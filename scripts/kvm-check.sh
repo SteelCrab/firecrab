@@ -129,7 +129,7 @@ check_user_access() {
     pass 'Current user can read and write /dev/kvm.'
   else
     fail 'Current user cannot read and write /dev/kvm.'
-    warn 'Add the user to the kvm group, then log out and log back in: sudo usermod -aG kvm "$USER"'
+    warn "Add the checked user to the kvm group, then log out and log back in: sudo usermod -aG kvm \"${current_user}\""
   fi
 
   if id -nG 2>/dev/null | tr ' ' '\n' | grep -qx 'kvm'; then
