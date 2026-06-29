@@ -140,23 +140,43 @@ check_user_access() {
 }
 
 check_kvm_module() {
-  printf '\n%s\n' '5. KVM kernel module'
+  printf '\n%s\n' '5. KVM kernel support'
 
-  if [ -r /proc/modules ]; then
-    if grep -q '^kvm ' /proc/modules; then
-      pass 'kvm module is loaded.'
-    else
-      warn 'kvm module is not listed in /proc/modules.'
-    fi
+  machine_arch=$(uname -m 2>/dev/null || printf 'unknown')
 
-    if grep -Eq '^kvm_intel |^kvm_amd ' /proc/modules; then
-      pass 'vendor KVM module is loaded.'
-    else
-      warn 'vendor KVM module is not listed. Expected kvm_intel or kvm_amd.'
-    fi
+  if [ -d /sys/module/kvm ]; then
+    pass 'kvm is present in /sys/module.'
+  elif [ -r /proc/modules ] && grep -q '^kvm ' /proc/modules; then
+    pass 'kvm module is listed in /proc/modules.'
+  elif [ -e /dev/kvm ]; then
+    info 'kvm is not listed as a loaded module, but /dev/kvm exists. KVM may be built into the kernel.'
+  elif [ -r /proc/modules ]; then
+    warn 'kvm module is not listed in /proc/modules.'
   else
-    warn '/proc/modules is not readable. Skipping kernel module check.'
+    warn '/proc/modules is not readable and /sys/module/kvm is not present. Skipping kernel module check.'
   fi
+
+  case "$machine_arch" in
+    x86_64 | amd64)
+      if [ -d /sys/module/kvm_intel ] || [ -d /sys/module/kvm_amd ]; then
+        pass 'x86 vendor KVM module is present in /sys/module.'
+      elif [ -r /proc/modules ] && grep -Eq '^kvm_intel |^kvm_amd ' /proc/modules; then
+        pass 'x86 vendor KVM module is listed in /proc/modules.'
+      elif [ -e /dev/kvm ]; then
+        info 'x86 vendor KVM module is not listed, but /dev/kvm exists. KVM may be built into the kernel.'
+      elif [ -r /proc/modules ]; then
+        warn 'x86 vendor KVM module is not listed. Expected kvm_intel or kvm_amd.'
+      else
+        warn '/proc/modules is not readable. Skipping x86 vendor KVM module check.'
+      fi
+      ;;
+    aarch64 | arm64)
+      info 'Skipping x86 vendor KVM module check on ARM.'
+      ;;
+    *)
+      info "Skipping x86 vendor KVM module check for architecture: ${machine_arch}"
+      ;;
+  esac
 }
 
 print_summary() {
