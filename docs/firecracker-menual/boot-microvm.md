@@ -1,11 +1,11 @@
 # boot-microvm
 
-`scripts/boot-microvm.sh`는 커널 이미지와 rootfs 이미지를 받아 Firecracker MicroVM을 부팅하는 실행 스크립트다.
+`scripts/firecracker-menual/boot-microvm.sh`는 커널 이미지와 rootfs 이미지를 받아 Firecracker MicroVM을 부팅하는 실행 스크립트다.
 
 ## 사용
 
 ```sh
-./scripts/boot-microvm.sh \
+./scripts/firecracker-menual/boot-microvm.sh \
   ./images/kernel/vmlinux-<kernel-version>-<arch> \
   ./images/rootfs/ubuntu-rootfs.ext4
 ```
@@ -38,7 +38,7 @@ sudo ip tuntap add dev tap0 mode tap user "$(id -un)"
 sudo ip addr replace 172.16.20.1/24 dev tap0
 sudo ip link set tap0 up
 
-./scripts/boot-microvm.sh \
+./scripts/firecracker-menual/boot-microvm.sh \
   ./images/kernel/vmlinux-<kernel-version>-<arch> \
   ./images/rootfs/ubuntu-rootfs.ext4
 ```

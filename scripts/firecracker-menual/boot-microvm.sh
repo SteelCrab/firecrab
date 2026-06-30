@@ -2,9 +2,12 @@
 
 set -euo pipefail
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+
 firecracker_bin='firecracker'
-config_path='./firecracker-config.json'
-console_log_path='./firecracker-console.log'
+config_path="${repo_dir}/firecracker-config.json"
+console_log_path="${repo_dir}/firecracker-console.log"
 api_socket='/tmp/firecracker.socket'
 vcpu_count='1'
 mem_size_mib='512'
@@ -33,7 +36,7 @@ fail() {
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/boot-microvm.sh <kernel-image> <rootfs-image>
+  ./scripts/firecracker-menual/boot-microvm.sh <kernel-image> <rootfs-image>
 EOF
 }
 

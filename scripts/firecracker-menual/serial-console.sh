@@ -2,9 +2,12 @@
 
 set -euo pipefail
 
-rootfs_image="./images/rootfs/ubuntu-rootfs.ext4"
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+
+rootfs_image="${repo_dir}/images/rootfs/ubuntu-rootfs.ext4"
 kernel_image=''
-console_log_path="./firecracker-console.log"
+console_log_path="${repo_dir}/firecracker-console.log"
 
 info() {
   printf '[INFO] %s\n' "$1"
@@ -22,7 +25,7 @@ fail() {
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/serial-console.sh
+  ./scripts/firecracker-menual/serial-console.sh
 
 No arguments boots the MicroVM and attaches this terminal to ttyS0.
 If host tap0 exists, it is attached as the MicroVM network device.
@@ -32,14 +35,14 @@ EOF
 default_kernel_image() {
   local candidate
 
-  for candidate in ./images/kernel/vmlinux-[0-9]*; do
+  for candidate in "${repo_dir}"/images/kernel/vmlinux-[0-9]*; do
     if [ -f "$candidate" ]; then
       printf '%s\n' "$candidate"
       return
     fi
   done
 
-  fail 'Kernel image does not exist. Run: ./scripts/install-linux-kernel.sh'
+  fail 'Kernel image does not exist. Run: ./scripts/firecracker-menual/install-linux-kernel.sh'
 }
 
 resolve_inputs() {
@@ -52,7 +55,7 @@ resolve_inputs() {
   fi
 
   if [ ! -f "$rootfs_image" ]; then
-    fail "Ubuntu rootfs does not exist. Run: ./scripts/install-ubuntu-roofs.sh"
+    fail "Ubuntu rootfs does not exist. Run: ./scripts/firecracker-menual/install-ubuntu-roofs.sh"
   fi
 }
 
@@ -69,7 +72,7 @@ boot_console() {
   info 'guest prompt: root shell on ttyS0'
   info 'exit guest with: reboot -f'
 
-  ./scripts/run-serial-shell.sh "$kernel_image" "$rootfs_image"
+  "${script_dir}/run-serial-shell.sh" "$kernel_image" "$rootfs_image"
 }
 
 main() {

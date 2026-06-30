@@ -70,6 +70,6 @@ Serial Console 로그 확인은 가능합니다.
 
 다만 이 캡처의 MicroVM은 정상 부팅 완료 상태가 아닙니다. Firecracker 프로세스는 `exit_code=0`으로 종료했지만, 게스트 커널은 rootfs mount 실패로 `Kernel panic`에 도달했습니다.
 
-이후 실행은 `scripts/boot-microvm.sh`에서 커널 패닉과 rootfs mount 실패를 성공으로 오판하지 않도록 검증 로직을 보강했습니다.
+이후 실행은 `scripts/firecracker-menual/boot-microvm.sh`에서 커널 패닉과 rootfs mount 실패를 성공으로 오판하지 않도록 검증 로직을 보강했습니다.
 
 현재 `artifacts/` 아래의 이전 커널 빌드는 사용하지 않습니다. root block device 인식에 필요한 `CONFIG_VIRTIO_MMIO`가 포함된 커널은 `images/kernel/vmlinux-<kernel-version>-<arch>` 버전 파일로 빌드합니다.

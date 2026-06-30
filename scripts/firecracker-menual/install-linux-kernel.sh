@@ -2,9 +2,12 @@
 
 set -euo pipefail
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+
 kernel_releases_url='https://www.kernel.org/releases.json'
-artifact_dir='./images/kernel'
-build_dir='./build/kernel-local'
+artifact_dir="${repo_dir}/images/kernel"
+build_dir="${repo_dir}/build/kernel-local"
 jobs=''
 
 info() {

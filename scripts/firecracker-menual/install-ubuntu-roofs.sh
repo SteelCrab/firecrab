@@ -2,10 +2,14 @@
 
 set -euo pipefail
 
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+script_path="${script_dir}/$(basename -- "$0")"
+
 ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
 ubuntu_series_setting='latest'
-artifact_dir='./images/rootfs'
-build_dir='./build/ubuntu-rootfs'
+artifact_dir="${repo_dir}/images/rootfs"
+build_dir="${repo_dir}/build/ubuntu-rootfs"
 rootfs_image=''
 rootfs_link=''
 rootfs_size='2G'
@@ -499,7 +503,7 @@ main() {
 
   if [ "$(id -u)" -ne 0 ]; then
     require_command sudo
-    exec sudo "$0"
+    exec sudo "$script_path"
   fi
 
   build_dir=$(abs_dir "$build_dir")
