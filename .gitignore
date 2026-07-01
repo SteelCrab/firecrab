@@ -1,0 +1,22 @@
+# Firecracker
+/build/
+/images/
+/firecracker-config.json
+/firecracker-console.log
+
+# Rust
+target/
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Secrets
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
