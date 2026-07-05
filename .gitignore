@@ -7,6 +7,9 @@
 # Rust
 target/
 
+# Data files
+firecrab-api/data/
+
 # Env
 .env
 .env.*
