@@ -7,6 +7,9 @@
 # Rust
 target/
 
+# Go
+firecrab-api-go/firecrab-api-go
+
 # Data files
 firecrab-api/data/
 
