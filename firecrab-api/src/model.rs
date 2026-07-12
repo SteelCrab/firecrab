@@ -10,6 +10,14 @@ pub struct VmRecord {
     pub name: String,
     pub state: VmState,
     pub template: String,
+    #[serde(default)]
+    pub template_version: String,
+    #[serde(default)]
+    pub template_kernel_sha256: String,
+    #[serde(default)]
+    pub template_rootfs_sha256: String,
+    #[serde(default)]
+    pub template_boot_args_sha256: String,
     pub cpu: f64,
     pub ram: u32,
 }
