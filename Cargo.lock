@@ -111,10 +111,30 @@ name = "firecrab-api"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "firecrab-api-types",
+ "firecrab-helper-protocol",
  "serde",
  "serde_json",
  "tokio",
  "tower-http",
+ "uuid",
+]
+
+[[package]]
+name = "firecrab-api-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "firecrab-helper-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "uuid",
 ]
 

@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
 use uuid::Uuid;
 
 use crate::model::{CreateVmRequest, VmRecord, VmState};
@@ -20,7 +20,10 @@ pub async fn create_vm(
         state: VmState::Created,
     };
 
-    let mut vms = state.vms.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     vms.insert(vm.id, vm.clone());
     persistence::save(&vms);
 

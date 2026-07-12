@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use uuid::Uuid;
 use std::sync::{Arc, Mutex};
+use uuid::Uuid;
 
 use crate::model::VmRecord;
 use crate::persistence;
