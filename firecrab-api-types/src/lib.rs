@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -13,7 +15,7 @@ pub struct CreateVmRequest {
     pub name: String,
     pub template: String,
     pub ram: u32,
-    pub cpu: f64,
+    pub cpu: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -23,8 +25,25 @@ pub struct VmResponse {
     pub name: String,
     pub state: VmState,
     pub template: String,
-    pub cpu: f64,
+    pub template_version: String,
+    pub cpu: u8,
     pub ram: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ErrorResponse {
+    pub error: ApiError,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiError {
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
+    pub request_id: Uuid,
 }
 
 #[cfg(test)]
@@ -38,7 +57,8 @@ mod tests {
             name: "test-vm".to_owned(),
             state: VmState::Created,
             template: "ubuntu-rootfs-26.04".to_owned(),
-            cpu: 1.0,
+            template_version: "ubuntu-26.04-v1".to_owned(),
+            cpu: 1,
             ram: 512,
         };
 

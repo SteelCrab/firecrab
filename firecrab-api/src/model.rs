@@ -18,6 +18,6 @@ pub struct VmRecord {
     pub template_rootfs_sha256: String,
     #[serde(default)]
     pub template_boot_args_sha256: String,
-    pub cpu: f64,
+    pub cpu: u8,
     pub ram: u32,
 }
