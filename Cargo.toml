@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = [
+    "firecrab-api",
+    "firecrab-api-types",
+    "firecrab-helper-protocol",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.1"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+uuid = { version = "1.19.0", features = ["serde"] }
+

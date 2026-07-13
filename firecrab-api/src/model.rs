@@ -1,10 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum VmState {
-    Created,
-}
+pub use firecrab_api_types::CreateVmRequest;
+pub use firecrab_api_types::VmState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmRecord {
@@ -14,12 +12,4 @@ pub struct VmRecord {
     pub template: String,
     pub cpu: f64,
     pub ram: u32,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CreateVmRequest {
-    pub name: String,
-    pub template: String,
-    pub ram: u32,
-    pub cpu: f64,
 }
