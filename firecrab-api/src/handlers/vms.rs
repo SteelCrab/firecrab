@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use axum::Json;
 use axum::extract::{Extension, State};
@@ -51,23 +51,41 @@ pub async fn create_vm(
         state: VmState::Created,
     };
 
+    let response = vm_response(&vm);
     let mut vms = state
         .vms
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    vms.insert(vm.id, vm.clone());
+    vms.insert(vm.id, vm);
     persistence::save(&vms);
 
-    let response = VmResponse {
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+pub async fn list_vms(State(state): State<AppState>) -> Json<Vec<VmResponse>> {
+    let vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Json(sorted_responses(&vms))
+}
+
+fn sorted_responses(vms: &HashMap<Uuid, VmRecord>) -> Vec<VmResponse> {
+    let mut records: Vec<&VmRecord> = vms.values().collect();
+    records.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+    records.into_iter().map(vm_response).collect()
+}
+
+fn vm_response(vm: &VmRecord) -> VmResponse {
+    VmResponse {
         id: vm.id,
-        name: vm.name,
+        name: vm.name.clone(),
         state: vm.state,
-        template: vm.template,
-        template_version: vm.template_version,
+        template: vm.template.clone(),
+        template_version: vm.template_version.clone(),
         cpu: vm.cpu,
         ram: vm.ram,
-    };
-    Ok((StatusCode::CREATED, Json(response)))
+    }
 }
 
 fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
@@ -104,7 +122,7 @@ fn valid_vm_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::valid_vm_name;
+    use super::*;
 
     #[test]
     fn validates_vm_names() {
@@ -113,5 +131,50 @@ mod tests {
         assert!(!valid_vm_name("-vm"));
         assert!(!valid_vm_name("vm space"));
         assert!(!valid_vm_name(&"a".repeat(65)));
+    }
+
+    fn record(name: &str, id: Uuid) -> VmRecord {
+        VmRecord {
+            id,
+            name: name.to_owned(),
+            state: VmState::Created,
+            template: "ubuntu-rootfs-26.04".to_owned(),
+            template_version: "ubuntu-26.04-v1".to_owned(),
+            template_kernel_sha256: String::new(),
+            template_rootfs_sha256: String::new(),
+            template_boot_args_sha256: String::new(),
+            cpu: 1,
+            ram: 128,
+        }
+    }
+
+    #[test]
+    fn lists_vms_sorted_by_name_then_id() {
+        let low = Uuid::from_u128(1);
+        let high = Uuid::from_u128(2);
+        let vms = HashMap::from([
+            (high, record("beta", high)),
+            (low, record("beta", low)),
+            (Uuid::from_u128(3), record("alpha", Uuid::from_u128(3))),
+        ]);
+
+        let responses = sorted_responses(&vms);
+        let order: Vec<(String, Uuid)> = responses
+            .into_iter()
+            .map(|response| (response.name, response.id))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("alpha".to_owned(), Uuid::from_u128(3)),
+                ("beta".to_owned(), low),
+                ("beta".to_owned(), high),
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_empty_map_as_empty_vec() {
+        assert!(sorted_responses(&HashMap::new()).is_empty());
     }
 }
