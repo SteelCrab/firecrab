@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use axum::Json;
-use axum::extract::{Extension, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::VmResponse;
 use uuid::Uuid;
@@ -19,6 +19,26 @@ pub async fn list_vms(State(state): State<AppState>) -> Json<Vec<VmResponse>> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     Json(sorted_responses(&vms))
+}
+
+pub async fn get_vm(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmResponse>, AppError> {
+    let id = Uuid::parse_str(&id).map_err(|_| {
+        let mut fields = BTreeMap::new();
+        fields.insert("id".to_owned(), "must be a UUID".to_owned());
+        AppError::validation(fields, request_id.0)
+    })?;
+    let vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    vms.get(&id)
+        .map(vm_response)
+        .map(Json)
+        .ok_or_else(|| AppError::not_found(request_id.0))
 }
 
 pub async fn create_vm(
@@ -136,6 +156,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use axum::response::IntoResponse;
     use tempfile::tempdir;
 
     use super::*;
@@ -225,6 +246,57 @@ mod tests {
 
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].id, vm.id);
+    }
+
+    #[tokio::test]
+    async fn get_vm_returns_a_known_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("test-vm", Uuid::new_v4());
+        state.vms.lock().unwrap().insert(vm.id, vm.clone());
+
+        let Json(body) = get_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(body.id, vm.id);
+        assert_eq!(body.name, "test-vm");
+    }
+
+    #[tokio::test]
+    async fn get_vm_unknown_id_returns_not_found() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = get_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_vm_rejects_a_malformed_uuid() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = get_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path("not-a-uuid".to_owned()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
