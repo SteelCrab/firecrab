@@ -197,6 +197,131 @@
       cursor: progress;
     }
 
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head .panel-title {
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    .list-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .list-status {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+
+    .list-status.is-ready {
+      color: var(--ready);
+    }
+
+    .list-status.is-error {
+      color: var(--error);
+    }
+
+    .secondary-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 2rem;
+      padding: 0.35rem 0.65rem;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      background: var(--bg-panel);
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.15s ease, color 0.15s ease;
+    }
+
+    .secondary-btn:hover:not(:disabled) {
+      border-color: var(--ember);
+      color: var(--ember);
+    }
+
+    .secondary-btn:disabled {
+      opacity: 0.55;
+      cursor: progress;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    .vm-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 720px;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+    }
+
+    .vm-table th,
+    .vm-table td {
+      padding: 0.7rem 0.55rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    .vm-table th {
+      color: var(--shell);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .vm-table tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .vm-id {
+      color: var(--shell);
+    }
+
+    .state-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.35rem;
+      padding: 0.1rem 0.45rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ready);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .table-message {
+      color: var(--shell);
+    }
+
+    .table-message.is-error {
+      color: var(--error);
+      font-weight: 600;
+    }
+
     .btn-icon {
       color: var(--on-ember);
     }
@@ -444,6 +569,36 @@
         </form>
       </section>
 
+      <section class="panel list-vms" id="list-vms" aria-label="VM 목록">
+        <div class="section-head">
+          <h2 class="panel-title">list-vms</h2>
+          <div class="list-actions">
+            <span class="list-status" id="vm-list-status">idle</span>
+            <button type="button" class="secondary-btn" id="vm-list-refresh">refresh</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="vm-table">
+            <thead>
+              <tr>
+                <th scope="col">name</th>
+                <th scope="col">state</th>
+                <th scope="col">template</th>
+                <th scope="col">cpu</th>
+                <th scope="col">ram</th>
+                <th scope="col">id</th>
+              </tr>
+            </thead>
+            <tbody id="vm-list-body">
+              <tr>
+                <td colspan="6" class="table-message">loading vms</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="panel console" id="console-panel" aria-label="부팅 콘솔">
         <button type="button" class="panel-toggle" id="console-toggle" aria-expanded="false" aria-controls="console-body">
           <h2 class="panel-title">console</h2>
@@ -489,6 +644,9 @@
     const jsonPanel = document.getElementById("json-panel");
     const jsonToggle = document.getElementById("json-toggle");
     const jsonStatus = document.getElementById("json-status");
+    const vmListBody = document.getElementById("vm-list-body");
+    const vmListStatus = document.getElementById("vm-list-status");
+    const vmListRefresh = document.getElementById("vm-list-refresh");
 
     function openPanel(panel, toggle) {
       panel.classList.add("is-open");
@@ -529,6 +687,92 @@
       cursor.textContent = "_";
       logEl.appendChild(cursor);
     }
+
+    function setListStatus(label, cls) {
+      vmListStatus.classList.remove("is-ready", "is-error");
+      if (cls) vmListStatus.classList.add(cls);
+      vmListStatus.textContent = label;
+    }
+
+    function setListMessage(message, cls) {
+      vmListBody.replaceChildren();
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 6;
+      cell.className = cls ? `table-message ${cls}` : "table-message";
+      cell.textContent = message;
+      row.appendChild(cell);
+      vmListBody.appendChild(row);
+    }
+
+    function shortId(id) {
+      return id ? id.slice(0, 8) : "—";
+    }
+
+    function normalizeVmList(data) {
+      if (Array.isArray(data)) return data;
+      return [];
+    }
+
+    function renderVmList(vms) {
+      vmListBody.replaceChildren();
+
+      if (vms.length === 0) {
+        setListMessage("no vms found");
+        return;
+      }
+
+      for (const vm of vms) {
+        const row = document.createElement("tr");
+        const cells = [
+          vm.name || "—",
+          vm.state || "—",
+          vm.template || "—",
+          vm.cpu ?? "—",
+          vm.ram ? `${vm.ram} MiB` : "—",
+          shortId(vm.id),
+        ];
+
+        cells.forEach((value, index) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          if (index === 1) {
+            const pill = document.createElement("span");
+            pill.className = "state-pill";
+            pill.textContent = value;
+            cell.replaceChildren(pill);
+          }
+          if (index === 5) cell.className = "vm-id";
+          row.appendChild(cell);
+        });
+
+        vmListBody.appendChild(row);
+      }
+    }
+
+    async function loadVms() {
+      vmListRefresh.disabled = true;
+      setListStatus("loading");
+      setListMessage("loading vms");
+
+      try {
+        const res = await fetch(`${API_BASE}/api/vms`);
+        if (!res.ok) throw new Error(`http ${res.status}`);
+
+        const data = await res.json();
+        const vms = normalizeVmList(data);
+        renderVmList(vms);
+        setListStatus(`${vms.length} vm${vms.length === 1 ? "" : "s"}`, "is-ready");
+      } catch (err) {
+        setListMessage(`list failed: ${err.message}`, "is-error");
+        setListStatus("error", "is-error");
+      } finally {
+        vmListRefresh.disabled = false;
+      }
+    }
+
+    vmListRefresh.addEventListener("click", loadVms);
+    loadVms();
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -579,6 +823,7 @@
         setPanelStatus(consolePanel, consoleStatus, "is-ready", "ready");
         jsonEl.textContent = JSON.stringify(data, null, 2);
         setPanelStatus(jsonPanel, jsonStatus, "is-ready", "ready");
+        await loadVms();
       } catch (err) {
         resetLog();
         appendLine(cmd);

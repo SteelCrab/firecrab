@@ -30,4 +30,27 @@
 | `too_many_requests` | 429 | 동시 요청 한도(128) 초과 |
 | `request_timeout` | 504 | 처리 시간 10초 초과 |
 | `not_found` | 404 | 정의되지 않은 라우트 |
-| `internal_error` | 500 | 서버 내부 오류 |
+| `internal_error` | 500 | 서버 내부 오류 (저장 실패 포함 — 실패한 VM은 메모리에도 반영되지 않음) |
+
+## 예시 — 지원하지 않는 템플릿
+
+```sh
+curl -X POST http://localhost:3000/api/vms \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"bad-vm","template":"not-supported","cpu":1,"ram":512}'
+```
+
+응답 (400 Bad Request):
+
+```json
+{
+  "error": {
+    "code": "validation_failed",
+    "message": "request validation failed",
+    "fields": {
+      "template": "is not supported"
+    },
+    "requestId": "<uuid>"
+  }
+}
+```
