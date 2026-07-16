@@ -74,7 +74,7 @@ impl TemplateVersion {
 #[derive(Debug, Clone)]
 pub struct TemplateRegistry {
     image_root: Arc<File>,
-    aliases: HashMap<String, Arc<TemplateVersion>>,
+    aliases: HashMap<String, (String, String)>,
     versions: HashMap<(String, String), Arc<TemplateVersion>>,
 }
 
@@ -87,13 +87,22 @@ impl TemplateRegistry {
 
         Self::from_specs(
             &image_root,
-            [TemplateSpec {
-                alias: "ubuntu-rootfs-26.04".to_owned(),
-                version: "ubuntu-26.04-v1".to_owned(),
-                kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
-                rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
-                boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
-            }],
+            [
+                TemplateSpec {
+                    alias: "ubuntu-rootfs-26.04".to_owned(),
+                    version: "ubuntu-26.04-v1".to_owned(),
+                    kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
+                    rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
+                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
+                },
+                TemplateSpec {
+                    alias: "ubuntu-26.04".to_owned(),
+                    version: "ubuntu-26.04-v1".to_owned(),
+                    kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
+                    rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
+                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
+                },
+            ],
         )
     }
 
@@ -123,7 +132,7 @@ impl TemplateRegistry {
                     version_key.1,
                 ));
             }
-            if aliases.insert(spec.alias.clone(), version).is_some() {
+            if aliases.insert(spec.alias.clone(), version_key).is_some() {
                 return Err(TemplateError::DuplicateAlias(spec.alias));
             }
         }
@@ -135,12 +144,9 @@ impl TemplateRegistry {
         })
     }
 
-    pub fn contains(&self, alias: &str) -> bool {
-        self.aliases.contains_key(alias)
-    }
-
     pub fn resolve_alias(&self, alias: &str) -> Option<Arc<TemplateVersion>> {
-        self.aliases.get(alias).cloned()
+        let (name, version) = self.aliases.get(alias)?;
+        self.resolve_version(name, version)
     }
 
     pub fn resolve_version(&self, name: &str, version: &str) -> Option<Arc<TemplateVersion>> {
@@ -273,13 +279,22 @@ mod tests {
         fs::write(root.join("rootfs"), b"rootfs").unwrap();
         TemplateRegistry::from_specs(
             root,
-            [TemplateSpec {
-                alias: "ubuntu-rootfs-26.04".to_owned(),
-                version: "v1".to_owned(),
-                kernel: PathBuf::from("kernel"),
-                rootfs: PathBuf::from("rootfs"),
-                boot_args: "console=ttyS0".to_owned(),
-            }],
+            [
+                TemplateSpec {
+                    alias: "ubuntu-rootfs-26.04".to_owned(),
+                    version: "v1".to_owned(),
+                    kernel: PathBuf::from("kernel"),
+                    rootfs: PathBuf::from("rootfs"),
+                    boot_args: "console=ttyS0".to_owned(),
+                },
+                TemplateSpec {
+                    alias: "ubuntu-26.04".to_owned(),
+                    version: "v1".to_owned(),
+                    kernel: PathBuf::from("kernel"),
+                    rootfs: PathBuf::from("rootfs"),
+                    boot_args: "console=ttyS0".to_owned(),
+                },
+            ],
         )
         .unwrap()
     }
@@ -293,6 +308,15 @@ mod tests {
         assert_eq!(template.version, "v1");
         assert_eq!(template.rootfs.sha256(), sha256_bytes(b"rootfs"));
         assert!(registry.resolve_version(&template.name, "v1").is_some());
+    }
+
+    #[test]
+    fn resolves_the_legacy_ubuntu_release_alias() {
+        let directory = tempdir().unwrap();
+        let registry = create_registry(directory.path());
+        let template = registry.resolve_alias("ubuntu-26.04").unwrap();
+
+        assert_eq!(template.version, "v1");
     }
 
     #[test]
