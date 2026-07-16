@@ -1,33 +1,34 @@
 mod error;
+mod extract;
 mod handlers;
 mod model;
 mod persistence;
+mod server;
 mod state;
 mod templates;
 
 use std::error::Error;
 use std::io;
+use std::net::SocketAddr;
 use std::process::ExitCode;
 
-use axum::Router;
-use axum::routing::{get, post};
 use persistence::PersistenceError;
+use server::{ConfigError, HttpConfig, build_router};
 use state::AppState;
 use templates::{TemplateError, TemplateRegistry};
 use thiserror::Error;
-use tower_http::cors::{Any, CorsLayer};
-
-const LISTEN_ADDRESS: &str = "0.0.0.0:3000";
 
 #[derive(Debug, Error)]
 enum StartupError {
+    #[error("failed to load HTTP configuration")]
+    Config(#[source] ConfigError),
     #[error("failed to initialize template registry")]
     Template(#[source] TemplateError),
     #[error("failed to load persisted VM state")]
     Persistence(#[source] PersistenceError),
     #[error("failed to bind API listener at {address}")]
     Bind {
-        address: &'static str,
+        address: SocketAddr,
         #[source]
         source: io::Error,
     },
@@ -54,25 +55,17 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), StartupError> {
+    let config = HttpConfig::load().map_err(StartupError::Config)?;
     let templates = TemplateRegistry::load_default().map_err(StartupError::Template)?;
     let state = AppState::new(templates)
         .await
         .map_err(StartupError::Persistence)?;
+    let app = build_router(state, &config);
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
-    let app = Router::new()
-        .route("/api/vms", get(handlers::vms::list_vms).post(handlers::vms::create_vm))
-        .layer(cors)
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(LISTEN_ADDRESS)
+    let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
         .map_err(|source| StartupError::Bind {
-            address: LISTEN_ADDRESS,
+            address: config.bind_addr,
             source,
         })?;
 
