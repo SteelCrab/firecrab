@@ -127,3 +127,38 @@ impl IntoResponse for AppError {
         (self.status, Json(body)).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::body::to_bytes;
+    use serde_json::Value;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn validation_error_returns_a_structured_bad_request() {
+        let mut fields = BTreeMap::new();
+        fields.insert("template".to_owned(), "is not supported".to_owned());
+        let request_id = Uuid::new_v4();
+
+        let response = AppError::validation(fields, request_id).into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "validation_failed");
+        assert_eq!(json["error"]["fields"]["template"], "is not supported");
+        assert_eq!(json["error"]["requestId"], request_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn internal_error_does_not_expose_details() {
+        let response = AppError::internal(Uuid::new_v4()).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("internal_error"));
+        assert!(!body.contains("path"));
+    }
+}

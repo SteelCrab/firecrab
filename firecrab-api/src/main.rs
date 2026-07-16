@@ -7,18 +7,72 @@ mod server;
 mod state;
 mod templates;
 
-use server::{HttpConfig, build_router};
+use std::error::Error;
+use std::io;
+use std::net::SocketAddr;
+use std::process::ExitCode;
+
+use persistence::PersistenceError;
+use server::{ConfigError, HttpConfig, build_router};
 use state::AppState;
-use templates::TemplateRegistry;
+use templates::{TemplateError, TemplateRegistry};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+enum StartupError {
+    #[error("failed to load HTTP configuration")]
+    Config(#[source] ConfigError),
+    #[error("failed to initialize template registry")]
+    Template(#[source] TemplateError),
+    #[error("failed to load persisted VM state")]
+    Persistence(#[source] PersistenceError),
+    #[error("failed to bind API listener at {address}")]
+    Bind {
+        address: SocketAddr,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to inspect API listener address")]
+    LocalAddress(#[source] io::Error),
+    #[error("API server terminated with an error")]
+    Serve(#[source] io::Error),
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = HttpConfig::load()?;
-    let state = AppState::new(TemplateRegistry::load_default()?);
-    let app = build_router(state, &config);
-    let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("[ERROR] {error}");
+            let mut source = error.source();
+            while let Some(cause) = source {
+                eprintln!("[ERROR] caused by: {cause}");
+                source = cause.source();
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    println!("[INFO] Listening on http://{}", listener.local_addr()?);
-    axum::serve(listener, app).await?;
+async fn run() -> Result<(), StartupError> {
+    let config = HttpConfig::load().map_err(StartupError::Config)?;
+    let templates = TemplateRegistry::load_default().map_err(StartupError::Template)?;
+    let state = AppState::new(templates)
+        .await
+        .map_err(StartupError::Persistence)?;
+    let app = build_router(state, &config);
+
+    let listener = tokio::net::TcpListener::bind(config.bind_addr)
+        .await
+        .map_err(|source| StartupError::Bind {
+            address: config.bind_addr,
+            source,
+        })?;
+
+    let local_address = listener.local_addr().map_err(StartupError::LocalAddress)?;
+    println!("[INFO] Listening on http://{local_address}");
+    axum::serve(listener, app)
+        .await
+        .map_err(StartupError::Serve)?;
     Ok(())
 }
