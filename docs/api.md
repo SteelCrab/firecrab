@@ -30,30 +30,7 @@ cargo run
 - 요청 처리 시간이 10초를 초과하면 `504 Gateway Timeout` 반환
 - 허용되지 않은 Origin에서의 요청은 `403 Forbidden` 반환
 
-### 에러 응답 형식
-
-```json
-{
-  "error": {
-    "code": "validation_failed",
-    "message": "request validation failed",
-    "fields": { "cpu": "must be between 1 and 32" },
-    "requestId": "<uuid>"
-  }
-}
-```
-
-| code | status | 설명 |
-| --- | --- | --- |
-| `validation_failed` | 400 | 요청 필드 검증 실패 (`fields`에 상세 사유 포함) |
-| `invalid_json` | 400 | JSON body가 아니거나 파싱 실패 |
-| `unsupported_media_type` | 415 | `Content-Type`이 `application/json`이 아님 |
-| `request_too_large` | 413 | 요청 바디가 64 KiB 초과 |
-| `forbidden_origin` | 403 | 허용되지 않은 Origin |
-| `too_many_requests` | 429 | 동시 요청 한도(128) 초과 |
-| `request_timeout` | 504 | 처리 시간 10초 초과 |
-| `not_found` | 404 | 정의되지 않은 라우트 |
-| `internal_error` | 500 | 서버 내부 오류 (저장 실패 포함 — 실패한 VM은 메모리에도 반영되지 않음) |
+에러 응답 형식과 코드는 [api-error.md](api-error.md) 참고.
 
 ## 현재 API
 
@@ -113,29 +90,6 @@ curl http://localhost:3000/api/vms
 ```
 
 VM이 없으면 `[]` 반환.
-
-### 3) 지원하지 않는 템플릿 — validation error
-
-```sh
-curl -X POST http://localhost:3000/api/vms \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"bad-vm","template":"not-supported","cpu":1,"ram":512}'
-```
-
-응답 (400 Bad Request):
-
-```json
-{
-  "error": {
-    "code": "validation_failed",
-    "message": "request validation failed",
-    "fields": {
-      "template": "is not supported"
-    },
-    "requestId": "<uuid>"
-  }
-}
-```
 
 ## 템플릿 레지스트리
 
