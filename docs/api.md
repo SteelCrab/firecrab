@@ -91,6 +91,17 @@ curl http://localhost:3000/api/vms
 
 VM이 없으면 `[]` 반환.
 
+### 3) MicroVM 상세 조회 — GET /api/vms/{id}
+
+```sh
+curl http://localhost:3000/api/vms/<uuid>
+```
+
+응답 (200 OK): 생성 응답과 동일한 형식
+
+- 없는 UUID: `404 not_found`
+- UUID 형식이 아닌 id: `400 validation_failed` (`fields.id`)
+
 ## 템플릿 레지스트리
 
 VM 생성 시 `template` alias는 `TemplateRegistry`(`firecrab-api/src/templates.rs`)를 통해 불변 버전으로 해석된다.

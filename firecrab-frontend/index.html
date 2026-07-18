@@ -317,6 +317,57 @@
       color: var(--shell);
     }
 
+    .vm-table tbody tr.is-clickable {
+      cursor: pointer;
+    }
+
+    .vm-table tbody tr.is-clickable:hover td,
+    .vm-table tbody tr.is-clickable:focus-visible td {
+      background: rgba(196, 62, 18, 0.06);
+    }
+
+    .detail-grid {
+      margin: 0;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+    }
+
+    .detail-row {
+      display: grid;
+      grid-template-columns: 10rem 1fr;
+      gap: 1rem;
+      padding: 0.55rem 0.1rem;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .detail-row:last-child {
+      border-bottom: 0;
+    }
+
+    .detail-grid dt {
+      align-self: center;
+      color: var(--shell);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .detail-grid dd {
+      margin: 0;
+      white-space: normal;
+      word-break: break-all;
+    }
+
+    .detail-grid .detail-message {
+      color: var(--shell);
+    }
+
+    .detail-grid .detail-message.is-error {
+      color: var(--error);
+      font-weight: 600;
+    }
+
     .table-message.is-error {
       color: var(--error);
       font-weight: 600;
@@ -527,7 +578,7 @@
             <div>
               <label class="field-label" for="vm-template">template</label>
               <select id="vm-template" name="template" class="field-control">
-                <option value="ubuntu-rootfs-26.04">ubuntu-rootfs (26.04)</option>
+                <option value="ubuntu-26.04">ubuntu (26.04)</option>
               </select>
             </div>
 
@@ -599,6 +650,24 @@
         </div>
       </section>
 
+      <section class="panel detail" id="detail-panel" aria-label="VM 상세">
+        <button type="button" class="panel-toggle" id="detail-toggle" aria-expanded="false" aria-controls="detail-body">
+          <h2 class="panel-title">describe-vm</h2>
+          <span class="panel-status" id="detail-status">idle</span>
+          <span class="chevron" aria-hidden="true">&#9656;</span>
+        </button>
+        <div class="panel-body" id="detail-body">
+          <div class="panel-body-inner">
+            <dl class="detail-grid" id="detail-grid">
+              <div class="detail-row">
+                <dt>hint</dt>
+                <dd class="detail-message">select a vm from the list</dd>
+              </div>
+            </dl>
+          </div>
+        </div>
+      </section>
+
       <section class="panel console" id="console-panel" aria-label="부팅 콘솔">
         <button type="button" class="panel-toggle" id="console-toggle" aria-expanded="false" aria-controls="console-body">
           <h2 class="panel-title">console</h2>
@@ -666,8 +735,14 @@
       });
     }
 
+    const detailPanel = document.getElementById("detail-panel");
+    const detailToggle = document.getElementById("detail-toggle");
+    const detailStatus = document.getElementById("detail-status");
+    const detailGrid = document.getElementById("detail-grid");
+
     bindToggle(consolePanel, consoleToggle);
     bindToggle(jsonPanel, jsonToggle);
+    bindToggle(detailPanel, detailToggle);
 
     function resetLog() {
       logEl.textContent = "";
@@ -746,6 +821,19 @@
           row.appendChild(cell);
         });
 
+        if (vm.id) {
+          row.className = "is-clickable";
+          row.tabIndex = 0;
+          row.setAttribute("aria-label", `${vm.name || vm.id} 상세 보기`);
+          row.addEventListener("click", () => loadVmDetail(vm.id));
+          row.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              loadVmDetail(vm.id);
+            }
+          });
+        }
+
         vmListBody.appendChild(row);
       }
     }
@@ -768,6 +856,70 @@
         setListStatus("error", "is-error");
       } finally {
         vmListRefresh.disabled = false;
+      }
+    }
+
+    function setDetailMessage(message, cls) {
+      detailGrid.replaceChildren();
+      const row = document.createElement("div");
+      row.className = "detail-row";
+      const dt = document.createElement("dt");
+      dt.textContent = cls ? "error" : "hint";
+      const dd = document.createElement("dd");
+      dd.className = cls ? `detail-message ${cls}` : "detail-message";
+      dd.textContent = message;
+      row.append(dt, dd);
+      detailGrid.appendChild(row);
+    }
+
+    function renderVmDetail(vm) {
+      const fields = [
+        ["name", vm.name],
+        ["state", vm.state],
+        ["template", vm.template],
+        ["template version", vm.templateVersion],
+        ["vcpu", vm.cpu],
+        ["memory", vm.ram != null ? `${vm.ram} MiB` : null],
+        ["id", vm.id],
+      ];
+
+      detailGrid.replaceChildren();
+      for (const [label, value] of fields) {
+        const row = document.createElement("div");
+        row.className = "detail-row";
+        const dt = document.createElement("dt");
+        dt.textContent = label;
+        const dd = document.createElement("dd");
+        dd.textContent = value ?? "—";
+        if (label === "state" && value) {
+          const pill = document.createElement("span");
+          pill.className = "state-pill";
+          pill.textContent = value;
+          dd.replaceChildren(pill);
+        }
+        row.append(dt, dd);
+        detailGrid.appendChild(row);
+      }
+    }
+
+    async function loadVmDetail(id) {
+      openPanel(detailPanel, detailToggle);
+      setPanelStatus(detailPanel, detailStatus, "is-running", "loading");
+
+      try {
+        const res = await fetch(`${API_BASE}/api/vms/${encodeURIComponent(id)}`);
+        const data = await res.json().catch(() => null);
+
+        if (!res.ok) {
+          const code = data && data.error && data.error.code;
+          throw new Error(code || `http ${res.status}`);
+        }
+
+        renderVmDetail(data);
+        setPanelStatus(detailPanel, detailStatus, "is-ready", shortId(data.id));
+      } catch (err) {
+        setDetailMessage(`describe failed: ${err.message}`, "is-error");
+        setPanelStatus(detailPanel, detailStatus, "is-error", "error");
       }
     }
 
