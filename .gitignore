@@ -8,6 +8,7 @@
 target/
 
 # Data files
+/data/
 firecrab-api/data/
 
 # Env
