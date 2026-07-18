@@ -39,7 +39,7 @@ cargo run
 ```sh
 curl -X POST http://localhost:3000/api/vms \
   -H 'Content-Type: application/json' \
-  -d '{"name":"test-vm","template":"ubuntu-rootfs-26.04","cpu":5,"ram":512}'
+  -d '{"name":"test-vm","template":"ubuntu-26.04","cpu":5,"ram":512}'
 ```
 
 요청 필드 검증 규칙:
@@ -47,7 +47,7 @@ curl -X POST http://localhost:3000/api/vms \
 | 필드 | 규칙 |
 | --- | --- |
 | `name` | 1~64자, ASCII 영숫자로 시작, 영숫자/`.`/`_`/`-`만 허용 |
-| `template` | 템플릿 레지스트리에 등록된 alias만 허용 (`ubuntu-rootfs-26.04`, `ubuntu-26.04`) |
+| `template` | 템플릿 레지스트리에 등록된 alias만 허용 (`ubuntu-26.04`) |
 | `cpu` | 1~32 (정수) |
 | `ram` | 128~32768 (MiB) |
 
@@ -58,7 +58,7 @@ curl -X POST http://localhost:3000/api/vms \
   "id": "<uuid>",
   "name": "test-vm",
   "state": "created",
-  "template": "ubuntu-rootfs-26.04",
+  "template": "ubuntu-26.04",
   "templateVersion": "ubuntu-26.04-v1",
   "cpu": 5,
   "ram": 512
@@ -81,7 +81,7 @@ curl http://localhost:3000/api/vms
     "id": "<uuid>",
     "name": "test-vm",
     "state": "created",
-    "template": "ubuntu-rootfs-26.04",
+    "template": "ubuntu-26.04",
     "templateVersion": "ubuntu-26.04-v1",
     "cpu": 5,
     "ram": 512
@@ -93,14 +93,41 @@ VM이 없으면 `[]` 반환.
 
 ### 3) MicroVM 상세 조회 — GET /api/vms/{id}
 
+생성 응답의 `id`를 그대로 사용해 조회한다. 생성 → id 추출 → 조회 흐름 예시:
+
 ```sh
-curl http://localhost:3000/api/vms/<uuid>
+VM_ID=$(curl -s -X POST http://localhost:3000/api/vms \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"test-vm","template":"ubuntu-26.04","cpu":5,"ram":512}' \
+  | jq -r '.id')
+
+curl http://localhost:3000/api/vms/$VM_ID
 ```
 
 응답 (200 OK): 생성 응답과 동일한 형식
 
+```json
+{
+  "id": "<uuid>",
+  "name": "test-vm",
+  "state": "created",
+  "template": "ubuntu-26.04",
+  "templateVersion": "ubuntu-26.04-v1",
+  "cpu": 5,
+  "ram": 512
+}
+```
+
 - 없는 UUID: `404 not_found`
 - UUID 형식이 아닌 id: `400 validation_failed` (`fields.id`)
+
+```sh
+# 없는 UUID
+curl -i http://localhost:3000/api/vms/00000000-0000-0000-0000-000000000000
+
+# UUID 형식이 아닌 id
+curl -i http://localhost:3000/api/vms/not-a-uuid
+```
 
 ## 템플릿 레지스트리
 
@@ -109,13 +136,14 @@ VM 생성 시 `template` alias는 `TemplateRegistry`(`firecrab-api/src/templates
 - 커널/rootfs 이미지는 `FIRECRAB_IMAGE_ROOT` 아래에서만 열리며, `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | ...)`로 경로 탈출·심볼릭 링크를 차단
 - 레지스트리 로드 시 각 아티팩트의 SHA-256/디바이스/inode/크기를 기록해두고, VM 생성 시점에 재검증하여 파일이 변경되었으면 요청을 거부
 - VM 레코드에는 해석된 `template_version`과 커널/rootfs/boot-args의 SHA-256 해시가 함께 저장됨
-- 여러 alias(`ubuntu-rootfs-26.04`, `ubuntu-26.04`)가 같은 불변 버전(`ubuntu-26.04-v1`)을 가리킬 수 있음
+- `template_version`은 `<alias>-v<n>` 형식 (예: `ubuntu-26.04` → `ubuntu-26.04-v1`)
 
 ## 데이터 저장
 
-VM 레코드는 생성/변경 시마다 실행 디렉터리 기준 `data/vms.json`에 저장되며, 서버 재시작 시 이 파일에서 복원된다.
+VM 레코드는 실행 디렉터리 기준 `data/firecrab.db`(SQLite, WAL mode)의 `vms` 테이블에 저장되며, 서버 재시작 시 여기서 복원된다.
 
 - 저장 실패 시 해당 VM은 메모리에도 반영되지 않고 `500 internal_error`를 반환
+- 레거시 `data/vms.json`이 있으면 시작 시 1회 import 후 `vms.json.imported`로 이름을 바꿔 보관
 - 시작 시 손상된 `vms.json`은 빈 목록으로 무시되지 않고 서버가 원인과 함께 시작 실패
 
 ## 브라우저 테스트 페이지
