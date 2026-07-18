@@ -7,6 +7,31 @@ use uuid::Uuid;
 #[serde(rename_all = "lowercase")]
 pub enum VmState {
     Created,
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Error,
+}
+
+impl VmState {
+    pub fn can_transition(self, to: Self) -> bool {
+        use VmState::{Created, Error, Running, Starting, Stopped, Stopping};
+        matches!(
+            (self, to),
+            (Created, Starting)
+                | (Starting, Running | Error)
+                | (Running, Stopping | Stopped | Error)
+                | (Stopping, Stopped | Error)
+                | (Stopped, Starting)
+                | (Error, Starting)
+        )
+    }
+
+    // Deletion is record removal, not a state transition; only inactive VMs qualify.
+    pub fn can_delete(self) -> bool {
+        matches!(self, Self::Created | Self::Stopped | Self::Error)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -49,6 +74,61 @@ pub struct ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use VmState::{Created, Error, Running, Starting, Stopped, Stopping};
+
+    const ALL_STATES: [VmState; 6] = [Created, Starting, Running, Stopping, Stopped, Error];
+
+    #[test]
+    fn transitions_follow_the_lifecycle_table() {
+        let allowed = [
+            (Created, Starting),
+            (Starting, Running),
+            (Starting, Error),
+            (Running, Stopping),
+            (Running, Stopped),
+            (Running, Error),
+            (Stopping, Stopped),
+            (Stopping, Error),
+            (Stopped, Starting),
+            (Error, Starting),
+        ];
+
+        for from in ALL_STATES {
+            for to in ALL_STATES {
+                assert_eq!(
+                    from.can_transition(to),
+                    allowed.contains(&(from, to)),
+                    "{from:?} -> {to:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deletion_is_allowed_only_for_inactive_states() {
+        for state in ALL_STATES {
+            assert_eq!(
+                state.can_delete(),
+                [Created, Stopped, Error].contains(&state),
+                "{state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vm_states_serialize_lowercase() {
+        for (state, json) in [
+            (Created, "\"created\""),
+            (Starting, "\"starting\""),
+            (Running, "\"running\""),
+            (Stopping, "\"stopping\""),
+            (Stopped, "\"stopped\""),
+            (Error, "\"error\""),
+        ] {
+            assert_eq!(serde_json::to_string(&state).unwrap(), json);
+            assert_eq!(serde_json::from_str::<VmState>(json).unwrap(), state);
+        }
+    }
 
     #[test]
     fn vm_response_round_trips() {
