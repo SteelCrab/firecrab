@@ -87,22 +87,13 @@ impl TemplateRegistry {
 
         Self::from_specs(
             &image_root,
-            [
-                TemplateSpec {
-                    alias: "ubuntu-rootfs-26.04".to_owned(),
-                    version: "ubuntu-26.04-v1".to_owned(),
-                    kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
-                    rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
-                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
-                },
-                TemplateSpec {
-                    alias: "ubuntu-26.04".to_owned(),
-                    version: "ubuntu-26.04-v1".to_owned(),
-                    kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
-                    rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
-                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
-                },
-            ],
+            [TemplateSpec {
+                alias: "ubuntu-26.04".to_owned(),
+                version: "ubuntu-26.04-v1".to_owned(),
+                kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
+                rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
+                boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
+            }],
         )
     }
 

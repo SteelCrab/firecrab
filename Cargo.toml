@@ -18,3 +18,8 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
 uuid = { version = "1.19.0", features = ["serde"] }
+
+# unoptimized sha2 is ~50-100x slower, turning multi-GB template hashing
+# (startup verification + per-request re-verification) into a multi-second stall.
+[profile.dev.package.sha2]
+opt-level = 3
