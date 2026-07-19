@@ -248,10 +248,43 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: error_chain(&error),
                 })
         }
-        NetworkRequest::CreateTap { .. }
-        | NetworkRequest::DeleteTap { .. }
-        | NetworkRequest::ApplyVmPolicy { .. }
-        | NetworkRequest::RemoveVmPolicy { .. } => Err(HelperFailure::UnsupportedOperation),
+        NetworkRequest::ApplyVmPolicy {
+            vm_id,
+            ipv4,
+            mac,
+            egress_policy,
+            allow_host_ssh,
+        } => {
+            // Resolve the API-supplied egress ID against the helper's own
+            // allowlist; an unknown ID is a client error, not an internal one.
+            let egress = firewall::EgressPolicy::from_id(&egress_policy).ok_or_else(|| {
+                HelperFailure::InvalidRequest {
+                    detail: format!("unknown egress policy id {egress_policy:?}"),
+                }
+            })?;
+            let policy = firewall::VmPolicy {
+                vm_id,
+                ipv4,
+                mac,
+                egress,
+                allow_host_ssh,
+            };
+            firewall::apply_vm_policy(&config.firewall, policy)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
+        NetworkRequest::RemoveVmPolicy { vm_id } => {
+            firewall::remove_vm_policy(&config.firewall, vm_id)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
+        NetworkRequest::CreateTap { .. } | NetworkRequest::DeleteTap { .. } => {
+            Err(HelperFailure::UnsupportedOperation)
+        }
     }
 }
 
@@ -318,11 +351,13 @@ mod tests {
 
     #[tokio::test]
     async fn unimplemented_operations_are_rejected() {
+        // Only TAP creation/deletion is still unimplemented; the policy
+        // operations are handled (RemoveVmPolicy is a no-op when nothing is
+        // installed, so it does not reach nft here).
         let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
         let requests = [
             NetworkRequest::CreateTap { vm_id: Uuid::nil() },
             NetworkRequest::DeleteTap { vm_id: Uuid::nil() },
-            NetworkRequest::RemoveVmPolicy { vm_id: Uuid::nil() },
         ];
         for request in requests {
             assert_eq!(
@@ -330,6 +365,22 @@ mod tests {
                 Err(HelperFailure::UnsupportedOperation)
             );
         }
+    }
+
+    #[tokio::test]
+    async fn apply_vm_policy_rejects_an_unknown_egress_id_as_invalid_request() {
+        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        let request = NetworkRequest::ApplyVmPolicy {
+            vm_id: Uuid::nil(),
+            ipv4: "172.30.0.9".parse().unwrap(),
+            mac: "02:fc:00:00:00:09".parse().unwrap(),
+            egress_policy: "0.0.0.0/0".to_owned(),
+            allow_host_ssh: false,
+        };
+        assert!(matches!(
+            dispatch(request, &config).await,
+            Err(HelperFailure::InvalidRequest { .. })
+        ));
     }
 
     #[tokio::test]
