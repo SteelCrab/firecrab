@@ -6,14 +6,13 @@ use futures_util::TryStreamExt;
 use rtnetlink::packet_route::{
     AddressFamily,
     address::AddressAttribute,
-    link::{InfoKind, LinkAttribute, LinkInfo, LinkMessage},
+    link::LinkMessage,
     route::{RouteAddress, RouteAttribute, RouteMessage},
 };
 use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
 use thiserror::Error;
 
 pub const BRIDGE_NAME: &str = "fcbr0";
-pub const BRIDGE_ALIAS: &str = "firecrab:bridge:v1";
 pub const BRIDGE_MTU: u32 = 1500;
 pub const BRIDGE_GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
 const BRIDGE_NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
@@ -25,8 +24,6 @@ pub enum BridgeError {
     Connection(#[source] io::Error),
     #[error("rtnetlink operation failed")]
     Netlink(#[source] rtnetlink::Error),
-    #[error("interface {BRIDGE_NAME} exists but is not a Firecrab-owned bridge")]
-    NotOwned,
     #[error("Firecrab subnet 172.30.0.0/24 overlaps host address {0}")]
     AddressConflict(Ipv4Addr),
     #[error("Firecrab subnet 172.30.0.0/24 overlaps host route {network}/{prefix}")]
@@ -50,7 +47,6 @@ pub async fn ensure_bridge() -> Result<(), BridgeError> {
 
     let bridge = match find_bridge(&handle).await? {
         Some(link) => {
-            validate_owned_bridge(&link)?;
             assert_subnet_available(&handle, Some(link.header.index)).await?;
             link
         }
@@ -58,12 +54,7 @@ pub async fn ensure_bridge() -> Result<(), BridgeError> {
             assert_subnet_available(&handle, None).await?;
             handle
                 .link()
-                .add(
-                    LinkBridge::new(BRIDGE_NAME)
-                        .mtu(BRIDGE_MTU)
-                        .append_extra_attribute(LinkAttribute::IfAlias(BRIDGE_ALIAS.to_owned()))
-                        .build(),
-                )
+                .add(LinkBridge::new(BRIDGE_NAME).mtu(BRIDGE_MTU).build())
                 .execute()
                 .await
                 .map_err(BridgeError::Netlink)?;
@@ -73,7 +64,6 @@ pub async fn ensure_bridge() -> Result<(), BridgeError> {
         }
     };
 
-    // A Firecrab-owned bridge is the only link this helper may repair.
     handle
         .link()
         .change(
@@ -116,26 +106,6 @@ async fn find_bridge(handle: &Handle) -> Result<Option<LinkMessage>, BridgeError
             Ok(None)
         }
         Err(error) => Err(BridgeError::Netlink(error)),
-    }
-}
-
-fn validate_owned_bridge(link: &LinkMessage) -> Result<(), BridgeError> {
-    let is_bridge = link.attributes.iter().any(|attribute| {
-        matches!(
-            attribute,
-            LinkAttribute::LinkInfo(info)
-                if info.iter().any(|item| matches!(item, LinkInfo::Kind(InfoKind::Bridge)))
-        )
-    });
-    let has_owner_alias = link
-        .attributes
-        .iter()
-        .any(|attribute| matches!(attribute, LinkAttribute::IfAlias(alias) if alias == BRIDGE_ALIAS));
-
-    if is_bridge && has_owner_alias {
-        Ok(())
-    } else {
-        Err(BridgeError::NotOwned)
     }
 }
 
@@ -268,19 +238,6 @@ mod tests {
             Ipv4Addr::new(172, 30, 0, 0),
             24
         ));
-    }
-
-    #[test]
-    fn only_a_tagged_linux_bridge_is_firecrab_owned() {
-        let mut bridge = LinkMessage::default();
-        bridge.attributes = vec![
-            LinkAttribute::LinkInfo(vec![LinkInfo::Kind(InfoKind::Bridge)]),
-            LinkAttribute::IfAlias(BRIDGE_ALIAS.to_owned()),
-        ];
-        assert!(validate_owned_bridge(&bridge).is_ok());
-
-        bridge.attributes.retain(|attribute| !matches!(attribute, LinkAttribute::IfAlias(_)));
-        assert!(matches!(validate_owned_bridge(&bridge), Err(BridgeError::NotOwned)));
     }
 
     #[test]

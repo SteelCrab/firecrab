@@ -232,11 +232,8 @@ async fn respond_to(envelope: NetworkRequestEnvelope) -> NetworkResponseEnvelope
 
 async fn dispatch(request: NetworkRequest) -> Result<(), HelperFailure> {
     match request {
-        NetworkRequest::EnsureBridge => bridge::ensure_bridge().await.map_err(|error| match error {
-            bridge::BridgeError::NotOwned => HelperFailure::NotOwned,
-            other => HelperFailure::Internal {
-                detail: error_chain(&other),
-            },
+        NetworkRequest::EnsureBridge => bridge::ensure_bridge().await.map_err(|error| HelperFailure::Internal {
+            detail: error_chain(&error),
         }),
         NetworkRequest::EnsureFirewall
         | NetworkRequest::CreateTap { .. }
