@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -8,7 +9,9 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
+use crate::firecracker::{self, FirecrackerProcess};
 use crate::model::{CreateVmRequest, VmRecord, VmState};
+use crate::rootfs;
 use crate::server::RequestId;
 use crate::state::AppState;
 
@@ -25,11 +28,7 @@ pub async fn get_vm(
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
 ) -> Result<Json<VmResponse>, AppError> {
-    let id = Uuid::parse_str(&id).map_err(|_| {
-        let mut fields = BTreeMap::new();
-        fields.insert("id".to_owned(), "must be a UUID".to_owned());
-        AppError::validation(fields, request_id.0)
-    })?;
+    let id = parse_id(&id, request_id.0)?;
     let vms = state
         .vms
         .lock()
@@ -97,6 +96,182 @@ pub async fn create_vm(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+/// Starts the VM synchronously: claim `starting`, prepare the disk and
+/// config, spawn Firecracker, wait for its API, then record `running`.
+/// Any failure lands the record on `error` with no process left behind.
+pub async fn start_vm(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let (claimed, previous) = claim_transition(&state, id, VmState::Starting, request_id.0)?;
+    if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
+        set_memory_state(&state, id, previous);
+        return Err(error);
+    }
+
+    let process = match run_start(&state, &claimed).await {
+        Ok(process) => process,
+        Err(reason) => {
+            eprintln!(
+                "[ERROR] request_id={} vm {id} start failed: {reason}",
+                request_id.0
+            );
+            return Err(fail_start(&state, id, request_id.0).await);
+        }
+    };
+
+    firecracker::register_and_watch(&state, id, process);
+
+    match transition_if(&state, id, VmState::Starting, VmState::Running) {
+        Some(running) => {
+            if persist_update(&state, &running, request_id.0).await.is_err() {
+                return Err(fail_start(&state, id, request_id.0).await);
+            }
+            Ok(Json(vm_response(&running)))
+        }
+        // The guest exited before we could record running; the exit monitor
+        // already landed the record on its terminal state.
+        None => state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&id)
+            .map(vm_response)
+            .map(Json)
+            .ok_or_else(|| AppError::not_found(request_id.0)),
+    }
+}
+
+fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {
+    Uuid::parse_str(id).map_err(|_| {
+        let mut fields = BTreeMap::new();
+        fields.insert("id".to_owned(), "must be a UUID".to_owned());
+        AppError::validation(fields, request_id)
+    })
+}
+
+/// Atomically checks the transition table and moves the in-memory record to
+/// `to`, so concurrent lifecycle calls on the same VM cannot both proceed.
+fn claim_transition(
+    state: &AppState,
+    id: Uuid,
+    to: VmState,
+    request_id: Uuid,
+) -> Result<(VmRecord, VmState), AppError> {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let vm = vms
+        .get_mut(&id)
+        .ok_or_else(|| AppError::not_found(request_id))?;
+    let previous = vm.state;
+    if !previous.can_transition(to) {
+        return Err(AppError::invalid_state(previous, request_id));
+    }
+    vm.state = to;
+    Ok((vm.clone(), previous))
+}
+
+fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord> {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    vms.get_mut(&id).map(|vm| {
+        vm.state = to;
+        vm.clone()
+    })
+}
+
+fn transition_if(state: &AppState, id: Uuid, from: VmState, to: VmState) -> Option<VmRecord> {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match vms.get_mut(&id) {
+        Some(vm) if vm.state == from => {
+            vm.state = to;
+            Some(vm.clone())
+        }
+        _ => None,
+    }
+}
+
+async fn persist_update(
+    state: &AppState,
+    record: &VmRecord,
+    request_id: Uuid,
+) -> Result<(), AppError> {
+    let store = state.store.clone();
+    let record = record.clone();
+    tokio::task::spawn_blocking(move || store.update(&record))
+        .await
+        .map_err(|_| AppError::internal(request_id))?
+        .map_err(|error| {
+            eprintln!("[ERROR] request_id={request_id} failed to persist VM state: {error}");
+            AppError::internal(request_id)
+        })
+}
+
+async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess, String> {
+    let template = state
+        .templates
+        .resolve_version(&vm.template, &vm.template_version)
+        .ok_or_else(|| {
+            format!(
+                "template {}/{} is not registered",
+                vm.template, vm.template_version
+            )
+        })?;
+
+    let templates = state.templates.clone();
+    let runtime = state.runtime.clone();
+    let record = vm.clone();
+    let config_path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+        let mut source = templates
+            .open_verified(&template.rootfs)
+            .map_err(|error| format!("rootfs verification failed: {error}"))?;
+        rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source)
+            .map_err(|error| format!("rootfs preparation failed: {error}"))?;
+        let kernel = templates.artifact_path(&template.kernel);
+        firecracker::write_config(&runtime.vms_dir, &record, &kernel, &template.boot_args)
+            .map_err(|error| format!("config generation failed: {error}"))
+    })
+    .await
+    .map_err(|error| format!("start preparation task failed: {error}"))??;
+
+    firecracker::spawn_vm(
+        &state.runtime.firecracker_binary,
+        &state.runtime.vms_dir,
+        vm.id,
+        &config_path,
+        state.runtime.ready_timeout,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// Failure tail of the start flow: record `error`, then make sure no process
+/// survives (the monitor sees `error` and leaves the record alone).
+async fn fail_start(state: &AppState, id: Uuid, request_id: Uuid) -> AppError {
+    let pid = state
+        .processes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&id)
+        .map(|process| process.pid);
+    if let Some(record) = set_memory_state(state, id, VmState::Error) {
+        let _ = persist_update(state, &record, request_id).await;
+    }
+    if let Some(pid) = pid {
+        firecracker::sigkill(pid);
+    }
+    AppError::internal(request_id)
+}
+
 fn sorted_responses(vms: &HashMap<Uuid, VmRecord>) -> Vec<VmResponse> {
     let mut records: Vec<&VmRecord> = vms.values().collect();
     records.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
@@ -151,11 +326,16 @@ fn valid_vm_name(name: &str) -> bool {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     use axum::response::IntoResponse;
     use tempfile::tempdir;
 
     use super::*;
+    use crate::firecracker::test_support::{
+        SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, short_tempdir,
+    };
+    use crate::state::RuntimeConfig;
     use crate::templates::{TemplateRegistry, TemplateSpec};
 
     #[test]
@@ -213,6 +393,10 @@ mod tests {
     }
 
     async fn test_state(root: &Path) -> AppState {
+        test_state_with_binary(root, PathBuf::from("/nonexistent-firecracker")).await
+    }
+
+    async fn test_state_with_binary(root: &Path, binary: PathBuf) -> AppState {
         fs::write(root.join("kernel"), b"kernel").unwrap();
         fs::write(root.join("rootfs"), b"rootfs").unwrap();
         let templates = TemplateRegistry::from_specs(
@@ -229,6 +413,35 @@ mod tests {
         AppState::with_db_file(templates, root.join("data/firecrab.db"))
             .await
             .unwrap()
+            .with_test_runtime(RuntimeConfig {
+                vms_dir: root.join("vms"),
+                firecracker_binary: binary,
+                ready_timeout: Duration::from_secs(5),
+                stop_grace: Duration::from_millis(500),
+            })
+    }
+
+    fn seed_vm(state: &AppState, vm: &VmRecord) {
+        state.store.insert(vm).unwrap();
+        state.vms.lock().unwrap().insert(vm.id, vm.clone());
+    }
+
+    fn memory_state(state: &AppState, id: Uuid) -> Option<VmState> {
+        state.vms.lock().unwrap().get(&id).map(|vm| vm.state)
+    }
+
+    fn db_state(state: &AppState, id: Uuid) -> Option<VmState> {
+        state.store.load_all().unwrap().get(&id).map(|vm| vm.state)
+    }
+
+    async fn wait_for_state(state: &AppState, id: Uuid, want: VmState) {
+        for _ in 0..100 {
+            if memory_state(state, id) == Some(want) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        panic!("vm {id} never reached {want:?}");
     }
 
     #[tokio::test]
@@ -293,6 +506,113 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn start_rejects_disallowed_states_with_conflict() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("busy", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+
+        let error = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Running));
+    }
+
+    #[tokio::test]
+    async fn start_unknown_vm_returns_not_found() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = start_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn start_failure_records_error_state_without_leftovers() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("doomed", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let error = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Error));
+        assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+        assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn guest_poweroff_lands_on_stopped() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(root, SERVE_ONCE_THEN_EXIT);
+        let state = test_state_with_binary(root, binary).await;
+        let vm = record("poweroff", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(_) = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        wait_for_state(&state, vm.id, VmState::Stopped).await;
+        assert_eq!(db_state(&state, vm.id), Some(VmState::Stopped));
+        assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn killed_process_lands_on_error() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(root, SERVE_LOOP);
+        let state = test_state_with_binary(root, binary).await;
+        let vm = record("crashy", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(_) = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+        let pid = state.processes.lock().unwrap().get(&vm.id).unwrap().pid;
+
+        firecracker::sigkill(pid);
+
+        wait_for_state(&state, vm.id, VmState::Error).await;
+        assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+        assert!(state.processes.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

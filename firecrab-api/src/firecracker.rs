@@ -433,6 +433,18 @@ while True:
     conn.close()
 "#;
 
+    // Serves the readiness probe once, then exits like a guest poweroff.
+    pub const SERVE_ONCE_THEN_EXIT: &str = r#"
+srv = socket.socket(socket.AF_UNIX)
+srv.bind(sock_path)
+srv.listen(1)
+conn, _ = srv.accept()
+conn.recv(1024)
+conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+conn.close()
+sys.exit(0)
+"#;
+
     pub fn fake_firecracker(directory: &Path, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 

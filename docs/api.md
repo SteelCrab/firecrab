@@ -21,6 +21,7 @@ cargo run
 | `FIRECRAB_ENV` | (없음) | `production`이면 `FIRECRAB_ALLOWED_ORIGINS` 기본값이 빈 값(=CORS 전체 차단)이 됨 |
 | `FIRECRAB_ALLOWED_ORIGINS` | `http://localhost:8080` (비-production) | 콤마로 구분된 허용 Origin 목록. CORS 및 `Origin` 헤더 검사에 사용 |
 | `FIRECRAB_IMAGE_ROOT` | `../images` (crate 기준 상대경로) | 템플릿 커널/rootfs 이미지가 위치한 루트 디렉터리 |
+| `FIRECRAB_FIRECRACKER_BIN` | `firecracker` (PATH 탐색) | VM 시작 시 실행할 Firecracker 바이너리 경로 |
 
 ## 요청/응답 공통 사항
 
@@ -128,6 +129,42 @@ curl -i http://localhost:3000/api/vms/00000000-0000-0000-0000-000000000000
 # UUID 형식이 아닌 id
 curl -i http://localhost:3000/api/vms/not-a-uuid
 ```
+
+### 4) MicroVM 시작 — POST /api/vms/{id}/start
+
+동기 처리: rootfs 준비(템플릿 복사) → Firecracker config 생성 → 프로세스 spawn → API socket readiness 확인 → `running` 저장.
+
+```sh
+curl -X POST http://localhost:3000/api/vms/$VM_ID/start
+```
+
+- 허용 상태: `created`/`stopped`/`error` → 성공 시 200 + `VmResponse` (`state: "running"`)
+- 그 외 상태: `409 invalid_state` (`fields.state`에 현재 상태)
+- 시작 실패(스폰 실패, readiness timeout 등): 상태를 `error`로 저장하고 `500` 반환, 프로세스 잔여물 없음
+- 재시작 시 기존 VM 디스크(`rootfs.ext4`)를 재사용해 데이터가 보존됨
+
+### VM 상태 lifecycle
+
+```
+created ──start──▶ starting ──▶ running ──stop──▶ stopping ──▶ stopped ──start──▶ …
+                      │            │                  │
+                      ▼            ▼(내부 종료)        ▼
+                    error        stopped/error      error
+```
+
+- Guest 내부 종료(poweroff 등)는 종료 감시가 자동 반영: 정상 종료 → `stopped`, 비정상 종료(crash, kill) → `error`
+- 삭제는 `created`/`stopped`/`error`에서만 허용
+
+## VM 디렉터리
+
+VM별 런타임 파일은 `data/vms/{id}/` 아래에 생성된다.
+
+| 파일 | 내용 |
+| --- | --- |
+| `rootfs.ext4` | 템플릿에서 복사된 VM 전용 writable 디스크 (stop 후에도 보존, delete 시 제거) |
+| `firecracker.json` | boot-source/drives/machine-config가 담긴 Firecracker 설정 (start마다 재생성) |
+| `firecracker.sock` | Firecracker API socket (프로세스 종료 시 제거) |
+| `console.log` | VM 부팅/콘솔 출력 (start마다 새로 씀) |
 
 ## 템플릿 레지스트리
 

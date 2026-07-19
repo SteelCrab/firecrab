@@ -9,7 +9,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Extension, Router};
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -135,6 +135,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::vms::list_vms).post(handlers::vms::create_vm),
         )
         .route("/api/vms/{id}", get(handlers::vms::get_vm))
+        .route("/api/vms/{id}/start", post(handlers::vms::start_vm))
         .fallback(not_found)
         .with_state(state)
         .layer(cors)

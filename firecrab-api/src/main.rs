@@ -1,13 +1,9 @@
 mod error;
 mod extract;
-// Consumed by the upcoming VM start API.
-#[allow(dead_code)]
 mod firecracker;
 mod handlers;
 mod model;
 mod persistence;
-// Consumed by the upcoming VM start API.
-#[allow(dead_code)]
 mod rootfs;
 mod server;
 mod state;

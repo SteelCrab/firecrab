@@ -6,6 +6,9 @@ use axum::response::{IntoResponse, Response};
 use firecrab_api_types::{ApiError, ErrorResponse};
 use uuid::Uuid;
 
+use crate::model::VmState;
+use crate::persistence::encode_state;
+
 #[derive(Debug)]
 pub struct AppError {
     status: StatusCode,
@@ -111,6 +114,18 @@ impl AppError {
             "resource not found",
             request_id,
         )
+    }
+
+    pub fn invalid_state(current: VmState, request_id: Uuid) -> Self {
+        let mut fields = BTreeMap::new();
+        fields.insert("state".to_owned(), encode_state(current));
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "invalid_state",
+            message: "current VM state does not allow this operation",
+            fields,
+            request_id,
+        }
     }
 }
 

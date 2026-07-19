@@ -40,8 +40,6 @@ const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template,
     template_boot_args_sha256, cpu, ram) \
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 
-// update/delete back the upcoming lifecycle APIs; only tests exercise them so far.
-#[allow(dead_code)]
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10 \
@@ -66,7 +64,6 @@ pub enum PersistenceError {
     #[error("VM database record {id} is invalid: {reason}")]
     CorruptRecord { id: String, reason: String },
     #[error("VM {id} does not exist in the database")]
-    #[allow(dead_code)]
     MissingVm { id: Uuid },
     #[error("failed to read legacy VM data from {path}: {source}")]
     LegacyRead {
@@ -159,7 +156,6 @@ impl Store {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn update(&self, vm: &VmRecord) -> Result<(), PersistenceError> {
         if execute_record(&self.lock(), UPDATE_SQL, vm)? == 0 {
             return Err(PersistenceError::MissingVm { id: vm.id });
@@ -167,6 +163,7 @@ impl Store {
         Ok(())
     }
 
+    // Consumed by the upcoming delete API.
     #[allow(dead_code)]
     pub fn delete(&self, id: Uuid) -> Result<(), PersistenceError> {
         let changed = self
@@ -248,7 +245,7 @@ fn execute_record(
 }
 
 // Encode/decode through serde so the DB text stays in lockstep with the API wire format.
-fn encode_state(state: VmState) -> String {
+pub(crate) fn encode_state(state: VmState) -> String {
     match serde_json::to_value(state) {
         Ok(serde_json::Value::String(name)) => name,
         _ => unreachable!("VmState serializes to a string"),
