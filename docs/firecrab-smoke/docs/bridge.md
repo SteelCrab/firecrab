@@ -25,7 +25,7 @@ sudo FIRECRAB_NET_HELPER_SOCK=/tmp/firecrab-net.sock \
 ## 1. 생성
 
 ```sh
-python3 docs/firecrab-smoke/net-helper.py /tmp/firecrab-net.sock ensure_bridge
+python3 docs/firecrab-smoke/script/net-helper.py /tmp/firecrab-net.sock ensure_bridge
 
 ip -d link show fcbr0                              # UP, alias firecrab:bridge:v1
 ip addr show fcbr0                                  # 172.30.0.1/24
@@ -36,8 +36,8 @@ ip -6 addr show dev fcbr0                           # 출력 없음
 ## 2. idempotent 재실행
 
 ```sh
-python3 docs/firecrab-smoke/net-helper.py /tmp/firecrab-net.sock ensure_bridge
-python3 docs/firecrab-smoke/net-helper.py /tmp/firecrab-net.sock ensure_bridge
+python3 docs/firecrab-smoke/script/net-helper.py /tmp/firecrab-net.sock ensure_bridge
+python3 docs/firecrab-smoke/script/net-helper.py /tmp/firecrab-net.sock ensure_bridge
 ```
 
 `ip addr show fcbr0` — 주소 중복 없어야 함.
@@ -46,7 +46,7 @@ python3 docs/firecrab-smoke/net-helper.py /tmp/firecrab-net.sock ensure_bridge
 
 ```sh
 sudo ip addr del 172.30.0.1/24 dev fcbr0
-python3 docs/firecrab-smoke/net-helper.py /tmp/firecrab-net.sock ensure_bridge
+python3 docs/firecrab-smoke/script/net-helper.py /tmp/firecrab-net.sock ensure_bridge
 ip addr show fcbr0   # 복원 확인
 ```
 
@@ -56,7 +56,7 @@ ip addr show fcbr0   # 복원 확인
 sudo ip link del fcbr0
 sudo ip link add fcbr0 type dummy
 
-python3 docs/firecrab-smoke/net-helper.py /tmp/firecrab-net.sock ensure_bridge
+python3 docs/firecrab-smoke/script/net-helper.py /tmp/firecrab-net.sock ensure_bridge
 # 기대: result.Err.code == not_owned
 
 ip -d link show fcbr0   # dummy 그대로, 미변경 확인

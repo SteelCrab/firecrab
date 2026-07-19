@@ -6,7 +6,7 @@ Usage:
 
 operation defaults to ensure_firewall (still unimplemented) so the framing
 check stays deterministic without privileges; pass ensure_bridge to exercise
-the real bridge path as root (docs/firecrab-smoke/bridge.md).
+the real bridge path as root (docs/firecrab-smoke/docs/bridge.md).
 
 The helper should be running in another terminal, for example:
     FIRECRAB_NET_HELPER_SOCK=/tmp/firecrab-net.sock cargo run -p firecrab-net-helper

@@ -33,7 +33,7 @@ RUST_LOG=firecrab_api=debug cargo run
 
 `firecrab-api`에는 `firecrab-net-helper`와 통신하는 `NetworkClient`가 준비되어 있지만, 현재 VM start/stop 흐름에는 아직 연결되어 있지 않다. 따라서 지금 API 실행에는 network helper가 필수 조건이 아니다.
 
-- helper protocol과 수동 검증 절차: [net-helper.md](net-helper.md), [firecrab-smoke/net-helper.md](firecrab-smoke/net-helper.md)
+- helper protocol과 수동 검증 절차: [net-helper.md](net-helper.md), [firecrab-smoke/docs/net-helper.md](firecrab-smoke/docs/net-helper.md)
 - helper socket 환경 변수: `FIRECRAB_NET_HELPER_SOCK` (helper와 API 클라이언트가 공유할 경로, 기본값 `/run/firecrab/net-helper.sock`)
 - 실제 bridge/TAP/firewall 자동화는 TAP/network task에서 start/stop 흐름에 연결 예정
 

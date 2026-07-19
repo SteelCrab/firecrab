@@ -11,7 +11,7 @@ FIRECRAB_NET_HELPER_SOCK=/tmp/firecrab-net.sock cargo run -p firecrab-net-helper
 ## 테스트
 
 ```sh
-python3 docs/firecrab-smoke/net-helper.py /tmp/firecrab-net.sock
+python3 docs/firecrab-smoke/script/net-helper.py /tmp/firecrab-net.sock
 ```
 
 기본 operation `ensure_firewall` (미구현 → 결정적 `unsupported_operation`).
