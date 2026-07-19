@@ -13,8 +13,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::model::VmRecord;
+use crate::model::{VmRecord, VmState};
 use crate::rootfs;
+use crate::state::AppState;
 
 const CONFIG_FILE_NAME: &str = "firecracker.json";
 const API_SOCK_FILE_NAME: &str = "firecracker.sock";
@@ -206,6 +207,79 @@ pub fn sigkill(pid: u32) {
     unsafe {
         libc::kill(pid as i32, libc::SIGKILL);
     }
+}
+
+/// Registers the process in the state map and spawns the exit monitor.
+///
+/// The monitor owns the child and is the only writer of guest-initiated
+/// terminal states: a clean exit lands on `stopped`, a crash on `error`, and
+/// an exit while the record is `stopping` always lands on `stopped` so the
+/// stop API and the monitor never fight over the result.
+pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProcess) {
+    let (exited_tx, exited_rx) = watch::channel(false);
+    let pid = process.pid().unwrap_or_default();
+    state
+        .processes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(
+            id,
+            VmProcess {
+                pid,
+                exited: exited_rx,
+            },
+        );
+
+    let FirecrackerProcess { mut child, api_sock } = process;
+    let state = state.clone();
+    tokio::spawn(async move {
+        let status = child.wait().await;
+        let _ = fs::remove_file(&api_sock);
+        state
+            .processes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&id);
+
+        let clean_exit = status.as_ref().is_ok_and(|status| status.success());
+        let updated = {
+            let mut vms = state
+                .vms
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match vms.get_mut(&id) {
+                Some(vm)
+                    if matches!(
+                        vm.state,
+                        VmState::Starting | VmState::Running | VmState::Stopping
+                    ) =>
+                {
+                    vm.state = if vm.state == VmState::Stopping || clean_exit {
+                        VmState::Stopped
+                    } else {
+                        VmState::Error
+                    };
+                    Some(vm.clone())
+                }
+                _ => None,
+            }
+        };
+
+        if let Some(record) = updated {
+            let store = state.store.clone();
+            match tokio::task::spawn_blocking(move || store.update(&record)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    eprintln!("[ERROR] vm {id}: failed to persist exit state: {error}");
+                }
+                Err(error) => {
+                    eprintln!("[ERROR] vm {id}: exit state persistence task failed: {error}");
+                }
+            }
+        }
+
+        let _ = exited_tx.send(true);
+    });
 }
 
 /// Spawns Firecracker for the VM and waits until its API socket answers.
