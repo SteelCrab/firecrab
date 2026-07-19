@@ -11,6 +11,12 @@ cargo run
 
 `127.0.0.1:3000` 에서 HTTP 서버가 시작 (기본값은 loopback 바인딩, 인증/TLS 없이도 허용됨)
 
+모든 요청(method/path/status/소요시간/request_id)과 VM lifecycle 이벤트가 stdout에 로그로 출력된다. 로그 레벨은 `RUST_LOG`로 조절 (기본 `firecrab_api=info`):
+
+```sh
+RUST_LOG=firecrab_api=debug cargo run
+```
+
 ### 환경 변수
 
 | 변수 | 기본값 | 설명 |
@@ -22,6 +28,14 @@ cargo run
 | `FIRECRAB_ALLOWED_ORIGINS` | `http://localhost:8080` (비-production) | 콤마로 구분된 허용 Origin 목록. CORS 및 `Origin` 헤더 검사에 사용 |
 | `FIRECRAB_IMAGE_ROOT` | `../images` (crate 기준 상대경로) | 템플릿 커널/rootfs 이미지가 위치한 루트 디렉터리 |
 | `FIRECRAB_FIRECRACKER_BIN` | `firecracker` (PATH 탐색) | VM 시작 시 실행할 Firecracker 바이너리 경로 |
+
+### 네트워크 helper 상태
+
+`firecrab-api`에는 `firecrab-net-helper`와 통신하는 `NetworkClient`가 준비되어 있지만, 현재 VM start/stop 흐름에는 아직 연결되어 있지 않다. 따라서 지금 API 실행에는 network helper가 필수 조건이 아니다.
+
+- helper protocol과 수동 검증 절차: [net-helper.md](net-helper.md), [net-helper-smoke.md](net-helper-smoke.md)
+- helper socket 환경 변수: `FIRECRAB_NET_HELPER_SOCK` (helper와 API 클라이언트가 공유할 경로, 기본값 `/run/firecrab/net-helper.sock`)
+- 실제 bridge/TAP/firewall 자동화는 TAP/network task에서 start/stop 흐름에 연결 예정
 
 ## 요청/응답 공통 사항
 

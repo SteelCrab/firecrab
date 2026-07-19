@@ -56,7 +56,17 @@ async fn main() -> ExitCode {
     }
 }
 
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "firecrab_api=info".into()),
+        )
+        .init();
+}
+
 async fn run() -> Result<(), StartupError> {
+    init_tracing();
     let config = HttpConfig::load().map_err(StartupError::Config)?;
     let templates = TemplateRegistry::load_default().map_err(StartupError::Template)?;
     let state = AppState::new(templates)
@@ -72,7 +82,7 @@ async fn run() -> Result<(), StartupError> {
         })?;
 
     let local_address = listener.local_addr().map_err(StartupError::LocalAddress)?;
-    println!("[INFO] Listening on http://{local_address}");
+    tracing::info!(address = %local_address, "listening on http://{local_address}");
     axum::serve(listener, app)
         .await
         .map_err(StartupError::Serve)?;

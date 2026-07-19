@@ -82,12 +82,18 @@ pub async fn create_vm(
         .await
         .map_err(|_| AppError::internal(request_id.0))?
         .map_err(|error| {
-            eprintln!(
-                "[ERROR] request_id={} failed to persist VM state: {error}",
-                request_id.0
-            );
+            tracing::error!(request_id = %request_id.0, %error, "failed to persist VM state");
             AppError::internal(request_id.0)
         })?;
+    tracing::info!(
+        request_id = %request_id.0,
+        vm_id = %vm.id,
+        name = vm.name,
+        template = vm.template,
+        cpu = vm.cpu,
+        ram = vm.ram,
+        "vm created"
+    );
     state
         .vms
         .lock()
@@ -112,16 +118,15 @@ pub async fn start_vm(
         return Err(error);
     }
 
+    let started = std::time::Instant::now();
     let process = match run_start(&state, &claimed).await {
         Ok(process) => process,
         Err(reason) => {
-            eprintln!(
-                "[ERROR] request_id={} vm {id} start failed: {reason}",
-                request_id.0
-            );
+            tracing::error!(request_id = %request_id.0, vm_id = %id, reason, "vm start failed");
             return Err(fail_start(&state, id, request_id.0).await);
         }
     };
+    let pid = process.pid();
 
     firecracker::register_and_watch(&state, id, process);
 
@@ -130,6 +135,13 @@ pub async fn start_vm(
             if persist_update(&state, &running, request_id.0).await.is_err() {
                 return Err(fail_start(&state, id, request_id.0).await);
             }
+            tracing::info!(
+                request_id = %request_id.0,
+                vm_id = %id,
+                pid,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "vm running"
+            );
             Ok(Json(vm_response(&running)))
         }
         // The guest exited before we could record running; the exit monitor
@@ -192,6 +204,7 @@ pub async fn stop_vm(
         vm.clone()
     };
     persist_update(&state, &stopped, request_id.0).await?;
+    tracing::info!(request_id = %request_id.0, vm_id = %id, "vm stopped");
     Ok(Json(vm_response(&stopped)))
 }
 
@@ -237,10 +250,7 @@ pub async fn delete_vm(
     .and_then(|inner| inner);
 
     if let Err(reason) = result {
-        eprintln!(
-            "[ERROR] request_id={} vm {id} delete failed: {reason}",
-            request_id.0
-        );
+        tracing::error!(request_id = %request_id.0, vm_id = %id, reason, "vm delete failed");
         state
             .vms
             .lock()
@@ -248,6 +258,7 @@ pub async fn delete_vm(
             .insert(id, removed);
         return Err(AppError::internal(request_id.0));
     }
+    tracing::info!(request_id = %request_id.0, vm_id = %id, "vm deleted");
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -318,7 +329,7 @@ async fn persist_update(
         .await
         .map_err(|_| AppError::internal(request_id))?
         .map_err(|error| {
-            eprintln!("[ERROR] request_id={request_id} failed to persist VM state: {error}");
+            tracing::error!(request_id = %request_id, %error, "failed to persist VM state");
             AppError::internal(request_id)
         })
 }

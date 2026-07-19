@@ -266,14 +266,20 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
         };
 
         if let Some(record) = updated {
+            tracing::info!(
+                vm_id = %id,
+                clean_exit,
+                state = ?record.state,
+                "vm process exited"
+            );
             let store = state.store.clone();
             match tokio::task::spawn_blocking(move || store.update(&record)).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
-                    eprintln!("[ERROR] vm {id}: failed to persist exit state: {error}");
+                    tracing::error!(vm_id = %id, %error, "failed to persist exit state");
                 }
                 Err(error) => {
-                    eprintln!("[ERROR] vm {id}: exit state persistence task failed: {error}");
+                    tracing::error!(vm_id = %id, %error, "exit state persistence task failed");
                 }
             }
         }
