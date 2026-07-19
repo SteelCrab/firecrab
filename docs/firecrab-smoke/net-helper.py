@@ -2,7 +2,11 @@
 """Manual smoke test for firecrab-net-helper.
 
 Usage:
-    python3 net-helper.py [socket-path]
+    python3 net-helper.py [socket-path] [operation]
+
+operation defaults to ensure_firewall (still unimplemented) so the framing
+check stays deterministic without privileges; pass ensure_bridge to exercise
+the real bridge path as root (docs/firecrab-smoke/bridge.md).
 
 The helper should be running in another terminal, for example:
     FIRECRAB_NET_HELPER_SOCK=/tmp/firecrab-net.sock cargo run -p firecrab-net-helper
@@ -16,6 +20,7 @@ import uuid
 
 DEFAULT_PATH = "/tmp/firecrab-net.sock"
 PATH = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("FIRECRAB_NET_HELPER_SOCK", DEFAULT_PATH)
+OPERATION = sys.argv[2] if len(sys.argv) > 2 else "ensure_firewall"
 
 
 def recv_exact(sock, length):
@@ -46,7 +51,7 @@ except OSError as error:
     sys.exit(f"소켓 연결 실패 ({PATH}): {error} — helper 실행 여부와 경로를 확인하세요")
 
 req = {"version": 1, "request_id": str(uuid.uuid4()),
-       "request": {"operation": "ensure_bridge"}}
+       "request": {"operation": OPERATION}}
 print("정상 요청  :", call(s, req))
 print("버전 불일치:", call(s, dict(req, version=99)))
 print("이후 종료  :", s.recv(4) == b"")

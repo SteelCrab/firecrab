@@ -88,11 +88,11 @@ FIRECRAB_NET_HELPER_SOCK=/tmp/firecrab-net.sock cargo run -p firecrab-net-helper
 
 ## 스모크 테스트
 
-수동 검증 절차는 [net-helper-smoke.md](net-helper-smoke.md)에 따로 정리한다.
+수동 검증 절차는 [firecrab-smoke/net-helper.md](firecrab-smoke/net-helper.md)에 따로 정리한다.
 
 ## 테스트 클라이언트
 
-`net-helper.py`는 수동 테스트용 클라이언트다.
+`firecrab-smoke/net-helper.py`는 수동 테스트용 클라이언트다.
 
 하는 일:
 
