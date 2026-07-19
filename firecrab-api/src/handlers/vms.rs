@@ -11,6 +11,7 @@ use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::firecracker::{self, FirecrackerProcess, VmProcess};
 use crate::model::{CreateVmRequest, VmRecord, VmState};
+use crate::persistence::PersistenceError;
 use crate::rootfs;
 use crate::server::RequestId;
 use crate::state::AppState;
@@ -192,6 +193,62 @@ pub async fn stop_vm(
     };
     persist_update(&state, &stopped, request_id.0).await?;
     Ok(Json(vm_response(&stopped)))
+}
+
+/// Hard-deletes the VM: refuse while a process could be alive, then remove
+/// the VM directory and the record.
+pub async fn delete_vm(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let removed = {
+        let mut vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vm = vms
+            .get(&id)
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        if !vm.state.can_delete() {
+            return Err(AppError::invalid_state(vm.state, request_id.0));
+        }
+        vms.remove(&id).expect("record checked under the same lock")
+    };
+
+    let store = state.store.clone();
+    let vm_dir = state.runtime.vms_dir.join(id.to_string());
+    let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        match std::fs::remove_dir_all(&vm_dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("failed to remove {}: {error}", vm_dir.display()));
+            }
+        }
+        match store.delete(id) {
+            Ok(()) | Err(PersistenceError::MissingVm { .. }) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())
+    .and_then(|inner| inner);
+
+    if let Err(reason) = result {
+        eprintln!(
+            "[ERROR] request_id={} vm {id} delete failed: {reason}",
+            request_id.0
+        );
+        state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id, removed);
+        return Err(AppError::internal(request_id.0));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {
@@ -678,6 +735,59 @@ mod tests {
 
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
         assert_eq!(memory_state(&state, vm.id), Some(VmState::Created));
+    }
+
+    #[tokio::test]
+    async fn delete_removes_record_and_directory() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("condemned", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let vm_dir = state.runtime.vms_dir.join(vm.id.to_string());
+        fs::create_dir_all(&vm_dir).unwrap();
+        fs::write(vm_dir.join("rootfs.ext4"), b"disk").unwrap();
+
+        let status = delete_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(state.vms.lock().unwrap().is_empty());
+        assert!(state.store.load_all().unwrap().is_empty());
+        assert!(!vm_dir.exists());
+
+        let error = get_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_active_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("active", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+
+        let error = delete_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Running));
     }
 
     #[tokio::test]

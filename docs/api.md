@@ -154,6 +154,17 @@ curl -X POST http://localhost:3000/api/vms/$VM_ID/stop
 - 허용 상태: `running` → 성공 시 200 + `VmResponse` (`state: "stopped"`)
 - 그 외 상태: `409 invalid_state`
 
+### 6) MicroVM 삭제 — DELETE /api/vms/{id}
+
+Hard delete: `data/vms/{id}` 디렉터리(디스크 포함)와 레코드를 제거.
+
+```sh
+curl -i -X DELETE http://localhost:3000/api/vms/$VM_ID
+```
+
+- `starting`/`running`/`stopping` 상태면 `409 invalid_state` — 먼저 stop 필요
+- 성공 시 `204 No Content`, 이후 조회는 404
+
 ### VM 상태 lifecycle
 
 ```

@@ -134,7 +134,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/vms",
             get(handlers::vms::list_vms).post(handlers::vms::create_vm),
         )
-        .route("/api/vms/{id}", get(handlers::vms::get_vm))
+        .route(
+            "/api/vms/{id}",
+            get(handlers::vms::get_vm).delete(handlers::vms::delete_vm),
+        )
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .fallback(not_found)

@@ -163,8 +163,6 @@ impl Store {
         Ok(())
     }
 
-    // Consumed by the upcoming delete API.
-    #[allow(dead_code)]
     pub fn delete(&self, id: Uuid) -> Result<(), PersistenceError> {
         let changed = self
             .lock()
