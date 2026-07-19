@@ -4,7 +4,7 @@ use uuid::Uuid;
 pub use firecrab_api_types::CreateVmRequest;
 pub use firecrab_api_types::VmState;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VmRecord {
     pub id: Uuid,
     pub name: String,

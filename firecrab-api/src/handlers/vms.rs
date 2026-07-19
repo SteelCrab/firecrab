@@ -9,7 +9,6 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::model::{CreateVmRequest, VmRecord, VmState};
-use crate::persistence;
 use crate::server::RequestId;
 use crate::state::AppState;
 
@@ -77,15 +76,11 @@ pub async fn create_vm(
     };
 
     let response = vm_response(&vm);
-    let _writer = state.persistence_writer.lock().await;
-    let mut snapshot = state
-        .vms
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    snapshot.insert(vm.id, vm.clone());
-    persistence::save(&state.data_file, &snapshot)
+    let store = state.store.clone();
+    let record = vm.clone();
+    tokio::task::spawn_blocking(move || store.insert(&record))
         .await
+        .map_err(|_| AppError::internal(request_id.0))?
         .map_err(|error| {
             eprintln!(
                 "[ERROR] request_id={} failed to persist VM state: {error}",
@@ -231,7 +226,7 @@ mod tests {
             }],
         )
         .unwrap();
-        AppState::with_data_file(templates, root.join("data/vms.json"))
+        AppState::with_db_file(templates, root.join("data/firecrab.db"))
             .await
             .unwrap()
     }
@@ -304,7 +299,7 @@ mod tests {
     async fn persistence_failure_does_not_publish_vm_in_memory() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        fs::write(directory.path().join("data"), b"not a directory").unwrap();
+        state.store.break_for_tests();
 
         let request = CreateVmRequest {
             name: "test-vm".to_owned(),
