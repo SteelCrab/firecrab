@@ -175,6 +175,7 @@ created ──start──▶ starting ──▶ running ──stop──▶ stop
 ```
 
 - Guest 내부 종료(poweroff 등)는 종료 감시가 자동 반영: 정상 종료 → `stopped`, 비정상 종료(crash, kill) → `error`
+- 서버 재시작 시 이전 실행이 남긴 `starting`/`running`/`stopping` 레코드는 `stopped`로 정리됨 (유령 running 방지)
 - 삭제는 `created`/`stopped`/`error`에서만 허용
 
 ## VM 디렉터리

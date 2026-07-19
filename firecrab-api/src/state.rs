@@ -49,6 +49,9 @@ impl AppState {
     ) -> Result<Self, PersistenceError> {
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
+            // A fresh server has no processes, so live states from the
+            // previous run are ghosts — demote them before serving.
+            store.reset_active_states()?;
             let vms = store.load_all()?;
             Ok::<_, PersistenceError>((store, vms))
         })

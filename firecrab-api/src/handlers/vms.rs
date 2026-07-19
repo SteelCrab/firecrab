@@ -838,6 +838,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restart_demotes_active_states_to_stopped() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let state = test_state(root).await;
+        let mut vm = record("ghost", Uuid::new_v4());
+        vm.state = VmState::Running;
+        state.store.insert(&vm).unwrap();
+        drop(state);
+
+        let reopened = test_state(root).await;
+
+        assert_eq!(memory_state(&reopened, vm.id), Some(VmState::Stopped));
+        assert_eq!(db_state(&reopened, vm.id), Some(VmState::Stopped));
+    }
+
+    #[tokio::test]
     async fn persistence_failure_does_not_publish_vm_in_memory() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
