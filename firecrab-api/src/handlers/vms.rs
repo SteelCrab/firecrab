@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
-use crate::firecracker::{self, FirecrackerProcess};
+use crate::firecracker::{self, FirecrackerProcess, VmProcess};
 use crate::model::{CreateVmRequest, VmRecord, VmState};
 use crate::rootfs;
 use crate::server::RequestId;
@@ -142,6 +142,56 @@ pub async fn start_vm(
             .map(Json)
             .ok_or_else(|| AppError::not_found(request_id.0)),
     }
+}
+
+/// Stops the VM synchronously: claim `stopping`, SIGTERM the process,
+/// escalate to SIGKILL after the grace period, then record `stopped`.
+pub async fn stop_vm(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let (claimed, previous) = claim_transition(&state, id, VmState::Stopping, request_id.0)?;
+    if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
+        set_memory_state(&state, id, previous);
+        return Err(error);
+    }
+
+    let entry = state
+        .processes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&id)
+        .cloned();
+    if let Some(VmProcess { pid, mut exited }) = entry {
+        firecracker::sigterm(pid);
+        if tokio::time::timeout(state.runtime.stop_grace, exited.changed())
+            .await
+            .is_err()
+        {
+            firecracker::sigkill(pid);
+            let _ = tokio::time::timeout(state.runtime.stop_grace, exited.changed()).await;
+        }
+    }
+
+    // The exit monitor normally lands the record on stopped; cover the
+    // process-less and raced cases by finishing the transition ourselves.
+    let stopped = {
+        let mut vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vm = vms
+            .get_mut(&id)
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        if vm.state == VmState::Stopping {
+            vm.state = VmState::Stopped;
+        }
+        vm.clone()
+    };
+    persist_update(&state, &stopped, request_id.0).await?;
+    Ok(Json(vm_response(&stopped)))
 }
 
 fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {
@@ -333,7 +383,7 @@ mod tests {
 
     use super::*;
     use crate::firecracker::test_support::{
-        SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, short_tempdir,
+        SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, process_alive, short_tempdir,
     };
     use crate::state::RuntimeConfig;
     use crate::templates::{TemplateRegistry, TemplateSpec};
@@ -509,6 +559,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_then_stop_runs_the_full_lifecycle() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(
+            root,
+            &format!("signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)){SERVE_LOOP}"),
+        );
+        let state = test_state_with_binary(root, binary).await;
+        let vm = record("lifecycle", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(started) = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(started.state, VmState::Running);
+        assert_eq!(db_state(&state, vm.id), Some(VmState::Running));
+        let pid = state.processes.lock().unwrap().get(&vm.id).unwrap().pid as i32;
+        assert!(process_alive(pid));
+        assert!(
+            rootfs::rootfs_path(&state.runtime.vms_dir, vm.id).exists(),
+            "start must prepare the VM disk"
+        );
+
+        let Json(stopped) = stop_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(stopped.state, VmState::Stopped);
+        assert_eq!(db_state(&state, vm.id), Some(VmState::Stopped));
+        assert!(!process_alive(pid));
+        assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn start_rejects_disallowed_states_with_conflict() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
@@ -566,6 +659,25 @@ mod tests {
         assert_eq!(memory_state(&state, vm.id), Some(VmState::Error));
         assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
         assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stop_rejects_non_running_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("idle", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let error = stop_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Created));
     }
 
     #[tokio::test]

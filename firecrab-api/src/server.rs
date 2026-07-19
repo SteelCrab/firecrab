@@ -136,6 +136,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/vms/{id}", get(handlers::vms::get_vm))
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm))
+        .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .fallback(not_found)
         .with_state(state)
         .layer(cors)

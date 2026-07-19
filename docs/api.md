@@ -143,6 +143,17 @@ curl -X POST http://localhost:3000/api/vms/$VM_ID/start
 - 시작 실패(스폰 실패, readiness timeout 등): 상태를 `error`로 저장하고 `500` 반환, 프로세스 잔여물 없음
 - 재시작 시 기존 VM 디스크(`rootfs.ext4`)를 재사용해 데이터가 보존됨
 
+### 5) MicroVM 중지 — POST /api/vms/{id}/stop
+
+동기 처리: `stopping` 저장 → SIGTERM → 유예시간(5s) 초과 시 SIGKILL → `stopped` 저장.
+
+```sh
+curl -X POST http://localhost:3000/api/vms/$VM_ID/stop
+```
+
+- 허용 상태: `running` → 성공 시 200 + `VmResponse` (`state: "stopped"`)
+- 그 외 상태: `409 invalid_state`
+
 ### VM 상태 lifecycle
 
 ```
