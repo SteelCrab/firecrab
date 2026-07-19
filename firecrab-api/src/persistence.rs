@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::model::{VmRecord, VmState};
+use crate::ipam::{self, IpamError};
+use crate::model::{Lease, VmRecord, VmState};
 
 const DB_FILE: &str = "data/firecrab.db";
 const LEGACY_FILE_NAME: &str = "vms.json";
@@ -111,6 +112,10 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute(CREATE_TABLE_SQL, [])?;
+        conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
+        for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
+            conn.execute(index_sql, [])?;
+        }
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -170,6 +175,26 @@ impl Store {
         if changed == 0 {
             return Err(PersistenceError::MissingVm { id });
         }
+        Ok(())
+    }
+
+    /// Allocate an IPv4 + MAC for `vm_id` inside a `BEGIN IMMEDIATE`
+    /// transaction, serializing concurrent allocations on the same lock.
+    pub fn allocate_lease(&self, vm_id: Uuid) -> Result<Lease, IpamError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let lease = ipam::allocate(&tx, vm_id)?;
+        tx.commit()?;
+        Ok(lease)
+    }
+
+    /// Release `vm_id`'s active lease; the row stays as history. Call only
+    /// after VM cleanup (policy, TAP, artifacts) has fully succeeded.
+    pub fn release_lease(&self, vm_id: Uuid) -> Result<(), IpamError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ipam::release(&tx, vm_id)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -420,5 +445,55 @@ mod tests {
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
             .unwrap();
         assert_eq!(mode, "wal");
+    }
+
+    #[test]
+    fn concurrent_lease_allocation_never_hands_out_duplicates() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let store = store.clone();
+                std::thread::spawn(move || store.allocate_lease(Uuid::new_v4()).unwrap())
+            })
+            .collect();
+        let leases: Vec<Lease> = handles.into_iter().map(|handle| handle.join().unwrap()).collect();
+
+        let mut ips: Vec<_> = leases.iter().map(|lease| lease.ipv4).collect();
+        let mut macs: Vec<_> = leases.iter().map(|lease| lease.mac).collect();
+        ips.sort();
+        macs.sort_by_key(|mac| mac.0);
+        let unique_ip_count = {
+            let mut deduped = ips.clone();
+            deduped.dedup();
+            deduped.len()
+        };
+        let unique_mac_count = {
+            let mut deduped = macs.clone();
+            deduped.dedup();
+            deduped.len()
+        };
+        assert_eq!(unique_ip_count, 16, "duplicate IPs handed out: {ips:?}");
+        assert_eq!(unique_mac_count, 16, "duplicate MACs handed out: {macs:?}");
+    }
+
+    #[test]
+    fn lease_persists_across_stop_start_and_frees_only_after_release() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let vm_id = Uuid::new_v4();
+
+        let lease = store.allocate_lease(vm_id).unwrap();
+        // Simulate stop/start: nothing in the lifecycle touches the lease.
+        assert_eq!(
+            store.allocate_lease(vm_id).unwrap_err().to_string(),
+            IpamError::AlreadyLeased { vm_id }.to_string()
+        );
+
+        store.release_lease(vm_id).unwrap();
+        let other_vm = Uuid::new_v4();
+        let reallocated = store.allocate_lease(other_vm).unwrap();
+        assert_eq!(reallocated.ipv4, lease.ipv4, "freed address should be reusable");
     }
 }
