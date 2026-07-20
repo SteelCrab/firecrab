@@ -1,4 +1,4 @@
-import type { ApiError, CreateVmRequest, ErrorResponse, VmResponse } from "../bindings";
+import type { ApiError, CreateVmRequest, ErrorResponse, VmLogResponse, VmResponse } from "../bindings";
 
 /** API failures split into what the server said vs. not reaching it at all. */
 export class ApiClientError extends Error {
@@ -58,6 +58,14 @@ async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
 
 export function listVms(): Promise<VmResponse[]> {
   return fetchJson("/api/vms");
+}
+
+export function getVm(id: string): Promise<VmResponse> {
+  return fetchJson(`/api/vms/${id}`);
+}
+
+export function getVmLog(id: string): Promise<VmLogResponse> {
+  return fetchJson(`/api/vms/${id}/log`);
 }
 
 export function createVm(request: CreateVmRequest): Promise<VmResponse> {

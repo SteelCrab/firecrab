@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
 use std::path::PathBuf;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use firecrab_api_types::VmResponse;
+use firecrab_api_types::{VmLogResponse, VmResponse};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -40,6 +41,57 @@ pub async fn get_vm(
         .ok_or_else(|| AppError::not_found(request_id.0))
 }
 
+/// Bytes of the on-disk console log returned to the dashboard's VM detail
+/// view; generous enough for a full boot without risking an unbounded
+/// response for a long-lived VM's ever-growing log file.
+const MAX_LOG_BYTES: u64 = 256 * 1024;
+
+/// The VM's captured serial console output (see
+/// `firecracker::console_log_path`) — empty, not an error, before the VM has
+/// ever produced any output.
+pub async fn get_vm_log(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmLogResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !vms.contains_key(&id) {
+            return Err(AppError::not_found(request_id.0));
+        }
+    }
+
+    let vms_dir = state.runtime.vms_dir.clone();
+    tokio::task::spawn_blocking(move || read_console_log(&vms_dir, id))
+        .await
+        .map(Json)
+        .map_err(|_| AppError::internal(request_id.0))
+}
+
+fn read_console_log(vms_dir: &std::path::Path, id: Uuid) -> VmLogResponse {
+    let path = firecracker::console_log_path(vms_dir, id);
+    let Ok(file) = std::fs::File::open(&path) else {
+        return VmLogResponse {
+            console_log: String::new(),
+            truncated: false,
+        };
+    };
+    let truncated = file
+        .metadata()
+        .map(|metadata| metadata.len() > MAX_LOG_BYTES)
+        .unwrap_or(false);
+    let mut buffer = Vec::new();
+    let _ = file.take(MAX_LOG_BYTES).read_to_end(&mut buffer);
+    VmLogResponse {
+        console_log: String::from_utf8_lossy(&buffer).into_owned(),
+        truncated,
+    }
+}
+
 pub async fn create_vm(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -49,19 +101,14 @@ pub async fn create_vm(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
+    // Not verified against disk here — that's a real (2GB rootfs) I/O cost,
+    // and run_start already re-verifies right before the template is
+    // actually used, which is the point that matters for catching a
+    // tampered/corrupted artifact.
     let template = state
         .templates
         .resolve_alias(&req.template)
         .ok_or_else(|| AppError::internal(request_id.0))?;
-    let verify_templates = state.templates.clone();
-    let verify_template = template.clone();
-    tokio::task::spawn_blocking(move || {
-        verify_templates.open_verified(&verify_template.kernel)?;
-        verify_templates.open_verified(&verify_template.rootfs)
-    })
-    .await
-    .map_err(|_| AppError::internal(request_id.0))?
-    .map_err(|_| AppError::internal(request_id.0))?;
     let vm = VmRecord {
         id: Uuid::new_v4(),
         name: req.name,
@@ -653,6 +700,107 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn console_log_is_empty_before_any_output_exists() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("quiet", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(log) = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(log.console_log, "");
+        assert!(!log.truncated);
+    }
+
+    #[tokio::test]
+    async fn console_log_returns_file_contents_once_written() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("chatty", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "booted\nlogin: ").unwrap();
+
+        let Json(log) = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(log.console_log, "booted\nlogin: ");
+        assert!(!log.truncated);
+    }
+
+    #[tokio::test]
+    async fn console_log_truncates_oversized_output() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("verbose", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "x".repeat(MAX_LOG_BYTES as usize + 1000)).unwrap();
+
+        let Json(log) = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(log.console_log.len() as u64, MAX_LOG_BYTES);
+        assert!(log.truncated);
+    }
+
+    #[tokio::test]
+    async fn console_log_unknown_vm_returns_not_found() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn console_log_handles_non_utf8_bytes_without_erroring() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("binary", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, [b'o', b'k', 0xFF, 0xFE, b'\n']).unwrap();
+
+        let Json(log) = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert!(log.console_log.starts_with("ok"));
+        assert!(!log.truncated);
     }
 
     #[tokio::test]

@@ -1,14 +1,6 @@
-import type { StartupStep, VmResponse } from "../bindings";
+import type { VmResponse } from "../bindings";
 import type { VmAction } from "../model";
 import { availableActions } from "../model";
-
-const STARTUP_STEPS: StartupStep[] = ["preparingDisk", "generatingConfig", "startingProcess"];
-
-const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
-  preparingDisk: "디스크 준비",
-  generatingConfig: "설정 생성",
-  startingProcess: "프로세스 시작",
-};
 
 interface VmTableProps {
   vms: VmResponse[];
@@ -17,9 +9,11 @@ interface VmTableProps {
   onAction: (id: string, action: VmAction) => void;
   /** A console is only attachable while the VM has a live process. */
   onOpenConsole: (id: string) => void;
+  /** Opens the VM detail modal (stepper + log) — always available. */
+  onOpenDetail: (id: string) => void;
 }
 
-export default function VmTable({ vms, busy, onAction, onOpenConsole }: VmTableProps) {
+export default function VmTable({ vms, busy, onAction, onOpenConsole, onOpenDetail }: VmTableProps) {
   if (vms.length === 0) {
     return <div className="empty">VM이 없습니다 — 위에서 생성하세요</div>;
   }
@@ -39,7 +33,14 @@ export default function VmTable({ vms, busy, onAction, onOpenConsole }: VmTableP
       </thead>
       <tbody>
         {vms.map((vm) => (
-          <Row key={vm.id} vm={vm} busy={busy.has(vm.id)} onAction={onAction} onOpenConsole={onOpenConsole} />
+          <Row
+            key={vm.id}
+            vm={vm}
+            busy={busy.has(vm.id)}
+            onAction={onAction}
+            onOpenConsole={onOpenConsole}
+            onOpenDetail={onOpenDetail}
+          />
         ))}
       </tbody>
     </table>
@@ -51,17 +52,21 @@ interface RowProps {
   busy: boolean;
   onAction: (id: string, action: VmAction) => void;
   onOpenConsole: (id: string) => void;
+  onOpenDetail: (id: string) => void;
 }
 
-function Row({ vm, busy, onAction, onOpenConsole }: RowProps) {
+function Row({ vm, busy, onAction, onOpenConsole, onOpenDetail }: RowProps) {
   const shortId = vm.id.split("-")[0] ?? "";
 
   return (
     <tr>
-      <td className="name">{vm.name}</td>
+      <td className="name">
+        <button type="button" className="link-button" onClick={() => onOpenDetail(vm.id)}>
+          {vm.name}
+        </button>
+      </td>
       <td>
         <span className={`state-badge ${vm.state}`}>{vm.state}</span>
-        {vm.state === "starting" && <StartupProgress step={vm.startupStep} />}
       </td>
       <td className="mono">{vm.templateVersion}</td>
       <td className="mono">{vm.cpu}</td>
@@ -88,29 +93,6 @@ function Row({ vm, busy, onAction, onOpenConsole }: RowProps) {
         {busy && <span className="mono">…</span>}
       </td>
     </tr>
-  );
-}
-
-/**
- * `step` is `null` for a brief window right after `starting` is claimed but
- * before the first step lands (see `set_startup_step` in
- * `firecrab-api/src/handlers/vms.rs`) — render nothing rather than guess.
- */
-function StartupProgress({ step }: { step: StartupStep | null }) {
-  if (!step) return null;
-  const currentIndex = STARTUP_STEPS.indexOf(step);
-
-  return (
-    <ul className="startup-steps" title={STARTUP_STEP_LABEL[step]}>
-      {STARTUP_STEPS.map((candidate, index) => (
-        <li
-          key={candidate}
-          className={index < currentIndex ? "done" : index === currentIndex ? "active" : "pending"}
-        >
-          {STARTUP_STEP_LABEL[candidate]}
-        </li>
-      ))}
-    </ul>
   );
 }
 

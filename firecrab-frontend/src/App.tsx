@@ -6,6 +6,7 @@ import BannerView from "./components/Banner";
 import CreateVm from "./components/CreateVm";
 import VmTable from "./components/VmTable";
 import Console from "./components/Console";
+import VmDetailModal from "./components/VmDetailModal";
 
 const POLL_MILLIS = 3_000;
 // After repeated failures assume the API is down and poll gently.
@@ -96,6 +97,9 @@ export default function App() {
   // (id, name) of the console currently attached, if any. Separate from
   // `Dashboard` since it's local UI state, not server-synced data.
   const [openConsole, setOpenConsole] = useState<{ id: string; name: string } | null>(null);
+  // id of the VM whose detail modal is open, if any — same local-UI-state
+  // reasoning as openConsole.
+  const [openDetailId, setOpenDetailId] = useState<string | null>(null);
 
   const runRefresh = useCallback(() => {
     if (refreshInFlight.current) return;
@@ -159,6 +163,9 @@ export default function App() {
   );
   const onCloseConsole = useCallback(() => setOpenConsole(null), []);
 
+  const onOpenDetail = useCallback((id: string) => setOpenDetailId(id), []);
+  const onCloseDetail = useCallback(() => setOpenDetailId(null), []);
+
   const pollNote = slowMode ? "API 연결 안 됨 — 15s 간격 재시도" : `${POLL_MILLIS / 1000}s polling`;
 
   return (
@@ -182,13 +189,20 @@ export default function App() {
             <span className="poll-note">{pollNote}</span>
           </h2>
           {state.loaded ? (
-            <VmTable vms={state.vms} busy={state.busy} onAction={onAction} onOpenConsole={onOpenConsole} />
+            <VmTable
+              vms={state.vms}
+              busy={state.busy}
+              onAction={onAction}
+              onOpenConsole={onOpenConsole}
+              onOpenDetail={onOpenDetail}
+            />
           ) : (
             <div className="empty">불러오는 중…</div>
           )}
         </section>
       </div>
       {openConsole && <Console vmId={openConsole.id} vmName={openConsole.name} onClose={onCloseConsole} />}
+      {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
     </div>
   );
 }

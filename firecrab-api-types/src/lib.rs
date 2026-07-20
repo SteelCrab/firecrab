@@ -68,6 +68,18 @@ pub struct VmResponse {
     pub startup_step: Option<StartupStep>,
 }
 
+/// The VM's captured serial console output (see
+/// `firecrab-api/src/firecracker.rs`'s `console.log` tee), capped so a long
+/// boot doesn't turn this into an unbounded response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmLogResponse {
+    pub console_log: String,
+    /// `true` if the on-disk log exceeds the cap and `console_log` is only
+    /// the first portion of it.
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
@@ -183,5 +195,18 @@ mod tests {
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
+    }
+
+    #[test]
+    fn vm_log_response_round_trips_camel_case() {
+        let response = VmLogResponse {
+            console_log: "booting...\n".to_owned(),
+            truncated: true,
+        };
+
+        let json = serde_json::to_string(&response).expect("serialize response");
+        assert!(json.contains("\"consoleLog\":\"booting...\\n\""));
+        assert!(json.contains("\"truncated\":true"));
+        assert_eq!(serde_json::from_str::<VmLogResponse>(&json).unwrap(), response);
     }
 }
