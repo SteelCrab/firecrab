@@ -8,7 +8,11 @@ license.workspace = true
 [dependencies]
 serde = { workspace = true }
 uuid = { workspace = true }
+ts-rs = { version = "12", optional = true, features = ["uuid-impl"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+
+[features]
+ts-rs = ["dep:ts-rs"]
 

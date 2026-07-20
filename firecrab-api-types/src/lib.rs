@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(export))]
 #[serde(rename_all = "lowercase")]
 pub enum VmState {
     Created,
@@ -34,7 +36,9 @@ impl VmState {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(export))]
 #[serde(deny_unknown_fields)]
 pub struct CreateVmRequest {
     pub name: String,
@@ -44,6 +48,8 @@ pub struct CreateVmRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct VmResponse {
     pub id: Uuid,
@@ -56,12 +62,16 @@ pub struct VmResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
     pub error: ApiError,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-rs", ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct ApiError {
     pub code: String,
