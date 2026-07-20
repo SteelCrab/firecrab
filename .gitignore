@@ -7,6 +7,10 @@
 # Rust
 target/
 
+# Frontend build output / dependencies
+firecrab-frontend/dist/
+node_modules/
+
 # Data files
 /data/
 firecrab-api/data/
