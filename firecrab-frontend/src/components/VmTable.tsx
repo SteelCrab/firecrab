@@ -1,6 +1,14 @@
-import type { VmResponse } from "../bindings";
+import type { StartupStep, VmResponse } from "../bindings";
 import type { VmAction } from "../model";
 import { availableActions } from "../model";
+
+const STARTUP_STEPS: StartupStep[] = ["preparingDisk", "generatingConfig", "startingProcess"];
+
+const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
+  preparingDisk: "디스크 준비",
+  generatingConfig: "설정 생성",
+  startingProcess: "프로세스 시작",
+};
 
 interface VmTableProps {
   vms: VmResponse[];
@@ -53,6 +61,7 @@ function Row({ vm, busy, onAction, onOpenConsole }: RowProps) {
       <td className="name">{vm.name}</td>
       <td>
         <span className={`state-badge ${vm.state}`}>{vm.state}</span>
+        {vm.state === "starting" && <StartupProgress step={vm.startupStep} />}
       </td>
       <td className="mono">{vm.templateVersion}</td>
       <td className="mono">{vm.cpu}</td>
@@ -79,6 +88,29 @@ function Row({ vm, busy, onAction, onOpenConsole }: RowProps) {
         {busy && <span className="mono">…</span>}
       </td>
     </tr>
+  );
+}
+
+/**
+ * `step` is `null` for a brief window right after `starting` is claimed but
+ * before the first step lands (see `set_startup_step` in
+ * `firecrab-api/src/handlers/vms.rs`) — render nothing rather than guess.
+ */
+function StartupProgress({ step }: { step: StartupStep | null }) {
+  if (!step) return null;
+  const currentIndex = STARTUP_STEPS.indexOf(step);
+
+  return (
+    <ul className="startup-steps" title={STARTUP_STEP_LABEL[step]}>
+      {STARTUP_STEPS.map((candidate, index) => (
+        <li
+          key={candidate}
+          className={index < currentIndex ? "done" : index === currentIndex ? "active" : "pending"}
+        >
+          {STARTUP_STEP_LABEL[candidate]}
+        </li>
+      ))}
+    </ul>
   );
 }
 

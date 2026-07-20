@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::firecracker::{self, FirecrackerProcess, VmProcess};
-use crate::model::{CreateVmRequest, VmRecord, VmState};
+use crate::model::{CreateVmRequest, StartupStep, VmRecord, VmState};
 use crate::persistence::PersistenceError;
 use crate::rootfs;
 use crate::server::RequestId;
@@ -73,6 +73,7 @@ pub async fn create_vm(
         ram: req.ram,
         cpu: req.cpu,
         state: VmState::Created,
+        startup_step: None,
     };
 
     let response = vm_response(&vm);
@@ -290,6 +291,10 @@ fn claim_transition(
         return Err(AppError::invalid_state(previous, request_id));
     }
     vm.state = to;
+    // Reset here rather than skip-if-Starting: `run_start` sets the first
+    // real step moments later, so a stale step from a prior start never
+    // shows through even for a single poll.
+    vm.startup_step = None;
     Ok((vm.clone(), previous))
 }
 
@@ -300,6 +305,7 @@ fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord>
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     vms.get_mut(&id).map(|vm| {
         vm.state = to;
+        vm.startup_step = None;
         vm.clone()
     })
 }
@@ -312,6 +318,7 @@ fn transition_if(state: &AppState, id: Uuid, from: VmState, to: VmState) -> Opti
     match vms.get_mut(&id) {
         Some(vm) if vm.state == from => {
             vm.state = to;
+            vm.startup_step = None;
             Some(vm.clone())
         }
         _ => None,
@@ -345,21 +352,28 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
             )
         })?;
 
+    set_startup_step(state, vm.id, StartupStep::PreparingDisk);
+
     let templates = state.templates.clone();
     let runtime = state.runtime.clone();
     let record = vm.clone();
+    let state_for_blocking = state.clone();
     let config_path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
         let mut source = templates
             .open_verified(&template.rootfs)
             .map_err(|error| format!("rootfs verification failed: {error}"))?;
         rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
+
+        set_startup_step(&state_for_blocking, record.id, StartupStep::GeneratingConfig);
         let kernel = templates.artifact_path(&template.kernel);
         firecracker::write_config(&runtime.vms_dir, &record, &kernel, &template.boot_args)
             .map_err(|error| format!("config generation failed: {error}"))
     })
     .await
     .map_err(|error| format!("start preparation task failed: {error}"))??;
+
+    set_startup_step(state, vm.id, StartupStep::StartingProcess);
 
     firecracker::spawn_vm(
         &state.runtime.firecracker_binary,
@@ -370,6 +384,19 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+/// Records the current phase of an in-flight start so pollers can show *why*
+/// a VM hasn't reached `running` yet. Silently a no-op once the record has
+/// moved on (e.g. a concurrent failure already landed it on `error`).
+fn set_startup_step(state: &AppState, id: Uuid, step: StartupStep) {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(vm) = vms.get_mut(&id) {
+        vm.startup_step = Some(step);
+    }
 }
 
 /// Failure tail of the start flow: record `error`, then make sure no process
@@ -405,6 +432,7 @@ fn vm_response(vm: &VmRecord) -> VmResponse {
         template_version: vm.template_version.clone(),
         cpu: vm.cpu,
         ram: vm.ram,
+        startup_step: vm.startup_step,
     }
 }
 
@@ -477,6 +505,7 @@ mod tests {
             template_boot_args_sha256: String::new(),
             cpu: 1,
             ram: 128,
+            startup_step: None,
         }
     }
 
@@ -648,6 +677,10 @@ mod tests {
 
         assert_eq!(started.state, VmState::Running);
         assert_eq!(db_state(&state, vm.id), Some(VmState::Running));
+        assert_eq!(
+            started.startup_step, None,
+            "a running VM must not still be reporting a startup step"
+        );
         let pid = state.processes.lock().unwrap().get(&vm.id).unwrap().pid as i32;
         assert!(process_alive(pid));
         assert!(
@@ -726,7 +759,33 @@ mod tests {
         );
         assert_eq!(memory_state(&state, vm.id), Some(VmState::Error));
         assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().startup_step,
+            None,
+            "a failed start must not leave a stale startup step behind"
+        );
         assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_startup_step_updates_the_live_record_and_ignores_unknown_ids() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("stepping", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        set_startup_step(&state, vm.id, StartupStep::GeneratingConfig);
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().startup_step,
+            Some(StartupStep::GeneratingConfig)
+        );
+
+        // No matching VM: must not panic, and no unrelated record is touched.
+        set_startup_step(&state, Uuid::new_v4(), StartupStep::PreparingDisk);
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().startup_step,
+            Some(StartupStep::GeneratingConfig)
+        );
     }
 
     #[tokio::test]

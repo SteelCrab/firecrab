@@ -150,6 +150,7 @@ impl Store {
                     template_boot_args_sha256: row.get(7)?,
                     cpu: row.get(8)?,
                     ram: row.get(9)?,
+                    startup_step: None,
                 },
             );
         }
@@ -317,6 +318,7 @@ mod tests {
             template_boot_args_sha256: "args".to_owned(),
             cpu: 1,
             ram: 512,
+            startup_step: None,
         }
     }
 

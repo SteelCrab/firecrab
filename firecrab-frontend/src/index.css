@@ -243,6 +243,35 @@ table.vm-table {
 }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
+.startup-steps {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.3rem 0 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+}
+.startup-steps li {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+.startup-steps li.done {
+  border-color: var(--ready);
+  color: var(--ready);
+}
+.startup-steps li.active {
+  border-color: var(--amber);
+  color: var(--amber);
+  animation: pulse 1s ease-in-out infinite;
+}
+
 .empty {
   padding: 2rem 0.75rem;
   text-align: center;

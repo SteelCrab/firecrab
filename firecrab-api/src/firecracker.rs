@@ -259,6 +259,7 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
                     } else {
                         VmState::Error
                     };
+                    vm.startup_step = None;
                     Some(vm.clone())
                 }
                 _ => None,
@@ -492,6 +493,7 @@ mod tests {
             template_boot_args_sha256: "args".to_owned(),
             cpu,
             ram,
+            startup_step: None,
         }
     }
 

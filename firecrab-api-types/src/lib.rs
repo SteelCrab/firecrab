@@ -43,6 +43,17 @@ pub struct CreateVmRequest {
     pub cpu: u8,
 }
 
+/// A named phase of `start_vm`'s pipeline, exposed only while `state ==
+/// Starting` so the dashboard can show *why* a VM hasn't reached `running`
+/// yet instead of a bare spinner (`docs/task-vm-startup-progress.md`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StartupStep {
+    PreparingDisk,
+    GeneratingConfig,
+    StartingProcess,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmResponse {
@@ -53,6 +64,8 @@ pub struct VmResponse {
     pub template_version: String,
     pub cpu: u8,
     pub ram: u32,
+    /// `Some` only while `state == Starting`.
+    pub startup_step: Option<StartupStep>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,9 +153,35 @@ mod tests {
             template_version: "ubuntu-26.04-v1".to_owned(),
             cpu: 1,
             ram: 512,
+            startup_step: None,
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
         assert_eq!(serde_json::from_str::<VmResponse>(&json).unwrap(), response);
+    }
+
+    #[test]
+    fn startup_step_serializes_camel_case_and_is_absent_by_default() {
+        for (step, json) in [
+            (StartupStep::PreparingDisk, "\"preparingDisk\""),
+            (StartupStep::GeneratingConfig, "\"generatingConfig\""),
+            (StartupStep::StartingProcess, "\"startingProcess\""),
+        ] {
+            assert_eq!(serde_json::to_string(&step).unwrap(), json);
+            assert_eq!(serde_json::from_str::<StartupStep>(json).unwrap(), step);
+        }
+
+        let response = VmResponse {
+            id: Uuid::nil(),
+            name: "test-vm".to_owned(),
+            state: VmState::Starting,
+            template: "ubuntu-rootfs-26.04".to_owned(),
+            template_version: "ubuntu-26.04-v1".to_owned(),
+            cpu: 1,
+            ram: 512,
+            startup_step: Some(StartupStep::PreparingDisk),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"startupStep\":\"preparingDisk\""));
     }
 }
