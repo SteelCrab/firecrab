@@ -177,7 +177,7 @@ pub async fn stop_vm(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&id)
         .cloned();
-    if let Some(VmProcess { pid, mut exited }) = entry {
+    if let Some(VmProcess { pid, mut exited, .. }) = entry {
         firecracker::sigterm(pid);
         if tokio::time::timeout(state.runtime.stop_grace, exited.changed())
             .await

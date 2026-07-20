@@ -129,7 +129,19 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         cors = cors.allow_origin(AllowOrigin::list(config.allowed_origins.clone()));
     }
 
-    Router::new()
+    // The console WebSocket is intentionally its own sub-router: it must
+    // stay open far longer than `enforce_limits`' request timeout allows,
+    // and a request body limit means nothing for an upgraded connection.
+    // Everything else keeps the full REST stack (CORS, body limit,
+    // timeout/concurrency); both sub-routers still get origin enforcement
+    // and request-id tagging, applied after the merge below.
+    //
+    // It also lives under a completely separate `/ws` prefix rather than
+    // nested under `/api/vms/{id}/...`: dev-proxies (trunk's included) pick
+    // HTTP vs. WebSocket handling per configured path prefix, not by
+    // inspecting each request's Upgrade header, so an HTTP-proxied `/api`
+    // prefix and a WS-proxied path can't overlap.
+    let rest = Router::new()
         .route(
             "/api/vms",
             get(handlers::vms::list_vms).post(handlers::vms::create_vm),
@@ -140,12 +152,16 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
-        .fallback(not_found)
-        .with_state(state)
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(limits, enforce_limits));
+
+    let console = Router::new().route("/ws/vms/{id}/console", get(handlers::console::console_ws));
+
+    rest.merge(console)
+        .fallback(not_found)
+        .with_state(state)
         .layer(middleware::from_fn_with_state(policy, enforce_origin))
-        .layer(middleware::from_fn_with_state(limits, enforce_limits))
         .layer(middleware::from_fn(assign_request_id))
 }
 
