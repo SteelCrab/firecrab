@@ -86,23 +86,6 @@ FIRECRAB_NET_HELPER_SOCK=/tmp/firecrab-net.sock cargo run -p firecrab-net-helper
 [INFO] net-helper listening on /tmp/firecrab-net.sock
 ```
 
-## 스모크 테스트
-
-수동 검증 절차는 [firecrab-smoke/docs/net-helper.md](firecrab-smoke/docs/net-helper.md)에 따로 정리한다.
-
-## 테스트 클라이언트
-
-`firecrab-smoke/script/net-helper.py`는 수동 테스트용 클라이언트다.
-
-하는 일:
-
-- Unix socket에 연결
-- JSON 요청을 length-prefixed frame으로 인코딩
-- helper 응답 frame을 읽고 JSON으로 출력
-- 정상 요청과 version mismatch 요청을 차례로 전송
-
-이 스크립트는 운영 코드가 아니라 protocol 확인용 도구다.
-
 ## systemd 배포 예시
 
 ```ini

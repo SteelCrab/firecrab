@@ -2,6 +2,7 @@ mod error;
 mod extract;
 mod firecracker;
 mod handlers;
+mod ipam;
 mod model;
 mod persistence;
 mod rootfs;
