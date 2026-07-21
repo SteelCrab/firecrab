@@ -221,10 +221,10 @@ fn validate_update(req: &UpdateVmResourcesRequest, current_disk_gb: u16) -> BTre
     if !(1..=32).contains(&req.cpu) {
         fields.insert("cpu".to_owned(), "must be between 1 and 32".to_owned());
     }
-    if !(128..=32_768).contains(&req.ram) {
+    if !is_valid_ram_mib(req.ram) {
         fields.insert(
             "ram".to_owned(),
-            "must be between 128 and 32768 MiB".to_owned(),
+            "must be a power of two between 128 and 32768 MiB".to_owned(),
         );
     }
     if req.disk_gb < current_disk_gb {
@@ -582,6 +582,16 @@ fn vm_response(vm: &VmRecord) -> VmResponse {
 /// the start pipeline, so an absurd size would just hang a start).
 const MAX_DISK_GB: u16 = 500;
 
+const MIN_RAM_MIB: u32 = 128;
+const MAX_RAM_MIB: u32 = 32_768;
+
+/// RAM is restricted to powers of two (128, 256, 512, ... 32768 MiB),
+/// matching how cloud instance sizes are usually picked rather than an
+/// arbitrary MiB value.
+fn is_valid_ram_mib(ram: u32) -> bool {
+    (MIN_RAM_MIB..=MAX_RAM_MIB).contains(&ram) && ram.is_power_of_two()
+}
+
 fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     if !valid_vm_name(&req.name) {
@@ -597,10 +607,10 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
     if !(1..=32).contains(&req.cpu) {
         fields.insert("cpu".to_owned(), "must be between 1 and 32".to_owned());
     }
-    if !(128..=32_768).contains(&req.ram) {
+    if !is_valid_ram_mib(req.ram) {
         fields.insert(
             "ram".to_owned(),
-            "must be between 128 and 32768 MiB".to_owned(),
+            "must be a power of two between 128 and 32768 MiB".to_owned(),
         );
     }
     if let Some(template) = &template {
@@ -1345,6 +1355,16 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn ram_must_be_a_power_of_two_within_range() {
+        for valid in [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768] {
+            assert!(is_valid_ram_mib(valid), "{valid} should be valid");
+        }
+        for invalid in [0, 64, 100, 127, 512 + 1, 3000, 32768 + 1, 65536] {
+            assert!(!is_valid_ram_mib(invalid), "{invalid} should be invalid");
+        }
     }
 
     #[test]

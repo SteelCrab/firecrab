@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { StartupStep, VmResponse } from "../bindings";
 import { ApiClientError, getVm, getVmLog, updateVmResources } from "../api/client";
 import { isEditableState } from "../model";
+import RamStepper from "./RamStepper";
 
 const STARTUP_STEPS: StartupStep[] = ["preparingDisk", "generatingConfig", "startingProcess"];
 
@@ -179,15 +180,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               <dt>ram</dt>
               <dd>
                 {editing ? (
-                  <input
-                    className="detail-edit-input"
-                    type="number"
-                    min={128}
-                    max={32768}
-                    step={128}
-                    value={editRam}
-                    onChange={(event) => setEditRam(event.target.value)}
-                  />
+                  <RamStepper id="vm-edit-ram" value={editRam} onChange={setEditRam} />
                 ) : (
                   `${vm.ram} MiB`
                 )}

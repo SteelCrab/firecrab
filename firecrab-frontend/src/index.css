@@ -166,6 +166,52 @@ form.create-grid {
   min-height: 1em;
 }
 
+.ram-stepper {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.ram-stepper .ram-stepper-value {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--ink);
+  padding: 0.55rem 0.65rem;
+  cursor: default;
+}
+.ram-stepper-buttons {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid transparent;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+}
+.ram-stepper:hover .ram-stepper-buttons,
+.ram-stepper:focus-within .ram-stepper-buttons {
+  border-left-color: var(--line);
+  opacity: 1;
+  pointer-events: auto;
+}
+.ram-stepper-btn {
+  flex: 1;
+  border: 0;
+  background: var(--bg-panel);
+  color: var(--shell);
+  font-size: 0.5rem;
+  line-height: 1;
+  padding: 0 0.5rem;
+  cursor: pointer;
+}
+.ram-stepper-btn:first-child { border-bottom: 1px solid var(--line); }
+.ram-stepper-btn:hover { color: var(--ember); background: var(--bg); }
+
 .btn {
   font-family: var(--font-mono);
   font-size: 0.82rem;

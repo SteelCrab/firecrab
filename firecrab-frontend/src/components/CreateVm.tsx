@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import { ApiClientError, createVm } from "../api/client";
 import type { CreateVmRequest, VmResponse } from "../bindings";
+import RamStepper from "./RamStepper";
 
 /** The registry aliases the API accepts today; selection only, no free text. */
 const TEMPLATES = ["ubuntu-26.04"] as const;
@@ -95,15 +96,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       </div>
       <div className="field">
         <label htmlFor="vm-ram">ram (MiB)</label>
-        <input
-          id="vm-ram"
-          type="number"
-          min={128}
-          max={32768}
-          step={128}
-          value={ram}
-          onChange={(event) => setRam(event.target.value)}
-        />
+        <RamStepper id="vm-ram" value={ram} onChange={setRam} />
         {fieldError("ram")}
       </div>
       <div className="field">

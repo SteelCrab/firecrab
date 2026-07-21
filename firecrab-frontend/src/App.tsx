@@ -180,7 +180,7 @@ export default function App() {
       <div className="stack">
         {state.banner && <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} />}
         <section className="panel">
-          <h2 className="panel-title">vm 생성</h2>
+          <h2 className="panel-title">NEW MICROVM</h2>
           <CreateVm onCreated={onCreated} onError={onError} />
         </section>
         <section className="panel">
