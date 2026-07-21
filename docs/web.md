@@ -52,10 +52,9 @@ cd firecrab-frontend && npm run dev
 `console.log` 그대로)가 이어붙는다 — 부팅 완료 후 다시 열어도 캡처된 로그 전체가 즉시 보인다.
 750ms 주기로 갱신되며, 모달을 닫으면 갱신도 멈춘다.
 
-**참고**: `terminal` 버튼(`running` 상태 VM에 표시)은 이 브랜치에서 백엔드 WebSocket 라우트가 아직
-연결되지 않아 클릭해도 붙지 않는다 — 별도 브랜치(`feat/microvm-terminal`)에 구현이 있고, 병합은
-검증됐지만 이번 작업 범위에는 포함하지 않았다. 실제 guest 출력은 위 상세 모달의 로그창으로 확인할 수
-있다.
+`running` 상태 VM에는 목록 액션에 `terminal` 버튼도 뜬다 — 클릭하면 실제 serial console(ttyS0)에
+WebSocket으로 실시간 접속해 부팅 로그부터 셸까지 그대로 보이고 타이핑이 guest에 도달한다(REST
+타임아웃과 무관하게 유지). 자세한 내용은 [tests/microvm-terminal.md](tests/microvm-terminal.md) 참고.
 
 ## 4. 상태 배지
 

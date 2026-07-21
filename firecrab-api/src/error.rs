@@ -116,6 +116,18 @@ impl AppError {
         )
     }
 
+    /// The VM has no live Firecracker process (and therefore no console to
+    /// attach to) — distinct from `not_found`, which means the VM record
+    /// itself doesn't exist.
+    pub fn vm_not_running(request_id: Uuid) -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            "vm_not_running",
+            "VM has no active console; it must be running",
+            request_id,
+        )
+    }
+
     pub fn invalid_state(current: VmState, request_id: Uuid) -> Self {
         let mut fields = BTreeMap::new();
         fields.insert("state".to_owned(), encode_state(current));

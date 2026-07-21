@@ -3,6 +3,7 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -13,9 +14,14 @@ use tokio::process::{Child, Command};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::console::ConsoleBroker;
 use crate::model::{VmRecord, VmState};
 use crate::rootfs;
 use crate::state::AppState;
+
+/// Bytes read off the guest console per `read()` call before it is teed to
+/// disk and broadcast to viewers.
+const CONSOLE_READ_CHUNK: usize = 4096;
 
 const CONFIG_FILE_NAME: &str = "firecracker.json";
 const API_SOCK_FILE_NAME: &str = "firecracker.sock";
@@ -179,6 +185,7 @@ pub fn console_log_path(vms_dir: &Path, id: Uuid) -> PathBuf {
 pub struct FirecrackerProcess {
     child: Child,
     api_sock: PathBuf,
+    console: Arc<ConsoleBroker>,
 }
 
 impl FirecrackerProcess {
@@ -188,11 +195,13 @@ impl FirecrackerProcess {
 }
 
 /// Map entry for a live VM: the process id plus a channel that resolves once
-/// the exit monitor has finished recording the terminal state.
+/// the exit monitor has finished recording the terminal state, plus the
+/// console broker for anyone attaching a terminal to this VM's ttyS0.
 #[derive(Debug, Clone)]
 pub struct VmProcess {
     pub pid: u32,
     pub exited: watch::Receiver<bool>,
+    pub console: Arc<ConsoleBroker>,
 }
 
 pub fn sigterm(pid: u32) {
@@ -218,6 +227,7 @@ pub fn sigkill(pid: u32) {
 pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProcess) {
     let (exited_tx, exited_rx) = watch::channel(false);
     let pid = process.pid().unwrap_or_default();
+    let FirecrackerProcess { mut child, api_sock, console } = process;
     state
         .processes
         .lock()
@@ -227,10 +237,10 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
             VmProcess {
                 pid,
                 exited: exited_rx,
+                console,
             },
         );
 
-    let FirecrackerProcess { mut child, api_sock } = process;
     let state = state.clone();
     tokio::spawn(async move {
         let status = child.wait().await;
@@ -323,16 +333,20 @@ pub async fn spawn_vm(
         path: console_log.clone(),
         source,
     };
-    let stdout = File::create(&console_log).map_err(console_error)?;
-    let stderr = stdout.try_clone().map_err(console_error)?;
+    // The guest's ttyS0 is Firecracker's own stdin/stdout (no PTY needed —
+    // the guest kernel already owns a real tty on its end, so raw bytes both
+    // ways are enough). stderr is Firecracker's own diagnostics, unrelated
+    // to the guest console, so it keeps going straight to the log file.
+    let log_file = File::create(&console_log).map_err(console_error)?;
+    let stderr = log_file.try_clone().map_err(console_error)?;
 
     let mut child = Command::new(binary)
         .arg("--api-sock")
         .arg(&api_sock)
         .arg("--config-file")
         .arg(config_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .stderr(Stdio::from(stderr))
         .kill_on_drop(true)
         .spawn()
@@ -341,13 +355,49 @@ pub async fn spawn_vm(
             source,
         })?;
 
+    let stdin = child.stdin.take().expect("stdin was piped");
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let console = Arc::new(ConsoleBroker::new());
+    console.attach_stdin(stdin).await;
+    spawn_console_reader(id, stdout, log_file, Arc::clone(&console));
+
     if let Err(error) = wait_ready(&api_sock, ready_timeout).await {
         let _ = child.kill().await;
         let _ = fs::remove_file(&api_sock);
         return Err(error);
     }
 
-    Ok(FirecrackerProcess { child, api_sock })
+    Ok(FirecrackerProcess {
+        child,
+        api_sock,
+        console,
+    })
+}
+
+/// Reads the guest's console once and fans it out: every chunk is teed to
+/// `console.log` on disk and pushed to the broker for any attached viewers.
+/// Runs until the pipe closes (the Firecracker process exiting closes its
+/// stdout, which is this loop's only way to know to stop).
+fn spawn_console_reader(id: Uuid, mut stdout: tokio::process::ChildStdout, log_file: File, console: Arc<ConsoleBroker>) {
+    let mut log_file = tokio::fs::File::from_std(log_file);
+    tokio::spawn(async move {
+        let mut buffer = [0_u8; CONSOLE_READ_CHUNK];
+        loop {
+            let read = match stdout.read(&mut buffer).await {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) => {
+                    tracing::warn!(vm_id = %id, %error, "console read failed");
+                    break;
+                }
+            };
+            let chunk = &buffer[..read];
+            if let Err(error) = log_file.write_all(chunk).await {
+                tracing::warn!(vm_id = %id, %error, "failed to tee console output to log file");
+            }
+            console.push_output(chunk);
+        }
+    });
 }
 
 async fn wait_ready(api_sock: &Path, timeout: Duration) -> Result<(), FirecrackerError> {
@@ -580,6 +630,17 @@ mod tests {
             .unwrap();
         let pid = process.pid().unwrap() as i32;
         assert!(process_alive(pid));
+
+        // The broker must see the same bytes that get tee'd to the log file,
+        // checked here (rather than in a standalone test) so this doesn't add
+        // an extra concurrent Firecracker spawn: this sandbox's fork/exec
+        // gets measurably ETXTBSY-flaky for `fake_firecracker` scripts once
+        // 7+ of these tests spawn processes in the same `cargo test` run.
+        let (backlog, _receiver) = process.console.subscribe();
+        assert!(
+            String::from_utf8_lossy(&backlog).contains("booted"),
+            "the console broker must have already seen the guest's boot output"
+        );
 
         stop_vm(process, Duration::from_secs(5)).await.unwrap();
 

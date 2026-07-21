@@ -6,9 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
+futures-util = "0.3"
 libc = "0.2.186"
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { workspace = true }

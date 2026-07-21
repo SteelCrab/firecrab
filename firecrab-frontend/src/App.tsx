@@ -185,7 +185,7 @@ export default function App() {
         </section>
         <section className="panel">
           <h2 className="panel-title">
-            <span>{`vm 목록 (${state.vms.length})`}</span>
+            <span>{`MicroVM list (${state.vms.length})`}</span>
             <span className="poll-note">{pollNote}</span>
           </h2>
           {state.loaded ? (
