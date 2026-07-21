@@ -41,6 +41,10 @@ pub fn default_vms_dir() -> PathBuf {
     PathBuf::from(VMS_DIR)
 }
 
+pub fn rootfs_path(vms_dir: &Path, id: Uuid) -> PathBuf {
+    vms_dir.join(id.to_string()).join(ROOTFS_FILE_NAME)
+}
+
 /// Copies the verified template rootfs into the VM's writable disk at
 /// `{vms_dir}/{id}/rootfs.ext4`. An existing disk is reused as-is so a
 /// stopped VM keeps its data across restarts.
@@ -50,7 +54,7 @@ pub fn prepare_rootfs(
     template: &mut File,
 ) -> Result<PathBuf, RootfsError> {
     let vm_dir = vms_dir.join(id.to_string());
-    let rootfs = vm_dir.join(ROOTFS_FILE_NAME);
+    let rootfs = rootfs_path(vms_dir, id);
     match fs::metadata(&rootfs) {
         Ok(_) => return Ok(rootfs),
         Err(source) if source.kind() == io::ErrorKind::NotFound => {}
