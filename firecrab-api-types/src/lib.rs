@@ -35,12 +35,13 @@ impl VmState {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateVmRequest {
     pub name: String,
     pub template: String,
     pub ram: u32,
     pub cpu: u8,
+    pub disk_gb: u16,
 }
 
 /// A named phase of `start_vm`'s pipeline, exposed only while `state ==
@@ -64,6 +65,7 @@ pub struct VmResponse {
     pub template_version: String,
     pub cpu: u8,
     pub ram: u32,
+    pub disk_gb: u16,
     /// `Some` only while `state == Starting`.
     pub startup_step: Option<StartupStep>,
 }
@@ -156,6 +158,13 @@ mod tests {
     }
 
     #[test]
+    fn create_vm_request_deserializes_camel_case_disk_gb() {
+        let json = r#"{"name":"test-vm","template":"ubuntu-26.04","ram":512,"cpu":1,"diskGb":4}"#;
+        let request: CreateVmRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.disk_gb, 4);
+    }
+
+    #[test]
     fn vm_response_round_trips() {
         let response = VmResponse {
             id: Uuid::nil(),
@@ -165,6 +174,7 @@ mod tests {
             template_version: "ubuntu-26.04-v1".to_owned(),
             cpu: 1,
             ram: 512,
+            disk_gb: 2,
             startup_step: None,
         };
 
@@ -191,6 +201,7 @@ mod tests {
             template_version: "ubuntu-26.04-v1".to_owned(),
             cpu: 1,
             ram: 512,
+            disk_gb: 2,
             startup_step: Some(StartupStep::PreparingDisk),
         };
         let json = serde_json::to_string(&response).unwrap();

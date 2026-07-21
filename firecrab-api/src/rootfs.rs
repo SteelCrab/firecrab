@@ -1,6 +1,7 @@
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use thiserror::Error;
 use uuid::Uuid;
@@ -35,6 +36,25 @@ pub enum RootfsError {
         #[source]
         source: io::Error,
     },
+    #[error("failed to extend rootfs file at {path}: {source}")]
+    Extend {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to run '{tool}' on rootfs at {path}: {source}")]
+    ResizeTool {
+        path: PathBuf,
+        tool: &'static str,
+        #[source]
+        source: io::Error,
+    },
+    #[error("'{tool}' reported a failure while resizing rootfs at {path}: {stderr}")]
+    ResizeFailed {
+        path: PathBuf,
+        tool: &'static str,
+        stderr: String,
+    },
 }
 
 pub fn default_vms_dir() -> PathBuf {
@@ -46,12 +66,14 @@ pub fn rootfs_path(vms_dir: &Path, id: Uuid) -> PathBuf {
 }
 
 /// Copies the verified template rootfs into the VM's writable disk at
-/// `{vms_dir}/{id}/rootfs.ext4`. An existing disk is reused as-is so a
-/// stopped VM keeps its data across restarts.
+/// `{vms_dir}/{id}/rootfs.ext4`, then grows it to `target_bytes` if that's
+/// larger than the template. An existing disk is reused as-is (size
+/// unchanged) so a stopped VM keeps its data across restarts.
 pub fn prepare_rootfs(
     vms_dir: &Path,
     id: Uuid,
     template: &mut File,
+    target_bytes: u64,
 ) -> Result<PathBuf, RootfsError> {
     let vm_dir = vms_dir.join(id.to_string());
     let rootfs = rootfs_path(vms_dir, id);
@@ -76,7 +98,70 @@ pub fn prepare_rootfs(
         let _ = fs::remove_file(&tmp);
         return Err(error);
     }
+    if let Err(error) = grow(&rootfs, target_bytes) {
+        let _ = fs::remove_file(&rootfs);
+        return Err(error);
+    }
     Ok(rootfs)
+}
+
+/// Extends the disk file to `target_bytes` (no-op if it's already at least
+/// that size — ext4 shrink isn't supported here) and grows the filesystem
+/// to fill it, via the host's `e2fsprogs` tools.
+fn grow(rootfs: &Path, target_bytes: u64) -> Result<(), RootfsError> {
+    let current = fs::metadata(rootfs)
+        .map_err(|source| RootfsError::Inspect {
+            path: rootfs.to_owned(),
+            source,
+        })?
+        .len();
+    if target_bytes <= current {
+        return Ok(());
+    }
+
+    let file = OpenOptions::new().write(true).open(rootfs).map_err(|source| {
+        RootfsError::Extend {
+            path: rootfs.to_owned(),
+            source,
+        }
+    })?;
+    file.set_len(target_bytes).map_err(|source| RootfsError::Extend {
+        path: rootfs.to_owned(),
+        source,
+    })?;
+    drop(file);
+
+    run_resize_tool(rootfs, "e2fsck", &["-f", "-y"], |status| {
+        // 0 = clean, 1 = errors corrected; anything higher is a real failure.
+        status.code().is_some_and(|code| code <= 1)
+    })?;
+    run_resize_tool(rootfs, "resize2fs", &[], |status| status.success())
+}
+
+fn run_resize_tool(
+    rootfs: &Path,
+    tool: &'static str,
+    args: &[&str],
+    accept: impl Fn(&std::process::ExitStatus) -> bool,
+) -> Result<(), RootfsError> {
+    let output = Command::new(tool)
+        .args(args)
+        .arg(rootfs)
+        .output()
+        .map_err(|source| RootfsError::ResizeTool {
+            path: rootfs.to_owned(),
+            tool,
+            source,
+        })?;
+    if accept(&output.status) {
+        Ok(())
+    } else {
+        Err(RootfsError::ResizeFailed {
+            path: rootfs.to_owned(),
+            tool,
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
 }
 
 fn publish(template: &mut File, tmp: &Path, rootfs: &Path) -> Result<(), RootfsError> {
@@ -125,7 +210,8 @@ mod tests {
         let mut template = template_file(directory.path(), b"template-bytes");
         let id = Uuid::new_v4();
 
-        let rootfs = prepare_rootfs(&vms_dir, id, &mut template).unwrap();
+        let rootfs = prepare_rootfs(&vms_dir, id, &mut template, "template-bytes".len() as u64)
+            .unwrap();
 
         assert_eq!(rootfs, vms_dir.join(id.to_string()).join("rootfs.ext4"));
         assert_eq!(fs::read(&rootfs).unwrap(), b"template-bytes");
@@ -142,7 +228,8 @@ mod tests {
         fs::create_dir_all(&vm_dir).unwrap();
         fs::write(vm_dir.join("rootfs.ext4"), b"existing-disk").unwrap();
 
-        let rootfs = prepare_rootfs(&vms_dir, id, &mut template).unwrap();
+        let rootfs = prepare_rootfs(&vms_dir, id, &mut template, "fresh-template".len() as u64)
+            .unwrap();
 
         assert_eq!(fs::read(&rootfs).unwrap(), b"existing-disk");
     }
@@ -160,11 +247,59 @@ mod tests {
         unreadable.write_all(b"template-bytes").unwrap();
         let id = Uuid::new_v4();
 
-        let error = prepare_rootfs(&vms_dir, id, &mut unreadable).unwrap_err();
+        let error = prepare_rootfs(&vms_dir, id, &mut unreadable, 0).unwrap_err();
 
         assert!(matches!(error, RootfsError::Copy { .. }));
         let vm_dir = vms_dir.join(id.to_string());
         assert!(!vm_dir.join("rootfs.ext4.tmp").exists());
         assert!(!vm_dir.join("rootfs.ext4").exists());
+    }
+
+    /// End-to-end proof that `grow` actually works against a real
+    /// filesystem, not just a `set_len`'d blob of bytes: builds a genuine
+    /// small ext4 image with `mkfs.ext4`, copies it through `prepare_rootfs`
+    /// with a larger target size, and checks the resulting filesystem
+    /// actually reports the grown capacity.
+    #[test]
+    fn grows_a_real_ext4_filesystem_to_the_requested_size() {
+        let directory = tempdir().unwrap();
+        let template_path = directory.path().join("template.ext4");
+        let status = Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(&template_path)
+            .arg("8M")
+            .status()
+            .expect("mkfs.ext4 must be installed for this test");
+        assert!(status.success(), "mkfs.ext4 failed");
+
+        let mut template = File::open(&template_path).unwrap();
+        let vms_dir = directory.path().join("vms");
+        let id = Uuid::new_v4();
+        let target_bytes = 32 * 1024 * 1024;
+
+        let rootfs = prepare_rootfs(&vms_dir, id, &mut template, target_bytes).unwrap();
+
+        assert_eq!(fs::metadata(&rootfs).unwrap().len(), target_bytes);
+        let dumpe2fs = Command::new("dumpe2fs")
+            .args(["-h"])
+            .arg(&rootfs)
+            .output()
+            .unwrap();
+        let info = String::from_utf8_lossy(&dumpe2fs.stdout);
+        let block_count: u64 = info
+            .lines()
+            .find_map(|line| line.strip_prefix("Block count:"))
+            .expect("dumpe2fs must report a block count")
+            .trim()
+            .parse()
+            .unwrap();
+        let block_size: u64 = info
+            .lines()
+            .find_map(|line| line.strip_prefix("Block size:"))
+            .expect("dumpe2fs must report a block size")
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(block_count * block_size, target_bytes);
     }
 }

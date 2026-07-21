@@ -119,6 +119,7 @@ pub async fn create_vm(
         template_boot_args_sha256: template.boot_args_sha256(),
         ram: req.ram,
         cpu: req.cpu,
+        disk_gb: req.disk_gb,
         state: VmState::Created,
         startup_step: None,
     };
@@ -409,7 +410,8 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
         let mut source = templates
             .open_verified(&template.rootfs)
             .map_err(|error| format!("rootfs verification failed: {error}"))?;
-        rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source)
+        let target_bytes = u64::from(record.disk_gb) * 1024 * 1024 * 1024;
+        rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source, target_bytes)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
 
         set_startup_step(&state_for_blocking, record.id, StartupStep::GeneratingConfig);
@@ -479,9 +481,15 @@ fn vm_response(vm: &VmRecord) -> VmResponse {
         template_version: vm.template_version.clone(),
         cpu: vm.cpu,
         ram: vm.ram,
+        disk_gb: vm.disk_gb,
         startup_step: vm.startup_step,
     }
 }
+
+/// Highest disk size the create form accepts; keeps a mistyped value from
+/// filling the host disk (`copy` + `resize2fs` both happen synchronously in
+/// the start pipeline, so an absurd size would just hang a start).
+const MAX_DISK_GB: u16 = 500;
 
 fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
@@ -491,7 +499,8 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             "must be 1-64 ASCII letters, numbers, '.', '_' or '-'".to_owned(),
         );
     }
-    if state.templates.resolve_alias(&req.template).is_none() {
+    let template = state.templates.resolve_alias(&req.template);
+    if template.is_none() {
         fields.insert("template".to_owned(), "is not supported".to_owned());
     }
     if !(1..=32).contains(&req.cpu) {
@@ -503,7 +512,23 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             "must be between 128 and 32768 MiB".to_owned(),
         );
     }
+    if let Some(template) = &template {
+        let min_disk_gb = min_disk_gb_for(template.rootfs.length());
+        if !(min_disk_gb..=MAX_DISK_GB).contains(&req.disk_gb) {
+            fields.insert(
+                "diskGb".to_owned(),
+                format!("must be between {min_disk_gb} and {MAX_DISK_GB} GiB"),
+            );
+        }
+    }
     fields
+}
+
+/// Smallest disk size that can hold the template's rootfs, rounded up to a
+/// whole GiB (ext4 shrink isn't supported, so this is a hard floor).
+fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    rootfs_bytes.div_ceil(GIB).try_into().unwrap_or(u16::MAX)
 }
 
 fn valid_vm_name(name: &str) -> bool {
@@ -540,6 +565,42 @@ mod tests {
         assert!(!valid_vm_name(&"a".repeat(65)));
     }
 
+    #[tokio::test]
+    async fn validates_disk_gb_against_the_template_floor_and_fixed_ceiling() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
+        // so `min_disk_gb_for` rounds it up to 1 GiB.
+        let base = CreateVmRequest {
+            name: "test-vm".to_owned(),
+            template: "ubuntu-rootfs-26.04".to_owned(),
+            ram: 512,
+            cpu: 1,
+            disk_gb: 0,
+        };
+
+        let too_small = validate_create(&base, &state);
+        assert!(too_small.contains_key("diskGb"), "{too_small:?}");
+
+        let at_floor = CreateVmRequest {
+            disk_gb: 1,
+            ..base.clone()
+        };
+        assert!(!validate_create(&at_floor, &state).contains_key("diskGb"));
+
+        let too_large = CreateVmRequest {
+            disk_gb: MAX_DISK_GB + 1,
+            ..base.clone()
+        };
+        assert!(validate_create(&too_large, &state).contains_key("diskGb"));
+
+        let at_ceiling = CreateVmRequest {
+            disk_gb: MAX_DISK_GB,
+            ..base
+        };
+        assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
+    }
+
     fn record(name: &str, id: Uuid) -> VmRecord {
         VmRecord {
             id,
@@ -552,6 +613,10 @@ mod tests {
             template_boot_args_sha256: String::new(),
             cpu: 1,
             ram: 128,
+            // 0 keeps `run_start`'s disk grow step a no-op against this
+            // fixture's fake (non-ext4) rootfs bytes; real growth is
+            // covered by `rootfs::tests::grows_a_real_ext4_filesystem_to_the_requested_size`.
+            disk_gb: 0,
             startup_step: None,
         }
     }
@@ -1082,6 +1147,7 @@ mod tests {
             template: "ubuntu-rootfs-26.04".to_owned(),
             ram: 512,
             cpu: 1,
+            disk_gb: 2,
         };
         let result = create_vm(
             State(state.clone()),

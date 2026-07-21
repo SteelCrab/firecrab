@@ -54,6 +54,10 @@ impl VerifiedArtifact {
     pub fn sha256(&self) -> &str {
         &self.sha256
     }
+
+    pub fn length(&self) -> u64 {
+        self.length
+    }
 }
 
 #[derive(Debug, Clone)]

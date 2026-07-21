@@ -27,6 +27,7 @@ export default function VmTable({ vms, busy, onAction, onOpenConsole, onOpenDeta
           <th>template</th>
           <th>cpu</th>
           <th>ram</th>
+          <th>disk</th>
           <th>id</th>
           <th className="actions">actions</th>
         </tr>
@@ -71,6 +72,7 @@ function Row({ vm, busy, onAction, onOpenConsole, onOpenDetail }: RowProps) {
       <td className="mono">{vm.templateVersion}</td>
       <td className="mono">{vm.cpu}</td>
       <td className="mono">{vm.ram} MiB</td>
+      <td className="mono">{vm.diskGb} GiB</td>
       <td className="mono" title={vm.id}>
         {shortId}
       </td>

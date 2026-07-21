@@ -25,6 +25,7 @@ cd firecrab-frontend && npm run dev
 | template | `ubuntu-26.04`(현재 유일 선택지) |
 | cpu | 1–32 |
 | ram | 128–32768 MiB |
+| disk | 템플릿 rootfs 크기(현재 2GiB) 이상 500GiB 이하 |
 
 값이 잘못되면 해당 입력 아래 빨간 글씨로 서버 검증 오류가 바로 표시된다.
 
@@ -35,7 +36,7 @@ cd firecrab-frontend && npm run dev
 
 ## 3. VM 상세 모달
 
-목록에서 **VM 이름 클릭**(상태와 무관하게 언제든 가능) → 모달로 template/cpu/ram/id 상세 정보,
+목록에서 **VM 이름 클릭**(상태와 무관하게 언제든 가능) → 모달로 template/cpu/ram/disk/id 상세 정보,
 상단에 단계 스테퍼(`[✓]─[✓]─[ ]` 형태), 아래에 로그창이 뜬다.
 
 스테퍼는 `디스크 준비` → `설정 생성` → `프로세스 시작` 순서. 첫 시작은 rootfs 템플릿(2GB)을 VM 전용
@@ -75,4 +76,5 @@ cd firecrab-frontend && npm run dev
 - 그 외 상세 디버깅은 [tests/microvm-terminal.md](tests/microvm-terminal.md),
   [tests/vm-startup-progress.md](tests/vm-startup-progress.md),
   [tests/vm-detail-modal.md](tests/vm-detail-modal.md),
+  [tests/vm-disk-capacity.md](tests/vm-disk-capacity.md),
   [tests/frontend-react-migration.md](tests/frontend-react-migration.md) 참고

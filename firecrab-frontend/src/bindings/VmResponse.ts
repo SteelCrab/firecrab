@@ -2,4 +2,4 @@
 import type { StartupStep } from "./StartupStep";
 import type { VmState } from "./VmState";
 
-export type VmResponse = { id: string, name: string, state: VmState, template: string, templateVersion: string, cpu: number, ram: number, startupStep: StartupStep | null, };
+export type VmResponse = { id: string, name: string, state: VmState, template: string, templateVersion: string, cpu: number, ram: number, diskGb: number, startupStep: StartupStep | null, };

@@ -33,9 +33,17 @@ pub struct VmRecord {
     pub template_boot_args_sha256: String,
     pub cpu: u8,
     pub ram: u32,
+    #[serde(default = "default_disk_gb")]
+    pub disk_gb: u16,
     /// Live progress while `state == Starting`; never persisted (a restart
     /// already demotes any in-flight start to `Stopped`, see
     /// `restart_demotes_active_states_to_stopped`) and irrelevant otherwise.
     #[serde(skip)]
     pub startup_step: Option<StartupStep>,
+}
+
+/// Matches the fixed rootfs template size that applied before disk capacity
+/// became configurable, for records written before this field existed.
+fn default_disk_gb() -> u16 {
+    2
 }

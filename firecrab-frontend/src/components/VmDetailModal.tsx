@@ -124,6 +124,8 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               <dd>{vm.cpu}</dd>
               <dt>ram</dt>
               <dd>{vm.ram} MiB</dd>
+              <dt>disk</dt>
+              <dd>{vm.diskGb} GiB</dd>
               <dt>id</dt>
               <dd title={vm.id}>{vm.id}</dd>
             </dl>
@@ -154,5 +156,8 @@ function PipelineStepper({ currentIndex }: { currentIndex: number }) {
 }
 
 function timestamp(): string {
-  return new Date().toLocaleTimeString("ko-KR", { hour12: false });
+  // ISO 8601 with a 9-digit fractional suffix (matches the console log's
+  // timestamp shape); the browser only has millisecond precision, so the
+  // trailing 6 digits are zero-padded rather than fabricated.
+  return `${new Date().toISOString().slice(0, -1)}000000`;
 }

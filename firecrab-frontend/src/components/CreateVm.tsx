@@ -6,7 +6,7 @@ import type { CreateVmRequest, VmResponse } from "../bindings";
 /** The registry aliases the API accepts today; selection only, no free text. */
 const TEMPLATES = ["ubuntu-26.04"] as const;
 
-const FIELDS_WITH_OWN_ERROR = ["name", "cpu", "ram", "template"] as const;
+const FIELDS_WITH_OWN_ERROR = ["name", "cpu", "ram", "template", "diskGb"] as const;
 
 interface CreateVmProps {
   onCreated: (vm: VmResponse) => void;
@@ -18,6 +18,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [template, setTemplate] = useState<string>(TEMPLATES[0]);
   const [cpu, setCpu] = useState("1");
   const [ram, setRam] = useState("512");
+  const [diskGb, setDiskGb] = useState("2");
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
 
@@ -30,6 +31,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       template,
       cpu: parseInt(cpu, 10) || 0,
       ram: parseInt(ram, 10) || 0,
+      diskGb: parseInt(diskGb, 10) || 0,
     };
 
     setSubmitting(true);
@@ -103,6 +105,18 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           onChange={(event) => setRam(event.target.value)}
         />
         {fieldError("ram")}
+      </div>
+      <div className="field">
+        <label htmlFor="vm-disk">disk (GiB)</label>
+        <input
+          id="vm-disk"
+          type="number"
+          min={2}
+          max={500}
+          value={diskGb}
+          onChange={(event) => setDiskGb(event.target.value)}
+        />
+        {fieldError("diskGb")}
       </div>
       <div className="field">
         <label>&nbsp;</label>

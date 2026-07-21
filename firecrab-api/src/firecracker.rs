@@ -493,6 +493,7 @@ mod tests {
             template_boot_args_sha256: "args".to_owned(),
             cpu,
             ram,
+            disk_gb: 2,
             startup_step: None,
         }
     }
