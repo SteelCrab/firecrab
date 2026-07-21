@@ -25,26 +25,41 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     template_rootfs_sha256 TEXT NOT NULL,
     template_boot_args_sha256 TEXT NOT NULL,
     cpu INTEGER NOT NULL,
-    ram INTEGER NOT NULL
+    ram INTEGER NOT NULL,
+    disk_gb INTEGER NOT NULL DEFAULT 2
 ) STRICT";
 
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
-    template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram \
+    template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb \
     FROM vms";
 
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
-    template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+    template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
-    template_boot_args_sha256, cpu, ram) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+    template_boot_args_sha256, cpu, ram, disk_gb) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
-    template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10 \
+    template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11 \
     WHERE id = ?1";
+
+/// Adds `disk_gb` to a `vms` table created before the column existed (a
+/// bare `CREATE TABLE IF NOT EXISTS` doesn't retrofit new columns onto an
+/// already-created table). `2` matches the fixed rootfs template size that
+/// applied before disk capacity became configurable.
+fn migrate_disk_gb_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let has_column: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name = 'disk_gb'")?
+        .exists([])?;
+    if !has_column {
+        conn.execute("ALTER TABLE vms ADD COLUMN disk_gb INTEGER NOT NULL DEFAULT 2", [])?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum PersistenceError {
@@ -112,6 +127,7 @@ impl Store {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute(CREATE_TABLE_SQL, [])?;
+        migrate_disk_gb_column(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
             conn.execute(index_sql, [])?;
@@ -150,6 +166,8 @@ impl Store {
                     template_boot_args_sha256: row.get(7)?,
                     cpu: row.get(8)?,
                     ram: row.get(9)?,
+                    disk_gb: row.get(10)?,
+                    startup_step: None,
                 },
             );
         }
@@ -278,6 +296,7 @@ fn execute_record(
             vm.template_boot_args_sha256,
             vm.cpu,
             vm.ram,
+            vm.disk_gb,
         ],
     )
 }
@@ -317,6 +336,8 @@ mod tests {
             template_boot_args_sha256: "args".to_owned(),
             cpu: 1,
             ram: 512,
+            disk_gb: 2,
+            startup_step: None,
         }
     }
 

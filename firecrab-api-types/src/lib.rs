@@ -32,15 +32,43 @@ impl VmState {
     pub fn can_delete(self) -> bool {
         matches!(self, Self::Created | Self::Stopped | Self::Error)
     }
+
+    /// Resource edits (cpu/ram/disk) only take effect on the *next* start, so
+    /// they're only meaningful while no Firecracker process is live.
+    pub fn can_edit_resources(self) -> bool {
+        matches!(self, Self::Created | Self::Stopped | Self::Error)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateVmRequest {
     pub name: String,
     pub template: String,
     pub ram: u32,
     pub cpu: u8,
+    pub disk_gb: u16,
+}
+
+/// Body for `PUT /api/vms/{id}`: replaces cpu/ram/disk for a VM that isn't
+/// currently running. Takes effect on the next start, not live.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpdateVmResourcesRequest {
+    pub ram: u32,
+    pub cpu: u8,
+    pub disk_gb: u16,
+}
+
+/// A named phase of `start_vm`'s pipeline, exposed only while `state ==
+/// Starting` so the dashboard can show *why* a VM hasn't reached `running`
+/// yet instead of a bare spinner (`docs/task-vm-startup-progress.md`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StartupStep {
+    PreparingDisk,
+    GeneratingConfig,
+    StartingProcess,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -53,6 +81,21 @@ pub struct VmResponse {
     pub template_version: String,
     pub cpu: u8,
     pub ram: u32,
+    pub disk_gb: u16,
+    /// `Some` only while `state == Starting`.
+    pub startup_step: Option<StartupStep>,
+}
+
+/// The VM's captured serial console output (see
+/// `firecrab-api/src/firecracker.rs`'s `console.log` tee), capped so a long
+/// boot doesn't turn this into an unbounded response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmLogResponse {
+    pub console_log: String,
+    /// `true` if the on-disk log exceeds the cap and `console_log` is only
+    /// the first portion of it.
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -131,6 +174,28 @@ mod tests {
     }
 
     #[test]
+    fn create_vm_request_deserializes_camel_case_disk_gb() {
+        let json = r#"{"name":"test-vm","template":"ubuntu-26.04","ram":512,"cpu":1,"diskGb":4}"#;
+        let request: CreateVmRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.disk_gb, 4);
+    }
+
+    #[test]
+    fn update_vm_resources_request_deserializes_camel_case_disk_gb() {
+        let json = r#"{"ram":1024,"cpu":2,"diskGb":8}"#;
+        let request: UpdateVmResourcesRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request, UpdateVmResourcesRequest { ram: 1024, cpu: 2, disk_gb: 8 });
+    }
+
+    #[test]
+    fn only_inactive_states_allow_resource_edits() {
+        for state in ALL_STATES {
+            let expected = matches!(state, Created | Stopped | Error);
+            assert_eq!(state.can_edit_resources(), expected, "{state:?}");
+        }
+    }
+
+    #[test]
     fn vm_response_round_trips() {
         let response = VmResponse {
             id: Uuid::nil(),
@@ -140,9 +205,50 @@ mod tests {
             template_version: "ubuntu-26.04-v1".to_owned(),
             cpu: 1,
             ram: 512,
+            disk_gb: 2,
+            startup_step: None,
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
         assert_eq!(serde_json::from_str::<VmResponse>(&json).unwrap(), response);
+    }
+
+    #[test]
+    fn startup_step_serializes_camel_case_and_is_absent_by_default() {
+        for (step, json) in [
+            (StartupStep::PreparingDisk, "\"preparingDisk\""),
+            (StartupStep::GeneratingConfig, "\"generatingConfig\""),
+            (StartupStep::StartingProcess, "\"startingProcess\""),
+        ] {
+            assert_eq!(serde_json::to_string(&step).unwrap(), json);
+            assert_eq!(serde_json::from_str::<StartupStep>(json).unwrap(), step);
+        }
+
+        let response = VmResponse {
+            id: Uuid::nil(),
+            name: "test-vm".to_owned(),
+            state: VmState::Starting,
+            template: "ubuntu-rootfs-26.04".to_owned(),
+            template_version: "ubuntu-26.04-v1".to_owned(),
+            cpu: 1,
+            ram: 512,
+            disk_gb: 2,
+            startup_step: Some(StartupStep::PreparingDisk),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"startupStep\":\"preparingDisk\""));
+    }
+
+    #[test]
+    fn vm_log_response_round_trips_camel_case() {
+        let response = VmLogResponse {
+            console_log: "booting...\n".to_owned(),
+            truncated: true,
+        };
+
+        let json = serde_json::to_string(&response).expect("serialize response");
+        assert!(json.contains("\"consoleLog\":\"booting...\\n\""));
+        assert!(json.contains("\"truncated\":true"));
+        assert_eq!(serde_json::from_str::<VmLogResponse>(&json).unwrap(), response);
     }
 }

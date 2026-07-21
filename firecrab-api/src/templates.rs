@@ -6,7 +6,7 @@ use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -54,6 +54,10 @@ impl VerifiedArtifact {
     pub fn sha256(&self) -> &str {
         &self.sha256
     }
+
+    pub fn length(&self) -> u64 {
+        self.length
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +81,19 @@ pub struct TemplateRegistry {
     image_root_path: PathBuf,
     aliases: HashMap<String, (String, String)>,
     versions: HashMap<(String, String), Arc<TemplateVersion>>,
+    /// Caches `open_verified`'s full-file hash by (device, inode), so many
+    /// VMs starting at once against the same untouched multi-GB template
+    /// don't each independently re-read and re-hash it (`docs/task-vm-startup-progress.md`'s
+    /// "stuck at disk prep with many VMs" bug). Invalidated by length or
+    /// mtime moving, which any real content change updates.
+    verify_cache: Arc<Mutex<HashMap<(u64, u64), CachedHash>>>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedHash {
+    length: u64,
+    mtime: (i64, i64),
+    sha256: String,
 }
 
 impl TemplateRegistry {
@@ -137,6 +154,7 @@ impl TemplateRegistry {
             image_root_path,
             aliases,
             versions,
+            verify_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -161,13 +179,48 @@ impl TemplateRegistry {
         if metadata.dev() != artifact.device
             || metadata.ino() != artifact.inode
             || metadata.len() != artifact.length
-            || sha256_file(&file)? != artifact.sha256
         {
             return Err(TemplateError::ArtifactChanged(
                 artifact.relative_path.clone(),
             ));
         }
+        if self.hash_cached(&file, &metadata)? != artifact.sha256 {
+            return Err(TemplateError::ArtifactChanged(
+                artifact.relative_path.clone(),
+            ));
+        }
         Ok(file)
+    }
+
+    /// Full-file SHA256, reusing a cached value for this exact (device,
+    /// inode, length, mtime) instead of re-reading the whole file — that
+    /// combination only repeats for content that's genuinely unchanged
+    /// since it was last hashed (any real edit bumps mtime).
+    fn hash_cached(&self, file: &File, metadata: &Metadata) -> io::Result<String> {
+        let key = (metadata.dev(), metadata.ino());
+        let mtime = (metadata.mtime(), metadata.mtime_nsec());
+        {
+            let cache = self.verify_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(cached) = cache.get(&key)
+                && cached.length == metadata.len()
+                && cached.mtime == mtime
+            {
+                return Ok(cached.sha256.clone());
+            }
+        }
+        let sha256 = sha256_file(file)?;
+        self.verify_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                key,
+                CachedHash {
+                    length: metadata.len(),
+                    mtime,
+                    sha256: sha256.clone(),
+                },
+            );
+        Ok(sha256)
     }
 }
 
@@ -269,6 +322,7 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 mod tests {
     use std::fs;
     use std::os::unix::fs::symlink;
+    use std::time::{Duration, SystemTime};
 
     use tempfile::tempdir;
 
@@ -361,6 +415,43 @@ mod tests {
         let registry = create_registry(directory.path());
         let template = registry.resolve_alias("ubuntu-rootfs-26.04").unwrap();
         fs::write(directory.path().join("rootfs"), b"changed").unwrap();
+
+        assert!(matches!(
+            registry.open_verified(&template.rootfs),
+            Err(TemplateError::ArtifactChanged(_))
+        ));
+    }
+
+    /// Many VMs starting at once each call `open_verified` for the same
+    /// template; this proves that doesn't fail the 2nd+ time (the naive
+    /// bug would be a stale/poisoned cache making repeats worse, not just
+    /// slower — see `docs/task-vm-startup-progress.md`).
+    #[test]
+    fn open_verified_succeeds_repeatedly_for_an_unchanged_artifact() {
+        let directory = tempdir().unwrap();
+        let registry = create_registry(directory.path());
+        let template = registry.resolve_alias("ubuntu-rootfs-26.04").unwrap();
+
+        registry.open_verified(&template.rootfs).unwrap();
+        registry.open_verified(&template.rootfs).unwrap();
+        registry.open_verified(&template.rootfs).unwrap();
+    }
+
+    /// The hash cache keys on (device, inode, length, mtime), not just
+    /// (device, inode, length) — a same-length in-place content edit (which
+    /// bumps mtime) must still be caught, not served a stale cached hash.
+    #[test]
+    fn cache_is_invalidated_by_a_same_length_content_change() {
+        let directory = tempdir().unwrap();
+        let registry = create_registry(directory.path());
+        let template = registry.resolve_alias("ubuntu-rootfs-26.04").unwrap();
+        registry.open_verified(&template.rootfs).unwrap();
+
+        let rootfs_path = directory.path().join("rootfs");
+        fs::write(&rootfs_path, b"ROOTFS").unwrap(); // same length as "rootfs", different bytes
+        let file = File::open(&rootfs_path).unwrap();
+        file.set_modified(SystemTime::now() + Duration::from_secs(5))
+            .unwrap();
 
         assert!(matches!(
             registry.open_verified(&template.rootfs),

@@ -54,6 +54,7 @@ struct HelperConfig {
     socket_path: PathBuf,
     allowed_peer_uids: HashSet<u32>,
     firewall: firewall::FirewallActor,
+    bridge: bridge::BridgeActor,
 }
 
 impl HelperConfig {
@@ -81,6 +82,7 @@ impl HelperConfig {
             socket_path: PathBuf::from(socket_path),
             allowed_peer_uids,
             firewall: firewall::FirewallActor::new(),
+            bridge: bridge::BridgeActor::new(),
         })
     }
 
@@ -238,7 +240,7 @@ async fn respond_to(
 
 async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), HelperFailure> {
     match request {
-        NetworkRequest::EnsureBridge => bridge::ensure_bridge().await.map_err(|error| HelperFailure::Internal {
+        NetworkRequest::EnsureBridge => bridge::ensure_bridge(&config.bridge).await.map_err(|error| HelperFailure::Internal {
             detail: error_chain(&error),
         }),
         NetworkRequest::EnsureFirewall => {

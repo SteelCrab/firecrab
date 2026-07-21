@@ -1,16 +1,17 @@
 use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
 use std::path::PathBuf;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use firecrab_api_types::VmResponse;
+use firecrab_api_types::{VmLogResponse, VmResponse};
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::firecracker::{self, FirecrackerProcess, VmProcess};
-use crate::model::{CreateVmRequest, VmRecord, VmState};
+use crate::model::{CreateVmRequest, StartupStep, UpdateVmResourcesRequest, VmRecord, VmState};
 use crate::persistence::PersistenceError;
 use crate::rootfs;
 use crate::server::RequestId;
@@ -40,6 +41,57 @@ pub async fn get_vm(
         .ok_or_else(|| AppError::not_found(request_id.0))
 }
 
+/// Bytes of the on-disk console log returned to the dashboard's VM detail
+/// view; generous enough for a full boot without risking an unbounded
+/// response for a long-lived VM's ever-growing log file.
+const MAX_LOG_BYTES: u64 = 256 * 1024;
+
+/// The VM's captured serial console output (see
+/// `firecracker::console_log_path`) — empty, not an error, before the VM has
+/// ever produced any output.
+pub async fn get_vm_log(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmLogResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !vms.contains_key(&id) {
+            return Err(AppError::not_found(request_id.0));
+        }
+    }
+
+    let vms_dir = state.runtime.vms_dir.clone();
+    tokio::task::spawn_blocking(move || read_console_log(&vms_dir, id))
+        .await
+        .map(Json)
+        .map_err(|_| AppError::internal(request_id.0))
+}
+
+fn read_console_log(vms_dir: &std::path::Path, id: Uuid) -> VmLogResponse {
+    let path = firecracker::console_log_path(vms_dir, id);
+    let Ok(file) = std::fs::File::open(&path) else {
+        return VmLogResponse {
+            console_log: String::new(),
+            truncated: false,
+        };
+    };
+    let truncated = file
+        .metadata()
+        .map(|metadata| metadata.len() > MAX_LOG_BYTES)
+        .unwrap_or(false);
+    let mut buffer = Vec::new();
+    let _ = file.take(MAX_LOG_BYTES).read_to_end(&mut buffer);
+    VmLogResponse {
+        console_log: String::from_utf8_lossy(&buffer).into_owned(),
+        truncated,
+    }
+}
+
 pub async fn create_vm(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -49,19 +101,14 @@ pub async fn create_vm(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
+    // Not verified against disk here — that's a real (2GB rootfs) I/O cost,
+    // and run_start already re-verifies right before the template is
+    // actually used, which is the point that matters for catching a
+    // tampered/corrupted artifact.
     let template = state
         .templates
         .resolve_alias(&req.template)
         .ok_or_else(|| AppError::internal(request_id.0))?;
-    let verify_templates = state.templates.clone();
-    let verify_template = template.clone();
-    tokio::task::spawn_blocking(move || {
-        verify_templates.open_verified(&verify_template.kernel)?;
-        verify_templates.open_verified(&verify_template.rootfs)
-    })
-    .await
-    .map_err(|_| AppError::internal(request_id.0))?
-    .map_err(|_| AppError::internal(request_id.0))?;
     let vm = VmRecord {
         id: Uuid::new_v4(),
         name: req.name,
@@ -72,7 +119,9 @@ pub async fn create_vm(
         template_boot_args_sha256: template.boot_args_sha256(),
         ram: req.ram,
         cpu: req.cpu,
+        disk_gb: req.disk_gb,
         state: VmState::Created,
+        startup_step: None,
     };
 
     let response = vm_response(&vm);
@@ -103,6 +152,97 @@ pub async fn create_vm(
     Ok((StatusCode::CREATED, Json(response)))
 }
 
+/// Replaces cpu/ram/disk for a VM that has no live process. Applies on the
+/// *next* `start`, not to a running Firecracker instance.
+pub async fn update_vm(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    ValidatedJson(req): ValidatedJson<UpdateVmResourcesRequest>,
+) -> Result<Json<VmResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let (updated, previous) = claim_resource_update(&state, id, &req, request_id.0)?;
+    if let Err(error) = persist_update(&state, &updated, request_id.0).await {
+        restore_resources(&state, id, previous);
+        return Err(error);
+    }
+    tracing::info!(
+        request_id = %request_id.0,
+        vm_id = %id,
+        cpu = updated.cpu,
+        ram = updated.ram,
+        disk_gb = updated.disk_gb,
+        "vm resources updated"
+    );
+    Ok(Json(vm_response(&updated)))
+}
+
+type PreviousResources = (u8, u32, u16);
+
+fn claim_resource_update(
+    state: &AppState,
+    id: Uuid,
+    req: &UpdateVmResourcesRequest,
+    request_id: Uuid,
+) -> Result<(VmRecord, PreviousResources), AppError> {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let vm = vms
+        .get_mut(&id)
+        .ok_or_else(|| AppError::not_found(request_id))?;
+    if !vm.state.can_edit_resources() {
+        return Err(AppError::invalid_state(vm.state, request_id));
+    }
+    let fields = validate_update(req, vm.disk_gb);
+    if !fields.is_empty() {
+        return Err(AppError::validation(fields, request_id));
+    }
+    let previous = (vm.cpu, vm.ram, vm.disk_gb);
+    vm.cpu = req.cpu;
+    vm.ram = req.ram;
+    vm.disk_gb = req.disk_gb;
+    Ok((vm.clone(), previous))
+}
+
+fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(vm) = vms.get_mut(&id) {
+        (vm.cpu, vm.ram, vm.disk_gb) = previous;
+    }
+}
+
+fn validate_update(req: &UpdateVmResourcesRequest, current_disk_gb: u16) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    if !(1..=32).contains(&req.cpu) {
+        fields.insert("cpu".to_owned(), "must be between 1 and 32".to_owned());
+    }
+    if !is_valid_ram_mib(req.ram) {
+        fields.insert(
+            "ram".to_owned(),
+            "must be a power of two between 128 and 32768 MiB".to_owned(),
+        );
+    }
+    if req.disk_gb < current_disk_gb {
+        fields.insert(
+            "diskGb".to_owned(),
+            format!(
+                "must be at least the current size ({current_disk_gb} GiB) — shrinking is not supported"
+            ),
+        );
+    } else if req.disk_gb > MAX_DISK_GB {
+        fields.insert(
+            "diskGb".to_owned(),
+            format!("must be at most {MAX_DISK_GB} GiB"),
+        );
+    }
+    fields
+}
+
 /// Starts the VM synchronously: claim `starting`, prepare the disk and
 /// config, spawn Firecracker, wait for its API, then record `running`.
 /// Any failure lands the record on `error` with no process left behind.
@@ -118,22 +258,43 @@ pub async fn start_vm(
         return Err(error);
     }
 
+    // Detached: a slow disk copy (queued behind `disk_prep_permits` when
+    // many VMs start at once) can outlive the per-request timeout in
+    // `enforce_limits`. A plain nested `.await` chain would be dropped
+    // right along with the timed-out request, orphaning the VM in
+    // `starting` forever — nothing would be left to call `spawn_vm` or
+    // record the final state once the disk work finished. `tokio::spawn`
+    // runs independently of whoever's awaiting it, so the VM still reaches
+    // `running`/`error` even if this response times out; the dashboard's
+    // existing polling picks up the result either way.
+    let state_for_task = state.clone();
+    tokio::spawn(async move { finish_start(&state_for_task, id, claimed, request_id).await })
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+}
+
+async fn finish_start(
+    state: &AppState,
+    id: Uuid,
+    claimed: VmRecord,
+    request_id: RequestId,
+) -> Result<Json<VmResponse>, AppError> {
     let started = std::time::Instant::now();
-    let process = match run_start(&state, &claimed).await {
+    let process = match run_start(state, &claimed).await {
         Ok(process) => process,
         Err(reason) => {
             tracing::error!(request_id = %request_id.0, vm_id = %id, reason, "vm start failed");
-            return Err(fail_start(&state, id, request_id.0).await);
+            return Err(fail_start(state, id, request_id.0).await);
         }
     };
     let pid = process.pid();
 
-    firecracker::register_and_watch(&state, id, process);
+    firecracker::register_and_watch(state, id, process);
 
-    match transition_if(&state, id, VmState::Starting, VmState::Running) {
+    match transition_if(state, id, VmState::Starting, VmState::Running) {
         Some(running) => {
-            if persist_update(&state, &running, request_id.0).await.is_err() {
-                return Err(fail_start(&state, id, request_id.0).await);
+            if persist_update(state, &running, request_id.0).await.is_err() {
+                return Err(fail_start(state, id, request_id.0).await);
             }
             tracing::info!(
                 request_id = %request_id.0,
@@ -177,7 +338,7 @@ pub async fn stop_vm(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&id)
         .cloned();
-    if let Some(VmProcess { pid, mut exited }) = entry {
+    if let Some(VmProcess { pid, mut exited, .. }) = entry {
         firecracker::sigterm(pid);
         if tokio::time::timeout(state.runtime.stop_grace, exited.changed())
             .await
@@ -290,6 +451,10 @@ fn claim_transition(
         return Err(AppError::invalid_state(previous, request_id));
     }
     vm.state = to;
+    // Reset here rather than skip-if-Starting: `run_start` sets the first
+    // real step moments later, so a stale step from a prior start never
+    // shows through even for a single poll.
+    vm.startup_step = None;
     Ok((vm.clone(), previous))
 }
 
@@ -300,6 +465,7 @@ fn set_memory_state(state: &AppState, id: Uuid, to: VmState) -> Option<VmRecord>
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     vms.get_mut(&id).map(|vm| {
         vm.state = to;
+        vm.startup_step = None;
         vm.clone()
     })
 }
@@ -312,6 +478,7 @@ fn transition_if(state: &AppState, id: Uuid, from: VmState, to: VmState) -> Opti
     match vms.get_mut(&id) {
         Some(vm) if vm.state == from => {
             vm.state = to;
+            vm.startup_step = None;
             Some(vm.clone())
         }
         _ => None,
@@ -345,21 +512,40 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
             )
         })?;
 
+    set_startup_step(state, vm.id, StartupStep::PreparingDisk);
+
+    // Bounds how many VMs copy/grow a rootfs disk at once — see
+    // `DISK_PREP_CONCURRENCY`'s doc comment. Held across the blocking task
+    // below, released once that VM's disk+config are ready.
+    let permit = state
+        .disk_prep_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("disk_prep_permits semaphore is never closed");
+
     let templates = state.templates.clone();
     let runtime = state.runtime.clone();
     let record = vm.clone();
+    let state_for_blocking = state.clone();
     let config_path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+        let _permit = permit;
         let mut source = templates
             .open_verified(&template.rootfs)
             .map_err(|error| format!("rootfs verification failed: {error}"))?;
-        rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source)
+        let target_bytes = u64::from(record.disk_gb) * 1024 * 1024 * 1024;
+        rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source, target_bytes)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
+
+        set_startup_step(&state_for_blocking, record.id, StartupStep::GeneratingConfig);
         let kernel = templates.artifact_path(&template.kernel);
         firecracker::write_config(&runtime.vms_dir, &record, &kernel, &template.boot_args)
             .map_err(|error| format!("config generation failed: {error}"))
     })
     .await
     .map_err(|error| format!("start preparation task failed: {error}"))??;
+
+    set_startup_step(state, vm.id, StartupStep::StartingProcess);
 
     firecracker::spawn_vm(
         &state.runtime.firecracker_binary,
@@ -370,6 +556,19 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+/// Records the current phase of an in-flight start so pollers can show *why*
+/// a VM hasn't reached `running` yet. Silently a no-op once the record has
+/// moved on (e.g. a concurrent failure already landed it on `error`).
+fn set_startup_step(state: &AppState, id: Uuid, step: StartupStep) {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(vm) = vms.get_mut(&id) {
+        vm.startup_step = Some(step);
+    }
 }
 
 /// Failure tail of the start flow: record `error`, then make sure no process
@@ -405,7 +604,24 @@ fn vm_response(vm: &VmRecord) -> VmResponse {
         template_version: vm.template_version.clone(),
         cpu: vm.cpu,
         ram: vm.ram,
+        disk_gb: vm.disk_gb,
+        startup_step: vm.startup_step,
     }
+}
+
+/// Highest disk size the create form accepts; keeps a mistyped value from
+/// filling the host disk (`copy` + `resize2fs` both happen synchronously in
+/// the start pipeline, so an absurd size would just hang a start).
+const MAX_DISK_GB: u16 = 500;
+
+const MIN_RAM_MIB: u32 = 128;
+const MAX_RAM_MIB: u32 = 32_768;
+
+/// RAM is restricted to powers of two (128, 256, 512, ... 32768 MiB),
+/// matching how cloud instance sizes are usually picked rather than an
+/// arbitrary MiB value.
+fn is_valid_ram_mib(ram: u32) -> bool {
+    (MIN_RAM_MIB..=MAX_RAM_MIB).contains(&ram) && ram.is_power_of_two()
 }
 
 fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
@@ -416,19 +632,36 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             "must be 1-64 ASCII letters, numbers, '.', '_' or '-'".to_owned(),
         );
     }
-    if state.templates.resolve_alias(&req.template).is_none() {
+    let template = state.templates.resolve_alias(&req.template);
+    if template.is_none() {
         fields.insert("template".to_owned(), "is not supported".to_owned());
     }
     if !(1..=32).contains(&req.cpu) {
         fields.insert("cpu".to_owned(), "must be between 1 and 32".to_owned());
     }
-    if !(128..=32_768).contains(&req.ram) {
+    if !is_valid_ram_mib(req.ram) {
         fields.insert(
             "ram".to_owned(),
-            "must be between 128 and 32768 MiB".to_owned(),
+            "must be a power of two between 128 and 32768 MiB".to_owned(),
         );
     }
+    if let Some(template) = &template {
+        let min_disk_gb = min_disk_gb_for(template.rootfs.length());
+        if !(min_disk_gb..=MAX_DISK_GB).contains(&req.disk_gb) {
+            fields.insert(
+                "diskGb".to_owned(),
+                format!("must be between {min_disk_gb} and {MAX_DISK_GB} GiB"),
+            );
+        }
+    }
     fields
+}
+
+/// Smallest disk size that can hold the template's rootfs, rounded up to a
+/// whole GiB (ext4 shrink isn't supported, so this is a hard floor).
+fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    rootfs_bytes.div_ceil(GIB).try_into().unwrap_or(u16::MAX)
 }
 
 fn valid_vm_name(name: &str) -> bool {
@@ -465,6 +698,42 @@ mod tests {
         assert!(!valid_vm_name(&"a".repeat(65)));
     }
 
+    #[tokio::test]
+    async fn validates_disk_gb_against_the_template_floor_and_fixed_ceiling() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
+        // so `min_disk_gb_for` rounds it up to 1 GiB.
+        let base = CreateVmRequest {
+            name: "test-vm".to_owned(),
+            template: "ubuntu-rootfs-26.04".to_owned(),
+            ram: 512,
+            cpu: 1,
+            disk_gb: 0,
+        };
+
+        let too_small = validate_create(&base, &state);
+        assert!(too_small.contains_key("diskGb"), "{too_small:?}");
+
+        let at_floor = CreateVmRequest {
+            disk_gb: 1,
+            ..base.clone()
+        };
+        assert!(!validate_create(&at_floor, &state).contains_key("diskGb"));
+
+        let too_large = CreateVmRequest {
+            disk_gb: MAX_DISK_GB + 1,
+            ..base.clone()
+        };
+        assert!(validate_create(&too_large, &state).contains_key("diskGb"));
+
+        let at_ceiling = CreateVmRequest {
+            disk_gb: MAX_DISK_GB,
+            ..base
+        };
+        assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
+    }
+
     fn record(name: &str, id: Uuid) -> VmRecord {
         VmRecord {
             id,
@@ -477,6 +746,11 @@ mod tests {
             template_boot_args_sha256: String::new(),
             cpu: 1,
             ram: 128,
+            // 0 keeps `run_start`'s disk grow step a no-op against this
+            // fixture's fake (non-ext4) rootfs bytes; real growth is
+            // covered by `rootfs::tests::grows_a_real_ext4_filesystem_to_the_requested_size`.
+            disk_gb: 0,
+            startup_step: None,
         }
     }
 
@@ -627,6 +901,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn console_log_is_empty_before_any_output_exists() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("quiet", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(log) = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(log.console_log, "");
+        assert!(!log.truncated);
+    }
+
+    #[tokio::test]
+    async fn console_log_returns_file_contents_once_written() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("chatty", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "booted\nlogin: ").unwrap();
+
+        let Json(log) = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(log.console_log, "booted\nlogin: ");
+        assert!(!log.truncated);
+    }
+
+    #[tokio::test]
+    async fn console_log_truncates_oversized_output() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("verbose", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "x".repeat(MAX_LOG_BYTES as usize + 1000)).unwrap();
+
+        let Json(log) = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(log.console_log.len() as u64, MAX_LOG_BYTES);
+        assert!(log.truncated);
+    }
+
+    #[tokio::test]
+    async fn console_log_unknown_vm_returns_not_found() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn console_log_handles_non_utf8_bytes_without_erroring() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("binary", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, [b'o', b'k', 0xFF, 0xFE, b'\n']).unwrap();
+
+        let Json(log) = get_vm_log(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert!(log.console_log.starts_with("ok"));
+        assert!(!log.truncated);
+    }
+
+    #[tokio::test]
     async fn start_then_stop_runs_the_full_lifecycle() {
         let directory = short_tempdir();
         let root = directory.path();
@@ -648,6 +1023,10 @@ mod tests {
 
         assert_eq!(started.state, VmState::Running);
         assert_eq!(db_state(&state, vm.id), Some(VmState::Running));
+        assert_eq!(
+            started.startup_step, None,
+            "a running VM must not still be reporting a startup step"
+        );
         let pid = state.processes.lock().unwrap().get(&vm.id).unwrap().pid as i32;
         assert!(process_alive(pid));
         assert!(
@@ -726,7 +1105,33 @@ mod tests {
         );
         assert_eq!(memory_state(&state, vm.id), Some(VmState::Error));
         assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().startup_step,
+            None,
+            "a failed start must not leave a stale startup step behind"
+        );
         assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_startup_step_updates_the_live_record_and_ignores_unknown_ids() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("stepping", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        set_startup_step(&state, vm.id, StartupStep::GeneratingConfig);
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().startup_step,
+            Some(StartupStep::GeneratingConfig)
+        );
+
+        // No matching VM: must not panic, and no unrelated record is touched.
+        set_startup_step(&state, Uuid::new_v4(), StartupStep::PreparingDisk);
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().startup_step,
+            Some(StartupStep::GeneratingConfig)
+        );
     }
 
     #[tokio::test]
@@ -875,6 +1280,7 @@ mod tests {
             template: "ubuntu-rootfs-26.04".to_owned(),
             ram: 512,
             cpu: 1,
+            disk_gb: 2,
         };
         let result = create_vm(
             State(state.clone()),
@@ -885,5 +1291,129 @@ mod tests {
 
         assert!(result.is_err());
         assert!(state.vms.lock().unwrap().is_empty());
+    }
+
+    fn update_request(cpu: u8, ram: u32, disk_gb: u16) -> UpdateVmResourcesRequest {
+        UpdateVmResourcesRequest { cpu, ram, disk_gb }
+    }
+
+    #[tokio::test]
+    async fn update_applies_new_resources_for_an_editable_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("resizable", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(updated) = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(update_request(4, 1024, 3)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.cpu, 4);
+        assert_eq!(updated.ram, 1024);
+        assert_eq!(updated.disk_gb, 3);
+        let reopened = {
+            let state = test_state(directory.path()).await;
+            state
+        };
+        assert_eq!(db_state(&reopened, vm.id), Some(VmState::Created));
+        let persisted = reopened.store.load_all().unwrap();
+        let persisted = persisted.get(&vm.id).unwrap();
+        assert_eq!((persisted.cpu, persisted.ram, persisted.disk_gb), (4, 1024, 3));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_a_running_vm_with_conflict() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("busy-resize", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+
+        let error = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(update_request(4, 1024, 3)),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        let vms = state.vms.lock().unwrap();
+        let unchanged = vms.get(&vm.id).unwrap();
+        assert_eq!((unchanged.cpu, unchanged.ram, unchanged.disk_gb), (1, 128, 0));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_shrinking_the_disk() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("no-shrink", Uuid::new_v4());
+        vm.disk_gb = 5;
+        seed_vm(&state, &vm);
+
+        let error = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(update_request(1, 128, 4)),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Created));
+        let vms = state.vms.lock().unwrap();
+        assert_eq!(vms.get(&vm.id).unwrap().disk_gb, 5);
+    }
+
+    #[tokio::test]
+    async fn update_unknown_vm_returns_not_found() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = update_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(Uuid::new_v4().to_string()),
+            ValidatedJson(update_request(1, 128, 2)),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn ram_must_be_a_power_of_two_within_range() {
+        for valid in [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768] {
+            assert!(is_valid_ram_mib(valid), "{valid} should be valid");
+        }
+        for invalid in [0, 64, 100, 127, 512 + 1, 3000, 32768 + 1, 65536] {
+            assert!(!is_valid_ram_mib(invalid), "{invalid} should be invalid");
+        }
+    }
+
+    #[test]
+    fn validates_update_cpu_ram_and_disk_bounds() {
+        let valid = update_request(2, 512, 5);
+        assert!(validate_update(&valid, 5).is_empty());
+
+        let bad_cpu = update_request(0, 512, 5);
+        assert!(validate_update(&bad_cpu, 5).contains_key("cpu"));
+
+        let bad_ram = update_request(2, 64, 5);
+        assert!(validate_update(&bad_ram, 5).contains_key("ram"));
+
+        let shrink = update_request(2, 512, 4);
+        assert!(validate_update(&shrink, 5).contains_key("diskGb"));
+
+        let too_big = update_request(2, 512, MAX_DISK_GB + 1);
+        assert!(validate_update(&too_big, 5).contains_key("diskGb"));
     }
 }

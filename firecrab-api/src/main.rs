@@ -1,3 +1,4 @@
+mod console;
 mod error;
 mod extract;
 mod firecracker;

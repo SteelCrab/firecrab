@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::firecracker::{self, VmProcess};
@@ -29,6 +30,14 @@ impl RuntimeConfig {
     }
 }
 
+/// How many `run_start` calls may copy/grow a rootfs disk at once. Each
+/// copy is a multi-GB sequential read+write; letting every concurrently
+/// starting VM race for disk bandwidth at once makes all of them slower
+/// (seek thrashing) instead of finishing any of them sooner, which reads to
+/// dashboard users as VMs "stuck" in the disk-prep step
+/// (`docs/tests/vm-startup-progress.md`).
+const DISK_PREP_CONCURRENCY: usize = 2;
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub vms: Arc<Mutex<HashMap<Uuid, VmRecord>>>,
@@ -36,6 +45,7 @@ pub struct AppState {
     pub(crate) store: Store,
     pub(crate) processes: Arc<Mutex<HashMap<Uuid, VmProcess>>>,
     pub(crate) runtime: Arc<RuntimeConfig>,
+    pub(crate) disk_prep_permits: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -64,6 +74,7 @@ impl AppState {
             store,
             processes: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(RuntimeConfig::from_defaults()),
+            disk_prep_permits: Arc::new(Semaphore::new(DISK_PREP_CONCURRENCY)),
         })
     }
 

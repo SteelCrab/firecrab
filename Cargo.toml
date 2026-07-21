@@ -4,6 +4,7 @@ members = [
     "firecrab-api",
     "firecrab-api-types",
     "firecrab-helper-protocol",
+    "firecrab-net-helper",
 ]
 
 [workspace.package]
