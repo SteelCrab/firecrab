@@ -4,6 +4,7 @@ mod firecracker;
 mod handlers;
 mod ipam;
 mod model;
+mod network_policy;
 mod persistence;
 mod rootfs;
 mod server;
