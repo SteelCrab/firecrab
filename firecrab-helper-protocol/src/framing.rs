@@ -43,7 +43,7 @@ where
     let mut len_bytes = [0_u8; 4];
     reader.read_exact(&mut len_bytes).await?;
     let len = u32::from_be_bytes(len_bytes) as usize;
-    if len == 0 || len > MAX_FRAME_BYTES {
+    if len > MAX_FRAME_BYTES {
         return Err(FrameError::TooLarge { len });
     }
 
@@ -80,6 +80,14 @@ mod tests {
     async fn garbage_payload_is_malformed() {
         let mut frame = 3_u32.to_be_bytes().to_vec();
         frame.extend_from_slice(b"{{{");
+
+        let result = read_frame::<_, String>(&mut frame.as_slice()).await;
+        assert!(matches!(result, Err(FrameError::Malformed(_))));
+    }
+
+    #[tokio::test]
+    async fn zero_length_frame_is_malformed_not_too_large() {
+        let frame = 0_u32.to_be_bytes().to_vec();
 
         let result = read_frame::<_, String>(&mut frame.as_slice()).await;
         assert!(matches!(result, Err(FrameError::Malformed(_))));

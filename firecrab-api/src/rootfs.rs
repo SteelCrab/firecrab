@@ -141,11 +141,22 @@ fn grow(rootfs: &Path, target_bytes: u64) -> Result<(), RootfsError> {
     })?;
     drop(file);
 
-    run_resize_tool(rootfs, "e2fsck", &["-f", "-y"], |status| {
+    let resized = run_resize_tool(rootfs, "e2fsck", &["-f", "-y"], |status| {
         // 0 = clean, 1 = errors corrected; anything higher is a real failure.
         status.code().is_some_and(|code| code <= 1)
-    })?;
-    run_resize_tool(rootfs, "resize2fs", &[], |status| status.success())
+    })
+    .and_then(|()| run_resize_tool(rootfs, "resize2fs", &[], |status| status.success()));
+
+    if resized.is_err() {
+        // The filesystem inside wasn't actually grown, but the file's raw
+        // length now is — restore it so a retry's no-op check above (which
+        // only compares raw length) doesn't mistake this for an
+        // already-grown disk and skip redoing e2fsck/resize2fs.
+        if let Ok(file) = OpenOptions::new().write(true).open(rootfs) {
+            let _ = file.set_len(current);
+        }
+    }
+    resized
 }
 
 fn run_resize_tool(
@@ -346,5 +357,32 @@ mod tests {
         assert_eq!(second, first);
         assert_eq!(fs::metadata(&second).unwrap().len(), grown_bytes);
         assert_eq!(ext4_capacity_bytes(&second), grown_bytes);
+    }
+
+    /// If e2fsck/resize2fs fail after `set_len` has already extended the raw
+    /// file, `grow`'s own no-op check (`target_bytes <= current`) must not
+    /// be fooled by that larger raw length on a later retry — otherwise the
+    /// retry silently skips resizing a filesystem that was never actually
+    /// grown.
+    #[test]
+    fn failed_resize_restores_the_original_file_length_so_a_retry_redoes_it() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        // Not a real ext4 filesystem, so e2fsck fails outright (verified:
+        // exit code 8) instead of silently "fixing" it into something
+        // resize2fs would then accept.
+        fs::write(&rootfs, b"not an ext4 filesystem, just some bytes").unwrap();
+        let original_len = fs::metadata(&rootfs).unwrap().len();
+
+        let error = grow(&rootfs, original_len + 8 * 1024 * 1024).unwrap_err();
+        assert!(matches!(
+            error,
+            RootfsError::ResizeFailed { tool: "e2fsck", .. }
+        ));
+        assert_eq!(
+            fs::metadata(&rootfs).unwrap().len(),
+            original_len,
+            "a failed resize must not leave the file permanently enlarged"
+        );
     }
 }

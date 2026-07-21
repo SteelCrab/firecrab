@@ -11,6 +11,7 @@ use rtnetlink::packet_route::{
 };
 use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
 use thiserror::Error;
+use tokio::sync::Mutex;
 
 pub const BRIDGE_NAME: &str = "fcbr0";
 pub const BRIDGE_MTU: u32 = 1500;
@@ -36,12 +37,30 @@ pub enum BridgeError {
     Ipv6Disable(#[source] io::Error),
 }
 
+/// Single-writer guard: `main.rs` spawns one task per accepted connection,
+/// so two concurrent `EnsureBridge` requests could otherwise both see "no
+/// bridge yet" and both race to create `fcbr0`. Mirrors `FirewallActor` —
+/// there's no state worth caching here (unlike the firewall's applied-uplink
+/// short-circuit), just mutual exclusion over the whole check-then-act flow.
+#[derive(Debug, Default)]
+pub struct BridgeActor {
+    lock: Mutex<()>,
+}
+
+impl BridgeActor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 /// Ensure the single root-owned Firecrab bridge is present and usable.
 ///
 /// This adds only the bridge, its gateway address and link state. It never
 /// removes host routes or addresses, and it intentionally does not change the
 /// global IPv4 forwarding sysctl.
-pub async fn ensure_bridge() -> Result<(), BridgeError> {
+pub async fn ensure_bridge(actor: &BridgeActor) -> Result<(), BridgeError> {
+    let _guard = actor.lock.lock().await;
+
     let (connection, handle, _) = new_connection().map_err(BridgeError::Connection)?;
     tokio::spawn(connection);
 
@@ -131,7 +150,10 @@ async fn assert_subnet_available(
             continue;
         }
         let prefix = route.header.destination_prefix_length;
-        if prefix == 0 || prefix > 32 || route_output_interface(&route) == own_bridge_index {
+        if prefix == 0 || prefix > 32 {
+            continue;
+        }
+        if route_belongs_to_own_bridge(route_output_interface(&route), own_bridge_index) {
             continue;
         }
         if let Some(network) = route_ipv4_destination(&route)
@@ -176,6 +198,17 @@ fn ipv4_address(address: &rtnetlink::packet_route::address::AddressMessage) -> O
         | AddressAttribute::Local(IpAddr::V4(ipv4)) => Some(*ipv4),
         _ => None,
     })
+}
+
+/// Whether a route should be excluded from the conflict scan because it
+/// belongs to the bridge we already own. `None == None` would wrongly match
+/// a route with no `RTA_OIF` against the "no bridge exists yet" case, so
+/// this only excludes on an explicit index match.
+fn route_belongs_to_own_bridge(route_oif: Option<u32>, own_bridge_index: Option<u32>) -> bool {
+    match own_bridge_index {
+        Some(own_index) => route_oif == Some(own_index),
+        None => false,
+    }
 }
 
 fn route_output_interface(route: &RouteMessage) -> Option<u32> {
@@ -252,5 +285,27 @@ mod tests {
             BRIDGE_NETWORK,
             BRIDGE_PREFIX
         ));
+    }
+
+    #[test]
+    fn routes_without_an_oif_stay_eligible_when_no_bridge_exists_yet() {
+        // The bug: None == None used to make this true, hiding a real
+        // conflicting route from the scan during first-time bridge creation.
+        assert!(!route_belongs_to_own_bridge(None, None));
+    }
+
+    #[test]
+    fn routes_without_an_oif_stay_eligible_even_once_a_bridge_exists() {
+        assert!(!route_belongs_to_own_bridge(None, Some(7)));
+    }
+
+    #[test]
+    fn a_route_on_a_different_interface_is_not_excluded() {
+        assert!(!route_belongs_to_own_bridge(Some(3), Some(7)));
+    }
+
+    #[test]
+    fn a_route_on_the_owned_bridge_interface_is_excluded() {
+        assert!(route_belongs_to_own_bridge(Some(7), Some(7)));
     }
 }
