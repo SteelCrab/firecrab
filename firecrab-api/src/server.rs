@@ -120,7 +120,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         timeout: config.request_timeout,
     };
     let mut cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([
             header::CONTENT_TYPE,
             HeaderName::from_static("idempotency-key"),
@@ -136,7 +136,9 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/vms/{id}",
-            get(handlers::vms::get_vm).delete(handlers::vms::delete_vm),
+            get(handlers::vms::get_vm)
+                .put(handlers::vms::update_vm)
+                .delete(handlers::vms::delete_vm),
         )
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))

@@ -66,9 +66,11 @@ pub fn rootfs_path(vms_dir: &Path, id: Uuid) -> PathBuf {
 }
 
 /// Copies the verified template rootfs into the VM's writable disk at
-/// `{vms_dir}/{id}/rootfs.ext4`, then grows it to `target_bytes` if that's
-/// larger than the template. An existing disk is reused as-is (size
-/// unchanged) so a stopped VM keeps its data across restarts.
+/// `{vms_dir}/{id}/rootfs.ext4` (an existing disk is reused as-is so a
+/// stopped VM keeps its data across restarts), then grows it to
+/// `target_bytes` if that's larger than its current size -- covering both a
+/// fresh copy and a disk whose VM had its `diskGb` edited upward since the
+/// last start.
 pub fn prepare_rootfs(
     vms_dir: &Path,
     id: Uuid,
@@ -77,29 +79,37 @@ pub fn prepare_rootfs(
 ) -> Result<PathBuf, RootfsError> {
     let vm_dir = vms_dir.join(id.to_string());
     let rootfs = rootfs_path(vms_dir, id);
-    match fs::metadata(&rootfs) {
-        Ok(_) => return Ok(rootfs),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+    let freshly_created = match fs::metadata(&rootfs) {
+        Ok(_) => false,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => true,
         Err(source) => {
             return Err(RootfsError::Inspect {
                 path: rootfs,
                 source,
             });
         }
+    };
+
+    if freshly_created {
+        fs::create_dir_all(&vm_dir).map_err(|source| RootfsError::CreateDirectory {
+            path: vm_dir.clone(),
+            source,
+        })?;
+
+        let tmp = vm_dir.join(ROOTFS_TMP_FILE_NAME);
+        if let Err(error) = publish(template, &tmp, &rootfs) {
+            let _ = fs::remove_file(&tmp);
+            return Err(error);
+        }
     }
 
-    fs::create_dir_all(&vm_dir).map_err(|source| RootfsError::CreateDirectory {
-        path: vm_dir.clone(),
-        source,
-    })?;
-
-    let tmp = vm_dir.join(ROOTFS_TMP_FILE_NAME);
-    if let Err(error) = publish(template, &tmp, &rootfs) {
-        let _ = fs::remove_file(&tmp);
-        return Err(error);
-    }
     if let Err(error) = grow(&rootfs, target_bytes) {
-        let _ = fs::remove_file(&rootfs);
+        // A fresh copy that fails to grow is safe to discard (a retry just
+        // re-copies); an existing disk's prior contents must survive a
+        // failed resize attempt, so it is left in place on that path.
+        if freshly_created {
+            let _ = fs::remove_file(&rootfs);
+        }
         return Err(error);
     }
     Ok(rootfs)
@@ -228,7 +238,7 @@ mod tests {
         fs::create_dir_all(&vm_dir).unwrap();
         fs::write(vm_dir.join("rootfs.ext4"), b"existing-disk").unwrap();
 
-        let rootfs = prepare_rootfs(&vms_dir, id, &mut template, "fresh-template".len() as u64)
+        let rootfs = prepare_rootfs(&vms_dir, id, &mut template, "existing-disk".len() as u64)
             .unwrap();
 
         assert_eq!(fs::read(&rootfs).unwrap(), b"existing-disk");
@@ -260,6 +270,30 @@ mod tests {
     /// small ext4 image with `mkfs.ext4`, copies it through `prepare_rootfs`
     /// with a larger target size, and checks the resulting filesystem
     /// actually reports the grown capacity.
+    fn ext4_capacity_bytes(path: &Path) -> u64 {
+        let dumpe2fs = Command::new("dumpe2fs")
+            .args(["-h"])
+            .arg(path)
+            .output()
+            .unwrap();
+        let info = String::from_utf8_lossy(&dumpe2fs.stdout);
+        let block_count: u64 = info
+            .lines()
+            .find_map(|line| line.strip_prefix("Block count:"))
+            .expect("dumpe2fs must report a block count")
+            .trim()
+            .parse()
+            .unwrap();
+        let block_size: u64 = info
+            .lines()
+            .find_map(|line| line.strip_prefix("Block size:"))
+            .expect("dumpe2fs must report a block size")
+            .trim()
+            .parse()
+            .unwrap();
+        block_count * block_size
+    }
+
     #[test]
     fn grows_a_real_ext4_filesystem_to_the_requested_size() {
         let directory = tempdir().unwrap();
@@ -280,26 +314,37 @@ mod tests {
         let rootfs = prepare_rootfs(&vms_dir, id, &mut template, target_bytes).unwrap();
 
         assert_eq!(fs::metadata(&rootfs).unwrap().len(), target_bytes);
-        let dumpe2fs = Command::new("dumpe2fs")
-            .args(["-h"])
-            .arg(&rootfs)
-            .output()
-            .unwrap();
-        let info = String::from_utf8_lossy(&dumpe2fs.stdout);
-        let block_count: u64 = info
-            .lines()
-            .find_map(|line| line.strip_prefix("Block count:"))
-            .expect("dumpe2fs must report a block count")
-            .trim()
-            .parse()
-            .unwrap();
-        let block_size: u64 = info
-            .lines()
-            .find_map(|line| line.strip_prefix("Block size:"))
-            .expect("dumpe2fs must report a block size")
-            .trim()
-            .parse()
-            .unwrap();
-        assert_eq!(block_count * block_size, target_bytes);
+        assert_eq!(ext4_capacity_bytes(&rootfs), target_bytes);
+    }
+
+    /// A VM whose `diskGb` was edited upward after it already had a disk
+    /// (`task-vm-resource-update.md`) needs the *next* `prepare_rootfs` call
+    /// — the "reuse existing disk" path, not the "fresh copy" one — to
+    /// actually grow it.
+    #[test]
+    fn growing_an_already_existing_disk_is_applied_on_the_next_call() {
+        let directory = tempdir().unwrap();
+        let template_path = directory.path().join("template.ext4");
+        let status = Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(&template_path)
+            .arg("8M")
+            .status()
+            .expect("mkfs.ext4 must be installed for this test");
+        assert!(status.success(), "mkfs.ext4 failed");
+
+        let mut template = File::open(&template_path).unwrap();
+        let vms_dir = directory.path().join("vms");
+        let id = Uuid::new_v4();
+        let initial_bytes = 8 * 1024 * 1024;
+        let grown_bytes = 24 * 1024 * 1024;
+
+        let first = prepare_rootfs(&vms_dir, id, &mut template, initial_bytes).unwrap();
+        assert_eq!(fs::metadata(&first).unwrap().len(), initial_bytes);
+
+        let second = prepare_rootfs(&vms_dir, id, &mut template, grown_bytes).unwrap();
+        assert_eq!(second, first);
+        assert_eq!(fs::metadata(&second).unwrap().len(), grown_bytes);
+        assert_eq!(ext4_capacity_bytes(&second), grown_bytes);
     }
 }

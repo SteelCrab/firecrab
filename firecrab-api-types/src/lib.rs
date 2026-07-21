@@ -32,6 +32,12 @@ impl VmState {
     pub fn can_delete(self) -> bool {
         matches!(self, Self::Created | Self::Stopped | Self::Error)
     }
+
+    /// Resource edits (cpu/ram/disk) only take effect on the *next* start, so
+    /// they're only meaningful while no Firecracker process is live.
+    pub fn can_edit_resources(self) -> bool {
+        matches!(self, Self::Created | Self::Stopped | Self::Error)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -39,6 +45,16 @@ impl VmState {
 pub struct CreateVmRequest {
     pub name: String,
     pub template: String,
+    pub ram: u32,
+    pub cpu: u8,
+    pub disk_gb: u16,
+}
+
+/// Body for `PUT /api/vms/{id}`: replaces cpu/ram/disk for a VM that isn't
+/// currently running. Takes effect on the next start, not live.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpdateVmResourcesRequest {
     pub ram: u32,
     pub cpu: u8,
     pub disk_gb: u16,
@@ -162,6 +178,21 @@ mod tests {
         let json = r#"{"name":"test-vm","template":"ubuntu-26.04","ram":512,"cpu":1,"diskGb":4}"#;
         let request: CreateVmRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.disk_gb, 4);
+    }
+
+    #[test]
+    fn update_vm_resources_request_deserializes_camel_case_disk_gb() {
+        let json = r#"{"ram":1024,"cpu":2,"diskGb":8}"#;
+        let request: UpdateVmResourcesRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request, UpdateVmResourcesRequest { ram: 1024, cpu: 2, disk_gb: 8 });
+    }
+
+    #[test]
+    fn only_inactive_states_allow_resource_edits() {
+        for state in ALL_STATES {
+            let expected = matches!(state, Created | Stopped | Error);
+            assert_eq!(state.can_edit_resources(), expected, "{state:?}");
+        }
     }
 
     #[test]

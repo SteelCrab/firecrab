@@ -409,3 +409,24 @@ table.vm-table {
 }
 .detail-fields dt { color: var(--shell); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.7rem; }
 .detail-fields dd { margin: 0; color: var(--ink); word-break: break-all; }
+
+.detail-edit-input {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.3rem 0.5rem;
+  width: 6rem;
+}
+.detail-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 1.5rem;
+}
+.detail-edit-actions .field-error {
+  font-size: 0.75rem;
+  color: var(--error);
+}

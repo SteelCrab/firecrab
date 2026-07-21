@@ -16,3 +16,9 @@ export function availableActions(state: VmState): VmAction[] {
       return [];
   }
 }
+
+/** cpu/ram/disk edits only take effect on the next start, so they're only
+ * accepted while no Firecracker process is live for this VM. */
+export function isEditableState(state: VmState): boolean {
+  return state === "created" || state === "stopped" || state === "error";
+}

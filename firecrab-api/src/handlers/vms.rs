@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::firecracker::{self, FirecrackerProcess, VmProcess};
-use crate::model::{CreateVmRequest, StartupStep, VmRecord, VmState};
+use crate::model::{CreateVmRequest, StartupStep, UpdateVmResourcesRequest, VmRecord, VmState};
 use crate::persistence::PersistenceError;
 use crate::rootfs;
 use crate::server::RequestId;
@@ -150,6 +150,97 @@ pub async fn create_vm(
         .insert(vm.id, vm);
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Replaces cpu/ram/disk for a VM that has no live process. Applies on the
+/// *next* `start`, not to a running Firecracker instance.
+pub async fn update_vm(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    ValidatedJson(req): ValidatedJson<UpdateVmResourcesRequest>,
+) -> Result<Json<VmResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let (updated, previous) = claim_resource_update(&state, id, &req, request_id.0)?;
+    if let Err(error) = persist_update(&state, &updated, request_id.0).await {
+        restore_resources(&state, id, previous);
+        return Err(error);
+    }
+    tracing::info!(
+        request_id = %request_id.0,
+        vm_id = %id,
+        cpu = updated.cpu,
+        ram = updated.ram,
+        disk_gb = updated.disk_gb,
+        "vm resources updated"
+    );
+    Ok(Json(vm_response(&updated)))
+}
+
+type PreviousResources = (u8, u32, u16);
+
+fn claim_resource_update(
+    state: &AppState,
+    id: Uuid,
+    req: &UpdateVmResourcesRequest,
+    request_id: Uuid,
+) -> Result<(VmRecord, PreviousResources), AppError> {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let vm = vms
+        .get_mut(&id)
+        .ok_or_else(|| AppError::not_found(request_id))?;
+    if !vm.state.can_edit_resources() {
+        return Err(AppError::invalid_state(vm.state, request_id));
+    }
+    let fields = validate_update(req, vm.disk_gb);
+    if !fields.is_empty() {
+        return Err(AppError::validation(fields, request_id));
+    }
+    let previous = (vm.cpu, vm.ram, vm.disk_gb);
+    vm.cpu = req.cpu;
+    vm.ram = req.ram;
+    vm.disk_gb = req.disk_gb;
+    Ok((vm.clone(), previous))
+}
+
+fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(vm) = vms.get_mut(&id) {
+        (vm.cpu, vm.ram, vm.disk_gb) = previous;
+    }
+}
+
+fn validate_update(req: &UpdateVmResourcesRequest, current_disk_gb: u16) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    if !(1..=32).contains(&req.cpu) {
+        fields.insert("cpu".to_owned(), "must be between 1 and 32".to_owned());
+    }
+    if !(128..=32_768).contains(&req.ram) {
+        fields.insert(
+            "ram".to_owned(),
+            "must be between 128 and 32768 MiB".to_owned(),
+        );
+    }
+    if req.disk_gb < current_disk_gb {
+        fields.insert(
+            "diskGb".to_owned(),
+            format!(
+                "must be at least the current size ({current_disk_gb} GiB) — shrinking is not supported"
+            ),
+        );
+    } else if req.disk_gb > MAX_DISK_GB {
+        fields.insert(
+            "diskGb".to_owned(),
+            format!("must be at most {MAX_DISK_GB} GiB"),
+        );
+    }
+    fields
 }
 
 /// Starts the VM synchronously: claim `starting`, prepare the disk and
@@ -1158,5 +1249,119 @@ mod tests {
 
         assert!(result.is_err());
         assert!(state.vms.lock().unwrap().is_empty());
+    }
+
+    fn update_request(cpu: u8, ram: u32, disk_gb: u16) -> UpdateVmResourcesRequest {
+        UpdateVmResourcesRequest { cpu, ram, disk_gb }
+    }
+
+    #[tokio::test]
+    async fn update_applies_new_resources_for_an_editable_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("resizable", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(updated) = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(update_request(4, 1024, 3)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.cpu, 4);
+        assert_eq!(updated.ram, 1024);
+        assert_eq!(updated.disk_gb, 3);
+        let reopened = {
+            let state = test_state(directory.path()).await;
+            state
+        };
+        assert_eq!(db_state(&reopened, vm.id), Some(VmState::Created));
+        let persisted = reopened.store.load_all().unwrap();
+        let persisted = persisted.get(&vm.id).unwrap();
+        assert_eq!((persisted.cpu, persisted.ram, persisted.disk_gb), (4, 1024, 3));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_a_running_vm_with_conflict() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("busy-resize", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+
+        let error = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(update_request(4, 1024, 3)),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        let vms = state.vms.lock().unwrap();
+        let unchanged = vms.get(&vm.id).unwrap();
+        assert_eq!((unchanged.cpu, unchanged.ram, unchanged.disk_gb), (1, 128, 0));
+    }
+
+    #[tokio::test]
+    async fn update_rejects_shrinking_the_disk() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("no-shrink", Uuid::new_v4());
+        vm.disk_gb = 5;
+        seed_vm(&state, &vm);
+
+        let error = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(update_request(1, 128, 4)),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Created));
+        let vms = state.vms.lock().unwrap();
+        assert_eq!(vms.get(&vm.id).unwrap().disk_gb, 5);
+    }
+
+    #[tokio::test]
+    async fn update_unknown_vm_returns_not_found() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = update_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(Uuid::new_v4().to_string()),
+            ValidatedJson(update_request(1, 128, 2)),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn validates_update_cpu_ram_and_disk_bounds() {
+        let valid = update_request(2, 512, 5);
+        assert!(validate_update(&valid, 5).is_empty());
+
+        let bad_cpu = update_request(0, 512, 5);
+        assert!(validate_update(&bad_cpu, 5).contains_key("cpu"));
+
+        let bad_ram = update_request(2, 64, 5);
+        assert!(validate_update(&bad_ram, 5).contains_key("ram"));
+
+        let shrink = update_request(2, 512, 4);
+        assert!(validate_update(&shrink, 5).contains_key("diskGb"));
+
+        let too_big = update_request(2, 512, MAX_DISK_GB + 1);
+        assert!(validate_update(&too_big, 5).contains_key("diskGb"));
     }
 }

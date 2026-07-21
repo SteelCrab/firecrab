@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { StartupStep, VmResponse } from "../bindings";
-import { getVm, getVmLog } from "../api/client";
+import { ApiClientError, getVm, getVmLog, updateVmResources } from "../api/client";
+import { isEditableState } from "../model";
 
 const STARTUP_STEPS: StartupStep[] = ["preparingDisk", "generatingConfig", "startingProcess"];
 
@@ -39,6 +40,46 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [pipelineLines, setPipelineLines] = useState<string[]>([]);
   const [highestStepSeen, setHighestStepSeen] = useState(-1);
   const logRef = useRef<HTMLPreElement>(null);
+
+  const [editing, setEditing] = useState(false);
+  const [editCpu, setEditCpu] = useState("1");
+  const [editRam, setEditRam] = useState("512");
+  const [editDisk, setEditDisk] = useState("2");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<ApiClientError | null>(null);
+
+  const startEditing = () => {
+    if (!vm) return;
+    setEditCpu(String(vm.cpu));
+    setEditRam(String(vm.ram));
+    setEditDisk(String(vm.diskGb));
+    setSaveError(null);
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setEditing(false);
+    setSaveError(null);
+  };
+
+  const handleSave = async () => {
+    if (!vm) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await updateVmResources(vm.id, {
+        cpu: parseInt(editCpu, 10) || 0,
+        ram: parseInt(editRam, 10) || 0,
+        diskGb: parseInt(editDisk, 10) || 0,
+      });
+      setVm(updated);
+      setEditing(false);
+    } catch (error) {
+      setSaveError(error as ApiClientError);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -121,14 +162,73 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               <dt>template</dt>
               <dd>{vm.templateVersion}</dd>
               <dt>cpu</dt>
-              <dd>{vm.cpu}</dd>
+              <dd>
+                {editing ? (
+                  <input
+                    className="detail-edit-input"
+                    type="number"
+                    min={1}
+                    max={32}
+                    value={editCpu}
+                    onChange={(event) => setEditCpu(event.target.value)}
+                  />
+                ) : (
+                  vm.cpu
+                )}
+              </dd>
               <dt>ram</dt>
-              <dd>{vm.ram} MiB</dd>
+              <dd>
+                {editing ? (
+                  <input
+                    className="detail-edit-input"
+                    type="number"
+                    min={128}
+                    max={32768}
+                    step={128}
+                    value={editRam}
+                    onChange={(event) => setEditRam(event.target.value)}
+                  />
+                ) : (
+                  `${vm.ram} MiB`
+                )}
+              </dd>
               <dt>disk</dt>
-              <dd>{vm.diskGb} GiB</dd>
+              <dd>
+                {editing ? (
+                  <input
+                    className="detail-edit-input"
+                    type="number"
+                    min={vm.diskGb}
+                    max={500}
+                    value={editDisk}
+                    onChange={(event) => setEditDisk(event.target.value)}
+                  />
+                ) : (
+                  `${vm.diskGb} GiB`
+                )}
+              </dd>
               <dt>id</dt>
               <dd title={vm.id}>{vm.id}</dd>
             </dl>
+            {isEditableState(vm.state) && (
+              <div className="detail-edit-actions">
+                {editing ? (
+                  <>
+                    <button className="btn primary" onClick={handleSave} disabled={saving}>
+                      {saving ? "저장 중…" : "저장"}
+                    </button>
+                    <button className="btn" onClick={cancelEditing} disabled={saving}>
+                      취소
+                    </button>
+                    {saveError && <span className="field-error">{saveError.message}</span>}
+                  </>
+                ) : (
+                  <button className="btn" onClick={startEditing}>
+                    수정
+                  </button>
+                )}
+              </div>
+            )}
             <PipelineStepper currentIndex={currentIndex} />
             <pre className="detail-log" ref={logRef}>
               {logText}

@@ -39,6 +39,11 @@ cd firecrab-frontend && npm run dev
 목록에서 **VM 이름 클릭**(상태와 무관하게 언제든 가능) → 모달로 template/cpu/ram/disk/id 상세 정보,
 상단에 단계 스테퍼(`[✓]─[✓]─[ ]` 형태), 아래에 로그창이 뜬다.
 
+`created`/`stopped`/`error` 상태에서는 필드 옆에 **"수정"** 버튼이 뜬다 — 누르면 cpu/ram/disk가
+입력 필드로 바뀌고 저장하면 즉시 반영된다(다음 시작부터 적용, 떠 있는 프로세스를 실시간으로 바꾸는
+게 아님). disk는 축소 불가 — 현재 값보다 작은 값은 검증 오류. `running`/`starting`/`stopping`
+중에는 "수정" 버튼 자체가 안 보인다.
+
 스테퍼는 `디스크 준비` → `설정 생성` → `프로세스 시작` 순서. 첫 시작은 rootfs 템플릿(2GB)을 VM 전용
 디스크로 복사하는 "디스크 준비" 단계가 대부분을 차지해 몇 초간 머무는 게 정상이다 — 이후 재시작은
 이미 복사된 디스크를 재사용해 훨씬 빠르다. `running`에 도달하면 3단계 모두 체크 표시로 바뀐다.
@@ -77,4 +82,5 @@ cd firecrab-frontend && npm run dev
   [tests/vm-startup-progress.md](tests/vm-startup-progress.md),
   [tests/vm-detail-modal.md](tests/vm-detail-modal.md),
   [tests/vm-disk-capacity.md](tests/vm-disk-capacity.md),
+  [tests/vm-resource-update.md](tests/vm-resource-update.md),
   [tests/frontend-react-migration.md](tests/frontend-react-migration.md) 참고

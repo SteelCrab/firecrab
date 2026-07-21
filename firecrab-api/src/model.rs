@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 pub use firecrab_api_types::CreateVmRequest;
 pub use firecrab_api_types::StartupStep;
+pub use firecrab_api_types::UpdateVmResourcesRequest;
 pub use firecrab_api_types::VmState;
 pub use firecrab_helper_protocol::network::MacAddr;
 
