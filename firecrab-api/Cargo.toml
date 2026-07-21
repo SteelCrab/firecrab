@@ -17,6 +17,8 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]

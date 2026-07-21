@@ -1,0 +1,18 @@
+[package]
+name = "firecrab-net-helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
+futures-util = "0.3"
+libc = "0.2"
+rtnetlink = "0.21"
+thiserror = { workspace = true }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+uuid = { workspace = true, features = ["v4"] }

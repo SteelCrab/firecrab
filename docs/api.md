@@ -11,6 +11,12 @@ cargo run
 
 `127.0.0.1:3000` 에서 HTTP 서버가 시작 (기본값은 loopback 바인딩, 인증/TLS 없이도 허용됨)
 
+모든 요청(method/path/status/소요시간/request_id)과 VM lifecycle 이벤트가 stdout에 로그로 출력된다. 로그 레벨은 `RUST_LOG`로 조절 (기본 `firecrab_api=info`):
+
+```sh
+RUST_LOG=firecrab_api=debug cargo run
+```
+
 ### 환경 변수
 
 | 변수 | 기본값 | 설명 |
@@ -21,6 +27,15 @@ cargo run
 | `FIRECRAB_ENV` | (없음) | `production`이면 `FIRECRAB_ALLOWED_ORIGINS` 기본값이 빈 값(=CORS 전체 차단)이 됨 |
 | `FIRECRAB_ALLOWED_ORIGINS` | `http://localhost:8080` (비-production) | 콤마로 구분된 허용 Origin 목록. CORS 및 `Origin` 헤더 검사에 사용 |
 | `FIRECRAB_IMAGE_ROOT` | `../images` (crate 기준 상대경로) | 템플릿 커널/rootfs 이미지가 위치한 루트 디렉터리 |
+| `FIRECRAB_FIRECRACKER_BIN` | `firecracker` (PATH 탐색) | VM 시작 시 실행할 Firecracker 바이너리 경로 |
+
+### 네트워크 helper 상태
+
+`firecrab-api`에는 `firecrab-net-helper`와 통신하는 `NetworkClient`가 준비되어 있지만, 현재 VM start/stop 흐름에는 아직 연결되어 있지 않다. 따라서 지금 API 실행에는 network helper가 필수 조건이 아니다.
+
+- helper protocol과 수동 검증 절차: [net-helper.md](net-helper.md), [firecrab-smoke/docs/net-helper.md](firecrab-smoke/docs/net-helper.md)
+- helper socket 환경 변수: `FIRECRAB_NET_HELPER_SOCK` (helper와 API 클라이언트가 공유할 경로, 기본값 `/run/firecrab/net-helper.sock`)
+- 실제 bridge/TAP/firewall 자동화는 TAP/network task에서 start/stop 흐름에 연결 예정
 
 ## 요청/응답 공통 사항
 
@@ -128,6 +143,65 @@ curl -i http://localhost:3000/api/vms/00000000-0000-0000-0000-000000000000
 # UUID 형식이 아닌 id
 curl -i http://localhost:3000/api/vms/not-a-uuid
 ```
+
+### 4) MicroVM 시작 — POST /api/vms/{id}/start
+
+동기 처리: rootfs 준비(템플릿 복사) → Firecracker config 생성 → 프로세스 spawn → API socket readiness 확인 → `running` 저장.
+
+```sh
+curl -X POST http://localhost:3000/api/vms/$VM_ID/start
+```
+
+- 허용 상태: `created`/`stopped`/`error` → 성공 시 200 + `VmResponse` (`state: "running"`)
+- 그 외 상태: `409 invalid_state` (`fields.state`에 현재 상태)
+- 시작 실패(스폰 실패, readiness timeout 등): 상태를 `error`로 저장하고 `500` 반환, 프로세스 잔여물 없음
+- 재시작 시 기존 VM 디스크(`rootfs.ext4`)를 재사용해 데이터가 보존됨
+
+### 5) MicroVM 중지 — POST /api/vms/{id}/stop
+
+동기 처리: `stopping` 저장 → SIGTERM → 유예시간(5s) 초과 시 SIGKILL → `stopped` 저장.
+
+```sh
+curl -X POST http://localhost:3000/api/vms/$VM_ID/stop
+```
+
+- 허용 상태: `running` → 성공 시 200 + `VmResponse` (`state: "stopped"`)
+- 그 외 상태: `409 invalid_state`
+
+### 6) MicroVM 삭제 — DELETE /api/vms/{id}
+
+Hard delete: `data/vms/{id}` 디렉터리(디스크 포함)와 레코드를 제거.
+
+```sh
+curl -i -X DELETE http://localhost:3000/api/vms/$VM_ID
+```
+
+- `starting`/`running`/`stopping` 상태면 `409 invalid_state` — 먼저 stop 필요
+- 성공 시 `204 No Content`, 이후 조회는 404
+
+### VM 상태 lifecycle
+
+```
+created ──start──▶ starting ──▶ running ──stop──▶ stopping ──▶ stopped ──start──▶ …
+                      │            │                  │
+                      ▼            ▼(내부 종료)        ▼
+                    error        stopped/error      error
+```
+
+- Guest 내부 종료(poweroff 등)는 종료 감시가 자동 반영: 정상 종료 → `stopped`, 비정상 종료(crash, kill) → `error`
+- 서버 재시작 시 이전 실행이 남긴 `starting`/`running`/`stopping` 레코드는 `stopped`로 정리됨 (유령 running 방지)
+- 삭제는 `created`/`stopped`/`error`에서만 허용
+
+## VM 디렉터리
+
+VM별 런타임 파일은 `data/vms/{id}/` 아래에 생성된다.
+
+| 파일 | 내용 |
+| --- | --- |
+| `rootfs.ext4` | 템플릿에서 복사된 VM 전용 writable 디스크 (stop 후에도 보존, delete 시 제거) |
+| `firecracker.json` | boot-source/drives/machine-config가 담긴 Firecracker 설정 (start마다 재생성) |
+| `firecracker.sock` | Firecracker API socket (프로세스 종료 시 제거) |
+| `console.log` | VM 부팅/콘솔 출력 (start마다 새로 씀) |
 
 ## 템플릿 레지스트리
 

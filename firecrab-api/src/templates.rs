@@ -74,6 +74,7 @@ impl TemplateVersion {
 #[derive(Debug, Clone)]
 pub struct TemplateRegistry {
     image_root: Arc<File>,
+    image_root_path: PathBuf,
     aliases: HashMap<String, (String, String)>,
     versions: HashMap<(String, String), Arc<TemplateVersion>>,
 }
@@ -101,6 +102,9 @@ impl TemplateRegistry {
         image_root: &Path,
         specs: impl IntoIterator<Item = TemplateSpec>,
     ) -> Result<Self, TemplateError> {
+        // Firecracker opens artifacts by path, so keep a canonical path next
+        // to the descriptor used for verified reads.
+        let image_root_path = image_root.canonicalize()?;
         let image_root = Arc::new(open_image_root(image_root)?);
         let mut aliases = HashMap::new();
         let mut versions = HashMap::new();
@@ -130,9 +134,14 @@ impl TemplateRegistry {
 
         Ok(Self {
             image_root,
+            image_root_path,
             aliases,
             versions,
         })
+    }
+
+    pub fn artifact_path(&self, artifact: &VerifiedArtifact) -> PathBuf {
+        self.image_root_path.join(&artifact.relative_path)
     }
 
     pub fn resolve_alias(&self, alias: &str) -> Option<Arc<TemplateVersion>> {

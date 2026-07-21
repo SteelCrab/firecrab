@@ -9,7 +9,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Extension, Router};
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -134,7 +134,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/vms",
             get(handlers::vms::list_vms).post(handlers::vms::create_vm),
         )
-        .route("/api/vms/{id}", get(handlers::vms::get_vm))
+        .route(
+            "/api/vms/{id}",
+            get(handlers::vms::get_vm).delete(handlers::vms::delete_vm),
+        )
+        .route("/api/vms/{id}/start", post(handlers::vms::start_vm))
+        .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .fallback(not_found)
         .with_state(state)
         .layer(cors)
@@ -147,10 +152,23 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 async fn assign_request_id(mut request: Request, next: Next) -> Response {
     let request_id = RequestId(Uuid::new_v4());
     request.extensions_mut().insert(request_id);
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let started = std::time::Instant::now();
+
     let mut response = next.run(request).await;
+
     if let Ok(value) = HeaderValue::from_str(&request_id.0.to_string()) {
         response.headers_mut().insert(X_REQUEST_ID, value);
     }
+    tracing::info!(
+        request_id = %request_id.0,
+        %method,
+        path,
+        status = response.status().as_u16(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "request"
+    );
     response
 }
 
