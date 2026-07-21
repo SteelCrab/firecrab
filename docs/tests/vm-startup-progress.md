@@ -53,6 +53,9 @@ curl -s -X POST http://127.0.0.1:3000/api/vms \
 브라우저로 `http://localhost:8080/` 접속 → 생성된 VM의 `start` 클릭 → `starting` 배지 아래 단계 pill이
 "디스크 준비"부터 순서대로 진행되는지 확인(2GB 복사라 몇 초간 "디스크 준비"에 머무는 게 정상).
 
+**참고**: VM을 여러 대 동시에 시작할 때의 버그(디스크 준비에서 멈춤)와 수정 내용은
+[docs/bugs/vm-startup-stuck-under-concurrent-load.md](../bugs/vm-startup-stuck-under-concurrent-load.md) 참고.
+
 ## 정리
 
 ```sh

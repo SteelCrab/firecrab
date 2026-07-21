@@ -258,22 +258,43 @@ pub async fn start_vm(
         return Err(error);
     }
 
+    // Detached: a slow disk copy (queued behind `disk_prep_permits` when
+    // many VMs start at once) can outlive the per-request timeout in
+    // `enforce_limits`. A plain nested `.await` chain would be dropped
+    // right along with the timed-out request, orphaning the VM in
+    // `starting` forever — nothing would be left to call `spawn_vm` or
+    // record the final state once the disk work finished. `tokio::spawn`
+    // runs independently of whoever's awaiting it, so the VM still reaches
+    // `running`/`error` even if this response times out; the dashboard's
+    // existing polling picks up the result either way.
+    let state_for_task = state.clone();
+    tokio::spawn(async move { finish_start(&state_for_task, id, claimed, request_id).await })
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+}
+
+async fn finish_start(
+    state: &AppState,
+    id: Uuid,
+    claimed: VmRecord,
+    request_id: RequestId,
+) -> Result<Json<VmResponse>, AppError> {
     let started = std::time::Instant::now();
-    let process = match run_start(&state, &claimed).await {
+    let process = match run_start(state, &claimed).await {
         Ok(process) => process,
         Err(reason) => {
             tracing::error!(request_id = %request_id.0, vm_id = %id, reason, "vm start failed");
-            return Err(fail_start(&state, id, request_id.0).await);
+            return Err(fail_start(state, id, request_id.0).await);
         }
     };
     let pid = process.pid();
 
-    firecracker::register_and_watch(&state, id, process);
+    firecracker::register_and_watch(state, id, process);
 
-    match transition_if(&state, id, VmState::Starting, VmState::Running) {
+    match transition_if(state, id, VmState::Starting, VmState::Running) {
         Some(running) => {
-            if persist_update(&state, &running, request_id.0).await.is_err() {
-                return Err(fail_start(&state, id, request_id.0).await);
+            if persist_update(state, &running, request_id.0).await.is_err() {
+                return Err(fail_start(state, id, request_id.0).await);
             }
             tracing::info!(
                 request_id = %request_id.0,
@@ -493,11 +514,22 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
 
     set_startup_step(state, vm.id, StartupStep::PreparingDisk);
 
+    // Bounds how many VMs copy/grow a rootfs disk at once — see
+    // `DISK_PREP_CONCURRENCY`'s doc comment. Held across the blocking task
+    // below, released once that VM's disk+config are ready.
+    let permit = state
+        .disk_prep_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("disk_prep_permits semaphore is never closed");
+
     let templates = state.templates.clone();
     let runtime = state.runtime.clone();
     let record = vm.clone();
     let state_for_blocking = state.clone();
     let config_path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+        let _permit = permit;
         let mut source = templates
             .open_verified(&template.rootfs)
             .map_err(|error| format!("rootfs verification failed: {error}"))?;
