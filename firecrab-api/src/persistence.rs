@@ -1,3 +1,6 @@
+//! SQLite-backed VM record storage: schema creation/migration, CRUD, IPAM
+//! lease delegation, and one-time import of the legacy `vms.json` format.
+
 use std::collections::HashMap;
 use std::fs;
 use std::io;
@@ -12,9 +15,12 @@ use uuid::Uuid;
 use crate::ipam::{self, IpamError};
 use crate::model::{Lease, VmRecord, VmState};
 
+/// Default SQLite database path, relative to the process's working directory.
 const DB_FILE: &str = "data/firecrab.db";
+/// File name of the legacy JSON store, imported once on first open.
 const LEGACY_FILE_NAME: &str = "vms.json";
 
+/// Schema for the `vms` table.
 const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -29,19 +35,23 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     disk_gb INTEGER NOT NULL DEFAULT 2
 ) STRICT";
 
+/// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb \
     FROM vms";
 
+/// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb) \
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
+/// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
     template_boot_args_sha256, cpu, ram, disk_gb) \
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
+/// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11 \
@@ -56,63 +66,98 @@ fn migrate_disk_gb_column(conn: &Connection) -> Result<(), PersistenceError> {
         .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name = 'disk_gb'")?
         .exists([])?;
     if !has_column {
-        conn.execute("ALTER TABLE vms ADD COLUMN disk_gb INTEGER NOT NULL DEFAULT 2", [])?;
+        conn.execute(
+            "ALTER TABLE vms ADD COLUMN disk_gb INTEGER NOT NULL DEFAULT 2",
+            [],
+        )?;
     }
     Ok(())
 }
 
+/// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// Couldn't create the database's parent directory.
     #[error("failed to create VM data directory {path}: {source}")]
     CreateDirectory {
+        /// The directory that couldn't be created.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't open the SQLite database file.
     #[error("failed to open VM database {path}: {source}")]
     Open {
+        /// The database path that couldn't be opened.
         path: PathBuf,
         #[source]
         source: rusqlite::Error,
     },
+    /// A SQLite query/statement failed.
     #[error("VM database operation failed: {0}")]
     Database(#[from] rusqlite::Error),
+    /// A stored row's data doesn't match what the application expects.
     #[error("VM database record {id} is invalid: {reason}")]
-    CorruptRecord { id: String, reason: String },
+    CorruptRecord {
+        /// The invalid row's id (as stored, not necessarily a valid UUID).
+        id: String,
+        /// Human-readable reason the row is invalid.
+        reason: String,
+    },
+    /// An operation targeted a VM id with no matching row.
     #[error("VM {id} does not exist in the database")]
-    MissingVm { id: Uuid },
+    MissingVm {
+        /// The id that wasn't found.
+        id: Uuid,
+    },
+    /// Couldn't read the legacy `vms.json` file.
     #[error("failed to read legacy VM data from {path}: {source}")]
     LegacyRead {
+        /// The legacy file path that couldn't be read.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// The legacy `vms.json` file's content isn't valid for the expected shape.
     #[error("failed to deserialize legacy VM data from {path}: {source}")]
     LegacyDeserialize {
+        /// The legacy file path that failed to parse.
         path: PathBuf,
         #[source]
         source: serde_json::Error,
     },
+    /// Couldn't rename the legacy file after a successful import.
     #[error("failed to archive imported legacy VM data {path}: {source}")]
     LegacyArchive {
+        /// The legacy file path that couldn't be renamed.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
 }
 
+/// The default SQLite database path (`data/firecrab.db`).
 pub fn default_db_file() -> PathBuf {
     PathBuf::from(DB_FILE)
 }
 
+/// Handle to the VM records SQLite database. Cheaply `Clone`able; all
+/// clones share one connection behind a mutex.
 #[derive(Debug, Clone)]
 pub struct Store {
+    /// The shared, mutex-guarded SQLite connection.
     conn: Arc<Mutex<Connection>>,
 }
 
 impl Store {
+    /// Opens (creating if needed) the database at `path`: sets WAL mode,
+    /// creates/migrates the schema, and imports any legacy `vms.json` found
+    /// alongside it.
     pub fn open(path: &Path) -> Result<Self, PersistenceError> {
-        if let Some(directory) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Some(directory) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(directory).map_err(|source| PersistenceError::CreateDirectory {
                 path: directory.to_owned(),
                 source,
@@ -140,6 +185,7 @@ impl Store {
         Ok(store)
     }
 
+    /// Loads every VM record currently in the database.
     pub fn load_all(&self) -> Result<HashMap<Uuid, VmRecord>, PersistenceError> {
         let conn = self.lock();
         let mut statement = conn.prepare(SELECT_ALL_SQL)?;
@@ -147,11 +193,10 @@ impl Store {
         let mut vms = HashMap::new();
         while let Some(row) = rows.next()? {
             let id_text: String = row.get(0)?;
-            let id =
-                Uuid::parse_str(&id_text).map_err(|_| PersistenceError::CorruptRecord {
-                    id: id_text.clone(),
-                    reason: "id is not a UUID".to_owned(),
-                })?;
+            let id = Uuid::parse_str(&id_text).map_err(|_| PersistenceError::CorruptRecord {
+                id: id_text.clone(),
+                reason: "id is not a UUID".to_owned(),
+            })?;
             let state_text: String = row.get(2)?;
             vms.insert(
                 id,
@@ -174,11 +219,13 @@ impl Store {
         Ok(vms)
     }
 
+    /// Inserts a new VM record.
     pub fn insert(&self, vm: &VmRecord) -> Result<(), PersistenceError> {
         execute_record(&self.lock(), INSERT_SQL, vm)?;
         Ok(())
     }
 
+    /// Replaces an existing VM record's columns.
     pub fn update(&self, vm: &VmRecord) -> Result<(), PersistenceError> {
         if execute_record(&self.lock(), UPDATE_SQL, vm)? == 0 {
             return Err(PersistenceError::MissingVm { id: vm.id });
@@ -186,6 +233,7 @@ impl Store {
         Ok(())
     }
 
+    /// Deletes a VM record by id.
     pub fn delete(&self, id: Uuid) -> Result<(), PersistenceError> {
         let changed = self
             .lock()
@@ -231,6 +279,8 @@ impl Store {
         Ok(changed)
     }
 
+    /// Imports `legacy` (the old JSON store) if it exists, then renames it
+    /// with a `.imported` suffix so re-opening never imports it again.
     fn import_legacy(&self, legacy: &Path) -> Result<(), PersistenceError> {
         let content = match fs::read(legacy) {
             Ok(content) => content,
@@ -242,12 +292,13 @@ impl Store {
                 });
             }
         };
-        let records: HashMap<Uuid, VmRecord> = serde_json::from_slice(&content).map_err(
-            |source| PersistenceError::LegacyDeserialize {
-                path: legacy.to_owned(),
-                source,
-            },
-        )?;
+        let records: HashMap<Uuid, VmRecord> =
+            serde_json::from_slice(&content).map_err(|source| {
+                PersistenceError::LegacyDeserialize {
+                    path: legacy.to_owned(),
+                    source,
+                }
+            })?;
 
         {
             let mut conn = self.lock();
@@ -266,23 +317,23 @@ impl Store {
         })
     }
 
+    /// Locks the shared connection, recovering from a poisoned mutex.
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Drops the `vms` table so tests can force subsequent queries to fail.
     #[cfg(test)]
     pub(crate) fn break_for_tests(&self) {
         self.lock().execute("DROP TABLE vms", []).unwrap();
     }
 }
 
-fn execute_record(
-    conn: &Connection,
-    sql: &str,
-    vm: &VmRecord,
-) -> Result<usize, rusqlite::Error> {
+/// Binds `vm`'s fields as parameters and executes `sql` (shared by insert,
+/// update, and legacy import, which differ only in which SQL they run).
+fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, rusqlite::Error> {
     conn.execute(
         sql,
         params![
@@ -301,7 +352,8 @@ fn execute_record(
     )
 }
 
-// Encode/decode through serde so the DB text stays in lockstep with the API wire format.
+/// Encodes through serde so the DB text stays in lockstep with the API wire
+/// format.
 pub(crate) fn encode_state(state: VmState) -> String {
     match serde_json::to_value(state) {
         Ok(serde_json::Value::String(name)) => name,
@@ -309,6 +361,7 @@ pub(crate) fn encode_state(state: VmState) -> String {
     }
 }
 
+/// Inverse of [`encode_state`]; fails on any string that isn't a known state.
 fn decode_state(id: &str, name: &str) -> Result<VmState, PersistenceError> {
     serde_json::from_value(serde_json::Value::String(name.to_owned())).map_err(|_| {
         PersistenceError::CorruptRecord {
@@ -479,7 +532,10 @@ mod tests {
                 std::thread::spawn(move || store.allocate_lease(Uuid::new_v4()).unwrap())
             })
             .collect();
-        let leases: Vec<Lease> = handles.into_iter().map(|handle| handle.join().unwrap()).collect();
+        let leases: Vec<Lease> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
 
         let mut ips: Vec<_> = leases.iter().map(|lease| lease.ipv4).collect();
         let mut macs: Vec<_> = leases.iter().map(|lease| lease.mac).collect();
@@ -515,6 +571,9 @@ mod tests {
         store.release_lease(vm_id).unwrap();
         let other_vm = Uuid::new_v4();
         let reallocated = store.allocate_lease(other_vm).unwrap();
-        assert_eq!(reallocated.ipv4, lease.ipv4, "freed address should be reusable");
+        assert_eq!(
+            reallocated.ipv4, lease.ipv4,
+            "freed address should be reusable"
+        );
     }
 }

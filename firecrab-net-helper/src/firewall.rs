@@ -1,3 +1,7 @@
+//! Per-VM and global nftables rules: NAT/egress dispatch (`inet firecrab`)
+//! and L2 anti-spoofing (`bridge firecrab_l2`), both idempotently rendered
+//! and applied as single atomic `nft -f -` transactions.
+
 use std::net::Ipv4Addr;
 use std::process::Stdio;
 
@@ -16,8 +20,11 @@ use uuid::Uuid;
 
 use crate::bridge::BRIDGE_NAME;
 
+/// Name of the owned `inet` table (NAT/egress dispatch).
 const TABLE_INET: &str = "firecrab";
+/// Name of the owned `bridge` table (L2 anti-spoofing).
 const TABLE_BRIDGE: &str = "firecrab_l2";
+/// The Firecrab VPC subnet, as an nftables-literal CIDR string.
 const BRIDGE_SUBNET: &str = "172.30.0.0/24";
 /// TAP interface names are bounded by IFNAMSIZ (16 incl. NUL). `fct` + 12 hex
 /// of sha256(vm_id) = 15 chars. The prefix is distinct from `fcbr0` so an
@@ -38,6 +45,8 @@ pub enum EgressPolicy {
 }
 
 impl EgressPolicy {
+    /// Resolves an API-supplied policy ID, or `None` if it's not on the
+    /// allowlist (the helper never accepts a raw CIDR from the API).
     pub fn from_id(id: &str) -> Option<Self> {
         match id {
             "internet" => Some(EgressPolicy::Internet),
@@ -52,9 +61,13 @@ impl EgressPolicy {
 /// source address that does not match them.
 #[derive(Debug, Clone, Copy)]
 pub struct VmPolicy {
+    /// The VM this policy applies to.
     pub vm_id: Uuid,
+    /// The VM's leased IPv4 address.
     pub ipv4: Ipv4Addr,
+    /// The VM's Firecracker guest MAC.
     pub mac: MacAddr,
+    /// Outbound (egress) posture for this VM.
     pub egress: EgressPolicy,
     /// Open forwarded inbound TCP 22 to this VM. Note: host-*originated*
     /// traffic traverses the output hook, which this initial scope does not
@@ -63,22 +76,33 @@ pub struct VmPolicy {
     pub allow_host_ssh: bool,
 }
 
+/// Failure modes shared by every firewall operation.
 #[derive(Debug, Error)]
 pub enum FirewallError {
+    /// Couldn't open the rtnetlink socket.
     #[error("failed to open rtnetlink connection")]
     Connection(#[source] std::io::Error),
+    /// An rtnetlink request failed.
     #[error("rtnetlink operation failed")]
     Netlink(#[source] rtnetlink::Error),
+    /// No IPv4 default route exists, so the uplink can't be detected.
     #[error("host has no IPv4 default route to detect an uplink interface")]
     NoUplink,
+    /// Detected uplink name isn't safe to embed in an nftables ruleset.
     #[error("uplink interface name {0:?} is not valid for an nftables rule")]
     InvalidUplinkName(String),
+    /// Couldn't spawn the `nft` binary.
     #[error("failed to spawn nft")]
     Spawn(#[source] std::io::Error),
+    /// Writing the ruleset to `nft`'s stdin failed.
     #[error("failed to write ruleset to nft stdin")]
     WriteStdin(#[source] std::io::Error),
+    /// `nft` rejected the ruleset.
     #[error("nft rejected the ruleset: {stderr}")]
-    NftFailed { stderr: String },
+    NftFailed {
+        /// `nft`'s stderr output.
+        stderr: String,
+    },
 }
 
 /// Single-writer actor: every `nft` write goes through one mutex, so
@@ -88,17 +112,21 @@ pub enum FirewallError {
 /// IP it needs to delete this VM's IP-keyed map elements.
 #[derive(Debug)]
 pub struct FirewallActor {
+    /// The one lock every `nft` write goes through.
     state: Mutex<FirewallState>,
 }
 
+/// The actor's cached view of what's currently applied to `nft`.
 #[derive(Debug, Default)]
 struct FirewallState {
+    /// Uplink interface name the global ruleset was last rendered for.
     applied_uplink: Option<String>,
     /// vm_id -> leased IPv4 of every VM whose policy is currently installed.
     applied_vms: std::collections::HashMap<Uuid, Ipv4Addr>,
 }
 
 impl FirewallActor {
+    /// Creates an actor with nothing recorded as applied yet.
     pub fn new() -> Self {
         Self {
             state: Mutex::new(FirewallState::default()),
@@ -107,6 +135,7 @@ impl FirewallActor {
 }
 
 impl Default for FirewallActor {
+    /// Same as [`FirewallActor::new`].
     fn default() -> Self {
         Self::new()
     }
@@ -166,6 +195,7 @@ pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError>
     Ok(())
 }
 
+/// Whether `name` is safe to embed unescaped in an nftables ruleset string.
 fn validate_uplink(name: &str) -> Result<(), FirewallError> {
     let is_valid = !name.is_empty()
         && name.len() < 16 // IFNAMSIZ
@@ -331,6 +361,8 @@ fn render_remove_ruleset() -> String {
     )
 }
 
+/// Resolves the host's uplink by following its IPv4 default route to an
+/// interface name.
 async fn detect_uplink(handle: &Handle) -> Result<String, FirewallError> {
     let mut routes = handle.route().get(RouteMessage::default()).execute();
     let mut oif_index = None;
@@ -338,10 +370,13 @@ async fn detect_uplink(handle: &Handle) -> Result<String, FirewallError> {
         if route.header.address_family == AddressFamily::Inet
             && route.header.destination_prefix_length == 0
         {
-            oif_index = route.attributes.iter().find_map(|attribute| match attribute {
-                RouteAttribute::Oif(index) => Some(*index),
-                _ => None,
-            });
+            oif_index = route
+                .attributes
+                .iter()
+                .find_map(|attribute| match attribute {
+                    RouteAttribute::Oif(index) => Some(*index),
+                    _ => None,
+                });
             if oif_index.is_some() {
                 break;
             }
@@ -384,7 +419,10 @@ async fn run_nft(ruleset: &str) -> Result<(), FirewallError> {
         .map_err(FirewallError::WriteStdin)?;
     drop(stdin);
 
-    let output = child.wait_with_output().await.map_err(FirewallError::Spawn)?;
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(FirewallError::Spawn)?;
     if !output.status.success() {
         return Err(FirewallError::NftFailed {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
@@ -412,7 +450,9 @@ mod tests {
         assert!(ruleset.contains("policy accept"));
         assert!(ruleset.contains("iifname \"fcbr0\" jump firecrab_egress"));
         assert!(ruleset.contains("oifname \"fcbr0\" jump firecrab_ingress"));
-        assert!(ruleset.contains("ip saddr 172.30.0.0/24 oifname \"eth0\" jump firecrab_postrouting"));
+        assert!(
+            ruleset.contains("ip saddr 172.30.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
+        );
         assert!(ruleset.contains("masquerade"));
     }
 
@@ -551,19 +591,39 @@ mod tests {
         let vm = Uuid::from_u128(0x1234);
         let ruleset = render_vm_policy_removal(vm, Ipv4Addr::new(172, 30, 0, 42));
         let tag = vm.simple();
-        let l2_elem = ruleset.find("delete element bridge firecrab_l2 l2_ingress").unwrap();
-        let l2_chain = ruleset.find(&format!("delete chain bridge firecrab_l2 vm_{tag}_l2")).unwrap();
-        assert!(l2_elem < l2_chain, "map element must be deleted before its chain");
+        let l2_elem = ruleset
+            .find("delete element bridge firecrab_l2 l2_ingress")
+            .unwrap();
+        let l2_chain = ruleset
+            .find(&format!("delete chain bridge firecrab_l2 vm_{tag}_l2"))
+            .unwrap();
+        assert!(
+            l2_elem < l2_chain,
+            "map element must be deleted before its chain"
+        );
 
-        let eg_elem = ruleset.find("delete element inet firecrab vm_egress").unwrap();
-        let eg_chain = ruleset.find(&format!("delete chain inet firecrab vm_{tag}_eg")).unwrap();
-        assert!(eg_elem < eg_chain, "egress element must be deleted before its chain");
+        let eg_elem = ruleset
+            .find("delete element inet firecrab vm_egress")
+            .unwrap();
+        let eg_chain = ruleset
+            .find(&format!("delete chain inet firecrab vm_{tag}_eg"))
+            .unwrap();
+        assert!(
+            eg_elem < eg_chain,
+            "egress element must be deleted before its chain"
+        );
     }
 
     #[test]
     fn unknown_egress_policy_id_is_rejected() {
-        assert_eq!(EgressPolicy::from_id("internet"), Some(EgressPolicy::Internet));
-        assert_eq!(EgressPolicy::from_id("isolated"), Some(EgressPolicy::Isolated));
+        assert_eq!(
+            EgressPolicy::from_id("internet"),
+            Some(EgressPolicy::Internet)
+        );
+        assert_eq!(
+            EgressPolicy::from_id("isolated"),
+            Some(EgressPolicy::Isolated)
+        );
         assert_eq!(EgressPolicy::from_id("0.0.0.0/0"), None);
         assert_eq!(EgressPolicy::from_id("wide-open"), None);
     }
@@ -602,6 +662,10 @@ mod tests {
     async fn remove_vm_policy_is_a_no_op_when_nothing_was_applied() {
         // No applied_vms entry -> returns Ok without ever invoking nft.
         let actor = FirewallActor::new();
-        assert!(remove_vm_policy(&actor, Uuid::from_u128(0x1234)).await.is_ok());
+        assert!(
+            remove_vm_policy(&actor, Uuid::from_u128(0x1234))
+                .await
+                .is_ok()
+        );
     }
 }

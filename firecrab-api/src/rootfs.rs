@@ -1,3 +1,8 @@
+//! Per-VM writable disk management: copies a verified template rootfs into
+//! `data/vms/{id}/rootfs.ext4` on first start, and grows it (raw file +
+//! filesystem, via `e2fsck`/`resize2fs`) when the requested capacity exceeds
+//! its current size.
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -6,61 +11,84 @@ use std::process::Command;
 use thiserror::Error;
 use uuid::Uuid;
 
+/// Default root directory for per-VM state (disk, config, console log).
 const VMS_DIR: &str = "data/vms";
+/// File name of a VM's published writable disk.
 const ROOTFS_FILE_NAME: &str = "rootfs.ext4";
+/// File name of the in-progress copy before it's renamed into place.
 const ROOTFS_TMP_FILE_NAME: &str = "rootfs.ext4.tmp";
 
+/// Failure modes for preparing or growing a VM's rootfs disk.
 #[derive(Debug, Error)]
 pub enum RootfsError {
+    /// Couldn't create the VM's own directory.
     #[error("failed to create VM directory {path}: {source}")]
     CreateDirectory {
+        /// The directory that couldn't be created.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't stat the rootfs file.
     #[error("failed to inspect rootfs at {path}: {source}")]
     Inspect {
+        /// The rootfs path that couldn't be inspected.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't copy the template into the temporary file.
     #[error("failed to copy template rootfs into {path}: {source}")]
     Copy {
+        /// The temporary file path the copy was writing to.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't rename the temporary file into its final location.
     #[error("failed to publish rootfs at {path}: {source}")]
     Publish {
+        /// The final rootfs path that couldn't be published.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't `set_len` the rootfs file to the new target size.
     #[error("failed to extend rootfs file at {path}: {source}")]
     Extend {
+        /// The rootfs path that couldn't be extended.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't spawn `e2fsck`/`resize2fs`.
     #[error("failed to run '{tool}' on rootfs at {path}: {source}")]
     ResizeTool {
+        /// The rootfs path the tool was run against.
         path: PathBuf,
+        /// Which tool failed to spawn (`e2fsck` or `resize2fs`).
         tool: &'static str,
         #[source]
         source: io::Error,
     },
+    /// `e2fsck`/`resize2fs` ran but reported failure.
     #[error("'{tool}' reported a failure while resizing rootfs at {path}: {stderr}")]
     ResizeFailed {
+        /// The rootfs path the tool was run against.
         path: PathBuf,
+        /// Which tool failed (`e2fsck` or `resize2fs`).
         tool: &'static str,
+        /// The tool's stderr output.
         stderr: String,
     },
 }
 
+/// The default per-VM state root (`data/vms`).
 pub fn default_vms_dir() -> PathBuf {
     PathBuf::from(VMS_DIR)
 }
 
+/// Path to a VM's writable rootfs disk file.
 pub fn rootfs_path(vms_dir: &Path, id: Uuid) -> PathBuf {
     vms_dir.join(id.to_string()).join(ROOTFS_FILE_NAME)
 }
@@ -129,16 +157,18 @@ fn grow(rootfs: &Path, target_bytes: u64) -> Result<(), RootfsError> {
         return Ok(());
     }
 
-    let file = OpenOptions::new().write(true).open(rootfs).map_err(|source| {
-        RootfsError::Extend {
+    let file = OpenOptions::new()
+        .write(true)
+        .open(rootfs)
+        .map_err(|source| RootfsError::Extend {
             path: rootfs.to_owned(),
             source,
-        }
-    })?;
-    file.set_len(target_bytes).map_err(|source| RootfsError::Extend {
-        path: rootfs.to_owned(),
-        source,
-    })?;
+        })?;
+    file.set_len(target_bytes)
+        .map_err(|source| RootfsError::Extend {
+            path: rootfs.to_owned(),
+            source,
+        })?;
     drop(file);
 
     let resized = run_resize_tool(rootfs, "e2fsck", &["-f", "-y"], |status| {
@@ -159,6 +189,9 @@ fn grow(rootfs: &Path, target_bytes: u64) -> Result<(), RootfsError> {
     resized
 }
 
+/// Runs `tool` against `rootfs` and maps its exit status through `accept`
+/// (since a successful `e2fsck` run can still exit non-zero for "errors
+/// corrected").
 fn run_resize_tool(
     rootfs: &Path,
     tool: &'static str,
@@ -185,6 +218,7 @@ fn run_resize_tool(
     }
 }
 
+/// Copies `template` into `tmp` and atomically renames it to `rootfs`.
 fn publish(template: &mut File, tmp: &Path, rootfs: &Path) -> Result<(), RootfsError> {
     let copy_error = |source| RootfsError::Copy {
         path: tmp.to_owned(),
@@ -193,9 +227,7 @@ fn publish(template: &mut File, tmp: &Path, rootfs: &Path) -> Result<(), RootfsE
 
     // The registry's hash verification shares the descriptor offset, so the
     // template handle arrives at EOF.
-    template
-        .seek(SeekFrom::Start(0))
-        .map_err(copy_error)?;
+    template.seek(SeekFrom::Start(0)).map_err(copy_error)?;
     let mut out = File::create(tmp).map_err(copy_error)?;
     io::copy(template, &mut out).map_err(copy_error)?;
     out.sync_all().map_err(copy_error)?;
@@ -231,12 +263,17 @@ mod tests {
         let mut template = template_file(directory.path(), b"template-bytes");
         let id = Uuid::new_v4();
 
-        let rootfs = prepare_rootfs(&vms_dir, id, &mut template, "template-bytes".len() as u64)
-            .unwrap();
+        let rootfs =
+            prepare_rootfs(&vms_dir, id, &mut template, "template-bytes".len() as u64).unwrap();
 
         assert_eq!(rootfs, vms_dir.join(id.to_string()).join("rootfs.ext4"));
         assert_eq!(fs::read(&rootfs).unwrap(), b"template-bytes");
-        assert!(!vms_dir.join(id.to_string()).join("rootfs.ext4.tmp").exists());
+        assert!(
+            !vms_dir
+                .join(id.to_string())
+                .join("rootfs.ext4.tmp")
+                .exists()
+        );
     }
 
     #[test]
@@ -249,8 +286,8 @@ mod tests {
         fs::create_dir_all(&vm_dir).unwrap();
         fs::write(vm_dir.join("rootfs.ext4"), b"existing-disk").unwrap();
 
-        let rootfs = prepare_rootfs(&vms_dir, id, &mut template, "existing-disk".len() as u64)
-            .unwrap();
+        let rootfs =
+            prepare_rootfs(&vms_dir, id, &mut template, "existing-disk".len() as u64).unwrap();
 
         assert_eq!(fs::read(&rootfs).unwrap(), b"existing-disk");
     }

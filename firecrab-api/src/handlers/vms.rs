@@ -216,7 +216,10 @@ fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
     }
 }
 
-fn validate_update(req: &UpdateVmResourcesRequest, current_disk_gb: u16) -> BTreeMap<String, String> {
+fn validate_update(
+    req: &UpdateVmResourcesRequest,
+    current_disk_gb: u16,
+) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     if !(1..=32).contains(&req.cpu) {
         fields.insert("cpu".to_owned(), "must be between 1 and 32".to_owned());
@@ -338,7 +341,10 @@ pub async fn stop_vm(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&id)
         .cloned();
-    if let Some(VmProcess { pid, mut exited, .. }) = entry {
+    if let Some(VmProcess {
+        pid, mut exited, ..
+    }) = entry
+    {
         firecracker::sigterm(pid);
         if tokio::time::timeout(state.runtime.stop_grace, exited.changed())
             .await
@@ -537,7 +543,11 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
         rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source, target_bytes)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
 
-        set_startup_step(&state_for_blocking, record.id, StartupStep::GeneratingConfig);
+        set_startup_step(
+            &state_for_blocking,
+            record.id,
+            StartupStep::GeneratingConfig,
+        );
         let kernel = templates.artifact_path(&template.kernel);
         firecracker::write_config(&runtime.vms_dir, &record, &kernel, &template.boot_args)
             .map_err(|error| format!("config generation failed: {error}"))
@@ -1323,7 +1333,10 @@ mod tests {
         assert_eq!(db_state(&reopened, vm.id), Some(VmState::Created));
         let persisted = reopened.store.load_all().unwrap();
         let persisted = persisted.get(&vm.id).unwrap();
-        assert_eq!((persisted.cpu, persisted.ram, persisted.disk_gb), (4, 1024, 3));
+        assert_eq!(
+            (persisted.cpu, persisted.ram, persisted.disk_gb),
+            (4, 1024, 3)
+        );
     }
 
     #[tokio::test]
@@ -1346,7 +1359,10 @@ mod tests {
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
         let vms = state.vms.lock().unwrap();
         let unchanged = vms.get(&vm.id).unwrap();
-        assert_eq!((unchanged.cpu, unchanged.ram, unchanged.disk_gb), (1, 128, 0));
+        assert_eq!(
+            (unchanged.cpu, unchanged.ram, unchanged.disk_gb),
+            (1, 128, 0)
+        );
     }
 
     #[tokio::test]

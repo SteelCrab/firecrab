@@ -7,12 +7,19 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// violation and the connection must be closed.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
+/// Failure reading or writing a length-prefixed frame.
 #[derive(Debug, Error)]
 pub enum FrameError {
+    /// The underlying socket read/write failed.
     #[error("connection I/O failed")]
     Io(#[from] std::io::Error),
+    /// Declared or actual frame length exceeds [`MAX_FRAME_BYTES`].
     #[error("frame of {len} bytes exceeds the {MAX_FRAME_BYTES}-byte limit")]
-    TooLarge { len: usize },
+    TooLarge {
+        /// The oversized length that was rejected.
+        len: usize,
+    },
+    /// Frame body didn't deserialize as the expected JSON type.
     #[error("frame payload is not valid protocol JSON")]
     Malformed(#[source] serde_json::Error),
 }
@@ -27,7 +34,9 @@ where
     if payload.len() > MAX_FRAME_BYTES {
         return Err(FrameError::TooLarge { len: payload.len() });
     }
-    writer.write_all(&(payload.len() as u32).to_be_bytes()).await?;
+    writer
+        .write_all(&(payload.len() as u32).to_be_bytes())
+        .await?;
     writer.write_all(&payload).await?;
     writer.flush().await?;
     Ok(())
@@ -63,7 +72,9 @@ mod tests {
             .await
             .expect("write frame");
 
-        let decoded: Vec<String> = read_frame(&mut buffer.as_slice()).await.expect("read frame");
+        let decoded: Vec<String> = read_frame(&mut buffer.as_slice())
+            .await
+            .expect("read frame");
         assert_eq!(decoded, ["a", "b"]);
     }
 

@@ -1,3 +1,6 @@
+//! Idempotent creation/repair of the single Firecrab-owned Linux bridge
+//! (`fcbr0`) that every VM's TAP device attaches to.
+
 use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
@@ -13,26 +16,44 @@ use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+/// Name of the single Firecrab-owned Linux bridge shared by every VM.
 pub const BRIDGE_NAME: &str = "fcbr0";
+/// MTU applied to the bridge and its link.
 pub const BRIDGE_MTU: u32 = 1500;
+/// Bridge's own address on the VPC subnet, also the VMs' default gateway.
 pub const BRIDGE_GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
+/// Network address of the Firecrab VPC subnet (172.30.0.0/24).
 const BRIDGE_NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
+/// CIDR prefix length of the Firecrab VPC subnet.
 const BRIDGE_PREFIX: u8 = 24;
 
+/// Failure modes for [`ensure_bridge`].
 #[derive(Debug, Error)]
 pub enum BridgeError {
+    /// Couldn't open the rtnetlink socket.
     #[error("failed to open rtnetlink connection")]
     Connection(#[source] io::Error),
+    /// An rtnetlink request failed.
     #[error("rtnetlink operation failed")]
     Netlink(#[source] rtnetlink::Error),
+    /// A pre-existing host address overlaps the Firecrab subnet.
     #[error("Firecrab subnet 172.30.0.0/24 overlaps host address {0}")]
     AddressConflict(Ipv4Addr),
+    /// A pre-existing host route overlaps the Firecrab subnet.
     #[error("Firecrab subnet 172.30.0.0/24 overlaps host route {network}/{prefix}")]
-    RouteConflict { network: Ipv4Addr, prefix: u8 },
+    RouteConflict {
+        /// The conflicting route's network address.
+        network: Ipv4Addr,
+        /// The conflicting route's prefix length.
+        prefix: u8,
+    },
+    /// The bridge already has the gateway IP but at a different prefix.
     #[error("bridge gateway {BRIDGE_GATEWAY}/{BRIDGE_PREFIX} has a conflicting prefix")]
     GatewayPrefixConflict,
+    /// The bridge vanished between being created and being looked up again.
     #[error("bridge {BRIDGE_NAME} disappeared while it was being configured")]
     MissingAfterCreate,
+    /// Writing the per-interface IPv6-disable sysctl failed.
     #[error("failed to disable IPv6 on {BRIDGE_NAME}")]
     Ipv6Disable(#[source] io::Error),
 }
@@ -44,10 +65,12 @@ pub enum BridgeError {
 /// short-circuit), just mutual exclusion over the whole check-then-act flow.
 #[derive(Debug, Default)]
 pub struct BridgeActor {
+    /// Held for the duration of a whole check-then-act `ensure_bridge` call.
     lock: Mutex<()>,
 }
 
 impl BridgeActor {
+    /// Creates an actor with no bridge-creation call in flight yet.
     pub fn new() -> Self {
         Self::default()
     }
@@ -110,6 +133,7 @@ fn disable_ipv6() -> Result<(), BridgeError> {
     }
 }
 
+/// Looks up the Firecrab bridge by name, if it already exists.
 async fn find_bridge(handle: &Handle) -> Result<Option<LinkMessage>, BridgeError> {
     let mut links = handle
         .link()
@@ -119,15 +143,15 @@ async fn find_bridge(handle: &Handle) -> Result<Option<LinkMessage>, BridgeError
     match links.try_next().await {
         Ok(link) => Ok(link),
         // A get-by-name answers ENODEV when the link does not exist yet.
-        Err(rtnetlink::Error::NetlinkError(message))
-            if message.raw_code() == -libc::ENODEV =>
-        {
+        Err(rtnetlink::Error::NetlinkError(message)) if message.raw_code() == -libc::ENODEV => {
             Ok(None)
         }
         Err(error) => Err(BridgeError::Netlink(error)),
     }
 }
 
+/// Fails if any host address/route outside our own bridge already overlaps
+/// the Firecrab subnet.
 async fn assert_subnet_available(
     handle: &Handle,
     own_bridge_index: Option<u32>,
@@ -165,6 +189,7 @@ async fn assert_subnet_available(
     Ok(())
 }
 
+/// Adds [`BRIDGE_GATEWAY`] to the bridge if it isn't already assigned.
 async fn ensure_gateway(handle: &Handle, bridge_index: u32) -> Result<(), BridgeError> {
     let mut addresses = handle
         .address()
@@ -182,22 +207,22 @@ async fn ensure_gateway(handle: &Handle, bridge_index: u32) -> Result<(), Bridge
 
     handle
         .address()
-        .add(
-            bridge_index,
-            IpAddr::V4(BRIDGE_GATEWAY),
-            BRIDGE_PREFIX,
-        )
+        .add(bridge_index, IpAddr::V4(BRIDGE_GATEWAY), BRIDGE_PREFIX)
         .execute()
         .await
         .map_err(BridgeError::Netlink)
 }
 
+/// Extracts the IPv4 address from an rtnetlink address attribute list, if any.
 fn ipv4_address(address: &rtnetlink::packet_route::address::AddressMessage) -> Option<Ipv4Addr> {
-    address.attributes.iter().find_map(|attribute| match attribute {
-        AddressAttribute::Address(IpAddr::V4(ipv4))
-        | AddressAttribute::Local(IpAddr::V4(ipv4)) => Some(*ipv4),
-        _ => None,
-    })
+    address
+        .attributes
+        .iter()
+        .find_map(|attribute| match attribute {
+            AddressAttribute::Address(IpAddr::V4(ipv4))
+            | AddressAttribute::Local(IpAddr::V4(ipv4)) => Some(*ipv4),
+            _ => None,
+        })
 }
 
 /// Whether a route should be excluded from the conflict scan because it
@@ -211,34 +236,46 @@ fn route_belongs_to_own_bridge(route_oif: Option<u32>, own_bridge_index: Option<
     }
 }
 
+/// Extracts a route's outgoing interface index, if it has one.
 fn route_output_interface(route: &RouteMessage) -> Option<u32> {
-    route.attributes.iter().find_map(|attribute| match attribute {
-        RouteAttribute::Oif(index) => Some(*index),
-        _ => None,
-    })
+    route
+        .attributes
+        .iter()
+        .find_map(|attribute| match attribute {
+            RouteAttribute::Oif(index) => Some(*index),
+            _ => None,
+        })
 }
 
+/// Extracts a route's IPv4 destination network, if it has one.
 fn route_ipv4_destination(route: &RouteMessage) -> Option<Ipv4Addr> {
-    route.attributes.iter().find_map(|attribute| match attribute {
-        RouteAttribute::Destination(RouteAddress::Inet(ipv4)) => Some(*ipv4),
-        _ => None,
-    })
+    route
+        .attributes
+        .iter()
+        .find_map(|attribute| match attribute {
+            RouteAttribute::Destination(RouteAddress::Inet(ipv4)) => Some(*ipv4),
+            _ => None,
+        })
 }
 
+/// Whether `address` falls within `network/prefix`.
 fn subnet_contains(address: Ipv4Addr, network: Ipv4Addr, prefix: u8) -> bool {
     ipv4_to_u32(address) & prefix_mask(prefix) == ipv4_to_u32(network) & prefix_mask(prefix)
 }
 
+/// Whether two CIDR ranges share any address.
 fn cidrs_overlap(a_network: Ipv4Addr, a_prefix: u8, b_network: Ipv4Addr, b_prefix: u8) -> bool {
     let shared_prefix = a_prefix.min(b_prefix);
     ipv4_to_u32(a_network) & prefix_mask(shared_prefix)
         == ipv4_to_u32(b_network) & prefix_mask(shared_prefix)
 }
 
+/// Big-endian numeric form of an IPv4 address, for bitmask arithmetic.
 fn ipv4_to_u32(address: Ipv4Addr) -> u32 {
     u32::from_be_bytes(address.octets())
 }
 
+/// Bitmask covering the top `prefix` bits of a 32-bit address.
 fn prefix_mask(prefix: u8) -> u32 {
     match prefix {
         0 => 0,

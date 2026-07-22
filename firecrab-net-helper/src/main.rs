@@ -1,3 +1,8 @@
+//! Privileged helper daemon: owns bridge/firewall host operations behind a
+//! Unix socket so `firecrab-api` never needs root. Peers are authenticated
+//! via `SO_PEERCRED` against an explicit UID allowlist, not the socket's
+//! filesystem permissions alone.
+
 use std::collections::HashSet;
 use std::env;
 use std::fs;
@@ -8,7 +13,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Firecrab bridge (`fcbr0`) creation/repair.
 mod bridge;
+/// Per-VM and global nftables firewall rules.
 mod firewall;
 
 use firecrab_helper_protocol::PROTOCOL_VERSION;
@@ -21,43 +28,61 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
+/// Default Unix socket path, overridable via `FIRECRAB_NET_HELPER_SOCK`.
 const DEFAULT_SOCKET_PATH: &str = "/run/firecrab/net-helper.sock";
+/// Upper bound on concurrently handled connections; excess ones are dropped.
 const MAX_CONNECTIONS: usize = 16;
+/// How long to wait for a full request frame before closing the connection.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Failures that can prevent the helper from starting up.
 #[derive(Debug, Error)]
 enum StartupError {
+    /// `FIRECRAB_NET_HELPER_ALLOWED_UID` isn't a valid `u32`.
     #[error("invalid FIRECRAB_NET_HELPER_ALLOWED_UID: {0}")]
     InvalidAllowedUid(String),
+    /// Couldn't create the socket's parent directory.
     #[error("failed to prepare socket directory {path}")]
     SocketDir {
+        /// The directory that couldn't be created.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't bind the Unix socket.
     #[error("failed to bind helper socket {path}")]
     Bind {
+        /// The socket path that couldn't be bound.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't restrict the socket file's permissions after binding.
     #[error("failed to restrict permissions on helper socket {path}")]
     Permissions {
+        /// The socket path whose permissions couldn't be set.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
 }
 
+/// Resolved startup configuration plus the shared actors every connection
+/// dispatches into.
 #[derive(Debug)]
 struct HelperConfig {
+    /// Where the Unix socket is bound.
     socket_path: PathBuf,
+    /// UIDs allowed to connect, checked via `SO_PEERCRED`.
     allowed_peer_uids: HashSet<u32>,
+    /// Shared firewall state (single-writer mutex inside).
     firewall: firewall::FirewallActor,
+    /// Shared bridge-creation state (single-writer mutex inside).
     bridge: bridge::BridgeActor,
 }
 
 impl HelperConfig {
+    /// Reads configuration from the process environment.
     fn load() -> Result<Self, StartupError> {
         let socket_path =
             env::var("FIRECRAB_NET_HELPER_SOCK").unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_owned());
@@ -65,6 +90,7 @@ impl HelperConfig {
         Self::from_values(&socket_path, allowed_uid.as_deref())
     }
 
+    /// Builds config from already-parsed values (used directly by tests).
     fn from_values(socket_path: &str, allowed_uid: Option<&str>) -> Result<Self, StartupError> {
         // The helper always trusts its own uid so unprivileged local
         // development needs no extra configuration; production adds the
@@ -86,16 +112,20 @@ impl HelperConfig {
         })
     }
 
+    /// Whether `uid` is on the allowlist.
     fn peer_allowed(&self, uid: u32) -> bool {
         self.allowed_peer_uids.contains(&uid)
     }
 }
 
+/// This process's effective UID, always implicitly trusted.
 fn effective_uid() -> u32 {
     // SAFETY: geteuid has no failure modes or preconditions.
     unsafe { libc::geteuid() }
 }
 
+/// Entry point: runs the server and prints any startup error's full cause
+/// chain before exiting non-zero.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     match run().await {
@@ -112,6 +142,7 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Loads config, binds the socket, and serves until shutdown.
 async fn run() -> Result<(), StartupError> {
     let config = Arc::new(HelperConfig::load()?);
     let listener = bind_socket(&config.socket_path)?;
@@ -125,6 +156,8 @@ async fn run() -> Result<(), StartupError> {
     Ok(())
 }
 
+/// Creates the socket's parent directory if needed, removes a stale socket
+/// file, binds, and restricts permissions to owner/group only.
 fn bind_socket(path: &Path) -> Result<UnixListener, StartupError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -159,6 +192,7 @@ fn bind_socket(path: &Path) -> Result<UnixListener, StartupError> {
     Ok(listener)
 }
 
+/// Resolves once SIGTERM or Ctrl-C is received.
 async fn shutdown_signal() {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("install SIGTERM handler");
@@ -168,6 +202,8 @@ async fn shutdown_signal() {
     }
 }
 
+/// Accepts connections until `shutdown` resolves, spawning one task per
+/// connection bounded by [`MAX_CONNECTIONS`] concurrent permits.
 async fn serve(
     listener: UnixListener,
     config: Arc<HelperConfig>,
@@ -192,6 +228,8 @@ async fn serve(
     }
 }
 
+/// Serves requests on one accepted connection until it errors, times out, or
+/// a version-mismatch response is sent.
 async fn handle_connection(stream: UnixStream, config: Arc<HelperConfig>) {
     let Ok(peer) = stream.peer_cred() else { return };
     // Silent close: unauthenticated peers learn nothing about the protocol.
@@ -220,6 +258,7 @@ async fn handle_connection(stream: UnixStream, config: Arc<HelperConfig>) {
     }
 }
 
+/// Validates the envelope's protocol version, then dispatches its request.
 async fn respond_to(
     envelope: NetworkRequestEnvelope,
     config: &HelperConfig,
@@ -238,18 +277,21 @@ async fn respond_to(
     }
 }
 
+/// Routes a validated request to the matching bridge/firewall operation.
 async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), HelperFailure> {
     match request {
-        NetworkRequest::EnsureBridge => bridge::ensure_bridge(&config.bridge).await.map_err(|error| HelperFailure::Internal {
-            detail: error_chain(&error),
-        }),
-        NetworkRequest::EnsureFirewall => {
-            firewall::ensure_firewall(&config.firewall)
+        NetworkRequest::EnsureBridge => {
+            bridge::ensure_bridge(&config.bridge)
                 .await
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),
                 })
         }
+        NetworkRequest::EnsureFirewall => firewall::ensure_firewall(&config.firewall)
+            .await
+            .map_err(|error| HelperFailure::Internal {
+                detail: error_chain(&error),
+            }),
         NetworkRequest::ApplyVmPolicy {
             vm_id,
             ipv4,
@@ -394,9 +436,13 @@ mod tests {
         for _ in 0..2 {
             // DeleteTap answers deterministically without touching netlink,
             // so the framing loop is testable without privileges.
-            let envelope =
-                NetworkRequestEnvelope::new(Uuid::new_v4(), NetworkRequest::DeleteTap { vm_id: Uuid::nil() });
-            write_frame(&mut stream, &envelope).await.expect("send request");
+            let envelope = NetworkRequestEnvelope::new(
+                Uuid::new_v4(),
+                NetworkRequest::DeleteTap { vm_id: Uuid::nil() },
+            );
+            write_frame(&mut stream, &envelope)
+                .await
+                .expect("send request");
             let response: NetworkResponseEnvelope =
                 read_frame(&mut stream).await.expect("receive response");
             assert_eq!(response.version, PROTOCOL_VERSION);
@@ -417,7 +463,9 @@ mod tests {
         let mut envelope =
             NetworkRequestEnvelope::new(Uuid::new_v4(), NetworkRequest::EnsureBridge);
         envelope.version = PROTOCOL_VERSION + 1;
-        write_frame(&mut stream, &envelope).await.expect("send request");
+        write_frame(&mut stream, &envelope)
+            .await
+            .expect("send request");
 
         let response: NetworkResponseEnvelope =
             read_frame(&mut stream).await.expect("receive response");
@@ -429,7 +477,9 @@ mod tests {
         );
 
         assert!(
-            read_frame::<_, NetworkResponseEnvelope>(&mut stream).await.is_err(),
+            read_frame::<_, NetworkResponseEnvelope>(&mut stream)
+                .await
+                .is_err(),
             "connection should be closed after a version rejection"
         );
     }
@@ -440,12 +490,17 @@ mod tests {
         let (path, _stop, _handle) = start_helper(&dir);
 
         let mut stream = UnixStream::connect(&path).await.expect("connect");
-        let oversized = ((firecrab_helper_protocol::framing::MAX_FRAME_BYTES + 1) as u32)
-            .to_be_bytes();
-        stream.write_all(&oversized).await.expect("send length prefix");
+        let oversized =
+            ((firecrab_helper_protocol::framing::MAX_FRAME_BYTES + 1) as u32).to_be_bytes();
+        stream
+            .write_all(&oversized)
+            .await
+            .expect("send length prefix");
 
         assert!(
-            read_frame::<_, NetworkResponseEnvelope>(&mut stream).await.is_err(),
+            read_frame::<_, NetworkResponseEnvelope>(&mut stream)
+                .await
+                .is_err(),
             "helper must drop the connection instead of answering"
         );
     }
