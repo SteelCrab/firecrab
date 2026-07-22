@@ -22,7 +22,7 @@ cd firecrab-frontend && npm run dev
 | 필드 | 제약 |
 |---|---|
 | name | 1–64자, 영문/숫자/`.`/`_`/`-` |
-| template | `ubuntu-26.04`, `alpine-3.x` |
+| template | `ubuntu-26.04`, `alpine-3.24` |
 | cpu | 1–32 |
 | ram | 128–32768 MiB, 2의 거듭제곱만(128/256/512/.../32768) |
 | disk | 템플릿 rootfs 크기(현재 2GiB) 이상 500GiB 이하 |

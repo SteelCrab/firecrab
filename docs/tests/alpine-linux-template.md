@@ -10,10 +10,10 @@ cd firecrab-frontend && npx tsc -b && npm run build
 
 ## 확인 항목
 
-- `TemplateRegistry::load_default`: alias `alpine-3.x` 추가, 기존 `ubuntu-26.04`와 alias/version 중복 없음
+- `TemplateRegistry::load_default`: alias `alpine-3.24` 추가, 기존 `ubuntu-26.04`와 alias/version 중복 없음
 - Alpine과 Ubuntu 모두 같은 커널(`kernel/vmlinux-7.1.2-x86_64`) 공유 — 커널은 virtio/ext4/serial만
   요구하는 distro-agnostic 산출물이라 재빌드 불필요
-- `CreateVm.tsx`의 `TEMPLATES` 배열에 `alpine-3.x` 추가
+- `CreateVm.tsx`의 `TEMPLATES` 배열에 `alpine-3.24` 추가
 - rootfs 이미지: `images/rootfs/alpine-rootfs-3.24.1-x86_64.ext4` + `alpine-rootfs.ext4` 심볼릭 링크
 - 빌드 스크립트 `scripts/firecracker-menual/install-alpine-rootfs.sh`: host root/sudo 불필요 —
   `images/rootfs/`가 root:root 소유(기존 ubuntu 스크립트가 sudo로 만든 디렉터리)라 pista 계정은 쓰기
@@ -34,7 +34,7 @@ cd firecrab-frontend && npx tsc -b && npm run build
   `firecrab login: root (automatic login)` + 쉘 프롬프트(`firecrab:~#`) 도달. 같은 스크립트로
   `ubuntu-rootfs.ext4`도 재부팅해 회귀 없음 확인(둘 다 `verify_boot_log`의 에러/성공 패턴 기준 통과)
 - **실제 API+프론트 엔드투엔드**(Playwright로 브라우저 조작): `cargo run -p firecrab-api` +
-  `npm run dev` 기동 → 생성 폼 template 드롭다운에서 `alpine-3.x` 선택 → 생성 → start → VM 상세
+  `npm run dev` 기동 → 생성 폼 template 드롭다운에서 `alpine-3.24` 선택 → 생성 → start → VM 상세
   모달의 실제 캡처된 console.log에서 Alpine 부팅(OpenRC → dhcpcd → sshd → login) 확인. 이어서
   `ubuntu-26.04`도 동일 플로우로 생성·시작해 systemd 부팅이 `Reached target graphical.target`까지
   끝까지 도달하는 것으로 회귀 없음 확인. 두 테스트 VM 모두 stop 후 delete로 정리, 띄운 서버도 종료
@@ -60,7 +60,7 @@ cd firecrab-frontend
 npm run dev
 ```
 
-`http://localhost:8080/`(꼭 `localhost`)에서 template 드롭다운에 `alpine-3.x` 선택 → 생성 → start →
+`http://localhost:8080/`(꼭 `localhost`)에서 template 드롭다운에 `alpine-3.24` 선택 → 생성 → start →
 이름 클릭해 상세 모달 로그에서 Alpine 부팅 확인.
 
 ## 정리

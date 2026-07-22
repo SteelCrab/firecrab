@@ -115,7 +115,7 @@ impl TemplateRegistry {
                         .to_owned(),
                 },
                 TemplateSpec {
-                    alias: "alpine-3.x".to_owned(),
+                    alias: "alpine-3.24".to_owned(),
                     version: "alpine-3.24.1-v1".to_owned(),
                     // Same generic kernel as ubuntu-26.04: it's distro-agnostic
                     // (virtio/ext4/serial support, no guest-specific config).
