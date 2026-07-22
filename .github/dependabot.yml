@@ -5,7 +5,20 @@
 
 version: 2
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/" # Location of package manifests
+  # Rust workspace (Cargo.toml at repo root)
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Frontend (firecrab-frontend/package.json)
+  - package-ecosystem: "npm"
+    directory: "/firecrab-frontend"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actions used by ci.yml / release.yml
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
       interval: "weekly"
