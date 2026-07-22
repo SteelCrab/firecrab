@@ -57,16 +57,19 @@ cargo test -p firecrab-api handlers::vms::
 - ownership alias `firecrab:<vm_uuid>` 포맷 검증
 - `ifreq` 인코딩(NUL 종료, `IFF_TAP|IFF_NO_PI`) 검증
 - 미존재 TAP 삭제 no-op
+- `create_tap`도 재사용 전 소유권 확인 — alias 안 맞는 기존 링크는 거부(덮어쓰기 안 함)
 - lease 할당(`create_vm`)·해제(`delete_vm`), 실패 시 rollback
 - `setup_vm_network` 성공 경로 — fake net-helper로 전체 lifecycle 확인
-- 중간 실패 시 TAP·policy compensation (Drop 비의존)
+- `apply_vm_policy` 실패 시 `remove_vm_policy`+`delete_tap` 순서로 호출됨을 call-sequence 테스트로 확인
+- 중간 실패 시 새로 만든 TAP도 compensation으로 삭제 (Drop 비의존)
 - `stop_vm` 시 teardown(remove_vm_policy+delete_tap), lease는 delete까지 유지
+- 게스트 자체 종료(poweroff)·프로세스 kill로 인한 종료도 exit monitor가 teardown 호출(이전엔 `stop_vm` 경유 종료만 정리됨)
 
 ## 수동 확인 (root/CAP_NET_ADMIN 필요)
 
-- 개발 sandbox: 미검증(CAP_NET_ADMIN 없음)
+- 개발 sandbox: 미검증(CAP_NET_ADMIN 없음) — `create_tap`의 소유권 선확인·실패 시 신규 디바이스 삭제 로직도 포함
 - 실제 root 환경 검증 완료(2026-07-22): 서로 다른 두 `vm_id` → 다른 TAP 2개, 둘 다 `master fcbr0`, alias 일치, `ifreq` 플래그 반영 확인
-- 미검증: 실패 주입 시 고아 TAP 없음, daemon 재시작 후 orphan 없음, `delete_tap` ownership 재확인
+- 미검증: 이름 충돌(다른 소유자) 시 거부, 실패 주입 시 고아 TAP 없음, daemon 재시작 후 orphan 없음, `delete_tap` ownership 재확인
 
 ### 터미널 세션 1 — helper 실행
 

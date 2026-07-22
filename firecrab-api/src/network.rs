@@ -141,6 +141,7 @@ impl NetworkClient {
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
 
     use firecrab_helper_protocol::PROTOCOL_VERSION;
     use tokio::net::UnixListener;
@@ -173,6 +174,77 @@ pub(crate) mod test_support {
                 version: PROTOCOL_VERSION,
                 request_id: envelope.request_id,
                 result: Ok(()),
+            };
+            if write_frame(&mut stream, &response).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Short name for each request variant, for tests asserting a call
+    /// sequence rather than each request's full payload.
+    fn operation_name(request: &NetworkRequest) -> &'static str {
+        match request {
+            NetworkRequest::EnsureBridge => "ensure_bridge",
+            NetworkRequest::EnsureFirewall => "ensure_firewall",
+            NetworkRequest::CreateTap { .. } => "create_tap",
+            NetworkRequest::DeleteTap { .. } => "delete_tap",
+            NetworkRequest::ApplyVmPolicy { .. } => "apply_vm_policy",
+            NetworkRequest::RemoveVmPolicy { .. } => "remove_vm_policy",
+        }
+    }
+
+    /// Spawns a fake net-helper that records each request's operation name
+    /// (in arrival order) and answers `fail_operation` (if any) with an
+    /// error while answering everything else `Ok` — for tests asserting a
+    /// call sequence, whether that's a compensation path (e.g. "a failed
+    /// apply_vm_policy is still followed by remove_vm_policy and
+    /// delete_tap") or just that some path was reached at all (`None`).
+    pub fn spawn_recording_helper(
+        socket_path: &Path,
+        fail_operation: Option<&'static str>,
+    ) -> (tokio::task::JoinHandle<()>, Arc<Mutex<Vec<&'static str>>>) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let log_for_task = Arc::clone(&log);
+        let listener = UnixListener::bind(socket_path).expect("bind fake net-helper socket");
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(serve_recording(
+                    stream,
+                    Arc::clone(&log_for_task),
+                    fail_operation,
+                ));
+            }
+        });
+        (handle, log)
+    }
+
+    async fn serve_recording(
+        mut stream: UnixStream,
+        log: Arc<Mutex<Vec<&'static str>>>,
+        fail_operation: Option<&'static str>,
+    ) {
+        loop {
+            let envelope: NetworkRequestEnvelope = match read_frame(&mut stream).await {
+                Ok(envelope) => envelope,
+                Err(_) => return,
+            };
+            let operation = operation_name(&envelope.request);
+            log.lock().unwrap().push(operation);
+            let result = if fail_operation == Some(operation) {
+                Err(HelperFailure::Internal {
+                    detail: "forced failure for test".to_owned(),
+                })
+            } else {
+                Ok(())
+            };
+            let response = NetworkResponseEnvelope {
+                version: PROTOCOL_VERSION,
+                request_id: envelope.request_id,
+                result,
             };
             if write_frame(&mut stream, &response).await.is_err() {
                 return;

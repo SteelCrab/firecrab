@@ -247,6 +247,26 @@ mod tests {
     }
 
     #[test]
+    fn active_lease_reports_a_corrupt_stored_ipv4() {
+        let mut conn = open();
+        let vm_id = Uuid::new_v4();
+        let tx = begin(&mut conn);
+        allocate(&tx, vm_id).unwrap();
+        tx.commit().unwrap();
+
+        conn.execute(
+            "UPDATE network_leases SET ipv4 = 'not-an-ip' WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            active_lease(&conn, vm_id),
+            Err(IpamError::CorruptLease { .. })
+        ));
+    }
+
+    #[test]
     fn pool_exhaustion_is_reported_once_all_253_hosts_are_leased() {
         let mut conn = open();
         for _ in 0..253 {

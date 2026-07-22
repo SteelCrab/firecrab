@@ -382,6 +382,10 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
                 state = ?record.state,
                 "vm process exited"
             );
+            // Only stop_vm's own SIGTERM path tears the network down today;
+            // a guest-initiated poweroff or an external kill lands here
+            // instead and would otherwise leave the TAP/policy orphaned.
+            crate::handlers::vms::teardown_vm_network(&state, id).await;
             let store = state.store.clone();
             match tokio::task::spawn_blocking(move || store.update(&record)).await {
                 Ok(Ok(())) => {}

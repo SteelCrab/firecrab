@@ -73,23 +73,56 @@ fn owner_alias(vm_id: Uuid) -> String {
     format!("firecrab:{vm_id}")
 }
 
-/// Creates `vm_id`'s TAP device (if it doesn't already exist), attaches it
-/// to the shared bridge, tags it with an ownership alias, and brings it up.
+/// Creates `vm_id`'s TAP device, attaches it to the shared bridge, tags it
+/// with an ownership alias, and brings it up.
+///
+/// A name collision with an existing link is only reused if that link is
+/// already ours (alias matches) — this never silently takes over a foreign
+/// or stale-from-before-this-check interface. And if anything after
+/// creating a fresh device fails (missing bridge, the device vanishing, the
+/// alias/attach/up call itself), that fresh device is deleted again before
+/// returning the error, so a partial failure never leaves an orphaned TAP.
 pub async fn create_tap(vm_id: Uuid) -> Result<(), TapError> {
     let name = tap_name(vm_id);
-    create_persistent_device(&name)?;
-
     let (connection, handle, _) = new_connection().map_err(TapError::Connection)?;
     tokio::spawn(connection);
 
-    let bridge_index = find_link(&handle, BRIDGE_NAME)
+    let created_now = match find_link(&handle, &name).await? {
+        Some(existing) => {
+            let alias = link_alias(&existing);
+            if alias.as_deref() != Some(owner_alias(vm_id).as_str()) {
+                return Err(TapError::OwnershipMismatch { name, vm_id, alias });
+            }
+            false
+        }
+        None => {
+            create_persistent_device(&name)?;
+            true
+        }
+    };
+
+    let result = attach_and_configure(&handle, &name, vm_id).await;
+    if result.is_err() && created_now {
+        // Best-effort: a cleanup failure here must not mask the original
+        // error, but a freshly-created device that we failed to finish
+        // configuring must not survive as an orphan either.
+        if let Ok(Some(link)) = find_link(&handle, &name).await {
+            let _ = handle.link().del(link.header.index).execute().await;
+        }
+    }
+    result
+}
+
+/// Looks up `name` and the shared bridge, then attaches/aliases/brings it up.
+async fn attach_and_configure(handle: &Handle, name: &str, vm_id: Uuid) -> Result<(), TapError> {
+    let bridge_index = find_link(handle, BRIDGE_NAME)
         .await?
         .ok_or(TapError::MissingBridge)?
         .header
         .index;
-    let tap_index = find_link(&handle, &name)
+    let tap_index = find_link(handle, name)
         .await?
-        .ok_or_else(|| TapError::MissingAfterCreate(name.clone()))?
+        .ok_or_else(|| TapError::MissingAfterCreate(name.to_owned()))?
         .header
         .index;
 

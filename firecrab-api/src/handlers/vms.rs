@@ -660,6 +660,12 @@ async fn setup_vm_network(state: &AppState, vm_id: Uuid) -> Result<VmNetwork, St
         .apply_vm_policy(vm_id, lease.ipv4, lease.mac, EgressPolicy::default(), false)
         .await
     {
+        // A failed apply_vm_policy leaves nothing installed (nft applies a
+        // ruleset as one atomic transaction), so remove_vm_policy is a
+        // guaranteed no-op today — called anyway so cleanup here doesn't
+        // silently rely on that nft implementation detail staying true, and
+        // so this matches teardown_vm_network's own order everywhere else.
+        let _ = state.network.remove_vm_policy(vm_id).await;
         let _ = state.network.delete_tap(vm_id).await;
         return Err(format!("firewall policy application failed: {error}"));
     }
@@ -673,8 +679,11 @@ async fn setup_vm_network(state: &AppState, vm_id: Uuid) -> Result<VmNetwork, St
 /// Reverses [`setup_vm_network`]: removes the firewall policy then the TAP.
 /// Best-effort and always called from an already-failing or already-stopping
 /// path, so failures here are logged rather than propagated — the VM's own
-/// lifecycle state still needs to move forward either way.
-async fn teardown_vm_network(state: &AppState, vm_id: Uuid) {
+/// lifecycle state still needs to move forward either way. `pub(crate)` so
+/// the exit monitor (`firecracker::register_and_watch`) can call it too —
+/// a guest-initiated poweroff or crash never goes through `stop_vm`, so it
+/// has to run from there instead.
+pub(crate) async fn teardown_vm_network(state: &AppState, vm_id: Uuid) {
     if let Err(error) = state.network.remove_vm_policy(vm_id).await {
         tracing::warn!(vm_id = %vm_id, %error, "failed to remove vm firewall policy");
     }
@@ -1181,6 +1190,64 @@ mod tests {
         assert!(state.processes.lock().unwrap().is_empty());
     }
 
+    async fn stop_tolerates_a_failed_teardown_step(fail_operation: &'static str) {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(
+            root,
+            &format!("signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)){SERVE_LOOP}"),
+        );
+        let state = test_state_with_binary(root, binary).await;
+
+        let socket_path = root.join("net-helper-teardown-fail.sock");
+        let (_helper, log) = crate::network::test_support::spawn_recording_helper(
+            &socket_path,
+            Some(fail_operation),
+        );
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
+        let vm = record("teardown-partial-fail", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        let Json(stopped) = stop_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            stopped.state,
+            VmState::Stopped,
+            "a failed {fail_operation} must not block landing on stopped"
+        );
+        let calls = log.lock().unwrap().clone();
+        assert!(
+            calls.contains(&"remove_vm_policy") && calls.contains(&"delete_tap"),
+            "both teardown steps must still run even when {fail_operation} fails, got {calls:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_vm_tolerates_a_failed_remove_vm_policy() {
+        stop_tolerates_a_failed_teardown_step("remove_vm_policy").await;
+    }
+
+    #[tokio::test]
+    async fn stop_vm_tolerates_a_failed_delete_tap() {
+        stop_tolerates_a_failed_teardown_step("delete_tap").await;
+    }
+
     #[tokio::test]
     async fn start_rejects_disallowed_states_with_conflict() {
         let directory = tempdir().unwrap();
@@ -1244,6 +1311,52 @@ mod tests {
             "a failed start must not leave a stale startup step behind"
         );
         assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn apply_vm_policy_failure_still_removes_policy_and_tap() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let state = test_state(root).await;
+
+        let socket_path = root.join("net-helper-fail.sock");
+        let (_helper, log) = crate::network::test_support::spawn_recording_helper(
+            &socket_path,
+            Some("apply_vm_policy"),
+        );
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
+        let vm = record("policy-fail", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let error = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+
+        let calls = log.lock().unwrap().clone();
+        let apply_at = calls
+            .iter()
+            .position(|&op| op == "apply_vm_policy")
+            .expect("apply_vm_policy must have been called");
+        assert!(
+            calls[apply_at + 1..].contains(&"remove_vm_policy"),
+            "expected remove_vm_policy after a failed apply_vm_policy, got {calls:?}"
+        );
+        assert!(
+            calls[apply_at + 1..].contains(&"delete_tap"),
+            "expected delete_tap after a failed apply_vm_policy, got {calls:?}"
+        );
     }
 
     #[tokio::test]
@@ -1367,6 +1480,16 @@ mod tests {
         let root = directory.path();
         let binary = fake_firecracker(root, SERVE_LOOP);
         let state = test_state_with_binary(root, binary).await;
+
+        // Swap in a recording helper so this test can confirm the exit
+        // monitor (not stop_vm) is the one tearing the network down when
+        // the process dies without ever going through the stop API.
+        let socket_path = root.join("net-helper-recording.sock");
+        let (_helper, log) =
+            crate::network::test_support::spawn_recording_helper(&socket_path, None);
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
         let vm = record("crashy", Uuid::new_v4());
         seed_vm(&state, &vm);
 
@@ -1384,6 +1507,16 @@ mod tests {
         wait_for_state(&state, vm.id, VmState::Error).await;
         assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
         assert!(state.processes.lock().unwrap().is_empty());
+
+        let calls = log.lock().unwrap().clone();
+        assert!(
+            calls.contains(&"remove_vm_policy"),
+            "exit monitor must tear down the firewall policy on an unclean exit, got {calls:?}"
+        );
+        assert!(
+            calls.contains(&"delete_tap"),
+            "exit monitor must delete the TAP on an unclean exit, got {calls:?}"
+        );
     }
 
     #[tokio::test]
@@ -1408,22 +1541,72 @@ mod tests {
         let state = test_state(directory.path()).await;
         state.store.break_for_tests();
 
-        let request = CreateVmRequest {
-            name: "test-vm".to_owned(),
-            template: "ubuntu-rootfs-26.04".to_owned(),
-            ram: 512,
-            cpu: 1,
-            disk_gb: 2,
-        };
         let result = create_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            ValidatedJson(request),
+            ValidatedJson(create_request("test-vm")),
         )
         .await;
 
         assert!(result.is_err());
         assert!(state.vms.lock().unwrap().is_empty());
+    }
+
+    fn create_request(name: &str) -> CreateVmRequest {
+        CreateVmRequest {
+            name: name.to_owned(),
+            template: "ubuntu-rootfs-26.04".to_owned(),
+            ram: 512,
+            cpu: 1,
+            disk_gb: 2,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_vm_succeeds_and_allocates_a_lease() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let (status, Json(created)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(create_request("fresh-vm")),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert!(state.vms.lock().unwrap().contains_key(&created.id));
+        assert!(
+            state.store.active_lease(created.id).unwrap().is_some(),
+            "create_vm must allocate a lease up front, not on first start"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_vm_rolls_back_the_record_when_lease_allocation_fails() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        // Exhaust the 253-address pool so the lease allocation inside
+        // create_vm fails after the VM record has already been inserted.
+        for _ in 0..253 {
+            state.store.allocate_lease(Uuid::new_v4()).unwrap();
+        }
+
+        let result = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(create_request("doomed-vm")),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(
+            state.vms.lock().unwrap().is_empty(),
+            "a failed lease allocation must roll back the just-inserted VM record"
+        );
+        assert!(state.store.load_all().unwrap().is_empty());
     }
 
     fn update_request(cpu: u8, ram: u32, disk_gb: u16) -> UpdateVmResourcesRequest {
