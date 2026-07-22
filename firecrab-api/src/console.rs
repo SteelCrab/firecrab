@@ -93,11 +93,16 @@ impl ConsoleBroker {
     /// subscribe call can be missed or double-delivered.
     pub fn subscribe(&self) -> (Vec<u8>, broadcast::Receiver<Vec<u8>>) {
         let state = self.lock();
-        (state.backlog.iter().copied().collect(), state.output.subscribe())
+        (
+            state.backlog.iter().copied().collect(),
+            state.output.subscribe(),
+        )
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ConsoleState> {
-        self.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -189,7 +194,9 @@ mod tests {
 
         let mut buffer = [0_u8; 32];
         let read = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::io::AsyncReadExt::read(&mut stdout, &mut buffer).await.unwrap()
+            tokio::io::AsyncReadExt::read(&mut stdout, &mut buffer)
+                .await
+                .unwrap()
         })
         .await
         .expect("cat echoed input back before the timeout");

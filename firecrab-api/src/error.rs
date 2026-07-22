@@ -1,3 +1,7 @@
+//! Structured API error type: renders as the `ErrorResponse` JSON shape with
+//! a stable `code`, human `message`, and optional per-field validation
+//! detail, so `internal_error` never leaks details a client shouldn't see.
+
 use std::collections::BTreeMap;
 
 use axum::Json;
@@ -9,16 +13,23 @@ use uuid::Uuid;
 use crate::model::VmState;
 use crate::persistence::encode_state;
 
+/// A structured, HTTP-status-carrying API error.
 #[derive(Debug)]
 pub struct AppError {
+    /// HTTP status this error renders as.
     status: StatusCode,
+    /// Machine-readable error code.
     code: &'static str,
+    /// Human-readable message.
     message: &'static str,
+    /// Field name -> error message, for validation failures.
     fields: BTreeMap<String, String>,
+    /// Correlates this error with server-side logs.
     request_id: Uuid,
 }
 
 impl AppError {
+    /// Builds an error with no per-field validation detail.
     pub fn new(
         status: StatusCode,
         code: &'static str,
@@ -34,6 +45,7 @@ impl AppError {
         }
     }
 
+    /// `400` with per-field validation messages.
     pub fn validation(fields: BTreeMap<String, String>, request_id: Uuid) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -44,6 +56,7 @@ impl AppError {
         }
     }
 
+    /// `400`: request body isn't valid JSON.
     pub fn invalid_json(request_id: Uuid) -> Self {
         Self::new(
             StatusCode::BAD_REQUEST,
@@ -53,6 +66,7 @@ impl AppError {
         )
     }
 
+    /// `415`: `Content-Type` isn't `application/json`.
     pub fn unsupported_media_type(request_id: Uuid) -> Self {
         Self::new(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -62,6 +76,7 @@ impl AppError {
         )
     }
 
+    /// `413`: request body exceeds the size limit.
     pub fn request_too_large(request_id: Uuid) -> Self {
         Self::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -71,6 +86,7 @@ impl AppError {
         )
     }
 
+    /// `403`: request `Origin` isn't on the allowlist.
     pub fn forbidden_origin(request_id: Uuid) -> Self {
         Self::new(
             StatusCode::FORBIDDEN,
@@ -80,6 +96,7 @@ impl AppError {
         )
     }
 
+    /// `429`: concurrency/rate limit exceeded.
     pub fn too_many_requests(request_id: Uuid) -> Self {
         Self::new(
             StatusCode::TOO_MANY_REQUESTS,
@@ -89,6 +106,7 @@ impl AppError {
         )
     }
 
+    /// `504`: request processing exceeded its deadline.
     pub fn gateway_timeout(request_id: Uuid) -> Self {
         Self::new(
             StatusCode::GATEWAY_TIMEOUT,
@@ -98,6 +116,7 @@ impl AppError {
         )
     }
 
+    /// `500` with no detail exposed to the client.
     pub fn internal(request_id: Uuid) -> Self {
         Self::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -107,6 +126,7 @@ impl AppError {
         )
     }
 
+    /// `404`: the resource (e.g. VM) doesn't exist.
     pub fn not_found(request_id: Uuid) -> Self {
         Self::new(
             StatusCode::NOT_FOUND,
@@ -128,6 +148,7 @@ impl AppError {
         )
     }
 
+    /// `409`: the VM's current state doesn't allow the requested operation.
     pub fn invalid_state(current: VmState, request_id: Uuid) -> Self {
         let mut fields = BTreeMap::new();
         fields.insert("state".to_owned(), encode_state(current));
@@ -142,6 +163,7 @@ impl AppError {
 }
 
 impl IntoResponse for AppError {
+    /// Renders as the `ErrorResponse` JSON body at the error's status code.
     fn into_response(self) -> Response {
         let body = ErrorResponse {
             error: ApiError {

@@ -1,3 +1,7 @@
+//! Renders and runs the Firecracker microVM process: `firecracker.json`
+//! generation, spawning + readiness polling of the child, and the exit
+//! monitor that records guest-initiated state transitions.
+
 use std::env;
 use std::fs::{self, File};
 use std::io;
@@ -23,51 +27,75 @@ use crate::state::AppState;
 /// disk and broadcast to viewers.
 const CONSOLE_READ_CHUNK: usize = 4096;
 
+/// File name of the rendered Firecracker JSON config, within a VM's directory.
 const CONFIG_FILE_NAME: &str = "firecracker.json";
+/// File name of the Firecracker API Unix socket, within a VM's directory.
 const API_SOCK_FILE_NAME: &str = "firecracker.sock";
+/// File name of the tee'd guest console log, within a VM's directory.
 const CONSOLE_LOG_FILE_NAME: &str = "console.log";
+/// Delay between readiness probe attempts while waiting for the API socket.
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+/// Failure modes for rendering config, spawning, or stopping Firecracker.
 #[derive(Debug, Error)]
 pub enum FirecrackerError {
+    /// Couldn't create the VM's own directory.
     #[error("failed to create VM directory {path}: {source}")]
     CreateDirectory {
+        /// The directory that couldn't be created.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't serialize the config to JSON.
     #[error("failed to serialize Firecracker config for {path}: {source}")]
     Serialize {
+        /// The config file path this was destined for.
         path: PathBuf,
         #[source]
         source: serde_json::Error,
     },
+    /// Couldn't write the rendered config to disk.
     #[error("failed to write Firecracker config {path}: {source}")]
     Write {
+        /// The config file path that failed to write.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// A pre-existing API socket file couldn't be removed before binding.
     #[error("failed to remove stale API socket {path}: {source}")]
     StaleSocket {
+        /// The stale socket path.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't open the console log file for writing.
     #[error("failed to open console log {path}: {source}")]
     ConsoleLog {
+        /// The console log path that couldn't be opened.
         path: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// Couldn't spawn the Firecracker binary.
     #[error("failed to spawn Firecracker binary {binary}: {source}")]
     Spawn {
+        /// The binary path that failed to spawn.
         binary: PathBuf,
         #[source]
         source: io::Error,
     },
+    /// The API socket never answered within the readiness timeout.
     #[error("Firecracker API socket {path} did not become ready within {timeout:?}")]
-    NotReady { path: PathBuf, timeout: Duration },
+    NotReady {
+        /// The API socket path that never became ready.
+        path: PathBuf,
+        /// The timeout that was exceeded.
+        timeout: Duration,
+    },
+    /// Waiting for or killing the process failed.
     #[error("failed to terminate Firecracker process: {source}")]
     // Only the owned-handle stop path builds this; handlers stop via pid
     // signals because the exit monitor owns the child.
@@ -78,36 +106,52 @@ pub enum FirecrackerError {
     },
 }
 
+/// The JSON body Firecracker's `--config-file` expects.
 #[derive(Debug, Serialize)]
 pub struct FirecrackerConfig {
+    /// Kernel image path and boot args.
     #[serde(rename = "boot-source")]
     boot_source: BootSource,
+    /// Block devices, always exactly the one root drive today.
     drives: Vec<Drive>,
+    /// vCPU/memory sizing.
     #[serde(rename = "machine-config")]
     machine_config: MachineConfig,
 }
 
+/// `boot-source` section of [`FirecrackerConfig`].
 #[derive(Debug, Serialize)]
 struct BootSource {
+    /// Absolute path to the kernel image.
     kernel_image_path: PathBuf,
+    /// Kernel command line.
     boot_args: String,
 }
 
+/// One entry in [`FirecrackerConfig`]'s `drives` list.
 #[derive(Debug, Serialize)]
 struct Drive {
+    /// Firecracker-side drive identifier.
     drive_id: String,
+    /// Absolute host path to the backing file.
     path_on_host: PathBuf,
+    /// Whether this drive is mounted as the VM's root filesystem.
     is_root_device: bool,
+    /// Whether the drive is exposed read-only to the guest.
     is_read_only: bool,
 }
 
+/// `machine-config` section of [`FirecrackerConfig`].
 #[derive(Debug, Serialize)]
 struct MachineConfig {
+    /// vCPU count.
     vcpu_count: u8,
+    /// RAM in MiB.
     mem_size_mib: u32,
 }
 
 impl FirecrackerConfig {
+    /// Builds the config for `vm`'s single root drive at `rootfs_path`.
     pub fn for_vm(
         vm: &VmRecord,
         kernel_image_path: &Path,
@@ -167,28 +211,37 @@ pub fn write_config(
     Ok(path)
 }
 
+/// Resolves the Firecracker binary path: `FIRECRAB_FIRECRACKER_BIN` if set,
+/// otherwise `firecracker` looked up on `PATH`.
 pub fn default_firecracker_binary() -> PathBuf {
     env::var_os("FIRECRAB_FIRECRACKER_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("firecracker"))
 }
 
+/// Path to a VM's Firecracker API Unix socket.
 pub fn api_sock_path(vms_dir: &Path, id: Uuid) -> PathBuf {
     vms_dir.join(id.to_string()).join(API_SOCK_FILE_NAME)
 }
 
+/// Path to a VM's tee'd guest console log file.
 pub fn console_log_path(vms_dir: &Path, id: Uuid) -> PathBuf {
     vms_dir.join(id.to_string()).join(CONSOLE_LOG_FILE_NAME)
 }
 
+/// A live, owned Firecracker child process and its associated resources.
 #[derive(Debug)]
 pub struct FirecrackerProcess {
+    /// The spawned child process.
     child: Child,
+    /// Path to its API socket, removed on stop/exit.
     api_sock: PathBuf,
+    /// Broker fanning out this VM's serial console to attached viewers.
     console: Arc<ConsoleBroker>,
 }
 
 impl FirecrackerProcess {
+    /// The child's OS process id, if it hasn't already been reaped.
     pub fn pid(&self) -> Option<u32> {
         self.child.id()
     }
@@ -199,11 +252,15 @@ impl FirecrackerProcess {
 /// console broker for anyone attaching a terminal to this VM's ttyS0.
 #[derive(Debug, Clone)]
 pub struct VmProcess {
+    /// The Firecracker process's OS process id.
     pub pid: u32,
+    /// Resolves to `true` once the exit monitor has recorded the final state.
     pub exited: watch::Receiver<bool>,
+    /// Broker for anyone attaching a terminal to this VM's ttyS0.
     pub console: Arc<ConsoleBroker>,
 }
 
+/// Sends `SIGTERM` to `pid`, requesting graceful shutdown.
 pub fn sigterm(pid: u32) {
     // SAFETY: sending a signal is memory-safe; pid races only misdeliver signals.
     unsafe {
@@ -211,6 +268,7 @@ pub fn sigterm(pid: u32) {
     }
 }
 
+/// Sends `SIGKILL` to `pid`, forcing immediate termination.
 pub fn sigkill(pid: u32) {
     // SAFETY: as above.
     unsafe {
@@ -227,7 +285,11 @@ pub fn sigkill(pid: u32) {
 pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProcess) {
     let (exited_tx, exited_rx) = watch::channel(false);
     let pid = process.pid().unwrap_or_default();
-    let FirecrackerProcess { mut child, api_sock, console } = process;
+    let FirecrackerProcess {
+        mut child,
+        api_sock,
+        console,
+    } = process;
     state
         .processes
         .lock()
@@ -378,7 +440,12 @@ pub async fn spawn_vm(
 /// `console.log` on disk and pushed to the broker for any attached viewers.
 /// Runs until the pipe closes (the Firecracker process exiting closes its
 /// stdout, which is this loop's only way to know to stop).
-fn spawn_console_reader(id: Uuid, mut stdout: tokio::process::ChildStdout, log_file: File, console: Arc<ConsoleBroker>) {
+fn spawn_console_reader(
+    id: Uuid,
+    mut stdout: tokio::process::ChildStdout,
+    log_file: File,
+    console: Arc<ConsoleBroker>,
+) {
     let mut log_file = tokio::fs::File::from_std(log_file);
     tokio::spawn(async move {
         let mut buffer = [0_u8; CONSOLE_READ_CHUNK];
@@ -400,6 +467,8 @@ fn spawn_console_reader(id: Uuid, mut stdout: tokio::process::ChildStdout, log_f
     });
 }
 
+/// Polls the API socket with a minimal HTTP request until it answers or
+/// `timeout` elapses.
 async fn wait_ready(api_sock: &Path, timeout: Duration) -> Result<(), FirecrackerError> {
     let probe = async {
         loop {
@@ -465,19 +534,22 @@ pub async fn stop_vm(
     Ok(())
 }
 
+/// Test-only helpers for standing in a fake Firecracker binary (a small
+/// Python script) so process-spawning tests don't need the real one.
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    // Every fake writes "{api_sock}.pid" so tests can probe the process after
-    // the FirecrackerProcess handle is consumed.
+    /// Every fake writes "{api_sock}.pid" so tests can probe the process after
+    /// the FirecrackerProcess handle is consumed.
     pub const FAKE_PRELUDE: &str = r#"#!/usr/bin/env python3
 import os, signal, socket, sys, time
 sock_path = sys.argv[sys.argv.index("--api-sock") + 1]
 open(sock_path + ".pid", "w").write(str(os.getpid()))
 "#;
 
+    /// Answers the readiness probe forever, like a running guest.
     pub const SERVE_LOOP: &str = r#"
 print("booted", flush=True)
 srv = socket.socket(socket.AF_UNIX)
@@ -490,7 +562,7 @@ while True:
     conn.close()
 "#;
 
-    // Serves the readiness probe once, then exits like a guest poweroff.
+    /// Serves the readiness probe once, then exits like a guest poweroff.
     pub const SERVE_ONCE_THEN_EXIT: &str = r#"
 srv = socket.socket(socket.AF_UNIX)
 srv.bind(sock_path)
@@ -502,6 +574,8 @@ conn.close()
 sys.exit(0)
 "#;
 
+    /// Writes an executable fake Firecracker script combining the prelude
+    /// with `body`.
     pub fn fake_firecracker(directory: &Path, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
@@ -511,12 +585,13 @@ sys.exit(0)
         path
     }
 
-    // Unix socket paths are capped near 108 bytes, so keep test dirs in /tmp
-    // instead of a deeply nested TMPDIR.
+    /// A tempdir under `/tmp`: Unix socket paths are capped near 108 bytes,
+    /// so this avoids a deeply nested `TMPDIR`.
     pub fn short_tempdir() -> tempfile::TempDir {
         tempfile::tempdir_in("/tmp").unwrap()
     }
 
+    /// Whether a process with `pid` still exists.
     pub fn process_alive(pid: i32) -> bool {
         // SAFETY: signal 0 only probes for existence.
         unsafe { libc::kill(pid, 0) == 0 }
@@ -554,12 +629,14 @@ mod tests {
         let vms_dir = directory.path().join("vms");
         let vm = record(3, 768);
 
-        let path = write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0")
-            .unwrap();
+        let path =
+            write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0").unwrap();
 
-        assert_eq!(path, vms_dir.join(vm.id.to_string()).join("firecracker.json"));
-        let config: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            path,
+            vms_dir.join(vm.id.to_string()).join("firecracker.json")
+        );
+        let config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["machine-config"]["vcpu_count"], 3);
         assert_eq!(config["machine-config"]["mem_size_mib"], 768);
     }
@@ -570,12 +647,14 @@ mod tests {
         let vms_dir = directory.path().join("vms");
         let vm = record(1, 512);
 
-        let path = write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0")
-            .unwrap();
+        let path =
+            write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0").unwrap();
 
-        let config: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(config["boot-source"]["kernel_image_path"], "/images/vmlinux");
+        let config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            config["boot-source"]["kernel_image_path"],
+            "/images/vmlinux"
+        );
         assert_eq!(config["boot-source"]["boot_args"], "console=ttyS0");
 
         let drive = &config["drives"][0];
@@ -597,20 +676,23 @@ mod tests {
         write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0").unwrap();
         vm.cpu = 2;
         vm.ram = 1024;
-        let path = write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0")
-            .unwrap();
+        let path =
+            write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0").unwrap();
 
-        let config: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["machine-config"]["vcpu_count"], 2);
         assert_eq!(config["machine-config"]["mem_size_mib"], 1024);
     }
 
-    use super::test_support::{fake_firecracker, process_alive, short_tempdir, SERVE_LOOP};
+    use super::test_support::{SERVE_LOOP, fake_firecracker, process_alive, short_tempdir};
 
     fn fake_pid(vms_dir: &Path, id: Uuid) -> i32 {
         let pid_file = format!("{}.pid", api_sock_path(vms_dir, id).display());
-        fs::read_to_string(pid_file).unwrap().trim().parse().unwrap()
+        fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -653,10 +735,7 @@ mod tests {
     async fn readiness_timeout_cleans_up_the_process() {
         let directory = short_tempdir();
         let vms_dir = directory.path().join("vms");
-        let binary = fake_firecracker(
-            directory.path(),
-            "while True:\n    time.sleep(60)\n",
-        );
+        let binary = fake_firecracker(directory.path(), "while True:\n    time.sleep(60)\n");
         let config = directory.path().join("firecracker.json");
         fs::write(&config, "{}").unwrap();
         let id = Uuid::new_v4();

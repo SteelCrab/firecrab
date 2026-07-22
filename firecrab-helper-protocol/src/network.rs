@@ -12,6 +12,7 @@ use crate::PROTOCOL_VERSION;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MacAddr(pub [u8; 6]);
 
+/// Returned by [`MacAddr`]'s `FromStr` impl for malformed input.
 #[derive(Debug, Error, PartialEq, Eq)]
 #[error("MAC address must be six ':'-separated hex octets")]
 pub struct MacAddrParseError;
@@ -62,35 +63,53 @@ impl<'de> Deserialize<'de> for MacAddr {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum NetworkRequest {
+    /// Idempotently ensure the shared bridge/subnet/gateway exist.
     EnsureBridge,
+    /// Idempotently (re)apply the owned nftables tables.
     EnsureFirewall,
+    /// Create and attach a TAP device for a starting VM.
     CreateTap {
+        /// The VM the TAP belongs to.
         vm_id: Uuid,
     },
+    /// Remove a VM's TAP device.
     DeleteTap {
+        /// The VM the TAP belongs to.
         vm_id: Uuid,
     },
+    /// Apply per-VM firewall/anti-spoofing rules for its lease.
     ApplyVmPolicy {
+        /// The VM the policy applies to.
         vm_id: Uuid,
+        /// The VM's allocated IPv4 address.
         ipv4: Ipv4Addr,
+        /// The VM's Firecracker guest MAC.
         mac: MacAddr,
         /// ID resolved against the helper's allowlist; never a raw CIDR.
         egress_policy: String,
+        /// Whether host SSH access should be permitted for this VM.
         allow_host_ssh: bool,
     },
+    /// Remove a VM's firewall/anti-spoofing rules.
     RemoveVmPolicy {
+        /// The VM whose policy should be removed.
         vm_id: Uuid,
     },
 }
 
+/// A [`NetworkRequest`] tagged with protocol version and a correlation id.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkRequestEnvelope {
+    /// Sender's [`crate::PROTOCOL_VERSION`].
     pub version: u16,
+    /// Correlates this request with its response.
     pub request_id: Uuid,
+    /// The actual request payload.
     pub request: NetworkRequest,
 }
 
 impl NetworkRequestEnvelope {
+    /// Wraps `request` with the current protocol version.
     pub fn new(request_id: Uuid, request: NetworkRequest) -> Self {
         Self {
             version: PROTOCOL_VERSION,
@@ -100,23 +119,41 @@ impl NetworkRequestEnvelope {
     }
 }
 
+/// Reasons a [`NetworkRequest`] can fail, sent back over the wire.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Error)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum HelperFailure {
+    /// Request envelope's version doesn't match the helper's.
     #[error("helper only speaks protocol version {supported}")]
-    UnsupportedVersion { supported: u16 },
+    UnsupportedVersion {
+        /// The version the helper actually supports.
+        supported: u16,
+    },
+    /// The requested operation exists but has no handler yet.
     #[error("operation is not implemented yet")]
     UnsupportedOperation,
+    /// Request failed validation before touching any host state.
     #[error("request rejected: {detail}")]
-    InvalidRequest { detail: String },
+    InvalidRequest {
+        /// Human-readable rejection reason.
+        detail: String,
+    },
+    /// Request was valid but applying it failed.
     #[error("helper internal failure: {detail}")]
-    Internal { detail: String },
+    Internal {
+        /// Human-readable failure detail.
+        detail: String,
+    },
 }
 
+/// Response to a [`NetworkRequestEnvelope`], echoing its correlation id.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkResponseEnvelope {
+    /// Responder's [`crate::PROTOCOL_VERSION`].
     pub version: u16,
+    /// Matches the request's `request_id`.
     pub request_id: Uuid,
+    /// Outcome of processing the request.
     pub result: Result<(), HelperFailure>,
 }
 
@@ -131,12 +168,21 @@ mod tests {
 
         let json = serde_json::to_string(&mac).expect("serialize");
         assert_eq!(json, "\"02:fc:0a:1b:2c:3d\"");
-        assert_eq!(serde_json::from_str::<MacAddr>(&json).expect("deserialize"), mac);
+        assert_eq!(
+            serde_json::from_str::<MacAddr>(&json).expect("deserialize"),
+            mac
+        );
     }
 
     #[test]
     fn malformed_mac_addrs_are_rejected() {
-        for text in ["", "02:fc", "02:fc:0a:1b:2c:3d:4e", "02:fc:0a:1b:2c:zz", "2:fc:0a:1b:2c:3d"] {
+        for text in [
+            "",
+            "02:fc",
+            "02:fc:0a:1b:2c:3d:4e",
+            "02:fc:0a:1b:2c:zz",
+            "2:fc:0a:1b:2c:3d",
+        ] {
             assert_eq!(text.parse::<MacAddr>(), Err(MacAddrParseError), "{text}");
         }
     }

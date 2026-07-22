@@ -1,20 +1,32 @@
+//! Wire types shared between `firecrab-api` and `firecrab-frontend`'s
+//! generated bindings: request/response bodies and the VM lifecycle state
+//! machine.
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// A VM's lifecycle state, serialized lowercase over the API.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum VmState {
+    /// Record exists, no Firecracker process has ever run for it.
     Created,
+    /// `start_vm`'s pipeline is running (see [`StartupStep`]).
     Starting,
+    /// Firecracker process is up and the guest has booted.
     Running,
+    /// Shutdown requested, process not yet confirmed gone.
     Stopping,
+    /// Process exited cleanly.
     Stopped,
+    /// Process exited unexpectedly or a start attempt failed.
     Error,
 }
 
 impl VmState {
+    /// Whether the lifecycle table allows moving from `self` to `to`.
     pub fn can_transition(self, to: Self) -> bool {
         use VmState::{Created, Error, Running, Starting, Stopped, Stopping};
         matches!(
@@ -28,7 +40,8 @@ impl VmState {
         )
     }
 
-    // Deletion is record removal, not a state transition; only inactive VMs qualify.
+    /// Whether the VM record may be deleted — deletion is record removal,
+    /// not a state transition, so only inactive VMs qualify.
     pub fn can_delete(self) -> bool {
         matches!(self, Self::Created | Self::Stopped | Self::Error)
     }
@@ -40,13 +53,19 @@ impl VmState {
     }
 }
 
+/// Body for `POST /api/vms`.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateVmRequest {
+    /// 1–64 chars, alphanumeric plus `.`/`_`/`-`.
     pub name: String,
+    /// Template registry alias (e.g. `ubuntu-26.04`), not a specific version.
     pub template: String,
+    /// RAM in MiB; must be a power of two in the accepted range.
     pub ram: u32,
+    /// vCPU count.
     pub cpu: u8,
+    /// Disk capacity in GiB; rejected below the template rootfs's own size.
     pub disk_gb: u16,
 }
 
@@ -55,8 +74,11 @@ pub struct CreateVmRequest {
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateVmResourcesRequest {
+    /// New RAM in MiB.
     pub ram: u32,
+    /// New vCPU count.
     pub cpu: u8,
+    /// New disk capacity in GiB; must be >= the VM's current size.
     pub disk_gb: u16,
 }
 
@@ -66,21 +88,33 @@ pub struct UpdateVmResourcesRequest {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupStep {
+    /// Copying/growing the template rootfs into the VM's own disk file.
     PreparingDisk,
+    /// Writing the Firecracker `firecracker-config.json`.
     GeneratingConfig,
+    /// Spawning the Firecracker process and waiting for it to come up.
     StartingProcess,
 }
 
+/// A VM record as returned by the list/detail/create/update endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmResponse {
+    /// Stable identifier, also the `data/vms/<id>/` directory name.
     pub id: Uuid,
+    /// User-supplied name.
     pub name: String,
+    /// Current lifecycle state.
     pub state: VmState,
+    /// Template alias this VM was created from.
     pub template: String,
+    /// Pinned template version the alias resolved to at creation time.
     pub template_version: String,
+    /// vCPU count.
     pub cpu: u8,
+    /// RAM in MiB.
     pub ram: u32,
+    /// Disk capacity in GiB.
     pub disk_gb: u16,
     /// `Some` only while `state == Starting`.
     pub startup_step: Option<StartupStep>,
@@ -92,25 +126,34 @@ pub struct VmResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmLogResponse {
+    /// Captured serial console output, capped in size.
     pub console_log: String,
     /// `true` if the on-disk log exceeds the cap and `console_log` is only
     /// the first portion of it.
     pub truncated: bool,
 }
 
+/// JSON error body wrapper: `{"error": {...}}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorResponse {
+    /// The structured error payload.
     pub error: ApiError,
 }
 
+/// Structured API error: a machine-readable `code`, a human `message`, and
+/// optional per-field validation detail.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiError {
+    /// Machine-readable error code (e.g. `validation_error`).
     pub code: String,
+    /// Human-readable message.
     pub message: String,
+    /// Field name → error message, for request validation failures.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fields: BTreeMap<String, String>,
+    /// Correlates this error with server-side logs.
     pub request_id: Uuid,
 }
 
@@ -184,7 +227,14 @@ mod tests {
     fn update_vm_resources_request_deserializes_camel_case_disk_gb() {
         let json = r#"{"ram":1024,"cpu":2,"diskGb":8}"#;
         let request: UpdateVmResourcesRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(request, UpdateVmResourcesRequest { ram: 1024, cpu: 2, disk_gb: 8 });
+        assert_eq!(
+            request,
+            UpdateVmResourcesRequest {
+                ram: 1024,
+                cpu: 2,
+                disk_gb: 8
+            }
+        );
     }
 
     #[test]
@@ -249,6 +299,9 @@ mod tests {
         let json = serde_json::to_string(&response).expect("serialize response");
         assert!(json.contains("\"consoleLog\":\"booting...\\n\""));
         assert!(json.contains("\"truncated\":true"));
-        assert_eq!(serde_json::from_str::<VmLogResponse>(&json).unwrap(), response);
+        assert_eq!(
+            serde_json::from_str::<VmLogResponse>(&json).unwrap(),
+            response
+        );
     }
 }

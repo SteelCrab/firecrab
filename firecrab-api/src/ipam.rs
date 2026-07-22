@@ -1,3 +1,7 @@
+//! IP address and MAC allocation management (IPAM): hands out unique
+//! IPv4/MAC leases from the fixed 172.30.0.0/24 subnet, backed by SQLite so
+//! allocation is atomic under concurrent VM creation.
+
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
 
@@ -8,6 +12,7 @@ use uuid::Uuid;
 
 use crate::model::{Lease, MacAddr};
 
+/// Schema for the `network_leases` table.
 pub const CREATE_LEASES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS network_leases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     vm_id TEXT NOT NULL,
@@ -17,8 +22,8 @@ pub const CREATE_LEASES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS network_le
     released_at TEXT
 ) STRICT";
 
-// Partial indexes: uniqueness only applies to still-active leases, so
-// released rows stay behind as history without blocking reuse.
+/// Partial indexes: uniqueness only applies to still-active leases, so
+/// released rows stay behind as history without blocking reuse.
 pub const CREATE_LEASES_INDEXES_SQL: [&str; 3] = [
     "CREATE UNIQUE INDEX IF NOT EXISTS network_leases_active_vm \
      ON network_leases(vm_id) WHERE released_at IS NULL",
@@ -28,24 +33,40 @@ pub const CREATE_LEASES_INDEXES_SQL: [&str; 3] = [
      ON network_leases(mac) WHERE released_at IS NULL",
 ];
 
-// Mirrors the fixed fcbr0 config in firecrab-net-helper/src/bridge.rs.
+/// Subnet network address; mirrors the fixed `fcbr0` config in
+/// `firecrab-net-helper/src/bridge.rs`.
 const NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
+/// Subnet gateway address, reserved from allocation.
 const GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
+/// Subnet broadcast address, reserved from allocation.
 const BROADCAST: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 255);
+/// How many salted MAC candidates to try before giving up.
 const MAX_MAC_ATTEMPTS: u32 = 8;
 
+/// Failure modes for allocating or releasing a network lease.
 #[derive(Debug, Error)]
 pub enum IpamError {
+    /// A SQLite query/statement failed.
     #[error("network lease operation failed")]
     Database(#[from] rusqlite::Error),
+    /// Every host address in the subnet is already leased.
     #[error("no free IPv4 address left in 172.30.0.0/24")]
     PoolExhausted,
+    /// No unclaimed MAC was found within [`MAX_MAC_ATTEMPTS`] salted tries.
     #[error("could not find a free MAC address after {MAX_MAC_ATTEMPTS} attempts")]
     MacPoolExhausted,
+    /// The VM already holds an unreleased lease.
     #[error("vm {vm_id} already has an active network lease")]
-    AlreadyLeased { vm_id: Uuid },
+    AlreadyLeased {
+        /// The VM that already has an active lease.
+        vm_id: Uuid,
+    },
+    /// The VM has no active lease to release.
     #[error("vm {vm_id} has no active network lease to release")]
-    NotLeased { vm_id: Uuid },
+    NotLeased {
+        /// The VM with no active lease.
+        vm_id: Uuid,
+    },
 }
 
 /// Allocate an IPv4 + MAC for `vm_id`. Must run inside a `BEGIN IMMEDIATE`
@@ -93,6 +114,7 @@ pub fn release(tx: &Transaction<'_>, vm_id: Uuid) -> Result<(), IpamError> {
     Ok(())
 }
 
+/// Whether `vm_id` currently holds an unreleased lease.
 fn has_active_lease(tx: &Transaction<'_>, vm_id: Uuid) -> Result<bool, rusqlite::Error> {
     tx.query_row(
         "SELECT 1 FROM network_leases WHERE vm_id = ?1 AND released_at IS NULL",
@@ -103,6 +125,8 @@ fn has_active_lease(tx: &Transaction<'_>, vm_id: Uuid) -> Result<bool, rusqlite:
     .map(|row| row.is_some())
 }
 
+/// Every IPv4 address currently unavailable for allocation: reserved
+/// network/gateway/broadcast plus every still-leased address.
 fn active_ipv4s(tx: &Transaction<'_>) -> Result<HashSet<Ipv4Addr>, rusqlite::Error> {
     let mut statement = tx.prepare("SELECT ipv4 FROM network_leases WHERE released_at IS NULL")?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
@@ -115,6 +139,7 @@ fn active_ipv4s(tx: &Transaction<'_>) -> Result<HashSet<Ipv4Addr>, rusqlite::Err
     Ok(set)
 }
 
+/// Every MAC address currently claimed by a still-leased VM.
 fn active_macs(tx: &Transaction<'_>) -> Result<HashSet<MacAddr>, rusqlite::Error> {
     let mut statement = tx.prepare("SELECT mac FROM network_leases WHERE released_at IS NULL")?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
@@ -127,6 +152,9 @@ fn active_macs(tx: &Transaction<'_>) -> Result<HashSet<MacAddr>, rusqlite::Error
     Ok(set)
 }
 
+/// Deterministically derives a candidate MAC from `vm_id` and `salt`, so
+/// retrying with an incremented salt tries a different address without
+/// needing to track previously-tried candidates.
 fn derive_mac(vm_id: Uuid, salt: u32) -> MacAddr {
     let mut hasher = Sha256::new();
     hasher.update(vm_id.as_bytes());
@@ -194,7 +222,10 @@ mod tests {
         }
 
         let tx = begin(&mut conn);
-        assert!(matches!(allocate(&tx, Uuid::new_v4()), Err(IpamError::PoolExhausted)));
+        assert!(matches!(
+            allocate(&tx, Uuid::new_v4()),
+            Err(IpamError::PoolExhausted)
+        ));
     }
 
     #[test]
@@ -312,6 +343,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(leaked, 0, "failed allocation must not leave a lease row behind");
+        assert_eq!(
+            leaked, 0,
+            "failed allocation must not leave a lease row behind"
+        );
     }
 }

@@ -46,7 +46,11 @@ fn resolve_console_process(
 }
 
 async fn stream_console(socket: WebSocket, process: VmProcess) {
-    let VmProcess { mut exited, console, .. } = process;
+    let VmProcess {
+        mut exited,
+        console,
+        ..
+    } = process;
     let (mut sink, mut inbound) = socket.split();
     let (backlog, mut output) = console.subscribe();
 
@@ -119,8 +123,9 @@ mod tests {
     fn unknown_vm_id_is_reported_as_not_running() {
         let processes = Mutex::new(HashMap::new());
 
-        let error = resolve_console_process(&processes, &Uuid::new_v4().to_string(), Uuid::new_v4())
-            .unwrap_err();
+        let error =
+            resolve_console_process(&processes, &Uuid::new_v4().to_string(), Uuid::new_v4())
+                .unwrap_err();
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
     }
 

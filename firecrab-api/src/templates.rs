@@ -1,3 +1,9 @@
+//! Immutable, integrity-verified VM boot template registry: resolves a
+//! stable alias (e.g. `ubuntu-26.04`) to a pinned kernel+rootfs version,
+//! re-verifying each artifact's identity (device/inode/length) and content
+//! hash on every open so a template swapped out from under a running
+//! registry is detected instead of silently served.
+
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
@@ -11,75 +17,118 @@ use std::sync::{Arc, Mutex};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+/// `openat2` `RESOLVE_*` flag: reject crossing a mount point.
 const RESOLVE_NO_XDEV: u64 = 0x01;
+/// `openat2` `RESOLVE_*` flag: reject magic-link procfs-style resolution.
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+/// `openat2` `RESOLVE_*` flag: reject any symlink in the path.
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+/// `openat2` `RESOLVE_*` flag: keep resolution confined beneath the dirfd.
 const RESOLVE_BENEATH: u64 = 0x08;
 
+/// Failure modes for building or reading from a [`TemplateRegistry`].
 #[derive(Debug, Error)]
 pub enum TemplateError {
+    /// An artifact path was absolute, empty, or escaped the image root.
     #[error("template artifact path must be a non-empty relative path")]
     InvalidPath,
+    /// The resolved path exists but isn't a regular file.
     #[error("template artifact is not a regular file: {0}")]
     NotRegularFile(PathBuf),
+    /// An artifact's identity/content no longer matches what was verified
+    /// at registry construction time.
     #[error("template artifact changed after registry validation: {0}")]
     ArtifactChanged(PathBuf),
+    /// Two [`TemplateSpec`]s declared the same `(alias, version)` pair.
     #[error("template registry contains a duplicate version: {0}/{1}")]
     DuplicateVersion(String, String),
+    /// Two [`TemplateSpec`]s declared the same alias.
     #[error("template registry contains a duplicate alias: {0}")]
     DuplicateAlias(String),
+    /// A filesystem operation failed while building the registry.
     #[error("template registry I/O failed: {0}")]
     Io(#[from] io::Error),
 }
 
+/// One template to register: an alias, its pinned version tag, and the
+/// artifacts/boot args that version resolves to.
 #[derive(Debug, Clone)]
 pub struct TemplateSpec {
+    /// Stable, user-facing name (e.g. `ubuntu-26.04`); what the API accepts.
     pub alias: String,
+    /// Internal version tag this alias currently pins to.
     pub version: String,
+    /// Path to the kernel image, relative to the image root.
     pub kernel: PathBuf,
+    /// Path to the rootfs image, relative to the image root.
     pub rootfs: PathBuf,
+    /// Firecracker kernel command line for this template.
     pub boot_args: String,
 }
 
+/// An artifact whose identity and content have been hashed and pinned;
+/// [`TemplateRegistry::open_verified`] re-checks both before every read.
 #[derive(Debug, Clone)]
 pub struct VerifiedArtifact {
+    /// Path relative to the registry's image root.
     relative_path: PathBuf,
+    /// Device number at verification time.
     device: u64,
+    /// Inode number at verification time.
     inode: u64,
+    /// File length at verification time.
     length: u64,
+    /// Full-file SHA256 at verification time.
     sha256: String,
 }
 
 impl VerifiedArtifact {
+    /// The artifact's pinned SHA256 hex digest.
     pub fn sha256(&self) -> &str {
         &self.sha256
     }
 
+    /// The artifact's pinned length in bytes.
     pub fn length(&self) -> u64 {
         self.length
     }
 }
 
+/// One resolved, immutable version of a template: a name/version pair with
+/// its verified kernel and rootfs artifacts.
 #[derive(Debug, Clone)]
 pub struct TemplateVersion {
+    /// The alias this version was registered under.
     pub name: String,
+    /// This version's own tag (distinct from the alias it's reached through).
     pub version: String,
+    /// Verified kernel image.
     pub kernel: VerifiedArtifact,
+    /// Verified rootfs image.
     pub rootfs: VerifiedArtifact,
+    /// Firecracker kernel command line.
     pub boot_args: String,
 }
 
 impl TemplateVersion {
+    /// SHA256 of `boot_args`, so callers can detect a boot-args change
+    /// without re-hashing the (potentially multi-GB) rootfs.
     pub fn boot_args_sha256(&self) -> String {
         sha256_bytes(self.boot_args.as_bytes())
     }
 }
 
+/// Registry of verified template versions, resolved by alias or by exact
+/// `(name, version)`.
 #[derive(Debug, Clone)]
 pub struct TemplateRegistry {
+    /// Directory fd artifacts are opened beneath via `openat2`.
     image_root: Arc<File>,
+    /// Canonical path of the image root, for building absolute paths.
     image_root_path: PathBuf,
+    /// alias -> `(name, version)` it currently resolves to.
     aliases: HashMap<String, (String, String)>,
+    /// `(name, version)` -> the resolved, verified template.
     versions: HashMap<(String, String), Arc<TemplateVersion>>,
     /// Caches `open_verified`'s full-file hash by (device, inode), so many
     /// VMs starting at once against the same untouched multi-GB template
@@ -89,14 +138,20 @@ pub struct TemplateRegistry {
     verify_cache: Arc<Mutex<HashMap<(u64, u64), CachedHash>>>,
 }
 
+/// One entry in [`TemplateRegistry::verify_cache`].
 #[derive(Debug, Clone)]
 struct CachedHash {
+    /// File length when this hash was computed.
     length: u64,
+    /// `(mtime seconds, mtime nanoseconds)` when this hash was computed.
     mtime: (i64, i64),
+    /// The cached SHA256 hex digest.
     sha256: String,
 }
 
 impl TemplateRegistry {
+    /// Loads the registry's built-in template set (`ubuntu-26.04`,
+    /// `alpine-3.24`) from `images/` (or `FIRECRAB_IMAGE_ROOT` if set).
     pub fn load_default() -> Result<Self, TemplateError> {
         let default_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../images");
         let image_root = env::var_os("FIRECRAB_IMAGE_ROOT")
@@ -111,8 +166,7 @@ impl TemplateRegistry {
                     version: "ubuntu-26.04-v1".to_owned(),
                     kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
                     rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
-                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw"
-                        .to_owned(),
+                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
                 },
                 TemplateSpec {
                     alias: "alpine-3.24".to_owned(),
@@ -121,13 +175,15 @@ impl TemplateRegistry {
                     // (virtio/ext4/serial support, no guest-specific config).
                     kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
                     rootfs: PathBuf::from("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"),
-                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw"
-                        .to_owned(),
+                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
                 },
             ],
         )
     }
 
+    /// Builds a registry from an explicit image root and template specs,
+    /// verifying every artifact's identity and hash up front and rejecting
+    /// duplicate aliases/versions.
     pub fn from_specs(
         image_root: &Path,
         specs: impl IntoIterator<Item = TemplateSpec>,
@@ -171,21 +227,29 @@ impl TemplateRegistry {
         })
     }
 
+    /// Absolute host path for a verified artifact (e.g. to hand to
+    /// Firecracker, which opens boot files by path, not fd).
     pub fn artifact_path(&self, artifact: &VerifiedArtifact) -> PathBuf {
         self.image_root_path.join(&artifact.relative_path)
     }
 
+    /// Resolves a user-facing alias (e.g. `ubuntu-26.04`) to its pinned
+    /// version.
     pub fn resolve_alias(&self, alias: &str) -> Option<Arc<TemplateVersion>> {
         let (name, version) = self.aliases.get(alias)?;
         self.resolve_version(name, version)
     }
 
+    /// Resolves an exact `(name, version)` pair, bypassing alias indirection.
     pub fn resolve_version(&self, name: &str, version: &str) -> Option<Arc<TemplateVersion>> {
         self.versions
             .get(&(name.to_owned(), version.to_owned()))
             .cloned()
     }
 
+    /// Re-verifies `artifact`'s identity (device/inode/length) and content
+    /// hash, then returns an open handle to it. Fails if either check no
+    /// longer matches what was pinned at registry construction time.
     pub fn open_verified(&self, artifact: &VerifiedArtifact) -> Result<File, TemplateError> {
         let file = open_beneath(&self.image_root, &artifact.relative_path)?;
         let metadata = regular_file_metadata(&file, &artifact.relative_path)?;
@@ -213,7 +277,10 @@ impl TemplateRegistry {
         let key = (metadata.dev(), metadata.ino());
         let mtime = (metadata.mtime(), metadata.mtime_nsec());
         {
-            let cache = self.verify_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self
+                .verify_cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(cached) = cache.get(&key)
                 && cached.length == metadata.len()
                 && cached.mtime == mtime
@@ -237,6 +304,7 @@ impl TemplateRegistry {
     }
 }
 
+/// Rejects absolute paths, empty paths, and any `.`/`..` component.
 fn validate_relative_path(path: &Path) -> Result<(), TemplateError> {
     let mut has_component = false;
     for component in path.components() {
@@ -251,6 +319,8 @@ fn validate_relative_path(path: &Path) -> Result<(), TemplateError> {
     Ok(())
 }
 
+/// Opens the image root directory itself, as a dirfd for later `openat2`
+/// calls beneath it.
 fn open_image_root(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .read(true)
@@ -258,13 +328,20 @@ fn open_image_root(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
+/// Argument struct for the raw `openat2(2)` syscall.
 #[repr(C)]
 struct OpenHow {
+    /// `open(2)`-style flags.
     flags: u64,
+    /// Mode bits, unused here (no file creation).
     mode: u64,
+    /// `RESOLVE_*` resolution-restriction flags.
     resolve: u64,
 }
 
+/// Opens `path` relative to `root` via `openat2` with `RESOLVE_BENEATH` (and
+/// no-symlinks/no-magiclinks/no-xdev), so a malicious or mistaken template
+/// path can't escape the image root even via a symlink.
 fn open_beneath(root: &File, path: &Path) -> Result<File, TemplateError> {
     validate_relative_path(path)?;
     let bytes = path.as_os_str().as_encoded_bytes();
@@ -293,6 +370,8 @@ fn open_beneath(root: &File, path: &Path) -> Result<File, TemplateError> {
     Ok(unsafe { File::from_raw_fd(fd as i32) })
 }
 
+/// Opens `path` beneath `root` and pins its identity/hash into a
+/// [`VerifiedArtifact`].
 fn verify_artifact(root: &File, path: &Path) -> Result<VerifiedArtifact, TemplateError> {
     let file = open_beneath(root, path)?;
     let metadata = regular_file_metadata(&file, path)?;
@@ -305,6 +384,7 @@ fn verify_artifact(root: &File, path: &Path) -> Result<VerifiedArtifact, Templat
     })
 }
 
+/// Fetches metadata and rejects anything that isn't a regular file.
 fn regular_file_metadata(file: &File, path: &Path) -> Result<Metadata, TemplateError> {
     let metadata = file.metadata()?;
     if !metadata.is_file() {
@@ -313,6 +393,7 @@ fn regular_file_metadata(file: &File, path: &Path) -> Result<Metadata, TemplateE
     Ok(metadata)
 }
 
+/// Streams the whole file through SHA256 in 64 KiB chunks.
 fn sha256_file(file: &File) -> io::Result<String> {
     let mut file = file.try_clone()?;
     let mut hasher = Sha256::new();
@@ -327,6 +408,7 @@ fn sha256_file(file: &File) -> io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// SHA256 hex digest of an in-memory byte slice.
 fn sha256_bytes(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
