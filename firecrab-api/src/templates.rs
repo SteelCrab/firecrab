@@ -105,13 +105,26 @@ impl TemplateRegistry {
 
         Self::from_specs(
             &image_root,
-            [TemplateSpec {
-                alias: "ubuntu-26.04".to_owned(),
-                version: "ubuntu-26.04-v1".to_owned(),
-                kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
-                rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
-                boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
-            }],
+            [
+                TemplateSpec {
+                    alias: "ubuntu-26.04".to_owned(),
+                    version: "ubuntu-26.04-v1".to_owned(),
+                    kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
+                    rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
+                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw"
+                        .to_owned(),
+                },
+                TemplateSpec {
+                    alias: "alpine-3.24".to_owned(),
+                    version: "alpine-3.24.1-v1".to_owned(),
+                    // Same generic kernel as ubuntu-26.04: it's distro-agnostic
+                    // (virtio/ext4/serial support, no guest-specific config).
+                    kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
+                    rootfs: PathBuf::from("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"),
+                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw"
+                        .to_owned(),
+                },
+            ],
         )
     }
 

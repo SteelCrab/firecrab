@@ -5,7 +5,7 @@ import type { CreateVmRequest, VmResponse } from "../bindings";
 import RamStepper from "./RamStepper";
 
 /** The registry aliases the API accepts today; selection only, no free text. */
-const TEMPLATES = ["ubuntu-26.04"] as const;
+const TEMPLATES = ["ubuntu-26.04", "alpine-3.24"] as const;
 
 const FIELDS_WITH_OWN_ERROR = ["name", "cpu", "ram", "template", "diskGb"] as const;
 
