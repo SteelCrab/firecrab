@@ -6,6 +6,8 @@
 
 # Rust
 target/
+lcov.info
+doc-coverage.txt
 
 # Frontend build output / dependencies
 firecrab-frontend/dist/

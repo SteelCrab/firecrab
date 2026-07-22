@@ -1,0 +1,95 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-test:
+    name: Release-profile test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: cargo test --release
+        # Catches release-only bugs (overflow checks off, different codegen)
+        # before they reach a tagged build.
+        run: cargo test --workspace --release --locked
+
+  build-release:
+    name: Build (${{ matrix.target }})
+    needs: release-test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          # Firecracker itself only ships for x86_64 and aarch64 (see
+          # https://github.com/firecracker-microvm/firecracker/releases) —
+          # firecrab-api/firecrab-net-helper have no reason to target
+          # architectures Firecracker can't run on, so the matrix is
+          # intentionally narrower than a generic Rust release template.
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        run: cargo install cross --locked
+
+      - name: Build firecrab-api and firecrab-net-helper
+        run: |
+          cross build --release --target ${{ matrix.target }} \
+            -p firecrab-api -p firecrab-net-helper
+
+      - name: Package binaries
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../firecrab-${{ matrix.target }}.tar.gz \
+            firecrab-api firecrab-net-helper
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firecrab-${{ matrix.target }}
+          path: firecrab-${{ matrix.target }}.tar.gz
+
+  create-release:
+    name: Publish GitHub Release
+    needs: build-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.tar.gz
+          generate_release_notes: true

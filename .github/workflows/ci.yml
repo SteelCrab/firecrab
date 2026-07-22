@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test + coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned toolchain
+        # rust-toolchain.toml pins channel 1.94.1 + clippy/rustfmt/llvm-tools
+        run: rustup show
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        # Not -D warnings: several workspace crates carry dead_code warnings
+        # for network-automation pieces (IPAM, egress policy, ...) that are
+        # already merged ahead of the task that wires them up
+        # (task-vm-tap-automation.md, task-guest-network-configuration.md).
+        # Denying warnings here would fail CI on legitimate WIP, not bugs.
+        run: cargo clippy --workspace --all-targets
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: cargo test + coverage
+        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  docs:
+    name: Rust (rustdoc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: cargo doc
+        # Denies warnings so broken intra-doc links / invalid rustdoc syntax
+        # fail CI instead of silently shipping a broken docs build.
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --document-private-items
+
+      - name: rustdoc coverage floor
+        # --show-coverage is nightly-only rustdoc; RUSTC_BOOTSTRAP=1 unlocks it
+        # on the pinned stable toolchain. Floor is a documentation-completeness
+        # target (75%), not a regression guard — current baseline is ~14%, so
+        # this fails until doc comments are added across the workspace.
+        run: |
+          RUSTC_BOOTSTRAP=1 RUSTDOCFLAGS="-Z unstable-options --show-coverage" \
+            cargo doc --workspace --no-deps --document-private-items | tee doc-coverage.txt
+          python3 - doc-coverage.txt <<'PY'
+          import re, sys
+
+          documented = total = 0
+          for line in open(sys.argv[1]):
+              m = re.match(r"\|\s*Total\s*\|\s*(\d+)\s*\|\s*([\d.]+)%", line)
+              if not m:
+                  continue
+              count, pct = int(m.group(1)), float(m.group(2))
+              documented += count
+              if pct > 0:
+                  total += round(count / (pct / 100))
+
+          pct = (documented / total * 100) if total else 0.0
+          threshold = 75.0
+          summary = f"**rustdoc coverage: {documented}/{total} items ({pct:.1f}%)** — floor {threshold}%\n"
+          print(summary)
+          import os
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(summary)
+          if pct < threshold:
+              print(f"FAIL: below {threshold}% floor")
+              sys.exit(1)
+          PY
+
+  frontend:
+    name: Frontend (lint, typecheck, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firecrab-frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: firecrab-frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
