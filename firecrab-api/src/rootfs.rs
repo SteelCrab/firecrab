@@ -81,6 +81,14 @@ pub enum RootfsError {
         /// The tool's stderr output.
         stderr: String,
     },
+    /// `debugfs` didn't confirm writing a file into the guest's rootfs.
+    #[error("failed to specialize guest rootfs at {path}: {detail}")]
+    Specialize {
+        /// The rootfs path being specialized.
+        path: PathBuf,
+        /// Human-readable detail (usually debugfs's own stderr).
+        detail: String,
+    },
 }
 
 /// The default per-VM state root (`data/vms`).
@@ -216,6 +224,96 @@ fn run_resize_tool(
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
     }
+}
+
+/// Paths this project always strips from a VM's own rootfs copy, best
+/// effort — a distro that doesn't have a given path is a no-op, not a
+/// failure. SSH host keys and the entropy seed would otherwise be
+/// byte-identical across every VM cloned from the same template (a real
+/// MITM risk for the host keys); any cached DHCP lease from the template
+/// build is stale for this VM's own lease. Regenerating fresh versions on
+/// first boot is the same thing cloud-init does for every AWS AMI clone.
+const STRIP_PATHS: &[&str] = &[
+    "/etc/ssh/ssh_host_rsa_key",
+    "/etc/ssh/ssh_host_rsa_key.pub",
+    "/etc/ssh/ssh_host_ecdsa_key",
+    "/etc/ssh/ssh_host_ecdsa_key.pub",
+    "/etc/ssh/ssh_host_ed25519_key",
+    "/etc/ssh/ssh_host_ed25519_key.pub",
+    "/var/lib/systemd/random-seed",
+    "/var/lib/urandom/random-seed",
+    "/var/lib/dhcp/dhclient.leases",
+    "/var/lib/dhcpcd/dhcpcd-eth0.lease",
+];
+
+/// Per-VM guest specialization: writes this VM's deterministic hostname
+/// (see `firecrab_helper_protocol::network::guest_hostname`) into
+/// `/etc/hostname`, then strips [`STRIP_PATHS`] — all directly on the VM's
+/// own rootfs file via `debugfs -w` (no mount, no root needed; the same
+/// style already used for `e2fsck`/`resize2fs` in [`grow`]). Idempotent:
+/// safe to call again against an already-specialized disk.
+pub fn specialize_guest(vms_dir: &Path, id: Uuid) -> Result<(), RootfsError> {
+    let rootfs = rootfs_path(vms_dir, id);
+    let hostname = firecrab_helper_protocol::network::guest_hostname(id);
+    write_into_image(&rootfs, "/etc/hostname", format!("{hostname}\n").as_bytes())?;
+    for path in STRIP_PATHS {
+        remove_from_image(&rootfs, path);
+    }
+    Ok(())
+}
+
+/// Writes `content` as `guest_path` inside `rootfs`'s ext4 image.
+/// `debugfs`'s own `write` command refuses to overwrite an existing file,
+/// so any prior version is removed first — making this safe to call again
+/// against an already-specialized disk.
+fn write_into_image(rootfs: &Path, guest_path: &str, content: &[u8]) -> Result<(), RootfsError> {
+    let staging = rootfs.with_extension("specialize.tmp");
+    fs::write(&staging, content).map_err(|source| RootfsError::Specialize {
+        path: rootfs.to_owned(),
+        detail: format!("failed to stage content for {guest_path}: {source}"),
+    })?;
+    remove_from_image(rootfs, guest_path);
+    let output = run_debugfs(rootfs, &format!("write {} {guest_path}", staging.display()));
+    let _ = fs::remove_file(&staging);
+    let output = output?;
+
+    // debugfs's own exit code is always 0 regardless of whether the -R
+    // command actually succeeded, so success is confirmed positively from
+    // stdout instead of trusting the exit status or absence of stderr.
+    if String::from_utf8_lossy(&output.stdout).contains("Allocated inode") {
+        Ok(())
+    } else {
+        Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: format!(
+                "debugfs did not confirm writing {guest_path}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        })
+    }
+}
+
+/// Best-effort removal of `guest_path` from `rootfs`'s image. Whether the
+/// path exists on this particular distro's template varies, and debugfs's
+/// exit code can't distinguish "removed" from "wasn't there" from "failed"
+/// regardless — so the outcome is deliberately never inspected.
+fn remove_from_image(rootfs: &Path, guest_path: &str) {
+    let _ = run_debugfs(rootfs, &format!("rm {guest_path}"));
+}
+
+/// Runs one `debugfs -w -R <command>` invocation against `rootfs`.
+fn run_debugfs(rootfs: &Path, command: &str) -> Result<std::process::Output, RootfsError> {
+    Command::new("debugfs")
+        .arg("-w")
+        .arg("-R")
+        .arg(command)
+        .arg(rootfs)
+        .output()
+        .map_err(|source| RootfsError::ResizeTool {
+            path: rootfs.to_owned(),
+            tool: "debugfs",
+            source,
+        })
 }
 
 /// Copies `template` into `tmp` and atomically renames it to `rootfs`.
@@ -421,5 +519,128 @@ mod tests {
             original_len,
             "a failed resize must not leave the file permanently enlarged"
         );
+    }
+
+    /// A real small ext4 image with the directories a specialization run
+    /// needs to already exist (a blank `mkfs.ext4` image has no `/etc`).
+    fn real_rootfs_with_guest_dirs(path: &Path) {
+        let status = Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(path)
+            .arg("8M")
+            .status()
+            .expect("mkfs.ext4 must be installed for this test");
+        assert!(status.success(), "mkfs.ext4 failed");
+        for dir in ["/etc", "/etc/ssh", "/var", "/var/lib", "/var/lib/systemd"] {
+            let output = run_debugfs(path, &format!("mkdir {dir}")).unwrap();
+            assert!(
+                output.stderr.is_empty()
+                    || !String::from_utf8_lossy(&output.stderr).contains("File not found"),
+                "mkdir {dir} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    fn debugfs_cat(path: &Path, guest_path: &str) -> String {
+        let output = Command::new("debugfs")
+            .arg("-R")
+            .arg(format!("cat {guest_path}"))
+            .arg(path)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[test]
+    fn specialize_guest_writes_the_deterministic_hostname() {
+        let directory = tempdir().unwrap();
+        let vms_dir = directory.path().join("vms");
+        let id = Uuid::new_v4();
+        let rootfs = vms_dir.join(id.to_string()).join(ROOTFS_FILE_NAME);
+        fs::create_dir_all(rootfs.parent().unwrap()).unwrap();
+        real_rootfs_with_guest_dirs(&rootfs);
+
+        specialize_guest(&vms_dir, id).unwrap();
+
+        let hostname = firecrab_helper_protocol::network::guest_hostname(id);
+        assert_eq!(
+            debugfs_cat(&rootfs, "/etc/hostname"),
+            format!("{hostname}\n")
+        );
+    }
+
+    #[test]
+    fn specialize_guest_strips_ssh_host_keys_and_random_seed() {
+        let directory = tempdir().unwrap();
+        let vms_dir = directory.path().join("vms");
+        let id = Uuid::new_v4();
+        let rootfs = vms_dir.join(id.to_string()).join(ROOTFS_FILE_NAME);
+        fs::create_dir_all(rootfs.parent().unwrap()).unwrap();
+        real_rootfs_with_guest_dirs(&rootfs);
+
+        let seeded = fs::write(directory.path().join("key.tmp"), b"not-a-real-key").is_ok();
+        assert!(seeded);
+        for path in ["/etc/ssh/ssh_host_rsa_key", "/var/lib/systemd/random-seed"] {
+            let staging = directory.path().join("seed.tmp");
+            fs::write(&staging, b"template-shared-secret").unwrap();
+            run_debugfs(&rootfs, &format!("write {} {path}", staging.display())).unwrap();
+        }
+
+        specialize_guest(&vms_dir, id).unwrap();
+
+        for path in ["/etc/ssh/ssh_host_rsa_key", "/var/lib/systemd/random-seed"] {
+            // debugfs's "cat" prints nothing to stdout for a missing file
+            // (the "File not found" message goes to stderr instead), so an
+            // empty read confirms the strip actually removed it.
+            assert_eq!(
+                debugfs_cat(&rootfs, path),
+                "",
+                "{path} should have been stripped"
+            );
+        }
+    }
+
+    #[test]
+    fn specialize_guest_is_idempotent() {
+        let directory = tempdir().unwrap();
+        let vms_dir = directory.path().join("vms");
+        let id = Uuid::new_v4();
+        let rootfs = vms_dir.join(id.to_string()).join(ROOTFS_FILE_NAME);
+        fs::create_dir_all(rootfs.parent().unwrap()).unwrap();
+        real_rootfs_with_guest_dirs(&rootfs);
+
+        specialize_guest(&vms_dir, id).unwrap();
+        // debugfs's `write` refuses to overwrite an existing file — this
+        // must still succeed the second time (e.g. a VM restarted against
+        // an already-specialized disk).
+        specialize_guest(&vms_dir, id).unwrap();
+
+        let hostname = firecrab_helper_protocol::network::guest_hostname(id);
+        assert_eq!(
+            debugfs_cat(&rootfs, "/etc/hostname"),
+            format!("{hostname}\n")
+        );
+    }
+
+    #[test]
+    fn specialize_guest_tolerates_a_distro_missing_some_strip_paths() {
+        // Alpine has no /etc/machine-id or systemd random-seed — none of
+        // STRIP_PATHS existing on a given template must not be an error.
+        let directory = tempdir().unwrap();
+        let vms_dir = directory.path().join("vms");
+        let id = Uuid::new_v4();
+        let rootfs = vms_dir.join(id.to_string()).join(ROOTFS_FILE_NAME);
+        fs::create_dir_all(rootfs.parent().unwrap()).unwrap();
+        let status = Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(&rootfs)
+            .arg("8M")
+            .status()
+            .expect("mkfs.ext4 must be installed for this test");
+        assert!(status.success());
+        run_debugfs(&rootfs, "mkdir /etc").unwrap();
+
+        specialize_guest(&vms_dir, id).unwrap();
     }
 }

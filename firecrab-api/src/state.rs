@@ -26,6 +26,10 @@ pub struct RuntimeConfig {
     pub ready_timeout: Duration,
     /// Grace period before escalating SIGTERM to SIGKILL on stop.
     pub stop_grace: Duration,
+    /// How long to wait for the guest's network-readiness sentinel on its
+    /// serial console before failing the start (see
+    /// `handlers::vms::wait_for_network_ready`).
+    pub network_ready_timeout: Duration,
 }
 
 impl RuntimeConfig {
@@ -36,6 +40,7 @@ impl RuntimeConfig {
             firecracker_binary: firecracker::default_firecracker_binary(),
             ready_timeout: Duration::from_secs(10),
             stop_grace: Duration::from_secs(5),
+            network_ready_timeout: Duration::from_secs(30),
         }
     }
 }

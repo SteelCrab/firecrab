@@ -35,6 +35,18 @@
   97.2%, `firecrab-api` 76.2% — 워크스페이스 전체 84.1%(503/598 아이템). `cargo fmt --all` +
   `cargo clippy --workspace --all-targets` + `cargo test --workspace`(83/9/9/31) +
   `RUSTDOCFLAGS=-D warnings cargo doc` 전부 green 확인
+- 2026-07-22(계속): VM별 TAP 자동화 완료 후 코드 리뷰에서 나온 실제 버그 3건 수정(exit monitor가
+  guest poweroff/kill 시 네트워크 정리를 안 하던 것, `create_tap`의 이름 충돌 시 소유권 미확인,
+  `setup_vm_network`의 policy 실패 시 TAP만 정리하던 것) + Codecov patch coverage 78%→약 91%로
+  보강. 이어서 Guest 네트워크 설정(DHCP) 구현: lease 세대(`PRAGMA user_version`) 도입,
+  `firecrab-net-helper/src/dhcp.rs`(dnsmasq 자식 프로세스 supervise, hosts 파일 원자 교체+
+  `dnsmasq --test` 검증+reload), `specialize_guest`(실제 ext4 이미지에 `debugfs -w`로 hostname
+  기록·SSH host key/random-seed 제거, root 불필요), guest agent 없이 serial console sentinel
+  (`FIRECRAB_NETWORK_READY`/`FIRECRAB_NETWORK_FAILED`)로 network readiness 판정(`StartupStep::
+  ConfiguringNetwork`), golden image 스크립트 갱신(Ubuntu 고정 IP→DHCP 전환, 두 배포판 모두
+  sentinel 유닛/init.d 추가). `cargo test --workspace` 104/9/12/39 green, 프론트엔드
+  `tsc -b`/`oxlint`/`vite build` 전부 통과. 실제 dnsmasq bind+lease 발급, 실제 golden image
+  재빌드 후 부팅은 root/CAP_NET_ADMIN 필요라 미검증(`docs/guest-network-smoke.md` 참고)
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
@@ -55,8 +67,8 @@
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
-| 미완료 (다음) | [VM별 TAP 디바이스 자동화 구현](task-vm-tap-automation.md) | VM start 시 고유 TAP을 생성해 bridge에 연결하고 stop, delete, 실패 시 정리한다. | 두 VM이 서로 다른 TAP을 사용하며 daemon 복구 후에도 고아 TAP이 남지 않는다. | `firecrab-api/src/network.rs`, `firecrab-net-helper/src/tap.rs` |
-| 미완료 (다음) | [Guest 네트워크 설정 적용 구현](task-guest-network-configuration.md) | DHCP와 MAC 예약으로 할당 IP를 Guest `eth0`에 적용한다. | DB IP, Firecracker MAC, Guest `eth0` 주소가 일치하고 gateway와 DNS 설정이 재부팅 후에도 유지된다. | `firecrab-api/src/dhcp.rs`, `firecrab-net-helper/src/dhcp.rs`, Guest template 설정 |
+| ✅ | [VM별 TAP 디바이스 자동화 구현](task-vm-tap-automation.md) | VM start 시 고유 TAP을 생성해 bridge에 연결하고 stop, delete, 실패 시 정리한다. | 두 VM이 서로 다른 TAP을 사용하며 daemon 복구 후에도 고아 TAP이 남지 않는다. | `firecrab-api/src/network.rs`, `firecrab-net-helper/src/tap.rs` |
+| ✅ | [Guest 네트워크 설정 적용 구현](task-guest-network-configuration.md) | DHCP와 MAC 예약으로 할당 IP를 Guest `eth0`에 적용한다. | DB IP, Firecracker MAC, Guest `eth0` 주소가 일치하고 gateway와 DNS 설정이 재부팅 후에도 유지된다. | `firecrab-api/src/dhcp.rs`, `firecrab-net-helper/src/dhcp.rs`, Guest template 설정 |
 
 ### 네트워크 이후
 

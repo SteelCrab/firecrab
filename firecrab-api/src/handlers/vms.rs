@@ -6,6 +6,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{VmLogResponse, VmResponse};
+use firecrab_helper_protocol::network::DhcpLeaseEntry;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -150,6 +151,14 @@ pub async fn create_vm(
         let store = state.store.clone();
         let _ = tokio::task::spawn_blocking(move || store.delete(vm_id)).await;
         return Err(AppError::internal(request_id.0));
+    }
+    // Best-effort: a failure here just means the guest won't get its lease
+    // via DHCP until the next sync — setup_vm_network re-pushes the full
+    // snapshot on every start regardless, and the console-sentinel
+    // readiness check at that point is what actually surfaces a genuinely
+    // missing reservation, not this one.
+    if let Err(error) = sync_dhcp_leases(&state).await {
+        tracing::warn!(request_id = %request_id.0, vm_id = %vm.id, error, "dhcp sync failed after create");
     }
 
     tracing::info!(
@@ -457,6 +466,12 @@ pub async fn delete_vm(
             .insert(id, removed);
         return Err(AppError::internal(request_id.0));
     }
+    // Best-effort, same reasoning as create_vm's sync call: this VM's
+    // reservation just needs to eventually disappear from dnsmasq, not
+    // synchronously with this response.
+    if let Err(error) = sync_dhcp_leases(&state).await {
+        tracing::warn!(request_id = %request_id.0, vm_id = %id, error, "dhcp sync failed after delete");
+    }
     tracing::info!(request_id = %request_id.0, vm_id = %id, "vm deleted");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -593,6 +608,8 @@ async fn finish_run_start(
         let target_bytes = u64::from(record.disk_gb) * 1024 * 1024 * 1024;
         rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source, target_bytes)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
+        rootfs::specialize_guest(&runtime.vms_dir, record.id)
+            .map_err(|error| format!("guest specialization failed: {error}"))?;
 
         set_startup_step(
             &state_for_blocking,
@@ -614,7 +631,7 @@ async fn finish_run_start(
 
     set_startup_step(state, vm.id, StartupStep::StartingProcess);
 
-    firecracker::spawn_vm(
+    let process = firecracker::spawn_vm(
         &state.runtime.firecracker_binary,
         &state.runtime.vms_dir,
         vm.id,
@@ -622,7 +639,78 @@ async fn finish_run_start(
         state.runtime.ready_timeout,
     )
     .await
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+
+    set_startup_step(state, vm.id, StartupStep::ConfiguringNetwork);
+    // Not registered with register_and_watch yet, so `process` dropping on
+    // an early return here still kills it (spawn_vm's Command sets
+    // kill_on_drop) — no separate cleanup needed on this path.
+    wait_for_network_ready(process.console(), state.runtime.network_ready_timeout)
+        .await
+        .map_err(|error| format!("network readiness check failed: {error}"))?;
+
+    Ok(process)
+}
+
+/// Bytes of console output re-scanned for the network-readiness sentinel
+/// on every new chunk; bounded so a guest that never prints one doesn't
+/// grow this without limit over a long timeout.
+const NETWORK_SENTINEL_SCAN_CAP: usize = 4096;
+
+/// Waits for the guest's boot-time network-readiness unit to report over
+/// its serial console (`docs/task-guest-network-configuration.md` — the
+/// substitute this project uses for a guest-agent event, which is out of
+/// scope). `FIRECRAB_NETWORK_READY` succeeds; `FIRECRAB_NETWORK_FAILED`,
+/// the console closing, or the timeout all fail the start outright — a
+/// silent DNS failure at this stage must not be treated as a successful
+/// boot.
+async fn wait_for_network_ready(
+    console: &crate::console::ConsoleBroker,
+    timeout: std::time::Duration,
+) -> Result<(), String> {
+    let (backlog, mut receiver) = console.subscribe();
+    let mut buffer = backlog;
+    if let Some(outcome) = find_network_sentinel(&buffer) {
+        return outcome;
+    }
+
+    let wait = async {
+        loop {
+            match receiver.recv().await {
+                Ok(chunk) => {
+                    buffer.extend_from_slice(&chunk);
+                    if buffer.len() > NETWORK_SENTINEL_SCAN_CAP {
+                        let excess = buffer.len() - NETWORK_SENTINEL_SCAN_CAP;
+                        buffer.drain(..excess);
+                    }
+                    if let Some(outcome) = find_network_sentinel(&buffer) {
+                        return outcome;
+                    }
+                }
+                Err(_) => return Err("console closed before network became ready".to_owned()),
+            }
+        }
+    };
+
+    tokio::time::timeout(timeout, wait)
+        .await
+        .unwrap_or_else(|_| Err("timed out waiting for network readiness".to_owned()))
+}
+
+/// Scans already-received console bytes for the sentinel line, re-run
+/// against the whole rolling buffer (not just the newest chunk) since the
+/// line can straddle two separate console reads.
+fn find_network_sentinel(buffer: &[u8]) -> Option<Result<(), String>> {
+    let text = String::from_utf8_lossy(buffer);
+    for line in text.lines() {
+        if line.contains("FIRECRAB_NETWORK_READY") {
+            return Some(Ok(()));
+        }
+        if let Some((_, reason)) = line.split_once("FIRECRAB_NETWORK_FAILED") {
+            return Some(Err(format!("guest reported network failure:{reason}")));
+        }
+    }
+    None
 }
 
 /// Ensures the bridge/firewall are up, creates `vm_id`'s TAP, and applies its
@@ -648,6 +736,11 @@ async fn setup_vm_network(state: &AppState, vm_id: Uuid) -> Result<VmNetwork, St
         .ensure_firewall()
         .await
         .map_err(|error| format!("ensure_firewall failed: {error}"))?;
+    // Re-pushed on every start (not just create/delete) so a net-helper
+    // restart that lost its dnsmasq process gets it back — sync_dhcp_leases
+    // always sends the full current snapshot, so this is a harmless no-op
+    // when dnsmasq is already up to date.
+    sync_dhcp_leases(state).await?;
 
     let tap_name = state
         .network
@@ -690,6 +783,40 @@ pub(crate) async fn teardown_vm_network(state: &AppState, vm_id: Uuid) {
     if let Err(error) = state.network.delete_tap(vm_id).await {
         tracing::warn!(vm_id = %vm_id, %error, "failed to delete vm tap device");
     }
+}
+
+/// Pushes the current full set of active leases to the DHCP helper, tagged
+/// with the current lease generation so a snapshot that arrives out of
+/// order relative to a newer one is ignored instead of clobbering it (see
+/// `Store::lease_revision`). Called after any change to the active-lease
+/// set (`create_vm`/`delete_vm`) and defensively on every VM start (see
+/// `setup_vm_network`) in case the helper's dnsmasq process itself needs
+/// restarting.
+pub(crate) async fn sync_dhcp_leases(state: &AppState) -> Result<(), String> {
+    let store = state.store.clone();
+    let (revision, leases) = tokio::task::spawn_blocking(move || {
+        let revision = store.lease_revision()?;
+        let leases = store.active_leases()?;
+        Ok::<_, IpamError>((revision, leases))
+    })
+    .await
+    .map_err(|error| format!("dhcp lease snapshot task failed: {error}"))?
+    .map_err(|error| format!("dhcp lease snapshot failed: {error}"))?;
+
+    let entries = leases
+        .into_iter()
+        .map(|lease| DhcpLeaseEntry {
+            vm_id: lease.vm_id,
+            ipv4: lease.ipv4,
+            mac: lease.mac,
+        })
+        .collect();
+
+    state
+        .network
+        .sync_dhcp_leases(revision, entries)
+        .await
+        .map_err(|error| format!("dhcp sync failed: {error}"))
 }
 
 /// Records the current phase of an in-flight start so pollers can show *why*
@@ -924,7 +1051,27 @@ mod tests {
 
     async fn test_state_with_binary(root: &Path, binary: PathBuf) -> AppState {
         fs::write(root.join("kernel"), b"kernel").unwrap();
-        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+        // A real (if tiny) ext4 image, not just an arbitrary byte blob —
+        // `specialize_guest` runs `debugfs` against every VM's own rootfs
+        // copy as part of a normal start, so the template itself needs to
+        // be a filesystem debugfs can actually open.
+        let status = std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(root.join("rootfs"))
+            .arg("8M")
+            .status()
+            .expect("mkfs.ext4 must be installed for this test");
+        assert!(status.success(), "mkfs.ext4 failed");
+        // A blank mkfs.ext4 image has no directories at all — real golden
+        // images always have /etc, but this fake template needs it made
+        // explicitly for specialize_guest's /etc/hostname write to land.
+        std::process::Command::new("debugfs")
+            .arg("-w")
+            .arg("-R")
+            .arg("mkdir /etc")
+            .arg(root.join("rootfs"))
+            .output()
+            .expect("debugfs must be installed for this test");
         let templates = TemplateRegistry::from_specs(
             root,
             [TemplateSpec {
@@ -950,6 +1097,7 @@ mod tests {
                 firecracker_binary: binary,
                 ready_timeout: Duration::from_secs(5),
                 stop_grace: Duration::from_millis(500),
+                network_ready_timeout: Duration::from_millis(300),
             })
             .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path))
     }
@@ -1311,6 +1459,82 @@ mod tests {
             "a failed start must not leave a stale startup step behind"
         );
         assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_fails_when_guest_never_reports_network_ready() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        // Boots and serves the readiness probe, like a real guest, but
+        // never prints the network sentinel — simulates a guest whose
+        // DHCP/DNS check hangs or was never wired up.
+        let binary = fake_firecracker(
+            root,
+            r#"
+srv = socket.socket(socket.AF_UNIX)
+srv.bind(sock_path)
+srv.listen(1)
+while True:
+    conn, _ = srv.accept()
+    conn.recv(1024)
+    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+    conn.close()
+"#,
+        );
+        let state = test_state_with_binary(root, binary).await;
+        let vm = record("network-never-ready", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let error = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+    }
+
+    #[tokio::test]
+    async fn start_fails_when_guest_reports_network_failure() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(
+            root,
+            r#"
+print("FIRECRAB_NETWORK_FAILED dns unreachable", flush=True)
+srv = socket.socket(socket.AF_UNIX)
+srv.bind(sock_path)
+srv.listen(1)
+while True:
+    conn, _ = srv.accept()
+    conn.recv(1024)
+    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+    conn.close()
+"#,
+        );
+        let state = test_state_with_binary(root, binary).await;
+        let vm = record("network-failed", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let error = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
     }
 
     #[tokio::test]
@@ -1709,6 +1933,30 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn find_network_sentinel_recognizes_ready_and_failed_lines() {
+        assert_eq!(
+            find_network_sentinel(b"boot log\nFIRECRAB_NETWORK_READY 172.30.0.5\nmore\n"),
+            Some(Ok(()))
+        );
+        assert!(matches!(
+            find_network_sentinel(b"FIRECRAB_NETWORK_FAILED dns unreachable\n"),
+            Some(Err(reason)) if reason.contains("dns unreachable")
+        ));
+        assert_eq!(find_network_sentinel(b"just a normal boot line\n"), None);
+    }
+
+    #[test]
+    fn find_network_sentinel_matches_across_a_reassembled_buffer() {
+        // wait_for_network_ready re-scans the whole rolling buffer on every
+        // new chunk specifically so a sentinel line split across two
+        // separate console reads is still found once both have arrived.
+        let mut buffer = b"boot log FIRECRAB_NETWORK".to_vec();
+        assert_eq!(find_network_sentinel(&buffer), None);
+        buffer.extend_from_slice(b"_READY 172.30.0.5\n");
+        assert_eq!(find_network_sentinel(&buffer), Some(Ok(())));
     }
 
     #[test]

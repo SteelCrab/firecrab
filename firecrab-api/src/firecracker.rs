@@ -282,6 +282,13 @@ impl FirecrackerProcess {
     pub fn pid(&self) -> Option<u32> {
         self.child.id()
     }
+
+    /// This VM's serial console broker, for watching its boot output (e.g.
+    /// the network-readiness sentinel line) before it's registered with
+    /// [`register_and_watch`].
+    pub fn console(&self) -> &ConsoleBroker {
+        self.console.as_ref()
+    }
 }
 
 /// Map entry for a live VM: the process id plus a channel that resolves once
@@ -593,6 +600,7 @@ open(sock_path + ".pid", "w").write(str(os.getpid()))
     /// Answers the readiness probe forever, like a running guest.
     pub const SERVE_LOOP: &str = r#"
 print("booted", flush=True)
+print("FIRECRAB_NETWORK_READY 172.30.0.5", flush=True)
 srv = socket.socket(socket.AF_UNIX)
 srv.bind(sock_path)
 srv.listen(1)
@@ -605,6 +613,7 @@ while True:
 
     /// Serves the readiness probe once, then exits like a guest poweroff.
     pub const SERVE_ONCE_THEN_EXIT: &str = r#"
+print("FIRECRAB_NETWORK_READY 172.30.0.5", flush=True)
 srv = socket.socket(socket.AF_UNIX)
 srv.bind(sock_path)
 srv.listen(1)

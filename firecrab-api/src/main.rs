@@ -76,6 +76,13 @@ async fn run() -> Result<(), StartupError> {
     let state = AppState::new(templates)
         .await
         .map_err(StartupError::Persistence)?;
+    // Best-effort: if the net-helper (and its dnsmasq) aren't up yet, this
+    // just means DHCP reservations lag until the next per-VM start, which
+    // re-syncs the full snapshot anyway (see setup_vm_network) — not worth
+    // failing API startup over.
+    if let Err(error) = handlers::vms::sync_dhcp_leases(&state).await {
+        tracing::warn!(error, "initial dhcp resync failed");
+    }
     let app = build_router(state, &config);
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr)

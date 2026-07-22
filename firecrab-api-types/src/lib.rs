@@ -94,6 +94,10 @@ pub enum StartupStep {
     GeneratingConfig,
     /// Spawning the Firecracker process and waiting for it to come up.
     StartingProcess,
+    /// Waiting for the guest to confirm (over its serial console) that
+    /// DHCP and DNS actually came up, since there's no guest agent to ask
+    /// directly (`docs/task-guest-network-configuration.md`).
+    ConfiguringNetwork,
 }
 
 /// A VM record as returned by the list/detail/create/update endpoints.
@@ -269,6 +273,7 @@ mod tests {
             (StartupStep::PreparingDisk, "\"preparingDisk\""),
             (StartupStep::GeneratingConfig, "\"generatingConfig\""),
             (StartupStep::StartingProcess, "\"startingProcess\""),
+            (StartupStep::ConfiguringNetwork, "\"configuringNetwork\""),
         ] {
             assert_eq!(serde_json::to_string(&step).unwrap(), json);
             assert_eq!(serde_json::from_str::<StartupStep>(json).unwrap(), step);

@@ -272,6 +272,18 @@ impl Store {
         ipam::active_lease(&self.lock(), vm_id)
     }
 
+    /// Every currently-active lease, for a full DHCP-reservation resync
+    /// (see `ipam::active_leases`).
+    pub fn active_leases(&self) -> Result<Vec<Lease>, IpamError> {
+        ipam::active_leases(&self.lock())
+    }
+
+    /// Current lease generation (see `ipam::current_revision`), tagged onto
+    /// a DHCP snapshot so the helper can reject an out-of-order stale one.
+    pub fn lease_revision(&self) -> Result<u64, IpamError> {
+        ipam::current_revision(&self.lock())
+    }
+
     /// Startup cleanup: a VM left in a live state by a previous run has no
     /// process behind it anymore, so demote it to stopped.
     pub fn reset_active_states(&self) -> Result<usize, PersistenceError> {
