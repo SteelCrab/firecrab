@@ -6,7 +6,8 @@ use std::time::Duration;
 use firecrab_helper_protocol::framing::{FrameError, read_frame, write_frame};
 pub use firecrab_helper_protocol::network::tap_name;
 use firecrab_helper_protocol::network::{
-    HelperFailure, MacAddr, NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope,
+    DhcpLeaseEntry, HelperFailure, MacAddr, NetworkRequest, NetworkRequestEnvelope,
+    NetworkResponseEnvelope,
 };
 use thiserror::Error;
 use tokio::net::UnixStream;
@@ -106,6 +107,18 @@ impl NetworkClient {
         self.call(NetworkRequest::RemoveVmPolicy { vm_id }).await
     }
 
+    /// Replaces the DHCP reservation snapshot with `leases` in full,
+    /// tagged with `revision` (see `Store::lease_revision`) so the helper
+    /// can ignore a stale/out-of-order snapshot instead of applying it.
+    pub async fn sync_dhcp_leases(
+        &self,
+        revision: u64,
+        leases: Vec<DhcpLeaseEntry>,
+    ) -> Result<(), NetworkError> {
+        self.call(NetworkRequest::SyncDhcpLeases { revision, leases })
+            .await
+    }
+
     /// Builds a client pointed at an explicit socket path, for lifecycle
     /// tests that spin up a fake net-helper (see `test_support`).
     #[cfg(test)]
@@ -191,6 +204,7 @@ pub(crate) mod test_support {
             NetworkRequest::DeleteTap { .. } => "delete_tap",
             NetworkRequest::ApplyVmPolicy { .. } => "apply_vm_policy",
             NetworkRequest::RemoveVmPolicy { .. } => "remove_vm_policy",
+            NetworkRequest::SyncDhcpLeases { .. } => "sync_dhcp_leases",
         }
     }
 

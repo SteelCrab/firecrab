@@ -104,6 +104,7 @@ pub fn allocate(tx: &Transaction<'_>, vm_id: Uuid) -> Result<Lease, IpamError> {
          VALUES (?1, ?2, ?3, datetime('now'))",
         params![vm_id.to_string(), ipv4.to_string(), mac.to_string()],
     )?;
+    bump_lease_revision(tx)?;
 
     Ok(Lease { vm_id, ipv4, mac })
 }
@@ -121,6 +122,7 @@ pub fn release(tx: &Transaction<'_>, vm_id: Uuid) -> Result<(), IpamError> {
     if changed == 0 {
         return Err(IpamError::NotLeased { vm_id });
     }
+    bump_lease_revision(tx)?;
     Ok(())
 }
 
@@ -134,18 +136,64 @@ pub fn active_lease(conn: &rusqlite::Connection, vm_id: Uuid) -> Result<Option<L
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
     )
     .optional()?
-    .map(|(ipv4, mac)| {
-        let ipv4 = ipv4.parse().map_err(|_| IpamError::CorruptLease {
-            vm_id,
-            reason: format!("stored ipv4 {ipv4:?} does not parse"),
-        })?;
-        let mac = mac.parse().map_err(|_| IpamError::CorruptLease {
-            vm_id,
-            reason: format!("stored mac {mac:?} does not parse"),
-        })?;
-        Ok(Lease { vm_id, ipv4, mac })
-    })
+    .map(|(ipv4, mac)| parse_lease(vm_id, ipv4, mac))
     .transpose()
+}
+
+/// Every currently-active lease, for handing the DHCP helper a full
+/// snapshot to render its host-reservation file from (see
+/// [`current_revision`], sent alongside so a stale snapshot is never
+/// applied out of order).
+pub fn active_leases(conn: &rusqlite::Connection) -> Result<Vec<Lease>, IpamError> {
+    let mut statement =
+        conn.prepare("SELECT vm_id, ipv4, mac FROM network_leases WHERE released_at IS NULL")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (vm_id, ipv4, mac) = row?;
+        let vm_id = Uuid::parse_str(&vm_id).map_err(|_| IpamError::CorruptLease {
+            vm_id: Uuid::nil(),
+            reason: format!("stored vm_id {vm_id:?} is not a UUID"),
+        })?;
+        parse_lease(vm_id, ipv4, mac)
+    })
+    .collect()
+}
+
+fn parse_lease(vm_id: Uuid, ipv4: String, mac: String) -> Result<Lease, IpamError> {
+    let ipv4 = ipv4.parse().map_err(|_| IpamError::CorruptLease {
+        vm_id,
+        reason: format!("stored ipv4 {ipv4:?} does not parse"),
+    })?;
+    let mac = mac.parse().map_err(|_| IpamError::CorruptLease {
+        vm_id,
+        reason: format!("stored mac {mac:?} does not parse"),
+    })?;
+    Ok(Lease { vm_id, ipv4, mac })
+}
+
+/// Current lease generation, bumped by every [`allocate`]/[`release`] (see
+/// [`bump_lease_revision`]). Read alone (no transaction) is fine: a caller
+/// racing a concurrent bump just sees the pre- or post-bump value, either of
+/// which is a valid revision to tag a snapshot with.
+pub fn current_revision(conn: &rusqlite::Connection) -> Result<u64, IpamError> {
+    Ok(conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))? as u64)
+}
+
+/// Bumps the lease generation counter, reusing SQLite's built-in
+/// `user_version` pragma rather than a dedicated table/column. Must run
+/// inside the same `BEGIN IMMEDIATE` transaction as the lease change so the
+/// two commit atomically together — otherwise a crash between them could
+/// leave the revision under- or over-counted relative to what's actually
+/// stored.
+fn bump_lease_revision(tx: &Transaction<'_>) -> Result<(), rusqlite::Error> {
+    let current: i64 = tx.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    tx.pragma_update(None, "user_version", current + 1)
 }
 
 /// Whether `vm_id` currently holds an unreleased lease.
@@ -216,6 +264,43 @@ mod tests {
     fn begin(conn: &mut Connection) -> Transaction<'_> {
         conn.transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap()
+    }
+
+    #[test]
+    fn lease_revision_bumps_on_both_allocate_and_release() {
+        let mut conn = open();
+        assert_eq!(current_revision(&conn).unwrap(), 0);
+
+        let vm_id = Uuid::new_v4();
+        let tx = begin(&mut conn);
+        allocate(&tx, vm_id).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(current_revision(&conn).unwrap(), 1);
+
+        let tx = begin(&mut conn);
+        release(&tx, vm_id).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(current_revision(&conn).unwrap(), 2);
+    }
+
+    #[test]
+    fn active_leases_lists_only_unreleased_rows() {
+        let mut conn = open();
+        let kept = Uuid::new_v4();
+        let released = Uuid::new_v4();
+
+        let tx = begin(&mut conn);
+        allocate(&tx, kept).unwrap();
+        allocate(&tx, released).unwrap();
+        tx.commit().unwrap();
+
+        let tx = begin(&mut conn);
+        release(&tx, released).unwrap();
+        tx.commit().unwrap();
+
+        let leases = active_leases(&conn).unwrap();
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].vm_id, kept);
     }
 
     #[test]

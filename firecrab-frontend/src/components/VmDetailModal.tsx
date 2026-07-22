@@ -4,12 +4,18 @@ import { ApiClientError, getVm, getVmLog, updateVmResources } from "../api/clien
 import { isEditableState } from "../model";
 import RamStepper from "./RamStepper";
 
-const STARTUP_STEPS: StartupStep[] = ["preparingDisk", "generatingConfig", "startingProcess"];
+const STARTUP_STEPS: StartupStep[] = [
+  "preparingDisk",
+  "generatingConfig",
+  "startingProcess",
+  "configuringNetwork",
+];
 
 const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
   preparingDisk: "디스크 준비",
   generatingConfig: "설정 생성",
   startingProcess: "프로세스 시작",
+  configuringNetwork: "네트워크 확인",
 };
 
 // Derived client-side from the polled `startupStep` value — no dedicated
@@ -18,6 +24,7 @@ const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
   preparingDisk: "디스크 준비 중 (rootfs 템플릿 복사)...",
   generatingConfig: "디스크 준비 완료 → Firecracker 설정 생성 중...",
   startingProcess: "설정 생성 완료 → Firecracker 프로세스 시작 중...",
+  configuringNetwork: "프로세스 시작 완료 → guest DHCP/DNS 확인 중...",
 };
 
 const POLL_MILLIS = 750;

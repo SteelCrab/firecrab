@@ -15,6 +15,8 @@ use std::time::Duration;
 
 /// Firecrab bridge (`fcbr0`) creation/repair.
 mod bridge;
+/// DHCP (dnsmasq) for guest VMs.
+mod dhcp;
 /// Per-VM and global nftables firewall rules.
 mod firewall;
 /// Per-VM TAP device lifecycle.
@@ -81,6 +83,8 @@ struct HelperConfig {
     firewall: firewall::FirewallActor,
     /// Shared bridge-creation state (single-writer mutex inside).
     bridge: bridge::BridgeActor,
+    /// Shared DHCP (dnsmasq) state (single-writer mutex inside).
+    dhcp: dhcp::DhcpActor,
 }
 
 impl HelperConfig {
@@ -111,6 +115,7 @@ impl HelperConfig {
             allowed_peer_uids,
             firewall: firewall::FirewallActor::new(),
             bridge: bridge::BridgeActor::new(),
+            dhcp: dhcp::DhcpActor::new(),
         })
     }
 
@@ -337,6 +342,13 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
         }
         NetworkRequest::DeleteTap { vm_id } => {
             tap::delete_tap(vm_id)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
+        NetworkRequest::SyncDhcpLeases { revision, leases } => {
+            dhcp::sync_dhcp_leases(&config.dhcp, revision, &leases)
                 .await
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),

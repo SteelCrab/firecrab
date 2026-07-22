@@ -357,16 +357,17 @@ EOF
 
   install_authorized_ssh_key
 
-  # Configure the Firecracker guest network interface with a stable static address.
+  # Configure the Firecracker guest network interface via DHCP — the host's
+  # net-helper/dnsmasq hands out the IPAM-allocated address by MAC
+  # reservation (task-guest-network-configuration.md), so the guest never
+  # hardcodes an address itself.
   install -d -m 0755 "${mount_dir}/etc/systemd/network"
   write_root_file "${mount_dir}/etc/systemd/network/10-eth0.network" <<'EOF'
 [Match]
 Name=eth0
 
 [Network]
-Address=172.16.20.2/24
-Gateway=172.16.20.1
-DNS=1.1.1.1
+DHCP=yes
 EOF
 
   install -d -m 0755 "${mount_dir}/etc/systemd/system/multi-user.target.wants"
@@ -375,6 +376,8 @@ EOF
   install -d -m 0755 "${mount_dir}/etc/systemd/system/sockets.target.wants"
   ln -sf /lib/systemd/system/systemd-networkd.socket \
     "${mount_dir}/etc/systemd/system/sockets.target.wants/systemd-networkd.socket"
+
+  install_network_ready_sentinel
 
   # Enable a serial console getty so Firecracker console output reaches ttyS0.
   install -d -m 0755 "${mount_dir}/etc/systemd/system/getty.target.wants"
@@ -397,10 +400,55 @@ EOF
   install -d -m 1777 "${mount_dir}/tmp"
 }
 
+# firecrab-net-helper's dnsmasq answers DNS on the bridge gateway itself
+# (172.30.0.1) for every guest on the VPC subnet, so the guest points at
+# that instead of a public resolver — matches how a NAT router's own
+# address is typically handed out as the DNS server.
 configure_guest_dns() {
   write_root_file "${mount_dir}/etc/resolv.conf" <<'EOF'
-nameserver 1.1.1.1
+nameserver 172.30.0.1
 EOF
+}
+
+# Prints a fixed sentinel line to the serial console (ttyS0, which is
+# Firecracker's captured stdout) once DHCP + DNS are confirmed working —
+# the signal firecrab-api's start pipeline waits on in place of a guest
+# agent event (task-guest-network-configuration.md; guest agent/vsock is
+# out of this project's competition scope).
+install_network_ready_sentinel() {
+  install -d -m 0755 "${mount_dir}/usr/local/sbin"
+  write_root_file "${mount_dir}/usr/local/sbin/firecrab-network-ready.sh" <<'EOF'
+#!/bin/sh
+set -eu
+ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+if [ -z "$ipv4" ]; then
+  echo "FIRECRAB_NETWORK_FAILED no-ipv4-address"
+elif getent hosts example.com >/dev/null 2>&1; then
+  echo "FIRECRAB_NETWORK_READY $ipv4"
+else
+  echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
+fi
+EOF
+  chmod 0755 "${mount_dir}/usr/local/sbin/firecrab-network-ready.sh"
+
+  write_root_file "${mount_dir}/etc/systemd/system/firecrab-network-ready.service" <<'EOF'
+[Unit]
+Description=Firecrab network readiness sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+StandardOutput=tty
+TTYPath=/dev/console
+ExecStart=/usr/local/sbin/firecrab-network-ready.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  install -d -m 0755 "${mount_dir}/etc/systemd/system/multi-user.target.wants"
+  ln -sf /etc/systemd/system/firecrab-network-ready.service \
+    "${mount_dir}/etc/systemd/system/multi-user.target.wants/firecrab-network-ready.service"
 }
 
 install_rootfs_packages() {
@@ -452,6 +500,14 @@ verify_rootfs_content() {
 
   if [ ! -e "${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" ]; then
     fail 'Rootfs did not enable systemd-networkd.service.'
+  fi
+
+  if [ ! -x "${mount_dir}/usr/local/sbin/firecrab-network-ready.sh" ]; then
+    fail 'Rootfs did not install an executable firecrab-network-ready.sh.'
+  fi
+
+  if [ ! -e "${mount_dir}/etc/systemd/system/multi-user.target.wants/firecrab-network-ready.service" ]; then
+    fail 'Rootfs did not enable firecrab-network-ready.service.'
   fi
 
   if [ ! -e "${mount_dir}/bin/udevadm" ] && [ ! -e "${mount_dir}/usr/bin/udevadm" ] &&

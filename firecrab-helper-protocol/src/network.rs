@@ -30,6 +30,22 @@ pub fn tap_name(vm_id: Uuid) -> String {
     name
 }
 
+/// The deterministic guest hostname for a VM: `fc-` plus 12 hex digits of
+/// `sha256(vm_id)` (same construction as [`tap_name`], so two different
+/// `vm_id`s can't collide just because they happen to share high-order
+/// bits — unlike truncating the UUID's own text form directly). Derived
+/// the same way by both sides so the API never has to hand the helper an
+/// arbitrary, user-influenced hostname string to embed in the DHCP
+/// reservation file.
+pub fn guest_hostname(vm_id: Uuid) -> String {
+    let digest = Sha256::digest(vm_id.as_bytes());
+    let mut hostname = String::from("fc-");
+    for byte in &digest[..6] {
+        hostname.push_str(&format!("{byte:02x}"));
+    }
+    hostname
+}
+
 /// MAC address in `aa:bb:cc:dd:ee:ff` form; serialized as that string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MacAddr(pub [u8; 6]);
@@ -117,6 +133,30 @@ pub enum NetworkRequest {
         /// The VM whose policy should be removed.
         vm_id: Uuid,
     },
+    /// Replace the DHCP host-reservation file with this full snapshot of
+    /// every currently-active lease, then reload. `revision` must be
+    /// monotonically increasing (see `Store::lease_revision`); a snapshot
+    /// older than the last one the helper applied is ignored rather than
+    /// clobbering a newer one that arrived out of order.
+    SyncDhcpLeases {
+        /// Lease generation this snapshot reflects.
+        revision: u64,
+        /// Every currently-active lease.
+        leases: Vec<DhcpLeaseEntry>,
+    },
+}
+
+/// One VM's reservation for [`NetworkRequest::SyncDhcpLeases`]. No hostname
+/// field: the helper derives it itself via [`guest_hostname`], the same way
+/// it derives TAP names, rather than trusting a string the API supplies.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DhcpLeaseEntry {
+    /// The VM this reservation belongs to.
+    pub vm_id: Uuid,
+    /// Its allocated IPv4 address.
+    pub ipv4: Ipv4Addr,
+    /// Its Firecracker guest MAC.
+    pub mac: MacAddr,
 }
 
 /// A [`NetworkRequest`] tagged with protocol version and a correlation id.
@@ -206,6 +246,14 @@ mod tests {
     }
 
     #[test]
+    fn guest_hostname_is_deterministic_and_distinct_per_vm() {
+        let vm = Uuid::from_u128(0x1234);
+        assert_eq!(guest_hostname(vm), guest_hostname(vm));
+        assert!(guest_hostname(vm).starts_with("fc-"));
+        assert_ne!(guest_hostname(vm), guest_hostname(Uuid::from_u128(0x1235)));
+    }
+
+    #[test]
     fn malformed_mac_addrs_are_rejected() {
         for text in [
             "",
@@ -225,6 +273,25 @@ mod tests {
 
         let envelope = NetworkRequestEnvelope::new(Uuid::nil(), NetworkRequest::EnsureBridge);
         assert_eq!(envelope.version, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn sync_dhcp_leases_serializes_with_its_operation_tag() {
+        let request = NetworkRequest::SyncDhcpLeases {
+            revision: 3,
+            leases: vec![DhcpLeaseEntry {
+                vm_id: Uuid::nil(),
+                ipv4: "172.30.0.5".parse().unwrap(),
+                mac: "02:fc:00:00:00:05".parse().unwrap(),
+            }],
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "sync_dhcp_leases");
+        assert_eq!(json["revision"], 3);
+        assert_eq!(
+            serde_json::from_value::<NetworkRequest>(json).unwrap(),
+            request
+        );
     }
 
     #[test]

@@ -19,17 +19,24 @@ PATH = sys.argv[1] if len(sys.argv) > 1 else sys.exit(
 OPERATION = sys.argv[2] if len(sys.argv) > 2 else "ensure_firewall"
 
 # Operations beyond ensure_bridge/ensure_firewall take extra fields
-# (create_tap/delete_tap need vm_id, apply_vm_policy needs more) — the
-# request is internally tagged on "operation", so these merge in alongside
-# it. Passing a bare UUID with no "vm_id=" prefix is silently dropped by the
-# server as an unparseable request (no vm_id field at all), which looks like
-# a hang/EOF on the client side, not a helpful error — always use key=value.
+# (create_tap/delete_tap need vm_id, apply_vm_policy needs more,
+# sync_dhcp_leases needs a number and a nested array) — the request is
+# internally tagged on "operation", so these merge in alongside it. Passing
+# a bare UUID with no "vm_id=" prefix is silently dropped by the server as
+# an unparseable request (no vm_id field at all), which looks like a
+# hang/EOF on the client side, not a helpful error — always use key=value.
 EXTRA_FIELDS = {}
 for arg in sys.argv[3:]:
     key, sep, value = arg.partition("=")
     if not sep:
         sys.exit(f"잘못된 인자 {arg!r} — key=value 형식으로 주세요 (예: vm_id=<uuid>)")
-    EXTRA_FIELDS[key] = value
+    try:
+        # Lets revision=1 become a number and leases=[...] become a real
+        # JSON array; a bare UUID/MAC string just fails to parse as JSON
+        # and falls through to the plain-string form, unchanged.
+        EXTRA_FIELDS[key] = json.loads(value)
+    except json.JSONDecodeError:
+        EXTRA_FIELDS[key] = value
 
 
 def recv_exact(sock, length):

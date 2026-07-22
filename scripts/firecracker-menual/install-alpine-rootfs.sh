@@ -136,8 +136,12 @@ cat >"${staging}/etc/fstab" <<'EOF_FSTAB'
 /dev/vda / ext4 defaults 0 1
 EOF_FSTAB
 
+# firecrab-net-helper's dnsmasq answers DNS on the bridge gateway itself
+# (172.30.0.1) for every guest on the VPC subnet — dhcpcd overwrites this
+# from the DHCP-provided options once it runs, so this is really just the
+# pre-DHCP fallback value.
 cat >"${staging}/etc/resolv.conf" <<'EOF_RESOLV'
-nameserver 1.1.1.1
+nameserver 172.30.0.1
 EOF_RESOLV
 
 install -d -m 0755 "${staging}/etc/network"
@@ -148,6 +152,34 @@ iface lo inet loopback
 auto eth0
 iface eth0 inet dhcp
 EOF_IFACES
+
+# Prints a fixed sentinel line to /dev/console (Firecracker's captured
+# stdout) once DHCP + DNS are confirmed working — the signal firecrab-api's
+# start pipeline waits on in place of a guest agent event
+# (task-guest-network-configuration.md; guest agent/vsock is out of this
+# project's competition scope).
+cat >"${staging}/etc/init.d/firecrab-network-ready" <<'EOF_SENTINEL'
+#!/sbin/openrc-run
+
+description="Firecrab network readiness sentinel"
+
+depend() {
+    need net
+    after dhcpcd
+}
+
+start() {
+    ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+    if [ -z "$ipv4" ]; then
+        echo "FIRECRAB_NETWORK_FAILED no-ipv4-address" >/dev/console
+    elif getent hosts example.com >/dev/null 2>&1; then
+        echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
+    else
+        echo "FIRECRAB_NETWORK_FAILED dns-unreachable" >/dev/console
+    fi
+}
+EOF_SENTINEL
+chmod 0755 "${staging}/etc/init.d/firecrab-network-ready"
 
 # Serial console getty with autologin, mirroring the Ubuntu agetty setup.
 grep -v '^ttyS0::' "${staging}/etc/inittab" >"${staging}/etc/inittab.new"
@@ -166,7 +198,7 @@ done
 for svc in hostname bootmisc sysctl loopback; do
   ln -sf "/etc/init.d/${svc}" "${staging}/etc/runlevels/boot/${svc}"
 done
-for svc in local dhcpcd sshd; do
+for svc in local dhcpcd sshd firecrab-network-ready; do
   ln -sf "/etc/init.d/${svc}" "${staging}/etc/runlevels/default/${svc}"
 done
 
@@ -181,6 +213,8 @@ test -e "${staging}/sbin/init" || { echo 'missing /sbin/init' >&2; exit 1; }
 { test -e "${staging}/sbin/agetty" || test -e "${staging}/usr/sbin/agetty"; } || { echo 'missing agetty' >&2; exit 1; }
 test -e "${staging}/sbin/openrc" || { echo 'missing openrc' >&2; exit 1; }
 test -e "${staging}/usr/sbin/sshd" || { echo 'missing sshd' >&2; exit 1; }
+test -x "${staging}/etc/init.d/firecrab-network-ready" || { echo 'missing firecrab-network-ready init script' >&2; exit 1; }
+test -L "${staging}/etc/runlevels/default/firecrab-network-ready" || { echo 'firecrab-network-ready not enabled in default runlevel' >&2; exit 1; }
 
 apk add --no-cache e2fsprogs >/dev/null
 
