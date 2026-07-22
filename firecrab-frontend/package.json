@@ -12,7 +12,7 @@
   "dependencies": {
     "@xterm/xterm": "^6.0.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
     "@types/node": "^24.13.2",
