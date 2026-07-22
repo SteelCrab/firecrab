@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::firecracker::{self, VmProcess};
 use crate::model::VmRecord;
+use crate::network::NetworkClient;
 use crate::persistence::{self, PersistenceError, Store};
 use crate::rootfs;
 use crate::templates::TemplateRegistry;
@@ -63,6 +64,8 @@ pub struct AppState {
     pub(crate) runtime: Arc<RuntimeConfig>,
     /// Bounds how many `start_vm` calls copy/grow a rootfs disk at once.
     pub(crate) disk_prep_permits: Arc<Semaphore>,
+    /// Client for the privileged `firecrab-net-helper` (bridge/TAP/firewall).
+    pub(crate) network: NetworkClient,
 }
 
 impl AppState {
@@ -96,7 +99,16 @@ impl AppState {
             processes: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(RuntimeConfig::from_defaults()),
             disk_prep_permits: Arc::new(Semaphore::new(DISK_PREP_CONCURRENCY)),
+            network: NetworkClient::from_env(),
         })
+    }
+
+    /// Overrides the net-helper client, for tests that spin up a fake
+    /// net-helper (see `network::test_support`) instead of a real one.
+    #[cfg(test)]
+    pub(crate) fn with_test_network(mut self, network: NetworkClient) -> Self {
+        self.network = network;
+        self
     }
 
     /// Overrides the runtime config, for tests that need a fake Firecracker

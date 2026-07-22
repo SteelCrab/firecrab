@@ -3,10 +3,32 @@ use std::net::Ipv4Addr;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::PROTOCOL_VERSION;
+
+/// Prefix for every Firecrab-owned TAP interface name. TAP interface names
+/// are bounded by IFNAMSIZ (16 bytes incl. NUL): `fct` + 12 hex of
+/// sha256(vm_id) = 15 chars. The prefix is distinct from the bridge name
+/// (`fcbr0`) so an east-west wildcard (`fct*`) never matches the bridge
+/// itself.
+pub const TAP_PREFIX: &str = "fct";
+
+/// The deterministic TAP interface name for a VM. Both `firecrab-api` (to
+/// reference it in the Firecracker config) and `firecrab-net-helper` (to
+/// create/attach/delete the real device, and to name nftables objects)
+/// derive the same name from the same `vm_id` — the API never gets to pass
+/// the helper an arbitrary interface name.
+pub fn tap_name(vm_id: Uuid) -> String {
+    let digest = Sha256::digest(vm_id.as_bytes());
+    let mut name = String::from(TAP_PREFIX);
+    for byte in &digest[..6] {
+        name.push_str(&format!("{byte:02x}"));
+    }
+    name
+}
 
 /// MAC address in `aa:bb:cc:dd:ee:ff` form; serialized as that string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -172,6 +194,15 @@ mod tests {
             serde_json::from_str::<MacAddr>(&json).expect("deserialize"),
             mac
         );
+    }
+
+    #[test]
+    fn tap_name_is_deterministic_and_within_ifnamsiz() {
+        let vm = Uuid::from_u128(0x1234);
+        assert_eq!(tap_name(vm), tap_name(vm));
+        assert!(tap_name(vm).len() <= 15, "{}", tap_name(vm));
+        assert!(tap_name(vm).starts_with(TAP_PREFIX));
+        assert_ne!(tap_name(vm), tap_name(Uuid::from_u128(0x1235)));
     }
 
     #[test]

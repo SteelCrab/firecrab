@@ -10,8 +10,10 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
-use crate::firecracker::{self, FirecrackerProcess, VmProcess};
+use crate::firecracker::{self, FirecrackerProcess, VmNetwork, VmProcess};
+use crate::ipam::IpamError;
 use crate::model::{CreateVmRequest, StartupStep, UpdateVmResourcesRequest, VmRecord, VmState};
+use crate::network_policy::EgressPolicy;
 use crate::persistence::PersistenceError;
 use crate::rootfs;
 use crate::server::RequestId;
@@ -134,6 +136,22 @@ pub async fn create_vm(
             tracing::error!(request_id = %request_id.0, %error, "failed to persist VM state");
             AppError::internal(request_id.0)
         })?;
+
+    // Allocated up front (not on first start) so it persists across every
+    // stop/start of this VM and is only ever freed by a successful delete —
+    // see Store::active_lease's doc comment.
+    let store = state.store.clone();
+    let vm_id = vm.id;
+    if let Err(error) = tokio::task::spawn_blocking(move || store.allocate_lease(vm_id))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+    {
+        tracing::error!(request_id = %request_id.0, vm_id = %vm_id, %error, "failed to allocate vm lease");
+        let store = state.store.clone();
+        let _ = tokio::task::spawn_blocking(move || store.delete(vm_id)).await;
+        return Err(AppError::internal(request_id.0));
+    }
+
     tracing::info!(
         request_id = %request_id.0,
         vm_id = %vm.id,
@@ -355,6 +373,12 @@ pub async fn stop_vm(
         }
     }
 
+    // Only a running VM can reach Stopping (see VmState::can_transition), so
+    // setup_vm_network always ran for it — tear its TAP/policy back down.
+    // The underlying lease is untouched; it's freed only by a successful
+    // delete, so a later start reuses the same IP/MAC.
+    teardown_vm_network(&state, id).await;
+
     // The exit monitor normally lands the record on stopped; cover the
     // process-less and raced cases by finishing the transition ourselves.
     let stopped = {
@@ -408,7 +432,15 @@ pub async fn delete_vm(
             }
         }
         match store.delete(id) {
-            Ok(()) | Err(PersistenceError::MissingVm { .. }) => Ok(()),
+            Ok(()) | Err(PersistenceError::MissingVm { .. }) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        // Only ever freed here, after everything else about the VM is gone
+        // — see Store::active_lease's doc comment. NotLeased shouldn't
+        // happen (every VM gets one at create_vm), but isn't worth failing
+        // an otherwise-successful delete over.
+        match store.release_lease(id) {
+            Ok(()) | Err(IpamError::NotLeased { .. }) => Ok(()),
             Err(error) => Err(error.to_string()),
         }
     })
@@ -520,6 +552,24 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
 
     set_startup_step(state, vm.id, StartupStep::PreparingDisk);
 
+    // Set up before the disk copy so a network failure fails fast, without
+    // paying for a multi-GB copy first. Any failure *after* this succeeds
+    // must tear the TAP + policy back down — see the loop below.
+    let network = setup_vm_network(state, vm.id).await?;
+
+    let result = finish_run_start(state, vm, template, &network).await;
+    if result.is_err() {
+        teardown_vm_network(state, vm.id).await;
+    }
+    result
+}
+
+async fn finish_run_start(
+    state: &AppState,
+    vm: &VmRecord,
+    template: std::sync::Arc<crate::templates::TemplateVersion>,
+    network: &VmNetwork,
+) -> Result<FirecrackerProcess, String> {
     // Bounds how many VMs copy/grow a rootfs disk at once — see
     // `DISK_PREP_CONCURRENCY`'s doc comment. Held across the blocking task
     // below, released once that VM's disk+config are ready.
@@ -534,6 +584,7 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     let runtime = state.runtime.clone();
     let record = vm.clone();
     let state_for_blocking = state.clone();
+    let network = network.clone();
     let config_path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
         let _permit = permit;
         let mut source = templates
@@ -549,8 +600,14 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
             StartupStep::GeneratingConfig,
         );
         let kernel = templates.artifact_path(&template.kernel);
-        firecracker::write_config(&runtime.vms_dir, &record, &kernel, &template.boot_args)
-            .map_err(|error| format!("config generation failed: {error}"))
+        firecracker::write_config(
+            &runtime.vms_dir,
+            &record,
+            &kernel,
+            &template.boot_args,
+            Some(&network),
+        )
+        .map_err(|error| format!("config generation failed: {error}"))
     })
     .await
     .map_err(|error| format!("start preparation task failed: {error}"))??;
@@ -566,6 +623,64 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+/// Ensures the bridge/firewall are up, creates `vm_id`'s TAP, and applies its
+/// isolation policy for its (already-allocated, see `create_vm`) lease. Any
+/// failure after the TAP is created tears the TAP itself back down before
+/// returning, so a partial failure here never leaves an unprotected TAP
+/// attached to the bridge.
+async fn setup_vm_network(state: &AppState, vm_id: Uuid) -> Result<VmNetwork, String> {
+    let store = state.store.clone();
+    let lease = tokio::task::spawn_blocking(move || store.active_lease(vm_id))
+        .await
+        .map_err(|error| format!("lease lookup task failed: {error}"))?
+        .map_err(|error| format!("lease lookup failed: {error}"))?
+        .ok_or_else(|| format!("vm {vm_id} has no allocated lease"))?;
+
+    state
+        .network
+        .ensure_bridge()
+        .await
+        .map_err(|error| format!("ensure_bridge failed: {error}"))?;
+    state
+        .network
+        .ensure_firewall()
+        .await
+        .map_err(|error| format!("ensure_firewall failed: {error}"))?;
+
+    let tap_name = state
+        .network
+        .create_tap(vm_id)
+        .await
+        .map_err(|error| format!("tap creation failed: {error}"))?;
+
+    if let Err(error) = state
+        .network
+        .apply_vm_policy(vm_id, lease.ipv4, lease.mac, EgressPolicy::default(), false)
+        .await
+    {
+        let _ = state.network.delete_tap(vm_id).await;
+        return Err(format!("firewall policy application failed: {error}"));
+    }
+
+    Ok(VmNetwork {
+        tap_name,
+        guest_mac: lease.mac,
+    })
+}
+
+/// Reverses [`setup_vm_network`]: removes the firewall policy then the TAP.
+/// Best-effort and always called from an already-failing or already-stopping
+/// path, so failures here are logged rather than propagated — the VM's own
+/// lifecycle state still needs to move forward either way.
+async fn teardown_vm_network(state: &AppState, vm_id: Uuid) {
+    if let Err(error) = state.network.remove_vm_policy(vm_id).await {
+        tracing::warn!(vm_id = %vm_id, %error, "failed to remove vm firewall policy");
+    }
+    if let Err(error) = state.network.delete_tap(vm_id).await {
+        tracing::warn!(vm_id = %vm_id, %error, "failed to delete vm tap device");
+    }
 }
 
 /// Records the current phase of an in-flight start so pollers can show *why*
@@ -812,6 +927,12 @@ mod tests {
             }],
         )
         .unwrap();
+        // Unique per call (not just per `root`): some tests reopen state
+        // against the same directory to simulate a restart, and a stale
+        // listener would still hold the previous socket path.
+        let socket_path = root.join(format!("net-helper-{}.sock", Uuid::new_v4()));
+        crate::network::test_support::spawn_always_ok_helper(&socket_path);
+
         AppState::with_db_file(templates, root.join("data/firecrab.db"))
             .await
             .unwrap()
@@ -821,11 +942,13 @@ mod tests {
                 ready_timeout: Duration::from_secs(5),
                 stop_grace: Duration::from_millis(500),
             })
+            .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path))
     }
 
     fn seed_vm(state: &AppState, vm: &VmRecord) {
         state.store.insert(vm).unwrap();
         state.vms.lock().unwrap().insert(vm.id, vm.clone());
+        state.store.allocate_lease(vm.id).unwrap();
     }
 
     fn memory_state(state: &AppState, id: Uuid) -> Option<VmState> {

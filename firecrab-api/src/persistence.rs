@@ -264,6 +264,14 @@ impl Store {
         Ok(())
     }
 
+    /// Looks up `vm_id`'s current active lease (its allocated IPv4 + MAC),
+    /// if it has one — the lease persists across stop/start, so a start
+    /// after the VM's first fetches the same one back rather than
+    /// allocating again.
+    pub fn active_lease(&self, vm_id: Uuid) -> Result<Option<Lease>, IpamError> {
+        ipam::active_lease(&self.lock(), vm_id)
+    }
+
     /// Startup cleanup: a VM left in a live state by a previous run has no
     /// process behind it anymore, so demote it to stopped.
     pub fn reset_active_states(&self) -> Result<usize, PersistenceError> {
