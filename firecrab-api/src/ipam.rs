@@ -67,6 +67,16 @@ pub enum IpamError {
         /// The VM with no active lease.
         vm_id: Uuid,
     },
+    /// A lease row's stored ipv4/mac text didn't parse — the schema only
+    /// ever accepts values this module itself wrote, so this means the
+    /// database was altered out from under it.
+    #[error("vm {vm_id}'s stored lease is corrupt: {reason}")]
+    CorruptLease {
+        /// The VM whose lease row is corrupt.
+        vm_id: Uuid,
+        /// Human-readable reason.
+        reason: String,
+    },
 }
 
 /// Allocate an IPv4 + MAC for `vm_id`. Must run inside a `BEGIN IMMEDIATE`
@@ -112,6 +122,30 @@ pub fn release(tx: &Transaction<'_>, vm_id: Uuid) -> Result<(), IpamError> {
         return Err(IpamError::NotLeased { vm_id });
     }
     Ok(())
+}
+
+/// Looks up `vm_id`'s current active lease, if it has one. Unlike
+/// [`allocate`]/[`release`], this is a plain read with no need for a
+/// `BEGIN IMMEDIATE` transaction.
+pub fn active_lease(conn: &rusqlite::Connection, vm_id: Uuid) -> Result<Option<Lease>, IpamError> {
+    conn.query_row(
+        "SELECT ipv4, mac FROM network_leases WHERE vm_id = ?1 AND released_at IS NULL",
+        params![vm_id.to_string()],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )
+    .optional()?
+    .map(|(ipv4, mac)| {
+        let ipv4 = ipv4.parse().map_err(|_| IpamError::CorruptLease {
+            vm_id,
+            reason: format!("stored ipv4 {ipv4:?} does not parse"),
+        })?;
+        let mac = mac.parse().map_err(|_| IpamError::CorruptLease {
+            vm_id,
+            reason: format!("stored mac {mac:?} does not parse"),
+        })?;
+        Ok(Lease { vm_id, ipv4, mac })
+    })
+    .transpose()
 }
 
 /// Whether `vm_id` currently holds an unreleased lease.
@@ -210,6 +244,26 @@ mod tests {
             assert_ne!(lease.ipv4, GATEWAY);
             assert_ne!(lease.ipv4, BROADCAST);
         }
+    }
+
+    #[test]
+    fn active_lease_reports_a_corrupt_stored_ipv4() {
+        let mut conn = open();
+        let vm_id = Uuid::new_v4();
+        let tx = begin(&mut conn);
+        allocate(&tx, vm_id).unwrap();
+        tx.commit().unwrap();
+
+        conn.execute(
+            "UPDATE network_leases SET ipv4 = 'not-an-ip' WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            active_lease(&conn, vm_id),
+            Err(IpamError::CorruptLease { .. })
+        ));
     }
 
     #[test]

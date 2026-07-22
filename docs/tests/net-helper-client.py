@@ -13,8 +13,23 @@ import struct
 import sys
 import uuid
 
-PATH = sys.argv[1] if len(sys.argv) > 1 else sys.exit("usage: net-helper-client.py <socket-path> [operation]")
+PATH = sys.argv[1] if len(sys.argv) > 1 else sys.exit(
+    "usage: net-helper-client.py <socket-path> [operation] [key=value ...]"
+)
 OPERATION = sys.argv[2] if len(sys.argv) > 2 else "ensure_firewall"
+
+# Operations beyond ensure_bridge/ensure_firewall take extra fields
+# (create_tap/delete_tap need vm_id, apply_vm_policy needs more) — the
+# request is internally tagged on "operation", so these merge in alongside
+# it. Passing a bare UUID with no "vm_id=" prefix is silently dropped by the
+# server as an unparseable request (no vm_id field at all), which looks like
+# a hang/EOF on the client side, not a helpful error — always use key=value.
+EXTRA_FIELDS = {}
+for arg in sys.argv[3:]:
+    key, sep, value = arg.partition("=")
+    if not sep:
+        sys.exit(f"잘못된 인자 {arg!r} — key=value 형식으로 주세요 (예: vm_id=<uuid>)")
+    EXTRA_FIELDS[key] = value
 
 
 def recv_exact(sock, length):
@@ -43,5 +58,9 @@ try:
 except OSError as error:
     sys.exit(f"소켓 연결 실패 ({PATH}): {error} — helper 실행 여부와 경로를 확인하세요")
 
-req = {"version": 1, "request_id": str(uuid.uuid4()), "request": {"operation": OPERATION}}
+req = {
+    "version": 1,
+    "request_id": str(uuid.uuid4()),
+    "request": {"operation": OPERATION, **EXTRA_FIELDS},
+}
 print(call(s, req))

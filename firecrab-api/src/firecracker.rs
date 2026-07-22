@@ -19,7 +19,7 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::console::ConsoleBroker;
-use crate::model::{VmRecord, VmState};
+use crate::model::{MacAddr, VmRecord, VmState};
 use crate::rootfs;
 use crate::state::AppState;
 
@@ -114,6 +114,9 @@ pub struct FirecrackerConfig {
     boot_source: BootSource,
     /// Block devices, always exactly the one root drive today.
     drives: Vec<Drive>,
+    /// The VM's TAP interface, absent until TAP automation assigns one.
+    #[serde(rename = "network-interfaces", skip_serializing_if = "Vec::is_empty")]
+    network_interfaces: Vec<NetworkInterface>,
     /// vCPU/memory sizing.
     #[serde(rename = "machine-config")]
     machine_config: MachineConfig,
@@ -150,13 +153,36 @@ struct MachineConfig {
     mem_size_mib: u32,
 }
 
+/// One entry in [`FirecrackerConfig`]'s `network-interfaces` list.
+#[derive(Debug, Serialize)]
+struct NetworkInterface {
+    /// Firecracker-side interface identifier.
+    iface_id: String,
+    /// MAC address presented to the guest.
+    guest_mac: String,
+    /// Host-side TAP device name this interface is backed by.
+    host_dev_name: String,
+}
+
+/// The VM's TAP attachment: its host TAP device name (from
+/// [`crate::network::tap_name`]) and the guest MAC its IPAM lease pins.
+#[derive(Debug, Clone)]
+pub struct VmNetwork {
+    /// Host-side TAP device name.
+    pub tap_name: String,
+    /// MAC address the guest's `eth0` presents.
+    pub guest_mac: MacAddr,
+}
+
 impl FirecrackerConfig {
-    /// Builds the config for `vm`'s single root drive at `rootfs_path`.
+    /// Builds the config for `vm`'s single root drive at `rootfs_path`, and
+    /// its network interface if TAP automation has attached one.
     pub fn for_vm(
         vm: &VmRecord,
         kernel_image_path: &Path,
         boot_args: &str,
         rootfs_path: &Path,
+        network: Option<&VmNetwork>,
     ) -> Self {
         Self {
             boot_source: BootSource {
@@ -169,6 +195,15 @@ impl FirecrackerConfig {
                 is_root_device: true,
                 is_read_only: false,
             }],
+            network_interfaces: network
+                .map(|network| {
+                    vec![NetworkInterface {
+                        iface_id: "eth0".to_owned(),
+                        guest_mac: network.guest_mac.to_string(),
+                        host_dev_name: network.tap_name.clone(),
+                    }]
+                })
+                .unwrap_or_default(),
             machine_config: MachineConfig {
                 vcpu_count: vm.cpu,
                 mem_size_mib: vm.ram,
@@ -185,6 +220,7 @@ pub fn write_config(
     vm: &VmRecord,
     kernel_image_path: &Path,
     boot_args: &str,
+    network: Option<&VmNetwork>,
 ) -> Result<PathBuf, FirecrackerError> {
     let vm_dir = vms_dir.join(vm.id.to_string());
     fs::create_dir_all(&vm_dir).map_err(|source| FirecrackerError::CreateDirectory {
@@ -198,6 +234,7 @@ pub fn write_config(
         kernel_image_path,
         boot_args,
         &rootfs::rootfs_path(vms_dir, vm.id),
+        network,
     );
     let json =
         serde_json::to_vec_pretty(&config).map_err(|source| FirecrackerError::Serialize {
@@ -345,6 +382,10 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
                 state = ?record.state,
                 "vm process exited"
             );
+            // Only stop_vm's own SIGTERM path tears the network down today;
+            // a guest-initiated poweroff or an external kill lands here
+            // instead and would otherwise leave the TAP/policy orphaned.
+            crate::handlers::vms::teardown_vm_network(&state, id).await;
             let store = state.store.clone();
             match tokio::task::spawn_blocking(move || store.update(&record)).await {
                 Ok(Ok(())) => {}
@@ -629,8 +670,14 @@ mod tests {
         let vms_dir = directory.path().join("vms");
         let vm = record(3, 768);
 
-        let path =
-            write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0").unwrap();
+        let path = write_config(
+            &vms_dir,
+            &vm,
+            Path::new("/images/vmlinux"),
+            "console=ttyS0",
+            None,
+        )
+        .unwrap();
 
         assert_eq!(
             path,
@@ -647,8 +694,14 @@ mod tests {
         let vms_dir = directory.path().join("vms");
         let vm = record(1, 512);
 
-        let path =
-            write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0").unwrap();
+        let path = write_config(
+            &vms_dir,
+            &vm,
+            Path::new("/images/vmlinux"),
+            "console=ttyS0",
+            None,
+        )
+        .unwrap();
 
         let config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(
@@ -673,11 +726,24 @@ mod tests {
         let vms_dir = directory.path().join("vms");
         let mut vm = record(1, 512);
 
-        write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0").unwrap();
+        write_config(
+            &vms_dir,
+            &vm,
+            Path::new("/images/vmlinux"),
+            "console=ttyS0",
+            None,
+        )
+        .unwrap();
         vm.cpu = 2;
         vm.ram = 1024;
-        let path =
-            write_config(&vms_dir, &vm, Path::new("/images/vmlinux"), "console=ttyS0").unwrap();
+        let path = write_config(
+            &vms_dir,
+            &vm,
+            Path::new("/images/vmlinux"),
+            "console=ttyS0",
+            None,
+        )
+        .unwrap();
 
         let config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["machine-config"]["vcpu_count"], 2);

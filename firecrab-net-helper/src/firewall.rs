@@ -5,13 +5,12 @@
 use std::net::Ipv4Addr;
 use std::process::Stdio;
 
-use firecrab_helper_protocol::network::MacAddr;
+use firecrab_helper_protocol::network::{MacAddr, TAP_PREFIX, tap_name};
 use futures_util::TryStreamExt;
 use rtnetlink::packet_route::link::LinkAttribute;
 use rtnetlink::packet_route::route::RouteAttribute;
 use rtnetlink::packet_route::{AddressFamily, route::RouteMessage};
 use rtnetlink::{Handle, new_connection};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -26,12 +25,6 @@ const TABLE_INET: &str = "firecrab";
 const TABLE_BRIDGE: &str = "firecrab_l2";
 /// The Firecrab VPC subnet, as an nftables-literal CIDR string.
 const BRIDGE_SUBNET: &str = "172.30.0.0/24";
-/// TAP interface names are bounded by IFNAMSIZ (16 incl. NUL). `fct` + 12 hex
-/// of sha256(vm_id) = 15 chars. The prefix is distinct from `fcbr0` so an
-/// east-west wildcard (`fct*`) never matches the bridge itself. The
-/// tap-automation helper derives the same name from the same vm_id, so policy
-/// rules and the real device agree.
-const TAP_PREFIX: &str = "fct";
 
 /// The egress posture the helper resolves an API-supplied policy ID into.
 /// The API selects the ID; the helper is the trust boundary and owns the
@@ -273,17 +266,6 @@ fn render_apply_ruleset(uplink: &str) -> Result<String, FirewallError> {
     ))
 }
 
-/// The deterministic TAP name for a VM. Both this module and the
-/// tap-automation helper derive it from the same vm_id.
-pub fn tap_name(vm_id: Uuid) -> String {
-    let digest = Sha256::digest(vm_id.as_bytes());
-    let mut name = String::from(TAP_PREFIX);
-    for byte in &digest[..6] {
-        name.push_str(&format!("{byte:02x}"));
-    }
-    name
-}
-
 /// Renders one VM's isolation rules: L2 anti-spoofing tied to the lease, plus
 /// L3 egress/ingress verdicts. Every per-VM object is named after the vm_id
 /// and (re)built with add+flush, so re-applying or replacing this VM's policy
@@ -509,15 +491,6 @@ mod tests {
             egress,
             allow_host_ssh,
         }
-    }
-
-    #[test]
-    fn tap_name_is_deterministic_and_within_ifnamsiz() {
-        let vm = Uuid::from_u128(0x1234);
-        assert_eq!(tap_name(vm), tap_name(vm));
-        assert!(tap_name(vm).len() <= 15, "{}", tap_name(vm));
-        assert!(tap_name(vm).starts_with("fct"));
-        assert_ne!(tap_name(vm), tap_name(Uuid::from_u128(0x1235)));
     }
 
     #[test]

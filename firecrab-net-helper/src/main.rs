@@ -17,6 +17,8 @@ use std::time::Duration;
 mod bridge;
 /// Per-VM and global nftables firewall rules.
 mod firewall;
+/// Per-VM TAP device lifecycle.
+mod tap;
 
 use firecrab_helper_protocol::PROTOCOL_VERSION;
 use firecrab_helper_protocol::framing::{read_frame, write_frame};
@@ -326,8 +328,19 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: error_chain(&error),
                 })
         }
-        NetworkRequest::CreateTap { .. } | NetworkRequest::DeleteTap { .. } => {
-            Err(HelperFailure::UnsupportedOperation)
+        NetworkRequest::CreateTap { vm_id } => {
+            tap::create_tap(vm_id)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
+        NetworkRequest::DeleteTap { vm_id } => {
+            tap::delete_tap(vm_id)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
         }
     }
 }
@@ -394,21 +407,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unimplemented_operations_are_rejected() {
-        // Only TAP creation/deletion is still unimplemented; the policy
-        // operations are handled (RemoveVmPolicy is a no-op when nothing is
-        // installed, so it does not reach nft here).
+    async fn deleting_a_tap_that_was_never_created_is_a_no_op() {
+        // Read-only rtnetlink lookups need no special privilege, so this is
+        // safe to run unprivileged: the delete never reaches the point of
+        // needing CAP_NET_ADMIN because find_link reports nothing to delete.
         let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
-        let requests = [
-            NetworkRequest::CreateTap { vm_id: Uuid::nil() },
-            NetworkRequest::DeleteTap { vm_id: Uuid::nil() },
-        ];
-        for request in requests {
-            assert_eq!(
-                dispatch(request, &config).await,
-                Err(HelperFailure::UnsupportedOperation)
-            );
-        }
+        let request = NetworkRequest::DeleteTap {
+            vm_id: Uuid::new_v4(),
+        };
+        assert_eq!(dispatch(request, &config).await, Ok(()));
     }
 
     #[tokio::test]
@@ -434,11 +441,14 @@ mod tests {
 
         let mut stream = UnixStream::connect(&path).await.expect("connect");
         for _ in 0..2 {
-            // DeleteTap answers deterministically without touching netlink,
+            // DeleteTap of a nonexistent device is a deterministic, read-only
+            // no-op (see deleting_a_tap_that_was_never_created_is_a_no_op),
             // so the framing loop is testable without privileges.
             let envelope = NetworkRequestEnvelope::new(
                 Uuid::new_v4(),
-                NetworkRequest::DeleteTap { vm_id: Uuid::nil() },
+                NetworkRequest::DeleteTap {
+                    vm_id: Uuid::new_v4(),
+                },
             );
             write_frame(&mut stream, &envelope)
                 .await
@@ -447,7 +457,7 @@ mod tests {
                 read_frame(&mut stream).await.expect("receive response");
             assert_eq!(response.version, PROTOCOL_VERSION);
             assert_eq!(response.request_id, envelope.request_id);
-            assert_eq!(response.result, Err(HelperFailure::UnsupportedOperation));
+            assert_eq!(response.result, Ok(()));
         }
 
         drop(stop);
