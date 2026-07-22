@@ -61,6 +61,16 @@ export default function Console({ vmId, vmName, onClose }: ConsoleProps) {
     socket.onerror = () => setStatus("failed");
 
     const dataListener = term.onData((data) => {
+      // xterm.js answers the guest's own cursor-position queries (`ESC[6n`)
+      // by emitting a synthetic `ESC[row;colR` "keystroke" here so it can be
+      // relayed back — but the guest's tty echoes whatever it receives back
+      // out as output, which xterm.js's parser can then treat as another
+      // meaningful escape burst, and 8-9 rounds shows up as
+      // `;1R;80R;1R;80R...` printed at the prompt. Real keystrokes never
+      // take this exact shape, so dropping it here breaks the loop without
+      // affecting anything the user actually types.
+      // eslint-disable-next-line no-control-regex -- matching a literal ESC byte is the point
+      if (/^\x1b\[\d+;\d+R$/.test(data)) return;
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(new TextEncoder().encode(data));
       }
