@@ -31,6 +31,12 @@ jobs:
         # rust-toolchain.toml pins channel 1.94.1 + clippy/rustfmt/llvm-tools
         run: rustup show
 
+      - name: Install dnsmasq
+        # firecrab-net-helper's dhcp.rs tests shell out to the real
+        # `dnsmasq --test` to validate generated configs — not preinstalled
+        # on the runner image.
+        run: sudo apt-get update && sudo apt-get install -y dnsmasq
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
