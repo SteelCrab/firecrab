@@ -58,6 +58,21 @@
   확인 후 74.75%→100%(라인 기준)까지 테스트 보강. 프론트엔드 `tsc -b`/`oxlint`/`vite build` 통과, Playwright로
   실제 dev 서버 골든 패스 확인(VM 생성 시 격리 정책 선택 → 상세에서 ip/mac/hostname/정책 확인 → 수정 →
   HOST 정보 모달에서 실제 값 확인)
+- 2026-07-24: 실사용 중 발견한 버그 4건 수정 + OS 패키지 업데이트 기능 추가.
+  콘솔 브로드캐스트 채널의 `Lagged`(컨슈머 지연)를 `Closed`(진짜 종료)와 구분 못 해 여러 VM
+  동시 부팅 시 멀쩡한 VM을 SIGKILL하던 버그(`docs/bugs/vm-killed-mid-boot-under-concurrent-load.md`),
+  DHCP가 거의 항상 실패하던 원인 3건 추가 발견·수정(dnsmasq base config/hosts 파일 경로 충돌,
+  `dhcp-hostsfile` 잘못된 접두어, IP 빠른 재사용 시 dnsmasq 예전 리스와 충돌 —
+  `docs/bugs/dhcp-never-reaches-guest.md`), Alpine 템플릿만 매번 `no-ipv4-address`로 실패하던
+  버그(OpenRC `after dhcpcd`가 시작 순서만 보장, dhcpcd 완료를 보장하지 않음 —
+  `docs/bugs/alpine-network-ready-races-dhcpcd.md`), VM 내부에서 나가는 새 아웃바운드 연결이
+  타임아웃되던 버그(호스트 UFW가 라우팅을 기본 거부, 프로젝트 자체 nftables와 별개로 독자 drop —
+  `docs/bugs/vm-outbound-forward-blocked-by-ufw.md`, 코드 아닌 호스트 설정 문제)까지 총 4건.
+  `POST /api/vms/{id}/packages/update`(`firecrab-api/src/handlers/packages.rs`)로 실행 중 VM에
+  apt/apk update·upgrade를 콘솔 sentinel 방식으로 실행하는 기능도 추가(guest agent 없이
+  `wait_for_network_ready`와 같은 패턴 재사용) — 실제 Ubuntu/Alpine VM에서 exit code 0으로 검증,
+  프론트엔드 버튼은 아직 없음(백엔드만). CI(GitHub Actions)에 `dnsmasq` 미설치로 나던 테스트 실패
+  수정, Codecov patch coverage 90.00%→92.24%로 보강. `cargo test --workspace` 126/18/12/46 green
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
@@ -87,7 +102,7 @@
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
 | 미완료 (네트워크 이후) | [배포판 표준 커널 사용](task-distro-standard-kernels.md) | Ubuntu/Alpine 템플릿이 공유하는 자체 빌드 vanilla 커널 대신, 각 배포판이 실제 배포하는 공식 커널(`linux-image-generic`, `linux-virt`)을 추출해 쓴다. | 두 템플릿 모두 실제 배포판 공식 커널로 부팅되고 기존 동작에 회귀가 없다(Alpine은 virtio_blk/ext4가 모듈이라 initrd 필요). | `firecrab-api/src/templates.rs`, `firecrab-api/src/firecracker.rs`, `images/kernel/` |
-| 미완료 (네트워크 이후) | [네트워크 구성 대시보드](task-network-configuration-dashboard.md) | 웹 대시보드에서 host 네트워크(subnet/uplink)를 설정하고 VM을 그 네트워크에 명시적으로 포함시키는 UI/API를 추가한다. | 대시보드에서 네트워크 설정을 보고 바꿀 수 있고, VM 생성·상세 화면에서 소속 네트워크를 확인할 수 있다. | `firecrab-api/src/handlers/network.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/nat.rs`, `firecrab-frontend/src/components/` |
+| 미완료 (네트워크 이후) | [네트워크 구성 대시보드 — 다중 subnet/uplink 편집](task-network-configuration-dashboard.md) | (읽기 전용 조회 + VM별 egress 정책은 위 표에서 ✅ 완료됨) 대시보드에서 host 네트워크(subnet/uplink) 자체를 **직접 설정**하고, 여러 네트워크 중 VM이 속할 네트워크를 명시적으로 고를 수 있게 한다 — IPAM/bridge 다중화 리팩터가 선행돼야 함. | 대시보드에서 네트워크 설정을 바꿀 수 있고, VM 생성·상세 화면에서 소속 네트워크(복수 중 하나)를 확인할 수 있다. | `firecrab-api/src/handlers/network.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/nat.rs`, `firecrab-frontend/src/components/` |
 
 ### 네트워크 — 범위 밖으로 보류 (재개 시 참고용, 이번 대회 일정에는 포함 안 함)
 
