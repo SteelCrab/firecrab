@@ -498,7 +498,15 @@ verify_rootfs_content() {
     fail 'Rootfs did not create /etc/systemd/network/10-eth0.network.'
   fi
 
-  if [ ! -L "${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" ]; then
+  networkd_service_link="${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service"
+  if [ ! -L "${networkd_service_link}" ]; then
+    fail 'Rootfs did not enable systemd-networkd.service.'
+  fi
+  networkd_service_target=$(readlink "${networkd_service_link}")
+  if [ "${networkd_service_target}" != '/lib/systemd/system/systemd-networkd.service' ]; then
+    fail 'Rootfs did not enable systemd-networkd.service.'
+  fi
+  if [ ! -e "${mount_dir}${networkd_service_target}" ]; then
     fail 'Rootfs did not enable systemd-networkd.service.'
   fi
 
