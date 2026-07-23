@@ -17,6 +17,7 @@
 | `FIRECRAB_NETWORK_FAILED no-ipv4-address` | [네트워크](#네트워크) |
 | Alpine 템플릿만 매번 `no-ipv4-address`(Ubuntu는 정상) | [네트워크](#네트워크) |
 | VM을 여러 대 동시에 시작하면 부팅 극초반에 죽음 | [네트워크](#네트워크) |
+| VM 내부에서 새 목적지로 나가는 연결(apt/apk update 등)이 타임아웃 | [네트워크](#네트워크) |
 | 터미널 "연결 끊김"만 뜨고 안 붙음 | [터미널](#터미널) |
 | 터미널 프롬프트에 `;1R;80R;1R;80R...` 반복 | [터미널](#터미널) |
 
@@ -111,6 +112,14 @@ VM이 부팅과 `firecrab-network-ready.service` 실행까지는 성공하지만
   콘솔 브로드캐스트 채널이 컨슈머 지연으로 `Lagged`를 반환하는 걸 `Closed`(진짜 종료)와 구분 못 해
   멀쩡히 부팅 중인 VM을 죽였던 버그, 수정됨. bpftrace로 SIGKILL 발신자가 `firecrab-api` 자신임을
   특정한 과정도 기록해뒀다(비슷한 미스터리 킬을 또 만나면 참고)
+
+### VM 내부에서 새 목적지로 나가는 연결이 타임아웃(예: `apt update`는 되는데 `apk update`는 안 됨)
+
+- **원인·수정**: [bugs/vm-outbound-forward-blocked-by-ufw.md](bugs/vm-outbound-forward-blocked-by-ufw.md) —
+  `dhcp-never-reaches-guest.md` 원인 3과 같은 클래스: 호스트 UFW가 라우팅(forward)을 기본
+  거부(`라우팅 된: deny`)하는데 새 아웃바운드 연결을 허용하는 규칙이 없었음(established/related와
+  ping만 예외). `inet firecrab` 테이블 자체는 정상이라 코드 문제가 아니었음(코드 문제 아님, 새
+  개발 머신마다 수동으로 `sudo ufw route allow in on fcbr0 out on <업링크>` 해줘야 함)
 
 ## 터미널
 
