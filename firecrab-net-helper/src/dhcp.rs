@@ -139,8 +139,16 @@ async fn active_leases() -> Vec<(Ipv4Addr, MacAddr)> {
     let Ok(text) = tokio::fs::read_to_string(LEASE_FILE).await else {
         return Vec::new();
     };
-    // Format is `<expiry> <mac> <ip> <hostname-or-*> <client-id-or-*>`,
-    // one lease per line.
+    parse_lease_file(&text)
+}
+
+/// Parses dnsmasq's own lease database format — split out from
+/// [`active_leases`] so the parsing itself is testable without touching the
+/// real lease file. Format is `<expiry> <mac> <ip> <hostname-or-*>
+/// <client-id-or-*>`, one lease per line; a line that doesn't match (blank,
+/// truncated, or holding an unparseable field) is skipped rather than
+/// failing the whole read.
+fn parse_lease_file(text: &str) -> Vec<(Ipv4Addr, MacAddr)> {
     text.lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
@@ -460,6 +468,38 @@ mod tests {
         let old = active("172.30.0.5", "02:fc:00:00:00:01");
         let current = [lease(1, "172.30.0.5", "02:fc:00:00:00:01")];
         assert!(stale_leases(vec![old], &current).is_empty());
+    }
+
+    #[test]
+    fn parse_lease_file_reads_one_ip_mac_pair_per_line() {
+        let text = "\
+            1784810338 02:fc:00:00:00:01 172.30.0.5 fc-abc123456789 *\n\
+            1784810400 02:fc:00:00:00:02 172.30.0.6 * 01:02:fc:00:00:00:02\n";
+        assert_eq!(
+            parse_lease_file(text),
+            vec![
+                active("172.30.0.5", "02:fc:00:00:00:01"),
+                active("172.30.0.6", "02:fc:00:00:00:02"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_lease_file_skips_blank_and_malformed_lines_instead_of_failing() {
+        let text = "\n \
+            not-enough-fields\n\
+            1784810338 not-a-mac 172.30.0.5 fc-abc123456789 *\n\
+            1784810338 02:fc:00:00:00:01 not-an-ip fc-abc123456789 *\n\
+            1784810338 02:fc:00:00:00:03 172.30.0.7 fc-abc123456789 *\n";
+        assert_eq!(
+            parse_lease_file(text),
+            vec![active("172.30.0.7", "02:fc:00:00:00:03")]
+        );
+    }
+
+    #[test]
+    fn parse_lease_file_of_an_empty_string_is_empty() {
+        assert!(parse_lease_file("").is_empty());
     }
 
     #[test]

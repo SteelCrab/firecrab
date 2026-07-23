@@ -588,6 +588,16 @@ mod tests {
     }
 
     #[test]
+    fn decode_egress_policy_rejects_an_unknown_value_as_corrupt() {
+        let error = decode_egress_policy("some-id", "wide-open").unwrap_err();
+        assert!(matches!(
+            error,
+            PersistenceError::CorruptRecord { id, reason }
+                if id == "some-id" && reason.contains("wide-open")
+        ));
+    }
+
+    #[test]
     fn records_survive_reopen() {
         let directory = tempdir().unwrap();
         let db_file = directory.path().join("firecrab.db");

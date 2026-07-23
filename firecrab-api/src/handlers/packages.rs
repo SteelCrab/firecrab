@@ -445,6 +445,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_for_completion_caps_the_tail_at_output_tail_cap() {
+        let console = ConsoleBroker::new();
+        let (_backlog, mut receiver) = console.subscribe();
+
+        let waiter = tokio::spawn(async move {
+            wait_for_completion(&mut receiver, Duration::from_secs(5)).await
+        });
+        tokio::task::yield_now().await;
+
+        // One line short of OUTPUT_TAIL_CAP by itself is well past it once
+        // repeated — enough to force the rolling-buffer trim, not just fill
+        // it exactly.
+        let line = "x".repeat(100) + "\n";
+        for _ in 0..(OUTPUT_TAIL_CAP / line.len() + 10) {
+            console.push_output(line.as_bytes());
+        }
+        console.push_output(b"FIRECRAB_PKG_UPDATE_DONE:0\n");
+
+        let (code, tail) = waiter.await.expect("waiter task panicked").unwrap();
+        assert_eq!(code, 0);
+        assert!(tail.len() <= OUTPUT_TAIL_CAP);
+        assert!(tail.contains("FIRECRAB_PKG_UPDATE_DONE:0"));
+    }
+
+    #[tokio::test]
     async fn wait_for_completion_fails_when_the_console_closes_first() {
         let console = ConsoleBroker::new();
         let (_backlog, mut receiver) = console.subscribe();

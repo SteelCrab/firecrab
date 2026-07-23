@@ -330,6 +330,12 @@ mod tests {
     }
 
     #[test]
+    fn egress_policy_displays_as_its_id() {
+        assert_eq!(EgressPolicy::Internet.to_string(), "internet");
+        assert_eq!(EgressPolicy::Isolated.to_string(), "isolated");
+    }
+
+    #[test]
     fn create_vm_request_defaults_egress_policy_to_internet_when_absent() {
         let json = r#"{"name":"vm","template":"ubuntu-rootfs-26.04","ram":512,"cpu":1,"diskGb":2}"#;
         let request: CreateVmRequest = serde_json::from_str(json).unwrap();
