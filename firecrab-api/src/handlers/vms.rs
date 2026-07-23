@@ -7,6 +7,7 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{VmLogResponse, VmResponse};
 use firecrab_helper_protocol::network::DhcpLeaseEntry;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -724,7 +725,24 @@ async fn wait_for_network_ready(
                         return outcome;
                     }
                 }
-                Err(_) => return Err("console closed before network became ready".to_owned()),
+                // Lagged means the broadcast fan-out dropped some buffered
+                // output because this receiver fell behind (e.g. many VMs
+                // booting at once starve the consumer task of CPU) — the
+                // guest and its console are still perfectly alive, so this
+                // must not be treated the same as the channel actually
+                // closing. Losing a chunk just means a sentinel inside it
+                // could be missed; resubscribing from scratch would lose the
+                // backlog needed to detect a sentinel that already scrolled
+                // by, so simply keep reading forward.
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        skipped,
+                        "console broadcast lagged; still waiting for network readiness"
+                    );
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    return Err("console closed before network became ready".to_owned());
+                }
             }
         }
     };
@@ -2079,6 +2097,30 @@ while True:
         assert_eq!(find_network_sentinel(&buffer), None);
         buffer.extend_from_slice(b"_READY 172.30.0.5\n");
         assert_eq!(find_network_sentinel(&buffer), Some(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn wait_for_network_ready_survives_a_lagged_broadcast_receiver() {
+        // Regression test for the concurrent-boot bug: a receiver that falls
+        // behind the console broadcast (many VMs booting at once starve the
+        // consumer task of CPU) must not be treated as the console having
+        // closed. Flood well past the broadcast capacity before the sentinel
+        // arrives, so the waiter is guaranteed to observe `Lagged` first.
+        let console = std::sync::Arc::new(crate::console::ConsoleBroker::new());
+        let waiter = tokio::spawn({
+            let console = console.clone();
+            async move { wait_for_network_ready(&console, Duration::from_secs(5)).await }
+        });
+
+        // Let the spawned task reach its subscribe() call before the flood,
+        // so the flood lags its receiver instead of only filling backlog.
+        tokio::task::yield_now().await;
+        for _ in 0..300 {
+            console.push_output(b"boot noise\n");
+        }
+        console.push_output(b"FIRECRAB_NETWORK_READY 172.30.0.5\n");
+
+        assert_eq!(waiter.await.expect("waiter task panicked"), Ok(()));
     }
 
     #[test]
