@@ -15,6 +15,7 @@
 | "network helper is unavailable" 로 start가 500 | [네트워크](#네트워크) |
 | VM은 로그인 셸까지 완전히 부팅되는데 계속 `error` | [네트워크](#네트워크) |
 | `FIRECRAB_NETWORK_FAILED no-ipv4-address` | [네트워크](#네트워크) |
+| Alpine 템플릿만 매번 `no-ipv4-address`(Ubuntu는 정상) | [네트워크](#네트워크) |
 | VM을 여러 대 동시에 시작하면 부팅 극초반에 죽음 | [네트워크](#네트워크) |
 | 터미널 "연결 끊김"만 뜨고 안 붙음 | [터미널](#터미널) |
 | 터미널 프롬프트에 `;1R;80R;1R;80R...` 반복 | [터미널](#터미널) |
@@ -97,6 +98,12 @@ VM이 부팅과 `firecrab-network-ready.service` 실행까지는 성공하지만
   `sudo ufw allow in on fcbr0 to any port 67 proto udp` 등 해줘야 함), IP를 빠르게 재사용할 때
   dnsmasq의 예전 리스와 충돌(`dhcp_release`로 강제 해제하도록 수정, `dnsmasq-utils` 설치 필요).
   넷 다 수정/조치됨 — VM 5대 연속 생성·삭제로 재현 검증 완료
+
+### Alpine 템플릿만 매번 `no-ipv4-address`(Ubuntu는 정상)
+
+- **원인·수정**: [bugs/alpine-network-ready-races-dhcpcd.md](bugs/alpine-network-ready-races-dhcpcd.md) —
+  OpenRC의 `after dhcpcd`는 시작 순서만 보장하지 dhcpcd가 실제로 IP를 받았다는 보장이 아님(dhcpcd가
+  즉시 데몬으로 fork). `firecrab-network-ready` 서비스에 짧은 폴링 추가로 수정, 수정됨
 
 ### VM을 여러 대 동시에 시작하면 부팅 극초반에 일부가 원인 불명으로 죽는다
 
