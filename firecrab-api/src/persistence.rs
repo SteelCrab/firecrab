@@ -233,6 +233,7 @@ impl Store {
                     disk_gb: row.get(10)?,
                     egress_policy: decode_egress_policy(&id_text, &row.get::<_, String>(11)?)?,
                     startup_step: None,
+                    package_update: None,
                 },
             );
         }
@@ -445,6 +446,7 @@ mod tests {
             disk_gb: 2,
             egress_policy: Default::default(),
             startup_step: None,
+            package_update: None,
         }
     }
 

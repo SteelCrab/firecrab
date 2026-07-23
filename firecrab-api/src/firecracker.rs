@@ -671,6 +671,7 @@ mod tests {
             disk_gb: 2,
             egress_policy: Default::default(),
             startup_step: None,
+            package_update: None,
         }
     }
 

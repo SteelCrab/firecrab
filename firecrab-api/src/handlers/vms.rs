@@ -151,6 +151,7 @@ pub async fn create_vm(
         egress_policy: req.egress_policy,
         state: VmState::Created,
         startup_step: None,
+        package_update: None,
     };
 
     let store = state.store.clone();
@@ -514,7 +515,7 @@ pub async fn delete_vm(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {
+pub(crate) fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {
     Uuid::parse_str(id).map_err(|_| {
         let mut fields = BTreeMap::new();
         fields.insert("id".to_owned(), "must be a UUID".to_owned());
@@ -927,7 +928,7 @@ fn sorted_responses(
 /// (task panic or DB error) just means the response's ipv4/mac come back
 /// `None` for this one call, not a hard failure — the lease itself is the
 /// source of truth and is unaffected either way.
-async fn lease_for(state: &AppState, vm_id: Uuid) -> Option<Lease> {
+pub(crate) async fn lease_for(state: &AppState, vm_id: Uuid) -> Option<Lease> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || store.active_lease(vm_id))
         .await
@@ -935,7 +936,7 @@ async fn lease_for(state: &AppState, vm_id: Uuid) -> Option<Lease> {
         .ok()?
 }
 
-fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
+pub(crate) fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
@@ -947,6 +948,7 @@ fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
         disk_gb: vm.disk_gb,
         startup_step: vm.startup_step,
         egress_policy: vm.egress_policy,
+        package_update: vm.package_update.clone(),
         ipv4: lease.map(|lease| lease.ipv4.to_string()),
         mac: lease.map(|lease| lease.mac.to_string()),
         hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
@@ -1017,69 +1019,22 @@ fn valid_vm_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// Test-only fixtures shared with sibling handler modules (e.g.
+/// `handlers::packages`) that need a running-VM-with-a-process to exercise
+/// their own handlers, without duplicating this module's DB/rootfs setup.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use axum::response::IntoResponse;
-    use tempfile::tempdir;
+    use uuid::Uuid;
 
-    use super::*;
-    use crate::firecracker::test_support::{
-        SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, process_alive, short_tempdir,
-    };
+    use super::{AppState, VmRecord, VmState};
     use crate::state::RuntimeConfig;
     use crate::templates::{TemplateRegistry, TemplateSpec};
 
-    #[test]
-    fn validates_vm_names() {
-        assert!(valid_vm_name("vm-01.example"));
-        assert!(!valid_vm_name(""));
-        assert!(!valid_vm_name("-vm"));
-        assert!(!valid_vm_name("vm space"));
-        assert!(!valid_vm_name(&"a".repeat(65)));
-    }
-
-    #[tokio::test]
-    async fn validates_disk_gb_against_the_template_floor_and_fixed_ceiling() {
-        let directory = tempdir().unwrap();
-        let state = test_state(directory.path()).await;
-        // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
-        // so `min_disk_gb_for` rounds it up to 1 GiB.
-        let base = CreateVmRequest {
-            name: "test-vm".to_owned(),
-            template: "ubuntu-rootfs-26.04".to_owned(),
-            ram: 512,
-            cpu: 1,
-            disk_gb: 0,
-            egress_policy: Default::default(),
-        };
-
-        let too_small = validate_create(&base, &state);
-        assert!(too_small.contains_key("diskGb"), "{too_small:?}");
-
-        let at_floor = CreateVmRequest {
-            disk_gb: 1,
-            ..base.clone()
-        };
-        assert!(!validate_create(&at_floor, &state).contains_key("diskGb"));
-
-        let too_large = CreateVmRequest {
-            disk_gb: MAX_DISK_GB + 1,
-            ..base.clone()
-        };
-        assert!(validate_create(&too_large, &state).contains_key("diskGb"));
-
-        let at_ceiling = CreateVmRequest {
-            disk_gb: MAX_DISK_GB,
-            ..base
-        };
-        assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
-    }
-
-    fn record(name: &str, id: Uuid) -> VmRecord {
+    pub(crate) fn record(name: &str, id: Uuid) -> VmRecord {
         VmRecord {
             id,
             name: name.to_owned(),
@@ -1097,44 +1052,15 @@ mod tests {
             disk_gb: 0,
             egress_policy: Default::default(),
             startup_step: None,
+            package_update: None,
         }
     }
 
-    #[test]
-    fn lists_vms_sorted_by_name_then_id() {
-        let low = Uuid::from_u128(1);
-        let high = Uuid::from_u128(2);
-        let vms = HashMap::from([
-            (high, record("beta", high)),
-            (low, record("beta", low)),
-            (Uuid::from_u128(3), record("alpha", Uuid::from_u128(3))),
-        ]);
-
-        let responses = sorted_responses(&vms, &HashMap::new());
-        let order: Vec<(String, Uuid)> = responses
-            .into_iter()
-            .map(|response| (response.name, response.id))
-            .collect();
-        assert_eq!(
-            order,
-            vec![
-                ("alpha".to_owned(), Uuid::from_u128(3)),
-                ("beta".to_owned(), low),
-                ("beta".to_owned(), high),
-            ]
-        );
-    }
-
-    #[test]
-    fn lists_empty_map_as_empty_vec() {
-        assert!(sorted_responses(&HashMap::new(), &HashMap::new()).is_empty());
-    }
-
-    async fn test_state(root: &Path) -> AppState {
+    pub(crate) async fn test_state(root: &Path) -> AppState {
         test_state_with_binary(root, PathBuf::from("/nonexistent-firecracker")).await
     }
 
-    async fn test_state_with_binary(root: &Path, binary: PathBuf) -> AppState {
+    pub(crate) async fn test_state_with_binary(root: &Path, binary: PathBuf) -> AppState {
         fs::write(root.join("kernel"), b"kernel").unwrap();
         // A real (if tiny) ext4 image, not just an arbitrary byte blob —
         // `specialize_guest` runs `debugfs` against every VM's own rootfs
@@ -1187,10 +1113,101 @@ mod tests {
             .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path))
     }
 
-    fn seed_vm(state: &AppState, vm: &VmRecord) {
+    pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
         state.store.insert(vm).unwrap();
         state.vms.lock().unwrap().insert(vm.id, vm.clone());
         state.store.allocate_lease(vm.id).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::Duration;
+
+    use axum::response::IntoResponse;
+    use tempfile::tempdir;
+
+    use super::test_support::{record, seed_vm, test_state, test_state_with_binary};
+    use super::*;
+    use crate::firecracker::test_support::{
+        SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, process_alive, short_tempdir,
+    };
+
+    #[test]
+    fn validates_vm_names() {
+        assert!(valid_vm_name("vm-01.example"));
+        assert!(!valid_vm_name(""));
+        assert!(!valid_vm_name("-vm"));
+        assert!(!valid_vm_name("vm space"));
+        assert!(!valid_vm_name(&"a".repeat(65)));
+    }
+
+    #[tokio::test]
+    async fn validates_disk_gb_against_the_template_floor_and_fixed_ceiling() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
+        // so `min_disk_gb_for` rounds it up to 1 GiB.
+        let base = CreateVmRequest {
+            name: "test-vm".to_owned(),
+            template: "ubuntu-rootfs-26.04".to_owned(),
+            ram: 512,
+            cpu: 1,
+            disk_gb: 0,
+            egress_policy: Default::default(),
+        };
+
+        let too_small = validate_create(&base, &state);
+        assert!(too_small.contains_key("diskGb"), "{too_small:?}");
+
+        let at_floor = CreateVmRequest {
+            disk_gb: 1,
+            ..base.clone()
+        };
+        assert!(!validate_create(&at_floor, &state).contains_key("diskGb"));
+
+        let too_large = CreateVmRequest {
+            disk_gb: MAX_DISK_GB + 1,
+            ..base.clone()
+        };
+        assert!(validate_create(&too_large, &state).contains_key("diskGb"));
+
+        let at_ceiling = CreateVmRequest {
+            disk_gb: MAX_DISK_GB,
+            ..base
+        };
+        assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
+    }
+
+    #[test]
+    fn lists_vms_sorted_by_name_then_id() {
+        let low = Uuid::from_u128(1);
+        let high = Uuid::from_u128(2);
+        let vms = HashMap::from([
+            (high, record("beta", high)),
+            (low, record("beta", low)),
+            (Uuid::from_u128(3), record("alpha", Uuid::from_u128(3))),
+        ]);
+
+        let responses = sorted_responses(&vms, &HashMap::new());
+        let order: Vec<(String, Uuid)> = responses
+            .into_iter()
+            .map(|response| (response.name, response.id))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("alpha".to_owned(), Uuid::from_u128(3)),
+                ("beta".to_owned(), low),
+                ("beta".to_owned(), high),
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_empty_map_as_empty_vec() {
+        assert!(sorted_responses(&HashMap::new(), &HashMap::new()).is_empty());
     }
 
     fn memory_state(state: &AppState, id: Uuid) -> Option<VmState> {
