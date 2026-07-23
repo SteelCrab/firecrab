@@ -24,6 +24,12 @@ jobs:
       - name: Install pinned toolchain
         run: rustup show
 
+      - name: Install dnsmasq
+        # firecrab-net-helper's dhcp.rs tests shell out to the real
+        # `dnsmasq --test` to validate generated configs — not preinstalled
+        # on the runner image.
+        run: sudo apt-get update && sudo apt-get install -y dnsmasq
+
       - name: cargo test --release
         # Catches release-only bugs (overflow checks off, different codegen)
         # before they reach a tagged build.

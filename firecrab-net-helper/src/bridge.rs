@@ -117,6 +117,23 @@ pub async fn ensure_bridge(actor: &BridgeActor) -> Result<(), BridgeError> {
         .execute()
         .await
         .map_err(BridgeError::Netlink)?;
+    // Ports otherwise sit in STP listening/learning for the kernel's default
+    // forward delay (15s each, ~30s total) before passing traffic, even with
+    // STP itself off — a freshly attached TAP's DHCPDISCOVER gets dropped
+    // because the guest requests it within its first few boot seconds, well
+    // inside that window. No physical loop is possible here (every port is a
+    // TAP to a VM we manage), so there's nothing for the delay to guard.
+    handle
+        .link()
+        .change(
+            LinkBridge::new(BRIDGE_NAME)
+                .index(bridge.header.index)
+                .forward_delay(0)
+                .build(),
+        )
+        .execute()
+        .await
+        .map_err(BridgeError::Netlink)?;
     disable_ipv6()?;
     ensure_gateway(&handle, bridge.header.index).await
 }

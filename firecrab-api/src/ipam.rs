@@ -34,12 +34,15 @@ pub const CREATE_LEASES_INDEXES_SQL: [&str; 3] = [
 ];
 
 /// Subnet network address; mirrors the fixed `fcbr0` config in
-/// `firecrab-net-helper/src/bridge.rs`.
-const NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
+/// `firecrab-net-helper/src/bridge.rs`. `pub(crate)` so `handlers::network`
+/// can report it via `GET /api/network` without a second, drifting copy.
+pub(crate) const NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
 /// Subnet gateway address, reserved from allocation.
-const GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
+pub(crate) const GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
 /// Subnet broadcast address, reserved from allocation.
 const BROADCAST: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 255);
+/// CIDR prefix length of the Firecrab VPC subnet.
+pub(crate) const PREFIX_LEN: u8 = 24;
 /// How many salted MAC candidates to try before giving up.
 const MAX_MAC_ATTEMPTS: u32 = 8;
 

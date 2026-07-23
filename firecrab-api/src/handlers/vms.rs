@@ -7,13 +7,16 @@ use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{VmLogResponse, VmResponse};
 use firecrab_helper_protocol::network::DhcpLeaseEntry;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::firecracker::{self, FirecrackerProcess, VmNetwork, VmProcess};
 use crate::ipam::IpamError;
-use crate::model::{CreateVmRequest, StartupStep, UpdateVmResourcesRequest, VmRecord, VmState};
+use crate::model::{
+    CreateVmRequest, Lease, StartupStep, UpdateVmResourcesRequest, VmRecord, VmState,
+};
 use crate::network_policy::EgressPolicy;
 use crate::persistence::PersistenceError;
 use crate::rootfs;
@@ -21,11 +24,29 @@ use crate::server::RequestId;
 use crate::state::AppState;
 
 pub async fn list_vms(State(state): State<AppState>) -> Json<Vec<VmResponse>> {
-    let vms = state
-        .vms
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    Json(sorted_responses(&vms))
+    let vms = {
+        let guard = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.clone()
+    };
+    // Best-effort, same reasoning as lease_for: a failure here just means
+    // every VM's ipv4/mac comes back None for this one poll, not a failed
+    // list.
+    let store = state.store.clone();
+    let leases: HashMap<Uuid, Lease> = tokio::task::spawn_blocking(move || store.active_leases())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .map(|leases| {
+            leases
+                .into_iter()
+                .map(|lease| (lease.vm_id, lease))
+                .collect()
+        })
+        .unwrap_or_default();
+    Json(sorted_responses(&vms, &leases))
 }
 
 pub async fn get_vm(
@@ -34,14 +55,18 @@ pub async fn get_vm(
     Path(id): Path<String>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
-    let vms = state
-        .vms
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    vms.get(&id)
-        .map(vm_response)
-        .map(Json)
-        .ok_or_else(|| AppError::not_found(request_id.0))
+    let record = {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        vms.get(&id).cloned()
+    };
+    let Some(record) = record else {
+        return Err(AppError::not_found(request_id.0));
+    };
+    let lease = lease_for(&state, id).await;
+    Ok(Json(vm_response(&record, lease.as_ref())))
 }
 
 /// Bytes of the on-disk console log returned to the dashboard's VM detail
@@ -123,11 +148,12 @@ pub async fn create_vm(
         ram: req.ram,
         cpu: req.cpu,
         disk_gb: req.disk_gb,
+        egress_policy: req.egress_policy,
         state: VmState::Created,
         startup_step: None,
+        package_update: None,
     };
 
-    let response = vm_response(&vm);
     let store = state.store.clone();
     let record = vm.clone();
     tokio::task::spawn_blocking(move || store.insert(&record))
@@ -143,15 +169,18 @@ pub async fn create_vm(
     // see Store::active_lease's doc comment.
     let store = state.store.clone();
     let vm_id = vm.id;
-    if let Err(error) = tokio::task::spawn_blocking(move || store.allocate_lease(vm_id))
+    let lease = match tokio::task::spawn_blocking(move || store.allocate_lease(vm_id))
         .await
         .map_err(|_| AppError::internal(request_id.0))?
     {
-        tracing::error!(request_id = %request_id.0, vm_id = %vm_id, %error, "failed to allocate vm lease");
-        let store = state.store.clone();
-        let _ = tokio::task::spawn_blocking(move || store.delete(vm_id)).await;
-        return Err(AppError::internal(request_id.0));
-    }
+        Ok(lease) => lease,
+        Err(error) => {
+            tracing::error!(request_id = %request_id.0, vm_id = %vm_id, %error, "failed to allocate vm lease");
+            let store = state.store.clone();
+            let _ = tokio::task::spawn_blocking(move || store.delete(vm_id)).await;
+            return Err(AppError::internal(request_id.0));
+        }
+    };
     // Best-effort: a failure here just means the guest won't get its lease
     // via DHCP until the next sync — setup_vm_network re-pushes the full
     // snapshot on every start regardless, and the console-sentinel
@@ -170,6 +199,7 @@ pub async fn create_vm(
         ram = vm.ram,
         "vm created"
     );
+    let response = vm_response(&vm, Some(&lease));
     state
         .vms
         .lock()
@@ -201,10 +231,11 @@ pub async fn update_vm(
         disk_gb = updated.disk_gb,
         "vm resources updated"
     );
-    Ok(Json(vm_response(&updated)))
+    let lease = lease_for(&state, id).await;
+    Ok(Json(vm_response(&updated, lease.as_ref())))
 }
 
-type PreviousResources = (u8, u32, u16);
+type PreviousResources = (u8, u32, u16, EgressPolicy);
 
 fn claim_resource_update(
     state: &AppState,
@@ -226,10 +257,11 @@ fn claim_resource_update(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id));
     }
-    let previous = (vm.cpu, vm.ram, vm.disk_gb);
+    let previous = (vm.cpu, vm.ram, vm.disk_gb, vm.egress_policy);
     vm.cpu = req.cpu;
     vm.ram = req.ram;
     vm.disk_gb = req.disk_gb;
+    vm.egress_policy = req.egress_policy;
     Ok((vm.clone(), previous))
 }
 
@@ -239,7 +271,7 @@ fn restore_resources(state: &AppState, id: Uuid, previous: PreviousResources) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(vm) = vms.get_mut(&id) {
-        (vm.cpu, vm.ram, vm.disk_gb) = previous;
+        (vm.cpu, vm.ram, vm.disk_gb, vm.egress_policy) = previous;
     }
 }
 
@@ -333,18 +365,24 @@ async fn finish_start(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "vm running"
             );
-            Ok(Json(vm_response(&running)))
+            let lease = lease_for(state, id).await;
+            Ok(Json(vm_response(&running, lease.as_ref())))
         }
         // The guest exited before we could record running; the exit monitor
         // already landed the record on its terminal state.
-        None => state
-            .vms
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(&id)
-            .map(vm_response)
-            .map(Json)
-            .ok_or_else(|| AppError::not_found(request_id.0)),
+        None => {
+            let record = state
+                .vms
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&id)
+                .cloned();
+            let Some(record) = record else {
+                return Err(AppError::not_found(request_id.0));
+            };
+            let lease = lease_for(state, id).await;
+            Ok(Json(vm_response(&record, lease.as_ref())))
+        }
     }
 }
 
@@ -405,7 +443,8 @@ pub async fn stop_vm(
     };
     persist_update(&state, &stopped, request_id.0).await?;
     tracing::info!(request_id = %request_id.0, vm_id = %id, "vm stopped");
-    Ok(Json(vm_response(&stopped)))
+    let lease = lease_for(&state, id).await;
+    Ok(Json(vm_response(&stopped, lease.as_ref())))
 }
 
 /// Hard-deletes the VM: refuse while a process could be alive, then remove
@@ -476,7 +515,7 @@ pub async fn delete_vm(
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {
+pub(crate) fn parse_id(id: &str, request_id: Uuid) -> Result<Uuid, AppError> {
     Uuid::parse_str(id).map_err(|_| {
         let mut fields = BTreeMap::new();
         fields.insert("id".to_owned(), "must be a UUID".to_owned());
@@ -570,7 +609,7 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     // Set up before the disk copy so a network failure fails fast, without
     // paying for a multi-GB copy first. Any failure *after* this succeeds
     // must tear the TAP + policy back down — see the loop below.
-    let network = setup_vm_network(state, vm.id).await?;
+    let network = setup_vm_network(state, vm.id, vm.egress_policy).await?;
 
     let result = finish_run_start(state, vm, template, &network).await;
     if result.is_err() {
@@ -687,7 +726,24 @@ async fn wait_for_network_ready(
                         return outcome;
                     }
                 }
-                Err(_) => return Err("console closed before network became ready".to_owned()),
+                // Lagged means the broadcast fan-out dropped some buffered
+                // output because this receiver fell behind (e.g. many VMs
+                // booting at once starve the consumer task of CPU) — the
+                // guest and its console are still perfectly alive, so this
+                // must not be treated the same as the channel actually
+                // closing. Losing a chunk just means a sentinel inside it
+                // could be missed; resubscribing from scratch would lose the
+                // backlog needed to detect a sentinel that already scrolled
+                // by, so simply keep reading forward.
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        skipped,
+                        "console broadcast lagged; still waiting for network readiness"
+                    );
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    return Err("console closed before network became ready".to_owned());
+                }
             }
         }
     };
@@ -718,7 +774,11 @@ fn find_network_sentinel(buffer: &[u8]) -> Option<Result<(), String>> {
 /// failure after the TAP is created tears the TAP itself back down before
 /// returning, so a partial failure here never leaves an unprotected TAP
 /// attached to the bridge.
-async fn setup_vm_network(state: &AppState, vm_id: Uuid) -> Result<VmNetwork, String> {
+async fn setup_vm_network(
+    state: &AppState,
+    vm_id: Uuid,
+    egress_policy: EgressPolicy,
+) -> Result<VmNetwork, String> {
     let store = state.store.clone();
     let lease = tokio::task::spawn_blocking(move || store.active_lease(vm_id))
         .await
@@ -750,7 +810,7 @@ async fn setup_vm_network(state: &AppState, vm_id: Uuid) -> Result<VmNetwork, St
 
     if let Err(error) = state
         .network
-        .apply_vm_policy(vm_id, lease.ipv4, lease.mac, EgressPolicy::default(), false)
+        .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false)
         .await
     {
         // A failed apply_vm_policy leaves nothing installed (nft applies a
@@ -850,13 +910,33 @@ async fn fail_start(state: &AppState, id: Uuid, request_id: Uuid) -> AppError {
     AppError::internal(request_id)
 }
 
-fn sorted_responses(vms: &HashMap<Uuid, VmRecord>) -> Vec<VmResponse> {
+/// `leases` is a full snapshot (see `Store::active_leases`), looked up once
+/// for the whole list rather than once per VM.
+fn sorted_responses(
+    vms: &HashMap<Uuid, VmRecord>,
+    leases: &HashMap<Uuid, Lease>,
+) -> Vec<VmResponse> {
     let mut records: Vec<&VmRecord> = vms.values().collect();
     records.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
-    records.into_iter().map(vm_response).collect()
+    records
+        .into_iter()
+        .map(|vm| vm_response(vm, leases.get(&vm.id)))
+        .collect()
 }
 
-fn vm_response(vm: &VmRecord) -> VmResponse {
+/// Looks up `vm_id`'s active lease, if any. Best-effort: a lookup failure
+/// (task panic or DB error) just means the response's ipv4/mac come back
+/// `None` for this one call, not a hard failure — the lease itself is the
+/// source of truth and is unaffected either way.
+pub(crate) async fn lease_for(state: &AppState, vm_id: Uuid) -> Option<Lease> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.active_lease(vm_id))
+        .await
+        .ok()?
+        .ok()?
+}
+
+pub(crate) fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
@@ -867,6 +947,11 @@ fn vm_response(vm: &VmRecord) -> VmResponse {
         ram: vm.ram,
         disk_gb: vm.disk_gb,
         startup_step: vm.startup_step,
+        egress_policy: vm.egress_policy,
+        package_update: vm.package_update.clone(),
+        ipv4: lease.map(|lease| lease.ipv4.to_string()),
+        mac: lease.map(|lease| lease.mac.to_string()),
+        hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
     }
 }
 
@@ -934,68 +1019,22 @@ fn valid_vm_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// Test-only fixtures shared with sibling handler modules (e.g.
+/// `handlers::packages`) that need a running-VM-with-a-process to exercise
+/// their own handlers, without duplicating this module's DB/rootfs setup.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use axum::response::IntoResponse;
-    use tempfile::tempdir;
+    use uuid::Uuid;
 
-    use super::*;
-    use crate::firecracker::test_support::{
-        SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, process_alive, short_tempdir,
-    };
+    use super::{AppState, VmRecord, VmState};
     use crate::state::RuntimeConfig;
     use crate::templates::{TemplateRegistry, TemplateSpec};
 
-    #[test]
-    fn validates_vm_names() {
-        assert!(valid_vm_name("vm-01.example"));
-        assert!(!valid_vm_name(""));
-        assert!(!valid_vm_name("-vm"));
-        assert!(!valid_vm_name("vm space"));
-        assert!(!valid_vm_name(&"a".repeat(65)));
-    }
-
-    #[tokio::test]
-    async fn validates_disk_gb_against_the_template_floor_and_fixed_ceiling() {
-        let directory = tempdir().unwrap();
-        let state = test_state(directory.path()).await;
-        // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
-        // so `min_disk_gb_for` rounds it up to 1 GiB.
-        let base = CreateVmRequest {
-            name: "test-vm".to_owned(),
-            template: "ubuntu-rootfs-26.04".to_owned(),
-            ram: 512,
-            cpu: 1,
-            disk_gb: 0,
-        };
-
-        let too_small = validate_create(&base, &state);
-        assert!(too_small.contains_key("diskGb"), "{too_small:?}");
-
-        let at_floor = CreateVmRequest {
-            disk_gb: 1,
-            ..base.clone()
-        };
-        assert!(!validate_create(&at_floor, &state).contains_key("diskGb"));
-
-        let too_large = CreateVmRequest {
-            disk_gb: MAX_DISK_GB + 1,
-            ..base.clone()
-        };
-        assert!(validate_create(&too_large, &state).contains_key("diskGb"));
-
-        let at_ceiling = CreateVmRequest {
-            disk_gb: MAX_DISK_GB,
-            ..base
-        };
-        assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
-    }
-
-    fn record(name: &str, id: Uuid) -> VmRecord {
+    pub(crate) fn record(name: &str, id: Uuid) -> VmRecord {
         VmRecord {
             id,
             name: name.to_owned(),
@@ -1011,45 +1050,17 @@ mod tests {
             // fixture's fake (non-ext4) rootfs bytes; real growth is
             // covered by `rootfs::tests::grows_a_real_ext4_filesystem_to_the_requested_size`.
             disk_gb: 0,
+            egress_policy: Default::default(),
             startup_step: None,
+            package_update: None,
         }
     }
 
-    #[test]
-    fn lists_vms_sorted_by_name_then_id() {
-        let low = Uuid::from_u128(1);
-        let high = Uuid::from_u128(2);
-        let vms = HashMap::from([
-            (high, record("beta", high)),
-            (low, record("beta", low)),
-            (Uuid::from_u128(3), record("alpha", Uuid::from_u128(3))),
-        ]);
-
-        let responses = sorted_responses(&vms);
-        let order: Vec<(String, Uuid)> = responses
-            .into_iter()
-            .map(|response| (response.name, response.id))
-            .collect();
-        assert_eq!(
-            order,
-            vec![
-                ("alpha".to_owned(), Uuid::from_u128(3)),
-                ("beta".to_owned(), low),
-                ("beta".to_owned(), high),
-            ]
-        );
-    }
-
-    #[test]
-    fn lists_empty_map_as_empty_vec() {
-        assert!(sorted_responses(&HashMap::new()).is_empty());
-    }
-
-    async fn test_state(root: &Path) -> AppState {
+    pub(crate) async fn test_state(root: &Path) -> AppState {
         test_state_with_binary(root, PathBuf::from("/nonexistent-firecracker")).await
     }
 
-    async fn test_state_with_binary(root: &Path, binary: PathBuf) -> AppState {
+    pub(crate) async fn test_state_with_binary(root: &Path, binary: PathBuf) -> AppState {
         fs::write(root.join("kernel"), b"kernel").unwrap();
         // A real (if tiny) ext4 image, not just an arbitrary byte blob —
         // `specialize_guest` runs `debugfs` against every VM's own rootfs
@@ -1102,10 +1113,101 @@ mod tests {
             .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path))
     }
 
-    fn seed_vm(state: &AppState, vm: &VmRecord) {
+    pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
         state.store.insert(vm).unwrap();
         state.vms.lock().unwrap().insert(vm.id, vm.clone());
         state.store.allocate_lease(vm.id).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::Duration;
+
+    use axum::response::IntoResponse;
+    use tempfile::tempdir;
+
+    use super::test_support::{record, seed_vm, test_state, test_state_with_binary};
+    use super::*;
+    use crate::firecracker::test_support::{
+        SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, process_alive, short_tempdir,
+    };
+
+    #[test]
+    fn validates_vm_names() {
+        assert!(valid_vm_name("vm-01.example"));
+        assert!(!valid_vm_name(""));
+        assert!(!valid_vm_name("-vm"));
+        assert!(!valid_vm_name("vm space"));
+        assert!(!valid_vm_name(&"a".repeat(65)));
+    }
+
+    #[tokio::test]
+    async fn validates_disk_gb_against_the_template_floor_and_fixed_ceiling() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        // The fixture template's rootfs is 6 bytes (`test_state_with_binary`),
+        // so `min_disk_gb_for` rounds it up to 1 GiB.
+        let base = CreateVmRequest {
+            name: "test-vm".to_owned(),
+            template: "ubuntu-rootfs-26.04".to_owned(),
+            ram: 512,
+            cpu: 1,
+            disk_gb: 0,
+            egress_policy: Default::default(),
+        };
+
+        let too_small = validate_create(&base, &state);
+        assert!(too_small.contains_key("diskGb"), "{too_small:?}");
+
+        let at_floor = CreateVmRequest {
+            disk_gb: 1,
+            ..base.clone()
+        };
+        assert!(!validate_create(&at_floor, &state).contains_key("diskGb"));
+
+        let too_large = CreateVmRequest {
+            disk_gb: MAX_DISK_GB + 1,
+            ..base.clone()
+        };
+        assert!(validate_create(&too_large, &state).contains_key("diskGb"));
+
+        let at_ceiling = CreateVmRequest {
+            disk_gb: MAX_DISK_GB,
+            ..base
+        };
+        assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
+    }
+
+    #[test]
+    fn lists_vms_sorted_by_name_then_id() {
+        let low = Uuid::from_u128(1);
+        let high = Uuid::from_u128(2);
+        let vms = HashMap::from([
+            (high, record("beta", high)),
+            (low, record("beta", low)),
+            (Uuid::from_u128(3), record("alpha", Uuid::from_u128(3))),
+        ]);
+
+        let responses = sorted_responses(&vms, &HashMap::new());
+        let order: Vec<(String, Uuid)> = responses
+            .into_iter()
+            .map(|response| (response.name, response.id))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("alpha".to_owned(), Uuid::from_u128(3)),
+                ("beta".to_owned(), low),
+                ("beta".to_owned(), high),
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_empty_map_as_empty_vec() {
+        assert!(sorted_responses(&HashMap::new(), &HashMap::new()).is_empty());
     }
 
     fn memory_state(state: &AppState, id: Uuid) -> Option<VmState> {
@@ -1137,6 +1239,21 @@ mod tests {
 
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].id, vm.id);
+    }
+
+    #[tokio::test]
+    async fn list_vms_includes_the_leased_ipv4_and_mac() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("leased-vm", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let lease = state.store.active_lease(vm.id).unwrap().unwrap();
+
+        let Json(body) = list_vms(State(state)).await;
+
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0].ipv4, Some(lease.ipv4.to_string()));
+        assert_eq!(body[0].mac, Some(lease.mac.to_string()));
     }
 
     #[tokio::test]
@@ -1358,7 +1475,7 @@ mod tests {
         let vm = record("teardown-partial-fail", Uuid::new_v4());
         seed_vm(&state, &vm);
 
-        start_vm(
+        let _ = start_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             axum::extract::Path(vm.id.to_string()),
@@ -1783,6 +1900,7 @@ while True:
             ram: 512,
             cpu: 1,
             disk_gb: 2,
+            egress_policy: Default::default(),
         }
     }
 
@@ -1801,10 +1919,18 @@ while True:
 
         assert_eq!(status, StatusCode::CREATED);
         assert!(state.vms.lock().unwrap().contains_key(&created.id));
-        assert!(
-            state.store.active_lease(created.id).unwrap().is_some(),
-            "create_vm must allocate a lease up front, not on first start"
+        let lease = state
+            .store
+            .active_lease(created.id)
+            .unwrap()
+            .expect("create_vm must allocate a lease up front, not on first start");
+        assert_eq!(created.ipv4, Some(lease.ipv4.to_string()));
+        assert_eq!(created.mac, Some(lease.mac.to_string()));
+        assert_eq!(
+            created.hostname,
+            firecrab_helper_protocol::network::guest_hostname(created.id)
         );
+        assert_eq!(created.egress_policy, EgressPolicy::Internet);
     }
 
     #[tokio::test]
@@ -1834,7 +1960,12 @@ while True:
     }
 
     fn update_request(cpu: u8, ram: u32, disk_gb: u16) -> UpdateVmResourcesRequest {
-        UpdateVmResourcesRequest { cpu, ram, disk_gb }
+        UpdateVmResourcesRequest {
+            cpu,
+            ram,
+            disk_gb,
+            egress_policy: Default::default(),
+        }
     }
 
     #[tokio::test]
@@ -1856,16 +1987,42 @@ while True:
         assert_eq!(updated.cpu, 4);
         assert_eq!(updated.ram, 1024);
         assert_eq!(updated.disk_gb, 3);
-        let reopened = {
-            let state = test_state(directory.path()).await;
-            state
-        };
+        let reopened = test_state(directory.path()).await;
         assert_eq!(db_state(&reopened, vm.id), Some(VmState::Created));
         let persisted = reopened.store.load_all().unwrap();
         let persisted = persisted.get(&vm.id).unwrap();
         assert_eq!(
             (persisted.cpu, persisted.ram, persisted.disk_gb),
             (4, 1024, 3)
+        );
+    }
+
+    #[tokio::test]
+    async fn update_vm_can_change_the_egress_policy() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("policy-editable", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        assert_eq!(vm.egress_policy, EgressPolicy::Internet);
+
+        let request = UpdateVmResourcesRequest {
+            egress_policy: EgressPolicy::Isolated,
+            ..update_request(vm.cpu, vm.ram, vm.disk_gb)
+        };
+        let Json(updated) = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(request),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(updated.egress_policy, EgressPolicy::Isolated);
+        let persisted = state.store.load_all().unwrap();
+        assert_eq!(
+            persisted.get(&vm.id).unwrap().egress_policy,
+            EgressPolicy::Isolated
         );
     }
 
@@ -1957,6 +2114,30 @@ while True:
         assert_eq!(find_network_sentinel(&buffer), None);
         buffer.extend_from_slice(b"_READY 172.30.0.5\n");
         assert_eq!(find_network_sentinel(&buffer), Some(Ok(())));
+    }
+
+    #[tokio::test]
+    async fn wait_for_network_ready_survives_a_lagged_broadcast_receiver() {
+        // Regression test for the concurrent-boot bug: a receiver that falls
+        // behind the console broadcast (many VMs booting at once starve the
+        // consumer task of CPU) must not be treated as the console having
+        // closed. Flood well past the broadcast capacity before the sentinel
+        // arrives, so the waiter is guaranteed to observe `Lagged` first.
+        let console = std::sync::Arc::new(crate::console::ConsoleBroker::new());
+        let waiter = tokio::spawn({
+            let console = console.clone();
+            async move { wait_for_network_ready(&console, Duration::from_secs(5)).await }
+        });
+
+        // Let the spawned task reach its subscribe() call before the flood,
+        // so the flood lags its receiver instead of only filling backlog.
+        tokio::task::yield_now().await;
+        for _ in 0..300 {
+            console.push_output(b"boot noise\n");
+        }
+        console.push_output(b"FIRECRAB_NETWORK_READY 172.30.0.5\n");
+
+        assert_eq!(waiter.await.expect("waiter task panicked"), Ok(()));
     }
 
     #[test]

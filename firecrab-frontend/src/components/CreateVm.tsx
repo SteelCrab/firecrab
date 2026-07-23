@@ -1,11 +1,16 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { ApiClientError, createVm } from "../api/client";
-import type { CreateVmRequest, VmResponse } from "../bindings";
+import type { CreateVmRequest, EgressPolicy, VmResponse } from "../bindings";
 import RamStepper from "./RamStepper";
 
 /** The registry aliases the API accepts today; selection only, no free text. */
 const TEMPLATES = ["ubuntu-26.04", "alpine-3.24"] as const;
+
+const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
+  internet: "인터넷 허용",
+  isolated: "격리(게이트웨이만 허용)",
+};
 
 const FIELDS_WITH_OWN_ERROR = ["name", "cpu", "ram", "template", "diskGb"] as const;
 
@@ -20,6 +25,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [cpu, setCpu] = useState("1");
   const [ram, setRam] = useState("512");
   const [diskGb, setDiskGb] = useState("2");
+  const [egressPolicy, setEgressPolicy] = useState<EgressPolicy>("internet");
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
 
@@ -33,6 +39,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       cpu: parseInt(cpu, 10) || 0,
       ram: parseInt(ram, 10) || 0,
       diskGb: parseInt(diskGb, 10) || 0,
+      egressPolicy,
     };
 
     setSubmitting(true);
@@ -110,6 +117,20 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           onChange={(event) => setDiskGb(event.target.value)}
         />
         {fieldError("diskGb")}
+      </div>
+      <div className="field">
+        <label htmlFor="vm-egress-policy">네트워크</label>
+        <select
+          id="vm-egress-policy"
+          value={egressPolicy}
+          onChange={(event) => setEgressPolicy(event.target.value as EgressPolicy)}
+        >
+          {(Object.keys(EGRESS_POLICY_LABEL) as EgressPolicy[]).map((policy) => (
+            <option key={policy} value={policy}>
+              {EGRESS_POLICY_LABEL[policy]}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="field">
         <label>&nbsp;</label>

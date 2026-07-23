@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use firecrab_api_types::CreateVmRequest;
+pub use firecrab_api_types::EgressPolicy;
+pub use firecrab_api_types::PackageUpdateStatus;
 pub use firecrab_api_types::StartupStep;
 pub use firecrab_api_types::UpdateVmResourcesRequest;
 pub use firecrab_api_types::VmState;
@@ -57,11 +59,21 @@ pub struct VmRecord {
     /// Disk capacity in GiB.
     #[serde(default = "default_disk_gb")]
     pub disk_gb: u16,
+    /// Outbound network posture, applied on every `start_vm` (see
+    /// `setup_vm_network`) — not live, same as cpu/ram/disk.
+    #[serde(default)]
+    pub egress_policy: EgressPolicy,
     /// Live progress while `state == Starting`; never persisted (a restart
     /// already demotes any in-flight start to `Stopped`, see
     /// `restart_demotes_active_states_to_stopped`) and irrelevant otherwise.
     #[serde(skip)]
     pub startup_step: Option<StartupStep>,
+    /// Outcome of the most recent `packages/update` run, if any — never
+    /// persisted; a restart loses no state a fresh run can't reproduce, and
+    /// it's purely informational (unlike `state`, nothing else in the
+    /// lifecycle depends on it).
+    #[serde(skip)]
+    pub package_update: Option<PackageUpdateStatus>,
 }
 
 /// Matches the fixed rootfs template size that applied before disk capacity

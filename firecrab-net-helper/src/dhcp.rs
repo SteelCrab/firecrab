@@ -6,10 +6,11 @@
 //! swap, reload — never edited in place.
 
 use std::io;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use firecrab_helper_protocol::network::{DhcpLeaseEntry, guest_hostname};
+use firecrab_helper_protocol::network::{DhcpLeaseEntry, MacAddr, guest_hostname};
 use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -23,6 +24,12 @@ use crate::bridge::BRIDGE_NAME;
 const HOSTS_FILE: &str = "/run/firecrab/dnsmasq-hosts.conf";
 /// PID file dnsmasq itself maintains, used to signal it for a reload.
 const PID_FILE: &str = "/run/firecrab/dnsmasq.pid";
+/// dnsmasq's own DHCP lease database — set explicitly (rather than letting
+/// it default to the OS-wide `/var/lib/misc/dnsmasq.leases`) so
+/// `release_stale_leases` can read it back to find stale leases, and so it
+/// lives in our own runtime dir regardless of what user dnsmasq ends up
+/// running as.
+const LEASE_FILE: &str = "/run/firecrab/dnsmasq.leases";
 
 /// Failure modes for syncing DHCP reservations or (re)starting dnsmasq.
 #[derive(Debug, Error)]
@@ -87,8 +94,14 @@ impl DhcpActor {
 fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
     let mut rendered = String::new();
     for lease in leases {
+        // No `dhcp-host=` prefix: unlike a plain `--conf-file`, dnsmasq's
+        // `--dhcp-hostsfile` expects the bare `mac,ip,hostname` triplet per
+        // line — the prefix (valid in a real conf file) makes it try to
+        // parse the literal text "dhcp-host" as the leading MAC/hex field
+        // and reject the whole file with "bad hex constant", silently
+        // dropping every reservation.
         rendered.push_str(&format!(
-            "dhcp-host={},{},{}\n",
+            "{},{},{}\n",
             lease.mac,
             lease.ipv4,
             guest_hostname(lease.vm_id)
@@ -97,17 +110,111 @@ fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
     rendered
 }
 
+/// Force-releases dnsmasq's active lease for any `(ip, mac)` pair its own
+/// lease database (`active_leases`) has that `current` doesn't — i.e. an IP
+/// whose active lease belongs to a MAC that no longer holds the static
+/// reservation for it (typically: freed by a deleted VM and immediately
+/// handed to a new one, since this project's IPAM reuses addresses right
+/// away). Needed because the static `dhcp-hostsfile` reservations this
+/// module manages only take effect for *new* DHCP negotiations — reloading
+/// a changed reservation via SIGHUP does not invalidate an already-active
+/// lease. Reading the lease file back (rather than diffing against
+/// whatever snapshot this process last applied) also catches leases still
+/// active from a *previous* net-helper/dnsmasq lifetime — the lease
+/// database is a file on disk, read back in on every dnsmasq spawn,
+/// unaffected by our own process restarting. Without this, a stale lease
+/// blocks the new MAC ("no address available") until the old one's full
+/// `dhcp-range` lease time (an hour) naturally expires.
+async fn release_stale_leases(current: &[DhcpLeaseEntry]) {
+    for (ip, mac) in stale_leases(active_leases().await, current) {
+        release_lease(ip, mac).await;
+    }
+}
+
+/// Reads dnsmasq's own lease database, returning every `(ip, mac)` pair it
+/// currently considers actively leased. A missing or unreadable file is
+/// treated as "no active leases" — the normal case right after a fresh
+/// dnsmasq spawn that hasn't leased anything yet.
+async fn active_leases() -> Vec<(Ipv4Addr, MacAddr)> {
+    let Ok(text) = tokio::fs::read_to_string(LEASE_FILE).await else {
+        return Vec::new();
+    };
+    parse_lease_file(&text)
+}
+
+/// Parses dnsmasq's own lease database format — split out from
+/// [`active_leases`] so the parsing itself is testable without touching the
+/// real lease file. Format is `<expiry> <mac> <ip> <hostname-or-*>
+/// <client-id-or-*>`, one lease per line; a line that doesn't match (blank,
+/// truncated, or holding an unparseable field) is skipped rather than
+/// failing the whole read.
+fn parse_lease_file(text: &str) -> Vec<(Ipv4Addr, MacAddr)> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next()?; // expiry epoch, unused
+            let mac: MacAddr = fields.next()?.parse().ok()?;
+            let ip: Ipv4Addr = fields.next()?.parse().ok()?;
+            Some((ip, mac))
+        })
+        .collect()
+}
+
+/// Active `(ip, mac)` pairs not matched by the same pair in `current` —
+/// split out from [`release_stale_leases`] so the diff itself is testable
+/// without touching the real lease file or running `dhcp_release`.
+fn stale_leases(
+    active: Vec<(Ipv4Addr, MacAddr)>,
+    current: &[DhcpLeaseEntry],
+) -> Vec<(Ipv4Addr, MacAddr)> {
+    active
+        .into_iter()
+        .filter(|(ip, mac)| {
+            !current
+                .iter()
+                .any(|lease| lease.ipv4 == *ip && lease.mac == *mac)
+        })
+        .collect()
+}
+
+/// Sends a DHCPRELEASE for `ip`/`mac` via the `dhcp_release` helper
+/// (`dnsmasq-utils`) so dnsmasq drops the lease immediately instead of
+/// waiting out its lease time. Best-effort: a failure here just means the
+/// old lease lingers until it expires, not a fatal sync error.
+async fn release_lease(ip: Ipv4Addr, mac: MacAddr) {
+    let result = Command::new("dhcp_release")
+        .arg(BRIDGE_NAME)
+        .arg(ip.to_string())
+        .arg(mac.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    match result {
+        Ok(status) if status.success() => {}
+        Ok(status) => eprintln!("[ERROR] dhcp_release {ip} {mac} exited with {status}"),
+        Err(error) => eprintln!("[ERROR] failed to run dhcp_release {ip} {mac}: {error}"),
+    }
+}
+
 /// The fixed (lease-independent) part of dnsmasq's config: bound only to
 /// the Firecrab bridge, static-reservations-only (no dynamic pool — an
 /// unreserved MAC gets nothing), DNS forwarding left at dnsmasq's default
-/// (reads the host's own `/etc/resolv.conf`).
+/// (reads the host's own `/etc/resolv.conf`). `bind-dynamic` rather than
+/// `bind-interfaces`: on a host with several other interfaces (docker0,
+/// virbr0, the uplink...), `bind-interfaces`' wildcard socket can't reliably
+/// tell which interface a broadcast-flag-0 DHCPDISCOVER arrived on, so the
+/// unicast DHCPOFFER a client without a broadcast flag expects never goes
+/// out — `bind-dynamic` binds directly to `fcbr0` instead.
 fn render_base_config(hosts_file: &Path) -> String {
     format!(
         "interface={BRIDGE_NAME}\n\
-         bind-interfaces\n\
+         bind-dynamic\n\
          dhcp-range=172.30.0.0,static\n\
          dhcp-hostsfile={}\n\
-         pid-file={PID_FILE}\n",
+         dhcp-leasefile={LEASE_FILE}\n\
+         pid-file={PID_FILE}\n\
+         log-dhcp\n",
         hosts_file.display()
     )
 }
@@ -143,13 +250,44 @@ pub async fn sync_dhcp_leases(
 
     match state.child.as_mut() {
         Some(child) => reload(child)?,
-        None => state.child = Some(spawn_dnsmasq(hosts_path).await?),
+        // No Child handle in *this* process's memory doesn't mean no
+        // dnsmasq is running — a prior net-helper instance (before a
+        // restart) may have spawned one that's still alive, orphaned but
+        // otherwise healthy, tracked only by its own pid file. Reusing it
+        // is what makes a restart not silently strand every VM started
+        // afterwards without a working DHCP reload target.
+        None => match running_orphan_pid().await {
+            Some(pid) => reload_pid(pid)?,
+            None => state.child = Some(spawn_dnsmasq(hosts_path).await?),
+        },
     }
 
+    release_stale_leases(leases).await;
     state.applied_revision = Some(revision);
     Ok(())
 }
 
+/// Reads dnsmasq's own pid file and returns its pid if that process is
+/// still alive — a `kill(pid, 0)` existence probe, not a real signal.
+async fn running_orphan_pid() -> Option<u32> {
+    let text = tokio::fs::read_to_string(PID_FILE).await.ok()?;
+    let pid: u32 = text.trim().parse().ok()?;
+    // SAFETY: signal 0 sends nothing; it only probes whether `pid` exists
+    // and is signalable, per kill(2).
+    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+    alive.then_some(pid)
+}
+
+/// Tells `pid` (not necessarily a process this instance spawned) to
+/// re-read its hosts file.
+fn reload_pid(pid: u32) -> Result<(), DhcpError> {
+    // SAFETY: as in `reload` — sending a signal is memory-safe.
+    let result = unsafe { libc::kill(pid as i32, libc::SIGHUP) };
+    if result < 0 {
+        return Err(DhcpError::Reload(io::Error::last_os_error()));
+    }
+    Ok(())
+}
 /// Writes `content` to `path` and fsyncs it before returning, so a crash
 /// right after this call can never leave a half-written candidate file.
 async fn write_atomic_candidate(path: &Path, content: &str) -> Result<(), DhcpError> {
@@ -218,13 +356,26 @@ async fn validate(candidate_hosts_path: &Path) -> Result<(), DhcpError> {
     }
 }
 
+/// Where the base config (bridge/range/hostsfile directives) is written —
+/// must differ from `hosts_path` itself. `hosts_path` already ends in
+/// `.conf`, so deriving this via `.with_extension("conf")` would be a no-op
+/// and collide the two files into one. Every `sync_dhcp_leases` call then
+/// overwrites that shared path with nothing but bare lease lines, wiping out
+/// the base config's own `interface=`/`dhcp-range=`/`dhcp-hostsfile=`
+/// directives — and dnsmasq's SIGHUP-triggered hostsfile reload rejects the
+/// `dhcp-host=`-prefixed lines it left behind ("bad hex constant"), silently
+/// breaking every reservation for the process's whole lifetime.
+fn base_config_path(hosts_path: &Path) -> PathBuf {
+    hosts_path.with_file_name("dnsmasq.conf")
+}
+
 /// Starts dnsmasq bound to the live hosts file, in the foreground so this
 /// process supervises it directly (matching how Firecracker's own child
 /// processes are supervised, rather than a separately-managed systemd
 /// unit — every privileged host process this project runs is owned by
 /// `firecrab-net-helper` alone).
 async fn spawn_dnsmasq(hosts_path: &Path) -> Result<Child, DhcpError> {
-    let config_path = hosts_path.with_extension("conf");
+    let config_path = base_config_path(hosts_path);
     write_atomic_candidate(&config_path, &render_base_config(hosts_path)).await?;
 
     Command::new("dnsmasq")
@@ -280,7 +431,7 @@ mod tests {
         assert_eq!(
             lines[0],
             format!(
-                "dhcp-host=02:fc:00:00:00:05,172.30.0.5,{}",
+                "02:fc:00:00:00:05,172.30.0.5,{}",
                 guest_hostname(Uuid::from_u128(1))
             )
         );
@@ -291,11 +442,83 @@ mod tests {
         assert_eq!(render_hosts_file(&[]), "");
     }
 
+    fn active(ipv4: &str, mac: &str) -> (Ipv4Addr, MacAddr) {
+        (ipv4.parse().unwrap(), mac.parse().unwrap())
+    }
+
+    #[test]
+    fn stale_leases_flags_an_ip_reused_by_a_different_mac() {
+        // Regression: a deleted VM's IP handed straight to a new VM's new
+        // MAC (this project's IPAM reuses addresses immediately) must be
+        // force-released, or dnsmasq refuses it as still actively leased
+        // to the old MAC until the lease's full hour expires.
+        let old = active("172.30.0.5", "02:fc:00:00:00:01");
+        let current = [lease(2, "172.30.0.5", "02:fc:00:00:00:02")];
+        assert_eq!(stale_leases(vec![old], &current), vec![old]);
+    }
+
+    #[test]
+    fn stale_leases_flags_a_deleted_vms_ip_even_with_no_replacement() {
+        let old = active("172.30.0.5", "02:fc:00:00:00:01");
+        assert_eq!(stale_leases(vec![old], &[]), vec![old]);
+    }
+
+    #[test]
+    fn stale_leases_ignores_an_unchanged_reservation() {
+        let old = active("172.30.0.5", "02:fc:00:00:00:01");
+        let current = [lease(1, "172.30.0.5", "02:fc:00:00:00:01")];
+        assert!(stale_leases(vec![old], &current).is_empty());
+    }
+
+    #[test]
+    fn parse_lease_file_reads_one_ip_mac_pair_per_line() {
+        let text = "\
+            1784810338 02:fc:00:00:00:01 172.30.0.5 fc-abc123456789 *\n\
+            1784810400 02:fc:00:00:00:02 172.30.0.6 * 01:02:fc:00:00:00:02\n";
+        assert_eq!(
+            parse_lease_file(text),
+            vec![
+                active("172.30.0.5", "02:fc:00:00:00:01"),
+                active("172.30.0.6", "02:fc:00:00:00:02"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_lease_file_skips_blank_and_malformed_lines_instead_of_failing() {
+        let text = "\n \
+            not-enough-fields\n\
+            1784810338 not-a-mac 172.30.0.5 fc-abc123456789 *\n\
+            1784810338 02:fc:00:00:00:01 not-an-ip fc-abc123456789 *\n\
+            1784810338 02:fc:00:00:00:03 172.30.0.7 fc-abc123456789 *\n";
+        assert_eq!(
+            parse_lease_file(text),
+            vec![active("172.30.0.7", "02:fc:00:00:00:03")]
+        );
+    }
+
+    #[test]
+    fn parse_lease_file_of_an_empty_string_is_empty() {
+        assert!(parse_lease_file("").is_empty());
+    }
+
+    #[test]
+    fn base_config_path_never_collides_with_the_hosts_file_it_describes() {
+        // Regression: `base_config_path` used to be derived via
+        // `hosts_path.with_extension("conf")`, a no-op for a path that
+        // already ends in `.conf` — it silently returned `hosts_path`
+        // itself, so `spawn_dnsmasq` wrote the base config on top of the
+        // live lease-reservation file (see its doc comment for the fallout).
+        let hosts_path = Path::new(HOSTS_FILE);
+        let config_path = base_config_path(hosts_path);
+        assert_ne!(config_path, hosts_path);
+    }
+
     #[test]
     fn base_config_binds_only_the_firecrab_bridge_and_is_static_only() {
         let config = render_base_config(Path::new("/run/firecrab/dnsmasq-hosts.conf"));
         assert!(config.contains("interface=fcbr0"));
-        assert!(config.contains("bind-interfaces"));
+        assert!(config.contains("bind-dynamic"));
         assert!(
             config.contains("dhcp-range=172.30.0.0,static"),
             "must not hand out addresses to unreserved MACs: {config}"

@@ -397,6 +397,7 @@ mod tests {
         let template_path = directory.path().join("template.ext4");
         let mut unreadable = OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .open(&template_path)
             .unwrap();

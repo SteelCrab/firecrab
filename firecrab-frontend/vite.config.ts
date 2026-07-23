@@ -10,6 +10,13 @@ export default defineConfig({
     // match on http://localhost:8080; silently hopping to 8081 on a port
     // clash would turn into a confusing 403 instead of a clear bind error.
     strictPort: true,
+    // Remote dev (SSH remote/devcontainer/Codespaces) port-forwarding
+    // proxies rewrite the Host header to something other than localhost;
+    // Vite's default host check then serves a plain "Blocked request" page
+    // instead of the app (looks like a blank screen). This is a local-only
+    // dev server behind an already-authenticated tunnel, so disabling the
+    // check is fine here.
+    allowedHosts: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:3000',

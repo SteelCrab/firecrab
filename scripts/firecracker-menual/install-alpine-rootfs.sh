@@ -169,7 +169,17 @@ depend() {
 }
 
 start() {
-    ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+    # `after dhcpcd` only orders service *starts* — dhcpcd's own start
+    # action returns as soon as it forks into the background, well before
+    # it has actually completed a DHCP transaction, so checking eth0 right
+    # away here routinely runs before the lease exists yet. Poll briefly
+    # instead of trusting the ordering dependency to mean "has an address".
+    ipv4=""
+    for _ in $(seq 1 10); do
+        ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+        [ -n "$ipv4" ] && break
+        sleep 1
+    done
     if [ -z "$ipv4" ]; then
         echo "FIRECRAB_NETWORK_FAILED no-ipv4-address" >/dev/console
     elif getent hosts example.com >/dev/null 2>&1; then

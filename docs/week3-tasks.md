@@ -47,6 +47,17 @@
   sentinel 유닛/init.d 추가). `cargo test --workspace` 104/9/12/39 green, 프론트엔드
   `tsc -b`/`oxlint`/`vite build` 전부 통과. 실제 dnsmasq bind+lease 발급, 실제 golden image
   재빌드 후 부팅은 root/CAP_NET_ADMIN 필요라 미검증(`docs/guest-network-smoke.md` 참고)
+- 2026-07-23: 네트워크 구성 대시보드 구현 완료(`task-network-configuration-dashboard.md`). `EgressPolicy`를
+  `firecrab-api-types`로 옮겨 VM 생성·수정 화면에서 Internet/Isolated를 실제로 고를 수 있게 하고(기존엔
+  `setup_vm_network`가 항상 `EgressPolicy::default()`로 고정), VM 상세에 실제 할당된 ip/mac과 결정론적
+  hostname을 노출. `GET /api/network`(bridge/subnet/gateway — 고정값 노출만, 런타임 편집은 IPAM/bridge
+  재구성이 필요해 범위 밖으로 유지)와 `GET /api/host`(load average/memory/disk/uptime, `/proc`+`df -kP`
+  기준)를 신규 추가하고 헤더 "HOST 정보" 버튼+모달로 노출. 검증 중 발견한, 이번 기능과 무관한 기존
+  clippy 실패 4건(dead_code 2건, let_and_return, suspicious_open_options, unused Json)도 같이 정리.
+  `cargo test --workspace` 112/16/12/39 green, `cargo llvm-cov`로 신규 `handlers/network.rs` 커버리지
+  확인 후 74.75%→100%(라인 기준)까지 테스트 보강. 프론트엔드 `tsc -b`/`oxlint`/`vite build` 통과, Playwright로
+  실제 dev 서버 골든 패스 확인(VM 생성 시 격리 정책 선택 → 상세에서 ip/mac/hostname/정책 확인 → 수정 →
+  HOST 정보 모달에서 실제 값 확인)
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
@@ -62,6 +73,7 @@
 | ✅ | [구축된 VM CPU/MEM/DISK 수정 구현](task-vm-resource-update.md) | `PUT /api/vms/{id}`로 프로세스가 안 떠 있는 VM의 cpu/ram/disk를 다음 시작에 반영되게 수정한다. | `running`/`starting`/`stopping`은 거부되고, disk는 축소가 거부되며, 수정 후 시작하면 Firecracker config와 실제 디스크 크기에 반영된다. | `firecrab-api-types/src/lib.rs`, `firecrab-api/src/handlers/vms.rs`, `firecrab-api/src/rootfs.rs`, `firecrab-frontend/src/components/VmDetailModal.tsx` |
 | ✅ | [이미지 템플릿 Alpine Linux 추가](task-alpine-linux-template.md) | Alpine 커널·rootfs를 두 번째 템플릿으로 등록하고 생성 폼에서 고를 수 있게 한다. | Alpine 선택 시 실제로 Alpine 커널이 부팅되고, 기존 Ubuntu 템플릿 동작에 회귀가 없다. | `firecrab-api/src/templates.rs`, `firecrab-frontend/src/components/CreateVm.tsx`, `images/` |
 | ✅ | [CI 구현(GitHub Actions)](task-cicd-github-actions.md) | PR/push마다 fmt·clippy·test+coverage(Codecov)·rustdoc(Rust)와 lint·typecheck·build(frontend)를 자동 검증한다. | `rust`/`docs`/`frontend` 3개 job 모두 green(rustdoc 문서화율 게이트 75% 대비 `feat/rustdoc-coverage`에서 84.1% 달성). | `.github/workflows/ci.yml`, `codecov.yml`, `rust-toolchain.toml` |
+| ✅ | [네트워크 구성 대시보드](task-network-configuration-dashboard.md) | 웹 대시보드에서 host 네트워크 정보(bridge/subnet/gateway)와 host 리소스 상태를 보여주고, VM별 egress 정책을 생성·수정 화면에서 선택할 수 있게 한다. | 대시보드에서 실제 bridge/subnet/gateway와 host load average/memory/disk/uptime을 확인할 수 있고, VM 생성·상세 화면에서 egress 정책을 보고 바꿀 수 있다. subnet/uplink 자체의 런타임 편집은 범위 밖(IPAM/bridge 재구성 필요, 후속 작업으로 유지). | `firecrab-api/src/handlers/network.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-frontend/src/components/HostInfoModal.tsx`, `firecrab-frontend/src/components/CreateVm.tsx`, `firecrab-frontend/src/components/VmDetailModal.tsx` |
 
 ### 네트워크 — 최소 범위(VM이 실제 IP로 외부와 통신 가능한 상태까지)
 
@@ -75,6 +87,7 @@
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
 | 미완료 (네트워크 이후) | [배포판 표준 커널 사용](task-distro-standard-kernels.md) | Ubuntu/Alpine 템플릿이 공유하는 자체 빌드 vanilla 커널 대신, 각 배포판이 실제 배포하는 공식 커널(`linux-image-generic`, `linux-virt`)을 추출해 쓴다. | 두 템플릿 모두 실제 배포판 공식 커널로 부팅되고 기존 동작에 회귀가 없다(Alpine은 virtio_blk/ext4가 모듈이라 initrd 필요). | `firecrab-api/src/templates.rs`, `firecrab-api/src/firecracker.rs`, `images/kernel/` |
+| 미완료 (네트워크 이후) | [네트워크 구성 대시보드](task-network-configuration-dashboard.md) | 웹 대시보드에서 host 네트워크(subnet/uplink)를 설정하고 VM을 그 네트워크에 명시적으로 포함시키는 UI/API를 추가한다. | 대시보드에서 네트워크 설정을 보고 바꿀 수 있고, VM 생성·상세 화면에서 소속 네트워크를 확인할 수 있다. | `firecrab-api/src/handlers/network.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/nat.rs`, `firecrab-frontend/src/components/` |
 
 ### 네트워크 — 범위 밖으로 보류 (재개 시 참고용, 이번 대회 일정에는 포함 안 함)
 
