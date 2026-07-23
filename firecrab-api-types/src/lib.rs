@@ -3,9 +3,58 @@
 //! machine.
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+/// The egress policies the API may request for a VM. New policies are added
+/// here and mirrored in `firecrab-net-helper`'s own (deliberately separate)
+/// `EgressPolicy`; the helper is the trust boundary and re-validates every
+/// ID it receives rather than trusting this type directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EgressPolicy {
+    /// Outbound to non-reserved destinations (the internet) is permitted.
+    #[default]
+    Internet,
+    /// No outbound egress; only gateway-local services (DHCP/DNS) reach it.
+    Isolated,
+}
+
+impl EgressPolicy {
+    /// The wire ID carried in `NetworkRequest::ApplyVmPolicy.egress_policy`.
+    pub fn id(self) -> &'static str {
+        match self {
+            EgressPolicy::Internet => "internet",
+            EgressPolicy::Isolated => "isolated",
+        }
+    }
+}
+
+impl fmt::Display for EgressPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
+/// Reject an unknown ID rather than silently defaulting, so a client typo
+/// surfaces as a validation error instead of an unexpected network posture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownEgressPolicy(pub String);
+
+impl FromStr for EgressPolicy {
+    type Err = UnknownEgressPolicy;
+
+    fn from_str(id: &str) -> Result<Self, Self::Err> {
+        match id {
+            "internet" => Ok(EgressPolicy::Internet),
+            "isolated" => Ok(EgressPolicy::Isolated),
+            other => Err(UnknownEgressPolicy(other.to_owned())),
+        }
+    }
+}
 
 /// A VM's lifecycle state, serialized lowercase over the API.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,6 +116,10 @@ pub struct CreateVmRequest {
     pub cpu: u8,
     /// Disk capacity in GiB; rejected below the template rootfs's own size.
     pub disk_gb: u16,
+    /// Outbound network posture; defaults to `Internet` so existing clients
+    /// that don't send this field are unaffected.
+    #[serde(default)]
+    pub egress_policy: EgressPolicy,
 }
 
 /// Body for `PUT /api/vms/{id}`: replaces cpu/ram/disk for a VM that isn't
@@ -80,6 +133,9 @@ pub struct UpdateVmResourcesRequest {
     pub cpu: u8,
     /// New disk capacity in GiB; must be >= the VM's current size.
     pub disk_gb: u16,
+    /// New outbound network posture; defaults to `Internet`.
+    #[serde(default)]
+    pub egress_policy: EgressPolicy,
 }
 
 /// A named phase of `start_vm`'s pipeline, exposed only while `state ==
@@ -122,6 +178,51 @@ pub struct VmResponse {
     pub disk_gb: u16,
     /// `Some` only while `state == Starting`.
     pub startup_step: Option<StartupStep>,
+    /// Outbound network posture.
+    pub egress_policy: EgressPolicy,
+    /// Allocated IPv4 address, if this VM currently holds an active lease
+    /// (see `Store::active_lease` — allocated at create, kept through
+    /// stop/start, freed only on delete).
+    pub ipv4: Option<String>,
+    /// Allocated MAC address, alongside `ipv4`.
+    pub mac: Option<String>,
+    /// Deterministic guest hostname (`fc-<12 hex>`, see
+    /// `firecrab_helper_protocol::network::guest_hostname`) — always
+    /// present once the VM record exists, independent of lease state.
+    pub hostname: String,
+}
+
+/// Response for `GET /api/network`: the host network firecrab has set up,
+/// read-only for now (see `task-network-configuration-dashboard.md` — making
+/// this genuinely editable needs a larger IPAM/bridge refactor).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkInfoResponse {
+    /// Name of the shared Linux bridge every VM's TAP attaches to.
+    pub bridge_name: String,
+    /// The Firecrab VPC subnet, as a CIDR string.
+    pub subnet_cidr: String,
+    /// The bridge's own address on the subnet (every VM's default gateway).
+    pub gateway: String,
+}
+
+/// Response for `GET /api/host`: point-in-time host resource usage, for a
+/// dashboard status panel.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HostStatusResponse {
+    /// 1-minute load average (`/proc/loadavg`'s first field).
+    pub load_average_1m: f64,
+    /// Total RAM, in MiB.
+    pub memory_total_mib: u64,
+    /// Currently available (not just free) RAM, in MiB.
+    pub memory_available_mib: u64,
+    /// Total capacity of the filesystem backing the VM data directory, in GiB.
+    pub disk_total_gib: u64,
+    /// Available capacity of that same filesystem, in GiB.
+    pub disk_available_gib: u64,
+    /// Seconds since the host booted (`/proc/uptime`'s first field).
+    pub uptime_seconds: u64,
 }
 
 /// The VM's captured serial console output (see
@@ -167,6 +268,41 @@ mod tests {
     use VmState::{Created, Error, Running, Starting, Stopped, Stopping};
 
     const ALL_STATES: [VmState; 6] = [Created, Starting, Running, Stopping, Stopped, Error];
+
+    #[test]
+    fn egress_policy_id_round_trips_through_from_str() {
+        for policy in [EgressPolicy::Internet, EgressPolicy::Isolated] {
+            assert_eq!(policy.id().parse(), Ok(policy));
+        }
+    }
+
+    #[test]
+    fn egress_policy_unknown_ids_are_rejected_not_defaulted() {
+        assert_eq!(
+            "wide-open".parse::<EgressPolicy>(),
+            Err(UnknownEgressPolicy("wide-open".to_owned()))
+        );
+        // A CIDR must never be accepted as a policy ID.
+        assert!("0.0.0.0/0".parse::<EgressPolicy>().is_err());
+    }
+
+    #[test]
+    fn egress_policy_default_is_internet() {
+        assert_eq!(EgressPolicy::default(), EgressPolicy::Internet);
+    }
+
+    #[test]
+    fn egress_policy_serializes_as_its_snake_case_id() {
+        let json = serde_json::to_string(&EgressPolicy::Isolated).unwrap();
+        assert_eq!(json, "\"isolated\"");
+    }
+
+    #[test]
+    fn create_vm_request_defaults_egress_policy_to_internet_when_absent() {
+        let json = r#"{"name":"vm","template":"ubuntu-rootfs-26.04","ram":512,"cpu":1,"diskGb":2}"#;
+        let request: CreateVmRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.egress_policy, EgressPolicy::Internet);
+    }
 
     #[test]
     fn transitions_follow_the_lifecycle_table() {
@@ -236,7 +372,8 @@ mod tests {
             UpdateVmResourcesRequest {
                 ram: 1024,
                 cpu: 2,
-                disk_gb: 8
+                disk_gb: 8,
+                egress_policy: EgressPolicy::Internet,
             }
         );
     }
@@ -261,6 +398,10 @@ mod tests {
             ram: 512,
             disk_gb: 2,
             startup_step: None,
+            egress_policy: EgressPolicy::Internet,
+            ipv4: Some("172.30.0.5".to_owned()),
+            mac: Some("02:fc:00:00:00:05".to_owned()),
+            hostname: "fc-abc123456789".to_owned(),
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
@@ -289,6 +430,10 @@ mod tests {
             ram: 512,
             disk_gb: 2,
             startup_step: Some(StartupStep::PreparingDisk),
+            egress_policy: EgressPolicy::Internet,
+            ipv4: None,
+            mac: None,
+            hostname: "fc-abc123456789".to_owned(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
@@ -307,6 +452,30 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<VmLogResponse>(&json).unwrap(),
             response
+        );
+    }
+
+    #[test]
+    fn host_status_response_serializes_camel_case() {
+        let json = serde_json::to_string(&HostStatusResponse::default()).unwrap();
+        assert_eq!(
+            json,
+            "{\"loadAverage1m\":0.0,\"memoryTotalMib\":0,\"memoryAvailableMib\":0,\
+             \"diskTotalGib\":0,\"diskAvailableGib\":0,\"uptimeSeconds\":0}"
+        );
+    }
+
+    #[test]
+    fn network_info_response_serializes_camel_case() {
+        let response = NetworkInfoResponse {
+            bridge_name: "fcbr0".to_owned(),
+            subnet_cidr: "172.30.0.0/24".to_owned(),
+            gateway: "172.30.0.1".to_owned(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert_eq!(
+            json,
+            "{\"bridgeName\":\"fcbr0\",\"subnetCidr\":\"172.30.0.0/24\",\"gateway\":\"172.30.0.1\"}"
         );
     }
 }

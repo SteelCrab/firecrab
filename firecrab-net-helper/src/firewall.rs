@@ -180,6 +180,9 @@ pub async fn remove_vm_policy(actor: &FirewallActor, vm_id: Uuid) -> Result<(), 
 
 /// Explicit uninstall: remove both Firecrab tables. VM stop/delete must
 /// never call this — only an explicit teardown of the whole subsystem does.
+/// Not wired to a caller yet (reserved for a future uninstall path); its
+/// rendering is exercised directly by tests.
+#[allow(dead_code)]
 pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError> {
     let mut state = actor.state.lock().await;
     run_nft(&render_remove_ruleset()).await?;
@@ -334,6 +337,7 @@ fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr) -> String {
 
 /// `add table` before `delete table` makes removal idempotent even if the
 /// table was never installed, without depending on nft's newer `destroy`.
+#[allow(dead_code)]
 fn render_remove_ruleset() -> String {
     format!(
         "add table inet {TABLE_INET}\n\

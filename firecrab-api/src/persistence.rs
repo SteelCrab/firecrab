@@ -32,29 +32,30 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     template_boot_args_sha256 TEXT NOT NULL,
     cpu INTEGER NOT NULL,
     ram INTEGER NOT NULL,
-    disk_gb INTEGER NOT NULL DEFAULT 2
+    disk_gb INTEGER NOT NULL DEFAULT 2,
+    egress_policy TEXT NOT NULL DEFAULT 'internet'
 ) STRICT";
 
 /// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
-    template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb \
-    FROM vms";
+    template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
+    egress_policy FROM vms";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
-    template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+    template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
+    egress_policy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
 /// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
-    template_boot_args_sha256, cpu, ram, disk_gb) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+    template_boot_args_sha256, cpu, ram, disk_gb, egress_policy) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
 /// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
-    template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11 \
+    template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12 \
     WHERE id = ?1";
 
 /// Adds `disk_gb` to a `vms` table created before the column existed (a
@@ -68,6 +69,23 @@ fn migrate_disk_gb_column(conn: &Connection) -> Result<(), PersistenceError> {
     if !has_column {
         conn.execute(
             "ALTER TABLE vms ADD COLUMN disk_gb INTEGER NOT NULL DEFAULT 2",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Adds `egress_policy` to a `vms` table created before the column existed,
+/// same reasoning as [`migrate_disk_gb_column`]. `'internet'` matches the
+/// behavior every VM had before this field existed (`setup_vm_network`
+/// always applied `EgressPolicy::default()`).
+fn migrate_egress_policy_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let has_column: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name = 'egress_policy'")?
+        .exists([])?;
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE vms ADD COLUMN egress_policy TEXT NOT NULL DEFAULT 'internet'",
             [],
         )?;
     }
@@ -173,6 +191,7 @@ impl Store {
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute(CREATE_TABLE_SQL, [])?;
         migrate_disk_gb_column(&conn)?;
+        migrate_egress_policy_column(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
             conn.execute(index_sql, [])?;
@@ -212,6 +231,7 @@ impl Store {
                     cpu: row.get(8)?,
                     ram: row.get(9)?,
                     disk_gb: row.get(10)?,
+                    egress_policy: decode_egress_policy(&id_text, &row.get::<_, String>(11)?)?,
                     startup_step: None,
                 },
             );
@@ -368,6 +388,7 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.cpu,
             vm.ram,
             vm.disk_gb,
+            vm.egress_policy.id(),
         ],
     )
 }
@@ -391,6 +412,18 @@ fn decode_state(id: &str, name: &str) -> Result<VmState, PersistenceError> {
     })
 }
 
+/// Inverse of `EgressPolicy::id`; fails on any string that isn't a known
+/// policy id.
+fn decode_egress_policy(
+    id: &str,
+    policy: &str,
+) -> Result<crate::model::EgressPolicy, PersistenceError> {
+    policy.parse().map_err(|_| PersistenceError::CorruptRecord {
+        id: id.to_owned(),
+        reason: format!("unknown egress policy {policy:?}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -410,6 +443,7 @@ mod tests {
             cpu: 1,
             ram: 512,
             disk_gb: 2,
+            egress_policy: Default::default(),
             startup_step: None,
         }
     }
@@ -477,6 +511,78 @@ mod tests {
             };
             assert_eq!(all.get(&id).unwrap().state, expected, "{before:?}");
         }
+    }
+
+    #[test]
+    fn migrate_egress_policy_column_adds_it_to_a_pre_existing_table() {
+        let directory = tempdir().unwrap();
+        let db_file = directory.path().join("firecrab.db");
+
+        // Simulate a `vms` table created before `egress_policy` existed —
+        // the same shape `CREATE_TABLE_SQL` had before this column was added.
+        {
+            let conn = Connection::open(&db_file).unwrap();
+            conn.execute(
+                "CREATE TABLE vms (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    template TEXT NOT NULL,
+                    template_version TEXT NOT NULL,
+                    template_kernel_sha256 TEXT NOT NULL,
+                    template_rootfs_sha256 TEXT NOT NULL,
+                    template_boot_args_sha256 TEXT NOT NULL,
+                    cpu INTEGER NOT NULL,
+                    ram INTEGER NOT NULL,
+                    disk_gb INTEGER NOT NULL DEFAULT 2
+                ) STRICT",
+                [],
+            )
+            .unwrap();
+            let vm = record(Uuid::new_v4(), "pre-migration");
+            conn.execute(
+                "INSERT INTO vms (id, name, state, template, template_version, \
+                 template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, \
+                 cpu, ram, disk_gb) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    vm.id.to_string(),
+                    vm.name,
+                    encode_state(vm.state),
+                    vm.template,
+                    vm.template_version,
+                    vm.template_kernel_sha256,
+                    vm.template_rootfs_sha256,
+                    vm.template_boot_args_sha256,
+                    vm.cpu,
+                    vm.ram,
+                    vm.disk_gb,
+                ],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&db_file).unwrap();
+        let vms = store.load_all().unwrap();
+        let (_, migrated) = vms.iter().next().expect("the pre-migration row survives");
+        assert_eq!(
+            migrated.egress_policy,
+            crate::model::EgressPolicy::Internet,
+            "a column added by migration must default to the pre-existing behavior"
+        );
+
+        // And the column is now writable, same as any other field.
+        let mut updated = migrated.clone();
+        updated.egress_policy = crate::model::EgressPolicy::Isolated;
+        store.update(&updated).unwrap();
+        assert_eq!(
+            store
+                .load_all()
+                .unwrap()
+                .get(&updated.id)
+                .unwrap()
+                .egress_policy,
+            crate::model::EgressPolicy::Isolated
+        );
     }
 
     #[test]

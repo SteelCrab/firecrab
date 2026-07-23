@@ -1,4 +1,13 @@
-import type { ApiError, CreateVmRequest, ErrorResponse, UpdateVmResourcesRequest, VmLogResponse, VmResponse } from "../bindings";
+import type {
+  ApiError,
+  CreateVmRequest,
+  ErrorResponse,
+  HostStatusResponse,
+  NetworkInfoResponse,
+  UpdateVmResourcesRequest,
+  VmLogResponse,
+  VmResponse,
+} from "../bindings";
 
 /** API failures split into what the server said vs. not reaching it at all. */
 export class ApiClientError extends Error {
@@ -90,6 +99,14 @@ export function startVm(id: string): Promise<VmResponse> {
 
 export function stopVm(id: string): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}/stop`, { method: "POST" });
+}
+
+export function getNetworkInfo(): Promise<NetworkInfoResponse> {
+  return fetchJson("/api/network");
+}
+
+export function getHostStatus(): Promise<HostStatusResponse> {
+  return fetchJson("/api/host");
 }
 
 export async function deleteVm(id: string): Promise<void> {

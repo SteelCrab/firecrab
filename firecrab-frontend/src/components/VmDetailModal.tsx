@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import type { StartupStep, VmResponse } from "../bindings";
+import type { EgressPolicy, StartupStep, VmResponse } from "../bindings";
 import { ApiClientError, getVm, getVmLog, updateVmResources } from "../api/client";
 import { isEditableState } from "../model";
 import RamStepper from "./RamStepper";
+
+const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
+  internet: "인터넷 허용",
+  isolated: "격리(게이트웨이만 허용)",
+};
 
 const STARTUP_STEPS: StartupStep[] = [
   "preparingDisk",
@@ -53,6 +58,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [editCpu, setEditCpu] = useState("1");
   const [editRam, setEditRam] = useState("512");
   const [editDisk, setEditDisk] = useState("2");
+  const [editEgressPolicy, setEditEgressPolicy] = useState<EgressPolicy>("internet");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
 
@@ -61,6 +67,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     setEditCpu(String(vm.cpu));
     setEditRam(String(vm.ram));
     setEditDisk(String(vm.diskGb));
+    setEditEgressPolicy(vm.egressPolicy);
     setSaveError(null);
     setEditing(true);
   };
@@ -79,6 +86,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
         cpu: parseInt(editCpu, 10) || 0,
         ram: parseInt(editRam, 10) || 0,
         diskGb: parseInt(editDisk, 10) || 0,
+        egressPolicy: editEgressPolicy,
       });
       setVm(updated);
       setEditing(false);
@@ -207,6 +215,30 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   `${vm.diskGb} GiB`
                 )}
               </dd>
+              <dt>네트워크</dt>
+              <dd>
+                {editing ? (
+                  <select
+                    className="detail-edit-input"
+                    value={editEgressPolicy}
+                    onChange={(event) => setEditEgressPolicy(event.target.value as EgressPolicy)}
+                  >
+                    {(Object.keys(EGRESS_POLICY_LABEL) as EgressPolicy[]).map((policy) => (
+                      <option key={policy} value={policy}>
+                        {EGRESS_POLICY_LABEL[policy]}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  EGRESS_POLICY_LABEL[vm.egressPolicy]
+                )}
+              </dd>
+              <dt>ip</dt>
+              <dd>{vm.ipv4 ?? "—"}</dd>
+              <dt>mac</dt>
+              <dd>{vm.mac ?? "—"}</dd>
+              <dt>hostname</dt>
+              <dd>{vm.hostname}</dd>
               <dt>id</dt>
               <dd title={vm.id}>{vm.id}</dd>
             </dl>
