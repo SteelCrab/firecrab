@@ -498,7 +498,7 @@ verify_rootfs_content() {
     fail 'Rootfs did not create /etc/systemd/network/10-eth0.network.'
   fi
 
-  if [ ! -e "${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" ]; then
+  if [ ! -L "${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-networkd.service" ]; then
     fail 'Rootfs did not enable systemd-networkd.service.'
   fi
 
@@ -506,7 +506,11 @@ verify_rootfs_content() {
     fail 'Rootfs did not install an executable firecrab-network-ready.sh.'
   fi
 
-  if [ ! -e "${mount_dir}/etc/systemd/system/multi-user.target.wants/firecrab-network-ready.service" ]; then
+  if [ ! -e "${mount_dir}/etc/systemd/system/firecrab-network-ready.service" ]; then
+    fail 'Rootfs did not install firecrab-network-ready.service.'
+  fi
+
+  if [ ! -L "${mount_dir}/etc/systemd/system/multi-user.target.wants/firecrab-network-ready.service" ]; then
     fail 'Rootfs did not enable firecrab-network-ready.service.'
   fi
 

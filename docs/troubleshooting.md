@@ -12,6 +12,9 @@
 | VM 상세 모달 "불러오는 중…" 계속 | [대시보드/API](#대시보드api) |
 | VM 여러 대 동시 시작 시 일부가 starting에서 멈춤 | [VM 생성·시작](#vm-생성시작) |
 | 디스크 공간 부족으로 생성/시작이 느리거나 실패 | [VM 생성·시작](#vm-생성시작) |
+| "network helper is unavailable" 로 start가 500 | [네트워크](#네트워크) |
+| VM은 로그인 셸까지 완전히 부팅되는데 계속 `error` | [네트워크](#네트워크) |
+| `FIRECRAB_NETWORK_FAILED no-ipv4-address` | [네트워크](#네트워크) |
 | VM을 여러 대 동시에 시작하면 부팅 극초반에 죽음 | [네트워크](#네트워크) |
 | 터미널 "연결 끊김"만 뜨고 안 붙음 | [터미널](#터미널) |
 | 터미널 프롬프트에 `;1R;80R;1R;80R...` 반복 | [터미널](#터미널) |
@@ -48,6 +51,52 @@
 - **해결**: `df -h`로 확인하고, 안 쓰는 VM은 `DELETE /api/vms/{id}`로 정리(디스크 파일도 같이 삭제됨)
 
 ## 네트워크
+
+### "network helper is unavailable at /run/firecrab/net-helper.sock"
+
+- **원인**: `firecrab-net-helper`가 안 떠 있거나, `firecrab-api`가 보는 기본 소켓 경로
+  (`/run/firecrab/net-helper.sock`)와 다른 경로(`docs/net-helper.md`의 개발용 `/tmp/firecrab-net.sock`
+  예시 등)로 기동됨
+- **해결**: `./scripts/dev-net-helper.sh`로 기동. `sudo -u root -g pista` 둘 다 필요 —
+  `-g pista`만 쓰면 root가 아니라 호출한 사용자로 실행되어 `/run/firecrab` 바인드가 permission
+  denied로 실패한다(`-u root` 없이 `-g`만 지정하면 sudo는 대상 사용자를 root가 아니라 **호출한
+  사용자**로 취급)
+
+### VM이 로그인 셸까지 완전히 부팅되는데도 계속 `error`로 끝난다
+
+- **원인**: rootfs 템플릿 이미지가 `firecrab-network-ready.service`를 추가한 빌드 스크립트보다
+  오래된 채로 재빌드가 안 됨 — guest가 네트워크 준비 신호(`FIRECRAB_NETWORK_READY`)를 영영 콘솔에
+  출력하지 않아 `wait_for_network_ready`가 실패한다. 게다가 `firecrab-api`는 템플릿 파일의
+  inode/길이/SHA256을 **기동 시점에 한 번만** 검증해 메모리에 고정하므로(`TemplateRegistry::
+  load_default`, `firecrab-api/src/main.rs`), 이미지를 재빌드해도 `firecrab-api`를 재시작하지
+  않으면 "template artifact changed" 로 계속 실패한다
+- **확인**: `debugfs -c -R "ls -l /etc/systemd/system/multi-user.target.wants" <rootfs.ext4>` 로
+  `firecrab-network-ready.service` 심볼릭 링크가 있는지 직접 확인 가능
+- **해결**: `scripts/firecracker-menual/install-{ubuntu,alpine}-rootfs.sh` 재실행 →
+  `firecrab-api` 재시작(새 이미지 인식용)
+
+### `FIRECRAB_NETWORK_FAILED no-ipv4-address`
+
+VM이 부팅과 `firecrab-network-ready.service` 실행까지는 성공하지만 guest가 DHCP로 IP를 못 받는 경우.
+원인이 두 가지 겹쳐 있었다(둘 다 수정됨):
+
+- **원인 1 — bridge forward delay**: 새로 붙은 TAP 포트가 커널 기본 forward delay(단계당 15초,
+  최대 ~30초) 때문에 한동안 forwarding 상태가 안 됨 — `stp_state=0`(STP 자체를 꺼도) 이 지연은
+  별개로 적용된다. guest는 부팅 후 몇 초 안에 DHCPDISCOVER를 보내므로 그 안에 대부분 못 받는다.
+  `firecrab-net-helper/src/bridge.rs`의 `ensure_bridge`에 `forward_delay(0)` 추가로 수정 — VM
+  start마다 매번 호출되는 idempotent 함수라 기존 브리지에도 바로 적용된다
+- **원인 2 — dnsmasq 고아 프로세스 미재사용**: DHCP를 서빙하는 `dnsmasq` child의 참조
+  (`DhcpActor.child`)가 net-helper 프로세스 메모리에만 있다. net-helper가 재시작되면(개발 중
+  흔함) 이 참조가 사라지고, 이미 떠 있는(재시작 전 net-helper가 띄운) 고아 dnsmasq를 재사용하지
+  않은 채 새 dnsmasq를 spawn 시도 → 포트 충돌로 새 프로세스가 죽거나 무시됨 → 이후 신규 VM의
+  lease가 실제로 서빙 중인(원래) dnsmasq에는 절대 반영되지 않는다. `firecrab-net-helper/src/
+  dhcp.rs`에 `dnsmasq.pid` 파일을 확인해 살아있는 기존 프로세스면 그걸 재사용(SIGHUP)하도록 수정
+- **원인 3~6**: [bugs/dhcp-never-reaches-guest.md](bugs/dhcp-never-reaches-guest.md) —
+  dnsmasq base config/hosts 파일 경로 충돌, `dhcp-hostsfile`에 잘못된 `dhcp-host=` 접두어,
+  **호스트 UFW가 67/53 포트를 막고 있던 것**(코드 문제 아님, 새 개발 머신마다 수동으로
+  `sudo ufw allow in on fcbr0 to any port 67 proto udp` 등 해줘야 함), IP를 빠르게 재사용할 때
+  dnsmasq의 예전 리스와 충돌(`dhcp_release`로 강제 해제하도록 수정, `dnsmasq-utils` 설치 필요).
+  넷 다 수정/조치됨 — VM 5대 연속 생성·삭제로 재현 검증 완료
 
 ### VM을 여러 대 동시에 시작하면 부팅 극초반에 일부가 원인 불명으로 죽는다
 
