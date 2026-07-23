@@ -338,7 +338,11 @@ mod tests {
 
         console.push_output(b"FIRECRAB_PKG_UPDATE_DONE:0\n");
 
-        for _ in 0..100 {
+        // Matches handlers::vms::tests::wait_for_state's budget (100 *
+        // 30ms) — 100 * 20ms was tight enough to occasionally time out on a
+        // loaded CI runner before the detached tokio::spawn task got
+        // scheduled.
+        for _ in 0..150 {
             let status = state
                 .vms
                 .lock()
@@ -348,7 +352,7 @@ mod tests {
             if matches!(status, Some(PackageUpdateStatus::Succeeded { .. })) {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(Duration::from_millis(30)).await;
         }
         panic!("package update never reached Succeeded");
     }
@@ -375,7 +379,7 @@ mod tests {
 
         console.push_output(b"FIRECRAB_PKG_UPDATE_DONE:1\n");
 
-        for _ in 0..100 {
+        for _ in 0..150 {
             let status = state
                 .vms
                 .lock()
@@ -385,7 +389,7 @@ mod tests {
             if matches!(status, Some(PackageUpdateStatus::Failed { .. })) {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            tokio::time::sleep(Duration::from_millis(30)).await;
         }
         panic!("package update never reached Failed");
     }
