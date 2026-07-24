@@ -27,6 +27,22 @@ pub async fn get_network_info() -> Json<NetworkInfoResponse> {
         bridge_name: BRIDGE_NAME.to_owned(),
         subnet_cidr: format!("{NETWORK}/{PREFIX_LEN}"),
         gateway: GATEWAY.to_string(),
+        uplink: read_uplink().unwrap_or_default(),
+    })
+}
+
+/// Default route's outbound interface, read from `/proc/net/route` (no
+/// privilege needed). This is the same value `firecrab-net-helper`'s own
+/// `nat::detect_uplink` resolves via rtnetlink, just read a different way —
+/// a read-only value isn't worth a new IPC round trip across the privilege
+/// boundary for.
+fn read_uplink() -> Option<String> {
+    let text = fs::read_to_string("/proc/net/route").ok()?;
+    text.lines().skip(1).find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let iface = fields.next()?;
+        let destination = fields.next()?;
+        (destination == "00000000").then(|| iface.to_owned())
     })
 }
 
@@ -122,6 +138,15 @@ mod tests {
         assert_eq!(info.bridge_name, "fcbr0");
         assert_eq!(info.subnet_cidr, "172.30.0.0/24");
         assert_eq!(info.gateway, "172.30.0.1");
+        // Real host value, not fixed like the rest — just check it resolved.
+        assert!(!info.uplink.is_empty());
+    }
+
+    #[test]
+    fn read_uplink_resolves_a_real_default_route_interface() {
+        // Unprivileged read; requires this host to have an IPv4 default
+        // route (true in the dev/CI sandbox this was written against).
+        assert!(!read_uplink().unwrap().is_empty());
     }
 
     #[test]

@@ -19,6 +19,8 @@ mod bridge;
 mod dhcp;
 /// Per-VM and global nftables firewall rules.
 mod firewall;
+/// NAT/uplink detection, split out of `firewall`.
+mod nat;
 /// Per-VM TAP device lifecycle.
 mod tap;
 
@@ -69,6 +71,9 @@ enum StartupError {
         #[source]
         source: io::Error,
     },
+    /// Couldn't enable IPv4 forwarding globally.
+    #[error("failed to enable net.ipv4.ip_forward")]
+    IpForward(#[source] io::Error),
 }
 
 /// Resolved startup configuration plus the shared actors every connection
@@ -152,6 +157,11 @@ async fn main() -> ExitCode {
 /// Loads config, binds the socket, and serves until shutdown.
 async fn run() -> Result<(), StartupError> {
     let config = Arc::new(HelperConfig::load()?);
+    // Required for NAT'd VM egress to work at all; previously a manual
+    // operator step (docs/task-shared-bridge-network.md). Global and
+    // idempotent, so doing it once here (rather than on every ensure_bridge
+    // call) is enough.
+    bridge::enable_ip_forward().map_err(StartupError::IpForward)?;
     let listener = bind_socket(&config.socket_path)?;
     println!(
         "[INFO] net-helper listening on {}",

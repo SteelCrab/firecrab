@@ -138,6 +138,14 @@ pub async fn ensure_bridge(actor: &BridgeActor) -> Result<(), BridgeError> {
     ensure_gateway(&handle, bridge.header.index).await
 }
 
+/// Enables IPv4 forwarding globally — required for NAT'd VM egress to work
+/// at all. A global sysctl, not per-bridge, so this is deliberately not part
+/// of [`ensure_bridge`] (its own doc comment disclaims touching this); the
+/// caller runs it once at daemon startup instead.
+pub fn enable_ip_forward() -> io::Result<()> {
+    fs::write("/proc/sys/net/ipv4/ip_forward", "1")
+}
+
 /// The bridge is IPv4-only for now. Writing the per-interface sysctl also
 /// flushes any IPv6 addresses the kernel already auto-assigned.
 fn disable_ipv6() -> Result<(), BridgeError> {

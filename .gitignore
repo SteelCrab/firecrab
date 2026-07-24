@@ -17,6 +17,8 @@ node_modules/
 /data/
 firecrab-api/data/
 
+.playwright-mcp
+
 # Env
 .env
 .env.*

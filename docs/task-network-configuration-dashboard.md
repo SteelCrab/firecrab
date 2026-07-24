@@ -19,6 +19,25 @@
 - 선행 필요: `net.ipv4.ip_forward` 자동 활성화(지금은 수동, `task-shared-bridge-network.md` 참고), `firewall.rs`의 NAT 로직 `nat.rs` 분리 — 설정이 실제로 여러 값을 오갈 수 있으려면 이 정리가 먼저 되어 있는 게 안전
 - 범위 조정 여지: 초기 버전은 네트워크 1개(현재 구조 그대로)를 "설정 가능하게 노출"만 하고, 여러 개의 독립된 네트워크(멀티 브릿지/서브넷) 지원은 후속으로 미룰 수 있음
 
+## 진행 상황 (2026-07-24)
+
+탐색 결과 subnet/gateway/bridge 이름이 `firecrab-api`(ipam.rs, handlers/network.rs)와
+`firecrab-net-helper`(bridge.rs, firewall.rs, dhcp.rs) 양쪽에 5곳 독립적으로 하드코딩돼 있고,
+설정을 영속화할 저장소 자체가 없으며, `ensure_gateway`는 기존 주소를 교체하는 로직이 없어
+실제 subnet 변경 지원엔 새 로직이 필요함을 확인. 지금 host에 실제 running VM이 떠 있는 상태라
+subnet을 실제로 바꾸는 기능은 라이브 시스템에 위험 부담이 있어, 이번 라운드는 문서가 명시한
+안전한 선행 작업만 진행함:
+
+- ✅ `net.ipv4.ip_forward` 자동 활성화 (`firecrab-net-helper/src/bridge.rs`의
+  `enable_ip_forward()`, daemon 시작 시 1회 호출)
+- ✅ `firewall.rs`의 NAT 로직을 `nat.rs`로 분리(동작 변화 없는 순수 리팩터 — `detect_uplink`,
+  `validate_uplink`, postrouting 체인 렌더링, `BRIDGE_SUBNET`)
+- ✅ `GET /api/network` 응답에 `uplink` 필드 추가(`/proc/net/route` 읽기, net-helper IPC 안 늘림)
+  및 `HostInfoModal.tsx`에 표시
+
+**남은 범위** (다음 단계): `PUT /api/network`로 subnet/uplink 실제 편집, 설정 영속화 저장소,
+5곳 하드코딩을 런타임 설정 하나로 통합, `ensure_gateway`의 주소 교체 로직, 활성 lease 충돌 방어.
+
 ## 완료 기준
 
 - 대시보드에서 host 네트워크 설정(subnet/uplink)을 보고 바꿀 수 있다
@@ -27,4 +46,4 @@
 
 ## 산출물
 
-`firecrab-api/src/handlers/network.rs`(신규), `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/nat.rs`(신규), `firecrab-frontend/src/components/`(설정 페이지 신규/확장)
+`firecrab-api/src/handlers/network.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/nat.rs`(신규, 완료), `firecrab-frontend/src/components/HostInfoModal.tsx` — subnet/uplink 실제 편집용 설정 페이지는 남은 범위

@@ -164,43 +164,7 @@ impl TemplateRegistry {
             .map(PathBuf::from)
             .unwrap_or(default_root);
 
-        Self::from_specs(
-            &image_root,
-            [
-                TemplateSpec {
-                    alias: "ubuntu-26.04".to_owned(),
-                    version: "ubuntu-26.04-v2".to_owned(),
-                    // Ubuntu's own linux-image-generic kernel (see
-                    // install-ubuntu-roofs.sh) rather than a self-built
-                    // vanilla one — virtio_blk/ext4 are builtin, no initrd
-                    // needed (task-distro-standard-kernels.md).
-                    kernel: PathBuf::from("kernel/vmlinux-ubuntu-26.04-x86_64"),
-                    initrd: None,
-                    rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
-                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
-                },
-                TemplateSpec {
-                    alias: "alpine-3.24".to_owned(),
-                    version: "alpine-3.24.1-v3".to_owned(),
-                    // Alpine's own linux-virt kernel (see
-                    // install-alpine-rootfs.sh); unlike Ubuntu's, its
-                    // virtio_blk/ext4 are modules, so the initrd Alpine
-                    // itself builds for it is required to reach the root
-                    // device at all. `rootfstype=ext4` is also required —
-                    // without an explicit -t, mkinitfs's mount call can't
-                    // guess a filesystem type whose module (ext4, also not
-                    // builtin here) isn't loaded yet, and fails with a
-                    // misleading "No such file or directory" instead of
-                    // triggering the kernel's on-demand module load.
-                    kernel: PathBuf::from("kernel/vmlinux-alpine-virt-x86_64"),
-                    initrd: Some(PathBuf::from("kernel/initramfs-alpine-virt-x86_64")),
-                    rootfs: PathBuf::from("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"),
-                    boot_args:
-                        "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
-                            .to_owned(),
-                },
-            ],
-        )
+        Self::from_specs(&image_root, default_specs())
     }
 
     /// Builds a registry from an explicit image root and template specs,
@@ -330,6 +294,47 @@ impl TemplateRegistry {
             );
         Ok(sha256)
     }
+}
+
+/// The templates [`TemplateRegistry::load_default`] installs, kept as a
+/// standalone function (rather than inline in `load_default`) so the exact
+/// alias/kernel/initrd/boot_args values are unit-testable without needing
+/// real image files on disk — `from_specs` itself always needs those to
+/// verify against, but the spec values themselves don't.
+fn default_specs() -> [TemplateSpec; 2] {
+    [
+        TemplateSpec {
+            alias: "ubuntu-26.04".to_owned(),
+            version: "ubuntu-26.04-v2".to_owned(),
+            // Ubuntu's own linux-image-generic kernel (see
+            // install-ubuntu-roofs.sh) rather than a self-built
+            // vanilla one — virtio_blk/ext4 are builtin, no initrd
+            // needed (task-distro-standard-kernels.md).
+            kernel: PathBuf::from("kernel/vmlinux-ubuntu-26.04-x86_64"),
+            initrd: None,
+            rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
+            boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
+        },
+        TemplateSpec {
+            alias: "alpine-3.24".to_owned(),
+            version: "alpine-3.24.1-v3".to_owned(),
+            // Alpine's own linux-virt kernel (see
+            // install-alpine-rootfs.sh); unlike Ubuntu's, its
+            // virtio_blk/ext4 are modules, so the initrd Alpine
+            // itself builds for it is required to reach the root
+            // device at all. `rootfstype=ext4` is also required —
+            // without an explicit -t, mkinitfs's mount call can't
+            // guess a filesystem type whose module (ext4, also not
+            // builtin here) isn't loaded yet, and fails with a
+            // misleading "No such file or directory" instead of
+            // triggering the kernel's on-demand module load.
+            kernel: PathBuf::from("kernel/vmlinux-alpine-virt-x86_64"),
+            initrd: Some(PathBuf::from("kernel/initramfs-alpine-virt-x86_64")),
+            rootfs: PathBuf::from("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"),
+            boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
+                .to_owned(),
+        },
+    ]
 }
 
 /// Rejects absolute paths, empty paths, and any `.`/`..` component.
@@ -565,6 +570,37 @@ mod tests {
             registry.open_verified(initrd),
             Err(TemplateError::ArtifactChanged(_))
         ));
+    }
+
+    #[test]
+    fn default_specs_match_each_distros_own_kernel_and_initrd_requirement() {
+        let specs = default_specs();
+        let ubuntu = specs
+            .iter()
+            .find(|spec| spec.alias == "ubuntu-26.04")
+            .expect("ubuntu-26.04 is one of the default specs");
+        assert_eq!(
+            ubuntu.kernel,
+            PathBuf::from("kernel/vmlinux-ubuntu-26.04-x86_64")
+        );
+        assert_eq!(ubuntu.initrd, None);
+
+        let alpine = specs
+            .iter()
+            .find(|spec| spec.alias == "alpine-3.24")
+            .expect("alpine-3.24 is one of the default specs");
+        assert_eq!(
+            alpine.kernel,
+            PathBuf::from("kernel/vmlinux-alpine-virt-x86_64")
+        );
+        assert_eq!(
+            alpine.initrd,
+            Some(PathBuf::from("kernel/initramfs-alpine-virt-x86_64"))
+        );
+        // virtio_blk/ext4 being modules on this kernel is exactly why the
+        // initrd above is required — and why the kernel needs an explicit
+        // hint to find the root filesystem type before that module loads.
+        assert!(alpine.boot_args.contains("rootfstype=ext4"));
     }
 
     #[test]
