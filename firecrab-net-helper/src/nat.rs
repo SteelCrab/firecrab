@@ -2,7 +2,7 @@
 //! renders the postrouting/masquerade chain that lets VM traffic egress
 //! through it. Split out of `firewall.rs`
 //! (`docs/task-network-configuration-dashboard.md`) as an organizational
-//! separation only — same [`FirewallError`] type, and `firewall.rs`'s
+//! separation only — same `FirewallError` type, and `firewall.rs`'s
 //! `render_apply_ruleset` still splices this module's output into the same
 //! single atomic `nft -f -` transaction as before.
 
