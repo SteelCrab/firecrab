@@ -73,6 +73,17 @@
   `wait_for_network_ready`와 같은 패턴 재사용) — 실제 Ubuntu/Alpine VM에서 exit code 0으로 검증,
   프론트엔드 버튼은 아직 없음(백엔드만). CI(GitHub Actions)에 `dnsmasq` 미설치로 나던 테스트 실패
   수정, Codecov patch coverage 90.00%→92.24%로 보강. `cargo test --workspace` 126/18/12/46 green
+- 2026-07-24(계속): 배포판 표준 커널 사용 완료(`task-distro-standard-kernels.md`). Ubuntu는
+  `linux-image-generic`, Alpine은 `linux-virt`를 각자의 rootfs 빌드 스크립트에서 설치 후
+  `/boot/vmlinuz*`를 `extract-vmlinux`(커널 소스에서 그대로 가져옴, `scripts/firecracker-menual/
+  extract-vmlinux`에 vendor)로 ELF vmlinux로 변환해 `images/kernel/`에 저장. Alpine은
+  virtio_blk/ext4가 모듈이라 `initramfs-virt`도 그대로 initrd로 필요 — `TemplateSpec`/
+  `TemplateVersion`에 `initrd: Option<...>` 추가, Firecracker `boot-source`에 조건부
+  `initrd_path` 필드 추가. 실제 부팅 중 Alpine만 커널 패닉으로 실패하는 걸 발견·수정
+  (`docs/bugs/alpine-official-kernel-cant-mount-root.md` — ext4가 모듈이라 `rootfstype=ext4`
+  없이는 mount가 타입을 못 정하고 실패). 두 템플릿 다 실제 API로 생성·시작→`running` 도달,
+  ping 0% 손실, `uname`/`Linux version` 배너로 실제 배포판 커널(Ubuntu 7.0.0-28-generic,
+  Alpine 6.18.39-0-virt) 사용 확인. `cargo test --workspace` 129/18/12/46 green
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
@@ -101,7 +112,7 @@
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
-| 미완료 (네트워크 이후) | [배포판 표준 커널 사용](task-distro-standard-kernels.md) | Ubuntu/Alpine 템플릿이 공유하는 자체 빌드 vanilla 커널 대신, 각 배포판이 실제 배포하는 공식 커널(`linux-image-generic`, `linux-virt`)을 추출해 쓴다. | 두 템플릿 모두 실제 배포판 공식 커널로 부팅되고 기존 동작에 회귀가 없다(Alpine은 virtio_blk/ext4가 모듈이라 initrd 필요). | `firecrab-api/src/templates.rs`, `firecrab-api/src/firecracker.rs`, `images/kernel/` |
+| ✅ | [배포판 표준 커널 사용](task-distro-standard-kernels.md) | Ubuntu/Alpine 템플릿이 공유하던 자체 빌드 vanilla 커널 대신, 각 배포판이 실제 배포하는 공식 커널(`linux-image-generic`, `linux-virt`)을 추출해 쓴다. | 두 템플릿 모두 실제 배포판 공식 커널로 부팅되고 기존 동작에 회귀가 없다(Alpine은 virtio_blk/ext4가 모듈이라 initrd 필요). | `firecrab-api/src/templates.rs`, `firecrab-api/src/firecracker.rs`, `images/kernel/`, `scripts/firecracker-menual/install-{ubuntu,alpine}-rootfs.sh`, `scripts/firecracker-menual/extract-vmlinux` |
 | 미완료 (네트워크 이후) | [네트워크 구성 대시보드 — 다중 subnet/uplink 편집](task-network-configuration-dashboard.md) | (읽기 전용 조회 + VM별 egress 정책은 위 표에서 ✅ 완료됨) 대시보드에서 host 네트워크(subnet/uplink) 자체를 **직접 설정**하고, 여러 네트워크 중 VM이 속할 네트워크를 명시적으로 고를 수 있게 한다 — IPAM/bridge 다중화 리팩터가 선행돼야 함. | 대시보드에서 네트워크 설정을 바꿀 수 있고, VM 생성·상세 화면에서 소속 네트워크(복수 중 하나)를 확인할 수 있다. | `firecrab-api/src/handlers/network.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/nat.rs`, `firecrab-frontend/src/components/` |
 
 ### 네트워크 — 범위 밖으로 보류 (재개 시 참고용, 이번 대회 일정에는 포함 안 함)

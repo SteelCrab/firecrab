@@ -60,6 +60,10 @@ pub struct TemplateSpec {
     pub version: String,
     /// Path to the kernel image, relative to the image root.
     pub kernel: PathBuf,
+    /// Path to the initrd image, relative to the image root — only needed
+    /// when the kernel doesn't build virtio_blk/ext4 in (e.g. Alpine's
+    /// `linux-virt`, which ships them as modules).
+    pub initrd: Option<PathBuf>,
     /// Path to the rootfs image, relative to the image root.
     pub rootfs: PathBuf,
     /// Firecracker kernel command line for this template.
@@ -104,6 +108,8 @@ pub struct TemplateVersion {
     pub version: String,
     /// Verified kernel image.
     pub kernel: VerifiedArtifact,
+    /// Verified initrd image, if this template needs one.
+    pub initrd: Option<VerifiedArtifact>,
     /// Verified rootfs image.
     pub rootfs: VerifiedArtifact,
     /// Firecracker kernel command line.
@@ -163,19 +169,35 @@ impl TemplateRegistry {
             [
                 TemplateSpec {
                     alias: "ubuntu-26.04".to_owned(),
-                    version: "ubuntu-26.04-v1".to_owned(),
-                    kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
+                    version: "ubuntu-26.04-v2".to_owned(),
+                    // Ubuntu's own linux-image-generic kernel (see
+                    // install-ubuntu-roofs.sh) rather than a self-built
+                    // vanilla one — virtio_blk/ext4 are builtin, no initrd
+                    // needed (task-distro-standard-kernels.md).
+                    kernel: PathBuf::from("kernel/vmlinux-ubuntu-26.04-x86_64"),
+                    initrd: None,
                     rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
                     boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
                 },
                 TemplateSpec {
                     alias: "alpine-3.24".to_owned(),
-                    version: "alpine-3.24.1-v1".to_owned(),
-                    // Same generic kernel as ubuntu-26.04: it's distro-agnostic
-                    // (virtio/ext4/serial support, no guest-specific config).
-                    kernel: PathBuf::from("kernel/vmlinux-7.1.2-x86_64"),
+                    version: "alpine-3.24.1-v3".to_owned(),
+                    // Alpine's own linux-virt kernel (see
+                    // install-alpine-rootfs.sh); unlike Ubuntu's, its
+                    // virtio_blk/ext4 are modules, so the initrd Alpine
+                    // itself builds for it is required to reach the root
+                    // device at all. `rootfstype=ext4` is also required —
+                    // without an explicit -t, mkinitfs's mount call can't
+                    // guess a filesystem type whose module (ext4, also not
+                    // builtin here) isn't loaded yet, and fails with a
+                    // misleading "No such file or directory" instead of
+                    // triggering the kernel's on-demand module load.
+                    kernel: PathBuf::from("kernel/vmlinux-alpine-virt-x86_64"),
+                    initrd: Some(PathBuf::from("kernel/initramfs-alpine-virt-x86_64")),
                     rootfs: PathBuf::from("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"),
-                    boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
+                    boot_args:
+                        "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
+                            .to_owned(),
                 },
             ],
         )
@@ -196,10 +218,16 @@ impl TemplateRegistry {
         let mut versions = HashMap::new();
 
         for spec in specs {
+            let initrd = spec
+                .initrd
+                .as_ref()
+                .map(|path| verify_artifact(&image_root, path))
+                .transpose()?;
             let version = Arc::new(TemplateVersion {
                 name: spec.alias.clone(),
                 version: spec.version.clone(),
                 kernel: verify_artifact(&image_root, &spec.kernel)?,
+                initrd,
                 rootfs: verify_artifact(&image_root, &spec.rootfs)?,
                 boot_args: spec.boot_args,
             });
@@ -433,6 +461,7 @@ mod tests {
                     alias: "ubuntu-rootfs-26.04".to_owned(),
                     version: "v1".to_owned(),
                     kernel: PathBuf::from("kernel"),
+                    initrd: None,
                     rootfs: PathBuf::from("rootfs"),
                     boot_args: "console=ttyS0".to_owned(),
                 },
@@ -440,6 +469,7 @@ mod tests {
                     alias: "ubuntu-26.04".to_owned(),
                     version: "v1".to_owned(),
                     kernel: PathBuf::from("kernel"),
+                    initrd: None,
                     rootfs: PathBuf::from("rootfs"),
                     boot_args: "console=ttyS0".to_owned(),
                 },
@@ -485,6 +515,7 @@ mod tests {
                 alias: "bad".to_owned(),
                 version: "v1".to_owned(),
                 kernel: PathBuf::from("../artifact"),
+                initrd: None,
                 rootfs: PathBuf::from("../artifact"),
                 boot_args: String::new(),
             }],
@@ -497,11 +528,43 @@ mod tests {
                 alias: "bad".to_owned(),
                 version: "v1".to_owned(),
                 kernel: PathBuf::from("link"),
+                initrd: None,
                 rootfs: PathBuf::from("link"),
                 boot_args: String::new(),
             }],
         );
         assert!(matches!(link_result, Err(TemplateError::Io(_))));
+    }
+
+    #[test]
+    fn initrd_is_verified_like_kernel_and_rootfs_when_present() {
+        let directory = tempdir().unwrap();
+        fs::write(directory.path().join("kernel"), b"kernel").unwrap();
+        fs::write(directory.path().join("rootfs"), b"rootfs").unwrap();
+        fs::write(directory.path().join("initrd"), b"initrd").unwrap();
+
+        let registry = TemplateRegistry::from_specs(
+            directory.path(),
+            [TemplateSpec {
+                alias: "alpine-virt".to_owned(),
+                version: "v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: Some(PathBuf::from("initrd")),
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: "console=ttyS0".to_owned(),
+            }],
+        )
+        .unwrap();
+        let template = registry.resolve_alias("alpine-virt").unwrap();
+
+        let initrd = template.initrd.as_ref().expect("initrd was declared");
+        assert_eq!(initrd.sha256(), sha256_bytes(b"initrd"));
+
+        fs::write(directory.path().join("initrd"), b"tampered").unwrap();
+        assert!(matches!(
+            registry.open_verified(initrd),
+            Err(TemplateError::ArtifactChanged(_))
+        ));
     }
 
     #[test]

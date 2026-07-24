@@ -18,6 +18,7 @@
 | Alpine 템플릿만 매번 `no-ipv4-address`(Ubuntu는 정상) | [네트워크](#네트워크) |
 | VM을 여러 대 동시에 시작하면 부팅 극초반에 죽음 | [네트워크](#네트워크) |
 | VM 내부에서 새 목적지로 나가는 연결(apt/apk update 등)이 타임아웃 | [네트워크](#네트워크) |
+| Alpine이 공식 커널로 바꾸니 부팅 중 커널 패닉("No such file or directory") | [VM 생성·시작](#vm-생성시작) |
 | 터미널 "연결 끊김"만 뜨고 안 붙음 | [터미널](#터미널) |
 | 터미널 프롬프트에 `;1R;80R;1R;80R...` 반복 | [터미널](#터미널) |
 
@@ -45,6 +46,13 @@
 
 - **원인·수정**: [bugs/vm-startup-stuck-under-concurrent-load.md](bugs/vm-startup-stuck-under-concurrent-load.md) —
   템플릿 재해싱 중복 + 타임아웃된 요청의 future가 drop되며 VM이 고아 상태가 되는 버그, 둘 다 수정됨
+
+### Alpine이 공식 커널로 바꾸니 부팅 중 커널 패닉("No such file or directory")
+
+- **원인·수정**: [bugs/alpine-official-kernel-cant-mount-root.md](bugs/alpine-official-kernel-cant-mount-root.md) —
+  Alpine 공식 `linux-virt` 커널은 ext4가 모듈이라, `rootfstype=` 없이 mount를 호출하면 모듈이
+  아직 안 실린 상태라 타입을 인식 못 해 실패한다("No such file or directory"는 이 상황을
+  오해하기 쉽게 표현한 에러). `boot_args`에 `rootfstype=ext4` 추가로 수정, 수정됨
 
 ### 호스트 디스크가 꽉 차서 VM 생성/시작이 느리거나 실패한다
 
