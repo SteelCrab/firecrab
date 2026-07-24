@@ -84,6 +84,13 @@
   없이는 mount가 타입을 못 정하고 실패). 두 템플릿 다 실제 API로 생성·시작→`running` 도달,
   ping 0% 손실, `uname`/`Linux version` 배너로 실제 배포판 커널(Ubuntu 7.0.0-28-generic,
   Alpine 6.18.39-0-virt) 사용 확인. `cargo test --workspace` 129/18/12/46 green
+- 2026-07-24(계속): 네트워크 구성 대시보드(`task-network-configuration-dashboard.md`)의 안전한
+  선행 작업만 진행 — subnet 실제 편집은 지금 running 중인 VM들의 bridge/subnet에 직접 영향을
+  주는 위험한 작업이라 이번엔 범위 밖으로 유지. `net.ipv4.ip_forward` 자동 활성화(`bridge.rs`의
+  `enable_ip_forward()`, daemon 시작 시 1회), `firewall.rs`의 NAT 로직을 `nat.rs`로 분리(동작
+  변화 없는 순수 리팩터), `GET /api/network` 응답에 `uplink` 필드 추가(net-helper IPC 안 늘리고
+  `/proc/net/route`를 직접 읽어 특권 경계 유지) 및 `HostInfoModal.tsx`에 표시. `cargo test
+  --workspace` 130/18/12/46 green
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|

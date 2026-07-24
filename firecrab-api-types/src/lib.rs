@@ -236,6 +236,8 @@ pub struct NetworkInfoResponse {
     pub subnet_cidr: String,
     /// The bridge's own address on the subnet (every VM's default gateway).
     pub gateway: String,
+    /// The host's outbound interface, resolved from its IPv4 default route.
+    pub uplink: String,
 }
 
 /// Response for `GET /api/host`: point-in-time host resource usage, for a
@@ -531,11 +533,12 @@ mod tests {
             bridge_name: "fcbr0".to_owned(),
             subnet_cidr: "172.30.0.0/24".to_owned(),
             gateway: "172.30.0.1".to_owned(),
+            uplink: "eth0".to_owned(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert_eq!(
             json,
-            "{\"bridgeName\":\"fcbr0\",\"subnetCidr\":\"172.30.0.0/24\",\"gateway\":\"172.30.0.1\"}"
+            "{\"bridgeName\":\"fcbr0\",\"subnetCidr\":\"172.30.0.0/24\",\"gateway\":\"172.30.0.1\",\"uplink\":\"eth0\"}"
         );
     }
 }

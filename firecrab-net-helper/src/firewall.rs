@@ -6,11 +6,7 @@ use std::net::Ipv4Addr;
 use std::process::Stdio;
 
 use firecrab_helper_protocol::network::{MacAddr, TAP_PREFIX, tap_name};
-use futures_util::TryStreamExt;
-use rtnetlink::packet_route::link::LinkAttribute;
-use rtnetlink::packet_route::route::RouteAttribute;
-use rtnetlink::packet_route::{AddressFamily, route::RouteMessage};
-use rtnetlink::{Handle, new_connection};
+use rtnetlink::new_connection;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -18,13 +14,12 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::bridge::BRIDGE_NAME;
+use crate::nat;
 
 /// Name of the owned `inet` table (NAT/egress dispatch).
 const TABLE_INET: &str = "firecrab";
 /// Name of the owned `bridge` table (L2 anti-spoofing).
 const TABLE_BRIDGE: &str = "firecrab_l2";
-/// The Firecrab VPC subnet, as an nftables-literal CIDR string.
-const BRIDGE_SUBNET: &str = "172.30.0.0/24";
 
 /// The egress posture the helper resolves an API-supplied policy ID into.
 /// The API selects the ID; the helper is the trust boundary and owns the
@@ -140,7 +135,7 @@ impl Default for FirewallActor {
 pub async fn ensure_firewall(actor: &FirewallActor) -> Result<(), FirewallError> {
     let (connection, handle, _) = new_connection().map_err(FirewallError::Connection)?;
     tokio::spawn(connection);
-    let uplink = detect_uplink(&handle).await?;
+    let uplink = nat::detect_uplink(&handle).await?;
 
     let mut state = actor.state.lock().await;
     if state.applied_uplink.as_deref() == Some(uplink.as_str()) {
@@ -191,18 +186,6 @@ pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError>
     Ok(())
 }
 
-/// Whether `name` is safe to embed unescaped in an nftables ruleset string.
-fn validate_uplink(name: &str) -> Result<(), FirewallError> {
-    let is_valid = !name.is_empty()
-        && name.len() < 16 // IFNAMSIZ
-        && name.chars().all(|c| c.is_ascii_graphic() && c != '"' && c != '\\' && c != ';');
-    if is_valid {
-        Ok(())
-    } else {
-        Err(FirewallError::InvalidUplinkName(name.to_owned()))
-    }
-}
-
 /// Renders the whole VM-independent desired state for both owned tables as
 /// one nft(8) script. `add table` + `flush table` before redeclaring keeps
 /// this idempotent without ever touching a table this helper doesn't own.
@@ -212,7 +195,8 @@ fn validate_uplink(name: &str) -> Result<(), FirewallError> {
 /// This global flush therefore only runs on an uplink change, when no per-VM
 /// state is expected to be present yet.
 fn render_apply_ruleset(uplink: &str) -> Result<String, FirewallError> {
-    validate_uplink(uplink)?;
+    nat::validate_uplink(uplink)?;
+    let postrouting = nat::render_postrouting_chain(uplink);
     Ok(format!(
         // L3: NAT + egress/ingress dispatch keyed by the VM's leased IP. The
         // L2 table below guarantees the source IP is genuine, so keying L3
@@ -243,13 +227,7 @@ fn render_apply_ruleset(uplink: &str) -> Result<String, FirewallError> {
          \t\tip daddr vmap @vm_ingress\n\
          \t\tdrop\n\
          \t}}\n\
-         \tchain postrouting_dispatch {{\n\
-         \t\ttype nat hook postrouting priority srcnat; policy accept;\n\
-         \t\tip saddr {BRIDGE_SUBNET} oifname \"{uplink}\" jump firecrab_postrouting\n\
-         \t}}\n\
-         \tchain firecrab_postrouting {{\n\
-         \t\tmasquerade\n\
-         \t}}\n\
+         {postrouting}\
          }}\n\
          add table bridge {TABLE_BRIDGE}\n\
          flush table bridge {TABLE_BRIDGE}\n\
@@ -345,44 +323,6 @@ fn render_remove_ruleset() -> String {
          add table bridge {TABLE_BRIDGE}\n\
          delete table bridge {TABLE_BRIDGE}\n"
     )
-}
-
-/// Resolves the host's uplink by following its IPv4 default route to an
-/// interface name.
-async fn detect_uplink(handle: &Handle) -> Result<String, FirewallError> {
-    let mut routes = handle.route().get(RouteMessage::default()).execute();
-    let mut oif_index = None;
-    while let Some(route) = routes.try_next().await.map_err(FirewallError::Netlink)? {
-        if route.header.address_family == AddressFamily::Inet
-            && route.header.destination_prefix_length == 0
-        {
-            oif_index = route
-                .attributes
-                .iter()
-                .find_map(|attribute| match attribute {
-                    RouteAttribute::Oif(index) => Some(*index),
-                    _ => None,
-                });
-            if oif_index.is_some() {
-                break;
-            }
-        }
-    }
-    let index = oif_index.ok_or(FirewallError::NoUplink)?;
-
-    let mut links = handle.link().get().match_index(index).execute();
-    let link = links
-        .try_next()
-        .await
-        .map_err(FirewallError::Netlink)?
-        .ok_or(FirewallError::NoUplink)?;
-    link.attributes
-        .iter()
-        .find_map(|attribute| match attribute {
-            LinkAttribute::IfName(name) => Some(name.clone()),
-            _ => None,
-        })
-        .ok_or(FirewallError::NoUplink)
 }
 
 /// Applies `ruleset` as a single atomic transaction: `nft -f -` accepts the
@@ -606,21 +546,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detect_uplink_resolves_the_hosts_default_route_interface() {
-        let (connection, handle, _) = new_connection().unwrap();
-        tokio::spawn(connection);
-
-        // Unprivileged read; requires this host to have an IPv4 default
-        // route (true in the dev/CI sandbox this was written against).
-        let uplink = detect_uplink(&handle).await.unwrap();
-        assert!(!uplink.is_empty());
-    }
-
-    #[tokio::test]
     async fn ensure_firewall_skips_nft_entirely_when_the_uplink_is_unchanged() {
         let (connection, handle, _) = new_connection().unwrap();
         tokio::spawn(connection);
-        let real_uplink = detect_uplink(&handle).await.unwrap();
+        let real_uplink = nat::detect_uplink(&handle).await.unwrap();
 
         // Pre-seed the actor as if this uplink was already applied. No `nft`
         // binary needs to exist or succeed for this call to return Ok, since

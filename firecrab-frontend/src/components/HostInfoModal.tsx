@@ -53,6 +53,8 @@ export default function HostInfoModal({ onClose }: HostInfoModalProps) {
               <dd>{network.subnetCidr}</dd>
               <dt>gateway</dt>
               <dd>{network.gateway}</dd>
+              <dt>uplink</dt>
+              <dd>{network.uplink}</dd>
             </dl>
           ) : (
             <div className="empty">불러오는 중…</div>
