@@ -656,10 +656,15 @@ async fn finish_run_start(
             StartupStep::GeneratingConfig,
         );
         let kernel = templates.artifact_path(&template.kernel);
+        let initrd = template
+            .initrd
+            .as_ref()
+            .map(|artifact| templates.artifact_path(artifact));
         firecracker::write_config(
             &runtime.vms_dir,
             &record,
             &kernel,
+            initrd.as_deref(),
             &template.boot_args,
             Some(&network),
         )
@@ -1089,6 +1094,7 @@ pub(crate) mod test_support {
                 alias: "ubuntu-rootfs-26.04".to_owned(),
                 version: "v1".to_owned(),
                 kernel: PathBuf::from("kernel"),
+                initrd: None,
                 rootfs: PathBuf::from("rootfs"),
                 boot_args: "console=ttyS0".to_owned(),
             }],

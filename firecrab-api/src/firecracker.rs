@@ -127,6 +127,11 @@ pub struct FirecrackerConfig {
 struct BootSource {
     /// Absolute path to the kernel image.
     kernel_image_path: PathBuf,
+    /// Absolute path to the initrd image, if this template's kernel needs
+    /// one (e.g. a distro kernel whose virtio_blk/ext4 are modules rather
+    /// than builtin).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    initrd_path: Option<PathBuf>,
     /// Kernel command line.
     boot_args: String,
 }
@@ -180,6 +185,7 @@ impl FirecrackerConfig {
     pub fn for_vm(
         vm: &VmRecord,
         kernel_image_path: &Path,
+        initrd_path: Option<&Path>,
         boot_args: &str,
         rootfs_path: &Path,
         network: Option<&VmNetwork>,
@@ -187,6 +193,7 @@ impl FirecrackerConfig {
         Self {
             boot_source: BootSource {
                 kernel_image_path: kernel_image_path.to_owned(),
+                initrd_path: initrd_path.map(Path::to_owned),
                 boot_args: boot_args.to_owned(),
             },
             drives: vec![Drive {
@@ -219,6 +226,7 @@ pub fn write_config(
     vms_dir: &Path,
     vm: &VmRecord,
     kernel_image_path: &Path,
+    initrd_path: Option<&Path>,
     boot_args: &str,
     network: Option<&VmNetwork>,
 ) -> Result<PathBuf, FirecrackerError> {
@@ -232,6 +240,7 @@ pub fn write_config(
     let config = FirecrackerConfig::for_vm(
         vm,
         kernel_image_path,
+        initrd_path,
         boot_args,
         &rootfs::rootfs_path(vms_dir, vm.id),
         network,
@@ -685,6 +694,7 @@ mod tests {
             &vms_dir,
             &vm,
             Path::new("/images/vmlinux"),
+            None,
             "console=ttyS0",
             None,
         )
@@ -709,6 +719,7 @@ mod tests {
             &vms_dir,
             &vm,
             Path::new("/images/vmlinux"),
+            None,
             "console=ttyS0",
             None,
         )
@@ -732,6 +743,46 @@ mod tests {
     }
 
     #[test]
+    fn initrd_path_is_omitted_when_the_template_has_none() {
+        let directory = tempdir().unwrap();
+        let vms_dir = directory.path().join("vms");
+        let vm = record(1, 512);
+
+        let path = write_config(
+            &vms_dir,
+            &vm,
+            Path::new("/images/vmlinux"),
+            None,
+            "console=ttyS0",
+            None,
+        )
+        .unwrap();
+
+        let config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(config["boot-source"].get("initrd_path").is_none());
+    }
+
+    #[test]
+    fn initrd_path_is_wired_through_when_the_template_has_one() {
+        let directory = tempdir().unwrap();
+        let vms_dir = directory.path().join("vms");
+        let vm = record(1, 512);
+
+        let path = write_config(
+            &vms_dir,
+            &vm,
+            Path::new("/images/vmlinux"),
+            Some(Path::new("/images/initrd")),
+            "console=ttyS0",
+            None,
+        )
+        .unwrap();
+
+        let config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(config["boot-source"]["initrd_path"], "/images/initrd");
+    }
+
+    #[test]
     fn rewriting_config_overwrites_previous_content() {
         let directory = tempdir().unwrap();
         let vms_dir = directory.path().join("vms");
@@ -741,6 +792,7 @@ mod tests {
             &vms_dir,
             &vm,
             Path::new("/images/vmlinux"),
+            None,
             "console=ttyS0",
             None,
         )
@@ -751,6 +803,7 @@ mod tests {
             &vms_dir,
             &vm,
             Path::new("/images/vmlinux"),
+            None,
             "console=ttyS0",
             None,
         )

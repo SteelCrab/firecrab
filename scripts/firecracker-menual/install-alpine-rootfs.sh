@@ -7,6 +7,10 @@ repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
 
 alpine_releases_base='https://dl-cdn.alpinelinux.org/alpine'
 artifact_dir="${repo_dir}/images/rootfs"
+kernel_artifact_dir="${repo_dir}/images/kernel"
+kernel_image_name='vmlinux-alpine-virt-x86_64'
+initrd_image_name='initramfs-alpine-virt-x86_64'
+extract_vmlinux="${script_dir}/extract-vmlinux"
 build_dir="${repo_dir}/build/alpine-rootfs"
 rootfs_size='512M'
 rootfs_hostname='firecrab'
@@ -18,7 +22,13 @@ rootfs_hostname='firecrab'
 # by that script's sudo re-exec). Docker gives us both without sudo.
 docker_bin='docker'
 docker_image='alpine:latest'
-rootfs_packages='alpine-baselayout busybox openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps'
+# linux-virt: Alpine's own officially-maintained cloud/virt kernel package
+# (task-distro-standard-kernels.md) — replaces the self-built vanilla kernel
+# every template used to share. Unlike Ubuntu's linux-image-generic,
+# virtio_blk/ext4 are modules here rather than builtin, so the initramfs-virt
+# Alpine builds alongside it (mkinitfs) has to ship as the VM's initrd too —
+# without it the kernel can never reach /dev/vda to mount the real root.
+rootfs_packages='alpine-baselayout busybox openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
 
 info() {
   printf '[INFO] %s\n' "$1"
@@ -111,6 +121,7 @@ alpine_arch=$3
 hostname=$4
 rootfs_size=$5
 rootfs_packages=$6
+initrd_image_name=$7
 
 mkdir -p "$staging"
 tar -xzf /input/archive.tar.gz -C "$staging"
@@ -226,6 +237,18 @@ test -e "${staging}/usr/sbin/sshd" || { echo 'missing sshd' >&2; exit 1; }
 test -x "${staging}/etc/init.d/firecrab-network-ready" || { echo 'missing firecrab-network-ready init script' >&2; exit 1; }
 test -L "${staging}/etc/runlevels/default/firecrab-network-ready" || { echo 'firecrab-network-ready not enabled in default runlevel' >&2; exit 1; }
 
+# linux-virt's boot files land under the staging root, not this container's
+# own /boot — pulled out to /kernel-out (mounted from the host) so the host
+# side can convert the compressed vmlinuz-virt to the uncompressed ELF
+# vmlinux Firecracker needs (extract-vmlinux isn't guaranteed to be usable
+# from inside this throwaway alpine:latest container, and the host already
+# has every decompressor it might need).
+test -e "${staging}/boot/vmlinuz-virt" || { echo 'missing boot/vmlinuz-virt (linux-virt)' >&2; exit 1; }
+test -e "${staging}/boot/initramfs-virt" || { echo 'missing boot/initramfs-virt (linux-virt)' >&2; exit 1; }
+cp "${staging}/boot/vmlinuz-virt" /kernel-out/vmlinuz-virt-raw
+cp "${staging}/boot/initramfs-virt" "/kernel-out/${initrd_image_name}"
+chown 1000:1000 /kernel-out/vmlinuz-virt-raw "/kernel-out/${initrd_image_name}" 2>/dev/null || true
+
 apk add --no-cache e2fsprogs >/dev/null
 
 rootfs_image="/out/alpine-rootfs-${alpine_version}-${alpine_arch}.ext4"
@@ -240,6 +263,42 @@ echo "ROOTFS_IMAGE=${rootfs_image}"
 EOF
 }
 
+# Converts the raw vmlinuz-virt the container copied out to /kernel-out into
+# the uncompressed ELF vmlinux Firecracker expects (a compressed bzImage
+# fails with "Invalid Elf magic number") — run on the host, not inside the
+# throwaway alpine:latest container, since the host is already known to have
+# a usable decompressor (see extract-vmlinux's own fallback list) while a
+# fresh container might not.
+extract_kernel() {
+  raw_path="${kernel_artifact_dir}/vmlinuz-virt-raw"
+  if [ ! -s "$raw_path" ]; then
+    fail "linux-virt's vmlinuz-virt was not copied out to ${raw_path}"
+  fi
+
+  kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
+  kernel_image_tmp="${kernel_image_path}.tmp"
+  info "extracting ELF vmlinux from: ${raw_path}"
+  if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
+    rm -f "$kernel_image_tmp"
+    fail "extract-vmlinux could not extract an ELF vmlinux from ${raw_path}"
+  fi
+  if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
+    rm -f "$kernel_image_tmp"
+    fail "extracted kernel is not an ELF image: ${raw_path}"
+  fi
+  chmod 0644 "$kernel_image_tmp"
+  mv "$kernel_image_tmp" "$kernel_image_path"
+  rm -f "$raw_path"
+  info "Alpine kernel image: ${kernel_image_path}"
+
+  initrd_image_path="${kernel_artifact_dir}/${initrd_image_name}"
+  if [ ! -s "$initrd_image_path" ]; then
+    fail "linux-virt's initramfs-virt was not copied out to ${initrd_image_path}"
+  fi
+  chmod 0644 "$initrd_image_path"
+  info "Alpine initrd image: ${initrd_image_path}"
+}
+
 main() {
   if [ "$#" -ne 0 ]; then
     fail 'install-alpine-rootfs.sh does not accept arguments.'
@@ -247,12 +306,16 @@ main() {
 
   require_command awk
   require_command curl
+  require_command file
   require_command grep
   require_command mkdir
   require_command mv
   require_command sha256sum
   require_command uname
   require_command "$docker_bin"
+  if [ ! -x "$extract_vmlinux" ]; then
+    fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  fi
 
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
@@ -296,6 +359,8 @@ main() {
   mkdir -p "$mount_dir"
   "$docker_bin" run --rm -v "${mount_dir}:/work/rootfs" "$docker_image" sh -c 'rm -rf /work/rootfs/* /work/rootfs/.[!.]* 2>/dev/null || true'
 
+  mkdir -p "$kernel_artifact_dir"
+
   info 'building Alpine rootfs staging + ext4 image via Docker (apk --root, no host root required)'
   "$docker_bin" run --rm \
     -v "${archive_path}:/input/archive.tar.gz:ro" \
@@ -303,7 +368,10 @@ main() {
     -v "${configure_script}:/configure.sh:ro" \
     -v "${mount_dir}:/work/rootfs" \
     -v "${artifact_dir}:/out" \
-    "$docker_image" sh /configure.sh "$alpine_branch" "$alpine_version" "$alpine_arch" "$rootfs_hostname" "$rootfs_size" "$rootfs_packages"
+    -v "${kernel_artifact_dir}:/kernel-out" \
+    "$docker_image" sh /configure.sh "$alpine_branch" "$alpine_version" "$alpine_arch" "$rootfs_hostname" "$rootfs_size" "$rootfs_packages" "$initrd_image_name"
+
+  extract_kernel
 
   rootfs_image="${artifact_dir}/alpine-rootfs-${alpine_version}-${alpine_arch}.ext4"
   rootfs_link="${artifact_dir}/alpine-rootfs.ext4"

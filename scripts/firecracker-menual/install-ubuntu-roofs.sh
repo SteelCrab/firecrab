@@ -9,13 +9,21 @@ script_path="${script_dir}/$(basename -- "$0")"
 ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
 ubuntu_series_setting='latest'
 artifact_dir="${repo_dir}/images/rootfs"
+kernel_artifact_dir="${repo_dir}/images/kernel"
+kernel_image_name='vmlinux-ubuntu-26.04-x86_64'
+extract_vmlinux="${script_dir}/extract-vmlinux"
 build_dir="${repo_dir}/build/ubuntu-rootfs"
 rootfs_image=''
 rootfs_link=''
 rootfs_size='2G'
 rootfs_hostname='firecrab'
 
-rootfs_boot_packages='systemd systemd-sysv udev kmod util-linux'
+# linux-image-generic: Ubuntu's own officially-maintained cloud/generic
+# kernel package (task-distro-standard-kernels.md) — replaces the
+# self-built vanilla kernel every template used to share, so security
+# patches and driver support follow Ubuntu's own release cadence instead
+# of this project having to track kernel.org itself.
+rootfs_boot_packages='systemd systemd-sysv udev kmod util-linux linux-image-generic'
 rootfs_packages="${rootfs_boot_packages} iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server"
 
 mount_dir=''
@@ -292,6 +300,8 @@ restore_output_ownership() {
   if [ "$rootfs_link" != "$rootfs_image" ] && [ -L "$rootfs_link" ]; then
     chown -h "${SUDO_UID}:${SUDO_GID}" "$rootfs_link" 2>/dev/null || true
   fi
+
+  chown "${SUDO_UID}:${SUDO_GID}" "${kernel_artifact_dir}/${kernel_image_name}"
 }
 
 cleanup_chroot_mounts() {
@@ -420,7 +430,20 @@ install_network_ready_sentinel() {
   write_root_file "${mount_dir}/usr/local/sbin/firecrab-network-ready.sh" <<'EOF'
 #!/bin/sh
 set -eu
-ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+# network-online.target only orders unit *starts*, it doesn't guarantee
+# systemd-networkd's DHCP transaction has actually completed by the time
+# this runs — checking eth0 once right away routinely races a lease that
+# lands a few hundred ms later. Poll briefly instead of trusting the
+# ordering dependency to mean "has an address" (matches the retry loop
+# install-alpine-rootfs.sh already uses for the same race).
+ipv4=""
+for _ in $(seq 1 10); do
+  ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+  if [ -n "$ipv4" ]; then
+    break
+  fi
+  sleep 1
+done
 if [ -z "$ipv4" ]; then
   echo "FIRECRAB_NETWORK_FAILED no-ipv4-address"
 elif getent hosts example.com >/dev/null 2>&1; then
@@ -463,6 +486,34 @@ install_rootfs_packages() {
   chroot "$mount_dir" apt-get clean
   rm -rf "${mount_dir}/var/lib/apt/lists/"*
   cleanup_chroot_mounts
+}
+
+# Pulls the vmlinuz linux-image-generic just installed out of the rootfs
+# build and converts it to the uncompressed ELF vmlinux Firecracker expects
+# (a compressed bzImage fails with "Invalid Elf magic number") — mirrors
+# what install-linux-kernel.sh's from-source build got for free via
+# `make vmlinux`, since a packaged kernel only ships the compressed form.
+extract_kernel() {
+  vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -n 1)
+  if [ -z "$vmlinuz_path" ]; then
+    fail "linux-image-generic did not install a vmlinuz under ${mount_dir}/boot"
+  fi
+  info "extracting ELF vmlinux from: ${vmlinuz_path}"
+
+  mkdir -p "$kernel_artifact_dir"
+  kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
+  kernel_image_tmp="${kernel_image_path}.tmp"
+  if ! "$extract_vmlinux" "$vmlinuz_path" >"$kernel_image_tmp"; then
+    rm -f "$kernel_image_tmp"
+    fail "extract-vmlinux could not extract an ELF vmlinux from ${vmlinuz_path}"
+  fi
+  if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
+    rm -f "$kernel_image_tmp"
+    fail "extracted kernel is not an ELF image: ${vmlinuz_path}"
+  fi
+  chmod 0644 "$kernel_image_tmp"
+  mv "$kernel_image_tmp" "$kernel_image_path"
+  info "Ubuntu kernel image: ${kernel_image_path}"
 }
 
 verify_rootfs_content() {
@@ -539,6 +590,14 @@ verify_rootfs_content() {
   if [ ! -e "${mount_dir}/bin/ping" ] && [ ! -e "${mount_dir}/usr/bin/ping" ]; then
     fail "Rootfs did not install ping. Check packages: ${rootfs_packages}"
   fi
+
+  kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
+  if [ ! -s "$kernel_image_path" ]; then
+    fail "extract_kernel did not produce a kernel image: ${kernel_image_path}"
+  fi
+  if ! file "$kernel_image_path" | grep -q 'ELF'; then
+    fail "Extracted kernel image is not ELF: ${kernel_image_path}"
+  fi
 }
 
 main() {
@@ -552,6 +611,8 @@ main() {
   require_command chroot
   require_command cp
   require_command curl
+  require_command file
+  require_command find
   require_command grep
   require_command install
   require_command ln
@@ -568,6 +629,9 @@ main() {
   require_command truncate
   require_command uname
   require_command umount
+  if [ ! -x "$extract_vmlinux" ]; then
+    fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  fi
 
   if [ "$(id -u)" -ne 0 ]; then
     require_command sudo
@@ -619,6 +683,7 @@ main() {
   tar --numeric-owner -xpf "$archive_path" -C "$mount_dir"
   configure_rootfs
   install_rootfs_packages
+  extract_kernel
   configure_guest_dns
   verify_rootfs_content
 
