@@ -30,6 +30,22 @@ pub fn tap_name(vm_id: Uuid) -> String {
     name
 }
 
+/// Prefix for a MicroNetwork's deterministic bridge interface name.
+pub const MICRO_NETWORK_BRIDGE_PREFIX: &str = "mnb";
+
+/// The deterministic bridge interface name for a MicroNetwork (mirrors
+/// [`tap_name`]'s construction and its reasoning — the helper derives every
+/// interface name itself from a trusted id, never from a name string the API
+/// supplies).
+pub fn micro_network_bridge_name(micro_network_id: Uuid) -> String {
+    let digest = Sha256::digest(micro_network_id.as_bytes());
+    let mut name = String::from(MICRO_NETWORK_BRIDGE_PREFIX);
+    for byte in &digest[..6] {
+        name.push_str(&format!("{byte:02x}"));
+    }
+    name
+}
+
 /// The deterministic guest hostname for a VM: `fc-` plus 12 hex digits of
 /// `sha256(vm_id)` (same construction as [`tap_name`], so two different
 /// `vm_id`s can't collide just because they happen to share high-order
@@ -103,6 +119,26 @@ impl<'de> Deserialize<'de> for MacAddr {
 pub enum NetworkRequest {
     /// Idempotently ensure the shared bridge/subnet/gateway exist.
     EnsureBridge,
+    /// Idempotently ensure a MicroNetwork's own bridge/subnet/gateway exist
+    /// (`docs/task-micro-network.md`). The interface name is derived from
+    /// `micro_network_id` (see [`micro_network_bridge_name`]), never taken
+    /// as a string from the API — only the numeric gateway/prefix, which
+    /// carry no shell/nftables injection surface, cross the boundary
+    /// (mirrors `ApplyVmPolicy`'s `ipv4` field).
+    EnsureMicroNetworkBridge {
+        /// The MicroNetwork this bridge belongs to.
+        micro_network_id: Uuid,
+        /// The bridge's own address on its subnet (the MicroNetwork's
+        /// implicit router, same role as the default network's gateway).
+        gateway: Ipv4Addr,
+        /// CIDR prefix length of the MicroNetwork's subnet.
+        prefix: u8,
+    },
+    /// Removes a MicroNetwork's bridge; a no-op if it's already gone.
+    RemoveMicroNetworkBridge {
+        /// The MicroNetwork whose bridge should be removed.
+        micro_network_id: Uuid,
+    },
     /// Idempotently (re)apply the owned nftables tables.
     EnsureFirewall,
     /// Create and attach a TAP device for a starting VM.
@@ -246,6 +282,25 @@ mod tests {
     }
 
     #[test]
+    fn micro_network_bridge_name_is_deterministic_and_within_ifnamsiz() {
+        let network = Uuid::from_u128(0x1234);
+        assert_eq!(
+            micro_network_bridge_name(network),
+            micro_network_bridge_name(network)
+        );
+        assert!(
+            micro_network_bridge_name(network).len() <= 15,
+            "{}",
+            micro_network_bridge_name(network)
+        );
+        assert!(micro_network_bridge_name(network).starts_with(MICRO_NETWORK_BRIDGE_PREFIX));
+        assert_ne!(
+            micro_network_bridge_name(network),
+            micro_network_bridge_name(Uuid::from_u128(0x1235))
+        );
+    }
+
+    #[test]
     fn guest_hostname_is_deterministic_and_distinct_per_vm() {
         let vm = Uuid::from_u128(0x1234);
         assert_eq!(guest_hostname(vm), guest_hostname(vm));
@@ -288,6 +343,22 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "sync_dhcp_leases");
         assert_eq!(json["revision"], 3);
+        assert_eq!(
+            serde_json::from_value::<NetworkRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn ensure_micro_network_bridge_serializes_with_its_operation_tag() {
+        let request = NetworkRequest::EnsureMicroNetworkBridge {
+            micro_network_id: Uuid::nil(),
+            gateway: "172.31.0.1".parse().unwrap(),
+            prefix: 24,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "ensure_micro_network_bridge");
+        assert_eq!(json["prefix"], 24);
         assert_eq!(
             serde_json::from_value::<NetworkRequest>(json).unwrap(),
             request

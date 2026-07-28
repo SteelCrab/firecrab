@@ -91,6 +91,29 @@
   변화 없는 순수 리팩터), `GET /api/network` 응답에 `uplink` 필드 추가(net-helper IPC 안 늘리고
   `/proc/net/route`를 직접 읽어 특권 경계 유지) 및 `HostInfoModal.tsx`에 표시. `cargo test
   --workspace` 130/18/12/46 green
+- 2026-07-24(계속): `MicroNetwork`(`task-micro-network.md`, VPC형 가상 네트워크) 1단계 —
+  이름 있는 CIDR 예약만 다루는 최소 리소스만 구현. `micro_networks` SQLite 테이블(id/name/
+  subnet_cidr), `POST/GET/DELETE /api/micro-networks`(name·CIDR 형식 검증), 프론트엔드에
+  "MicroNetwork" 버튼 → 목록/생성/삭제 모달(`MicroNetworksModal.tsx`, 기존 `HostInfoModal`/
+  `CreateVm` 컨벤션 재사용). bridge/VRF/RouteTable 실제 프로비저닝과 VM 소속 연동은 범위 밖 —
+  `task-micro-network.md`에 남은 범위로 기록. 실제 dev 서버 브라우저에서 생성→목록→삭제→검증
+  에러 표시 확인, `cargo test --workspace` 137/20/12/46 green, 프론트 `tsc -b`/`oxlint`/
+  `vite build` 통과
+- 2026-07-24(계속): `MicroNetwork` 2단계 — 생성/삭제가 실제 host bridge를 만들고 지우게 함.
+  `firecrab-helper-protocol`에 `micro_network_bridge_name`(id로부터 결정론적 유도, 기존
+  `tap_name`과 동일 패턴) + `NetworkRequest::{EnsureMicroNetworkBridge, RemoveMicroNetworkBridge}`
+  신설(넘어가는 건 gateway/prefix 숫자값뿐, 인터페이스 이름은 helper가 직접 유도 —
+  `ApplyVmPolicy`의 `ipv4`와 같은 신뢰 경계). `firecrab-net-helper/src/bridge.rs`를
+  `BridgeConfig`로 내부 파라미터화(기존 `ensure_bridge()`는 그대로 유지, 새 bridge용
+  `ensure_micro_network_bridge`/`delete_micro_network_bridge` 추가) — 기존 overlap 검사가
+  그대로 재사용되어 새 MicroNetwork끼리도 기존 `fcbr0`와도 자동 충돌 방지됨. `handlers/
+  micro_networks.rs`: 생성은 DB insert 후 프로비저닝(실패 시 롤백, `create_vm`과 동일 순서),
+  삭제는 bridge 제거 후 DB delete. 실제 host에서 MicroNetwork 생성 → `mnb<hex>` bridge가
+  실제로 `ip link`에 나타나고 주소(`172.31.0.1/24`)도 정확함을 확인, 기존 `fcbr0`와 실행 중이던
+  VM은 무영향, 삭제 시 완전히 제거됨, 겹치는 CIDR로 생성 시도 시 거부+롤백까지 확인.
+  `cargo fmt/clippy/test --workspace` 140/20/14/47 green. VRF(라우팅 테이블 분리)·firewall/
+  nat/dhcp 네임스페이스 분리·VM 소속 연동은 여전히 범위 밖 — `task-micro-network.md`에 남은
+  범위로 기록
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
@@ -120,7 +143,7 @@
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
 | ✅ | [배포판 표준 커널 사용](task-distro-standard-kernels.md) | Ubuntu/Alpine 템플릿이 공유하던 자체 빌드 vanilla 커널 대신, 각 배포판이 실제 배포하는 공식 커널(`linux-image-generic`, `linux-virt`)을 추출해 쓴다. | 두 템플릿 모두 실제 배포판 공식 커널로 부팅되고 기존 동작에 회귀가 없다(Alpine은 virtio_blk/ext4가 모듈이라 initrd 필요). | `firecrab-api/src/templates.rs`, `firecrab-api/src/firecracker.rs`, `images/kernel/`, `scripts/firecracker-menual/install-{ubuntu,alpine}-rootfs.sh`, `scripts/firecracker-menual/extract-vmlinux` |
-| 미완료 (네트워크 이후) | [네트워크 구성 대시보드 — 다중 subnet/uplink 편집](task-network-configuration-dashboard.md) | (읽기 전용 조회 + VM별 egress 정책은 위 표에서 ✅ 완료됨) 대시보드에서 host 네트워크(subnet/uplink) 자체를 **직접 설정**하고, 여러 네트워크 중 VM이 속할 네트워크를 명시적으로 고를 수 있게 한다 — IPAM/bridge 다중화 리팩터가 선행돼야 함. | 대시보드에서 네트워크 설정을 바꿀 수 있고, VM 생성·상세 화면에서 소속 네트워크(복수 중 하나)를 확인할 수 있다. | `firecrab-api/src/handlers/network.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/nat.rs`, `firecrab-frontend/src/components/` |
+| 진행 중 (1단계 완료) | [MicroNetwork — VPC형 가상 네트워크 구현](task-micro-network.md) | (읽기 전용 조회 + VM별 egress 정책, `ip_forward` 자동화, `nat.rs` 분리, `uplink` 노출은 위 표에서 ✅ 완료됨) 지금 하나뿐인 bridge/subnet을 사용자가 여러 개(MicroNetwork) 만들고 VM을 그중 하나에 명시적으로 소속시킬 수 있게 일반화한다 — subnet/gateway/bridge 이름이 5곳에 하드코딩된 것 통합, 설정 영속화, `ensure_gateway` 주소 교체 로직이 선행돼야 함. | MicroNetwork를 여러 개 만들 수 있고, VM 생성 시 소속 MicroNetwork를 선택하며, 서로 다른 MicroNetwork의 VM은 기본 격리된다. | `firecrab-api/src/ipam.rs`, `firecrab-api/src/handlers/micro_networks.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/bridge.rs`, `firecrab-net-helper/src/firewall.rs`, `firecrab-net-helper/src/nat.rs`, `firecrab-net-helper/src/dhcp.rs`, `firecrab-frontend/src/components/` |
 
 ### 네트워크 — 범위 밖으로 보류 (재개 시 참고용, 이번 대회 일정에는 포함 안 함)
 

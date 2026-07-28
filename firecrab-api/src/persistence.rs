@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use firecrab_api_types::MicroNetworkResponse;
 use rusqlite::{Connection, TransactionBehavior, params};
 use thiserror::Error;
 use uuid::Uuid;
@@ -57,6 +58,22 @@ const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12 \
     WHERE id = ?1";
+
+/// Schema for the `micro_networks` table (`docs/task-micro-network.md`) —
+/// this first slice is just the named CIDR reservation itself; no
+/// bridge/gateway/route-table columns yet.
+const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_networks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    subnet_cidr TEXT NOT NULL
+) STRICT";
+
+/// Selects every column [`Store::list_micro_networks`] needs.
+const SELECT_ALL_MICRO_NETWORKS_SQL: &str = "SELECT id, name, subnet_cidr FROM micro_networks";
+
+/// Inserts a new row; fails on a duplicate id.
+const INSERT_MICRO_NETWORK_SQL: &str =
+    "INSERT INTO micro_networks (id, name, subnet_cidr) VALUES (?1, ?2, ?3)";
 
 /// Adds `disk_gb` to a `vms` table created before the column existed (a
 /// bare `CREATE TABLE IF NOT EXISTS` doesn't retrofit new columns onto an
@@ -128,6 +145,12 @@ pub enum PersistenceError {
         /// The id that wasn't found.
         id: Uuid,
     },
+    /// An operation targeted a MicroNetwork id with no matching row.
+    #[error("MicroNetwork {id} does not exist in the database")]
+    MissingMicroNetwork {
+        /// The id that wasn't found.
+        id: Uuid,
+    },
     /// Couldn't read the legacy `vms.json` file.
     #[error("failed to read legacy VM data from {path}: {source}")]
     LegacyRead {
@@ -196,6 +219,7 @@ impl Store {
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
             conn.execute(index_sql, [])?;
         }
+        conn.execute(CREATE_MICRO_NETWORKS_TABLE_SQL, [])?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -261,6 +285,51 @@ impl Store {
             .execute("DELETE FROM vms WHERE id = ?1", params![id.to_string()])?;
         if changed == 0 {
             return Err(PersistenceError::MissingVm { id });
+        }
+        Ok(())
+    }
+
+    /// Inserts a new MicroNetwork.
+    pub fn insert_micro_network(
+        &self,
+        network: &MicroNetworkResponse,
+    ) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            INSERT_MICRO_NETWORK_SQL,
+            params![network.id.to_string(), network.name, network.subnet_cidr],
+        )?;
+        Ok(())
+    }
+
+    /// Lists every MicroNetwork.
+    pub fn list_micro_networks(&self) -> Result<Vec<MicroNetworkResponse>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(SELECT_ALL_MICRO_NETWORKS_SQL)?;
+        let mut rows = statement.query([])?;
+        let mut networks = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id_text: String = row.get(0)?;
+            let id = Uuid::parse_str(&id_text).map_err(|_| PersistenceError::CorruptRecord {
+                id: id_text.clone(),
+                reason: "id is not a UUID".to_owned(),
+            })?;
+            networks.push(MicroNetworkResponse {
+                id,
+                name: row.get(1)?,
+                subnet_cidr: row.get(2)?,
+            });
+        }
+        Ok(networks)
+    }
+
+    /// Deletes a MicroNetwork by id.
+    pub fn delete_micro_network(&self, id: Uuid) -> Result<(), PersistenceError> {
+        let changed = self.lock().execute(
+            "DELETE FROM micro_networks WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(PersistenceError::MissingMicroNetwork { id });
         }
         Ok(())
     }

@@ -224,6 +224,32 @@ pub struct VmResponse {
     pub hostname: String,
 }
 
+/// Request body for `POST /api/micro-networks`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMicroNetworkRequest {
+    /// 1–64 chars, alphanumeric plus `.`/`_`/`-` (same convention as VM names).
+    pub name: String,
+    /// The network's own CIDR block (e.g. `172.31.0.0/24`) — just the
+    /// reserved address range, mirroring how an AWS VPC is created with a
+    /// CIDR block before any subnet/route table/gateway exists.
+    pub subnet_cidr: String,
+}
+
+/// A MicroNetwork — firecrab's VPC-equivalent (`docs/task-micro-network.md`).
+/// This first slice is just the named CIDR reservation; bridge/gateway/route
+/// table provisioning and VM membership are follow-up work.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkResponse {
+    /// Stable identifier.
+    pub id: Uuid,
+    /// User-supplied name.
+    pub name: String,
+    /// The network's reserved CIDR block.
+    pub subnet_cidr: String,
+}
+
 /// Response for `GET /api/network`: the host network firecrab has set up,
 /// read-only for now (see `task-network-configuration-dashboard.md` — making
 /// this genuinely editable needs a larger IPAM/bridge refactor).
@@ -540,5 +566,26 @@ mod tests {
             json,
             "{\"bridgeName\":\"fcbr0\",\"subnetCidr\":\"172.30.0.0/24\",\"gateway\":\"172.30.0.1\",\"uplink\":\"eth0\"}"
         );
+    }
+
+    #[test]
+    fn create_micro_network_request_deserializes_camel_case() {
+        let json = r#"{"name":"prod","subnetCidr":"172.31.0.0/24"}"#;
+        let request: CreateMicroNetworkRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.name, "prod");
+        assert_eq!(request.subnet_cidr, "172.31.0.0/24");
+    }
+
+    #[test]
+    fn micro_network_response_round_trips() {
+        let response = MicroNetworkResponse {
+            id: Uuid::from_u128(0x1234),
+            name: "prod".to_owned(),
+            subnet_cidr: "172.31.0.0/24".to_owned(),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: MicroNetworkResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, response);
+        assert!(json.contains("\"subnetCidr\":\"172.31.0.0/24\""));
     }
 }

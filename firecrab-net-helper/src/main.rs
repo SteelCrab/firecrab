@@ -304,6 +304,36 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: error_chain(&error),
                 })
         }
+        NetworkRequest::EnsureMicroNetworkBridge {
+            micro_network_id,
+            gateway,
+            prefix,
+        } => {
+            // Sanity bound on a value that ultimately comes from user input
+            // (a MicroNetwork's subnet CIDR) — the helper is the trust
+            // boundary and re-validates rather than assuming the API's own
+            // check already caught it (same reasoning as egress_policy's
+            // allowlist lookup below). 30 leaves at least 2 host addresses;
+            // 8 keeps the reserved range from swallowing most of the host's
+            // own address space.
+            if !(8..=30).contains(&prefix) {
+                return Err(HelperFailure::InvalidRequest {
+                    detail: format!("prefix {prefix} is out of the accepted 8-30 range"),
+                });
+            }
+            bridge::ensure_micro_network_bridge(&config.bridge, micro_network_id, gateway, prefix)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
+        NetworkRequest::RemoveMicroNetworkBridge { micro_network_id } => {
+            bridge::delete_micro_network_bridge(&config.bridge, micro_network_id)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
         NetworkRequest::EnsureFirewall => firewall::ensure_firewall(&config.firewall)
             .await
             .map_err(|error| HelperFailure::Internal {
@@ -454,6 +484,25 @@ mod tests {
             dispatch(request, &config).await,
             Err(HelperFailure::InvalidRequest { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn ensure_micro_network_bridge_rejects_an_out_of_range_prefix_as_invalid_request() {
+        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        for prefix in [0, 7, 31, 32] {
+            let request = NetworkRequest::EnsureMicroNetworkBridge {
+                micro_network_id: Uuid::nil(),
+                gateway: "172.31.0.1".parse().unwrap(),
+                prefix,
+            };
+            assert!(
+                matches!(
+                    dispatch(request, &config).await,
+                    Err(HelperFailure::InvalidRequest { .. })
+                ),
+                "prefix {prefix} should have been rejected"
+            );
+        }
     }
 
     #[tokio::test]

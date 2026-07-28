@@ -1,8 +1,10 @@
 import type {
   ApiError,
+  CreateMicroNetworkRequest,
   CreateVmRequest,
   ErrorResponse,
   HostStatusResponse,
+  MicroNetworkResponse,
   NetworkInfoResponse,
   UpdateVmResourcesRequest,
   VmLogResponse,
@@ -113,6 +115,30 @@ export async function deleteVm(id: string): Promise<void> {
   let response: Response;
   try {
     response = await fetch(`/api/vms/${id}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+}
+
+export function listMicroNetworks(): Promise<MicroNetworkResponse[]> {
+  return fetchJson("/api/micro-networks");
+}
+
+export function createMicroNetwork(request: CreateMicroNetworkRequest): Promise<MicroNetworkResponse> {
+  return fetchJson("/api/micro-networks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export async function deleteMicroNetwork(id: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/micro-networks/${id}`, { method: "DELETE" });
   } catch (error) {
     throw ApiClientError.transport(transportDetail(error));
   }

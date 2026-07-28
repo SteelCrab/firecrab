@@ -64,6 +64,31 @@ impl NetworkClient {
         self.call(NetworkRequest::EnsureBridge).await
     }
 
+    /// Idempotently ensures a MicroNetwork's own bridge exists, gated at
+    /// `gateway`/`prefix` (`docs/task-micro-network.md`).
+    pub async fn ensure_micro_network_bridge(
+        &self,
+        micro_network_id: Uuid,
+        gateway: Ipv4Addr,
+        prefix: u8,
+    ) -> Result<(), NetworkError> {
+        self.call(NetworkRequest::EnsureMicroNetworkBridge {
+            micro_network_id,
+            gateway,
+            prefix,
+        })
+        .await
+    }
+
+    /// Removes a MicroNetwork's bridge; a no-op if it's already gone.
+    pub async fn remove_micro_network_bridge(
+        &self,
+        micro_network_id: Uuid,
+    ) -> Result<(), NetworkError> {
+        self.call(NetworkRequest::RemoveMicroNetworkBridge { micro_network_id })
+            .await
+    }
+
     /// Idempotently (re)applies the owned nftables tables.
     pub async fn ensure_firewall(&self) -> Result<(), NetworkError> {
         self.call(NetworkRequest::EnsureFirewall).await
@@ -199,6 +224,8 @@ pub(crate) mod test_support {
     fn operation_name(request: &NetworkRequest) -> &'static str {
         match request {
             NetworkRequest::EnsureBridge => "ensure_bridge",
+            NetworkRequest::EnsureMicroNetworkBridge { .. } => "ensure_micro_network_bridge",
+            NetworkRequest::RemoveMicroNetworkBridge { .. } => "remove_micro_network_bridge",
             NetworkRequest::EnsureFirewall => "ensure_firewall",
             NetworkRequest::CreateTap { .. } => "create_tap",
             NetworkRequest::DeleteTap { .. } => "delete_tap",
