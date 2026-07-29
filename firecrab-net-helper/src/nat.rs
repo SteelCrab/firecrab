@@ -31,9 +31,13 @@ pub(crate) fn validate_uplink(name: &str) -> Result<(), FirewallError> {
 
 /// Renders the NAT postrouting chain fragment that `firewall.rs`'s
 /// `render_apply_ruleset` splices into its single `table inet firecrab`
-/// declaration. One dispatch rule per Firecrab subnet (the default network's
-/// plus every MicroNetwork's), all jumping to the same masquerade chain —
-/// every network egresses through the host's single uplink.
+/// declaration. One dispatch rule per Firecrab subnet that is allowed out
+/// (the default network's plus every internet-enabled MicroNetwork's), all
+/// jumping to the same masquerade chain — every such network egresses
+/// through the host's single uplink. A network with the internet switched
+/// off contributes no rule here, so its addresses are never translated (the
+/// forward-path drop in `firewall.rs` is what actually stops the traffic;
+/// this keeps the NAT table from claiming otherwise).
 pub(crate) fn render_postrouting_chain(uplink: &str, subnets: &[String]) -> String {
     let dispatch: String = subnets
         .iter()

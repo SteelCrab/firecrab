@@ -7,6 +7,7 @@ import {
   deleteMicroNetwork,
   getMicroNetwork,
   listMicroNetworks,
+  updateMicroNetwork,
 } from "../api/client";
 
 interface MicroNetworksModalProps {
@@ -23,6 +24,7 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
   const [networks, setNetworks] = useState<MicroNetworkResponse[] | null>(null);
   const [name, setName] = useState("");
   const [subnetCidr, setSubnetCidr] = useState("");
+  const [internetEnabled, setInternetEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -66,9 +68,14 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
     setSubmitting(true);
     setFieldErrors(null);
     try {
-      await createMicroNetwork({ name: name.trim(), subnetCidr: subnetCidr.trim() });
+      await createMicroNetwork({
+        name: name.trim(),
+        subnetCidr: subnetCidr.trim(),
+        internetEnabled,
+      });
       setName("");
       setSubnetCidr("");
+      setInternetEnabled(true);
       await refresh();
     } catch (error) {
       setFieldErrors(error as ApiClientError);
@@ -84,6 +91,22 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
       await deleteMicroNetwork(network.id);
       if (selectedId === network.id) setSelectedId(null);
       await refresh();
+    } catch (error) {
+      setListError((error as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Reloads both the row (the list's badge) and the panel (its NAT line), so
+  // the two can't disagree about a network that was just toggled.
+  const handleToggleInternet = async (network: MicroNetworkResponse) => {
+    if (busyId) return;
+    setBusyId(network.id);
+    try {
+      await updateMicroNetwork(network.id, { internetEnabled: !network.internetEnabled });
+      await refresh();
+      if (selectedId === network.id) setDetail(await getMicroNetwork(network.id));
     } catch (error) {
       setListError((error as Error).message);
     } finally {
@@ -131,6 +154,18 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
               {fieldError("subnetCidr")}
             </div>
             <div className="field">
+              <label htmlFor="mn-internet">인터넷</label>
+              <select
+                id="mn-internet"
+                value={internetEnabled ? "on" : "off"}
+                onChange={(event) => setInternetEnabled(event.target.value === "on")}
+              >
+                <option value="on">연결 (NAT)</option>
+                <option value="off">차단 (내부 전용)</option>
+              </select>
+              <span className="field-error"></span>
+            </div>
+            <div className="field">
               <label>&nbsp;</label>
               <button className="btn primary" type="submit" disabled={submitting}>
                 {submitting ? "생성 중…" : "생성"}
@@ -152,6 +187,7 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
                   <th>name</th>
                   <th>subnet CIDR</th>
                   <th>gateway</th>
+                  <th>인터넷</th>
                   <th>id</th>
                   <th className="actions">actions</th>
                 </tr>
@@ -166,10 +202,26 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
                     <td className="name">{network.name}</td>
                     <td className="mono">{network.subnetCidr}</td>
                     <td className="mono">{network.gateway}</td>
+                    <td>{network.internetEnabled ? "연결" : "차단"}</td>
                     <td className="mono" title={network.id}>
                       {network.id.split("-")[0]}
                     </td>
                     <td className="actions">
+                      <button
+                        className="btn"
+                        disabled={busyId === network.id}
+                        title={
+                          network.internetEnabled
+                            ? "NAT을 떼고 외부로 나가는 트래픽을 차단합니다"
+                            : "NAT을 붙여 외부 통신을 허용합니다"
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleToggleInternet(network);
+                        }}
+                      >
+                        {network.internetEnabled ? "인터넷 차단" : "인터넷 연결"}
+                      </button>
                       <button
                         className="btn danger"
                         disabled={busyId === network.id}
@@ -227,7 +279,9 @@ function MicroNetworkDetail({
 
         <dt>NAT</dt>
         <dd>
-          {nat.enabled ? `${nat.sourceCidr} → ${nat.uplink || "(uplink 없음)"}` : "사용 안 함"}
+          {nat.enabled
+            ? `${nat.sourceCidr} → ${nat.uplink || "(uplink 없음)"}`
+            : "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop"}
         </dd>
 
         <dt>방화벽</dt>

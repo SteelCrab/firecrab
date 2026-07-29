@@ -209,6 +209,20 @@ pub struct MicroNetworkSpec {
     pub gateway: Ipv4Addr,
     /// Its subnet's CIDR prefix length.
     pub prefix: u8,
+    /// Whether this network's VMs may reach anything outside Firecrab
+    /// (AWS's "is an internet gateway attached to this VPC"). `false`
+    /// withholds both the masquerade rule and the forward permission, so
+    /// nothing leaves the network at L3 — DHCP/DNS from its own gateway are
+    /// unaffected, being host-local rather than forwarded. Defaults to `true`
+    /// when absent so an older API, which has no such concept, keeps the
+    /// behavior every network had before this field existed.
+    #[serde(default = "internet_enabled_default")]
+    pub internet_enabled: bool,
+}
+
+/// Serde default for [`MicroNetworkSpec::internet_enabled`].
+fn internet_enabled_default() -> bool {
+    true
 }
 
 impl MicroNetworkSpec {
@@ -399,6 +413,7 @@ mod tests {
                 micro_network_id: Uuid::from_u128(0x1234),
                 gateway: "172.31.0.1".parse().unwrap(),
                 prefix: 24,
+                internet_enabled: true,
             }],
         };
         let json = serde_json::to_value(&request).unwrap();
@@ -416,6 +431,7 @@ mod tests {
             micro_network_id: Uuid::from_u128(0x1234),
             gateway: "172.31.5.1".parse().unwrap(),
             prefix: 24,
+            internet_enabled: true,
         };
         assert_eq!(
             spec.network_address(),
@@ -430,6 +446,19 @@ mod tests {
         // A /16 masks off the third octet too.
         let wide = MicroNetworkSpec { prefix: 16, ..spec };
         assert_eq!(wide.subnet_cidr(), "172.31.0.0/16");
+    }
+
+    #[test]
+    fn a_spec_without_internet_enabled_keeps_the_pre_toggle_behavior() {
+        // An API built before the toggle existed sends no such field, and
+        // every network it knows about is on the internet.
+        let spec: MicroNetworkSpec = serde_json::from_value(serde_json::json!({
+            "micro_network_id": Uuid::nil(),
+            "gateway": "172.31.0.1",
+            "prefix": 24,
+        }))
+        .expect("a spec without the field must still deserialize");
+        assert!(spec.internet_enabled);
     }
 
     #[test]

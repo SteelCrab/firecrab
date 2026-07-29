@@ -120,7 +120,13 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         timeout: config.request_timeout,
     };
     let mut cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([
             header::CONTENT_TYPE,
             HeaderName::from_static("idempotency-key"),
@@ -169,6 +175,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/micro-networks/{id}",
             get(handlers::micro_networks::get_micro_network)
+                .patch(handlers::micro_networks::update_micro_network)
                 .delete(handlers::micro_networks::delete_micro_network),
         )
         .layer(cors)

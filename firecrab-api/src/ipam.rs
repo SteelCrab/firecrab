@@ -133,12 +133,15 @@ impl SubnetSpec {
 
     /// The privileged helper's view of this subnet, or `None` for the
     /// default network (which the helper already knows about and never
-    /// receives over the wire).
-    pub fn helper_spec(&self) -> Option<MicroNetworkSpec> {
+    /// receives over the wire). `internet_enabled` is the network's own
+    /// stored posture rather than anything derivable from the CIDR, so it is
+    /// passed in.
+    pub fn helper_spec(&self, internet_enabled: bool) -> Option<MicroNetworkSpec> {
         Some(MicroNetworkSpec {
             micro_network_id: self.micro_network_id?,
             gateway: self.gateway(),
             prefix: self.prefix,
+            internet_enabled,
         })
     }
 }

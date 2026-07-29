@@ -601,6 +601,9 @@ mod tests {
             micro_network_id: Uuid::from_u128(id),
             gateway: gateway.parse().unwrap(),
             prefix,
+            // DHCP is served on the network's own bridge either way — the
+            // internet toggle only governs what leaves it.
+            internet_enabled: true,
         }
     }
 

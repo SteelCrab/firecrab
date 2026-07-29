@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use firecrab_api_types::{
     CreateMicroNetworkRequest, EgressPolicy, MicroNetworkBridge, MicroNetworkDetailResponse,
     MicroNetworkFirewall, MicroNetworkNat, MicroNetworkResponse, MicroNetworkSubnet,
-    MicroNetworkVm, VmState,
+    MicroNetworkVm, UpdateMicroNetworkRequest, VmState,
 };
 use firecrab_helper_protocol::network::micro_network_bridge_name;
 use uuid::Uuid;
@@ -124,9 +124,10 @@ pub async fn get_micro_network(
             attached_taps,
         },
         nat: MicroNetworkNat {
-            // Every network masquerades out of the host's single uplink;
-            // there is no per-network toggle yet (task doc's remaining scope).
-            enabled: true,
+            // Masquerading out of the host's single uplink is what having the
+            // internet switched on means for a network; off withholds both
+            // the NAT rule and the forward permission.
+            enabled: network.internet_enabled,
             uplink: crate::handlers::network::read_uplink().unwrap_or_default(),
             source_cidr: network.subnet_cidr,
         },
@@ -170,6 +171,7 @@ pub async fn create_micro_network(
         name: req.name,
         subnet_cidr: req.subnet_cidr,
         gateway: gateway.to_string(),
+        internet_enabled: req.internet_enabled,
     };
 
     let store = state.store.clone();
@@ -204,6 +206,61 @@ pub async fn create_micro_network(
     apply_network_services(&state, request_id.0).await;
 
     Ok((StatusCode::CREATED, Json(network)))
+}
+
+/// `PATCH /api/micro-networks/{id}`: switches this network's internet access
+/// on or off — firecrab's equivalent of attaching or detaching an AWS
+/// internet gateway. The network, its bridge, its addresses and its DHCP
+/// keep working either way; only what may leave it changes.
+pub async fn update_micro_network(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    ValidatedJson(req): ValidatedJson<UpdateMicroNetworkRequest>,
+) -> Result<Json<MicroNetworkResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+
+    let store = state.store.clone();
+    let network = tokio::task::spawn_blocking(move || store.micro_network(id))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, %error, "failed to load micro network");
+            AppError::internal(request_id.0)
+        })?;
+    let mut network = network.ok_or_else(|| AppError::not_found(request_id.0))?;
+
+    let previous = network.internet_enabled;
+    if previous == req.internet_enabled {
+        return Ok(Json(network));
+    }
+
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.set_micro_network_internet(id, req.internet_enabled))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| match error {
+            PersistenceError::MissingMicroNetwork { .. } => AppError::not_found(request_id.0),
+            error => {
+                tracing::error!(request_id = %request_id.0, %error, "failed to update micro network");
+                AppError::internal(request_id.0)
+            }
+        })?;
+    network.internet_enabled = req.internet_enabled;
+
+    // Unlike create/delete, this one is not best-effort: the whole point of
+    // the request is the ruleset, so a stored posture the host isn't
+    // enforcing would be a wrong answer rather than a degraded one. Rolled
+    // back to what it was, which is still what the host has installed.
+    if let Err(error) = ensure_all_networks(&state).await {
+        tracing::error!(request_id = %request_id.0, micro_network_id = %id, error, "failed to apply micro network internet toggle");
+        let store = state.store.clone();
+        let _ = tokio::task::spawn_blocking(move || store.set_micro_network_internet(id, previous))
+            .await;
+        return Err(AppError::internal(request_id.0));
+    }
+
+    Ok(Json(network))
 }
 
 /// The subnet `candidate` would collide with, if any: the built-in default
@@ -271,6 +328,10 @@ pub(crate) async fn ensure_all_networks(state: &AppState) -> Result<(), String> 
         .ensure_firewall(micro_networks)
         .await
         .map_err(|error| format!("ensure_firewall failed: {error}"))?;
+    // The apply above flushes the tables when anything changed, taking every
+    // per-VM chain with it — so already-running VMs get their policy put
+    // back here rather than losing egress until someone restarts them.
+    crate::handlers::vms::reapply_running_vm_policies(state).await?;
     crate::handlers::vms::sync_dhcp_leases(state).await
 }
 
@@ -407,6 +468,7 @@ mod tests {
             ValidatedJson(CreateMicroNetworkRequest {
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
             }),
         )
         .await
@@ -447,6 +509,7 @@ mod tests {
             ValidatedJson(CreateMicroNetworkRequest {
                 name: String::new(),
                 subnet_cidr: "not-a-cidr".to_owned(),
+                internet_enabled: true,
             }),
         )
         .await
@@ -466,6 +529,7 @@ mod tests {
             ValidatedJson(CreateMicroNetworkRequest {
                 name: name.to_owned(),
                 subnet_cidr: cidr.to_owned(),
+                internet_enabled: true,
             }),
         )
         .await
@@ -488,6 +552,7 @@ mod tests {
                 ValidatedJson(CreateMicroNetworkRequest {
                     name: "clash".to_owned(),
                     subnet_cidr: cidr.to_owned(),
+                    internet_enabled: true,
                 }),
             )
             .await
@@ -506,6 +571,7 @@ mod tests {
             ValidatedJson(CreateMicroNetworkRequest {
                 name: "clash".to_owned(),
                 subnet_cidr: "172.30.0.0/24".to_owned(),
+                internet_enabled: true,
             }),
         )
         .await
@@ -632,6 +698,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reconcile_puts_a_running_vms_policy_back_after_the_ruleset_flush() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .expect("empty template spec list should always verify");
+        let state = AppState::with_db_file(templates, directory.path().join("state.db"))
+            .await
+            .expect("fresh temp db should open cleanly");
+        let socket_path = directory.path().join("net-helper.sock");
+        let (_task, log) = crate::network::test_support::spawn_recording_helper(&socket_path, None);
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
+        // A VM that is running right now, with the lease its policy is keyed
+        // on — the state a toggle has to not break.
+        let mut vm = crate::handlers::vms::test_support::record("live", Uuid::new_v4());
+        vm.state = VmState::Running;
+        state.store.insert(&vm).expect("seed vm");
+        state
+            .store
+            .allocate_lease(vm.id, SubnetSpec::default_network())
+            .expect("seed lease");
+        log.lock().unwrap().clear();
+
+        ensure_all_networks(&state).await.expect("reconcile");
+
+        let operations = log.lock().unwrap().clone();
+        let firewall = operations
+            .iter()
+            .position(|op| *op == "ensure_firewall")
+            .expect("the global ruleset is applied");
+        let policy = operations
+            .iter()
+            .position(|op| *op == "apply_vm_policy")
+            .unwrap_or_else(|| panic!("a running VM's policy must be reinstalled: {operations:?}"));
+        assert!(
+            firewall < policy,
+            "the reinstall has to come after the flush, or it is flushed away again: {operations:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn reconcile_reports_a_helper_failure_instead_of_swallowing_it() {
         let directory = tempdir().unwrap();
         let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
@@ -647,6 +754,116 @@ mod tests {
         // A VM start propagates this; only the daemon-startup caller logs it.
         let error = ensure_all_networks(&state).await.unwrap_err();
         assert!(error.contains("ensure_bridge"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn switching_the_internet_off_changes_what_the_helper_is_told_about_the_network() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let created = create_network(&state, "closed", "172.31.0.0/24").await;
+        assert!(created.internet_enabled, "a new network starts connected");
+
+        let Json(updated) = update_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(created.id.to_string()),
+            ValidatedJson(UpdateMicroNetworkRequest {
+                internet_enabled: false,
+            }),
+        )
+        .await
+        .expect("toggle the internet off");
+        assert!(!updated.internet_enabled);
+
+        // What actually matters: the spec the helper renders NAT and the
+        // forward rules from now says the network is closed.
+        let specs = crate::handlers::vms::micro_network_specs(&state)
+            .await
+            .expect("micro network specs");
+        assert_eq!(specs.len(), 1);
+        assert!(!specs[0].internet_enabled);
+
+        // And the detail view reports it rather than the old hardcoded true.
+        let Json(detail) = get_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(created.id.to_string()),
+        )
+        .await
+        .expect("detail");
+        assert!(!detail.nat.enabled);
+
+        // Back on again — the toggle is not one-way.
+        let Json(reopened) = update_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(created.id.to_string()),
+            ValidatedJson(UpdateMicroNetworkRequest {
+                internet_enabled: true,
+            }),
+        )
+        .await
+        .expect("toggle the internet back on");
+        assert!(reopened.internet_enabled);
+    }
+
+    #[tokio::test]
+    async fn a_toggle_the_helper_rejects_leaves_the_stored_posture_as_it_was() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .expect("empty template spec list should always verify");
+        let state = AppState::with_db_file(templates, directory.path().join("state.db"))
+            .await
+            .expect("fresh temp db should open cleanly");
+        let socket_path = directory.path().join("net-helper.sock");
+        // Fails only the ruleset call, so the network is still created.
+        crate::network::test_support::spawn_recording_helper(&socket_path, Some("ensure_firewall"));
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+        let created = create_network(&state, "prod", "172.31.0.0/24").await;
+
+        let error = update_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(created.id.to_string()),
+            ValidatedJson(UpdateMicroNetworkRequest {
+                internet_enabled: false,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        // Rolled back: reporting a closed network the host is still routing
+        // out of would be worse than reporting the failure.
+        let Json(listed) = list_micro_networks(State(state), extension())
+            .await
+            .unwrap();
+        assert!(
+            listed[0].internet_enabled,
+            "a failed apply must not leave the stored posture ahead of the host"
+        );
+    }
+
+    #[tokio::test]
+    async fn toggling_a_network_that_does_not_exist_is_a_404() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = update_micro_network(
+            State(state),
+            extension(),
+            Path(Uuid::new_v4().to_string()),
+            ValidatedJson(UpdateMicroNetworkRequest {
+                internet_enabled: false,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -725,6 +942,7 @@ mod tests {
             ValidatedJson(CreateMicroNetworkRequest {
                 name: "doomed".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
             }),
         )
         .await;
@@ -753,6 +971,7 @@ mod tests {
         let fields = validate_create(&CreateMicroNetworkRequest {
             name: String::new(),
             subnet_cidr: "not-a-cidr".to_owned(),
+            internet_enabled: true,
         });
         assert!(fields.contains_key("name"));
         assert!(fields.contains_key("subnetCidr"));
@@ -764,6 +983,7 @@ mod tests {
             let fields = validate_create(&CreateMicroNetworkRequest {
                 name: "prod".to_owned(),
                 subnet_cidr: cidr.to_owned(),
+                internet_enabled: true,
             });
             assert!(
                 fields.contains_key("subnetCidr"),
@@ -774,6 +994,7 @@ mod tests {
             let fields = validate_create(&CreateMicroNetworkRequest {
                 name: "prod".to_owned(),
                 subnet_cidr: cidr.to_owned(),
+                internet_enabled: true,
             });
             assert!(
                 !fields.contains_key("subnetCidr"),

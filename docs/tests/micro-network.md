@@ -39,6 +39,7 @@ sequenceDiagram
 | MicroNetwork - bridge + gateway | Subnet의 암묵적 라우터 |
 | MicroNetwork - `dhcp-range` | VPC DHCP Option Set |
 | MicroNetwork - postrouting 규칙 | VPC NAT Gateway |
+| MicroNetwork - 인터넷 on/off | Internet Gateway attach/detach |
 | VM 생성 시 MicroNetwork 선택 | EC2 launch 시 VPC/Subnet 선택 |
 | 다른 MicroNetwork의 VM과 통신 불가 | VPC 간 기본 격리(peering 없음) |
 | lease 있는 MicroNetwork 삭제 거부 | ENI가 남은 Subnet 삭제 거부 |
@@ -46,16 +47,17 @@ sequenceDiagram
 ## 자동 테스트 (root 불필요)
 
 ```sh
-cargo test -p firecrab-helper-protocol network::        # 10
-cargo test -p firecrab-net-helper firewall::            # 19
+cargo test -p firecrab-helper-protocol network::        # 11
+cargo test -p firecrab-net-helper firewall::            # 21
 cargo test -p firecrab-net-helper dhcp::                # 17
 cargo test -p firecrab-net-helper tap::                 #  3
-cargo test -p firecrab-api handlers::micro_networks::   # 15
+cargo test -p firecrab-api handlers::micro_networks::   # 19
 cargo test -p firecrab-api ipam::                       # 11
+cargo test -p firecrab-api persistence::                # 12
 cargo test -p firecrab-api handlers::vms::              # 45
 ```
 
-전체: `cargo test --workspace` → 148/20/15/54
+전체: `cargo test --workspace` → 154/20/16/56
 
 ## 확인 항목 (자동 테스트가 덮는 범위)
 
@@ -82,6 +84,12 @@ cargo test -p firecrab-api handlers::vms::              # 45
 - ipam: lease가 소속 네트워크 CIDR에서 나옴, 기본 네트워크 VM은 `172.30.0.x` 유지
 - helper: `prefix`를 8~30으로 재검증(API의 16~28과 별개, 신뢰 경계)
 - 재적용: VM이 없는 네트워크까지 bridge를 다시 ensure하고, helper 실패는 삼키지 않고 전달
+- 인터넷 off: 그 subnet의 postrouting 규칙이 사라지고 `ip saddr { <subnet> } drop`이 추가됨
+  (established/related accept **뒤**, per-VM 맵 **앞** — 응답은 살고 새 흐름만 막힘)
+- 인터넷 off: 렌더링 결과가 달라져 `nft` 재적용이 실제로 일어남(같으면 조용히 안 걸림)
+- 인터넷 토글: 저장 → helper 적용 실패 시 저장값 롤백, 없는 id는 404
+- 마이그레이션: 컬럼 없던 기존 DB의 네트워크는 `internet_enabled = 1`(예전 동작)로 열림
+- 재적용 후 실행 중 VM의 개별 정책 재설치(전역 apply가 테이블을 flush하므로) — 순서도 검증
 
 ## 수동 확인 (root 필요)
 
@@ -178,6 +186,28 @@ pkill -x firecrab-api && cargo run -p firecrab-api
 ip -br addr show type bridge | grep mnb     # 주소까지 그대로 복구
 ```
 
+### 인터넷 on/off 확인
+
+```sh
+# 9) 인터넷 차단으로 전환 (AWS의 IGW detach에 해당)
+curl -s -X PATCH localhost:3000/api/micro-networks/$PROD \
+     -H 'content-type: application/json' -d '{"internetEnabled":false}' | python3 -m json.tool
+
+# 규칙 확인: 그 subnet의 masquerade 규칙이 사라지고 drop 규칙이 생김
+sudo nft list table inet firecrab | grep -E 'postrouting|172.31.0.0/24'
+#   ip saddr 172.31.0.0/24 oifname ... jump firecrab_postrouting  → 없어야 함
+#   ip saddr { 172.31.0.0/24 } drop                               → 있어야 함
+
+# guest 안에서: 내부는 살아 있고 외부만 막힘
+#   ping -c2 172.31.0.1   → gateway 응답 (DHCP/DNS도 그대로)
+#   ping -c2 1.1.1.1      → 100% loss
+#   (기존에 열려 있던 연결은 established라 바로 끊기지 않을 수 있음)
+
+# 10) 다시 연결로 되돌리면 외부 통신 복구
+curl -s -X PATCH localhost:3000/api/micro-networks/$PROD \
+     -H 'content-type: application/json' -d '{"internetEnabled":true}' > /dev/null
+```
+
 ### 격리 확인
 
 ```sh
@@ -202,7 +232,9 @@ ip -br link show type bridge | grep mnb      # prod의 mnb<hex>가 없어야 함
 
 `docs/browser-test.md`대로 dev 서버(`npm run dev`, http://localhost:8080)를 띄우고:
 
-- 헤더 "MicroNetwork" → 목록에 name/subnet/gateway 표시, 생성·삭제 동작
+- 헤더 "MicroNetwork" → 목록에 name/subnet/gateway/인터넷 표시, 생성·삭제 동작
+- 생성 폼의 "인터넷" 선택(연결/차단)이 목록의 인터넷 열에 그대로 반영
+- 행의 "인터넷 차단"/"인터넷 연결" 버튼 → 열과 상세의 NAT 줄이 함께 바뀜
 - 목록에서 행을 클릭 → 상세 패널에 네트워크 ID / 서브넷(주소 사용량·DHCP) / 브릿지(TAP 수) /
   NAT(출발 대역 → 업링크) / 방화벽(차단 항목) / 소속 VM 표시
 - VM 생성 폼의 "MicroNetwork" 드롭다운에 방금 만든 네트워크가 뜨고, 선택해서 생성
@@ -220,7 +252,7 @@ MN=$(uuidgen)
 sudo python3 docs/tests/net-helper-client.py /tmp/firecrab-net.sock \
      ensure_micro_network_bridge micro_network_id=$MN gateway=172.31.0.1 prefix=24
 sudo python3 docs/tests/net-helper-client.py /tmp/firecrab-net.sock \
-     ensure_firewall "micro_networks=[{\"micro_network_id\":\"$MN\",\"gateway\":\"172.31.0.1\",\"prefix\":24}]"
+     ensure_firewall "micro_networks=[{\"micro_network_id\":\"$MN\",\"gateway\":\"172.31.0.1\",\"prefix\":24,\"internet_enabled\":false}]"
 sudo python3 docs/tests/net-helper-client.py /tmp/firecrab-net.sock \
      remove_micro_network_bridge micro_network_id=$MN
 ```
@@ -229,9 +261,15 @@ sudo python3 docs/tests/net-helper-client.py /tmp/firecrab-net.sock \
 
 ## 완료 기준 대조
 
-- MicroNetwork를 여러 개 만들고 각자 독립된 subnet/bridge/gateway를 가진다 — 미검증
-- VM 생성 시 소속 MicroNetwork를 선택하고, 그 네트워크 IP를 받아 외부와 통신한다 — 미검증
-- 서로 다른 MicroNetwork의 VM은 통신하지 못한다 — 미검증
+- MicroNetwork를 여러 개 만들고 각자 독립된 subnet/bridge/gateway를 가진다
+  — 실 host 확인(2026-07-24: `mnb<hex>` + `172.31.0.1/24` 생성·삭제)
+- VM 생성 시 소속 MicroNetwork를 선택하고, 그 네트워크 IP를 받아 외부와 통신한다
+  — 실 host 확인(2026-07-29: `172.31.0.4` lease, guest `apk update` 성공)
+- 네트워크별 인터넷 on/off가 실제로 외부 통신을 끊고 되살린다
+  — 실 host 확인(2026-07-29: off → `apk update` exit 2 + postrouting 규칙 소멸,
+    호스트↔VM ping은 0% loss 유지, on → 다시 성공)
+- 재적용이 VM 없는 네트워크의 bridge를 되살린다 — 실 host 확인(2026-07-29)
+- 서로 다른 MicroNetwork의 VM은 통신하지 못한다 — 자동 테스트만(두 번째 네트워크 VM 미생성)
 - lease가 있는 MicroNetwork는 삭제되지 않는다 — 자동 테스트로 확인, 실 host 미검증
 - 하나를 삭제해도 다른 네트워크·기본 네트워크의 VM은 영향받지 않는다 — 미검증
 

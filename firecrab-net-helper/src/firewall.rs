@@ -208,6 +208,30 @@ fn subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
         .collect()
 }
 
+/// The subnets allowed out of the host. The built-in default network always
+/// is; a MicroNetwork only if its internet toggle is on
+/// (`docs/task-micro-network.md`).
+fn egress_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
+    std::iter::once(nat::BRIDGE_SUBNET.to_owned())
+        .chain(
+            micro_networks
+                .iter()
+                .filter(|network| network.internet_enabled)
+                .map(MicroNetworkSpec::subnet_cidr),
+        )
+        .collect()
+}
+
+/// The subnets whose internet is switched off — the complement of
+/// [`egress_subnet_cidrs`] among the MicroNetworks.
+fn offline_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
+    micro_networks
+        .iter()
+        .filter(|network| !network.internet_enabled)
+        .map(MicroNetworkSpec::subnet_cidr)
+        .collect()
+}
+
 /// Renders the whole VM-independent desired state for both owned tables as
 /// one nft(8) script. `add table` + `flush table` before redeclaring keeps
 /// this idempotent without ever touching a table this helper doesn't own.
@@ -223,7 +247,7 @@ fn render_apply_ruleset(
     nat::validate_uplink(uplink)?;
     let bridges = bridge_names(micro_networks);
     let subnets = subnet_cidrs(micro_networks);
-    let postrouting = nat::render_postrouting_chain(uplink, &subnets);
+    let postrouting = nat::render_postrouting_chain(uplink, &egress_subnet_cidrs(micro_networks));
 
     // One dispatch pair per bridge: the per-VM verdict maps below are keyed
     // by leased IP (globally unique across networks, since their subnets
@@ -243,6 +267,19 @@ fn render_apply_ruleset(
     // within one subnet is switched, not routed, and is denied separately by
     // the bridge table's tap-to-tap rule.
     let internal_destinations = subnets.join(", ");
+    // A network with its internet switched off: every *new* forwarded flow
+    // out of it is dropped, whatever the per-VM egress policy says. Placed
+    // after the established/related accept so a VM that something else is
+    // allowed to reach (forwarded inbound SSH) can still answer, and before
+    // the per-VM map so the network-level switch wins over the VM-level one.
+    // DHCP/DNS keep working — those terminate on the gateway itself and
+    // never traverse the forward hook.
+    let offline = offline_subnet_cidrs(micro_networks);
+    let offline_drop = if offline.is_empty() {
+        String::new()
+    } else {
+        format!("\t\tip saddr {{ {} }} drop\n", offline.join(", "))
+    };
     Ok(format!(
         // L3: NAT + egress/ingress dispatch keyed by the VM's leased IP. The
         // L2 table below guarantees the source IP is genuine, so keying L3
@@ -264,6 +301,7 @@ fn render_apply_ruleset(
          \tchain firecrab_egress {{\n\
          \t\tct state established,related accept\n\
          \t\tip daddr {{ 127.0.0.0/8, 169.254.0.0/16, {internal_destinations} }} drop\n\
+         {offline_drop}\
          \t\tip saddr vmap @vm_egress\n\
          \t\tdrop\n\
          \t}}\n\
@@ -411,6 +449,7 @@ mod tests {
             micro_network_id: Uuid::from_u128(id),
             gateway: gateway.parse().unwrap(),
             prefix,
+            internet_enabled: true,
         }
     }
 
@@ -454,6 +493,51 @@ mod tests {
         assert!(ruleset.contains(
             "ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.30.0.0/24, 172.31.0.0/24, 172.32.0.0/24 } drop"
         ));
+    }
+
+    #[test]
+    fn a_network_with_the_internet_off_is_neither_masqueraded_nor_forwarded() {
+        let offline = MicroNetworkSpec {
+            internet_enabled: false,
+            ..sample_network(0x1234, "172.31.0.1", 24)
+        };
+        let online = sample_network(0x5678, "172.32.0.1", 24);
+        let ruleset = render_apply_ruleset("eth0", &[offline, online]).unwrap();
+
+        // No NAT for it: its addresses are never translated.
+        assert!(!ruleset.contains("ip saddr 172.31.0.0/24 oifname"));
+        // And nothing new leaves it at L3 regardless of per-VM egress policy.
+        assert!(ruleset.contains("ip saddr { 172.31.0.0/24 } drop"));
+        // The drop lands after the established/related accept, so a VM that
+        // is reachable from outside can still answer.
+        let accept = ruleset.find("ct state established,related accept").unwrap();
+        assert!(accept < ruleset.find("ip saddr { 172.31.0.0/24 } drop").unwrap());
+
+        // Its bridge and DHCP range are untouched — the network still exists,
+        // it just has no way out.
+        assert!(ruleset.contains(&format!(
+            "iifname \"{}\" jump firecrab_egress",
+            offline.bridge_name()
+        )));
+        // The other network is unaffected.
+        assert!(
+            ruleset.contains("ip saddr 172.32.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
+        );
+    }
+
+    #[test]
+    fn switching_the_internet_off_changes_the_ruleset_so_it_gets_re_applied() {
+        // FirewallState compares the rendered text verbatim, so a toggle that
+        // rendered identically would silently never reach nft.
+        let online = sample_network(0x1234, "172.31.0.1", 24);
+        let offline = MicroNetworkSpec {
+            internet_enabled: false,
+            ..online
+        };
+        assert_ne!(
+            render_apply_ruleset("eth0", &[online]).unwrap(),
+            render_apply_ruleset("eth0", &[offline]).unwrap()
+        );
     }
 
     #[test]

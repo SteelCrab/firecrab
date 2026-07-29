@@ -243,6 +243,29 @@ pub struct CreateMicroNetworkRequest {
     /// reserved address range, mirroring how an AWS VPC is created with a
     /// CIDR block before any subnet/route table/gateway exists.
     pub subnet_cidr: String,
+    /// Whether its VMs may reach the internet. Omitted means `true`, so a
+    /// client written before the toggle existed still gets the connected
+    /// network it expects.
+    #[serde(default = "internet_enabled_default")]
+    pub internet_enabled: bool,
+}
+
+/// Body for `PATCH /api/micro-networks/{id}`: flips one network's internet
+/// access, the equivalent of attaching or detaching an AWS internet gateway.
+/// Nothing else about a network is editable — its CIDR is what its VMs'
+/// addresses were handed out of.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpdateMicroNetworkRequest {
+    /// The new posture: `false` withholds NAT and drops anything this
+    /// network's VMs try to send outside it.
+    pub internet_enabled: bool,
+}
+
+/// Serde default for the `internet_enabled` fields: connected, which is what
+/// every MicroNetwork was before the toggle existed.
+fn internet_enabled_default() -> bool {
+    true
 }
 
 /// A MicroNetwork — one of firecrab's own virtual networks
@@ -260,6 +283,10 @@ pub struct MicroNetworkResponse {
     /// Its gateway — the first host address of `subnet_cidr`, which is also
     /// the address its bridge holds on the host. Derived, never stored.
     pub gateway: String,
+    /// Whether its VMs may reach anything outside Firecrab. `false` is a
+    /// closed network: no NAT, and nothing routed out of it
+    /// (`docs/task-micro-network.md`).
+    pub internet_enabled: bool,
 }
 
 /// Response for `GET /api/network`: the host network firecrab has set up,
@@ -695,6 +722,7 @@ mod tests {
             name: "prod".to_owned(),
             subnet_cidr: "172.31.0.0/24".to_owned(),
             gateway: "172.31.0.1".to_owned(),
+            internet_enabled: true,
         };
         let json = serde_json::to_string(&response).unwrap();
         let decoded: MicroNetworkResponse = serde_json::from_str(&json).unwrap();

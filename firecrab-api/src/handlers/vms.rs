@@ -888,6 +888,41 @@ pub(crate) async fn sync_dhcp_leases(state: &AppState) -> Result<(), String> {
         .map_err(|error| format!("dhcp sync failed: {error}"))
 }
 
+/// Reinstalls the per-VM policy of every VM that is currently running.
+///
+/// A global firewall (re)apply flushes the owned tables, which takes every
+/// per-VM chain and verdict-map entry with it — the helper says as much by
+/// clearing its `applied_vms`. Without this, a VM that was running when a
+/// network was created, deleted or switched on/off would keep its TAP and
+/// its address but silently lose all egress until someone restarted it.
+pub(crate) async fn reapply_running_vm_policies(state: &AppState) -> Result<(), String> {
+    let store = state.store.clone();
+    let running = tokio::task::spawn_blocking(move || {
+        let vms = store.load_all()?;
+        let mut running = Vec::new();
+        for vm in vms.into_values().filter(|vm| vm.state == VmState::Running) {
+            // A running VM always has one; skipped rather than failed if not,
+            // since there is nothing to install for it either way.
+            if let Some(lease) = store.active_lease(vm.id).ok().flatten() {
+                running.push((vm.id, vm.egress_policy, lease));
+            }
+        }
+        Ok::<_, crate::persistence::PersistenceError>(running)
+    })
+    .await
+    .map_err(|error| format!("running vm lookup task failed: {error}"))?
+    .map_err(|error| format!("running vm lookup failed: {error}"))?;
+
+    for (vm_id, egress_policy, lease) in running {
+        state
+            .network
+            .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false)
+            .await
+            .map_err(|error| format!("policy reapply failed for vm {vm_id}: {error}"))?;
+    }
+    Ok(())
+}
+
 /// The current set of MicroNetworks in the shape the privileged helper takes
 /// them. Sent with every firewall/DHCP call because both render one rule (or
 /// dnsmasq interface) per network and need the complete set, not a delta.
@@ -902,7 +937,7 @@ pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNet
         .into_iter()
         .map(|network| {
             SubnetSpec::parse(Some(network.id), &network.subnet_cidr)
-                .and_then(|subnet| subnet.helper_spec())
+                .and_then(|subnet| subnet.helper_spec(network.internet_enabled))
                 .ok_or_else(|| {
                     format!(
                         "micro network {} has an unparseable subnet {:?}",
@@ -2002,6 +2037,7 @@ while True:
             ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
             }),
         )
         .await

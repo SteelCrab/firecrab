@@ -7,6 +7,7 @@ import type {
   MicroNetworkDetailResponse,
   MicroNetworkResponse,
   NetworkInfoResponse,
+  UpdateMicroNetworkRequest,
   UpdateVmResourcesRequest,
   VmLogResponse,
   VmResponse,
@@ -135,6 +136,19 @@ export function getMicroNetwork(id: string): Promise<MicroNetworkDetailResponse>
 export function createMicroNetwork(request: CreateMicroNetworkRequest): Promise<MicroNetworkResponse> {
   return fetchJson("/api/micro-networks", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+/** Switches one network's internet access on or off — everything else about
+ *  a MicroNetwork is fixed once created. */
+export function updateMicroNetwork(
+  id: string,
+  request: UpdateMicroNetworkRequest,
+): Promise<MicroNetworkResponse> {
+  return fetchJson(`/api/micro-networks/${id}`, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
   });
