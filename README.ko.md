@@ -40,28 +40,56 @@ Unix 소켓을 통해서만 처리하며, API 서버 자체는 비특권 프로�
 - WebSocket 기반 실시간 시리얼 콘솔
 - SQLite 상태 저장, 권한 분리된 helper 프로세스를 통한 호스트 네트워크 격리
 
-## 빠른 시작
+## 설치 (권장)
 
-### 터미널 세션 1 — API 서버
-
-- `firecrab-api`: Rust REST API 서버(`http://localhost:3000`)
-- VM 상태 저장, Firecracker 프로세스 관리
+KVM과 네트워크만 되는 리눅스 호스트라면:
 
 ```sh
-cargo run -p firecrab-api
+git clone https://github.com/SteelCrab/firecrab && cd firecrab
+sudo ./install.sh
 ```
 
-### 터미널 세션 2 — 프론트엔드
-
-- `firecrab-frontend`: React 대시보드 개발 서버(`http://localhost:8080`)
-- VM 생성·조회 UI, 콘솔 접속 제공
+이게 전부입니다. 설치 스크립트가 없는 것을 찾아 직접 채웁니다 — 패키지는 호스트에 있는
+관리자(apt/dnf/zypper/pacman/apk)로, Firecracker·Rust 툴체인·게스트 이미지까지. 그다음
+서비스 계정을 만들고 systemd 데몬 2개를 설치해 `http://127.0.0.1:3000/`에 대시보드를 띄웁니다.
+다시 실행해도 안전합니다 — 중복이 아니라 복구로 동작합니다.
 
 ```sh
-cd firecrab-frontend
-npm run dev
+./install.sh --check            # 무엇이 없는지 먼저 확인 (root 불필요, 아무것도 바꾸지 않음)
+sudo ./install.sh --uninstall   # 데몬 제거. --purge 없이는 VM 데이터 보존
+```
+
+KVM은 스크립트가 대신 설치할 수 없는 유일한 항목입니다 — `/dev/kvm`이 없으면 BIOS에서
+가상화를 켜세요(이 호스트가 VM이면 중첩 가상화). 자세한 내용은
+[docs/task-host-install-script.md](docs/task-host-install-script.md)를 참고하세요.
+
+## 소스에서 실행 (개발)
+
+설치 없이 터미널 3개로 띄웁니다 — 특권 네트워크 헬퍼, API, 그리고 브라우저가 API에 닿게
+해주는 프록시가 붙은 Vite 개발 서버입니다.
+
+```sh
+# 1 — 특권 네트워크 헬퍼 (bridge, TAP, 방화벽, DHCP)
+cargo build -p firecrab-net-helper
+sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
+     ./target/debug/firecrab-net-helper
+
+# 2 — API 서버 (저장소 루트에서 실행 — 경로가 작업 디렉터리 기준입니다)
+cargo run -p firecrab-api
+
+# 3 — 대시보드 개발 서버
+cd firecrab-frontend && npm run dev
 ```
 
 `http://localhost:8080/`에 접속하세요. 전체 사용법은 [docs/web.md](docs/web.md)를 참고하세요.
+
+3번 터미널 없이 빌드된 대시보드를 API가 직접 서빙하게 할 수도 있습니다.
+
+```sh
+cd firecrab-frontend && npm run build && cd ..
+FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
+# http://localhost:3000/
+```
 
 ## 라이선스
 

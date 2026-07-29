@@ -1,0 +1,29 @@
+[Unit]
+Description=firecrab API and dashboard
+Documentation=https://github.com/pista/firecrab
+After=firecrab-net-helper.service network-online.target
+Wants=firecrab-net-helper.service
+
+[Service]
+Type=simple
+User=@FIRECRAB_USER@
+Group=@FIRECRAB_GROUP@
+# Not cosmetic: the DB (data/firecrab.db) and VM artifacts (data/vms/<id>/) are
+# resolved relative to the working directory. Start this anywhere else and it
+# silently opens a different, empty database.
+WorkingDirectory=@DATADIR@
+Environment=FIRECRAB_IMAGE_ROOT=@DATADIR@/images
+Environment=FIRECRAB_STATIC_ROOT=@SHAREDIR@/dashboard
+EnvironmentFile=-@CONFDIR@/api.env
+ExecStart=@LIBDIR@/firecrab-api
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=@DATADIR@ /run/firecrab
+
+[Install]
+WantedBy=multi-user.target

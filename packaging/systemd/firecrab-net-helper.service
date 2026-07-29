@@ -1,0 +1,33 @@
+[Unit]
+Description=firecrab privileged network helper
+Documentation=https://github.com/pista/firecrab
+# Owns the bridges, TAPs, nftables tables and dnsmasq that the API asks for.
+# Must be listening before the API's startup reconcile runs, or the API only
+# logs a warning and the host side stays unprovisioned until the next VM start.
+After=network-pre.target
+Wants=network-pre.target
+Before=firecrab-api.service
+
+[Service]
+Type=simple
+# root for CAP_NET_ADMIN; the group is what makes the socket reachable — the
+# helper chmods it 0660 and takes its group from this process, so the API's
+# account must be in @FIRECRAB_GROUP@.
+User=root
+Group=@FIRECRAB_GROUP@
+RuntimeDirectory=firecrab
+RuntimeDirectoryMode=0750
+Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
+ExecStart=@LIBDIR@/firecrab-net-helper
+Restart=on-failure
+RestartSec=2
+
+# Deliberately mild: this process shells out to nft/ip and supervises dnsmasq,
+# which inherit the namespace. ProtectSystem=strict would take /var with it and
+# break dnsmasq's lease file.
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/run/firecrab
+
+[Install]
+WantedBy=multi-user.target

@@ -42,19 +42,20 @@ updated: 2026-07-29
 
 ## Host — 설치·데몬 기반
 
-지금 firecrab은 터미널 **3개**(net-helper / API / 프론트 dev 서버)를 손으로 띄우는 상태다.
-재부팅하면 아무것도 안 뜨고, 새 머신에 올리려면 문서를 보며 여러 단계를 밟아야 한다.
-목표는 **설치 한 번 + 데몬 2개**.
+터미널 **3개**(net-helper / API / 프론트 dev 서버)를 손으로 띄우던 것을
+**설치 한 번 + 데몬 2개**로 바꾼다. 아래 셋은 2026-07-29 구현 완료 — 검증 절차는
+[tests/host-install](tests/host-install.md).
 
-- [ ] [Host 설치 — `install.sh`](task-host-install-script.md)
-      — 의존성 점검, 계정·디렉터리·권한, 바이너리 배치, `--uninstall`
-      — 재실행해도 같은 결과(idempotent)
-- [ ] [Host 데몬 — systemd 유닛](task-host-systemd-daemons.md)
-      — helper → API 순서 보장, 재시작 정책, `WorkingDirectory` 고정(옛 DB 여는 사고 방지)
-      — 재부팅 후 사람 개입 없이 MicroNetwork bridge까지 복구될 것
-- [ ] [프론트엔드 서빙](task-host-frontend-serving.md)
-      — 빌드된 `dist/`를 API가 직접 서빙(`ServeDir` + SPA fallback), Vite dev 서버 없이 동작
-      — same-origin이 되므로 CORS 허용 origin 설정도 필요 없어짐
+- [x] [Host 설치 — `install.sh`](task-host-install-script.md)
+      — **네트워크만 되는 머신에서 한 줄**: 없는 의존성(nft·dnsmasq·firecracker·rustup·node·docker)과
+      게스트 이미지까지 스스로 채우고 데몬 2개를 띄움. `--check`는 비특권·무변경
+      — 실 호스트 전체 설치는 아직 미검증(버려도 되는 머신 필요)
+- [x] [Host 데몬 — systemd 유닛](task-host-systemd-daemons.md)
+      — `packaging/systemd/` 템플릿 2종. helper의 `Group=`이 소켓 접근을 좌우, API는 `WorkingDirectory` 고정
+      — 실 호스트 기동은 미검증
+- [x] [프론트엔드 서빙](task-host-frontend-serving.md)
+      — `FIRECRAB_STATIC_ROOT`로 `dist/` 서빙 + SPA fallback, `/api`·`/ws`는 JSON 404 유지
+      — 실제로 dev 서버 없이 대시보드 동작 확인
 - [ ] [Host 진단 — `firecrab doctor`](task-host-doctor.md)
       — KVM·ip_forward·nft·dnsmasq·UFW·소켓 권한·이미지 digest를 한 번에 점검
       — 지금까지의 실패가 대부분 코드가 아니라 host 설정이었음
