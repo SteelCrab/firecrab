@@ -76,12 +76,16 @@ async fn run() -> Result<(), StartupError> {
     let state = AppState::new(templates)
         .await
         .map_err(StartupError::Persistence)?;
-    // Best-effort: if the net-helper (and its dnsmasq) aren't up yet, this
-    // just means DHCP reservations lag until the next per-VM start, which
-    // re-syncs the full snapshot anyway (see setup_vm_network) — not worth
-    // failing API startup over.
-    if let Err(error) = handlers::vms::sync_dhcp_leases(&state).await {
-        tracing::warn!(error, "initial dhcp resync failed");
+    // Bridges, nftables rules and dnsmasq's config are all host state a
+    // reboot wipes, so they are re-applied here rather than assumed. Doing it
+    // at startup (not only on VM start) is what brings back a MicroNetwork
+    // that has no VMs in it yet — nothing else would ever touch it.
+    //
+    // Best-effort: if the net-helper isn't up yet, this just means the host
+    // side lags until the next per-VM start, which re-applies the same thing
+    // (see setup_vm_network) — not worth failing API startup over.
+    if let Err(error) = handlers::micro_networks::ensure_all_networks(&state).await {
+        tracing::warn!(error, "initial network resync failed");
     }
     let app = build_router(state, &config);
 

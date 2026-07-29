@@ -36,7 +36,7 @@ pub async fn get_network_info() -> Json<NetworkInfoResponse> {
 /// `nat::detect_uplink` resolves via rtnetlink, just read a different way —
 /// a read-only value isn't worth a new IPC round trip across the privilege
 /// boundary for.
-fn read_uplink() -> Option<String> {
+pub(crate) fn read_uplink() -> Option<String> {
     let text = fs::read_to_string("/proc/net/route").ok()?;
     text.lines().skip(1).find_map(|line| {
         let mut fields = line.split_whitespace();

@@ -10,7 +10,9 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use firecrab_helper_protocol::network::{DhcpLeaseEntry, MacAddr, guest_hostname};
+use firecrab_helper_protocol::network::{
+    DhcpLeaseEntry, MacAddr, MicroNetworkSpec, guest_hostname,
+};
 use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -79,6 +81,11 @@ struct DhcpState {
     child: Option<Child>,
     /// Lease generation of the snapshot currently applied, if any.
     applied_revision: Option<u64>,
+    /// The MicroNetwork set the running dnsmasq's base config was rendered
+    /// for. dnsmasq only reads its main config file at startup — SIGHUP
+    /// re-reads the `dhcp-hostsfile` and nothing else — so a network being
+    /// created or deleted has to restart the process, not just reload it.
+    served_networks: Option<Vec<MicroNetworkSpec>>,
 }
 
 impl DhcpActor {
@@ -125,10 +132,26 @@ fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
 /// unaffected by our own process restarting. Without this, a stale lease
 /// blocks the new MAC ("no address available") until the old one's full
 /// `dhcp-range` lease time (an hour) naturally expires.
-async fn release_stale_leases(current: &[DhcpLeaseEntry]) {
+async fn release_stale_leases(current: &[DhcpLeaseEntry], micro_networks: &[MicroNetworkSpec]) {
     for (ip, mac) in stale_leases(active_leases().await, current) {
-        release_lease(ip, mac).await;
+        release_lease(ip, mac, serving_interface(ip, micro_networks)).await;
     }
+}
+
+/// Which bridge serves `ip` — the MicroNetwork whose subnet contains it, or
+/// the default network's bridge when none does. `dhcp_release` addresses
+/// dnsmasq through the interface the lease lives on, so releasing a
+/// MicroNetwork lease against `fcbr0` would silently do nothing.
+fn serving_interface(ip: Ipv4Addr, micro_networks: &[MicroNetworkSpec]) -> String {
+    micro_networks
+        .iter()
+        .find(|network| {
+            let mask = u32::MAX
+                .checked_shl(32 - u32::from(network.prefix))
+                .unwrap_or(0);
+            u32::from(ip) & mask == u32::from(network.network_address()) & mask
+        })
+        .map_or_else(|| BRIDGE_NAME.to_owned(), MicroNetworkSpec::bridge_name)
 }
 
 /// Reads dnsmasq's own lease database, returning every `(ip, mac)` pair it
@@ -181,9 +204,9 @@ fn stale_leases(
 /// (`dnsmasq-utils`) so dnsmasq drops the lease immediately instead of
 /// waiting out its lease time. Best-effort: a failure here just means the
 /// old lease lingers until it expires, not a fatal sync error.
-async fn release_lease(ip: Ipv4Addr, mac: MacAddr) {
+async fn release_lease(ip: Ipv4Addr, mac: MacAddr, interface: String) {
     let result = Command::new("dhcp_release")
-        .arg(BRIDGE_NAME)
+        .arg(&interface)
         .arg(ip.to_string())
         .arg(mac.to_string())
         .stdout(Stdio::null())
@@ -206,11 +229,25 @@ async fn release_lease(ip: Ipv4Addr, mac: MacAddr) {
 /// tell which interface a broadcast-flag-0 DHCPDISCOVER arrived on, so the
 /// unicast DHCPOFFER a client without a broadcast flag expects never goes
 /// out — `bind-dynamic` binds directly to `fcbr0` instead.
-fn render_base_config(hosts_file: &Path) -> String {
+fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) -> String {
+    // One `interface=`/`dhcp-range=` pair per served network. dnsmasq picks
+    // the range matching the interface a request arrived on, so a VM on a
+    // MicroNetwork's bridge is offered that network's reservation and never
+    // another's.
+    let served: String = std::iter::once(format!(
+        "interface={BRIDGE_NAME}\ndhcp-range=172.30.0.0,static\n"
+    ))
+    .chain(micro_networks.iter().map(|network| {
+        format!(
+            "interface={}\ndhcp-range={},static\n",
+            network.bridge_name(),
+            network.network_address()
+        )
+    }))
+    .collect();
     format!(
-        "interface={BRIDGE_NAME}\n\
+        "{served}\
          bind-dynamic\n\
-         dhcp-range=172.30.0.0,static\n\
          dhcp-hostsfile={}\n\
          dhcp-leasefile={LEASE_FILE}\n\
          pid-file={PID_FILE}\n\
@@ -228,19 +265,18 @@ pub async fn sync_dhcp_leases(
     actor: &DhcpActor,
     revision: u64,
     leases: &[DhcpLeaseEntry],
+    micro_networks: &[MicroNetworkSpec],
 ) -> Result<(), DhcpError> {
     let mut state = actor.state.lock().await;
-    if state
-        .applied_revision
-        .is_some_and(|applied| applied >= revision)
-    {
+    let networks_changed = state.served_networks.as_deref() != Some(micro_networks);
+    if is_stale_snapshot(state.applied_revision, revision, networks_changed) {
         return Ok(());
     }
 
     let hosts_path = Path::new(HOSTS_FILE);
     let candidate_path = hosts_path.with_extension("tmp");
     write_atomic_candidate(&candidate_path, &render_hosts_file(leases)).await?;
-    validate(&candidate_path).await?;
+    validate(&candidate_path, micro_networks).await?;
     tokio::fs::rename(&candidate_path, hosts_path)
         .await
         .map_err(|source| DhcpError::Swap {
@@ -248,23 +284,59 @@ pub async fn sync_dhcp_leases(
             source,
         })?;
 
-    match state.child.as_mut() {
-        Some(child) => reload(child)?,
-        // No Child handle in *this* process's memory doesn't mean no
-        // dnsmasq is running — a prior net-helper instance (before a
-        // restart) may have spawned one that's still alive, orphaned but
-        // otherwise healthy, tracked only by its own pid file. Reusing it
-        // is what makes a restart not silently strand every VM started
-        // afterwards without a working DHCP reload target.
-        None => match running_orphan_pid().await {
-            Some(pid) => reload_pid(pid)?,
-            None => state.child = Some(spawn_dnsmasq(hosts_path).await?),
-        },
+    if networks_changed {
+        // Restart rather than reload, and tear down an orphan from a prior
+        // net-helper lifetime too: whatever is running was configured for a
+        // different set of interfaces, so reusing it would leave the new
+        // network's bridge unserved (or keep answering on a deleted one).
+        stop_running_dnsmasq(&mut state).await;
+        state.child = Some(spawn_dnsmasq(hosts_path, micro_networks).await?);
+        state.served_networks = Some(micro_networks.to_vec());
+    } else {
+        match state.child.as_mut() {
+            Some(child) => reload(child)?,
+            // No Child handle in *this* process's memory doesn't mean no
+            // dnsmasq is running — a prior net-helper instance (before a
+            // restart) may have spawned one that's still alive, orphaned but
+            // otherwise healthy, tracked only by its own pid file. Reusing it
+            // is what makes a restart not silently strand every VM started
+            // afterwards without a working DHCP reload target.
+            None => match running_orphan_pid().await {
+                Some(pid) => reload_pid(pid)?,
+                None => state.child = Some(spawn_dnsmasq(hosts_path, micro_networks).await?),
+            },
+        }
     }
 
-    release_stale_leases(leases).await;
+    release_stale_leases(leases, micro_networks).await;
     state.applied_revision = Some(revision);
     Ok(())
+}
+
+/// Whether this snapshot can be skipped as stale/duplicate. A changed
+/// network set never counts as stale, however old its revision: the set of
+/// interfaces dnsmasq serves is not part of the lease snapshot, so a
+/// MicroNetwork created before it holds any VM bumps no lease revision at
+/// all and would otherwise never reach dnsmasq's config.
+fn is_stale_snapshot(applied_revision: Option<u64>, revision: u64, networks_changed: bool) -> bool {
+    !networks_changed && applied_revision.is_some_and(|applied| applied >= revision)
+}
+
+/// Terminates whatever dnsmasq is currently running — this process's own
+/// child if it has one, otherwise an orphan left by a previous net-helper
+/// lifetime (found via its pid file). Best-effort: if nothing is running, or
+/// the signal fails because it already exited, there is nothing to clean up
+/// and the caller can go straight to spawning a replacement.
+async fn stop_running_dnsmasq(state: &mut DhcpState) {
+    if let Some(mut child) = state.child.take() {
+        let _ = child.kill().await;
+        return;
+    }
+    if let Some(pid) = running_orphan_pid().await {
+        // SAFETY: sending a signal is memory-safe; a stale/reused pid only
+        // risks misdelivering the signal, not memory unsafety.
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    }
 }
 
 /// Reads dnsmasq's own pid file and returns its pid if that process is
@@ -329,8 +401,11 @@ async fn write_atomic_candidate(path: &Path, content: &str) -> Result<(), DhcpEr
 /// that content only ever comes from already-typed `MacAddr`/`Ipv4Addr`
 /// values (see [`render_hosts_file`]), so there is no path that could hand
 /// it malformed lines to catch in the first place.
-async fn validate(candidate_hosts_path: &Path) -> Result<(), DhcpError> {
-    let config = render_base_config(candidate_hosts_path);
+async fn validate(
+    candidate_hosts_path: &Path,
+    micro_networks: &[MicroNetworkSpec],
+) -> Result<(), DhcpError> {
+    let config = render_base_config(candidate_hosts_path, micro_networks);
     let config_path = candidate_hosts_path.with_extension("test-conf");
     write_atomic_candidate(&config_path, &config).await?;
 
@@ -374,9 +449,16 @@ fn base_config_path(hosts_path: &Path) -> PathBuf {
 /// processes are supervised, rather than a separately-managed systemd
 /// unit — every privileged host process this project runs is owned by
 /// `firecrab-net-helper` alone).
-async fn spawn_dnsmasq(hosts_path: &Path) -> Result<Child, DhcpError> {
+async fn spawn_dnsmasq(
+    hosts_path: &Path,
+    micro_networks: &[MicroNetworkSpec],
+) -> Result<Child, DhcpError> {
     let config_path = base_config_path(hosts_path);
-    write_atomic_candidate(&config_path, &render_base_config(hosts_path)).await?;
+    write_atomic_candidate(
+        &config_path,
+        &render_base_config(hosts_path, micro_networks),
+    )
+    .await?;
 
     Command::new("dnsmasq")
         .arg("--keep-in-foreground")
@@ -514,14 +596,57 @@ mod tests {
         assert_ne!(config_path, hosts_path);
     }
 
+    fn sample_network(id: u128, gateway: &str, prefix: u8) -> MicroNetworkSpec {
+        MicroNetworkSpec {
+            micro_network_id: Uuid::from_u128(id),
+            gateway: gateway.parse().unwrap(),
+            prefix,
+            // DHCP is served on the network's own bridge either way — the
+            // internet toggle only governs what leaves it.
+            internet_enabled: true,
+        }
+    }
+
     #[test]
     fn base_config_binds_only_the_firecrab_bridge_and_is_static_only() {
-        let config = render_base_config(Path::new("/run/firecrab/dnsmasq-hosts.conf"));
+        let config = render_base_config(Path::new("/run/firecrab/dnsmasq-hosts.conf"), &[]);
         assert!(config.contains("interface=fcbr0"));
         assert!(config.contains("bind-dynamic"));
         assert!(
             config.contains("dhcp-range=172.30.0.0,static"),
             "must not hand out addresses to unreserved MACs: {config}"
+        );
+    }
+
+    #[test]
+    fn base_config_serves_every_micro_network_bridge_with_its_own_range() {
+        let networks = [
+            sample_network(0x1234, "172.31.0.1", 24),
+            sample_network(0x5678, "172.32.0.1", 24),
+        ];
+        let config = render_base_config(Path::new("/run/firecrab/dnsmasq-hosts.conf"), &networks);
+
+        // The default network is still served alongside them.
+        assert!(config.contains("interface=fcbr0"));
+        assert!(config.contains("dhcp-range=172.30.0.0,static"));
+        for network in networks {
+            assert!(config.contains(&format!("interface={}", network.bridge_name())));
+            assert!(config.contains(&format!("dhcp-range={},static", network.network_address())));
+        }
+    }
+
+    #[test]
+    fn a_lease_is_released_through_the_bridge_that_actually_serves_it() {
+        let networks = [sample_network(0x1234, "172.31.0.1", 24)];
+        // Inside the MicroNetwork's subnet -> its own bridge.
+        assert_eq!(
+            serving_interface("172.31.0.7".parse().unwrap(), &networks),
+            networks[0].bridge_name()
+        );
+        // Outside every MicroNetwork -> the default network's bridge.
+        assert_eq!(
+            serving_interface("172.30.0.7".parse().unwrap(), &networks),
+            BRIDGE_NAME
         );
     }
 
@@ -556,7 +681,7 @@ mod tests {
             .await
             .expect("write candidate");
 
-        validate(&candidate).await.expect("dnsmasq --test");
+        validate(&candidate, &[]).await.expect("dnsmasq --test");
     }
 
     #[tokio::test]
@@ -596,20 +721,46 @@ mod tests {
         {
             let mut state = actor.state.lock().await;
             state.applied_revision = Some(5);
+            state.served_networks = Some(Vec::new());
         }
 
         // Would fail trying to actually spawn/bind dnsmasq for real if it
         // got past the staleness check — reaching `Ok(())` here proves the
         // stale revision short-circuited before any of that.
         assert!(
-            sync_dhcp_leases(&actor, 5, &[lease(1, "172.30.0.5", "02:fc:00:00:00:05")])
-                .await
-                .is_ok()
+            sync_dhcp_leases(
+                &actor,
+                5,
+                &[lease(1, "172.30.0.5", "02:fc:00:00:00:05")],
+                &[]
+            )
+            .await
+            .is_ok()
         );
         assert!(
-            sync_dhcp_leases(&actor, 3, &[lease(1, "172.30.0.5", "02:fc:00:00:00:05")])
-                .await
-                .is_ok()
+            sync_dhcp_leases(
+                &actor,
+                3,
+                &[lease(1, "172.30.0.5", "02:fc:00:00:00:05")],
+                &[]
+            )
+            .await
+            .is_ok()
         );
+    }
+
+    #[test]
+    fn a_changed_network_set_is_never_stale_however_old_its_revision() {
+        // Same revision, same networks: nothing to do.
+        assert!(is_stale_snapshot(Some(5), 5, false));
+        // Older revision, same networks: an out-of-order snapshot to ignore.
+        assert!(is_stale_snapshot(Some(5), 3, false));
+        // Creating a MicroNetwork bumps no lease revision (it holds no VMs
+        // yet), so the revision alone would skip it and dnsmasq would never
+        // learn to serve the new bridge.
+        assert!(!is_stale_snapshot(Some(5), 5, true));
+        assert!(!is_stale_snapshot(Some(5), 3, true));
+        // Nothing applied yet is never stale.
+        assert!(!is_stale_snapshot(None, 0, false));
     }
 }

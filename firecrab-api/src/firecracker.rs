@@ -679,6 +679,7 @@ mod tests {
             ram,
             disk_gb: 2,
             egress_policy: Default::default(),
+            micro_network_id: None,
             startup_step: None,
             package_update: None,
         }

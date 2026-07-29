@@ -8,11 +8,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use firecrab_api_types::MicroNetworkResponse;
 use rusqlite::{Connection, TransactionBehavior, params};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::ipam::{self, IpamError};
+use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
 /// Default SQLite database path, relative to the process's working directory.
@@ -33,30 +34,49 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     cpu INTEGER NOT NULL,
     ram INTEGER NOT NULL,
     disk_gb INTEGER NOT NULL DEFAULT 2,
-    egress_policy TEXT NOT NULL DEFAULT 'internet'
+    egress_policy TEXT NOT NULL DEFAULT 'internet',
+    micro_network_id TEXT
 ) STRICT";
 
 /// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy FROM vms";
+    egress_policy, micro_network_id FROM vms";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+    egress_policy, micro_network_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 
 /// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
-    template_boot_args_sha256, cpu, ram, disk_gb, egress_policy) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+    template_boot_args_sha256, cpu, ram, disk_gb, egress_policy, micro_network_id) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 
 /// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
-    template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12 \
-    WHERE id = ?1";
+    template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12, \
+    micro_network_id = ?13 WHERE id = ?1";
+
+/// Schema for the `micro_networks` table (`docs/task-micro-network.md`).
+/// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
+/// is the bridge name, which the helper derives from `id`.
+const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_networks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    subnet_cidr TEXT NOT NULL,
+    internet_enabled INTEGER NOT NULL DEFAULT 1
+) STRICT";
+
+/// Selects every column [`Store::list_micro_networks`] needs.
+const SELECT_ALL_MICRO_NETWORKS_SQL: &str =
+    "SELECT id, name, subnet_cidr, internet_enabled FROM micro_networks";
+
+/// Inserts a new row; fails on a duplicate id.
+const INSERT_MICRO_NETWORK_SQL: &str =
+    "INSERT INTO micro_networks (id, name, subnet_cidr, internet_enabled) VALUES (?1, ?2, ?3, ?4)";
 
 /// Adds `disk_gb` to a `vms` table created before the column existed (a
 /// bare `CREATE TABLE IF NOT EXISTS` doesn't retrofit new columns onto an
@@ -86,6 +106,48 @@ fn migrate_egress_policy_column(conn: &Connection) -> Result<(), PersistenceErro
     if !has_column {
         conn.execute(
             "ALTER TABLE vms ADD COLUMN egress_policy TEXT NOT NULL DEFAULT 'internet'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Adds `micro_network_id` to a `vms`/`network_leases` pair created before
+/// MicroNetwork membership existed. NULL means the default network — exactly
+/// what every pre-existing VM and lease was on — so nothing needs
+/// backfilling. `network_leases` is created after this runs on a fresh DB,
+/// hence the table-exists check.
+fn migrate_micro_network_columns(conn: &Connection) -> Result<(), PersistenceError> {
+    for (table, sql) in [
+        ("vms", "ALTER TABLE vms ADD COLUMN micro_network_id TEXT"),
+        ("network_leases", ipam::ADD_LEASE_MICRO_NETWORK_COLUMN_SQL),
+    ] {
+        let table_exists: bool = conn
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")?
+            .exists([table])?;
+        let has_column: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = 'micro_network_id'")?
+            .exists([table])?;
+        if table_exists && !has_column {
+            conn.execute(sql, [])?;
+        }
+    }
+    Ok(())
+}
+
+/// Adds `internet_enabled` to a `micro_networks` table created before the
+/// per-network internet toggle existed, same reasoning as
+/// [`migrate_disk_gb_column`]. `1` matches the behavior every network had
+/// then: all of them were masqueraded out of the host's uplink.
+fn migrate_internet_enabled_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let has_column: bool = conn
+        .prepare(
+            "SELECT 1 FROM pragma_table_info('micro_networks') WHERE name = 'internet_enabled'",
+        )?
+        .exists([])?;
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE micro_networks ADD COLUMN internet_enabled INTEGER NOT NULL DEFAULT 1",
             [],
         )?;
     }
@@ -125,6 +187,12 @@ pub enum PersistenceError {
     /// An operation targeted a VM id with no matching row.
     #[error("VM {id} does not exist in the database")]
     MissingVm {
+        /// The id that wasn't found.
+        id: Uuid,
+    },
+    /// An operation targeted a MicroNetwork id with no matching row.
+    #[error("MicroNetwork {id} does not exist in the database")]
+    MissingMicroNetwork {
         /// The id that wasn't found.
         id: Uuid,
     },
@@ -192,10 +260,16 @@ impl Store {
         conn.execute(CREATE_TABLE_SQL, [])?;
         migrate_disk_gb_column(&conn)?;
         migrate_egress_policy_column(&conn)?;
+        migrate_micro_network_columns(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
             conn.execute(index_sql, [])?;
         }
+        conn.execute(CREATE_MICRO_NETWORKS_TABLE_SQL, [])?;
+        // After the CREATE, unlike the `vms` migrations above: the table this
+        // one alters is the one just created, and `CREATE TABLE IF NOT EXISTS`
+        // leaves an older table's columns as they were.
+        migrate_internet_enabled_column(&conn)?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -232,6 +306,7 @@ impl Store {
                     ram: row.get(9)?,
                     disk_gb: row.get(10)?,
                     egress_policy: decode_egress_policy(&id_text, &row.get::<_, String>(11)?)?,
+                    micro_network_id: decode_optional_id(&id_text, row.get(12)?)?,
                     startup_step: None,
                     package_update: None,
                 },
@@ -265,14 +340,114 @@ impl Store {
         Ok(())
     }
 
+    /// Inserts a new MicroNetwork.
+    pub fn insert_micro_network(
+        &self,
+        network: &MicroNetworkResponse,
+    ) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            INSERT_MICRO_NETWORK_SQL,
+            params![
+                network.id.to_string(),
+                network.name,
+                network.subnet_cidr,
+                network.internet_enabled
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Flips one MicroNetwork's internet access. The only mutable field a
+    /// network has — its CIDR is what its VMs' addresses came out of.
+    pub fn set_micro_network_internet(
+        &self,
+        id: Uuid,
+        internet_enabled: bool,
+    ) -> Result<(), PersistenceError> {
+        let changed = self.lock().execute(
+            "UPDATE micro_networks SET internet_enabled = ?2 WHERE id = ?1",
+            params![id.to_string(), internet_enabled],
+        )?;
+        if changed == 0 {
+            return Err(PersistenceError::MissingMicroNetwork { id });
+        }
+        Ok(())
+    }
+
+    /// Lists every MicroNetwork.
+    pub fn list_micro_networks(&self) -> Result<Vec<MicroNetworkResponse>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(SELECT_ALL_MICRO_NETWORKS_SQL)?;
+        let mut rows = statement.query([])?;
+        let mut networks = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id_text: String = row.get(0)?;
+            let id = Uuid::parse_str(&id_text).map_err(|_| PersistenceError::CorruptRecord {
+                id: id_text.clone(),
+                reason: "id is not a UUID".to_owned(),
+            })?;
+            let subnet_cidr: String = row.get(2)?;
+            // Derived rather than stored, so the gateway can never drift out
+            // of sync with the CIDR it belongs to.
+            let gateway = SubnetSpec::parse(Some(id), &subnet_cidr)
+                .ok_or_else(|| PersistenceError::CorruptRecord {
+                    id: id_text.clone(),
+                    reason: format!("subnet_cidr {subnet_cidr:?} does not parse"),
+                })?
+                .gateway()
+                .to_string();
+            networks.push(MicroNetworkResponse {
+                id,
+                name: row.get(1)?,
+                subnet_cidr,
+                gateway,
+                internet_enabled: row.get(3)?,
+            });
+        }
+        Ok(networks)
+    }
+
+    /// Deletes a MicroNetwork by id.
+    pub fn delete_micro_network(&self, id: Uuid) -> Result<(), PersistenceError> {
+        let changed = self.lock().execute(
+            "DELETE FROM micro_networks WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(PersistenceError::MissingMicroNetwork { id });
+        }
+        Ok(())
+    }
+
     /// Allocate an IPv4 + MAC for `vm_id` inside a `BEGIN IMMEDIATE`
     /// transaction, serializing concurrent allocations on the same lock.
-    pub fn allocate_lease(&self, vm_id: Uuid) -> Result<Lease, IpamError> {
+    pub fn allocate_lease(&self, vm_id: Uuid, subnet: SubnetSpec) -> Result<Lease, IpamError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let lease = ipam::allocate(&tx, vm_id)?;
+        let lease = ipam::allocate(&tx, vm_id, subnet)?;
         tx.commit()?;
         Ok(lease)
+    }
+
+    /// Whether `micro_network_id` still has an active lease — checked before
+    /// deleting a MicroNetwork, so a network with VMs in it can't be pulled
+    /// out from under them.
+    pub fn micro_network_has_active_leases(
+        &self,
+        micro_network_id: Uuid,
+    ) -> Result<bool, IpamError> {
+        ipam::has_active_leases_in(&self.lock(), micro_network_id)
+    }
+
+    /// Looks up one MicroNetwork by id.
+    pub fn micro_network(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<MicroNetworkResponse>, PersistenceError> {
+        Ok(self
+            .list_micro_networks()?
+            .into_iter()
+            .find(|network| network.id == id))
     }
 
     /// Release `vm_id`'s active lease; the row stays as history. Call only
@@ -390,8 +565,25 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.ram,
             vm.disk_gb,
             vm.egress_policy.id(),
+            vm.micro_network_id.map(|id| id.to_string()),
         ],
     )
+}
+
+/// Decodes a nullable id column, reporting a stored non-UUID as corruption
+/// rather than silently treating the row as if it had no MicroNetwork.
+fn decode_optional_id(
+    vm_id: &str,
+    stored: Option<String>,
+) -> Result<Option<Uuid>, PersistenceError> {
+    stored
+        .map(|text| {
+            Uuid::parse_str(&text).map_err(|_| PersistenceError::CorruptRecord {
+                id: vm_id.to_owned(),
+                reason: format!("micro_network_id {text:?} is not a UUID"),
+            })
+        })
+        .transpose()
 }
 
 /// Encodes through serde so the DB text stays in lockstep with the API wire
@@ -445,6 +637,7 @@ mod tests {
             ram: 512,
             disk_gb: 2,
             egress_policy: Default::default(),
+            micro_network_id: None,
             startup_step: None,
             package_update: None,
         }
@@ -588,6 +781,54 @@ mod tests {
     }
 
     #[test]
+    fn migrate_internet_enabled_column_defaults_an_existing_network_to_connected() {
+        let directory = tempdir().unwrap();
+        let db_file = directory.path().join("firecrab.db");
+        let id = Uuid::new_v4();
+
+        // A `micro_networks` table from before the internet toggle existed.
+        {
+            let conn = Connection::open(&db_file).unwrap();
+            conn.execute(
+                "CREATE TABLE micro_networks (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    subnet_cidr TEXT NOT NULL
+                ) STRICT",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO micro_networks (id, name, subnet_cidr) VALUES (?1, ?2, ?3)",
+                params![id.to_string(), "pre-migration", "172.31.0.0/24"],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&db_file).unwrap();
+        let network = store.micro_network(id).unwrap().expect("row survives");
+        assert!(
+            network.internet_enabled,
+            "every network was masqueraded before the toggle existed"
+        );
+
+        // And it is writable from here on.
+        store.set_micro_network_internet(id, false).unwrap();
+        assert!(!store.micro_network(id).unwrap().unwrap().internet_enabled);
+    }
+
+    #[test]
+    fn setting_the_internet_flag_on_a_missing_network_is_an_error() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let id = Uuid::new_v4();
+        assert!(matches!(
+            store.set_micro_network_internet(id, false).unwrap_err(),
+            PersistenceError::MissingMicroNetwork { id: missing } if missing == id
+        ));
+    }
+
+    #[test]
     fn decode_egress_policy_rejects_an_unknown_value_as_corrupt() {
         let error = decode_egress_policy("some-id", "wide-open").unwrap_err();
         assert!(matches!(
@@ -667,7 +908,11 @@ mod tests {
         let handles: Vec<_> = (0..16)
             .map(|_| {
                 let store = store.clone();
-                std::thread::spawn(move || store.allocate_lease(Uuid::new_v4()).unwrap())
+                std::thread::spawn(move || {
+                    store
+                        .allocate_lease(Uuid::new_v4(), SubnetSpec::default_network())
+                        .unwrap()
+                })
             })
             .collect();
         let leases: Vec<Lease> = handles
@@ -699,16 +944,23 @@ mod tests {
         let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
         let vm_id = Uuid::new_v4();
 
-        let lease = store.allocate_lease(vm_id).unwrap();
+        let lease = store
+            .allocate_lease(vm_id, SubnetSpec::default_network())
+            .unwrap();
         // Simulate stop/start: nothing in the lifecycle touches the lease.
         assert_eq!(
-            store.allocate_lease(vm_id).unwrap_err().to_string(),
+            store
+                .allocate_lease(vm_id, SubnetSpec::default_network())
+                .unwrap_err()
+                .to_string(),
             IpamError::AlreadyLeased { vm_id }.to_string()
         );
 
         store.release_lease(vm_id).unwrap();
         let other_vm = Uuid::new_v4();
-        let reallocated = store.allocate_lease(other_vm).unwrap();
+        let reallocated = store
+            .allocate_lease(other_vm, SubnetSpec::default_network())
+            .unwrap();
         assert_eq!(
             reallocated.ipv4, lease.ipv4,
             "freed address should be reusable"

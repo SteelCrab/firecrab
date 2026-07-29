@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 
+use firecrab_helper_protocol::network::micro_network_bridge_name;
 use futures_util::TryStreamExt;
 use rtnetlink::packet_route::{
     AddressFamily,
@@ -15,6 +16,7 @@ use rtnetlink::packet_route::{
 use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
 use thiserror::Error;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 /// Name of the single Firecrab-owned Linux bridge shared by every VM.
 pub const BRIDGE_NAME: &str = "fcbr0";
@@ -27,6 +29,16 @@ const BRIDGE_NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
 /// CIDR prefix length of the Firecrab VPC subnet.
 const BRIDGE_PREFIX: u8 = 24;
 
+/// One bridge's desired name/gateway/subnet — [`ensure_bridge`] is just
+/// [`ensure_bridge_for`] called with the fixed default network's own values;
+/// [`ensure_micro_network_bridge`] calls it with a MicroNetwork's own.
+struct BridgeConfig<'a> {
+    name: &'a str,
+    gateway: Ipv4Addr,
+    network: Ipv4Addr,
+    prefix: u8,
+}
+
 /// Failure modes for [`ensure_bridge`].
 #[derive(Debug, Error)]
 pub enum BridgeError {
@@ -36,26 +48,50 @@ pub enum BridgeError {
     /// An rtnetlink request failed.
     #[error("rtnetlink operation failed")]
     Netlink(#[source] rtnetlink::Error),
-    /// A pre-existing host address overlaps the Firecrab subnet.
-    #[error("Firecrab subnet 172.30.0.0/24 overlaps host address {0}")]
-    AddressConflict(Ipv4Addr),
-    /// A pre-existing host route overlaps the Firecrab subnet.
-    #[error("Firecrab subnet 172.30.0.0/24 overlaps host route {network}/{prefix}")]
-    RouteConflict {
-        /// The conflicting route's network address.
+    /// A pre-existing host address overlaps the target subnet.
+    #[error("subnet {network}/{prefix} overlaps host address {address}")]
+    AddressConflict {
+        /// The subnet that was being configured.
         network: Ipv4Addr,
-        /// The conflicting route's prefix length.
+        /// Its prefix length.
         prefix: u8,
+        /// The conflicting host address.
+        address: Ipv4Addr,
+    },
+    /// A pre-existing host route overlaps the target subnet.
+    #[error("subnet {network}/{prefix} overlaps host route {route_network}/{route_prefix}")]
+    RouteConflict {
+        /// The subnet that was being configured.
+        network: Ipv4Addr,
+        /// Its prefix length.
+        prefix: u8,
+        /// The conflicting route's network address.
+        route_network: Ipv4Addr,
+        /// The conflicting route's prefix length.
+        route_prefix: u8,
     },
     /// The bridge already has the gateway IP but at a different prefix.
-    #[error("bridge gateway {BRIDGE_GATEWAY}/{BRIDGE_PREFIX} has a conflicting prefix")]
-    GatewayPrefixConflict,
+    #[error("bridge gateway {gateway}/{prefix} has a conflicting prefix")]
+    GatewayPrefixConflict {
+        /// The gateway address that was already assigned.
+        gateway: Ipv4Addr,
+        /// The prefix length that was requested instead.
+        prefix: u8,
+    },
     /// The bridge vanished between being created and being looked up again.
-    #[error("bridge {BRIDGE_NAME} disappeared while it was being configured")]
-    MissingAfterCreate,
+    #[error("bridge {name} disappeared while it was being configured")]
+    MissingAfterCreate {
+        /// The bridge's name.
+        name: String,
+    },
     /// Writing the per-interface IPv6-disable sysctl failed.
-    #[error("failed to disable IPv6 on {BRIDGE_NAME}")]
-    Ipv6Disable(#[source] io::Error),
+    #[error("failed to disable IPv6 on {name}")]
+    Ipv6Disable {
+        /// The bridge's name.
+        name: String,
+        #[source]
+        source: io::Error,
+    },
 }
 
 /// Single-writer guard: `main.rs` spawns one task per accepted connection,
@@ -82,27 +118,101 @@ impl BridgeActor {
 /// removes host routes or addresses, and it intentionally does not change the
 /// global IPv4 forwarding sysctl.
 pub async fn ensure_bridge(actor: &BridgeActor) -> Result<(), BridgeError> {
+    ensure_bridge_for(
+        actor,
+        &BridgeConfig {
+            name: BRIDGE_NAME,
+            gateway: BRIDGE_GATEWAY,
+            network: BRIDGE_NETWORK,
+            prefix: BRIDGE_PREFIX,
+        },
+    )
+    .await
+}
+
+/// Ensure a MicroNetwork's own bridge is present and usable
+/// (`docs/task-micro-network.md`) — same idempotent create-if-missing
+/// behavior as [`ensure_bridge`], just for a bridge named/addressed after a
+/// MicroNetwork instead of the fixed default network. The interface name is
+/// derived from `micro_network_id`, never taken from a string the caller
+/// supplies.
+pub async fn ensure_micro_network_bridge(
+    actor: &BridgeActor,
+    micro_network_id: Uuid,
+    gateway: Ipv4Addr,
+    prefix: u8,
+) -> Result<(), BridgeError> {
+    let name = micro_network_bridge_name(micro_network_id);
+    let network = Ipv4Addr::from(u32::from(gateway) & prefix_mask(prefix));
+    ensure_bridge_for(
+        actor,
+        &BridgeConfig {
+            name: &name,
+            gateway,
+            network,
+            prefix,
+        },
+    )
+    .await
+}
+
+/// Removes a MicroNetwork's bridge; a no-op if it's already gone. Mirrors
+/// `tap.rs::delete_tap`'s idempotent-delete shape.
+pub async fn delete_micro_network_bridge(
+    actor: &BridgeActor,
+    micro_network_id: Uuid,
+) -> Result<(), BridgeError> {
+    let _guard = actor.lock.lock().await;
+    let name = micro_network_bridge_name(micro_network_id);
+
+    let (connection, handle, _) = new_connection().map_err(BridgeError::Connection)?;
+    tokio::spawn(connection);
+
+    let mut links = handle.link().get().match_name(name).execute();
+    let link = match links.try_next().await {
+        Ok(link) => link,
+        Err(rtnetlink::Error::NetlinkError(message)) if message.raw_code() == -libc::ENODEV => None,
+        Err(error) => return Err(BridgeError::Netlink(error)),
+    };
+    let Some(link) = link else {
+        return Ok(());
+    };
+
+    handle
+        .link()
+        .del(link.header.index)
+        .execute()
+        .await
+        .map_err(BridgeError::Netlink)
+}
+
+async fn ensure_bridge_for(
+    actor: &BridgeActor,
+    config: &BridgeConfig<'_>,
+) -> Result<(), BridgeError> {
     let _guard = actor.lock.lock().await;
 
     let (connection, handle, _) = new_connection().map_err(BridgeError::Connection)?;
     tokio::spawn(connection);
 
-    let bridge = match find_bridge(&handle).await? {
+    let bridge = match find_bridge(&handle, config.name).await? {
         Some(link) => {
-            assert_subnet_available(&handle, Some(link.header.index)).await?;
+            assert_subnet_available(&handle, config, Some(link.header.index)).await?;
             link
         }
         None => {
-            assert_subnet_available(&handle, None).await?;
+            assert_subnet_available(&handle, config, None).await?;
             handle
                 .link()
-                .add(LinkBridge::new(BRIDGE_NAME).mtu(BRIDGE_MTU).build())
+                .add(LinkBridge::new(config.name).mtu(BRIDGE_MTU).build())
                 .execute()
                 .await
                 .map_err(BridgeError::Netlink)?;
-            find_bridge(&handle)
-                .await?
-                .ok_or(BridgeError::MissingAfterCreate)?
+            find_bridge(&handle, config.name).await?.ok_or_else(|| {
+                BridgeError::MissingAfterCreate {
+                    name: config.name.to_owned(),
+                }
+            })?
         }
     };
 
@@ -126,7 +236,7 @@ pub async fn ensure_bridge(actor: &BridgeActor) -> Result<(), BridgeError> {
     handle
         .link()
         .change(
-            LinkBridge::new(BRIDGE_NAME)
+            LinkBridge::new(config.name)
                 .index(bridge.header.index)
                 .forward_delay(0)
                 .build(),
@@ -134,8 +244,8 @@ pub async fn ensure_bridge(actor: &BridgeActor) -> Result<(), BridgeError> {
         .execute()
         .await
         .map_err(BridgeError::Netlink)?;
-    disable_ipv6()?;
-    ensure_gateway(&handle, bridge.header.index).await
+    disable_ipv6(config.name)?;
+    ensure_gateway(&handle, bridge.header.index, config).await
 }
 
 /// Enables IPv4 forwarding globally — required for NAT'd VM egress to work
@@ -148,23 +258,22 @@ pub fn enable_ip_forward() -> io::Result<()> {
 
 /// The bridge is IPv4-only for now. Writing the per-interface sysctl also
 /// flushes any IPv6 addresses the kernel already auto-assigned.
-fn disable_ipv6() -> Result<(), BridgeError> {
-    let path = format!("/proc/sys/net/ipv6/conf/{BRIDGE_NAME}/disable_ipv6");
+fn disable_ipv6(name: &str) -> Result<(), BridgeError> {
+    let path = format!("/proc/sys/net/ipv6/conf/{name}/disable_ipv6");
     match fs::write(&path, "1") {
         Ok(()) => Ok(()),
         // A kernel without IPv6 support has nothing to disable.
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(BridgeError::Ipv6Disable(source)),
+        Err(source) => Err(BridgeError::Ipv6Disable {
+            name: name.to_owned(),
+            source,
+        }),
     }
 }
 
-/// Looks up the Firecrab bridge by name, if it already exists.
-async fn find_bridge(handle: &Handle) -> Result<Option<LinkMessage>, BridgeError> {
-    let mut links = handle
-        .link()
-        .get()
-        .match_name(BRIDGE_NAME.to_owned())
-        .execute();
+/// Looks up a bridge by name, if it already exists.
+async fn find_bridge(handle: &Handle, name: &str) -> Result<Option<LinkMessage>, BridgeError> {
+    let mut links = handle.link().get().match_name(name.to_owned()).execute();
     match links.try_next().await {
         Ok(link) => Ok(link),
         // A get-by-name answers ENODEV when the link does not exist yet.
@@ -176,9 +285,10 @@ async fn find_bridge(handle: &Handle) -> Result<Option<LinkMessage>, BridgeError
 }
 
 /// Fails if any host address/route outside our own bridge already overlaps
-/// the Firecrab subnet.
+/// `config`'s subnet.
 async fn assert_subnet_available(
     handle: &Handle,
+    config: &BridgeConfig<'_>,
     own_bridge_index: Option<u32>,
 ) -> Result<(), BridgeError> {
     let mut addresses = handle.address().get().execute();
@@ -187,9 +297,13 @@ async fn assert_subnet_available(
             continue;
         }
         if let Some(ipv4) = ipv4_address(&address)
-            && subnet_contains(ipv4, BRIDGE_NETWORK, BRIDGE_PREFIX)
+            && subnet_contains(ipv4, config.network, config.prefix)
         {
-            return Err(BridgeError::AddressConflict(ipv4));
+            return Err(BridgeError::AddressConflict {
+                network: config.network,
+                prefix: config.prefix,
+                address: ipv4,
+            });
         }
     }
 
@@ -198,41 +312,53 @@ async fn assert_subnet_available(
         if route.header.address_family != AddressFamily::Inet {
             continue;
         }
-        let prefix = route.header.destination_prefix_length;
-        if prefix == 0 || prefix > 32 {
+        let route_prefix = route.header.destination_prefix_length;
+        if route_prefix == 0 || route_prefix > 32 {
             continue;
         }
         if route_belongs_to_own_bridge(route_output_interface(&route), own_bridge_index) {
             continue;
         }
-        if let Some(network) = route_ipv4_destination(&route)
-            && cidrs_overlap(network, prefix, BRIDGE_NETWORK, BRIDGE_PREFIX)
+        if let Some(route_network) = route_ipv4_destination(&route)
+            && cidrs_overlap(route_network, route_prefix, config.network, config.prefix)
         {
-            return Err(BridgeError::RouteConflict { network, prefix });
+            return Err(BridgeError::RouteConflict {
+                network: config.network,
+                prefix: config.prefix,
+                route_network,
+                route_prefix,
+            });
         }
     }
     Ok(())
 }
 
-/// Adds [`BRIDGE_GATEWAY`] to the bridge if it isn't already assigned.
-async fn ensure_gateway(handle: &Handle, bridge_index: u32) -> Result<(), BridgeError> {
+/// Adds `config`'s gateway to the bridge if it isn't already assigned.
+async fn ensure_gateway(
+    handle: &Handle,
+    bridge_index: u32,
+    config: &BridgeConfig<'_>,
+) -> Result<(), BridgeError> {
     let mut addresses = handle
         .address()
         .get()
         .set_link_index_filter(bridge_index)
         .execute();
     while let Some(address) = addresses.try_next().await.map_err(BridgeError::Netlink)? {
-        if ipv4_address(&address) == Some(BRIDGE_GATEWAY) {
-            if address.header.prefix_len == BRIDGE_PREFIX {
+        if ipv4_address(&address) == Some(config.gateway) {
+            if address.header.prefix_len == config.prefix {
                 return Ok(());
             }
-            return Err(BridgeError::GatewayPrefixConflict);
+            return Err(BridgeError::GatewayPrefixConflict {
+                gateway: config.gateway,
+                prefix: config.prefix,
+            });
         }
     }
 
     handle
         .address()
-        .add(bridge_index, IpAddr::V4(BRIDGE_GATEWAY), BRIDGE_PREFIX)
+        .add(bridge_index, IpAddr::V4(config.gateway), config.prefix)
         .execute()
         .await
         .map_err(BridgeError::Netlink)

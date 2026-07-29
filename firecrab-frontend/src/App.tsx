@@ -8,6 +8,7 @@ import VmTable from "./components/VmTable";
 import Console from "./components/Console";
 import VmDetailModal from "./components/VmDetailModal";
 import HostInfoModal from "./components/HostInfoModal";
+import MicroNetworksModal from "./components/MicroNetworksModal";
 
 const POLL_MILLIS = 3_000;
 // After repeated failures assume the API is down and poll gently.
@@ -102,6 +103,7 @@ export default function App() {
   // reasoning as openConsole.
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [showHostInfo, setShowHostInfo] = useState(false);
+  const [showMicroNetworks, setShowMicroNetworks] = useState(false);
 
   const runRefresh = useCallback(() => {
     if (refreshInFlight.current) return;
@@ -178,6 +180,9 @@ export default function App() {
           firecrab
           <span className="cursor">_</span>
         </h1>
+        <button className="btn" onClick={() => setShowMicroNetworks(true)}>
+          MicroNetwork
+        </button>
         <button className="btn" onClick={() => setShowHostInfo(true)}>
           HOST 정보
         </button>
@@ -209,6 +214,7 @@ export default function App() {
       {openConsole && <Console vmId={openConsole.id} vmName={openConsole.name} onClose={onCloseConsole} />}
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
       {showHostInfo && <HostInfoModal onClose={() => setShowHostInfo(false)} />}
+      {showMicroNetworks && <MicroNetworksModal onClose={() => setShowMicroNetworks(false)} />}
     </div>
   );
 }

@@ -63,6 +63,12 @@ pub struct VmRecord {
     /// `setup_vm_network`) — not live, same as cpu/ram/disk.
     #[serde(default)]
     pub egress_policy: EgressPolicy,
+    /// The MicroNetwork this VM belongs to, or `None` for the built-in
+    /// default network (`docs/task-micro-network.md`). Fixed at creation:
+    /// the VM's lease comes out of that network's subnet, so moving it would
+    /// mean reallocating the address its guest already booted with.
+    #[serde(default)]
+    pub micro_network_id: Option<Uuid>,
     /// Live progress while `state == Starting`; never persisted (a restart
     /// already demotes any in-flight start to `Stopped`, see
     /// `restart_demotes_active_states_to_stopped`) and irrelevant otherwise.

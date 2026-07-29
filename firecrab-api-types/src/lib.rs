@@ -120,6 +120,11 @@ pub struct CreateVmRequest {
     /// that don't send this field are unaffected.
     #[serde(default)]
     pub egress_policy: EgressPolicy,
+    /// MicroNetwork to place this VM in; omitted (or null) puts it on the
+    /// built-in default network, which is what every client sent before
+    /// MicroNetworks existed.
+    #[serde(default)]
+    pub micro_network_id: Option<Uuid>,
 }
 
 /// Body for `PUT /api/vms/{id}`: replaces cpu/ram/disk for a VM that isn't
@@ -222,6 +227,66 @@ pub struct VmResponse {
     /// `firecrab_helper_protocol::network::guest_hostname`) — always
     /// present once the VM record exists, independent of lease state.
     pub hostname: String,
+    /// MicroNetwork this VM belongs to, or `None` for the built-in default
+    /// network. Fixed at creation — its lease comes out of that network's
+    /// subnet (`docs/task-micro-network.md`).
+    pub micro_network_id: Option<Uuid>,
+}
+
+/// Request body for `POST /api/micro-networks`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMicroNetworkRequest {
+    /// 1–64 chars, alphanumeric plus `.`/`_`/`-` (same convention as VM names).
+    pub name: String,
+    /// The network's own CIDR block (e.g. `172.31.0.0/24`) — just the
+    /// reserved address range, mirroring how an AWS VPC is created with a
+    /// CIDR block before any subnet/route table/gateway exists.
+    pub subnet_cidr: String,
+    /// Whether its VMs may reach the internet. Omitted means `true`, so a
+    /// client written before the toggle existed still gets the connected
+    /// network it expects.
+    #[serde(default = "internet_enabled_default")]
+    pub internet_enabled: bool,
+}
+
+/// Body for `PATCH /api/micro-networks/{id}`: flips one network's internet
+/// access, the equivalent of attaching or detaching an AWS internet gateway.
+/// Nothing else about a network is editable — its CIDR is what its VMs'
+/// addresses were handed out of.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpdateMicroNetworkRequest {
+    /// The new posture: `false` withholds NAT and drops anything this
+    /// network's VMs try to send outside it.
+    pub internet_enabled: bool,
+}
+
+/// Serde default for the `internet_enabled` fields: connected, which is what
+/// every MicroNetwork was before the toggle existed.
+fn internet_enabled_default() -> bool {
+    true
+}
+
+/// A MicroNetwork — one of firecrab's own virtual networks
+/// (`docs/task-micro-network.md`). A named CIDR reservation backed by a real
+/// host bridge; routing-table separation and VM membership are follow-up work.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkResponse {
+    /// Stable identifier.
+    pub id: Uuid,
+    /// User-supplied name.
+    pub name: String,
+    /// The network's reserved CIDR block.
+    pub subnet_cidr: String,
+    /// Its gateway — the first host address of `subnet_cidr`, which is also
+    /// the address its bridge holds on the host. Derived, never stored.
+    pub gateway: String,
+    /// Whether its VMs may reach anything outside Firecrab. `false` is a
+    /// closed network: no NAT, and nothing routed out of it
+    /// (`docs/task-micro-network.md`).
+    pub internet_enabled: bool,
 }
 
 /// Response for `GET /api/network`: the host network firecrab has set up,
@@ -238,6 +303,104 @@ pub struct NetworkInfoResponse {
     pub gateway: String,
     /// The host's outbound interface, resolved from its IPv4 default route.
     pub uplink: String,
+}
+
+/// Response for `GET /api/micro-networks/{id}`: one network broken out into
+/// the services it is actually made of, so the dashboard can show what a
+/// MicroNetwork gives a VM rather than just its name and CIDR
+/// (`docs/task-micro-network.md`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkDetailResponse {
+    /// Stable identifier — the id every host resource below is derived from.
+    pub id: Uuid,
+    /// User-supplied name.
+    pub name: String,
+    /// Address plan and how much of it is in use.
+    pub subnet: MicroNetworkSubnet,
+    /// The Linux bridge this network's VMs attach to.
+    pub bridge: MicroNetworkBridge,
+    /// Outbound address translation for this network's subnet.
+    pub nat: MicroNetworkNat,
+    /// The isolation rules that apply to traffic in this network.
+    pub firewall: MicroNetworkFirewall,
+    /// Every VM currently placed in this network.
+    pub vms: Vec<MicroNetworkVm>,
+}
+
+/// The address plan of a [`MicroNetworkDetailResponse`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkSubnet {
+    /// Reserved CIDR block.
+    pub cidr: String,
+    /// First host address, held by the bridge and handed to guests as their
+    /// default gateway.
+    pub gateway: String,
+    /// How many addresses can be handed out (network/gateway/broadcast are
+    /// reserved and never counted).
+    pub usable_addresses: u32,
+    /// How many of those are currently leased.
+    pub allocated_addresses: u32,
+    /// Where guests get their address from.
+    pub dhcp: String,
+}
+
+/// The host bridge backing a MicroNetwork.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkBridge {
+    /// Interface name, derived from the network id (never user-supplied).
+    pub name: String,
+    /// How many VM TAPs are expected on it — i.e. running VMs in this
+    /// network. A stopped VM keeps its address but has no TAP.
+    pub attached_taps: u32,
+}
+
+/// Outbound NAT for a MicroNetwork.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkNat {
+    /// Whether this network's subnet is masqueraded out of the host.
+    pub enabled: bool,
+    /// The host interface it egresses through.
+    pub uplink: String,
+    /// Masquerade source range.
+    pub source_cidr: String,
+}
+
+/// The isolation posture applied to a MicroNetwork's traffic. These are
+/// properties of the rendered ruleset, not per-network toggles — they are
+/// reported so the dashboard can state what is enforced instead of implying
+/// a network is unprotected just because nothing is shown.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkFirewall {
+    /// VMs inside this network cannot reach each other.
+    pub east_west_blocked: bool,
+    /// Traffic routed to any other Firecrab network is dropped.
+    pub cross_network_blocked: bool,
+    /// A VM may only send from its own leased IP/MAC.
+    pub anti_spoofing: bool,
+    /// Outbound posture is decided per VM (see [`MicroNetworkVm`]), not per
+    /// network — this names the default a new VM gets.
+    pub default_egress: EgressPolicy,
+}
+
+/// One VM's placement in a MicroNetwork.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkVm {
+    /// The VM's id.
+    pub id: Uuid,
+    /// Its name.
+    pub name: String,
+    /// Its lifecycle state.
+    pub state: VmState,
+    /// Its address in this network, if it currently holds a lease.
+    pub ipv4: Option<String>,
+    /// Its own outbound posture.
+    pub egress_policy: EgressPolicy,
 }
 
 /// Response for `GET /api/host`: point-in-time host resource usage, for a
@@ -446,6 +609,7 @@ mod tests {
             ipv4: Some("172.30.0.5".to_owned()),
             mac: Some("02:fc:00:00:00:05".to_owned()),
             hostname: "fc-abc123456789".to_owned(),
+            micro_network_id: None,
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
@@ -496,6 +660,7 @@ mod tests {
             ipv4: None,
             mac: None,
             hostname: "fc-abc123456789".to_owned(),
+            micro_network_id: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
@@ -540,5 +705,28 @@ mod tests {
             json,
             "{\"bridgeName\":\"fcbr0\",\"subnetCidr\":\"172.30.0.0/24\",\"gateway\":\"172.30.0.1\",\"uplink\":\"eth0\"}"
         );
+    }
+
+    #[test]
+    fn create_micro_network_request_deserializes_camel_case() {
+        let json = r#"{"name":"prod","subnetCidr":"172.31.0.0/24"}"#;
+        let request: CreateMicroNetworkRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.name, "prod");
+        assert_eq!(request.subnet_cidr, "172.31.0.0/24");
+    }
+
+    #[test]
+    fn micro_network_response_round_trips() {
+        let response = MicroNetworkResponse {
+            id: Uuid::from_u128(0x1234),
+            name: "prod".to_owned(),
+            subnet_cidr: "172.31.0.0/24".to_owned(),
+            gateway: "172.31.0.1".to_owned(),
+            internet_enabled: true,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: MicroNetworkResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, response);
+        assert!(json.contains("\"subnetCidr\":\"172.31.0.0/24\""));
     }
 }

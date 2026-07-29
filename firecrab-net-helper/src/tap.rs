@@ -7,7 +7,7 @@
 use std::io;
 use std::os::fd::AsRawFd;
 
-use firecrab_helper_protocol::network::tap_name;
+use firecrab_helper_protocol::network::{micro_network_bridge_name, tap_name};
 use futures_util::TryStreamExt;
 use rtnetlink::packet_route::link::{LinkAttribute, LinkMessage};
 use rtnetlink::{Handle, LinkUnspec, new_connection};
@@ -47,9 +47,12 @@ pub enum TapError {
     /// An rtnetlink request failed.
     #[error("rtnetlink operation failed")]
     Netlink(#[source] rtnetlink::Error),
-    /// The shared bridge hasn't been created yet.
-    #[error("bridge {BRIDGE_NAME} does not exist yet")]
-    MissingBridge,
+    /// The bridge this TAP should attach to hasn't been created yet.
+    #[error("bridge {name} does not exist yet")]
+    MissingBridge {
+        /// The bridge that was looked for.
+        name: String,
+    },
     /// The TAP device vanished between being created and being configured.
     #[error("TAP device {0} disappeared while it was being configured")]
     MissingAfterCreate(String),
@@ -82,8 +85,9 @@ fn owner_alias(vm_id: Uuid) -> String {
 /// creating a fresh device fails (missing bridge, the device vanishing, the
 /// alias/attach/up call itself), that fresh device is deleted again before
 /// returning the error, so a partial failure never leaves an orphaned TAP.
-pub async fn create_tap(vm_id: Uuid) -> Result<(), TapError> {
+pub async fn create_tap(vm_id: Uuid, micro_network_id: Option<Uuid>) -> Result<(), TapError> {
     let name = tap_name(vm_id);
+    let bridge = bridge_for(micro_network_id);
     let (connection, handle, _) = new_connection().map_err(TapError::Connection)?;
     tokio::spawn(connection);
 
@@ -101,7 +105,7 @@ pub async fn create_tap(vm_id: Uuid) -> Result<(), TapError> {
         }
     };
 
-    let result = attach_and_configure(&handle, &name, vm_id).await;
+    let result = attach_and_configure(&handle, &name, vm_id, &bridge).await;
     if result.is_err() && created_now {
         // Best-effort: a cleanup failure here must not mask the original
         // error, but a freshly-created device that we failed to finish
@@ -113,11 +117,25 @@ pub async fn create_tap(vm_id: Uuid) -> Result<(), TapError> {
     result
 }
 
-/// Looks up `name` and the shared bridge, then attaches/aliases/brings it up.
-async fn attach_and_configure(handle: &Handle, name: &str, vm_id: Uuid) -> Result<(), TapError> {
-    let bridge_index = find_link(handle, BRIDGE_NAME)
+/// The bridge a VM's TAP attaches to: its MicroNetwork's, or the default
+/// network's when it belongs to none. As everywhere else in this helper, the
+/// interface name is derived from an id rather than taken as a string.
+fn bridge_for(micro_network_id: Option<Uuid>) -> String {
+    micro_network_id.map_or_else(|| BRIDGE_NAME.to_owned(), micro_network_bridge_name)
+}
+
+/// Looks up `name` and its target bridge, then attaches/aliases/brings it up.
+async fn attach_and_configure(
+    handle: &Handle,
+    name: &str,
+    vm_id: Uuid,
+    bridge: &str,
+) -> Result<(), TapError> {
+    let bridge_index = find_link(handle, bridge)
         .await?
-        .ok_or(TapError::MissingBridge)?
+        .ok_or_else(|| TapError::MissingBridge {
+            name: bridge.to_owned(),
+        })?
         .header
         .index;
     let tap_index = find_link(handle, name)
@@ -250,6 +268,16 @@ fn create_persistent_device(name: &str) -> Result<(), TapError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_vm_attaches_to_its_own_micro_networks_bridge() {
+        let network = Uuid::from_u128(0x1234);
+        assert_eq!(
+            bridge_for(Some(network)),
+            micro_network_bridge_name(network)
+        );
+        assert_eq!(bridge_for(None), BRIDGE_NAME);
+    }
 
     #[test]
     fn owner_alias_embeds_the_vm_id() {

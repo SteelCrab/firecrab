@@ -6,14 +6,14 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{VmLogResponse, VmResponse};
-use firecrab_helper_protocol::network::DhcpLeaseEntry;
+use firecrab_helper_protocol::network::{DhcpLeaseEntry, MicroNetworkSpec};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::firecracker::{self, FirecrackerProcess, VmNetwork, VmProcess};
-use crate::ipam::IpamError;
+use crate::ipam::{IpamError, SubnetSpec};
 use crate::model::{
     CreateVmRequest, Lease, StartupStep, UpdateVmResourcesRequest, VmRecord, VmState,
 };
@@ -149,6 +149,7 @@ pub async fn create_vm(
         cpu: req.cpu,
         disk_gb: req.disk_gb,
         egress_policy: req.egress_policy,
+        micro_network_id: req.micro_network_id,
         state: VmState::Created,
         startup_step: None,
         package_update: None,
@@ -166,10 +167,21 @@ pub async fn create_vm(
 
     // Allocated up front (not on first start) so it persists across every
     // stop/start of this VM and is only ever freed by a successful delete —
-    // see Store::active_lease's doc comment.
+    // see Store::active_lease's doc comment. The subnet it comes from is the
+    // VM's MicroNetwork, so a VM can never hold an address its own bridge
+    // doesn't route.
+    let subnet = match resolve_subnet(&state, vm.micro_network_id, request_id.0).await {
+        Ok(subnet) => subnet,
+        Err(error) => {
+            let store = state.store.clone();
+            let vm_id = vm.id;
+            let _ = tokio::task::spawn_blocking(move || store.delete(vm_id)).await;
+            return Err(error);
+        }
+    };
     let store = state.store.clone();
     let vm_id = vm.id;
-    let lease = match tokio::task::spawn_blocking(move || store.allocate_lease(vm_id))
+    let lease = match tokio::task::spawn_blocking(move || store.allocate_lease(vm_id, subnet))
         .await
         .map_err(|_| AppError::internal(request_id.0))?
     {
@@ -609,7 +621,7 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     // Set up before the disk copy so a network failure fails fast, without
     // paying for a multi-GB copy first. Any failure *after* this succeeds
     // must tear the TAP + policy back down — see the loop below.
-    let network = setup_vm_network(state, vm.id, vm.egress_policy).await?;
+    let network = setup_vm_network(state, vm.id, vm.egress_policy, vm.micro_network_id).await?;
 
     let result = finish_run_start(state, vm, template, &network).await;
     if result.is_err() {
@@ -783,6 +795,7 @@ async fn setup_vm_network(
     state: &AppState,
     vm_id: Uuid,
     egress_policy: EgressPolicy,
+    micro_network_id: Option<Uuid>,
 ) -> Result<VmNetwork, String> {
     let store = state.store.clone();
     let lease = tokio::task::spawn_blocking(move || store.active_lease(vm_id))
@@ -791,25 +804,16 @@ async fn setup_vm_network(
         .map_err(|error| format!("lease lookup failed: {error}"))?
         .ok_or_else(|| format!("vm {vm_id} has no allocated lease"))?;
 
-    state
-        .network
-        .ensure_bridge()
-        .await
-        .map_err(|error| format!("ensure_bridge failed: {error}"))?;
-    state
-        .network
-        .ensure_firewall()
-        .await
-        .map_err(|error| format!("ensure_firewall failed: {error}"))?;
-    // Re-pushed on every start (not just create/delete) so a net-helper
-    // restart that lost its dnsmasq process gets it back — sync_dhcp_leases
-    // always sends the full current snapshot, so this is a harmless no-op
-    // when dnsmasq is already up to date.
-    sync_dhcp_leases(state).await?;
+    // Re-applied on every start, not just at create: bridges, nftables rules
+    // and dnsmasq's config do not survive a host reboot (or a net-helper
+    // restart), and a VM start is the one moment the network it needs has to
+    // genuinely exist. Unlike the same call at daemon startup, a failure here
+    // fails the start — this VM would have nowhere to attach.
+    crate::handlers::micro_networks::ensure_all_networks(state).await?;
 
     let tap_name = state
         .network
-        .create_tap(vm_id)
+        .create_tap(vm_id, micro_network_id)
         .await
         .map_err(|error| format!("tap creation failed: {error}"))?;
 
@@ -879,9 +883,112 @@ pub(crate) async fn sync_dhcp_leases(state: &AppState) -> Result<(), String> {
 
     state
         .network
-        .sync_dhcp_leases(revision, entries)
+        .sync_dhcp_leases(revision, entries, micro_network_specs(state).await?)
         .await
         .map_err(|error| format!("dhcp sync failed: {error}"))
+}
+
+/// Reinstalls the per-VM policy of every VM that is currently running.
+///
+/// A global firewall (re)apply flushes the owned tables, which takes every
+/// per-VM chain and verdict-map entry with it — the helper says as much by
+/// clearing its `applied_vms`. Without this, a VM that was running when a
+/// network was created, deleted or switched on/off would keep its TAP and
+/// its address but silently lose all egress until someone restarted it.
+pub(crate) async fn reapply_running_vm_policies(state: &AppState) -> Result<(), String> {
+    let store = state.store.clone();
+    let running = tokio::task::spawn_blocking(move || {
+        let vms = store.load_all()?;
+        let mut running = Vec::new();
+        for vm in vms.into_values().filter(|vm| vm.state == VmState::Running) {
+            // A running VM always has one; skipped rather than failed if not,
+            // since there is nothing to install for it either way.
+            if let Some(lease) = store.active_lease(vm.id).ok().flatten() {
+                running.push((vm.id, vm.egress_policy, lease));
+            }
+        }
+        Ok::<_, crate::persistence::PersistenceError>(running)
+    })
+    .await
+    .map_err(|error| format!("running vm lookup task failed: {error}"))?
+    .map_err(|error| format!("running vm lookup failed: {error}"))?;
+
+    for (vm_id, egress_policy, lease) in running {
+        state
+            .network
+            .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false)
+            .await
+            .map_err(|error| format!("policy reapply failed for vm {vm_id}: {error}"))?;
+    }
+    Ok(())
+}
+
+/// The current set of MicroNetworks in the shape the privileged helper takes
+/// them. Sent with every firewall/DHCP call because both render one rule (or
+/// dnsmasq interface) per network and need the complete set, not a delta.
+pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNetworkSpec>, String> {
+    let store = state.store.clone();
+    let networks = tokio::task::spawn_blocking(move || store.list_micro_networks())
+        .await
+        .map_err(|error| format!("micro network lookup task failed: {error}"))?
+        .map_err(|error| format!("micro network lookup failed: {error}"))?;
+
+    networks
+        .into_iter()
+        .map(|network| {
+            SubnetSpec::parse(Some(network.id), &network.subnet_cidr)
+                .and_then(|subnet| subnet.helper_spec(network.internet_enabled))
+                .ok_or_else(|| {
+                    format!(
+                        "micro network {} has an unparseable subnet {:?}",
+                        network.id, network.subnet_cidr
+                    )
+                })
+        })
+        .collect()
+}
+
+/// The subnet a new VM's lease comes from: its MicroNetwork's, or the
+/// default network's when it belongs to none. A MicroNetwork id that no
+/// longer exists is a client error, not an internal one — it usually means
+/// the network was deleted between the form loading and the VM being
+/// created.
+async fn resolve_subnet(
+    state: &AppState,
+    micro_network_id: Option<Uuid>,
+    request_id: Uuid,
+) -> Result<SubnetSpec, AppError> {
+    let Some(micro_network_id) = micro_network_id else {
+        return Ok(SubnetSpec::default_network());
+    };
+
+    let store = state.store.clone();
+    let network = tokio::task::spawn_blocking(move || store.micro_network(micro_network_id))
+        .await
+        .map_err(|_| AppError::internal(request_id))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id, %error, "failed to look up micro network");
+            AppError::internal(request_id)
+        })?
+        .ok_or_else(|| {
+            AppError::validation(
+                BTreeMap::from([(
+                    "microNetworkId".to_owned(),
+                    "no MicroNetwork with this id exists".to_owned(),
+                )]),
+                request_id,
+            )
+        })?;
+
+    SubnetSpec::parse(Some(network.id), &network.subnet_cidr).ok_or_else(|| {
+        tracing::error!(
+            request_id = %request_id,
+            micro_network_id = %network.id,
+            subnet_cidr = network.subnet_cidr,
+            "stored micro network subnet does not parse"
+        );
+        AppError::internal(request_id)
+    })
 }
 
 /// Records the current phase of an in-flight start so pollers can show *why*
@@ -957,6 +1064,7 @@ pub(crate) fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
         ipv4: lease.map(|lease| lease.ipv4.to_string()),
         mac: lease.map(|lease| lease.mac.to_string()),
         hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
+        micro_network_id: vm.micro_network_id,
     }
 }
 
@@ -1036,6 +1144,7 @@ pub(crate) mod test_support {
     use uuid::Uuid;
 
     use super::{AppState, VmRecord, VmState};
+    use crate::ipam::SubnetSpec;
     use crate::state::RuntimeConfig;
     use crate::templates::{TemplateRegistry, TemplateSpec};
 
@@ -1056,6 +1165,7 @@ pub(crate) mod test_support {
             // covered by `rootfs::tests::grows_a_real_ext4_filesystem_to_the_requested_size`.
             disk_gb: 0,
             egress_policy: Default::default(),
+            micro_network_id: None,
             startup_step: None,
             package_update: None,
         }
@@ -1122,12 +1232,16 @@ pub(crate) mod test_support {
     pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
         state.store.insert(vm).unwrap();
         state.vms.lock().unwrap().insert(vm.id, vm.clone());
-        state.store.allocate_lease(vm.id).unwrap();
+        state
+            .store
+            .allocate_lease(vm.id, SubnetSpec::default_network())
+            .unwrap();
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::ipam::SubnetSpec;
     use std::fs;
     use std::time::Duration;
 
@@ -1162,6 +1276,7 @@ mod tests {
             cpu: 1,
             disk_gb: 0,
             egress_policy: Default::default(),
+            micro_network_id: None,
         };
 
         let too_small = validate_create(&base, &state);
@@ -1907,7 +2022,87 @@ while True:
             cpu: 1,
             disk_gb: 2,
             egress_policy: Default::default(),
+            micro_network_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_vm_in_a_micro_network_leases_from_that_networks_subnet() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let (_, Json(network)) = crate::handlers::micro_networks::create_micro_network(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                name: "prod".to_owned(),
+                subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
+            }),
+        )
+        .await
+        .expect("create micro network");
+
+        let (_, Json(created)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateVmRequest {
+                micro_network_id: Some(network.id),
+                ..create_request("in-prod")
+            }),
+        )
+        .await
+        .expect("create vm");
+
+        assert_eq!(created.micro_network_id, Some(network.id));
+        assert_eq!(
+            created
+                .ipv4
+                .as_deref()
+                .map(|ip| ip.starts_with("172.31.0.")),
+            Some(true),
+            "lease must come from the MicroNetwork's subnet, not the default one: {:?}",
+            created.ipv4
+        );
+
+        // A VM with no MicroNetwork still lands on the default network.
+        let (_, Json(default_vm)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(create_request("in-default")),
+        )
+        .await
+        .expect("create vm");
+        assert_eq!(default_vm.micro_network_id, None);
+        assert!(
+            default_vm
+                .ipv4
+                .as_deref()
+                .is_some_and(|ip| ip.starts_with("172.30.0."))
+        );
+    }
+
+    #[tokio::test]
+    async fn creating_a_vm_in_an_unknown_micro_network_is_rejected_without_a_record() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateVmRequest {
+                micro_network_id: Some(Uuid::new_v4()),
+                ..create_request("orphan")
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        assert!(
+            state.store.load_all().unwrap().is_empty(),
+            "a rejected create must not leave the VM record behind"
+        );
     }
 
     #[tokio::test]
@@ -1947,7 +2142,10 @@ while True:
         // Exhaust the 253-address pool so the lease allocation inside
         // create_vm fails after the VM record has already been inserted.
         for _ in 0..253 {
-            state.store.allocate_lease(Uuid::new_v4()).unwrap();
+            state
+                .store
+                .allocate_lease(Uuid::new_v4(), SubnetSpec::default_network())
+                .unwrap();
         }
 
         let result = create_vm(

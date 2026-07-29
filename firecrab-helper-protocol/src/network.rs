@@ -30,6 +30,22 @@ pub fn tap_name(vm_id: Uuid) -> String {
     name
 }
 
+/// Prefix for a MicroNetwork's deterministic bridge interface name.
+pub const MICRO_NETWORK_BRIDGE_PREFIX: &str = "mnb";
+
+/// The deterministic bridge interface name for a MicroNetwork (mirrors
+/// [`tap_name`]'s construction and its reasoning — the helper derives every
+/// interface name itself from a trusted id, never from a name string the API
+/// supplies).
+pub fn micro_network_bridge_name(micro_network_id: Uuid) -> String {
+    let digest = Sha256::digest(micro_network_id.as_bytes());
+    let mut name = String::from(MICRO_NETWORK_BRIDGE_PREFIX);
+    for byte in &digest[..6] {
+        name.push_str(&format!("{byte:02x}"));
+    }
+    name
+}
+
 /// The deterministic guest hostname for a VM: `fc-` plus 12 hex digits of
 /// `sha256(vm_id)` (same construction as [`tap_name`], so two different
 /// `vm_id`s can't collide just because they happen to share high-order
@@ -103,12 +119,42 @@ impl<'de> Deserialize<'de> for MacAddr {
 pub enum NetworkRequest {
     /// Idempotently ensure the shared bridge/subnet/gateway exist.
     EnsureBridge,
-    /// Idempotently (re)apply the owned nftables tables.
-    EnsureFirewall,
+    /// Idempotently ensure a MicroNetwork's own bridge/subnet/gateway exist
+    /// (`docs/task-micro-network.md`). The interface name is derived from
+    /// `micro_network_id` (see [`micro_network_bridge_name`]), never taken
+    /// as a string from the API — only the numeric gateway/prefix, which
+    /// carry no shell/nftables injection surface, cross the boundary
+    /// (mirrors `ApplyVmPolicy`'s `ipv4` field).
+    EnsureMicroNetworkBridge {
+        /// The MicroNetwork this bridge belongs to.
+        micro_network_id: Uuid,
+        /// The bridge's own address on its subnet (the MicroNetwork's
+        /// implicit router, same role as the default network's gateway).
+        gateway: Ipv4Addr,
+        /// CIDR prefix length of the MicroNetwork's subnet.
+        prefix: u8,
+    },
+    /// Removes a MicroNetwork's bridge; a no-op if it's already gone.
+    RemoveMicroNetworkBridge {
+        /// The MicroNetwork whose bridge should be removed.
+        micro_network_id: Uuid,
+    },
+    /// Idempotently (re)apply the owned nftables tables. `micro_networks`
+    /// is the full current set, so the helper can render one NAT/dispatch
+    /// rule per network and default-deny traffic routed between them; the
+    /// built-in default network is always included by the helper itself and
+    /// never listed here.
+    EnsureFirewall {
+        /// Every MicroNetwork that currently exists.
+        micro_networks: Vec<MicroNetworkSpec>,
+    },
     /// Create and attach a TAP device for a starting VM.
     CreateTap {
         /// The VM the TAP belongs to.
         vm_id: Uuid,
+        /// The MicroNetwork whose bridge to attach to, or `None` for the
+        /// built-in default network.
+        micro_network_id: Option<Uuid>,
     },
     /// Remove a VM's TAP device.
     DeleteTap {
@@ -143,7 +189,63 @@ pub enum NetworkRequest {
         revision: u64,
         /// Every currently-active lease.
         leases: Vec<DhcpLeaseEntry>,
+        /// Every MicroNetwork that currently exists, so dnsmasq can serve
+        /// each one's bridge. As with [`NetworkRequest::EnsureFirewall`],
+        /// the default network is added by the helper itself.
+        micro_networks: Vec<MicroNetworkSpec>,
     },
+}
+
+/// One MicroNetwork's host-facing parameters. Deliberately carries no
+/// interface name or CIDR text: the helper derives the bridge name from
+/// `micro_network_id` (see [`micro_network_bridge_name`]) and the subnet from
+/// `gateway`/`prefix`, so nothing the API sends is ever spliced into an
+/// `ip link` or nftables argument as-is.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MicroNetworkSpec {
+    /// The MicroNetwork this describes.
+    pub micro_network_id: Uuid,
+    /// Its gateway address (the bridge's own address on its subnet).
+    pub gateway: Ipv4Addr,
+    /// Its subnet's CIDR prefix length.
+    pub prefix: u8,
+    /// Whether this network's VMs may reach anything outside Firecrab
+    /// (AWS's "is an internet gateway attached to this VPC"). `false`
+    /// withholds both the masquerade rule and the forward permission, so
+    /// nothing leaves the network at L3 — DHCP/DNS from its own gateway are
+    /// unaffected, being host-local rather than forwarded. Defaults to `true`
+    /// when absent so an older API, which has no such concept, keeps the
+    /// behavior every network had before this field existed.
+    #[serde(default = "internet_enabled_default")]
+    pub internet_enabled: bool,
+}
+
+/// Serde default for [`MicroNetworkSpec::internet_enabled`].
+fn internet_enabled_default() -> bool {
+    true
+}
+
+impl MicroNetworkSpec {
+    /// Network (base) address of this MicroNetwork's subnet.
+    pub fn network_address(&self) -> Ipv4Addr {
+        let mask = if self.prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - u32::from(self.prefix.min(32)))
+        };
+        Ipv4Addr::from(u32::from(self.gateway) & mask)
+    }
+
+    /// The subnet in `<network>/<prefix>` CIDR notation, built from typed
+    /// values rather than any caller-supplied text.
+    pub fn subnet_cidr(&self) -> String {
+        format!("{}/{}", self.network_address(), self.prefix)
+    }
+
+    /// The deterministic name of this MicroNetwork's bridge interface.
+    pub fn bridge_name(&self) -> String {
+        micro_network_bridge_name(self.micro_network_id)
+    }
 }
 
 /// One VM's reservation for [`NetworkRequest::SyncDhcpLeases`]. No hostname
@@ -246,6 +348,25 @@ mod tests {
     }
 
     #[test]
+    fn micro_network_bridge_name_is_deterministic_and_within_ifnamsiz() {
+        let network = Uuid::from_u128(0x1234);
+        assert_eq!(
+            micro_network_bridge_name(network),
+            micro_network_bridge_name(network)
+        );
+        assert!(
+            micro_network_bridge_name(network).len() <= 15,
+            "{}",
+            micro_network_bridge_name(network)
+        );
+        assert!(micro_network_bridge_name(network).starts_with(MICRO_NETWORK_BRIDGE_PREFIX));
+        assert_ne!(
+            micro_network_bridge_name(network),
+            micro_network_bridge_name(Uuid::from_u128(0x1235))
+        );
+    }
+
+    #[test]
     fn guest_hostname_is_deterministic_and_distinct_per_vm() {
         let vm = Uuid::from_u128(0x1234);
         assert_eq!(guest_hostname(vm), guest_hostname(vm));
@@ -268,7 +389,11 @@ mod tests {
 
     #[test]
     fn requests_serialize_with_snake_case_operation_tags() {
-        let json = serde_json::to_value(NetworkRequest::CreateTap { vm_id: Uuid::nil() }).unwrap();
+        let json = serde_json::to_value(NetworkRequest::CreateTap {
+            vm_id: Uuid::nil(),
+            micro_network_id: None,
+        })
+        .unwrap();
         assert_eq!(json["operation"], "create_tap");
 
         let envelope = NetworkRequestEnvelope::new(Uuid::nil(), NetworkRequest::EnsureBridge);
@@ -284,10 +409,68 @@ mod tests {
                 ipv4: "172.30.0.5".parse().unwrap(),
                 mac: "02:fc:00:00:00:05".parse().unwrap(),
             }],
+            micro_networks: vec![MicroNetworkSpec {
+                micro_network_id: Uuid::from_u128(0x1234),
+                gateway: "172.31.0.1".parse().unwrap(),
+                prefix: 24,
+                internet_enabled: true,
+            }],
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "sync_dhcp_leases");
         assert_eq!(json["revision"], 3);
+        assert_eq!(
+            serde_json::from_value::<NetworkRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn micro_network_spec_derives_its_subnet_from_gateway_and_prefix() {
+        let spec = MicroNetworkSpec {
+            micro_network_id: Uuid::from_u128(0x1234),
+            gateway: "172.31.5.1".parse().unwrap(),
+            prefix: 24,
+            internet_enabled: true,
+        };
+        assert_eq!(
+            spec.network_address(),
+            "172.31.5.0".parse::<Ipv4Addr>().unwrap()
+        );
+        assert_eq!(spec.subnet_cidr(), "172.31.5.0/24");
+        assert_eq!(
+            spec.bridge_name(),
+            micro_network_bridge_name(spec.micro_network_id)
+        );
+
+        // A /16 masks off the third octet too.
+        let wide = MicroNetworkSpec { prefix: 16, ..spec };
+        assert_eq!(wide.subnet_cidr(), "172.31.0.0/16");
+    }
+
+    #[test]
+    fn a_spec_without_internet_enabled_keeps_the_pre_toggle_behavior() {
+        // An API built before the toggle existed sends no such field, and
+        // every network it knows about is on the internet.
+        let spec: MicroNetworkSpec = serde_json::from_value(serde_json::json!({
+            "micro_network_id": Uuid::nil(),
+            "gateway": "172.31.0.1",
+            "prefix": 24,
+        }))
+        .expect("a spec without the field must still deserialize");
+        assert!(spec.internet_enabled);
+    }
+
+    #[test]
+    fn ensure_micro_network_bridge_serializes_with_its_operation_tag() {
+        let request = NetworkRequest::EnsureMicroNetworkBridge {
+            micro_network_id: Uuid::nil(),
+            gateway: "172.31.0.1".parse().unwrap(),
+            prefix: 24,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "ensure_micro_network_bridge");
+        assert_eq!(json["prefix"], 24);
         assert_eq!(
             serde_json::from_value::<NetworkRequest>(json).unwrap(),
             request

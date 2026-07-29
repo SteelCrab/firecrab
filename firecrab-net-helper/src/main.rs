@@ -27,7 +27,8 @@ mod tap;
 use firecrab_helper_protocol::PROTOCOL_VERSION;
 use firecrab_helper_protocol::framing::{read_frame, write_frame};
 use firecrab_helper_protocol::network::{
-    HelperFailure, NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope,
+    HelperFailure, MicroNetworkSpec, NetworkRequest, NetworkRequestEnvelope,
+    NetworkResponseEnvelope,
 };
 use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
@@ -294,6 +295,30 @@ async fn respond_to(
     }
 }
 
+/// Sanity bound on a prefix length that ultimately comes from user input (a
+/// MicroNetwork's subnet CIDR) — the helper is the trust boundary and
+/// re-validates rather than assuming the API's own check already caught it
+/// (same reasoning as `egress_policy`'s allowlist lookup). 30 leaves at
+/// least 2 host addresses; 8 keeps the reserved range from swallowing most
+/// of the host's own address space.
+fn validate_prefix(prefix: u8) -> Result<(), HelperFailure> {
+    if (8..=30).contains(&prefix) {
+        Ok(())
+    } else {
+        Err(HelperFailure::InvalidRequest {
+            detail: format!("prefix {prefix} is out of the accepted 8-30 range"),
+        })
+    }
+}
+
+/// Same check across a whole network set, applied before any of it is
+/// rendered into an nftables ruleset or a dnsmasq config.
+fn validate_micro_networks(micro_networks: &[MicroNetworkSpec]) -> Result<(), HelperFailure> {
+    micro_networks
+        .iter()
+        .try_for_each(|network| validate_prefix(network.prefix))
+}
+
 /// Routes a validated request to the matching bridge/firewall operation.
 async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), HelperFailure> {
     match request {
@@ -304,11 +329,40 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: error_chain(&error),
                 })
         }
-        NetworkRequest::EnsureFirewall => firewall::ensure_firewall(&config.firewall)
-            .await
-            .map_err(|error| HelperFailure::Internal {
-                detail: error_chain(&error),
-            }),
+        NetworkRequest::EnsureMicroNetworkBridge {
+            micro_network_id,
+            gateway,
+            prefix,
+        } => {
+            // Sanity bound on a value that ultimately comes from user input
+            // (a MicroNetwork's subnet CIDR) — the helper is the trust
+            // boundary and re-validates rather than assuming the API's own
+            // check already caught it (same reasoning as egress_policy's
+            // allowlist lookup below). 30 leaves at least 2 host addresses;
+            // 8 keeps the reserved range from swallowing most of the host's
+            // own address space.
+            validate_prefix(prefix)?;
+            bridge::ensure_micro_network_bridge(&config.bridge, micro_network_id, gateway, prefix)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
+        NetworkRequest::RemoveMicroNetworkBridge { micro_network_id } => {
+            bridge::delete_micro_network_bridge(&config.bridge, micro_network_id)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
+        NetworkRequest::EnsureFirewall { micro_networks } => {
+            validate_micro_networks(&micro_networks)?;
+            firewall::ensure_firewall(&config.firewall, &micro_networks)
+                .await
+                .map_err(|error| HelperFailure::Internal {
+                    detail: error_chain(&error),
+                })
+        }
         NetworkRequest::ApplyVmPolicy {
             vm_id,
             ipv4,
@@ -343,13 +397,14 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: error_chain(&error),
                 })
         }
-        NetworkRequest::CreateTap { vm_id } => {
-            tap::create_tap(vm_id)
-                .await
-                .map_err(|error| HelperFailure::Internal {
-                    detail: error_chain(&error),
-                })
-        }
+        NetworkRequest::CreateTap {
+            vm_id,
+            micro_network_id,
+        } => tap::create_tap(vm_id, micro_network_id)
+            .await
+            .map_err(|error| HelperFailure::Internal {
+                detail: error_chain(&error),
+            }),
         NetworkRequest::DeleteTap { vm_id } => {
             tap::delete_tap(vm_id)
                 .await
@@ -357,8 +412,13 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: error_chain(&error),
                 })
         }
-        NetworkRequest::SyncDhcpLeases { revision, leases } => {
-            dhcp::sync_dhcp_leases(&config.dhcp, revision, &leases)
+        NetworkRequest::SyncDhcpLeases {
+            revision,
+            leases,
+            micro_networks,
+        } => {
+            validate_micro_networks(&micro_networks)?;
+            dhcp::sync_dhcp_leases(&config.dhcp, revision, &leases, &micro_networks)
                 .await
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),
@@ -454,6 +514,25 @@ mod tests {
             dispatch(request, &config).await,
             Err(HelperFailure::InvalidRequest { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn ensure_micro_network_bridge_rejects_an_out_of_range_prefix_as_invalid_request() {
+        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        for prefix in [0, 7, 31, 32] {
+            let request = NetworkRequest::EnsureMicroNetworkBridge {
+                micro_network_id: Uuid::nil(),
+                gateway: "172.31.0.1".parse().unwrap(),
+                prefix,
+            };
+            assert!(
+                matches!(
+                    dispatch(request, &config).await,
+                    Err(HelperFailure::InvalidRequest { .. })
+                ),
+                "prefix {prefix} should have been rejected"
+            );
+        }
     }
 
     #[tokio::test]
