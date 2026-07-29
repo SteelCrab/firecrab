@@ -4,18 +4,20 @@ tags:
   - week4
   - micro-network
   - micro-storage
+  - m2image
+  - host
   - isolation
   - observability
 status: 진행 중
 updated: 2026-07-29
 ---
 
-# 4주차 — MicroNetwork, MicroStorage, Isolation, Observability
+# 4주차 — MicroNetwork · MicroStorage · M2Image · Host · 격리 · 관측
 
 > [!summary] 목표
-> [MicroNetwork](task-micro-network.md)의 격리를 규칙이 아닌 구조로 끌어올리고,
-> 스토리지를 고를 수 있게 만들고,
-> Firecracker 실행 경계와 관측을 갖춘다.
+> 3주차까지 "동작하는 것"을 만들었다면, 4주차는 **남에게 넘길 수 있는 것**으로 만든다.
+> 설치(Host)·이미지(M2Image)·스토리지 선택을 갖추고,
+> MicroNetwork 격리를 규칙이 아닌 구조로 끌어올리고, 실행 경계와 관측을 붙인다.
 > snapshot은 [7주차](week7-tasks.md)로 이월 — 격리·관측이 없으면 실패를 진단할 수 없기 때문.
 
 ## 개념 참조
@@ -25,7 +27,7 @@ updated: 2026-07-29
 | EC2 | **M2 (MicroMachine)** | MicroVM 기반 컴퓨팅 |
 | VPC | **MicroNetwork** | 가상 네트워크 |
 | EBS | **MicroStorage** | 영구 스토리지 |
-| AMI | **MicroImage** | 인스턴스 이미지 |
+| AMI | **M2Image** | 인스턴스 이미지 |
 | Snapshot | **Snapshot** | 스토리지 백업 |
 | RDS | **MicroDB** | 관리형 데이터베이스 |
 
@@ -33,8 +35,29 @@ updated: 2026-07-29
 
 - 문서의 코드 조각은 설계 골격 — 지원 Firecracker·kernel·crate 버전으로 compile/KVM 테스트 후 적용
 - 각 항목의 작업 내용·완료 기준·산출물은 링크된 task 문서에 있음
-- MicroStorage → MicroNetwork → 격리 → 관측 순서. 그다음이 snapshot([7주차](week7-tasks.md))
+- Host → MicroStorage → MicroNetwork → M2Image → 격리 → 관측 순서.
+  그다음이 snapshot([7주차](week7-tasks.md))
+- Host가 먼저인 이유: 데몬으로 안 뜨면 나머지를 재부팅·재현 환경에서 검증할 수 없음
 - MicroNetwork는 [3주차](week3-tasks.md)에서 쓸 수 있는 상태까지 갔고, 4주차는 그 격리를 단단하게 하는 단계
+
+## Host — 설치·데몬 기반
+
+지금 firecrab은 터미널 **3개**(net-helper / API / 프론트 dev 서버)를 손으로 띄우는 상태다.
+재부팅하면 아무것도 안 뜨고, 새 머신에 올리려면 문서를 보며 여러 단계를 밟아야 한다.
+목표는 **설치 한 번 + 데몬 2개**.
+
+- [ ] [Host 설치 — `install.sh`](task-host-install-script.md)
+      — 의존성 점검, 계정·디렉터리·권한, 바이너리 배치, `--uninstall`
+      — 재실행해도 같은 결과(idempotent)
+- [ ] [Host 데몬 — systemd 유닛](task-host-systemd-daemons.md)
+      — helper → API 순서 보장, 재시작 정책, `WorkingDirectory` 고정(옛 DB 여는 사고 방지)
+      — 재부팅 후 사람 개입 없이 MicroNetwork bridge까지 복구될 것
+- [ ] [프론트엔드 서빙](task-host-frontend-serving.md)
+      — 빌드된 `dist/`를 API가 직접 서빙(`ServeDir` + SPA fallback), Vite dev 서버 없이 동작
+      — same-origin이 되므로 CORS 허용 origin 설정도 필요 없어짐
+- [ ] [Host 진단 — `firecrab doctor`](task-host-doctor.md)
+      — KVM·ip_forward·nft·dnsmasq·UFW·소켓 권한·이미지 digest를 한 번에 점검
+      — 지금까지의 실패가 대부분 코드가 아니라 host 설정이었음
 
 ## MicroStorage — 영구 스토리지
 
@@ -67,9 +90,25 @@ updated: 2026-07-29
 - [ ] [2계층 분리 (MicroNetwork / Subnet)](task-micro-network.md) — 조건부 보류
       — 멀티 host 확장이나 용도별 대역이 필요해지면 재검토
 
+## M2Image — 인스턴스 이미지
+
+서버에 [템플릿 레지스트리](task-template-registry.md)가 있는데도 대시보드의 목록은
+프론트엔드 코드 상수다. 이미지를 코드 수정 없이 다룰 수 있게 만든다.
+
+- [ ] [M2Image 카탈로그 API](task-m2image-catalog-api.md)
+      — `GET /api/images`로 레지스트리 노출, `CreateVm.tsx`의 하드코딩 목록 제거
+- [ ] [M2Image 등록·삭제](task-m2image-registration.md)
+      — 재빌드·재시작 없이 이미지 추가, 사용 중인 이미지는 삭제 거부
+- [ ] [M2Image 캡처](task-m2image-capture-from-vm.md)
+      — 설정을 끝낸 VM의 디스크를 새 이미지로(AMI 생성 대응). hostname·SSH host key 정리 포함
+
+> [!note] 재현 가능한 빌드는 5주차
+> 이미지의 서명·승격·재현 빌드는 [5주차](week5-tasks.md) 범위.
+> 4주차는 "있는 이미지를 다룰 수 있게" 까지.
+
 ## Firecracker - 실행 격리
 
-MicroNetwork가 네트워크 경계라면, 여기는 프로세스·파일시스템 경계.
+ 프로세스·파일시스템 경계.
 
 - [ ] [Firecracker Jailer 격리](task-firecracker-jailer-isolation.md)
       — VM별 chroot + 비특권 UID/GID. API는 root가 아니어야 함
@@ -107,18 +146,3 @@ MicroNetwork가 네트워크 경계라면, 여기는 프로세스·파일시스�
 - [ ] [패키지 최신 상태 확인·알림](task-package-update-notification.md)
       — guest agent가 패키지 버전을 구조화된 형태로 보고(AWS SSM Patch Compliance 대응)
       — 지금은 콘솔 텍스트 파싱 방식의 실행 API만 있음
-
-## 이월 정리 (2026-07-29)
-
-2주차 이월 목록을 없애고 각 항목을 필요한 주차로 보냈다.
-
-| 항목 | 어디로 | 왜 |
-|---|---|---|
-| lifecycle event log API | 4주차 관측 | 대시보드가 "왜 error인지" 보여주려면 필요 |
-| SQLite 확장 스키마 | 4주차 관측 | 위 이벤트 로그의 저장소 |
-| pidfd process identity 복구 | 4주차 실행 격리 | 프로세스 경계 문제 |
-| lifecycle 통합 테스트 suite | 4주차 통합 테스트 | 이번 주차 변경을 덮는 회귀망 |
-| disk generation·artifact ledger | 4주차 MicroStorage | 스토리지 세대 관리 |
-| 202 비동기 + idempotency 계약 | [7주차](week7-tasks.md) | snapshot 비동기 API의 선행 작업 |
-| cursor pagination | [5주차](week5-tasks.md) | 운영 규모에서 필요, 이번 주차 목표와 무관 |
-| soft delete | [5주차](week5-tasks.md) | 삭제 추적은 운영·감사 범위 |
