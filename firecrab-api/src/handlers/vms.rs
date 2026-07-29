@@ -804,32 +804,12 @@ async fn setup_vm_network(
         .map_err(|error| format!("lease lookup failed: {error}"))?
         .ok_or_else(|| format!("vm {vm_id} has no allocated lease"))?;
 
-    let micro_networks = micro_network_specs(state).await?;
-    state
-        .network
-        .ensure_bridge()
-        .await
-        .map_err(|error| format!("ensure_bridge failed: {error}"))?;
-    // Every MicroNetwork's bridge is re-ensured here, not only at create:
-    // bridges do not survive a host reboot, and a VM start is the one moment
-    // the network it needs has to genuinely exist.
-    for network in &micro_networks {
-        state
-            .network
-            .ensure_micro_network_bridge(network.micro_network_id, network.gateway, network.prefix)
-            .await
-            .map_err(|error| format!("ensure_micro_network_bridge failed: {error}"))?;
-    }
-    state
-        .network
-        .ensure_firewall(micro_networks.clone())
-        .await
-        .map_err(|error| format!("ensure_firewall failed: {error}"))?;
-    // Re-pushed on every start (not just create/delete) so a net-helper
-    // restart that lost its dnsmasq process gets it back — sync_dhcp_leases
-    // always sends the full current snapshot, so this is a harmless no-op
-    // when dnsmasq is already up to date.
-    sync_dhcp_leases(state).await?;
+    // Re-applied on every start, not just at create: bridges, nftables rules
+    // and dnsmasq's config do not survive a host reboot (or a net-helper
+    // restart), and a VM start is the one moment the network it needs has to
+    // genuinely exist. Unlike the same call at daemon startup, a failure here
+    // fails the start — this VM would have nowhere to attach.
+    crate::handlers::micro_networks::ensure_all_networks(state).await?;
 
     let tap_name = state
         .network

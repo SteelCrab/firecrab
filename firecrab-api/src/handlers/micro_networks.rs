@@ -235,25 +235,53 @@ async fn overlapping_network(
     }))
 }
 
-/// Re-pushes the firewall ruleset and DHCP config for the current set of
-/// MicroNetworks. Best-effort: a failure here leaves the just-created
-/// network without working DHCP/NAT until the next VM start re-pushes the
-/// same snapshot, which is a degraded network rather than a wrong one — so
-/// it is logged instead of failing (and rolling back) an otherwise
-/// successful create.
-async fn apply_network_services(state: &AppState, request_id: Uuid) {
-    let specs = match crate::handlers::vms::micro_network_specs(state).await {
-        Ok(specs) => specs,
-        Err(error) => {
-            tracing::warn!(request_id = %request_id, error, "micro network snapshot failed");
-            return;
-        }
-    };
-    if let Err(error) = state.network.ensure_firewall(specs).await {
-        tracing::warn!(request_id = %request_id, %error, "firewall resync failed");
+/// Brings every network's host resources back to the desired state: the
+/// default bridge, one bridge per MicroNetwork, the nftables ruleset and
+/// dnsmasq's served interfaces. None of that survives a host reboot — they
+/// are kernel objects and a child process — so it is re-applied rather than
+/// assumed. Every step is idempotent, so calling this repeatedly (at daemon
+/// start, on every VM start, after a network is created or deleted) costs
+/// nothing when things are already in place.
+pub(crate) async fn ensure_all_networks(state: &AppState) -> Result<(), String> {
+    let micro_networks = crate::handlers::vms::micro_network_specs(state).await?;
+
+    state
+        .network
+        .ensure_bridge()
+        .await
+        .map_err(|error| format!("ensure_bridge failed: {error}"))?;
+    for network in &micro_networks {
+        state
+            .network
+            .ensure_micro_network_bridge(network.micro_network_id, network.gateway, network.prefix)
+            .await
+            .map_err(|error| {
+                format!(
+                    "ensure_micro_network_bridge failed for {}: {error}",
+                    network.micro_network_id
+                )
+            })?;
     }
-    if let Err(error) = crate::handlers::vms::sync_dhcp_leases(state).await {
-        tracing::warn!(request_id = %request_id, error, "dhcp resync failed");
+    // Both are rendered from the full network set, so they have to be
+    // re-pushed whenever that set might have changed — a bridge on its own
+    // carries no traffic: without a dnsmasq range a VM on it never gets an
+    // address, and without a NAT rule it never reaches the uplink.
+    state
+        .network
+        .ensure_firewall(micro_networks)
+        .await
+        .map_err(|error| format!("ensure_firewall failed: {error}"))?;
+    crate::handlers::vms::sync_dhcp_leases(state).await
+}
+
+/// [`ensure_all_networks`] for callers that must not fail because of it: a
+/// created network is already persisted and provisioned, and a deleted one
+/// is already gone, so a failure here degrades the network (no DHCP/NAT
+/// until the next VM start re-pushes the same snapshot) rather than making
+/// the request wrong. Logged instead of rolled back.
+async fn apply_network_services(state: &AppState, request_id: Uuid) {
+    if let Err(error) = ensure_all_networks(state).await {
+        tracing::warn!(request_id = %request_id, error, "network service resync failed");
     }
 }
 
@@ -564,6 +592,61 @@ mod tests {
             other_detail.vms.is_empty(),
             "a VM must only show up under its own network"
         );
+    }
+
+    #[tokio::test]
+    async fn reconcile_reprovisions_every_network_including_ones_with_no_vms() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .expect("empty template spec list should always verify");
+        let state = AppState::with_db_file(templates, directory.path().join("state.db"))
+            .await
+            .expect("fresh temp db should open cleanly");
+        let socket_path = directory.path().join("net-helper.sock");
+        let (_task, log) = crate::network::test_support::spawn_recording_helper(&socket_path, None);
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
+        let first = create_network(&state, "prod", "172.31.0.0/24").await;
+        let second = create_network(&state, "stage", "172.32.0.0/24").await;
+        log.lock().unwrap().clear();
+
+        // Neither network has a VM in it, so nothing else would ever touch
+        // them again — a host reboot would leave both bridges gone.
+        ensure_all_networks(&state).await.expect("reconcile");
+
+        let operations = log.lock().unwrap().clone();
+        assert_eq!(
+            operations
+                .iter()
+                .filter(|op| **op == "ensure_micro_network_bridge")
+                .count(),
+            2,
+            "each MicroNetwork's bridge must be re-ensured: {operations:?}"
+        );
+        assert!(operations.contains(&"ensure_bridge"), "{operations:?}");
+        assert!(operations.contains(&"ensure_firewall"), "{operations:?}");
+        assert!(operations.contains(&"sync_dhcp_leases"), "{operations:?}");
+        // Sanity: the two really are distinct networks, not one counted twice.
+        assert_ne!(first.id, second.id);
+    }
+
+    #[tokio::test]
+    async fn reconcile_reports_a_helper_failure_instead_of_swallowing_it() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .expect("empty template spec list should always verify");
+        let state = AppState::with_db_file(templates, directory.path().join("state.db"))
+            .await
+            .expect("fresh temp db should open cleanly");
+        let socket_path = directory.path().join("net-helper.sock");
+        crate::network::test_support::spawn_recording_helper(&socket_path, Some("ensure_bridge"));
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
+        // A VM start propagates this; only the daemon-startup caller logs it.
+        let error = ensure_all_networks(&state).await.unwrap_err();
+        assert!(error.contains("ensure_bridge"), "{error}");
     }
 
     #[tokio::test]

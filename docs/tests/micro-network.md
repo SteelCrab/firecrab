@@ -50,12 +50,12 @@ cargo test -p firecrab-helper-protocol network::        # 10
 cargo test -p firecrab-net-helper firewall::            # 19
 cargo test -p firecrab-net-helper dhcp::                # 17
 cargo test -p firecrab-net-helper tap::                 #  3
-cargo test -p firecrab-api handlers::micro_networks::   # 13
+cargo test -p firecrab-api handlers::micro_networks::   # 15
 cargo test -p firecrab-api ipam::                       # 11
 cargo test -p firecrab-api handlers::vms::              # 45
 ```
 
-전체: `cargo test --workspace` → 146/20/15/54
+전체: `cargo test --workspace` → 148/20/15/54
 
 ## 확인 항목 (자동 테스트가 덮는 범위)
 
@@ -81,6 +81,7 @@ cargo test -p firecrab-api handlers::vms::              # 45
 - tap: `micro_network_id`가 있으면 그 네트워크 bridge, 없으면 `fcbr0`
 - ipam: lease가 소속 네트워크 CIDR에서 나옴, 기본 네트워크 VM은 `172.30.0.x` 유지
 - helper: `prefix`를 8~30으로 재검증(API의 16~28과 별개, 신뢰 경계)
+- 재적용: VM이 없는 네트워크까지 bridge를 다시 ensure하고, helper 실패는 삼키지 않고 전달
 
 ## 수동 확인 (root 필요)
 
@@ -166,6 +167,15 @@ ip link show master $(ip -br link show type bridge | grep mnb | head -1 | cut -d
 #    ip -4 addr show eth0   → 172.31.0.x
 #    ping -c2 <gateway>     → 172.31.0.1 응답
 #    ping -c2 1.1.1.1       → NAT 통과
+```
+
+### 재적용 확인 (재부팅 복구)
+
+```sh
+# VM이 하나도 없는 네트워크의 bridge를 강제로 없앤 뒤 API만 재시작하면 되살아나야 한다
+sudo ip link delete <mnb브리지>
+pkill -x firecrab-api && cargo run -p firecrab-api
+ip -br addr show type bridge | grep mnb     # 주소까지 그대로 복구
 ```
 
 ### 격리 확인

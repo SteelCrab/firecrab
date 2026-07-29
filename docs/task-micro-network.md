@@ -58,8 +58,9 @@
   attach, 생성 폼에 MicroNetwork 선택 추가
 - **삭제 가드**: active lease가 있는 MicroNetwork는 `409`로 삭제 거부
 - **겹침 검증**: 기존 MicroNetwork·기본 네트워크와 겹치는 CIDR은 필드 검증 오류로 거부
-- **재적용(부분)**: VM 시작 때마다 모든 MicroNetwork bridge를 다시 ensure — 재부팅으로
-  사라진 bridge가 복구됨
+- **재적용**: `ensure_all_networks()`가 기본 bridge + 모든 MicroNetwork bridge + 방화벽 +
+  DHCP를 한 번에 되살림. daemon 시작 시 1회(best-effort, helper가 아직 없어도 API는 뜸)와
+  VM 시작 때마다(실패하면 start 실패) 호출 — VM이 하나도 없는 네트워크도 재부팅 후 복구됨
 - **상세 조회**: `GET /api/micro-networks/{id}` — 네트워크 ID, 서브넷(CIDR/gateway/주소
   사용량/DHCP), 브릿지(이름/TAP 수), NAT(출발 대역/업링크), 방화벽(차단 항목), 소속 VM 목록.
   전부 id·CIDR에서 유도한 값이라 실제 설치된 것과 따로 저장돼 어긋날 여지가 없음.
@@ -70,8 +71,6 @@
 - **VRF**(`vrf.rs` 신규): MicroNetwork별 라우팅 테이블 분리
   - 지금 네트워크 간 차단은 nftables 규칙이라, 규칙이 빠지면 뚫림
   - VRF는 경로 자체가 없어서 규칙 누락으로 뚫릴 수 없음 — 같은 결과의 더 강한 보장
-- **daemon 시작 시 재적용**: 지금은 VM 시작이 트리거라, VM이 하나도 없는 MicroNetwork는
-  host 재부팅 후 bridge가 사라진 채로 남음
 - **2계층 분리**(MicroNetwork / Subnet): 위 "계층 구조" 참고 — 필요해지면 재검토
 - MicroNetwork별 uplink 지정(지금은 host의 기본 경로 하나를 모두 공유)
 - **네트워크별 인터넷 on/off**: 지금은 모든 네트워크가 NAT를 받음. 상세의 `nat.enabled`는
