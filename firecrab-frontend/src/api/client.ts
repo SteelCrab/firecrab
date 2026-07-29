@@ -4,6 +4,7 @@ import type {
   CreateVmRequest,
   ErrorResponse,
   HostStatusResponse,
+  MicroNetworkDetailResponse,
   MicroNetworkResponse,
   NetworkInfoResponse,
   UpdateVmResourcesRequest,
@@ -125,6 +126,10 @@ export async function deleteVm(id: string): Promise<void> {
 
 export function listMicroNetworks(): Promise<MicroNetworkResponse[]> {
   return fetchJson("/api/micro-networks");
+}
+
+export function getMicroNetwork(id: string): Promise<MicroNetworkDetailResponse> {
+  return fetchJson(`/api/micro-networks/${id}`);
 }
 
 export function createMicroNetwork(request: CreateMicroNetworkRequest): Promise<MicroNetworkResponse> {

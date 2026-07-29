@@ -15,10 +15,16 @@ npm install
 
 API 서버를 먼저 띄운다.
 
+저장소 루트에서 실행한다 — DB(`data/firecrab.db`)와 VM 아티팩트(`data/vms/<id>/`) 경로가
+cwd 기준이라, `firecrab-api/`에서 띄우면 별도의 빈 DB가 생기고 기존 VM이 안 보인다.
+
 ```sh
-cd firecrab-api
-cargo run
+pkill -f 'target/debug/firecrab-api'   # 이전 인스턴스 종료(포트 3000 점유 + 구 바이너리)
+cargo run -p firecrab-api
 ```
+
+이전 인스턴스를 안 죽이면 포트가 이미 잡혀 있어 새 프로세스가 못 뜨고, 브라우저는 계속
+**재빌드 전 바이너리**를 상대하게 된다. 새 필드가 응답에 안 보이면 대개 이 경우다.
 
 대시보드는 Vite 개발 서버로 띄운다.
 

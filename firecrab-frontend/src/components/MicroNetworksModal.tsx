@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import type { MicroNetworkResponse } from "../bindings";
-import { ApiClientError, createMicroNetwork, deleteMicroNetwork, listMicroNetworks } from "../api/client";
+import type { MicroNetworkDetailResponse, MicroNetworkResponse } from "../bindings";
+import {
+  ApiClientError,
+  createMicroNetwork,
+  deleteMicroNetwork,
+  getMicroNetwork,
+  listMicroNetworks,
+} from "../api/client";
 
 interface MicroNetworksModalProps {
   onClose: () => void;
@@ -21,6 +27,24 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<MicroNetworkDetailResponse | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  // Refetched on every selection rather than derived from the list row: the
+  // detail carries live counts (leases in use, TAPs attached) the list
+  // doesn't have.
+  useEffect(() => {
+    if (!selectedId) {
+      setDetail(null);
+      return;
+    }
+    setDetail(null);
+    setDetailError(null);
+    getMicroNetwork(selectedId)
+      .then(setDetail)
+      .catch((error) => setDetailError((error as Error).message));
+  }, [selectedId]);
 
   const refresh = async () => {
     try {
@@ -58,6 +82,7 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
     setBusyId(network.id);
     try {
       await deleteMicroNetwork(network.id);
+      if (selectedId === network.id) setSelectedId(null);
       await refresh();
     } catch (error) {
       setListError((error as Error).message);
@@ -133,7 +158,11 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
               </thead>
               <tbody>
                 {networks.map((network) => (
-                  <tr key={network.id}>
+                  <tr
+                    key={network.id}
+                    className={selectedId === network.id ? "selected" : undefined}
+                    onClick={() => setSelectedId(selectedId === network.id ? null : network.id)}
+                  >
                     <td className="name">{network.name}</td>
                     <td className="mono">{network.subnetCidr}</td>
                     <td className="mono">{network.gateway}</td>
@@ -144,7 +173,10 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
                       <button
                         className="btn danger"
                         disabled={busyId === network.id}
-                        onClick={() => handleDelete(network)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleDelete(network);
+                        }}
                       >
                         delete
                       </button>
@@ -154,8 +186,72 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
               </tbody>
             </table>
           )}
+
+          {selectedId && <MicroNetworkDetail detail={detail} error={detailError} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Renders one network's services. Kept in this file because it is only ever
+ *  shown from the row it belongs to. */
+function MicroNetworkDetail({
+  detail,
+  error,
+}: {
+  detail: MicroNetworkDetailResponse | null;
+  error: string | null;
+}) {
+  if (error) return <div className="field-error">{error}</div>;
+  if (!detail) return <div className="empty">상세 불러오는 중…</div>;
+
+  const { subnet, bridge, nat, firewall } = detail;
+  return (
+    <div className="detail-body">
+      <dl className="detail-fields mono">
+        <dt>네트워크 ID</dt>
+        <dd>{detail.id}</dd>
+
+        <dt>서브넷</dt>
+        <dd>
+          {subnet.cidr} · gateway {subnet.gateway}
+          <br />
+          주소 {subnet.allocatedAddresses}/{subnet.usableAddresses} 사용 중 · {subnet.dhcp}
+        </dd>
+
+        <dt>브릿지</dt>
+        <dd>
+          {bridge.name} · TAP {bridge.attachedTaps}개 연결
+        </dd>
+
+        <dt>NAT</dt>
+        <dd>
+          {nat.enabled ? `${nat.sourceCidr} → ${nat.uplink || "(uplink 없음)"}` : "사용 안 함"}
+        </dd>
+
+        <dt>방화벽</dt>
+        <dd>
+          {[
+            firewall.eastWestBlocked && "VM 간 차단",
+            firewall.crossNetworkBlocked && "다른 네트워크 차단",
+            firewall.antiSpoofing && "IP/MAC 위조 차단",
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+          <br />
+          기본 외부 통신: {firewall.defaultEgress}
+        </dd>
+
+        <dt>소속 VM</dt>
+        <dd>
+          {detail.vms.length === 0
+            ? "없음"
+            : detail.vms
+                .map((vm) => `${vm.name} (${vm.ipv4 ?? "주소 없음"}, ${vm.state})`)
+                .join(", ")}
+        </dd>
+      </dl>
     </div>
   );
 }

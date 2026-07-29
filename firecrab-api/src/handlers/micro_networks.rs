@@ -5,12 +5,17 @@
 //! (routing-table separation, so isolation can't depend on a rule being
 //! present) is still follow-up work.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use firecrab_api_types::{CreateMicroNetworkRequest, MicroNetworkResponse};
+use firecrab_api_types::{
+    CreateMicroNetworkRequest, EgressPolicy, MicroNetworkBridge, MicroNetworkDetailResponse,
+    MicroNetworkFirewall, MicroNetworkNat, MicroNetworkResponse, MicroNetworkSubnet,
+    MicroNetworkVm, VmState,
+};
+use firecrab_helper_protocol::network::micro_network_bridge_name;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -41,6 +46,98 @@ pub async fn list_micro_networks(
             AppError::internal(request_id.0)
         })?;
     Ok(Json(networks))
+}
+
+/// `GET /api/micro-networks/{id}`: one network broken out into the services
+/// it is made of. Everything here is derived — the bridge name from the id,
+/// the address plan from the CIDR, the NAT source from the subnet — so this
+/// reports what is actually installed rather than a second copy of it that
+/// could drift.
+pub async fn get_micro_network(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<MicroNetworkDetailResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+
+    let store = state.store.clone();
+    let (network, vms, leases) = tokio::task::spawn_blocking(move || {
+        let network = store.micro_network(id)?;
+        let vms = store.load_all()?;
+        let leases = store.active_leases().unwrap_or_default();
+        Ok::<_, PersistenceError>((network, vms, leases))
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?
+    .map_err(|error| {
+        tracing::error!(request_id = %request_id.0, %error, "failed to load micro network detail");
+        AppError::internal(request_id.0)
+    })?;
+
+    let network = network.ok_or_else(|| AppError::not_found(request_id.0))?;
+    let subnet = SubnetSpec::parse(Some(id), &network.subnet_cidr).ok_or_else(|| {
+        tracing::error!(
+            request_id = %request_id.0,
+            micro_network_id = %id,
+            subnet_cidr = network.subnet_cidr,
+            "stored micro network subnet does not parse"
+        );
+        AppError::internal(request_id.0)
+    })?;
+
+    let addresses: HashMap<Uuid, String> = leases
+        .into_iter()
+        .map(|lease| (lease.vm_id, lease.ipv4.to_string()))
+        .collect();
+    let mut members: Vec<MicroNetworkVm> = vms
+        .into_values()
+        .filter(|vm| vm.micro_network_id == Some(id))
+        .map(|vm| MicroNetworkVm {
+            ipv4: addresses.get(&vm.id).cloned(),
+            id: vm.id,
+            name: vm.name,
+            state: vm.state,
+            egress_policy: vm.egress_policy,
+        })
+        .collect();
+    members.sort_by(|left, right| left.name.cmp(&right.name));
+
+    // A stopped VM keeps its address but has no TAP, so "running" is what
+    // says how many ports the bridge really has right now.
+    let attached_taps = members
+        .iter()
+        .filter(|vm| vm.state == VmState::Running)
+        .count() as u32;
+
+    Ok(Json(MicroNetworkDetailResponse {
+        id,
+        name: network.name,
+        subnet: MicroNetworkSubnet {
+            cidr: network.subnet_cidr.clone(),
+            gateway: subnet.gateway().to_string(),
+            usable_addresses: subnet.usable_addresses(),
+            allocated_addresses: members.iter().filter(|vm| vm.ipv4.is_some()).count() as u32,
+            dhcp: format!("dnsmasq on {}", micro_network_bridge_name(id)),
+        },
+        bridge: MicroNetworkBridge {
+            name: micro_network_bridge_name(id),
+            attached_taps,
+        },
+        nat: MicroNetworkNat {
+            // Every network masquerades out of the host's single uplink;
+            // there is no per-network toggle yet (task doc's remaining scope).
+            enabled: true,
+            uplink: crate::handlers::network::read_uplink().unwrap_or_default(),
+            source_cidr: network.subnet_cidr,
+        },
+        firewall: MicroNetworkFirewall {
+            east_west_blocked: true,
+            cross_network_blocked: true,
+            anti_spoofing: true,
+            default_egress: EgressPolicy::default(),
+        },
+        vms: members,
+    }))
 }
 
 pub async fn create_micro_network(
@@ -391,6 +488,92 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(listed.len(), 1, "no rejected attempt may leave a record");
+    }
+
+    #[tokio::test]
+    async fn detail_breaks_the_network_out_into_its_services() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let network = create_network(&state, "prod", "172.31.0.0/24").await;
+
+        let Json(detail) = get_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(network.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(detail.id, network.id);
+        assert_eq!(detail.name, "prod");
+        // Subnet: /24 minus network/gateway/broadcast.
+        assert_eq!(detail.subnet.cidr, "172.31.0.0/24");
+        assert_eq!(detail.subnet.gateway, "172.31.0.1");
+        assert_eq!(detail.subnet.usable_addresses, 253);
+        assert_eq!(detail.subnet.allocated_addresses, 0);
+        // Bridge name is derived from the id, the same way the helper does it.
+        assert_eq!(
+            detail.bridge.name,
+            micro_network_bridge_name(network.id),
+            "the reported bridge must be the one the helper actually creates"
+        );
+        assert_eq!(detail.bridge.attached_taps, 0);
+        // NAT masquerades this network's own subnet.
+        assert!(detail.nat.enabled);
+        assert_eq!(detail.nat.source_cidr, "172.31.0.0/24");
+        // Firewall posture is what the rendered ruleset enforces.
+        assert!(detail.firewall.east_west_blocked);
+        assert!(detail.firewall.cross_network_blocked);
+        assert!(detail.firewall.anti_spoofing);
+        assert!(detail.vms.is_empty());
+    }
+
+    #[tokio::test]
+    async fn detail_lists_only_the_vms_placed_in_that_network() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let network = create_network(&state, "prod", "172.31.0.0/24").await;
+        let other = create_network(&state, "stage", "172.32.0.0/24").await;
+
+        let subnet = SubnetSpec::parse(Some(network.id), &network.subnet_cidr).unwrap();
+        let mut member = crate::handlers::vms::test_support::record("member", Uuid::new_v4());
+        member.state = VmState::Stopped;
+        member.micro_network_id = Some(network.id);
+        let lease = state.store.allocate_lease(member.id, subnet).unwrap();
+        state.store.insert(&member).unwrap();
+
+        let Json(detail) = get_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(network.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(detail.vms.len(), 1);
+        assert_eq!(detail.vms[0].name, "member");
+        assert_eq!(detail.vms[0].ipv4, Some(lease.ipv4.to_string()));
+        assert_eq!(detail.subnet.allocated_addresses, 1);
+        // Stopped VMs hold an address but have no TAP on the bridge.
+        assert_eq!(detail.bridge.attached_taps, 0);
+
+        let Json(other_detail) =
+            get_micro_network(State(state), extension(), Path(other.id.to_string()))
+                .await
+                .unwrap();
+        assert!(
+            other_detail.vms.is_empty(),
+            "a VM must only show up under its own network"
+        );
+    }
+
+    #[tokio::test]
+    async fn detail_reports_not_found_for_an_unknown_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let error = get_micro_network(State(state), extension(), Path(Uuid::new_v4().to_string()))
+            .await
+            .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

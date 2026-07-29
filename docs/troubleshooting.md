@@ -129,6 +129,27 @@ VM이 부팅과 `firecrab-network-ready.service` 실행까지는 성공하지만
   ping만 예외). `inet firecrab` 테이블 자체는 정상이라 코드 문제가 아니었음(코드 문제 아님, 새
   개발 머신마다 수동으로 `sudo ufw route allow in on fcbr0 out on <업링크>` 해줘야 함)
 
+### MicroNetwork에 넣은 VM만 `no-ipv4-address`로 실패(기본 네트워크 VM은 정상)
+
+- **원인**: 위 두 UFW 항목과 같은 클래스 — UFW 허용 규칙이 `fcbr0` **인터페이스 이름에 묶여**
+  있어서(`67/udp on fcbr0`), MicroNetwork마다 새로 생기는 `mnb<hex>` 브리지에는 적용되지 않는다.
+  guest의 DHCPDISCOVER가 host INPUT에서 UFW에 drop된다. 코드 문제 아님
+- **확인**: `sudo ufw status verbose`에 그 브리지 이름이 안 보이면 이 케이스다. dnsmasq 자체는
+  정상이라 `sudo ss -lunp | grep :67`에는 멀쩡히 떠 있고, `/run/firecrab/dnsmasq.conf`에도
+  `interface=mnb<hex>`가 들어 있다(2026-07-29 실제로 이 증상으로 한 번 헤맴)
+- **조치**: MicroNetwork를 만들 때마다 그 브리지에 대해 한 번씩
+
+```sh
+BR=$(ip -br link show type bridge | grep mnb | cut -d' ' -f1)   # 대상 브리지
+sudo ufw allow in on "$BR" to any port 67 proto udp
+sudo ufw allow in on "$BR" to any port 53
+sudo ufw route allow in on "$BR" out on <업링크>                  # 외부 통신까지 필요하면
+```
+
+- firecrab은 자기 소유가 아닌 firewall(UFW)을 건드리지 않는 것이 원칙이라
+  (`task-host-network-privileges.md`) 자동화하지 않았다. 운영 배포 시에는 UFW를 끄고
+  프로젝트의 nftables만 쓰거나, 브리지 접두어(`mnb`) 단위 규칙을 미리 넣어두는 쪽이 낫다
+
 ## 터미널
 
 ### 터미널 버튼을 눌러도 "연결 끊김"만 뜨고 안 붙는다

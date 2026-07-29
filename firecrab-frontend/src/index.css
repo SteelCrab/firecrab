@@ -476,3 +476,11 @@ table.vm-table {
   font-size: 0.75rem;
   color: var(--error);
 }
+
+/* MicroNetwork 목록에서 상세를 열어둔 행 */
+.vm-table tbody tr.selected > td {
+  background: rgba(255, 122, 41, 0.12);
+}
+.vm-table tbody tr {
+  cursor: default;
+}

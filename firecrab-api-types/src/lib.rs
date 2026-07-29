@@ -278,6 +278,104 @@ pub struct NetworkInfoResponse {
     pub uplink: String,
 }
 
+/// Response for `GET /api/micro-networks/{id}`: one network broken out into
+/// the services it is actually made of, so the dashboard can show what a
+/// MicroNetwork gives a VM rather than just its name and CIDR
+/// (`docs/task-micro-network.md`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkDetailResponse {
+    /// Stable identifier — the id every host resource below is derived from.
+    pub id: Uuid,
+    /// User-supplied name.
+    pub name: String,
+    /// Address plan and how much of it is in use.
+    pub subnet: MicroNetworkSubnet,
+    /// The Linux bridge this network's VMs attach to.
+    pub bridge: MicroNetworkBridge,
+    /// Outbound address translation for this network's subnet.
+    pub nat: MicroNetworkNat,
+    /// The isolation rules that apply to traffic in this network.
+    pub firewall: MicroNetworkFirewall,
+    /// Every VM currently placed in this network.
+    pub vms: Vec<MicroNetworkVm>,
+}
+
+/// The address plan of a [`MicroNetworkDetailResponse`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkSubnet {
+    /// Reserved CIDR block.
+    pub cidr: String,
+    /// First host address, held by the bridge and handed to guests as their
+    /// default gateway.
+    pub gateway: String,
+    /// How many addresses can be handed out (network/gateway/broadcast are
+    /// reserved and never counted).
+    pub usable_addresses: u32,
+    /// How many of those are currently leased.
+    pub allocated_addresses: u32,
+    /// Where guests get their address from.
+    pub dhcp: String,
+}
+
+/// The host bridge backing a MicroNetwork.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkBridge {
+    /// Interface name, derived from the network id (never user-supplied).
+    pub name: String,
+    /// How many VM TAPs are expected on it — i.e. running VMs in this
+    /// network. A stopped VM keeps its address but has no TAP.
+    pub attached_taps: u32,
+}
+
+/// Outbound NAT for a MicroNetwork.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkNat {
+    /// Whether this network's subnet is masqueraded out of the host.
+    pub enabled: bool,
+    /// The host interface it egresses through.
+    pub uplink: String,
+    /// Masquerade source range.
+    pub source_cidr: String,
+}
+
+/// The isolation posture applied to a MicroNetwork's traffic. These are
+/// properties of the rendered ruleset, not per-network toggles — they are
+/// reported so the dashboard can state what is enforced instead of implying
+/// a network is unprotected just because nothing is shown.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkFirewall {
+    /// VMs inside this network cannot reach each other.
+    pub east_west_blocked: bool,
+    /// Traffic routed to any other Firecrab network is dropped.
+    pub cross_network_blocked: bool,
+    /// A VM may only send from its own leased IP/MAC.
+    pub anti_spoofing: bool,
+    /// Outbound posture is decided per VM (see [`MicroNetworkVm`]), not per
+    /// network — this names the default a new VM gets.
+    pub default_egress: EgressPolicy,
+}
+
+/// One VM's placement in a MicroNetwork.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroNetworkVm {
+    /// The VM's id.
+    pub id: Uuid,
+    /// Its name.
+    pub name: String,
+    /// Its lifecycle state.
+    pub state: VmState,
+    /// Its address in this network, if it currently holds a lease.
+    pub ipv4: Option<String>,
+    /// Its own outbound posture.
+    pub egress_policy: EgressPolicy,
+}
+
 /// Response for `GET /api/host`: point-in-time host resource usage, for a
 /// dashboard status panel.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

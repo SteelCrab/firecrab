@@ -9,7 +9,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{get, post};
 use axum::{Extension, Router};
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -168,7 +168,8 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/micro-networks/{id}",
-            delete(handlers::micro_networks::delete_micro_network),
+            get(handlers::micro_networks::get_micro_network)
+                .delete(handlers::micro_networks::delete_micro_network),
         )
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))

@@ -110,6 +110,12 @@ impl SubnetSpec {
         (u32::from(self.gateway()) + 1..u32::from(self.broadcast())).map(Ipv4Addr::from)
     }
 
+    /// How many addresses this subnet can hand out — everything except the
+    /// network, gateway and broadcast addresses.
+    pub fn usable_addresses(&self) -> u32 {
+        u32::from(self.broadcast()).saturating_sub(u32::from(self.gateway()) + 1)
+    }
+
     /// Parses a MicroNetwork's stored `<network>/<prefix>` CIDR. The one
     /// place subnet text is turned into numbers, so the API, the DHCP
     /// snapshot and the firewall ruleset can't drift apart on what a stored
