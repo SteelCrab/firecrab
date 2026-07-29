@@ -120,6 +120,11 @@ pub struct CreateVmRequest {
     /// that don't send this field are unaffected.
     #[serde(default)]
     pub egress_policy: EgressPolicy,
+    /// MicroNetwork to place this VM in; omitted (or null) puts it on the
+    /// built-in default network, which is what every client sent before
+    /// MicroNetworks existed.
+    #[serde(default)]
+    pub micro_network_id: Option<Uuid>,
 }
 
 /// Body for `PUT /api/vms/{id}`: replaces cpu/ram/disk for a VM that isn't
@@ -222,6 +227,10 @@ pub struct VmResponse {
     /// `firecrab_helper_protocol::network::guest_hostname`) — always
     /// present once the VM record exists, independent of lease state.
     pub hostname: String,
+    /// MicroNetwork this VM belongs to, or `None` for the built-in default
+    /// network. Fixed at creation — its lease comes out of that network's
+    /// subnet (`docs/task-micro-network.md`).
+    pub micro_network_id: Option<Uuid>,
 }
 
 /// Request body for `POST /api/micro-networks`.
@@ -236,9 +245,9 @@ pub struct CreateMicroNetworkRequest {
     pub subnet_cidr: String,
 }
 
-/// A MicroNetwork — firecrab's VPC-equivalent (`docs/task-micro-network.md`).
-/// This first slice is just the named CIDR reservation; bridge/gateway/route
-/// table provisioning and VM membership are follow-up work.
+/// A MicroNetwork — one of firecrab's own virtual networks
+/// (`docs/task-micro-network.md`). A named CIDR reservation backed by a real
+/// host bridge; routing-table separation and VM membership are follow-up work.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroNetworkResponse {
@@ -248,6 +257,9 @@ pub struct MicroNetworkResponse {
     pub name: String,
     /// The network's reserved CIDR block.
     pub subnet_cidr: String,
+    /// Its gateway — the first host address of `subnet_cidr`, which is also
+    /// the address its bridge holds on the host. Derived, never stored.
+    pub gateway: String,
 }
 
 /// Response for `GET /api/network`: the host network firecrab has set up,
@@ -472,6 +484,7 @@ mod tests {
             ipv4: Some("172.30.0.5".to_owned()),
             mac: Some("02:fc:00:00:00:05".to_owned()),
             hostname: "fc-abc123456789".to_owned(),
+            micro_network_id: None,
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
@@ -522,6 +535,7 @@ mod tests {
             ipv4: None,
             mac: None,
             hostname: "fc-abc123456789".to_owned(),
+            micro_network_id: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
@@ -582,6 +596,7 @@ mod tests {
             id: Uuid::from_u128(0x1234),
             name: "prod".to_owned(),
             subnet_cidr: "172.31.0.0/24".to_owned(),
+            gateway: "172.31.0.1".to_owned(),
         };
         let json = serde_json::to_string(&response).unwrap();
         let decoded: MicroNetworkResponse = serde_json::from_str(&json).unwrap();

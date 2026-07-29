@@ -1,12 +1,11 @@
 //! MicroNetwork CRUD (`docs/task-micro-network.md`) — a named CIDR
-//! reservation that now also provisions a real bridge on the host, mirroring
-//! how an AWS VPC creation reserves a CIDR block and immediately gets a real
-//! implicit router. VRF/firewall namespacing and VM membership are still
-//! follow-up work (see the task doc's remaining scope).
+//! reservation that also provisions a real bridge on the host and is wired
+//! into the network services VMs need: its own dnsmasq range, its own NAT
+//! rule, and a default deny on traffic routed to any other network. VRF
+//! (routing-table separation, so isolation can't depend on a rule being
+//! present) is still follow-up work.
 
 use std::collections::BTreeMap;
-use std::net::Ipv4Addr;
-use std::str::FromStr;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -17,6 +16,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::handlers::vms::parse_id;
+use crate::ipam::SubnetSpec;
 use crate::persistence::PersistenceError;
 use crate::server::RequestId;
 use crate::state::AppState;
@@ -48,20 +48,31 @@ pub async fn create_micro_network(
     Extension(request_id): Extension<RequestId>,
     ValidatedJson(req): ValidatedJson<CreateMicroNetworkRequest>,
 ) -> Result<(StatusCode, Json<MicroNetworkResponse>), AppError> {
-    let fields = validate_create(&req);
+    let mut fields = validate_create(&req);
+    if fields.is_empty()
+        && let Some(subnet) = SubnetSpec::parse(None, &req.subnet_cidr)
+        && let Some(conflict) = overlapping_network(&state, subnet, request_id.0).await?
+    {
+        fields.insert(
+            "subnetCidr".to_owned(),
+            format!("overlaps {conflict}, which is already in use"),
+        );
+    }
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
     // Already checked by validate_create; re-parsed here (rather than
     // threaded through) since the request is consumed piecemeal below.
-    let (network_address, prefix) =
-        parse_cidr(&req.subnet_cidr).expect("validate_create already accepted this CIDR");
-    let gateway = gateway_for(network_address);
+    let id = Uuid::new_v4();
+    let subnet = SubnetSpec::parse(Some(id), &req.subnet_cidr)
+        .expect("validate_create already accepted this CIDR");
+    let gateway = subnet.gateway();
 
     let network = MicroNetworkResponse {
-        id: Uuid::new_v4(),
+        id,
         name: req.name,
         subnet_cidr: req.subnet_cidr,
+        gateway: gateway.to_string(),
     };
 
     let store = state.store.clone();
@@ -73,6 +84,8 @@ pub async fn create_micro_network(
             tracing::error!(request_id = %request_id.0, %error, "failed to persist micro network");
             AppError::internal(request_id.0)
         })?;
+
+    let prefix = subnet.prefix;
 
     // Provisioned after persisting (same order as create_vm's lease
     // allocation) so a failure here rolls back the just-inserted row rather
@@ -87,8 +100,64 @@ pub async fn create_micro_network(
         let _ = tokio::task::spawn_blocking(move || store.delete_micro_network(network.id)).await;
         return Err(AppError::internal(request_id.0));
     }
+    // The bridge alone carries no traffic: without a dnsmasq range a VM on
+    // it never gets an address, and without a NAT rule it never reaches the
+    // uplink. Both are rendered from the full network set, so they have to
+    // be re-pushed now rather than waiting for the next VM start.
+    apply_network_services(&state, request_id.0).await;
 
     Ok((StatusCode::CREATED, Json(network)))
+}
+
+/// The subnet `candidate` would collide with, if any: the built-in default
+/// network or an existing MicroNetwork. Two networks sharing addresses would
+/// make the host's routing table ambiguous, so the helper refuses the bridge
+/// outright — this just catches it earlier, with a field the form can show.
+async fn overlapping_network(
+    state: &AppState,
+    candidate: SubnetSpec,
+    request_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    if candidate.overlaps(&SubnetSpec::default_network()) {
+        return Ok(Some("the default network".to_owned()));
+    }
+
+    let store = state.store.clone();
+    let existing = tokio::task::spawn_blocking(move || store.list_micro_networks())
+        .await
+        .map_err(|_| AppError::internal(request_id))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id, %error, "failed to list micro networks");
+            AppError::internal(request_id)
+        })?;
+
+    Ok(existing.into_iter().find_map(|network| {
+        SubnetSpec::parse(Some(network.id), &network.subnet_cidr)
+            .filter(|subnet| subnet.overlaps(&candidate))
+            .map(|_| format!("MicroNetwork {:?}", network.name))
+    }))
+}
+
+/// Re-pushes the firewall ruleset and DHCP config for the current set of
+/// MicroNetworks. Best-effort: a failure here leaves the just-created
+/// network without working DHCP/NAT until the next VM start re-pushes the
+/// same snapshot, which is a degraded network rather than a wrong one — so
+/// it is logged instead of failing (and rolling back) an otherwise
+/// successful create.
+async fn apply_network_services(state: &AppState, request_id: Uuid) {
+    let specs = match crate::handlers::vms::micro_network_specs(state).await {
+        Ok(specs) => specs,
+        Err(error) => {
+            tracing::warn!(request_id = %request_id, error, "micro network snapshot failed");
+            return;
+        }
+    };
+    if let Err(error) = state.network.ensure_firewall(specs).await {
+        tracing::warn!(request_id = %request_id, %error, "firewall resync failed");
+    }
+    if let Err(error) = crate::handlers::vms::sync_dhcp_leases(state).await {
+        tracing::warn!(request_id = %request_id, error, "dhcp resync failed");
+    }
 }
 
 pub async fn delete_micro_network(
@@ -97,6 +166,24 @@ pub async fn delete_micro_network(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+
+    // A network still holding leases has VMs whose addresses come out of its
+    // subnet and whose TAPs hang off its bridge — deleting it would strand
+    // them, so it's refused while any lease is active.
+    let store = state.store.clone();
+    let in_use = tokio::task::spawn_blocking(move || store.micro_network_has_active_leases(id))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, %error, "failed to check micro network leases");
+            AppError::internal(request_id.0)
+        })?;
+    if in_use {
+        return Err(AppError::in_use(
+            "MicroNetwork still has VMs in it",
+            request_id.0,
+        ));
+    }
 
     // Torn down before the record is deleted: if this fails, the record
     // stays so the delete is safely retriable instead of orphaning a bridge
@@ -117,6 +204,9 @@ pub async fn delete_micro_network(
                 AppError::internal(request_id.0)
             }
         })?;
+    // Same reason as create: the removed network has to disappear from the
+    // firewall ruleset and dnsmasq's served interfaces too.
+    apply_network_services(&state, request_id.0).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -128,8 +218,8 @@ fn validate_create(req: &CreateMicroNetworkRequest) -> BTreeMap<String, String> 
             "must be 1-64 ASCII letters, numbers, '.', '_' or '-'".to_owned(),
         );
     }
-    match parse_cidr(&req.subnet_cidr) {
-        Some((_, prefix)) if !(MIN_PREFIX..=MAX_PREFIX).contains(&prefix) => {
+    match SubnetSpec::parse(None, &req.subnet_cidr) {
+        Some(subnet) if !(MIN_PREFIX..=MAX_PREFIX).contains(&subnet.prefix) => {
             fields.insert(
                 "subnetCidr".to_owned(),
                 format!("prefix must be between /{MIN_PREFIX} and /{MAX_PREFIX}"),
@@ -146,13 +236,6 @@ fn validate_create(req: &CreateMicroNetworkRequest) -> BTreeMap<String, String> 
     fields
 }
 
-/// The MicroNetwork's own address on its subnet — first host address after
-/// the network address, same convention as the default network's own
-/// `172.30.0.0/24` -> `172.30.0.1` (`firecrab-net-helper/src/bridge.rs`).
-fn gateway_for(network_address: Ipv4Addr) -> Ipv4Addr {
-    Ipv4Addr::from(u32::from(network_address) + 1)
-}
-
 fn valid_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     (1..=64).contains(&bytes.len())
@@ -160,15 +243,6 @@ fn valid_name(name: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-/// Parses `text` as an IPv4 CIDR (`a.b.c.d/prefix`), returning the address
-/// and prefix length if both parts are valid.
-fn parse_cidr(text: &str) -> Option<(Ipv4Addr, u8)> {
-    let (address, prefix) = text.split_once('/')?;
-    let address = Ipv4Addr::from_str(address).ok()?;
-    let prefix: u8 = prefix.parse().ok()?;
-    (prefix <= 32).then_some((address, prefix))
 }
 
 #[cfg(test)]
@@ -215,6 +289,7 @@ mod tests {
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(created.name, "prod");
         assert_eq!(created.subnet_cidr, "172.31.0.0/24");
+        assert_eq!(created.gateway, "172.31.0.1");
 
         let Json(listed) = list_micro_networks(State(state.clone()), extension())
             .await
@@ -257,6 +332,97 @@ mod tests {
             .await
             .unwrap();
         assert!(listed.is_empty());
+    }
+
+    async fn create_network(state: &AppState, name: &str, cidr: &str) -> MicroNetworkResponse {
+        let (_, Json(created)) = create_micro_network(
+            State(state.clone()),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: name.to_owned(),
+                subnet_cidr: cidr.to_owned(),
+            }),
+        )
+        .await
+        .expect("create micro network");
+        created
+    }
+
+    #[tokio::test]
+    async fn a_cidr_overlapping_an_existing_network_is_a_field_error_not_a_rollback() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        create_network(&state, "prod", "172.31.0.0/24").await;
+
+        // Same block, and a wider block that swallows it: both ambiguous for
+        // the host's routing table, so both are refused.
+        for cidr in ["172.31.0.0/24", "172.31.0.0/16"] {
+            let error = create_micro_network(
+                State(state.clone()),
+                extension(),
+                ValidatedJson(CreateMicroNetworkRequest {
+                    name: "clash".to_owned(),
+                    subnet_cidr: cidr.to_owned(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error.into_response().status(),
+                StatusCode::BAD_REQUEST,
+                "{cidr} should be rejected as overlapping"
+            );
+        }
+
+        // ... and the default network's own subnet is just as unavailable.
+        let error = create_micro_network(
+            State(state.clone()),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: "clash".to_owned(),
+                subnet_cidr: "172.30.0.0/24".to_owned(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+
+        let Json(listed) = list_micro_networks(State(state), extension())
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1, "no rejected attempt may leave a record");
+    }
+
+    #[tokio::test]
+    async fn a_network_with_an_active_lease_cannot_be_deleted() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let network = create_network(&state, "prod", "172.31.0.0/24").await;
+
+        let subnet = SubnetSpec::parse(Some(network.id), &network.subnet_cidr).unwrap();
+        let lease = state
+            .store
+            .allocate_lease(Uuid::new_v4(), subnet)
+            .expect("allocate a lease inside the network");
+        // The address really does come out of the MicroNetwork's own subnet,
+        // not the default one.
+        assert!(lease.ipv4.to_string().starts_with("172.31.0."));
+
+        let error = delete_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(network.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+
+        // Releasing the lease unblocks the delete.
+        state.store.release_lease(lease.vm_id).unwrap();
+        let status = delete_micro_network(State(state), extension(), Path(network.id.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test]
@@ -317,17 +483,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_cidr_accepts_a_valid_ipv4_cidr_and_rejects_the_rest() {
-        assert_eq!(
-            parse_cidr("172.31.0.0/24"),
-            Some((Ipv4Addr::new(172, 31, 0, 0), 24))
-        );
-        assert_eq!(parse_cidr("172.31.0.0"), None);
-        assert_eq!(parse_cidr("172.31.0.0/33"), None);
-        assert_eq!(parse_cidr("not-an-ip/24"), None);
-    }
-
-    #[test]
     fn validate_create_reports_both_fields_independently() {
         let fields = validate_create(&CreateMicroNetworkRequest {
             name: String::new(),
@@ -362,10 +517,8 @@ mod tests {
     }
 
     #[test]
-    fn gateway_for_is_the_first_host_address() {
-        assert_eq!(
-            gateway_for(Ipv4Addr::new(172, 31, 0, 0)),
-            Ipv4Addr::new(172, 31, 0, 1)
-        );
+    fn a_created_network_reports_the_gateway_derived_from_its_cidr() {
+        let subnet = SubnetSpec::parse(Some(Uuid::nil()), "172.31.0.0/24").unwrap();
+        assert_eq!(subnet.gateway().to_string(), "172.31.0.1");
     }
 }

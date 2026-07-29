@@ -6,8 +6,8 @@ use std::time::Duration;
 use firecrab_helper_protocol::framing::{FrameError, read_frame, write_frame};
 pub use firecrab_helper_protocol::network::tap_name;
 use firecrab_helper_protocol::network::{
-    DhcpLeaseEntry, HelperFailure, MacAddr, NetworkRequest, NetworkRequestEnvelope,
-    NetworkResponseEnvelope,
+    DhcpLeaseEntry, HelperFailure, MacAddr, MicroNetworkSpec, NetworkRequest,
+    NetworkRequestEnvelope, NetworkResponseEnvelope,
 };
 use thiserror::Error;
 use tokio::net::UnixStream;
@@ -89,17 +89,32 @@ impl NetworkClient {
             .await
     }
 
-    /// Idempotently (re)applies the owned nftables tables.
-    pub async fn ensure_firewall(&self) -> Result<(), NetworkError> {
-        self.call(NetworkRequest::EnsureFirewall).await
+    /// Idempotently (re)applies the owned nftables tables for the default
+    /// network plus every MicroNetwork in `micro_networks` — the helper
+    /// renders NAT and dispatch rules per network and denies traffic routed
+    /// between them, so this must always be the complete current set.
+    pub async fn ensure_firewall(
+        &self,
+        micro_networks: Vec<MicroNetworkSpec>,
+    ) -> Result<(), NetworkError> {
+        self.call(NetworkRequest::EnsureFirewall { micro_networks })
+            .await
     }
 
     /// Creates `vm_id`'s TAP device, attaches it to the bridge, and returns
     /// its deterministic name (also derivable locally via [`tap_name`], so
     /// callers that already know it don't have to wait on this to build a
     /// Firecracker config referencing it).
-    pub async fn create_tap(&self, vm_id: Uuid) -> Result<String, NetworkError> {
-        self.call(NetworkRequest::CreateTap { vm_id }).await?;
+    pub async fn create_tap(
+        &self,
+        vm_id: Uuid,
+        micro_network_id: Option<Uuid>,
+    ) -> Result<String, NetworkError> {
+        self.call(NetworkRequest::CreateTap {
+            vm_id,
+            micro_network_id,
+        })
+        .await?;
         Ok(tap_name(vm_id))
     }
 
@@ -139,9 +154,14 @@ impl NetworkClient {
         &self,
         revision: u64,
         leases: Vec<DhcpLeaseEntry>,
+        micro_networks: Vec<MicroNetworkSpec>,
     ) -> Result<(), NetworkError> {
-        self.call(NetworkRequest::SyncDhcpLeases { revision, leases })
-            .await
+        self.call(NetworkRequest::SyncDhcpLeases {
+            revision,
+            leases,
+            micro_networks,
+        })
+        .await
     }
 
     /// Builds a client pointed at an explicit socket path, for lifecycle
@@ -226,7 +246,7 @@ pub(crate) mod test_support {
             NetworkRequest::EnsureBridge => "ensure_bridge",
             NetworkRequest::EnsureMicroNetworkBridge { .. } => "ensure_micro_network_bridge",
             NetworkRequest::RemoveMicroNetworkBridge { .. } => "remove_micro_network_bridge",
-            NetworkRequest::EnsureFirewall => "ensure_firewall",
+            NetworkRequest::EnsureFirewall { .. } => "ensure_firewall",
             NetworkRequest::CreateTap { .. } => "create_tap",
             NetworkRequest::DeleteTap { .. } => "delete_tap",
             NetworkRequest::ApplyVmPolicy { .. } => "apply_vm_policy",
@@ -361,7 +381,9 @@ mod tests {
         });
 
         let result = client(&path, HELPER_TIMEOUT)
-            .call(NetworkRequest::EnsureFirewall)
+            .call(NetworkRequest::EnsureFirewall {
+                micro_networks: Vec::new(),
+            })
             .await;
         assert!(matches!(
             result,

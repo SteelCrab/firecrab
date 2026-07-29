@@ -1,10 +1,12 @@
 //! IP address and MAC allocation management (IPAM): hands out unique
-//! IPv4/MAC leases from the fixed 172.30.0.0/24 subnet, backed by SQLite so
+//! IPv4/MAC leases from one network's subnet — the default 172.30.0.0/24 or
+//! a MicroNetwork's own (`docs/task-micro-network.md`) — backed by SQLite so
 //! allocation is atomic under concurrent VM creation.
 
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
 
+use firecrab_helper_protocol::network::MicroNetworkSpec;
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -19,8 +21,15 @@ pub const CREATE_LEASES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS network_le
     ipv4 TEXT NOT NULL,
     mac TEXT NOT NULL,
     allocated_at TEXT NOT NULL,
-    released_at TEXT
+    released_at TEXT,
+    micro_network_id TEXT
 ) STRICT";
+
+/// Adds `micro_network_id` to a `network_leases` table created before
+/// MicroNetworks existed. NULL means the default network, which is exactly
+/// what every pre-existing lease was on, so no backfill is needed.
+pub const ADD_LEASE_MICRO_NETWORK_COLUMN_SQL: &str =
+    "ALTER TABLE network_leases ADD COLUMN micro_network_id TEXT";
 
 /// Partial indexes: uniqueness only applies to still-active leases, so
 /// released rows stay behind as history without blocking reuse.
@@ -39,12 +48,94 @@ pub const CREATE_LEASES_INDEXES_SQL: [&str; 3] = [
 pub(crate) const NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
 /// Subnet gateway address, reserved from allocation.
 pub(crate) const GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
-/// Subnet broadcast address, reserved from allocation.
-const BROADCAST: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 255);
 /// CIDR prefix length of the Firecrab VPC subnet.
 pub(crate) const PREFIX_LEN: u8 = 24;
 /// How many salted MAC candidates to try before giving up.
 const MAX_MAC_ATTEMPTS: u32 = 8;
+
+/// The subnet a lease is allocated from: the built-in default network, or a
+/// MicroNetwork's own. Addresses are derived from `network`/`prefix` rather
+/// than stored, the same way `firecrab-net-helper`'s bridge derives them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubnetSpec {
+    /// The MicroNetwork this subnet belongs to, or `None` for the default.
+    pub micro_network_id: Option<Uuid>,
+    /// Network (base) address.
+    pub network: Ipv4Addr,
+    /// CIDR prefix length.
+    pub prefix: u8,
+}
+
+impl SubnetSpec {
+    /// The built-in default network (`fcbr0`'s 172.30.0.0/24).
+    pub fn default_network() -> Self {
+        Self {
+            micro_network_id: None,
+            network: NETWORK,
+            prefix: PREFIX_LEN,
+        }
+    }
+
+    /// First host address, reserved as the gateway.
+    pub fn gateway(&self) -> Ipv4Addr {
+        Ipv4Addr::from(u32::from(self.network) + 1)
+    }
+
+    /// Last address in the subnet, reserved as broadcast.
+    pub fn broadcast(&self) -> Ipv4Addr {
+        Ipv4Addr::from(u32::from(self.network) | !self.mask())
+    }
+
+    fn mask(&self) -> u32 {
+        u32::MAX
+            .checked_shl(32 - u32::from(self.prefix))
+            .unwrap_or(0)
+    }
+
+    /// Whether `address` falls inside this subnet.
+    fn contains(&self, address: Ipv4Addr) -> bool {
+        u32::from(address) & self.mask() == u32::from(self.network) & self.mask()
+    }
+
+    /// Whether two subnets share any address. The helper refuses an
+    /// overlapping bridge anyway; checking here first turns that into a
+    /// field-level validation error instead of a rolled-back internal one.
+    pub fn overlaps(&self, other: &Self) -> bool {
+        self.contains(other.network) || other.contains(self.network)
+    }
+
+    /// Every assignable host address: everything between the gateway and the
+    /// broadcast address, both of which are reserved.
+    fn host_addresses(&self) -> impl Iterator<Item = Ipv4Addr> {
+        (u32::from(self.gateway()) + 1..u32::from(self.broadcast())).map(Ipv4Addr::from)
+    }
+
+    /// Parses a MicroNetwork's stored `<network>/<prefix>` CIDR. The one
+    /// place subnet text is turned into numbers, so the API, the DHCP
+    /// snapshot and the firewall ruleset can't drift apart on what a stored
+    /// CIDR means.
+    pub fn parse(micro_network_id: Option<Uuid>, cidr: &str) -> Option<Self> {
+        let (network, prefix) = cidr.split_once('/')?;
+        let network: Ipv4Addr = network.parse().ok()?;
+        let prefix: u8 = prefix.parse().ok()?;
+        (prefix <= 32).then_some(Self {
+            micro_network_id,
+            network,
+            prefix,
+        })
+    }
+
+    /// The privileged helper's view of this subnet, or `None` for the
+    /// default network (which the helper already knows about and never
+    /// receives over the wire).
+    pub fn helper_spec(&self) -> Option<MicroNetworkSpec> {
+        Some(MicroNetworkSpec {
+            micro_network_id: self.micro_network_id?,
+            gateway: self.gateway(),
+            prefix: self.prefix,
+        })
+    }
+}
 
 /// Failure modes for allocating or releasing a network lease.
 #[derive(Debug, Error)]
@@ -53,8 +144,13 @@ pub enum IpamError {
     #[error("network lease operation failed")]
     Database(#[from] rusqlite::Error),
     /// Every host address in the subnet is already leased.
-    #[error("no free IPv4 address left in 172.30.0.0/24")]
-    PoolExhausted,
+    #[error("no free IPv4 address left in {network}/{prefix}")]
+    PoolExhausted {
+        /// Network address of the exhausted subnet.
+        network: Ipv4Addr,
+        /// Its prefix length.
+        prefix: u8,
+    },
     /// No unclaimed MAC was found within [`MAX_MAC_ATTEMPTS`] salted tries.
     #[error("could not find a free MAC address after {MAX_MAC_ATTEMPTS} attempts")]
     MacPoolExhausted,
@@ -85,16 +181,24 @@ pub enum IpamError {
 /// Allocate an IPv4 + MAC for `vm_id`. Must run inside a `BEGIN IMMEDIATE`
 /// transaction (see `Store::allocate_lease`) so concurrent callers serialize
 /// on the same write lock instead of racing on the free-address scan.
-pub fn allocate(tx: &Transaction<'_>, vm_id: Uuid) -> Result<Lease, IpamError> {
+pub fn allocate(tx: &Transaction<'_>, vm_id: Uuid, subnet: SubnetSpec) -> Result<Lease, IpamError> {
     if has_active_lease(tx, vm_id)? {
         return Err(IpamError::AlreadyLeased { vm_id });
     }
 
+    // Scanned against every active lease, not just this subnet's: two
+    // MicroNetworks can never overlap (the helper's bridge overlap check
+    // refuses that), so a globally-unique address is also unique here, and
+    // keeping the check global means a subnet whose CIDR was somehow reused
+    // still cannot hand out a duplicate.
     let taken_ips = active_ipv4s(tx)?;
-    let ipv4 = (2_u8..255)
-        .map(|last| Ipv4Addr::new(172, 30, 0, last))
+    let ipv4 = subnet
+        .host_addresses()
         .find(|candidate| !taken_ips.contains(candidate))
-        .ok_or(IpamError::PoolExhausted)?;
+        .ok_or(IpamError::PoolExhausted {
+            network: subnet.network,
+            prefix: subnet.prefix,
+        })?;
 
     let taken_macs = active_macs(tx)?;
     let mac = (0..MAX_MAC_ATTEMPTS)
@@ -103,13 +207,35 @@ pub fn allocate(tx: &Transaction<'_>, vm_id: Uuid) -> Result<Lease, IpamError> {
         .ok_or(IpamError::MacPoolExhausted)?;
 
     tx.execute(
-        "INSERT INTO network_leases (vm_id, ipv4, mac, allocated_at) \
-         VALUES (?1, ?2, ?3, datetime('now'))",
-        params![vm_id.to_string(), ipv4.to_string(), mac.to_string()],
+        "INSERT INTO network_leases (vm_id, ipv4, mac, allocated_at, micro_network_id) \
+         VALUES (?1, ?2, ?3, datetime('now'), ?4)",
+        params![
+            vm_id.to_string(),
+            ipv4.to_string(),
+            mac.to_string(),
+            subnet.micro_network_id.map(|id| id.to_string()),
+        ],
     )?;
     bump_lease_revision(tx)?;
 
     Ok(Lease { vm_id, ipv4, mac })
+}
+
+/// Whether any still-active lease belongs to `micro_network_id` — what makes
+/// deleting a MicroNetwork that still has VMs in it refusable.
+pub fn has_active_leases_in(
+    conn: &rusqlite::Connection,
+    micro_network_id: Uuid,
+) -> Result<bool, IpamError> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM network_leases \
+             WHERE micro_network_id = ?1 AND released_at IS NULL",
+            params![micro_network_id.to_string()],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 /// Release `vm_id`'s active lease. The row is kept with `released_at` set
@@ -210,12 +336,13 @@ fn has_active_lease(tx: &Transaction<'_>, vm_id: Uuid) -> Result<bool, rusqlite:
     .map(|row| row.is_some())
 }
 
-/// Every IPv4 address currently unavailable for allocation: reserved
-/// network/gateway/broadcast plus every still-leased address.
+/// Every IPv4 address currently leased. The network/gateway/broadcast
+/// addresses need no entry here — [`SubnetSpec::host_addresses`] never
+/// offers them for the subnet being allocated from in the first place.
 fn active_ipv4s(tx: &Transaction<'_>) -> Result<HashSet<Ipv4Addr>, rusqlite::Error> {
     let mut statement = tx.prepare("SELECT ipv4 FROM network_leases WHERE released_at IS NULL")?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    let mut set = HashSet::from([NETWORK, GATEWAY, BROADCAST]);
+    let mut set = HashSet::new();
     for row in rows {
         if let Ok(addr) = row?.parse() {
             set.insert(addr);
@@ -276,7 +403,7 @@ mod tests {
 
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id).unwrap();
+        allocate(&tx, vm_id, SubnetSpec::default_network()).unwrap();
         tx.commit().unwrap();
         assert_eq!(current_revision(&conn).unwrap(), 1);
 
@@ -293,8 +420,8 @@ mod tests {
         let released = Uuid::new_v4();
 
         let tx = begin(&mut conn);
-        allocate(&tx, kept).unwrap();
-        allocate(&tx, released).unwrap();
+        allocate(&tx, kept, SubnetSpec::default_network()).unwrap();
+        allocate(&tx, released, SubnetSpec::default_network()).unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
@@ -314,7 +441,7 @@ mod tests {
 
         for _ in 0..50 {
             let tx = begin(&mut conn);
-            let lease = allocate(&tx, Uuid::new_v4()).unwrap();
+            let lease = allocate(&tx, Uuid::new_v4(), SubnetSpec::default_network()).unwrap();
             tx.commit().unwrap();
             assert!(seen_ips.insert(lease.ipv4), "duplicate ip {}", lease.ipv4);
             assert!(seen_macs.insert(lease.mac), "duplicate mac {}", lease.mac);
@@ -326,11 +453,11 @@ mod tests {
         let mut conn = open();
         for _ in 0..253 {
             let tx = begin(&mut conn);
-            let lease = allocate(&tx, Uuid::new_v4()).unwrap();
+            let lease = allocate(&tx, Uuid::new_v4(), SubnetSpec::default_network()).unwrap();
             tx.commit().unwrap();
             assert_ne!(lease.ipv4, NETWORK);
             assert_ne!(lease.ipv4, GATEWAY);
-            assert_ne!(lease.ipv4, BROADCAST);
+            assert_ne!(lease.ipv4, SubnetSpec::default_network().broadcast());
         }
     }
 
@@ -339,7 +466,7 @@ mod tests {
         let mut conn = open();
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id).unwrap();
+        allocate(&tx, vm_id, SubnetSpec::default_network()).unwrap();
         tx.commit().unwrap();
 
         conn.execute(
@@ -359,14 +486,14 @@ mod tests {
         let mut conn = open();
         for _ in 0..253 {
             let tx = begin(&mut conn);
-            allocate(&tx, Uuid::new_v4()).unwrap();
+            allocate(&tx, Uuid::new_v4(), SubnetSpec::default_network()).unwrap();
             tx.commit().unwrap();
         }
 
         let tx = begin(&mut conn);
         assert!(matches!(
-            allocate(&tx, Uuid::new_v4()),
-            Err(IpamError::PoolExhausted)
+            allocate(&tx, Uuid::new_v4(), SubnetSpec::default_network()),
+            Err(IpamError::PoolExhausted { .. })
         ));
     }
 
@@ -375,12 +502,12 @@ mod tests {
         let mut conn = open();
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id).unwrap();
+        allocate(&tx, vm_id, SubnetSpec::default_network()).unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
         assert!(matches!(
-            allocate(&tx, vm_id),
+            allocate(&tx, vm_id, SubnetSpec::default_network()),
             Err(IpamError::AlreadyLeased { vm_id: leased }) if leased == vm_id
         ));
     }
@@ -390,7 +517,7 @@ mod tests {
         let mut conn = open();
         let first_vm = Uuid::new_v4();
         let tx = begin(&mut conn);
-        let first_lease = allocate(&tx, first_vm).unwrap();
+        let first_lease = allocate(&tx, first_vm, SubnetSpec::default_network()).unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
@@ -409,7 +536,7 @@ mod tests {
 
         let second_vm = Uuid::new_v4();
         let tx = begin(&mut conn);
-        let second_lease = allocate(&tx, second_vm).unwrap();
+        let second_lease = allocate(&tx, second_vm, SubnetSpec::default_network()).unwrap();
         tx.commit().unwrap();
         assert_eq!(second_lease.ipv4, first_lease.ipv4);
     }
@@ -446,7 +573,7 @@ mod tests {
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
-        let lease = allocate(&tx, vm_id).unwrap();
+        let lease = allocate(&tx, vm_id, SubnetSpec::default_network()).unwrap();
         tx.commit().unwrap();
         assert_eq!(lease.mac, derive_mac(vm_id, 1));
     }
@@ -474,7 +601,7 @@ mod tests {
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
-        let result = allocate(&tx, vm_id);
+        let result = allocate(&tx, vm_id, SubnetSpec::default_network());
         assert!(matches!(result, Err(IpamError::MacPoolExhausted)));
         drop(tx); // no commit: rolls back
 

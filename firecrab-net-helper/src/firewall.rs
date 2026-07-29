@@ -5,7 +5,7 @@
 use std::net::Ipv4Addr;
 use std::process::Stdio;
 
-use firecrab_helper_protocol::network::{MacAddr, TAP_PREFIX, tap_name};
+use firecrab_helper_protocol::network::{MacAddr, MicroNetworkSpec, TAP_PREFIX, tap_name};
 use rtnetlink::new_connection;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -107,8 +107,10 @@ pub struct FirewallActor {
 /// The actor's cached view of what's currently applied to `nft`.
 #[derive(Debug, Default)]
 struct FirewallState {
-    /// Uplink interface name the global ruleset was last rendered for.
-    applied_uplink: Option<String>,
+    /// The global ruleset text last applied. Compared verbatim so both an
+    /// uplink change and a MicroNetwork being added/removed re-apply, without
+    /// this state needing to mirror every input that goes into rendering.
+    applied_ruleset: Option<String>,
     /// vm_id -> leased IPv4 of every VM whose policy is currently installed.
     applied_vms: std::collections::HashMap<Uuid, Ipv4Addr>,
 }
@@ -129,24 +131,28 @@ impl Default for FirewallActor {
     }
 }
 
-/// Detect the uplink, and (re)apply the Firecrab tables only if the uplink
-/// differs from what was last applied. Never touches any table/chain this
+/// Detect the uplink, and (re)apply the Firecrab tables only if the rendered
+/// ruleset differs from what was last applied — i.e. on an uplink change or
+/// when a MicroNetwork is created/removed. Never touches any table/chain this
 /// helper does not own.
-pub async fn ensure_firewall(actor: &FirewallActor) -> Result<(), FirewallError> {
+pub async fn ensure_firewall(
+    actor: &FirewallActor,
+    micro_networks: &[MicroNetworkSpec],
+) -> Result<(), FirewallError> {
     let (connection, handle, _) = new_connection().map_err(FirewallError::Connection)?;
     tokio::spawn(connection);
     let uplink = nat::detect_uplink(&handle).await?;
 
     let mut state = actor.state.lock().await;
-    if state.applied_uplink.as_deref() == Some(uplink.as_str()) {
+    let ruleset = render_apply_ruleset(&uplink, micro_networks)?;
+    if state.applied_ruleset.as_deref() == Some(ruleset.as_str()) {
         return Ok(());
     }
 
-    let ruleset = render_apply_ruleset(&uplink)?;
     run_nft(&ruleset).await?;
     // A global (re)apply flushes the tables, so no per-VM policy survives it.
     state.applied_vms.clear();
-    state.applied_uplink = Some(uplink);
+    state.applied_ruleset = Some(ruleset);
     Ok(())
 }
 
@@ -182,8 +188,24 @@ pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError>
     let mut state = actor.state.lock().await;
     run_nft(&render_remove_ruleset()).await?;
     state.applied_vms.clear();
-    state.applied_uplink = None;
+    state.applied_ruleset = None;
     Ok(())
+}
+
+/// Every Firecrab-owned bridge: the built-in default network's, plus one per
+/// MicroNetwork. Names are derived from the network id (hex only), never
+/// taken as text from the API.
+fn bridge_names(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
+    std::iter::once(BRIDGE_NAME.to_owned())
+        .chain(micro_networks.iter().map(MicroNetworkSpec::bridge_name))
+        .collect()
+}
+
+/// Every Firecrab-owned subnet, in the same order as [`bridge_names`].
+fn subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
+    std::iter::once(nat::BRIDGE_SUBNET.to_owned())
+        .chain(micro_networks.iter().map(MicroNetworkSpec::subnet_cidr))
+        .collect()
 }
 
 /// Renders the whole VM-independent desired state for both owned tables as
@@ -194,9 +216,33 @@ pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError>
 /// [`render_vm_policy`]) so replacing one VM's policy never disturbs another.
 /// This global flush therefore only runs on an uplink change, when no per-VM
 /// state is expected to be present yet.
-fn render_apply_ruleset(uplink: &str) -> Result<String, FirewallError> {
+fn render_apply_ruleset(
+    uplink: &str,
+    micro_networks: &[MicroNetworkSpec],
+) -> Result<String, FirewallError> {
     nat::validate_uplink(uplink)?;
-    let postrouting = nat::render_postrouting_chain(uplink);
+    let bridges = bridge_names(micro_networks);
+    let subnets = subnet_cidrs(micro_networks);
+    let postrouting = nat::render_postrouting_chain(uplink, &subnets);
+
+    // One dispatch pair per bridge: the per-VM verdict maps below are keyed
+    // by leased IP (globally unique across networks, since their subnets
+    // cannot overlap), so only the entry rules need to know about bridges.
+    let forward_dispatch: String = bridges
+        .iter()
+        .map(|bridge| {
+            format!(
+                "\t\tiifname \"{bridge}\" jump firecrab_egress\n\
+                 \t\toifname \"{bridge}\" jump firecrab_ingress\n"
+            )
+        })
+        .collect();
+    // Routed traffic aimed at any Firecrab subnet is denied before the
+    // per-VM egress map is consulted: that is what keeps two MicroNetworks
+    // from reaching each other now that the host routes all of them. Traffic
+    // within one subnet is switched, not routed, and is denied separately by
+    // the bridge table's tap-to-tap rule.
+    let internal_destinations = subnets.join(", ");
     Ok(format!(
         // L3: NAT + egress/ingress dispatch keyed by the VM's leased IP. The
         // L2 table below guarantees the source IP is genuine, so keying L3
@@ -213,12 +259,11 @@ fn render_apply_ruleset(uplink: &str) -> Result<String, FirewallError> {
          \t}}\n\
          \tchain forward_dispatch {{\n\
          \t\ttype filter hook forward priority filter; policy accept;\n\
-         \t\tiifname \"{BRIDGE_NAME}\" jump firecrab_egress\n\
-         \t\toifname \"{BRIDGE_NAME}\" jump firecrab_ingress\n\
+         {forward_dispatch}\
          \t}}\n\
          \tchain firecrab_egress {{\n\
          \t\tct state established,related accept\n\
-         \t\tip daddr {{ 127.0.0.0/8, 169.254.0.0/16 }} drop\n\
+         \t\tip daddr {{ 127.0.0.0/8, 169.254.0.0/16, {internal_destinations} }} drop\n\
          \t\tip saddr vmap @vm_egress\n\
          \t\tdrop\n\
          \t}}\n\
@@ -361,9 +406,59 @@ async fn run_nft(ruleset: &str) -> Result<(), FirewallError> {
 mod tests {
     use super::*;
 
+    fn sample_network(id: u128, gateway: &str, prefix: u8) -> MicroNetworkSpec {
+        MicroNetworkSpec {
+            micro_network_id: Uuid::from_u128(id),
+            gateway: gateway.parse().unwrap(),
+            prefix,
+        }
+    }
+
+    #[test]
+    fn every_micro_network_gets_its_own_dispatch_and_nat_rules() {
+        let networks = [
+            sample_network(0x1234, "172.31.0.1", 24),
+            sample_network(0x5678, "172.32.0.1", 24),
+        ];
+        let ruleset = render_apply_ruleset("eth0", &networks).unwrap();
+
+        // The default network keeps its own rules, unchanged.
+        assert!(ruleset.contains("iifname \"fcbr0\" jump firecrab_egress"));
+        assert!(
+            ruleset.contains("ip saddr 172.30.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
+        );
+
+        for network in networks {
+            let bridge = network.bridge_name();
+            assert!(ruleset.contains(&format!("iifname \"{bridge}\" jump firecrab_egress")));
+            assert!(ruleset.contains(&format!("oifname \"{bridge}\" jump firecrab_ingress")));
+            assert!(ruleset.contains(&format!(
+                "ip saddr {} oifname \"eth0\" jump firecrab_postrouting",
+                network.subnet_cidr()
+            )));
+        }
+        // All of them masquerade through the one shared chain.
+        assert_eq!(ruleset.matches("masquerade").count(), 1);
+    }
+
+    #[test]
+    fn traffic_routed_between_micro_networks_is_dropped() {
+        let networks = [
+            sample_network(0x1234, "172.31.0.1", 24),
+            sample_network(0x5678, "172.32.0.1", 24),
+        ];
+        let ruleset = render_apply_ruleset("eth0", &networks).unwrap();
+        // Every Firecrab subnet is a denied destination for routed traffic,
+        // so one MicroNetwork cannot reach another even though the host has
+        // a connected route to both and ip_forward is on.
+        assert!(ruleset.contains(
+            "ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.30.0.0/24, 172.31.0.0/24, 172.32.0.0/24 } drop"
+        ));
+    }
+
     #[test]
     fn ruleset_only_declares_the_two_owned_tables() {
-        let ruleset = render_apply_ruleset("eth0").unwrap();
+        let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
         assert!(ruleset.contains("table inet firecrab"));
         assert!(ruleset.contains("table bridge firecrab_l2"));
         // Never a blanket flush of the whole host ruleset.
@@ -372,7 +467,7 @@ mod tests {
 
     #[test]
     fn global_ruleset_dispatches_bridge_traffic_from_accept_policy_base_chains() {
-        let ruleset = render_apply_ruleset("eth0").unwrap();
+        let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
         assert!(ruleset.contains("policy accept"));
         assert!(ruleset.contains("iifname \"fcbr0\" jump firecrab_egress"));
         assert!(ruleset.contains("oifname \"fcbr0\" jump firecrab_ingress"));
@@ -384,10 +479,10 @@ mod tests {
 
     #[test]
     fn global_ruleset_default_denies_egress_and_ingress_and_reserved_dests() {
-        let ruleset = render_apply_ruleset("eth0").unwrap();
+        let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
         // firecrab_egress: reserved destinations dropped, then per-VM map,
         // then a trailing drop (default deny for anything not accepted).
-        assert!(ruleset.contains("ip daddr { 127.0.0.0/8, 169.254.0.0/16 } drop"));
+        assert!(ruleset.contains("ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.30.0.0/24 } drop"));
         assert!(ruleset.contains("ip saddr vmap @vm_egress"));
         assert!(ruleset.contains("ip daddr vmap @vm_ingress"));
         // Both dispatch chains must end in drop.
@@ -396,7 +491,7 @@ mod tests {
 
     #[test]
     fn global_ruleset_denies_east_west_between_firecrab_taps() {
-        let ruleset = render_apply_ruleset("eth0").unwrap();
+        let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
         assert!(ruleset.contains("iifname \"fct*\" oifname \"fct*\" drop"));
         // The wildcard must not be able to match the bridge itself.
         assert!(!"fcbr0".starts_with("fct"));
@@ -404,7 +499,7 @@ mod tests {
 
     #[test]
     fn global_ruleset_is_idempotent_via_add_then_flush_and_owns_only_two_tables() {
-        let ruleset = render_apply_ruleset("eth0").unwrap();
+        let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
         assert!(ruleset.contains("add table inet firecrab\nflush table inet firecrab"));
         assert!(ruleset.contains("add table bridge firecrab_l2\nflush table bridge firecrab_l2"));
         assert!(!ruleset.contains("flush ruleset"));
@@ -414,7 +509,7 @@ mod tests {
     fn malformed_uplink_names_are_rejected_before_touching_nft() {
         for bad in ["", "eth0\"; flush ruleset #", "way-too-long-interface-name"] {
             assert!(matches!(
-                render_apply_ruleset(bad),
+                render_apply_ruleset(bad, &[]),
                 Err(FirewallError::InvalidUplinkName(_))
             ));
         }
@@ -554,14 +649,26 @@ mod tests {
         // Pre-seed the actor as if this uplink was already applied. No `nft`
         // binary needs to exist or succeed for this call to return Ok, since
         // it must short-circuit before ever calling run_nft/spawning nft.
+        let applied = render_apply_ruleset(&real_uplink, &[]).unwrap();
         let actor = FirewallActor::new();
-        actor.state.lock().await.applied_uplink = Some(real_uplink.clone());
+        actor.state.lock().await.applied_ruleset = Some(applied.clone());
 
-        assert!(ensure_firewall(&actor).await.is_ok());
+        assert!(ensure_firewall(&actor, &[]).await.is_ok());
         assert_eq!(
-            actor.state.lock().await.applied_uplink.as_deref(),
-            Some(real_uplink.as_str())
+            actor.state.lock().await.applied_ruleset.as_deref(),
+            Some(applied.as_str())
         );
+    }
+
+    #[test]
+    fn adding_a_micro_network_changes_the_rendered_ruleset() {
+        // What `ensure_firewall`'s short-circuit compares is this text, so a
+        // network set that renders differently is exactly what makes it
+        // re-apply rather than skip.
+        let without = render_apply_ruleset("eth0", &[]).unwrap();
+        let with =
+            render_apply_ruleset("eth0", &[sample_network(0x1234, "172.31.0.1", 24)]).unwrap();
+        assert_ne!(without, with);
     }
 
     #[tokio::test]

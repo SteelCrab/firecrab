@@ -148,6 +148,12 @@ impl AppError {
         )
     }
 
+    /// `409`: the resource is still in use by something that depends on it
+    /// (a MicroNetwork with VMs still in it).
+    pub fn in_use(message: &'static str, request_id: Uuid) -> Self {
+        Self::new(StatusCode::CONFLICT, "in_use", message, request_id)
+    }
+
     /// `409`: the VM's current state doesn't allow the requested operation.
     pub fn invalid_state(current: VmState, request_id: Uuid) -> Self {
         let mut fields = BTreeMap::new();

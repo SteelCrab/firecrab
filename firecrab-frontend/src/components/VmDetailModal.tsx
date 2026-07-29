@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import type { EgressPolicy, StartupStep, VmResponse } from "../bindings";
-import { ApiClientError, getVm, getVmLog, updateVmResources } from "../api/client";
+import type { EgressPolicy, MicroNetworkResponse, StartupStep, VmResponse } from "../bindings";
+import {
+  ApiClientError,
+  getVm,
+  getVmLog,
+  listMicroNetworks,
+  updateVmResources,
+} from "../api/client";
 import { isEditableState } from "../model";
 import RamStepper from "./RamStepper";
 
@@ -61,6 +67,13 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [editEgressPolicy, setEditEgressPolicy] = useState<EgressPolicy>("internet");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
+  const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
+
+  // Only to resolve the VM's microNetworkId into a readable name/subnet; a
+  // failed load just falls back to showing the raw id.
+  useEffect(() => {
+    listMicroNetworks().then(setMicroNetworks).catch(() => setMicroNetworks([]));
+  }, []);
 
   const startEditing = () => {
     if (!vm) return;
@@ -162,6 +175,13 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
 
   const logText = [...pipelineLines, consoleLog].filter(Boolean).join("\n") || "아직 출력이 없습니다.";
 
+  const microNetwork = microNetworks.find((network) => network.id === vm?.microNetworkId);
+  const microNetworkLabel = !vm?.microNetworkId
+    ? "기본 네트워크"
+    : microNetwork
+      ? `${microNetwork.name} (${microNetwork.subnetCidr})`
+      : vm.microNetworkId;
+
   return (
     <div className="console-overlay">
       <div className="console-panel">
@@ -215,7 +235,9 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   `${vm.diskGb} GiB`
                 )}
               </dd>
-              <dt>네트워크</dt>
+              <dt>MicroNetwork</dt>
+              <dd>{microNetworkLabel}</dd>
+              <dt>외부 통신</dt>
               <dd>
                 {editing ? (
                   <select

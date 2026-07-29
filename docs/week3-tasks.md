@@ -91,7 +91,7 @@
   변화 없는 순수 리팩터), `GET /api/network` 응답에 `uplink` 필드 추가(net-helper IPC 안 늘리고
   `/proc/net/route`를 직접 읽어 특권 경계 유지) 및 `HostInfoModal.tsx`에 표시. `cargo test
   --workspace` 130/18/12/46 green
-- 2026-07-24(계속): `MicroNetwork`(`task-micro-network.md`, VPC형 가상 네트워크) 1단계 —
+- 2026-07-24(계속): `MicroNetwork`(`task-micro-network.md`, 가상 네트워크) 1단계 —
   이름 있는 CIDR 예약만 다루는 최소 리소스만 구현. `micro_networks` SQLite 테이블(id/name/
   subnet_cidr), `POST/GET/DELETE /api/micro-networks`(name·CIDR 형식 검증), 프론트엔드에
   "MicroNetwork" 버튼 → 목록/생성/삭제 모달(`MicroNetworksModal.tsx`, 기존 `HostInfoModal`/
@@ -114,6 +114,24 @@
   `cargo fmt/clippy/test --workspace` 140/20/14/47 green. VRF(라우팅 테이블 분리)·firewall/
   nat/dhcp 네임스페이스 분리·VM 소속 연동은 여전히 범위 밖 — `task-micro-network.md`에 남은
   범위로 기록
+- 2026-07-29: `MicroNetwork` 3단계 — 하드코딩돼 있던 네트워크 서비스 5종을 네트워크별로
+  파라미터화해 VM이 실제로 MicroNetwork 안에서 동작하게 함. 2계층(MicroNetwork/Subnet) 분리는
+  검토 후 보류(단일 host에서 subnet을 여러 개 둘 동기가 없고 VRF·2단 UI까지 함께 커짐) —
+  1계층 유지 결정을 `task-micro-network.md`에 기록. 구현: `MicroNetworkSpec`(helper-protocol,
+  gateway/prefix 숫자값만 넘기고 bridge 이름·CIDR은 helper가 유도)을 `EnsureFirewall`/
+  `SyncDhcpLeases`에 실어 보내고 `CreateTap`에 `micro_network_id` 추가, `firewall.rs`는
+  bridge별 forward dispatch + 모든 firecrab subnet을 목적지 deny에 넣어 네트워크 간 라우팅
+  차단(`applied_uplink` → `applied_ruleset` 비교로 네트워크 집합 변화도 재적용 트리거),
+  `nat.rs`는 subnet별 postrouting 규칙, `dhcp.rs`는 네트워크별 `interface=`/`dhcp-range=` +
+  집합이 바뀌면 dnsmasq **restart**(SIGHUP은 hostsfile만 다시 읽음) + `dhcp_release`를 실제
+  서빙 bridge로 전송, `ipam.rs`는 `SubnetSpec`으로 lease 할당을 네트워크 CIDR로 스코프
+  (`network_leases.micro_network_id` 컬럼 + 마이그레이션, NULL = 기본 네트워크라 기존 VM 무영향),
+  `CreateVmRequest`/`VmResponse`에 `micro_network_id`, VM 시작 시 모든 MicroNetwork bridge
+  재-ensure(재부팅 복구), active lease 있는 MicroNetwork 삭제는 `409`, 겹치는 CIDR은 필드 검증
+  오류로 거부. 프론트엔드는 생성 폼 MicroNetwork 선택 + 상세/목록에 소속 네트워크·gateway 표시.
+  `cargo fmt/clippy/test --workspace` 143/20/15/54 green, `RUSTDOCFLAGS=-D warnings cargo doc`
+  clean, 프론트 `tsc -b`/`oxlint`/`vite build` 통과, patch coverage 86.15%. 실제 host 검증은
+  net-helper 재시작이 필요해 미실시(실행 중인 VM에 영향). VRF와 daemon 시작 시 재적용은 남은 범위
 
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
@@ -143,7 +161,7 @@
 | 상태 | 제목 | 작업 | 완료 기준 | 산출물 |
 |---|---|---|---|---|
 | ✅ | [배포판 표준 커널 사용](task-distro-standard-kernels.md) | Ubuntu/Alpine 템플릿이 공유하던 자체 빌드 vanilla 커널 대신, 각 배포판이 실제 배포하는 공식 커널(`linux-image-generic`, `linux-virt`)을 추출해 쓴다. | 두 템플릿 모두 실제 배포판 공식 커널로 부팅되고 기존 동작에 회귀가 없다(Alpine은 virtio_blk/ext4가 모듈이라 initrd 필요). | `firecrab-api/src/templates.rs`, `firecrab-api/src/firecracker.rs`, `images/kernel/`, `scripts/firecracker-menual/install-{ubuntu,alpine}-rootfs.sh`, `scripts/firecracker-menual/extract-vmlinux` |
-| 진행 중 (1단계 완료) | [MicroNetwork — VPC형 가상 네트워크 구현](task-micro-network.md) | (읽기 전용 조회 + VM별 egress 정책, `ip_forward` 자동화, `nat.rs` 분리, `uplink` 노출은 위 표에서 ✅ 완료됨) 지금 하나뿐인 bridge/subnet을 사용자가 여러 개(MicroNetwork) 만들고 VM을 그중 하나에 명시적으로 소속시킬 수 있게 일반화한다 — subnet/gateway/bridge 이름이 5곳에 하드코딩된 것 통합, 설정 영속화, `ensure_gateway` 주소 교체 로직이 선행돼야 함. | MicroNetwork를 여러 개 만들 수 있고, VM 생성 시 소속 MicroNetwork를 선택하며, 서로 다른 MicroNetwork의 VM은 기본 격리된다. | `firecrab-api/src/ipam.rs`, `firecrab-api/src/handlers/micro_networks.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/bridge.rs`, `firecrab-net-helper/src/firewall.rs`, `firecrab-net-helper/src/nat.rs`, `firecrab-net-helper/src/dhcp.rs`, `firecrab-frontend/src/components/` |
+| 진행 중 (VRF만 남음) | [MicroNetwork — 가상 네트워크 구현](task-micro-network.md) | (읽기 전용 조회 + VM별 egress 정책, `ip_forward` 자동화, `nat.rs` 분리, `uplink` 노출은 위 표에서 ✅ 완료됨) 지금 하나뿐인 bridge/subnet을 사용자가 여러 개(MicroNetwork) 만들고 VM을 그중 하나에 명시적으로 소속시킬 수 있게 일반화한다 — subnet/gateway/bridge 이름이 5곳에 하드코딩된 것 통합, 설정 영속화, `ensure_gateway` 주소 교체 로직이 선행돼야 함. | MicroNetwork를 여러 개 만들 수 있고, VM 생성 시 소속 MicroNetwork를 선택하며, 서로 다른 MicroNetwork의 VM은 기본 격리된다. | `firecrab-api/src/ipam.rs`, `firecrab-api/src/handlers/micro_networks.rs`, `firecrab-api-types/src/lib.rs`, `firecrab-net-helper/src/bridge.rs`, `firecrab-net-helper/src/firewall.rs`, `firecrab-net-helper/src/nat.rs`, `firecrab-net-helper/src/dhcp.rs`, `firecrab-frontend/src/components/` |
 
 ### 네트워크 — 범위 밖으로 보류 (재개 시 참고용, 이번 대회 일정에는 포함 안 함)
 

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { ApiClientError, createVm } from "../api/client";
-import type { CreateVmRequest, EgressPolicy, VmResponse } from "../bindings";
+import { ApiClientError, createVm, listMicroNetworks } from "../api/client";
+import type { CreateVmRequest, EgressPolicy, MicroNetworkResponse, VmResponse } from "../bindings";
 import RamStepper from "./RamStepper";
 
 /** The registry aliases the API accepts today; selection only, no free text. */
@@ -12,7 +12,11 @@ const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
   isolated: "격리(게이트웨이만 허용)",
 };
 
-const FIELDS_WITH_OWN_ERROR = ["name", "cpu", "ram", "template", "diskGb"] as const;
+const FIELDS_WITH_OWN_ERROR = ["name", "cpu", "ram", "template", "diskGb", "microNetworkId"] as const;
+
+/** `<select>` value standing in for "no MicroNetwork" — the built-in default
+ *  network, which the API represents as a null microNetworkId. */
+const DEFAULT_NETWORK = "";
 
 interface CreateVmProps {
   onCreated: (vm: VmResponse) => void;
@@ -26,8 +30,17 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [ram, setRam] = useState("512");
   const [diskGb, setDiskGb] = useState("2");
   const [egressPolicy, setEgressPolicy] = useState<EgressPolicy>("internet");
+  const [microNetworkId, setMicroNetworkId] = useState<string>(DEFAULT_NETWORK);
+  const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
+
+  // Failing to load the list isn't surfaced: the dropdown then just offers
+  // the default network, which is exactly what this form did before
+  // MicroNetworks existed.
+  useEffect(() => {
+    listMicroNetworks().then(setMicroNetworks).catch(() => setMicroNetworks([]));
+  }, []);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -40,6 +53,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       ram: parseInt(ram, 10) || 0,
       diskGb: parseInt(diskGb, 10) || 0,
       egressPolicy,
+      microNetworkId: microNetworkId === DEFAULT_NETWORK ? null : microNetworkId,
     };
 
     setSubmitting(true);
@@ -119,7 +133,23 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         {fieldError("diskGb")}
       </div>
       <div className="field">
-        <label htmlFor="vm-egress-policy">네트워크</label>
+        <label htmlFor="vm-micro-network">MicroNetwork</label>
+        <select
+          id="vm-micro-network"
+          value={microNetworkId}
+          onChange={(event) => setMicroNetworkId(event.target.value)}
+        >
+          <option value={DEFAULT_NETWORK}>기본 네트워크</option>
+          {microNetworks.map((network) => (
+            <option key={network.id} value={network.id}>
+              {network.name} ({network.subnetCidr})
+            </option>
+          ))}
+        </select>
+        {fieldError("microNetworkId")}
+      </div>
+      <div className="field">
+        <label htmlFor="vm-egress-policy">외부 통신</label>
         <select
           id="vm-egress-policy"
           value={egressPolicy}

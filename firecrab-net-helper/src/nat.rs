@@ -31,12 +31,20 @@ pub(crate) fn validate_uplink(name: &str) -> Result<(), FirewallError> {
 
 /// Renders the NAT postrouting chain fragment that `firewall.rs`'s
 /// `render_apply_ruleset` splices into its single `table inet firecrab`
-/// declaration.
-pub(crate) fn render_postrouting_chain(uplink: &str) -> String {
+/// declaration. One dispatch rule per Firecrab subnet (the default network's
+/// plus every MicroNetwork's), all jumping to the same masquerade chain —
+/// every network egresses through the host's single uplink.
+pub(crate) fn render_postrouting_chain(uplink: &str, subnets: &[String]) -> String {
+    let dispatch: String = subnets
+        .iter()
+        .map(|subnet| {
+            format!("\t\tip saddr {subnet} oifname \"{uplink}\" jump firecrab_postrouting\n")
+        })
+        .collect();
     format!(
         "\tchain postrouting_dispatch {{\n\
          \t\ttype nat hook postrouting priority srcnat; policy accept;\n\
-         \t\tip saddr {BRIDGE_SUBNET} oifname \"{uplink}\" jump firecrab_postrouting\n\
+         {dispatch}\
          \t}}\n\
          \tchain firecrab_postrouting {{\n\
          \t\tmasquerade\n\

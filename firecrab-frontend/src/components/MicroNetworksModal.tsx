@@ -8,10 +8,10 @@ interface MicroNetworksModalProps {
 }
 
 /**
- * MicroNetwork management (`docs/task-micro-network.md`) — firecrab's
- * VPC-equivalent. This first slice only manages the named CIDR reservation
- * itself; bridge/gateway/route-table provisioning and VM membership aren't
- * wired up yet, so there's nothing to show beyond name + subnet here.
+ * MicroNetwork management (`docs/task-micro-network.md`) — firecrab's own
+ * virtual networks. Creating one reserves the CIDR, provisions its host
+ * bridge, and gives it its own DHCP range and NAT rule; VMs then pick one on
+ * the create form. Deleting is refused while VMs are still in it.
  */
 export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps) {
   const [networks, setNetworks] = useState<MicroNetworkResponse[] | null>(null);
@@ -126,6 +126,7 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
                 <tr>
                   <th>name</th>
                   <th>subnet CIDR</th>
+                  <th>gateway</th>
                   <th>id</th>
                   <th className="actions">actions</th>
                 </tr>
@@ -135,6 +136,7 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
                   <tr key={network.id}>
                     <td className="name">{network.name}</td>
                     <td className="mono">{network.subnetCidr}</td>
+                    <td className="mono">{network.gateway}</td>
                     <td className="mono" title={network.id}>
                       {network.id.split("-")[0]}
                     </td>
