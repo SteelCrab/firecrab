@@ -156,7 +156,7 @@ sudo ./install.sh --uninstall --purge   # 데이터까지 (되돌릴 수 없음)
 | `--check` | 비특권 동작 + `/var/lib/firecrab`을 만들지 않음 |
 | `sudo ./install.sh --no-images` | 계정·디렉터리·유닛·기동 |
 | 소켓·그룹 확인 | `root firecrab 660`, firecrab이 kvm 그룹 |
-| capability | `fcbr0` 생성, dnsmasq 생존, `operation not permitted` 없음 |
+| capability | `fcbr0` 주소, dnsmasq 생존, 67번 포트 바인딩, `operation not permitted` 없음 |
 | HTTP | 대시보드 200, `/api/vms` `[]`, 같은 origin POST 통과 / 타 사이트 403 |
 | 재실행 | 멱등성 + 기존 MicroNetwork 보존 |
 | 제거 | `--uninstall`은 데이터 보존, `--purge`는 삭제 |

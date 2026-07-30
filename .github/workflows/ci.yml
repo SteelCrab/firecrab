@@ -187,8 +187,13 @@ jobs:
         # the bridge (NET_ADMIN) and a dnsmasq the helper can still signal
         # (SETUID/SETGID/NET_BIND_SERVICE/KILL).
         run: |
-          ip -br addr show fcbr0
+          # The bridge exists with its address. It reads DOWN until a VM's TAP
+          # joins it, which is normal for a bridge with no ports.
+          ip -br addr show fcbr0 | grep -q 172.30.0.1/24
           sudo pgrep -af dnsmasq | grep -q firecrab
+          # dnsmasq bound the privileged DHCP port, so NET_BIND_SERVICE held.
+          sudo ss -lun | grep -q ':67'
+          # Anything the bounding set is missing shows up here, not at startup.
           ! sudo journalctl -u firecrab-net-helper --no-pager | grep -i 'operation not permitted'
 
       - name: Dashboard and API answer

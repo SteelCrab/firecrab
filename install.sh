@@ -97,6 +97,10 @@ pkg_name() {
         apk:e2fsprogs) echo "e2fsprogs-extra" ;;
         *:e2fsprogs)  echo "e2fsprogs" ;;
         *:curl)       echo "curl" ;;
+        # scripts/install-firecracker.sh needs find and tar; a minimal
+        # openSUSE or Debian install has neither.
+        *:findutils)  echo "findutils" ;;
+        *:tar)        echo "tar" ;;
         # cargo needs a linker; rustup only warns that one is missing and the
         # build then fails at link time with a much less obvious error.
         apt-get:cc)   echo "build-essential" ;;
@@ -198,7 +202,8 @@ report_ufw() {
 
 # --- dependency resolution -------------------------------------------------
 
-# The commands the two daemons shell out to while running.
+# The commands the two daemons shell out to while running, plus the handful the
+# installer's own helper scripts need.
 ensure_runtime_deps() {
     local failed=0
     ensure ip iproute2   || failed=1
@@ -206,6 +211,8 @@ ensure_runtime_deps() {
     ensure dnsmasq dnsmasq || failed=1
     ensure mkfs.ext4 e2fsprogs || failed=1
     ensure curl curl     || failed=1
+    ensure find findutils || failed=1
+    ensure tar tar       || failed=1
     return $failed
 }
 

@@ -48,6 +48,13 @@ updated: 2026-07-29
 - `firecrab-api.service` — 비특권 `firecrab` 계정, `WorkingDirectory=/var/lib/firecrab`
   - `FIRECRAB_IMAGE_ROOT`, `FIRECRAB_STATIC_ROOT` 지정, `EnvironmentFile=-/etc/firecrab/api.env`
 - 샌드박싱은 `ProtectSystem=full`까지만 — `strict`는 `/var`를 잠가 dnsmasq의 lease 파일을 깨뜨린다
+- `CapabilityBoundingSet`으로 uid 0을 유지한 채 쓰지 않는 권한을 전부 회수:
+  `NET_ADMIN` `NET_RAW` `NET_BIND_SERVICE` `SETUID` `SETGID` `KILL` `CHOWN`
+  - 하나가 빠지면 **기동은 되고 특정 동작만 런타임에 깨진다** — 그래서 CI가 실제로 확인한다
+  - `KILL`: dnsmasq가 비특권 사용자로 내려간 뒤 시그널을 보내야 함(커널은 uid가 아니라
+    capability를 본다)
+  - `CHOWN`: dnsmasq가 pid 파일 소유자를 그 사용자로 넘긴다. **CI가 이걸 잡아냈다** —
+    없으면 매 기동마다 `chown of PID file ... Operation not permitted`
 
 ## 완료 기준
 
