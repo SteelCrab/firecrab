@@ -31,6 +31,7 @@ PURGE=0
 PKG=''          # detected package manager
 PKG_UPDATED=0   # index refreshed at most once
 
+# Help text, also printed before failing on an unknown option.
 usage() {
     cat <<'USAGE'
 Usage: sudo ./install.sh [OPTIONS]
@@ -74,6 +75,7 @@ done
 
 # --- package manager -------------------------------------------------------
 
+# Sets PKG to the first package manager found; returns 1 if none is.
 detect_pkg() {
     for candidate in apt-get dnf zypper pacman apk; do
         if have "$candidate"; then PKG=$candidate; return 0; fi
@@ -101,6 +103,7 @@ pkg_name() {
     esac
 }
 
+# Refreshes the package index at most once per run.
 pkg_refresh() {
     [ "$PKG_UPDATED" -eq 1 ] && return 0
     case "$PKG" in
@@ -111,15 +114,15 @@ pkg_refresh() {
     PKG_UPDATED=1
 }
 
+# Installs the named packages with whichever manager was detected.
 pkg_install() {
     pkg_refresh
-    # shellcheck disable=SC2086 # deliberate word splitting: one name can map to two packages
     case "$PKG" in
-        apt-get) DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $* ;;
-        dnf) dnf install -y -q $* ;;
-        zypper) zypper --non-interactive install -y $* ;;
-        pacman) pacman -Sy --noconfirm --needed $* ;;
-        apk) apk add --no-cache $* ;;
+        apt-get) DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" ;;
+        dnf) dnf install -y -q "$@" ;;
+        zypper) zypper --non-interactive install -y "$@" ;;
+        pacman) pacman -Sy --noconfirm --needed "$@" ;;
+        apk) apk add --no-cache "$@" ;;
         *) return 1 ;;
     esac
 }
@@ -129,21 +132,24 @@ ensure() {
     local command_name=$1 generic=$2 packages
     have "$command_name" && return 0
 
-    packages=$(pkg_name "$generic")
+    # One generic name can map to two packages (nodejs + npm), so the words are
+    # split here, deliberately, into an array rather than left to the shell.
+    read -ra packages <<<"$(pkg_name "$generic")"
     if [ "$MODE" = check ]; then
-        warn "missing: $command_name (would install: $packages)"
+        warn "missing: $command_name (would install: ${packages[*]})"
         return 1
     fi
-    [ "$INSTALL_DEPS" -eq 1 ] || { warn "missing: $command_name (--no-deps, install '$packages' yourself)"; return 1; }
-    [ -n "$PKG" ] || { warn "missing: $command_name and no known package manager — install '$packages' yourself"; return 1; }
+    [ "$INSTALL_DEPS" -eq 1 ] || { warn "missing: $command_name (--no-deps, install '${packages[*]}' yourself)"; return 1; }
+    [ -n "$PKG" ] || { warn "missing: $command_name and no known package manager — install '${packages[*]}' yourself"; return 1; }
 
-    step "installing $packages (for $command_name)"
-    pkg_install "$packages" || { warn "failed to install $packages"; return 1; }
+    step "installing ${packages[*]} (for $command_name)"
+    pkg_install "${packages[@]}" || { warn "failed to install ${packages[*]}"; return 1; }
     have "$command_name"
 }
 
 # --- host checks -----------------------------------------------------------
 
+# A VM cannot start without /dev/kvm, and this script cannot supply it.
 check_kvm() {
     if [ -e /dev/kvm ]; then
         log "/dev/kvm present"
@@ -154,6 +160,7 @@ check_kvm() {
     return 1
 }
 
+# The units need a running systemd, not merely the binary.
 check_systemd() {
     if [ -d /run/systemd/system ]; then
         log "systemd is running"
@@ -163,6 +170,7 @@ check_systemd() {
     return 1
 }
 
+# UFW is not ours to change, so its DHCP block is reported, not fixed.
 report_ufw() {
     have ufw || return 0
     local status
@@ -179,6 +187,7 @@ report_ufw() {
 
 # --- dependency resolution -------------------------------------------------
 
+# The commands the two daemons shell out to while running.
 ensure_runtime_deps() {
     local failed=0
     ensure ip iproute2   || failed=1
@@ -189,6 +198,7 @@ ensure_runtime_deps() {
     return $failed
 }
 
+# Comes from its own upstream script rather than a distro package.
 ensure_firecracker() {
     have firecracker && { log "firecracker present"; return 0; }
 
@@ -203,6 +213,7 @@ ensure_firecracker() {
     have firecracker
 }
 
+# cargo, plus npm when the dashboard is being built.
 ensure_build_tools() {
     local failed=0
 
@@ -213,8 +224,18 @@ ensure_build_tools() {
         failed=1
     elif [ "$INSTALL_DEPS" -eq 1 ]; then
         step "installing the Rust toolchain (rustup)"
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
-            || { warn "rustup install failed"; failed=1; }
+        # Downloaded whole, then run - piping curl into sh executes whatever
+        # arrived if the transfer is cut off partway.
+        local installer
+        installer=$(mktemp)
+        # shellcheck disable=SC2064 # expand the path now, not at trap time
+        trap "rm -f '$installer'" RETURN
+        if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$installer"; then
+            sh "$installer" -y --no-modify-path || { warn "rustup install failed"; failed=1; }
+        else
+            warn "could not download the rustup installer"
+            failed=1
+        fi
         # rustup lands in $HOME/.cargo for whoever runs this (root under sudo).
         export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
         have cargo || { warn "cargo still not on PATH"; failed=1; }
@@ -231,6 +252,7 @@ ensure_build_tools() {
 
 # --- build -----------------------------------------------------------------
 
+# Release binaries, and the dashboard bundle unless it was skipped.
 build_all() {
     step "building the workspace (release)"
     ( cd "$REPO_ROOT" && cargo build --release --workspace )
@@ -243,6 +265,7 @@ build_all() {
 
 # --- host layout -----------------------------------------------------------
 
+# The account the API runs as, in the kvm group for firecracker.
 ensure_account() {
     if getent group "$FIRECRAB_GROUP" >/dev/null; then
         log "group $FIRECRAB_GROUP exists"
@@ -266,6 +289,7 @@ ensure_account() {
     fi
 }
 
+# Data, config and install directories with their intended owners.
 ensure_directories() {
     install -d -o root -g root -m 0755 "$LIBDIR" "$SHAREDIR"
     install -d -o "$FIRECRAB_USER" -g "$FIRECRAB_GROUP" -m 0750 \
@@ -274,6 +298,7 @@ ensure_directories() {
     log "directories ready under $DATADIR, $CONFDIR"
 }
 
+# Puts the built binaries, and the dashboard, where the units expect them.
 install_binaries() {
     local target="$REPO_ROOT/target/release"
     for binary in firecrab-api firecrab-net-helper; do
@@ -292,6 +317,7 @@ install_binaries() {
     log "dashboard installed to $SHAREDIR/dashboard"
 }
 
+# Seeds api.env once so an operator's edits survive a re-run.
 install_config() {
     if [ -f "$CONFDIR/api.env" ]; then
         log "keeping existing $CONFDIR/api.env"
@@ -312,6 +338,7 @@ ENVFILE
     log "wrote $CONFDIR/api.env"
 }
 
+# Renders the unit templates with this host's paths and account.
 install_units() {
     local uid
     uid=$(id -u "$FIRECRAB_USER")
@@ -332,10 +359,12 @@ install_units() {
 
 # --- guest images ----------------------------------------------------------
 
+# Whether a guest rootfs is already installed.
 images_present() {
     compgen -G "$DATADIR/images/rootfs/*.ext4" >/dev/null 2>&1
 }
 
+# Whether the repo has images that can be copied instead of built.
 repo_images_present() {
     compgen -G "$REPO_ROOT/images/rootfs/*.ext4" >/dev/null 2>&1
 }
@@ -363,6 +392,7 @@ report_images() {
     return 1
 }
 
+# Gets a guest image into place: copy from the repo, otherwise build one.
 ensure_images() {
     [ "$WITH_IMAGES" -eq 1 ] || { log "skipping images (--no-images)"; return 0; }
 
@@ -410,6 +440,7 @@ ensure_images() {
 
 # --- run -------------------------------------------------------------------
 
+# Enables and starts both units, then confirms they really came up.
 start_units() {
     systemctl enable --now "${UNITS[@]}"
     sleep 1
@@ -425,10 +456,16 @@ start_units() {
     return $failed
 }
 
+# Report-only path: every gap, no changes, no root required.
 do_check() {
     log "checking host readiness (nothing will be changed)"
     local gaps=0
-    detect_pkg && log "package manager: $PKG" || { warn "no known package manager (apt/dnf/zypper/pacman/apk)"; gaps=1; }
+    if detect_pkg; then
+        log "package manager: $PKG"
+    else
+        warn "no known package manager (apt/dnf/zypper/pacman/apk)"
+        gaps=1
+    fi
     ensure_runtime_deps || gaps=1
     ensure_firecracker || gaps=1
     ensure_build_tools || gaps=1
@@ -445,6 +482,7 @@ do_check() {
     return 0
 }
 
+# The default path: fill the gaps, build, lay out, start.
 do_install() {
     need_root
     detect_pkg || warn "no known package manager — anything missing has to be installed by hand"
@@ -474,6 +512,7 @@ do_install() {
     fi
 }
 
+# Removes what this script installed; data only with --purge.
 do_uninstall() {
     need_root --uninstall
     for unit in "${UNITS[@]}"; do

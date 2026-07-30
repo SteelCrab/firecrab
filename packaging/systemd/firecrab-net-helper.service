@@ -22,6 +22,21 @@ ExecStart=@LIBDIR@/firecrab-net-helper
 Restart=on-failure
 RestartSec=2
 
+# Still uid 0, but with everything it does not use taken away. Each of these is
+# load-bearing; dropping one breaks a specific operation at runtime rather than
+# at startup:
+#   NET_ADMIN         bridges and TAPs over rtnetlink, and the nftables tables
+#   NET_RAW           dnsmasq's raw DHCP sockets
+#   NET_BIND_SERVICE  dnsmasq binds 67 (DHCP) and 53 (DNS)
+#   SETUID, SETGID    dnsmasq drops to an unprivileged user after startup
+#   KILL              signalling dnsmasq once it has dropped to that user:
+#                     SIGHUP to reload, SIGTERM to stop, signal 0 to probe it.
+#                     A uid-0 process with CAP_KILL removed cannot signal a
+#                     process of another uid — the kernel checks the capability,
+#                     not the uid.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL
+NoNewPrivileges=yes
+
 # Deliberately mild: this process shells out to nft/ip and supervises dnsmasq,
 # which inherit the namespace. ProtectSystem=strict would take /var with it and
 # break dnsmasq's lease file.
