@@ -65,7 +65,7 @@ sudo ./install.sh --uninstall   # remove the daemons; VM data is kept unless --p
 KVM is the one thing it cannot install for you — if `/dev/kvm` is missing, enable
 virtualization in the BIOS (or nested virtualization, if this host is itself a VM).
 Full usage — options, layout, upgrades, uninstall, troubleshooting — is in
-[docs/install.md](docs/install.md).
+[docs/20-guides/install.md](docs/20-guides/install.md).
 
 ## Run from source (development)
 
@@ -85,7 +85,7 @@ cargo run -p firecrab-api
 cd firecrab-frontend && npm run dev
 ```
 
-Open `http://localhost:8080/`. See [docs/web.md](docs/web.md) for the full walkthrough.
+Open `http://localhost:8080/`. See [docs/20-guides/web.md](docs/20-guides/web.md) for the full walkthrough.
 
 To serve the built dashboard from the API instead of running the third terminal, point
 it at the build output:
@@ -95,6 +95,12 @@ cd firecrab-frontend && npm run build && cd ..
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 # http://localhost:3000/
 ```
+
+## Documentation
+
+All design notes, task plans, verification procedures and bug write-ups live in
+[`docs/`](docs/HOME.md), which doubles as an Obsidian vault. Written in Korean;
+code, comments and commits are in English.
 
 ## License
 

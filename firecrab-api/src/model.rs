@@ -64,7 +64,7 @@ pub struct VmRecord {
     #[serde(default)]
     pub egress_policy: EgressPolicy,
     /// The MicroNetwork this VM belongs to, or `None` for the built-in
-    /// default network (`docs/task-micro-network.md`). Fixed at creation:
+    /// default network (`docs/30-tasks/task-micro-network.md`). Fixed at creation:
     /// the VM's lease comes out of that network's subnet, so moving it would
     /// mean reallocating the address its guest already booted with.
     #[serde(default)]

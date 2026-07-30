@@ -1,6 +1,6 @@
 //! IP address and MAC allocation management (IPAM): hands out unique
 //! IPv4/MAC leases from one network's subnet — the default 172.30.0.0/24 or
-//! a MicroNetwork's own (`docs/task-micro-network.md`) — backed by SQLite so
+//! a MicroNetwork's own (`docs/30-tasks/task-micro-network.md`) — backed by SQLite so
 //! allocation is atomic under concurrent VM creation.
 
 use std::collections::HashSet;

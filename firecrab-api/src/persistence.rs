@@ -60,7 +60,7 @@ const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12, \
     micro_network_id = ?13 WHERE id = ?1";
 
-/// Schema for the `micro_networks` table (`docs/task-micro-network.md`).
+/// Schema for the `micro_networks` table (`docs/30-tasks/task-micro-network.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
 /// is the bridge name, which the helper derives from `id`.
 const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_networks (

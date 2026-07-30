@@ -714,7 +714,7 @@ async fn finish_run_start(
 const NETWORK_SENTINEL_SCAN_CAP: usize = 4096;
 
 /// Waits for the guest's boot-time network-readiness unit to report over
-/// its serial console (`docs/task-guest-network-configuration.md` — the
+/// its serial console (`docs/30-tasks/task-guest-network-configuration.md` — the
 /// substitute this project uses for a guest-agent event, which is out of
 /// scope). `FIRECRAB_NETWORK_READY` succeeds; `FIRECRAB_NETWORK_FAILED`,
 /// the console closing, or the timeout all fail the start outright — a

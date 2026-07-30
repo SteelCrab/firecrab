@@ -61,7 +61,7 @@ sudo ./install.sh --uninstall   # 데몬 제거. --purge 없이는 VM 데이터 
 
 KVM은 스크립트가 대신 설치할 수 없는 유일한 항목입니다 — `/dev/kvm`이 없으면 BIOS에서
 가상화를 켜세요(이 호스트가 VM이면 중첩 가상화). 옵션·설치 위치·업그레이드·제거·문제 해결은
-[docs/install.md](docs/install.md)에 정리돼 있습니다.
+[docs/20-guides/install.md](docs/20-guides/install.md)에 정리돼 있습니다.
 
 ## 소스에서 실행 (개발)
 
@@ -81,7 +81,7 @@ cargo run -p firecrab-api
 cd firecrab-frontend && npm run dev
 ```
 
-`http://localhost:8080/`에 접속하세요. 전체 사용법은 [docs/web.md](docs/web.md)를 참고하세요.
+`http://localhost:8080/`에 접속하세요. 전체 사용법은 [docs/20-guides/web.md](docs/20-guides/web.md)를 참고하세요.
 
 3번 터미널 없이 빌드된 대시보드를 API가 직접 서빙하게 할 수도 있습니다.
 
@@ -90,6 +90,11 @@ cd firecrab-frontend && npm run build && cd ..
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 # http://localhost:3000/
 ```
+
+## 문서
+
+설계 노트·태스크 계획·검증 절차·버그 기록은 모두 [`docs/`](docs/HOME.md)에 있습니다.
+Obsidian 볼트로 바로 열립니다(`docs/` 폴더를 볼트로 지정).
 
 ## 라이선스
 

@@ -1,5 +1,5 @@
 //! Read-only host/network info for the dashboard's status panel (see
-//! `docs/task-network-configuration-dashboard.md`). The subnet/bridge are
+//! `docs/30-tasks/task-network-configuration-dashboard.md`). The subnet/bridge are
 //! fixed constants for now — making them genuinely editable needs a larger
 //! IPAM/bridge refactor, deferred per that task doc's own scope note. Host
 //! status is a live snapshot read straight from `/proc` and `df`.

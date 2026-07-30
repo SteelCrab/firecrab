@@ -145,7 +145,7 @@ pub struct UpdateVmResourcesRequest {
 
 /// A named phase of `start_vm`'s pipeline, exposed only while `state ==
 /// Starting` so the dashboard can show *why* a VM hasn't reached `running`
-/// yet instead of a bare spinner (`docs/task-vm-startup-progress.md`).
+/// yet instead of a bare spinner (`docs/30-tasks/task-vm-startup-progress.md`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupStep {
@@ -157,13 +157,13 @@ pub enum StartupStep {
     StartingProcess,
     /// Waiting for the guest to confirm (over its serial console) that
     /// DHCP and DNS actually came up, since there's no guest agent to ask
-    /// directly (`docs/task-guest-network-configuration.md`).
+    /// directly (`docs/30-tasks/task-guest-network-configuration.md`).
     ConfiguringNetwork,
 }
 
 /// Outcome of the most recent `POST /api/vms/{id}/packages/update` run for
 /// this VM — transient like `startup_step` (see
-/// `docs/task-guest-network-configuration.md`'s sibling doc for the console-
+/// `docs/30-tasks/task-guest-network-configuration.md`'s sibling doc for the console-
 /// sentinel pattern this reuses), not persisted across a restart.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
@@ -229,7 +229,7 @@ pub struct VmResponse {
     pub hostname: String,
     /// MicroNetwork this VM belongs to, or `None` for the built-in default
     /// network. Fixed at creation — its lease comes out of that network's
-    /// subnet (`docs/task-micro-network.md`).
+    /// subnet (`docs/30-tasks/task-micro-network.md`).
     pub micro_network_id: Option<Uuid>,
 }
 
@@ -269,7 +269,7 @@ fn internet_enabled_default() -> bool {
 }
 
 /// A MicroNetwork — one of firecrab's own virtual networks
-/// (`docs/task-micro-network.md`). A named CIDR reservation backed by a real
+/// (`docs/30-tasks/task-micro-network.md`). A named CIDR reservation backed by a real
 /// host bridge; routing-table separation and VM membership are follow-up work.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -285,12 +285,12 @@ pub struct MicroNetworkResponse {
     pub gateway: String,
     /// Whether its VMs may reach anything outside Firecrab. `false` is a
     /// closed network: no NAT, and nothing routed out of it
-    /// (`docs/task-micro-network.md`).
+    /// (`docs/30-tasks/task-micro-network.md`).
     pub internet_enabled: bool,
 }
 
 /// Response for `GET /api/network`: the host network firecrab has set up,
-/// read-only for now (see `task-network-configuration-dashboard.md` — making
+/// read-only for now (see `docs/30-tasks/task-network-configuration-dashboard.md` — making
 /// this genuinely editable needs a larger IPAM/bridge refactor).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -308,7 +308,7 @@ pub struct NetworkInfoResponse {
 /// Response for `GET /api/micro-networks/{id}`: one network broken out into
 /// the services it is actually made of, so the dashboard can show what a
 /// MicroNetwork gives a VM rather than just its name and CIDR
-/// (`docs/task-micro-network.md`).
+/// (`docs/30-tasks/task-micro-network.md`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroNetworkDetailResponse {

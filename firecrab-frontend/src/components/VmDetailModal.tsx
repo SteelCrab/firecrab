@@ -30,7 +30,7 @@ const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
 };
 
 // Derived client-side from the polled `startupStep` value — no dedicated
-// backend log field. See docs/tests/vm-detail-modal.md for why.
+// backend log field. See docs/40-tests/vm-detail-modal.md for why.
 const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
   preparingDisk: "디스크 준비 중 (rootfs 템플릿 복사)...",
   generatingConfig: "디스크 준비 완료 → Firecracker 설정 생성 중...",

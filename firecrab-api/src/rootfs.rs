@@ -465,7 +465,7 @@ mod tests {
     }
 
     /// A VM whose `diskGb` was edited upward after it already had a disk
-    /// (`task-vm-resource-update.md`) needs the *next* `prepare_rootfs` call
+    /// (`docs/30-tasks/task-vm-resource-update.md`) needs the *next* `prepare_rootfs` call
     /// — the "reuse existing disk" path, not the "fresh copy" one — to
     /// actually grow it.
     #[test]

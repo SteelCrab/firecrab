@@ -210,7 +210,7 @@ fn subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
 
 /// The subnets allowed out of the host. The built-in default network always
 /// is; a MicroNetwork only if its internet toggle is on
-/// (`docs/task-micro-network.md`).
+/// (`docs/30-tasks/task-micro-network.md`).
 fn egress_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
     std::iter::once(nat::BRIDGE_SUBNET.to_owned())
         .chain(

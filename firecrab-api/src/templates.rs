@@ -138,7 +138,7 @@ pub struct TemplateRegistry {
     versions: HashMap<(String, String), Arc<TemplateVersion>>,
     /// Caches `open_verified`'s full-file hash by (device, inode), so many
     /// VMs starting at once against the same untouched multi-GB template
-    /// don't each independently re-read and re-hash it (`docs/task-vm-startup-progress.md`'s
+    /// don't each independently re-read and re-hash it (`docs/30-tasks/task-vm-startup-progress.md`'s
     /// "stuck at disk prep with many VMs" bug). Invalidated by length or
     /// mtime moving, which any real content change updates.
     verify_cache: Arc<Mutex<HashMap<(u64, u64), CachedHash>>>,
@@ -346,7 +346,7 @@ fn default_specs() -> [TemplateSpec; 2] {
             // Ubuntu's own linux-image-generic kernel (see
             // install-ubuntu-roofs.sh) rather than a self-built
             // vanilla one — virtio_blk/ext4 are builtin, no initrd
-            // needed (task-distro-standard-kernels.md).
+            // needed (docs/30-tasks/task-distro-standard-kernels.md).
             kernel: PathBuf::from("kernel/vmlinux-ubuntu-26.04-x86_64"),
             initrd: None,
             rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
@@ -692,7 +692,7 @@ mod tests {
     /// Many VMs starting at once each call `open_verified` for the same
     /// template; this proves that doesn't fail the 2nd+ time (the naive
     /// bug would be a stale/poisoned cache making repeats worse, not just
-    /// slower — see `docs/task-vm-startup-progress.md`).
+    /// slower — see `docs/30-tasks/task-vm-startup-progress.md`).
     #[test]
     fn open_verified_succeeds_repeatedly_for_an_unchanged_artifact() {
         let directory = tempdir().unwrap();

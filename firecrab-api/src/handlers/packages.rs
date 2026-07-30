@@ -2,7 +2,7 @@
 //! console and reports the result. Reuses the same "print a fixed sentinel,
 //! scan the console for it" pattern `wait_for_network_ready`
 //! (`handlers::vms`) uses for boot readiness, since there's no guest agent
-//! to ask directly (`docs/task-guest-network-configuration.md`).
+//! to ask directly (`docs/30-tasks/task-guest-network-configuration.md`).
 
 use std::collections::BTreeMap;
 use std::time::Duration;

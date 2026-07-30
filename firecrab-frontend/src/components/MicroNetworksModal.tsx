@@ -15,7 +15,7 @@ interface MicroNetworksModalProps {
 }
 
 /**
- * MicroNetwork management (`docs/task-micro-network.md`) — firecrab's own
+ * MicroNetwork management (`docs/30-tasks/task-micro-network.md`) — firecrab's own
  * virtual networks. Creating one reserves the CIDR, provisions its host
  * bridge, and gives it its own DHCP range and NAT rule; VMs then pick one on
  * the create form. Deleting is refused while VMs are still in it.

@@ -159,7 +159,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), StartupError> {
     let config = Arc::new(HelperConfig::load()?);
     // Required for NAT'd VM egress to work at all; previously a manual
-    // operator step (docs/task-shared-bridge-network.md). Global and
+    // operator step (docs/30-tasks/task-shared-bridge-network.md). Global and
     // idempotent, so doing it once here (rather than on every ensure_bridge
     // call) is enough.
     bridge::enable_ip_forward().map_err(StartupError::IpForward)?;

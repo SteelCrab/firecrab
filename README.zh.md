@@ -60,7 +60,7 @@ sudo ./install.sh --uninstall   # 移除守护进程；不加 --purge 则保留 
 
 KVM 是唯一无法替你安装的东西 —— 如果没有 `/dev/kvm`，请在 BIOS 中开启虚拟化
 （若该主机本身是虚拟机，则开启嵌套虚拟化）。完整用法（选项、安装位置、升级、卸载、故障排查）见
-[docs/install.md](docs/install.md)。
+[docs/20-guides/install.md](docs/20-guides/install.md)。
 
 ## 从源码运行（开发）
 
@@ -79,7 +79,7 @@ cargo run -p firecrab-api
 cd firecrab-frontend && npm run dev
 ```
 
-打开 `http://localhost:8080/`。完整使用说明见 [docs/web.md](docs/web.md)。
+打开 `http://localhost:8080/`。完整使用说明见 [docs/20-guides/web.md](docs/20-guides/web.md)。
 
 也可以让 API 直接提供已构建的仪表盘，省掉第三个终端：
 
@@ -88,6 +88,11 @@ cd firecrab-frontend && npm run build && cd ..
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 # http://localhost:3000/
 ```
+
+## 文档
+
+设计说明、任务计划、验证步骤与缺陷记录都在 [`docs/`](docs/HOME.md)，
+可直接作为 Obsidian 仓库打开。正文为韩语。
 
 ## 许可证
 

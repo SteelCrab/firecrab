@@ -50,7 +50,7 @@ impl RuntimeConfig {
 /// starting VM race for disk bandwidth at once makes all of them slower
 /// (seek thrashing) instead of finishing any of them sooner, which reads to
 /// dashboard users as VMs "stuck" in the disk-prep step
-/// (`docs/tests/vm-startup-progress.md`).
+/// (`docs/40-tests/vm-startup-progress.md`).
 const DISK_PREP_CONCURRENCY: usize = 2;
 
 /// Shared state handed to every handler: in-memory VM cache, live process

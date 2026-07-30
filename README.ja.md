@@ -64,7 +64,7 @@ sudo ./install.sh --uninstall   # デーモンを削除。--purge を付けな�
 
 KVM だけは代わりに導入できません — `/dev/kvm` が無い場合は BIOS で仮想化を有効に
 してください(このホスト自体が VM ならネステッド仮想化)。オプション・配置場所・アップグレード・アンインストール・トラブルシュートは
-[docs/install.md](docs/install.md) を参照。
+[docs/20-guides/install.md](docs/20-guides/install.md) を参照。
 
 ## ソースから実行(開発)
 
@@ -84,7 +84,7 @@ cargo run -p firecrab-api
 cd firecrab-frontend && npm run dev
 ```
 
-`http://localhost:8080/` を開く。使い方の詳細は [docs/web.md](docs/web.md) を参照。
+`http://localhost:8080/` を開く。使い方の詳細は [docs/20-guides/web.md](docs/20-guides/web.md) を参照。
 
 3 番目のターミナルを使わず、ビルド済みダッシュボードを API から配信することもできます。
 
@@ -93,6 +93,11 @@ cd firecrab-frontend && npm run build && cd ..
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 # http://localhost:3000/
 ```
+
+## ドキュメント
+
+設計ノート・タスク計画・検証手順・バグ記録は [`docs/`](docs/HOME.md) にあります。
+Obsidian のヴォルトとしてそのまま開けます。本文は韓国語です。
 
 ## ライセンス
 

@@ -23,7 +23,7 @@ rootfs_hostname='firecrab'
 docker_bin='docker'
 docker_image='alpine:latest'
 # linux-virt: Alpine's own officially-maintained cloud/virt kernel package
-# (task-distro-standard-kernels.md) — replaces the self-built vanilla kernel
+# (docs/30-tasks/task-distro-standard-kernels.md) — replaces the self-built vanilla kernel
 # every template used to share. Unlike Ubuntu's linux-image-generic,
 # virtio_blk/ext4 are modules here rather than builtin, so the initramfs-virt
 # Alpine builds alongside it (mkinitfs) has to ship as the VM's initrd too —
@@ -167,7 +167,7 @@ EOF_IFACES
 # Prints a fixed sentinel line to /dev/console (Firecracker's captured
 # stdout) once DHCP + DNS are confirmed working — the signal firecrab-api's
 # start pipeline waits on in place of a guest agent event
-# (task-guest-network-configuration.md; guest agent/vsock is out of this
+# (docs/30-tasks/task-guest-network-configuration.md; guest agent/vsock is out of this
 # project's competition scope).
 cat >"${staging}/etc/init.d/firecrab-network-ready" <<'EOF_SENTINEL'
 #!/sbin/openrc-run

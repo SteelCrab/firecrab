@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# firecrab host installer (docs/task-host-install-script.md).
+# firecrab host installer (docs/30-tasks/task-host-install-script.md).
 #
 # One command on a machine that only has network access: works out what is
 # missing, installs it, builds firecrab, and leaves two systemd daemons
@@ -192,7 +192,7 @@ report_ufw() {
     if status=$(ufw status 2>/dev/null); then
         case "$status" in
             *"Status: active"*)
-                warn "UFW is active — allow DHCP/DNS on each MicroNetwork bridge (docs/troubleshooting.md)" ;;
+                warn "UFW is active — allow DHCP/DNS on each MicroNetwork bridge (docs/20-guides/troubleshooting.md)" ;;
             *) log "UFW installed but inactive" ;;
         esac
     else
