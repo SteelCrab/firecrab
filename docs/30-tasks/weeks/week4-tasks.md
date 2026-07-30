@@ -130,6 +130,10 @@ updated: 2026-07-29
       — request ID ↔ VM ID를 잇는 JSON log/span, secret은 남기지 않음
 - [ ] [서비스 health·readiness API](../task-service-health-readiness.md)
       — `/health/live`(프로세스 생존) / `/health/ready`(DB·KVM·helper·template) 분리
+- [x] [VM 시작 타임라인](../task-vm-startup-timeline.md)
+      — CI 빌드 로그처럼: 단계별 소요 시간 + ✓/✕, 시작 시각, 실패 단계에 사유
+      — 서버가 전이 시각을 기록(`startupTimeline`)하므로 3초 폴링보다 짧은 단계도 정확
+      — 남은 것: 로그 라인 타임스탬프를 서버 기준으로 교체
 - [ ] [VM 관측 대시보드](../task-observability-dashboard.md)
       — CPU/memory/I/O/network·오류·의존성 상태. bounded polling + downsampling
 - [ ] [lifecycle event log API](../task-lifecycle-log-api.md)

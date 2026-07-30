@@ -15,7 +15,8 @@ use crate::extract::ValidatedJson;
 use crate::firecracker::{self, FirecrackerProcess, VmNetwork, VmProcess};
 use crate::ipam::{IpamError, SubnetSpec};
 use crate::model::{
-    CreateVmRequest, Lease, StartupStep, UpdateVmResourcesRequest, VmRecord, VmState,
+    CreateVmRequest, Lease, StartupStep, StartupStepOutcome, StartupStepRun,
+    UpdateVmResourcesRequest, VmRecord, VmState,
 };
 use crate::network_policy::EgressPolicy;
 use crate::persistence::PersistenceError;
@@ -152,6 +153,7 @@ pub async fn create_vm(
         micro_network_id: req.micro_network_id,
         state: VmState::Created,
         startup_step: None,
+        startup_timeline: Vec::new(),
         package_update: None,
     };
 
@@ -358,12 +360,14 @@ async fn finish_start(
         Ok(process) => process,
         Err(reason) => {
             tracing::error!(request_id = %request_id.0, vm_id = %id, reason, "vm start failed");
-            return Err(fail_start(state, id, request_id.0).await);
+            return Err(fail_start_with(state, id, request_id.0, Some(reason)).await);
         }
     };
     let pid = process.pid();
 
     firecracker::register_and_watch(state, id, process);
+
+    finish_startup_timeline(state, id, StartupStepOutcome::Succeeded, None);
 
     match transition_if(state, id, VmState::Starting, VmState::Running) {
         Some(running) => {
@@ -559,6 +563,9 @@ fn claim_transition(
     // real step moments later, so a stale step from a prior start never
     // shows through even for a single poll.
     vm.startup_step = None;
+    if to == VmState::Starting {
+        vm.startup_timeline.clear();
+    }
     Ok((vm.clone(), previous))
 }
 
@@ -995,18 +1002,87 @@ async fn resolve_subnet(
 /// a VM hasn't reached `running` yet. Silently a no-op once the record has
 /// moved on (e.g. a concurrent failure already landed it on `error`).
 fn set_startup_step(state: &AppState, id: Uuid, step: StartupStep) {
+    let now = epoch_millis();
     let mut vms = state
         .vms
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(vm) = vms.get_mut(&id) {
+        close_open_step(vm, now, StartupStepOutcome::Succeeded, None);
         vm.startup_step = Some(step);
+        vm.startup_timeline.push(StartupStepRun {
+            step,
+            started_at_ms: now,
+            ended_at_ms: None,
+            outcome: StartupStepOutcome::Running,
+            detail: None,
+        });
+    }
+}
+
+/// Wall-clock now, in milliseconds since the Unix epoch. The dashboard needs
+/// a real clock (it prints the time each step began), not the monotonic one
+/// used elsewhere for measuring durations.
+fn epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+/// Closes whichever step is still open, if any. Idempotent, so the success
+/// and failure paths can both call it without checking first.
+fn close_open_step(
+    vm: &mut VmRecord,
+    now: u64,
+    outcome: StartupStepOutcome,
+    detail: Option<String>,
+) {
+    if let Some(open) = vm
+        .startup_timeline
+        .iter_mut()
+        .find(|run| run.outcome == StartupStepOutcome::Running)
+    {
+        open.ended_at_ms = Some(now);
+        open.outcome = outcome;
+        open.detail = detail;
+    }
+}
+
+/// Ends the current start attempt's timeline. The entries stay on the record
+/// afterwards — a finished timeline is exactly what the dashboard shows, so
+/// clearing it here would blank the screen at the moment it becomes useful.
+/// A *new* start clears it (see `claim_transition`).
+fn finish_startup_timeline(
+    state: &AppState,
+    id: Uuid,
+    outcome: StartupStepOutcome,
+    detail: Option<String>,
+) {
+    let now = epoch_millis();
+    let mut vms = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(vm) = vms.get_mut(&id) {
+        close_open_step(vm, now, outcome, detail);
     }
 }
 
 /// Failure tail of the start flow: record `error`, then make sure no process
 /// survives (the monitor sees `error` and leaves the record alone).
 async fn fail_start(state: &AppState, id: Uuid, request_id: Uuid) -> AppError {
+    fail_start_with(state, id, request_id, None).await
+}
+
+/// `fail_start`, plus the reason recorded on whichever startup step was open
+/// — that is what tells the dashboard *where* the start died.
+async fn fail_start_with(
+    state: &AppState,
+    id: Uuid,
+    request_id: Uuid,
+    reason: Option<String>,
+) -> AppError {
+    finish_startup_timeline(state, id, StartupStepOutcome::Failed, reason);
     let pid = state
         .processes
         .lock()
@@ -1059,6 +1135,7 @@ pub(crate) fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
         ram: vm.ram,
         disk_gb: vm.disk_gb,
         startup_step: vm.startup_step,
+        startup_timeline: vm.startup_timeline.clone(),
         egress_policy: vm.egress_policy,
         package_update: vm.package_update.clone(),
         ipv4: lease.map(|lease| lease.ipv4.to_string()),
@@ -1167,6 +1244,7 @@ pub(crate) mod test_support {
             egress_policy: Default::default(),
             micro_network_id: None,
             startup_step: None,
+            startup_timeline: Vec::new(),
             package_update: None,
         }
     }
@@ -1527,6 +1605,111 @@ mod tests {
 
         assert!(log.console_log.starts_with("ok"));
         assert!(!log.truncated);
+    }
+
+    #[tokio::test]
+    async fn a_successful_start_records_every_step_with_its_own_span() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(
+            root,
+            &format!("signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)){SERVE_LOOP}"),
+        );
+        let state = test_state_with_binary(root, binary).await;
+        let vm = record("timeline", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(started) = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        // Every step of the pipeline, in the order run_start walks them.
+        let steps: Vec<StartupStep> = started
+            .startup_timeline
+            .iter()
+            .map(|run| run.step)
+            .collect();
+        assert_eq!(
+            steps,
+            vec![
+                StartupStep::PreparingDisk,
+                StartupStep::GeneratingConfig,
+                StartupStep::StartingProcess,
+                StartupStep::ConfiguringNetwork,
+            ]
+        );
+
+        for run in &started.startup_timeline {
+            assert_eq!(
+                run.outcome,
+                StartupStepOutcome::Succeeded,
+                "{:?} should be closed once the VM is running",
+                run.step
+            );
+            let ended = run.ended_at_ms.expect("a closed step has an end");
+            assert!(
+                ended >= run.started_at_ms,
+                "{:?} ended before it started",
+                run.step
+            );
+            assert!(run.detail.is_none(), "only a failed step carries a reason");
+        }
+
+        // Steps run back to back, so each one starts where the last ended.
+        for pair in started.startup_timeline.windows(2) {
+            assert!(
+                pair[1].started_at_ms >= pair[0].ended_at_ms.unwrap(),
+                "steps must not overlap"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_marks_the_step_it_died_on() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        // Exits immediately, so the readiness wait in StartingProcess fails.
+        let binary = fake_firecracker(root, "sys.exit(1)\n");
+        let state = test_state_with_binary(root, binary).await;
+        let vm = record("doomed", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let error = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        let vms = state.vms.lock().unwrap();
+        let timeline = &vms.get(&vm.id).unwrap().startup_timeline;
+        let failed = timeline
+            .iter()
+            .find(|run| run.outcome == StartupStepOutcome::Failed)
+            .expect("the step that died must be recorded as failed");
+        assert!(
+            failed.detail.is_some(),
+            "a failed step carries why it failed"
+        );
+        assert!(
+            failed.ended_at_ms.is_some(),
+            "a failed step is closed, not left open"
+        );
+        // Nothing ran after it.
+        let failed_index = timeline
+            .iter()
+            .position(|run| run.outcome == StartupStepOutcome::Failed)
+            .unwrap();
+        assert_eq!(failed_index, timeline.len() - 1);
     }
 
     #[tokio::test]

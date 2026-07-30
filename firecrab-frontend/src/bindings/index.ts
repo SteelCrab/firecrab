@@ -13,6 +13,8 @@ export * from "./MicroNetworkSubnet";
 export * from "./MicroNetworkVm";
 export * from "./NetworkInfoResponse";
 export * from "./StartupStep";
+export * from "./StartupStepOutcome";
+export * from "./StartupStepRun";
 export * from "./UpdateMicroNetworkRequest";
 export * from "./UpdateVmResourcesRequest";
 export * from "./VmLogResponse";

@@ -308,6 +308,7 @@ impl Store {
                     egress_policy: decode_egress_policy(&id_text, &row.get::<_, String>(11)?)?,
                     micro_network_id: decode_optional_id(&id_text, row.get(12)?)?,
                     startup_step: None,
+                    startup_timeline: Vec::new(),
                     package_update: None,
                 },
             );
@@ -639,6 +640,7 @@ mod tests {
             egress_policy: Default::default(),
             micro_network_id: None,
             startup_step: None,
+            startup_timeline: Vec::new(),
             package_update: None,
         }
     }

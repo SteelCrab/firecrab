@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { EgressPolicy, MicroNetworkResponse, StartupStep, VmResponse } from "../bindings";
+import type {
+  EgressPolicy,
+  MicroNetworkResponse,
+  StartupStep,
+  StartupStepRun,
+  VmResponse,
+} from "../bindings";
 import {
   ApiClientError,
   getVm,
@@ -283,7 +289,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                 )}
               </div>
             )}
-            <PipelineStepper currentIndex={currentIndex} />
+            <PipelineStepper currentIndex={currentIndex} timeline={vm?.startupTimeline ?? []} />
             <pre className="detail-log" ref={logRef}>
               {logText}
             </pre>
@@ -296,15 +302,78 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   );
 }
 
-function PipelineStepper({ currentIndex }: { currentIndex: number }) {
+/** Formats a span the way a build log does: `820ms`, `3s`, `1m 32s`. */
+function duration(millis: number): string {
+  if (millis < 1000) return `${millis}ms`;
+  const seconds = Math.round(millis / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+/** Wall-clock `HH:MM:SS.mmm`, to line up with the console log below. */
+function clockTime(epochMillis: number): string {
+  const at = new Date(epochMillis);
+  const pad = (value: number, width = 2) => String(value).padStart(width, "0");
   return (
-    <ol className="pipeline-stepper">
-      {STARTUP_STEPS.map((step, index) => (
-        <li key={step} className={index < currentIndex ? "done" : index === currentIndex ? "active" : "pending"}>
-          <span className="step-box">{index < currentIndex ? "✓" : index + 1}</span>
-          <span className="step-label">{STARTUP_STEP_LABEL[step]}</span>
-        </li>
-      ))}
+    `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}` +
+    `.${pad(at.getMilliseconds(), 3)}`
+  );
+}
+
+/**
+ * The start pipeline as a row of timed steps, like a CI build log
+ * (`docs/30-tasks/task-vm-startup-timeline.md`). Durations come from the
+ * server's own timestamps — polling is far too coarse to time a 2-second
+ * disk copy — and only the still-running step ticks locally.
+ */
+function PipelineStepper({
+  currentIndex,
+  timeline,
+}: {
+  currentIndex: number;
+  timeline: StartupStepRun[];
+}) {
+  // Re-renders once a second so the open step's elapsed time keeps moving
+  // between polls. Stops as soon as nothing is open.
+  const [now, setNow] = useState(() => Date.now());
+  const hasOpenStep = timeline.some((run) => run.outcome === "running");
+  useEffect(() => {
+    if (!hasOpenStep) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [hasOpenStep]);
+
+  const runFor = (step: StartupStep) => timeline.find((run) => run.step === step);
+
+  return (
+    <ol className="pipeline">
+      {STARTUP_STEPS.map((step, index) => {
+        const run = runFor(step);
+        const status = run
+          ? run.outcome
+          : index < currentIndex
+            ? "succeeded"
+            : index === currentIndex
+              ? "running"
+              : "pending";
+        const elapsed = run
+          ? (run.endedAtMs ?? now) - run.startedAtMs
+          : null;
+
+        return (
+          <li key={step} className={`pipeline-step ${status}`}>
+            <span className="step-label">{STARTUP_STEP_LABEL[step]}</span>
+            <span className="step-bar">
+              <span className="step-time">{elapsed === null ? "—" : duration(elapsed)}</span>
+              <span className="step-mark">
+                {status === "succeeded" ? "✓" : status === "failed" ? "✕" : ""}
+              </span>
+            </span>
+            <span className="step-started">{run ? clockTime(run.startedAtMs) : ""}</span>
+            {run?.detail && <span className="step-detail">{run.detail}</span>}
+          </li>
+        );
+      })}
     </ol>
   );
 }

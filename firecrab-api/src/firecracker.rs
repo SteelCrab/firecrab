@@ -681,6 +681,7 @@ mod tests {
             egress_policy: Default::default(),
             micro_network_id: None,
             startup_step: None,
+            startup_timeline: Vec::new(),
             package_update: None,
         }
     }

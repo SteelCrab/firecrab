@@ -300,63 +300,71 @@ table.vm-table {
 }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
-.pipeline-stepper {
+/* 시작 파이프라인 — CI 빌드 로그처럼 단계별 소요 시간을 가로로 (task-vm-startup-timeline) */
+.pipeline {
   list-style: none;
   display: flex;
+  gap: 0.5rem;
   margin: 0 0 1.25rem;
   padding: 0;
   font-family: var(--font-mono);
 }
-.pipeline-stepper li {
-  position: relative;
+.pipeline-step {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.4rem;
-  text-align: center;
-}
-.pipeline-stepper li:not(:last-child)::after {
-  content: "";
-  position: absolute;
-  top: 0.85rem;
-  left: 50%;
-  width: 100%;
-  height: 2px;
-  background: var(--line);
-  z-index: 0;
-}
-.pipeline-stepper li.done:not(:last-child)::after { background: var(--ready); }
-
-.step-box {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.7rem;
-  height: 1.7rem;
-  border-radius: 3px;
-  border: 2px solid var(--line);
-  background: var(--bg-panel);
-  font-size: 0.78rem;
-  color: var(--dim);
-}
-.pipeline-stepper li.done .step-box {
-  border-color: var(--ready);
-  background: var(--ready);
-  color: var(--on-ember);
-}
-.pipeline-stepper li.active .step-box {
-  border-color: var(--amber);
-  color: var(--amber);
-  animation: pulse 1s ease-in-out infinite;
+  gap: 0.3rem;
 }
 .step-label {
   font-size: 0.68rem;
   letter-spacing: 0.02em;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 소요 시간이 들어가는 칸 자체가 진행 막대 역할을 한다 */
+.step-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-panel);
+  font-size: 0.78rem;
+  color: var(--dim);
+}
+.step-time { font-variant-numeric: tabular-nums; }
+.step-mark { font-size: 0.8rem; }
+.step-started {
+  font-size: 0.64rem;
+  color: var(--dim);
+  opacity: 0.75;
+}
+.step-detail {
+  font-size: 0.66rem;
+  color: var(--error);
+  word-break: break-word;
+}
+
+.pipeline-step.succeeded .step-bar {
+  border-color: var(--ready);
   color: var(--shell);
 }
+.pipeline-step.succeeded .step-mark { color: var(--ready); }
+.pipeline-step.running .step-bar {
+  border-color: var(--amber);
+  color: var(--amber);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.pipeline-step.failed .step-bar {
+  border-color: var(--error);
+  color: var(--error);
+}
+.pipeline-step.pending .step-bar { opacity: 0.45; }
 
 .detail-log {
   margin: 0;

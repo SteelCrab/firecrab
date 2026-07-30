@@ -161,6 +161,40 @@ pub enum StartupStep {
     ConfiguringNetwork,
 }
 
+/// How one [`StartupStep`] ended, or that it hasn't yet.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StartupStepOutcome {
+    /// Still in progress — `ended_at_ms` is `None`.
+    Running,
+    /// Finished and moved on to the next step.
+    Succeeded,
+    /// The start failed here. No later step ever began.
+    Failed,
+}
+
+/// One pass through a [`StartupStep`], with the wall-clock times it spanned.
+///
+/// The dashboard polls every few seconds, which is coarser than the fastest
+/// steps take — timing them client-side would round a 2-second disk copy up
+/// to the poll interval or miss it entirely. So the server records when each
+/// step opened and closed, and the client only formats it
+/// (`docs/30-tasks/task-vm-startup-timeline.md`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StartupStepRun {
+    /// Which step this was.
+    pub step: StartupStep,
+    /// When it began, in milliseconds since the Unix epoch.
+    pub started_at_ms: u64,
+    /// When it ended, or `None` while it is still running.
+    pub ended_at_ms: Option<u64>,
+    /// Whether it finished, failed, or is still going.
+    pub outcome: StartupStepOutcome,
+    /// Failure reason, only ever set on a `Failed` step.
+    pub detail: Option<String>,
+}
+
 /// Outcome of the most recent `POST /api/vms/{id}/packages/update` run for
 /// this VM — transient like `startup_step` (see
 /// `docs/30-tasks/task-guest-network-configuration.md`'s sibling doc for the console-
@@ -227,6 +261,10 @@ pub struct VmResponse {
     /// `firecrab_helper_protocol::network::guest_hostname`) — always
     /// present once the VM record exists, independent of lease state.
     pub hostname: String,
+    /// Every startup step of the most recent start attempt, in order, with
+    /// the times it spanned. Empty for a VM that has never been started, and
+    /// kept after the start finishes so the timeline stays readable.
+    pub startup_timeline: Vec<StartupStepRun>,
     /// MicroNetwork this VM belongs to, or `None` for the built-in default
     /// network. Fixed at creation — its lease comes out of that network's
     /// subnet (`docs/30-tasks/task-micro-network.md`).
@@ -601,6 +639,7 @@ mod tests {
             ram: 512,
             disk_gb: 2,
             startup_step: None,
+            startup_timeline: Vec::new(),
             egress_policy: EgressPolicy::Internet,
             package_update: Some(PackageUpdateStatus::Failed {
                 reason: "exited with code 100".to_owned(),
@@ -655,6 +694,7 @@ mod tests {
             ram: 512,
             disk_gb: 2,
             startup_step: Some(StartupStep::PreparingDisk),
+            startup_timeline: Vec::new(),
             egress_policy: EgressPolicy::Internet,
             package_update: None,
             ipv4: None,

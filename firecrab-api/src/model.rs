@@ -10,9 +10,9 @@ use uuid::Uuid;
 pub use firecrab_api_types::CreateVmRequest;
 pub use firecrab_api_types::EgressPolicy;
 pub use firecrab_api_types::PackageUpdateStatus;
-pub use firecrab_api_types::StartupStep;
 pub use firecrab_api_types::UpdateVmResourcesRequest;
 pub use firecrab_api_types::VmState;
+pub use firecrab_api_types::{StartupStep, StartupStepOutcome, StartupStepRun};
 pub use firecrab_helper_protocol::network::MacAddr;
 
 /// An active IPv4 + MAC assignment for one VM, drawn from the shared bridge
@@ -74,6 +74,11 @@ pub struct VmRecord {
     /// `restart_demotes_active_states_to_stopped`) and irrelevant otherwise.
     #[serde(skip)]
     pub startup_step: Option<StartupStep>,
+    /// Timed record of the most recent start attempt's steps. Transient for
+    /// the same reason as `startup_step` — a restart demotes any in-flight
+    /// start, so there is no half-finished timeline worth persisting.
+    #[serde(skip)]
+    pub startup_timeline: Vec<StartupStepRun>,
     /// Outcome of the most recent `packages/update` run, if any — never
     /// persisted; a restart loses no state a fresh run can't reproduce, and
     /// it's purely informational (unlike `state`, nothing else in the
