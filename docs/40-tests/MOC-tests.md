@@ -27,6 +27,7 @@ updated: 2026-07-30
 | [NAT·firewall 자동화](nat-firewall-automation.md) | [task-nat-firewall-automation](../30-tasks/task-nat-firewall-automation.md) |
 | [VM network 격리·anti-spoofing](vm-network-isolation.md) | [task-vm-network-isolation](../30-tasks/task-vm-network-isolation.md) |
 | [Host 설치](host-install.md) | [task-host-install-script](../30-tasks/task-host-install-script.md) |
+| [Host doctor](host-doctor.md) | [task-host-doctor](../30-tasks/task-host-doctor.md) |
 | [MicroVM 부팅 + Terminal UI](microvm-terminal.md) | [task-microvm-terminal](../30-tasks/task-microvm-terminal.md) |
 | [VM 시작 단계별 진행 상황](vm-startup-progress.md) | [task-vm-startup-progress](../30-tasks/task-vm-startup-progress.md) |
 | [VM 상세 모달](vm-detail-modal.md) | [task-vm-startup-progress](../30-tasks/task-vm-startup-progress.md) |

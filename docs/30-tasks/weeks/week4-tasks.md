@@ -56,9 +56,9 @@ updated: 2026-07-29
 - [x] [프론트엔드 서빙](../task-host-frontend-serving.md)
       — `FIRECRAB_STATIC_ROOT`로 `dist/` 서빙 + SPA fallback, `/api`·`/ws`는 JSON 404 유지
       — 실제로 dev 서버 없이 대시보드 동작 확인
-- [ ] [Host 진단 — `firecrab doctor`](../task-host-doctor.md)
-      — KVM·ip_forward·nft·dnsmasq·UFW·소켓 권한·이미지 digest를 한 번에 점검
-      — 지금까지의 실패가 대부분 코드가 아니라 host 설정이었음
+- [x] [Host 진단 — `firecrab doctor`](../task-host-doctor.md)
+      — `scripts/firecrab-doctor.sh` / `./install.sh --doctor` / `firecrab-doctor`
+      — KVM·ip_forward·nft·dnsmasq·UFW·소켓 권한·이중 DB·이미지; 전부 ok면 요약만
 
 ## MicroStorage — 영구 스토리지
 

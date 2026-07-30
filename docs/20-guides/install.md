@@ -2,7 +2,7 @@
 tags:
   - firecrab
   - guide
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # 설치 (`install.sh`)
@@ -25,7 +25,7 @@ sudo ./install.sh
 | 리눅스 + systemd | 필수 | 유닛을 설치할 수 없어 중단 |
 | KVM (`/dev/kvm`) | 필수 | 설치는 계속되지만 VM이 시작되지 않음 — **스크립트가 대신 설치할 수 없는 유일한 항목** |
 | 네트워크 | 필수 | 패키지·firecracker·이미지를 받지 못함 |
-| root | 필수 (`--check`는 예외) | `sudo ./install.sh` |
+| root | 필수 (`--check` / `--doctor`는 예외) | `sudo ./install.sh` |
 | 패키지 관리자 | apt-get / dnf / zypper / pacman / apk | 감지 실패 시 부족한 것을 안내만 하고 직접 설치해야 함 |
 
 KVM이 없다는 건 보통 BIOS에서 가상화가 꺼져 있거나, 이 호스트 자체가 VM인데 중첩 가상화가
@@ -40,12 +40,24 @@ KVM이 없다는 건 보통 BIOS에서 가상화가 꺼져 있거나, 이 호스
 - **root 불필요**, 파일을 하나도 바꾸지 않는다
 - 무엇이 없고 무엇을 설치할지, KVM·systemd·이미지·UFW 상태까지 보고한다
 
+설치 후(또는 네트워크/DB 이상 시) **런타임 host 진단**:
+
+```sh
+./install.sh --doctor            # 또는 ./scripts/firecrab-doctor.sh
+# 설치 후: firecrab-doctor
+```
+
+- 역시 root 불필요·무변경. UFW 브리지 규칙, helper 소켓 권한, 이중 DB 경로, nft 테이블 등을
+  한 번에 보고, 문제마다 조치 한 줄을 붙인다. 전부 정상이면 통과 요약만 출력.
+- 자세한 검증: [tests/host-doctor](../40-tests/host-doctor.md), 태스크 [Host 진단](../30-tasks/task-host-doctor.md)
+
 ## 옵션
 
 | 옵션 | 동작 |
 |---|---|
 | (없음) | 없는 것을 설치하고 빌드·배치·기동까지 |
-| `--check` | 보고만. root 불필요, 무변경 |
+| `--check` | 설치 readiness 보고만. root 불필요, 무변경 |
+| `--doctor` | 런타임 host 진단 (`scripts/firecrab-doctor.sh`). root 불필요, 무변경 |
 | `--no-deps` | 아무것도 설치하지 않고 부족한 것만 보고 (직접 준비한 호스트용) |
 | `--no-images` | 게스트 이미지를 준비하지 않음 |
 | `--with-ubuntu-image` | Alpine 외에 Ubuntu 이미지도 빌드 (용량 큼, root chroot 필요) |
@@ -95,6 +107,7 @@ sudo DATADIR=/srv/firecrab PREFIX=/opt ./install.sh
 | 경로 | 내용 |
 |---|---|
 | `/usr/local/lib/firecrab/` | `firecrab-api`, `firecrab-net-helper` |
+| `/usr/local/bin/firecrab-doctor` | host 진단 스크립트 (`install.sh --doctor`와 동일) |
 | `/usr/local/share/firecrab/dashboard/` | 빌드된 대시보드 정적 파일 |
 | `/var/lib/firecrab/data/` | SQLite DB, VM 아티팩트(`vms/<id>/`) |
 | `/var/lib/firecrab/images/` | 커널·rootfs 이미지 |
@@ -108,6 +121,7 @@ sudo DATADIR=/srv/firecrab PREFIX=/opt ./install.sh
 systemctl status firecrab-net-helper firecrab-api   # 둘 다 active
 ls -l /run/firecrab/net-helper.sock                 # 그룹이 firecrab이어야 함
 sudo -u firecrab id                                 # kvm 그룹 포함
+firecrab-doctor                                     # host 진단 (또는 ./install.sh --doctor)
 curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/   # 200 (대시보드)
 curl -s localhost:3000/api/vms                             # []
 ```
@@ -146,11 +160,11 @@ sudo ./install.sh --uninstall --purge   # 데이터까지 (되돌릴 수 없음)
 | 증상 | 원인·조치 |
 |---|---|
 | `--check`가 `/dev/kvm missing` | BIOS에서 가상화 활성화. 이 호스트가 VM이면 중첩 가상화 필요 |
-| `firecrab-api`가 helper에 연결 실패 | 소켓 그룹 확인(`ls -l /run/firecrab/net-helper.sock`). 유닛의 `Group=`이 API 계정과 같아야 함 |
+| `firecrab-api`가 helper에 연결 실패 | `./install.sh --doctor` → helper socket. 소켓 그룹 확인(`ls -l /run/firecrab/net-helper.sock`). 유닛의 `Group=`이 API 계정과 같아야 함 |
 | VM 생성 폼에 템플릿이 없음 | 이미지 미설치. `$DATADIR/images/` 확인 후 API 재시작 |
-| guest가 `no-ipv4-address`로 실패 | UFW가 새 브리지의 DHCP를 막음 → [troubleshooting.md](troubleshooting.md) |
-| VM은 뜨는데 외부 통신 불가 | UFW가 라우팅 기본 거부 → [bugs/vm-outbound-forward-blocked-by-ufw.md](../50-bugs/vm-outbound-forward-blocked-by-ufw.md) |
-| `no such column` 류 DB 오류 | 잘못된 작업 디렉터리에서 실행. 유닛은 `WorkingDirectory`가 고정돼 있으므로 손으로 띄운 프로세스가 남아 있는지 확인 |
+| guest가 `no-ipv4-address`로 실패 | `./install.sh --doctor` → UFW. 새 브리지 DHCP 차단 → [troubleshooting.md](troubleshooting.md) |
+| VM은 뜨는데 외부 통신 불가 | `./install.sh --doctor` → UFW route. [bugs/vm-outbound-forward-blocked-by-ufw.md](../50-bugs/vm-outbound-forward-blocked-by-ufw.md) |
+| `no such column` 류 DB 오류 | `./install.sh --doctor` → multiple DB. 잘못된 작업 디렉터리에서 실행. 유닛은 `WorkingDirectory`가 고정돼 있으므로 손으로 띄운 프로세스가 남아 있는지 확인 |
 | arm64에서 VM이 안 뜸 | 이미지 파일명과 `console=ttyS0`가 x86_64 전용 — 아직 미지원 |
 
 ## CI 검증
@@ -159,14 +173,16 @@ sudo ./install.sh --uninstall --purge   # 데이터까지 (되돌릴 수 없음)
 
 | 단계 | 확인하는 것 |
 |---|---|
-| shellcheck | 인용·단어 분리 실수 |
+| shellcheck | `install.sh` + `scripts/firecrab-doctor.sh` 인용·단어 분리 실수 |
 | `--check` | 비특권 동작 + `/var/lib/firecrab`을 만들지 않음 |
-| `sudo ./install.sh --no-images` | 계정·디렉터리·유닛·기동 |
+| `--doctor` | 비특권·무변경, exit 0/1 |
+| `sudo ./install.sh --no-images` | 계정·디렉터리·유닛·기동, `firecrab-doctor` 배치 |
+| 설치 후 doctor | host 경로 정상; 이미지 FAIL만 허용(`--no-images`) |
 | 소켓·그룹 확인 | `root firecrab 660`, firecrab이 kvm 그룹 |
 | capability | `fcbr0` 주소, dnsmasq 생존, 67번 포트 바인딩, `operation not permitted` 없음 |
 | HTTP | 대시보드 200, `/api/vms` `[]`, 같은 origin POST 통과 / 타 사이트 403 |
 | 재실행 | 멱등성 + 기존 MicroNetwork 보존 |
-| 제거 | `--uninstall`은 데이터 보존, `--purge`는 삭제 |
+| 제거 | `--uninstall`은 데이터 보존·doctor 제거, `--purge`는 삭제 |
 
 게스트 이미지 빌드(=VM 부팅)는 docker와 10분 이상이 필요해 범위 밖이다.
 

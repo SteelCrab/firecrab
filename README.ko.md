@@ -56,6 +56,7 @@ sudo ./install.sh
 
 ```sh
 ./install.sh --check            # 무엇이 없는지 먼저 확인 (root 불필요, 아무것도 바꾸지 않음)
+./install.sh --doctor           # host 설정 진단 (UFW, 소켓, 잘못된 DB 경로 등)
 sudo ./install.sh --uninstall   # 데몬 제거. --purge 없이는 VM 데이터 보존
 ```
 

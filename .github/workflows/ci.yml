@@ -133,7 +133,7 @@ jobs:
           PY
 
   install:
-    name: Installer (shellcheck, --check, install/uninstall)
+    name: Installer (shellcheck, --check, doctor, install/uninstall)
     # A GitHub-hosted Linux runner is a throwaway VM with systemd, so the whole
     # installer can be exercised for real — the one thing this cannot cover is
     # booting a guest, which needs an image build (see --no-images below).
@@ -156,15 +156,29 @@ jobs:
         run: rustup show
 
       - name: shellcheck
-        run: shellcheck install.sh
+        run: shellcheck install.sh scripts/firecrab-doctor.sh
 
-      - name: --help and --check
-        # --check has to work unprivileged and change nothing; a check that
-        # quietly mutates is worse than no check.
+      - name: --help, --check, and --doctor (unprivileged, no mutation)
+        # --check / --doctor have to work unprivileged and change nothing; a
+        # check that quietly mutates is worse than no check.
         run: |
+          bash -n install.sh
+          bash -n scripts/firecrab-doctor.sh
           ./install.sh --help
           ./install.sh --check
           test ! -e /var/lib/firecrab || { echo "--check created the data directory"; exit 1; }
+          ./scripts/firecrab-doctor.sh --help
+          # Bare runner will typically FAIL helper socket / images; doctor must
+          # still exit 0 or 1 (not crash) and leave the host untouched.
+          BEFORE=$(ls -la /var/lib/firecrab 2>&1 || true)
+          set +e
+          ./install.sh --doctor
+          doctor_rc=$?
+          set -e
+          test "$doctor_rc" -eq 0 -o "$doctor_rc" -eq 1 \
+            || { echo "doctor exited $doctor_rc (want 0 or 1)"; exit 1; }
+          AFTER=$(ls -la /var/lib/firecrab 2>&1 || true)
+          test "$BEFORE" = "$AFTER" || { echo "--doctor mutated host state"; exit 1; }
 
       - name: Install
         # --no-images: building a guest rootfs needs docker and ~10 minutes.
@@ -185,6 +199,33 @@ jobs:
           # runner user cannot even traverse it - which is the point.
           sudo stat -c '%U %G %a' /run/firecrab/net-helper.sock | tee /dev/stderr | grep -qx 'root firecrab 660'
           id -nG firecrab | tr ' ' '\n' | grep -qx kvm
+          test -x /usr/local/bin/firecrab-doctor
+
+      - name: Doctor after install
+        # Runtime host path must be clean. Run from the unit WorkingDirectory
+        # so the checkout's data/firecrab.db is not counted as a second DB.
+        # Images are intentionally absent (--no-images), so the only acceptable
+        # FAIL is the images check. sudo so nft/ufw are not SKIP'd.
+        run: |
+          set +e
+          out=$(sudo env DATADIR=/var/lib/firecrab \
+                bash -c 'cd /var/lib/firecrab && firecrab-doctor' 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "$out" | grep -q 'all checks passed'
+            exit 0
+          fi
+          unexpected=$(printf '%s\n' "$out" | grep '^\[FAIL\]' | grep -v '^\[FAIL\] images:' || true)
+          if [ -n "$unexpected" ]; then
+            echo "doctor reported unexpected failures:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+          # At least one image FAIL, and nothing else.
+          printf '%s\n' "$out" | grep -q '^\[FAIL\] images:'
+          test "$code" -eq 1
 
       - name: Capability set is sufficient at runtime
         # The helper runs as uid 0 with a bounded capability set. A missing
@@ -228,6 +269,7 @@ jobs:
           sudo ./install.sh --uninstall
           ! systemctl is-active --quiet firecrab-api
           test ! -e /etc/systemd/system/firecrab-api.service
+          test ! -e /usr/local/bin/firecrab-doctor
           test -d /var/lib/firecrab
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab
@@ -238,6 +280,7 @@ jobs:
           sudo journalctl -u firecrab-net-helper --no-pager -n 60 || true
           sudo journalctl -u firecrab-api --no-pager -n 60 || true
           systemctl status firecrab-net-helper firecrab-api --no-pager || true
+          sudo firecrab-doctor 2>&1 || true
 
   install-distro:
     name: Installer deps (${{ matrix.image }})

@@ -89,4 +89,5 @@ updated: 2026-07-30
 - 패키지(.deb/.rpm)·업그레이드·롤백은 [5주차](weeks/week5-tasks.md)의
   [패키징·systemd·upgrade](task-packaging-systemd-upgrades.md) 범위 —
   이 태스크는 그 전 단계인 **소스에서의 설치**
-- 진단만 따로 떼어낸 것이 [Host 진단](task-host-doctor.md) — 지금은 `--check`가 그 일부를 한다
+- 진단만 따로 떼어낸 것이 [Host 진단](task-host-doctor.md) — `scripts/firecrab-doctor.sh` /
+  `./install.sh --doctor` (`--check`는 설치 readiness 전용)

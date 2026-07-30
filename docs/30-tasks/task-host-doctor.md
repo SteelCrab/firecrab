@@ -3,9 +3,9 @@ tags:
   - firecrab
   - host
   - diagnostics
-status: 미완료
+status: 완료
 scope: 4주차
-updated: 2026-07-29
+updated: 2026-07-31
 ---
 
 # Host 진단 — `firecrab doctor`
@@ -35,6 +35,30 @@ updated: 2026-07-29
 - UFW가 켜져 있으면 firecrab 브리지에 대한 허용 규칙 유무
 - 데이터 루트 경로·여유 공간, 이미지 파일 존재와 digest
 - 각 항목마다 **무엇을 하면 되는지** 한 줄 조치 안내
+
+## 구현
+
+| 진입점 | 설명 |
+|---|---|
+| `./scripts/firecrab-doctor.sh` | 본체 (소스 트리) |
+| `./install.sh --doctor` | 위 스크립트에 위임 (`--digest` 등 이후 인자 전달) |
+| `$PREFIX/bin/firecrab-doctor` | 설치 후 PATH (`install.sh`가 배치) |
+
+`install.sh --check`는 **설치 readiness**(무엇을 깔지) 역할로 남기고, doctor는
+**런타임 host 진단**이다. `--check` 끝에 doctor 안내 한 줄을 붙인다.
+
+점검 항목: KVM, firecracker, `ip_forward`, nft 테이블(`inet firecrab` / `bridge firecrab_l2`),
+dnsmasq(+ conf interface), helper 소켓, UFW(브리지 DHCP/DNS + route allow), 데이터 루트(이중 DB),
+이미지 아티팩트(`--digest` 시 sha256 앞 12자).
+
+출력 계약:
+
+- 전부 ok → `doctor: all checks passed (N ok)` 한 줄
+- fail/skip만 상세 출력, 각 항목에 `→` 조치 한 줄
+- root 불필요; 권한 부족은 `[SKIP]`
+- fail ≥ 1 → exit 1
+
+검증 절차: [tests/host-doctor](../40-tests/host-doctor.md)
 
 ## 완료 기준
 

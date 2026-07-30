@@ -59,6 +59,7 @@ systemd デーモン 2 つを導入して `http://127.0.0.1:3000/` にダッシ�
 
 ```sh
 ./install.sh --check            # 何が足りないかを先に確認(root 不要・変更なし)
+./install.sh --doctor           # ホスト設定の診断(UFW・ソケット・DB パスなど)
 sudo ./install.sh --uninstall   # デーモンを削除。--purge を付けなければ VM データは残る
 ```
 
