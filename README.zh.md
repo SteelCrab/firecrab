@@ -39,26 +39,55 @@ firecrab 是一个轻量级控制平面，用于在自建 Linux 主机上基于
 - 基于 WebSocket 的实时串行控制台
 - SQLite 状态存储，通过特权 helper 进程实现主机网络隔离
 
-## 快速开始
+## 安装（推荐）
 
-### 终端会话 1 — API 服务器
-
-负责存储 VM 状态并管理 Firecracker 进程的 Rust REST API 服务器（`http://localhost:3000`）。
+只要是支持 KVM 且能联网的 Linux 主机：
 
 ```sh
-cargo run -p firecrab-api
+git clone https://github.com/SteelCrab/firecrab && cd firecrab
+sudo ./install.sh
 ```
 
-### 终端会话 2 — 前端
-
-用于创建/查看 VM 并连接控制台的 React 仪表盘开发服务器（`http://localhost:8080`）。
+这就够了。安装脚本会自行找出缺失的部分并装好 —— 用主机自带的包管理器
+（apt/dnf/zypper/pacman/apk）安装依赖，再装 Firecracker、Rust 工具链和一个客户机镜像，
+然后创建服务账户、安装两个 systemd 守护进程，并在 `http://127.0.0.1:3000/` 提供仪表盘。
+重复执行是安全的 —— 它会修复而不是重复安装。
 
 ```sh
-cd firecrab-frontend
-npm run dev
+./install.sh --check            # 先看缺什么（无需 root，不改动任何东西）
+sudo ./install.sh --uninstall   # 移除守护进程；不加 --purge 则保留 VM 数据
+```
+
+KVM 是唯一无法替你安装的东西 —— 如果没有 `/dev/kvm`，请在 BIOS 中开启虚拟化
+（若该主机本身是虚拟机，则开启嵌套虚拟化）。完整用法（选项、安装位置、升级、卸载、故障排查）见
+[docs/install.md](docs/install.md)。
+
+## 从源码运行（开发）
+
+无需安装，三个终端：特权网络 helper、API，以及带代理、让浏览器能访问 API 的 Vite 开发服务器。
+
+```sh
+# 1 — 特权网络 helper（bridge、TAP、防火墙、DHCP）
+cargo build -p firecrab-net-helper
+sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
+     ./target/debug/firecrab-net-helper
+
+# 2 — API 服务器（在仓库根目录运行：路径相对于工作目录）
+cargo run -p firecrab-api
+
+# 3 — 仪表盘开发服务器
+cd firecrab-frontend && npm run dev
 ```
 
 打开 `http://localhost:8080/`。完整使用说明见 [docs/web.md](docs/web.md)。
+
+也可以让 API 直接提供已构建的仪表盘，省掉第三个终端：
+
+```sh
+cd firecrab-frontend && npm run build && cd ..
+FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
+# http://localhost:3000/
+```
 
 ## 许可证
 

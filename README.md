@@ -42,26 +42,59 @@ their integrity by hash. Host network operations that need root — bridge, TAP,
 - Live serial console over WebSocket
 - SQLite-backed state, host network isolation via a privileged helper process
 
-## Quick start
+## Install (recommended)
 
-### Terminal session 1 — API server
-
-The Rust REST API server that stores VM state and manages Firecracker processes (`http://localhost:3000`).
+On any Linux host with KVM and network access:
 
 ```sh
-cargo run -p firecrab-api
+git clone https://github.com/SteelCrab/firecrab && cd firecrab
+sudo ./install.sh
 ```
 
-### Terminal session 2 — Frontend
-
-The React dashboard dev server for creating/viewing VMs and attaching to their console (`http://localhost:8080`).
+That is the whole thing. The installer finds what is missing and installs it —
+packages via whichever manager the host has (apt/dnf/zypper/pacman/apk), Firecracker,
+the Rust toolchain, and a guest image — then creates the service account, installs two
+systemd daemons, and serves the dashboard at `http://127.0.0.1:3000/`. Re-running it is
+safe; it repairs instead of duplicating.
 
 ```sh
-cd firecrab-frontend
-npm run dev
+./install.sh --check       # see what is missing first (no root, changes nothing)
+sudo ./install.sh --uninstall   # remove the daemons; VM data is kept unless --purge
+```
+
+KVM is the one thing it cannot install for you — if `/dev/kvm` is missing, enable
+virtualization in the BIOS (or nested virtualization, if this host is itself a VM).
+Full usage — options, layout, upgrades, uninstall, troubleshooting — is in
+[docs/install.md](docs/install.md).
+
+## Run from source (development)
+
+Three terminals, no installation: the privileged network helper, the API, and the Vite
+dev server whose proxy lets the browser reach the API.
+
+```sh
+# 1 — privileged network helper (bridge, TAP, firewall, DHCP)
+cargo build -p firecrab-net-helper
+sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
+     ./target/debug/firecrab-net-helper
+
+# 2 — API server (run from the repo root: paths are relative to the working directory)
+cargo run -p firecrab-api
+
+# 3 — dashboard dev server
+cd firecrab-frontend && npm run dev
 ```
 
 Open `http://localhost:8080/`. See [docs/web.md](docs/web.md) for the full walkthrough.
+
+To serve the built dashboard from the API instead of running the third terminal, point
+it at the build output:
+
+```sh
+cd firecrab-frontend && npm run build && cd ..
+FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
+# http://localhost:3000/
+```
 
 ## License
 

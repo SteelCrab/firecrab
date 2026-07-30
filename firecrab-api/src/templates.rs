@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::ffi::CString;
-use std::fs::{File, Metadata, OpenOptions};
+use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -164,7 +164,34 @@ impl TemplateRegistry {
             .map(PathBuf::from)
             .unwrap_or(default_root);
 
-        Self::from_specs(&image_root, default_specs())
+        Self::load_from(&image_root)
+    }
+
+    /// [`load_default`](Self::load_default) against an explicit image root.
+    ///
+    /// A template whose files aren't there yet is skipped with a warning
+    /// rather than failing startup: on a fresh install the daemons come up
+    /// before any multi-gigabyte image has been built, and an API that
+    /// refuses to start would take the dashboard and every existing VM down
+    /// with it. Anything that *is* present is still verified in full by
+    /// [`from_specs`](Self::from_specs).
+    pub fn load_from(image_root: &Path) -> Result<Self, TemplateError> {
+        if !image_root.exists() {
+            fs::create_dir_all(image_root)?;
+        }
+
+        let (present, missing): (Vec<_>, Vec<_>) = default_specs()
+            .into_iter()
+            .partition(|spec| artifacts_present(image_root, spec));
+        for spec in &missing {
+            tracing::warn!(
+                template = spec.alias,
+                image_root = %image_root.display(),
+                "template artifacts are missing; skipping this template"
+            );
+        }
+
+        Self::from_specs(image_root, present)
     }
 
     /// Builds a registry from an explicit image root and template specs,
@@ -301,6 +328,16 @@ impl TemplateRegistry {
 /// alias/kernel/initrd/boot_args values are unit-testable without needing
 /// real image files on disk — `from_specs` itself always needs those to
 /// verify against, but the spec values themselves don't.
+/// Whether every file a spec needs is already on disk. A cheap existence
+/// check only — [`TemplateRegistry::from_specs`] still opens each one safely
+/// beneath the image root and hashes it.
+fn artifacts_present(image_root: &Path, spec: &TemplateSpec) -> bool {
+    std::iter::once(&spec.kernel)
+        .chain(std::iter::once(&spec.rootfs))
+        .chain(spec.initrd.as_ref())
+        .all(|relative| image_root.join(relative).is_file())
+}
+
 fn default_specs() -> [TemplateSpec; 2] {
     [
         TemplateSpec {
@@ -455,6 +492,42 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn load_from_skips_templates_whose_images_are_not_built_yet() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join("images");
+
+        // A fresh install: the image root does not even exist yet.
+        let registry = TemplateRegistry::load_from(&root).expect("startup must not fail");
+        assert!(
+            root.is_dir(),
+            "the image root is created so later builds land there"
+        );
+        assert!(
+            registry.resolve_alias("alpine-3.24").is_none(),
+            "an unbuilt template must not resolve"
+        );
+
+        // Building one template's files in makes exactly that one usable; the
+        // other stays skipped rather than failing the whole registry.
+        let alpine = default_specs()
+            .into_iter()
+            .find(|spec| spec.alias == "alpine-3.24")
+            .expect("alpine is a default template");
+        for relative in [&alpine.kernel, &alpine.rootfs]
+            .into_iter()
+            .chain(alpine.initrd.as_ref())
+        {
+            let path = root.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, b"image").unwrap();
+        }
+
+        let registry = TemplateRegistry::load_from(&root).expect("one built template");
+        assert!(registry.resolve_alias("alpine-3.24").is_some());
+        assert!(registry.resolve_alias("ubuntu-26.04").is_none());
+    }
 
     fn create_registry(root: &Path) -> TemplateRegistry {
         fs::write(root.join("kernel"), b"kernel").unwrap();

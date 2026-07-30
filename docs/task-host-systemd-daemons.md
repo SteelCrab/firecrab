@@ -3,7 +3,7 @@ tags:
   - firecrab
   - host
   - systemd
-status: 미완료
+status: 구현 완료 (실 호스트 기동 미검증)
 scope: 4주차
 updated: 2026-07-29
 ---
@@ -35,6 +35,26 @@ updated: 2026-07-29
 - `firecrab-api.service`가 `dnsmasq`·`nftables`와 충돌하지 않는지 확인
 - 3번(dev 서버)은 유닛으로 만들지 않는다 — [프론트엔드 서빙](task-host-frontend-serving.md)에서
   API가 정적 자산을 직접 서빙하게 바꿔 데몬 2개로 끝낸다
+
+## 구현 (2026-07-29)
+
+`packaging/systemd/`에 템플릿 2개. `install.sh`가 `@PLACEHOLDER@`를 실제 경로/계정으로 치환해 설치.
+
+- `firecrab-net-helper.service` — `User=root` + `Group=firecrab`.
+  **그룹이 핵심**: helper가 소켓을 0660으로 만들고 그룹은 프로세스에서 가져가므로,
+  이걸 빠뜨리면 API가 소켓에 못 붙는다(이번 주에 실제로 겪은 실패)
+  - `RuntimeDirectory=firecrab`(0750)로 `/run/firecrab` 생성·정리
+  - `Before=firecrab-api.service` — API의 시작 시 재적용이 helper를 찾을 수 있도록
+- `firecrab-api.service` — 비특권 `firecrab` 계정, `WorkingDirectory=/var/lib/firecrab`
+  - `FIRECRAB_IMAGE_ROOT`, `FIRECRAB_STATIC_ROOT` 지정, `EnvironmentFile=-/etc/firecrab/api.env`
+- 샌드박싱은 `ProtectSystem=full`까지만 — `strict`는 `/var`를 잠가 dnsmasq의 lease 파일을 깨뜨린다
+- `CapabilityBoundingSet`으로 uid 0을 유지한 채 쓰지 않는 권한을 전부 회수:
+  `NET_ADMIN` `NET_RAW` `NET_BIND_SERVICE` `SETUID` `SETGID` `KILL` `CHOWN`
+  - 하나가 빠지면 **기동은 되고 특정 동작만 런타임에 깨진다** — 그래서 CI가 실제로 확인한다
+  - `KILL`: dnsmasq가 비특권 사용자로 내려간 뒤 시그널을 보내야 함(커널은 uid가 아니라
+    capability를 본다)
+  - `CHOWN`: dnsmasq가 pid 파일 소유자를 그 사용자로 넘긴다. **CI가 이걸 잡아냈다** —
+    없으면 매 기동마다 `chown of PID file ... Operation not permitted`
 
 ## 완료 기준
 

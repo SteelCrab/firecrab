@@ -3,7 +3,7 @@ tags:
   - firecrab
   - host
   - frontend
-status: 미완료
+status: 완료
 scope: 4주차
 updated: 2026-07-29
 ---
@@ -36,11 +36,27 @@ updated: 2026-07-29
 - dev 흐름은 그대로 유지 — dist가 없으면 서빙을 끄고 안내만(개발자는 계속 `npm run dev` 사용)
 - 같은 origin에서 서빙되므로 CORS 허용 origin이 필요 없어짐 — 설정 문서 갱신
 
+## 구현 (2026-07-29)
+
+- `HttpConfig.static_root` — `FIRECRAB_STATIC_ROOT`로 지정. **`index.html`이 있을 때만** 켜짐
+  (반쯤 빌드된 `dist/`가 라우터 fallback을 가로채지 않게, 없으면 경고만 남기고 API만 서빙)
+- `ServeDir(root).fallback(ServeFile(index.html))`을 라우터 fallback으로 —
+  실제 파일이 있으면 그 파일, 없으면 `index.html`(브라우저에서 `/vms/<id>` 새로고침이 404가 되면 안 됨)
+- `/api/{*rest}`·`/ws/{*rest}` catch-all을 먼저 둬서 **오타 난 API 경로는 계속 JSON 404** —
+  HTML이 돌아오면 클라이언트가 파싱에서 죽는다
+- dev 흐름 무변경: `FIRECRAB_STATIC_ROOT`를 안 주면 예전과 똑같이 동작
+
 ## 완료 기준
 
 - 운영에서 **데몬 2개**(net-helper, api)만으로 브라우저 대시보드가 동작
 - 터미널 접속·WebSocket 콘솔이 같은 포트에서 그대로 동작
 - `npm run dev` 개발 흐름에 회귀 없음
+
+> [!note] 실제 확인 (2026-07-29)
+> 빌드된 `dist/`를 가리켜 API를 띄우고 확인:
+> `/` → 200 text/html, `/assets/*.js` → 200 text/javascript,
+> `/vms/abc` → 200(SPA fallback), `/api/vms` → 200,
+> `/api/nope` → JSON 404, `/ws/vms/<id>/console` → WebSocket 핸들러 도달(catch-all에 안 가려짐).
 
 ## 참고
 

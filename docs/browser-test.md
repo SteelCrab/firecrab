@@ -70,7 +70,16 @@ Rust 툴체인 없이 `npm run dev`/`build`만으로 동작해야 하기 때문.
 
 ## 프로덕션 배포
 
-`firecrab-api`에는 정적 파일 서빙 코드가 없다 — 지금은 dev/production 구분 없이 두 프로세스(API +
-프록시 낀 프론트 dev 서버)로 동작한다. 단일 배포 아티팩트가 필요해지면 `tower-http`의 `ServeDir`로
-`npm run build`의 `dist/`를 `firecrab-api`가 직접 서빙하는 옵션을 추가할 수 있다(아직 미구현,
-`docs/task-packaging-systemd-upgrades.md` 범위).
+`FIRECRAB_STATIC_ROOT`에 `npm run build`의 `dist/`를 가리키면 `firecrab-api`가 대시보드를 직접
+서빙한다(`tower-http`의 `ServeDir` + SPA fallback). 그러면 Vite dev 서버가 필요 없고, 같은 origin이라
+`FIRECRAB_ALLOWED_ORIGINS`도 비워도 된다.
+
+```sh
+cd firecrab-frontend && npm run build && cd ..
+FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
+# http://localhost:3000/
+```
+
+설치 스크립트(`./install.sh`)가 이 경로를 systemd 유닛에 넣어 주므로, 설치한 호스트에서는
+데몬 2개(net-helper, api)만으로 대시보드가 뜬다 — 사용법은 [install.md](install.md).
+지정하지 않으면 예전처럼 API만 서빙하고, 개발은 아래 dev 서버 방식을 그대로 쓴다.

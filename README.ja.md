@@ -42,26 +42,57 @@ Rust で書かれた API サーバー（`firecrab-api`）が VM の状態を SQL
 - WebSocket によるリアルタイムシリアルコンソール
 - SQLite によるステート管理、権限分離された helper プロセスによるホストネットワーク分離
 
-## クイックスタート
+## インストール(推奨)
 
-### ターミナルセッション 1 — API サーバー
-
-VM の状態管理と Firecracker プロセスの制御を担う Rust 製 REST API サーバー(`http://localhost:3000`)。
+KVM が使えてネットワークにつながる Linux ホストであれば:
 
 ```sh
-cargo run -p firecrab-api
+git clone https://github.com/SteelCrab/firecrab && cd firecrab
+sudo ./install.sh
 ```
 
-### ターミナルセッション 2 — フロントエンド
-
-VM の作成・確認・コンソール接続用 React ダッシュボードの開発サーバー(`http://localhost:8080`)。
+これだけです。インストーラーが足りないものを自分で見つけて導入します — パッケージは
+ホストにある管理コマンド(apt/dnf/zypper/pacman/apk)経由で、さらに Firecracker、
+Rust ツールチェーン、ゲストイメージまで。そのうえでサービスアカウントを作成し、
+systemd デーモン 2 つを導入して `http://127.0.0.1:3000/` にダッシュボードを提供します。
+再実行しても安全で、重複ではなく修復として動きます。
 
 ```sh
-cd firecrab-frontend
-npm run dev
+./install.sh --check            # 何が足りないかを先に確認(root 不要・変更なし)
+sudo ./install.sh --uninstall   # デーモンを削除。--purge を付けなければ VM データは残る
+```
+
+KVM だけは代わりに導入できません — `/dev/kvm` が無い場合は BIOS で仮想化を有効に
+してください(このホスト自体が VM ならネステッド仮想化)。オプション・配置場所・アップグレード・アンインストール・トラブルシュートは
+[docs/install.md](docs/install.md) を参照。
+
+## ソースから実行(開発)
+
+インストールせずターミナル 3 つで動かします — 特権ネットワークヘルパー、API、そして
+ブラウザから API へ届かせるプロキシ付きの Vite 開発サーバーです。
+
+```sh
+# 1 — 特権ネットワークヘルパー(bridge, TAP, ファイアウォール, DHCP)
+cargo build -p firecrab-net-helper
+sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
+     ./target/debug/firecrab-net-helper
+
+# 2 — API サーバー(リポジトリのルートで実行 — パスは作業ディレクトリ基準)
+cargo run -p firecrab-api
+
+# 3 — ダッシュボード開発サーバー
+cd firecrab-frontend && npm run dev
 ```
 
 `http://localhost:8080/` を開く。使い方の詳細は [docs/web.md](docs/web.md) を参照。
+
+3 番目のターミナルを使わず、ビルド済みダッシュボードを API から配信することもできます。
+
+```sh
+cd firecrab-frontend && npm run build && cd ..
+FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
+# http://localhost:3000/
+```
 
 ## ライセンス
 

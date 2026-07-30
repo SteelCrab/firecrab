@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,11 +10,12 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Extension, Router};
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -39,6 +41,12 @@ pub struct HttpConfig {
     pub allowed_origins: Vec<HeaderValue>,
     pub max_concurrent_requests: usize,
     pub request_timeout: Duration,
+    /// Directory of built dashboard assets to serve, or `None` to serve none
+    /// (`docs/task-host-frontend-serving.md`). Set when an installed deploy
+    /// should answer the browser itself instead of needing a Vite dev server
+    /// alongside it; unset during development, where `npm run dev` proxies
+    /// to this API.
+    pub static_root: Option<PathBuf>,
 }
 
 impl HttpConfig {
@@ -55,7 +63,9 @@ impl HttpConfig {
             }
         });
 
-        Self::from_values(&bind, &origins, authentication_enabled, tls_enabled)
+        let mut config = Self::from_values(&bind, &origins, authentication_enabled, tls_enabled)?;
+        config.static_root = resolve_static_root(env::var("FIRECRAB_STATIC_ROOT").ok());
+        Ok(config)
     }
 
     fn from_values(
@@ -85,8 +95,25 @@ impl HttpConfig {
             allowed_origins,
             max_concurrent_requests: 128,
             request_timeout: Duration::from_secs(10),
+            static_root: None,
         })
     }
+}
+
+/// The dashboard assets to serve, if any. A configured directory that has no
+/// `index.html` is treated as absent and logged rather than failing startup:
+/// the API is still fully usable over HTTP, and a half-built `dist/` should
+/// not stop VMs from being managed.
+fn resolve_static_root(configured: Option<String>) -> Option<PathBuf> {
+    let root = PathBuf::from(configured?);
+    if root.join("index.html").is_file() {
+        return Some(root);
+    }
+    tracing::warn!(
+        path = %root.display(),
+        "FIRECRAB_STATIC_ROOT has no index.html; serving the API only"
+    );
+    None
 }
 
 fn env_flag(name: &str) -> bool {
@@ -184,10 +211,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     let console = Router::new().route("/ws/vms/{id}/console", get(handlers::console::console_ws));
 
-    rest.merge(console)
-        .fallback(not_found)
-        .with_state(state)
-        .layer(middleware::from_fn_with_state(policy, enforce_origin))
+    let app = rest
+        .merge(console)
+        // Unknown paths under the API/WebSocket prefixes answer with the JSON
+        // error envelope even when the dashboard is served below, so a typo in
+        // a client's URL never comes back as an HTML page.
+        .route("/api/{*rest}", any(not_found))
+        .route("/ws/{*rest}", any(not_found))
+        .with_state(state);
+
+    let app = match &config.static_root {
+        // Anything else is the dashboard: a real file if it exists, otherwise
+        // index.html, because the router's routes only exist in the browser
+        // (a reload on /vms/<id> must not 404).
+        Some(root) => app.fallback_service(
+            ServeDir::new(root).fallback(ServeFile::new(root.join("index.html"))),
+        ),
+        None => app.fallback(not_found),
+    };
+
+    app.layer(middleware::from_fn_with_state(policy, enforce_origin))
         .layer(middleware::from_fn(assign_request_id))
 }
 
@@ -214,6 +257,44 @@ async fn assign_request_id(mut request: Request, next: Next) -> Response {
     response
 }
 
+/// Whether `origin` names the very address this request was sent to.
+///
+/// Browsers attach `Origin` to same-origin state-changing requests as well, so
+/// once the dashboard is served by this API (`static_root`) every POST/DELETE it
+/// makes carries one. Requiring that address to be listed would be a trap: it is
+/// whatever the operator typed — `localhost`, a LAN IP, a proxy's hostname — and
+/// getting it wrong turns every action in the UI into a `403` while GETs keep
+/// working. A request whose `Origin` equals its own authority cannot have been
+/// sent by another site, which is exactly what this check is defending against.
+fn is_same_origin(origin: &HeaderValue, request: &Request) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    // HTTP/2 carries the authority in the URI; HTTP/1.1 in the Host header.
+    let authority = request
+        .uri()
+        .authority()
+        .map(|value| value.as_str())
+        .or_else(|| {
+            request
+                .headers()
+                .get(header::HOST)
+                .and_then(|host| host.to_str().ok())
+        });
+    let Some((scheme, host)) = origin.split_once("://") else {
+        // `null` (sandboxed frame, data: URL) and anything else without a
+        // scheme is not this API's own page.
+        return false;
+    };
+    // The scheme must be a web one: `chrome-extension://localhost:3000` parses
+    // to the same authority as the dashboard, and an extension's page is not
+    // it. http and https are both accepted for one authority on purpose — a
+    // TLS-terminating proxy forwards `https://name` to this plaintext port, and
+    // an attacker who could serve https on the very address the operator
+    // reached would already own the connection.
+    matches!(scheme, "http" | "https") && authority.is_some_and(|authority| host == authority)
+}
+
 async fn enforce_origin(
     State(policy): State<HttpPolicy>,
     request: Request,
@@ -222,6 +303,7 @@ async fn enforce_origin(
     let id = request_id(&request);
     if let Some(origin) = request.headers().get(header::ORIGIN)
         && !policy.allowed_origins.contains(origin)
+        && !is_same_origin(origin, &request)
     {
         return Err(AppError::forbidden_origin(id));
     }
@@ -274,5 +356,168 @@ mod tests {
             HttpConfig::from_values("0.0.0.0:3000", "", false, false),
             Err(ConfigError::InsecureNonLoopbackBind)
         ));
+    }
+
+    #[test]
+    fn a_static_root_without_an_index_is_treated_as_absent() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_owned();
+        assert_eq!(resolve_static_root(None), None);
+        assert_eq!(
+            resolve_static_root(Some(root.display().to_string())),
+            None,
+            "an unbuilt dist/ must not take over the router's fallback"
+        );
+
+        std::fs::write(root.join("index.html"), "<!doctype html>").unwrap();
+        assert_eq!(
+            resolve_static_root(Some(root.display().to_string())),
+            Some(root)
+        );
+    }
+
+    async fn test_state(root: &std::path::Path) -> AppState {
+        let templates = crate::templates::TemplateRegistry::from_specs(root, std::iter::empty())
+            .expect("empty template spec list should always verify");
+        AppState::with_db_file(templates, root.join("state.db"))
+            .await
+            .expect("fresh temp db should open cleanly")
+    }
+
+    async fn get(app: &Router, path: &str) -> (axum::http::StatusCode, String) {
+        use tower::ServiceExt;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    #[tokio::test]
+    async fn a_mutation_from_the_dashboards_own_origin_is_not_forbidden() {
+        use tower::ServiceExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        // The installed shape: dashboard served from this API, so nothing is
+        // listed as a cross-origin caller.
+        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let app = build_router(test_state(directory.path()).await, &config);
+
+        let post = |origin: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri("/api/vms")
+                            .header(header::HOST, "localhost:3000")
+                            .header(header::ORIGIN, origin)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(axum::body::Body::from("{}"))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                response.status()
+            }
+        };
+
+        // Same origin: reaches the handler (and fails validation there, which is
+        // the point — it is not turned away at the door).
+        assert_eq!(
+            post("http://localhost:3000").await,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        // A TLS-terminating proxy in front of this port sends the same
+        // authority with an https scheme; that is still this dashboard.
+        assert_eq!(
+            post("https://localhost:3000").await,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+
+        for refused in [
+            // Another site posting to this host.
+            "http://evil.example",
+            // Right authority, but an extension's page is not the dashboard.
+            "chrome-extension://localhost:3000",
+            // A sandboxed frame or a data: URL.
+            "null",
+            // Another port on the same host is a different origin.
+            "http://localhost:8081",
+        ] {
+            assert_eq!(
+                post(refused).await,
+                axum::http::StatusCode::FORBIDDEN,
+                "{refused} must not pass as the dashboard's own origin"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn without_a_static_root_every_unknown_path_is_a_json_404() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let app = build_router(test_state(directory.path()).await, &config);
+
+        for path in ["/", "/api/nope", "/dashboard"] {
+            let (status, body) = get(&app, path).await;
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{path}");
+            assert!(
+                body.contains("\"error\""),
+                "{path} should answer JSON: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn with_a_static_root_the_dashboard_is_served_but_api_paths_still_answer_json() {
+        let directory = tempfile::tempdir().unwrap();
+        let assets = directory.path().join("dist");
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(
+            assets.join("index.html"),
+            "<!doctype html><title>fc</title>",
+        )
+        .unwrap();
+        std::fs::write(assets.join("app.js"), "console.log(1)").unwrap();
+
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        config.static_root = Some(assets);
+        let app = build_router(test_state(directory.path()).await, &config);
+
+        let (status, body) = get(&app, "/").await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert!(body.contains("<title>fc</title>"), "{body}");
+
+        let (status, body) = get(&app, "/app.js").await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(body, "console.log(1)");
+
+        // A client-side route the browser reloads on: no such file, so the
+        // SPA entry point answers instead of a 404.
+        let (status, body) = get(&app, "/vms/42").await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert!(body.contains("<title>fc</title>"), "{body}");
+
+        // ... but a mistyped API path must not come back as HTML.
+        for path in ["/api/nope", "/ws/nope"] {
+            let (status, body) = get(&app, path).await;
+            assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{path}");
+            assert!(
+                body.contains("\"error\""),
+                "{path} should answer JSON: {body}"
+            );
+        }
     }
 }
