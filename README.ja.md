@@ -63,8 +63,8 @@ sudo ./install.sh --uninstall   # デーモンを削除。--purge を付けな�
 ```
 
 KVM だけは代わりに導入できません — `/dev/kvm` が無い場合は BIOS で仮想化を有効に
-してください(このホスト自体が VM ならネステッド仮想化)。詳細は
-[docs/task-host-install-script.md](docs/task-host-install-script.md) を参照。
+してください(このホスト自体が VM ならネステッド仮想化)。オプション・配置場所・アップグレード・アンインストール・トラブルシュートは
+[docs/install.md](docs/install.md) を参照。
 
 ## ソースから実行(開発)
 

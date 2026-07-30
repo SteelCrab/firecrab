@@ -60,8 +60,8 @@ sudo ./install.sh --uninstall   # 데몬 제거. --purge 없이는 VM 데이터 
 ```
 
 KVM은 스크립트가 대신 설치할 수 없는 유일한 항목입니다 — `/dev/kvm`이 없으면 BIOS에서
-가상화를 켜세요(이 호스트가 VM이면 중첩 가상화). 자세한 내용은
-[docs/task-host-install-script.md](docs/task-host-install-script.md)를 참고하세요.
+가상화를 켜세요(이 호스트가 VM이면 중첩 가상화). 옵션·설치 위치·업그레이드·제거·문제 해결은
+[docs/install.md](docs/install.md)에 정리돼 있습니다.
 
 ## 소스에서 실행 (개발)
 

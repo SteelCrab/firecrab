@@ -59,8 +59,8 @@ sudo ./install.sh --uninstall   # 移除守护进程；不加 --purge 则保留 
 ```
 
 KVM 是唯一无法替你安装的东西 —— 如果没有 `/dev/kvm`，请在 BIOS 中开启虚拟化
-（若该主机本身是虚拟机，则开启嵌套虚拟化）。详情见
-[docs/task-host-install-script.md](docs/task-host-install-script.md)。
+（若该主机本身是虚拟机，则开启嵌套虚拟化）。完整用法（选项、安装位置、升级、卸载、故障排查）见
+[docs/install.md](docs/install.md)。
 
 ## 从源码运行（开发）
 

@@ -28,7 +28,7 @@ RUST_LOG=firecrab_api=debug cargo run
 | `FIRECRAB_ALLOWED_ORIGINS` | `http://localhost:8080` (비-production) | 콤마로 구분된 허용 Origin 목록. CORS 및 `Origin` 헤더 검사에 사용 |
 | `FIRECRAB_IMAGE_ROOT` | `../images` (crate 기준 상대경로) | 템플릿 커널/rootfs 이미지가 위치한 루트 디렉터리 |
 | `FIRECRAB_FIRECRACKER_BIN` | `firecracker` (PATH 탐색) | VM 시작 시 실행할 Firecracker 바이너리 경로 |
-| `FIRECRAB_STATIC_ROOT` | (없음) | 대시보드 빌드 산출물(`dist/`) 경로. 지정하면 API가 직접 서빙하고 없는 경로는 `index.html`로 폴백. `index.html`이 없으면 무시하고 경고만 남김 |
+| `FIRECRAB_STATIC_ROOT` | (없음, 설치 시 유닛이 지정 — [install.md](install.md)) | 대시보드 빌드 산출물(`dist/`) 경로. 지정하면 API가 직접 서빙하고 없는 경로는 `index.html`로 폴백. `index.html`이 없으면 무시하고 경고만 남김 |
 
 ### 네트워크 helper 상태
 

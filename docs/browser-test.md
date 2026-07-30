@@ -81,5 +81,5 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 ```
 
 설치 스크립트(`./install.sh`)가 이 경로를 systemd 유닛에 넣어 주므로, 설치한 호스트에서는
-데몬 2개(net-helper, api)만으로 대시보드가 뜬다 — `docs/task-host-install-script.md`.
+데몬 2개(net-helper, api)만으로 대시보드가 뜬다 — 사용법은 [install.md](install.md).
 지정하지 않으면 예전처럼 API만 서빙하고, 개발은 아래 dev 서버 방식을 그대로 쓴다.

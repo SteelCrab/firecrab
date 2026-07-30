@@ -5,9 +5,16 @@
 [task-host-systemd-daemons](../task-host-systemd-daemons.md),
 [task-host-frontend-serving](../task-host-frontend-serving.md)).
 
+사용법(옵션·경로·운영·제거)은 [install.md](../install.md).
+
 > [!warning] 개발 머신에서 전체 설치를 돌리지 말 것
 > 시스템 계정과 유닛이 생겨서 지금의 수동 실행(터미널 3개)과 충돌한다.
 > 전체 설치는 VM이나 컨테이너 같은 **버려도 되는 호스트**에서 한다.
+
+> [!note] CI가 대신 돌린다
+> `.github/workflows/ci.yml`의 `install` job이 일회용 러너 VM에서 전체 설치를 실행한다 —
+> shellcheck, `--check` 무변경, 설치, 데몬 2개 기동, capability 런타임 확인, 대시보드 200,
+> 재실행 멱등성, `--uninstall`/`--purge`까지. 게스트 이미지 빌드(=VM 부팅)만 범위 밖.
 
 ## 자동 테스트 (root 불필요)
 

@@ -64,7 +64,8 @@ sudo ./install.sh --uninstall   # remove the daemons; VM data is kept unless --p
 
 KVM is the one thing it cannot install for you — if `/dev/kvm` is missing, enable
 virtualization in the BIOS (or nested virtualization, if this host is itself a VM).
-See [docs/task-host-install-script.md](docs/task-host-install-script.md) for the details.
+Full usage — options, layout, upgrades, uninstall, troubleshooting — is in
+[docs/install.md](docs/install.md).
 
 ## Run from source (development)
 
