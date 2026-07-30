@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Create or delete a batch of test VMs against a running firecrab-api, for
 # manually exercising concurrent start/disk-prep behavior
-# (docs/bugs/vm-startup-stuck-under-concurrent-load.md).
+# (docs/50-bugs/vm-startup-stuck-under-concurrent-load.md).
 
 set -u
 
@@ -79,7 +79,7 @@ stop_one() {
 
 # A 504 here just means the response took longer than the server's request
 # timeout — start_vm's actual work is detached (tokio::spawn) and keeps
-# running regardless (docs/bugs/vm-startup-stuck-under-concurrent-load.md),
+# running regardless (docs/50-bugs/vm-startup-stuck-under-concurrent-load.md),
 # so this isn't a failure, just "check status later" instead of "now".
 report_async_result() {
   id="$1"
