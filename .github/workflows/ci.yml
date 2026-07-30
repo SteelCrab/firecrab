@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The VM-boot job below is too slow for every PR but is the only thing that
+  # proves a guest actually comes up, so it runs nightly and on demand.
+  schedule:
+    - cron: "0 17 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -170,7 +175,9 @@ jobs:
           systemctl is-active --quiet firecrab-api
           # The socket's group is what lets the unprivileged API reach the
           # helper at all; getting it wrong is a silent, confusing failure.
-          stat -c '%U %G %a' /run/firecrab/net-helper.sock | tee /dev/stderr | grep -qx 'root firecrab 660'
+          # Needs sudo to look at: /run/firecrab is 0750 root:firecrab, so the
+          # runner user cannot even traverse it - which is the point.
+          sudo stat -c '%U %G %a' /run/firecrab/net-helper.sock | tee /dev/stderr | grep -qx 'root firecrab 660'
           id -nG firecrab | tr ' ' '\n' | grep -qx kvm
 
       - name: Capability set is sufficient at runtime
@@ -181,8 +188,8 @@ jobs:
         # (SETUID/SETGID/NET_BIND_SERVICE/KILL).
         run: |
           ip -br addr show fcbr0
-          pgrep -af dnsmasq | grep -q firecrab
-          ! journalctl -u firecrab-net-helper --no-pager | grep -i 'operation not permitted'
+          sudo pgrep -af dnsmasq | grep -q firecrab
+          ! sudo journalctl -u firecrab-net-helper --no-pager | grep -i 'operation not permitted'
 
       - name: Dashboard and API answer
         run: |
@@ -217,9 +224,134 @@ jobs:
       - name: Daemon logs (on failure)
         if: failure()
         run: |
-          journalctl -u firecrab-net-helper --no-pager -n 60 || true
-          journalctl -u firecrab-api --no-pager -n 60 || true
+          sudo journalctl -u firecrab-net-helper --no-pager -n 60 || true
+          sudo journalctl -u firecrab-api --no-pager -n 60 || true
           systemctl status firecrab-net-helper firecrab-api --no-pager || true
+
+  install-distro:
+    name: Installer deps (${{ matrix.image }})
+    # GitHub only hosts Ubuntu for Linux, so other distributions are covered in
+    # containers. No systemd there, hence --deps-only: what actually differs per
+    # distribution is package naming and the toolchain, and that is what this
+    # exercises. Full install with units stays on the runner VM above.
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Alpine is deliberately absent: GitHub's own action runtime is
+        # glibc-linked and will not start in a musl container, and the upstream
+        # firecracker release binary has the same problem.
+        image:
+          - debian:12
+          - fedora:latest
+          - archlinux:latest
+          - opensuse/tumbleweed
+    steps:
+      - name: Bootstrap the container
+        # Enough to run a bash script and check out the repo; the installer
+        # takes it from there.
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update -qq && apt-get install -y -qq bash ca-certificates curl git
+          elif command -v dnf >/dev/null; then
+            dnf install -y -q bash ca-certificates curl git
+          elif command -v pacman >/dev/null; then
+            pacman -Sy --noconfirm --needed bash ca-certificates curl git
+          elif command -v zypper >/dev/null; then
+            zypper -n install bash ca-certificates curl git
+          fi
+        shell: sh -e {0}
+
+      - uses: actions/checkout@v4
+
+      - name: --check reports this distro's package manager
+        run: ./install.sh --check
+
+      - name: --deps-only installs them for real
+        # Containers run as root, so no sudo. A distro whose node packaging we
+        # cannot name drops the dashboard with a warning instead of failing —
+        # that path is exercised here too (Fedora ships only versioned streams).
+        run: ./install.sh --deps-only
+
+      - name: Everything the daemons need is present
+        run: |
+          for command in ip nft dnsmasq mkfs.ext4 firecracker cc; do
+            command -v "$command" >/dev/null || { echo "missing: $command"; exit 1; }
+          done
+          "$HOME/.cargo/bin/cargo" --version || cargo --version
+
+  vm-boot:
+    name: VM boot (nightly)
+    # The one thing the fast install job cannot cover: building a guest image
+    # and booting it. Needs KVM, docker and ~15 minutes.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: KVM is available
+        # Nested virtualisation is enabled on GitHub's Linux runners, but the
+        # device is root-only by default. If this step fails, the runner image
+        # has changed and this job cannot do its work — say so plainly instead
+        # of failing later with a confusing Firecracker error.
+        run: |
+          test -e /dev/kvm || { echo "no /dev/kvm on this runner"; exit 1; }
+          sudo chmod 666 /dev/kvm
+          ls -l /dev/kvm
+
+      - name: Install with a guest image
+        run: sudo -E env "PATH=$PATH" ./install.sh
+
+      - name: A template is registered
+        run: |
+          sudo ls -l /var/lib/firecrab/images/rootfs/
+          curl -fsS http://127.0.0.1:3000/api/vms
+
+      - name: Create, start and reach running
+        run: |
+          set -o pipefail
+          VM=$(curl -fsS -X POST http://127.0.0.1:3000/api/vms \
+                 -H 'content-type: application/json' \
+                 -d '{"name":"ci-boot","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2}' \
+               | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          echo "VM=$VM" >> "$GITHUB_ENV"
+          curl -fsS -X POST "http://127.0.0.1:3000/api/vms/$VM/start" --max-time 180 > /dev/null
+          state=$(curl -fsS "http://127.0.0.1:3000/api/vms/$VM" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["state"], d.get("ipv4"))')
+          echo "state: $state"
+          case "$state" in running*) ;; *) echo "did not reach running"; exit 1 ;; esac
+
+      - name: The guest answers on its leased address
+        run: |
+          ipv4=$(curl -fsS "http://127.0.0.1:3000/api/vms/$VM" | python3 -c 'import json,sys; print(json.load(sys.stdin)["ipv4"])')
+          ping -c 3 -W 5 "$ipv4"
+
+      - name: Stop and delete
+        run: |
+          curl -fsS -X POST "http://127.0.0.1:3000/api/vms/$VM/stop" --max-time 120 > /dev/null
+          curl -fsS -X DELETE "http://127.0.0.1:3000/api/vms/$VM"
+
+      - name: Console log and journals (on failure)
+        if: failure()
+        run: |
+          sudo tail -n 120 /var/lib/firecrab/data/vms/*/console.log || true
+          sudo journalctl -u firecrab-api --no-pager -n 80 || true
+          sudo journalctl -u firecrab-net-helper --no-pager -n 80 || true
 
   frontend:
     name: Frontend (lint, typecheck, build)
