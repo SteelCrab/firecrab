@@ -281,11 +281,18 @@ fn is_same_origin(origin: &HeaderValue, request: &Request) -> bool {
                 .get(header::HOST)
                 .and_then(|host| host.to_str().ok())
         });
-    authority.is_some_and(|authority| {
-        origin
-            .split_once("://")
-            .is_some_and(|(_, host)| host == authority)
-    })
+    let Some((scheme, host)) = origin.split_once("://") else {
+        // `null` (sandboxed frame, data: URL) and anything else without a
+        // scheme is not this API's own page.
+        return false;
+    };
+    // The scheme must be a web one: `chrome-extension://localhost:3000` parses
+    // to the same authority as the dashboard, and an extension's page is not
+    // it. http and https are both accepted for one authority on purpose — a
+    // TLS-terminating proxy forwards `https://name` to this plaintext port, and
+    // an attacker who could serve https on the very address the operator
+    // reached would already own the connection.
+    matches!(scheme, "http" | "https") && authority.is_some_and(|authority| host == authority)
 }
 
 async fn enforce_origin(
@@ -432,11 +439,29 @@ mod tests {
             post("http://localhost:3000").await,
             axum::http::StatusCode::BAD_REQUEST
         );
-        // Another site posting to the same host is still refused.
+        // A TLS-terminating proxy in front of this port sends the same
+        // authority with an https scheme; that is still this dashboard.
         assert_eq!(
-            post("http://evil.example").await,
-            axum::http::StatusCode::FORBIDDEN
+            post("https://localhost:3000").await,
+            axum::http::StatusCode::BAD_REQUEST
         );
+
+        for refused in [
+            // Another site posting to this host.
+            "http://evil.example",
+            // Right authority, but an extension's page is not the dashboard.
+            "chrome-extension://localhost:3000",
+            // A sandboxed frame or a data: URL.
+            "null",
+            // Another port on the same host is a different origin.
+            "http://localhost:8081",
+        ] {
+            assert_eq!(
+                post(refused).await,
+                axum::http::StatusCode::FORBIDDEN,
+                "{refused} must not pass as the dashboard's own origin"
+            );
+        }
     }
 
     #[tokio::test]
