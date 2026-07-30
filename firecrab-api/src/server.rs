@@ -257,6 +257,37 @@ async fn assign_request_id(mut request: Request, next: Next) -> Response {
     response
 }
 
+/// Whether `origin` names the very address this request was sent to.
+///
+/// Browsers attach `Origin` to same-origin state-changing requests as well, so
+/// once the dashboard is served by this API (`static_root`) every POST/DELETE it
+/// makes carries one. Requiring that address to be listed would be a trap: it is
+/// whatever the operator typed — `localhost`, a LAN IP, a proxy's hostname — and
+/// getting it wrong turns every action in the UI into a `403` while GETs keep
+/// working. A request whose `Origin` equals its own authority cannot have been
+/// sent by another site, which is exactly what this check is defending against.
+fn is_same_origin(origin: &HeaderValue, request: &Request) -> bool {
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    // HTTP/2 carries the authority in the URI; HTTP/1.1 in the Host header.
+    let authority = request
+        .uri()
+        .authority()
+        .map(|value| value.as_str())
+        .or_else(|| {
+            request
+                .headers()
+                .get(header::HOST)
+                .and_then(|host| host.to_str().ok())
+        });
+    authority.is_some_and(|authority| {
+        origin
+            .split_once("://")
+            .is_some_and(|(_, host)| host == authority)
+    })
+}
+
 async fn enforce_origin(
     State(policy): State<HttpPolicy>,
     request: Request,
@@ -265,6 +296,7 @@ async fn enforce_origin(
     let id = request_id(&request);
     if let Some(origin) = request.headers().get(header::ORIGIN)
         && !policy.allowed_origins.contains(origin)
+        && !is_same_origin(origin, &request)
     {
         return Err(AppError::forbidden_origin(id));
     }
@@ -362,6 +394,49 @@ mod tests {
             .await
             .unwrap();
         (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    #[tokio::test]
+    async fn a_mutation_from_the_dashboards_own_origin_is_not_forbidden() {
+        use tower::ServiceExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        // The installed shape: dashboard served from this API, so nothing is
+        // listed as a cross-origin caller.
+        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let app = build_router(test_state(directory.path()).await, &config);
+
+        let post = |origin: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri("/api/vms")
+                            .header(header::HOST, "localhost:3000")
+                            .header(header::ORIGIN, origin)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(axum::body::Body::from("{}"))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                response.status()
+            }
+        };
+
+        // Same origin: reaches the handler (and fails validation there, which is
+        // the point — it is not turned away at the door).
+        assert_eq!(
+            post("http://localhost:3000").await,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        // Another site posting to the same host is still refused.
+        assert_eq!(
+            post("http://evil.example").await,
+            axum::http::StatusCode::FORBIDDEN
+        );
     }
 
     #[tokio::test]
