@@ -38,6 +38,7 @@ Usage: sudo ./install.sh [OPTIONS]
 
   (no options)        install everything that is missing, then start firecrab
   --check             report what is missing and what would be installed
+  --deps-only         install the dependencies, then stop (no host changes)
   --no-deps           never install packages/toolchains, only report gaps
   --no-images         do not build a guest image
   --with-ubuntu-image also build the Ubuntu image (large, needs root chroot)
@@ -61,6 +62,7 @@ need_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo ./install.sh $*"; }
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) MODE=check ;;
+        --deps-only) MODE=deps ;;
         --no-deps) INSTALL_DEPS=0 ;;
         --no-images) WITH_IMAGES=0 ;;
         --with-ubuntu-image) WITH_UBUNTU_IMAGE=1 ;;
@@ -87,15 +89,24 @@ detect_pkg() {
 pkg_name() {
     local generic=$1
     case "$PKG:$generic" in
-        apt-get:iproute2|dnf:iproute2)  echo "iproute2" ;;
-        zypper:iproute2|pacman:iproute2|apk:iproute2) echo "iproute2" ;;
+        # Fedora/RHEL call it iproute; everyone else iproute2.
+        dnf:iproute2) echo "iproute" ;;
+        *:iproute2)   echo "iproute2" ;;
         *:nftables)   echo "nftables" ;;
         *:dnsmasq)    echo "dnsmasq" ;;
         apk:e2fsprogs) echo "e2fsprogs-extra" ;;
         *:e2fsprogs)  echo "e2fsprogs" ;;
         *:curl)       echo "curl" ;;
-        apt-get:node) echo "nodejs npm" ;;
-        pacman:node)  echo "nodejs npm" ;;
+        # cargo needs a linker; rustup only warns that one is missing and the
+        # build then fails at link time with a much less obvious error.
+        apt-get:cc)   echo "build-essential" ;;
+        apk:cc)       echo "build-base" ;;
+        *:cc)         echo "gcc" ;;
+        # Node is the one dependency nobody names the same way. openSUSE has
+        # meta packages; Fedora ships only versioned streams (nodejs22-npm-bin
+        # and friends), so the unversioned guess below simply fails there and
+        # `ensure_build_tools` carries on without the dashboard.
+        zypper:node)  echo "nodejs-default npm-default" ;;
         *:node)       echo "nodejs npm" ;;
         apt-get:docker) echo "docker.io" ;;
         *:docker)     echo "docker" ;;
@@ -244,8 +255,14 @@ ensure_build_tools() {
         failed=1
     fi
 
-    if [ "$WITH_FRONTEND" -eq 1 ]; then
-        ensure npm node || failed=1
+    ensure cc cc || failed=1
+
+    if [ "$WITH_FRONTEND" -eq 1 ] && ! ensure npm node; then
+        # Degraded, not fatal: the API and MicroNetworks work without the
+        # dashboard, and node package names vary too much between distributions
+        # to fail an install over. Build it later and re-run.
+        warn "no npm — installing without the dashboard (re-run after installing Node)"
+        WITH_FRONTEND=0
     fi
     return $failed
 }
@@ -482,16 +499,33 @@ do_check() {
     return 0
 }
 
+# Installs what firecrab needs and stops there — no account, directories, units
+# or services. This is the part that differs per distribution, so it is what a
+# container without systemd (and CI's distro matrix) can usefully exercise.
+do_deps() {
+    need_root --deps-only
+    detect_pkg || die "no known package manager (apt/dnf/zypper/pacman/apk)"
+
+    ensure_runtime_deps || die "missing runtime dependencies (see above)"
+    ensure_firecracker  || die "firecracker is required"
+    ensure_build_tools  || die "build tools are required"
+    check_kvm || warn "no KVM here; that only matters where VMs actually run"
+    report_ufw
+    log "dependencies ready — run without --deps-only to install firecrab"
+}
+
 # The default path: fill the gaps, build, lay out, start.
 do_install() {
     need_root
+    # Checked before anything is installed: refusing after pulling in five
+    # packages would be a waste of the operator's time.
+    check_systemd || die "this installer manages systemd units"
     detect_pkg || warn "no known package manager — anything missing has to be installed by hand"
 
     ensure_runtime_deps || die "missing runtime dependencies (see above)"
     ensure_firecracker  || die "firecracker is required"
     ensure_build_tools  || die "build tools are required"
     check_kvm || warn "continuing, but VMs will not start until KVM is available"
-    check_systemd || die "this installer manages systemd units"
 
     build_all
     ensure_account
@@ -540,6 +574,7 @@ do_uninstall() {
 
 case "$MODE" in
     check) do_check ;;
+    deps) do_deps ;;
     install) do_install ;;
     uninstall) do_uninstall ;;
 esac
