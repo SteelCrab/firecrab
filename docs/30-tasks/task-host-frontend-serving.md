@@ -22,7 +22,7 @@ updated: 2026-07-29
   3. `npm run dev` (Vite, 8080 → 3000 프록시)
 - 3번은 개발용이다. `/api`·`/ws` 프록시가 `vite.config.ts`에 있어서
   이게 없으면 브라우저가 API에 닿지 못함
-- `firecrab-api`에는 정적 파일 서빙 코드가 아예 없음([browser-test](../20-guides/browser-test.md))
+- `firecrab-api`에는 정적 파일 서빙 코드가 아예 없음([web](../20-guides/web.md))
 - 데몬화([systemd 유닛](task-host-systemd-daemons.md))를 해도 이게 남으면
   운영 환경에서 Node를 계속 띄워야 함
 

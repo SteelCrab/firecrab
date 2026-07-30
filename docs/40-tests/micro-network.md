@@ -239,7 +239,7 @@ ip -br link show type bridge | grep mnb      # prod의 mnb<hex>가 없어야 함
 
 ### 브라우저 확인
 
-`docs/browser-test.md`대로 dev 서버(`npm run dev`, http://localhost:8080)를 띄우고:
+[web](../20-guides/web.md)대로 dev 서버(`npm run dev`, http://localhost:8080)를 띄우고:
 
 - 헤더 "MicroNetwork" → 목록에 name/subnet/gateway/인터넷 표시, 생성·삭제 동작
 - 생성 폼의 "인터넷" 선택(연결/차단)이 목록의 인터넷 열에 그대로 반영

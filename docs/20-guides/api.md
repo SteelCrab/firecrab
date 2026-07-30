@@ -230,4 +230,4 @@ VM 레코드는 실행 디렉터리 기준 `data/firecrab.db`(SQLite, WAL mode)�
 
 ## 브라우저 테스트 페이지
 
-`firecrab-frontend`로 분리되어 있다. [browser-test.md](browser-test.md) 참고.
+`firecrab-frontend`로 분리되어 있다. [web.md](web.md) 참고.

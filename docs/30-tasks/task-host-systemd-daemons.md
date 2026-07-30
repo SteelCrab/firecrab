@@ -18,7 +18,7 @@ updated: 2026-07-29
 ## 왜
 
 - 지금 실행 방법 — 터미널 3개
-  ([browser-test](../20-guides/browser-test.md), [tests/micro-network](../40-tests/micro-network.md))
+  ([web](../20-guides/web.md), [tests/micro-network](../40-tests/micro-network.md))
   1. `sudo … firecrab-net-helper` (root, 소켓 그룹 지정 필요)
   2. `cargo run -p firecrab-api` (저장소 루트에서)
   3. `npm run dev` (Vite dev 서버 — 8080에서 `/api`·`/ws`를 3000으로 프록시)

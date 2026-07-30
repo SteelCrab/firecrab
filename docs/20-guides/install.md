@@ -16,7 +16,7 @@ sudo ./install.sh
 ```
 
 끝나면 `http://127.0.0.1:3000/`에서 대시보드가 뜬다. 개발용 3터미널 실행은
-[browser-test.md](browser-test.md)를 참고한다.
+[web.md](web.md)를 참고한다.
 
 ## 요구사항
 
@@ -177,5 +177,5 @@ sudo ./install.sh --uninstall --purge   # 데이터까지 (되돌릴 수 없음)
   [task-host-frontend-serving.md](../30-tasks/task-host-frontend-serving.md)
 - 검증 절차: [tests/host-install.md](../40-tests/host-install.md)
 - API 설정·엔드포인트: [api.md](api.md)
-- 개발용 실행(3터미널): [browser-test.md](browser-test.md)
+- 개발용 실행(3터미널): [web.md](web.md)
 - 특권 helper: [net-helper.md](net-helper.md)
