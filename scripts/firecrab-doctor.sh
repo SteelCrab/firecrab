@@ -192,9 +192,19 @@ check_nft() {
         return
     fi
 
-    # Tables only exist while net-helper has applied rules. If the helper is
-    # not up yet, treat as informational skip rather than a hard fail.
+    # Tables appear after API/helper has run ensure_firewall at least once
+    # (daemon start or first MicroNetwork). Helper socket alone is not enough
+    # if the API never connected yet — skip rather than hard-fail that race.
     if [ -S "$HELPER_SOCK" ]; then
+        # Zero bridges and no tables: install-fresh with no MicroNetwork yet.
+        # Ruleset may still be applied empty; if tables are missing entirely,
+        # treat as soft until a network or VM start forces ensure.
+        if [ -z "$(list_firecrab_bridges)" ]; then
+            skip "nft: firecrab tables not present yet (${missing[*]})" \
+                "ok with zero MicroNetworks until ensure_firewall runs" \
+                "POST /api/micro-networks or restart firecrab-api"
+            return
+        fi
         fail "nft: missing firecrab tables: ${missing[*]}" \
             "net-helper socket is up but tables are absent" \
             "systemctl restart firecrab-net-helper  (or start a VM so rules are applied)"
@@ -230,11 +240,21 @@ check_dnsmasq() {
             | sed 's/^interface=//' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
     fi
 
+    # Collect firecrab bridges currently on the host (mnb* only after
+    # explicit MicroNetwork create; no implicit fcbr0).
+    interfaces=$(list_firecrab_bridges | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+
     if [ "$alive" -eq 0 ]; then
         if [ -S "$HELPER_SOCK" ]; then
+            # Zero MicroNetworks: helper is healthy but has no interface to
+            # serve — dnsmasq is expected idle until the first network exists.
+            if [ -z "$interfaces" ]; then
+                pass
+                return
+            fi
             fail "dnsmasq: no firecrab dnsmasq process" \
-                "pid_file=$DNSMASQ_PID conf=$DNSMASQ_CONF" \
-                "systemctl restart firecrab-net-helper"
+                "pid_file=$DNSMASQ_PID conf=$DNSMASQ_CONF bridges: $interfaces" \
+                "systemctl restart firecrab-net-helper  (or create a MicroNetwork)"
         else
             skip "dnsmasq: not running (helper also down)" \
                 "" \
@@ -242,9 +262,6 @@ check_dnsmasq() {
         fi
         return
     fi
-
-    # Collect firecrab bridges currently on the host.
-    interfaces=$(list_firecrab_bridges | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
     if [ -n "$interfaces" ] && [ -n "$conf_ifaces" ]; then
         local br missing_if=()
@@ -307,7 +324,7 @@ check_helper_socket() {
     pass
 }
 
-# Prints firecrab-owned bridge names, one per line (fcbr0 and mnb*).
+# Prints firecrab-owned bridge names, one per line (mnb*; legacy fcbr0 if any).
 list_firecrab_bridges() {
     if ! have ip; then
         return 0

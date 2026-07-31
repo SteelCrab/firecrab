@@ -21,7 +21,7 @@ updated: 2026-07-31
 |---|---|
 | shellcheck | `install.sh` + `scripts/firecrab-doctor.sh` |
 | 설치 전 | `./install.sh --doctor` 비특권, exit 0/1, `/var/lib/firecrab` 무변경 |
-| 설치 후 | `sudo firecrab-doctor` — fail이 있으면 **images 관련만** 허용(`--no-images`) |
+| 설치 후 | `sudo firecrab-doctor` — fail이 있으면 **images 관련만** 허용(`--no-images`). MicroNetwork 0개일 때 dnsmasq idle은 fail 아님 |
 | uninstall | `/usr/local/bin/firecrab-doctor` 제거 확인 |
 
 ## 자동·스모크 (root 불필요)
@@ -71,7 +71,8 @@ sudo ./scripts/firecrab-doctor.sh   # 정상 호스트: all checks passed (9 ok)
 
 - `nft list tables`에 `inet firecrab`, `bridge firecrab_l2`가 있으면 ok
 - UFW inactive → UFW 항목 pass(규칙 검사 생략)
-- UFW active + 모든 fcbr0/mnb*에 DHCP·DNS·route 있으면 pass
+- UFW active + 모든 mnb* (및 레거시 fcbr0)에 DHCP·DNS·route 있으면 pass
+- MicroNetwork 0개: dnsmasq 미기동은 fail이 아님 (명시적 네트워크 모델)
 
 ## 완료 기준 대조
 
