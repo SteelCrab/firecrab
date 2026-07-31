@@ -358,9 +358,8 @@ jobs:
           "$HOME/.cargo/bin/cargo" --version || cargo --version
 
   # M2 guest boot matrix: every supported guest template × every GitHub-hosted
-  # Linux runner that exposes nested KVM (Ubuntu LTS family). See
-  # docs/20-guides/m2-ci-boot-matrix.md. Other host distros get package deps
-  # in install-distro; full M2 boot there needs a self-hosted KVM runner label.
+  # Linux runner that exposes nested KVM (Ubuntu LTS family). Other host distros
+  # get package deps in install-distro; full M2 boot there needs self-hosted KVM.
   vm-boot:
     name: M2 boot (${{ matrix.host }} / ${{ matrix.template }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -433,8 +432,7 @@ jobs:
 
   # Extra host OS / arch: only when the repo variable ENABLE_M2_SELF_HOSTED=true
   # and matching self-hosted runners are online. Without that gate, missing
-  # runners would queue forever and stall nightly. Labels are documented in
-  # docs/20-guides/m2-ci-boot-matrix.md.
+  # runners would queue forever and stall nightly.
   vm-boot-self-hosted:
     name: M2 boot self-hosted (${{ matrix.host }} / ${{ matrix.template }})
     if: >-

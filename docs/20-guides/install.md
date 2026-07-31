@@ -136,8 +136,7 @@ curl -s -X POST localhost:3000/api/micro-networks \
 ```
 
 브라우저에서 `http://127.0.0.1:3000/` → MicroNetwork 생성 → VM 생성 → start → `running` 도달까지 확인한다.
-자세한 절차는 [tests/host-install.md](../40-tests/host-install.md).  
-M2 게스트 부팅 매트릭스(nightly): [m2-ci-boot-matrix.md](m2-ci-boot-matrix.md).
+자세한 절차는 [tests/host-install.md](../40-tests/host-install.md).
 
 ## 운영
 
