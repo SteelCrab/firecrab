@@ -505,10 +505,8 @@ pub async fn delete_vm(
     };
 
     let store = state.store.clone();
-    let artifact_paths = crate::artifacts::VmArtifactPaths::for_vm(
-        &state.vms_dir_for(&removed.storage_root),
-        id,
-    );
+    let artifact_paths =
+        crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&removed.storage_root), id);
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         // Runtime dirs first conceptually (owned by this VM only), then the
         // whole tree including disks — one remove_dir_all covers both.
@@ -1217,6 +1215,24 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             "must be 1-64 ASCII letters, numbers, '.', '_' or '-'".to_owned(),
         );
     }
+    // MicroNetwork is required on the wire type; reject unknown ids here so a
+    // create never inserts then rolls back for a missing network.
+    match state.store.micro_network(req.micro_network_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            fields.insert(
+                "microNetworkId".to_owned(),
+                "no MicroNetwork with this id exists".to_owned(),
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, "failed to look up micro network during create validation");
+            fields.insert(
+                "microNetworkId".to_owned(),
+                "could not verify MicroNetwork".to_owned(),
+            );
+        }
+    }
     let template = state.templates.resolve_alias(&req.template);
     if template.is_none() {
         fields.insert("template".to_owned(), "is not supported".to_owned());
@@ -1344,10 +1360,12 @@ pub async fn assign_vm_storage(
         .and_then(|vm| vm.disk_generation)
     {
         Some(generation) => old_paths.rootfs(generation).exists(),
-        None => old_paths.disks.exists()
-            && std::fs::read_dir(&old_paths.disks)
-                .map(|entries| entries.filter_map(Result::ok).any(|_| true))
-                .unwrap_or(false),
+        None => {
+            old_paths.disks.exists()
+                && std::fs::read_dir(&old_paths.disks)
+                    .map(|entries| entries.filter_map(Result::ok).any(|_| true))
+                    .unwrap_or(false)
+        }
     };
     if has_disk {
         return Err(AppError::new(
@@ -1780,11 +1798,7 @@ mod tests {
         let state = test_state(directory.path()).await;
         let mut vm = record("verbose", Uuid::new_v4());
         seed_vm(&state, &vm);
-        seed_console_log(
-            &state,
-            &mut vm,
-            "x".repeat(MAX_LOG_BYTES as usize + 1000),
-        );
+        seed_console_log(&state, &mut vm, "x".repeat(MAX_LOG_BYTES as usize + 1000));
 
         let Json(log) = get_vm_log(
             State(state),
@@ -2432,10 +2446,6 @@ while True:
         assert!(state.vms.lock().unwrap().is_empty());
     }
 
-    fn create_request(name: &str) -> CreateVmRequest {
-        create_request_on(name, Uuid::from_u128(1))
-    }
-
     fn create_request_on(name: &str, micro_network_id: Uuid) -> CreateVmRequest {
         CreateVmRequest {
             name: name.to_owned(),
@@ -2514,16 +2524,14 @@ while True:
         let disk_b = directory.path().join("disk-b");
         std::fs::create_dir_all(&disk_a).unwrap();
         std::fs::create_dir_all(&disk_b).unwrap();
-        let state = test_state(directory.path())
-            .await
-            .with_test_storage(
-                crate::storage::StorageRegistry::parse(&format!(
-                    "disk-a={}:disk-b={}",
-                    disk_a.display(),
-                    disk_b.display()
-                ))
-                .unwrap(),
-            );
+        let state = test_state(directory.path()).await.with_test_storage(
+            crate::storage::StorageRegistry::parse(&format!(
+                "disk-a={}:disk-b={}",
+                disk_a.display(),
+                disk_b.display()
+            ))
+            .unwrap(),
+        );
         let net = seed_network(&state).await;
 
         let unknown = validate_create(
@@ -2547,7 +2555,13 @@ while True:
         .expect("create on disk-b");
         assert_eq!(created.storage_root, "disk-b");
         assert_eq!(
-            state.vms.lock().unwrap().get(&created.id).unwrap().storage_root,
+            state
+                .vms
+                .lock()
+                .unwrap()
+                .get(&created.id)
+                .unwrap()
+                .storage_root,
             "disk-b"
         );
 
@@ -2685,7 +2699,10 @@ while True:
         for _ in 0..253 {
             state
                 .store
-                .allocate_lease(Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
+                .allocate_lease(
+                    Uuid::new_v4(),
+                    SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+                )
                 .unwrap();
         }
 
