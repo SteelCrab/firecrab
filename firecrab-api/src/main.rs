@@ -1,3 +1,4 @@
+mod artifacts;
 mod console;
 mod error;
 mod extract;
@@ -11,6 +12,7 @@ mod persistence;
 mod rootfs;
 mod server;
 mod state;
+mod storage;
 mod templates;
 
 use std::error::Error;

@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
-use std::path::PathBuf;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -84,25 +83,37 @@ pub async fn get_vm_log(
     Path(id): Path<String>,
 ) -> Result<Json<VmLogResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
-    {
+    let (storage_root, last_runtime_id) = {
         let vms = state
             .vms
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !vms.contains_key(&id) {
-            return Err(AppError::not_found(request_id.0));
+        match vms.get(&id) {
+            Some(vm) => (vm.storage_root.clone(), vm.last_runtime_id),
+            None => return Err(AppError::not_found(request_id.0)),
         }
-    }
+    };
 
-    let vms_dir = state.runtime.vms_dir.clone();
-    tokio::task::spawn_blocking(move || read_console_log(&vms_dir, id))
+    let vms_dir = state.vms_dir_for(&storage_root);
+    tokio::task::spawn_blocking(move || read_console_log(&vms_dir, id, last_runtime_id))
         .await
         .map(Json)
         .map_err(|_| AppError::internal(request_id.0))
 }
 
-fn read_console_log(vms_dir: &std::path::Path, id: Uuid) -> VmLogResponse {
-    let path = firecracker::console_log_path(vms_dir, id);
+fn read_console_log(
+    vms_dir: &std::path::Path,
+    id: Uuid,
+    last_runtime_id: Option<Uuid>,
+) -> VmLogResponse {
+    let Some(runtime_id) = last_runtime_id else {
+        return VmLogResponse {
+            console_log: String::new(),
+            truncated: false,
+        };
+    };
+    let runtime = crate::artifacts::VmArtifactPaths::for_vm(vms_dir, id).runtime(runtime_id);
+    let path = firecracker::console_log_path(&runtime);
     let Ok(file) = std::fs::File::open(&path) else {
         return VmLogResponse {
             console_log: String::new(),
@@ -138,6 +149,11 @@ pub async fn create_vm(
         .templates
         .resolve_alias(&req.template)
         .ok_or_else(|| AppError::internal(request_id.0))?;
+    let storage_root = req
+        .storage_root
+        .clone()
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| state.storage.default_id().to_owned());
     let vm = VmRecord {
         id: Uuid::new_v4(),
         name: req.name,
@@ -151,6 +167,9 @@ pub async fn create_vm(
         disk_gb: req.disk_gb,
         egress_policy: req.egress_policy,
         micro_network_id: req.micro_network_id,
+        storage_root,
+        disk_generation: None,
+        last_runtime_id: None,
         state: VmState::Created,
         startup_step: None,
         startup_timeline: Vec::new(),
@@ -486,14 +505,18 @@ pub async fn delete_vm(
     };
 
     let store = state.store.clone();
-    let vm_dir = state.runtime.vms_dir.join(id.to_string());
+    let artifact_paths = crate::artifacts::VmArtifactPaths::for_vm(
+        &state.vms_dir_for(&removed.storage_root),
+        id,
+    );
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        match std::fs::remove_dir_all(&vm_dir) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!("failed to remove {}: {error}", vm_dir.display()));
-            }
+        // Runtime dirs first conceptually (owned by this VM only), then the
+        // whole tree including disks — one remove_dir_all covers both.
+        if let Err(error) = crate::artifacts::remove_vm_artifacts(&artifact_paths) {
+            return Err(format!(
+                "failed to remove {}: {error}",
+                artifact_paths.dir.display()
+            ));
         }
         match store.delete(id) {
             Ok(()) | Err(PersistenceError::MissingVm { .. }) => {}
@@ -654,19 +677,24 @@ async fn finish_run_start(
         .expect("disk_prep_permits semaphore is never closed");
 
     let templates = state.templates.clone();
-    let runtime = state.runtime.clone();
     let record = vm.clone();
+    let vms_dir = state.vms_dir_for(&vm.storage_root);
     let state_for_blocking = state.clone();
     let network = network.clone();
-    let config_path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+    // One durable disk generation per VM; allocated on first prepare and
+    // reused for every later start so guest data survives stop/start.
+    let generation = record.disk_generation.unwrap_or_else(Uuid::new_v4);
+    let runtime_id = Uuid::new_v4();
+    let prep = tokio::task::spawn_blocking(move || -> Result<(Uuid, Uuid), String> {
         let _permit = permit;
+        let paths = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, record.id);
         let mut source = templates
             .open_verified(&template.rootfs)
             .map_err(|error| format!("rootfs verification failed: {error}"))?;
         let target_bytes = u64::from(record.disk_gb) * 1024 * 1024 * 1024;
-        rootfs::prepare_rootfs(&runtime.vms_dir, record.id, &mut source, target_bytes)
+        let rootfs = rootfs::prepare_rootfs(&paths, generation, &mut source, target_bytes)
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
-        rootfs::specialize_guest(&runtime.vms_dir, record.id)
+        rootfs::specialize_guest(&rootfs, record.id)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
 
         set_startup_step(
@@ -674,31 +702,57 @@ async fn finish_run_start(
             record.id,
             StartupStep::GeneratingConfig,
         );
+        let runtime = paths
+            .create_runtime(runtime_id)
+            .map_err(|error| format!("runtime directory failed: {error}"))?;
         let kernel = templates.artifact_path(&template.kernel);
         let initrd = template
             .initrd
             .as_ref()
             .map(|artifact| templates.artifact_path(artifact));
         firecracker::write_config(
-            &runtime.vms_dir,
+            &runtime,
+            &rootfs,
             &record,
             &kernel,
             initrd.as_deref(),
             &template.boot_args,
             Some(&network),
         )
-        .map_err(|error| format!("config generation failed: {error}"))
+        .map_err(|error| format!("config generation failed: {error}"))?;
+        Ok((generation, runtime_id))
     })
     .await
     .map_err(|error| format!("start preparation task failed: {error}"))??;
 
+    let (generation, runtime_id) = prep;
+    // Persist generation + last runtime so log/delete resolve host paths
+    // without storing absolute paths.
+    {
+        let mut vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(live) = vms.get_mut(&vm.id) {
+            live.disk_generation = Some(generation);
+            live.last_runtime_id = Some(runtime_id);
+        }
+    }
+    let store = state.store.clone();
+    let mut to_persist = vm.clone();
+    to_persist.disk_generation = Some(generation);
+    to_persist.last_runtime_id = Some(runtime_id);
+    let _ = tokio::task::spawn_blocking(move || store.update(&to_persist)).await;
+
     set_startup_step(state, vm.id, StartupStep::StartingProcess);
 
+    let vms_dir = state.vms_dir_for(&vm.storage_root);
+    let paths = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, vm.id);
+    let runtime = paths.runtime(runtime_id);
     let process = firecracker::spawn_vm(
         &state.runtime.firecracker_binary,
-        &state.runtime.vms_dir,
+        &runtime,
         vm.id,
-        &config_path,
         state.runtime.ready_timeout,
     )
     .await
@@ -1142,6 +1196,7 @@ pub(crate) fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
         mac: lease.map(|lease| lease.mac.to_string()),
         hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
         micro_network_id: vm.micro_network_id,
+        storage_root: vm.storage_root.clone(),
     }
 }
 
@@ -1190,7 +1245,173 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             );
         }
     }
+
+    let storage_id = req
+        .storage_root
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| state.storage.default_id());
+    if !state.storage_root_known(storage_id) {
+        fields.insert(
+            "storageRoot".to_owned(),
+            "is not a registered storage root".to_owned(),
+        );
+    } else if fields.get("diskGb").is_none() {
+        // Only probe free space once diskGb itself is in range — otherwise
+        // the capacity message would hide a simpler validation error.
+        let need_bytes = u64::from(req.disk_gb) * 1024 * 1024 * 1024;
+        if let Err(error) = state.ensure_storage_capacity(storage_id, need_bytes) {
+            fields.insert(
+                "storageRoot".to_owned(),
+                match error {
+                    crate::storage::StorageError::UnknownRoot(_) => {
+                        "is not a registered storage root".to_owned()
+                    }
+                    crate::storage::StorageError::FreeSpace { detail, .. } => {
+                        format!("not enough free space ({detail})")
+                    }
+                },
+            );
+        }
+    }
     fields
+}
+
+/// `PUT /api/vms/{id}/storage` — manually reassign a VM to another storage
+/// root. Allowed only while the VM is inactive; refused if a rootfs already
+/// exists at the old path (no silent disk move).
+pub async fn assign_vm_storage(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    ValidatedJson(req): ValidatedJson<firecrab_api_types::AssignVmStorageRequest>,
+) -> Result<Json<VmResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let target = req.storage_root.trim();
+    if target.is_empty() {
+        let mut fields = BTreeMap::new();
+        fields.insert("storageRoot".to_owned(), "must not be empty".to_owned());
+        return Err(AppError::validation(fields, request_id.0));
+    }
+    if !state.storage_root_known(target) {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "storageRoot".to_owned(),
+            "is not a registered storage root".to_owned(),
+        );
+        return Err(AppError::validation(fields, request_id.0));
+    }
+
+    let (previous_root, disk_gb, can_edit) = {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vm = vms
+            .get(&id)
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        (
+            vm.storage_root.clone(),
+            vm.disk_gb,
+            vm.state.can_edit_resources(),
+        )
+    };
+    if !can_edit {
+        let state_now = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&id)
+            .map(|vm| vm.state)
+            .unwrap_or(VmState::Error);
+        return Err(AppError::invalid_state(state_now, request_id.0));
+    }
+    if previous_root == target {
+        let lease = lease_for(&state, id).await;
+        let vm = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        return Ok(Json(vm_response(&vm, lease.as_ref())));
+    }
+
+    // Refuse if a disk already exists at the old location — moving multi-GB
+    // rootfs is out of scope; operator deletes/recreates or keeps the VM.
+    let old_paths =
+        crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&previous_root), id);
+    let has_disk = match state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&id)
+        .and_then(|vm| vm.disk_generation)
+    {
+        Some(generation) => old_paths.rootfs(generation).exists(),
+        None => old_paths.disks.exists()
+            && std::fs::read_dir(&old_paths.disks)
+                .map(|entries| entries.filter_map(Result::ok).any(|_| true))
+                .unwrap_or(false),
+    };
+    if has_disk {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "storage_has_disk",
+            "VM already has a disk at the current storage root; delete and recreate to move",
+            request_id.0,
+        ));
+    }
+
+    let need_bytes = u64::from(disk_gb) * 1024 * 1024 * 1024;
+    if let Err(error) = state.ensure_storage_capacity(target, need_bytes) {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "storageRoot".to_owned(),
+            match error {
+                crate::storage::StorageError::UnknownRoot(_) => {
+                    "is not a registered storage root".to_owned()
+                }
+                crate::storage::StorageError::FreeSpace { detail, .. } => {
+                    format!("not enough free space ({detail})")
+                }
+            },
+        );
+        return Err(AppError::validation(fields, request_id.0));
+    }
+
+    let updated = {
+        let mut vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vm = vms
+            .get_mut(&id)
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        vm.storage_root = target.to_owned();
+        vm.clone()
+    };
+    if let Err(error) = persist_update(&state, &updated, request_id.0).await {
+        // Roll back memory.
+        if let Some(vm) = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_mut(&id)
+        {
+            vm.storage_root = previous_root;
+        }
+        return Err(error);
+    }
+    tracing::info!(
+        request_id = %request_id.0,
+        vm_id = %id,
+        storage_root = %target,
+        "vm storage reassigned"
+    );
+    let lease = lease_for(&state, id).await;
+    Ok(Json(vm_response(&updated, lease.as_ref())))
 }
 
 /// Smallest disk size that can hold the template's rootfs, rounded up to a
@@ -1243,6 +1464,9 @@ pub(crate) mod test_support {
             disk_gb: 0,
             egress_policy: Default::default(),
             micro_network_id: None,
+            storage_root: "default".to_owned(),
+            disk_generation: None,
+            last_runtime_id: None,
             startup_step: None,
             startup_timeline: Vec::new(),
             package_update: None,
@@ -1355,6 +1579,7 @@ mod tests {
             disk_gb: 0,
             egress_policy: Default::default(),
             micro_network_id: None,
+            storage_root: None,
         };
 
         let too_small = validate_create(&base, &state);
@@ -1525,15 +1750,23 @@ mod tests {
         assert!(!log.truncated);
     }
 
+    fn seed_console_log(state: &AppState, vm: &mut VmRecord, contents: impl AsRef<[u8]>) {
+        let runtime_id = Uuid::new_v4();
+        let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id);
+        let runtime = paths.create_runtime(runtime_id).unwrap();
+        fs::write(&runtime.console_log, contents).unwrap();
+        vm.last_runtime_id = Some(runtime_id);
+        state.store.update(vm).unwrap();
+        state.vms.lock().unwrap().insert(vm.id, vm.clone());
+    }
+
     #[tokio::test]
     async fn console_log_returns_file_contents_once_written() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = record("chatty", Uuid::new_v4());
+        let mut vm = record("chatty", Uuid::new_v4());
         seed_vm(&state, &vm);
-        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "booted\nlogin: ").unwrap();
+        seed_console_log(&state, &mut vm, "booted\nlogin: ");
 
         let Json(log) = get_vm_log(
             State(state),
@@ -1551,11 +1784,13 @@ mod tests {
     async fn console_log_truncates_oversized_output() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = record("verbose", Uuid::new_v4());
+        let mut vm = record("verbose", Uuid::new_v4());
         seed_vm(&state, &vm);
-        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "x".repeat(MAX_LOG_BYTES as usize + 1000)).unwrap();
+        seed_console_log(
+            &state,
+            &mut vm,
+            "x".repeat(MAX_LOG_BYTES as usize + 1000),
+        );
 
         let Json(log) = get_vm_log(
             State(state),
@@ -1589,11 +1824,9 @@ mod tests {
     async fn console_log_handles_non_utf8_bytes_without_erroring() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = record("binary", Uuid::new_v4());
+        let mut vm = record("binary", Uuid::new_v4());
         seed_vm(&state, &vm);
-        let path = firecracker::console_log_path(&state.runtime.vms_dir, vm.id);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, [b'o', b'k', 0xFF, 0xFE, b'\n']).unwrap();
+        seed_console_log(&state, &mut vm, [b'o', b'k', 0xFF, 0xFE, b'\n']);
 
         let Json(log) = get_vm_log(
             State(state),
@@ -1740,10 +1973,16 @@ mod tests {
         );
         let pid = state.processes.lock().unwrap().get(&vm.id).unwrap().pid as i32;
         assert!(process_alive(pid));
-        assert!(
-            rootfs::rootfs_path(&state.runtime.vms_dir, vm.id).exists(),
-            "start must prepare the VM disk"
-        );
+        let generation = state
+            .vms
+            .lock()
+            .unwrap()
+            .get(&vm.id)
+            .and_then(|live| live.disk_generation)
+            .expect("start must assign a disk generation");
+        let disk = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id)
+            .rootfs(generation);
+        assert!(disk.exists(), "start must prepare the VM disk at {disk:?}");
 
         let Json(stopped) = stop_vm(
             State(state.clone()),
@@ -2050,9 +2289,10 @@ while True:
         let state = test_state(directory.path()).await;
         let vm = record("condemned", Uuid::new_v4());
         seed_vm(&state, &vm);
-        let vm_dir = state.runtime.vms_dir.join(vm.id.to_string());
-        fs::create_dir_all(&vm_dir).unwrap();
-        fs::write(vm_dir.join("rootfs.ext4"), b"disk").unwrap();
+        let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id);
+        paths.ensure_directories().unwrap();
+        let generation = Uuid::new_v4();
+        fs::write(paths.rootfs(generation), b"disk").unwrap();
 
         let status = delete_vm(
             State(state.clone()),
@@ -2065,7 +2305,7 @@ while True:
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(state.vms.lock().unwrap().is_empty());
         assert!(state.store.load_all().unwrap().is_empty());
-        assert!(!vm_dir.exists());
+        assert!(!paths.dir.exists());
 
         let error = get_vm(
             State(state),
@@ -2206,6 +2446,121 @@ while True:
             disk_gb: 2,
             egress_policy: Default::default(),
             micro_network_id: None,
+            storage_root: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn assign_vm_storage_updates_root_before_disk_exists() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("assigned-pool");
+        let state = test_state(directory.path()).await;
+        let (_, Json(ms)) = crate::handlers::micro_storages::create_micro_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(firecrab_api_types::CreateMicroStorageRequest {
+                name: "assigned-pool".to_owned(),
+                path: pool.display().to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let (_, Json(created)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(create_request("move-me")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.storage_root, "default");
+
+        let Json(reassigned) = assign_vm_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(created.id.to_string()),
+            ValidatedJson(firecrab_api_types::AssignVmStorageRequest {
+                storage_root: ms.id.to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(reassigned.storage_root, ms.id.to_string());
+        assert_eq!(
+            state.vms_dir_for(&reassigned.storage_root),
+            pool.join("vms")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_vm_uses_selected_storage_root_and_rejects_unknown_or_full_roots() {
+        let directory = tempdir().unwrap();
+        let disk_a = directory.path().join("disk-a");
+        let disk_b = directory.path().join("disk-b");
+        std::fs::create_dir_all(&disk_a).unwrap();
+        std::fs::create_dir_all(&disk_b).unwrap();
+        let state = test_state(directory.path())
+            .await
+            .with_test_storage(
+                crate::storage::StorageRegistry::parse(&format!(
+                    "disk-a={}:disk-b={}",
+                    disk_a.display(),
+                    disk_b.display()
+                ))
+                .unwrap(),
+            );
+
+        let unknown = validate_create(
+            &CreateVmRequest {
+                storage_root: Some("nope".to_owned()),
+                ..create_request("x")
+            },
+            &state,
+        );
+        assert!(unknown.contains_key("storageRoot"), "{unknown:?}");
+
+        let (_, Json(created)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateVmRequest {
+                storage_root: Some("disk-b".to_owned()),
+                ..create_request("on-b")
+            }),
+        )
+        .await
+        .expect("create on disk-b");
+        assert_eq!(created.storage_root, "disk-b");
+        assert_eq!(
+            state.vms.lock().unwrap().get(&created.id).unwrap().storage_root,
+            "disk-b"
+        );
+
+        let ok = validate_create(
+            &CreateVmRequest {
+                storage_root: Some("disk-a".to_owned()),
+                ..create_request("ok")
+            },
+            &state,
+        );
+        assert!(!ok.contains_key("storageRoot"), "{ok:?}");
+
+        // Free-space rejection at create time (before any disk copy).
+        let free = crate::storage::available_bytes(&disk_a).unwrap();
+        let need_gib = (free / (1024 * 1024 * 1024)).saturating_add(100);
+        if need_gib <= u64::from(MAX_DISK_GB) {
+            let full = validate_create(
+                &CreateVmRequest {
+                    disk_gb: need_gib as u16,
+                    storage_root: Some("disk-a".to_owned()),
+                    ..create_request("huge")
+                },
+                &state,
+            );
+            assert!(
+                full.get("storageRoot")
+                    .is_some_and(|msg| msg.contains("free space")),
+                "{full:?}"
+            );
         }
     }
 

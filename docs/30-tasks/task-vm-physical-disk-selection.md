@@ -2,31 +2,30 @@
 tags:
   - firecrab
   - storage
-status: 미완료
+status: 완료
 scope: 4주차
-updated: 2026-07-23
+updated: 2026-07-31
 ---
 
-# VM 생성 시 물리 디스크(저장 위치) 선택 기능
+# VM 생성 시 물리 디스크(저장 위치) 선택 · MicroStorage
 
-VM 여러 대를 동시에 시작하면 전부 같은 물리 디스크(`data/vms/`가 마운트된 장치) 하나에 2GB씩
-동시에 쓰기 때문에 그 디스크 하나가 병목이 된다(`docs/bugs/vm-startup-stuck-under-concurrent-load.md`
-수정 이후에도 남아있는 문제 — iostat로 `%util` 거의 100%, `w_await` 수백ms 확인됨, NVMe 하드웨어
-자체는 문제 없음). 호스트에 디스크가 여러 개 있다면 VM을 서로 다른 물리 디스크에 분산 배치해
-동시 시작 시 하나의 디스크로 I/O가 몰리는 걸 줄인다.
+VM 여러 대를 동시에 시작하면 전부 같은 물리 디스크에 I/O가 몰린다. 저장 위치를 나누고
+MicroStorage 서비스로 등록·수동 할당한다. 개념 설명: [micro-storage.md](../20-guides/micro-storage.md).
 
-## 작업
+## 구현
 
-- 서버 설정(예: `FIRECRAB_STORAGE_ROOTS` 환경 변수, 콜론 구분 경로 목록)으로 관리자가 사용 가능한
-  저장 위치(물리 디스크별 마운트 경로) 목록을 등록. 사용자가 임의 경로를 입력하게 하지 않음
-  (path traversal/host 파일 접근 방지 — 기존 `templates.rs`의 `open_beneath`/RESOLVE_BENEATH 패턴
-  참고)
-- `CreateVmRequest`에 `storagePath`(또는 별칭, 예: `"disk-a"`) 선택 필드 추가 — 미지정 시 기존
-  기본 위치 사용(하위 호환)
-- `VmRecord`/`rootfs::prepare_rootfs`가 VM별로 선택된 저장 위치 아래에 디스크를 생성하도록 수정
-  (`data/vms/{id}/` 대신 `{선택된 root}/vms/{id}/`)
-- 저장 위치 선택 시 실제 여유 공간(`statvfs`)을 확인해 지정한 `diskGb`가 안 들어가면 생성 거부
-- 프론트: 생성 폼에 "저장 위치" select 추가(등록된 저장 위치 목록을 `GET /api/storage`류 API로 조회)
+| 항목 | 내용 |
+|---|---|
+| env | `FIRECRAB_STORAGE_ROOTS=id=path:…` (미설정 시 `default` → `data/`) |
+| MicroStorage | `POST/GET/DELETE /api/micro-storages` — 이름+절대경로 풀 |
+| 통합 목록 | `GET /api/storage` (default/env + MicroStorage) |
+| 파티션 탐색 | `GET /api/storage/devices` — 마운트만 발견 (생성·포맷 없음) |
+| create | `storageRoot` 선택, 여유 공간 검증 |
+| 수동 할당 | `PUT /api/vms/{id}/storage` — 비활성·rootfs 없을 때만 |
+| 경로 | `{path}/vms/{id}/` |
+| UI | MicroStorage 모달, 생성 폼, VM 상세 재할당 |
+
+검증: [tests/vm-physical-disk-selection](../40-tests/vm-physical-disk-selection.md)
 
 ## 완료 기준
 
@@ -38,6 +37,6 @@ VM 여러 대를 동시에 시작하면 전부 같은 물리 디스크(`data/vms
 
 ## 산출물
 
-`firecrab-api/src/state.rs`(저장 위치 설정), `firecrab-api/src/rootfs.rs`,
+`firecrab-api/src/storage.rs`, `firecrab-api/src/state.rs`, `firecrab-api/src/rootfs.rs`(경로 호출부),
 `firecrab-api-types/src/lib.rs`, `firecrab-api/src/handlers/vms.rs`,
-`firecrab-frontend/src/components/CreateVm.tsx`
+`firecrab-api/src/handlers/storage.rs`, `firecrab-frontend/src/components/CreateVm.tsx`

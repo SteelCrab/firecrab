@@ -69,6 +69,20 @@ pub struct VmRecord {
     /// mean reallocating the address its guest already booted with.
     #[serde(default)]
     pub micro_network_id: Option<Uuid>,
+    /// Storage root id (from `FIRECRAB_STORAGE_ROOTS` / `GET /api/storage`).
+    /// Disks live at `{root}/vms/{id}/`. Defaults to `"default"` so records
+    /// written before multi-disk support keep the legacy `data/vms` path.
+    #[serde(default = "default_storage_root")]
+    pub storage_root: String,
+    /// Active disk generation UUID. Host path is derived as
+    /// `{vms}/{vm}/disks/{generation}.ext4` — never stored as an absolute path.
+    /// `None` until the first successful prepare.
+    #[serde(default)]
+    pub disk_generation: Option<Uuid>,
+    /// Most recent start's runtime directory id (config/socket/console under
+    /// `runtimes/{id}/`). Used for log reads after the process exits.
+    #[serde(default)]
+    pub last_runtime_id: Option<Uuid>,
     /// Live progress while `state == Starting`; never persisted (a restart
     /// already demotes any in-flight start to `Stopped`, see
     /// `restart_demotes_active_states_to_stopped`) and irrelevant otherwise.
@@ -91,4 +105,9 @@ pub struct VmRecord {
 /// became configurable, for records written before this field existed.
 fn default_disk_gb() -> u16 {
     2
+}
+
+/// Id of the implicit storage root when `FIRECRAB_STORAGE_ROOTS` is unset.
+fn default_storage_root() -> String {
+    "default".to_owned()
 }

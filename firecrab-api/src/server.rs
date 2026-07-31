@@ -194,6 +194,25 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route("/api/storage", get(handlers::storage::list_storage))
+        .route(
+            "/api/storage/devices",
+            get(handlers::storage::list_storage_devices),
+        )
+        .route(
+            "/api/micro-storages",
+            get(handlers::micro_storages::list_micro_storages)
+                .post(handlers::micro_storages::create_micro_storage),
+        )
+        .route(
+            "/api/micro-storages/{id}",
+            get(handlers::micro_storages::get_micro_storage)
+                .delete(handlers::micro_storages::delete_micro_storage),
+        )
+        .route(
+            "/api/vms/{id}/storage",
+            axum::routing::put(handlers::vms::assign_vm_storage),
+        )
         .route(
             "/api/micro-networks",
             get(handlers::micro_networks::list_micro_networks)

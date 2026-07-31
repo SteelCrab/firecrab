@@ -17,7 +17,7 @@ updated: 2026-07-30
 |---|---|
 | **M2 / MicroMachine** | firecrab의 컴퓨팅 단위. 문서·코드에서는 대개 그냥 `VM`으로 쓴다 |
 | **MicroNetwork** | 사용자가 만드는 가상 네트워크. bridge 하나 + subnet 하나 + 그 위의 DHCP/NAT/방화벽을 묶은 것 |
-| **MicroStorage** | VM에 붙이는 영구 스토리지(4주차 범위) |
+| **MicroStorage** | 호스트 마운트 경로에 이름을 붙인 영구 스토리지 풀. VM rootfs는 `{path}/vms/{id}/`. 가이드: [micro-storage.md](../20-guides/micro-storage.md) |
 | **M2Image** | 실행 중인 VM에서 떠낸 인스턴스 이미지(4주차 범위) |
 | **기본 네트워크** | MicroNetwork를 고르지 않은 VM이 붙는 내장 네트워크. bridge `fcbr0`, `172.30.0.0/24` |
 

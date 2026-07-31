@@ -12,13 +12,14 @@ use crate::firecracker::{self, VmProcess};
 use crate::model::VmRecord;
 use crate::network::NetworkClient;
 use crate::persistence::{self, PersistenceError, Store};
-use crate::rootfs;
+use crate::storage::StorageRegistry;
 use crate::templates::TemplateRegistry;
 
 /// Environment-derived settings for spawning/stopping Firecracker.
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
-    /// Root directory for per-VM state (disk, config, console log).
+    /// Default root directory for per-VM state (disk, config, console log).
+    /// Prefer [`AppState::vms_dir_for`] so multi-disk VMs resolve correctly.
     pub vms_dir: PathBuf,
     /// Path to the Firecracker binary.
     pub firecracker_binary: PathBuf,
@@ -34,9 +35,9 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     /// Builds config from environment-derived defaults.
-    fn from_defaults() -> Self {
+    fn from_defaults(storage: &StorageRegistry) -> Self {
         Self {
-            vms_dir: rootfs::default_vms_dir(),
+            vms_dir: storage.default_vms_dir(),
             firecracker_binary: firecracker::default_firecracker_binary(),
             ready_timeout: Duration::from_secs(10),
             stop_grace: Duration::from_secs(5),
@@ -67,6 +68,8 @@ pub struct AppState {
     pub(crate) processes: Arc<Mutex<HashMap<Uuid, VmProcess>>>,
     /// Environment-derived runtime settings.
     pub(crate) runtime: Arc<RuntimeConfig>,
+    /// Admin-registered storage roots (`FIRECRAB_STORAGE_ROOTS`).
+    pub(crate) storage: Arc<StorageRegistry>,
     /// Bounds how many `start_vm` calls copy/grow a rootfs disk at once.
     pub(crate) disk_prep_permits: Arc<Semaphore>,
     /// Client for the privileged `firecrab-net-helper` (bridge/TAP/firewall).
@@ -97,15 +100,68 @@ impl AppState {
         .await
         .expect("persistence startup task panicked")?;
 
+        let storage = StorageRegistry::from_env();
+        let runtime = RuntimeConfig::from_defaults(&storage);
         Ok(AppState {
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
             processes: Arc::new(Mutex::new(HashMap::new())),
-            runtime: Arc::new(RuntimeConfig::from_defaults()),
+            runtime: Arc::new(runtime),
+            storage: Arc::new(storage),
             disk_prep_permits: Arc::new(Semaphore::new(DISK_PREP_CONCURRENCY)),
             network: NetworkClient::from_env(),
         })
+    }
+
+    /// `{storage_root}/vms` for this VM. Resolves env/default roots first,
+    /// then MicroStorage rows in the DB. Falls back to the default root if
+    /// the id vanished (delete still works; start fails with a clear error
+    /// when capacity/path is checked at create).
+    pub(crate) fn vms_dir_for(&self, storage_root: &str) -> PathBuf {
+        if let Ok(dir) = self.storage.vms_dir(storage_root) {
+            return dir;
+        }
+        if let Ok(uuid) = Uuid::parse_str(storage_root)
+            && let Ok(Some((_, _, path))) = self.store.micro_storage(uuid)
+        {
+            return PathBuf::from(path).join("vms");
+        }
+        self.runtime.vms_dir.clone()
+    }
+
+    /// Resolves a selectable storage id to its host path (not the `vms/`
+    /// child). Used for free-space checks and list labels.
+    pub(crate) fn storage_path_for(
+        &self,
+        storage_root: &str,
+    ) -> Result<PathBuf, crate::storage::StorageError> {
+        if let Some(root) = self.storage.get(storage_root) {
+            return Ok(root.path.clone());
+        }
+        if let Ok(uuid) = Uuid::parse_str(storage_root)
+            && let Ok(Some((_, _, path))) = self.store.micro_storage(uuid)
+        {
+            return Ok(PathBuf::from(path));
+        }
+        Err(crate::storage::StorageError::UnknownRoot(
+            storage_root.to_owned(),
+        ))
+    }
+
+    /// Whether `storage_root` is known (env/default or MicroStorage).
+    pub(crate) fn storage_root_known(&self, storage_root: &str) -> bool {
+        self.storage_path_for(storage_root).is_ok()
+    }
+
+    /// Free-space gate for create/assign.
+    pub(crate) fn ensure_storage_capacity(
+        &self,
+        storage_root: &str,
+        need_bytes: u64,
+    ) -> Result<(), crate::storage::StorageError> {
+        let path = self.storage_path_for(storage_root)?;
+        crate::storage::StorageRegistry::ensure_capacity_at(&path, need_bytes)
     }
 
     /// Overrides the net-helper client, for tests that spin up a fake
@@ -117,9 +173,31 @@ impl AppState {
     }
 
     /// Overrides the runtime config, for tests that need a fake Firecracker
-    /// binary or a short timeout.
+    /// binary or a short timeout. Also rewires storage so the default root's
+    /// `vms` dir matches `runtime.vms_dir`.
     #[cfg(test)]
     pub(crate) fn with_test_runtime(mut self, runtime: RuntimeConfig) -> Self {
+        let root_path = runtime
+            .vms_dir
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| runtime.vms_dir.clone());
+        self.storage = Arc::new(StorageRegistry::single("default", root_path));
+        self.runtime = Arc::new(runtime);
+        self
+    }
+
+    /// Replaces the storage registry (multi-disk create tests).
+    #[cfg(test)]
+    pub(crate) fn with_test_storage(mut self, storage: StorageRegistry) -> Self {
+        let runtime = RuntimeConfig {
+            vms_dir: storage.default_vms_dir(),
+            firecracker_binary: self.runtime.firecracker_binary.clone(),
+            ready_timeout: self.runtime.ready_timeout,
+            stop_grace: self.runtime.stop_grace,
+            network_ready_timeout: self.runtime.network_ready_timeout,
+        };
+        self.storage = Arc::new(storage);
         self.runtime = Arc::new(runtime);
         self
     }

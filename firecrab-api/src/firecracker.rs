@@ -20,19 +20,13 @@ use uuid::Uuid;
 
 use crate::console::ConsoleBroker;
 use crate::model::{MacAddr, VmRecord, VmState};
-use crate::rootfs;
+
 use crate::state::AppState;
 
 /// Bytes read off the guest console per `read()` call before it is teed to
 /// disk and broadcast to viewers.
 const CONSOLE_READ_CHUNK: usize = 4096;
 
-/// File name of the rendered Firecracker JSON config, within a VM's directory.
-const CONFIG_FILE_NAME: &str = "firecracker.json";
-/// File name of the Firecracker API Unix socket, within a VM's directory.
-const API_SOCK_FILE_NAME: &str = "firecracker.sock";
-/// File name of the tee'd guest console log, within a VM's directory.
-const CONSOLE_LOG_FILE_NAME: &str = "console.log";
 /// Delay between readiness probe attempts while waiting for the API socket.
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -219,30 +213,29 @@ impl FirecrackerConfig {
     }
 }
 
-/// Renders the VM's Firecracker config to `{vms_dir}/{id}/firecracker.json`,
-/// overwriting any previous config. The root drive points at the disk
-/// `prepare_rootfs` publishes for the same VM.
+/// Renders the VM's Firecracker config into this start's runtime directory.
+/// The root drive points at the active generation file from `prepare_rootfs`.
 pub fn write_config(
-    vms_dir: &Path,
+    runtime: &crate::artifacts::HostRuntimePaths,
+    rootfs_path: &Path,
     vm: &VmRecord,
     kernel_image_path: &Path,
     initrd_path: Option<&Path>,
     boot_args: &str,
     network: Option<&VmNetwork>,
 ) -> Result<PathBuf, FirecrackerError> {
-    let vm_dir = vms_dir.join(vm.id.to_string());
-    fs::create_dir_all(&vm_dir).map_err(|source| FirecrackerError::CreateDirectory {
-        path: vm_dir.clone(),
+    fs::create_dir_all(&runtime.dir).map_err(|source| FirecrackerError::CreateDirectory {
+        path: runtime.dir.clone(),
         source,
     })?;
 
-    let path = vm_dir.join(CONFIG_FILE_NAME);
+    let path = runtime.config.clone();
     let config = FirecrackerConfig::for_vm(
         vm,
         kernel_image_path,
         initrd_path,
         boot_args,
-        &rootfs::rootfs_path(vms_dir, vm.id),
+        rootfs_path,
         network,
     );
     let json =
@@ -265,14 +258,14 @@ pub fn default_firecracker_binary() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("firecracker"))
 }
 
-/// Path to a VM's Firecracker API Unix socket.
-pub fn api_sock_path(vms_dir: &Path, id: Uuid) -> PathBuf {
-    vms_dir.join(id.to_string()).join(API_SOCK_FILE_NAME)
+/// Path to this start's Firecracker API Unix socket.
+pub fn api_sock_path(runtime: &crate::artifacts::HostRuntimePaths) -> PathBuf {
+    runtime.api_socket.clone()
 }
 
-/// Path to a VM's tee'd guest console log file.
-pub fn console_log_path(vms_dir: &Path, id: Uuid) -> PathBuf {
-    vms_dir.join(id.to_string()).join(CONSOLE_LOG_FILE_NAME)
+/// Path to this start's tee'd guest console log file.
+pub fn console_log_path(runtime: &crate::artifacts::HostRuntimePaths) -> PathBuf {
+    runtime.console_log.clone()
 }
 
 /// A live, owned Firecracker child process and its associated resources.
@@ -423,19 +416,17 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
 /// failed start never leaks a stray Firecracker.
 pub async fn spawn_vm(
     binary: &Path,
-    vms_dir: &Path,
+    runtime: &crate::artifacts::HostRuntimePaths,
     id: Uuid,
-    config_path: &Path,
     ready_timeout: Duration,
 ) -> Result<FirecrackerProcess, FirecrackerError> {
-    let vm_dir = vms_dir.join(id.to_string());
-    fs::create_dir_all(&vm_dir).map_err(|source| FirecrackerError::CreateDirectory {
-        path: vm_dir.clone(),
+    fs::create_dir_all(&runtime.dir).map_err(|source| FirecrackerError::CreateDirectory {
+        path: runtime.dir.clone(),
         source,
     })?;
 
     // Firecracker refuses to start if the socket path already exists.
-    let api_sock = api_sock_path(vms_dir, id);
+    let api_sock = api_sock_path(runtime);
     match fs::remove_file(&api_sock) {
         Ok(()) => {}
         Err(source) if source.kind() == io::ErrorKind::NotFound => {}
@@ -447,7 +438,7 @@ pub async fn spawn_vm(
         }
     }
 
-    let console_log = console_log_path(vms_dir, id);
+    let console_log = console_log_path(runtime);
     let console_error = |source| FirecrackerError::ConsoleLog {
         path: console_log.clone(),
         source,
@@ -463,7 +454,7 @@ pub async fn spawn_vm(
         .arg("--api-sock")
         .arg(&api_sock)
         .arg("--config-file")
-        .arg(config_path)
+        .arg(&runtime.config)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(stderr))
@@ -680,10 +671,18 @@ mod tests {
             disk_gb: 2,
             egress_policy: Default::default(),
             micro_network_id: None,
+            storage_root: "default".to_owned(),
+            disk_generation: None,
+            last_runtime_id: None,
             startup_step: None,
             startup_timeline: Vec::new(),
             package_update: None,
         }
+    }
+
+    fn runtime_for(vms_root: &Path, vm_id: Uuid) -> crate::artifacts::HostRuntimePaths {
+        let paths = crate::artifacts::VmArtifactPaths::for_vm(vms_root, vm_id);
+        paths.create_runtime(Uuid::new_v4()).unwrap()
     }
 
     #[test]
@@ -691,9 +690,12 @@ mod tests {
         let directory = tempdir().unwrap();
         let vms_dir = directory.path().join("vms");
         let vm = record(3, 768);
+        let runtime = runtime_for(&vms_dir, vm.id);
+        let rootfs = Path::new("/tmp/rootfs.ext4");
 
         let path = write_config(
-            &vms_dir,
+            &runtime,
+            rootfs,
             &vm,
             Path::new("/images/vmlinux"),
             None,
@@ -702,10 +704,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            path,
-            vms_dir.join(vm.id.to_string()).join("firecracker.json")
-        );
+        assert_eq!(path, runtime.config);
         let config: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["machine-config"]["vcpu_count"], 3);
         assert_eq!(config["machine-config"]["mem_size_mib"], 768);
@@ -716,9 +715,12 @@ mod tests {
         let directory = tempdir().unwrap();
         let vms_dir = directory.path().join("vms");
         let vm = record(1, 512);
+        let runtime = runtime_for(&vms_dir, vm.id);
+        let rootfs = Path::new("/tmp/guest-rootfs.ext4");
 
         let path = write_config(
-            &vms_dir,
+            &runtime,
+            rootfs,
             &vm,
             Path::new("/images/vmlinux"),
             None,
@@ -738,10 +740,7 @@ mod tests {
         assert_eq!(drive["drive_id"], "rootfs");
         assert_eq!(drive["is_root_device"], true);
         assert_eq!(drive["is_read_only"], false);
-        assert_eq!(
-            drive["path_on_host"],
-            rootfs::rootfs_path(&vms_dir, vm.id).to_str().unwrap()
-        );
+        assert_eq!(drive["path_on_host"], rootfs.to_str().unwrap());
     }
 
     #[test]
@@ -749,9 +748,11 @@ mod tests {
         let directory = tempdir().unwrap();
         let vms_dir = directory.path().join("vms");
         let vm = record(1, 512);
+        let runtime = runtime_for(&vms_dir, vm.id);
 
         let path = write_config(
-            &vms_dir,
+            &runtime,
+            Path::new("/tmp/rootfs.ext4"),
             &vm,
             Path::new("/images/vmlinux"),
             None,
@@ -769,9 +770,11 @@ mod tests {
         let directory = tempdir().unwrap();
         let vms_dir = directory.path().join("vms");
         let vm = record(1, 512);
+        let runtime = runtime_for(&vms_dir, vm.id);
 
         let path = write_config(
-            &vms_dir,
+            &runtime,
+            Path::new("/tmp/rootfs.ext4"),
             &vm,
             Path::new("/images/vmlinux"),
             Some(Path::new("/images/initrd")),
@@ -789,9 +792,11 @@ mod tests {
         let directory = tempdir().unwrap();
         let vms_dir = directory.path().join("vms");
         let mut vm = record(1, 512);
+        let runtime = runtime_for(&vms_dir, vm.id);
 
         write_config(
-            &vms_dir,
+            &runtime,
+            Path::new("/tmp/rootfs.ext4"),
             &vm,
             Path::new("/images/vmlinux"),
             None,
@@ -802,7 +807,8 @@ mod tests {
         vm.cpu = 2;
         vm.ram = 1024;
         let path = write_config(
-            &vms_dir,
+            &runtime,
+            Path::new("/tmp/rootfs.ext4"),
             &vm,
             Path::new("/images/vmlinux"),
             None,
@@ -818,8 +824,8 @@ mod tests {
 
     use super::test_support::{SERVE_LOOP, fake_firecracker, process_alive, short_tempdir};
 
-    fn fake_pid(vms_dir: &Path, id: Uuid) -> i32 {
-        let pid_file = format!("{}.pid", api_sock_path(vms_dir, id).display());
+    fn fake_pid(runtime: &crate::artifacts::HostRuntimePaths) -> i32 {
+        let pid_file = format!("{}.pid", api_sock_path(runtime).display());
         fs::read_to_string(pid_file)
             .unwrap()
             .trim()
@@ -835,11 +841,11 @@ mod tests {
             directory.path(),
             &format!("signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)){SERVE_LOOP}"),
         );
-        let config = directory.path().join("firecracker.json");
-        fs::write(&config, "{}").unwrap();
         let id = Uuid::new_v4();
+        let mut runtime = runtime_for(&vms_dir, id);
+        fs::write(&runtime.config, "{}").unwrap();
 
-        let process = spawn_vm(&binary, &vms_dir, id, &config, Duration::from_secs(5))
+        let process = spawn_vm(&binary, &runtime, id, Duration::from_secs(5))
             .await
             .unwrap();
         let pid = process.pid().unwrap() as i32;
@@ -859,8 +865,9 @@ mod tests {
         stop_vm(process, Duration::from_secs(5)).await.unwrap();
 
         assert!(!process_alive(pid));
-        let console = fs::read_to_string(console_log_path(&vms_dir, id)).unwrap();
+        let console = fs::read_to_string(console_log_path(&runtime)).unwrap();
         assert!(console.contains("booted"));
+        let _ = &mut runtime;
     }
 
     #[tokio::test]
@@ -868,16 +875,16 @@ mod tests {
         let directory = short_tempdir();
         let vms_dir = directory.path().join("vms");
         let binary = fake_firecracker(directory.path(), "while True:\n    time.sleep(60)\n");
-        let config = directory.path().join("firecracker.json");
-        fs::write(&config, "{}").unwrap();
         let id = Uuid::new_v4();
+        let runtime = runtime_for(&vms_dir, id);
+        fs::write(&runtime.config, "{}").unwrap();
 
-        let error = spawn_vm(&binary, &vms_dir, id, &config, Duration::from_millis(500))
+        let error = spawn_vm(&binary, &runtime, id, Duration::from_millis(500))
             .await
             .unwrap_err();
 
         assert!(matches!(error, FirecrackerError::NotReady { .. }));
-        assert!(!process_alive(fake_pid(&vms_dir, id)));
+        assert!(!process_alive(fake_pid(&runtime)));
     }
 
     #[tokio::test]
@@ -888,11 +895,11 @@ mod tests {
             directory.path(),
             &format!("signal.signal(signal.SIGTERM, signal.SIG_IGN){SERVE_LOOP}"),
         );
-        let config = directory.path().join("firecracker.json");
-        fs::write(&config, "{}").unwrap();
         let id = Uuid::new_v4();
+        let runtime = runtime_for(&vms_dir, id);
+        fs::write(&runtime.config, "{}").unwrap();
 
-        let process = spawn_vm(&binary, &vms_dir, id, &config, Duration::from_secs(5))
+        let process = spawn_vm(&binary, &runtime, id, Duration::from_secs(5))
             .await
             .unwrap();
         let pid = process.pid().unwrap() as i32;

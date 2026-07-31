@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { ApiClientError, createVm, listMicroNetworks } from "../api/client";
-import type { CreateVmRequest, EgressPolicy, MicroNetworkResponse, VmResponse } from "../bindings";
+import { ApiClientError, createVm, listMicroNetworks, listStorageRoots } from "../api/client";
+import type {
+  CreateVmRequest,
+  EgressPolicy,
+  MicroNetworkResponse,
+  StorageRootResponse,
+  VmResponse,
+} from "../bindings";
 import RamStepper from "./RamStepper";
 
 /** The registry aliases the API accepts today; selection only, no free text. */
@@ -12,7 +18,15 @@ const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
   isolated: "격리(게이트웨이만 허용)",
 };
 
-const FIELDS_WITH_OWN_ERROR = ["name", "cpu", "ram", "template", "diskGb", "microNetworkId"] as const;
+const FIELDS_WITH_OWN_ERROR = [
+  "name",
+  "cpu",
+  "ram",
+  "template",
+  "diskGb",
+  "microNetworkId",
+  "storageRoot",
+] as const;
 
 /** `<select>` value standing in for "no MicroNetwork" — the built-in default
  *  network, which the API represents as a null microNetworkId. */
@@ -21,6 +35,12 @@ const DEFAULT_NETWORK = "";
 interface CreateVmProps {
   onCreated: (vm: VmResponse) => void;
   onError: (message: string) => void;
+}
+
+function storageLabel(root: StorageRootResponse): string {
+  const free = root.availableGib > 0 ? ` · ${root.availableGib} GiB free` : "";
+  const label = root.name && root.name !== root.id ? `${root.name}` : root.id;
+  return `${label} (${root.path})${free}`;
 }
 
 export default function CreateVm({ onCreated, onError }: CreateVmProps) {
@@ -32,6 +52,8 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [egressPolicy, setEgressPolicy] = useState<EgressPolicy>("internet");
   const [microNetworkId, setMicroNetworkId] = useState<string>(DEFAULT_NETWORK);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
+  const [storageRoots, setStorageRoots] = useState<StorageRootResponse[]>([]);
+  const [storageRoot, setStorageRoot] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
 
@@ -40,6 +62,14 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   // MicroNetworks existed.
   useEffect(() => {
     listMicroNetworks().then(setMicroNetworks).catch(() => setMicroNetworks([]));
+    listStorageRoots()
+      .then((roots) => {
+        setStorageRoots(roots);
+        if (roots.length > 0) {
+          setStorageRoot((current) => current || roots[0].id);
+        }
+      })
+      .catch(() => setStorageRoots([]));
   }, []);
 
   const handleSubmit = async (event: FormEvent) => {
@@ -54,6 +84,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       diskGb: parseInt(diskGb, 10) || 0,
       egressPolicy,
       microNetworkId: microNetworkId === DEFAULT_NETWORK ? null : microNetworkId,
+      storageRoot: storageRoot || null,
     };
 
     setSubmitting(true);
@@ -132,6 +163,23 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         />
         {fieldError("diskGb")}
       </div>
+      {storageRoots.length > 0 && (
+        <div className="field">
+          <label htmlFor="vm-storage">저장 위치</label>
+          <select
+            id="vm-storage"
+            value={storageRoot}
+            onChange={(event) => setStorageRoot(event.target.value)}
+          >
+            {storageRoots.map((root) => (
+              <option key={root.id} value={root.id}>
+                {storageLabel(root)}
+              </option>
+            ))}
+          </select>
+          {fieldError("storageRoot")}
+        </div>
+      )}
       <div className="field">
         <label htmlFor="vm-micro-network">MicroNetwork</label>
         <select

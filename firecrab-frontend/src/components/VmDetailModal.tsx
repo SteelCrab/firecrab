@@ -4,13 +4,16 @@ import type {
   MicroNetworkResponse,
   StartupStep,
   StartupStepRun,
+  StorageRootResponse,
   VmResponse,
 } from "../bindings";
 import {
   ApiClientError,
+  assignVmStorage,
   getVm,
   getVmLog,
   listMicroNetworks,
+  listStorageRoots,
   updateVmResources,
 } from "../api/client";
 import { isEditableState } from "../model";
@@ -71,14 +74,17 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [editRam, setEditRam] = useState("512");
   const [editDisk, setEditDisk] = useState("2");
   const [editEgressPolicy, setEditEgressPolicy] = useState<EgressPolicy>("internet");
+  const [editStorageRoot, setEditStorageRoot] = useState("default");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
+  const [storageRoots, setStorageRoots] = useState<StorageRootResponse[]>([]);
 
   // Only to resolve the VM's microNetworkId into a readable name/subnet; a
   // failed load just falls back to showing the raw id.
   useEffect(() => {
     listMicroNetworks().then(setMicroNetworks).catch(() => setMicroNetworks([]));
+    listStorageRoots().then(setStorageRoots).catch(() => setStorageRoots([]));
   }, []);
 
   const startEditing = () => {
@@ -87,6 +93,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     setEditRam(String(vm.ram));
     setEditDisk(String(vm.diskGb));
     setEditEgressPolicy(vm.egressPolicy);
+    setEditStorageRoot(vm.storageRoot || "default");
     setSaveError(null);
     setEditing(true);
   };
@@ -101,12 +108,17 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     setSaving(true);
     setSaveError(null);
     try {
-      const updated = await updateVmResources(vm.id, {
+      let updated = await updateVmResources(vm.id, {
         cpu: parseInt(editCpu, 10) || 0,
         ram: parseInt(editRam, 10) || 0,
         diskGb: parseInt(editDisk, 10) || 0,
         egressPolicy: editEgressPolicy,
       });
+      // Storage reassignment is a separate endpoint: only when inactive and
+      // no rootfs exists yet (server returns 409 otherwise).
+      if (editStorageRoot && editStorageRoot !== vm.storageRoot) {
+        updated = await assignVmStorage(vm.id, { storageRoot: editStorageRoot });
+      }
       setVm(updated);
       setEditing(false);
     } catch (error) {
@@ -188,6 +200,11 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
       ? `${microNetwork.name} (${microNetwork.subnetCidr})`
       : vm.microNetworkId;
 
+  const storageRootMeta = storageRoots.find((root) => root.id === vm?.storageRoot);
+  const storageRootLabel = storageRootMeta
+    ? `${storageRootMeta.name} (${storageRootMeta.path})`
+    : (vm?.storageRoot ?? "default");
+
   return (
     <div className="console-overlay">
       <div className="console-panel">
@@ -243,6 +260,25 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>MicroNetwork</dt>
               <dd>{microNetworkLabel}</dd>
+              <dt>MicroStorage</dt>
+              <dd>
+                {editing && storageRoots.length > 0 ? (
+                  <select
+                    className="detail-edit-input"
+                    value={editStorageRoot}
+                    onChange={(event) => setEditStorageRoot(event.target.value)}
+                  >
+                    {storageRoots.map((root) => (
+                      <option key={root.id} value={root.id}>
+                        {root.name} ({root.path})
+                        {root.availableGib > 0 ? ` · ${root.availableGib} GiB free` : ""}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  storageRootLabel
+                )}
+              </dd>
               <dt>외부 통신</dt>
               <dd>
                 {editing ? (

@@ -2,7 +2,7 @@
 tags:
   - firecrab
   - guide
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # API
@@ -36,6 +36,7 @@ RUST_LOG=firecrab_api=debug cargo run
 | `FIRECRAB_IMAGE_ROOT` | `../images` (crate 기준 상대경로) | 템플릿 커널/rootfs 이미지가 위치한 루트 디렉터리 |
 | `FIRECRAB_FIRECRACKER_BIN` | `firecracker` (PATH 탐색) | VM 시작 시 실행할 Firecracker 바이너리 경로 |
 | `FIRECRAB_STATIC_ROOT` | (없음, 설치 시 유닛이 지정 — [install.md](install.md)) | 대시보드 빌드 산출물(`dist/`) 경로. 지정하면 API가 직접 서빙하고 없는 경로는 `index.html`로 폴백. `index.html`이 없으면 무시하고 경고만 남김 |
+| `FIRECRAB_STORAGE_ROOTS` | (없음 → `default=data`) | VM 디스크 저장 위치(env). `id=path` 쌍을 `:`로 구분. UI/API로 등록하는 [MicroStorage](micro-storage.md)와 함께 `GET /api/storage`에 합쳐진다 |
 
 ### 네트워크 helper 상태
 
@@ -73,6 +74,8 @@ curl -X POST http://localhost:3000/api/vms \
 | `template` | 템플릿 레지스트리에 등록된 alias만 허용 (`ubuntu-26.04`) |
 | `cpu` | 1~32 (정수) |
 | `ram` | 128~32768 (MiB) |
+| `storageRoot` | 선택. `GET /api/storage`의 id. 생략 시 첫 등록 root. 여유 공간 < `diskGb`면 거부 |
+| `diskGb` | 템플릿 rootfs 이상 ~ 500 GiB |
 
 응답 (201 Created):
 
@@ -200,9 +203,33 @@ created ──start──▶ starting ──▶ running ──stop──▶ stop
 - 서버 재시작 시 이전 실행이 남긴 `starting`/`running`/`stopping` 레코드는 `stopped`로 정리됨 (유령 running 방지)
 - 삭제는 `created`/`stopped`/`error`에서만 허용
 
+## 저장 위치 · MicroStorage
+
+상세 개념·블로그 톤 설명: [micro-storage.md](micro-storage.md).
+
+| API | 역할 |
+|---|---|
+| `GET /api/storage` | 선택 가능 root 통합 목록 (default/env + MicroStorage) |
+| `GET /api/storage/devices` | 마운트된 파티션 탐색 (등록 후보; 포맷/파티션 생성 없음) |
+| `GET/POST /api/micro-storages` | 풀 목록 / 등록 `{name,path}` |
+| `GET/DELETE /api/micro-storages/{id}` | 상세(VM 목록) / 삭제 (VM 있으면 409) |
+| `PUT /api/vms/{id}/storage` | 수동 재할당 `{storageRoot}` (비활성 + rootfs 없을 때만) |
+
+```sh
+curl -s http://localhost:3000/api/storage
+curl -s http://localhost:3000/api/storage/devices
+curl -s -X POST http://localhost:3000/api/micro-storages \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"disk2","path":"/mnt/disk2"}'
+curl -s -X PUT http://localhost:3000/api/vms/$VM_ID/storage \
+  -H 'Content-Type: application/json' \
+  -d '{"storageRoot":"<micro-storage-uuid>"}'
+```
+
 ## VM 디렉터리
 
-VM별 런타임 파일은 `data/vms/{id}/` 아래에 생성된다.
+VM별 런타임 파일은 `{storageRoot의 path}/vms/{id}/` 아래에 생성된다.
+env·MicroStorage 미사용 시 path는 `data` → 기존과 같이 `data/vms/{id}/`.
 
 | 파일 | 내용 |
 | --- | --- |

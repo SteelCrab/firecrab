@@ -125,6 +125,11 @@ pub struct CreateVmRequest {
     /// MicroNetworks existed.
     #[serde(default)]
     pub micro_network_id: Option<Uuid>,
+    /// Storage root id from `GET /api/storage` / `FIRECRAB_STORAGE_ROOTS`.
+    /// Omitted (or null) uses the first registered root (the legacy
+    /// `data/vms` layout when the env var is unset).
+    #[serde(default)]
+    pub storage_root: Option<String>,
 }
 
 /// Body for `PUT /api/vms/{id}`: replaces cpu/ram/disk for a VM that isn't
@@ -269,6 +274,117 @@ pub struct VmResponse {
     /// network. Fixed at creation — its lease comes out of that network's
     /// subnet (`docs/30-tasks/task-micro-network.md`).
     pub micro_network_id: Option<Uuid>,
+    /// Storage root id this VM's disk lives under (`{root}/vms/{id}/`).
+    /// Fixed at creation so a later config change cannot orphan the files.
+    pub storage_root: String,
+}
+
+/// One selectable place a VM disk may be created — env root, default, or a
+/// MicroStorage (`docs/30-tasks/task-vm-physical-disk-selection.md`). Clients
+/// pick by `id` only; paths are never free-form on create.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageRootResponse {
+    /// Stable id used in `CreateVmRequest.storage_root` / assign.
+    pub id: String,
+    /// Operator-facing label (MicroStorage name, or the id for env/default).
+    pub name: String,
+    /// Registered mount path.
+    pub path: String,
+    /// Free capacity on that filesystem, in GiB (0 if unreadable).
+    pub available_gib: u64,
+    /// Total capacity of that filesystem, in GiB (0 if unreadable).
+    pub total_gib: u64,
+    /// Where this root came from: `default`, `env`, or `micro_storage`.
+    pub kind: String,
+}
+
+/// A MicroStorage — a named host path that VMs can put disks on
+/// (EBS analogue; 4주차 MicroStorage).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroStorageResponse {
+    /// Stable identifier (also used as `storageRoot` on VMs).
+    pub id: Uuid,
+    /// User-supplied name.
+    pub name: String,
+    /// Absolute host path registered for this pool.
+    pub path: String,
+    /// Free capacity in GiB (0 if unreadable).
+    pub available_gib: u64,
+    /// Total capacity in GiB (0 if unreadable).
+    pub total_gib: u64,
+}
+
+/// Body for `POST /api/micro-storages`.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateMicroStorageRequest {
+    /// 1–64 chars, same convention as VM names.
+    pub name: String,
+    /// Absolute host directory path (created if missing).
+    pub path: String,
+}
+
+/// Detail for `GET /api/micro-storages/{id}`: the pool plus VMs using it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroStorageDetailResponse {
+    /// Stable identifier.
+    pub id: Uuid,
+    /// User-supplied name.
+    pub name: String,
+    /// Absolute host path.
+    pub path: String,
+    /// Free capacity in GiB.
+    pub available_gib: u64,
+    /// Total capacity in GiB.
+    pub total_gib: u64,
+    /// VMs whose `storageRoot` points at this pool.
+    pub vms: Vec<MicroStorageVm>,
+}
+
+/// A VM listed under a MicroStorage detail response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroStorageVm {
+    /// VM id.
+    pub id: Uuid,
+    /// VM name.
+    pub name: String,
+    /// Lifecycle state.
+    pub state: VmState,
+    /// Disk capacity in GiB.
+    pub disk_gb: u16,
+}
+
+/// Body for `PUT /api/vms/{id}/storage` — reassign a VM to another storage
+/// root before (or after) its disk exists, with guards in the handler.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AssignVmStorageRequest {
+    /// Target storage root id (`default`, env id, or MicroStorage UUID).
+    pub storage_root: String,
+}
+
+/// A mounted host partition/filesystem that can become a MicroStorage path
+/// (`GET /api/storage/devices`). firecrab never creates or formats partitions
+/// — it only discovers already-mounted paths the operator can register.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageDeviceResponse {
+    /// Kernel device name when known (e.g. `nvme0n1p1`), else empty.
+    pub device: String,
+    /// Absolute mount path (the value used as MicroStorage `path`).
+    pub mountpoint: String,
+    /// Filesystem type (`ext4`, `xfs`, …) when known.
+    pub fstype: String,
+    /// Total size in GiB (0 if unknown).
+    pub size_gib: u64,
+    /// Free space in GiB (0 if unreadable).
+    pub available_gib: u64,
+    /// `part`, `disk`, or `other` when reported by lsblk; else empty.
+    pub kind: String,
 }
 
 /// Request body for `POST /api/micro-networks`.
@@ -649,6 +765,7 @@ mod tests {
             mac: Some("02:fc:00:00:00:05".to_owned()),
             hostname: "fc-abc123456789".to_owned(),
             micro_network_id: None,
+            storage_root: "default".to_owned(),
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
@@ -701,6 +818,7 @@ mod tests {
             mac: None,
             hostname: "fc-abc123456789".to_owned(),
             micro_network_id: None,
+            storage_root: "default".to_owned(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
