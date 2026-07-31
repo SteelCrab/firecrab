@@ -14,8 +14,6 @@ use rtnetlink::{Handle, LinkUnspec, new_connection};
 use thiserror::Error;
 use uuid::Uuid;
 
-
-
 /// Linux's `IFNAMSIZ`: the fixed size of `ifreq.ifr_name`.
 const IFNAMSIZ: usize = 16;
 

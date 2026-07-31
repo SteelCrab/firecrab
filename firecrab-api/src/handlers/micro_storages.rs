@@ -36,7 +36,8 @@ pub async fn list_micro_storages(
     Ok(Json(
         rows.into_iter()
             .map(|(id, name, path)| {
-                let (total_gib, available_gib) = StorageRegistry::space_for(PathBuf::from(&path).as_path());
+                let (total_gib, available_gib) =
+                    StorageRegistry::space_for(PathBuf::from(&path).as_path());
                 MicroStorageResponse {
                     id,
                     name,
@@ -227,10 +228,10 @@ fn valid_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use axum::response::IntoResponse;
     use super::*;
     use crate::handlers::vms::test_support::test_state;
     use crate::server::RequestId;
+    use axum::response::IntoResponse;
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -252,9 +253,10 @@ mod tests {
         assert_eq!(created.name, "pool-a");
         assert!(pool.is_dir());
 
-        let Json(list) = list_micro_storages(State(state.clone()), Extension(RequestId(Uuid::new_v4())))
-            .await
-            .unwrap();
+        let Json(list) =
+            list_micro_storages(State(state.clone()), Extension(RequestId(Uuid::new_v4())))
+                .await
+                .unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, created.id);
 

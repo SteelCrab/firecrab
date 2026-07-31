@@ -78,16 +78,10 @@ mod tests {
         let b = directory.path().join("b");
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();
-        let state = test_state(directory.path())
-            .await
-            .with_test_storage(
-                StorageRegistry::parse(&format!(
-                    "disk-a={}:disk-b={}",
-                    a.display(),
-                    b.display()
-                ))
+        let state = test_state(directory.path()).await.with_test_storage(
+            StorageRegistry::parse(&format!("disk-a={}:disk-b={}", a.display(), b.display()))
                 .unwrap(),
-            );
+        );
 
         let Json(roots) = list_storage(State(state)).await;
         assert_eq!(roots.len(), 2);

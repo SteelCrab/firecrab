@@ -410,7 +410,12 @@ mod tests {
 
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+        allocate(
+            &tx,
+            vm_id,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
         tx.commit().unwrap();
         assert_eq!(current_revision(&conn).unwrap(), 1);
 
@@ -427,8 +432,18 @@ mod tests {
         let released = Uuid::new_v4();
 
         let tx = begin(&mut conn);
-        allocate(&tx, kept, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
-        allocate(&tx, released, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+        allocate(
+            &tx,
+            kept,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
+        allocate(
+            &tx,
+            released,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
@@ -448,7 +463,12 @@ mod tests {
 
         for _ in 0..50 {
             let tx = begin(&mut conn);
-            let lease = allocate(&tx, Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+            let lease = allocate(
+                &tx,
+                Uuid::new_v4(),
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+            )
+            .unwrap();
             tx.commit().unwrap();
             assert!(seen_ips.insert(lease.ipv4), "duplicate ip {}", lease.ipv4);
             assert!(seen_macs.insert(lease.mac), "duplicate mac {}", lease.mac);
@@ -460,7 +480,12 @@ mod tests {
         let mut conn = open();
         for _ in 0..253 {
             let tx = begin(&mut conn);
-            let lease = allocate(&tx, Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+            let lease = allocate(
+                &tx,
+                Uuid::new_v4(),
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+            )
+            .unwrap();
             tx.commit().unwrap();
             assert_ne!(lease.ipv4, LEGACY_DEFAULT_NETWORK);
             assert_ne!(lease.ipv4, LEGACY_DEFAULT_GATEWAY);
@@ -476,7 +501,12 @@ mod tests {
         let mut conn = open();
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+        allocate(
+            &tx,
+            vm_id,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
         tx.commit().unwrap();
 
         conn.execute(
@@ -496,13 +526,22 @@ mod tests {
         let mut conn = open();
         for _ in 0..253 {
             let tx = begin(&mut conn);
-            allocate(&tx, Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+            allocate(
+                &tx,
+                Uuid::new_v4(),
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+            )
+            .unwrap();
             tx.commit().unwrap();
         }
 
         let tx = begin(&mut conn);
         assert!(matches!(
-            allocate(&tx, Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))),
+            allocate(
+                &tx,
+                Uuid::new_v4(),
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))
+            ),
             Err(IpamError::PoolExhausted { .. })
         ));
     }
@@ -512,7 +551,12 @@ mod tests {
         let mut conn = open();
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+        allocate(
+            &tx,
+            vm_id,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
@@ -527,7 +571,12 @@ mod tests {
         let mut conn = open();
         let first_vm = Uuid::new_v4();
         let tx = begin(&mut conn);
-        let first_lease = allocate(&tx, first_vm, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+        let first_lease = allocate(
+            &tx,
+            first_vm,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
@@ -546,7 +595,12 @@ mod tests {
 
         let second_vm = Uuid::new_v4();
         let tx = begin(&mut conn);
-        let second_lease = allocate(&tx, second_vm, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+        let second_lease = allocate(
+            &tx,
+            second_vm,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
         tx.commit().unwrap();
         assert_eq!(second_lease.ipv4, first_lease.ipv4);
     }
@@ -583,7 +637,12 @@ mod tests {
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
-        let lease = allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+        let lease = allocate(
+            &tx,
+            vm_id,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
         tx.commit().unwrap();
         assert_eq!(lease.mac, derive_mac(vm_id, 1));
     }
@@ -611,7 +670,11 @@ mod tests {
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
-        let result = allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)));
+        let result = allocate(
+            &tx,
+            vm_id,
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        );
         assert!(matches!(result, Err(IpamError::MacPoolExhausted)));
         drop(tx); // no commit: rolls back
 

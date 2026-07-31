@@ -19,7 +19,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-
 /// Where the live host-reservation file lives; `sync_dhcp_leases` only ever
 /// replaces it via an atomic rename, never edits it in place.
 const HOSTS_FILE: &str = "/run/firecrab/dnsmasq-hosts.conf";

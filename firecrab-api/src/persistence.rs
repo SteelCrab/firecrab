@@ -434,7 +434,11 @@ impl Store {
                     ram: row.get(9)?,
                     disk_gb: row.get(10)?,
                     egress_policy: decode_egress_policy(&id_text, &row.get::<_, String>(11)?)?,
-                    micro_network_id: decode_required_id(&id_text, row.get(12)?, "micro_network_id")?,
+                    micro_network_id: decode_required_id(
+                        &id_text,
+                        row.get(12)?,
+                        "micro_network_id",
+                    )?,
                     storage_root: row.get(13)?,
                     disk_generation: decode_optional_id(&id_text, row.get(14)?)?,
                     last_runtime_id: decode_optional_id(&id_text, row.get(15)?)?,
@@ -574,9 +578,8 @@ impl Store {
         id: Uuid,
     ) -> Result<Option<(Uuid, String, String)>, PersistenceError> {
         let conn = self.lock();
-        let mut statement = conn.prepare(
-            "SELECT id, name, path FROM micro_storages WHERE id = ?1",
-        )?;
+        let mut statement =
+            conn.prepare("SELECT id, name, path FROM micro_storages WHERE id = ?1")?;
         let mut rows = statement.query(params![id.to_string()])?;
         let Some(row) = rows.next()? else {
             return Ok(None);
@@ -1149,7 +1152,10 @@ mod tests {
                 let store = store.clone();
                 std::thread::spawn(move || {
                     store
-                        .allocate_lease(Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
+                        .allocate_lease(
+                            Uuid::new_v4(),
+                            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+                        )
                         .unwrap()
                 })
             })
@@ -1198,7 +1204,10 @@ mod tests {
         store.release_lease(vm_id).unwrap();
         let other_vm = Uuid::new_v4();
         let reallocated = store
-            .allocate_lease(other_vm, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
+            .allocate_lease(
+                other_vm,
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+            )
             .unwrap();
         assert_eq!(
             reallocated.ipv4, lease.ipv4,

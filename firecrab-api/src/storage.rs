@@ -201,10 +201,7 @@ impl StorageRegistry {
         if available < need_bytes {
             return Err(StorageError::FreeSpace {
                 path: root.path.clone(),
-                detail: format!(
-                    "need {} bytes free, have {available}",
-                    need_bytes
-                ),
+                detail: format!("need {} bytes free, have {available}", need_bytes),
             });
         }
         Ok(())
@@ -232,7 +229,9 @@ pub fn validate_storage_path(path: &str) -> Result<PathBuf, String> {
     if !p.is_absolute() {
         return Err("must be an absolute path".to_owned());
     }
-    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         return Err("must not contain '..'".to_owned());
     }
     Ok(p)
@@ -362,7 +361,10 @@ fn lsblk_index() -> std::collections::HashMap<String, (String, String)> {
     map
 }
 
-fn collect_lsblk(nodes: &serde_json::Value, map: &mut std::collections::HashMap<String, (String, String)>) {
+fn collect_lsblk(
+    nodes: &serde_json::Value,
+    map: &mut std::collections::HashMap<String, (String, String)>,
+) {
     let Some(arr) = nodes.as_array() else {
         return;
     };
@@ -433,10 +435,7 @@ mod tests {
         let reg = StorageRegistry::parse("disk-a=/mnt/a:disk-b=/mnt/b").unwrap();
         assert_eq!(reg.roots().len(), 2);
         assert_eq!(reg.default_id(), "disk-a");
-        assert_eq!(
-            reg.vms_dir("disk-b").unwrap(),
-            PathBuf::from("/mnt/b/vms")
-        );
+        assert_eq!(reg.vms_dir("disk-b").unwrap(), PathBuf::from("/mnt/b/vms"));
     }
 
     #[test]
@@ -468,11 +467,17 @@ mod tests {
         let devices = list_mounted_devices();
         // Linux CI/dev hosts always have at least one real mount.
         assert!(
-            devices.iter().any(|d| d.mountpoint == "/" || d.size_gib > 0),
+            devices
+                .iter()
+                .any(|d| d.mountpoint == "/" || d.size_gib > 0),
             "{devices:?}"
         );
         assert!(devices.iter().all(|d| d.mountpoint.starts_with('/')));
-        assert!(!devices.iter().any(|d| d.fstype == "proc" || d.fstype == "sysfs"));
+        assert!(
+            !devices
+                .iter()
+                .any(|d| d.fstype == "proc" || d.fstype == "sysfs")
+        );
     }
 
     #[test]

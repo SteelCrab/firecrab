@@ -75,8 +75,7 @@ impl VmArtifactPaths {
 
     /// In-progress copy path for a generation (atomic publish target).
     pub fn rootfs_tmp(&self, generation: Uuid) -> PathBuf {
-        self.disks
-            .join(format!(".{}.tmp", uuid_dir(generation)))
+        self.disks.join(format!(".{}.tmp", uuid_dir(generation)))
     }
 
     /// Paths for one start's runtime identity.
@@ -171,16 +170,20 @@ mod tests {
         assert!(paths_a.runtimes.ends_with("r"));
 
         let generation = Uuid::new_v4();
-        assert!(paths_a
-            .rootfs(generation)
-            .ends_with(format!("{}.ext4", uuid_dir(generation))));
-        assert!(paths_a
-            .rootfs_tmp(generation)
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .starts_with('.'));
+        assert!(
+            paths_a
+                .rootfs(generation)
+                .ends_with(format!("{}.ext4", uuid_dir(generation)))
+        );
+        assert!(
+            paths_a
+                .rootfs_tmp(generation)
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with('.')
+        );
     }
 
     #[test]
@@ -223,12 +226,20 @@ mod tests {
 
         let mut file_a = File::open(template.path()).unwrap();
         let mut file_b = File::open(template.path()).unwrap();
-        let root_a =
-            crate::rootfs::prepare_rootfs(&paths_a, gen_a, &mut file_a, b"template-bytes".len() as u64)
-                .unwrap();
-        let root_b =
-            crate::rootfs::prepare_rootfs(&paths_b, gen_b, &mut file_b, b"template-bytes".len() as u64)
-                .unwrap();
+        let root_a = crate::rootfs::prepare_rootfs(
+            &paths_a,
+            gen_a,
+            &mut file_a,
+            b"template-bytes".len() as u64,
+        )
+        .unwrap();
+        let root_b = crate::rootfs::prepare_rootfs(
+            &paths_b,
+            gen_b,
+            &mut file_b,
+            b"template-bytes".len() as u64,
+        )
+        .unwrap();
         assert_ne!(root_a, root_b);
         let meta_a = fs::metadata(&root_a).unwrap();
         let meta_b = fs::metadata(&root_b).unwrap();

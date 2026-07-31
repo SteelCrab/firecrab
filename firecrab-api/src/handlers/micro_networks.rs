@@ -739,10 +739,7 @@ mod tests {
             .await
             .expect("fresh temp db should open cleanly");
         let socket_path = directory.path().join("net-helper.sock");
-        crate::network::test_support::spawn_recording_helper(
-            &socket_path,
-            Some("ensure_firewall"),
-        );
+        crate::network::test_support::spawn_recording_helper(&socket_path, Some("ensure_firewall"));
         let state =
             state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
 

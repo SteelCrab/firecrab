@@ -267,10 +267,7 @@ fn render_apply_ruleset(
     let internal_destinations = if subnets.is_empty() {
         "127.0.0.0/8, 169.254.0.0/16".to_owned()
     } else {
-        format!(
-            "127.0.0.0/8, 169.254.0.0/16, {}",
-            subnets.join(", ")
-        )
+        format!("127.0.0.0/8, 169.254.0.0/16, {}", subnets.join(", "))
     };
     // A network with its internet switched off: every *new* forwarded flow
     // out of it is dropped, whatever the per-VM egress policy says. Placed
@@ -558,9 +555,9 @@ mod tests {
         let bridge = network.bridge_name();
         assert!(ruleset.contains(&format!("iifname \"{bridge}\" jump firecrab_egress")));
         assert!(ruleset.contains(&format!("oifname \"{bridge}\" jump firecrab_ingress")));
-        assert!(ruleset.contains(
-            "ip saddr 172.31.0.0/24 oifname \"eth0\" jump firecrab_postrouting"
-        ));
+        assert!(
+            ruleset.contains("ip saddr 172.31.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
+        );
         assert!(ruleset.contains("masquerade"));
     }
 

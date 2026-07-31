@@ -488,8 +488,7 @@ mod tests {
         let paths = VmArtifactPaths::for_vm(&directory.path().join("vms"), Uuid::new_v4());
         let target_bytes = 32 * 1024 * 1024;
 
-        let rootfs =
-            prepare_rootfs(&paths, Uuid::new_v4(), &mut template, target_bytes).unwrap();
+        let rootfs = prepare_rootfs(&paths, Uuid::new_v4(), &mut template, target_bytes).unwrap();
 
         assert_eq!(fs::metadata(&rootfs).unwrap().len(), target_bytes);
         assert_eq!(ext4_capacity_bytes(&rootfs), target_bytes);
