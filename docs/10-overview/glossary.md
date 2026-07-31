@@ -19,7 +19,7 @@ updated: 2026-07-30
 | **MicroNetwork** | 사용자가 만드는 가상 네트워크. bridge 하나 + subnet 하나 + 그 위의 DHCP/NAT/방화벽을 묶은 것 |
 | **MicroStorage** | 호스트 마운트 경로에 이름을 붙인 영구 스토리지 풀. VM rootfs는 `{path}/vms/{id}/`. 가이드: [micro-storage.md](../20-guides/micro-storage.md) |
 | **M2Image** | 실행 중인 VM에서 떠낸 인스턴스 이미지(4주차 범위) |
-| **기본 네트워크** | (제거) 암시적 `fcbr0`/`172.30.0.0/24` 없음. 네트워크는 MicroNetwork를 직접 생성. 가이드: [explicit-micro-network](../20-guides/explicit-micro-network.md) |
+| **기본 네트워크** | (제거) 암시적 `fcbr0`/`172.30.0.0/24` 없음. 네트워크는 MicroNetwork를 직접 생성 |
 
 ## 네트워크
 

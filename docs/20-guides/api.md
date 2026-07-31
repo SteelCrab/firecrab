@@ -74,7 +74,7 @@ curl -X POST http://localhost:3000/api/vms \
 | `template` | 템플릿 레지스트리에 등록된 alias만 허용 (`ubuntu-26.04`) |
 | `cpu` | 1~32 (정수) |
 | `ram` | 128~32768 (MiB) |
-| `microNetworkId` | **필수.** `GET /api/micro-networks`의 id. 암시 기본 서브넷 없음 — [explicit-micro-network](explicit-micro-network.md) |
+| `microNetworkId` | **필수.** `GET /api/micro-networks`의 id. 암시 기본 서브넷 없음 |
 | `storageRoot` | 선택. `GET /api/storage`의 id. 생략 시 첫 등록 root. 여유 공간 < `diskGb`면 거부 |
 | `diskGb` | 템플릿 rootfs 이상 ~ 500 GiB |
 
