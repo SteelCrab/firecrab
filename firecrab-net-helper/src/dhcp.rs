@@ -19,7 +19,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-use crate::bridge::BRIDGE_NAME;
 
 /// Where the live host-reservation file lives; `sync_dhcp_leases` only ever
 /// replaces it via an atomic rename, never edits it in place.
@@ -138,10 +137,8 @@ async fn release_stale_leases(current: &[DhcpLeaseEntry], micro_networks: &[Micr
     }
 }
 
-/// Which bridge serves `ip` — the MicroNetwork whose subnet contains it, or
-/// the default network's bridge when none does. `dhcp_release` addresses
-/// dnsmasq through the interface the lease lives on, so releasing a
-/// MicroNetwork lease against `fcbr0` would silently do nothing.
+/// Which bridge serves `ip` — the MicroNetwork whose subnet contains it.
+/// Falls back to empty when none match (release becomes a best-effort no-op).
 fn serving_interface(ip: Ipv4Addr, micro_networks: &[MicroNetworkSpec]) -> String {
     micro_networks
         .iter()
@@ -151,7 +148,8 @@ fn serving_interface(ip: Ipv4Addr, micro_networks: &[MicroNetworkSpec]) -> Strin
                 .unwrap_or(0);
             u32::from(ip) & mask == u32::from(network.network_address()) & mask
         })
-        .map_or_else(|| BRIDGE_NAME.to_owned(), MicroNetworkSpec::bridge_name)
+        .map(MicroNetworkSpec::bridge_name)
+        .unwrap_or_default()
 }
 
 /// Reads dnsmasq's own lease database, returning every `(ip, mac)` pair it
@@ -230,21 +228,20 @@ async fn release_lease(ip: Ipv4Addr, mac: MacAddr, interface: String) {
 /// unicast DHCPOFFER a client without a broadcast flag expects never goes
 /// out — `bind-dynamic` binds directly to `fcbr0` instead.
 fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) -> String {
-    // One `interface=`/`dhcp-range=` pair per served network. dnsmasq picks
-    // the range matching the interface a request arrived on, so a VM on a
-    // MicroNetwork's bridge is offered that network's reservation and never
-    // another's.
-    let served: String = std::iter::once(format!(
-        "interface={BRIDGE_NAME}\ndhcp-range=172.30.0.0,static\n"
-    ))
-    .chain(micro_networks.iter().map(|network| {
-        format!(
-            "interface={}\ndhcp-range={},static\n",
-            network.bridge_name(),
-            network.network_address()
-        )
-    }))
-    .collect();
+    // One `interface=`/`dhcp-range=` pair per served MicroNetwork. dnsmasq
+    // picks the range matching the interface a request arrived on, so a VM
+    // on a given bridge is offered that network's reservation only.
+    // Zero networks: no interface= lines (dnsmasq will not serve Firecrab).
+    let served: String = micro_networks
+        .iter()
+        .map(|network| {
+            format!(
+                "interface={}\ndhcp-range={},static\n",
+                network.bridge_name(),
+                network.network_address()
+            )
+        })
+        .collect();
     format!(
         "{served}\
          bind-dynamic\n\
@@ -610,12 +607,9 @@ mod tests {
     #[test]
     fn base_config_binds_only_the_firecrab_bridge_and_is_static_only() {
         let config = render_base_config(Path::new("/run/firecrab/dnsmasq-hosts.conf"), &[]);
-        assert!(config.contains("interface=fcbr0"));
         assert!(config.contains("bind-dynamic"));
-        assert!(
-            config.contains("dhcp-range=172.30.0.0,static"),
-            "must not hand out addresses to unreserved MACs: {config}"
-        );
+        // No MicroNetworks: no interface= lines (empty explicit set).
+        assert!(!config.contains("interface="));
     }
 
     #[test]
@@ -626,9 +620,7 @@ mod tests {
         ];
         let config = render_base_config(Path::new("/run/firecrab/dnsmasq-hosts.conf"), &networks);
 
-        // The default network is still served alongside them.
-        assert!(config.contains("interface=fcbr0"));
-        assert!(config.contains("dhcp-range=172.30.0.0,static"));
+        assert!(!config.contains("interface=fcbr0"));
         for network in networks {
             assert!(config.contains(&format!("interface={}", network.bridge_name())));
             assert!(config.contains(&format!("dhcp-range={},static", network.network_address())));
@@ -643,10 +635,10 @@ mod tests {
             serving_interface("172.31.0.7".parse().unwrap(), &networks),
             networks[0].bridge_name()
         );
-        // Outside every MicroNetwork -> the default network's bridge.
+        // Outside every MicroNetwork -> empty (no implicit default bridge).
         assert_eq!(
             serving_interface("172.30.0.7".parse().unwrap(), &networks),
-            BRIDGE_NAME
+            ""
         );
     }
 

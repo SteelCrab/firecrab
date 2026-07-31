@@ -4,4 +4,4 @@ import type { StartupStep } from "./StartupStep";
 import type { StartupStepRun } from "./StartupStepRun";
 import type { VmState } from "./VmState";
 
-export type VmResponse = { id: string, name: string, state: VmState, template: string, templateVersion: string, cpu: number, ram: number, diskGb: number, startupStep: StartupStep | null, startupTimeline: Array<StartupStepRun>, egressPolicy: EgressPolicy, ipv4: string | null, mac: string | null, hostname: string, microNetworkId: string | null, storageRoot: string, };
+export type VmResponse = { id: string, name: string, state: VmState, template: string, templateVersion: string, cpu: number, ram: number, diskGb: number, startupStep: StartupStep | null, startupTimeline: Array<StartupStepRun>, egressPolicy: EgressPolicy, ipv4: string | null, mac: string | null, hostname: string, microNetworkId: string, storageRoot: string, };

@@ -75,7 +75,7 @@ pub async fn get_micro_network(
     })?;
 
     let network = network.ok_or_else(|| AppError::not_found(request_id.0))?;
-    let subnet = SubnetSpec::parse(Some(id), &network.subnet_cidr).ok_or_else(|| {
+    let subnet = SubnetSpec::parse(id, &network.subnet_cidr).ok_or_else(|| {
         tracing::error!(
             request_id = %request_id.0,
             micro_network_id = %id,
@@ -91,7 +91,7 @@ pub async fn get_micro_network(
         .collect();
     let mut members: Vec<MicroNetworkVm> = vms
         .into_values()
-        .filter(|vm| vm.micro_network_id == Some(id))
+        .filter(|vm| vm.micro_network_id == id)
         .map(|vm| MicroNetworkVm {
             ipv4: addresses.get(&vm.id).cloned(),
             id: vm.id,
@@ -148,7 +148,7 @@ pub async fn create_micro_network(
 ) -> Result<(StatusCode, Json<MicroNetworkResponse>), AppError> {
     let mut fields = validate_create(&req);
     if fields.is_empty()
-        && let Some(subnet) = SubnetSpec::parse(None, &req.subnet_cidr)
+        && let Some(subnet) = SubnetSpec::parse(Uuid::nil(), &req.subnet_cidr)
         && let Some(conflict) = overlapping_network(&state, subnet, request_id.0).await?
     {
         fields.insert(
@@ -162,7 +162,7 @@ pub async fn create_micro_network(
     // Already checked by validate_create; re-parsed here (rather than
     // threaded through) since the request is consumed piecemeal below.
     let id = Uuid::new_v4();
-    let subnet = SubnetSpec::parse(Some(id), &req.subnet_cidr)
+    let subnet = SubnetSpec::parse(id, &req.subnet_cidr)
         .expect("validate_create already accepted this CIDR");
     let gateway = subnet.gateway();
 
@@ -263,19 +263,15 @@ pub async fn update_micro_network(
     Ok(Json(network))
 }
 
-/// The subnet `candidate` would collide with, if any: the built-in default
-/// network or an existing MicroNetwork. Two networks sharing addresses would
-/// make the host's routing table ambiguous, so the helper refuses the bridge
-/// outright — this just catches it earlier, with a field the form can show.
+/// The subnet `candidate` would collide with, if any existing MicroNetwork.
+/// Two networks sharing addresses would make the host's routing table
+/// ambiguous, so the helper refuses the bridge outright — this just catches
+/// it earlier, with a field the form can show.
 async fn overlapping_network(
     state: &AppState,
     candidate: SubnetSpec,
     request_id: Uuid,
 ) -> Result<Option<String>, AppError> {
-    if candidate.overlaps(&SubnetSpec::default_network()) {
-        return Ok(Some("the default network".to_owned()));
-    }
-
     let store = state.store.clone();
     let existing = tokio::task::spawn_blocking(move || store.list_micro_networks())
         .await
@@ -286,27 +282,23 @@ async fn overlapping_network(
         })?;
 
     Ok(existing.into_iter().find_map(|network| {
-        SubnetSpec::parse(Some(network.id), &network.subnet_cidr)
+        SubnetSpec::parse(network.id, &network.subnet_cidr)
             .filter(|subnet| subnet.overlaps(&candidate))
             .map(|_| format!("MicroNetwork {:?}", network.name))
     }))
 }
 
-/// Brings every network's host resources back to the desired state: the
-/// default bridge, one bridge per MicroNetwork, the nftables ruleset and
-/// dnsmasq's served interfaces. None of that survives a host reboot — they
-/// are kernel objects and a child process — so it is re-applied rather than
-/// assumed. Every step is idempotent, so calling this repeatedly (at daemon
-/// start, on every VM start, after a network is created or deleted) costs
-/// nothing when things are already in place.
+/// Brings every **explicit** MicroNetwork's host resources back to the
+/// desired state: one bridge per network, the nftables ruleset, and
+/// dnsmasq's served interfaces. There is no implicit default bridge.
+/// None of that survives a host reboot — they are kernel objects and a
+/// child process — so it is re-applied rather than assumed. Every step is
+/// idempotent, so calling this repeatedly (at daemon start, on every VM
+/// start, after a network is created or deleted) costs nothing when things
+/// are already in place. Zero networks is a valid state (no bridges).
 pub(crate) async fn ensure_all_networks(state: &AppState) -> Result<(), String> {
     let micro_networks = crate::handlers::vms::micro_network_specs(state).await?;
 
-    state
-        .network
-        .ensure_bridge()
-        .await
-        .map_err(|error| format!("ensure_bridge failed: {error}"))?;
     for network in &micro_networks {
         state
             .network
@@ -404,7 +396,7 @@ fn validate_create(req: &CreateMicroNetworkRequest) -> BTreeMap<String, String> 
             "must be 1-64 ASCII letters, numbers, '.', '_' or '-'".to_owned(),
         );
     }
-    match SubnetSpec::parse(None, &req.subnet_cidr) {
+    match SubnetSpec::parse(Uuid::nil(), &req.subnet_cidr) {
         Some(subnet) if !(MIN_PREFIX..=MAX_PREFIX).contains(&subnet.prefix) => {
             fields.insert(
                 "subnetCidr".to_owned(),
@@ -564,24 +556,24 @@ mod tests {
             );
         }
 
-        // ... and the default network's own subnet is just as unavailable.
-        let error = create_micro_network(
+        // A second distinct network that does not overlap is fine.
+        let (_, Json(other)) = create_micro_network(
             State(state.clone()),
             extension(),
             ValidatedJson(CreateMicroNetworkRequest {
-                name: "clash".to_owned(),
+                name: "other".to_owned(),
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
             }),
         )
         .await
-        .unwrap_err();
-        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        .expect("non-overlapping CIDR is allowed");
+        assert_eq!(other.subnet_cidr, "172.30.0.0/24");
 
         let Json(listed) = list_micro_networks(State(state), extension())
             .await
             .unwrap();
-        assert_eq!(listed.len(), 1, "no rejected attempt may leave a record");
+        assert_eq!(listed.len(), 2, "only rejected attempts leave no record");
     }
 
     #[tokio::test]
@@ -629,10 +621,10 @@ mod tests {
         let network = create_network(&state, "prod", "172.31.0.0/24").await;
         let other = create_network(&state, "stage", "172.32.0.0/24").await;
 
-        let subnet = SubnetSpec::parse(Some(network.id), &network.subnet_cidr).unwrap();
+        let subnet = SubnetSpec::parse(network.id, &network.subnet_cidr).unwrap();
         let mut member = crate::handlers::vms::test_support::record("member", Uuid::new_v4());
         member.state = VmState::Stopped;
-        member.micro_network_id = Some(network.id);
+        member.micro_network_id = network.id;
         let lease = state.store.allocate_lease(member.id, subnet).unwrap();
         state.store.insert(&member).unwrap();
 
@@ -690,7 +682,7 @@ mod tests {
             2,
             "each MicroNetwork's bridge must be re-ensured: {operations:?}"
         );
-        assert!(operations.contains(&"ensure_bridge"), "{operations:?}");
+        assert!(!operations.contains(&"ensure_bridge"), "{operations:?}");
         assert!(operations.contains(&"ensure_firewall"), "{operations:?}");
         assert!(operations.contains(&"sync_dhcp_leases"), "{operations:?}");
         // Sanity: the two really are distinct networks, not one counted twice.
@@ -717,7 +709,7 @@ mod tests {
         state.store.insert(&vm).expect("seed vm");
         state
             .store
-            .allocate_lease(vm.id, SubnetSpec::default_network())
+            .allocate_lease(vm.id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
             .expect("seed lease");
         log.lock().unwrap().clear();
 
@@ -747,13 +739,17 @@ mod tests {
             .await
             .expect("fresh temp db should open cleanly");
         let socket_path = directory.path().join("net-helper.sock");
-        crate::network::test_support::spawn_recording_helper(&socket_path, Some("ensure_bridge"));
+        crate::network::test_support::spawn_recording_helper(
+            &socket_path,
+            Some("ensure_firewall"),
+        );
         let state =
             state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
 
-        // A VM start propagates this; only the daemon-startup caller logs it.
+        // With no MicroNetworks, ensure_all_networks still pushes firewall+dhcp.
+        // Force a helper failure on ensure_firewall.
         let error = ensure_all_networks(&state).await.unwrap_err();
-        assert!(error.contains("ensure_bridge"), "{error}");
+        assert!(error.contains("ensure_firewall"), "{error}");
     }
 
     #[tokio::test]
@@ -882,7 +878,7 @@ mod tests {
         let state = test_state(directory.path()).await;
         let network = create_network(&state, "prod", "172.31.0.0/24").await;
 
-        let subnet = SubnetSpec::parse(Some(network.id), &network.subnet_cidr).unwrap();
+        let subnet = SubnetSpec::parse(network.id, &network.subnet_cidr).unwrap();
         let lease = state
             .store
             .allocate_lease(Uuid::new_v4(), subnet)
@@ -1005,7 +1001,7 @@ mod tests {
 
     #[test]
     fn a_created_network_reports_the_gateway_derived_from_its_cidr() {
-        let subnet = SubnetSpec::parse(Some(Uuid::nil()), "172.31.0.0/24").unwrap();
+        let subnet = SubnetSpec::parse(Uuid::nil(), "172.31.0.0/24").unwrap();
         assert_eq!(subnet.gateway().to_string(), "172.31.0.1");
     }
 }

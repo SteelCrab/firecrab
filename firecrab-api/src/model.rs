@@ -63,12 +63,10 @@ pub struct VmRecord {
     /// `setup_vm_network`) — not live, same as cpu/ram/disk.
     #[serde(default)]
     pub egress_policy: EgressPolicy,
-    /// The MicroNetwork this VM belongs to, or `None` for the built-in
-    /// default network (`docs/30-tasks/task-micro-network.md`). Fixed at creation:
-    /// the VM's lease comes out of that network's subnet, so moving it would
-    /// mean reallocating the address its guest already booted with.
-    #[serde(default)]
-    pub micro_network_id: Option<Uuid>,
+    /// The MicroNetwork this VM belongs to. Fixed at creation: the VM's
+    /// lease comes out of that network's subnet, so moving it would mean
+    /// reallocating the address its guest already booted with.
+    pub micro_network_id: Uuid,
     /// Storage root id (from `FIRECRAB_STORAGE_ROOTS` / `GET /api/storage`).
     /// Disks live at `{root}/vms/{id}/`. Defaults to `"default"` so records
     /// written before multi-disk support keep the legacy `data/vms` path.

@@ -124,9 +124,18 @@ sudo -u firecrab id                                 # kvm 그룹 포함
 firecrab-doctor                                     # host 진단 (또는 ./install.sh --doctor)
 curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/   # 200 (대시보드)
 curl -s localhost:3000/api/vms                             # []
+curl -s localhost:3000/api/micro-networks                  # [] (신규 설치 — 기본 서브넷 없음)
 ```
 
-브라우저에서 `http://127.0.0.1:3000/` → VM 생성 → start → `running` 도달까지 확인한다.
+**첫 네트워크를 만든 뒤** VM을 만든다. 암시적 `fcbr0`/기본 서브넷은 없다 — [explicit-micro-network](explicit-micro-network.md).
+
+```sh
+curl -s -X POST localhost:3000/api/micro-networks \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"lab","subnetCidr":"172.30.0.0/24","internetEnabled":true}'
+```
+
+브라우저에서 `http://127.0.0.1:3000/` → MicroNetwork 생성 → VM 생성 → start → `running` 도달까지 확인한다.
 자세한 절차는 [tests/host-install.md](../40-tests/host-install.md).
 
 ## 운영

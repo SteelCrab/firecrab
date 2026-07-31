@@ -19,7 +19,7 @@ updated: 2026-07-30
 | **MicroNetwork** | 사용자가 만드는 가상 네트워크. bridge 하나 + subnet 하나 + 그 위의 DHCP/NAT/방화벽을 묶은 것 |
 | **MicroStorage** | 호스트 마운트 경로에 이름을 붙인 영구 스토리지 풀. VM rootfs는 `{path}/vms/{id}/`. 가이드: [micro-storage.md](../20-guides/micro-storage.md) |
 | **M2Image** | 실행 중인 VM에서 떠낸 인스턴스 이미지(4주차 범위) |
-| **기본 네트워크** | MicroNetwork를 고르지 않은 VM이 붙는 내장 네트워크. bridge `fcbr0`, `172.30.0.0/24` |
+| **기본 네트워크** | (제거) 암시적 `fcbr0`/`172.30.0.0/24` 없음. 네트워크는 MicroNetwork를 직접 생성. 가이드: [explicit-micro-network](../20-guides/explicit-micro-network.md) |
 
 ## 네트워크
 
@@ -28,7 +28,7 @@ updated: 2026-07-30
 | **lease** | 한 VM에 배정된 IP+MAC 한 쌍. 생성 시 할당되고 **stop해도 유지**되며 delete에서만 반납된다 |
 | **IPAM** | lease를 겹치지 않게 나눠주는 부분. SQLite 트랜잭션으로 동시 생성에도 중복이 안 나게 한다 |
 | **TAP** | VM 하나에 하나씩 만드는 가상 NIC. 이름은 `fct` + vm-id 해시 |
-| **bridge** | TAP들이 붙는 가상 스위치. 기본 네트워크는 `fcbr0`, MicroNetwork는 `mnb` + id 해시 |
+| **bridge** | TAP들이 붙는 가상 스위치. MicroNetwork마다 `mnb` + id 해시 |
 | **uplink** | 호스트가 실제로 외부로 나가는 인터페이스. IPv4 기본 경로에서 자동 판별 |
 | **egress policy** | VM 단위 외부 통신 posture. `internet`(허용) 또는 `isolated`(차단) |
 | **east-west** | VM ↔ VM 통신. 기본적으로 차단된다 |

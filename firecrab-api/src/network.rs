@@ -89,10 +89,10 @@ impl NetworkClient {
             .await
     }
 
-    /// Idempotently (re)applies the owned nftables tables for the default
-    /// network plus every MicroNetwork in `micro_networks` — the helper
-    /// renders NAT and dispatch rules per network and denies traffic routed
-    /// between them, so this must always be the complete current set.
+    /// Idempotently (re)applies the owned nftables tables for every
+    /// MicroNetwork in `micro_networks` — the helper renders NAT and
+    /// dispatch rules per network and denies traffic routed between them,
+    /// so this must always be the complete current set (empty is valid).
     pub async fn ensure_firewall(
         &self,
         micro_networks: Vec<MicroNetworkSpec>,
@@ -101,14 +101,14 @@ impl NetworkClient {
             .await
     }
 
-    /// Creates `vm_id`'s TAP device, attaches it to the bridge, and returns
-    /// its deterministic name (also derivable locally via [`tap_name`], so
-    /// callers that already know it don't have to wait on this to build a
-    /// Firecracker config referencing it).
+    /// Creates `vm_id`'s TAP device, attaches it to the MicroNetwork's
+    /// bridge, and returns its deterministic name (also derivable locally
+    /// via [`tap_name`], so callers that already know it don't have to wait
+    /// on this to build a Firecracker config referencing it).
     pub async fn create_tap(
         &self,
         vm_id: Uuid,
-        micro_network_id: Option<Uuid>,
+        micro_network_id: Uuid,
     ) -> Result<String, NetworkError> {
         self.call(NetworkRequest::CreateTap {
             vm_id,

@@ -210,6 +210,60 @@ fn migrate_internet_enabled_column(conn: &Connection) -> Result<(), PersistenceE
     Ok(())
 }
 
+/// One-shot upgrade: VMs/leases created when the default network was
+/// implicit (`micro_network_id` NULL) get an explicit MicroNetwork row
+/// (`name=default`, `172.30.0.0/24`) and are reattached to it.
+///
+/// Fresh installs have no NULL rows and create no seed network — operators
+/// must POST a MicroNetwork before creating VMs.
+fn promote_implicit_default_network(conn: &Connection) -> Result<(), PersistenceError> {
+    let null_vms: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM vms WHERE micro_network_id IS NULL OR micro_network_id = ''",
+        [],
+        |row| row.get(0),
+    )?;
+    let null_leases: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM network_leases \
+             WHERE released_at IS NULL \
+               AND (micro_network_id IS NULL OR micro_network_id = '')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if null_vms == 0 && null_leases == 0 {
+        return Ok(());
+    }
+
+    let id = Uuid::new_v4();
+    let cidr = format!(
+        "{}/{}",
+        crate::ipam::LEGACY_DEFAULT_NETWORK,
+        crate::ipam::LEGACY_DEFAULT_PREFIX
+    );
+    conn.execute(
+        INSERT_MICRO_NETWORK_SQL,
+        params![id.to_string(), "default", cidr, 1],
+    )?;
+    conn.execute(
+        "UPDATE vms SET micro_network_id = ?1 \
+         WHERE micro_network_id IS NULL OR micro_network_id = ''",
+        params![id.to_string()],
+    )?;
+    let _ = conn.execute(
+        "UPDATE network_leases SET micro_network_id = ?1 \
+         WHERE micro_network_id IS NULL OR micro_network_id = ''",
+        params![id.to_string()],
+    );
+    tracing::info!(
+        micro_network_id = %id,
+        null_vms,
+        null_leases,
+        "promoted implicit default network to explicit MicroNetwork"
+    );
+    Ok(())
+}
+
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
@@ -341,6 +395,9 @@ impl Store {
         // leaves an older table's columns as they were.
         migrate_internet_enabled_column(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
+        // After micro_networks exists: promote pre-MicroNetwork VMs/leases
+        // that still have NULL micro_network_id onto one explicit row.
+        promote_implicit_default_network(&conn)?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -377,7 +434,7 @@ impl Store {
                     ram: row.get(9)?,
                     disk_gb: row.get(10)?,
                     egress_policy: decode_egress_policy(&id_text, &row.get::<_, String>(11)?)?,
-                    micro_network_id: decode_optional_id(&id_text, row.get(12)?)?,
+                    micro_network_id: decode_required_id(&id_text, row.get(12)?, "micro_network_id")?,
                     storage_root: row.get(13)?,
                     disk_generation: decode_optional_id(&id_text, row.get(14)?)?,
                     last_runtime_id: decode_optional_id(&id_text, row.get(15)?)?,
@@ -464,7 +521,7 @@ impl Store {
             let subnet_cidr: String = row.get(2)?;
             // Derived rather than stored, so the gateway can never drift out
             // of sync with the CIDR it belongs to.
-            let gateway = SubnetSpec::parse(Some(id), &subnet_cidr)
+            let gateway = SubnetSpec::parse(id, &subnet_cidr)
                 .ok_or_else(|| PersistenceError::CorruptRecord {
                     id: id_text.clone(),
                     reason: format!("subnet_cidr {subnet_cidr:?} does not parse"),
@@ -725,7 +782,7 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.ram,
             vm.disk_gb,
             vm.egress_policy.id(),
-            vm.micro_network_id.map(|id| id.to_string()),
+            vm.micro_network_id.to_string(),
             vm.storage_root,
             vm.disk_generation.map(|id| id.to_string()),
             vm.last_runtime_id.map(|id| id.to_string()),
@@ -733,8 +790,7 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
     )
 }
 
-/// Decodes a nullable id column, reporting a stored non-UUID as corruption
-/// rather than silently treating the row as if it had no MicroNetwork.
+/// Decodes a nullable id column, reporting a stored non-UUID as corruption.
 fn decode_optional_id(
     vm_id: &str,
     stored: Option<String>,
@@ -743,10 +799,26 @@ fn decode_optional_id(
         .map(|text| {
             Uuid::parse_str(&text).map_err(|_| PersistenceError::CorruptRecord {
                 id: vm_id.to_owned(),
-                reason: format!("micro_network_id {text:?} is not a UUID"),
+                reason: format!("id column {text:?} is not a UUID"),
             })
         })
         .transpose()
+}
+
+/// Decodes a required MicroNetwork (or similar) id column.
+fn decode_required_id(
+    vm_id: &str,
+    stored: Option<String>,
+    column: &str,
+) -> Result<Uuid, PersistenceError> {
+    let text = stored.ok_or_else(|| PersistenceError::CorruptRecord {
+        id: vm_id.to_owned(),
+        reason: format!("{column} is missing"),
+    })?;
+    Uuid::parse_str(&text).map_err(|_| PersistenceError::CorruptRecord {
+        id: vm_id.to_owned(),
+        reason: format!("{column} {text:?} is not a UUID"),
+    })
 }
 
 /// Encodes through serde so the DB text stays in lockstep with the API wire
@@ -800,7 +872,7 @@ mod tests {
             ram: 512,
             disk_gb: 2,
             egress_policy: Default::default(),
-            micro_network_id: None,
+            micro_network_id: Uuid::from_u128(1),
             storage_root: "default".to_owned(),
             disk_generation: None,
             last_runtime_id: None,
@@ -1077,7 +1149,7 @@ mod tests {
                 let store = store.clone();
                 std::thread::spawn(move || {
                     store
-                        .allocate_lease(Uuid::new_v4(), SubnetSpec::default_network())
+                        .allocate_lease(Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
                         .unwrap()
                 })
             })
@@ -1112,12 +1184,12 @@ mod tests {
         let vm_id = Uuid::new_v4();
 
         let lease = store
-            .allocate_lease(vm_id, SubnetSpec::default_network())
+            .allocate_lease(vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
             .unwrap();
         // Simulate stop/start: nothing in the lifecycle touches the lease.
         assert_eq!(
             store
-                .allocate_lease(vm_id, SubnetSpec::default_network())
+                .allocate_lease(vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
                 .unwrap_err()
                 .to_string(),
             IpamError::AlreadyLeased { vm_id }.to_string()
@@ -1126,7 +1198,7 @@ mod tests {
         store.release_lease(vm_id).unwrap();
         let other_vm = Uuid::new_v4();
         let reallocated = store
-            .allocate_lease(other_vm, SubnetSpec::default_network())
+            .allocate_lease(other_vm, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
             .unwrap();
         assert_eq!(
             reallocated.ipv4, lease.ipv4,

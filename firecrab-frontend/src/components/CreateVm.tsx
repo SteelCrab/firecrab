@@ -28,9 +28,8 @@ const FIELDS_WITH_OWN_ERROR = [
   "storageRoot",
 ] as const;
 
-/** `<select>` value standing in for "no MicroNetwork" — the built-in default
- *  network, which the API represents as a null microNetworkId. */
-const DEFAULT_NETWORK = "";
+/** Empty select value until the user picks a MicroNetwork (required). */
+const NO_NETWORK = "";
 
 interface CreateVmProps {
   onCreated: (vm: VmResponse) => void;
@@ -50,18 +49,22 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [ram, setRam] = useState("512");
   const [diskGb, setDiskGb] = useState("2");
   const [egressPolicy, setEgressPolicy] = useState<EgressPolicy>("internet");
-  const [microNetworkId, setMicroNetworkId] = useState<string>(DEFAULT_NETWORK);
+  const [microNetworkId, setMicroNetworkId] = useState<string>(NO_NETWORK);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
   const [storageRoots, setStorageRoots] = useState<StorageRootResponse[]>([]);
   const [storageRoot, setStorageRoot] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
 
-  // Failing to load the list isn't surfaced: the dropdown then just offers
-  // the default network, which is exactly what this form did before
-  // MicroNetworks existed.
   useEffect(() => {
-    listMicroNetworks().then(setMicroNetworks).catch(() => setMicroNetworks([]));
+    listMicroNetworks()
+      .then((networks) => {
+        setMicroNetworks(networks);
+        if (networks.length > 0) {
+          setMicroNetworkId((current) => current || networks[0].id);
+        }
+      })
+      .catch(() => setMicroNetworks([]));
     listStorageRoots()
       .then((roots) => {
         setStorageRoots(roots);
@@ -83,7 +86,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       ram: parseInt(ram, 10) || 0,
       diskGb: parseInt(diskGb, 10) || 0,
       egressPolicy,
-      microNetworkId: microNetworkId === DEFAULT_NETWORK ? null : microNetworkId,
+      microNetworkId: microNetworkId,
       storageRoot: storageRoot || null,
     };
 
@@ -187,7 +190,11 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           value={microNetworkId}
           onChange={(event) => setMicroNetworkId(event.target.value)}
         >
-          <option value={DEFAULT_NETWORK}>기본 네트워크</option>
+          <option value={NO_NETWORK} disabled>
+              {microNetworks.length === 0
+                ? "먼저 MicroNetwork를 만드세요"
+                : "MicroNetwork 선택"}
+            </option>
           {microNetworks.map((network) => (
             <option key={network.id} value={network.id}>
               {network.name} ({network.subnetCidr})

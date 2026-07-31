@@ -856,7 +856,7 @@ async fn setup_vm_network(
     state: &AppState,
     vm_id: Uuid,
     egress_policy: EgressPolicy,
-    micro_network_id: Option<Uuid>,
+    micro_network_id: Uuid,
 ) -> Result<VmNetwork, String> {
     let store = state.store.clone();
     let lease = tokio::task::spawn_blocking(move || store.active_lease(vm_id))
@@ -997,8 +997,8 @@ pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNet
     networks
         .into_iter()
         .map(|network| {
-            SubnetSpec::parse(Some(network.id), &network.subnet_cidr)
-                .and_then(|subnet| subnet.helper_spec(network.internet_enabled))
+            SubnetSpec::parse(network.id, &network.subnet_cidr)
+                .map(|subnet| subnet.helper_spec(network.internet_enabled))
                 .ok_or_else(|| {
                     format!(
                         "micro network {} has an unparseable subnet {:?}",
@@ -1009,20 +1009,14 @@ pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNet
         .collect()
 }
 
-/// The subnet a new VM's lease comes from: its MicroNetwork's, or the
-/// default network's when it belongs to none. A MicroNetwork id that no
-/// longer exists is a client error, not an internal one — it usually means
-/// the network was deleted between the form loading and the VM being
-/// created.
+/// The subnet a new VM's lease comes from. A MicroNetwork id that no longer
+/// exists is a client error — it usually means the network was deleted
+/// between the form loading and the VM being created.
 async fn resolve_subnet(
     state: &AppState,
-    micro_network_id: Option<Uuid>,
+    micro_network_id: Uuid,
     request_id: Uuid,
 ) -> Result<SubnetSpec, AppError> {
-    let Some(micro_network_id) = micro_network_id else {
-        return Ok(SubnetSpec::default_network());
-    };
-
     let store = state.store.clone();
     let network = tokio::task::spawn_blocking(move || store.micro_network(micro_network_id))
         .await
@@ -1041,7 +1035,7 @@ async fn resolve_subnet(
             )
         })?;
 
-    SubnetSpec::parse(Some(network.id), &network.subnet_cidr).ok_or_else(|| {
+    SubnetSpec::parse(network.id, &network.subnet_cidr).ok_or_else(|| {
         tracing::error!(
             request_id = %request_id,
             micro_network_id = %network.id,
@@ -1463,7 +1457,7 @@ pub(crate) mod test_support {
             // covered by `rootfs::tests::grows_a_real_ext4_filesystem_to_the_requested_size`.
             disk_gb: 0,
             egress_policy: Default::default(),
-            micro_network_id: None,
+            micro_network_id: Uuid::from_u128(1),
             storage_root: "default".to_owned(),
             disk_generation: None,
             last_runtime_id: None,
@@ -1536,7 +1530,7 @@ pub(crate) mod test_support {
         state.vms.lock().unwrap().insert(vm.id, vm.clone());
         state
             .store
-            .allocate_lease(vm.id, SubnetSpec::default_network())
+            .allocate_lease(vm.id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
             .unwrap();
     }
 }
@@ -1578,7 +1572,7 @@ mod tests {
             cpu: 1,
             disk_gb: 0,
             egress_policy: Default::default(),
-            micro_network_id: None,
+            micro_network_id: Uuid::from_u128(1),
             storage_root: None,
         };
 
@@ -2424,12 +2418,13 @@ while True:
     async fn persistence_failure_does_not_publish_vm_in_memory() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
+        let net = seed_network(&state).await;
         state.store.break_for_tests();
 
         let result = create_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            ValidatedJson(create_request("test-vm")),
+            ValidatedJson(create_request_on("test-vm", net)),
         )
         .await;
 
@@ -2438,6 +2433,10 @@ while True:
     }
 
     fn create_request(name: &str) -> CreateVmRequest {
+        create_request_on(name, Uuid::from_u128(1))
+    }
+
+    fn create_request_on(name: &str, micro_network_id: Uuid) -> CreateVmRequest {
         CreateVmRequest {
             name: name.to_owned(),
             template: "ubuntu-rootfs-26.04".to_owned(),
@@ -2445,9 +2444,24 @@ while True:
             cpu: 1,
             disk_gb: 2,
             egress_policy: Default::default(),
-            micro_network_id: None,
+            micro_network_id,
             storage_root: None,
         }
+    }
+
+    async fn seed_network(state: &AppState) -> Uuid {
+        let (_, Json(network)) = crate::handlers::micro_networks::create_micro_network(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                name: "test-net".to_owned(),
+                subnet_cidr: "172.30.0.0/24".to_owned(),
+                internet_enabled: true,
+            }),
+        )
+        .await
+        .expect("seed micro network");
+        network.id
     }
 
     #[tokio::test]
@@ -2455,6 +2469,7 @@ while True:
         let directory = tempdir().unwrap();
         let pool = directory.path().join("assigned-pool");
         let state = test_state(directory.path()).await;
+        let net = seed_network(&state).await;
         let (_, Json(ms)) = crate::handlers::micro_storages::create_micro_storage(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
@@ -2469,7 +2484,7 @@ while True:
         let (_, Json(created)) = create_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            ValidatedJson(create_request("move-me")),
+            ValidatedJson(create_request_on("move-me", net)),
         )
         .await
         .unwrap();
@@ -2509,11 +2524,12 @@ while True:
                 ))
                 .unwrap(),
             );
+        let net = seed_network(&state).await;
 
         let unknown = validate_create(
             &CreateVmRequest {
                 storage_root: Some("nope".to_owned()),
-                ..create_request("x")
+                ..create_request_on("x", net)
             },
             &state,
         );
@@ -2524,7 +2540,7 @@ while True:
             Extension(RequestId(Uuid::new_v4())),
             ValidatedJson(CreateVmRequest {
                 storage_root: Some("disk-b".to_owned()),
-                ..create_request("on-b")
+                ..create_request_on("on-b", net)
             }),
         )
         .await
@@ -2538,7 +2554,7 @@ while True:
         let ok = validate_create(
             &CreateVmRequest {
                 storage_root: Some("disk-a".to_owned()),
-                ..create_request("ok")
+                ..create_request_on("ok", net)
             },
             &state,
         );
@@ -2552,7 +2568,7 @@ while True:
                 &CreateVmRequest {
                     disk_gb: need_gib as u16,
                     storage_root: Some("disk-a".to_owned()),
-                    ..create_request("huge")
+                    ..create_request_on("huge", net)
                 },
                 &state,
             );
@@ -2585,38 +2601,22 @@ while True:
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             ValidatedJson(CreateVmRequest {
-                micro_network_id: Some(network.id),
-                ..create_request("in-prod")
+                micro_network_id: network.id,
+                ..create_request_on("in-prod", network.id)
             }),
         )
         .await
         .expect("create vm");
 
-        assert_eq!(created.micro_network_id, Some(network.id));
+        assert_eq!(created.micro_network_id, network.id);
         assert_eq!(
             created
                 .ipv4
                 .as_deref()
                 .map(|ip| ip.starts_with("172.31.0.")),
             Some(true),
-            "lease must come from the MicroNetwork's subnet, not the default one: {:?}",
+            "lease must come from the MicroNetwork's subnet: {:?}",
             created.ipv4
-        );
-
-        // A VM with no MicroNetwork still lands on the default network.
-        let (_, Json(default_vm)) = create_vm(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            ValidatedJson(create_request("in-default")),
-        )
-        .await
-        .expect("create vm");
-        assert_eq!(default_vm.micro_network_id, None);
-        assert!(
-            default_vm
-                .ipv4
-                .as_deref()
-                .is_some_and(|ip| ip.starts_with("172.30.0."))
         );
     }
 
@@ -2624,13 +2624,14 @@ while True:
     async fn creating_a_vm_in_an_unknown_micro_network_is_rejected_without_a_record() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
+        let net = seed_network(&state).await;
 
         let error = create_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             ValidatedJson(CreateVmRequest {
-                micro_network_id: Some(Uuid::new_v4()),
-                ..create_request("orphan")
+                micro_network_id: Uuid::new_v4(),
+                ..create_request_on("orphan", net)
             }),
         )
         .await
@@ -2647,11 +2648,12 @@ while True:
     async fn create_vm_succeeds_and_allocates_a_lease() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
+        let net = seed_network(&state).await;
 
         let (status, Json(created)) = create_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            ValidatedJson(create_request("fresh-vm")),
+            ValidatedJson(create_request_on("fresh-vm", net)),
         )
         .await
         .unwrap();
@@ -2676,20 +2678,21 @@ while True:
     async fn create_vm_rolls_back_the_record_when_lease_allocation_fails() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
+        let net = seed_network(&state).await;
 
         // Exhaust the 253-address pool so the lease allocation inside
         // create_vm fails after the VM record has already been inserted.
         for _ in 0..253 {
             state
                 .store
-                .allocate_lease(Uuid::new_v4(), SubnetSpec::default_network())
+                .allocate_lease(Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
                 .unwrap();
         }
 
         let result = create_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            ValidatedJson(create_request("doomed-vm")),
+            ValidatedJson(create_request_on("doomed-vm", net)),
         )
         .await;
 

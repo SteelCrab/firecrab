@@ -140,10 +140,9 @@ pub enum NetworkRequest {
         micro_network_id: Uuid,
     },
     /// Idempotently (re)apply the owned nftables tables. `micro_networks`
-    /// is the full current set, so the helper can render one NAT/dispatch
-    /// rule per network and default-deny traffic routed between them; the
-    /// built-in default network is always included by the helper itself and
-    /// never listed here.
+    /// is the full current set (may be empty), so the helper can render one
+    /// NAT/dispatch rule per network and default-deny traffic routed between
+    /// them. There is no implicit default network outside this list.
     EnsureFirewall {
         /// Every MicroNetwork that currently exists.
         micro_networks: Vec<MicroNetworkSpec>,
@@ -152,9 +151,8 @@ pub enum NetworkRequest {
     CreateTap {
         /// The VM the TAP belongs to.
         vm_id: Uuid,
-        /// The MicroNetwork whose bridge to attach to, or `None` for the
-        /// built-in default network.
-        micro_network_id: Option<Uuid>,
+        /// The MicroNetwork whose bridge to attach to.
+        micro_network_id: Uuid,
     },
     /// Remove a VM's TAP device.
     DeleteTap {
@@ -190,8 +188,7 @@ pub enum NetworkRequest {
         /// Every currently-active lease.
         leases: Vec<DhcpLeaseEntry>,
         /// Every MicroNetwork that currently exists, so dnsmasq can serve
-        /// each one's bridge. As with [`NetworkRequest::EnsureFirewall`],
-        /// the default network is added by the helper itself.
+        /// each one's bridge. Empty means no Firecrab DHCP interfaces.
         micro_networks: Vec<MicroNetworkSpec>,
     },
 }
@@ -391,7 +388,7 @@ mod tests {
     fn requests_serialize_with_snake_case_operation_tags() {
         let json = serde_json::to_value(NetworkRequest::CreateTap {
             vm_id: Uuid::nil(),
-            micro_network_id: None,
+            micro_network_id: Uuid::nil(),
         })
         .unwrap();
         assert_eq!(json["operation"], "create_tap");

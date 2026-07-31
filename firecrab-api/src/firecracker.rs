@@ -670,7 +670,7 @@ mod tests {
             ram,
             disk_gb: 2,
             egress_policy: Default::default(),
-            micro_network_id: None,
+            micro_network_id: Uuid::from_u128(1),
             storage_root: "default".to_owned(),
             disk_generation: None,
             last_runtime_id: None,

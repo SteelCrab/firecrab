@@ -120,11 +120,9 @@ pub struct CreateVmRequest {
     /// that don't send this field are unaffected.
     #[serde(default)]
     pub egress_policy: EgressPolicy,
-    /// MicroNetwork to place this VM in; omitted (or null) puts it on the
-    /// built-in default network, which is what every client sent before
-    /// MicroNetworks existed.
-    #[serde(default)]
-    pub micro_network_id: Option<Uuid>,
+    /// MicroNetwork to place this VM in. Required — firecrab has no
+    /// implicit default subnet; create a MicroNetwork first.
+    pub micro_network_id: Uuid,
     /// Storage root id from `GET /api/storage` / `FIRECRAB_STORAGE_ROOTS`.
     /// Omitted (or null) uses the first registered root (the legacy
     /// `data/vms` layout when the env var is unset).
@@ -270,10 +268,9 @@ pub struct VmResponse {
     /// the times it spanned. Empty for a VM that has never been started, and
     /// kept after the start finishes so the timeline stays readable.
     pub startup_timeline: Vec<StartupStepRun>,
-    /// MicroNetwork this VM belongs to, or `None` for the built-in default
-    /// network. Fixed at creation — its lease comes out of that network's
-    /// subnet (`docs/30-tasks/task-micro-network.md`).
-    pub micro_network_id: Option<Uuid>,
+    /// MicroNetwork this VM belongs to. Fixed at creation — its lease comes
+    /// out of that network's subnet (`docs/30-tasks/task-micro-network.md`).
+    pub micro_network_id: Uuid,
     /// Storage root id this VM's disk lives under (`{root}/vms/{id}/`).
     /// Fixed at creation so a later config change cannot orphan the files.
     pub storage_root: String,
@@ -656,7 +653,7 @@ mod tests {
 
     #[test]
     fn create_vm_request_defaults_egress_policy_to_internet_when_absent() {
-        let json = r#"{"name":"vm","template":"ubuntu-rootfs-26.04","ram":512,"cpu":1,"diskGb":2}"#;
+        let json = r#"{"name":"vm","template":"ubuntu-rootfs-26.04","ram":512,"cpu":1,"diskGb":2,"microNetworkId":"00000000-0000-0000-0000-000000000001"}"#;
         let request: CreateVmRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.egress_policy, EgressPolicy::Internet);
     }
@@ -715,7 +712,7 @@ mod tests {
 
     #[test]
     fn create_vm_request_deserializes_camel_case_disk_gb() {
-        let json = r#"{"name":"test-vm","template":"ubuntu-26.04","ram":512,"cpu":1,"diskGb":4}"#;
+        let json = r#"{"name":"test-vm","template":"ubuntu-26.04","ram":512,"cpu":1,"diskGb":4,"microNetworkId":"00000000-0000-0000-0000-000000000001"}"#;
         let request: CreateVmRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.disk_gb, 4);
     }
@@ -764,7 +761,7 @@ mod tests {
             ipv4: Some("172.30.0.5".to_owned()),
             mac: Some("02:fc:00:00:00:05".to_owned()),
             hostname: "fc-abc123456789".to_owned(),
-            micro_network_id: None,
+            micro_network_id: Uuid::nil(),
             storage_root: "default".to_owned(),
         };
 
@@ -817,7 +814,7 @@ mod tests {
             ipv4: None,
             mac: None,
             hostname: "fc-abc123456789".to_owned(),
-            micro_network_id: None,
+            micro_network_id: Uuid::nil(),
             storage_root: "default".to_owned(),
         };
         let json = serde_json::to_string(&response).unwrap();

@@ -1,7 +1,7 @@
 //! IP address and MAC allocation management (IPAM): hands out unique
-//! IPv4/MAC leases from one network's subnet — the default 172.30.0.0/24 or
-//! a MicroNetwork's own (`docs/30-tasks/task-micro-network.md`) — backed by SQLite so
-//! allocation is atomic under concurrent VM creation.
+//! IPv4/MAC leases from a MicroNetwork's subnet
+//! (`docs/30-tasks/task-micro-network.md`) — backed by SQLite so allocation
+//! is atomic under concurrent VM creation.
 
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
@@ -26,8 +26,8 @@ pub const CREATE_LEASES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS network_le
 ) STRICT";
 
 /// Adds `micro_network_id` to a `network_leases` table created before
-/// MicroNetworks existed. NULL means the default network, which is exactly
-/// what every pre-existing lease was on, so no backfill is needed.
+/// MicroNetworks existed. Pre-existing rows are backfilled by
+/// [`crate::persistence::Store`] promotion to an explicit MicroNetwork.
 pub const ADD_LEASE_MICRO_NETWORK_COLUMN_SQL: &str =
     "ALTER TABLE network_leases ADD COLUMN micro_network_id TEXT";
 
@@ -42,24 +42,23 @@ pub const CREATE_LEASES_INDEXES_SQL: [&str; 3] = [
      ON network_leases(mac) WHERE released_at IS NULL",
 ];
 
-/// Subnet network address; mirrors the fixed `fcbr0` config in
-/// `firecrab-net-helper/src/bridge.rs`. `pub(crate)` so `handlers::network`
-/// can report it via `GET /api/network` without a second, drifting copy.
-pub(crate) const NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
-/// Subnet gateway address, reserved from allocation.
-pub(crate) const GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
-/// CIDR prefix length of the Firecrab VPC subnet.
-pub(crate) const PREFIX_LEN: u8 = 24;
+/// Legacy implicit-default CIDR used only when promoting old NULL
+/// `micro_network_id` rows to an explicit MicroNetwork on upgrade.
+pub(crate) const LEGACY_DEFAULT_NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
+/// Legacy gateway for the same promotion path.
+pub(crate) const LEGACY_DEFAULT_GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
+/// Legacy prefix for the same promotion path.
+pub(crate) const LEGACY_DEFAULT_PREFIX: u8 = 24;
 /// How many salted MAC candidates to try before giving up.
 const MAX_MAC_ATTEMPTS: u32 = 8;
 
-/// The subnet a lease is allocated from: the built-in default network, or a
-/// MicroNetwork's own. Addresses are derived from `network`/`prefix` rather
-/// than stored, the same way `firecrab-net-helper`'s bridge derives them.
+/// The subnet a lease is allocated from — always a real MicroNetwork.
+/// Addresses are derived from `network`/`prefix` rather than stored, the
+/// same way `firecrab-net-helper`'s bridge derives them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubnetSpec {
-    /// The MicroNetwork this subnet belongs to, or `None` for the default.
-    pub micro_network_id: Option<Uuid>,
+    /// The MicroNetwork this subnet belongs to.
+    pub micro_network_id: Uuid,
     /// Network (base) address.
     pub network: Ipv4Addr,
     /// CIDR prefix length.
@@ -67,15 +66,6 @@ pub struct SubnetSpec {
 }
 
 impl SubnetSpec {
-    /// The built-in default network (`fcbr0`'s 172.30.0.0/24).
-    pub fn default_network() -> Self {
-        Self {
-            micro_network_id: None,
-            network: NETWORK,
-            prefix: PREFIX_LEN,
-        }
-    }
-
     /// First host address, reserved as the gateway.
     pub fn gateway(&self) -> Ipv4Addr {
         Ipv4Addr::from(u32::from(self.network) + 1)
@@ -120,7 +110,7 @@ impl SubnetSpec {
     /// place subnet text is turned into numbers, so the API, the DHCP
     /// snapshot and the firewall ruleset can't drift apart on what a stored
     /// CIDR means.
-    pub fn parse(micro_network_id: Option<Uuid>, cidr: &str) -> Option<Self> {
+    pub fn parse(micro_network_id: Uuid, cidr: &str) -> Option<Self> {
         let (network, prefix) = cidr.split_once('/')?;
         let network: Ipv4Addr = network.parse().ok()?;
         let prefix: u8 = prefix.parse().ok()?;
@@ -131,18 +121,26 @@ impl SubnetSpec {
         })
     }
 
-    /// The privileged helper's view of this subnet, or `None` for the
-    /// default network (which the helper already knows about and never
-    /// receives over the wire). `internet_enabled` is the network's own
-    /// stored posture rather than anything derivable from the CIDR, so it is
-    /// passed in.
-    pub fn helper_spec(&self, internet_enabled: bool) -> Option<MicroNetworkSpec> {
-        Some(MicroNetworkSpec {
-            micro_network_id: self.micro_network_id?,
+    /// The privileged helper's view of this subnet. `internet_enabled` is
+    /// the network's own stored posture rather than anything derivable from
+    /// the CIDR, so it is passed in.
+    pub fn helper_spec(&self, internet_enabled: bool) -> MicroNetworkSpec {
+        MicroNetworkSpec {
+            micro_network_id: self.micro_network_id,
             gateway: self.gateway(),
             prefix: self.prefix,
             internet_enabled,
-        })
+        }
+    }
+
+    /// The historical `172.30.0.0/24` layout under an explicit MicroNetwork
+    /// id — used by upgrade promotion and unit tests that need a full /24.
+    pub fn legacy_default_subnet(micro_network_id: Uuid) -> Self {
+        Self {
+            micro_network_id,
+            network: LEGACY_DEFAULT_NETWORK,
+            prefix: LEGACY_DEFAULT_PREFIX,
+        }
     }
 }
 
@@ -222,7 +220,7 @@ pub fn allocate(tx: &Transaction<'_>, vm_id: Uuid, subnet: SubnetSpec) -> Result
             vm_id.to_string(),
             ipv4.to_string(),
             mac.to_string(),
-            subnet.micro_network_id.map(|id| id.to_string()),
+            subnet.micro_network_id.to_string(),
         ],
     )?;
     bump_lease_revision(tx)?;
@@ -412,7 +410,7 @@ mod tests {
 
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id, SubnetSpec::default_network()).unwrap();
+        allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
         tx.commit().unwrap();
         assert_eq!(current_revision(&conn).unwrap(), 1);
 
@@ -429,8 +427,8 @@ mod tests {
         let released = Uuid::new_v4();
 
         let tx = begin(&mut conn);
-        allocate(&tx, kept, SubnetSpec::default_network()).unwrap();
-        allocate(&tx, released, SubnetSpec::default_network()).unwrap();
+        allocate(&tx, kept, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
+        allocate(&tx, released, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
@@ -450,7 +448,7 @@ mod tests {
 
         for _ in 0..50 {
             let tx = begin(&mut conn);
-            let lease = allocate(&tx, Uuid::new_v4(), SubnetSpec::default_network()).unwrap();
+            let lease = allocate(&tx, Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
             tx.commit().unwrap();
             assert!(seen_ips.insert(lease.ipv4), "duplicate ip {}", lease.ipv4);
             assert!(seen_macs.insert(lease.mac), "duplicate mac {}", lease.mac);
@@ -462,11 +460,14 @@ mod tests {
         let mut conn = open();
         for _ in 0..253 {
             let tx = begin(&mut conn);
-            let lease = allocate(&tx, Uuid::new_v4(), SubnetSpec::default_network()).unwrap();
+            let lease = allocate(&tx, Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
             tx.commit().unwrap();
-            assert_ne!(lease.ipv4, NETWORK);
-            assert_ne!(lease.ipv4, GATEWAY);
-            assert_ne!(lease.ipv4, SubnetSpec::default_network().broadcast());
+            assert_ne!(lease.ipv4, LEGACY_DEFAULT_NETWORK);
+            assert_ne!(lease.ipv4, LEGACY_DEFAULT_GATEWAY);
+            assert_ne!(
+                lease.ipv4,
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)).broadcast()
+            );
         }
     }
 
@@ -475,7 +476,7 @@ mod tests {
         let mut conn = open();
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id, SubnetSpec::default_network()).unwrap();
+        allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
         tx.commit().unwrap();
 
         conn.execute(
@@ -495,13 +496,13 @@ mod tests {
         let mut conn = open();
         for _ in 0..253 {
             let tx = begin(&mut conn);
-            allocate(&tx, Uuid::new_v4(), SubnetSpec::default_network()).unwrap();
+            allocate(&tx, Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
             tx.commit().unwrap();
         }
 
         let tx = begin(&mut conn);
         assert!(matches!(
-            allocate(&tx, Uuid::new_v4(), SubnetSpec::default_network()),
+            allocate(&tx, Uuid::new_v4(), SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))),
             Err(IpamError::PoolExhausted { .. })
         ));
     }
@@ -511,12 +512,12 @@ mod tests {
         let mut conn = open();
         let vm_id = Uuid::new_v4();
         let tx = begin(&mut conn);
-        allocate(&tx, vm_id, SubnetSpec::default_network()).unwrap();
+        allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
         assert!(matches!(
-            allocate(&tx, vm_id, SubnetSpec::default_network()),
+            allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))),
             Err(IpamError::AlreadyLeased { vm_id: leased }) if leased == vm_id
         ));
     }
@@ -526,7 +527,7 @@ mod tests {
         let mut conn = open();
         let first_vm = Uuid::new_v4();
         let tx = begin(&mut conn);
-        let first_lease = allocate(&tx, first_vm, SubnetSpec::default_network()).unwrap();
+        let first_lease = allocate(&tx, first_vm, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
@@ -545,7 +546,7 @@ mod tests {
 
         let second_vm = Uuid::new_v4();
         let tx = begin(&mut conn);
-        let second_lease = allocate(&tx, second_vm, SubnetSpec::default_network()).unwrap();
+        let second_lease = allocate(&tx, second_vm, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
         tx.commit().unwrap();
         assert_eq!(second_lease.ipv4, first_lease.ipv4);
     }
@@ -582,7 +583,7 @@ mod tests {
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
-        let lease = allocate(&tx, vm_id, SubnetSpec::default_network()).unwrap();
+        let lease = allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))).unwrap();
         tx.commit().unwrap();
         assert_eq!(lease.mac, derive_mac(vm_id, 1));
     }
@@ -610,7 +611,7 @@ mod tests {
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
-        let result = allocate(&tx, vm_id, SubnetSpec::default_network());
+        let result = allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)));
         assert!(matches!(result, Err(IpamError::MacPoolExhausted)));
         drop(tx); // no commit: rolls back
 
