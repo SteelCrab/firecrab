@@ -10,7 +10,7 @@
 #        firecrab-doctor   (after install)
 #
 # See docs/30-tasks/task-host-doctor.md
-set -euo pipefail
+set -Eeuo pipefail
 
 DIGEST=0
 DATADIR=${DATADIR:-/var/lib/firecrab}
@@ -23,6 +23,25 @@ FAIL=0
 SKIP=0
 # Accumulated problem lines (FAIL/SKIP only) for a quiet pass summary.
 REPORT=()
+
+# The individual checks only *accumulate* into REPORT/OK/FAIL/SKIP; nothing
+# is printed until the very end (see "run" below), so a bug in any one check
+# that trips `set -euo pipefail` (an unquoted expansion, a pipeline member
+# failing, an unbound var) aborts the whole script with zero visible output
+# — a totally silent failure that gives no clue which check misbehaved. This
+# trap guarantees a diagnosable trace even for a crash the checks
+# themselves never anticipated.
+# shellcheck disable=SC2329 # invoked indirectly via the ERR trap below
+on_unexpected_error() {
+    local line=$1 command=$2
+    printf 'doctor: internal error at line %s: %s\n' "$line" "$command" >&2
+    printf '(this is a bug in firecrab-doctor.sh itself, not a host problem)\n' >&2
+    if [ "${#REPORT[@]}" -gt 0 ]; then
+        printf 'partial results before the crash:\n' >&2
+        printf '%s\n' "${REPORT[@]}" >&2
+    fi
+}
+trap 'on_unexpected_error "$LINENO" "$BASH_COMMAND"' ERR
 
 usage() {
     cat <<'USAGE'

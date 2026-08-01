@@ -326,16 +326,29 @@ jobs:
     steps:
       - name: Bootstrap the container
         # Enough to run a bash script and check out the repo; the installer
-        # takes it from there.
+        # takes it from there. Retries absorb transient mirror hiccups (seen
+        # on fresh fedora:latest containers: dnf's metalink/zchunk repodata
+        # fetch occasionally fails with a curl write error).
         run: |
+          retry() {
+            n=0
+            until [ "$n" -ge 5 ]; do
+              "$@" && return 0
+              n=$((n + 1))
+              echo "retrying ($n/5): $*" >&2
+              sleep 5
+            done
+            return 1
+          }
+
           if command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq bash ca-certificates curl git
+            retry apt-get update -qq && retry apt-get install -y -qq bash ca-certificates curl git
           elif command -v dnf >/dev/null; then
-            dnf install -y -q bash ca-certificates curl git
+            retry dnf install -y -q bash ca-certificates curl git
           elif command -v pacman >/dev/null; then
-            pacman -Sy --noconfirm --needed bash ca-certificates curl git
+            retry pacman -Sy --noconfirm --needed bash ca-certificates curl git
           elif command -v zypper >/dev/null; then
-            zypper -n install bash ca-certificates curl git
+            retry zypper -n install bash ca-certificates curl git
           fi
         shell: sh -e {0}
 
