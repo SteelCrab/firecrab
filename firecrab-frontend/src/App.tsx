@@ -11,7 +11,7 @@ import HostInfo from "./components/HostInfo";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import Shell from "./components/Shell";
-import { useHashView } from "./navigation";
+import { useAppRoute } from "./navigation";
 
 const POLL_MILLIS = 3_000;
 // After repeated failures assume the API is down and poll gently.
@@ -99,13 +99,10 @@ const initialState: Dashboard = {
 export default function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
   const refreshInFlight = useRef(false);
-  // (id, name) of the console currently attached, if any. Separate from
-  // `Dashboard` since it's local UI state, not server-synced data.
-  const [openConsole, setOpenConsole] = useState<{ id: string; name: string } | null>(null);
-  // id of the VM whose detail modal is open, if any — same local-UI-state
-  // reasoning as openConsole.
+  // id of the VM whose detail modal is open, if any — local UI state, not
+  // server-synced. The serial console is a full-page hash route instead.
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
-  const [view, onSelectView] = useHashView();
+  const { route, selectView, closeConsole } = useAppRoute();
 
   const runRefresh = useCallback(() => {
     if (refreshInFlight.current) return;
@@ -160,22 +157,20 @@ export default function App() {
   const onError = useCallback((message: string) => dispatch({ type: "error", message }), []);
   const dismiss = useCallback(() => dispatch({ type: "dismissBanner" }), []);
 
-  const onOpenConsole = useCallback(
-    (id: string) => {
-      const name = state.vms.find((vm) => vm.id === id)?.name ?? "";
-      setOpenConsole({ id, name });
-    },
-    [state.vms],
-  );
-  const onCloseConsole = useCallback(() => setOpenConsole(null), []);
-
   const onOpenDetail = useCallback((id: string) => setOpenDetailId(id), []);
   const onCloseDetail = useCallback(() => setOpenDetailId(null), []);
 
   const pollNote = slowMode ? "API 연결 안 됨 — 15s 간격 재시도" : `${POLL_MILLIS / 1000}s polling`;
 
+  // Terminal owns the whole viewport — no shell chrome, no modal clip box.
+  if (route.kind === "console") {
+    return <Console vmId={route.vmId} onClose={closeConsole} />;
+  }
+
+  const view = route.view;
+
   return (
-    <Shell view={view} onSelectView={onSelectView}>
+    <Shell view={view} onSelectView={selectView}>
       <div className="stack">
         {state.banner && <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} />}
         {view === "vms" && (
@@ -194,7 +189,6 @@ export default function App() {
                   vms={state.vms}
                   busy={state.busy}
                   onAction={onAction}
-                  onOpenConsole={onOpenConsole}
                   onOpenDetail={onOpenDetail}
                 />
               ) : (
@@ -215,7 +209,6 @@ export default function App() {
           </section>
         )}
       </div>
-      {openConsole && <Console vmId={openConsole.id} vmName={openConsole.name} onClose={onCloseConsole} />}
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
     </Shell>
   );
