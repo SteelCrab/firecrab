@@ -31,7 +31,10 @@ REPORT=()
 # — a totally silent failure that gives no clue which check misbehaved. This
 # trap guarantees a diagnosable trace even for a crash the checks
 # themselves never anticipated.
-# shellcheck disable=SC2329 # invoked indirectly via the ERR trap below
+# Invoked indirectly via the ERR trap below; shellcheck can't see that, and
+# different versions flag it differently (SC2329 on the signature, or
+# SC2317 "unreachable" on every line in the body) — disable both.
+# shellcheck disable=SC2329,SC2317
 on_unexpected_error() {
     local line=$1 command=$2
     printf 'doctor: internal error at line %s: %s\n' "$line" "$command" >&2
