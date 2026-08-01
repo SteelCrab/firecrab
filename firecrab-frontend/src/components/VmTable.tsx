@@ -18,33 +18,37 @@ export default function VmTable({ vms, busy, onAction, onOpenConsole, onOpenDeta
     return <div className="empty">VM이 없습니다 — 위에서 생성하세요</div>;
   }
 
+  // The table has more columns than a narrow shell can show; it scrolls
+  // inside its own box so the page itself never scrolls sideways.
   return (
-    <table className="vm-table">
-      <thead>
-        <tr>
-          <th>name</th>
-          <th>state</th>
-          <th>template</th>
-          <th>cpu</th>
-          <th>ram</th>
-          <th>disk</th>
-          <th>id</th>
-          <th className="actions">actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {vms.map((vm) => (
-          <Row
-            key={vm.id}
-            vm={vm}
-            busy={busy.has(vm.id)}
-            onAction={onAction}
-            onOpenConsole={onOpenConsole}
-            onOpenDetail={onOpenDetail}
-          />
-        ))}
-      </tbody>
-    </table>
+    <div className="table-scroll">
+      <table className="vm-table">
+        <thead>
+          <tr>
+            <th>name</th>
+            <th>state</th>
+            <th>template</th>
+            <th>cpu</th>
+            <th>ram</th>
+            <th>disk</th>
+            <th>id</th>
+            <th className="actions">actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {vms.map((vm) => (
+            <Row
+              key={vm.id}
+              vm={vm}
+              busy={busy.has(vm.id)}
+              onAction={onAction}
+              onOpenConsole={onOpenConsole}
+              onOpenDetail={onOpenDetail}
+            />
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

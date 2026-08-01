@@ -34,22 +34,106 @@ body {
   outline-offset: 2px;
 }
 
-.wrap {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 3rem 1.5rem 3rem;
-}
+/* 앱 셸 — 헤더 + 좌측 내비 + 콘텐츠 */
 
-.hero { position: relative; margin-bottom: 2.25rem; }
-.hero::before {
+.shell-header {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 2rem 1.5rem 1.25rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+.shell-header::before {
   content: "";
   position: absolute;
-  top: -4rem;
+  top: -8rem;
   left: -6rem;
   width: 22rem;
   height: 22rem;
   background: radial-gradient(circle, rgba(196, 62, 18, 0.09), transparent 70%);
   pointer-events: none;
+}
+.shell-brand { position: relative; }
+.shell-brand .eyebrow { margin-bottom: 0.4rem; }
+.shell-brand .wordmark { margin-bottom: 0; }
+.shell-actions { position: relative; display: flex; gap: 0.6rem; }
+
+/* 내비 폭은 여기서만 바꾼다 — 축소 단계마다 이 값 하나로 전환된다. */
+.shell-body {
+  display: grid;
+  grid-template-columns: 13.5rem minmax(0, 1fr);
+  align-items: start;
+}
+
+.shell-nav {
+  position: sticky;
+  top: 0;
+  padding: 1.5rem 0.75rem;
+  border-right: 1px solid var(--line);
+  background: var(--bg-panel);
+  min-height: calc(100vh - 8rem);
+}
+.shell-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
+
+.shell-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0.75rem;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 3px;
+  background: none;
+  color: var(--shell);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.shell-nav-item:hover { background: var(--bg); color: var(--ink); }
+.shell-nav-item.active {
+  border-left-color: var(--ember);
+  background: rgba(196, 62, 18, 0.08);
+  color: var(--ember);
+}
+.shell-nav-glyph { font-size: 0.9rem; line-height: 1; }
+
+.shell-content {
+  min-width: 0;
+  padding: 1.75rem 1.5rem 3rem;
+  max-width: 1080px;
+}
+
+/* 좁아지면 라벨을 접어 아이콘 레일로 */
+@media (max-width: 1000px) {
+  .shell-body { grid-template-columns: 3.5rem minmax(0, 1fr); }
+  .shell-nav { padding: 1.5rem 0.4rem; }
+  .shell-nav-item { justify-content: center; padding: 0.6rem 0.2rem; }
+  .shell-nav-label { display: none; }
+}
+
+/* 더 좁아지면 내비를 콘텐츠 위 가로 줄로 */
+@media (max-width: 700px) {
+  .shell-header { padding: 1.5rem 1rem 1rem; }
+  .shell-body { grid-template-columns: minmax(0, 1fr); }
+  .shell-nav {
+    position: static;
+    min-height: 0;
+    padding: 0.5rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .shell-nav ul { flex-direction: row; overflow-x: auto; }
+  .shell-nav-item { width: auto; border-left: 0; border-bottom: 2px solid transparent; }
+  .shell-nav-item.active { border-left: 0; border-bottom-color: var(--ember); }
+  .shell-nav-label { display: inline; }
+  .shell-content { padding: 1.25rem 1rem 2.5rem; }
 }
 
 .eyebrow {
@@ -138,8 +222,14 @@ form.create-grid {
   gap: 0.9rem;
   align-items: end;
 }
-@media (max-width: 760px) {
+/* 내비가 레일로 줄어드는 폭과 같은 지점에서 접는다 — 5열을 유지하면 폼의
+   최소 너비가 콘텐츠 영역을 넘어 페이지 전체가 가로로 스크롤된다. */
+@media (max-width: 1000px) {
   form.create-grid { grid-template-columns: 1fr 1fr; }
+}
+/* 폰 폭에서는 2열도 입력 최소 너비를 넘는다 */
+@media (max-width: 560px) {
+  form.create-grid { grid-template-columns: 1fr; }
 }
 
 .field { display: flex; flex-direction: column; gap: 0.35rem; }
@@ -235,6 +325,9 @@ form.create-grid {
 .btn.primary:hover:not(:disabled) { background: var(--ember-fill-hover); }
 .btn.danger { color: var(--error); }
 .btn.danger:hover:not(:disabled) { border-color: var(--error); }
+
+/* 좁은 셸에서 표만 가로로 스크롤되고 페이지는 그대로 */
+.table-scroll { overflow-x: auto; }
 
 table.vm-table {
   width: 100%;

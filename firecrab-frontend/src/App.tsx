@@ -10,6 +10,9 @@ import VmDetailModal from "./components/VmDetailModal";
 import HostInfoModal from "./components/HostInfoModal";
 import MicroNetworksModal from "./components/MicroNetworksModal";
 import MicroStoragesModal from "./components/MicroStoragesModal";
+import Shell from "./components/Shell";
+import { VIEWS, useHashView } from "./navigation";
+import type { ViewId } from "./navigation";
 
 const POLL_MILLIS = 3_000;
 // After repeated failures assume the API is down and poll gently.
@@ -106,6 +109,7 @@ export default function App() {
   const [showHostInfo, setShowHostInfo] = useState(false);
   const [showMicroNetworks, setShowMicroNetworks] = useState(false);
   const [showMicroStorages, setShowMicroStorages] = useState(false);
+  const [view, onSelectView] = useHashView();
 
   const runRefresh = useCallback(() => {
     if (refreshInFlight.current) return;
@@ -174,54 +178,77 @@ export default function App() {
 
   const pollNote = slowMode ? "API 연결 안 됨 — 15s 간격 재시도" : `${POLL_MILLIS / 1000}s polling`;
 
+  const headerActions = (
+    <>
+      <button className="btn" onClick={() => setShowMicroNetworks(true)}>
+        MicroNetwork
+      </button>
+      <button className="btn" onClick={() => setShowMicroStorages(true)}>
+        MicroStorage
+      </button>
+      <button className="btn" onClick={() => setShowHostInfo(true)}>
+        HOST 정보
+      </button>
+    </>
+  );
+
   return (
-    <div className="wrap">
-      <header className="hero">
-        <p className="eyebrow">private microvm cloud</p>
-        <h1 className="wordmark">
-          firecrab
-          <span className="cursor">_</span>
-        </h1>
-        <button className="btn" onClick={() => setShowMicroNetworks(true)}>
-          MicroNetwork
-        </button>
-        <button className="btn" onClick={() => setShowMicroStorages(true)}>
-          MicroStorage
-        </button>
-        <button className="btn" onClick={() => setShowHostInfo(true)}>
-          HOST 정보
-        </button>
-      </header>
+    <Shell view={view} onSelectView={onSelectView} actions={headerActions}>
       <div className="stack">
         {state.banner && <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} />}
-        <section className="panel">
-          <h2 className="panel-title">NEW MICROVM</h2>
-          <CreateVm onCreated={onCreated} onError={onError} />
-        </section>
-        <section className="panel">
-          <h2 className="panel-title">
-            <span>{`MicroVM list (${state.vms.length})`}</span>
-            <span className="poll-note">{pollNote}</span>
-          </h2>
-          {state.loaded ? (
-            <VmTable
-              vms={state.vms}
-              busy={state.busy}
-              onAction={onAction}
-              onOpenConsole={onOpenConsole}
-              onOpenDetail={onOpenDetail}
-            />
-          ) : (
-            <div className="empty">불러오는 중…</div>
-          )}
-        </section>
+        {view === "vms" ? (
+          <>
+            <section className="panel">
+              <h2 className="panel-title">NEW MICROVM</h2>
+              <CreateVm onCreated={onCreated} onError={onError} />
+            </section>
+            <section className="panel">
+              <h2 className="panel-title">
+                <span>{`MicroVM list (${state.vms.length})`}</span>
+                <span className="poll-note">{pollNote}</span>
+              </h2>
+              {state.loaded ? (
+                <VmTable
+                  vms={state.vms}
+                  busy={state.busy}
+                  onAction={onAction}
+                  onOpenConsole={onOpenConsole}
+                  onOpenDetail={onOpenDetail}
+                />
+              ) : (
+                <div className="empty">불러오는 중…</div>
+              )}
+            </section>
+          </>
+        ) : (
+          <Placeholder view={view} />
+        )}
       </div>
       {openConsole && <Console vmId={openConsole.id} vmName={openConsole.name} onClose={onCloseConsole} />}
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
       {showHostInfo && <HostInfoModal onClose={() => setShowHostInfo(false)} />}
       {showMicroNetworks && <MicroNetworksModal onClose={() => setShowMicroNetworks(false)} />}
       {showMicroStorages && <MicroStoragesModal onClose={() => setShowMicroStorages(false)} />}
-    </div>
+    </Shell>
+  );
+}
+
+/**
+ * The four destinations whose pages are still modals. Named rather than
+ * blank so the nav has no dead end, and so it's obvious which screen is
+ * missing while the promotion work lands.
+ */
+function Placeholder({ view }: { view: ViewId }) {
+  const label = VIEWS.find((item) => item.id === view)?.label ?? view;
+  return (
+    <section className="panel">
+      <h2 className="panel-title">{label}</h2>
+      <div className="empty">
+        {view === "images"
+          ? "아직 화면이 없습니다 — 2주 이미지 작업에서 만듭니다."
+          : "아직 페이지가 아닙니다 — 위 헤더 버튼으로 여세요."}
+      </div>
+    </section>
   );
 }
 
