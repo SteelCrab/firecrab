@@ -696,7 +696,7 @@ table.vm-table {
   height: 100%;
 }
 
-/* Bottom VM metadata as a horizontal table (scrolls when the window is narrow). */
+/* Bottom VM metadata — four field groups instead of one wide row. */
 .console-detail {
   flex: 0 0 auto;
   background: var(--bg-panel);
@@ -720,37 +720,60 @@ table.vm-table {
   text-transform: uppercase;
   color: var(--shell);
 }
-.console-detail-scroll {
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+.console-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem 1rem;
+  align-items: start;
 }
-.console-detail-table {
-  width: 100%;
-  border-collapse: collapse;
+@media (max-width: 960px) {
+  .console-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .console-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.console-detail-group {
+  min-width: 0;
+  padding: 0.4rem 0.55rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.console-detail-group-title {
+  margin: 0 0 0.35rem;
   font-family: var(--font-mono);
-  font-size: 0.74rem;
-  white-space: nowrap;
-}
-.console-detail-table th,
-.console-detail-table td {
-  padding: 0.35rem 0.65rem;
-  text-align: left;
-  border-bottom: 1px solid var(--line);
-  vertical-align: middle;
-}
-.console-detail-table th {
   font-size: 0.65rem;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--shell);
-  background: var(--bg);
-  border-bottom: 1px solid var(--line);
 }
-.console-detail-table tbody tr:last-child td {
-  border-bottom: 0;
+.console-detail-fields {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.2rem 0.65rem;
+  margin: 0;
+  font-size: 0.74rem;
+  align-items: baseline;
 }
-.console-detail-table td.mono,
+.console-detail-fields dt {
+  color: var(--shell);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+.console-detail-fields dd {
+  margin: 0;
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .console-detail .mono {
   font-family: var(--font-mono);
 }

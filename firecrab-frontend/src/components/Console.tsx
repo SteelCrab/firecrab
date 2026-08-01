@@ -544,45 +544,51 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
           {vmError && !vm ? (
             <p className="console-detail-error">{vmError}</p>
           ) : vm ? (
-            <div className="console-detail-scroll">
-              <table className="console-detail-table">
-                <thead>
-                  <tr>
-                    <th>name</th>
-                    <th>id</th>
-                    <th>template</th>
-                    <th>cpu</th>
-                    <th>ram</th>
-                    <th>disk</th>
-                    <th>hostname</th>
-                    <th>ipv4</th>
-                    <th>mac</th>
-                    <th>egress</th>
-                    <th>network</th>
-                    <th>storage</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>{vm.name}</td>
-                    <td className="mono" title={vm.id}>
-                      {vm.id}
-                    </td>
-                    <td className="mono">{vm.templateVersion}</td>
-                    <td className="mono">{vm.cpu}</td>
-                    <td className="mono">{vm.ram} MiB</td>
-                    <td className="mono">{vm.diskGb} GiB</td>
-                    <td className="mono">{vm.hostname}</td>
-                    <td className="mono">{vm.ipv4 ?? "—"}</td>
-                    <td className="mono">{vm.mac ?? "—"}</td>
-                    <td>{EGRESS_LABEL[vm.egressPolicy] ?? vm.egressPolicy}</td>
-                    <td className="mono" title={vm.microNetworkId}>
-                      {vm.microNetworkId}
-                    </td>
-                    <td className="mono">{vm.storageRoot || "default"}</td>
-                  </tr>
-                </tbody>
-              </table>
+            <div className="console-detail-grid">
+              <section className="console-detail-group" aria-label="기본">
+                <h3 className="console-detail-group-title">기본</h3>
+                <dl className="console-detail-fields mono">
+                  <dt>name</dt>
+                  <dd>{vm.name}</dd>
+                  <dt>id</dt>
+                  <dd title={vm.id}>{vm.id}</dd>
+                  <dt>template</dt>
+                  <dd>{vm.templateVersion}</dd>
+                  <dt>hostname</dt>
+                  <dd>{vm.hostname}</dd>
+                </dl>
+              </section>
+              <section className="console-detail-group" aria-label="스펙">
+                <h3 className="console-detail-group-title">스펙</h3>
+                <dl className="console-detail-fields mono">
+                  <dt>cpu</dt>
+                  <dd>{vm.cpu}</dd>
+                  <dt>ram</dt>
+                  <dd>{vm.ram} MiB</dd>
+                  <dt>disk</dt>
+                  <dd>{vm.diskGb} GiB</dd>
+                </dl>
+              </section>
+              <section className="console-detail-group" aria-label="네트워크">
+                <h3 className="console-detail-group-title">네트워크</h3>
+                <dl className="console-detail-fields mono">
+                  <dt>ipv4</dt>
+                  <dd>{vm.ipv4 ?? "—"}</dd>
+                  <dt>mac</dt>
+                  <dd>{vm.mac ?? "—"}</dd>
+                  <dt>egress</dt>
+                  <dd>{EGRESS_LABEL[vm.egressPolicy] ?? vm.egressPolicy}</dd>
+                  <dt>network</dt>
+                  <dd title={vm.microNetworkId}>{vm.microNetworkId}</dd>
+                </dl>
+              </section>
+              <section className="console-detail-group" aria-label="스토리지">
+                <h3 className="console-detail-group-title">스토리지</h3>
+                <dl className="console-detail-fields mono">
+                  <dt>storage</dt>
+                  <dd>{vm.storageRoot || "default"}</dd>
+                </dl>
+              </section>
             </div>
           ) : (
             <p className="console-detail-loading">불러오는 중…</p>
