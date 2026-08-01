@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 
 /**
- * The console's five destinations. Only `vms` has a page today; the rest are
- * promoted from their modals in the next task
- * (`docs/30-tasks/weeks/mvp-3week-submit-2026-08-27.md`, 1주 "좌측 메뉴 · 화면 전환").
- * The glyph is what the nav shows once it collapses to a rail.
+ * The console's five destinations. All but `images` have a page today; that
+ * one is a placeholder until the image catalog lands. The glyph is what the
+ * nav shows once it collapses to a rail.
  *
  * Kept out of `components/Shell.tsx` so that file exports only its component
  * — mixing constants and hooks in there breaks Vite's fast refresh.
