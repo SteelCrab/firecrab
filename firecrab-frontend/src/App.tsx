@@ -8,6 +8,7 @@ import VmTable from "./components/VmTable";
 import Console from "./components/Console";
 import VmDetailModal from "./components/VmDetailModal";
 import HostInfo from "./components/HostInfo";
+import Images from "./components/Images";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import Shell from "./components/Shell";
@@ -213,12 +214,7 @@ export default function App() {
         {view === "networks" && <MicroNetworks />}
         {view === "storages" && <MicroStorages />}
         {view === "host" && <HostInfo />}
-        {view === "images" && (
-          <section className="panel">
-            <h2 className="panel-title">이미지</h2>
-            <div className="empty">아직 화면이 없습니다 — 2주 이미지 작업에서 만듭니다.</div>
-          </section>
-        )}
+        {view === "images" && <Images />}
       </div>
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
     </Shell>

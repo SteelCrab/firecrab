@@ -154,6 +154,36 @@ impl AppError {
         Self::new(StatusCode::CONFLICT, "in_use", message, request_id)
     }
 
+    /// `409 in_use` with extra detail (e.g. which VMs still reference a template).
+    pub fn in_use_with_fields(
+        message: &'static str,
+        fields: BTreeMap<String, String>,
+        request_id: Uuid,
+    ) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "in_use",
+            message,
+            fields,
+            request_id,
+        }
+    }
+
+    /// `409` with a custom machine-readable code (install already running, …).
+    pub fn conflict(code: &'static str, message: &'static str, request_id: Uuid) -> Self {
+        Self::new(StatusCode::CONFLICT, code, message, request_id)
+    }
+
+    /// `503`: a required runtime dependency is missing (e.g. image base URL).
+    pub fn unavailable(message: &'static str, request_id: Uuid) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            message,
+            request_id,
+        )
+    }
+
     /// `409`: the VM's current state doesn't allow the requested operation.
     pub fn invalid_state(current: VmState, request_id: Uuid) -> Self {
         let mut fields = BTreeMap::new();

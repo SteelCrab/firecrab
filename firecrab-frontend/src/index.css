@@ -519,6 +519,18 @@ table.vm-table {
 }
 .pipeline-step.pending .step-bar { opacity: 0.45; }
 
+.image-install-log {
+  max-height: 28vh;
+  min-height: 8rem;
+}
+
+table.image-table tbody tr {
+  cursor: pointer;
+}
+table.image-table tbody tr.is-selected td {
+  background: rgba(196, 62, 18, 0.06);
+}
+
 /* Copy / download controls shared by detail modal + console toolbar. */
 .log-export-actions {
   display: inline-flex;

@@ -7,6 +7,8 @@ export type ImageResponse = {
   rootfsSha256: string;
   initrdSha256?: string;
   minDiskGb: number;
+  /** On-disk rootfs length in bytes (0 / omitted when not installed). */
+  rootfsSizeBytes?: number;
   installed: boolean;
   description: string;
 };

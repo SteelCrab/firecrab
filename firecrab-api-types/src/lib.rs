@@ -581,23 +581,57 @@ pub struct HostStatusResponse {
 pub struct ImageResponse {
     /// Stable user-facing alias (`ubuntu-26.04`, …) accepted by create.
     pub alias: String,
-    /// Pinned version tag the alias currently resolves to.
+    /// Pinned version tag the alias currently resolves to (or will after install).
     pub version: String,
-    /// SHA256 of the kernel artifact (hex).
+    /// SHA256 of the kernel artifact (hex). Empty when not installed yet.
     pub kernel_sha256: String,
-    /// SHA256 of the rootfs artifact (hex).
+    /// SHA256 of the rootfs artifact (hex). Empty when not installed yet.
     pub rootfs_sha256: String,
     /// SHA256 of the initrd, when this template needs one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initrd_sha256: Option<String>,
-    /// Smallest disk size (GiB) that can hold this template's rootfs.
+    /// Smallest disk size (GiB) that can hold this template's rootfs (0 if unknown).
     pub min_disk_gb: u16,
+    /// On-disk rootfs image length in bytes (0 when not installed / unknown).
+    /// This is the real artifact size, not the ceiled `min_disk_gb` floor.
+    #[serde(default)]
+    pub rootfs_size_bytes: u64,
     /// Whether the artifacts are present and verified on this host.
-    /// Always `true` for rows returned today (missing templates are skipped
-    /// at registry load); kept so the install API can list uninstalled rows later.
     pub installed: bool,
     /// Short operator-facing note (may be empty).
     pub description: String,
+}
+
+/// Lifecycle of an image install job (`POST/GET /api/images/{alias}/install`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ImageInstallStatus {
+    /// No install has been requested for this alias in this process.
+    Idle,
+    /// Download / verify / register is in progress.
+    Running,
+    /// Template is registered and available for create.
+    Succeeded,
+    /// Last attempt failed; see `log` for details. Can retry.
+    Failed,
+}
+
+/// Status + log for `GET /api/images/{alias}/install` (and the POST response).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageInstallResponse {
+    /// Template alias this job targets.
+    pub alias: String,
+    /// Current job status.
+    pub status: ImageInstallStatus,
+    /// Multi-line progress log (download · verify · register steps).
+    pub log: String,
+    /// Epoch millis when the current/last attempt started, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    /// Epoch millis when the attempt finished, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
 }
 
 /// The VM's captured serial console output (see
@@ -857,12 +891,14 @@ mod tests {
             rootfs_sha256: "r".repeat(64),
             initrd_sha256: None,
             min_disk_gb: 2,
+            rootfs_size_bytes: 2 * 1024 * 1024 * 1024u64,
             installed: true,
             description: String::new(),
         };
         let json = serde_json::to_value(&image).unwrap();
         assert_eq!(json["alias"], "ubuntu-26.04");
         assert_eq!(json["minDiskGb"], 2);
+        assert_eq!(json["rootfsSizeBytes"], 2 * 1024 * 1024 * 1024u64);
         assert_eq!(json["kernelSha256"], "k".repeat(64));
         assert_eq!(json["installed"], true);
         assert!(json.get("initrdSha256").is_none());

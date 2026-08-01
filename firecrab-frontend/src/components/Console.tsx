@@ -582,8 +582,8 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                   <dd>{vm.name}</dd>
                   <dt>id</dt>
                   <dd title={vm.id}>{vm.id}</dd>
-                  <dt>template</dt>
-                  <dd>{vm.templateVersion}</dd>
+                  <dt>image</dt>
+                  <dd>{vm.template}</dd>
                   <dt>hostname</dt>
                   <dd>{vm.hostname}</dd>
                 </dl>

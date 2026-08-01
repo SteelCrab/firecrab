@@ -46,9 +46,33 @@ function storageLabel(root: StorageRootResponse): string {
   return `${label} (${root.path})${free}`;
 }
 
+/** Actual rootfs image size (same basis as the images page "disk" column). */
+function formatRootfsSize(bytes: number | undefined | null): string {
+  const n = typeof bytes === "number" ? bytes : Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  const gib = n / 1024 ** 3;
+  if (gib >= 1) {
+    const rounded = gib >= 10 || Number.isInteger(gib) ? gib.toFixed(0) : gib.toFixed(2);
+    return `${rounded} GiB`;
+  }
+  const mib = n / 1024 ** 2;
+  const rounded = mib >= 10 || Number.isInteger(mib) ? mib.toFixed(0) : mib.toFixed(1);
+  return `${rounded} MiB`;
+}
+
+/** VM disk floor in whole GiB, derived only from image disk bytes. */
+function diskFloorGb(image: ImageResponse): number {
+  const bytes = image.rootfsSizeBytes;
+  if (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0) {
+    return Math.max(1, Math.ceil(bytes / 1024 ** 3));
+  }
+  // Fallback if an older API omits rootfsSizeBytes.
+  return image.minDiskGb > 0 ? image.minDiskGb : 2;
+}
+
 function templateLabel(image: ImageResponse): string {
-  const floor = image.minDiskGb > 0 ? ` · min ${image.minDiskGb} GiB` : "";
-  return `${image.alias} (${image.version})${floor}`;
+  const size = formatRootfsSize(image.rootfsSizeBytes);
+  return size ? `${image.alias} · ${size}` : image.alias;
 }
 
 export default function CreateVm({ onCreated, onError }: CreateVmProps) {
@@ -85,8 +109,8 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           }
           return installed[0]?.alias ?? "";
         });
-        if (installed[0] && Number(diskGb) < installed[0].minDiskGb) {
-          setDiskGb(String(installed[0].minDiskGb));
+        if (installed[0] && Number(diskGb) < diskFloorGb(installed[0])) {
+          setDiskGb(String(diskFloorGb(installed[0])));
         }
       })
       .catch((error) => {
@@ -133,7 +157,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     () => images.find((image) => image.alias === template) ?? null,
     [images, template],
   );
-  const minDiskGb = selectedImage?.minDiskGb ?? 2;
+  const minDiskGb = selectedImage ? diskFloorGb(selectedImage) : 2;
   const noTemplates = !imagesLoading && images.length === 0;
   const canSubmit =
     !submitting && !imagesLoading && !noTemplates && Boolean(template) && !imagesError;
@@ -141,8 +165,9 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const onTemplateChange = (alias: string) => {
     setTemplate(alias);
     const image = images.find((entry) => entry.alias === alias);
-    if (image && Number(diskGb) < image.minDiskGb) {
-      setDiskGb(String(image.minDiskGb));
+    if (image) {
+      const floor = diskFloorGb(image);
+      if (Number(diskGb) < floor) setDiskGb(String(floor));
     }
   };
 
@@ -182,10 +207,10 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     <span className="field-error">{fieldErrors?.fieldError(field) ?? ""}</span>
   );
 
-  const templateHint = imagesLoading
-    ? "템플릿 불러오는 중…"
+  const imageHint = imagesLoading
+    ? "이미지 불러오는 중…"
     : imagesError
-      ? "템플릿 목록을 불러오지 못했습니다"
+      ? "이미지 목록을 불러오지 못했습니다"
       : noTemplates
         ? "설치된 이미지가 없습니다 (install.sh 또는 이미지 설치 필요)"
         : null;
@@ -206,15 +231,15 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         {fieldError("name")}
       </div>
       <div className="field">
-        <label htmlFor="vm-template">template</label>
+        <label htmlFor="vm-image">image</label>
         <select
-          id="vm-template"
+          id="vm-image"
           value={template}
           onChange={(event) => onTemplateChange(event.target.value)}
           disabled={imagesLoading || noTemplates || Boolean(imagesError)}
         >
-          {templateHint ? (
-            <option value="">{templateHint}</option>
+          {imageHint ? (
+            <option value="">{imageHint}</option>
           ) : (
             images.map((image) => (
               <option key={image.alias} value={image.alias}>

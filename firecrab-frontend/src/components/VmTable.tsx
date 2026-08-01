@@ -26,7 +26,7 @@ export default function VmTable({ vms, busy, onAction, onOpenDetail }: VmTablePr
           <tr>
             <th>name</th>
             <th>state</th>
-            <th>template</th>
+            <th>image</th>
             <th>cpu</th>
             <th>ram</th>
             <th>disk</th>
@@ -70,7 +70,7 @@ function Row({ vm, busy, onAction, onOpenDetail }: RowProps) {
       <td>
         <span className={`state-badge ${vm.state}`}>{vm.state}</span>
       </td>
-      <td className="mono">{vm.templateVersion}</td>
+      <td className="mono">{vm.template}</td>
       <td className="mono">{vm.cpu}</td>
       <td className="mono">{vm.ram} MiB</td>
       <td className="mono">{vm.diskGb} GiB</td>

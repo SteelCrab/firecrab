@@ -6,6 +6,7 @@ import type {
   CreateVmRequest,
   ErrorResponse,
   HostStatusResponse,
+  ImageInstallResponse,
   ImageResponse,
   MicroNetworkDetailResponse,
   MicroNetworkResponse,
@@ -59,6 +60,12 @@ async function fail(response: Response): Promise<ApiClientError> {
     const body = (await response.json()) as ErrorResponse;
     return ApiClientError.api(response.status, body.error);
   } catch {
+    // Vite returns empty 502/503 when firecrab-api is down or restarting.
+    if (response.status === 502 || response.status === 503 || response.status === 504) {
+      return ApiClientError.transport(
+        `API 서버에 연결할 수 없습니다 (HTTP ${response.status}). firecrab-api가 실행 중인지 확인하세요.`,
+      );
+    }
     return ApiClientError.transport(`unexpected response (HTTP ${response.status})`);
   }
 }
@@ -123,6 +130,31 @@ export function getHostStatus(): Promise<HostStatusResponse> {
 /** Template registry aliases available for create (`GET /api/images`). */
 export function listImages(): Promise<ImageResponse[]> {
   return fetchJson("/api/images");
+}
+
+/** Start async template install (`POST /api/images/{alias}/install`). */
+export function startImageInstall(alias: string): Promise<ImageInstallResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`, {
+    method: "POST",
+  });
+}
+
+/** Poll install job status + log (`GET /api/images/{alias}/install`). */
+export function getImageInstall(alias: string): Promise<ImageInstallResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`);
+}
+
+/** Unregister template and delete orphan artifact files (`DELETE /api/images/{alias}`). */
+export async function deleteImage(alias: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/images/${encodeURIComponent(alias)}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
 }
 
 export function listStorageRoots(): Promise<StorageRootResponse[]> {

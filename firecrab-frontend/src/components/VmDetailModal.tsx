@@ -220,8 +220,8 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
         {vm ? (
           <div className="detail-body">
             <dl className="detail-fields mono">
-              <dt>template</dt>
-              <dd>{vm.templateVersion}</dd>
+              <dt>image</dt>
+              <dd>{vm.template}</dd>
               <dt>cpu</dt>
               <dd>
                 {editing ? (
