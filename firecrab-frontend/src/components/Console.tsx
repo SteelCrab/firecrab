@@ -152,22 +152,38 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   }, []);
 
   /**
-   * Fit after layout paints. Single rAF is not enough when the browser
-   * or the flex surface changes size — the container still reports the old
-   * box for one frame, and FitAddon keeps a too-large canvas that then clips
-   * under `overflow: hidden`.
+   * Fit only when the surface has a real box. Calling FitAddon.fit() with a
+   * 0×0 container (first paint / StrictMode remount) sets cols/rows to 0 and
+   * the terminal draws nothing until a later successful fit.
    */
-  const scheduleFit = useCallback(() => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        try {
-          fitRef.current?.fit();
-        } catch {
-          /* unmounted mid-fit */
-        }
-      });
-    });
+  const doFit = useCallback(() => {
+    const fit = fitRef.current;
+    const term = termRef.current;
+    const el = containerRef.current;
+    if (!fit || !term || !el) return false;
+    if (el.clientWidth < 16 || el.clientHeight < 16) return false;
+    try {
+      const proposed = fit.proposeDimensions();
+      if (!proposed || proposed.cols < 2 || proposed.rows < 2) return false;
+      fit.fit();
+      return term.cols >= 2 && term.rows >= 2;
+    } catch {
+      return false;
+    }
   }, []);
+
+  /** Fit after layout paints; retry a few times if the box is still empty. */
+  const scheduleFit = useCallback(() => {
+    let tries = 0;
+    const tick = () => {
+      if (doFit()) return;
+      tries += 1;
+      if (tries < 20) {
+        requestAnimationFrame(tick);
+      }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(tick));
+  }, [doFit]);
 
   // Poll VM metadata for the bottom detail panel + document title.
   useEffect(() => {
@@ -192,10 +208,15 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     };
   }, [vmId]);
 
-  // Terminal lifecycle: create once per mount; prefs applied live below.
+  // Terminal + WebSocket share one effect so StrictMode remount never leaves
+  // a live socket writing into a disposed Terminal (blank screen).
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    let disposed = false;
+    intentionalCloseRef.current = false;
+    reconnectAttemptRef.current = 0;
 
     const initial = initialPrefsRef.current;
     const term = new Terminal({
@@ -205,6 +226,9 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       theme: THEMES[initial.themeId].theme,
       scrollback: 5000,
       cursorBlink: true,
+      // Avoid 0×0 first paint — FitAddon replaces these once the box is ready.
+      cols: 80,
+      rows: 24,
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
@@ -224,15 +248,18 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       }
     });
 
-    const ro = new ResizeObserver(() => scheduleFit());
+    const ro = new ResizeObserver(() => {
+      if (!disposed) scheduleFit();
+    });
     ro.observe(container);
     const page = pageRef.current;
     if (page) ro.observe(page);
 
-    const onWinResize = () => scheduleFit();
+    const onWinResize = () => {
+      if (!disposed) scheduleFit();
+    };
     window.addEventListener("resize", onWinResize);
 
-    // Escape leaves terminal-only mode so chrome is recoverable without a mouse.
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.ctrlKey || event.metaKey || event.altKey) return;
       if (!terminalOnlyRef.current) return;
@@ -241,16 +268,104 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     };
     window.addEventListener("keydown", onKey);
 
+    const connect = (isRetry: boolean) => {
+      if (disposed || intentionalCloseRef.current) return;
+
+      const prev = socketRef.current;
+      if (prev) {
+        socketRef.current = null;
+        prev.onopen = null;
+        prev.onmessage = null;
+        prev.onerror = null;
+        prev.onclose = null;
+        try {
+          prev.close();
+        } catch {
+          /* ignore */
+        }
+      }
+
+      setStatus(isRetry ? "reconnecting" : "connecting");
+
+      const socket = new WebSocket(consoleWsUrl(vmId));
+      socket.binaryType = "arraybuffer";
+      socketRef.current = socket;
+
+      socket.onopen = () => {
+        if (disposed || socketRef.current !== socket) return;
+        reconnectAttemptRef.current = 0;
+        setStatus("connected");
+        scheduleFit();
+        term.focus();
+      };
+
+      socket.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
+        if (disposed || socketRef.current !== socket) return;
+        const live = termRef.current;
+        if (!live) return;
+        live.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
+      };
+
+      socket.onerror = () => {
+        if (disposed || socketRef.current !== socket) return;
+        if (socket.readyState !== WebSocket.OPEN && reconnectAttemptRef.current === 0) {
+          setStatus("failed");
+        }
+      };
+
+      socket.onclose = () => {
+        if (socketRef.current === socket) {
+          socketRef.current = null;
+        }
+        if (disposed || intentionalCloseRef.current) return;
+        setStatus("disconnected");
+        scheduleReconnect();
+      };
+    };
+
+    const scheduleReconnect = () => {
+      if (disposed || intentionalCloseRef.current) return;
+      clearReconnectTimer();
+      const attempt = reconnectAttemptRef.current;
+      const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
+      reconnectAttemptRef.current = attempt + 1;
+      setStatus("reconnecting");
+      reconnectTimerRef.current = setTimeout(() => connect(true), delay);
+    };
+
+    // Defer the first WS connect one frame so the terminal has painted and
+    // fit() can run before the backlog snapshot arrives.
+    const bootTimer = window.setTimeout(() => {
+      if (!disposed) connect(false);
+    }, 0);
+
     return () => {
+      disposed = true;
+      intentionalCloseRef.current = true;
+      window.clearTimeout(bootTimer);
+      clearReconnectTimer();
       dataListener.dispose();
       ro.disconnect();
       window.removeEventListener("resize", onWinResize);
       window.removeEventListener("keydown", onKey);
+      const socket = socketRef.current;
+      if (socket) {
+        socketRef.current = null;
+        socket.onopen = null;
+        socket.onmessage = null;
+        socket.onerror = null;
+        socket.onclose = null;
+        try {
+          socket.close();
+        } catch {
+          /* ignore */
+        }
+      }
       term.dispose();
-      termRef.current = null;
-      fitRef.current = null;
+      if (termRef.current === term) termRef.current = null;
+      if (fitRef.current === fitAddon) fitRef.current = null;
     };
-  }, [scheduleFit]);
+  }, [vmId, reconnectKey, clearReconnectTimer, scheduleFit]);
 
   // Live-apply font size and color scheme without tearing down the session.
   useEffect(() => {
@@ -266,88 +381,6 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   useEffect(() => {
     scheduleFit();
   }, [terminalOnly, scheduleFit]);
-
-  // WebSocket with automatic reconnect. Terminal stays up across reconnects;
-  // the server re-sends a backlog snapshot on each new subscribe.
-  useEffect(() => {
-    intentionalCloseRef.current = false;
-    reconnectAttemptRef.current = 0;
-    clearReconnectTimer();
-
-    const connect = (isRetry: boolean) => {
-      if (intentionalCloseRef.current) return;
-
-      const prev = socketRef.current;
-      if (prev) {
-        socketRef.current = null;
-        prev.onopen = null;
-        prev.onmessage = null;
-        prev.onerror = null;
-        prev.onclose = null;
-        prev.close();
-      }
-
-      setStatus(isRetry ? "reconnecting" : "connecting");
-
-      const socket = new WebSocket(consoleWsUrl(vmId));
-      socket.binaryType = "arraybuffer";
-      socketRef.current = socket;
-
-      socket.onopen = () => {
-        reconnectAttemptRef.current = 0;
-        setStatus("connected");
-        termRef.current?.focus();
-        scheduleFit();
-      };
-
-      socket.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
-        const term = termRef.current;
-        if (!term) return;
-        term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
-      };
-
-      socket.onerror = () => {
-        if (socket.readyState !== WebSocket.OPEN && reconnectAttemptRef.current === 0) {
-          setStatus("failed");
-        }
-      };
-
-      socket.onclose = () => {
-        if (socketRef.current === socket) {
-          socketRef.current = null;
-        }
-        if (intentionalCloseRef.current) return;
-        setStatus("disconnected");
-        scheduleReconnect();
-      };
-    };
-
-    const scheduleReconnect = () => {
-      if (intentionalCloseRef.current) return;
-      clearReconnectTimer();
-      const attempt = reconnectAttemptRef.current;
-      const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
-      reconnectAttemptRef.current = attempt + 1;
-      setStatus("reconnecting");
-      reconnectTimerRef.current = setTimeout(() => connect(true), delay);
-    };
-
-    connect(false);
-
-    return () => {
-      intentionalCloseRef.current = true;
-      clearReconnectTimer();
-      const socket = socketRef.current;
-      if (socket) {
-        socketRef.current = null;
-        socket.onopen = null;
-        socket.onmessage = null;
-        socket.onerror = null;
-        socket.onclose = null;
-        socket.close();
-      }
-    };
-  }, [vmId, reconnectKey, clearReconnectTimer, scheduleFit]);
 
   const reconnectNow = () => {
     clearReconnectTimer();

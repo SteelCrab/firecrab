@@ -79,3 +79,4 @@ cross build --release --target x86_64-unknown-linux-musl -p firecrab-api -p fire
 | frontend lint/build 실패 | `npm run lint` / `npm run build` 로컬 재현 |
 | release-test 실패 | 로컬 `cargo test --workspace --release --locked`로 재현 |
 | build-release 실패 | 해당 타겟으로 로컬 `cross build --release --target <target> -p firecrab-api -p firecrab-net-helper` 재현 |
+| `install-distro` 컨테이너 부트스트랩 실패(`Curl error (23)` 등) | 신선한 배포판 컨테이너(특히 `fedora:latest`)에서 패키지 미러가 일시적으로 응답이 불안정한 경우가 있음 — `Bootstrap the container` 스텝에 재시도(5회, 5초 간격) 추가함(2026-08-01). 재시도로도 계속 실패하면 실제 미러 장애일 가능성 — Actions 로그의 실패한 URL을 직접 열어 확인 |

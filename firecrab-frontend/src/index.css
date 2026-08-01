@@ -215,32 +215,48 @@ body {
   font-size: 0.8em;
 }
 
+/* 5 equal tracks: name · template · cpu · ram · disk
+   then storage · network · egress · (spacer) · submit — last column
+   of each row lines up. minmax(0,1fr) keeps long select labels from
+   blowing out the track (disk was clipped under the old `auto` column). */
 form.create-grid {
   display: grid;
-  grid-template-columns: 2fr 1.5fr 1fr 1fr auto;
-  gap: 0.9rem;
-  align-items: end;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.9rem 0.85rem;
+  align-items: start;
 }
-/* 내비가 레일로 줄어드는 폭과 같은 지점에서 접는다 — 5열을 유지하면 폼의
-   최소 너비가 콘텐츠 영역을 넘어 페이지 전체가 가로로 스크롤된다. */
+/* 내비가 레일로 줄어드는 폭 — 5열을 유지하면 페이지가 가로 스크롤된다. */
 @media (max-width: 1000px) {
-  form.create-grid { grid-template-columns: 1fr 1fr; }
+  form.create-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  form.create-grid .field-submit { grid-column: 1 / -1; }
 }
-/* 폰 폭에서는 2열도 입력 최소 너비를 넘는다 */
+/* 폰 폭에서는 1열 */
 @media (max-width: 560px) {
-  form.create-grid { grid-template-columns: 1fr; }
+  form.create-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-.field { display: flex; flex-direction: column; gap: 0.35rem; }
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
 .field label {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--shell);
+  line-height: 1.2;
+  /* Same height even for the submit column's spacer label. */
+  min-height: 1.05rem;
 }
 .field input,
 .field select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   font-family: var(--font-mono);
   font-size: 0.9rem;
   color: var(--ink);
@@ -248,16 +264,45 @@ form.create-grid {
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 0.55rem 0.65rem;
+  height: 2.5rem;
+}
+.field select {
+  /* Long option text truncates inside the cell instead of overflowing. */
+  text-overflow: ellipsis;
 }
 .field .field-error {
   font-size: 0.75rem;
   color: var(--error);
   min-height: 1em;
 }
+/* Row 2: storage · network · egress · spacer · submit */
+.field-spacer-box {
+  height: 2.5rem;
+}
+.field-submit .btn {
+  width: 100%;
+  height: 2.5rem;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+@media (max-width: 1000px) {
+  .field-spacer { display: none; }
+  .field-submit {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+  .field-submit .btn { width: auto; min-width: 8rem; }
+}
 
 .ram-stepper {
   display: flex;
   align-items: stretch;
+  box-sizing: border-box;
+  height: 2.5rem;
   border: 1px solid var(--line);
   border-radius: 3px;
   background: var(--bg);
@@ -265,13 +310,14 @@ form.create-grid {
 .ram-stepper .ram-stepper-value {
   flex: 1;
   min-width: 0;
+  height: 100%;
   border: 0;
   border-radius: 0;
   background: transparent;
   font-family: var(--font-mono);
   font-size: 0.9rem;
   color: var(--ink);
-  padding: 0.55rem 0.65rem;
+  padding: 0 0.65rem;
   cursor: default;
 }
 .ram-stepper-buttons {
@@ -623,24 +669,31 @@ table.vm-table {
 .console-close:hover { color: var(--error); }
 
 /* `flex: 1; min-height: 0` so the surface absorbs leftover height after the
-   detail panel and FitAddon measures the real box on chrome show/hide. */
+   detail panel and FitAddon measures the real box on chrome show/hide.
+   A non-zero min-height keeps the first fit() from collapsing to 0 rows. */
 .console-surface {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 12rem;
   width: 100%;
   padding: 0.5rem;
   overflow: hidden;
   position: relative;
+  background: #171b22;
 }
 .console-page.is-terminal-only .console-surface {
   padding: 0;
+  min-height: 0;
 }
 .console-surface .xterm {
-  height: 100%;
-  width: 100%;
+  height: 100% !important;
+  width: 100% !important;
+  padding: 0;
 }
 .console-surface .xterm-viewport {
   overflow-y: auto !important;
+}
+.console-surface .xterm-screen {
+  height: 100%;
 }
 
 /* Bottom VM metadata as a horizontal table (scrolls when the window is narrow). */

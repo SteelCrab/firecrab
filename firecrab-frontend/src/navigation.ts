@@ -123,13 +123,18 @@ export function useAppRoute(): {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  // Empty / unknown shell hashes normalise to `#/vms` without a history entry.
-  // Console routes are left alone so a copy-pasted terminal URL still works.
+  // Empty / unknown shell hashes normalise to `#/vms`. Use `location.hash`
+  // (not only replaceState) so the URL bar and any hash-dependent code see
+  // the same route immediately on first paint after `npm run dev`.
   useEffect(() => {
     if (route.kind !== "shell") return;
     const path = stripHash(window.location.hash);
     if (parseViewId(path) === null && parseConsoleVmId(window.location.hash) === null) {
-      window.history.replaceState(null, "", viewHash(DEFAULT_VIEW));
+      const next = viewHash(DEFAULT_VIEW);
+      if (window.location.hash !== next) {
+        window.history.replaceState(null, "", next);
+        setRoute({ kind: "shell", view: DEFAULT_VIEW });
+      }
     }
   }, [route]);
 

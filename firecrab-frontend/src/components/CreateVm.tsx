@@ -166,23 +166,28 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         />
         {fieldError("diskGb")}
       </div>
-      {storageRoots.length > 0 && (
-        <div className="field">
-          <label htmlFor="vm-storage">저장 위치</label>
-          <select
-            id="vm-storage"
-            value={storageRoot}
-            onChange={(event) => setStorageRoot(event.target.value)}
-          >
-            {storageRoots.map((root) => (
+      {/* Always render storage so the 5-column grid stays aligned even
+          when the host has no extra storage roots yet. */}
+      <div className="field">
+        <label htmlFor="vm-storage">저장 위치</label>
+        <select
+          id="vm-storage"
+          value={storageRoot}
+          onChange={(event) => setStorageRoot(event.target.value)}
+          disabled={storageRoots.length === 0}
+        >
+          {storageRoots.length === 0 ? (
+            <option value="">default</option>
+          ) : (
+            storageRoots.map((root) => (
               <option key={root.id} value={root.id}>
                 {storageLabel(root)}
               </option>
-            ))}
-          </select>
-          {fieldError("storageRoot")}
-        </div>
-      )}
+            ))
+          )}
+        </select>
+        {fieldError("storageRoot")}
+      </div>
       <div className="field">
         <label htmlFor="vm-micro-network">MicroNetwork</label>
         <select
@@ -191,10 +196,10 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           onChange={(event) => setMicroNetworkId(event.target.value)}
         >
           <option value={NO_NETWORK} disabled>
-              {microNetworks.length === 0
-                ? "먼저 MicroNetwork를 만드세요"
-                : "MicroNetwork 선택"}
-            </option>
+            {microNetworks.length === 0
+              ? "먼저 MicroNetwork를 만드세요"
+              : "MicroNetwork 선택"}
+          </option>
           {microNetworks.map((network) => (
             <option key={network.id} value={network.id}>
               {network.name} ({network.subnetCidr})
@@ -216,13 +221,25 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
             </option>
           ))}
         </select>
+        <span className="field-error" aria-hidden />
       </div>
-      <div className="field">
+      {/* Empty track so the submit button sits in the last column under disk. */}
+      <div className="field field-spacer" aria-hidden>
         <label>&nbsp;</label>
-        <button className="btn primary" type="submit" disabled={submitting}>
+        <div className="field-spacer-box" />
+        <span className="field-error" />
+      </div>
+      <div className="field field-submit">
+        <label htmlFor="vm-create-submit">&nbsp;</label>
+        <button
+          id="vm-create-submit"
+          className="btn primary"
+          type="submit"
+          disabled={submitting}
+        >
           {submitting ? "생성 중…" : "생성"}
         </button>
-        <span className="field-error"></span>
+        <span className="field-error" aria-hidden />
       </div>
     </form>
   );

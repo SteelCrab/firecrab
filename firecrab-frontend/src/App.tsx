@@ -54,8 +54,12 @@ function reduce(state: Dashboard, msg: Msg): Dashboard {
     case "refreshed":
       return { ...state, vms: msg.vms, loaded: true, consecutiveFailures: 0 };
     case "refreshFailed":
+      // Always flip `loaded` so the list panel is not stuck on "불러오는 중…"
+      // after the first failed poll (common right after `npm run dev` while
+      // the API is still starting, or when the proxy flaps once).
       return {
         ...state,
+        loaded: true,
         consecutiveFailures: state.consecutiveFailures + 1,
         banner: { kind: "error", text: msg.message },
       };
@@ -98,22 +102,25 @@ const initialState: Dashboard = {
 
 export default function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
-  const refreshInFlight = useRef(false);
+  // Generation token so React StrictMode's mount→unmount→remount does not
+  // leave a stuck "in flight" flag that skips the real first list fetch.
+  const refreshGen = useRef(0);
   // id of the VM whose detail modal is open, if any — local UI state, not
   // server-synced. The serial console is a full-page hash route instead.
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const { route, selectView, closeConsole } = useAppRoute();
 
   const runRefresh = useCallback(() => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
+    const gen = ++refreshGen.current;
     (async () => {
       try {
-        dispatch({ type: "refreshed", vms: await listVms() });
+        const vms = await listVms();
+        // Ignore stale responses from an aborted StrictMode pass.
+        if (gen !== refreshGen.current) return;
+        dispatch({ type: "refreshed", vms });
       } catch (error) {
+        if (gen !== refreshGen.current) return;
         dispatch({ type: "refreshFailed", message: (error as Error).message });
-      } finally {
-        refreshInFlight.current = false;
       }
     })();
   }, []);
@@ -123,7 +130,11 @@ export default function App() {
     runRefresh();
     const millis = slowMode ? SLOW_POLL_MILLIS : POLL_MILLIS;
     const interval = setInterval(runRefresh, millis);
-    return () => clearInterval(interval);
+    return () => {
+      // Invalidate in-flight work from this effect instance (StrictMode cleanup).
+      refreshGen.current += 1;
+      clearInterval(interval);
+    };
   }, [slowMode, runRefresh]);
 
   const onAction = useCallback(

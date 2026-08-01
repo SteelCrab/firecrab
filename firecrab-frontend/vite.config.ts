@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 8080,
+    // Listen on all interfaces so SSH port-forward / LAN access works.
+    // Default (localhost-only) makes the page look "dead" from another host.
+    host: true,
     // firecrab-api's default FIRECRAB_ALLOWED_ORIGINS is an exact-string
     // match on http://localhost:8080; silently hopping to 8081 on a port
     // clash would turn into a confusing 403 instead of a clear bind error.
