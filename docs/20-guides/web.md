@@ -40,7 +40,7 @@ net-helper가 없으면 bridge/TAP/DHCP를 대신할 프로세스가 없어 VM �
 | 상단 폼 | VM 생성 — 이름·이미지·cpu·ram·disk·MicroNetwork·외부 통신 |
 | 목록 | 상태 배지 + 상태별 action. 3초 폴링 |
 | VM 이름 클릭 | 상세 모달 — 정보·시작 타임라인·로그 |
-| `terminal` 버튼 | 시리얼 콘솔(WebSocket, xterm.js). `running`일 때만 |
+| `terminal` 버튼 | 시리얼 콘솔 **새 창** (`#/console/<id>`, WebSocket + xterm.js). 하단 VM 세부정보 · `터미널만` 토글. `running`일 때만 |
 | 헤더 `MicroNetwork` | 가상 네트워크 목록/생성/삭제, 행 클릭 시 상세 |
 | 헤더 `HOST 정보` | bridge/subnet/gateway/uplink + load·memory·disk·uptime |
 

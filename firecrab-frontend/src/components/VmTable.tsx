@@ -1,19 +1,18 @@
 import type { VmResponse } from "../bindings";
 import type { VmAction } from "../model";
 import { availableActions } from "../model";
+import { consolePageUrl } from "../navigation";
 
 interface VmTableProps {
   vms: VmResponse[];
   /** VMs with an in-flight request; their actions are locked. */
   busy: Set<string>;
   onAction: (id: string, action: VmAction) => void;
-  /** A console is only attachable while the VM has a live process. */
-  onOpenConsole: (id: string) => void;
   /** Opens the VM detail modal (stepper + log) — always available. */
   onOpenDetail: (id: string) => void;
 }
 
-export default function VmTable({ vms, busy, onAction, onOpenConsole, onOpenDetail }: VmTableProps) {
+export default function VmTable({ vms, busy, onAction, onOpenDetail }: VmTableProps) {
   if (vms.length === 0) {
     return <div className="empty">VM이 없습니다 — 위에서 생성하세요</div>;
   }
@@ -27,7 +26,7 @@ export default function VmTable({ vms, busy, onAction, onOpenConsole, onOpenDeta
           <tr>
             <th>name</th>
             <th>state</th>
-            <th>template</th>
+            <th>image</th>
             <th>cpu</th>
             <th>ram</th>
             <th>disk</th>
@@ -42,7 +41,6 @@ export default function VmTable({ vms, busy, onAction, onOpenConsole, onOpenDeta
               vm={vm}
               busy={busy.has(vm.id)}
               onAction={onAction}
-              onOpenConsole={onOpenConsole}
               onOpenDetail={onOpenDetail}
             />
           ))}
@@ -56,11 +54,10 @@ interface RowProps {
   vm: VmResponse;
   busy: boolean;
   onAction: (id: string, action: VmAction) => void;
-  onOpenConsole: (id: string) => void;
   onOpenDetail: (id: string) => void;
 }
 
-function Row({ vm, busy, onAction, onOpenConsole, onOpenDetail }: RowProps) {
+function Row({ vm, busy, onAction, onOpenDetail }: RowProps) {
   const shortId = vm.id.split("-")[0] ?? "";
 
   return (
@@ -73,7 +70,7 @@ function Row({ vm, busy, onAction, onOpenConsole, onOpenDetail }: RowProps) {
       <td>
         <span className={`state-badge ${vm.state}`}>{vm.state}</span>
       </td>
-      <td className="mono">{vm.templateVersion}</td>
+      <td className="mono">{vm.template}</td>
       <td className="mono">{vm.cpu}</td>
       <td className="mono">{vm.ram} MiB</td>
       <td className="mono">{vm.diskGb} GiB</td>
@@ -82,9 +79,16 @@ function Row({ vm, busy, onAction, onOpenConsole, onOpenDetail }: RowProps) {
       </td>
       <td className="actions">
         {vm.state === "running" && (
-          <button className="btn" onClick={() => onOpenConsole(vm.id)}>
+          // Native new-tab link — visible in the tab bar (no detached popup).
+          <a
+            className="btn"
+            href={consolePageUrl(vm.id)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="시리얼 콘솔 (새 탭)"
+          >
             terminal
-          </button>
+          </a>
         )}
         {availableActions(vm.state).map((action) => (
           <button

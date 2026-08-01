@@ -215,32 +215,48 @@ body {
   font-size: 0.8em;
 }
 
+/* 5 equal tracks: name · template · cpu · ram · disk
+   then storage · network · egress · (spacer) · submit — last column
+   of each row lines up. minmax(0,1fr) keeps long select labels from
+   blowing out the track (disk was clipped under the old `auto` column). */
 form.create-grid {
   display: grid;
-  grid-template-columns: 2fr 1.5fr 1fr 1fr auto;
-  gap: 0.9rem;
-  align-items: end;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.9rem 0.85rem;
+  align-items: start;
 }
-/* 내비가 레일로 줄어드는 폭과 같은 지점에서 접는다 — 5열을 유지하면 폼의
-   최소 너비가 콘텐츠 영역을 넘어 페이지 전체가 가로로 스크롤된다. */
+/* 내비가 레일로 줄어드는 폭 — 5열을 유지하면 페이지가 가로 스크롤된다. */
 @media (max-width: 1000px) {
-  form.create-grid { grid-template-columns: 1fr 1fr; }
+  form.create-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  form.create-grid .field-submit { grid-column: 1 / -1; }
 }
-/* 폰 폭에서는 2열도 입력 최소 너비를 넘는다 */
+/* 폰 폭에서는 1열 */
 @media (max-width: 560px) {
-  form.create-grid { grid-template-columns: 1fr; }
+  form.create-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-.field { display: flex; flex-direction: column; gap: 0.35rem; }
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+}
 .field label {
   font-family: var(--font-mono);
   font-size: 0.72rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--shell);
+  line-height: 1.2;
+  /* Same height even for the submit column's spacer label. */
+  min-height: 1.05rem;
 }
 .field input,
 .field select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   font-family: var(--font-mono);
   font-size: 0.9rem;
   color: var(--ink);
@@ -248,16 +264,45 @@ form.create-grid {
   border: 1px solid var(--line);
   border-radius: 3px;
   padding: 0.55rem 0.65rem;
+  height: 2.5rem;
+}
+.field select {
+  /* Long option text truncates inside the cell instead of overflowing. */
+  text-overflow: ellipsis;
 }
 .field .field-error {
   font-size: 0.75rem;
   color: var(--error);
   min-height: 1em;
 }
+/* Row 2: storage · network · egress · spacer · submit */
+.field-spacer-box {
+  height: 2.5rem;
+}
+.field-submit .btn {
+  width: 100%;
+  height: 2.5rem;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+@media (max-width: 1000px) {
+  .field-spacer { display: none; }
+  .field-submit {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+  .field-submit .btn { width: auto; min-width: 8rem; }
+}
 
 .ram-stepper {
   display: flex;
   align-items: stretch;
+  box-sizing: border-box;
+  height: 2.5rem;
   border: 1px solid var(--line);
   border-radius: 3px;
   background: var(--bg);
@@ -265,13 +310,14 @@ form.create-grid {
 .ram-stepper .ram-stepper-value {
   flex: 1;
   min-width: 0;
+  height: 100%;
   border: 0;
   border-radius: 0;
   background: transparent;
   font-family: var(--font-mono);
   font-size: 0.9rem;
   color: var(--ink);
-  padding: 0.55rem 0.65rem;
+  padding: 0 0.65rem;
   cursor: default;
 }
 .ram-stepper-buttons {
@@ -311,6 +357,12 @@ form.create-grid {
   color: var(--ink);
   padding: 0.55rem 0.9rem;
   cursor: pointer;
+}
+a.btn {
+  display: inline-block;
+  text-decoration: none;
+  line-height: normal;
+  box-sizing: border-box;
 }
 .btn:hover:not(:disabled) { border-color: var(--shell); }
 .btn:disabled { opacity: 0.45; cursor: default; }
@@ -467,6 +519,48 @@ table.vm-table {
 }
 .pipeline-step.pending .step-bar { opacity: 0.45; }
 
+.image-install-log {
+  max-height: 28vh;
+  min-height: 8rem;
+}
+
+table.image-table tbody tr {
+  cursor: pointer;
+}
+table.image-table tbody tr.is-selected td {
+  background: rgba(196, 62, 18, 0.06);
+}
+
+/* Copy / download controls shared by detail modal + console toolbar. */
+.log-export-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.log-export-status {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ready);
+  letter-spacing: 0.04em;
+  min-width: 3.5rem;
+}
+.log-export-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin: 0 0 0.45rem;
+  flex-wrap: wrap;
+}
+.log-export-bar-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--shell);
+}
+
 .detail-log {
   margin: 0;
   padding: 0.75rem;
@@ -490,6 +584,275 @@ table.vm-table {
   font-size: 0.85rem;
 }
 
+/* Full-page serial console (`#/console/<id>`) — usually opened in a new
+   window from the VM list. Toolbar + xterm + bottom detail; "터미널만"
+   collapses chrome so only the surface remains. */
+.console-page {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--ink);
+  z-index: 20;
+  width: 100%;
+  height: 100%;
+  min-height: 100dvh;
+}
+
+.console-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.65rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  flex: 0 0 auto;
+}
+.console-title {
+  flex: 1 1 auto;
+  min-width: 8rem;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+.console-status-dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+.console-status.connecting { color: var(--amber); }
+.console-status.connecting .console-status-dot {
+  animation: console-pulse 1.1s ease-in-out infinite;
+}
+.console-status.connected { color: var(--ready); }
+.console-status.error { color: var(--error); }
+
+@keyframes console-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.console-bar-btn {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--shell);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.console-bar-btn:hover { border-color: var(--shell); color: var(--ink); }
+.console-bar-btn.is-active {
+  border-color: var(--ember);
+  color: var(--ember);
+  background: rgba(196, 62, 18, 0.08);
+}
+
+.console-settings { position: relative; flex-shrink: 0; }
+.console-settings-pop {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 2;
+  min-width: 12rem;
+  padding: 0.65rem 0.75rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  box-shadow: 0 0.5rem 1.25rem rgba(23, 27, 34, 0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.console-settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--shell);
+  letter-spacing: 0.04em;
+}
+.console-settings-row select {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.3rem 0.4rem;
+}
+
+.console-close {
+  border: 0;
+  background: none;
+  color: var(--shell);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  padding: 0.15rem 0.4rem;
+  flex-shrink: 0;
+}
+.console-close:hover { color: var(--error); }
+
+/* `flex: 1; min-height: 0` so the surface absorbs leftover height after the
+   detail panel and FitAddon measures the real box on chrome show/hide.
+   A non-zero min-height keeps the first fit() from collapsing to 0 rows. */
+.console-surface {
+  flex: 1 1 auto;
+  min-height: 12rem;
+  width: 100%;
+  padding: 0.5rem;
+  overflow: hidden;
+  position: relative;
+  background: #171b22;
+}
+.console-page.is-terminal-only .console-surface {
+  padding: 0;
+  min-height: 0;
+}
+.console-surface .xterm {
+  height: 100% !important;
+  width: 100% !important;
+  padding: 0;
+}
+.console-surface .xterm-viewport {
+  overflow-y: auto !important;
+}
+.console-surface .xterm-screen {
+  height: 100%;
+}
+
+/* Bottom VM metadata — four field groups instead of one wide row. */
+.console-detail {
+  flex: 0 0 auto;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  padding: 0.55rem 0.75rem 0.7rem;
+}
+.console-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.45rem;
+}
+.console-detail-title {
+  margin: 0;
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--shell);
+}
+.console-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem 1rem;
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .console-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .console-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.console-detail-group {
+  min-width: 0;
+  padding: 0.4rem 0.55rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.console-detail-group-title {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--shell);
+}
+.console-detail-fields {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.2rem 0.65rem;
+  margin: 0;
+  font-size: 0.74rem;
+  align-items: baseline;
+}
+.console-detail-fields dt {
+  color: var(--shell);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+.console-detail-fields dd {
+  margin: 0;
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.console-detail .mono {
+  font-family: var(--font-mono);
+}
+.console-detail-loading,
+.console-detail-error {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--dim);
+}
+.console-detail-error { color: var(--error); }
+
+/* Recover chrome after "터미널만" without relying solely on Esc. */
+.console-exit-only {
+  position: fixed;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 30;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  padding: 0.3rem 0.55rem;
+  cursor: pointer;
+  box-shadow: 0 0.25rem 0.75rem rgba(23, 27, 34, 0.2);
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+}
+.console-exit-only:hover,
+.console-exit-only:focus-visible {
+  opacity: 1;
+}
+
+/* VM detail still uses the shared overlay chrome (read-only log, not xterm). */
 .console-overlay {
   position: fixed;
   inset: 0;
@@ -500,53 +863,17 @@ table.vm-table {
   padding: 2rem;
   z-index: 20;
 }
-
 .console-panel {
-  width: min(920px, 100%);
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 100%);
+  max-height: calc(100vh - 4rem);
   background: var(--ink);
   border: 1px solid var(--line);
   border-radius: 3px;
   overflow: hidden;
   box-shadow: 0 1.5rem 3rem rgba(23, 27, 34, 0.35);
 }
-
-.console-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.65rem 0.9rem;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--line);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-}
-.console-title {
-  flex: 1;
-  color: var(--ink);
-  letter-spacing: 0.02em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.console-status { color: var(--dim); }
-.console-status.connecting { color: var(--amber); }
-.console-status.connected { color: var(--ready); }
-.console-status.error { color: var(--error); }
-.console-close {
-  border: 0;
-  background: none;
-  color: var(--shell);
-  cursor: pointer;
-  font-family: var(--font-mono);
-  padding: 0.15rem 0.4rem;
-}
-.console-close:hover { color: var(--error); }
-
-.console-surface {
-  height: 60vh;
-  padding: 0.5rem;
-}
-.console-surface .xterm { height: 100%; }
 
 .detail-body {
   padding: 1.25rem;

@@ -4,6 +4,7 @@ mod error;
 mod extract;
 mod firecracker;
 mod handlers;
+mod image_install;
 mod ipam;
 mod model;
 mod network;

@@ -1,17 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { ApiClientError, createVm, listMicroNetworks, listStorageRoots } from "../api/client";
+import {
+  ApiClientError,
+  createVm,
+  listImages,
+  listMicroNetworks,
+  listStorageRoots,
+} from "../api/client";
 import type {
   CreateVmRequest,
   EgressPolicy,
+  ImageResponse,
   MicroNetworkResponse,
   StorageRootResponse,
   VmResponse,
 } from "../bindings";
 import RamStepper from "./RamStepper";
-
-/** The registry aliases the API accepts today; selection only, no free text. */
-const TEMPLATES = ["ubuntu-26.04", "alpine-3.24"] as const;
 
 const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
   internet: "인터넷 허용",
@@ -42,9 +46,41 @@ function storageLabel(root: StorageRootResponse): string {
   return `${label} (${root.path})${free}`;
 }
 
+/** Actual rootfs image size (same basis as the images page "disk" column). */
+function formatRootfsSize(bytes: number | undefined | null): string {
+  const n = typeof bytes === "number" ? bytes : Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  const gib = n / 1024 ** 3;
+  if (gib >= 1) {
+    const rounded = gib >= 10 || Number.isInteger(gib) ? gib.toFixed(0) : gib.toFixed(2);
+    return `${rounded} GiB`;
+  }
+  const mib = n / 1024 ** 2;
+  const rounded = mib >= 10 || Number.isInteger(mib) ? mib.toFixed(0) : mib.toFixed(1);
+  return `${rounded} MiB`;
+}
+
+/** VM disk floor in whole GiB, derived only from image disk bytes. */
+function diskFloorGb(image: ImageResponse): number {
+  const bytes = image.rootfsSizeBytes;
+  if (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0) {
+    return Math.max(1, Math.ceil(bytes / 1024 ** 3));
+  }
+  // Fallback if an older API omits rootfsSizeBytes.
+  return image.minDiskGb > 0 ? image.minDiskGb : 2;
+}
+
+function templateLabel(image: ImageResponse): string {
+  const size = formatRootfsSize(image.rootfsSizeBytes);
+  return size ? `${image.alias} · ${size}` : image.alias;
+}
+
 export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState<string>(TEMPLATES[0]);
+  const [template, setTemplate] = useState<string>("");
+  const [images, setImages] = useState<ImageResponse[]>([]);
+  const [imagesLoading, setImagesLoading] = useState(true);
+  const [imagesError, setImagesError] = useState<string | null>(null);
   const [cpu, setCpu] = useState("1");
   const [ram, setRam] = useState("512");
   const [diskGb, setDiskGb] = useState("2");
@@ -57,27 +93,87 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setImagesLoading(true);
+    listImages()
+      .then((next) => {
+        if (cancelled) return;
+        // Create form only offers installed templates (uninstalled come later
+        // with the install API).
+        const installed = next.filter((image) => image.installed);
+        setImages(installed);
+        setImagesError(null);
+        setTemplate((current) => {
+          if (current && installed.some((image) => image.alias === current)) {
+            return current;
+          }
+          return installed[0]?.alias ?? "";
+        });
+        if (installed[0] && Number(diskGb) < diskFloorGb(installed[0])) {
+          setDiskGb(String(diskFloorGb(installed[0])));
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setImages([]);
+        setTemplate("");
+        setImagesError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setImagesLoading(false);
+      });
+
     listMicroNetworks()
       .then((networks) => {
+        if (cancelled) return;
         setMicroNetworks(networks);
         if (networks.length > 0) {
           setMicroNetworkId((current) => current || networks[0].id);
         }
       })
-      .catch(() => setMicroNetworks([]));
+      .catch(() => {
+        if (!cancelled) setMicroNetworks([]);
+      });
     listStorageRoots()
       .then((roots) => {
+        if (cancelled) return;
         setStorageRoots(roots);
         if (roots.length > 0) {
           setStorageRoot((current) => current || roots[0].id);
         }
       })
-      .catch(() => setStorageRoots([]));
+      .catch(() => {
+        if (!cancelled) setStorageRoots([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // diskGb intentionally omitted — only seed floor on first catalog load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only fetch
   }, []);
+
+  const selectedImage = useMemo(
+    () => images.find((image) => image.alias === template) ?? null,
+    [images, template],
+  );
+  const minDiskGb = selectedImage ? diskFloorGb(selectedImage) : 2;
+  const noTemplates = !imagesLoading && images.length === 0;
+  const canSubmit =
+    !submitting && !imagesLoading && !noTemplates && Boolean(template) && !imagesError;
+
+  const onTemplateChange = (alias: string) => {
+    setTemplate(alias);
+    const image = images.find((entry) => entry.alias === alias);
+    if (image) {
+      const floor = diskFloorGb(image);
+      if (Number(diskGb) < floor) setDiskGb(String(floor));
+    }
+  };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (submitting) return;
+    if (!canSubmit) return;
 
     const request: CreateVmRequest = {
       name: name.trim(),
@@ -111,6 +207,14 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     <span className="field-error">{fieldErrors?.fieldError(field) ?? ""}</span>
   );
 
+  const imageHint = imagesLoading
+    ? "이미지 불러오는 중…"
+    : imagesError
+      ? "이미지 목록을 불러오지 못했습니다"
+      : noTemplates
+        ? "설치된 이미지가 없습니다 (install.sh 또는 이미지 설치 필요)"
+        : null;
+
   return (
     <form className="create-grid" onSubmit={handleSubmit}>
       <div className="field">
@@ -127,15 +231,27 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         {fieldError("name")}
       </div>
       <div className="field">
-        <label htmlFor="vm-template">template</label>
-        <select id="vm-template" value={template} onChange={(event) => setTemplate(event.target.value)}>
-          {TEMPLATES.map((alias) => (
-            <option key={alias} value={alias}>
-              {alias}
-            </option>
-          ))}
+        <label htmlFor="vm-image">image</label>
+        <select
+          id="vm-image"
+          value={template}
+          onChange={(event) => onTemplateChange(event.target.value)}
+          disabled={imagesLoading || noTemplates || Boolean(imagesError)}
+        >
+          {imageHint ? (
+            <option value="">{imageHint}</option>
+          ) : (
+            images.map((image) => (
+              <option key={image.alias} value={image.alias}>
+                {templateLabel(image)}
+              </option>
+            ))
+          )}
         </select>
         {fieldError("template")}
+        {(imagesError || noTemplates) && !fieldErrors?.fieldError("template") && (
+          <span className="field-error">{imagesError ?? "생성하려면 먼저 이미지를 설치하세요"}</span>
+        )}
       </div>
       <div className="field">
         <label htmlFor="vm-cpu">cpu</label>
@@ -159,30 +275,35 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         <input
           id="vm-disk"
           type="number"
-          min={2}
+          min={minDiskGb}
           max={500}
           value={diskGb}
           onChange={(event) => setDiskGb(event.target.value)}
         />
         {fieldError("diskGb")}
       </div>
-      {storageRoots.length > 0 && (
-        <div className="field">
-          <label htmlFor="vm-storage">저장 위치</label>
-          <select
-            id="vm-storage"
-            value={storageRoot}
-            onChange={(event) => setStorageRoot(event.target.value)}
-          >
-            {storageRoots.map((root) => (
+      {/* Always render storage so the 5-column grid stays aligned even
+          when the host has no extra storage roots yet. */}
+      <div className="field">
+        <label htmlFor="vm-storage">저장 위치</label>
+        <select
+          id="vm-storage"
+          value={storageRoot}
+          onChange={(event) => setStorageRoot(event.target.value)}
+          disabled={storageRoots.length === 0}
+        >
+          {storageRoots.length === 0 ? (
+            <option value="">default</option>
+          ) : (
+            storageRoots.map((root) => (
               <option key={root.id} value={root.id}>
                 {storageLabel(root)}
               </option>
-            ))}
-          </select>
-          {fieldError("storageRoot")}
-        </div>
-      )}
+            ))
+          )}
+        </select>
+        {fieldError("storageRoot")}
+      </div>
       <div className="field">
         <label htmlFor="vm-micro-network">MicroNetwork</label>
         <select
@@ -191,10 +312,10 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           onChange={(event) => setMicroNetworkId(event.target.value)}
         >
           <option value={NO_NETWORK} disabled>
-              {microNetworks.length === 0
-                ? "먼저 MicroNetwork를 만드세요"
-                : "MicroNetwork 선택"}
-            </option>
+            {microNetworks.length === 0
+              ? "먼저 MicroNetwork를 만드세요"
+              : "MicroNetwork 선택"}
+          </option>
           {microNetworks.map((network) => (
             <option key={network.id} value={network.id}>
               {network.name} ({network.subnetCidr})
@@ -216,13 +337,25 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
             </option>
           ))}
         </select>
+        <span className="field-error" aria-hidden />
       </div>
-      <div className="field">
+      {/* Empty track so the submit button sits in the last column under disk. */}
+      <div className="field field-spacer" aria-hidden>
         <label>&nbsp;</label>
-        <button className="btn primary" type="submit" disabled={submitting}>
+        <div className="field-spacer-box" />
+        <span className="field-error" />
+      </div>
+      <div className="field field-submit">
+        <label htmlFor="vm-create-submit">&nbsp;</label>
+        <button
+          id="vm-create-submit"
+          className="btn primary"
+          type="submit"
+          disabled={!canSubmit}
+        >
           {submitting ? "생성 중…" : "생성"}
         </button>
-        <span className="field-error"></span>
+        <span className="field-error" aria-hidden />
       </div>
     </form>
   );

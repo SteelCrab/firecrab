@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 /**
- * The console's five destinations. All but `images` have a page today; that
- * one is a placeholder until the image catalog lands. The glyph is what the
- * nav shows once it collapses to a rail.
+ * The console's five destinations. The glyph is what the nav shows once it
+ * collapses to a rail.
  *
  * Kept out of `components/Shell.tsx` so that file exports only its component
  * — mixing constants and hooks in there breaks Vite's fast refresh.
@@ -20,38 +19,142 @@ export type ViewId = (typeof VIEWS)[number]["id"];
 
 const DEFAULT_VIEW: ViewId = "vms";
 
-function parseHash(hash: string): ViewId | null {
-  const id = hash.replace(/^#\/?/, "");
-  return VIEWS.some((view) => view.id === id) ? (id as ViewId) : null;
+/**
+ * Full-page serial console (not a modal). Hash form so the API host still
+ * serves `index.html` and a reload keeps the session URL:
+ * `#/console/<vmId>`.
+ */
+const CONSOLE_RE = /^console\/([^/?#]+)/;
+
+function stripHash(hash: string): string {
+  return hash.replace(/^#\/?/, "");
+}
+
+function parseViewId(path: string): ViewId | null {
+  return VIEWS.some((view) => view.id === path) ? (path as ViewId) : null;
+}
+
+/** VM id when the hash is a console page, otherwise `null`. */
+export function parseConsoleVmId(hash: string = window.location.hash): string | null {
+  const match = stripHash(hash).match(CONSOLE_RE);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1] ?? "");
+  } catch {
+    return match[1] ?? null;
+  }
+}
+
+/** Hash URL for the dedicated console page (same-tab or `window.open`). */
+export function consoleHash(vmId: string): string {
+  return `#/console/${encodeURIComponent(vmId)}`;
+}
+
+/** Absolute URL for opening the console in a new browser tab/window. */
+export function consolePageUrl(vmId: string): string {
+  return `${window.location.origin}${window.location.pathname}${consoleHash(vmId)}`;
 }
 
 /**
- * Current view, kept in `location.hash` so a reload (and back/forward) lands
- * on the same screen. The hash — not `history.pushState` paths — because the
- * API serves the dashboard itself: a deep path would be a real request the
- * SPA fallback has to absorb, while `#/vms` never leaves the client. Swapping
- * this for react-router later is a drop-in (`HashRouter` reads the same URLs).
+ * Open the serial console in a **new browser tab** (not a sized popup).
+ * Sized `window.open(..., "width=…")` windows are easy to miss / get blocked;
+ * `_blank` keeps the console in the tab strip.
+ *
+ * If the browser blocks the new tab, fall back to same-tab navigation.
  */
-export function useHashView(): [ViewId, (view: ViewId) => void] {
-  const [view, setView] = useState<ViewId>(() => parseHash(window.location.hash) ?? DEFAULT_VIEW);
+export function openConsoleWindow(vmId: string): Window | null {
+  const url = consolePageUrl(vmId);
+  const win = window.open(url, "_blank", "noopener,noreferrer");
+  if (!win) {
+    window.location.assign(url);
+    return null;
+  }
+  try {
+    win.focus();
+  } catch {
+    /* ignore */
+  }
+  return win;
+}
+
+export function viewHash(view: ViewId = DEFAULT_VIEW): string {
+  return `#/${view}`;
+}
+
+/**
+ * Shell views live under `#/vms` etc.; the terminal is a separate full-page
+ * route (`#/console/<id>`) so it never shares the modal overlay layout that
+ * clipped xterm after leaving "fullscreen".
+ */
+export type AppRoute =
+  | { kind: "shell"; view: ViewId }
+  | { kind: "console"; vmId: string };
+
+export function parseAppRoute(hash: string = window.location.hash): AppRoute {
+  const path = stripHash(hash);
+  const consoleMatch = path.match(CONSOLE_RE);
+  if (consoleMatch?.[1]) {
+    try {
+      return { kind: "console", vmId: decodeURIComponent(consoleMatch[1]) };
+    } catch {
+      return { kind: "console", vmId: consoleMatch[1] };
+    }
+  }
+  return { kind: "shell", view: parseViewId(path) ?? DEFAULT_VIEW };
+}
+
+/**
+ * Current route from `location.hash` so reload and back/forward work. Hash
+ * (not path routes) because the API serves the dashboard SPA — a deep path
+ * would hit the server; `#/…` never leaves the client.
+ */
+export function useAppRoute(): {
+  route: AppRoute;
+  selectView: (view: ViewId) => void;
+  openConsole: (vmId: string) => void;
+  closeConsole: () => void;
+} {
+  const [route, setRoute] = useState<AppRoute>(() => parseAppRoute());
 
   useEffect(() => {
-    const onHashChange = () => setView(parseHash(window.location.hash) ?? DEFAULT_VIEW);
+    const onHashChange = () => setRoute(parseAppRoute());
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  // An empty or unknown hash is normalised without a history entry, so the
-  // back button still leaves the app instead of bouncing off a rewrite.
+  // Empty / unknown shell hashes normalise to `#/vms`. Use `location.hash`
+  // (not only replaceState) so the URL bar and any hash-dependent code see
+  // the same route immediately on first paint after `npm run dev`.
   useEffect(() => {
-    if (parseHash(window.location.hash) === null) {
-      window.history.replaceState(null, "", `#/${DEFAULT_VIEW}`);
+    if (route.kind !== "shell") return;
+    const path = stripHash(window.location.hash);
+    if (parseViewId(path) === null && parseConsoleVmId(window.location.hash) === null) {
+      const next = viewHash(DEFAULT_VIEW);
+      if (window.location.hash !== next) {
+        window.history.replaceState(null, "", next);
+        setRoute({ kind: "shell", view: DEFAULT_VIEW });
+      }
     }
-  }, [view]);
+  }, [route]);
 
-  const select = useCallback((next: ViewId) => {
-    window.location.hash = `#/${next}`;
+  const selectView = useCallback((next: ViewId) => {
+    window.location.hash = viewHash(next);
   }, []);
 
-  return [view, select];
+  const openConsole = useCallback((vmId: string) => {
+    window.location.hash = consoleHash(vmId);
+  }, []);
+
+  const closeConsole = useCallback(() => {
+    window.location.hash = viewHash("vms");
+  }, []);
+
+  return { route, selectView, openConsole, closeConsole };
+}
+
+/** @deprecated Prefer `useAppRoute` — kept name for older call sites if any. */
+export function useHashView(): [ViewId, (view: ViewId) => void] {
+  const { route, selectView } = useAppRoute();
+  const view = route.kind === "shell" ? route.view : DEFAULT_VIEW;
+  return [view, selectView];
 }

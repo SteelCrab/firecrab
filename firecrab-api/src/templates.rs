@@ -96,6 +96,11 @@ impl VerifiedArtifact {
     pub fn length(&self) -> u64 {
         self.length
     }
+
+    /// Path relative to the registry image root (used when removing files).
+    pub fn relative_path(&self) -> &Path {
+        &self.relative_path
+    }
 }
 
 /// One resolved, immutable version of a template: a name/version pair with
@@ -125,23 +130,36 @@ impl TemplateVersion {
 }
 
 /// Registry of verified template versions, resolved by alias or by exact
-/// `(name, version)`.
-#[derive(Debug, Clone)]
+/// `(name, version)`. Alias maps are behind locks so a successful image
+/// install can register a newly downloaded template without restarting.
+#[derive(Debug)]
 pub struct TemplateRegistry {
     /// Directory fd artifacts are opened beneath via `openat2`.
     image_root: Arc<File>,
     /// Canonical path of the image root, for building absolute paths.
     image_root_path: PathBuf,
     /// alias -> `(name, version)` it currently resolves to.
-    aliases: HashMap<String, (String, String)>,
+    aliases: Arc<Mutex<HashMap<String, (String, String)>>>,
     /// `(name, version)` -> the resolved, verified template.
-    versions: HashMap<(String, String), Arc<TemplateVersion>>,
+    versions: Arc<Mutex<HashMap<(String, String), Arc<TemplateVersion>>>>,
     /// Caches `open_verified`'s full-file hash by (device, inode), so many
     /// VMs starting at once against the same untouched multi-GB template
     /// don't each independently re-read and re-hash it (`docs/30-tasks/task-vm-startup-progress.md`'s
     /// "stuck at disk prep with many VMs" bug). Invalidated by length or
     /// mtime moving, which any real content change updates.
     verify_cache: Arc<Mutex<HashMap<(u64, u64), CachedHash>>>,
+}
+
+impl Clone for TemplateRegistry {
+    fn clone(&self) -> Self {
+        Self {
+            image_root: self.image_root.clone(),
+            image_root_path: self.image_root_path.clone(),
+            aliases: self.aliases.clone(),
+            versions: self.versions.clone(),
+            verify_cache: self.verify_cache.clone(),
+        }
+    }
 }
 
 /// One entry in [`TemplateRegistry::verify_cache`].
@@ -240,8 +258,8 @@ impl TemplateRegistry {
         Ok(Self {
             image_root,
             image_root_path,
-            aliases,
-            versions,
+            aliases: Arc::new(Mutex::new(aliases)),
+            versions: Arc::new(Mutex::new(versions)),
             verify_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -252,18 +270,149 @@ impl TemplateRegistry {
         self.image_root_path.join(&artifact.relative_path)
     }
 
+    /// Canonical image root directory (where install places downloaded artifacts).
+    pub fn image_root_path(&self) -> &Path {
+        &self.image_root_path
+    }
+
+    /// Built-in template specs the project knows about (installed or not).
+    pub fn known_specs() -> Vec<TemplateSpec> {
+        default_specs().to_vec()
+    }
+
+    /// Look up a built-in spec by alias.
+    pub fn known_spec(alias: &str) -> Option<TemplateSpec> {
+        default_specs().into_iter().find(|spec| spec.alias == alias)
+    }
+
     /// Resolves a user-facing alias (e.g. `ubuntu-26.04`) to its pinned
     /// version.
     pub fn resolve_alias(&self, alias: &str) -> Option<Arc<TemplateVersion>> {
-        let (name, version) = self.aliases.get(alias)?;
-        self.resolve_version(name, version)
+        let aliases = self
+            .aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (name, version) = aliases.get(alias)?;
+        let versions = self
+            .versions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        versions.get(&(name.clone(), version.clone())).cloned()
     }
 
     /// Resolves an exact `(name, version)` pair, bypassing alias indirection.
     pub fn resolve_version(&self, name: &str, version: &str) -> Option<Arc<TemplateVersion>> {
         self.versions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&(name.to_owned(), version.to_owned()))
             .cloned()
+    }
+
+    /// Every alias currently pinned in the registry, sorted by alias name.
+    /// Used by `GET /api/images` so the dashboard dropdown matches the server
+    /// without a hardcoded frontend list.
+    pub fn list_aliases(&self) -> Vec<Arc<TemplateVersion>> {
+        let aliases = self
+            .aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let versions = self
+            .versions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut entries: Vec<_> = aliases
+            .values()
+            .filter_map(|(name, version)| versions.get(&(name.clone(), version.clone())).cloned())
+            .collect();
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        entries
+    }
+
+    /// Drop an alias from the live registry and return the unpinned version
+    /// plus absolute paths of artifact files that no other registered
+    /// template still references (safe to delete from disk).
+    ///
+    /// Returns `None` when the alias was not installed. Does not touch the
+    /// filesystem itself — the caller deletes the returned paths.
+    pub fn unregister_alias(&self, alias: &str) -> Option<(Arc<TemplateVersion>, Vec<PathBuf>)> {
+        let mut aliases = self
+            .aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut versions = self
+            .versions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let key = aliases.remove(alias)?;
+        let removed = versions.remove(&key)?;
+
+        // Paths still held by other versions must not be deleted.
+        let still_referenced: std::collections::HashSet<PathBuf> = versions
+            .values()
+            .flat_map(|template| {
+                std::iter::once(template.kernel.relative_path().to_path_buf())
+                    .chain(std::iter::once(
+                        template.rootfs.relative_path().to_path_buf(),
+                    ))
+                    .chain(
+                        template
+                            .initrd
+                            .as_ref()
+                            .map(|artifact| artifact.relative_path().to_path_buf()),
+                    )
+            })
+            .collect();
+
+        let orphan_paths: Vec<PathBuf> = std::iter::once(removed.kernel.relative_path())
+            .chain(std::iter::once(removed.rootfs.relative_path()))
+            .chain(
+                removed
+                    .initrd
+                    .as_ref()
+                    .map(|artifact| artifact.relative_path()),
+            )
+            .filter(|relative| !still_referenced.contains(*relative))
+            .map(|relative| self.image_root_path.join(relative))
+            .collect();
+
+        Some((removed, orphan_paths))
+    }
+
+    /// Verify artifacts already under the image root and pin them as a live
+    /// alias. Used after a successful download/install so create can use the
+    /// template without restarting the API.
+    pub fn register_spec(&self, spec: TemplateSpec) -> Result<Arc<TemplateVersion>, TemplateError> {
+        let initrd = spec
+            .initrd
+            .as_ref()
+            .map(|path| verify_artifact(&self.image_root, path))
+            .transpose()?;
+        let version = Arc::new(TemplateVersion {
+            name: spec.alias.clone(),
+            version: spec.version.clone(),
+            kernel: verify_artifact(&self.image_root, &spec.kernel)?,
+            initrd,
+            rootfs: verify_artifact(&self.image_root, &spec.rootfs)?,
+            boot_args: spec.boot_args,
+        });
+        let version_key = (spec.alias.clone(), version.version.clone());
+
+        let mut versions = self
+            .versions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut aliases = self
+            .aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        // Replacing an existing pin is allowed (reinstall); only the maps
+        // update — on-disk files were overwritten atomically by the installer.
+        versions.insert(version_key.clone(), version.clone());
+        aliases.insert(spec.alias, version_key);
+        Ok(version)
     }
 
     /// Re-verifies `artifact`'s identity (device/inode/length) and content
@@ -574,6 +723,78 @@ mod tests {
         let template = registry.resolve_alias("ubuntu-26.04").unwrap();
 
         assert_eq!(template.version, "v1");
+    }
+
+    #[test]
+    fn unregister_alias_returns_orphan_paths_and_clears_resolve() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+        let registry = TemplateRegistry::from_specs(
+            root,
+            [TemplateSpec {
+                alias: "demo".to_owned(),
+                version: "v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: "console=ttyS0".to_owned(),
+            }],
+        )
+        .unwrap();
+        assert!(registry.resolve_alias("demo").is_some());
+        assert!(registry.unregister_alias("missing").is_none());
+
+        let (version, orphans) = registry.unregister_alias("demo").unwrap();
+        assert_eq!(version.name, "demo");
+        assert!(registry.resolve_alias("demo").is_none());
+        assert_eq!(orphans.len(), 2);
+        assert!(version.kernel.relative_path() == Path::new("kernel"));
+    }
+
+    #[test]
+    fn unregister_keeps_shared_artifacts_referenced_by_another_alias() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs-a"), b"a").unwrap();
+        fs::write(root.join("rootfs-b"), b"b").unwrap();
+        let registry = TemplateRegistry::from_specs(
+            root,
+            [
+                TemplateSpec {
+                    alias: "a".to_owned(),
+                    version: "v1".to_owned(),
+                    kernel: PathBuf::from("kernel"),
+                    initrd: None,
+                    rootfs: PathBuf::from("rootfs-a"),
+                    boot_args: String::new(),
+                },
+                TemplateSpec {
+                    alias: "b".to_owned(),
+                    version: "v1".to_owned(),
+                    kernel: PathBuf::from("kernel"),
+                    initrd: None,
+                    rootfs: PathBuf::from("rootfs-b"),
+                    boot_args: String::new(),
+                },
+            ],
+        )
+        .unwrap();
+        let (_version, orphans) = registry.unregister_alias("a").unwrap();
+        // Shared kernel must not be listed for deletion.
+        assert!(
+            !orphans
+                .iter()
+                .any(|path| path.file_name().and_then(|n| n.to_str()) == Some("kernel"))
+        );
+        assert!(
+            orphans
+                .iter()
+                .any(|path| path.file_name().and_then(|n| n.to_str()) == Some("rootfs-a"))
+        );
+        assert!(registry.resolve_alias("b").is_some());
     }
 
     #[test]

@@ -8,10 +8,11 @@ import VmTable from "./components/VmTable";
 import Console from "./components/Console";
 import VmDetailModal from "./components/VmDetailModal";
 import HostInfo from "./components/HostInfo";
+import Images from "./components/Images";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import Shell from "./components/Shell";
-import { useHashView } from "./navigation";
+import { useAppRoute } from "./navigation";
 
 const POLL_MILLIS = 3_000;
 // After repeated failures assume the API is down and poll gently.
@@ -54,8 +55,12 @@ function reduce(state: Dashboard, msg: Msg): Dashboard {
     case "refreshed":
       return { ...state, vms: msg.vms, loaded: true, consecutiveFailures: 0 };
     case "refreshFailed":
+      // Always flip `loaded` so the list panel is not stuck on "불러오는 중…"
+      // after the first failed poll (common right after `npm run dev` while
+      // the API is still starting, or when the proxy flaps once).
       return {
         ...state,
+        loaded: true,
         consecutiveFailures: state.consecutiveFailures + 1,
         banner: { kind: "error", text: msg.message },
       };
@@ -98,25 +103,25 @@ const initialState: Dashboard = {
 
 export default function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
-  const refreshInFlight = useRef(false);
-  // (id, name) of the console currently attached, if any. Separate from
-  // `Dashboard` since it's local UI state, not server-synced data.
-  const [openConsole, setOpenConsole] = useState<{ id: string; name: string } | null>(null);
-  // id of the VM whose detail modal is open, if any — same local-UI-state
-  // reasoning as openConsole.
+  // Generation token so React StrictMode's mount→unmount→remount does not
+  // leave a stuck "in flight" flag that skips the real first list fetch.
+  const refreshGen = useRef(0);
+  // id of the VM whose detail modal is open, if any — local UI state, not
+  // server-synced. The serial console is a full-page hash route instead.
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
-  const [view, onSelectView] = useHashView();
+  const { route, selectView, closeConsole } = useAppRoute();
 
   const runRefresh = useCallback(() => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
+    const gen = ++refreshGen.current;
     (async () => {
       try {
-        dispatch({ type: "refreshed", vms: await listVms() });
+        const vms = await listVms();
+        // Ignore stale responses from an aborted StrictMode pass.
+        if (gen !== refreshGen.current) return;
+        dispatch({ type: "refreshed", vms });
       } catch (error) {
+        if (gen !== refreshGen.current) return;
         dispatch({ type: "refreshFailed", message: (error as Error).message });
-      } finally {
-        refreshInFlight.current = false;
       }
     })();
   }, []);
@@ -126,7 +131,11 @@ export default function App() {
     runRefresh();
     const millis = slowMode ? SLOW_POLL_MILLIS : POLL_MILLIS;
     const interval = setInterval(runRefresh, millis);
-    return () => clearInterval(interval);
+    return () => {
+      // Invalidate in-flight work from this effect instance (StrictMode cleanup).
+      refreshGen.current += 1;
+      clearInterval(interval);
+    };
   }, [slowMode, runRefresh]);
 
   const onAction = useCallback(
@@ -160,22 +169,20 @@ export default function App() {
   const onError = useCallback((message: string) => dispatch({ type: "error", message }), []);
   const dismiss = useCallback(() => dispatch({ type: "dismissBanner" }), []);
 
-  const onOpenConsole = useCallback(
-    (id: string) => {
-      const name = state.vms.find((vm) => vm.id === id)?.name ?? "";
-      setOpenConsole({ id, name });
-    },
-    [state.vms],
-  );
-  const onCloseConsole = useCallback(() => setOpenConsole(null), []);
-
   const onOpenDetail = useCallback((id: string) => setOpenDetailId(id), []);
   const onCloseDetail = useCallback(() => setOpenDetailId(null), []);
 
   const pollNote = slowMode ? "API 연결 안 됨 — 15s 간격 재시도" : `${POLL_MILLIS / 1000}s polling`;
 
+  // Terminal owns the whole viewport — no shell chrome, no modal clip box.
+  if (route.kind === "console") {
+    return <Console vmId={route.vmId} onClose={closeConsole} />;
+  }
+
+  const view = route.view;
+
   return (
-    <Shell view={view} onSelectView={onSelectView}>
+    <Shell view={view} onSelectView={selectView}>
       <div className="stack">
         {state.banner && <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} />}
         {view === "vms" && (
@@ -194,7 +201,6 @@ export default function App() {
                   vms={state.vms}
                   busy={state.busy}
                   onAction={onAction}
-                  onOpenConsole={onOpenConsole}
                   onOpenDetail={onOpenDetail}
                 />
               ) : (
@@ -208,14 +214,8 @@ export default function App() {
         {view === "networks" && <MicroNetworks />}
         {view === "storages" && <MicroStorages />}
         {view === "host" && <HostInfo />}
-        {view === "images" && (
-          <section className="panel">
-            <h2 className="panel-title">이미지</h2>
-            <div className="empty">아직 화면이 없습니다 — 2주 이미지 작업에서 만듭니다.</div>
-          </section>
-        )}
+        {view === "images" && <Images />}
       </div>
-      {openConsole && <Console vmId={openConsole.id} vmName={openConsole.name} onClose={onCloseConsole} />}
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
     </Shell>
   );

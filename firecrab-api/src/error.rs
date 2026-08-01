@@ -154,6 +154,36 @@ impl AppError {
         Self::new(StatusCode::CONFLICT, "in_use", message, request_id)
     }
 
+    /// `409 in_use` with extra detail (e.g. which VMs still reference a template).
+    pub fn in_use_with_fields(
+        message: &'static str,
+        fields: BTreeMap<String, String>,
+        request_id: Uuid,
+    ) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "in_use",
+            message,
+            fields,
+            request_id,
+        }
+    }
+
+    /// `409` with a custom machine-readable code (install already running, …).
+    pub fn conflict(code: &'static str, message: &'static str, request_id: Uuid) -> Self {
+        Self::new(StatusCode::CONFLICT, code, message, request_id)
+    }
+
+    /// `503`: a required runtime dependency is missing (e.g. image base URL).
+    pub fn unavailable(message: &'static str, request_id: Uuid) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            message,
+            request_id,
+        )
+    }
+
     /// `409`: the VM's current state doesn't allow the requested operation.
     pub fn invalid_state(current: VmState, request_id: Uuid) -> Self {
         let mut fields = BTreeMap::new();
@@ -215,5 +245,51 @@ mod tests {
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("internal_error"));
         assert!(!body.contains("path"));
+    }
+
+    #[tokio::test]
+    async fn conflict_and_unavailable_status_codes() {
+        let response = AppError::conflict("already_installed", "already there", Uuid::new_v4())
+            .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "already_installed");
+
+        let response = AppError::unavailable("base url missing", Uuid::new_v4()).into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "unavailable");
+    }
+
+    #[tokio::test]
+    async fn in_use_with_fields_includes_detail_map() {
+        let mut fields = BTreeMap::new();
+        fields.insert("vms".to_owned(), "mn-probe [stopped]".to_owned());
+        fields.insert("count".to_owned(), "1".to_owned());
+        let response =
+            AppError::in_use_with_fields("still used", fields, Uuid::new_v4()).into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "in_use");
+        assert_eq!(json["error"]["fields"]["count"], "1");
+        assert_eq!(json["error"]["fields"]["vms"], "mn-probe [stopped]");
+    }
+
+    #[tokio::test]
+    async fn in_use_and_vm_not_running_codes() {
+        let response = AppError::in_use("busy", Uuid::new_v4()).into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "in_use");
+
+        let response = AppError::vm_not_running(Uuid::new_v4()).into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "vm_not_running");
     }
 }

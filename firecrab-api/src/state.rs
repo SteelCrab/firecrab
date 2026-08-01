@@ -9,6 +9,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::firecracker::{self, VmProcess};
+use crate::image_install::ImageInstallTracker;
 use crate::model::VmRecord;
 use crate::network::NetworkClient;
 use crate::persistence::{self, PersistenceError, Store};
@@ -74,6 +75,8 @@ pub struct AppState {
     pub(crate) disk_prep_permits: Arc<Semaphore>,
     /// Client for the privileged `firecrab-net-helper` (bridge/TAP/firewall).
     pub(crate) network: NetworkClient,
+    /// Async image install jobs (`POST /api/images/{alias}/install`).
+    pub(crate) image_installs: ImageInstallTracker,
 }
 
 impl AppState {
@@ -111,6 +114,7 @@ impl AppState {
             storage: Arc::new(storage),
             disk_prep_permits: Arc::new(Semaphore::new(DISK_PREP_CONCURRENCY)),
             network: NetworkClient::from_env(),
+            image_installs: ImageInstallTracker::from_env(),
         })
     }
 

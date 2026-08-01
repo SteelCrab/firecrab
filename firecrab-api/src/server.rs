@@ -10,7 +10,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use axum::routing::{any, delete, get, post};
 use axum::{Extension, Router};
 use thiserror::Error;
 use tokio::sync::Semaphore;
@@ -194,6 +194,15 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route("/api/images", get(handlers::images::list_images))
+        .route(
+            "/api/images/{alias}",
+            delete(handlers::images::delete_image),
+        )
+        .route(
+            "/api/images/{alias}/install",
+            get(handlers::images::get_image_install).post(handlers::images::start_image_install),
+        )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
             "/api/storage/devices",
