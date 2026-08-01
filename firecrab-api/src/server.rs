@@ -194,6 +194,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route("/api/images", get(handlers::images::list_images))
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
             "/api/storage/devices",

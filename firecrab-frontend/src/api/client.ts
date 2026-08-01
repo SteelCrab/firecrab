@@ -6,6 +6,7 @@ import type {
   CreateVmRequest,
   ErrorResponse,
   HostStatusResponse,
+  ImageResponse,
   MicroNetworkDetailResponse,
   MicroNetworkResponse,
   MicroStorageDetailResponse,
@@ -117,6 +118,11 @@ export function getNetworkInfo(): Promise<NetworkInfoResponse> {
 
 export function getHostStatus(): Promise<HostStatusResponse> {
   return fetchJson("/api/host");
+}
+
+/** Template registry aliases available for create (`GET /api/images`). */
+export function listImages(): Promise<ImageResponse[]> {
+  return fetchJson("/api/images");
 }
 
 export function listStorageRoots(): Promise<StorageRootResponse[]> {

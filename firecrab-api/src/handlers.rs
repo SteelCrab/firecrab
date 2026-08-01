@@ -1,4 +1,5 @@
 pub mod console;
+pub mod images;
 pub mod micro_networks;
 pub mod micro_storages;
 pub mod network;

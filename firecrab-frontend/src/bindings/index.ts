@@ -6,6 +6,7 @@ export * from "./CreateVmRequest";
 export * from "./EgressPolicy";
 export * from "./ErrorResponse";
 export * from "./HostStatusResponse";
+export * from "./ImageResponse";
 export * from "./MicroNetworkBridge";
 export * from "./MicroNetworkDetailResponse";
 export * from "./MicroNetworkFirewall";

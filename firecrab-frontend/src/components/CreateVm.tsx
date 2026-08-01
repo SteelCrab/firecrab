@@ -1,17 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
-import { ApiClientError, createVm, listMicroNetworks, listStorageRoots } from "../api/client";
+import {
+  ApiClientError,
+  createVm,
+  listImages,
+  listMicroNetworks,
+  listStorageRoots,
+} from "../api/client";
 import type {
   CreateVmRequest,
   EgressPolicy,
+  ImageResponse,
   MicroNetworkResponse,
   StorageRootResponse,
   VmResponse,
 } from "../bindings";
 import RamStepper from "./RamStepper";
-
-/** The registry aliases the API accepts today; selection only, no free text. */
-const TEMPLATES = ["ubuntu-26.04", "alpine-3.24"] as const;
 
 const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
   internet: "인터넷 허용",
@@ -42,9 +46,17 @@ function storageLabel(root: StorageRootResponse): string {
   return `${label} (${root.path})${free}`;
 }
 
+function templateLabel(image: ImageResponse): string {
+  const floor = image.minDiskGb > 0 ? ` · min ${image.minDiskGb} GiB` : "";
+  return `${image.alias} (${image.version})${floor}`;
+}
+
 export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [name, setName] = useState("");
-  const [template, setTemplate] = useState<string>(TEMPLATES[0]);
+  const [template, setTemplate] = useState<string>("");
+  const [images, setImages] = useState<ImageResponse[]>([]);
+  const [imagesLoading, setImagesLoading] = useState(true);
+  const [imagesError, setImagesError] = useState<string | null>(null);
   const [cpu, setCpu] = useState("1");
   const [ram, setRam] = useState("512");
   const [diskGb, setDiskGb] = useState("2");
@@ -57,27 +69,86 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setImagesLoading(true);
+    listImages()
+      .then((next) => {
+        if (cancelled) return;
+        // Create form only offers installed templates (uninstalled come later
+        // with the install API).
+        const installed = next.filter((image) => image.installed);
+        setImages(installed);
+        setImagesError(null);
+        setTemplate((current) => {
+          if (current && installed.some((image) => image.alias === current)) {
+            return current;
+          }
+          return installed[0]?.alias ?? "";
+        });
+        if (installed[0] && Number(diskGb) < installed[0].minDiskGb) {
+          setDiskGb(String(installed[0].minDiskGb));
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setImages([]);
+        setTemplate("");
+        setImagesError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setImagesLoading(false);
+      });
+
     listMicroNetworks()
       .then((networks) => {
+        if (cancelled) return;
         setMicroNetworks(networks);
         if (networks.length > 0) {
           setMicroNetworkId((current) => current || networks[0].id);
         }
       })
-      .catch(() => setMicroNetworks([]));
+      .catch(() => {
+        if (!cancelled) setMicroNetworks([]);
+      });
     listStorageRoots()
       .then((roots) => {
+        if (cancelled) return;
         setStorageRoots(roots);
         if (roots.length > 0) {
           setStorageRoot((current) => current || roots[0].id);
         }
       })
-      .catch(() => setStorageRoots([]));
+      .catch(() => {
+        if (!cancelled) setStorageRoots([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // diskGb intentionally omitted — only seed floor on first catalog load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only fetch
   }, []);
+
+  const selectedImage = useMemo(
+    () => images.find((image) => image.alias === template) ?? null,
+    [images, template],
+  );
+  const minDiskGb = selectedImage?.minDiskGb ?? 2;
+  const noTemplates = !imagesLoading && images.length === 0;
+  const canSubmit =
+    !submitting && !imagesLoading && !noTemplates && Boolean(template) && !imagesError;
+
+  const onTemplateChange = (alias: string) => {
+    setTemplate(alias);
+    const image = images.find((entry) => entry.alias === alias);
+    if (image && Number(diskGb) < image.minDiskGb) {
+      setDiskGb(String(image.minDiskGb));
+    }
+  };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (submitting) return;
+    if (!canSubmit) return;
 
     const request: CreateVmRequest = {
       name: name.trim(),
@@ -111,6 +182,14 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     <span className="field-error">{fieldErrors?.fieldError(field) ?? ""}</span>
   );
 
+  const templateHint = imagesLoading
+    ? "템플릿 불러오는 중…"
+    : imagesError
+      ? "템플릿 목록을 불러오지 못했습니다"
+      : noTemplates
+        ? "설치된 이미지가 없습니다 (install.sh 또는 이미지 설치 필요)"
+        : null;
+
   return (
     <form className="create-grid" onSubmit={handleSubmit}>
       <div className="field">
@@ -128,14 +207,26 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       </div>
       <div className="field">
         <label htmlFor="vm-template">template</label>
-        <select id="vm-template" value={template} onChange={(event) => setTemplate(event.target.value)}>
-          {TEMPLATES.map((alias) => (
-            <option key={alias} value={alias}>
-              {alias}
-            </option>
-          ))}
+        <select
+          id="vm-template"
+          value={template}
+          onChange={(event) => onTemplateChange(event.target.value)}
+          disabled={imagesLoading || noTemplates || Boolean(imagesError)}
+        >
+          {templateHint ? (
+            <option value="">{templateHint}</option>
+          ) : (
+            images.map((image) => (
+              <option key={image.alias} value={image.alias}>
+                {templateLabel(image)}
+              </option>
+            ))
+          )}
         </select>
         {fieldError("template")}
+        {(imagesError || noTemplates) && !fieldErrors?.fieldError("template") && (
+          <span className="field-error">{imagesError ?? "생성하려면 먼저 이미지를 설치하세요"}</span>
+        )}
       </div>
       <div className="field">
         <label htmlFor="vm-cpu">cpu</label>
@@ -159,7 +250,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         <input
           id="vm-disk"
           type="number"
-          min={2}
+          min={minDiskGb}
           max={500}
           value={diskGb}
           onChange={(event) => setDiskGb(event.target.value)}
@@ -235,7 +326,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           id="vm-create-submit"
           className="btn primary"
           type="submit"
-          disabled={submitting}
+          disabled={!canSubmit}
         >
           {submitting ? "생성 중…" : "생성"}
         </button>

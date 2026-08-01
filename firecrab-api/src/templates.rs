@@ -266,6 +266,19 @@ impl TemplateRegistry {
             .cloned()
     }
 
+    /// Every alias currently pinned in the registry, sorted by alias name.
+    /// Used by `GET /api/images` so the dashboard dropdown matches the server
+    /// without a hardcoded frontend list.
+    pub fn list_aliases(&self) -> Vec<Arc<TemplateVersion>> {
+        let mut entries: Vec<_> = self
+            .aliases
+            .values()
+            .filter_map(|(name, version)| self.resolve_version(name, version))
+            .collect();
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        entries
+    }
+
     /// Re-verifies `artifact`'s identity (device/inode/length) and content
     /// hash, then returns an open handle to it. Fails if either check no
     /// longer matches what was pinned at registry construction time.
