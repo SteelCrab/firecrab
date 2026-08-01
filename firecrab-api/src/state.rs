@@ -118,7 +118,6 @@ impl AppState {
         })
     }
 
-
     /// `{storage_root}/vms` for this VM. Resolves env/default roots first,
     /// then MicroStorage rows in the DB. Falls back to the default root if
     /// the id vanished (delete still works; start fails with a clear error

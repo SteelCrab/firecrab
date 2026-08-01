@@ -111,8 +111,10 @@ impl ImageInstallTracker {
         let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(job) = jobs.get_mut(alias) {
             let now = now_ms();
-            job.log
-                .push(format!("[{}] install succeeded — template registered", clock(now)));
+            job.log.push(format!(
+                "[{}] install succeeded — template registered",
+                clock(now)
+            ));
             job.status = ImageInstallStatus::Succeeded;
             job.ended_at_ms = Some(now);
         }
@@ -122,8 +124,11 @@ impl ImageInstallTracker {
         let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(job) = jobs.get_mut(alias) {
             let now = now_ms();
-            job.log
-                .push(format!("[{}] install failed: {}", clock(now), detail.into()));
+            job.log.push(format!(
+                "[{}] install failed: {}",
+                clock(now),
+                detail.into()
+            ));
             job.status = ImageInstallStatus::Failed;
             job.ended_at_ms = Some(now);
         }

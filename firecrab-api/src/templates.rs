@@ -353,7 +353,9 @@ impl TemplateRegistry {
             .values()
             .flat_map(|template| {
                 std::iter::once(template.kernel.relative_path().to_path_buf())
-                    .chain(std::iter::once(template.rootfs.relative_path().to_path_buf()))
+                    .chain(std::iter::once(
+                        template.rootfs.relative_path().to_path_buf(),
+                    ))
                     .chain(
                         template
                             .initrd
@@ -365,7 +367,12 @@ impl TemplateRegistry {
 
         let orphan_paths: Vec<PathBuf> = std::iter::once(removed.kernel.relative_path())
             .chain(std::iter::once(removed.rootfs.relative_path()))
-            .chain(removed.initrd.as_ref().map(|artifact| artifact.relative_path()))
+            .chain(
+                removed
+                    .initrd
+                    .as_ref()
+                    .map(|artifact| artifact.relative_path()),
+            )
             .filter(|relative| !still_referenced.contains(*relative))
             .map(|relative| self.image_root_path.join(relative))
             .collect();

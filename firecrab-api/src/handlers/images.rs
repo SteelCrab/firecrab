@@ -82,7 +82,8 @@ pub async fn get_image_install(
     Path(alias): Path<String>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<ImageInstallResponse>, AppError> {
-    if TemplateRegistry::known_spec(&alias).is_none() && state.templates.resolve_alias(&alias).is_none()
+    if TemplateRegistry::known_spec(&alias).is_none()
+        && state.templates.resolve_alias(&alias).is_none()
     {
         return Err(AppError::not_found(request_id.0));
     }
@@ -173,7 +174,13 @@ pub async fn delete_image(
         let users: Vec<String> = vms
             .values()
             .filter(|vm| vm.template == alias)
-            .map(|vm| format!("{} [{}]", vm.name, crate::persistence::encode_state(vm.state)))
+            .map(|vm| {
+                format!(
+                    "{} [{}]",
+                    vm.name,
+                    crate::persistence::encode_state(vm.state)
+                )
+            })
             .collect();
         if !users.is_empty() {
             let mut fields = std::collections::BTreeMap::new();
@@ -253,8 +260,16 @@ mod tests {
         let directory = tempdir().unwrap();
         let state = empty_state(directory.path()).await;
         let Json(images) = list_images(State(state)).await;
-        assert!(images.iter().any(|image| image.alias == "ubuntu-26.04" && !image.installed));
-        assert!(images.iter().any(|image| image.alias == "alpine-3.24" && !image.installed));
+        assert!(
+            images
+                .iter()
+                .any(|image| image.alias == "ubuntu-26.04" && !image.installed)
+        );
+        assert!(
+            images
+                .iter()
+                .any(|image| image.alias == "alpine-3.24" && !image.installed)
+        );
     }
 
     #[tokio::test]
@@ -408,7 +423,11 @@ mod tests {
 
         let Json(images) = list_images(State(state)).await;
         // Built-in known aliases remain listed as missing; demo was not known.
-        assert!(!images.iter().any(|image| image.alias == "demo" && image.installed));
+        assert!(
+            !images
+                .iter()
+                .any(|image| image.alias == "demo" && image.installed)
+        );
     }
 
     #[tokio::test]
