@@ -7,12 +7,11 @@ import CreateVm from "./components/CreateVm";
 import VmTable from "./components/VmTable";
 import Console from "./components/Console";
 import VmDetailModal from "./components/VmDetailModal";
-import HostInfoModal from "./components/HostInfoModal";
-import MicroNetworksModal from "./components/MicroNetworksModal";
-import MicroStoragesModal from "./components/MicroStoragesModal";
+import HostInfo from "./components/HostInfo";
+import MicroNetworks from "./components/MicroNetworks";
+import MicroStorages from "./components/MicroStorages";
 import Shell from "./components/Shell";
-import { VIEWS, useHashView } from "./navigation";
-import type { ViewId } from "./navigation";
+import { useHashView } from "./navigation";
 
 const POLL_MILLIS = 3_000;
 // After repeated failures assume the API is down and poll gently.
@@ -106,9 +105,6 @@ export default function App() {
   // id of the VM whose detail modal is open, if any — same local-UI-state
   // reasoning as openConsole.
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
-  const [showHostInfo, setShowHostInfo] = useState(false);
-  const [showMicroNetworks, setShowMicroNetworks] = useState(false);
-  const [showMicroStorages, setShowMicroStorages] = useState(false);
   const [view, onSelectView] = useHashView();
 
   const runRefresh = useCallback(() => {
@@ -178,25 +174,11 @@ export default function App() {
 
   const pollNote = slowMode ? "API 연결 안 됨 — 15s 간격 재시도" : `${POLL_MILLIS / 1000}s polling`;
 
-  const headerActions = (
-    <>
-      <button className="btn" onClick={() => setShowMicroNetworks(true)}>
-        MicroNetwork
-      </button>
-      <button className="btn" onClick={() => setShowMicroStorages(true)}>
-        MicroStorage
-      </button>
-      <button className="btn" onClick={() => setShowHostInfo(true)}>
-        HOST 정보
-      </button>
-    </>
-  );
-
   return (
-    <Shell view={view} onSelectView={onSelectView} actions={headerActions}>
+    <Shell view={view} onSelectView={onSelectView}>
       <div className="stack">
         {state.banner && <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} />}
-        {view === "vms" ? (
+        {view === "vms" && (
           <>
             <section className="panel">
               <h2 className="panel-title">NEW MICROVM</h2>
@@ -220,35 +202,22 @@ export default function App() {
               )}
             </section>
           </>
-        ) : (
-          <Placeholder view={view} />
+        )}
+        {/* Each page mounts only while selected, so its own polling stops
+            the moment you navigate away. */}
+        {view === "networks" && <MicroNetworks />}
+        {view === "storages" && <MicroStorages />}
+        {view === "host" && <HostInfo />}
+        {view === "images" && (
+          <section className="panel">
+            <h2 className="panel-title">이미지</h2>
+            <div className="empty">아직 화면이 없습니다 — 2주 이미지 작업에서 만듭니다.</div>
+          </section>
         )}
       </div>
       {openConsole && <Console vmId={openConsole.id} vmName={openConsole.name} onClose={onCloseConsole} />}
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
-      {showHostInfo && <HostInfoModal onClose={() => setShowHostInfo(false)} />}
-      {showMicroNetworks && <MicroNetworksModal onClose={() => setShowMicroNetworks(false)} />}
-      {showMicroStorages && <MicroStoragesModal onClose={() => setShowMicroStorages(false)} />}
     </Shell>
-  );
-}
-
-/**
- * The four destinations whose pages are still modals. Named rather than
- * blank so the nav has no dead end, and so it's obvious which screen is
- * missing while the promotion work lands.
- */
-function Placeholder({ view }: { view: ViewId }) {
-  const label = VIEWS.find((item) => item.id === view)?.label ?? view;
-  return (
-    <section className="panel">
-      <h2 className="panel-title">{label}</h2>
-      <div className="empty">
-        {view === "images"
-          ? "아직 화면이 없습니다 — 2주 이미지 작업에서 만듭니다."
-          : "아직 페이지가 아닙니다 — 위 헤더 버튼으로 여세요."}
-      </div>
-    </section>
   );
 }
 

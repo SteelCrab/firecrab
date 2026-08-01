@@ -61,7 +61,6 @@ body {
 .shell-brand { position: relative; }
 .shell-brand .eyebrow { margin-bottom: 0.4rem; }
 .shell-brand .wordmark { margin-bottom: 0; }
-.shell-actions { position: relative; display: flex; gap: 0.6rem; }
 
 /* 내비 폭은 여기서만 바꾼다 — 축소 단계마다 이 값 하나로 전환된다. */
 .shell-body {
@@ -328,6 +327,15 @@ form.create-grid {
 
 /* 좁은 셸에서 표만 가로로 스크롤되고 페이지는 그대로 */
 .table-scroll { overflow-x: auto; }
+
+/* 페이지 안에 한 단계 들여 놓는 상세 블록 (모달의 .detail-body 대체) */
+.subpanel {
+  margin-top: 1.25rem;
+  padding: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+}
 
 table.vm-table {
   width: 100%;

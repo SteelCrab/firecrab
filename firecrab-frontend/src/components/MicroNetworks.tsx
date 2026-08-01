@@ -10,17 +10,13 @@ import {
   updateMicroNetwork,
 } from "../api/client";
 
-interface MicroNetworksModalProps {
-  onClose: () => void;
-}
-
 /**
  * MicroNetwork management (`docs/30-tasks/task-micro-network.md`) — firecrab's own
  * virtual networks. Creating one reserves the CIDR, provisions its host
  * bridge, and gives it its own DHCP range and NAT rule; VMs then pick one on
  * the create form. Deleting is refused while VMs are still in it.
  */
-export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps) {
+export default function MicroNetworks() {
   const [networks, setNetworks] = useState<MicroNetworkResponse[] | null>(null);
   const [name, setName] = useState("");
   const [subnetCidr, setSubnetCidr] = useState("");
@@ -119,130 +115,123 @@ export default function MicroNetworksModal({ onClose }: MicroNetworksModalProps)
   );
 
   return (
-    <div className="console-overlay">
-      <div className="console-panel">
-        <div className="console-bar">
-          <span className="console-title">MicroNetwork</span>
-          <button className="btn console-close" onClick={onClose}>
-            ✕
+    <section className="panel">
+      <h2 className="panel-title">MicroNetwork</h2>
+      <form className="create-grid" onSubmit={handleSubmit}>
+        <div className="field">
+          <label htmlFor="mn-name">name</label>
+          <input
+            id="mn-name"
+            placeholder="prod"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            required
+            minLength={1}
+            maxLength={64}
+          />
+          {fieldError("name")}
+        </div>
+        <div className="field">
+          <label htmlFor="mn-subnet">subnet CIDR</label>
+          <input
+            id="mn-subnet"
+            placeholder="172.31.0.0/24"
+            value={subnetCidr}
+            onChange={(event) => setSubnetCidr(event.target.value)}
+            required
+          />
+          {fieldError("subnetCidr")}
+        </div>
+        <div className="field">
+          <label htmlFor="mn-internet">인터넷</label>
+          <select
+            id="mn-internet"
+            value={internetEnabled ? "on" : "off"}
+            onChange={(event) => setInternetEnabled(event.target.value === "on")}
+          >
+            <option value="on">연결 (NAT)</option>
+            <option value="off">차단 (내부 전용)</option>
+          </select>
+          <span className="field-error"></span>
+        </div>
+        <div className="field">
+          <label>&nbsp;</label>
+          <button className="btn primary" type="submit" disabled={submitting}>
+            {submitting ? "생성 중…" : "생성"}
           </button>
+          <span className="field-error"></span>
         </div>
-        <div className="detail-body">
-          <form className="create-grid" onSubmit={handleSubmit}>
-            <div className="field">
-              <label htmlFor="mn-name">name</label>
-              <input
-                id="mn-name"
-                placeholder="prod"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                required
-                minLength={1}
-                maxLength={64}
-              />
-              {fieldError("name")}
-            </div>
-            <div className="field">
-              <label htmlFor="mn-subnet">subnet CIDR</label>
-              <input
-                id="mn-subnet"
-                placeholder="172.31.0.0/24"
-                value={subnetCidr}
-                onChange={(event) => setSubnetCidr(event.target.value)}
-                required
-              />
-              {fieldError("subnetCidr")}
-            </div>
-            <div className="field">
-              <label htmlFor="mn-internet">인터넷</label>
-              <select
-                id="mn-internet"
-                value={internetEnabled ? "on" : "off"}
-                onChange={(event) => setInternetEnabled(event.target.value === "on")}
-              >
-                <option value="on">연결 (NAT)</option>
-                <option value="off">차단 (내부 전용)</option>
-              </select>
-              <span className="field-error"></span>
-            </div>
-            <div className="field">
-              <label>&nbsp;</label>
-              <button className="btn primary" type="submit" disabled={submitting}>
-                {submitting ? "생성 중…" : "생성"}
-              </button>
-              <span className="field-error"></span>
-            </div>
-          </form>
+      </form>
 
-          {listError && <div className="field-error">{listError}</div>}
+      {listError && <div className="field-error">{listError}</div>}
 
-          {networks === null ? (
-            <div className="empty">불러오는 중…</div>
-          ) : networks.length === 0 ? (
-            <div className="empty">MicroNetwork가 없습니다 — 위에서 생성하세요</div>
-          ) : (
-            <table className="vm-table">
-              <thead>
-                <tr>
-                  <th>name</th>
-                  <th>subnet CIDR</th>
-                  <th>gateway</th>
-                  <th>인터넷</th>
-                  <th>id</th>
-                  <th className="actions">actions</th>
+      {networks === null ? (
+        <div className="empty">불러오는 중…</div>
+      ) : networks.length === 0 ? (
+        <div className="empty">MicroNetwork가 없습니다 — 위에서 생성하세요</div>
+      ) : (
+        <div className="table-scroll">
+          <table className="vm-table">
+            <thead>
+              <tr>
+                <th>name</th>
+                <th>subnet CIDR</th>
+                <th>gateway</th>
+                <th>인터넷</th>
+                <th>id</th>
+                <th className="actions">actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {networks.map((network) => (
+                <tr
+                  key={network.id}
+                  className={selectedId === network.id ? "selected" : undefined}
+                  onClick={() => setSelectedId(selectedId === network.id ? null : network.id)}
+                >
+                  <td className="name">{network.name}</td>
+                  <td className="mono">{network.subnetCidr}</td>
+                  <td className="mono">{network.gateway}</td>
+                  <td>{network.internetEnabled ? "연결" : "차단"}</td>
+                  <td className="mono" title={network.id}>
+                    {network.id.split("-")[0]}
+                  </td>
+                  <td className="actions">
+                    <button
+                      className="btn"
+                      disabled={busyId === network.id}
+                      title={
+                        network.internetEnabled
+                          ? "NAT을 떼고 외부로 나가는 트래픽을 차단합니다"
+                          : "NAT을 붙여 외부 통신을 허용합니다"
+                      }
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleToggleInternet(network);
+                      }}
+                    >
+                      {network.internetEnabled ? "인터넷 차단" : "인터넷 연결"}
+                    </button>
+                    <button
+                      className="btn danger"
+                      disabled={busyId === network.id}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleDelete(network);
+                      }}
+                    >
+                      delete
+                    </button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {networks.map((network) => (
-                  <tr
-                    key={network.id}
-                    className={selectedId === network.id ? "selected" : undefined}
-                    onClick={() => setSelectedId(selectedId === network.id ? null : network.id)}
-                  >
-                    <td className="name">{network.name}</td>
-                    <td className="mono">{network.subnetCidr}</td>
-                    <td className="mono">{network.gateway}</td>
-                    <td>{network.internetEnabled ? "연결" : "차단"}</td>
-                    <td className="mono" title={network.id}>
-                      {network.id.split("-")[0]}
-                    </td>
-                    <td className="actions">
-                      <button
-                        className="btn"
-                        disabled={busyId === network.id}
-                        title={
-                          network.internetEnabled
-                            ? "NAT을 떼고 외부로 나가는 트래픽을 차단합니다"
-                            : "NAT을 붙여 외부 통신을 허용합니다"
-                        }
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleToggleInternet(network);
-                        }}
-                      >
-                        {network.internetEnabled ? "인터넷 차단" : "인터넷 연결"}
-                      </button>
-                      <button
-                        className="btn danger"
-                        disabled={busyId === network.id}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleDelete(network);
-                        }}
-                      >
-                        delete
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {selectedId && <MicroNetworkDetail detail={detail} error={detailError} />}
+              ))}
+            </tbody>
+          </table>
         </div>
-      </div>
-    </div>
+      )}
+
+      {selectedId && <MicroNetworkDetail detail={detail} error={detailError} />}
+    </section>
   );
 }
 
@@ -260,7 +249,7 @@ function MicroNetworkDetail({
 
   const { subnet, bridge, nat, firewall } = detail;
   return (
-    <div className="detail-body">
+    <div className="subpanel">
       <dl className="detail-fields mono">
         <dt>네트워크 ID</dt>
         <dd>{detail.id}</dd>

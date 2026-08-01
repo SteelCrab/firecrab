@@ -5,8 +5,6 @@ import type { ViewId } from "../navigation";
 interface ShellProps {
   view: ViewId;
   onSelectView: (view: ViewId) => void;
-  /** Header-level controls (still modal buttons until the pages land). */
-  actions?: ReactNode;
   children: ReactNode;
 }
 
@@ -15,7 +13,7 @@ interface ShellProps {
  * collapses to an icon rail and then to a horizontal strip via CSS alone —
  * no breakpoint state to keep in sync with the stylesheet.
  */
-export default function Shell({ view, onSelectView, actions, children }: ShellProps) {
+export default function Shell({ view, onSelectView, children }: ShellProps) {
   return (
     <div className="shell">
       <header className="shell-header">
@@ -26,7 +24,6 @@ export default function Shell({ view, onSelectView, actions, children }: ShellPr
             <span className="cursor">_</span>
           </h1>
         </div>
-        {actions && <div className="shell-actions">{actions}</div>}
       </header>
       <div className="shell-body">
         <nav className="shell-nav" aria-label="주요 메뉴">
