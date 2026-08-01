@@ -1,12 +1,18 @@
 import type {
   ApiError,
+  AssignVmStorageRequest,
   CreateMicroNetworkRequest,
+  CreateMicroStorageRequest,
   CreateVmRequest,
   ErrorResponse,
   HostStatusResponse,
   MicroNetworkDetailResponse,
   MicroNetworkResponse,
+  MicroStorageDetailResponse,
+  MicroStorageResponse,
   NetworkInfoResponse,
+  StorageDeviceResponse,
+  StorageRootResponse,
   UpdateMicroNetworkRequest,
   UpdateVmResourcesRequest,
   VmLogResponse,
@@ -111,6 +117,50 @@ export function getNetworkInfo(): Promise<NetworkInfoResponse> {
 
 export function getHostStatus(): Promise<HostStatusResponse> {
   return fetchJson("/api/host");
+}
+
+export function listStorageRoots(): Promise<StorageRootResponse[]> {
+  return fetchJson("/api/storage");
+}
+
+export function listStorageDevices(): Promise<StorageDeviceResponse[]> {
+  return fetchJson("/api/storage/devices");
+}
+
+export function listMicroStorages(): Promise<MicroStorageResponse[]> {
+  return fetchJson("/api/micro-storages");
+}
+
+export function getMicroStorage(id: string): Promise<MicroStorageDetailResponse> {
+  return fetchJson(`/api/micro-storages/${id}`);
+}
+
+export function createMicroStorage(request: CreateMicroStorageRequest): Promise<MicroStorageResponse> {
+  return fetchJson("/api/micro-storages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export async function deleteMicroStorage(id: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/micro-storages/${id}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+}
+
+export function assignVmStorage(id: string, request: AssignVmStorageRequest): Promise<VmResponse> {
+  return fetchJson(`/api/vms/${id}/storage`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
 }
 
 export async function deleteVm(id: string): Promise<void> {

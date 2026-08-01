@@ -13,7 +13,6 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::bridge::BRIDGE_NAME;
 use crate::nat;
 
 /// Name of the owned `inet` table (NAT/egress dispatch).
@@ -192,33 +191,30 @@ pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError>
     Ok(())
 }
 
-/// Every Firecrab-owned bridge: the built-in default network's, plus one per
-/// MicroNetwork. Names are derived from the network id (hex only), never
-/// taken as text from the API.
+/// Every Firecrab-owned bridge: one per MicroNetwork. Names are derived from
+/// the network id (hex only), never taken as text from the API.
 fn bridge_names(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
-    std::iter::once(BRIDGE_NAME.to_owned())
-        .chain(micro_networks.iter().map(MicroNetworkSpec::bridge_name))
+    micro_networks
+        .iter()
+        .map(MicroNetworkSpec::bridge_name)
         .collect()
 }
 
 /// Every Firecrab-owned subnet, in the same order as [`bridge_names`].
 fn subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
-    std::iter::once(nat::BRIDGE_SUBNET.to_owned())
-        .chain(micro_networks.iter().map(MicroNetworkSpec::subnet_cidr))
+    micro_networks
+        .iter()
+        .map(MicroNetworkSpec::subnet_cidr)
         .collect()
 }
 
-/// The subnets allowed out of the host. The built-in default network always
-/// is; a MicroNetwork only if its internet toggle is on
+/// The subnets allowed out of the host — MicroNetworks with internet on
 /// (`docs/30-tasks/task-micro-network.md`).
 fn egress_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
-    std::iter::once(nat::BRIDGE_SUBNET.to_owned())
-        .chain(
-            micro_networks
-                .iter()
-                .filter(|network| network.internet_enabled)
-                .map(MicroNetworkSpec::subnet_cidr),
-        )
+    micro_networks
+        .iter()
+        .filter(|network| network.internet_enabled)
+        .map(MicroNetworkSpec::subnet_cidr)
         .collect()
 }
 
@@ -266,7 +262,13 @@ fn render_apply_ruleset(
     // from reaching each other now that the host routes all of them. Traffic
     // within one subnet is switched, not routed, and is denied separately by
     // the bridge table's tap-to-tap rule.
-    let internal_destinations = subnets.join(", ");
+    // Empty MicroNetwork set: still block link-local/loopback as destinations
+    // for any future per-VM policy; no trailing comma that would break nft.
+    let internal_destinations = if subnets.is_empty() {
+        "127.0.0.0/8, 169.254.0.0/16".to_owned()
+    } else {
+        format!("127.0.0.0/8, 169.254.0.0/16, {}", subnets.join(", "))
+    };
     // A network with its internet switched off: every *new* forwarded flow
     // out of it is dropped, whatever the per-VM egress policy says. Placed
     // after the established/related accept so a VM that something else is
@@ -300,7 +302,7 @@ fn render_apply_ruleset(
          \t}}\n\
          \tchain firecrab_egress {{\n\
          \t\tct state established,related accept\n\
-         \t\tip daddr {{ 127.0.0.0/8, 169.254.0.0/16, {internal_destinations} }} drop\n\
+         \t\tip daddr {{ {internal_destinations} }} drop\n\
          {offline_drop}\
          \t\tip saddr vmap @vm_egress\n\
          \t\tdrop\n\
@@ -461,11 +463,7 @@ mod tests {
         ];
         let ruleset = render_apply_ruleset("eth0", &networks).unwrap();
 
-        // The default network keeps its own rules, unchanged.
-        assert!(ruleset.contains("iifname \"fcbr0\" jump firecrab_egress"));
-        assert!(
-            ruleset.contains("ip saddr 172.30.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
-        );
+        assert!(!ruleset.contains("iifname \"fcbr0\""));
 
         for network in networks {
             let bridge = network.bridge_name();
@@ -491,7 +489,7 @@ mod tests {
         // so one MicroNetwork cannot reach another even though the host has
         // a connected route to both and ip_forward is on.
         assert!(ruleset.contains(
-            "ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.30.0.0/24, 172.31.0.0/24, 172.32.0.0/24 } drop"
+            "ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.31.0.0/24, 172.32.0.0/24 } drop"
         ));
     }
 
@@ -551,12 +549,14 @@ mod tests {
 
     #[test]
     fn global_ruleset_dispatches_bridge_traffic_from_accept_policy_base_chains() {
-        let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
+        let network = sample_network(0x1234, "172.31.0.1", 24);
+        let ruleset = render_apply_ruleset("eth0", &[network]).unwrap();
         assert!(ruleset.contains("policy accept"));
-        assert!(ruleset.contains("iifname \"fcbr0\" jump firecrab_egress"));
-        assert!(ruleset.contains("oifname \"fcbr0\" jump firecrab_ingress"));
+        let bridge = network.bridge_name();
+        assert!(ruleset.contains(&format!("iifname \"{bridge}\" jump firecrab_egress")));
+        assert!(ruleset.contains(&format!("oifname \"{bridge}\" jump firecrab_ingress")));
         assert!(
-            ruleset.contains("ip saddr 172.30.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
+            ruleset.contains("ip saddr 172.31.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
         );
         assert!(ruleset.contains("masquerade"));
     }
@@ -566,7 +566,7 @@ mod tests {
         let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
         // firecrab_egress: reserved destinations dropped, then per-VM map,
         // then a trailing drop (default deny for anything not accepted).
-        assert!(ruleset.contains("ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.30.0.0/24 } drop"));
+        assert!(ruleset.contains("ip daddr { 127.0.0.0/8, 169.254.0.0/16 } drop"));
         assert!(ruleset.contains("ip saddr vmap @vm_egress"));
         assert!(ruleset.contains("ip daddr vmap @vm_ingress"));
         // Both dispatch chains must end in drop.

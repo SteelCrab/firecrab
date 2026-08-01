@@ -1,8 +1,8 @@
 //! Read-only host/network info for the dashboard's status panel (see
-//! `docs/30-tasks/task-network-configuration-dashboard.md`). The subnet/bridge are
-//! fixed constants for now — making them genuinely editable needs a larger
-//! IPAM/bridge refactor, deferred per that task doc's own scope note. Host
-//! status is a live snapshot read straight from `/proc` and `df`.
+//! `docs/30-tasks/task-network-configuration-dashboard.md`). The subnet/bridge
+//! come from the first MicroNetwork when any exist — prefer
+//! `GET /api/micro-networks` for the full set. Host status is a live
+//! snapshot read straight from `/proc` and `df`.
 
 use std::fs;
 use std::path::Path;
@@ -11,23 +11,39 @@ use std::process::Command;
 use axum::Json;
 use axum::extract::State;
 use firecrab_api_types::{HostStatusResponse, NetworkInfoResponse};
+use firecrab_helper_protocol::network::micro_network_bridge_name;
 
-use crate::ipam::{GATEWAY, NETWORK, PREFIX_LEN};
+use crate::ipam::SubnetSpec;
 use crate::state::AppState;
 
-/// Name of the shared Linux bridge every VM's TAP attaches to. Mirrors
-/// `firecrab-net-helper/src/bridge.rs::BRIDGE_NAME` — not shared directly,
-/// since `firecrab-api` deliberately has no dependency on
-/// `firecrab-net-helper` (privilege separation).
-const BRIDGE_NAME: &str = "fcbr0";
+/// `GET /api/network`: first MicroNetwork summary, or empty strings when none.
+pub async fn get_network_info(State(state): State<AppState>) -> Json<NetworkInfoResponse> {
+    let uplink = read_uplink().unwrap_or_default();
+    let store = state.store.clone();
+    let networks = tokio::task::spawn_blocking(move || store.list_micro_networks())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
 
-/// `GET /api/network`: the fixed network configuration firecrab has set up.
-pub async fn get_network_info() -> Json<NetworkInfoResponse> {
+    let Some(network) = networks.into_iter().next() else {
+        return Json(NetworkInfoResponse {
+            bridge_name: String::new(),
+            subnet_cidr: String::new(),
+            gateway: String::new(),
+            uplink,
+        });
+    };
+
+    let gateway = SubnetSpec::parse(network.id, &network.subnet_cidr)
+        .map(|subnet| subnet.gateway().to_string())
+        .unwrap_or(network.gateway);
+
     Json(NetworkInfoResponse {
-        bridge_name: BRIDGE_NAME.to_owned(),
-        subnet_cidr: format!("{NETWORK}/{PREFIX_LEN}"),
-        gateway: GATEWAY.to_string(),
-        uplink: read_uplink().unwrap_or_default(),
+        bridge_name: micro_network_bridge_name(network.id),
+        subnet_cidr: network.subnet_cidr,
+        gateway,
+        uplink,
     })
 }
 
@@ -133,13 +149,42 @@ mod tests {
     use crate::templates::TemplateRegistry;
 
     #[tokio::test]
-    async fn network_info_reports_the_fixed_subnet() {
-        let Json(info) = get_network_info().await;
-        assert_eq!(info.bridge_name, "fcbr0");
-        assert_eq!(info.subnet_cidr, "172.30.0.0/24");
-        assert_eq!(info.gateway, "172.30.0.1");
-        // Real host value, not fixed like the rest — just check it resolved.
-        assert!(!info.uplink.is_empty());
+    async fn network_info_is_empty_when_no_micro_networks_exist() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .expect("empty template spec list should always verify");
+        let state = AppState::with_db_file(templates, directory.path().join("state.db"))
+            .await
+            .expect("fresh temp db should open cleanly");
+
+        let Json(info) = get_network_info(State(state)).await;
+        assert!(info.bridge_name.is_empty());
+        assert!(info.subnet_cidr.is_empty());
+        assert!(info.gateway.is_empty());
+    }
+
+    /// With MicroNetworks present, the panel reports the first one's bridge
+    /// and a gateway recomputed from its CIDR (not whatever was stored).
+    #[tokio::test]
+    async fn network_info_summarises_the_first_micro_network() {
+        let directory = tempdir().unwrap();
+        let state = crate::handlers::vms::test_support::test_state(directory.path()).await;
+        let (_, Json(network)) = crate::handlers::micro_networks::create_micro_network(
+            State(state.clone()),
+            axum::extract::Extension(crate::server::RequestId(uuid::Uuid::new_v4())),
+            crate::extract::ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                name: "panel-net".to_owned(),
+                subnet_cidr: "172.29.0.0/24".to_owned(),
+                internet_enabled: true,
+            }),
+        )
+        .await
+        .expect("create micro network");
+
+        let Json(info) = get_network_info(State(state)).await;
+        assert_eq!(info.subnet_cidr, "172.29.0.0/24");
+        assert_eq!(info.gateway, "172.29.0.1");
+        assert_eq!(info.bridge_name, micro_network_bridge_name(network.id));
     }
 
     #[test]

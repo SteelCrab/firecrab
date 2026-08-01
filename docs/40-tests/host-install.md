@@ -3,7 +3,7 @@ tags:
   - firecrab
   - test
   - host
-updated: 2026-07-30
+updated: 2026-08-01
 ---
 
 # Host 설치 테스트
@@ -21,20 +21,22 @@ updated: 2026-07-30
 
 > [!note] CI가 대신 돌린다
 > `.github/workflows/ci.yml`의 `install` job이 일회용 러너 VM에서 전체 설치를 실행한다 —
-> shellcheck, `--check` 무변경, 설치, 데몬 2개 기동, capability 런타임 확인, 대시보드 200,
-> 재실행 멱등성, `--uninstall`/`--purge`까지. 게스트 이미지 빌드(=VM 부팅)만 범위 밖.
+> shellcheck(`install.sh` + `firecrab-doctor.sh`), `--check`/`--doctor` 무변경, 설치,
+> 데몬 2개 기동, 설치 후 doctor(이미지 FAIL만 허용, `--no-images`), capability 런타임 확인,
+> 대시보드 200, 재실행 멱등성, `--uninstall`/`--purge`까지. 게스트 이미지 빌드(=VM 부팅)만 범위 밖.
 
 ## 자동 테스트 (root 불필요)
 
 ```sh
-cargo test -p firecrab-api server::                    # 5
+cargo test -p firecrab-api server::                    # 6
 cargo test -p firecrab-api templates::                 # 9
-bash -n install.sh                                     # 문법
+bash -n install.sh scripts/firecrab-doctor.sh          # 문법
 ./install.sh --help
 ./install.sh --check                                   # 비특권 + 무변경이어야 함
+./install.sh --doctor                                  # 비특권 + 무변경 (FAIL 있어도 exit 0/1)
 ```
 
-전체: `cargo test --workspace` → 158/20/16/56
+전체: `cargo test --workspace` → 216/20/16/56 (합계 308)
 
 확인 항목:
 

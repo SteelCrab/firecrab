@@ -14,8 +14,6 @@ use rtnetlink::{Handle, LinkUnspec, new_connection};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::bridge::BRIDGE_NAME;
-
 /// Linux's `IFNAMSIZ`: the fixed size of `ifreq.ifr_name`.
 const IFNAMSIZ: usize = 16;
 
@@ -85,9 +83,9 @@ fn owner_alias(vm_id: Uuid) -> String {
 /// creating a fresh device fails (missing bridge, the device vanishing, the
 /// alias/attach/up call itself), that fresh device is deleted again before
 /// returning the error, so a partial failure never leaves an orphaned TAP.
-pub async fn create_tap(vm_id: Uuid, micro_network_id: Option<Uuid>) -> Result<(), TapError> {
+pub async fn create_tap(vm_id: Uuid, micro_network_id: Uuid) -> Result<(), TapError> {
     let name = tap_name(vm_id);
-    let bridge = bridge_for(micro_network_id);
+    let bridge = micro_network_bridge_name(micro_network_id);
     let (connection, handle, _) = new_connection().map_err(TapError::Connection)?;
     tokio::spawn(connection);
 
@@ -115,13 +113,6 @@ pub async fn create_tap(vm_id: Uuid, micro_network_id: Option<Uuid>) -> Result<(
         }
     }
     result
-}
-
-/// The bridge a VM's TAP attaches to: its MicroNetwork's, or the default
-/// network's when it belongs to none. As everywhere else in this helper, the
-/// interface name is derived from an id rather than taken as a string.
-fn bridge_for(micro_network_id: Option<Uuid>) -> String {
-    micro_network_id.map_or_else(|| BRIDGE_NAME.to_owned(), micro_network_bridge_name)
 }
 
 /// Looks up `name` and its target bridge, then attaches/aliases/brings it up.
@@ -273,10 +264,10 @@ mod tests {
     fn a_vm_attaches_to_its_own_micro_networks_bridge() {
         let network = Uuid::from_u128(0x1234);
         assert_eq!(
-            bridge_for(Some(network)),
+            micro_network_bridge_name(network),
             micro_network_bridge_name(network)
         );
-        assert_eq!(bridge_for(None), BRIDGE_NAME);
+        assert!(micro_network_bridge_name(network).starts_with("mnb"));
     }
 
     #[test]

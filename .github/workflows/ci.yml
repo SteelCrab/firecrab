@@ -133,7 +133,7 @@ jobs:
           PY
 
   install:
-    name: Installer (shellcheck, --check, install/uninstall)
+    name: Installer (shellcheck, --check, doctor, install/uninstall)
     # A GitHub-hosted Linux runner is a throwaway VM with systemd, so the whole
     # installer can be exercised for real — the one thing this cannot cover is
     # booting a guest, which needs an image build (see --no-images below).
@@ -156,15 +156,29 @@ jobs:
         run: rustup show
 
       - name: shellcheck
-        run: shellcheck install.sh
+        run: shellcheck install.sh scripts/firecrab-doctor.sh
 
-      - name: --help and --check
-        # --check has to work unprivileged and change nothing; a check that
-        # quietly mutates is worse than no check.
+      - name: --help, --check, and --doctor (unprivileged, no mutation)
+        # --check / --doctor have to work unprivileged and change nothing; a
+        # check that quietly mutates is worse than no check.
         run: |
+          bash -n install.sh
+          bash -n scripts/firecrab-doctor.sh
           ./install.sh --help
           ./install.sh --check
           test ! -e /var/lib/firecrab || { echo "--check created the data directory"; exit 1; }
+          ./scripts/firecrab-doctor.sh --help
+          # Bare runner will typically FAIL helper socket / images; doctor must
+          # still exit 0 or 1 (not crash) and leave the host untouched.
+          BEFORE=$(ls -la /var/lib/firecrab 2>&1 || true)
+          set +e
+          ./install.sh --doctor
+          doctor_rc=$?
+          set -e
+          test "$doctor_rc" -eq 0 -o "$doctor_rc" -eq 1 \
+            || { echo "doctor exited $doctor_rc (want 0 or 1)"; exit 1; }
+          AFTER=$(ls -la /var/lib/firecrab 2>&1 || true)
+          test "$BEFORE" = "$AFTER" || { echo "--doctor mutated host state"; exit 1; }
 
       - name: Install
         # --no-images: building a guest rootfs needs docker and ~10 minutes.
@@ -185,36 +199,85 @@ jobs:
           # runner user cannot even traverse it - which is the point.
           sudo stat -c '%U %G %a' /run/firecrab/net-helper.sock | tee /dev/stderr | grep -qx 'root firecrab 660'
           id -nG firecrab | tr ' ' '\n' | grep -qx kvm
+          test -x /usr/local/bin/firecrab-doctor
 
-      - name: Capability set is sufficient at runtime
-        # The helper runs as uid 0 with a bounded capability set. A missing
-        # capability does not stop it starting - it breaks one operation later,
-        # so assert the operations that actually need each one have happened:
-        # the bridge (NET_ADMIN) and a dnsmasq the helper can still signal
-        # (SETUID/SETGID/NET_BIND_SERVICE/KILL).
+      - name: Doctor after install
+        # Runtime host path must be clean. Run from the unit WorkingDirectory
+        # so the checkout's data/firecrab.db is not counted as a second DB.
+        # Images are intentionally absent (--no-images), so the only acceptable
+        # FAIL is the images check. sudo so nft/ufw are not SKIP'd.
         run: |
-          # The bridge exists with its address. It reads DOWN until a VM's TAP
-          # joins it, which is normal for a bridge with no ports.
-          ip -br addr show fcbr0 | grep -q 172.30.0.1/24
-          sudo pgrep -af dnsmasq | grep -q firecrab
-          # dnsmasq bound the privileged DHCP port, so NET_BIND_SERVICE held.
-          sudo ss -lun | grep -q ':67'
-          # Anything the bounding set is missing shows up here, not at startup.
-          ! sudo journalctl -u firecrab-net-helper --no-pager | grep -i 'operation not permitted'
+          set +e
+          out=$(sudo env DATADIR=/var/lib/firecrab \
+                bash -c 'cd /var/lib/firecrab && firecrab-doctor' 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "$out" | grep -q 'all checks passed'
+            exit 0
+          fi
+          unexpected=$(printf '%s\n' "$out" | grep '^\[FAIL\]' | grep -v '^\[FAIL\] images:' || true)
+          if [ -n "$unexpected" ]; then
+            echo "doctor reported unexpected failures:"
+            printf '%s\n' "$unexpected"
+            exit 1
+          fi
+          # At least one image FAIL, and nothing else.
+          printf '%s\n' "$out" | grep -q '^\[FAIL\] images:'
+          test "$code" -eq 1
 
-      - name: Dashboard and API answer
+      - name: Dashboard, MicroNetwork, and create-VM API smoke
+        # --no-images: cannot boot a guest here. Still exercise the control-plane
+        # path that PR CI used to skip: create a network, reject bad creates,
+        # and leave a real MicroNetwork for the capability checks below.
         run: |
+          set -o pipefail
           curl -fsS -o /dev/null -w 'dashboard %{http_code} %{content_type}\n' http://127.0.0.1:3000/
           test "$(curl -fsS http://127.0.0.1:3000/api/vms)" = '[]'
-          # A state-changing request from the dashboard's own origin must not be
-          # turned away by the origin check (see server.rs's is_same_origin).
-          curl -fsS -X POST http://127.0.0.1:3000/api/micro-networks \
-               -H 'Origin: http://127.0.0.1:3000' -H 'content-type: application/json' \
-               -d '{"name":"ci","subnetCidr":"172.31.0.0/24"}' > /dev/null
-          # ... while another site's is.
+
+          # Fresh install has zero MicroNetworks (no implicit fcbr0).
+          NET=$(curl -fsS -X POST http://127.0.0.1:3000/api/micro-networks \
+                 -H 'Origin: http://127.0.0.1:3000' -H 'content-type: application/json' \
+                 -d '{"name":"ci","subnetCidr":"172.31.0.0/24","internetEnabled":true}' \
+               | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          echo "NET=$NET"
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/micro-networks \
                -H 'Origin: http://evil.example' -H 'content-type: application/json' \
-               -d '{"name":"nope","subnetCidr":"172.32.0.0/24"}')" = 403
+               -d '{"name":"nope","subnetCidr":"172.32.0.0/24","internetEnabled":true}')" = 403
+
+          # microNetworkId is required (serde) — omit it → 400.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/vms \
+               -H 'content-type: application/json' \
+               -d '{"name":"no-net","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2}')" = 400
+
+          # Unknown MicroNetwork → 400 field error, no VM row left behind.
+          code=$(curl -s -o /tmp/create-bad-net.json -w '%{http_code}' -X POST http://127.0.0.1:3000/api/vms \
+               -H 'content-type: application/json' \
+               -d '{"name":"bad-net","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2,"microNetworkId":"00000000-0000-0000-0000-000000000099"}')
+          test "$code" = 400
+          grep -q microNetworkId /tmp/create-bad-net.json
+          test "$(curl -fsS http://127.0.0.1:3000/api/vms)" = '[]'
+
+          # Valid network but no guest image (--no-images) → template rejected.
+          code=$(curl -s -o /tmp/create-no-image.json -w '%{http_code}' -X POST http://127.0.0.1:3000/api/vms \
+               -H 'content-type: application/json' \
+               -d "{\"name\":\"need-image\",\"template\":\"alpine-3.24\",\"cpu\":1,\"ram\":512,\"diskGb\":2,\"microNetworkId\":\"$NET\"}")
+          test "$code" = 400
+          grep -q template /tmp/create-no-image.json
+          test "$(curl -fsS http://127.0.0.1:3000/api/vms)" = '[]'
+
+      - name: Capability set is sufficient at runtime
+        # After at least one MicroNetwork exists, the helper has exercised
+        # NET_ADMIN (bridge) and SETUID/SETGID/NET_BIND_SERVICE/KILL (dnsmasq).
+        run: |
+          # Explicit MicroNetwork bridge (mnb*), not the removed default fcbr0.
+          ip -br link show type bridge | grep -Eq '^mnb'
+          # Gateway address lives on that bridge (ci network was 172.31.0.0/24).
+          ip -br addr | grep -Eq 'mnb.*172\.31\.0\.1/24'
+          sudo pgrep -af dnsmasq | grep -q firecrab
+          sudo ss -lun | grep -q ':67'
+          ! sudo journalctl -u firecrab-net-helper --no-pager | grep -i 'operation not permitted'
 
       - name: Re-running is safe
         run: |
@@ -228,6 +291,7 @@ jobs:
           sudo ./install.sh --uninstall
           ! systemctl is-active --quiet firecrab-api
           test ! -e /etc/systemd/system/firecrab-api.service
+          test ! -e /usr/local/bin/firecrab-doctor
           test -d /var/lib/firecrab
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab
@@ -238,6 +302,7 @@ jobs:
           sudo journalctl -u firecrab-net-helper --no-pager -n 60 || true
           sudo journalctl -u firecrab-api --no-pager -n 60 || true
           systemctl status firecrab-net-helper firecrab-api --no-pager || true
+          sudo firecrab-doctor 2>&1 || true
 
   install-distro:
     name: Installer deps (${{ matrix.image }})
@@ -261,16 +326,29 @@ jobs:
     steps:
       - name: Bootstrap the container
         # Enough to run a bash script and check out the repo; the installer
-        # takes it from there.
+        # takes it from there. Retries absorb transient mirror hiccups (seen
+        # on fresh fedora:latest containers: dnf's metalink/zchunk repodata
+        # fetch occasionally fails with a curl write error).
         run: |
+          retry() {
+            n=0
+            until [ "$n" -ge 5 ]; do
+              "$@" && return 0
+              n=$((n + 1))
+              echo "retrying ($n/5): $*" >&2
+              sleep 5
+            done
+            return 1
+          }
+
           if command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq bash ca-certificates curl git
+            retry apt-get update -qq && retry apt-get install -y -qq bash ca-certificates curl git
           elif command -v dnf >/dev/null; then
-            dnf install -y -q bash ca-certificates curl git
+            retry dnf install -y -q bash ca-certificates curl git
           elif command -v pacman >/dev/null; then
-            pacman -Sy --noconfirm --needed bash ca-certificates curl git
+            retry pacman -Sy --noconfirm --needed bash ca-certificates curl git
           elif command -v zypper >/dev/null; then
-            zypper -n install bash ca-certificates curl git
+            retry zypper -n install bash ca-certificates curl git
           fi
         shell: sh -e {0}
 
@@ -292,13 +370,25 @@ jobs:
           done
           "$HOME/.cargo/bin/cargo" --version || cargo --version
 
+  # M2 guest boot matrix: every supported guest template × every GitHub-hosted
+  # Linux runner that exposes nested KVM (Ubuntu LTS family). Other host distros
+  # get package deps in install-distro; full M2 boot there needs self-hosted KVM.
   vm-boot:
-    name: VM boot (nightly)
-    # The one thing the fast install job cannot cover: building a guest image
-    # and booting it. Needs KVM, docker and ~15 minutes.
+    name: M2 boot (${{ matrix.host }} / ${{ matrix.template }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    runs-on: ${{ matrix.host }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with firecrab-api/src/templates.rs default_specs().
+        template:
+          - alpine-3.24
+          - ubuntu-26.04
+        # GitHub-hosted Linux images with nested KVM (x86_64).
+        host:
+          - ubuntu-24.04
+          - ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -309,58 +399,117 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: cargo-${{ runner.os }}-${{ matrix.host }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
+            cargo-${{ runner.os }}-${{ matrix.host }}-
             cargo-${{ runner.os }}-
 
       - name: Install pinned toolchain
         run: rustup show
 
       - name: KVM is available
-        # Nested virtualisation is enabled on GitHub's Linux runners, but the
-        # device is root-only by default. If this step fails, the runner image
-        # has changed and this job cannot do its work — say so plainly instead
-        # of failing later with a confusing Firecracker error.
         run: |
-          test -e /dev/kvm || { echo "no /dev/kvm on this runner"; exit 1; }
+          test -e /dev/kvm || { echo "no /dev/kvm on ${{ matrix.host }}"; exit 1; }
           sudo chmod 666 /dev/kvm
           ls -l /dev/kvm
+          uname -a
 
-      - name: Install with a guest image
-        run: sudo -E env "PATH=$PATH" ./install.sh
-
-      - name: A template is registered
+      - name: Install firecrab with guest image(s)
+        # Alpine is the default image build; Ubuntu needs --with-ubuntu-image.
         run: |
-          sudo ls -l /var/lib/firecrab/images/rootfs/
+          set -euo pipefail
+          INSTALL=(sudo -E env "PATH=$PATH" ./install.sh)
+          case "${{ matrix.template }}" in
+            ubuntu-*) INSTALL+=(--with-ubuntu-image) ;;
+          esac
+          "${INSTALL[@]}"
+
+      - name: Images on disk
+        run: |
+          sudo ls -l /var/lib/firecrab/images/rootfs/ || true
           curl -fsS http://127.0.0.1:3000/api/vms
 
-      - name: Create, start and reach running
+      - name: Boot M2 guest (create → start → ping → stop)
         run: |
-          set -o pipefail
-          VM=$(curl -fsS -X POST http://127.0.0.1:3000/api/vms \
-                 -H 'content-type: application/json' \
-                 -d '{"name":"ci-boot","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2}' \
-               | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
-          echo "VM=$VM" >> "$GITHUB_ENV"
-          curl -fsS -X POST "http://127.0.0.1:3000/api/vms/$VM/start" --max-time 180 > /dev/null
-          state=$(curl -fsS "http://127.0.0.1:3000/api/vms/$VM" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["state"], d.get("ipv4"))')
-          echo "state: $state"
-          case "$state" in running*) ;; *) echo "did not reach running"; exit 1 ;; esac
-
-      - name: The guest answers on its leased address
-        run: |
-          ipv4=$(curl -fsS "http://127.0.0.1:3000/api/vms/$VM" | python3 -c 'import json,sys; print(json.load(sys.stdin)["ipv4"])')
-          ping -c 3 -W 5 "$ipv4"
-
-      - name: Stop and delete
-        run: |
-          curl -fsS -X POST "http://127.0.0.1:3000/api/vms/$VM/stop" --max-time 120 > /dev/null
-          curl -fsS -X DELETE "http://127.0.0.1:3000/api/vms/$VM"
+          chmod +x scripts/ci-m2-guest-boot.sh
+          scripts/ci-m2-guest-boot.sh "${{ matrix.template }}"
 
       - name: Console log and journals (on failure)
         if: failure()
         run: |
-          sudo tail -n 120 /var/lib/firecrab/data/vms/*/console.log || true
+          sudo find /var/lib/firecrab -name 'console.log' 2>/dev/null | head -5 | while read -r f; do
+            echo "==== $f ===="; sudo tail -n 80 "$f" || true
+          done
+          sudo journalctl -u firecrab-api --no-pager -n 80 || true
+          sudo journalctl -u firecrab-net-helper --no-pager -n 80 || true
+
+  # Extra host OS / arch: only when the repo variable ENABLE_M2_SELF_HOSTED=true
+  # and matching self-hosted runners are online. Without that gate, missing
+  # runners would queue forever and stall nightly.
+  vm-boot-self-hosted:
+    name: M2 boot self-hosted (${{ matrix.host }} / ${{ matrix.template }})
+    if: >-
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && vars.ENABLE_M2_SELF_HOSTED == 'true'
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: debian-12
+            template: alpine-3.24
+            runner: '["self-hosted","linux","x64","kvm","debian-12"]'
+          - host: debian-12
+            template: ubuntu-26.04
+            runner: '["self-hosted","linux","x64","kvm","debian-12"]'
+          - host: fedora
+            template: alpine-3.24
+            runner: '["self-hosted","linux","x64","kvm","fedora"]'
+          - host: fedora
+            template: ubuntu-26.04
+            runner: '["self-hosted","linux","x64","kvm","fedora"]'
+          - host: archlinux
+            template: alpine-3.24
+            runner: '["self-hosted","linux","x64","kvm","arch"]'
+          - host: archlinux
+            template: ubuntu-26.04
+            runner: '["self-hosted","linux","x64","kvm","arch"]'
+          - host: opensuse
+            template: alpine-3.24
+            runner: '["self-hosted","linux","x64","kvm","opensuse"]'
+          - host: opensuse
+            template: ubuntu-26.04
+            runner: '["self-hosted","linux","x64","kvm","opensuse"]'
+          - host: aarch64
+            template: alpine-3.24
+            runner: '["self-hosted","linux","arm64","kvm"]'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host and KVM
+        run: |
+          uname -a
+          test -e /dev/kvm || { echo "no /dev/kvm on self-hosted ${{ matrix.host }}"; exit 1; }
+          sudo chmod 666 /dev/kvm 2>/dev/null || chmod 666 /dev/kvm 2>/dev/null || true
+
+      - name: Install firecrab with guest image(s)
+        run: |
+          set -euo pipefail
+          INSTALL=(sudo -E env "PATH=$PATH" ./install.sh)
+          case "${{ matrix.template }}" in
+            ubuntu-*) INSTALL+=(--with-ubuntu-image) ;;
+          esac
+          "${INSTALL[@]}"
+
+      - name: Boot M2 guest
+        run: |
+          chmod +x scripts/ci-m2-guest-boot.sh
+          scripts/ci-m2-guest-boot.sh "${{ matrix.template }}"
+
+      - name: Logs (on failure)
+        if: failure()
+        run: |
           sudo journalctl -u firecrab-api --no-pager -n 80 || true
           sudo journalctl -u firecrab-net-helper --no-pager -n 80 || true
 

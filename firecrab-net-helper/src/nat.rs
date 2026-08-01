@@ -14,9 +14,6 @@ use rtnetlink::packet_route::{AddressFamily, route::RouteMessage};
 
 use crate::firewall::FirewallError;
 
-/// The Firecrab VPC subnet, as an nftables-literal CIDR string.
-pub(crate) const BRIDGE_SUBNET: &str = "172.30.0.0/24";
-
 /// Whether `name` is safe to embed unescaped in an nftables ruleset string.
 pub(crate) fn validate_uplink(name: &str) -> Result<(), FirewallError> {
     let is_valid = !name.is_empty()

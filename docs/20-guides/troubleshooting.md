@@ -2,13 +2,24 @@
 tags:
   - firecrab
   - guide
-updated: 2026-07-30
+updated: 2026-07-31
 ---
 
 # 트러블슈팅
 
 증상별로 찾아보는 문제 해결 모음. 아래 표에서 증상을 찾아 해당 섹션으로 이동한다. 기능별 상세
 검증 절차는 `docs/tests/`, 개별 버그의 전체 원인·수정 기록은 `docs/bugs/`에 있다.
+
+> [!tip] 먼저 host 진단
+> 실제로 겪은 실패 상당수는 코드가 아니라 **host 설정**(UFW, helper 소켓, 잘못된 cwd/DB)이다.
+> 문서를 뒤지기 전에:
+>
+> ```sh
+> ./install.sh --doctor          # 또는 ./scripts/firecrab-doctor.sh
+> # 설치 후: firecrab-doctor
+> ```
+>
+> root 불필요. 권한이 필요한 항목은 `[SKIP]`, 문제만 `[FAIL]` + 조치 한 줄.
 
 ## 한눈에 보기
 

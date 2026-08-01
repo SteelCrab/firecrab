@@ -35,30 +35,36 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     ram INTEGER NOT NULL,
     disk_gb INTEGER NOT NULL DEFAULT 2,
     egress_policy TEXT NOT NULL DEFAULT 'internet',
-    micro_network_id TEXT
+    micro_network_id TEXT,
+    storage_root TEXT NOT NULL DEFAULT 'default',
+    disk_generation TEXT,
+    last_runtime_id TEXT
 ) STRICT";
 
 /// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id FROM vms";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id FROM vms";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
 
 /// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
-    template_boot_args_sha256, cpu, ram, disk_gb, egress_policy, micro_network_id) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+    template_boot_args_sha256, cpu, ram, disk_gb, egress_policy, micro_network_id, storage_root, \
+    disk_generation, last_runtime_id) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
 
 /// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12, \
-    micro_network_id = ?13 WHERE id = ?1";
+    micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16 \
+    WHERE id = ?1";
 
 /// Schema for the `micro_networks` table (`docs/30-tasks/task-micro-network.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
@@ -77,6 +83,18 @@ const SELECT_ALL_MICRO_NETWORKS_SQL: &str =
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_MICRO_NETWORK_SQL: &str =
     "INSERT INTO micro_networks (id, name, subnet_cidr, internet_enabled) VALUES (?1, ?2, ?3, ?4)";
+
+/// MicroStorage pools (`docs/30-tasks/task-vm-physical-disk-selection.md`).
+const CREATE_MICRO_STORAGES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_storages (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL UNIQUE
+) STRICT";
+
+const SELECT_ALL_MICRO_STORAGES_SQL: &str = "SELECT id, name, path FROM micro_storages";
+
+const INSERT_MICRO_STORAGE_SQL: &str =
+    "INSERT INTO micro_storages (id, name, path) VALUES (?1, ?2, ?3)";
 
 /// Adds `disk_gb` to a `vms` table created before the column existed (a
 /// bare `CREATE TABLE IF NOT EXISTS` doesn't retrofit new columns onto an
@@ -135,6 +153,44 @@ fn migrate_micro_network_columns(conn: &Connection) -> Result<(), PersistenceErr
     Ok(())
 }
 
+/// Adds `storage_root` so VMs created before multi-disk selection keep the
+/// legacy `default` root (`data/vms/…`).
+fn migrate_storage_root_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let has_column: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name = 'storage_root'")?
+        .exists([])?;
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE vms ADD COLUMN storage_root TEXT NOT NULL DEFAULT 'default'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+/// Disk generation + last runtime ids for the artifact layout
+/// (`docs/30-tasks/task-vm-rootfs-and-artifacts.md`).
+fn migrate_disk_generation_columns(conn: &Connection) -> Result<(), PersistenceError> {
+    for (name, sql) in [
+        (
+            "disk_generation",
+            "ALTER TABLE vms ADD COLUMN disk_generation TEXT",
+        ),
+        (
+            "last_runtime_id",
+            "ALTER TABLE vms ADD COLUMN last_runtime_id TEXT",
+        ),
+    ] {
+        let has_column: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name = ?1")?
+            .exists([name])?;
+        if !has_column {
+            conn.execute(sql, [])?;
+        }
+    }
+    Ok(())
+}
+
 /// Adds `internet_enabled` to a `micro_networks` table created before the
 /// per-network internet toggle existed, same reasoning as
 /// [`migrate_disk_gb_column`]. `1` matches the behavior every network had
@@ -151,6 +207,60 @@ fn migrate_internet_enabled_column(conn: &Connection) -> Result<(), PersistenceE
             [],
         )?;
     }
+    Ok(())
+}
+
+/// One-shot upgrade: VMs/leases created when the default network was
+/// implicit (`micro_network_id` NULL) get an explicit MicroNetwork row
+/// (`name=default`, `172.30.0.0/24`) and are reattached to it.
+///
+/// Fresh installs have no NULL rows and create no seed network — operators
+/// must POST a MicroNetwork before creating VMs.
+fn promote_implicit_default_network(conn: &Connection) -> Result<(), PersistenceError> {
+    let null_vms: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM vms WHERE micro_network_id IS NULL OR micro_network_id = ''",
+        [],
+        |row| row.get(0),
+    )?;
+    let null_leases: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM network_leases \
+             WHERE released_at IS NULL \
+               AND (micro_network_id IS NULL OR micro_network_id = '')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if null_vms == 0 && null_leases == 0 {
+        return Ok(());
+    }
+
+    let id = Uuid::new_v4();
+    let cidr = format!(
+        "{}/{}",
+        crate::ipam::LEGACY_DEFAULT_NETWORK,
+        crate::ipam::LEGACY_DEFAULT_PREFIX
+    );
+    conn.execute(
+        INSERT_MICRO_NETWORK_SQL,
+        params![id.to_string(), "default", cidr, 1],
+    )?;
+    conn.execute(
+        "UPDATE vms SET micro_network_id = ?1 \
+         WHERE micro_network_id IS NULL OR micro_network_id = ''",
+        params![id.to_string()],
+    )?;
+    let _ = conn.execute(
+        "UPDATE network_leases SET micro_network_id = ?1 \
+         WHERE micro_network_id IS NULL OR micro_network_id = ''",
+        params![id.to_string()],
+    );
+    tracing::info!(
+        micro_network_id = %id,
+        null_vms,
+        null_leases,
+        "promoted implicit default network to explicit MicroNetwork"
+    );
     Ok(())
 }
 
@@ -195,6 +305,18 @@ pub enum PersistenceError {
     MissingMicroNetwork {
         /// The id that wasn't found.
         id: Uuid,
+    },
+    /// An operation targeted a MicroStorage id with no matching row.
+    #[error("MicroStorage {id} does not exist in the database")]
+    MissingMicroStorage {
+        /// The id that wasn't found.
+        id: Uuid,
+    },
+    /// A MicroStorage path is already registered.
+    #[error("MicroStorage path {path} is already registered")]
+    DuplicateMicroStoragePath {
+        /// The conflicting path.
+        path: String,
     },
     /// Couldn't read the legacy `vms.json` file.
     #[error("failed to read legacy VM data from {path}: {source}")]
@@ -261,6 +383,8 @@ impl Store {
         migrate_disk_gb_column(&conn)?;
         migrate_egress_policy_column(&conn)?;
         migrate_micro_network_columns(&conn)?;
+        migrate_storage_root_column(&conn)?;
+        migrate_disk_generation_columns(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
             conn.execute(index_sql, [])?;
@@ -270,6 +394,10 @@ impl Store {
         // one alters is the one just created, and `CREATE TABLE IF NOT EXISTS`
         // leaves an older table's columns as they were.
         migrate_internet_enabled_column(&conn)?;
+        conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
+        // After micro_networks exists: promote pre-MicroNetwork VMs/leases
+        // that still have NULL micro_network_id onto one explicit row.
+        promote_implicit_default_network(&conn)?;
 
         let store = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -306,7 +434,14 @@ impl Store {
                     ram: row.get(9)?,
                     disk_gb: row.get(10)?,
                     egress_policy: decode_egress_policy(&id_text, &row.get::<_, String>(11)?)?,
-                    micro_network_id: decode_optional_id(&id_text, row.get(12)?)?,
+                    micro_network_id: decode_required_id(
+                        &id_text,
+                        row.get(12)?,
+                        "micro_network_id",
+                    )?,
+                    storage_root: row.get(13)?,
+                    disk_generation: decode_optional_id(&id_text, row.get(14)?)?,
+                    last_runtime_id: decode_optional_id(&id_text, row.get(15)?)?,
                     startup_step: None,
                     startup_timeline: Vec::new(),
                     package_update: None,
@@ -390,7 +525,7 @@ impl Store {
             let subnet_cidr: String = row.get(2)?;
             // Derived rather than stored, so the gateway can never drift out
             // of sync with the CIDR it belongs to.
-            let gateway = SubnetSpec::parse(Some(id), &subnet_cidr)
+            let gateway = SubnetSpec::parse(id, &subnet_cidr)
                 .ok_or_else(|| PersistenceError::CorruptRecord {
                     id: id_text.clone(),
                     reason: format!("subnet_cidr {subnet_cidr:?} does not parse"),
@@ -418,6 +553,90 @@ impl Store {
             return Err(PersistenceError::MissingMicroNetwork { id });
         }
         Ok(())
+    }
+
+    /// Lists every MicroStorage (path only — free space is filled by the handler).
+    pub fn list_micro_storages(&self) -> Result<Vec<(Uuid, String, String)>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(SELECT_ALL_MICRO_STORAGES_SQL)?;
+        let mut rows = statement.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id_text: String = row.get(0)?;
+            let id = Uuid::parse_str(&id_text).map_err(|_| PersistenceError::CorruptRecord {
+                id: id_text.clone(),
+                reason: "id is not a UUID".to_owned(),
+            })?;
+            out.push((id, row.get(1)?, row.get(2)?));
+        }
+        Ok(out)
+    }
+
+    /// One MicroStorage by id.
+    pub fn micro_storage(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<(Uuid, String, String)>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement =
+            conn.prepare("SELECT id, name, path FROM micro_storages WHERE id = ?1")?;
+        let mut rows = statement.query(params![id.to_string()])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let id_text: String = row.get(0)?;
+        let parsed = Uuid::parse_str(&id_text).map_err(|_| PersistenceError::CorruptRecord {
+            id: id_text.clone(),
+            reason: "id is not a UUID".to_owned(),
+        })?;
+        Ok(Some((parsed, row.get(1)?, row.get(2)?)))
+    }
+
+    /// Inserts a new MicroStorage.
+    pub fn insert_micro_storage(
+        &self,
+        id: Uuid,
+        name: &str,
+        path: &str,
+    ) -> Result<(), PersistenceError> {
+        let result = self.lock().execute(
+            INSERT_MICRO_STORAGE_SQL,
+            params![id.to_string(), name, path],
+        );
+        match result {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Err(PersistenceError::DuplicateMicroStoragePath {
+                    path: path.to_owned(),
+                })
+            }
+            Err(error) => Err(PersistenceError::Database(error)),
+        }
+    }
+
+    /// Deletes a MicroStorage by id.
+    pub fn delete_micro_storage(&self, id: Uuid) -> Result<(), PersistenceError> {
+        let changed = self.lock().execute(
+            "DELETE FROM micro_storages WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        if changed == 0 {
+            return Err(PersistenceError::MissingMicroStorage { id });
+        }
+        Ok(())
+    }
+
+    /// How many VMs still point at `storage_root` (id string).
+    pub fn count_vms_with_storage_root(&self, storage_root: &str) -> Result<u32, PersistenceError> {
+        let conn = self.lock();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM vms WHERE storage_root = ?1",
+            params![storage_root],
+            |row| row.get(0),
+        )?;
+        Ok(count as u32)
     }
 
     /// Allocate an IPv4 + MAC for `vm_id` inside a `BEGIN IMMEDIATE`
@@ -566,13 +785,15 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.ram,
             vm.disk_gb,
             vm.egress_policy.id(),
-            vm.micro_network_id.map(|id| id.to_string()),
+            vm.micro_network_id.to_string(),
+            vm.storage_root,
+            vm.disk_generation.map(|id| id.to_string()),
+            vm.last_runtime_id.map(|id| id.to_string()),
         ],
     )
 }
 
-/// Decodes a nullable id column, reporting a stored non-UUID as corruption
-/// rather than silently treating the row as if it had no MicroNetwork.
+/// Decodes a nullable id column, reporting a stored non-UUID as corruption.
 fn decode_optional_id(
     vm_id: &str,
     stored: Option<String>,
@@ -581,10 +802,26 @@ fn decode_optional_id(
         .map(|text| {
             Uuid::parse_str(&text).map_err(|_| PersistenceError::CorruptRecord {
                 id: vm_id.to_owned(),
-                reason: format!("micro_network_id {text:?} is not a UUID"),
+                reason: format!("id column {text:?} is not a UUID"),
             })
         })
         .transpose()
+}
+
+/// Decodes a required MicroNetwork (or similar) id column.
+fn decode_required_id(
+    vm_id: &str,
+    stored: Option<String>,
+    column: &str,
+) -> Result<Uuid, PersistenceError> {
+    let text = stored.ok_or_else(|| PersistenceError::CorruptRecord {
+        id: vm_id.to_owned(),
+        reason: format!("{column} is missing"),
+    })?;
+    Uuid::parse_str(&text).map_err(|_| PersistenceError::CorruptRecord {
+        id: vm_id.to_owned(),
+        reason: format!("{column} {text:?} is not a UUID"),
+    })
 }
 
 /// Encodes through serde so the DB text stays in lockstep with the API wire
@@ -638,7 +875,10 @@ mod tests {
             ram: 512,
             disk_gb: 2,
             egress_policy: Default::default(),
-            micro_network_id: None,
+            micro_network_id: Uuid::from_u128(1),
+            storage_root: "default".to_owned(),
+            disk_generation: None,
+            last_runtime_id: None,
             startup_step: None,
             startup_timeline: Vec::new(),
             package_update: None,
@@ -879,6 +1119,107 @@ mod tests {
         assert_eq!(all.get(&extra.id), Some(&extra));
     }
 
+    /// Records written before multi-disk / configurable-disk support have no
+    /// `storage_root` or `disk_gb` at all; the import must land them on the
+    /// legacy `data/vms` root instead of failing.
+    #[test]
+    fn legacy_records_without_storage_root_import_onto_the_default_root() {
+        let directory = tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let legacy = serde_json::json!({
+            id.to_string(): {
+                "id": id,
+                "name": "pre-multi-disk",
+                "state": "stopped",
+                "template": "ubuntu-26.04",
+                "cpu": 1,
+                "ram": 512,
+                "micro_network_id": Uuid::from_u128(1),
+            }
+        });
+        fs::write(
+            directory.path().join("vms.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let all = store.load_all().unwrap();
+        let imported = all.get(&id).expect("legacy record imported");
+        assert_eq!(imported.storage_root, "default");
+        assert_eq!(imported.disk_gb, 2);
+        assert_eq!(imported.state, VmState::Stopped);
+    }
+
+    /// Rows are decoded defensively: anything hand-edited into an
+    /// unparseable id surfaces as `CorruptRecord` instead of a panic or a
+    /// silently wrong record.
+    #[test]
+    fn corrupt_id_columns_are_reported_as_corrupt_records() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let vm = record(Uuid::new_v4(), "corruptible");
+        store.insert(&vm).unwrap();
+        let id = vm.id.to_string();
+
+        for (column, value) in [
+            ("micro_network_id", Some("not-a-uuid")),
+            ("micro_network_id", None),
+            ("disk_generation", Some("not-a-uuid")),
+        ] {
+            store
+                .lock()
+                .execute(
+                    &format!("UPDATE vms SET {column} = ?1 WHERE id = ?2"),
+                    params![value, id],
+                )
+                .unwrap();
+            assert!(
+                matches!(
+                    store.load_all(),
+                    Err(PersistenceError::CorruptRecord { .. })
+                ),
+                "{column} = {value:?} should be reported as corrupt"
+            );
+        }
+    }
+
+    #[test]
+    fn a_micro_storage_row_with_a_non_uuid_id_is_corrupt() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        store
+            .lock()
+            .execute(
+                "INSERT INTO micro_storages (id, name, path) VALUES ('not-a-uuid', 'p', '/mnt/p')",
+                [],
+            )
+            .unwrap();
+
+        assert!(matches!(
+            store.list_micro_storages(),
+            Err(PersistenceError::CorruptRecord { .. })
+        ));
+    }
+
+    /// Only a UNIQUE violation means "already registered" — every other
+    /// SQLite failure must stay a plain database error so the handler
+    /// answers 500 rather than a misleading validation message.
+    #[test]
+    fn a_non_constraint_failure_inserting_a_micro_storage_stays_a_database_error() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        store
+            .lock()
+            .execute("DROP TABLE micro_storages", [])
+            .unwrap();
+
+        assert!(matches!(
+            store.insert_micro_storage(Uuid::new_v4(), "p", "/mnt/p"),
+            Err(PersistenceError::Database(_))
+        ));
+    }
+
     #[test]
     fn malformed_legacy_json_fails_open() {
         let directory = tempdir().unwrap();
@@ -912,7 +1253,10 @@ mod tests {
                 let store = store.clone();
                 std::thread::spawn(move || {
                     store
-                        .allocate_lease(Uuid::new_v4(), SubnetSpec::default_network())
+                        .allocate_lease(
+                            Uuid::new_v4(),
+                            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+                        )
                         .unwrap()
                 })
             })
@@ -947,12 +1291,12 @@ mod tests {
         let vm_id = Uuid::new_v4();
 
         let lease = store
-            .allocate_lease(vm_id, SubnetSpec::default_network())
+            .allocate_lease(vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
             .unwrap();
         // Simulate stop/start: nothing in the lifecycle touches the lease.
         assert_eq!(
             store
-                .allocate_lease(vm_id, SubnetSpec::default_network())
+                .allocate_lease(vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
                 .unwrap_err()
                 .to_string(),
             IpamError::AlreadyLeased { vm_id }.to_string()
@@ -961,7 +1305,10 @@ mod tests {
         store.release_lease(vm_id).unwrap();
         let other_vm = Uuid::new_v4();
         let reallocated = store
-            .allocate_lease(other_vm, SubnetSpec::default_network())
+            .allocate_lease(
+                other_vm,
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+            )
             .unwrap();
         assert_eq!(
             reallocated.ipv4, lease.ipv4,

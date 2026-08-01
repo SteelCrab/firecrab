@@ -59,6 +59,7 @@ safe; it repairs instead of duplicating.
 
 ```sh
 ./install.sh --check       # see what is missing first (no root, changes nothing)
+./install.sh --doctor      # diagnose host config (UFW, socket, wrong DB path, …)
 sudo ./install.sh --uninstall   # remove the daemons; VM data is kept unless --purge
 ```
 

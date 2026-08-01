@@ -99,6 +99,15 @@ impl ConsoleBroker {
         )
     }
 
+    /// How many subscribers are currently attached. Test-only: the detached
+    /// tasks that watch the console subscribe *after* they are spawned, so a
+    /// test that pushes output has to wait for that first — anything pushed
+    /// earlier reaches only the backlog, which those watchers discard.
+    #[cfg(test)]
+    pub fn subscriber_count(&self) -> usize {
+        self.lock().output.receiver_count()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, ConsoleState> {
         self.state
             .lock()

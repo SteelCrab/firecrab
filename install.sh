@@ -38,6 +38,7 @@ Usage: sudo ./install.sh [OPTIONS]
 
   (no options)        install everything that is missing, then start firecrab
   --check             report what is missing and what would be installed
+  --doctor            run host diagnostics (UFW, socket, KVM, nft, …); no root required
   --deps-only         install the dependencies, then stop (no host changes)
   --no-deps           never install packages/toolchains, only report gaps
   --no-images         do not build a guest image
@@ -59,9 +60,19 @@ die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 need_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo ./install.sh $*"; }
 
+# Extra args after --doctor are forwarded to scripts/firecrab-doctor.sh.
+DOCTOR_ARGS=()
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) MODE=check ;;
+        --doctor)
+            MODE=doctor
+            shift
+            # Everything after --doctor belongs to the doctor script.
+            DOCTOR_ARGS=("$@")
+            break
+            ;;
         --deps-only) MODE=deps ;;
         --no-deps) INSTALL_DEPS=0 ;;
         --no-images) WITH_IMAGES=0 ;;
@@ -329,7 +340,11 @@ install_binaries() {
         [ -x "$target/$binary" ] || die "$target/$binary not found — the build did not produce it"
         install -o root -g root -m 0755 "$target/$binary" "$LIBDIR/$binary"
     done
-    log "binaries installed to $LIBDIR"
+    # Host doctor is a shell script — no build step. On PATH as firecrab-doctor.
+    install -d -o root -g root -m 0755 "$PREFIX/bin"
+    install -o root -g root -m 0755 "$REPO_ROOT/scripts/firecrab-doctor.sh" \
+        "$PREFIX/bin/firecrab-doctor"
+    log "binaries installed to $LIBDIR (doctor → $PREFIX/bin/firecrab-doctor)"
 
     [ "$WITH_FRONTEND" -eq 1 ] || return 0
     local dist="$REPO_ROOT/firecrab-frontend/dist"
@@ -503,7 +518,16 @@ do_check() {
     else
         warn "run 'sudo ./install.sh' to install the above"
     fi
+    step "for runtime host diagnostics (UFW, helper socket, wrong DB path): ./install.sh --doctor"
     return 0
+}
+
+# Runtime host diagnostics — delegates to scripts/firecrab-doctor.sh (no root).
+do_doctor() {
+    local doctor="$REPO_ROOT/scripts/firecrab-doctor.sh"
+    [ -x "$doctor" ] || die "missing $doctor"
+    # Pass DATADIR through so the doctor matches this install layout.
+    DATADIR="$DATADIR" exec "$doctor" "${DOCTOR_ARGS[@]}"
 }
 
 # Installs what firecrab needs and stops there — no account, directories, units
@@ -564,6 +588,7 @@ do_uninstall() {
     log "units removed"
 
     rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
+    rm -f "$PREFIX/bin/firecrab-doctor"
     rm -rf "$SHAREDIR/dashboard"
     rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true
     log "binaries and dashboard removed"
@@ -581,6 +606,7 @@ do_uninstall() {
 
 case "$MODE" in
     check) do_check ;;
+    doctor) do_doctor ;;
     deps) do_deps ;;
     install) do_install ;;
     uninstall) do_uninstall ;;

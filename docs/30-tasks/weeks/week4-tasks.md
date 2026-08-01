@@ -56,9 +56,9 @@ updated: 2026-07-29
 - [x] [프론트엔드 서빙](../task-host-frontend-serving.md)
       — `FIRECRAB_STATIC_ROOT`로 `dist/` 서빙 + SPA fallback, `/api`·`/ws`는 JSON 404 유지
       — 실제로 dev 서버 없이 대시보드 동작 확인
-- [ ] [Host 진단 — `firecrab doctor`](../task-host-doctor.md)
-      — KVM·ip_forward·nft·dnsmasq·UFW·소켓 권한·이미지 digest를 한 번에 점검
-      — 지금까지의 실패가 대부분 코드가 아니라 host 설정이었음
+- [x] [Host 진단 — `firecrab doctor`](../task-host-doctor.md)
+      — `scripts/firecrab-doctor.sh` / `./install.sh --doctor` / `firecrab-doctor`
+      — KVM·ip_forward·nft·dnsmasq·UFW·소켓 권한·이중 DB·이미지; 전부 ok면 요약만
 
 ## MicroStorage — 영구 스토리지
 
@@ -67,11 +67,17 @@ updated: 2026-07-29
 > (`iostat` `%util` ~100%, `w_await` 수백 ms — NVMe 하드웨어 자체는 문제 없음).
 > 자세한 내용은 [vm-startup-stuck-under-concurrent-load](../../50-bugs/vm-startup-stuck-under-concurrent-load.md).
 
-- [ ] [VM 생성 시 물리 디스크 선택](../task-vm-physical-disk-selection.md)
-      — rootfs를 등록된 여러 디스크 중 지정한 위치에 생성
-      — 여유 공간 부족은 생성 시점에 거부
-- [ ] [disk generation·artifact ledger](../task-vm-rootfs-and-artifacts.md)
-      — 디스크 세대 관리. [7주차](week7-tasks.md) snapshot lineage의 기반
+- [x] [VM 생성 시 물리 디스크 선택](../task-vm-physical-disk-selection.md)
+      — `FIRECRAB_STORAGE_ROOTS` + `GET /api/storage` + create `storageRoot`
+      — 여유 공간 부족은 생성 시점에 거부; 미지정 시 `data/vms` 호환
+- [x] MicroStorage 서비스 + 수동 할당 + 마운트 파티션 탐색
+      — `POST/GET/DELETE /api/micro-storages`, `PUT /api/vms/{id}/storage`
+      — `GET /api/storage/devices` (마운트만 발견, 파티션 생성 안 함)
+      — UI: MicroStorage 모달, 생성 폼 선택, VM 상세에서 재할당
+      — 블로그/가이드: [micro-storage.md](../../20-guides/micro-storage.md)
+- [x] [disk generation·artifact ledger](../task-vm-rootfs-and-artifacts.md)
+      — `disks/{gen}.ext4` + start마다 `r/{runtime}/`; stop/start rootfs 재사용
+      — snapshot lineage 확장용 UUID 기반 (풀 multi-gen retention UI는 후속)
 
 ## MicroNetwork — 네트워크 격리 강화
 

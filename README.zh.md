@@ -55,6 +55,7 @@ sudo ./install.sh
 
 ```sh
 ./install.sh --check            # 先看缺什么（无需 root，不改动任何东西）
+./install.sh --doctor           # 诊断主机配置（UFW、套接字、错误的 DB 路径等）
 sudo ./install.sh --uninstall   # 移除守护进程；不加 --purge 则保留 VM 数据
 ```
 
