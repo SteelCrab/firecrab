@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ImageInstallResponse, ImageResponse } from "../bindings";
-import { deleteImage, getImageInstall, listImages, startImageInstall } from "../api/client";
+import type { ImageInstallResponse, ImageResponse, VmResponse } from "../bindings";
+import {
+  ApiClientError,
+  deleteImage,
+  deleteVm,
+  getImageInstall,
+  listImages,
+  listVms,
+  startImageInstall,
+  stopVm,
+} from "../api/client";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 
@@ -90,10 +99,39 @@ export default function Images() {
     }
   };
 
+  /**
+   * Stop (if needed) and delete every VM that still pins this image, so the
+   * image delete can proceed entirely from the dashboard.
+   */
+  const removeVmsUsingImage = async (users: VmResponse[]) => {
+    for (const vm of users) {
+      if (vm.state === "running" || vm.state === "starting") {
+        await stopVm(vm.id);
+        // Poll until delete-eligible (stopped / error / created).
+        for (let attempt = 0; attempt < 40; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          const latest = (await listVms()).find((entry) => entry.id === vm.id);
+          if (!latest) break;
+          if (latest.state === "stopped" || latest.state === "error" || latest.state === "created") {
+            break;
+          }
+        }
+      }
+      const latest = (await listVms()).find((entry) => entry.id === vm.id);
+      if (!latest) continue;
+      if (latest.state === "stopping" || latest.state === "starting") {
+        throw new Error(
+          `VM ${latest.name}이(가) 아직 ${latest.state} 상태입니다. 잠시 후 다시 시도하세요.`,
+        );
+      }
+      await deleteVm(latest.id);
+    }
+  };
+
   const handleDelete = async (alias: string) => {
     if (
       !window.confirm(
-        `'${alias}' 이미지를 삭제할까요?\n레지스트리에서 제거하고 디스크 파일을 지웁니다.\n이 이미지를 쓰는 VM이 있으면 삭제할 수 없습니다 — 먼저 해당 VM을 지우세요.`,
+        `'${alias}' 이미지를 삭제할까요?\n레지스트리에서 제거하고 디스크 파일을 지웁니다.`,
       )
     ) {
       return;
@@ -102,13 +140,35 @@ export default function Images() {
     setActionError(null);
     setSelectedAlias(alias);
     try {
-      await deleteImage(alias);
+      try {
+        await deleteImage(alias);
+      } catch (error) {
+        const apiError = error instanceof ApiClientError ? error : null;
+        if (apiError?.apiError?.code !== "in_use") throw error;
+
+        const users = (await listVms()).filter((vm) => vm.template === alias);
+        if (users.length === 0) throw error;
+
+        const lines = users.map((vm) => `· ${vm.name} [${vm.state}]`).join("\n");
+        if (
+          !window.confirm(
+            `'${alias}' 이미지를 쓰는 VM ${users.length}개가 있습니다.\n` +
+              `웹에서 해당 VM을 지운 뒤 이미지를 삭제할까요?\n\n${lines}`,
+          )
+        ) {
+          setActionError(
+            `이미지 삭제 취소됨 — 사용 중인 VM: ${users.map((vm) => vm.name).join(", ")}`,
+          );
+          return;
+        }
+
+        await removeVmsUsingImage(users);
+        await deleteImage(alias);
+      }
       setInstall(null);
       await refreshList();
     } catch (error) {
-      const message = (error as Error).message;
-      // Surface which VMs block the delete (API puts them in fields.vms).
-      setActionError(message);
+      setActionError((error as Error).message);
     } finally {
       setBusyAlias(null);
     }
