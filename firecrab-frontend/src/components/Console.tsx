@@ -3,7 +3,10 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { EgressPolicy, VmResponse } from "../bindings";
-import { getVm } from "../api/client";
+import { getVm, getVmLog } from "../api/client";
+import { formatVmExportBundle, serializeXtermBuffer } from "../lib/formatVmLog";
+import { logDownloadFilename } from "../lib/textExport";
+import LogExportActions from "./LogExportActions";
 
 type Status = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";
 
@@ -403,6 +406,25 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   const canRetry = status === "disconnected" || status === "failed" || status === "reconnecting";
   const title = vm ? `terminal — ${vm.name}` : `terminal — ${vmId.slice(0, 8)}`;
 
+  /** Server console.log + startup timeline + live xterm buffer for copy/download. */
+  const buildExportText = useCallback(async () => {
+    let consoleLog = "";
+    try {
+      const log = await getVmLog(vmId);
+      consoleLog = log.consoleLog;
+    } catch {
+      consoleLog = "";
+    }
+    const term = termRef.current;
+    const liveTerminal = term ? serializeXtermBuffer(term) : undefined;
+    return formatVmExportBundle({
+      vm,
+      vmId,
+      consoleLog,
+      liveTerminal,
+    });
+  }, [vm, vmId]);
+
   return (
     <div
       className={`console-page${terminalOnly ? " is-terminal-only" : ""}`}
@@ -487,6 +509,14 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               </div>
             )}
           </div>
+
+          <LogExportActions
+            text={buildExportText}
+            filename={logDownloadFilename("console", vm?.name ?? vmId)}
+            buttonClassName="btn console-bar-btn"
+            copyLabel="로그 복사"
+            downloadLabel="로그 저장"
+          />
 
           <button
             type="button"

@@ -17,6 +17,8 @@ import {
   updateVmResources,
 } from "../api/client";
 import { isEditableState } from "../model";
+import { logDownloadFilename } from "../lib/textExport";
+import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
 
 const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
@@ -326,6 +328,14 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </div>
             )}
             <PipelineStepper currentIndex={currentIndex} timeline={vm?.startupTimeline ?? []} />
+            <div className="log-export-bar">
+              <span className="log-export-bar-label">시작 · 콘솔 로그</span>
+              <LogExportActions
+                text={logText === "아직 출력이 없습니다." ? "" : logText}
+                filename={logDownloadFilename("vm-log", vm?.name ?? vmId)}
+                buttonClassName="btn console-bar-btn"
+              />
+            </div>
             <pre className="detail-log" ref={logRef}>
               {logText}
             </pre>

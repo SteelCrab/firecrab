@@ -519,6 +519,36 @@ table.vm-table {
 }
 .pipeline-step.pending .step-bar { opacity: 0.45; }
 
+/* Copy / download controls shared by detail modal + console toolbar. */
+.log-export-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.log-export-status {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ready);
+  letter-spacing: 0.04em;
+  min-width: 3.5rem;
+}
+.log-export-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin: 0 0 0.45rem;
+  flex-wrap: wrap;
+}
+.log-export-bar-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--shell);
+}
+
 .detail-log {
   margin: 0;
   padding: 0.75rem;
