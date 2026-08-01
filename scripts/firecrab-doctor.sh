@@ -258,8 +258,10 @@ check_dnsmasq() {
     fi
 
     if [ -r "$DNSMASQ_CONF" ]; then
+        # No interface= lines is the normal zero-MicroNetwork state, but grep
+        # exits 1 there and `pipefail` would abort the whole run.
         conf_ifaces=$(grep -E '^interface=' "$DNSMASQ_CONF" 2>/dev/null \
-            | sed 's/^interface=//' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+            | sed 's/^interface=//' | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)
     fi
 
     # Collect firecrab bridges currently on the host (mnb* only after
