@@ -369,6 +369,37 @@ mod tests {
     }
 
     #[test]
+    fn prepare_reports_an_unusable_artifact_directory() {
+        let directory = tempdir().unwrap();
+        let blocker = directory.path().join("vms");
+        fs::write(&blocker, b"not a directory").unwrap();
+        let paths = VmArtifactPaths::for_vm(&blocker, Uuid::new_v4());
+        let mut template = template_file(directory.path(), b"template-bytes");
+
+        let error = prepare_rootfs(&paths, Uuid::new_v4(), &mut template, 16).unwrap_err();
+        assert!(
+            matches!(error, RootfsError::CreateDirectory { ref path, .. } if *path == paths.dir),
+            "{error}"
+        );
+    }
+
+    /// A brand-new copy that can't be grown is discarded entirely — no
+    /// half-sized disk and no temp file left for the next attempt.
+    #[test]
+    fn a_fresh_copy_that_fails_to_grow_is_removed() {
+        let directory = tempdir().unwrap();
+        let paths = VmArtifactPaths::for_vm(&directory.path().join("vms"), Uuid::new_v4());
+        // Not an ext4 image, so the grow step's e2fsck fails.
+        let mut template = template_file(directory.path(), b"not an ext4 filesystem");
+        let generation = Uuid::new_v4();
+
+        let error = prepare_rootfs(&paths, generation, &mut template, 8 * 1024 * 1024).unwrap_err();
+        assert!(matches!(error, RootfsError::ResizeFailed { .. }), "{error}");
+        assert!(!paths.rootfs(generation).exists());
+        assert!(!paths.rootfs_tmp(generation).exists());
+    }
+
+    #[test]
     fn reuses_an_existing_rootfs_without_recopying() {
         let directory = tempdir().unwrap();
         let paths = VmArtifactPaths::for_vm(&directory.path().join("vms"), Uuid::new_v4());

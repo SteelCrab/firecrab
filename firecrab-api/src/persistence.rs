@@ -1119,6 +1119,107 @@ mod tests {
         assert_eq!(all.get(&extra.id), Some(&extra));
     }
 
+    /// Records written before multi-disk / configurable-disk support have no
+    /// `storage_root` or `disk_gb` at all; the import must land them on the
+    /// legacy `data/vms` root instead of failing.
+    #[test]
+    fn legacy_records_without_storage_root_import_onto_the_default_root() {
+        let directory = tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let legacy = serde_json::json!({
+            id.to_string(): {
+                "id": id,
+                "name": "pre-multi-disk",
+                "state": "stopped",
+                "template": "ubuntu-26.04",
+                "cpu": 1,
+                "ram": 512,
+                "micro_network_id": Uuid::from_u128(1),
+            }
+        });
+        fs::write(
+            directory.path().join("vms.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let all = store.load_all().unwrap();
+        let imported = all.get(&id).expect("legacy record imported");
+        assert_eq!(imported.storage_root, "default");
+        assert_eq!(imported.disk_gb, 2);
+        assert_eq!(imported.state, VmState::Stopped);
+    }
+
+    /// Rows are decoded defensively: anything hand-edited into an
+    /// unparseable id surfaces as `CorruptRecord` instead of a panic or a
+    /// silently wrong record.
+    #[test]
+    fn corrupt_id_columns_are_reported_as_corrupt_records() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let vm = record(Uuid::new_v4(), "corruptible");
+        store.insert(&vm).unwrap();
+        let id = vm.id.to_string();
+
+        for (column, value) in [
+            ("micro_network_id", Some("not-a-uuid")),
+            ("micro_network_id", None),
+            ("disk_generation", Some("not-a-uuid")),
+        ] {
+            store
+                .lock()
+                .execute(
+                    &format!("UPDATE vms SET {column} = ?1 WHERE id = ?2"),
+                    params![value, id],
+                )
+                .unwrap();
+            assert!(
+                matches!(
+                    store.load_all(),
+                    Err(PersistenceError::CorruptRecord { .. })
+                ),
+                "{column} = {value:?} should be reported as corrupt"
+            );
+        }
+    }
+
+    #[test]
+    fn a_micro_storage_row_with_a_non_uuid_id_is_corrupt() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        store
+            .lock()
+            .execute(
+                "INSERT INTO micro_storages (id, name, path) VALUES ('not-a-uuid', 'p', '/mnt/p')",
+                [],
+            )
+            .unwrap();
+
+        assert!(matches!(
+            store.list_micro_storages(),
+            Err(PersistenceError::CorruptRecord { .. })
+        ));
+    }
+
+    /// Only a UNIQUE violation means "already registered" — every other
+    /// SQLite failure must stay a plain database error so the handler
+    /// answers 500 rather than a misleading validation message.
+    #[test]
+    fn a_non_constraint_failure_inserting_a_micro_storage_stays_a_database_error() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        store
+            .lock()
+            .execute("DROP TABLE micro_storages", [])
+            .unwrap();
+
+        assert!(matches!(
+            store.insert_micro_storage(Uuid::new_v4(), "p", "/mnt/p"),
+            Err(PersistenceError::Database(_))
+        ));
+    }
+
     #[test]
     fn malformed_legacy_json_fails_open() {
         let directory = tempdir().unwrap();

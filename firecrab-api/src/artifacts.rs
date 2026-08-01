@@ -245,4 +245,68 @@ mod tests {
         let meta_b = fs::metadata(&root_b).unwrap();
         assert_ne!(meta_a.ino(), meta_b.ino());
     }
+
+    #[test]
+    fn ensure_directories_fails_when_the_vms_root_is_a_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocker = directory.path().join("vms");
+        fs::write(&blocker, b"not a directory").unwrap();
+
+        let paths = VmArtifactPaths::for_vm(&blocker, Uuid::new_v4());
+        let error = paths.ensure_directories().unwrap_err();
+        assert!(
+            matches!(error, ArtifactError::CreateDirectory { ref path, .. } if *path == paths.dir),
+            "{error}"
+        );
+    }
+
+    /// A symlinked VM directory is refused rather than followed: the tree is
+    /// always derived from the storage root, never redirected out of it.
+    #[test]
+    fn ensure_directories_refuses_a_symlinked_vm_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let vms_root = directory.path().join("vms");
+        let elsewhere = directory.path().join("elsewhere");
+        fs::create_dir_all(&vms_root).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+
+        let id = Uuid::new_v4();
+        let paths = VmArtifactPaths::for_vm(&vms_root, id);
+        std::os::unix::fs::symlink(&elsewhere, &paths.dir).unwrap();
+
+        let error = paths.ensure_directories().unwrap_err();
+        assert!(
+            matches!(error, ArtifactError::UnsafeDirectory(ref path) if *path == paths.dir),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn create_runtime_refuses_to_reuse_an_existing_runtime_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = VmArtifactPaths::for_vm(directory.path(), Uuid::new_v4());
+        let runtime_id = Uuid::new_v4();
+        paths.create_runtime(runtime_id).unwrap();
+
+        let error = paths.create_runtime(runtime_id).unwrap_err();
+        let expected = paths.runtime(runtime_id).dir;
+        assert!(
+            matches!(error, ArtifactError::CreateDirectory { ref path, .. } if *path == expected),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn remove_vm_artifacts_ignores_a_missing_tree_but_reports_real_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = VmArtifactPaths::for_vm(directory.path(), Uuid::new_v4());
+        remove_vm_artifacts(&missing).expect("removing a tree that was never created is fine");
+
+        // A regular file where the VM directory belongs is a real error
+        // (ENOTDIR), not the "already gone" case.
+        let blocked = VmArtifactPaths::for_vm(directory.path(), Uuid::new_v4());
+        fs::write(&blocked.dir, b"not a directory").unwrap();
+        let error = remove_vm_artifacts(&blocked).unwrap_err();
+        assert_ne!(error.kind(), io::ErrorKind::NotFound, "{error}");
+    }
 }

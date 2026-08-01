@@ -2325,6 +2325,37 @@ while True:
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 
+    /// A delete that can't clear the artifact tree must not half-remove the
+    /// VM: the record goes back into memory and the DB row survives.
+    #[tokio::test]
+    async fn delete_restores_the_record_when_artifact_removal_fails() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("stuck", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        // A regular file where the VM's artifact directory belongs makes
+        // remove_dir_all fail with ENOTDIR rather than "already gone".
+        let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id);
+        fs::create_dir_all(&state.runtime.vms_dir).unwrap();
+        fs::write(&paths.dir, b"not a directory").unwrap();
+
+        let error = delete_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Created));
+        assert!(state.store.load_all().unwrap().contains_key(&vm.id));
+    }
+
     #[tokio::test]
     async fn delete_rejects_active_vm() {
         let directory = tempdir().unwrap();
@@ -2514,6 +2545,176 @@ while True:
         assert_eq!(
             state.vms_dir_for(&reassigned.storage_root),
             pool.join("vms")
+        );
+    }
+
+    /// Seeds a MicroStorage pool and returns its id, for the assign tests
+    /// that need a second (real, empty) root to move a VM onto.
+    async fn seed_pool(state: &AppState, name: &str, path: &std::path::Path) -> String {
+        let (_, Json(ms)) = crate::handlers::micro_storages::create_micro_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(firecrab_api_types::CreateMicroStorageRequest {
+                name: name.to_owned(),
+                path: path.display().to_string(),
+            }),
+        )
+        .await
+        .expect("create micro storage");
+        ms.id.to_string()
+    }
+
+    async fn assign_storage_err(state: &AppState, id: Uuid, root: &str) -> AppError {
+        assign_vm_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+            ValidatedJson(firecrab_api_types::AssignVmStorageRequest {
+                storage_root: root.to_owned(),
+            }),
+        )
+        .await
+        .expect_err("assign should fail")
+    }
+
+    #[tokio::test]
+    async fn assign_vm_storage_rejects_an_empty_or_unknown_root() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("pinned", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let blank = assign_storage_err(&state, vm.id, "   ").await;
+        assert_eq!(blank.into_response().status(), StatusCode::BAD_REQUEST);
+
+        let unknown = assign_storage_err(&state, vm.id, "no-such-root").await;
+        assert_eq!(unknown.into_response().status(), StatusCode::BAD_REQUEST);
+
+        // The VM stayed where it was.
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().storage_root,
+            "default"
+        );
+    }
+
+    #[tokio::test]
+    async fn assign_vm_storage_is_a_no_op_when_the_root_is_unchanged() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("stay", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(response) = assign_vm_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+            ValidatedJson(firecrab_api_types::AssignVmStorageRequest {
+                storage_root: "default".to_owned(),
+            }),
+        )
+        .await
+        .expect("same-root assign is allowed");
+        assert_eq!(response.storage_root, "default");
+        assert_eq!(response.id, vm.id);
+    }
+
+    #[tokio::test]
+    async fn assign_vm_storage_refuses_a_vm_that_is_not_editable() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("pool");
+        let state = test_state(directory.path()).await;
+        let pool_id = seed_pool(&state, "pool", &pool).await;
+        let vm = record("running", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        state.vms.lock().unwrap().get_mut(&vm.id).unwrap().state = VmState::Running;
+
+        let error = assign_storage_err(&state, vm.id, &pool_id).await;
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn assign_vm_storage_refuses_to_move_a_vm_that_already_has_a_disk() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("pool");
+        let state = test_state(directory.path()).await;
+        let pool_id = seed_pool(&state, "pool", &pool).await;
+
+        // No disk_generation yet: a non-empty disks/ directory is what marks
+        // the VM as already holding bytes at its current root.
+        let untracked = record("untracked-disk", Uuid::new_v4());
+        seed_vm(&state, &untracked);
+        let paths = crate::artifacts::VmArtifactPaths::for_vm(
+            &state.vms_dir_for(&untracked.storage_root),
+            untracked.id,
+        );
+        fs::create_dir_all(&paths.disks).unwrap();
+        fs::write(paths.disks.join("leftover.ext4"), b"disk").unwrap();
+        let error = assign_storage_err(&state, untracked.id, &pool_id).await;
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+
+        // With a disk_generation, the check looks at that exact rootfs file.
+        let generation = Uuid::new_v4();
+        let mut prepared = record("prepared-disk", Uuid::new_v4());
+        prepared.disk_generation = Some(generation);
+        seed_vm(&state, &prepared);
+        let paths = crate::artifacts::VmArtifactPaths::for_vm(
+            &state.vms_dir_for(&prepared.storage_root),
+            prepared.id,
+        );
+        fs::create_dir_all(&paths.disks).unwrap();
+        fs::write(paths.rootfs(generation), b"rootfs").unwrap();
+        let error = assign_storage_err(&state, prepared.id, &pool_id).await;
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn assign_vm_storage_rejects_a_target_without_room_for_the_disk() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("pool");
+        let state = test_state(directory.path()).await;
+        let pool_id = seed_pool(&state, "pool", &pool).await;
+
+        let free_gib = crate::storage::available_bytes(&pool).unwrap() / (1024 * 1024 * 1024);
+        let Ok(need_gib) = u16::try_from(free_gib.saturating_add(100)) else {
+            // Host has more free space than a u16 GiB disk can request; the
+            // capacity branch is unreachable here and covered at create time.
+            return;
+        };
+        let mut vm = record("too-big", Uuid::new_v4());
+        vm.disk_gb = need_gib;
+        seed_vm(&state, &vm);
+
+        let error = assign_storage_err(&state, vm.id, &pool_id).await;
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().storage_root,
+            "default",
+            "a rejected assign must not move the VM"
+        );
+    }
+
+    /// The in-memory record is moved first and rolled back if the write
+    /// fails, so memory never claims a root the DB doesn't agree with.
+    #[tokio::test]
+    async fn assign_vm_storage_rolls_memory_back_when_the_write_fails() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("pool");
+        let state = test_state(directory.path()).await;
+        let pool_id = seed_pool(&state, "pool", &pool).await;
+        let vm = record("orphaned-row", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        // Drop the DB row only: the update then fails with MissingVm while
+        // the in-memory record still says the VM exists.
+        state.store.delete(vm.id).unwrap();
+
+        let error = assign_storage_err(&state, vm.id, &pool_id).await;
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            state.vms.lock().unwrap().get(&vm.id).unwrap().storage_root,
+            "default"
         );
     }
 

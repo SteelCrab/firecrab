@@ -446,6 +446,60 @@ mod tests {
         assert!(StorageRegistry::parse("bad/id=/path").is_err());
     }
 
+    /// Blank entries are skipped (trailing/doubled `:`), but a spec that is
+    /// *only* separators leaves nothing to register and must fail rather
+    /// than yield a registry with no default root.
+    #[test]
+    fn parse_skips_blank_entries_and_rejects_an_all_blank_spec() {
+        let reg = StorageRegistry::parse("disk-a=/mnt/a::  :disk-b=/mnt/b:").unwrap();
+        assert_eq!(reg.roots().len(), 2);
+
+        let error = StorageRegistry::parse(" :: ").unwrap_err();
+        assert!(error.contains("no storage roots"), "{error}");
+    }
+
+    #[test]
+    fn list_responses_labels_the_default_root_alongside_env_roots() {
+        let reg = StorageRegistry::parse("default=/mnt/default:disk-b=/mnt/b").unwrap();
+        let kinds: Vec<_> = reg
+            .list_responses()
+            .into_iter()
+            .map(|root| (root.id, root.kind))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("default".to_owned(), "default".to_owned()),
+                ("disk-b".to_owned(), "env".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn device_basename_shortens_dev_paths_and_leaves_labels_alone() {
+        assert_eq!(device_basename("/dev/nvme0n1p1"), "nvme0n1p1");
+        assert_eq!(device_basename("none"), "none");
+        assert_eq!(device_basename(""), "");
+    }
+
+    #[test]
+    fn nearest_existing_walks_up_and_falls_back_to_the_cwd() {
+        let directory = tempfile::tempdir().unwrap();
+        let deep = directory.path().join("a/b/c");
+        assert_eq!(nearest_existing(&deep), directory.path());
+        // A relative path with no existing component pops itself empty.
+        assert_eq!(
+            nearest_existing(Path::new("no-such-relative-dir")),
+            PathBuf::from(".")
+        );
+    }
+
+    #[test]
+    fn statvfs_reports_an_error_for_a_path_that_does_not_exist() {
+        let error = statvfs_bytes(Path::new("/no-such-path-for-firecrab-tests")).unwrap_err();
+        assert!(!error.is_empty(), "the libc detail must be surfaced");
+    }
+
     #[test]
     fn default_single_keeps_legacy_data_vms_layout() {
         let reg = StorageRegistry::default_single();

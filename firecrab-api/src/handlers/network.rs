@@ -163,6 +163,30 @@ mod tests {
         assert!(info.gateway.is_empty());
     }
 
+    /// With MicroNetworks present, the panel reports the first one's bridge
+    /// and a gateway recomputed from its CIDR (not whatever was stored).
+    #[tokio::test]
+    async fn network_info_summarises_the_first_micro_network() {
+        let directory = tempdir().unwrap();
+        let state = crate::handlers::vms::test_support::test_state(directory.path()).await;
+        let (_, Json(network)) = crate::handlers::micro_networks::create_micro_network(
+            State(state.clone()),
+            axum::extract::Extension(crate::server::RequestId(uuid::Uuid::new_v4())),
+            crate::extract::ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                name: "panel-net".to_owned(),
+                subnet_cidr: "172.29.0.0/24".to_owned(),
+                internet_enabled: true,
+            }),
+        )
+        .await
+        .expect("create micro network");
+
+        let Json(info) = get_network_info(State(state)).await;
+        assert_eq!(info.subnet_cidr, "172.29.0.0/24");
+        assert_eq!(info.gateway, "172.29.0.1");
+        assert_eq!(info.bridge_name, micro_network_bridge_name(network.id));
+    }
+
     #[test]
     fn read_uplink_resolves_a_real_default_route_interface() {
         // Unprivileged read; requires this host to have an IPv4 default
