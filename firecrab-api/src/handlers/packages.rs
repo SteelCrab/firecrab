@@ -254,6 +254,21 @@ mod tests {
         console
     }
 
+    /// `update_packages` returns as soon as it has *spawned* `run_update`,
+    /// which only then subscribes to the console. Output pushed before that
+    /// subscription reaches nothing but the backlog `run_update` deliberately
+    /// discards, so the sentinel would be lost for good and the update would
+    /// hang until its 10-minute timeout — no polling budget can recover it.
+    async fn wait_for_console_subscriber(console: &ConsoleBroker) {
+        for _ in 0..200 {
+            if console.subscriber_count() > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("run_update never subscribed to the console");
+    }
+
     #[tokio::test]
     async fn update_packages_rejects_a_vm_that_is_not_running() {
         let directory = tempdir().unwrap();
@@ -336,12 +351,9 @@ mod tests {
         .unwrap();
         assert_eq!(body.package_update, Some(PackageUpdateStatus::Running));
 
+        wait_for_console_subscriber(&console).await;
         console.push_output(b"FIRECRAB_PKG_UPDATE_DONE:0\n");
 
-        // Matches handlers::vms::tests::wait_for_state's budget (100 *
-        // 30ms) — 100 * 20ms was tight enough to occasionally time out on a
-        // loaded CI runner before the detached tokio::spawn task got
-        // scheduled.
         for _ in 0..150 {
             let status = state
                 .vms
@@ -377,6 +389,7 @@ mod tests {
         .await
         .unwrap();
 
+        wait_for_console_subscriber(&console).await;
         console.push_output(b"FIRECRAB_PKG_UPDATE_DONE:1\n");
 
         for _ in 0..150 {
