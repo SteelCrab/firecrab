@@ -90,6 +90,17 @@ mod tests {
         assert!(roots[0].available_gib > 0 || roots[0].total_gib > 0);
     }
 
+    /// Discovery only: `/proc/mounts` always has at least the root
+    /// filesystem, and the handler must never fail even where it does not.
+    #[tokio::test]
+    async fn list_storage_devices_reads_real_mounts() {
+        let Json(devices) = list_storage_devices().await;
+        assert!(
+            devices.iter().all(|d| !d.mountpoint.is_empty()),
+            "{devices:?}"
+        );
+    }
+
     #[tokio::test]
     async fn list_storage_includes_micro_storages() {
         let directory = tempdir().unwrap();

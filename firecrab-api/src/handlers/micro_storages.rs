@@ -229,10 +229,36 @@ fn valid_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handlers::vms::test_support::test_state;
+    use crate::handlers::vms::test_support::{record, seed_vm, test_state};
     use crate::server::RequestId;
+    use axum::body::to_bytes;
     use axum::response::IntoResponse;
     use tempfile::tempdir;
+
+    /// `AppError` keeps its `fields` private, so validation messages are read
+    /// back through the rendered response body like `error.rs`'s own tests do.
+    async fn error_body(error: AppError) -> serde_json::Value {
+        let response = error.into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let mut json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        json["status"] = serde_json::json!(status.as_u16());
+        json
+    }
+
+    async fn create_pool(state: &AppState, name: &str, path: &std::path::Path) -> Uuid {
+        let (_, Json(created)) = create_micro_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateMicroStorageRequest {
+                name: name.to_owned(),
+                path: path.display().to_string(),
+            }),
+        )
+        .await
+        .expect("create");
+        created.id
+    }
 
     #[tokio::test]
     async fn create_list_delete_micro_storage_round_trips() {
@@ -285,5 +311,232 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_name_that_is_not_a_label() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let err = create_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateMicroStorageRequest {
+                name: "-nope!".to_owned(),
+                path: directory.path().join("pool").display().to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        let body = error_body(err).await;
+        assert_eq!(body["status"], 400);
+        assert!(
+            body["error"]["fields"]["name"].is_string(),
+            "name should be the rejected field: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_reports_both_invalid_name_and_invalid_path() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let err = create_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateMicroStorageRequest {
+                name: String::new(),
+                path: "  ".to_owned(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        let body = error_body(err).await;
+        assert_eq!(body["status"], 400);
+        assert!(body["error"]["fields"]["name"].is_string(), "{body}");
+        assert!(body["error"]["fields"]["path"].is_string(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_path_that_is_an_existing_file() {
+        let directory = tempdir().unwrap();
+        let file = directory.path().join("not-a-dir");
+        fs::write(&file, b"regular file").unwrap();
+        let state = test_state(directory.path()).await;
+
+        let err = create_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateMicroStorageRequest {
+                name: "pool".to_owned(),
+                path: file.display().to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        let body = error_body(err).await;
+        assert_eq!(body["status"], 400);
+        assert!(
+            body["error"]["fields"]["path"]
+                .as_str()
+                .unwrap()
+                .contains("could not create directory"),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_path_that_is_already_registered() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("pool");
+        let state = test_state(directory.path()).await;
+        create_pool(&state, "pool-a", &pool).await;
+
+        let err = create_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateMicroStorageRequest {
+                name: "pool-b".to_owned(),
+                path: pool.display().to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        let body = error_body(err).await;
+        assert_eq!(body["status"], 400);
+        assert!(
+            body["error"]["fields"]["path"]
+                .as_str()
+                .unwrap()
+                .contains("already registered"),
+            "{body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_micro_storage_lists_only_its_own_vms_sorted_by_name() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("pool");
+        let state = test_state(directory.path()).await;
+        let id = create_pool(&state, "pool-a", &pool).await;
+
+        let mut zeta = record("zeta", Uuid::new_v4());
+        zeta.storage_root = id.to_string();
+        zeta.disk_gb = 7;
+        let mut alpha = record("alpha", Uuid::new_v4());
+        alpha.storage_root = id.to_string();
+        let elsewhere = record("elsewhere", Uuid::new_v4());
+        seed_vm(&state, &zeta);
+        seed_vm(&state, &alpha);
+        seed_vm(&state, &elsewhere);
+
+        let Json(detail) = get_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+        )
+        .await
+        .expect("detail");
+
+        assert_eq!(detail.id, id);
+        assert_eq!(detail.name, "pool-a");
+        assert_eq!(detail.path, pool.display().to_string());
+        let names: Vec<_> = detail.vms.iter().map(|vm| vm.name.as_str()).collect();
+        assert_eq!(names, ["alpha", "zeta"]);
+        assert_eq!(detail.vms[1].id, zeta.id);
+        assert_eq!(detail.vms[1].disk_gb, 7);
+    }
+
+    #[tokio::test]
+    async fn get_micro_storage_rejects_a_malformed_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let err = get_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("not-a-uuid".to_owned()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn get_micro_storage_returns_not_found_for_an_unknown_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let err = get_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_refuses_while_a_vm_still_sits_on_the_storage() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("pool");
+        let state = test_state(directory.path()).await;
+        let id = create_pool(&state, "pool-a", &pool).await;
+
+        let mut vm = record("resident", Uuid::new_v4());
+        vm.storage_root = id.to_string();
+        seed_vm(&state, &vm);
+
+        let err = delete_micro_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+        )
+        .await
+        .unwrap_err();
+        let body = error_body(err).await;
+        assert_eq!(body["status"], 409);
+        assert_eq!(body["error"]["code"], "storage_in_use");
+
+        // Still registered after the refused delete.
+        let Json(list) = list_micro_storages(State(state), Extension(RequestId(Uuid::new_v4())))
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_returns_not_found_for_an_unknown_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let err = delete_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_a_malformed_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let err = delete_micro_storage(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("not-a-uuid".to_owned()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn valid_name_accepts_labels_and_rejects_the_rest() {
+        assert!(valid_name("a"));
+        assert!(valid_name("pool-1.nvme_0"));
+        assert!(!valid_name(""));
+        assert!(!valid_name("-leading-dash"));
+        assert!(!valid_name("has space"));
+        assert!(!valid_name(&"a".repeat(65)));
     }
 }
