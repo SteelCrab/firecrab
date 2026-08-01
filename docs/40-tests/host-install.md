@@ -3,7 +3,7 @@ tags:
   - firecrab
   - test
   - host
-updated: 2026-07-30
+updated: 2026-08-01
 ---
 
 # Host 설치 테스트
@@ -28,7 +28,7 @@ updated: 2026-07-30
 ## 자동 테스트 (root 불필요)
 
 ```sh
-cargo test -p firecrab-api server::                    # 5
+cargo test -p firecrab-api server::                    # 6
 cargo test -p firecrab-api templates::                 # 9
 bash -n install.sh scripts/firecrab-doctor.sh          # 문법
 ./install.sh --help
@@ -36,7 +36,7 @@ bash -n install.sh scripts/firecrab-doctor.sh          # 문법
 ./install.sh --doctor                                  # 비특권 + 무변경 (FAIL 있어도 exit 0/1)
 ```
 
-전체: `cargo test --workspace` → 158/20/16/56
+전체: `cargo test --workspace` → 216/20/16/56 (합계 308)
 
 확인 항목:
 
