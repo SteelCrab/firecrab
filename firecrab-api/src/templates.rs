@@ -726,6 +726,78 @@ mod tests {
     }
 
     #[test]
+    fn unregister_alias_returns_orphan_paths_and_clears_resolve() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+        let registry = TemplateRegistry::from_specs(
+            root,
+            [TemplateSpec {
+                alias: "demo".to_owned(),
+                version: "v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: "console=ttyS0".to_owned(),
+            }],
+        )
+        .unwrap();
+        assert!(registry.resolve_alias("demo").is_some());
+        assert!(registry.unregister_alias("missing").is_none());
+
+        let (version, orphans) = registry.unregister_alias("demo").unwrap();
+        assert_eq!(version.name, "demo");
+        assert!(registry.resolve_alias("demo").is_none());
+        assert_eq!(orphans.len(), 2);
+        assert!(version.kernel.relative_path() == Path::new("kernel"));
+    }
+
+    #[test]
+    fn unregister_keeps_shared_artifacts_referenced_by_another_alias() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs-a"), b"a").unwrap();
+        fs::write(root.join("rootfs-b"), b"b").unwrap();
+        let registry = TemplateRegistry::from_specs(
+            root,
+            [
+                TemplateSpec {
+                    alias: "a".to_owned(),
+                    version: "v1".to_owned(),
+                    kernel: PathBuf::from("kernel"),
+                    initrd: None,
+                    rootfs: PathBuf::from("rootfs-a"),
+                    boot_args: String::new(),
+                },
+                TemplateSpec {
+                    alias: "b".to_owned(),
+                    version: "v1".to_owned(),
+                    kernel: PathBuf::from("kernel"),
+                    initrd: None,
+                    rootfs: PathBuf::from("rootfs-b"),
+                    boot_args: String::new(),
+                },
+            ],
+        )
+        .unwrap();
+        let (_version, orphans) = registry.unregister_alias("a").unwrap();
+        // Shared kernel must not be listed for deletion.
+        assert!(
+            !orphans
+                .iter()
+                .any(|path| path.file_name().and_then(|n| n.to_str()) == Some("kernel"))
+        );
+        assert!(
+            orphans
+                .iter()
+                .any(|path| path.file_name().and_then(|n| n.to_str()) == Some("rootfs-a"))
+        );
+        assert!(registry.resolve_alias("b").is_some());
+    }
+
+    #[test]
     fn rejects_parent_and_symlink_paths() {
         let directory = tempdir().unwrap();
         let outside = tempdir().unwrap();

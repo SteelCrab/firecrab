@@ -270,3 +270,58 @@ async fn download_to(client: &reqwest::Client, url: &str, dest: &Path) -> Result
         .map_err(|error| format!("publish {}: {error}", dest.display()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use firecrab_api_types::ImageInstallStatus;
+
+    #[test]
+    fn tracker_begin_running_and_clear() {
+        let tracker = ImageInstallTracker::with_base_url("http://example.test");
+        assert!(tracker.base_url().is_some());
+        assert!(!tracker.is_running("a"));
+
+        let snap = tracker.begin("a").unwrap();
+        assert_eq!(snap.status, ImageInstallStatus::Running);
+        assert!(tracker.is_running("a"));
+        assert_eq!(tracker.begin("a").unwrap_err(), "running");
+
+        tracker.append_log("a", "step");
+        tracker.append_log("missing", "ignored");
+        let mid = tracker.snapshot("a");
+        assert!(mid.log.contains("step"));
+
+        tracker.finish_ok("a");
+        assert!(!tracker.is_running("a"));
+        assert_eq!(tracker.snapshot("a").status, ImageInstallStatus::Succeeded);
+
+        tracker.begin("b").unwrap();
+        tracker.finish_err("b", "boom");
+        assert_eq!(tracker.snapshot("b").status, ImageInstallStatus::Failed);
+        assert!(tracker.snapshot("b").log.contains("boom"));
+
+        tracker.clear("a");
+        assert_eq!(tracker.snapshot("a").status, ImageInstallStatus::Idle);
+    }
+
+    #[test]
+    fn with_base_url_empty_is_none() {
+        let tracker = ImageInstallTracker::with_base_url("   ");
+        assert!(tracker.base_url().is_none());
+    }
+
+    #[test]
+    fn finish_on_missing_job_is_noop() {
+        let tracker = ImageInstallTracker::default();
+        tracker.finish_ok("nope");
+        tracker.finish_err("nope", "x");
+        assert_eq!(tracker.snapshot("nope").status, ImageInstallStatus::Idle);
+    }
+
+    #[test]
+    fn clock_formats_hh_mm_ss() {
+        // 1h 2m 3s past epoch → 01:02:03
+        assert_eq!(clock(3_723_000), "01:02:03");
+    }
+}
