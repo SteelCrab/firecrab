@@ -211,6 +211,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/images/{alias}/build",
             post(handlers::builds::start_build),
         )
+        .route(
+            "/api/images/{alias}/bootstrap",
+            post(handlers::bootstrap::start_bootstrap),
+        )
         .route("/api/images/builds", get(handlers::builds::list_builds))
         .route(
             "/api/images/builds/{buildId}",

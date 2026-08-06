@@ -1,3 +1,4 @@
+pub mod bootstrap;
 pub mod builds;
 pub mod console;
 pub mod images;
