@@ -180,9 +180,17 @@ vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V 
 [ -n "$vmlinuz_path" ] || fail 'linux-image-generic did not install a vmlinuz'
 cp "$vmlinuz_path" "$out/vmlinuz-raw"
 
-cat >"${mount_dir}/etc/resolv.conf" <<'EOF'
-nameserver 172.30.0.1
-EOF
+# Enable systemd-resolved so the DHCP-provided DNS server is used at
+# runtime. Without this, resolv.conf stays as the static copy from the
+# MicroBoot builder chroot install (nameserver 172.30.0.1 — the builder
+# network's gateway, which does not exist on regular VM networks), causing
+# FIRECRAB_NETWORK_FAILED dns-unreachable on every VM start.
+# systemd-networkd's DHCP=yes already pushes DHCP-learned DNS to
+# systemd-resolved by default (UseDNS=yes); all we need is the service
+# enabled and the canonical stub symlink in place.
+ln -sf /lib/systemd/system/systemd-resolved.service \
+  "${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-resolved.service"
+ln -sfn /run/systemd/resolve/stub-resolv.conf "${mount_dir}/etc/resolv.conf"
 
 cleanup_mounts
 
