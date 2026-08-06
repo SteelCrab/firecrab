@@ -317,6 +317,30 @@ function BootstrapPanel({
 }
 
 /**
+ * 선택된 이미지 하나의 상세 정보 + 액션. 표 아래 인라인으로 열리며,
+ * MicroNetworks/MicroStorages의 행 클릭 → 상세 패턴과 동일하다.
+ */
+function ImageDetail({ image }: { image: ImageResponse }) {
+  return (
+    <div className="subpanel">
+      <dl className="detail-fields mono">
+        <dt>버전</dt>
+        <dd>{image.version}</dd>
+
+        <dt>최소 디스크</dt>
+        <dd>{image.minDiskGb} GiB</dd>
+
+        <dt>rootfs 크기</dt>
+        <dd>{formatRootfsSize(image.rootfsSizeBytes)}</dd>
+
+        <dt>설명</dt>
+        <dd>{image.description || "—"}</dd>
+      </dl>
+    </div>
+  );
+}
+
+/**
  * Single M2Image inventory table plus the from-scratch bootstrap panel.
  * Package download/install ("가져오기") is a per-row action here rather than
  * a separate panel.
@@ -328,6 +352,7 @@ export default function Images() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
   const [install, setInstall] = useState<ImageInstallResponse | null>(null);
+  const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
 
   const refreshList = useCallback(async () => {
     try {
@@ -342,6 +367,8 @@ export default function Images() {
   useEffect(() => {
     void refreshList();
   }, [refreshList]);
+
+  const selectedImage = (images ?? []).find((image) => image.alias === selectedAlias) ?? null;
 
   // Bootstrapping either of these would spend ~30 minutes producing a package
   // the install step then refuses (`already_installed`) or that is already
@@ -535,7 +562,11 @@ export default function Images() {
               // fall back to plain alias text with no logo for those.
               const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
               return (
-                <tr key={image.alias}>
+                <tr
+                  key={image.alias}
+                  className={selectedAlias === image.alias ? "is-selected" : undefined}
+                  onClick={() => setSelectedAlias(selectedAlias === image.alias ? null : image.alias)}
+                >
                   <td className="mono">
                     {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
                     {image.alias}
@@ -576,6 +607,7 @@ export default function Images() {
             })}
           </tbody>
         </table>
+        {selectedImage && <ImageDetail image={selectedImage} />}
         {install && install.status !== "idle" && (
           <>
             <div className="log-export-bar">
