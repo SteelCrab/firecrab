@@ -500,6 +500,12 @@ function ImageDetail({
   const bootstrapIsMine =
     bootstrapStartingAlias === image.alias || bootstrapSession?.alias === image.alias;
 
+  // "구울 필요 없음"은 이 태스크 이전부터 있던 문구가 아니라 이 플랜이
+  // 의도적으로 바꾸는 것이다 — 옛 라벨("이미 설치됨/패키지 준비됨")이
+  // 옆의 설치 버튼 라벨("설치됨")과 단어가 겹쳐 사용자가 두 버튼의
+  // 차이를 헷갈려 한다는 피드백으로 바뀌었다. 리뷰에서 "기존 버튼과
+  // 텍스트가 다르다"는 지적이 나올 수 있는데, 이 한 줄은 그 지적의
+  // 예외로 이미 확정된 변경이다.
   const bakeLabel = blockedByStatus
     ? "구울 필요 없음"
     : bootstrapIsMine && bootstrapBusy
@@ -537,8 +543,13 @@ function ImageDetail({
   // 지금 실행 중인 세션 취소, 또는 완료돼 스테이징된 패키지 삭제. 둘은
   // 실제로 배타적이다 — 세션이 `packageStaged`를 참으로 만들 수 있는
   // 시점(성공 종료)엔 이미 `bootstrapBusy`가 검사하는 비종결 상태를
-  // 벗어난 뒤다.
-  const canCancelBootstrap = bootstrapIsMine && bootstrapBusy;
+  // 벗어난 뒤다. `bootstrapSession !== null`을 추가로 요구하는 이유:
+  // `handleStartBootstrap`이 POST 응답을 기다리는 짧은 구간엔
+  // `bootstrapStartingAlias`(→ `bootstrapIsMine`/`bootstrapBusy`)가 먼저
+  // 참이 되고 `bootstrapSession`은 아직 null이다 — 이 세션 없는 구간을
+  // 빼지 않으면 "부트스트랩 취소"가 활성 상태로 보이지만 취소할 세션이
+  // 없어 클릭해도 아무 일도 안 일어나는 창이 생긴다.
+  const canCancelBootstrap = bootstrapIsMine && bootstrapBusy && bootstrapSession !== null;
   const canDeleteStagedPackage = image.packageStaged && !canCancelBootstrap;
   const bakeDeleteLabel = canCancelBootstrap ? "부트스트랩 취소" : "구운 패키지 삭제";
   const handleBakeDeleteClick = () => {
