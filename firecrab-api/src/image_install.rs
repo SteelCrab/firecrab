@@ -313,10 +313,7 @@ async fn download_package_once(
     // Emit a real stage event before checking host prerequisites.  Otherwise
     // an unavailable `tar`/`zstd` binary leaves every Packer stage at
     // "waiting" even though this job already failed.
-    tracker.append_log(
-        &spec.alias,
-        "[packer:source] preparing local package cache",
-    );
+    tracker.append_log(&spec.alias, "[packer:source] preparing local package cache");
     ensure_host_tools()?;
 
     let client = reqwest::Client::builder()
@@ -330,7 +327,10 @@ async fn download_package_once(
     let partial = partial_download_path(&temporary);
     let _ = tokio::fs::remove_file(&temporary).await;
     let _ = tokio::fs::remove_file(&partial).await;
-    tracker.append_log(&spec.alias, format!("[packer:source] downloading {package}"));
+    tracker.append_log(
+        &spec.alias,
+        format!("[packer:source] downloading {package}"),
+    );
     if let Err(error) = download_to(&client, &url, &temporary).await {
         let _ = tokio::fs::remove_file(&temporary).await;
         let _ = tokio::fs::remove_file(&partial).await;
@@ -347,7 +347,10 @@ async fn download_package_once(
     tokio::fs::rename(&temporary, &archive)
         .await
         .map_err(|error| format!("publish {}: {error}", archive.display()))?;
-    tracker.append_log(&spec.alias, "[packer:package] local package cache published");
+    tracker.append_log(
+        &spec.alias,
+        "[packer:package] local package cache published",
+    );
     tracker.append_log(&spec.alias, "[packer:package] complete");
     Ok(())
 }
@@ -706,8 +709,16 @@ mod tests {
 
     #[test]
     fn with_base_url_empty_or_none_disables() {
-        assert!(ImageInstallTracker::with_base_url("   ").base_url().is_none());
-        assert!(ImageInstallTracker::with_base_url("none").base_url().is_none());
+        assert!(
+            ImageInstallTracker::with_base_url("   ")
+                .base_url()
+                .is_none()
+        );
+        assert!(
+            ImageInstallTracker::with_base_url("none")
+                .base_url()
+                .is_none()
+        );
         assert!(ImageInstallTracker::with_base_url("-").base_url().is_none());
         assert!(ImageInstallTracker::disabled().base_url().is_none());
     }
@@ -727,9 +738,11 @@ mod tests {
             tracker.package_url_for("ubuntu-26.04").as_deref(),
             Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst")
         );
-        assert!(ImageInstallTracker::disabled()
-            .package_url_for("ubuntu-26.04")
-            .is_none());
+        assert!(
+            ImageInstallTracker::disabled()
+                .package_url_for("ubuntu-26.04")
+                .is_none()
+        );
     }
 
     #[test]
