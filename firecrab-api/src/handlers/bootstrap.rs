@@ -630,12 +630,13 @@ fn build_package_blocking(
         .map_err(|e| format!("mkdir {}: {e}", rootfs_dir.display()))?;
 
     let raw_rootfs = scratch.join("rootfs.raw.ext4");
-    crate::rootfs::dump_from_image(
-        guest_disk,
-        "/root/fc-bootstrap/out/rootfs.ext4",
-        &raw_rootfs,
-    )
-    .map_err(|e| format!("dump rootfs: {e}"))?;
+    // Root-level, not /root/fc-bootstrap/out/... — MicroBoot's guest
+    // scripts wrap their whole $out directory directly onto /dev/vda as
+    // its own filesystem (see the bootstrap-{alpine,ubuntu,rocky}-in-guest.sh
+    // scripts' own comments on this), so the paths inside it are relative
+    // to that filesystem's root.
+    crate::rootfs::dump_from_image(guest_disk, "/rootfs.ext4", &raw_rootfs)
+        .map_err(|e| format!("dump rootfs: {e}"))?;
     let rootfs_dest = scratch.join(&spec.rootfs); // spec.rootfs = "rootfs/<exact-filename>.ext4"
     std::fs::create_dir_all(rootfs_dest.parent().unwrap()).ok();
     std::fs::rename(&raw_rootfs, &rootfs_dest).map_err(|e| format!("place rootfs: {e}"))?;
@@ -646,12 +647,8 @@ fn build_package_blocking(
         "vmlinuz-raw"
     };
     let raw_kernel = scratch.join("kernel.raw");
-    crate::rootfs::dump_from_image(
-        guest_disk,
-        &format!("/root/fc-bootstrap/out/{raw_kernel_name}"),
-        &raw_kernel,
-    )
-    .map_err(|e| format!("dump kernel: {e}"))?;
+    crate::rootfs::dump_from_image(guest_disk, &format!("/{raw_kernel_name}"), &raw_kernel)
+        .map_err(|e| format!("dump kernel: {e}"))?;
 
     let kernel_dest = scratch.join(&spec.kernel); // e.g. "kernel/vmlinux-ubuntu-26.04-x86_64"
     std::fs::create_dir_all(kernel_dest.parent().unwrap()).ok();
@@ -690,7 +687,7 @@ fn build_package_blocking(
 
     if let Some(initrd_relative) = &spec.initrd {
         let raw_initrd = scratch.join("initramfs.raw");
-        crate::rootfs::dump_from_image(guest_disk, "/root/fc-bootstrap/out/initramfs", &raw_initrd)
+        crate::rootfs::dump_from_image(guest_disk, "/initramfs", &raw_initrd)
             .map_err(|e| format!("dump initrd: {e}"))?;
         let initrd_dest = scratch.join(initrd_relative);
         std::fs::create_dir_all(initrd_dest.parent().unwrap()).ok();
@@ -827,30 +824,6 @@ mod tests {
         panic!("run_bootstrap_script never subscribed to the console");
     }
 
-    /// `debugfs`'s own `write` command doesn't create parent directories
-    /// (verified directly: writing into a path whose parent doesn't yet
-    /// exist fails with "File not found by ext2_lookup"), so a test fixture
-    /// that wants to seed `/root/fc-bootstrap/out/<file>` the way a real
-    /// bootstrap script run leaves it behind must `mkdir` each path
-    /// component first — the same thing `rootfs.rs`'s own
-    /// `real_rootfs_with_guest_dirs` test helper does for its fixtures.
-    /// `rootfs::run_debugfs` itself stays module-private, so this shells
-    /// out directly rather than widening that too.
-    fn mkdir_in_image(disk_path: &std::path::Path, guest_dir: &str) {
-        let output = std::process::Command::new("debugfs")
-            .arg("-w")
-            .arg("-R")
-            .arg(format!("mkdir {guest_dir}"))
-            .arg(disk_path)
-            .output()
-            .unwrap();
-        assert!(
-            !String::from_utf8_lossy(&output.stderr).contains("File not found"),
-            "mkdir {guest_dir} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
     /// A minimal 64-byte ELF64 header (x86-64 executable, no sections) —
     /// enough for `readelf -h` to accept it, which is what
     /// `extract-vmlinux`'s own `check_vmlinux` uses to recognize an
@@ -926,9 +899,14 @@ mod tests {
         id
     }
 
-    /// Builds a small ext4 image at `disk_path` with `/root/fc-bootstrap/out`
-    /// already present, then seeds it with `files` (guest-relative paths
-    /// under that directory, e.g. `"rootfs.ext4"` -> content).
+    /// Builds a small ext4 image at `disk_path` and seeds it with `files`
+    /// (paths relative to the image root, e.g. `"rootfs.ext4"` -> content) —
+    /// the fixture stand-in for MicroBoot's guest scripts wrapping their
+    /// whole `$out` directory directly onto `/dev/vda` as its own
+    /// filesystem, so seeded files land at the image's root rather than
+    /// under any nested guest directory (see `build_package_blocking`'s own
+    /// comment on this). No `mkdir` is needed first: `/` already exists on
+    /// any freshly `mkfs.ext4`'d image.
     fn seed_builder_output_disk(disk_path: &std::path::Path, files: &[(&str, &[u8])]) {
         std::process::Command::new("mkfs.ext4")
             .args(["-q", "-F"])
@@ -936,16 +914,8 @@ mod tests {
             .arg("16M")
             .status()
             .unwrap();
-        for dir in ["/root", "/root/fc-bootstrap", "/root/fc-bootstrap/out"] {
-            mkdir_in_image(disk_path, dir);
-        }
         for (name, content) in files {
-            crate::rootfs::write_into_image(
-                disk_path,
-                &format!("/root/fc-bootstrap/out/{name}"),
-                content,
-            )
-            .unwrap();
+            crate::rootfs::write_into_image(disk_path, &format!("/{name}"), content).unwrap();
         }
     }
 
