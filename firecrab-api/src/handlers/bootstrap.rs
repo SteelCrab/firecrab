@@ -1562,6 +1562,9 @@ mod tests {
 
         assert!(heartbeat.is_finished());
         let log = state.bootstraps.get(bootstrap_id).unwrap().log;
-        assert!(!log.contains("still running the install script"), "log: {log}");
+        assert!(
+            !log.contains("still running the install script"),
+            "log: {log}"
+        );
     }
 }
