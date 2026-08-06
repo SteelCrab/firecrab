@@ -1,4 +1,6 @@
 export * from "./ApiError";
+export * from "./BuildResponse";
+export * from "./BuildStatus";
 export * from "./AssignVmStorageRequest";
 export * from "./CreateMicroNetworkRequest";
 export * from "./CreateMicroStorageRequest";
