@@ -122,7 +122,17 @@ pub async fn start_bootstrap(
     let create_request = CreateVmRequest {
         name: builder_vm_name(&format!("bootstrap-{alias}")),
         template: source_alias.clone(),
-        ram: 1024,
+        // MicroBoot boots into Alpine's RAM-backed recovery shell, not a
+        // disk-backed template rootfs — every guest script's
+        // download+extract+chroot-install staging area now lives in guest
+        // RAM instead of on disk, so the builder needs far more of it than
+        // it used to. 1024 MiB OOM-killed ubuntu's apt-get outright while
+        // verifying Task 8 of the MicroBoot plan (one dependency,
+        // linux-firmware-nvidia-graphics, is 109 MB by itself). Firecracker
+        // allocates guest memory lazily, so this headroom only costs what a
+        // given distro actually touches. Rocky additionally sizes its tmpfs
+        // work area off this number — see bootstrap-rocky-in-guest.sh.
+        ram: 8192,
         cpu: 1,
         // The target's own build headroom, but never below the floor the
         // source template itself needs to boot at all — a source rootfs

@@ -2,7 +2,7 @@
 tags:
   - firecrab
   - guide
-updated: 2026-07-31
+updated: 2026-08-05
 ---
 
 # 트러블슈팅
@@ -37,6 +37,17 @@ updated: 2026-07-31
 | VM을 여러 대 동시에 시작하면 부팅 극초반에 죽음 | [네트워크](#네트워크) |
 | VM 내부에서 새 목적지로 나가는 연결(apt/apk update 등)이 타임아웃 | [네트워크](#네트워크) |
 | Alpine이 공식 커널로 바꾸니 부팅 중 커널 패닉("No such file or directory") | [VM 생성·시작](#vm-생성시작) |
+| 부트스트랩 빌더 VM이 `Error`로 바로 죽음(`Bad magic number in super-block`) | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| 부트스트랩 시작이 `File not found by ext2_lookup`로 실패 | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| 부트스트랩 로그가 heartbeat만 반복하다 30분 타임아웃 | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| `Unable to lock database` / `curl: not found` | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| 게스트 스크립트에서 패키지가 전부 `no such package`(DNS 실패) | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| `mkfs.ext4 -d`가 `No such process`로 실패 | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| `oom-killer`가 apt-get/dnf를 죽임, `exited with code 137` | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| `At least NNNMB more space needed on the / filesystem` | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| 부트스트랩한 이미지로 만든 VM이 dracut emergency shell에 빠짐 | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| rocky만 1초 만에 `cp: can't stat '/etc/pki/rpm-gpg'` | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
+| microboot.rs를 고쳤는데 재시작해도 그대로 | [이미지 부트스트랩](#이미지-부트스트랩microboot) |
 | 터미널 "연결 끊김"만 뜨고 안 붙음 | [터미널](#터미널) |
 | 터미널 프롬프트에 `;1R;80R;1R;80R...` 반복 | [터미널](#터미널) |
 
@@ -72,11 +83,173 @@ updated: 2026-07-31
   아직 안 실린 상태라 타입을 인식 못 해 실패한다("No such file or directory"는 이 상황을
   오해하기 쉽게 표현한 에러). `boot_args`에 `rootfstype=ext4` 추가로 수정, 수정됨
 
+### 모든 VM이 시작하자마자 `Error` — 개발 모드로 직접 실행할 때
+
+- **원인**: `/dev/kvm` 접근 권한. udev의 `uaccess` 태그(`70-uaccess.rules`)는 **좌석에 연결된
+  그래픽 세션 사용자에게만** ACL을 동적으로 부여한다 — SSH·헤드리스·백그라운드 세션에는 안 붙는다.
+  `install.sh`의 `ensure_account()`가 kvm 그룹 가입을 처리하지만, 그건 **정식 설치 경로 전용**이고
+  `cargo run -p firecrab-api` 개발 모드는 이 처리를 거치지 않는다
+- **확인**: `ls -l /dev/kvm` → 그룹이 `kvm`이 아니거나, `id -nG`에 `kvm`이 없으면 이 케이스
+
+```sh
+sudo chgrp kvm /dev/kvm && sudo chmod 660 /dev/kvm   # 일시적
+sudo usermod -aG kvm "$USER"                          # 영구(재로그인 필요)
+```
+
+### 특정 MicroNetwork의 VM만 DHCP를 못 받는다
+
+- **원인**: 그 네트워크의 브리지가 죽어 있다. 붙은 TAP이 하나도 없으면 브리지는 `NO-CARRIER`/`DOWN`
+  상태로 남는다 — 코드 문제가 아니라 해당 네트워크의 상태 문제이므로, 다른 정상 네트워크로 바꾸면
+  같은 VM이 그대로 뜬다
+- **확인**: `ip -br link show type bridge` → 대상 `mnb<hex>`가 `DOWN`이면 이 케이스. UFW가 원인인
+  경우와 헷갈리기 쉬우니 [네트워크](#네트워크)의 UFW 항목도 같이 확인
+
+### 이미지 설치가 권한 오류로 실패한다(`images/rootfs`)
+
+- **원인**: `images/rootfs`가 `root:root` 소유로 남아 있으면 비특권 프로세스가 tar를 풀 수 없다.
+  과거에 sudo로 스크립트를 돌렸다면 이 상태가 된다
+- **해결**: `sudo chown "$USER:$USER" images/rootfs`
+
 ### 호스트 디스크가 꽉 차서 VM 생성/시작이 느리거나 실패한다
 
 - **원인**: VM 하나당 디스크(`data/vms/<id>/rootfs.ext4`)가 기본 2GiB — 테스트/재현용으로 VM을
   많이 만들면 금방 쌓인다. ext4는 여유 공간이 임계치 이하로 떨어지면 쓰기 성능이 급격히 나빠진다
 - **해결**: `df -h`로 확인하고, 안 쓰는 VM은 `DELETE /api/vms/{id}`로 정리(디스크 파일도 같이 삭제됨)
+
+## 이미지 부트스트랩(MicroBoot)
+
+웹에서 "{alias} 부트스트랩"을 누르면 빌더 VM이 **MicroBoot**(Alpine 공식 netboot 커널+initrd)로
+떠서 게스트 스크립트를 돌린다. 설계는
+[specs/2026-08-05-m2image-microboot-design.md](../superpowers/specs/2026-08-05-m2image-microboot-design.md).
+
+> [!important] MicroBoot 게스트의 3가지 전제
+> 아래 증상 대부분은 이 세 가지에서 파생된다. 새 증상을 만나면 여기부터 의심한다.
+>
+> 1. **`/`가 ramfs다** — 크기 정보가 없어 `df`에 아예 안 나오고, statvfs가 총량·여유 모두 0을
+>    반환한다. 디스크가 아니라 RAM이며, 용량 상한은 VM RAM이다
+> 2. **정상 설치된 배포판이 아니다** — Alpine의 비상 복구 셸이라 apk DB도, curl도, 네트워크
+>    설정도 없다. busybox 애플릿은 GNU 도구와 옵션이 다르다
+> 3. **`/dev/vda`는 root가 아니다** — 스크립트 마지막에 결과물을 통째로 덮어쓸 출력 장치일 뿐,
+>    중간 작업 공간이 아니다
+
+### 부트스트랩 로그 읽는 법
+
+- API의 `log` 필드는 콘솔 출력의 **꼬리만** 담는다 — 초반 실패는 여기 안 남는다
+- 전체 원본은 host의 `data/vms/<id에서 - 제거>/r/<runtime_id>/console.log`
+- 실패하면 빌더 VM이 삭제되며 이 파일도 같이 사라진다. 초반 구간을 봐야 하면 **시작 직후**
+  `tail -F`로 미리 잡아둔다
+
+```sh
+vmid=$(curl -s -X POST localhost:8080/api/images/rocky-9/bootstrap \
+  | grep -o '"vmId":"[^"]*"' | cut -d'"' -f4 | tr -d '-')
+tail -F "$(find data/vms/$vmid -name console.log)"
+```
+
+### 빌더 VM이 바로 `Error` — `Bad magic number in super-block`
+
+- **원인**: MicroBoot의 자리표시자 rootfs가 실제 ext4가 아님. 모든 VM은 부팅 전에
+  `rootfs::prepare_rootfs`의 `grow()`가 `e2fsck -f -y` → `resize2fs`를 돌리므로, 내용은 아무래도
+  좋지만 **구조는 진짜 ext4여야 한다**
+- **해결**: `microboot.rs`의 `register_blocking()`이 `mkfs.ext4`로 생성하도록 수정, 수정됨
+
+### 부트스트랩 시작이 `File not found by ext2_lookup`로 실패
+
+- **원인**: 매 VM 시작마다 `rootfs::specialize_guest`가 `/etc/hostname`을 `debugfs`로 쓰는데,
+  `debugfs`의 `write`는 부모 디렉터리를 만들지 않는다. 갓 `mkfs.ext4`한 이미지엔 `/etc`가 없다
+- **해결**: 자리표시자 생성 직후 `debugfs -w -R "mkdir /etc"` 추가, 수정됨
+
+### 로그가 heartbeat만 반복하다 30분 타임아웃(콘솔은 조용함)
+
+- **원인**: `eth0`은 존재하지만(virtio_net은 자동 로드) **administratively DOWN** 상태다. 설치된
+  템플릿은 네트워크 관리자가 DHCP 과정에서 링크를 올려주지만 `udhcpc`는 스스로 올리지 않아,
+  down 링크에서 패킷을 한 개도 안 보내고 조용히 영원히 대기한다
+- **확인**: host에서 해당 TAP을 `sudo tcpdump -i <tap> -n` — 10분간 0 패킷이면 이 케이스
+- **해결**: 3개 게스트 스크립트 모두 `udhcpc` 앞에 `ip link set eth0 up` 추가, 수정됨
+
+### `Unable to lock database: No such file or directory` / `curl: not found`
+
+- **원인**: 복구 셸은 정상 설치된 Alpine이 아니라 `/lib/apk/db` 자체가 없다. 그리고 busybox는
+  `wget`만 제공하고 `curl`은 없는데 스크립트는 `curl`을 쓴다
+- **해결**: `apk add --no-cache --initdb --repository <url> e2fsprogs curl` — `--initdb`로 이 root에
+  DB를 새로 만들고 `curl`도 같이 설치, 수정됨
+
+### 대상 chroot 안에서 패키지가 전부 `no such package`(DNS transient error)
+
+- **원인**: `chroot`는 `/proc`·`/sys`·`/dev` bind 마운트와 달리 `/etc/resolv.conf`를 공유하지
+  않는다. 대상 rootfs의 (사용 불가능한) resolv.conf가 그대로 쓰여 모든 조회가 실패한다
+- **해결**: resolv.conf 쓰기를 chroot 블록 **앞**으로 이동(최종 값은 동일, 타이밍만 이동), 수정됨
+
+### `mkfs.ext4 -d`가 `No such process`로 실패
+
+- **원인**: busybox의 `umount`에는 `-R` 옵션이 **아예 없다** — `umount -R ... 2>/dev/null || true`
+  전체가 조용히 no-op이 되어 `/proc`이 staging 아래 마운트된 채 남는다. 그 상태로 `mkfs.ext4 -d`가
+  디렉터리를 훑으며 `/proc`의 프로세스별 임시 파일을 복사하려다 실패한다
+- **해결**: `umount X || umount -l X || true` 2단 폴백으로 교체, 수정됨
+
+### `oom-killer`가 apt-get/dnf를 죽임 — `bootstrap script exited with code 137`
+
+- **원인**: 위 전제 1 — 다운로드·전개·chroot 설치가 전부 게스트 RAM에서 일어난다. 빌더 RAM
+  1024MiB로는 ubuntu가 못 버틴다(의존성 하나인 `linux-firmware-nvidia-graphics`만 109MB)
+- **확인**: 콘솔 로그에 `invoked oom-killer` + `Out of memory: Killed process ... (apt-get)`
+- **해결**: 빌더 VM RAM을 8192MiB로 상향(`handlers/bootstrap.rs`). Firecracker는 게스트 메모리를
+  lazy 할당하므로 실제로 만진 만큼만 든다, 수정됨
+
+### `At least NNNMB more space needed on the / filesystem`(rocky)
+
+- **원인**: 위 전제 1의 함정 — **실제 메모리 부족이 아니다.** `/`가 ramfs라 statvfs가 여유를 0으로
+  보고하는데, rpm은 모든 트랜잭션 전에 그 statvfs를 본다. 그래서 "부족량"은 그냥 설치 총량이고,
+  **RAM을 아무리 늘려도 숫자가 한 글자도 안 변한다**(4GiB·8GiB 모두 350MB로 동일, 같은 시점
+  `free`는 7.4GiB 유휴). apk·apt는 이런 사전 검사를 안 해서 rocky만 걸린다
+- **해결**: 작업 영역에 진짜 tmpfs를 마운트(`mount -t tmpfs tmpfs "$work"`) — tmpfs는 크기를
+  정직하게 보고하고, `size=` 없이 두면 VM RAM의 절반으로 자동 결정되어 빌더 RAM 설정을 그대로
+  따라간다, 수정됨
+- **교훈**: 같은 숫자가 조건을 바꿔도 안 변하면 "자원이 모자라다"가 아니라 "**측정이 틀렸다**"를
+  먼저 의심한다
+
+### 부트스트랩은 성공했는데 그 이미지로 만든 VM이 dracut emergency shell에 빠진다(rocky)
+
+- **증상**: `Failed to start File System Check on /dev/vda` → `Dependency failed for /sysroot` →
+  `Entering emergency mode`. 부트스트랩·패키징·설치는 전부 성공한 뒤라 원인이 안 보인다
+- **원인**: rootfs.ext4를 만드는 `mkfs.ext4`는 **바깥(MicroBoot) 셸의 것** — Alpine 3.24의
+  e2fsprogs 1.47.x라 `orphan_file` 피처를 기본으로 켠다. 그런데 그 파일시스템을 매 부팅마다
+  검사하는 건 방금 만든 rootfs 안의 e2fsck이고, Rocky 9는 e2fsprogs **1.46.5(2021)** 라 그 피처를
+  모른다. Alpine·Ubuntu는 자기 initramfs에도 1.47.x가 들어가서 이 문제가 안 생긴다
+- **확인**: host에서 rootfs 안의 e2fsck를 꺼내 직접 돌려보면 확정된다
+
+```sh
+debugfs -c -R "dump /usr/sbin/e2fsck /tmp/e2fsck-rocky" images/rootfs/rocky-rootfs-9-x86_64.ext4
+chmod +x /tmp/e2fsck-rocky && /tmp/e2fsck-rocky -fn images/rootfs/rocky-rootfs-9-x86_64.ext4
+# → has unsupported feature(s): orphan_file / Get a newer version of e2fsck!
+```
+
+- **해결**: rocky의 rootfs 생성만 `mkfs.ext4 -F -O '^orphan_file' ...`로 변경, 수정됨
+- **교훈**: 게스트 이미지를 **다른 배포판 도구로** 만들 때는 만든 쪽이 아니라 **쓰는 쪽**의 도구
+  버전이 기준이다
+
+### rocky만 1초 만에 `cp: can't stat '/etc/pki/rpm-gpg'`
+
+- **원인**: 스크립트가 RPM 서명 키를 **바깥 셸**의 `/etc/pki/rpm-gpg`에서 복사했다. 예전엔 빌더가
+  설치된 rocky 템플릿이라 거기 있었지만, 지금 바깥 셸은 Alpine이라 그 경로가 없다
+- **해결**: 같은 키를 담고 있는 Container-Base 추출본(`$container_root/etc/pki/rpm-gpg`)에서
+  가져오도록 이동 + 없으면 명확히 실패하는 체크 추가, 수정됨
+
+### `microboot.rs`를 고쳤는데 재시작해도 증상이 그대로다
+
+- **원인**: `TemplateRegistry::register_spec`이 등록을 `images/.templates.json`에 영속화하고 다음
+  기동 때 그대로 재생한다. `ensure_registered`는 `resolve_alias`가 이미 있으면 즉시 반환하므로,
+  **깨진 등록이 그대로 살아남아** 고친 코드가 실행되지 않는다
+- **해결**: 새 프로세스를 **띄우기 전에** 아래를 지운다(띄운 뒤에 지우면 이미 캐시된 경로를 참조해
+  `No such file or directory`가 난다)
+
+```sh
+rm -f images/.templates.json images/.microboot/placeholder.ext4
+```
+
+### 게스트 스크립트를 고쳤는데 반영이 안 된다
+
+- **원인**: 3개 스크립트는 `include_str!`로 바이너리에 박힌다 — 파일만 고치고 재빌드를 안 하면
+  옛 내용이 그대로 실행된다
+- **확인**: `strings target/debug/firecrab-api | grep '<새로 넣은 문구>'`
 
 ## 네트워크
 

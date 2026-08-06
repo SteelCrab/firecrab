@@ -9,6 +9,16 @@
 # minus its outer `docker run --cap-add=SYS_ADMIN ...` wrapper.
 set -eu
 
+# The interface exists (virtio_net loads on its own) but is administratively
+# down — a real installed template's network manager brings it up as part of
+# DHCP negotiation; udhcpc itself does not, so a bare `udhcpc -i eth0` on a
+# down link never sends a single packet and hangs silently forever (found
+# live: 0 packets captured on the host's TAP after 10+ minutes). Written
+# without the info/fail helpers since they aren't defined yet at this point.
+ip link set eth0 up || {
+  printf '[FAIL] %s\n' 'could not bring eth0 up' >&2
+  exit 1
+}
 udhcpc -i eth0 -n -q >/dev/null 2>&1 || {
   printf '[FAIL] %s\n' 'could not obtain a DHCP lease on eth0' >&2
   exit 1
@@ -50,8 +60,21 @@ mount_chroot_fs() {
 }
 
 rm -rf "$work"
+mkdir -p "$work"
+# MicroBoot's `/` is the kernel's own initramfs `rootfs` — a ramfs, which
+# keeps no size accounting at all: it doesn't even appear in `df`, and
+# statvfs on it reports zero blocks total *and* zero free. rpm runs exactly
+# that statvfs before every transaction, reads "0 bytes available" and
+# aborts with "At least NNNMB more space needed on the / filesystem" — the
+# figure is just the transaction's own size, so it stays identical no
+# matter how much RAM the VM has (found live: an unchanged 350 MB shortfall
+# at both 4 GiB and 8 GiB, with `free` reporting 7.4 GiB idle). Alpine's apk
+# and Ubuntu's apt make no such precheck, which is why only Rocky hits it.
+# A tmpfs does report real numbers, so mount one over the whole work area:
+# with no size= it defaults to half the VM's RAM, which both scales with
+# `handlers::bootstrap`'s builder RAM and gives rpm a truthful answer.
+mount -t tmpfs tmpfs "$work" || fail 'could not mount a tmpfs work area'
 mkdir -p "$staging/etc/pki" "$staging/dev" "$staging/proc" "$staging/sys" "$staging/run" "$out"
-cp -a /etc/pki/rpm-gpg "$staging/etc/pki/"
 
 # Rocky's dnf/rpm are glibc binaries; MicroBoot's outer shell is Alpine
 # (musl) and cannot run them directly (verified live: dnf/rpm exist inside
@@ -66,9 +89,14 @@ container_archive="$work/rocky-container-base.tar.xz"
 mkdir -p "$container_root"
 
 info 'installing e2fsprogs and container tooling into the outer (MicroBoot) shell'
-apk add --no-cache --repository 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' \
-  e2fsprogs jq \
-  || fail 'could not install e2fsprogs/jq into the outer shell'
+# --initdb: this bare recovery shell was never a real Alpine install, so it
+# has no /lib/apk/db at all yet (found live: "Unable to lock database: No
+# such file or directory") — --initdb creates one on this root before
+# installing. curl: busybox only provides wget, not curl, and this script
+# uses curl throughout (found live: "curl: not found").
+apk add --no-cache --initdb --repository 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' \
+  e2fsprogs jq curl \
+  || fail 'could not install e2fsprogs/jq/curl into the outer shell'
 
 info 'downloading Rocky 9 Container-Base'
 curl -fsSL 'https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-Container-Base.latest.x86_64.tar.xz' \
@@ -92,6 +120,23 @@ info 'extracting Rocky 9 Container-Base'
 tar -xzf "$oci_dir/blobs/sha256/$layer_digest" -C "$container_root"
 test -x "$container_root/usr/bin/rpm" || fail 'Container-Base is missing usr/bin/rpm'
 test -e "$container_root/usr/bin/dnf" || fail 'Container-Base is missing usr/bin/dnf'
+
+# Rocky's own RPM signing keys, which the repo configs below reference as
+# gpgkey=file:///etc/pki/rpm-gpg/... inside $staging. Under an installed
+# rocky-9 builder template these came from the outer shell's own
+# /etc/pki/rpm-gpg, but MicroBoot's outer shell is Alpine and has no such
+# directory (found live: "cp: can't stat '/etc/pki/rpm-gpg'") — Rocky's
+# Container-Base ships the identical keys, so take them from there.
+test -d "$container_root/etc/pki/rpm-gpg" || fail 'Container-Base is missing etc/pki/rpm-gpg'
+cp -a "$container_root/etc/pki/rpm-gpg" "$staging/etc/pki/"
+
+# Everything under $work lives in the MicroBoot guest's RAM-backed root
+# (tmpfs, half of the VM's RAM) — unlike an installed builder template,
+# where it was a real disk. The downloaded archive and the unpacked OCI
+# layout are both dead weight once $container_root exists, and dnf below
+# needs every megabyte it can get (found live: rocky's install died with
+# "At least 350MB more space needed on the / filesystem").
+rm -rf "$oci_dir" "$container_archive"
 
 mount -t proc proc "$container_root/proc"
 mount --rbind /sys "$container_root/sys"
@@ -247,7 +292,18 @@ cp "$initrd_path" "$out/initramfs"
 
 info 'building rootfs.ext4'
 truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
-mkfs.ext4 -F -L rootfs -d "$staging" "$out/rootfs.ext4.tmp"
+# -O ^orphan_file: this mkfs.ext4 is the *outer* MicroBoot shell's, from
+# Alpine 3.24's e2fsprogs 1.47.x, which turns orphan_file on by default —
+# but the filesystem it writes is fsck'd at every boot by the e2fsck inside
+# the Rocky initramfs we build just above, and Rocky 9 ships e2fsprogs
+# 1.46.5 (2021), predating that feature. The guest then dies in dracut with
+# systemd-fsck-root failing and drops to an emergency shell, never reaching
+# /sysroot (found live while verifying Task 8 of the MicroBoot plan;
+# reproduced on the host by running Rocky's own e2fsck against the produced
+# image: "has unsupported feature(s): orphan_file / Get a newer version of
+# e2fsck!", clean once the feature is off). Alpine and Ubuntu both ship
+# e2fsprogs 1.47.x in their own initramfs, so only Rocky needs this.
+mkfs.ext4 -F -O '^orphan_file' -L rootfs -d "$staging" "$out/rootfs.ext4.tmp"
 mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 
 # MicroBoot boots off its own initrd (RAM), not off /dev/vda — nothing

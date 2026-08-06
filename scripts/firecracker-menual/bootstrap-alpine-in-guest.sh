@@ -19,9 +19,15 @@ info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
 cleanup_mounts() {
-  umount -R "$staging/proc" 2>/dev/null || true
-  umount -R "$staging/sys" 2>/dev/null || true
-  umount -R "$staging/dev" 2>/dev/null || true
+  # MicroBoot's outer shell is busybox, whose umount applet has no -R at all
+  # (found live: unrecognized option, prints usage, exits 1) — the whole call
+  # silently no-ops under `2>/dev/null || true`, leaving /proc mounted live
+  # under $staging when `mkfs.ext4 -d` walks it next, which then fails
+  # ("No such process") trying to copy /proc's ephemeral per-process files.
+  # Same two-tier fallback bootstrap-rocky-in-guest.sh's cleanup already uses.
+  umount "$staging/proc" 2>/dev/null || umount -l "$staging/proc" 2>/dev/null || true
+  umount "$staging/sys" 2>/dev/null || umount -l "$staging/sys" 2>/dev/null || true
+  umount "$staging/dev" 2>/dev/null || umount -l "$staging/dev" 2>/dev/null || true
 }
 trap cleanup_mounts EXIT
 
@@ -35,11 +41,24 @@ case "$arch" in
 esac
 
 info 'bringing up eth0 (MicroBoot has no network service of its own)'
+# The interface exists (virtio_net loads on its own) but is administratively
+# down — a real installed template's network manager brings it up as part of
+# DHCP negotiation; udhcpc itself does not, so a bare `udhcpc -i eth0` on a
+# down link never sends a single packet and hangs silently forever (found
+# live: 0 packets captured on the host's TAP after 10+ minutes).
+ip link set eth0 up || fail 'could not bring eth0 up'
 udhcpc -i eth0 -n -q >/dev/null 2>&1 || fail 'could not obtain a DHCP lease on eth0'
 
 info 'installing e2fsprogs into the outer (MicroBoot) shell'
-apk add --no-cache --repository "${alpine_releases_base}/v3.24/main" e2fsprogs \
-  || fail 'could not install e2fsprogs into the outer shell'
+# --initdb: this bare recovery shell was never a real Alpine install, so it
+# has no /lib/apk/db at all yet (found live: "Unable to lock database: No
+# such file or directory") — --initdb creates one on this root before
+# installing. Not needed for the *target* rootfs below: that one is unpacked
+# from Alpine's own official minirootfs archive, which already ships a
+# pre-initialized apk database. curl: busybox only provides wget, not curl,
+# and this script uses curl throughout (found live: "curl: not found").
+apk add --no-cache --initdb --repository "${alpine_releases_base}/v3.24/main" e2fsprogs curl \
+  || fail 'could not install e2fsprogs/curl into the outer shell'
 
 info 'resolving latest Alpine 3.24 minirootfs release'
 releases_yaml="$work/latest-releases.yaml"
@@ -79,6 +98,16 @@ ${alpine_releases_base}/${branch}/main
 ${alpine_releases_base}/${branch}/community
 REPOS
 
+# Must be in place before the chroot apk install below — chroot does not
+# share /etc/resolv.conf the way the /proc,/sys,/dev bind mounts do, so
+# without this the extracted minirootfs's own (unusable) resolv.conf makes
+# every package lookup fail DNS resolution (found live: "DNS: transient
+# error", every package "no such package"). The final production value is
+# the same either way; only the timing moved.
+cat >"${staging}/etc/resolv.conf" <<'EOF'
+nameserver 172.30.0.1
+EOF
+
 mount -t proc proc "$staging/proc"
 mount --rbind /sys "$staging/sys"
 mount --rbind /dev "$staging/dev"
@@ -98,9 +127,6 @@ cat >"${staging}/etc/hosts" <<EOF
 EOF
 cat >"${staging}/etc/fstab" <<'EOF'
 /dev/vda / ext4 defaults 0 1
-EOF
-cat >"${staging}/etc/resolv.conf" <<'EOF'
-nameserver 172.30.0.1
 EOF
 mkdir -p "${staging}/etc/network"
 cat >"${staging}/etc/network/interfaces" <<'EOF'

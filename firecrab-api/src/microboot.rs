@@ -103,12 +103,55 @@ fn register_blocking(
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("mkdir {}: {error}", parent.display()))?;
     }
-    // 4 KiB of zeros: any small non-empty regular file works, since nothing
-    // ever reads this content — `prepare_rootfs` grows it to the requested
-    // `disk_gb` per VM, and the guest's own `mkfs.ext4 -F` overwrites
-    // whatever's there entirely.
-    std::fs::write(&rootfs_dest, [0u8; 4096])
-        .map_err(|error| format!("write {}: {error}", rootfs_dest.display()))?;
+    // Must be a genuinely valid ext4 filesystem, not just arbitrary bytes:
+    // `rootfs::prepare_rootfs`'s `grow()` step runs `e2fsck -f -y` on the
+    // copied template before `resize2fs`, for every VM (including this
+    // builder), before the guest ever gets a chance to run its own
+    // `mkfs.ext4 -F` — a placeholder that isn't real ext4 fails e2fsck with
+    // "Bad magic number in super-block" and the VM never boots (found live
+    // while running Task 8's manual verification). Its *contents* still
+    // don't matter — the guest's own `mkfs.ext4 -F -d "$out" /dev/vda`
+    // overwrites this completely — only its structure has to be valid.
+    std::process::Command::new("mkfs.ext4")
+        .args(["-q", "-F"])
+        .arg(&rootfs_dest)
+        .arg("16M")
+        .status()
+        .map_err(|error| format!("run mkfs.ext4 for {}: {error}", rootfs_dest.display()))
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!(
+                    "mkfs.ext4 {} failed: {status}",
+                    rootfs_dest.display()
+                ))
+            }
+        })?;
+    // Every VM start runs `rootfs::specialize_guest` against its own disk
+    // copy, which writes `/etc/hostname` unconditionally (found live in the
+    // same manual verification pass) — `debugfs`'s `write` doesn't create
+    // parent directories, so a freshly `mkfs.ext4`'d image (no directories
+    // at all beyond `/`) fails that write with "File not found". Same
+    // one-directory fix this crate's own `real_rootfs_with_guest_dirs` test
+    // helper (`rootfs.rs`) already applies for the identical reason.
+    let mkdir_etc = std::process::Command::new("debugfs")
+        .args(["-w", "-R", "mkdir /etc"])
+        .arg(&rootfs_dest)
+        .output()
+        .map_err(|error| {
+            format!(
+                "run debugfs mkdir /etc for {}: {error}",
+                rootfs_dest.display()
+            )
+        })?;
+    if String::from_utf8_lossy(&mkdir_etc.stderr).contains("File not found") {
+        return Err(format!(
+            "debugfs mkdir /etc failed for {}: {}",
+            rootfs_dest.display(),
+            String::from_utf8_lossy(&mkdir_etc.stderr)
+        ));
+    }
 
     templates
         .register_spec(TemplateSpec {
