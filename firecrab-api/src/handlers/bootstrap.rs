@@ -985,6 +985,26 @@ mod tests {
             "log: {}",
             snapshot.log
         );
+        // `package_bootstrap` must open a `Finalizing` step (via `set_step`)
+        // once the package is staged and before the builder VM is deleted,
+        // so the dashboard's 4-box stepper shows a teardown phase rather
+        // than leaving `Packaging` looking like the terminal step. Assert
+        // on the timeline directly, not just on the overall session status,
+        // since `finish_ok`'s `close_open_step` would silently close
+        // whatever step happens to still be open — status alone can't tell
+        // the two apart.
+        let finalizing_run = snapshot
+            .step_timeline
+            .iter()
+            .find(|run| run.step == BootstrapStep::Finalizing)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a Finalizing entry in the step timeline: {:?}",
+                    snapshot.step_timeline
+                )
+            });
+        assert_eq!(finalizing_run.outcome, BootstrapStepOutcome::Succeeded);
+        assert!(finalizing_run.ended_at_ms.is_some());
         let staged = crate::image_install::staged_package_path(
             state.templates.image_root_path(),
             "ubuntu-26.04",
