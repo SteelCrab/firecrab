@@ -320,7 +320,15 @@ function BootstrapPanel({
  * 선택된 이미지 하나의 상세 정보 + 액션. 표 아래 인라인으로 열리며,
  * MicroNetworks/MicroStorages의 행 클릭 → 상세 패턴과 동일하다.
  */
-function ImageDetail({ image }: { image: ImageResponse }) {
+function ImageDetail({
+  image,
+  usedByVms,
+  usedByError,
+}: {
+  image: ImageResponse;
+  usedByVms: VmResponse[] | null;
+  usedByError: string | null;
+}) {
   return (
     <div className="subpanel">
       <dl className="detail-fields mono">
@@ -335,6 +343,17 @@ function ImageDetail({ image }: { image: ImageResponse }) {
 
         <dt>설명</dt>
         <dd>{image.description || "—"}</dd>
+
+        <dt>사용 중인 VM</dt>
+        <dd>
+          {usedByError
+            ? usedByError
+            : usedByVms === null
+              ? "불러오는 중…"
+              : usedByVms.length === 0
+                ? "없음"
+                : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
+        </dd>
       </dl>
     </div>
   );
@@ -369,6 +388,24 @@ export default function Images() {
   }, [refreshList]);
 
   const selectedImage = (images ?? []).find((image) => image.alias === selectedAlias) ?? null;
+
+  const [usedByVms, setUsedByVms] = useState<VmResponse[] | null>(null);
+  const [usedByError, setUsedByError] = useState<string | null>(null);
+
+  // MicroNetworks의 `getMicroNetwork(selectedId)`와 같은 패턴 —
+  // 목록 자체엔 없는, 선택 시점의 최신 사용처만 별도로 가져온다.
+  useEffect(() => {
+    if (!selectedAlias) {
+      setUsedByVms(null);
+      setUsedByError(null);
+      return;
+    }
+    setUsedByVms(null);
+    setUsedByError(null);
+    listVms()
+      .then((vms) => setUsedByVms(vms.filter((vm) => vm.template === selectedAlias)))
+      .catch((error) => setUsedByError((error as Error).message));
+  }, [selectedAlias]);
 
   // Bootstrapping either of these would spend ~30 minutes producing a package
   // the install step then refuses (`already_installed`) or that is already
@@ -607,7 +644,9 @@ export default function Images() {
             })}
           </tbody>
         </table>
-        {selectedImage && <ImageDetail image={selectedImage} />}
+        {selectedImage && (
+          <ImageDetail image={selectedImage} usedByVms={usedByVms} usedByError={usedByError} />
+        )}
         {install && install.status !== "idle" && (
           <>
             <div className="log-export-bar">
