@@ -1,4 +1,6 @@
 export * from "./ApiError";
+export * from "./BootstrapResponse";
+export * from "./BootstrapStatus";
 export * from "./BuildResponse";
 export * from "./BuildStatus";
 export * from "./AssignVmStorageRequest";

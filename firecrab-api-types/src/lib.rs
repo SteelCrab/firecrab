@@ -718,6 +718,45 @@ pub struct FinalizeBuildRequest {
     pub new_alias: Option<String>,
 }
 
+/// Lifecycle of one from-scratch distro bootstrap session (`handlers::bootstrap`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BootstrapStatus {
+    /// Builder VM is being created/started.
+    Booting,
+    /// The bootstrap script (download + chroot install + mkfs) is running
+    /// on the builder VM's console.
+    Running,
+    /// VM stopped; extracting rootfs/kernel/initrd from its disk and
+    /// packaging them into `{alias}.tar.zst`.
+    Packaging,
+    /// Package written to the local install cache; builder VM deleted.
+    Succeeded,
+    /// Failed at any stage; see `log`. Builder VM has been deleted.
+    Failed,
+}
+
+/// Status + log for one bootstrap session
+/// (`POST /api/images/{alias}/bootstrap`, `GET`/`DELETE /api/images/bootstrap/{bootstrapId}`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapResponse {
+    pub bootstrap_id: Uuid,
+    /// The target being bootstrapped (`alpine-3.24`, `ubuntu-26.04`, or `rocky-9`).
+    pub alias: String,
+    /// Which already-installed template's VM is doing the work — an
+    /// unrelated, disposable environment, not the bootstrap's target.
+    pub source_alias: String,
+    /// Builder VM id, so the dashboard can reuse the existing console
+    /// WebSocket (`/ws/vms/{id}/console`) to show live output.
+    pub vm_id: Uuid,
+    pub status: BootstrapStatus,
+    pub log: String,
+    pub started_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+}
+
 /// The VM's captured serial console output (see
 /// `firecrab-api/src/firecracker.rs`'s `console.log` tee), capped so a long
 /// boot doesn't turn this into an unbounded response.
