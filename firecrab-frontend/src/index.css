@@ -389,6 +389,60 @@ a.btn {
   background: var(--bg);
 }
 
+.subpanel-header {
+  display: flex;
+  justify-content: flex-end;
+}
+.options-menu {
+  position: relative;
+}
+.options-menu-trigger {
+  border: none;
+  background: transparent;
+  color: var(--shell);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.options-menu-trigger:hover {
+  background: var(--bg);
+}
+.options-menu-list {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  min-width: 10rem;
+  margin-top: 0.25rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  box-shadow: 0 0.5rem 1.5rem rgba(23, 27, 34, 0.18);
+  list-style: none;
+  padding: 0.25rem;
+}
+.options-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  border-radius: 3px;
+}
+.options-menu-item:hover:not(:disabled) {
+  background: var(--bg);
+}
+.options-menu-item:disabled {
+  color: var(--dim);
+  cursor: default;
+}
+
 table.vm-table {
   width: 100%;
   border-collapse: collapse;

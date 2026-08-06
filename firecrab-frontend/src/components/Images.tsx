@@ -9,7 +9,9 @@ import type {
 } from "../bindings";
 import {
   ApiClientError,
+  cancelBootstrap,
   deleteImage,
+  deleteStagedPackage,
   deleteVm,
   getBootstrap,
   getImageInstall,
@@ -171,6 +173,63 @@ function formatElapsed(millis: number): string {
 }
 
 /**
+ * 클릭하면 열리는 최소 드롭다운 메뉴. 바깥 클릭 또는 Esc로 닫힌다.
+ * 이 프로젝트에 다른 드롭다운 패턴이 없어 이 자리 전용으로 최소 구현했다 —
+ * 범용화해서 다른 화면에 재사용할 계획은 없다.
+ */
+function OptionsMenu({
+  items,
+}: {
+  items: { label: string; onClick: () => void; disabled: boolean }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="options-menu" ref={rootRef}>
+      <button type="button" className="options-menu-trigger" onClick={() => setOpen((current) => !current)}>
+        ⋯
+      </button>
+      {open && (
+        <ul className="options-menu-list">
+          {items.map((item) => (
+            <li key={item.label}>
+              <button
+                type="button"
+                className="options-menu-item"
+                disabled={item.disabled}
+                onClick={() => {
+                  setOpen(false);
+                  item.onClick();
+                }}
+              >
+                {item.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
  * 선택된 이미지 하나의 상세 정보 + 액션. 표 아래 인라인으로 열리며,
  * MicroNetworks/MicroStorages의 행 클릭 → 상세 패턴과 동일하다.
  */
@@ -188,6 +247,8 @@ function ImageDetail({
   bootstrapStartingAlias,
   bootstrapError,
   onStartBootstrap,
+  onCancelBootstrap,
+  onDeleteStagedPackage,
 }: {
   image: ImageResponse;
   usedByVms: VmResponse[] | null;
@@ -202,6 +263,8 @@ function ImageDetail({
   bootstrapStartingAlias: string | null;
   bootstrapError: string | null;
   onStartBootstrap: (alias: string) => Promise<void>;
+  onCancelBootstrap: (bootstrapId: string) => Promise<void>;
+  onDeleteStagedPackage: (alias: string) => Promise<void>;
 }) {
   const fetching = packageJob?.status === "running";
   // Bootstrapping this alias would spend ~30 minutes producing a package
@@ -214,8 +277,92 @@ function ImageDetail({
   const bootstrapIsMine =
     bootstrapStartingAlias === image.alias || bootstrapSession?.alias === image.alias;
 
+  const bakeLabel = blockedByStatus
+    ? "구울 필요 없음"
+    : bootstrapIsMine && bootstrapBusy
+      ? "굽는 중…"
+      : bootstrapBusy
+        ? "다른 배포판 굽는 중"
+        : "굽기";
+
+  const installLabel = image.installed
+    ? "설치됨"
+    : image.packageStaged
+      ? busyAlias === image.alias
+        ? "설치 중…"
+        : "로컬 패키지 설치"
+      : image.packageUrl
+        ? fetching
+          ? "가져오는 중…"
+          : `가져오기 (${packageBasename(image.packageUrl)})`
+        : "패키지 URL 없음";
+  const installDisabled = image.installed
+    ? true
+    : image.packageStaged
+      ? busyAlias === image.alias
+      : image.packageUrl
+        ? fetching || busyAlias === image.alias
+        : true;
+  const handleInstallClick = () => {
+    if (image.packageStaged) void onInstallStaged(image.alias);
+    else if (image.packageUrl) void onFetchPackage(image.alias);
+  };
+
+  const deleteLabel = busyAlias === image.alias ? "삭제 중…" : "삭제";
+
+  // "굽기삭제"는 상태에 따라 서로 다른 두 동작을 겸한다: 이 alias에 대해
+  // 지금 실행 중인 세션 취소, 또는 완료돼 스테이징된 패키지 삭제. 둘은
+  // 실제로 배타적이다 — 세션이 `packageStaged`를 참으로 만들 수 있는
+  // 시점(성공 종료)엔 이미 `bootstrapBusy`가 검사하는 비종결 상태를
+  // 벗어난 뒤다.
+  const canCancelBootstrap = bootstrapIsMine && bootstrapBusy;
+  const canDeleteStagedPackage = image.packageStaged && !canCancelBootstrap;
+  const bakeDeleteLabel = canCancelBootstrap ? "부트스트랩 취소" : "구운 패키지 삭제";
+  const handleBakeDeleteClick = () => {
+    if (canCancelBootstrap && bootstrapSession) {
+      if (
+        !window.confirm(
+          "진행 중인 부트스트랩을 취소할까요?\n빌더 VM을 삭제하며, 지금까지 진행된 내용은 저장되지 않습니다.",
+        )
+      ) {
+        return;
+      }
+      void onCancelBootstrap(bootstrapSession.bootstrapId);
+    } else if (canDeleteStagedPackage) {
+      if (!window.confirm(`'${image.alias}' 구운 패키지를 삭제할까요?`)) return;
+      void onDeleteStagedPackage(image.alias);
+    }
+  };
+
   return (
     <div className="subpanel">
+      <div className="subpanel-header">
+        <OptionsMenu
+          items={[
+            {
+              label: bakeLabel,
+              disabled: blockedByStatus || bootstrapBusy,
+              onClick: () => void onStartBootstrap(image.alias),
+            },
+            {
+              label: installLabel,
+              disabled: installDisabled,
+              onClick: handleInstallClick,
+            },
+            {
+              label: deleteLabel,
+              disabled: !image.installed || busyAlias === image.alias,
+              onClick: () => void onDelete(image.alias),
+            },
+            {
+              label: bakeDeleteLabel,
+              disabled: !canCancelBootstrap && !canDeleteStagedPackage,
+              onClick: handleBakeDeleteClick,
+            },
+          ]}
+        />
+      </div>
+
       <dl className="detail-fields mono">
         <dt>alias</dt>
         <dd>{image.alias}</dd>
@@ -259,71 +406,6 @@ function ImageDetail({
                 : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
         </dd>
       </dl>
-
-      <div className="package-row">
-        <button
-          type="button"
-          className="btn"
-          disabled={blockedByStatus || bootstrapBusy}
-          title={
-            blockedByStatus || (bootstrapBusy && !bootstrapIsMine)
-              ? undefined
-              : "공식 배포판을 처음부터 준비합니다 — 이미 있는 microVM 빌더를 재사용해 별도 컨테이너나 권한 상승 없이 처리합니다."
-          }
-          onClick={() => void onStartBootstrap(image.alias)}
-        >
-          {blockedByStatus
-            ? "이미 설치됨/패키지 준비됨"
-            : bootstrapIsMine && bootstrapBusy
-              ? "굽는 중…"
-              : bootstrapBusy
-                ? "다른 배포판 굽는 중"
-                : "굽기"}
-        </button>
-
-        {image.installed ? (
-          <button type="button" className="btn" disabled>
-            설치됨
-          </button>
-        ) : image.packageStaged ? (
-          // Ahead of the packageUrl branch on purpose: when both
-          // are available, a package already on this host wins
-          // over re-downloading the remote one — which would
-          // overwrite a just-bootstrapped local build.
-          <button
-            type="button"
-            className="btn primary"
-            disabled={busyAlias === image.alias}
-            onClick={() => void onInstallStaged(image.alias)}
-            title="이 호스트에 준비된 로컬 패키지를 바로 설치합니다."
-          >
-            {busyAlias === image.alias ? "설치 중…" : "로컬 패키지 설치"}
-          </button>
-        ) : image.packageUrl ? (
-          <button
-            type="button"
-            className="btn primary"
-            disabled={fetching || busyAlias === image.alias}
-            onClick={() => void onFetchPackage(image.alias)}
-            title={image.packageUrl}
-          >
-            {fetching ? "가져오는 중…" : `가져오기 (${packageBasename(image.packageUrl)})`}
-          </button>
-        ) : (
-          <button type="button" className="btn" disabled>
-            패키지 URL 없음
-          </button>
-        )}
-
-        <button
-          type="button"
-          className="btn danger"
-          disabled={!image.installed || busyAlias === image.alias}
-          onClick={() => void onDelete(image.alias)}
-        >
-          {busyAlias === image.alias ? "삭제 중…" : "삭제"}
-        </button>
-      </div>
 
       {/* `bootstrapIsMine`으로 걸지 않는다: `startBootstrap` POST 자체가
           실패하면 이 alias의 세션이 아예 생기지 않아 `bootstrapIsMine`이
@@ -642,6 +724,34 @@ export default function Images() {
     }
   };
 
+  const handleDeleteStagedPackage = async (alias: string) => {
+    setBusyAlias(alias);
+    setActionError(null);
+    try {
+      await deleteStagedPackage(alias);
+      await refreshList();
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setBusyAlias(null);
+    }
+  };
+
+  // 취소 실패는 부트스트랩 자체의 진행 실패가 아니라 사용자가 시작한 별도
+  // 액션이므로, 세션 전용 `bootstrapError`가 아니라 일반 `actionError`
+  // 배너에 표시한다. 성공 시 세션을 즉시 지운다 — 다음 폴링 틱을 기다리면
+  // (`pollBootstrap`의 404 처리가 결국 같은 일을 하긴 하지만) 최대 1초
+  // 동안 이미 취소된 세션이 화면에 남는다.
+  const handleCancelBootstrap = async (bootstrapId: string) => {
+    setActionError(null);
+    try {
+      await cancelBootstrap(bootstrapId);
+      setBootstrapSession(null);
+    } catch (error) {
+      setActionError((error as Error).message);
+    }
+  };
+
   if (images === null && !listError) {
     return <div className="empty">이미지 목록 불러오는 중…</div>;
   }
@@ -705,6 +815,8 @@ export default function Images() {
             bootstrapStartingAlias={bootstrapStartingAlias}
             bootstrapError={bootstrapError}
             onStartBootstrap={handleStartBootstrap}
+            onCancelBootstrap={handleCancelBootstrap}
+            onDeleteStagedPackage={handleDeleteStagedPackage}
           />
         )}
       </section>
