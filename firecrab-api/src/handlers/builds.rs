@@ -193,8 +193,10 @@ pub(crate) fn builder_vm_name(alias: &str) -> String {
 
 /// Builder VMs need headroom beyond the source rootfs to install new
 /// packages into — a fixed 2 GiB margin over the template's own floor,
-/// matching `handlers::images::min_disk_gb_for`'s ceiling logic.
-fn builder_disk_gb(rootfs_bytes: u64) -> u16 {
+/// matching `handlers::images::min_disk_gb_for`'s ceiling logic. Shared with
+/// `handlers::bootstrap`, which takes the larger of this floor and its own
+/// per-target build budget.
+pub(crate) fn builder_disk_gb(rootfs_bytes: u64) -> u16 {
     const GIB: u64 = 1024 * 1024 * 1024;
     let floor: u16 = rootfs_bytes.div_ceil(GIB).try_into().unwrap_or(u16::MAX);
     floor.saturating_add(2)

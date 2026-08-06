@@ -49,6 +49,25 @@ const BOOTSTRAP_DONE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_DONE";
 /// `packages::PACKAGE_UPDATE_TIMEOUT`.
 const BOOTSTRAP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(1800);
 
+/// Marker the console-readiness probe asks the guest's shell to echo back,
+/// kept distinct from [`BOOTSTRAP_DONE_SENTINEL`] so a probe reply can never
+/// be mistaken for the script itself finishing.
+const CONSOLE_PROBE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_SHELL_READY";
+
+/// How long one probe waits for its own reply before probing again. Short:
+/// a live shell answers in milliseconds, and the point is to keep retrying
+/// cheaply while agetty is still coming up.
+const CONSOLE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Bounded so an unbootable console fails in ~30s with a clear message
+/// instead of hanging until [`BOOTSTRAP_SCRIPT_TIMEOUT`].
+const CONSOLE_PROBE_ATTEMPTS: usize = 10;
+
+/// How often the session log gets a "still running" line while the script
+/// executes. Frequent enough that the dashboard never looks frozen for long,
+/// rare enough not to bury the real output the script emits at the end.
+const BOOTSTRAP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
+
 const ALPINE_SCRIPT: &str =
     include_str!("../../../scripts/firecracker-menual/bootstrap-alpine-in-guest.sh");
 const UBUNTU_SCRIPT: &str =
@@ -88,6 +107,12 @@ pub async fn start_bootstrap(
         return Err(AppError::not_found(request_id.0));
     }
 
+    // Cheap fast path so the overwhelmingly common "one already running"
+    // rejection costs nothing — the *authoritative* single-session gate is
+    // `try_begin` below, which does this check and the insertion under one
+    // lock. This check alone is a TOCTOU window: two POSTs (a double-click
+    // in the dashboard is enough) can both pass it before either registers
+    // its session.
     if state.bootstraps.any_active() {
         return Err(AppError::conflict(
             "bootstrap_in_progress",
@@ -109,12 +134,16 @@ pub async fn start_bootstrap(
         template: source_alias.clone(),
         ram: 1024,
         cpu: 1,
-        disk_gb: bootstrap_disk_gb(&alias),
+        // The target's own build headroom, but never below the floor the
+        // source template itself needs to boot at all — a source rootfs
+        // bigger than the target's build budget would otherwise fail
+        // create validation (`handlers::images::min_disk_gb_for`).
+        disk_gb: bootstrap_disk_gb(&alias)
+            .max(super::builds::builder_disk_gb(source.rootfs.length())),
         egress_policy: EgressPolicy::Internet,
         micro_network_id,
         storage_root: None,
     };
-    let _ = source; // only needed to confirm the source alias actually resolves
 
     let (_status, Json(created)) = create_vm(
         State(state.clone()),
@@ -132,7 +161,23 @@ pub async fn start_bootstrap(
     )
     .await?;
 
-    let bootstrap_id = state.bootstraps.begin(&alias, &source_alias, created.id);
+    // Registered last, mirroring where `begin` always sat: a session
+    // inserted before `start_vm_request` would be stranded in `Booting`
+    // forever (blocking every future bootstrap) if starting the VM failed.
+    // `try_begin` returning `None` means a concurrent request won the race
+    // — tear this VM back down rather than leaking it, since nothing else
+    // tracks it.
+    let Some(bootstrap_id) = state
+        .bootstraps
+        .try_begin(&alias, &source_alias, created.id)
+    else {
+        teardown_builder_vm(&state, created.id, request_id).await;
+        return Err(AppError::conflict(
+            "bootstrap_in_progress",
+            "a bootstrap is already running; wait for it to finish before starting another",
+            request_id.0,
+        ));
+    };
 
     let state_for_watch = state.clone();
     tokio::spawn(async move {
@@ -241,6 +286,7 @@ pub(crate) async fn watch_bootstrap_boot(state: &AppState, bootstrap_id: Uuid, v
                     BootstrapStatus::Booting,
                     format!("builder VM {vm_id} failed to boot (state: {state_now:?})"),
                 );
+                teardown_builder_vm(state, vm_id, RequestId(Uuid::new_v4())).await;
                 return;
             }
             None => return,
@@ -256,19 +302,26 @@ pub(crate) async fn watch_bootstrap_boot(state: &AppState, bootstrap_id: Uuid, v
                     BUILDER_BOOT_TIMEOUT.as_secs()
                 ),
             );
+            teardown_builder_vm(state, vm_id, RequestId(Uuid::new_v4())).await;
             return;
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
 }
 
-/// Writes the guest-native bootstrap script for `state.bootstraps.get(id).alias`
-/// to the builder VM's console as a single heredoc (so the whole script
-/// lands as one shell invocation — no chunking or base64 needed, since
-/// `write_input` writes raw bytes to the guest's stdin pipe and the
-/// guest's own shell parses embedded newlines exactly the way it would
-/// typed input, including multi-line constructs), waits for
-/// [`BOOTSTRAP_DONE_SENTINEL`], and advances the session on success.
+/// Waits for a shell to actually claim the builder VM's console
+/// ([`wait_for_console_shell`]), then writes the guest-native bootstrap
+/// script for `state.bootstraps.get(id).alias` to it as a single heredoc (so
+/// the whole script lands as one shell invocation — no chunking or base64
+/// needed, since `write_input` writes raw bytes to the guest's stdin pipe
+/// and the guest's own shell parses embedded newlines exactly the way it
+/// would typed input, including multi-line constructs), waits for
+/// [`BOOTSTRAP_DONE_SENTINEL`] while a heartbeat keeps the session log
+/// moving, and advances the session on success.
+///
+/// Every failure arm tears the builder VM down before returning: a
+/// `VmPurpose::Builder` VM is invisible to `list_vms`, so one left running
+/// here could never be found or reclaimed from the dashboard.
 pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
     let Some(session) = state.bootstraps.get(bootstrap_id) else {
         return;
@@ -287,22 +340,35 @@ pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, v
             BootstrapStatus::Running,
             "builder VM's console process is no longer available",
         );
+        teardown_builder_vm(state, vm_id, RequestId(Uuid::new_v4())).await;
         return;
     };
 
     let (_backlog, mut receiver) = process.console.subscribe();
+
+    if let Err(reason) = wait_for_console_shell(&process.console, &mut receiver).await {
+        state
+            .bootstraps
+            .finish_err_from(bootstrap_id, BootstrapStatus::Running, reason);
+        teardown_builder_vm(state, vm_id, RequestId(Uuid::new_v4())).await;
+        return;
+    }
+
     let heredoc = format!(
         "cat > /root/fc-bootstrap.sh <<'FIRECRAB_BOOTSTRAP_SCRIPT_EOF'\n{script}\nFIRECRAB_BOOTSTRAP_SCRIPT_EOF\nsh /root/fc-bootstrap.sh; echo \"{BOOTSTRAP_DONE_SENTINEL}:$?\"\n"
     );
     process.console.write_input(heredoc.as_bytes()).await;
 
-    match super::packages::wait_for_completion_with_sentinel(
+    let heartbeat = spawn_progress_heartbeat(state, bootstrap_id);
+    let outcome = super::packages::wait_for_completion_with_sentinel(
         &mut receiver,
         BOOTSTRAP_SCRIPT_TIMEOUT,
         BOOTSTRAP_DONE_SENTINEL,
     )
-    .await
-    {
+    .await;
+    heartbeat.abort();
+
+    match outcome {
         Ok((0, tail)) => {
             state.bootstraps.append_log(bootstrap_id, tail);
             if state.bootstraps.set_status_from(
@@ -322,23 +388,141 @@ pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, v
                 BootstrapStatus::Running,
                 format!("bootstrap script exited with code {code}\n{tail}"),
             );
+            teardown_builder_vm(state, vm_id, RequestId(Uuid::new_v4())).await;
         }
         Err(reason) => {
             state
                 .bootstraps
                 .finish_err_from(bootstrap_id, BootstrapStatus::Running, reason);
+            teardown_builder_vm(state, vm_id, RequestId(Uuid::new_v4())).await;
         }
     }
 }
 
-/// Dumps the finished rootfs/kernel/initrd out of the builder VM's disk,
-/// converts the raw kernel to an uncompressed ELF vmlinux the same way
-/// `install-{alpine,ubuntu,rocky}-rootfs.sh` always did on the host, packs
-/// everything into `{alias}.tar.zst` at the exact layout
-/// `templates.rs::default_specs()` expects, writes it to
-/// `image_install::staged_package_path` — the unmodified "가져오기"
-/// pipeline picks it up from there — then deletes the builder VM.
+/// Confirms a shell is really reading the builder VM's console before the
+/// bootstrap heredoc is pushed at it. `VmState::Running` is set by the
+/// guest's network-readiness sentinel — an init service that fires *before*
+/// agetty has necessarily autologin'd a shell onto ttyS0 — and agetty
+/// flushes the tty's input queue when it opens it, so a heredoc written a
+/// moment too early is silently swallowed and the session then sits until
+/// [`BOOTSTRAP_SCRIPT_TIMEOUT`] (~30 min) with nothing to show for it.
+///
+/// The probe deliberately asks the guest to expand `$?` rather than echoing
+/// a literal code: the tty's own line discipline echoes typed bytes back
+/// even with no process reading them, so only an unexpanded-`$?`-turned-
+/// number proves a shell actually consumed the input (the same reason
+/// `packages::find_sentinel` can't be fooled by the echoed command text).
+async fn wait_for_console_shell(
+    console: &crate::console::ConsoleBroker,
+    receiver: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+) -> Result<(), String> {
+    for _ in 0..CONSOLE_PROBE_ATTEMPTS {
+        console
+            .write_input(format!("echo \"{CONSOLE_PROBE_SENTINEL}:$?\"\n").as_bytes())
+            .await;
+        match super::packages::wait_for_completion_with_sentinel(
+            receiver,
+            CONSOLE_PROBE_TIMEOUT,
+            CONSOLE_PROBE_SENTINEL,
+        )
+        .await
+        {
+            Ok(_) => return Ok(()),
+            // A closed console will never answer a later probe either, so
+            // stop immediately instead of burning the whole retry budget.
+            Err(reason) if reason.starts_with("console closed") => {
+                return Err(format!(
+                    "builder VM's console closed before a shell became responsive ({reason})"
+                ));
+            }
+            Err(_) => {}
+        }
+    }
+    Err(format!(
+        "builder VM's console shell never became responsive after {CONSOLE_PROBE_ATTEMPTS} probes"
+    ))
+}
+
+/// Appends a "still running" line to the session log every
+/// [`BOOTSTRAP_HEARTBEAT_INTERVAL`] while the script executes. The session
+/// log is otherwise written exactly twice (VM booted, script finished), so
+/// the dashboard would look frozen for the whole multi-minute run with no
+/// way to tell a working bootstrap from a hung one. Runs on its own task so
+/// it never delays the sentinel wait it accompanies — the caller aborts it
+/// the moment that wait returns.
+fn spawn_progress_heartbeat(state: &AppState, bootstrap_id: Uuid) -> tokio::task::JoinHandle<()> {
+    let state = state.clone();
+    tokio::spawn(async move {
+        let started = tokio::time::Instant::now();
+        loop {
+            tokio::time::sleep(BOOTSTRAP_HEARTBEAT_INTERVAL).await;
+            // Stop as soon as the session leaves `Running` (finished, failed,
+            // or cancelled) — an abort may not have landed yet, and a
+            // heartbeat after the terminal line would be misleading.
+            match state.bootstraps.get(bootstrap_id) {
+                Some(session) if session.status == BootstrapStatus::Running => {
+                    state.bootstraps.append_log(
+                        bootstrap_id,
+                        format!(
+                            "여전히 실행 중… ({}분 경과)",
+                            started.elapsed().as_secs() / 60
+                        ),
+                    );
+                }
+                _ => return,
+            }
+        }
+    })
+}
+
+/// Stops (only when it isn't already delete-eligible) and then deletes a
+/// builder VM. Every bootstrap failure path funnels through here: a
+/// `VmPurpose::Builder` VM is hidden from `list_vms`, so one left behind by
+/// an unhandled error is unreachable from the dashboard — its Firecracker
+/// process, TAP device, IP lease and multi-GB disk would all leak with no
+/// in-product way to reclaim them. Same stop-then-delete sequence
+/// `cancel_bootstrap` and `handlers::builds::cancel_build` use, and
+/// best-effort for the same reason: the failure already being reported is
+/// the one that matters, not a second one raised while cleaning up after it.
+async fn teardown_builder_vm(state: &AppState, vm_id: Uuid, request_id: RequestId) {
+    let can_delete_now = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&vm_id)
+        .map(|vm| vm.state.can_delete())
+        .unwrap_or(true);
+    if !can_delete_now {
+        let _ = super::vms::stop_vm(
+            State(state.clone()),
+            Extension(request_id),
+            Path(vm_id.to_string()),
+        )
+        .await;
+    }
+
+    let _ = super::vms::delete_vm(
+        State(state.clone()),
+        Extension(request_id),
+        Path(vm_id.to_string()),
+    )
+    .await;
+}
+
+/// Stops the builder VM, dumps the finished rootfs/kernel/initrd out of its
+/// now-quiesced disk, converts the raw kernel to an uncompressed ELF vmlinux
+/// the same way `install-{alpine,ubuntu,rocky}-rootfs.sh` always did on the
+/// host, packs everything into `{alias}.tar.zst` at the exact layout
+/// `templates.rs::default_specs()` expects, and writes it to
+/// `image_install::staged_package_path` — where `GET /api/images` reports it
+/// as `packageStaged`, so the dashboard can offer a local install
+/// (`POST /api/images/{alias}/install`) with no remote package URL involved
+/// — then deletes the builder VM.
+///
+/// Ordering is load-bearing and mirrors `handlers::builds::run_finalize`:
+/// stop first, package second, delete last.
 async fn package_bootstrap(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
+    let request_id = RequestId(Uuid::new_v4());
     let Some(session) = state.bootstraps.get(bootstrap_id) else {
         return;
     };
@@ -346,22 +530,64 @@ async fn package_bootstrap(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
         state
             .bootstraps
             .finish_err(bootstrap_id, format!("no known spec for {}", session.alias));
+        teardown_builder_vm(state, vm_id, request_id).await;
         return;
     };
 
-    let result = package_bootstrap_inner(state, &session, &spec).await;
-
-    let _ = super::vms::delete_vm(
+    // The disk below is read with `debugfs` straight off the host
+    // filesystem. While Firecracker is still running, the guest has that
+    // very image mounted read-write with its own dirty page cache over it,
+    // so a read here can see a half-written ext4 — and `dump_from_image`'s
+    // only success check is "the file exists and is non-empty", which a
+    // truncated rootfs passes. Stopping first is what makes the read safe.
+    if super::vms::stop_vm(
         State(state.clone()),
-        Extension(RequestId(Uuid::new_v4())),
+        Extension(request_id),
         Path(vm_id.to_string()),
     )
-    .await;
-
-    match result {
-        Ok(()) => state.bootstraps.finish_ok(bootstrap_id),
-        Err(reason) => state.bootstraps.finish_err(bootstrap_id, reason),
+    .await
+    .is_err()
+    {
+        // Nothing has been read or published yet, so this really is an
+        // end-to-end failure — land on a terminal status rather than
+        // packaging a live disk anyway. Same reasoning (and same deliberate
+        // absence of a delete attempt, which `stop_vm`'s failure means would
+        // be refused too) as `run_finalize`'s own stop failure branch.
+        state.bootstraps.finish_err(
+            bootstrap_id,
+            format!("failed to stop builder VM {vm_id} before packaging; nothing was published"),
+        );
+        return;
     }
+
+    if let Err(reason) = package_bootstrap_inner(state, &session, &spec).await {
+        state.bootstraps.finish_err(bootstrap_id, reason);
+        teardown_builder_vm(state, vm_id, request_id).await;
+        return;
+    }
+
+    if super::vms::delete_vm(
+        State(state.clone()),
+        Extension(request_id),
+        Path(vm_id.to_string()),
+    )
+    .await
+    .is_err()
+    {
+        // The package IS staged and installable by this point — the actual
+        // goal of this session already succeeded — so it still reports
+        // success. Log the vm_id, since `VmPurpose::Builder` hides the VM
+        // from `list_vms` and this line is the operator's only way to find
+        // it for manual removal (same handling as `run_finalize`'s).
+        state.bootstraps.append_log(
+            bootstrap_id,
+            format!(
+                "warning: builder VM {vm_id} could not be deleted after packaging succeeded; remove it manually"
+            ),
+        );
+    }
+
+    state.bootstraps.finish_ok(bootstrap_id);
 }
 
 async fn package_bootstrap_inner(
@@ -564,28 +790,7 @@ pub async fn cancel_bootstrap(
         .get(parsed_id)
         .ok_or_else(|| AppError::not_found(request_id.0))?;
 
-    let can_delete_now = state
-        .vms
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get(&session.vm_id)
-        .map(|vm| vm.state.can_delete())
-        .unwrap_or(true);
-    if !can_delete_now {
-        let _ = super::vms::stop_vm(
-            State(state.clone()),
-            Extension(request_id),
-            Path(session.vm_id.to_string()),
-        )
-        .await;
-    }
-
-    let _ = super::vms::delete_vm(
-        State(state.clone()),
-        Extension(request_id),
-        Path(session.vm_id.to_string()),
-    )
-    .await;
+    teardown_builder_vm(&state, session.vm_id, request_id).await;
 
     state.bootstraps.remove(parsed_id);
     Ok(StatusCode::NO_CONTENT)
@@ -680,6 +885,61 @@ mod tests {
         0x2f, 0x00, 0x2e, 0x00,
     ];
 
+    /// Seeds a builder VM record in `vm_state`.
+    ///
+    /// Every packaging test drives this at `VmState::Running`, the state a
+    /// real bootstrap's builder VM is always in when `package_bootstrap`
+    /// runs. `test_support::record()` defaults to `Created`, which
+    /// `delete_vm` accepts outright — so a `Created` fixture lets the whole
+    /// stop-then-read ordering pass vacuously without ever exercising it,
+    /// which is exactly how a live-disk read shipped through twelve task
+    /// reviews. `stop_vm` needs nothing beyond this in-memory state to
+    /// succeed (its SIGTERM step is skipped when `state.processes` has no
+    /// entry for the VM, and `teardown_vm_network` is best-effort against
+    /// the fixture's always-ok network helper), the same technique
+    /// `handlers::builds`'s own finalize tests use.
+    fn seed_builder_vm(state: &AppState, vm_state: VmState) -> crate::model::VmRecord {
+        let vm = crate::model::VmRecord {
+            state: vm_state,
+            ..crate::handlers::vms::test_support::record("builder", Uuid::new_v4())
+        };
+        crate::handlers::vms::test_support::seed_vm(state, &vm);
+        vm
+    }
+
+    /// Puts a real (tiny) ext4 image carrying `files` where
+    /// `package_bootstrap` expects the builder VM's current-generation disk,
+    /// and records that generation on the VM — the fixture stand-in for what
+    /// a finished guest-side bootstrap script leaves behind.
+    fn seed_builder_disk(state: &AppState, vm: &crate::model::VmRecord, files: &[(&str, &[u8])]) {
+        let generation = Uuid::new_v4();
+        let artifact_paths =
+            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id);
+        artifact_paths.ensure_directories().unwrap();
+        seed_builder_output_disk(&artifact_paths.rootfs(generation), files);
+        let mut vms = state.vms.lock().unwrap();
+        vms.get_mut(&vm.id).unwrap().disk_generation = Some(generation);
+    }
+
+    /// Registers a session already advanced to `status`, the way the earlier
+    /// stage of a real run would have left it.
+    fn seeded_session(
+        state: &AppState,
+        alias: &str,
+        source_alias: &str,
+        vm_id: Uuid,
+        status: BootstrapStatus,
+    ) -> Uuid {
+        let id = state
+            .bootstraps
+            .try_begin(alias, source_alias, vm_id)
+            .expect("no other bootstrap session is active");
+        state
+            .bootstraps
+            .set_status_from(id, BootstrapStatus::Booting, status);
+        id
+    }
+
     /// Builds a small ext4 image at `disk_path` with `/root/fc-bootstrap/out`
     /// already present, then seeds it with `files` (guest-relative paths
     /// under that directory, e.g. `"rootfs.ext4"` -> content).
@@ -707,36 +967,31 @@ mod tests {
     async fn package_bootstrap_writes_a_tar_zst_the_install_pipeline_can_read() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
-        crate::handlers::vms::test_support::seed_vm(&state, &vm);
-        let generation = Uuid::new_v4();
-        let artifact_paths =
-            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id);
-        artifact_paths.ensure_directories().unwrap();
-        let disk_path = artifact_paths.rootfs(generation);
+        // `Running`, like a real builder VM the bootstrap script just
+        // finished on — `package_bootstrap` has to stop it before it may
+        // read the disk, and delete it afterwards.
+        let vm = seed_builder_vm(&state, VmState::Running);
 
-        // Build a small ext4 image on this disk path containing the exact
-        // guest-side layout package_bootstrap expects to find and dump out.
+        // The exact guest-side layout package_bootstrap expects to dump out.
         // `ubuntu-26.04` has `initrd: None` in `default_specs()`, so only
         // `rootfs.ext4` and `vmlinuz-raw` (Ubuntu's raw-kernel dump
         // filename per `bootstrap-ubuntu-in-guest.sh`) need seeding here.
-        seed_builder_output_disk(
-            &disk_path,
+        seed_builder_disk(
+            &state,
+            &vm,
             &[
                 ("rootfs.ext4", b"fake ext4 rootfs bytes"),
                 ("vmlinuz-raw", FAKE_ELF64_HEADER),
             ],
         );
-        {
-            let mut vms = state.vms.lock().unwrap();
-            let stored = vms.get_mut(&vm.id).unwrap();
-            stored.disk_generation = Some(generation);
-        }
 
-        let bootstrap_id = state.bootstraps.begin("ubuntu-26.04", "alpine-3.24", vm.id);
-        state
-            .bootstraps
-            .set_status(bootstrap_id, BootstrapStatus::Packaging);
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Packaging,
+        );
 
         package_bootstrap(&state, bootstrap_id, vm.id).await;
 
@@ -763,6 +1018,65 @@ mod tests {
         let members = String::from_utf8_lossy(&listing.stdout);
         assert!(members.contains("kernel/vmlinux-ubuntu-26.04-x86_64"));
         assert!(members.contains("rootfs/ubuntu-rootfs-26.04-amd64.ext4"));
+        // The builder VM is gone: a successful bootstrap must not leave a
+        // Firecracker process, TAP, IP lease and multi-GB disk behind —
+        // `VmPurpose::Builder` hides it from `list_vms`, so nothing in the
+        // product could ever reclaim it.
+        assert!(
+            state.vms.lock().unwrap().get(&vm.id).is_none(),
+            "the builder VM record must be deleted after a successful package"
+        );
+    }
+
+    /// The stop must happen *before* the disk is read, not merely somewhere
+    /// in the function: `dump_from_image` only checks that it produced a
+    /// non-empty file, so a read from a still-live, rw-mounted, unsynced
+    /// ext4 would publish a torn rootfs as a perfectly valid package.
+    ///
+    /// Driving that ordering without a real Firecracker process: a VM left
+    /// in `Created` is one `stop_vm` refuses (`can_transition` allows only
+    /// `Running -> Stopping`). If anything were packaged despite that
+    /// refusal, a staged archive would exist — asserting there is none is
+    /// what proves nothing was read off the un-stopped disk.
+    #[tokio::test]
+    async fn package_bootstrap_publishes_nothing_when_the_builder_vm_cannot_be_stopped() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = seed_builder_vm(&state, VmState::Created);
+        seed_builder_disk(
+            &state,
+            &vm,
+            &[
+                ("rootfs.ext4", b"fake ext4 rootfs bytes"),
+                ("vmlinuz-raw", FAKE_ELF64_HEADER),
+            ],
+        );
+
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Packaging,
+        );
+
+        package_bootstrap(&state, bootstrap_id, vm.id).await;
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        assert!(
+            snapshot.log.contains("failed to stop builder VM"),
+            "log: {}",
+            snapshot.log
+        );
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+        );
+        assert!(
+            !staged.is_file(),
+            "nothing may be packaged from a builder VM that could not be stopped"
+        );
     }
 
     /// `extract-vmlinux`'s own exit code doesn't reliably reflect whether it
@@ -779,16 +1093,10 @@ mod tests {
     async fn package_bootstrap_fails_when_extract_vmlinux_cannot_recognize_the_raw_kernel() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
-        crate::handlers::vms::test_support::seed_vm(&state, &vm);
-        let generation = Uuid::new_v4();
-        let artifact_paths =
-            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id);
-        artifact_paths.ensure_directories().unwrap();
-        let disk_path = artifact_paths.rootfs(generation);
-
-        seed_builder_output_disk(
-            &disk_path,
+        let vm = seed_builder_vm(&state, VmState::Running);
+        seed_builder_disk(
+            &state,
+            &vm,
             &[
                 ("rootfs.ext4", b"fake ext4 rootfs bytes"),
                 (
@@ -797,16 +1105,14 @@ mod tests {
                 ),
             ],
         );
-        {
-            let mut vms = state.vms.lock().unwrap();
-            let stored = vms.get_mut(&vm.id).unwrap();
-            stored.disk_generation = Some(generation);
-        }
 
-        let bootstrap_id = state.bootstraps.begin("ubuntu-26.04", "alpine-3.24", vm.id);
-        state
-            .bootstraps
-            .set_status(bootstrap_id, BootstrapStatus::Packaging);
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Packaging,
+        );
 
         package_bootstrap(&state, bootstrap_id, vm.id).await;
 
@@ -825,6 +1131,12 @@ mod tests {
             !staged.is_file(),
             "a failed extraction must not publish a package"
         );
+        // A packaging failure still tears the builder VM down — otherwise
+        // every failed bootstrap would leak one, invisibly.
+        assert!(
+            state.vms.lock().unwrap().get(&vm.id).is_none(),
+            "the builder VM record must be deleted even when packaging fails"
+        );
     }
 
     /// Covers the `if let Some(initrd_relative) = &spec.initrd` branch in
@@ -838,32 +1150,24 @@ mod tests {
     async fn package_bootstrap_includes_the_initrd_when_the_spec_has_one() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
-        crate::handlers::vms::test_support::seed_vm(&state, &vm);
-        let generation = Uuid::new_v4();
-        let artifact_paths =
-            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id);
-        artifact_paths.ensure_directories().unwrap();
-        let disk_path = artifact_paths.rootfs(generation);
-
-        seed_builder_output_disk(
-            &disk_path,
+        let vm = seed_builder_vm(&state, VmState::Running);
+        seed_builder_disk(
+            &state,
+            &vm,
             &[
                 ("rootfs.ext4", b"fake alpine rootfs bytes"),
                 ("vmlinuz-virt-raw", FAKE_ELF64_HEADER),
                 ("initramfs", b"fake initramfs bytes"),
             ],
         );
-        {
-            let mut vms = state.vms.lock().unwrap();
-            let stored = vms.get_mut(&vm.id).unwrap();
-            stored.disk_generation = Some(generation);
-        }
 
-        let bootstrap_id = state.bootstraps.begin("alpine-3.24", "ubuntu-26.04", vm.id);
-        state
-            .bootstraps
-            .set_status(bootstrap_id, BootstrapStatus::Packaging);
+        let bootstrap_id = seeded_session(
+            &state,
+            "alpine-3.24",
+            "ubuntu-26.04",
+            vm.id,
+            BootstrapStatus::Packaging,
+        );
 
         package_bootstrap(&state, bootstrap_id, vm.id).await;
 
@@ -931,17 +1235,26 @@ mod tests {
     async fn run_bootstrap_script_records_the_console_output_and_reaches_running_terminal_wait() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
-        crate::handlers::vms::test_support::seed_vm(&state, &vm);
+        let vm = seed_builder_vm(&state, VmState::Running);
         let console = register_fake_process(&state, vm.id);
-        let bootstrap_id = state.bootstraps.begin("ubuntu-26.04", "alpine-3.24", vm.id);
-        state
-            .bootstraps
-            .set_status(bootstrap_id, BootstrapStatus::Running);
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Running,
+        );
 
         let vm_id = vm.id;
         let push_sentinel = async {
             wait_for_console_subscriber(&console).await;
+            // The console-readiness probe comes first now: nothing is
+            // written to a console no shell has claimed yet (agetty flushes
+            // the input queue when it opens the tty), so the script is only
+            // pushed once a probe has been answered. Pushed as its own chunk
+            // so the probe wait consumes only this one and leaves the
+            // completion sentinel below for the real wait.
+            console.push_output(format!("{CONSOLE_PROBE_SENTINEL}:0\n").as_bytes());
             console.push_output(format!("{}:0\n", BOOTSTRAP_DONE_SENTINEL).as_bytes());
         };
         // Driven with `join!` on this same task rather than a separate
@@ -974,7 +1287,8 @@ mod tests {
         let state = test_state(directory.path()).await;
         let id = state
             .bootstraps
-            .begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("no other bootstrap session is active");
 
         let Json(found) = get_bootstrap(
             State(state),
@@ -1003,13 +1317,19 @@ mod tests {
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 
+    /// Seeded `Running` rather than at `record()`'s default `Created`, so
+    /// this exercises `teardown_builder_vm`'s stop-then-delete branch (a VM
+    /// that `delete_vm` would refuse outright) — the branch every bootstrap
+    /// failure path now shares, not just cancel.
     #[tokio::test]
-    async fn cancel_bootstrap_deletes_the_builder_vm_and_drops_the_session() {
+    async fn cancel_bootstrap_stops_and_deletes_a_running_builder_vm_and_drops_the_session() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
-        crate::handlers::vms::test_support::seed_vm(&state, &vm);
-        let id = state.bootstraps.begin("ubuntu-26.04", "alpine-3.24", vm.id);
+        let vm = seed_builder_vm(&state, VmState::Running);
+        let id = state
+            .bootstraps
+            .try_begin("ubuntu-26.04", "alpine-3.24", vm.id)
+            .expect("no other bootstrap session is active");
 
         let status = cancel_bootstrap(
             State(state.clone()),
@@ -1021,5 +1341,141 @@ mod tests {
 
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(state.bootstraps.get(id).is_none());
+        assert!(
+            state.vms.lock().unwrap().get(&vm.id).is_none(),
+            "cancelling must not leave the builder VM behind"
+        );
+    }
+
+    /// A boot that never reaches `Running` used to `finish_err_from` and
+    /// return with no VM cleanup at all, stranding a `VmPurpose::Builder` VM
+    /// that `list_vms` hides from the dashboard entirely.
+    #[tokio::test]
+    async fn watch_bootstrap_boot_deletes_the_builder_vm_when_it_fails_to_boot() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = seed_builder_vm(&state, VmState::Error);
+        let bootstrap_id = state
+            .bootstraps
+            .try_begin("ubuntu-26.04", "alpine-3.24", vm.id)
+            .expect("no other bootstrap session is active");
+
+        watch_bootstrap_boot(&state, bootstrap_id, vm.id).await;
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        assert!(
+            snapshot.log.contains("failed to boot"),
+            "log: {}",
+            snapshot.log
+        );
+        assert!(
+            state.vms.lock().unwrap().get(&vm.id).is_none(),
+            "a builder VM that failed to boot must not be left behind"
+        );
+    }
+
+    /// `VmState::Running` is set by the guest's network-readiness sentinel,
+    /// which can fire before agetty has autologin'd a shell onto ttyS0 — and
+    /// agetty flushes the tty input queue when it opens it, silently eating
+    /// anything written early. Without the probe, that lands the session in
+    /// a ~30-minute wait ending in a meaningless timeout; with it, the
+    /// session fails fast and says why, and the builder VM is reclaimed.
+    ///
+    /// `start_paused` lets the probe's bounded retries burn their timeouts
+    /// in virtual time (tokio auto-advances the clock while every task is
+    /// parked on a timer), so this costs no real wall-clock seconds.
+    #[tokio::test(start_paused = true)]
+    async fn run_bootstrap_script_fails_when_no_shell_answers_the_console_probe() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        // Deliberately `Created`, not `Running`, even though a real builder
+        // VM would be `Running` here: this is the one test that needs a
+        // registered `VmProcess` (for its console), and that fixture's `pid`
+        // is 0 — so letting the teardown reach `stop_vm` would have it call
+        // `kill(0, SIGTERM)`, which signals the *entire process group*, test
+        // runner included. `run_bootstrap_script` never reads the VM's
+        // lifecycle state, so `Created` exercises the identical code path
+        // while keeping teardown on the delete-only branch.
+        let vm = seed_builder_vm(&state, VmState::Created);
+        // A console that is subscribed to but never answers — exactly what a
+        // tty with no shell reading it looks like from the host.
+        let _console = register_fake_process(&state, vm.id);
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Running,
+        );
+
+        run_bootstrap_script(&state, bootstrap_id, vm.id).await;
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        assert!(
+            snapshot.log.contains("never became responsive"),
+            "log: {}",
+            snapshot.log
+        );
+        assert!(
+            state.vms.lock().unwrap().get(&vm.id).is_none(),
+            "an unresponsive console must not strand the builder VM"
+        );
+    }
+
+    /// The session log is otherwise written exactly twice (VM booted, script
+    /// finished), so a multi-minute script run looks frozen in the
+    /// dashboard. The heartbeat is what distinguishes "still working" from
+    /// "hung" — driven here in virtual time rather than waiting a real
+    /// minute per tick.
+    #[tokio::test(start_paused = true)]
+    async fn a_long_running_script_keeps_appending_progress_to_the_session_log() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = seed_builder_vm(&state, VmState::Running);
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Running,
+        );
+
+        let heartbeat = spawn_progress_heartbeat(&state, bootstrap_id);
+        tokio::time::sleep(BOOTSTRAP_HEARTBEAT_INTERVAL * 3 + Duration::from_secs(1)).await;
+        heartbeat.abort();
+
+        let log = state.bootstraps.get(bootstrap_id).unwrap().log;
+        assert_eq!(
+            log.matches("여전히 실행 중").count(),
+            3,
+            "expected one heartbeat per interval elapsed; log: {log}"
+        );
+    }
+
+    /// The heartbeat must stop on its own once the session leaves `Running`
+    /// — an abort may not have landed yet, and a "still running" line after
+    /// the terminal one would misreport a finished session.
+    #[tokio::test(start_paused = true)]
+    async fn the_progress_heartbeat_stops_once_the_session_leaves_running() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = seed_builder_vm(&state, VmState::Running);
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Running,
+        );
+
+        let heartbeat = spawn_progress_heartbeat(&state, bootstrap_id);
+        state.bootstraps.finish_ok(bootstrap_id);
+        tokio::time::sleep(BOOTSTRAP_HEARTBEAT_INTERVAL * 3).await;
+
+        assert!(heartbeat.is_finished());
+        let log = state.bootstraps.get(bootstrap_id).unwrap().log;
+        assert!(!log.contains("여전히 실행 중"), "log: {log}");
     }
 }

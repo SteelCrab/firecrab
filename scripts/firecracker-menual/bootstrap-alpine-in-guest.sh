@@ -151,6 +151,13 @@ truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
 mkfs.ext4 -F -L rootfs -d "$staging" "$out/rootfs.ext4.tmp"
 mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 
+# Everything under $out is read back off this VM's *block device* by the
+# host (`rootfs::dump_from_image` via debugfs) once the VM is stopped, so
+# the guest's page cache must be flushed to the device before this script
+# exits — otherwise the host reads a truncated or entirely absent file and
+# packages it as if it were a complete rootfs.
+sync
+
 # extract-vmlinux ships alongside this script in the repo but does not
 # exist inside the guest — the raw vmlinuz is dumped out as-is
 # ($out/vmlinuz-virt-raw) and Task 8 runs extract-vmlinux on the HOST

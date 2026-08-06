@@ -14,39 +14,29 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use firecrab_api_types::{BootstrapResponse, BootstrapStatus};
 use uuid::Uuid;
 
-// Not yet consumed — handlers::bootstrap::start_bootstrap (Task 5 of the
-// m2image-web-bootstrap plan) wires this in; wiring it now would be out
-// of this task's scope.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct BootstrapTracker {
     sessions: Arc<Mutex<HashMap<Uuid, BootstrapResponse>>>,
 }
 
-// Not yet consumed — handlers::bootstrap::start_bootstrap (Task 5 of the
-// m2image-web-bootstrap plan) wires this in; wiring it now would be out
-// of this task's scope.
-#[allow(dead_code)]
 impl BootstrapTracker {
-    /// Registers a new session in `Booting` and returns its id.
-    pub fn begin(&self, alias: &str, source_alias: &str, vm_id: Uuid) -> Uuid {
-        let id = Uuid::new_v4();
-        let now = now_ms();
-        let session = BootstrapResponse {
-            bootstrap_id: id,
-            alias: alias.to_owned(),
-            source_alias: source_alias.to_owned(),
-            vm_id,
-            status: BootstrapStatus::Booting,
-            log: format!("[{}] builder VM starting", clock(now)),
-            started_at_ms: now,
-            ended_at_ms: None,
-        };
-        self.sessions
+    /// Registers a new session in `Booting` and returns its id — but only
+    /// while no other session is still active, with that check and the
+    /// insertion under a single lock acquisition. An `any_active()` call
+    /// followed by a separate insert is a TOCTOU window wide enough for two
+    /// concurrent `POST /api/images/{alias}/bootstrap` requests (a dashboard
+    /// double-click is enough) to both pass the gate and boot their own
+    /// builder VM. Returns `None` when a session is already running, so the
+    /// caller can refuse with `409` instead.
+    pub fn try_begin(&self, alias: &str, source_alias: &str, vm_id: Uuid) -> Option<Uuid> {
+        let mut sessions = self
+            .sessions
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(id, session);
-        id
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if sessions.values().any(is_active) {
+            return None;
+        }
+        Some(insert_session(&mut sessions, alias, source_alias, vm_id))
     }
 
     pub fn get(&self, id: Uuid) -> Option<BootstrapResponse> {
@@ -57,41 +47,18 @@ impl BootstrapTracker {
             .cloned()
     }
 
-    pub fn list(&self) -> Vec<BootstrapResponse> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .values()
-            .cloned()
-            .collect()
-    }
-
-    /// Whether any tracked session hasn't reached a terminal status —
-    /// `handlers::bootstrap::start_bootstrap` refuses a second session
-    /// while this is true (only one bootstrap runs at a time; see the
-    /// design doc's rationale — chroot/mount/mkfs on a shared build path).
+    /// Whether any tracked session hasn't reached a terminal status — a
+    /// cheap pre-check for `handlers::bootstrap::start_bootstrap`, which
+    /// still has to go through [`try_begin`](Self::try_begin) for the
+    /// authoritative, race-free version of the same question (only one
+    /// bootstrap runs at a time; see the design doc's rationale —
+    /// chroot/mount/mkfs on a shared build path).
     pub fn any_active(&self) -> bool {
         self.sessions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .values()
-            .any(|session| {
-                !matches!(
-                    session.status,
-                    BootstrapStatus::Succeeded | BootstrapStatus::Failed
-                )
-            })
-    }
-
-    pub fn set_status(&self, id: Uuid, status: BootstrapStatus) {
-        if let Some(session) = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get_mut(&id)
-        {
-            session.status = status;
-        }
+            .any(is_active)
     }
 
     /// Compare-and-set: only advances a session still in `expected`,
@@ -194,10 +161,41 @@ impl BootstrapTracker {
     }
 }
 
-// Not yet consumed — handlers::bootstrap::start_bootstrap (Task 5 of the
-// m2image-web-bootstrap plan) wires this in; wiring it now would be out
-// of this task's scope.
-#[allow(dead_code)]
+/// Builds the opening snapshot for [`BootstrapTracker::try_begin`], split
+/// out so the insertion stays readable inside the single lock acquisition
+/// that makes the active-session check atomic.
+fn insert_session(
+    sessions: &mut HashMap<Uuid, BootstrapResponse>,
+    alias: &str,
+    source_alias: &str,
+    vm_id: Uuid,
+) -> Uuid {
+    let id = Uuid::new_v4();
+    let now = now_ms();
+    sessions.insert(
+        id,
+        BootstrapResponse {
+            bootstrap_id: id,
+            alias: alias.to_owned(),
+            source_alias: source_alias.to_owned(),
+            vm_id,
+            status: BootstrapStatus::Booting,
+            log: format!("[{}] builder VM starting", clock(now)),
+            started_at_ms: now,
+            ended_at_ms: None,
+        },
+    );
+    id
+}
+
+/// A session still holding the single bootstrap slot.
+fn is_active(session: &BootstrapResponse) -> bool {
+    !matches!(
+        session.status,
+        BootstrapStatus::Succeeded | BootstrapStatus::Failed
+    )
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -205,10 +203,6 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-// Not yet consumed — handlers::bootstrap::start_bootstrap (Task 5 of the
-// m2image-web-bootstrap plan) wires this in; wiring it now would be out
-// of this task's scope.
-#[allow(dead_code)]
 fn clock(epoch_ms: u64) -> String {
     format!("{}s", epoch_ms / 1000)
 }
@@ -220,7 +214,9 @@ mod tests {
     #[test]
     fn begin_then_snapshot_returns_a_booting_session() {
         let tracker = BootstrapTracker::default();
-        let id = tracker.begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+        let id = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("no other session is active");
 
         let snapshot = tracker.get(id).unwrap();
         assert_eq!(snapshot.status, BootstrapStatus::Booting);
@@ -239,17 +235,49 @@ mod tests {
         let tracker = BootstrapTracker::default();
         assert!(!tracker.any_active());
 
-        let id = tracker.begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+        let id = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("no other session is active");
         assert!(tracker.any_active());
 
         tracker.finish_ok(id);
         assert!(!tracker.any_active());
     }
 
+    /// The single-session gate the dashboard's double-click can otherwise
+    /// slip through: `any_active()` + a separate insert leaves a window
+    /// where both callers see "nothing active". `try_begin` closes it by
+    /// doing both under one lock, so the second caller is refused even when
+    /// it checked before the first had inserted anything.
+    #[test]
+    fn try_begin_refuses_a_second_session_while_one_is_still_active() {
+        let tracker = BootstrapTracker::default();
+        let first = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("the first session claims the slot");
+
+        assert!(
+            tracker
+                .try_begin("rocky-9", "alpine-3.24", Uuid::new_v4())
+                .is_none()
+        );
+
+        // The slot frees up again once the first session reaches a terminal
+        // status — otherwise one bootstrap would block the feature forever.
+        tracker.finish_ok(first);
+        assert!(
+            tracker
+                .try_begin("rocky-9", "alpine-3.24", Uuid::new_v4())
+                .is_some()
+        );
+    }
+
     #[test]
     fn set_status_from_only_applies_while_the_session_is_in_the_expected_status() {
         let tracker = BootstrapTracker::default();
-        let id = tracker.begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+        let id = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("no other session is active");
 
         assert!(tracker.set_status_from(id, BootstrapStatus::Booting, BootstrapStatus::Running));
         assert_eq!(tracker.get(id).unwrap().status, BootstrapStatus::Running);
@@ -259,7 +287,9 @@ mod tests {
     #[test]
     fn finish_ok_records_succeeded_status_and_end_time() {
         let tracker = BootstrapTracker::default();
-        let id = tracker.begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+        let id = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("no other session is active");
 
         tracker.finish_ok(id);
 
@@ -271,7 +301,9 @@ mod tests {
     #[test]
     fn finish_err_records_failed_status_and_reason_in_the_log() {
         let tracker = BootstrapTracker::default();
-        let id = tracker.begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+        let id = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("no other session is active");
 
         tracker.finish_err(id, "download failed: connection reset");
 
@@ -283,9 +315,11 @@ mod tests {
     #[test]
     fn finish_err_from_only_fails_a_session_still_in_the_expected_status() {
         let tracker = BootstrapTracker::default();
-        let id = tracker.begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+        let id = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("no other session is active");
 
-        tracker.set_status(id, BootstrapStatus::Running);
+        tracker.set_status_from(id, BootstrapStatus::Booting, BootstrapStatus::Running);
         assert!(!tracker.finish_err_from(id, BootstrapStatus::Booting, "boot timed out"));
         assert_eq!(tracker.get(id).unwrap().status, BootstrapStatus::Running);
 
@@ -296,7 +330,9 @@ mod tests {
     #[test]
     fn remove_evicts_a_tracked_session() {
         let tracker = BootstrapTracker::default();
-        let id = tracker.begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+        let id = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .expect("no other session is active");
         tracker.remove(id);
         assert!(tracker.get(id).is_none());
     }
