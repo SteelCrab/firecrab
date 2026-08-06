@@ -1,4 +1,5 @@
 mod artifacts;
+mod bootstrap;
 mod builds;
 mod console;
 mod error;

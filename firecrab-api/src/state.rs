@@ -81,6 +81,12 @@ pub struct AppState {
     pub(crate) image_packages: ImageInstallTracker,
     /// Async image-build sessions (`POST /api/images/{alias}/build`).
     pub(crate) builds: crate::builds::BuildTracker,
+    /// Async from-scratch distro bootstrap sessions (`POST /api/images/{alias}/bootstrap`).
+    // Not yet consumed — handlers::bootstrap::start_bootstrap (Task 5 of the
+    // m2image-web-bootstrap plan) wires this in; wiring it now would be out
+    // of this task's scope.
+    #[allow(dead_code)]
+    pub(crate) bootstraps: crate::bootstrap::BootstrapTracker,
 }
 
 impl AppState {
@@ -121,6 +127,7 @@ impl AppState {
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
             builds: crate::builds::BuildTracker::default(),
+            bootstraps: crate::bootstrap::BootstrapTracker::default(),
         })
     }
 
