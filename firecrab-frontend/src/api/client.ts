@@ -1,6 +1,7 @@
 import type {
   ApiError,
   AssignVmStorageRequest,
+  BootstrapResponse,
   BuildResponse,
   CreateMicroNetworkRequest,
   CreateMicroStorageRequest,
@@ -327,6 +328,29 @@ export async function cancelBuild(buildId: string): Promise<void> {
   let response: Response;
   try {
     response = await fetch(`/api/images/builds/${encodeURIComponent(buildId)}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+}
+
+/** Bootstrap a distro from scratch inside a builder VM (`POST /api/images/{alias}/bootstrap`). */
+export function startBootstrap(alias: string): Promise<BootstrapResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/bootstrap`, { method: "POST" });
+}
+
+/** Poll one bootstrap session (`GET /api/images/bootstrap/{bootstrapId}`). */
+export function getBootstrap(bootstrapId: string): Promise<BootstrapResponse> {
+  return fetchJson(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`);
+}
+
+/** Cancel a bootstrap and delete its builder VM (`DELETE /api/images/bootstrap/{bootstrapId}`). */
+export async function cancelBootstrap(bootstrapId: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`, { method: "DELETE" });
   } catch (error) {
     throw ApiClientError.transport(transportDetail(error));
   }
