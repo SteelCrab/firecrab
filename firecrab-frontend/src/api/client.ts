@@ -184,6 +184,19 @@ export async function deleteImage(alias: string): Promise<void> {
   }
 }
 
+/** Delete a staged-but-not-installed package (`DELETE /api/images/{alias}/package`). */
+export async function deleteStagedPackage(alias: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/images/${encodeURIComponent(alias)}/package`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+}
+
 export function listStorageRoots(): Promise<StorageRootResponse[]> {
   return fetchJson("/api/storage");
 }
