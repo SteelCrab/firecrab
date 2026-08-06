@@ -177,7 +177,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     let rest = Router::new()
         .route(
             "/api/vms",
-            get(handlers::vms::list_vms).post(handlers::vms::create_vm),
+            get(handlers::vms::list_vms).post(handlers::vms::create_vm_route),
         )
         .route(
             "/api/vms/{id}",

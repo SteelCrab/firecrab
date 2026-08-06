@@ -133,6 +133,29 @@ fn read_console_log(
     }
 }
 
+/// `POST /api/vms`. Thin wrapper over [`create_vm`] that exists only to
+/// refuse the internal MicroBoot alias.
+///
+/// The check can't live in `validate_create`, because
+/// `bootstrap::start_bootstrap` legitimately calls `create_vm` with exactly
+/// that alias to provision its builder VM — it is a real registered
+/// template, just not a user-facing one. Rejecting at the HTTP boundary
+/// keeps the internal caller working while making `__microboot` unreachable
+/// from outside, matching how `images::list_images` already hides it.
+pub async fn create_vm_route(
+    state: State<AppState>,
+    request_id: Extension<RequestId>,
+    body: ValidatedJson<CreateVmRequest>,
+) -> Result<(StatusCode, Json<VmResponse>), AppError> {
+    if body.0.template == crate::microboot::MICROBOOT_ALIAS {
+        return Err(AppError::validation(
+            BTreeMap::from([("template".to_owned(), "is not supported".to_owned())]),
+            request_id.0.0,
+        ));
+    }
+    create_vm(state, request_id, body).await
+}
+
 pub async fn create_vm(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,

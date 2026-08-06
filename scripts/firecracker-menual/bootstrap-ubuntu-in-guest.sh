@@ -1,6 +1,9 @@
 #!/bin/sh
-# Runs entirely inside a firecrab builder VM (any installed template) —
-# downloads the official Ubuntu Base tarball, chroots in and installs
+# Runs entirely inside a firecrab MicroBoot builder VM — Alpine's own
+# recovery shell (see crate::microboot's doc comment), NOT an arbitrary
+# installed template: this script hard-depends on that environment via
+# `apk add --initdb`, `udhcpc`, and busybox's umount quirks below.
+# Downloads the official Ubuntu Base tarball, chroots in and installs
 # packages/kernel via ITS OWN apt (not the outer guest's), then packs the
 # result into an ext4 image via `mkfs.ext4 -d` (no loop mount). Adapted
 # from install-ubuntu-roofs.sh, minus its host-sudo re-exec and
@@ -25,7 +28,8 @@ cleanup_mounts() {
   # silently no-ops under `2>/dev/null || true`, leaving /proc mounted live
   # under $mount_dir when `mkfs.ext4 -d` walks it next, which then fails
   # ("No such process") trying to copy /proc's ephemeral per-process files.
-  # Same two-tier fallback bootstrap-rocky-in-guest.sh's cleanup already uses.
+  # Same lazy-umount fallback bootstrap-rocky-in-guest.sh's cleanup relies on
+  # (its own first attempt uses -R, so in practice it always lands here).
   umount "$mount_dir/proc" 2>/dev/null || umount -l "$mount_dir/proc" 2>/dev/null || true
   umount "$mount_dir/sys" 2>/dev/null || umount -l "$mount_dir/sys" 2>/dev/null || true
   umount "$mount_dir/dev" 2>/dev/null || umount -l "$mount_dir/dev" 2>/dev/null || true
@@ -188,7 +192,12 @@ test -e "${mount_dir}/usr/sbin/sshd" || fail 'missing sshd'
 
 info 'building rootfs.ext4'
 truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
-mkfs.ext4 -F -L rootfs -d "$mount_dir" "$out/rootfs.ext4.tmp"
+# -O ^orphan_file: same reasoning as the alpine/rocky scripts — the outer
+# MicroBoot shell's mkfs.ext4 (Alpine 3.24, e2fsprogs 1.47.x) enables it by
+# default, but the host re-checks this image with its own e2fsck on every
+# VM start (`prepare_rootfs`'s `e2fsck -f -y`, `specialize_guest`'s
+# `e2fsck -p`), and hosts still on e2fsprogs 1.46.5 don't know the feature.
+mkfs.ext4 -F -O '^orphan_file' -L rootfs -d "$mount_dir" "$out/rootfs.ext4.tmp"
 mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 
 # MicroBoot boots off its own initrd (RAM), not off /dev/vda — nothing

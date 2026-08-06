@@ -60,7 +60,15 @@ pub async fn start_build(
     Extension(request_id): Extension<RequestId>,
     Path(alias): Path<String>,
 ) -> Result<(StatusCode, Json<BuildResponse>), AppError> {
-    let Some(source) = state.templates.resolve_alias(&alias) else {
+    // `__microboot` is a real registered template (see crate::microboot) but
+    // not a user-facing one — 404 it here for the same reason
+    // `images::list_images` omits it, so it can't be rebuilt into an
+    // installable image off its 16 MiB placeholder rootfs.
+    let Some(source) = state
+        .templates
+        .resolve_alias(&alias)
+        .filter(|_| alias != crate::microboot::MICROBOOT_ALIAS)
+    else {
         return Err(AppError::not_found(request_id.0));
     };
 

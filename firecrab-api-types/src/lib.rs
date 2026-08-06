@@ -753,8 +753,13 @@ pub struct BootstrapResponse {
     pub bootstrap_id: Uuid,
     /// The target being bootstrapped (`alpine-3.24`, `ubuntu-26.04`, or `rocky-9`).
     pub alias: String,
-    /// Which already-installed template's VM is doing the work — an
-    /// unrelated, disposable environment, not the bootstrap's target.
+    /// Which template the disposable builder VM booted from — always the
+    /// internal MicroBoot alias since `firecrab_api::microboot` replaced
+    /// the old "pick an already-installed template" logic. Deliberately
+    /// still reported: it is diagnostic provenance for this one session,
+    /// not an installable image, and a bootstrap that failed early is much
+    /// harder to reason about without knowing what it booted. Unlike
+    /// `/api/images`, nothing here invites the reader to install it.
     pub source_alias: String,
     /// Builder VM id, so the dashboard can reuse the existing console
     /// WebSocket (`/ws/vms/{id}/console`) to show live output.

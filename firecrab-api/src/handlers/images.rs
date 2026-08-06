@@ -280,8 +280,12 @@ pub async fn delete_image(
     Path(alias): Path<String>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<StatusCode, AppError> {
-    if TemplateRegistry::known_spec(&alias).is_none()
-        && state.templates.resolve_alias(&alias).is_none()
+    // Same reason list_images omits it: `__microboot` is internal
+    // (see crate::microboot). Deleting it would strip the registration and
+    // its cached artifacts out from under an in-flight bootstrap.
+    if alias == crate::microboot::MICROBOOT_ALIAS
+        || (TemplateRegistry::known_spec(&alias).is_none()
+            && state.templates.resolve_alias(&alias).is_none())
     {
         return Err(AppError::not_found(request_id.0));
     }

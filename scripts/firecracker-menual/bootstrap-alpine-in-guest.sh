@@ -1,6 +1,9 @@
 #!/bin/sh
-# Runs entirely inside a firecrab builder VM (any installed template) —
-# downloads the official Alpine minirootfs, chroots in and installs
+# Runs entirely inside a firecrab MicroBoot builder VM — Alpine's own
+# recovery shell (see crate::microboot's doc comment), NOT an arbitrary
+# installed template: this script hard-depends on that environment via
+# `apk add --initdb`, `udhcpc`, and busybox's umount quirks below.
+# Downloads the official Alpine minirootfs, chroots in and installs
 # packages/kernel via ITS OWN bundled apk (not the outer guest's), then
 # packs the result into an ext4 image via `mkfs.ext4 -d` (no loop mount).
 # Adapted from install-alpine-rootfs.sh's write_configure_script — same
@@ -24,7 +27,8 @@ cleanup_mounts() {
   # silently no-ops under `2>/dev/null || true`, leaving /proc mounted live
   # under $staging when `mkfs.ext4 -d` walks it next, which then fails
   # ("No such process") trying to copy /proc's ephemeral per-process files.
-  # Same two-tier fallback bootstrap-rocky-in-guest.sh's cleanup already uses.
+  # Same lazy-umount fallback bootstrap-rocky-in-guest.sh's cleanup relies on
+  # (its own first attempt uses -R, so in practice it always lands here).
   umount "$staging/proc" 2>/dev/null || umount -l "$staging/proc" 2>/dev/null || true
   umount "$staging/sys" 2>/dev/null || umount -l "$staging/sys" 2>/dev/null || true
   umount "$staging/dev" 2>/dev/null || umount -l "$staging/dev" 2>/dev/null || true
@@ -181,7 +185,18 @@ cleanup_mounts
 
 info 'building rootfs.ext4'
 truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
-mkfs.ext4 -F -L rootfs -d "$staging" "$out/rootfs.ext4.tmp"
+# -O ^orphan_file: this mkfs.ext4 belongs to the outer MicroBoot shell
+# (Alpine 3.24's e2fsprogs 1.47.x), which enables orphan_file by default —
+# but the image it writes is read back by consumers whose e2fsprogs may be
+# older, and orphan_file only exists from 1.47.0 (2023). The host is one of
+# those consumers on *every single VM start*, not just the guest's own boot:
+# `rootfs::prepare_rootfs` runs `e2fsck -f -y` before `resize2fs`, and
+# `specialize_guest` runs `e2fsck -p`. On a host still shipping e2fsprogs
+# 1.46.5 (Rocky 9, Ubuntu 22.04 — both supported by install.sh) every VM
+# made from this template would fail to start. Building templates on the
+# host never hit this because host mkfs and host e2fsck matched; sourcing
+# the builder from MicroBoot is what split those two versions apart.
+mkfs.ext4 -F -O '^orphan_file' -L rootfs -d "$staging" "$out/rootfs.ext4.tmp"
 mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 
 # MicroBoot boots off its own initrd (RAM), not off /dev/vda — nothing
@@ -203,7 +218,7 @@ sync
 
 # extract-vmlinux ships alongside this script in the repo but does not
 # exist inside the guest — the raw vmlinuz is dumped out as-is
-# (vmlinux-virt-raw) and the host runs extract-vmlinux after pulling it
+# (vmlinuz-virt-raw) and the host runs extract-vmlinux after pulling it
 # off the guest disk, since the host is already known to have every
 # decompressor it might need (same reasoning install-alpine-rootfs.sh's
 # own extract_kernel already used).

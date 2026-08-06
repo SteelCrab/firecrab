@@ -236,14 +236,16 @@ chmod +x /tmp/e2fsck-rocky && /tmp/e2fsck-rocky -fn images/rootfs/rocky-rootfs-9
 ### `microboot.rs`를 고쳤는데 재시작해도 증상이 그대로다
 
 - **원인**: `TemplateRegistry::register_spec`이 등록을 `images/.templates.json`에 영속화하고 다음
-  기동 때 그대로 재생한다. `ensure_registered`는 `resolve_alias`가 이미 있으면 즉시 반환하므로,
-  **깨진 등록이 그대로 살아남아** 고친 코드가 실행되지 않는다
-- **해결**: 새 프로세스를 **띄우기 전에** 아래를 지운다(띄운 뒤에 지우면 이미 캐시된 경로를 참조해
-  `No such file or directory`가 난다)
+  기동 때 그대로 재생한다. `ensure_registered`의 fast path가 그 등록을 재사용하면 고친 코드가
+  아예 실행되지 않는다
+- **해결**: `microboot.rs`의 `MICROBOOT_VERSION`을 올린다 — fast path가 버전 일치까지 요구하므로
+  옛 등록은 자동으로 무시되고 새로 만들어진다. 스펙(아티팩트 URL, 자리표시자 구조, `boot_args`)을
+  바꿀 때는 **항상** 같이 올린다
 
-```sh
-rm -f images/.templates.json images/.microboot/placeholder.ext4
-```
+> [!warning] `.templates.json`을 통째로 지우지 말 것
+> 이 파일에는 microboot뿐 아니라 **모든 런타임 등록**(웹 빌드로 만든 파생 alias 포함)이 들어 있다.
+> 지우면 그 alias들이 사라지고, 거기에 묶인 VM은 이후 `template ... is not registered`로 시작
+> 자체가 안 된다. 개발 중 강제로 되돌려야 한다면 해당 항목만 편집해 지운다.
 
 ### 게스트 스크립트를 고쳤는데 반영이 안 된다
 

@@ -292,17 +292,16 @@ cp "$initrd_path" "$out/initramfs"
 
 info 'building rootfs.ext4'
 truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
-# -O ^orphan_file: this mkfs.ext4 is the *outer* MicroBoot shell's, from
-# Alpine 3.24's e2fsprogs 1.47.x, which turns orphan_file on by default —
-# but the filesystem it writes is fsck'd at every boot by the e2fsck inside
-# the Rocky initramfs we build just above, and Rocky 9 ships e2fsprogs
-# 1.46.5 (2021), predating that feature. The guest then dies in dracut with
-# systemd-fsck-root failing and drops to an emergency shell, never reaching
-# /sysroot (found live while verifying Task 8 of the MicroBoot plan;
-# reproduced on the host by running Rocky's own e2fsck against the produced
-# image: "has unsupported feature(s): orphan_file / Get a newer version of
-# e2fsck!", clean once the feature is off). Alpine and Ubuntu both ship
-# e2fsprogs 1.47.x in their own initramfs, so only Rocky needs this.
+# -O ^orphan_file: see the identical flag in the alpine/ubuntu scripts —
+# this mkfs.ext4 is the outer MicroBoot shell's (Alpine 3.24, e2fsprogs
+# 1.47.x, which enables orphan_file by default), while the images it writes
+# are fsck'd by whatever e2fsprogs the *consumers* have. Rocky is the
+# loudest case: its own initramfs runs e2fsprogs 1.46.5 (2021), so
+# systemd-fsck-root fails and the guest drops into a dracut emergency shell
+# without ever reaching /sysroot — found live while verifying Task 8 of the
+# MicroBoot plan, then reproduced on the host by dumping that very e2fsck
+# out of the produced image and running it ("has unsupported feature(s):
+# orphan_file / Get a newer version of e2fsck!", clean once it's off).
 mkfs.ext4 -F -O '^orphan_file' -L rootfs -d "$staging" "$out/rootfs.ext4.tmp"
 mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 

@@ -1190,11 +1190,14 @@ mod tests {
         // situation that used to 503 now succeeds. Register __microboot
         // directly (mirroring Task 1's own registration test) rather than
         // exercising a real network download here.
+        // Must be the version this build pins: `ensure_registered`'s fast
+        // path requires an exact match, so a stale tag here would silently
+        // send the test down the slow path and pull ~22 MB off the network.
         state
             .templates
             .register_spec(crate::templates::TemplateSpec {
                 alias: crate::microboot::MICROBOOT_ALIAS.to_owned(),
-                version: "v1".to_owned(),
+                version: crate::microboot::microboot_version_for_test().to_owned(),
                 kernel: std::path::PathBuf::from("kernel"),
                 initrd: None,
                 rootfs: std::path::PathBuf::from("rootfs"),
@@ -1203,7 +1206,7 @@ mod tests {
             .unwrap();
 
         let (status, Json(session)) = start_bootstrap(
-            State(state),
+            State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             Path("rocky-9".to_owned()),
         )
@@ -1212,6 +1215,23 @@ mod tests {
 
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(session.alias, "rocky-9");
+        assert_eq!(session.source_alias, crate::microboot::MICROBOOT_ALIAS);
+
+        // The builder VM's own spec, not just the session's status. The RAM
+        // figure is load-bearing, not cosmetic: at the previous 1024 MiB the
+        // guest's staging area (now entirely in RAM under MicroBoot) got
+        // ubuntu's apt-get OOM-killed on a real run, and nothing else in the
+        // suite would notice the constant being lowered again.
+        let builder = state
+            .vms
+            .lock()
+            .unwrap()
+            .values()
+            .find(|vm| vm.id == session.vm_id)
+            .cloned()
+            .expect("builder VM record");
+        assert_eq!(builder.template, crate::microboot::MICROBOOT_ALIAS);
+        assert_eq!(builder.ram, 8192);
     }
 
     #[tokio::test]
