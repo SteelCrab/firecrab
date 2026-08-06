@@ -554,31 +554,29 @@ git commit -m "feat: generalize package endpoint to install/remove/update"
 ### Task 3: Frontend — package management in the VM detail modal
 
 **Files:**
-- Create: `firecrab-frontend/src/bindings/PackageAction.ts`
-- Modify: `firecrab-frontend/src/bindings/index.ts`
+- Create: `firecrab-frontend/src/bindings/PackageUpdateStatus.ts`
+- Modify: `firecrab-frontend/src/bindings/VmResponse.ts`, `firecrab-frontend/src/bindings/index.ts`
 - Modify: `firecrab-frontend/src/api/client.ts`
 - Modify: `firecrab-frontend/src/components/VmDetailModal.tsx`
 
 **Interfaces:**
-- Consumes: `POST /api/vms/{id}/packages` from Task 2, existing `PackageUpdateStatus`/`VmResponse.packageUpdate` binding (already present per grep — if missing, add `packageUpdate?: PackageUpdateStatus` to `bindings/VmResponse.ts` mirroring the Rust field).
+- Consumes: `POST /api/vms/{id}/packages` from Task 2. `bindings/PackageAction.ts` already exists (Task 2 created it) as `export type PackageAction = { action: "install" | "remove" | "update", packages: Array<string>, };` — there is no separate `PackageActionKind` export, the union is inlined; use the literal union type directly, don't import a type named `PackageActionKind`.
 - Produces: `runPackageAction(id: string, action: "install"|"remove"|"update", packages?: string[]): Promise<VmResponse>` in `api/client.ts`.
 
-- [ ] **Step 1: Add the binding**
+- [ ] **Step 1: Add the `PackageUpdateStatus` binding and wire it onto `VmResponse`**
 
-Create `firecrab-frontend/src/bindings/PackageAction.ts`:
+Neither exists yet — verified directly, not assumed. The Rust type (`firecrab-api-types/src/lib.rs`, `#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "state")]`) is internally tagged on a `state` field, not `status`. Create `firecrab-frontend/src/bindings/PackageUpdateStatus.ts`:
 ```ts
-// Mirrors firecrab_api_types::{PackageAction, PackageActionKind} (camelCase wire shape).
+// Mirrors firecrab_api_types::PackageUpdateStatus (camelCase wire shape, tagged on "state").
 
-export type PackageActionKind = "install" | "remove" | "update";
-
-export type PackageAction = {
-  action: PackageActionKind;
-  packages: string[];
-};
+export type PackageUpdateStatus =
+  | { state: "running" }
+  | { state: "succeeded", outputTail: string }
+  | { state: "failed", reason: string, outputTail: string };
 ```
-Add `export * from "./PackageAction";` to `firecrab-frontend/src/bindings/index.ts`.
+Add `export * from "./PackageUpdateStatus";` to `firecrab-frontend/src/bindings/index.ts`.
 
-Check `firecrab-frontend/src/bindings/VmResponse.ts` for a `packageUpdate` field. If absent, add `packageUpdate: PackageUpdateStatus | null,` to the type and confirm `PackageUpdateStatus` is exported from `bindings/index.ts` (it should already exist as a file, given `handlers/packages.rs` already returns it).
+Add `packageUpdate: PackageUpdateStatus | null,` to the `VmResponse` type in `firecrab-frontend/src/bindings/VmResponse.ts` (matching that file's existing compact single-line style — it currently has no `packageUpdate` field at all).
 
 - [ ] **Step 2: Add the client function**
 
@@ -587,7 +585,7 @@ In `firecrab-frontend/src/api/client.ts`, near `updateVmResources`/`stopVm`:
 /** Install, remove, or update packages on a running VM (`POST /api/vms/{id}/packages`). */
 export function runPackageAction(
   id: string,
-  action: PackageActionKind,
+  action: PackageAction["action"],
   packages: string[] = [],
 ): Promise<VmResponse> {
   return fetchJson(`/api/vms/${encodeURIComponent(id)}/packages`, {
@@ -597,7 +595,7 @@ export function runPackageAction(
   });
 }
 ```
-Add `PackageActionKind` to the existing `import type { ... } from "../bindings"` line at the top of the file.
+Add `PackageAction` to the existing `import type { ... } from "../bindings"` line at the top of the file (used only for its `["action"]` index type here — the request body itself is built inline above, matching this file's existing style for simple POST bodies).
 
 - [ ] **Step 3: Add the UI section to `VmDetailModal.tsx`**
 
@@ -683,9 +681,9 @@ Add a section to the modal's JSX (only when `vm.state === "running"`, near where
         {packageBusy === "update" ? "업데이트 중…" : "전체 패키지 업데이트"}
       </button>
     </div>
-    {vm.packageUpdate && vm.packageUpdate.status !== "running" && (
+    {vm.packageUpdate && vm.packageUpdate.state !== "running" && (
       <pre className="detail-log">
-        {vm.packageUpdate.status === "succeeded"
+        {vm.packageUpdate.state === "succeeded"
           ? vm.packageUpdate.outputTail
           : `${vm.packageUpdate.reason}\n${vm.packageUpdate.outputTail}`}
       </pre>
