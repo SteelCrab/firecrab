@@ -451,12 +451,12 @@ async fn wait_for_console_shell(
 }
 
 /// Appends a "still running" line to the session log every
-/// [`BOOTSTRAP_HEARTBEAT_INTERVAL`] while the script executes. The session
-/// log is otherwise written exactly twice (VM booted, script finished), so
-/// the dashboard would look frozen for the whole multi-minute run with no
-/// way to tell a working bootstrap from a hung one. Runs on its own task so
-/// it never delays the sentinel wait it accompanies — the caller aborts it
-/// the moment that wait returns.
+/// [`BOOTSTRAP_HEARTBEAT_INTERVAL`] while the script executes. Live
+/// progress is the inline console's job now; this line's remaining purpose
+/// is the exported log, which is otherwise silent for the whole
+/// multi-minute install and gives a later reader no way to tell a slow run
+/// from a hung one. Runs on its own task so it never delays the sentinel
+/// wait it accompanies — the caller aborts it the moment that wait returns.
 fn spawn_progress_heartbeat(state: &AppState, bootstrap_id: Uuid) -> tokio::task::JoinHandle<()> {
     let state = state.clone();
     tokio::spawn(async move {
@@ -471,7 +471,7 @@ fn spawn_progress_heartbeat(state: &AppState, bootstrap_id: Uuid) -> tokio::task
                     state.bootstraps.append_log(
                         bootstrap_id,
                         format!(
-                            "여전히 실행 중… ({}분 경과)",
+                            "still running the install script ({}m elapsed)",
                             started.elapsed().as_secs() / 60
                         ),
                     );
@@ -1534,7 +1534,7 @@ mod tests {
 
         let log = state.bootstraps.get(bootstrap_id).unwrap().log;
         assert_eq!(
-            log.matches("여전히 실행 중").count(),
+            log.matches("still running the install script").count(),
             3,
             "expected one heartbeat per interval elapsed; log: {log}"
         );
@@ -1562,6 +1562,6 @@ mod tests {
 
         assert!(heartbeat.is_finished());
         let log = state.bootstraps.get(bootstrap_id).unwrap().log;
-        assert!(!log.contains("여전히 실행 중"), "log: {log}");
+        assert!(!log.contains("still running the install script"), "log: {log}");
     }
 }
