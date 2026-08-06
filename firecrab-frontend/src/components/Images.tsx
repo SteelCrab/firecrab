@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BootstrapResponse,
   BootstrapStep,
@@ -171,152 +171,6 @@ function formatElapsed(millis: number): string {
 }
 
 /**
- * Bootstrap panel: triggers a from-scratch distro bootstrap and shows its
- * live log. Only one bootstrap runs at a time (backend-enforced, 409 on a
- * second start) — this component's own busy state mirrors that by polling
- * `getBootstrap` and disabling every alias's button while any session it
- * knows about is non-terminal.
- */
-function BootstrapPanel({
-  onFinished,
-  unavailableAliases,
-}: {
-  onFinished: () => void;
-  /** Already installed, or already holding a staged package — either way
-   *  `POST /api/images/{alias}/install`'s own guard would reject a bootstrap
-   *  result for it, so don't offer to spend 30 minutes producing one. */
-  unavailableAliases: string[];
-}) {
-  const [session, setSession] = useState<BootstrapResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  /**
-   * True from the click itself, not from the response. `busy` below only
-   * becomes true once `startBootstrap` has resolved, which leaves a window
-   * where a double-click fires a second POST — and two POSTs that both pass
-   * the backend's single-session check boot two builder VMs.
-   */
-  const [starting, setStarting] = useState(false);
-
-  // BootstrapPanel lives inside Images, which the App shell only mounts
-  // while the "images" tab is active — a bootstrap can run for minutes, so
-  // its poll (and even the initial startBootstrap POST) can easily outlive
-  // the component if the user switches tabs mid-run. Mirror Images's own
-  // mountedRef/pollInstall discipline (see above) rather than the
-  // effect-scoped `cancelled` flag, since a bare `cancelled` flag only
-  // guards the one scheduled tick it closes over, not the recursive chain
-  // of ticks a real bootstrap session needs.
-  //
-  // Deliberately does NOT cancel the session on unmount: this component
-  // unmounts on every tab switch away from Images (not just an explicit
-  // dismissal), and cancelling mid-Packaging deletes the builder VM's disk
-  // out from under the concurrently-running packaging step, which can
-  // publish a truncated archive. A bootstrap simply keeps running on the
-  // backend and the panel resumes polling it next time Images mounts.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const pollBootstrap = (bootstrapId: string) => {
-    const tick = async () => {
-      if (!mountedRef.current) return;
-      try {
-        const snapshot = await getBootstrap(bootstrapId);
-        if (!mountedRef.current) return;
-        setSession(snapshot);
-        if (snapshot.status === "succeeded") {
-          onFinished();
-        } else if (snapshot.status !== "failed") {
-          setTimeout(() => void tick(), 1000);
-        }
-        // "failed" is a confirmed terminal state too — stop without retrying.
-      } catch (err) {
-        // A cancelled session is deleted from the tracker, so 404 is a real
-        // "this is over" answer, not a blip — stop and clear the panel.
-        // Anything else is not positive confirmation of a terminal state, so
-        // keep polling rather than freezing on one bad response.
-        if (err instanceof ApiClientError && err.status === 404) {
-          if (mountedRef.current) setSession(null);
-          return;
-        }
-        if (mountedRef.current) setTimeout(() => void tick(), 1000);
-      }
-    };
-    void tick();
-  };
-
-  const start = async (alias: string) => {
-    if (starting) return;
-    setStarting(true);
-    setError(null);
-    try {
-      const started = await startBootstrap(alias);
-      if (!mountedRef.current) return;
-      setSession(started);
-      pollBootstrap(started.bootstrapId);
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setError((err as Error).message);
-    } finally {
-      if (mountedRef.current) setStarting(false);
-    }
-  };
-
-  const busy =
-    starting || (session !== null && session.status !== "succeeded" && session.status !== "failed");
-
-  return (
-    <section className="panel">
-      <h2
-        className="panel-title"
-        title="공식 배포판을 처음부터 준비할 때 보통 docker나 sudo가 필요한데, 여기서는 그 대신 이미 있는 microVM 빌더를 재사용합니다 — 게스트 안에서는 이미 진짜 root라 별도 컨테이너나 권한 상승 없이 안전하게 처리됩니다."
-      >
-        배포판 부트스트랩
-      </h2>
-      {error && <div className="field-error">{error}</div>}
-      <div className="package-row">
-        {(["alpine-3.24", "ubuntu-26.04", "rocky-9"] as const).map((alias) => {
-          const unavailable = unavailableAliases.includes(alias);
-          return (
-            <button
-              key={alias}
-              type="button"
-              className="btn"
-              disabled={busy || unavailable}
-              title={unavailable ? "이미 설치됐거나 설치할 패키지가 이미 준비되어 있습니다." : undefined}
-              onClick={() => void start(alias)}
-            >
-              {busy && session?.alias === alias ? `${alias} 부트스트랩 중…` : `${alias} 부트스트랩`}
-            </button>
-          );
-        })}
-      </div>
-      {session && (
-        <>
-          <div className="state-badge">{session.status}</div>
-          <BootstrapStepper timeline={session.stepTimeline} />
-          {/* The builder VM only exists while the session is pre-terminal:
-              `packaging` is entered *after* stop_vm returns, and the VM is
-              deleted at the end. Gate on status, never on vmId — that field
-              keeps its value after the VM it names is gone. */}
-          {session.status === "booting" || session.status === "running" ? (
-            <InlineConsole vmId={session.vmId} />
-          ) : (
-            <p className="inline-console-ended">
-              빌더 VM이 정리되어 콘솔 연결이 종료되었습니다.
-            </p>
-          )}
-          <pre className="detail-log">{session.log}</pre>
-        </>
-      )}
-    </section>
-  );
-}
-
-/**
  * 선택된 이미지 하나의 상세 정보 + 액션. 표 아래 인라인으로 열리며,
  * MicroNetworks/MicroStorages의 행 클릭 → 상세 패턴과 동일하다.
  */
@@ -330,6 +184,10 @@ function ImageDetail({
   onInstallStaged,
   onFetchPackage,
   onDelete,
+  bootstrapSession,
+  bootstrapStarting,
+  bootstrapError,
+  onStartBootstrap,
 }: {
   image: ImageResponse;
   usedByVms: VmResponse[] | null;
@@ -340,8 +198,17 @@ function ImageDetail({
   onInstallStaged: (alias: string) => Promise<void>;
   onFetchPackage: (alias: string) => Promise<void>;
   onDelete: (alias: string) => Promise<void>;
+  bootstrapSession: BootstrapResponse | null;
+  bootstrapStarting: boolean;
+  bootstrapError: string | null;
+  onStartBootstrap: (alias: string) => Promise<void>;
 }) {
   const fetching = packageJob?.status === "running";
+  const blockedByStatus = image.installed || image.packageStaged;
+  const bootstrapBusy =
+    bootstrapStarting ||
+    (bootstrapSession !== null && bootstrapSession.status !== "succeeded" && bootstrapSession.status !== "failed");
+  const bootstrapIsMine = bootstrapSession?.alias === image.alias;
 
   return (
     <div className="subpanel">
@@ -371,6 +238,22 @@ function ImageDetail({
       </dl>
 
       <div className="package-row">
+        <button
+          type="button"
+          className="btn"
+          disabled={blockedByStatus || bootstrapBusy}
+          title={
+            blockedByStatus
+              ? "이미 설치됐거나 설치할 패키지가 이미 준비되어 있습니다."
+              : bootstrapBusy && !bootstrapIsMine
+                ? "다른 배포판의 부트스트랩이 진행 중입니다."
+                : "공식 배포판을 처음부터 준비합니다 — 이미 있는 microVM 빌더를 재사용해 별도 컨테이너나 권한 상승 없이 처리합니다."
+          }
+          onClick={() => void onStartBootstrap(image.alias)}
+        >
+          {bootstrapIsMine && bootstrapBusy ? "굽는 중…" : "굽기"}
+        </button>
+
         {image.installed ? (
           <button type="button" className="btn" disabled>
             설치됨
@@ -411,6 +294,25 @@ function ImageDetail({
         </button>
       </div>
 
+      {bootstrapIsMine && bootstrapError && <div className="field-error">{bootstrapError}</div>}
+
+      {bootstrapIsMine && bootstrapSession && (
+        <>
+          <div className="state-badge">{bootstrapSession.status}</div>
+          <BootstrapStepper timeline={bootstrapSession.stepTimeline} />
+          {/* The builder VM only exists while the session is pre-terminal:
+              `packaging` is entered *after* stop_vm returns, and the VM is
+              deleted at the end. Gate on status, never on vmId — that field
+              keeps its value after the VM it names is gone. */}
+          {bootstrapSession.status === "booting" || bootstrapSession.status === "running" ? (
+            <InlineConsole vmId={bootstrapSession.vmId} />
+          ) : (
+            <p className="inline-console-ended">빌더 VM이 정리되어 콘솔 연결이 종료되었습니다.</p>
+          )}
+          <pre className="detail-log">{bootstrapSession.log}</pre>
+        </>
+      )}
+
       {install && install.alias === image.alias && install.status !== "idle" && (
         <>
           <div className="log-export-bar">
@@ -430,9 +332,9 @@ function ImageDetail({
 }
 
 /**
- * Single M2Image inventory table plus the from-scratch bootstrap panel.
- * Package download/install ("가져오기") is a per-row action here rather than
- * a separate panel.
+ * Single M2Image inventory table. Package download/install ("가져오기") and
+ * from-scratch bootstrap ("굽기") are both actions inside the per-row detail
+ * panel (`ImageDetail`) rather than separate panels.
  */
 export default function Images() {
   const [images, setImages] = useState<ImageResponse[] | null>(null);
@@ -442,6 +344,15 @@ export default function Images() {
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
   const [install, setInstall] = useState<ImageInstallResponse | null>(null);
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
+  const [bootstrapSession, setBootstrapSession] = useState<BootstrapResponse | null>(null);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  /**
+   * True from the click itself, not from the response — mirrors
+   * `handleInstallStaged` 등의 `busyAlias` 가드와 같은 이유: 응답이
+   * 오기 전 더블클릭이 두 번째 POST를 쏴서 빌더 VM이 두 개 뜨는 것을
+   * 막는다. 백엔드도 세션 하나만 허용하므로(409) 이중 방어다.
+   */
+  const [bootstrapStarting, setBootstrapStarting] = useState(false);
 
   const refreshList = useCallback(async () => {
     try {
@@ -476,17 +387,6 @@ export default function Images() {
       .then((vms) => setUsedByVms(vms.filter((vm) => vm.template === selectedAlias)))
       .catch((error) => setUsedByError((error as Error).message));
   }, [selectedAlias]);
-
-  // Bootstrapping either of these would spend ~30 minutes producing a package
-  // the install step then refuses (`already_installed`) or that is already
-  // sitting on disk waiting to be installed.
-  const bootstrapBlockedAliases = useMemo(
-    () =>
-      (images ?? [])
-        .filter((image) => image.installed || image.packageStaged)
-        .map((image) => image.alias),
-    [images],
-  );
 
   // `Images` is conditionally mounted by the App shell (only while the
   // "images" tab is active), so a poll started here can easily outlive the
@@ -525,6 +425,50 @@ export default function Images() {
       }
     };
     void tick();
+  };
+
+  // 옛 BootstrapPanel.pollBootstrap과 동일한 폴링 규율 — 404는 취소로
+  // 삭제된 세션이라는 확정 신호(그만 폴링), 그 외 에러는 일시적일 수
+  // 있으니 계속 폴링한다.
+  const pollBootstrap = (bootstrapId: string) => {
+    const tick = async () => {
+      if (!mountedRef.current) return;
+      try {
+        const snapshot = await getBootstrap(bootstrapId);
+        if (!mountedRef.current) return;
+        setBootstrapSession(snapshot);
+        if (snapshot.status === "succeeded") {
+          await refreshList();
+        } else if (snapshot.status !== "failed") {
+          setTimeout(() => void tick(), 1000);
+        }
+        // "failed" is a confirmed terminal state too — stop without retrying.
+      } catch (err) {
+        if (err instanceof ApiClientError && err.status === 404) {
+          if (mountedRef.current) setBootstrapSession(null);
+          return;
+        }
+        if (mountedRef.current) setTimeout(() => void tick(), 1000);
+      }
+    };
+    void tick();
+  };
+
+  const handleStartBootstrap = async (alias: string) => {
+    if (bootstrapStarting) return;
+    setBootstrapStarting(true);
+    setBootstrapError(null);
+    try {
+      const started = await startBootstrap(alias);
+      if (!mountedRef.current) return;
+      setBootstrapSession(started);
+      pollBootstrap(started.bootstrapId);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setBootstrapError((err as Error).message);
+    } finally {
+      if (mountedRef.current) setBootstrapStarting(false);
+    }
   };
 
   /**
@@ -696,11 +640,13 @@ export default function Images() {
             onInstallStaged={handleInstallStaged}
             onFetchPackage={handleFetchPackage}
             onDelete={handleDelete}
+            bootstrapSession={bootstrapSession}
+            bootstrapStarting={bootstrapStarting}
+            bootstrapError={bootstrapError}
+            onStartBootstrap={handleStartBootstrap}
           />
         )}
       </section>
-
-      <BootstrapPanel onFinished={() => void refreshList()} unavailableAliases={bootstrapBlockedAliases} />
     </div>
   );
 }
