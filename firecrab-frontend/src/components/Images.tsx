@@ -315,7 +315,7 @@ function ImageDetail({
   // 실제로 배타적이다 — 세션이 `packageStaged`를 참으로 만들 수 있는
   // 시점(성공 종료)엔 이미 `bootstrapBusy`가 검사하는 비종결 상태를
   // 벗어난 뒤다.
-  const canCancelBootstrap = bootstrapIsMine && bootstrapBusy;
+  const canCancelBootstrap = bootstrapIsMine && bootstrapBusy && bootstrapSession !== null;
   const canDeleteStagedPackage = image.packageStaged && !canCancelBootstrap;
   const bakeDeleteLabel = canCancelBootstrap ? "부트스트랩 취소" : "구운 패키지 삭제";
   const handleBakeDeleteClick = () => {
