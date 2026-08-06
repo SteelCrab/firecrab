@@ -35,6 +35,13 @@ case "$(uname -m)" in
   *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
+info 'bringing up eth0 (MicroBoot has no network service of its own)'
+udhcpc -i eth0 -n -q >/dev/null 2>&1 || fail 'could not obtain a DHCP lease on eth0'
+
+info 'installing e2fsprogs into the outer (MicroBoot) shell'
+apk add --no-cache --repository 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' e2fsprogs \
+  || fail 'could not install e2fsprogs into the outer shell'
+
 release_url="${ubuntu_base_url}/${series}/release"
 index_html="$work/index.html"
 curl -fsSL "${release_url}/" -o "$index_html" || fail 'could not download Ubuntu Base release index'
@@ -167,14 +174,24 @@ truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
 mkfs.ext4 -F -L rootfs -d "$mount_dir" "$out/rootfs.ext4.tmp"
 mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 
-# Everything under $out is read back off this VM's *block device* by the
-# host (`rootfs::dump_from_image` via debugfs) once the VM is stopped, so
-# the guest's page cache must be flushed to the device before this script
-# exits — otherwise the host reads a truncated or entirely absent file and
-# packages it as if it were a complete rootfs.
+# MicroBoot boots off its own initrd (RAM), not off /dev/vda — nothing
+# under $work persists once this VM stops. Wrap the whole finished $out
+# directory (rootfs.ext4 + the raw kernel file) directly onto the real
+# block device as its own ext4 filesystem, so the host's debugfs-based
+# dump (`rootfs::dump_from_image`) can read them back at their root (e.g.
+# /rootfs.ext4, not /root/fc-bootstrap/out/rootfs.ext4) after this VM is
+# stopped.
+info 'publishing $out onto /dev/vda'
+mkfs.ext4 -F -L fcbootout -d "$out" /dev/vda
+
+# Everything on /dev/vda is read back by the host
+# (`rootfs::dump_from_image` via debugfs) once the VM is stopped, so the
+# guest's page cache must be flushed to the device before this script
+# exits — otherwise the host reads a truncated or entirely absent image
+# and packages it as if it were complete.
 sync
 
 # Same reasoning as the Alpine script: extract-vmlinux runs on the HOST
-# (Task 8) against $out/vmlinuz-raw once it's been dumped out of this
-# guest's own disk — not in here.
+# against vmlinuz-raw once it's been dumped off this guest's own disk —
+# not in here.
 info 'bootstrap complete'
