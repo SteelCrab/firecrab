@@ -114,9 +114,11 @@ impl BootstrapTracker {
             .get_mut(&id)
         {
             session.log.push('\n');
-            session
-                .log
-                .push_str(&format!("[{}] {}", clock(now_ms()), line.as_ref()));
+            session.log.push_str(&format!(
+                "[{}] {}",
+                elapsed_label(session.started_at_ms, now_ms()),
+                line.as_ref()
+            ));
         }
     }
 
@@ -141,9 +143,11 @@ impl BootstrapTracker {
         if let Some(session) = sessions.get_mut(&id) {
             session.status = BootstrapStatus::Failed;
             session.log.push('\n');
-            session
-                .log
-                .push_str(&format!("[{}] {}", clock(now_ms()), reason.as_ref()));
+            session.log.push_str(&format!(
+                "[{}] {}",
+                elapsed_label(session.started_at_ms, now_ms()),
+                reason.as_ref()
+            ));
             close_open_step(
                 session,
                 now_ms(),
@@ -170,9 +174,11 @@ impl BootstrapTracker {
             Some(session) if session.status == expected => {
                 session.status = BootstrapStatus::Failed;
                 session.log.push('\n');
-                session
-                    .log
-                    .push_str(&format!("[{}] {}", clock(now_ms()), reason.as_ref()));
+                session.log.push_str(&format!(
+                    "[{}] {}",
+                    elapsed_label(session.started_at_ms, now_ms()),
+                    reason.as_ref()
+                ));
                 close_open_step(
                     session,
                     now_ms(),
@@ -223,7 +229,7 @@ fn insert_session(
                 outcome: BootstrapStepOutcome::Running,
                 detail: None,
             }],
-            log: format!("[{}] builder VM starting", clock(now)),
+            log: format!("[{}] builder VM starting", elapsed_label(now, now)),
             started_at_ms: now,
             ended_at_ms: None,
         },
@@ -280,14 +286,27 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn clock(epoch_ms: u64) -> String {
-    format!("{}s", epoch_ms / 1000)
+/// Log-line stamp, relative to when this session started. The absolute
+/// epoch second this used to print (`[1785900123s]`) carried no usable
+/// information for a reader scanning a single session's log.
+/// `saturating_sub` because these are wall-clock reads, not monotonic ones,
+/// and an NTP step backwards must not wrap into a nonsense duration.
+fn elapsed_label(started_at_ms: u64, now_ms: u64) -> String {
+    format!("+{}s", now_ms.saturating_sub(started_at_ms) / 1000)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use firecrab_api_types::{BootstrapStep, BootstrapStepOutcome};
+
+    #[test]
+    fn log_lines_are_stamped_relative_to_the_session_start() {
+        assert_eq!(elapsed_label(1_000_000, 1_000_000), "+0s");
+        assert_eq!(elapsed_label(1_000_000, 1_042_000), "+42s");
+        // A clock that jumps backwards must not underflow into a huge number.
+        assert_eq!(elapsed_label(1_042_000, 1_000_000), "+0s");
+    }
 
     #[test]
     fn begin_then_snapshot_returns_a_booting_session() {
