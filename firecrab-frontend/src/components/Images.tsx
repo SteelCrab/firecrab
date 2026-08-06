@@ -408,7 +408,9 @@ function BootstrapStepper({ timeline }: { timeline: BootstrapStepRun[] }) {
               </span>
             </span>
             {run?.detail && (
-              <span className="step-detail">{stepDetailPreview(run.detail)}</span>
+              <span className="step-detail step-detail-clamped">
+                {stepDetailPreview(run.detail)}
+              </span>
             )}
           </li>
         );

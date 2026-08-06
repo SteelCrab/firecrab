@@ -501,11 +501,17 @@ table.vm-table {
   font-size: 0.66rem;
   color: var(--error);
   word-break: break-word;
-  /* Defense-in-depth, independent of whatever the caller passes in: the
-     full detail (bootstrap failures can carry ~8 KiB of echoed script) is
-     always shown in full in `.detail-log` below the stepper, so this box
-     never needs to grow past a few lines regardless of what any future
-     caller hands it. */
+}
+/* `.step-detail` is shared with `VmDetailModal`'s PipelineStepper, where
+   the step-detail span is the *only* place a startup failure reason is
+   shown anywhere in the UI (its own `.detail-log` is built from static
+   step labels + console output, never from `run.detail`) — clamping it
+   there would silently hide the one thing an operator needs to see. This
+   modifier is opt-in and applied only in the bootstrap panel (Images.tsx),
+   where it's safe for the opposite reason: the same text this clamps is
+   always shown in full, unclamped, in the `.detail-log` `<pre>` directly
+   below this stepper. Do not move this onto `.step-detail` itself. */
+.step-detail-clamped {
   max-height: 3.6em;
   overflow: hidden;
 }
