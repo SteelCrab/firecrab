@@ -31,7 +31,7 @@ pub(crate) const PACKAGE_UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 /// Bytes of the command's own output kept for the response's `outputTail` —
 /// enough for the last several dozen lines without holding a full apt/apk
 /// transcript in memory for the life of the VM.
-const OUTPUT_TAIL_CAP: usize = 8 * 1024;
+pub(crate) const OUTPUT_TAIL_CAP: usize = 8 * 1024;
 
 /// Sentinel the update command prints once it's done, followed by `:` and
 /// its exit code (e.g. `FIRECRAB_PKG_UPDATE_DONE:0`).
@@ -232,7 +232,7 @@ async fn run_action(state: &AppState, id: Uuid, process: VmProcess, command: Str
 /// Reads console output until [`DONE_SENTINEL`] appears, the console
 /// closes, or `timeout` elapses — `Ok` carries the guest-reported exit code
 /// plus the output seen so far (capped at [`OUTPUT_TAIL_CAP`]).
-async fn wait_for_completion(
+pub(crate) async fn wait_for_completion(
     receiver: &mut broadcast::Receiver<Vec<u8>>,
     timeout: Duration,
 ) -> Result<(i32, String), String> {
@@ -271,7 +271,7 @@ async fn wait_for_completion(
 /// `buffer` and parses its exit code. The literal command text itself
 /// (echoed back as it's typed, containing the unexpanded `$?`) never
 /// parses as a number, so it can't be mistaken for the real result.
-fn find_done_sentinel(buffer: &[u8]) -> Option<i32> {
+pub(crate) fn find_done_sentinel(buffer: &[u8]) -> Option<i32> {
     let text = String::from_utf8_lossy(buffer);
     text.lines().rev().find_map(|line| {
         let (_, rest) = line.split_once(DONE_SENTINEL)?;

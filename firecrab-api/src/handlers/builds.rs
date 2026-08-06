@@ -182,10 +182,12 @@ pub(crate) async fn watch_builder_boot(state: &AppState, build_id: Uuid, vm_id: 
     }
 }
 
-/// Names the builder VM so it's recognizable if an operator inspects
+/// Names a builder VM so it's recognizable if an operator inspects
 /// `data/firecrab.db` directly; not shown anywhere in the dashboard since
-/// `list_vms` filters `Builder` records out.
-fn builder_vm_name(alias: &str) -> String {
+/// `list_vms` filters `Builder` records out. Shared by `handlers::builds`
+/// (package-customization sessions) and `handlers::bootstrap` (from-scratch
+/// distro sessions) — both tag their VM `VmPurpose::Builder` the same way.
+pub(crate) fn builder_vm_name(alias: &str) -> String {
     format!("builder-{alias}-{}", &Uuid::new_v4().to_string()[..8])
 }
 
@@ -202,7 +204,10 @@ fn builder_disk_gb(rootfs_bytes: u64) -> u16 {
 /// needs to reach the guest's package repositories. Fails clearly rather
 /// than silently picking an isolated network a package install would hang
 /// against.
-async fn builder_micro_network_id(state: &AppState, request_id: Uuid) -> Result<Uuid, AppError> {
+pub(crate) async fn builder_micro_network_id(
+    state: &AppState,
+    request_id: Uuid,
+) -> Result<Uuid, AppError> {
     let store = state.store.clone();
     let networks = tokio::task::spawn_blocking(move || store.list_micro_networks())
         .await
@@ -222,7 +227,11 @@ async fn builder_micro_network_id(state: &AppState, request_id: Uuid) -> Result<
 
 /// Flags the just-created VM as a builder so `list_vms` hides it, then
 /// persists that change the same way `handlers::vms::persist_update` does.
-async fn mark_as_builder(state: &AppState, vm_id: Uuid, request_id: Uuid) -> Result<(), AppError> {
+pub(crate) async fn mark_as_builder(
+    state: &AppState,
+    vm_id: Uuid,
+    request_id: Uuid,
+) -> Result<(), AppError> {
     let record = {
         let mut vms = state
             .vms
