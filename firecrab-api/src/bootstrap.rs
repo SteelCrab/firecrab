@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use firecrab_api_types::{BootstrapResponse, BootstrapStatus};
+use firecrab_api_types::{
+    BootstrapResponse, BootstrapStatus, BootstrapStep, BootstrapStepOutcome, BootstrapStepRun,
+};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Default)]
@@ -84,6 +86,27 @@ impl BootstrapTracker {
         }
     }
 
+    /// Advances the session's step timeline: closes whatever step was open
+    /// as succeeded, then opens `step`. Unlike `set_status_from` this is
+    /// unconditional — every call site sits immediately after the status
+    /// transition it accompanies, so the compare-and-set has already
+    /// decided whether this session is the one still moving.
+    ///
+    /// Not yet called from `handlers::bootstrap` — wiring it into the
+    /// pipeline's status transitions is the next task's job, not this
+    /// one's. `#[allow(dead_code)]` is temporary and should come off once
+    /// that call site exists.
+    #[allow(dead_code)]
+    pub fn set_step(&self, id: Uuid, step: BootstrapStep) {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(session) = sessions.get_mut(&id) {
+            open_step(session, now_ms(), step);
+        }
+    }
+
     pub fn append_log(&self, id: Uuid, line: impl AsRef<str>) {
         if let Some(session) = self
             .sessions
@@ -106,6 +129,7 @@ impl BootstrapTracker {
             .get_mut(&id)
         {
             session.status = BootstrapStatus::Succeeded;
+            close_open_step(session, now_ms(), BootstrapStepOutcome::Succeeded, None);
             session.ended_at_ms = Some(now_ms());
         }
     }
@@ -121,6 +145,12 @@ impl BootstrapTracker {
             session
                 .log
                 .push_str(&format!("[{}] {}", clock(now_ms()), reason.as_ref()));
+            close_open_step(
+                session,
+                now_ms(),
+                BootstrapStepOutcome::Failed,
+                Some(reason.as_ref()),
+            );
             session.ended_at_ms = Some(now_ms());
         }
     }
@@ -144,6 +174,12 @@ impl BootstrapTracker {
                 session
                     .log
                     .push_str(&format!("[{}] {}", clock(now_ms()), reason.as_ref()));
+                close_open_step(
+                    session,
+                    now_ms(),
+                    BootstrapStepOutcome::Failed,
+                    Some(reason.as_ref()),
+                );
                 session.ended_at_ms = Some(now_ms());
                 true
             }
@@ -180,8 +216,14 @@ fn insert_session(
             source_alias: source_alias.to_owned(),
             vm_id,
             status: BootstrapStatus::Booting,
-            current_step: None,
-            step_timeline: Vec::new(),
+            current_step: Some(BootstrapStep::StartingBuilderVm),
+            step_timeline: vec![BootstrapStepRun {
+                step: BootstrapStep::StartingBuilderVm,
+                started_at_ms: now,
+                ended_at_ms: None,
+                outcome: BootstrapStepOutcome::Running,
+                detail: None,
+            }],
             log: format!("[{}] builder VM starting", clock(now)),
             started_at_ms: now,
             ended_at_ms: None,
@@ -198,6 +240,40 @@ fn is_active(session: &BootstrapResponse) -> bool {
     )
 }
 
+/// Closes whichever step is still open, if any. Idempotent, so both the
+/// success and failure paths can call it unconditionally — same shape as
+/// `handlers::vms::close_open_step`, which does this for VM startup.
+fn close_open_step(
+    session: &mut BootstrapResponse,
+    now: u64,
+    outcome: BootstrapStepOutcome,
+    detail: Option<&str>,
+) {
+    if let Some(run) = session
+        .step_timeline
+        .iter_mut()
+        .find(|run| run.outcome == BootstrapStepOutcome::Running)
+    {
+        run.ended_at_ms = Some(now);
+        run.outcome = outcome;
+        run.detail = detail.map(str::to_owned);
+    }
+    session.current_step = None;
+}
+
+/// Closes the open step as succeeded and opens `step` in its place.
+fn open_step(session: &mut BootstrapResponse, now: u64, step: BootstrapStep) {
+    close_open_step(session, now, BootstrapStepOutcome::Succeeded, None);
+    session.step_timeline.push(BootstrapStepRun {
+        step,
+        started_at_ms: now,
+        ended_at_ms: None,
+        outcome: BootstrapStepOutcome::Running,
+        detail: None,
+    });
+    session.current_step = Some(step);
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -212,6 +288,7 @@ fn clock(epoch_ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use firecrab_api_types::{BootstrapStep, BootstrapStepOutcome};
 
     #[test]
     fn begin_then_snapshot_returns_a_booting_session() {
@@ -337,5 +414,115 @@ mod tests {
             .expect("no other session is active");
         tracker.remove(id);
         assert!(tracker.get(id).is_none());
+    }
+
+    #[test]
+    fn a_new_session_opens_on_the_builder_vm_step() {
+        let tracker = BootstrapTracker::default();
+        let id = tracker
+            .try_begin("alpine-3.24", "__microboot", Uuid::new_v4())
+            .expect("first session");
+        let session = tracker.get(id).expect("session");
+
+        assert_eq!(session.current_step, Some(BootstrapStep::StartingBuilderVm));
+        assert_eq!(session.step_timeline.len(), 1);
+        assert_eq!(
+            session.step_timeline[0].outcome,
+            BootstrapStepOutcome::Running
+        );
+        assert_eq!(session.step_timeline[0].ended_at_ms, None);
+    }
+
+    #[test]
+    fn set_step_closes_the_previous_step_as_succeeded() {
+        let tracker = BootstrapTracker::default();
+        let id = tracker
+            .try_begin("alpine-3.24", "__microboot", Uuid::new_v4())
+            .expect("first session");
+
+        tracker.set_step(id, BootstrapStep::InstallingSystem);
+        let session = tracker.get(id).expect("session");
+
+        assert_eq!(session.step_timeline.len(), 2);
+        assert_eq!(
+            session.step_timeline[0].outcome,
+            BootstrapStepOutcome::Succeeded
+        );
+        assert!(session.step_timeline[0].ended_at_ms.is_some());
+        assert_eq!(session.current_step, Some(BootstrapStep::InstallingSystem));
+        assert_eq!(
+            session.step_timeline[1].outcome,
+            BootstrapStepOutcome::Running
+        );
+    }
+
+    #[test]
+    fn finishing_ok_closes_the_last_step_and_clears_the_current_one() {
+        let tracker = BootstrapTracker::default();
+        let id = tracker
+            .try_begin("alpine-3.24", "__microboot", Uuid::new_v4())
+            .expect("first session");
+        tracker.set_step(id, BootstrapStep::Finalizing);
+
+        tracker.finish_ok(id);
+        let session = tracker.get(id).expect("session");
+
+        assert_eq!(session.current_step, None);
+        assert!(
+            session
+                .step_timeline
+                .iter()
+                .all(|run| run.outcome == BootstrapStepOutcome::Succeeded),
+            "every step should be succeeded: {:?}",
+            session.step_timeline
+        );
+    }
+
+    #[test]
+    fn failing_marks_the_step_that_was_open_and_carries_the_reason() {
+        let tracker = BootstrapTracker::default();
+        let id = tracker
+            .try_begin("rocky-9", "__microboot", Uuid::new_v4())
+            .expect("first session");
+        tracker.set_step(id, BootstrapStep::InstallingSystem);
+
+        tracker.finish_err(id, "bootstrap script exited with code 1");
+        let session = tracker.get(id).expect("session");
+
+        assert_eq!(session.current_step, None);
+        let failed = session
+            .step_timeline
+            .iter()
+            .find(|run| run.outcome == BootstrapStepOutcome::Failed)
+            .expect("a failed step");
+        assert_eq!(failed.step, BootstrapStep::InstallingSystem);
+        assert_eq!(
+            failed.detail.as_deref(),
+            Some("bootstrap script exited with code 1")
+        );
+        // The earlier step still counts as done, not failed.
+        assert_eq!(
+            session.step_timeline[0].outcome,
+            BootstrapStepOutcome::Succeeded
+        );
+    }
+
+    #[test]
+    fn a_compare_and_set_failure_that_does_not_apply_leaves_the_timeline_alone() {
+        let tracker = BootstrapTracker::default();
+        let id = tracker
+            .try_begin("alpine-3.24", "__microboot", Uuid::new_v4())
+            .expect("first session");
+
+        // Session is in `Booting`; this expects `Packaging`, so it must no-op.
+        let applied = tracker.finish_err_from(id, BootstrapStatus::Packaging, "stale watcher");
+        assert!(!applied);
+
+        let session = tracker.get(id).expect("session");
+        assert_eq!(session.current_step, Some(BootstrapStep::StartingBuilderVm));
+        assert_eq!(
+            session.step_timeline[0].outcome,
+            BootstrapStepOutcome::Running
+        );
     }
 }
