@@ -189,6 +189,43 @@ pub enum IpamError {
 /// transaction (see `Store::allocate_lease`) so concurrent callers serialize
 /// on the same write lock instead of racing on the free-address scan.
 pub fn allocate(tx: &Transaction<'_>, vm_id: Uuid, subnet: SubnetSpec) -> Result<Lease, IpamError> {
+    allocate_excluding(tx, vm_id, subnet, &HashSet::new())
+}
+
+/// Atomically replaces `vm_id`'s active lease with a fresh address outside
+/// `unavailable_ipv4s`. This is the recovery path for host state that outlived
+/// its API record: an orphan MicroVM may still own an IP in nftables, so the
+/// new VM must move rather than overwrite that policy.
+///
+/// The previous row is retained as released history. Releasing and selecting
+/// the replacement run in one transaction, so a full pool or any database
+/// error leaves the original active lease intact.
+pub fn rotate(
+    tx: &Transaction<'_>,
+    vm_id: Uuid,
+    subnet: SubnetSpec,
+    unavailable_ipv4s: &HashSet<Ipv4Addr>,
+) -> Result<Lease, IpamError> {
+    let current = active_lease(&*tx, vm_id)?.ok_or(IpamError::NotLeased { vm_id })?;
+    let mut excluded = unavailable_ipv4s.clone();
+    // A caller may only know about the most recent conflict, but never hand
+    // the just-released address straight back to the VM.
+    excluded.insert(current.ipv4);
+
+    release_active(tx, vm_id)?;
+    allocate_excluding(tx, vm_id, subnet, &excluded)
+}
+
+/// The implementation shared by a normal allocation and an orphan-conflict
+/// recovery. `unavailable_ipv4s` contains host-owned addresses that are not
+/// represented by our SQLite lease rows, so it is checked alongside the
+/// durable active-lease set.
+fn allocate_excluding(
+    tx: &Transaction<'_>,
+    vm_id: Uuid,
+    subnet: SubnetSpec,
+    unavailable_ipv4s: &HashSet<Ipv4Addr>,
+) -> Result<Lease, IpamError> {
     if has_active_lease(tx, vm_id)? {
         return Err(IpamError::AlreadyLeased { vm_id });
     }
@@ -201,7 +238,7 @@ pub fn allocate(tx: &Transaction<'_>, vm_id: Uuid, subnet: SubnetSpec) -> Result
     let taken_ips = active_ipv4s(tx)?;
     let ipv4 = subnet
         .host_addresses()
-        .find(|candidate| !taken_ips.contains(candidate))
+        .find(|candidate| !taken_ips.contains(candidate) && !unavailable_ipv4s.contains(candidate))
         .ok_or(IpamError::PoolExhausted {
             network: subnet.network,
             prefix: subnet.prefix,
@@ -250,6 +287,15 @@ pub fn has_active_leases_in(
 /// survives. Callers must only invoke this once VM cleanup (policy, TAP,
 /// artifacts) has fully succeeded.
 pub fn release(tx: &Transaction<'_>, vm_id: Uuid) -> Result<(), IpamError> {
+    release_active(tx, vm_id)?;
+    bump_lease_revision(tx)?;
+    Ok(())
+}
+
+/// Marks the active lease released without changing the revision. A rotation
+/// calls this before its replacement allocation, which performs the single
+/// revision bump for the all-or-nothing lease change.
+fn release_active(tx: &Transaction<'_>, vm_id: Uuid) -> Result<(), IpamError> {
     let changed = tx.execute(
         "UPDATE network_leases SET released_at = datetime('now') \
          WHERE vm_id = ?1 AND released_at IS NULL",
@@ -258,7 +304,6 @@ pub fn release(tx: &Transaction<'_>, vm_id: Uuid) -> Result<(), IpamError> {
     if changed == 0 {
         return Err(IpamError::NotLeased { vm_id });
     }
-    bump_lease_revision(tx)?;
     Ok(())
 }
 
@@ -603,6 +648,65 @@ mod tests {
         .unwrap();
         tx.commit().unwrap();
         assert_eq!(second_lease.ipv4, first_lease.ipv4);
+    }
+
+    #[test]
+    fn rotating_a_conflicted_lease_skips_the_host_owned_ip_and_keeps_history() {
+        let mut conn = open();
+        let vm_id = Uuid::new_v4();
+        let subnet = SubnetSpec::legacy_default_subnet(Uuid::from_u128(1));
+
+        let tx = begin(&mut conn);
+        let original = allocate(&tx, vm_id, subnet).unwrap();
+        tx.commit().unwrap();
+
+        let tx = begin(&mut conn);
+        let replacement = rotate(&tx, vm_id, subnet, &HashSet::from([original.ipv4])).unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(original.ipv4, Ipv4Addr::new(172, 30, 0, 2));
+        assert_eq!(replacement.ipv4, Ipv4Addr::new(172, 30, 0, 3));
+        assert_eq!(active_lease(&conn, vm_id).unwrap(), Some(replacement));
+        assert_eq!(current_revision(&conn).unwrap(), 2);
+
+        let history_count: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM network_leases WHERE vm_id = ?1",
+                params![vm_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(history_count, 2, "the displaced lease remains auditable");
+    }
+
+    #[test]
+    fn failed_rotation_rolls_back_and_keeps_the_original_active_lease() {
+        let mut conn = open();
+        let vm_id = Uuid::new_v4();
+        let subnet = SubnetSpec {
+            micro_network_id: Uuid::from_u128(1),
+            network: Ipv4Addr::new(172, 30, 0, 0),
+            prefix: 29,
+        };
+
+        let tx = begin(&mut conn);
+        let original = allocate(&tx, vm_id, subnet).unwrap();
+        tx.commit().unwrap();
+
+        // /29 offers .2 through .6. Mark every candidate as still owned by
+        // host state so no replacement is possible.
+        let unavailable = (2..=6)
+            .map(|last_octet| Ipv4Addr::new(172, 30, 0, last_octet))
+            .collect();
+        let tx = begin(&mut conn);
+        assert!(matches!(
+            rotate(&tx, vm_id, subnet, &unavailable),
+            Err(IpamError::PoolExhausted { .. })
+        ));
+        drop(tx); // no commit: release_active must roll back too.
+
+        assert_eq!(active_lease(&conn, vm_id).unwrap(), Some(original));
+        assert_eq!(current_revision(&conn).unwrap(), 1);
     }
 
     #[test]

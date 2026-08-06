@@ -564,6 +564,9 @@ rootfs/ubuntu-rootfs-26.04-amd64.ext4
 kernel/vmlinux-alpine-virt-x86_64
 kernel/initramfs-alpine-virt-x86_64
 rootfs/alpine-rootfs-3.24.1-x86_64.ext4
+kernel/vmlinux-rocky-9-x86_64
+kernel/initramfs-rocky-9-x86_64
+rootfs/rocky-rootfs-9-x86_64.ext4
 EOF
 }
 
@@ -681,6 +684,36 @@ check_images() {
     fi
 }
 
+check_image_install_tools() {
+    # Needed only when downloading M2Image packages from FIRECRAB_IMAGE_BASE_URL.
+    # Soft skip when missing so hosts that only use pre-copied images still pass.
+    local missing=()
+    command -v tar >/dev/null 2>&1 || missing+=(tar)
+    command -v zstd >/dev/null 2>&1 || missing+=(zstd)
+    if [ "${#missing[@]}" -gt 0 ]; then
+        skip "image-install tools: missing ${missing[*]}" \
+            "dashboard template install needs tar + zstd to unpack {alias}.tar.zst" \
+            "install packages: tar zstd  (then retry dashboard image install)"
+        return
+    fi
+
+    if [ -n "${FIRECRAB_IMAGE_BASE_URL:-}" ]; then
+        case "${FIRECRAB_IMAGE_BASE_URL}" in
+            none|NONE|-)
+                skip "image-install: remote disabled (FIRECRAB_IMAGE_BASE_URL=${FIRECRAB_IMAGE_BASE_URL})" \
+                    "dashboard will not download packages; seed images/ on the host" \
+                    "see docs/20-guides/install.md (M2Image)"
+                return
+                ;;
+        esac
+        pass
+        return
+    fi
+    skip "image-install: FIRECRAB_IMAGE_BASE_URL unset" \
+        "dashboard cannot download templates until the URL is set in api.env" \
+        "see docs/20-guides/install.md (M2Image)"
+}
+
 # --- run ---------------------------------------------------------------------
 
 check_kvm
@@ -692,6 +725,7 @@ check_helper_socket
 check_ufw
 check_data_root
 check_images
+check_image_install_tools
 
 if [ "$FAIL" -eq 0 ] && [ "$SKIP" -eq 0 ]; then
     printf 'doctor: all checks passed (%s ok)\n' "$OK"

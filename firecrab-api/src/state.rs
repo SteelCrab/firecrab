@@ -75,8 +75,10 @@ pub struct AppState {
     pub(crate) disk_prep_permits: Arc<Semaphore>,
     /// Client for the privileged `firecrab-net-helper` (bridge/TAP/firewall).
     pub(crate) network: NetworkClient,
-    /// Async image install jobs (`POST /api/images/{alias}/install`).
+    /// Async image registration jobs (`POST /api/images/{alias}/install`).
     pub(crate) image_installs: ImageInstallTracker,
+    /// Async package acquisition jobs (`POST /api/images/{alias}/package`).
+    pub(crate) image_packages: ImageInstallTracker,
 }
 
 impl AppState {
@@ -115,6 +117,7 @@ impl AppState {
             disk_prep_permits: Arc::new(Semaphore::new(DISK_PREP_CONCURRENCY)),
             network: NetworkClient::from_env(),
             image_installs: ImageInstallTracker::from_env(),
+            image_packages: ImageInstallTracker::from_env(),
         })
     }
 

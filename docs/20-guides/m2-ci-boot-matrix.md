@@ -41,6 +41,7 @@ PR CI는 빠르고 얇게 간다.
 |---|---|
 | `alpine-3.24` | 기본 이미지 빌드 |
 | `ubuntu-26.04` | `--with-ubuntu-image` |
+| `rocky-9` | `--with-rocky-image` |
 
 템플릿이 추가되면 CI matrix의 `template:` 목록에도 같은 alias를 넣는다.
 
@@ -64,6 +65,8 @@ template × host
   alpine-3.24  ×  ubuntu-22.04
   ubuntu-26.04 ×  ubuntu-24.04
   ubuntu-26.04 ×  ubuntu-22.04
+  rocky-9      ×  ubuntu-24.04
+  rocky-9      ×  ubuntu-22.04
 ```
 
 셀마다:
@@ -102,10 +105,11 @@ schedule (17:00 UTC) / workflow_dispatch
 
 ```sh
 # 이미지 포함 설치 후
-sudo ./install.sh --with-ubuntu-image   # 또는 Alpine만: sudo ./install.sh
+sudo ./install.sh --with-ubuntu-image --with-rocky-image   # 또는 Alpine만: sudo ./install.sh
 chmod +x scripts/ci-m2-guest-boot.sh
 scripts/ci-m2-guest-boot.sh alpine-3.24
 scripts/ci-m2-guest-boot.sh ubuntu-26.04
+scripts/ci-m2-guest-boot.sh rocky-9
 ```
 
 명시적 MicroNetwork 모델: 네트워크 없이 VM create는 400이다. 스크립트가 네트워크를 만든다.

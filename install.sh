@@ -25,6 +25,7 @@ MODE=install
 INSTALL_DEPS=1
 WITH_IMAGES=1
 WITH_UBUNTU_IMAGE=0
+WITH_ROCKY_IMAGE=0
 WITH_FRONTEND=1
 PURGE=0
 
@@ -43,6 +44,7 @@ Usage: sudo ./install.sh [OPTIONS]
   --no-deps           never install packages/toolchains, only report gaps
   --no-images         do not build a guest image
   --with-ubuntu-image also build the Ubuntu image (large, needs root chroot)
+  --with-rocky-image  also build the Rocky Linux 9 image (large, uses Docker)
   --no-frontend       do not build/install the dashboard
   --uninstall         stop and remove units, binaries and dashboard
   --purge             with --uninstall, also delete /var/lib/firecrab (VM data!)
@@ -77,6 +79,7 @@ while [ $# -gt 0 ]; do
         --no-deps) INSTALL_DEPS=0 ;;
         --no-images) WITH_IMAGES=0 ;;
         --with-ubuntu-image) WITH_UBUNTU_IMAGE=1 ;;
+        --with-rocky-image) WITH_ROCKY_IMAGE=1 ;;
         --no-frontend) WITH_FRONTEND=0 ;;
         --uninstall) MODE=uninstall ;;
         --purge) PURGE=1 ;;
@@ -112,6 +115,8 @@ pkg_name() {
         # openSUSE or Debian install has neither.
         *:findutils)  echo "findutils" ;;
         *:tar)        echo "tar" ;;
+        # Dashboard M2Image install decompresses `{alias}.tar.zst` packages.
+        *:zstd)       echo "zstd" ;;
         # cargo needs a linker; rustup only warns that one is missing and the
         # build then fails at link time with a much less obvious error.
         apt-get:cc)   echo "build-essential" ;;
@@ -224,6 +229,7 @@ ensure_runtime_deps() {
     ensure curl curl     || failed=1
     ensure find findutils || failed=1
     ensure tar tar       || failed=1
+    ensure zstd zstd     || failed=1
     return $failed
 }
 
@@ -371,6 +377,13 @@ install_config() {
 # FIRECRAB_ALLOWED_ORIGINS=
 # Empty is correct while the dashboard is served from this same origin.
 # FIRECRAB_FIRECRACKER_BIN=firecracker
+#
+# M2Image install (Images page / POST /api/images/{alias}/install).
+# Points at a directory-style base that serves `{alias}.tar.zst` packages
+# (see scripts/package-m2images.sh). Unset = remote install disabled.
+# Example local mirror:
+# FIRECRAB_IMAGE_BASE_URL=http://127.0.0.1:8765
+# Requires host tools: tar, zstd. Restart firecrab-api after changing this.
 ENVFILE
     chown root:"$FIRECRAB_GROUP" "$CONFDIR/api.env"
     chmod 0640 "$CONFDIR/api.env"
@@ -470,6 +483,12 @@ ensure_images() {
         step "building the Ubuntu guest image (large)"
         "$REPO_ROOT/scripts/firecracker-menual/install-ubuntu-roofs.sh" \
             || warn "Ubuntu image build failed (the Alpine one is still usable)"
+    fi
+
+    if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
+        step "building the Rocky Linux 9 guest image (large)"
+        "$REPO_ROOT/scripts/firecracker-menual/install-rocky-rootfs.sh" \
+            || warn "Rocky Linux image build failed (the Alpine one is still usable)"
     fi
 
     cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true

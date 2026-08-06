@@ -322,6 +322,37 @@ pub fn sigkill(pid: u32) {
     }
 }
 
+/// Makes Firecracker terminate if the API that owns it disappears. Tokio's
+/// child handle normally has `kill_on_drop`, but a service manager can tear
+/// down the API runtime before its asynchronous child watcher is polled. In
+/// that window Firecracker would otherwise be re-parented to PID 1 while its
+/// TAP, lease, and nft policy still look owned by the old API.
+///
+/// `PR_SET_PDEATHSIG` closes that gap in the child immediately before exec.
+/// The parent-PID check handles the tiny race where the API exits between the
+/// fork and the prctl call: a re-parented child then refuses to start rather
+/// than becoming an untracked MicroVM.
+fn terminate_with_parent(command: &mut Command) {
+    // SAFETY: reads this process's PID before the child is forked.
+    let parent_pid = unsafe { libc::getpid() };
+    // SAFETY: `pre_exec` runs the closure only in the child between fork and
+    // exec. The closure uses only Linux process-control syscalls and reports
+    // failure back through `spawn`, before Firecracker receives user input.
+    unsafe {
+        command.pre_exec(move || {
+            // SAFETY: both libc calls are async-signal-safe process-control
+            // syscalls and this is the only code run in the post-fork child.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::getppid() != parent_pid {
+                return Err(io::Error::from_raw_os_error(libc::ESRCH));
+            }
+            Ok(())
+        });
+    }
+}
+
 /// Registers the process in the state map and spawns the exit monitor.
 ///
 /// The monitor owns the child and is the only writer of guest-initiated
@@ -418,6 +449,7 @@ pub async fn spawn_vm(
     binary: &Path,
     runtime: &crate::artifacts::HostRuntimePaths,
     id: Uuid,
+    enable_pci: bool,
     ready_timeout: Duration,
 ) -> Result<FirecrackerProcess, FirecrackerError> {
     fs::create_dir_all(&runtime.dir).map_err(|source| FirecrackerError::CreateDirectory {
@@ -450,7 +482,8 @@ pub async fn spawn_vm(
     let log_file = File::create(&console_log).map_err(console_error)?;
     let stderr = log_file.try_clone().map_err(console_error)?;
 
-    let mut child = Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .arg("--api-sock")
         .arg(&api_sock)
         .arg("--config-file")
@@ -458,12 +491,20 @@ pub async fn spawn_vm(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::from(stderr))
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|source| FirecrackerError::Spawn {
-            binary: binary.to_owned(),
-            source,
-        })?;
+        .kill_on_drop(true);
+    // Firecracker defaults to virtio-mmio. Rocky Linux 9's stock kernel has
+    // that transport disabled but ships virtio-pci, so only its template
+    // opts into the VMM's PCI device model. Other templates retain the
+    // smaller/default MMIO layout.
+    if enable_pci {
+        command.arg("--enable-pci");
+    }
+    terminate_with_parent(&mut command);
+
+    let mut child = command.spawn().map_err(|source| FirecrackerError::Spawn {
+        binary: binary.to_owned(),
+        source,
+    })?;
 
     let stdin = child.stdin.take().expect("stdin was piped");
     let stdout = child.stdout.take().expect("stdout was piped");
@@ -845,7 +886,7 @@ mod tests {
         let mut runtime = runtime_for(&vms_dir, id);
         fs::write(&runtime.config, "{}").unwrap();
 
-        let process = spawn_vm(&binary, &runtime, id, Duration::from_secs(5))
+        let process = spawn_vm(&binary, &runtime, id, false, Duration::from_secs(5))
             .await
             .unwrap();
         let pid = process.pid().unwrap() as i32;
@@ -879,7 +920,7 @@ mod tests {
         let runtime = runtime_for(&vms_dir, id);
         fs::write(&runtime.config, "{}").unwrap();
 
-        let error = spawn_vm(&binary, &runtime, id, Duration::from_millis(500))
+        let error = spawn_vm(&binary, &runtime, id, false, Duration::from_millis(500))
             .await
             .unwrap_err();
 
@@ -899,7 +940,7 @@ mod tests {
         let runtime = runtime_for(&vms_dir, id);
         fs::write(&runtime.config, "{}").unwrap();
 
-        let process = spawn_vm(&binary, &runtime, id, Duration::from_secs(5))
+        let process = spawn_vm(&binary, &runtime, id, false, Duration::from_secs(5))
             .await
             .unwrap();
         let pid = process.pid().unwrap() as i32;
@@ -909,5 +950,25 @@ mod tests {
 
         assert!(started.elapsed() >= Duration::from_millis(200));
         assert!(!process_alive(pid));
+    }
+
+    #[tokio::test]
+    async fn spawn_enables_pci_only_when_the_template_requests_it() {
+        let directory = short_tempdir();
+        let vms_dir = directory.path().join("vms");
+        let binary = fake_firecracker(
+            directory.path(),
+            &format!(
+                "if '--enable-pci' not in sys.argv:\n    raise SystemExit('missing --enable-pci')\n{SERVE_LOOP}"
+            ),
+        );
+        let id = Uuid::new_v4();
+        let runtime = runtime_for(&vms_dir, id);
+        fs::write(&runtime.config, "{}").unwrap();
+
+        let process = spawn_vm(&binary, &runtime, id, true, Duration::from_secs(5))
+            .await
+            .unwrap();
+        stop_vm(process, Duration::from_secs(5)).await.unwrap();
     }
 }

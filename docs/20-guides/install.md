@@ -61,6 +61,7 @@ KVM이 없다는 건 보통 BIOS에서 가상화가 꺼져 있거나, 이 호스
 | `--no-deps` | 아무것도 설치하지 않고 부족한 것만 보고 (직접 준비한 호스트용) |
 | `--no-images` | 게스트 이미지를 준비하지 않음 |
 | `--with-ubuntu-image` | Alpine 외에 Ubuntu 이미지도 빌드 (용량 큼, root chroot 필요) |
+| `--with-rocky-image` | Alpine 외에 Rocky Linux 9 이미지도 빌드 (용량 큼, Docker 사용) |
 | `--no-frontend` | 대시보드를 빌드·설치하지 않음 (API만) |
 | `--uninstall` | 유닛·바이너리·대시보드 제거. **데이터는 보존** |
 | `--uninstall --purge` | 데이터 디렉터리까지 삭제 (VM 디스크·DB 전부) |
@@ -150,8 +151,53 @@ systemctl restart firecrab-api         # 설정 변경 후
   (사용 가능한 변수는 [api.md](api.md)의 환경 변수 표 참고)
 - **업그레이드**: `git pull` 후 `sudo ./install.sh` 재실행 — 빌드·배치만 갱신되고
   데이터와 `api.env`는 그대로
-- **이미지 추가**: `$DATADIR/images/`에 넣고 `systemctl restart firecrab-api`
+- **이미지 추가 (수동)**: `$DATADIR/images/`에 넣고 `systemctl restart firecrab-api`
   (템플릿 파일명은 `firecrab-api/src/templates.rs`의 `default_specs()` 기준)
+- **이미지 추가 (대시보드 / M2Image)**: `FIRECRAB_IMAGE_BASE_URL`을 설정하면
+  Images 화면에서 `{alias}.tar.zst`를 받아 설치할 수 있다. 아래 절 참고.
+
+### 대시보드 M2Image 설치
+
+M2Image 설치는 **패키지 베이스 URL**에서 `{alias}.tar.zst`를 받는다.
+
+| 항목 | 값 |
+|---|---|
+| 베이스 | `FIRECRAB_IMAGE_BASE_URL` (미설정 시 원격 설치 불가) |
+| 패키지 URL | `{base}/{alias}.tar.zst` |
+| 카탈로그 | `GET /api/images` → 각 행의 `packageUrl` |
+| 패키지 설치 | `POST /api/images/{alias}/package` (비동기 다운로드 · 구조 검증) |
+| 이미지 설치 | `POST /api/images/{alias}/install` (준비된 패키지 해제 · 검증 · 등록) |
+
+호스트에 게스트 이미지 없이 설치한 경우(`sudo ./install.sh --no-images`)에도
+대시보드 **이미지** 메뉴로 템플릿을 받을 수 있다.
+
+1. 패키지 베이스 URL을 `api.env`에 넣는다 (재설치해도 기존 파일은 보존됨):
+
+   ```sh
+   # /etc/firecrab/api.env
+   FIRECRAB_IMAGE_BASE_URL=http://127.0.0.1:8765
+   ```
+
+   베이스 아래에 `{alias}.tar.zst`가 있어야 한다. 예:
+   `…/alpine-3.24.tar.zst`, `…/ubuntu-26.04.tar.zst`, `…/rocky-9.tar.zst`.
+   패키징: [`scripts/package-m2images.sh`](../../scripts/package-m2images.sh).
+
+2. 호스트에 `tar` · `zstd`가 있어야 한다 (`install.sh` 런타임 의존성에 포함).
+
+3. `sudo systemctl restart firecrab-api`
+
+4. 브라우저 → 좌측 **이미지** → **M2Image-Packer**에서 template 선택 →
+   **패키지 설치** 완료 → **M2Image-Store**에서 준비된 패키지 선택 →
+   **이미지 가져오기** → 진행 로그 확인 → VM 생성.
+
+로컬에서 패키지를 검증할 때:
+
+```sh
+./scripts/package-m2images.sh
+python3 -m http.server -d dist/m2images 8765
+FIRECRAB_IMAGE_BASE_URL=http://127.0.0.1:8765 cargo run -p firecrab-api
+# 대시보드 설치 → packageUrl 이 http://127.0.0.1:8765/{alias}.tar.zst
+```
 
 ## 제거
 

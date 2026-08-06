@@ -185,7 +185,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .put(handlers::vms::update_vm)
                 .delete(handlers::vms::delete_vm),
         )
-        .route("/api/vms/{id}/start", post(handlers::vms::start_vm))
+        .route(
+            "/api/vms/{id}/start",
+            post(handlers::vms::start_vm_request),
+        )
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route(
@@ -202,6 +205,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/images/{alias}/install",
             get(handlers::images::get_image_install).post(handlers::images::start_image_install),
+        )
+        .route(
+            "/api/images/{alias}/package",
+            get(handlers::images::get_image_package).post(handlers::images::start_image_package),
         )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(

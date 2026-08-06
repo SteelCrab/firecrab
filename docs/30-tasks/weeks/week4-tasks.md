@@ -101,17 +101,23 @@ updated: 2026-07-29
 
 서버에 [템플릿 레지스트리](../task-template-registry.md)가 있는데도 대시보드의 목록은
 프론트엔드 코드 상수다. 이미지를 코드 수정 없이 다룰 수 있게 만든다.
+Firecracker/Ubuntu/Alpine/Rocky Linux가 완성 게스트 이미지를 주지 않으므로 **굽기(builder)** 와
+**게시(레지스트리)** 도 잡는다 — 제출 MVP: [mvp-3week](mvp-3week-submit-2026-08-27.md).
 
 - [ ] [M2Image 카탈로그 API](../task-m2image-catalog-api.md)
       — `GET /api/images`로 레지스트리 노출, `CreateVm.tsx`의 하드코딩 목록 제거
 - [ ] [M2Image 등록·삭제](../task-m2image-registration.md)
       — 재빌드·재시작 없이 이미지 추가, 사용 중인 이미지는 삭제 거부
+- [ ] [M2Image-builder](../task-m2image-builder.md)
+      — 업스트림 → Firecracker kernel/rootfs 패키지 굽기 (MVP: 스크립트·CI)
+- [ ] [M2Image 레지스트리](../task-m2image-registry.md)
+      — 구운 `{alias}.tar.zst` 게시 · BASE_URL 설치 (MVP: 패키지 호스트)
 - [ ] [M2Image 캡처](../task-m2image-capture-from-vm.md)
       — 설정을 끝낸 VM의 디스크를 새 이미지로(AMI 생성 대응). hostname·SSH host key 정리 포함
 
 > [!note] 재현 가능한 빌드는 5주차
-> 이미지의 서명·승격·재현 빌드는 [5주차](week5-tasks.md) 범위.
-> 4주차는 "있는 이미지를 다룰 수 있게" 까지.
+> 바이트 단위 재현·서명·승격은 [5주차](week5-tasks.md) 범위.
+> MVP builder는 “스크립트로 다시 구울 수 있음”, 레지스트리는 “패키지 호스트 게시”까지.
 
 ## Firecracker - 실행 격리
 

@@ -18,6 +18,10 @@ PATH = sys.argv[1] if len(sys.argv) > 1 else sys.exit(
 )
 OPERATION = sys.argv[2] if len(sys.argv) > 2 else "ensure_firewall"
 
+# `ensure_firewall` always needs the complete MicroNetwork list.  A plain
+# smoke test has none, so make the empty snapshot its default.
+EXTRA_FIELDS = {"micro_networks": []} if OPERATION == "ensure_firewall" else {}
+
 # Operations beyond ensure_bridge/ensure_firewall take extra fields
 # (create_tap/delete_tap need vm_id, apply_vm_policy needs more,
 # sync_dhcp_leases needs a number and a nested array) — the request is
@@ -25,7 +29,6 @@ OPERATION = sys.argv[2] if len(sys.argv) > 2 else "ensure_firewall"
 # a bare UUID with no "vm_id=" prefix is silently dropped by the server as
 # an unparseable request (no vm_id field at all), which looks like a
 # hang/EOF on the client side, not a helpful error — always use key=value.
-EXTRA_FIELDS = {}
 for arg in sys.argv[3:]:
     key, sep, value = arg.partition("=")
     if not sep:

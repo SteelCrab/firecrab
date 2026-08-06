@@ -3,7 +3,7 @@ tags:
   - firecrab
   - guide
   - frontend
-updated: 2026-07-30
+updated: 2026-08-02
 ---
 
 # 웹 대시보드
@@ -20,15 +20,46 @@ npm install --prefix firecrab-frontend     # 최초 1회
 ./scripts/dev-net-helper.sh                # 터미널 1 — 특권 helper
 pkill -f 'target/debug/firecrab-api'       # 터미널 2 — 이전 인스턴스 정리
 cargo run -p firecrab-api                  #            저장소 루트에서
+pkill -f 'vite'                            # 터미널 3 — 이전 dev 서버 정리(선택)
 npm run dev --prefix firecrab-frontend     # 터미널 3 — http://localhost:8080/
 ```
+
+### 개발 환경에서 M2Image 설치 확인
+
+M2Image 설치는 API가 `FIRECRAB_IMAGE_BASE_URL`의 패키지를 받아야 한다. 로컬에서 확인할 때는
+패키지 호스트와 API를 각각 아래처럼 실행한다. 빈 `FIRECRAB_IMAGE_ROOT`를 쓰면 저장소의
+사전 빌드 이미지가 이미 설치된 것으로 보이는 일을 피할 수 있다.
+
+```sh
+# 터미널 4 — 먼저 ./scripts/build-m2images.sh 로 dist/m2images를 만든 뒤 실행
+python3 -m http.server --bind 127.0.0.1 --directory dist/m2images 8765
+
+# 터미널 2 — 기존 API를 내린 뒤, 같은 저장소 루트에서 실행
+FIRECRAB_IMAGE_ROOT=/tmp/firecrab-m2image-test \
+FIRECRAB_IMAGE_BASE_URL=http://127.0.0.1:8765 \
+cargo run -p firecrab-api
+```
+
+`GET /api/images`의 각 항목에 `packageUrl`이 보이면 Packer의 **패키지 설치** 버튼이
+활성화된다. 패키지 설치가 끝나면 Store의 **이미지 가져오기** 목록에 준비된 패키지가 나타나며,
+가져오기 로그는 Store에서 표시된다. 설정 없이 API를 띄우면 package API는 `503`을 반환한다.
+
+### 종료
+
+| 프로세스 | 붙어 있는 터미널 | 다른 셸에서 정리 |
+|---|---|---|
+| Vite (`npm run dev`) | `Ctrl-C` | `pkill -f 'vite'` |
+| `firecrab-api` | `Ctrl-C` | `pkill -f 'target/debug/firecrab-api'` |
+| net-helper | `Ctrl-C` | `sudo pkill -f firecrab-net-helper` |
+
+포트 8080이 비었는지 확인: `ss -ltnp | grep 8080` (또는 `lsof -i :8080`).
 
 > [!warning] 자주 걸리는 셋
 > - **`localhost:8080`으로 접속** — `127.0.0.1:8080`은 다른 origin이라 403
 > - **API는 저장소 루트에서** — DB(`data/firecrab.db`)와 VM 아티팩트 경로가 cwd 기준.
 >   `firecrab-api/`에서 띄우면 빈 DB가 새로 생기고 기존 VM이 안 보임
-> - **이전 인스턴스를 죽일 것** — 포트 3000이 잡혀 있으면 새 프로세스가 못 뜨고
->   브라우저는 계속 **재빌드 전 바이너리**를 상대함. 새 필드가 응답에 없으면 대개 이 경우
+> - **이전 인스턴스를 죽일 것** — 포트 3000(API)·8080(Vite)이 잡혀 있으면 새 프로세스가
+>   못 뜨고, 브라우저는 계속 **재빌드 전 바이너리**를 상대함. 새 필드가 응답에 없으면 대개 이 경우
 
 net-helper가 없으면 bridge/TAP/DHCP를 대신할 프로세스가 없어 VM 시작이
 `network helper is unavailable`로 즉시 실패함.
@@ -41,6 +72,7 @@ net-helper가 없으면 bridge/TAP/DHCP를 대신할 프로세스가 없어 VM �
 | 목록 | 상태 배지 + 상태별 action. 3초 폴링 |
 | VM 이름 클릭 | 상세 모달 — 정보·시작 타임라인·로그 |
 | `terminal` 버튼 | 시리얼 콘솔 **새 창** (`#/console/<id>`, WebSocket + xterm.js). 하단 VM 세부정보 · `터미널만` 토글. `running`일 때만 |
+| 좌측 `이미지` | M2Image-Packer의 패키지 설치 + M2Image-Store의 이미지 가져오기 · 로그 · 삭제 |
 | 헤더 `MicroNetwork` | 가상 네트워크 목록/생성/삭제, 행 클릭 시 상세 |
 | 헤더 `HOST 정보` | bridge/subnet/gateway/uplink + load·memory·disk·uptime |
 
@@ -49,7 +81,7 @@ net-helper가 없으면 bridge/TAP/DHCP를 대신할 프로세스가 없어 VM �
 | 필드 | 제약 |
 |---|---|
 | name | 1–64자, 영문/숫자/`.`/`_`/`-` |
-| template | `ubuntu-26.04` · `alpine-3.24` |
+| template | `ubuntu-26.04` · `alpine-3.24` · `rocky-9` |
 | cpu | 1–32 |
 | ram | 128–32768 MiB, 2의 거듭제곱만 |
 | disk | 템플릿 rootfs 크기(2 GiB) 이상, 500 GiB 이하 |

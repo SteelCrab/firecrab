@@ -7,6 +7,7 @@
 
 use std::io;
 use std::net::Ipv4Addr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -30,6 +31,11 @@ const PID_FILE: &str = "/run/firecrab/dnsmasq.pid";
 /// lives in our own runtime dir regardless of what user dnsmasq ends up
 /// running as.
 const LEASE_FILE: &str = "/run/firecrab/dnsmasq.leases";
+/// dnsmasq starts as root but normally drops to an unprivileged account
+/// before it handles SIGHUP.  The reservation snapshot has to remain
+/// readable by that account when a later sync atomically replaces it.
+/// It only contains MAC/IP/hostname mappings, not credentials.
+const DNSMASQ_READABLE_MODE: u32 = 0o644;
 
 /// Failure modes for syncing DHCP reservations or (re)starting dnsmasq.
 #[derive(Debug, Error)]
@@ -377,6 +383,17 @@ async fn write_atomic_candidate(path: &Path, content: &str) -> Result<(), DhcpEr
             path: path.to_owned(),
             source,
         })?;
+    // `dnsmasq` initially opens its config as root, then drops privileges.
+    // A later SIGHUP reopens `dhcp-hostsfile` as that unprivileged account,
+    // so relying on the helper's umask (which can produce 0600) would leave
+    // a newly atomically-renamed reservation snapshot unreadable and make
+    // every newly allocated IP appear unavailable.
+    file.set_permissions(std::fs::Permissions::from_mode(DNSMASQ_READABLE_MODE))
+        .await
+        .map_err(|source| DhcpError::Write {
+            path: path.to_owned(),
+            source,
+        })?;
     file.write_all(content.as_bytes())
         .await
         .map_err(|source| DhcpError::Write {
@@ -658,6 +675,31 @@ mod tests {
             .expect("write candidate");
 
         assert!(nested.exists());
+    }
+
+    #[tokio::test]
+    async fn write_atomic_candidate_is_readable_after_dnsmasq_drops_privileges() {
+        // Regression: the helper's restrictive umask used to leave the
+        // atomic replacement at 0600 root-owned. dnsmasq had already dropped
+        // privileges by the time SIGHUP asked it to reload this file, so it
+        // kept the previous reservations and reported new MACs as having no
+        // address available.
+        let dir = tempfile::Builder::new()
+            .prefix("fc-dhcp")
+            .tempdir_in("/tmp")
+            .expect("create tempdir");
+        let candidate = dir.path().join("hosts.tmp");
+
+        write_atomic_candidate(&candidate, "02:fc:00:00:00:05,172.30.0.5,fc-test\n")
+            .await
+            .expect("write candidate");
+
+        let mode = std::fs::metadata(&candidate)
+            .expect("read candidate metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, DNSMASQ_READABLE_MODE);
     }
 
     #[tokio::test]

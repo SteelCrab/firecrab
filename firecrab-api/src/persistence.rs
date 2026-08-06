@@ -1,9 +1,10 @@
 //! SQLite-backed VM record storage: schema creation/migration, CRUD, IPAM
 //! lease delegation, and one-time import of the legacy `vms.json` format.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -645,6 +646,23 @@ impl Store {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let lease = ipam::allocate(&tx, vm_id, subnet)?;
+        tx.commit()?;
+        Ok(lease)
+    }
+
+    /// Atomically moves a VM away from addresses that are still occupied by
+    /// host networking state but no longer have a durable Firecrab record
+    /// (for example an orphaned MicroVM after an interrupted API restart).
+    /// The existing lease remains active if no replacement can be committed.
+    pub fn rotate_lease(
+        &self,
+        vm_id: Uuid,
+        subnet: SubnetSpec,
+        unavailable_ipv4s: &HashSet<Ipv4Addr>,
+    ) -> Result<Lease, IpamError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let lease = ipam::rotate(&tx, vm_id, subnet, unavailable_ipv4s)?;
         tx.commit()?;
         Ok(lease)
     }

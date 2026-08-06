@@ -576,6 +576,10 @@ pub struct HostStatusResponse {
 /// One entry from `GET /api/images` — a template registry alias the create
 /// form can offer, with digests and a disk floor. Host paths are never
 /// exposed (`docs/30-tasks/task-m2image-catalog-api.md`).
+///
+/// Uninstalled built-in templates still appear so the dashboard can offer
+/// **official package links** (`package_url`) and kick off
+/// `POST /api/images/{alias}/install`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageResponse {
@@ -598,6 +602,10 @@ pub struct ImageResponse {
     pub rootfs_size_bytes: u64,
     /// Whether the artifacts are present and verified on this host.
     pub installed: bool,
+    /// Package download URL for this alias when `FIRECRAB_IMAGE_BASE_URL` is
+    /// set (`{base}/{alias}.tar.zst`). `None` when remote install is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_url: Option<String>,
     /// Short operator-facing note (may be empty).
     pub description: String,
 }
@@ -893,6 +901,7 @@ mod tests {
             min_disk_gb: 2,
             rootfs_size_bytes: 2 * 1024 * 1024 * 1024u64,
             installed: true,
+            package_url: Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst".to_owned()),
             description: String::new(),
         };
         let json = serde_json::to_value(&image).unwrap();
@@ -901,6 +910,10 @@ mod tests {
         assert_eq!(json["rootfsSizeBytes"], 2 * 1024 * 1024 * 1024u64);
         assert_eq!(json["kernelSha256"], "k".repeat(64));
         assert_eq!(json["installed"], true);
+        assert_eq!(
+            json["packageUrl"],
+            "http://127.0.0.1:8765/ubuntu-26.04.tar.zst"
+        );
         assert!(json.get("initrdSha256").is_none());
     }
 

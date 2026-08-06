@@ -37,13 +37,14 @@ const OUTPUT_TAIL_CAP: usize = 8 * 1024;
 const DONE_SENTINEL: &str = "FIRECRAB_PKG_UPDATE_DONE";
 
 /// The guest distro families this project ships templates for, inferred
-/// from the template alias rather than stored separately — `ubuntu-*` and
-/// `alpine-*` are the only aliases `TemplateRegistry::load_default` ever
-/// registers.
+/// from the template alias rather than stored separately — `ubuntu-*`,
+/// `alpine-*`, and `rocky-*` are the built-in families
+/// `TemplateRegistry::load_default` registers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PackageManager {
     Apt,
     Apk,
+    Dnf,
 }
 
 impl PackageManager {
@@ -52,6 +53,8 @@ impl PackageManager {
             Some(Self::Apt)
         } else if template.starts_with("alpine") {
             Some(Self::Apk)
+        } else if template.starts_with("rocky") {
+            Some(Self::Dnf)
         } else {
             None
         }
@@ -64,6 +67,7 @@ impl PackageManager {
         match self {
             Self::Apt => "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y",
             Self::Apk => "apk update && apk upgrade",
+            Self::Dnf => "dnf -y upgrade --refresh",
         }
     }
 }
@@ -416,6 +420,10 @@ mod tests {
         assert_eq!(
             PackageManager::for_template("alpine-3.24"),
             Some(PackageManager::Apk)
+        );
+        assert_eq!(
+            PackageManager::for_template("rocky-9"),
+            Some(PackageManager::Dnf)
         );
         assert_eq!(PackageManager::for_template("windows-11"), None);
     }

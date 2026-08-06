@@ -132,14 +132,26 @@ export function listImages(): Promise<ImageResponse[]> {
   return fetchJson("/api/images");
 }
 
-/** Start async template install (`POST /api/images/{alias}/install`). */
+/** Start package download + verification (`POST /api/images/{alias}/package`). */
+export function startImagePackage(alias: string): Promise<ImageInstallResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/package`, {
+    method: "POST",
+  });
+}
+
+/** Poll package download + verification (`GET /api/images/{alias}/package`). */
+export function getImagePackage(alias: string): Promise<ImageInstallResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/package`);
+}
+
+/** Install a prepared local package (`POST /api/images/{alias}/install`). */
 export function startImageInstall(alias: string): Promise<ImageInstallResponse> {
   return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`, {
     method: "POST",
   });
 }
 
-/** Poll install job status + log (`GET /api/images/{alias}/install`). */
+/** Poll image installation status + log (`GET /api/images/{alias}/install`). */
 export function getImageInstall(alias: string): Promise<ImageInstallResponse> {
   return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`);
 }

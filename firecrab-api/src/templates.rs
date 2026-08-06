@@ -127,6 +127,17 @@ impl TemplateVersion {
     pub fn boot_args_sha256(&self) -> String {
         sha256_bytes(self.boot_args.as_bytes())
     }
+
+    /// Whether this image must be started with Firecracker's PCI transport
+    /// enabled. Firecracker normally presents virtio devices over MMIO, but
+    /// Rocky Linux 9's stock EL9 kernel deliberately has
+    /// `CONFIG_VIRTIO_MMIO` disabled while keeping `CONFIG_VIRTIO_PCI`
+    /// built in. Its rootfs and dracut initramfs are otherwise valid, so
+    /// choose PCI for this one built-in template rather than replacing the
+    /// distro kernel with an unrelated one.
+    pub fn requires_pci_transport(&self) -> bool {
+        self.name == "rocky-9"
+    }
 }
 
 /// Registry of verified template versions, resolved by alias or by exact
@@ -175,7 +186,7 @@ struct CachedHash {
 
 impl TemplateRegistry {
     /// Loads the registry's built-in template set (`ubuntu-26.04`,
-    /// `alpine-3.24`) from `images/` (or `FIRECRAB_IMAGE_ROOT` if set).
+    /// `alpine-3.24`, `rocky-9`) from `images/` (or `FIRECRAB_IMAGE_ROOT` if set).
     pub fn load_default() -> Result<Self, TemplateError> {
         let default_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../images");
         let image_root = env::var_os("FIRECRAB_IMAGE_ROOT")
@@ -487,7 +498,7 @@ fn artifacts_present(image_root: &Path, spec: &TemplateSpec) -> bool {
         .all(|relative| image_root.join(relative).is_file())
 }
 
-fn default_specs() -> [TemplateSpec; 2] {
+fn default_specs() -> [TemplateSpec; 3] {
     [
         TemplateSpec {
             alias: "ubuntu-26.04".to_owned(),
@@ -518,6 +529,22 @@ fn default_specs() -> [TemplateSpec; 2] {
             initrd: Some(PathBuf::from("kernel/initramfs-alpine-virt-x86_64")),
             rootfs: PathBuf::from("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"),
             boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
+                .to_owned(),
+        },
+        TemplateSpec {
+            alias: "rocky-9".to_owned(),
+            version: "rocky-9-v1".to_owned(),
+            // EL9's distro kernel keeps virtio_blk/net and ext4 as modules,
+            // so the builder creates a generic dracut initramfs. It also
+            // deliberately disables CONFIG_VIRTIO_MMIO, while its PCI
+            // transport is builtin; `requires_pci_transport` makes the VMM
+            // expose matching PCI devices for this template. PCI would
+            // otherwise rename the builder's eth0 profile to ens2, so keep
+            // the guest's stable configuration name through the kernel args.
+            kernel: PathBuf::from("kernel/vmlinux-rocky-9-x86_64"),
+            initrd: Some(PathBuf::from("kernel/initramfs-rocky-9-x86_64")),
+            rootfs: PathBuf::from("rootfs/rocky-rootfs-9-x86_64.ext4"),
+            boot_args: "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw"
                 .to_owned(),
         },
     ]
@@ -676,6 +703,7 @@ mod tests {
         let registry = TemplateRegistry::load_from(&root).expect("one built template");
         assert!(registry.resolve_alias("alpine-3.24").is_some());
         assert!(registry.resolve_alias("ubuntu-26.04").is_none());
+        assert!(registry.resolve_alias("rocky-9").is_none());
     }
 
     fn create_registry(root: &Path) -> TemplateRegistry {
@@ -895,6 +923,40 @@ mod tests {
         // initrd above is required — and why the kernel needs an explicit
         // hint to find the root filesystem type before that module loads.
         assert!(alpine.boot_args.contains("rootfstype=ext4"));
+
+        let rocky = specs
+            .iter()
+            .find(|spec| spec.alias == "rocky-9")
+            .expect("rocky-9 is one of the default specs");
+        assert_eq!(rocky.kernel, PathBuf::from("kernel/vmlinux-rocky-9-x86_64"));
+        assert_eq!(
+            rocky.initrd,
+            Some(PathBuf::from("kernel/initramfs-rocky-9-x86_64"))
+        );
+        assert_eq!(
+            rocky.rootfs,
+            PathBuf::from("rootfs/rocky-rootfs-9-x86_64.ext4")
+        );
+        assert!(rocky.boot_args.contains("rootfstype=ext4"));
+        assert!(!rocky.boot_args.contains("pci=off"));
+        assert!(rocky.boot_args.contains("net.ifnames=0"));
+
+        let directory = tempdir().unwrap();
+        for relative in [&rocky.kernel, &rocky.rootfs]
+            .into_iter()
+            .chain(rocky.initrd.as_ref())
+        {
+            let path = directory.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"image").unwrap();
+        }
+        let registry = TemplateRegistry::from_specs(directory.path(), [rocky.clone()]).unwrap();
+        assert!(
+            registry
+                .resolve_alias("rocky-9")
+                .expect("Rocky template resolves")
+                .requires_pci_transport()
+        );
     }
 
     #[test]

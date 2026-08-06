@@ -10,5 +10,10 @@ export type ImageResponse = {
   /** On-disk rootfs length in bytes (0 / omitted when not installed). */
   rootfsSizeBytes?: number;
   installed: boolean;
+  /**
+   * Package download URL when `FIRECRAB_IMAGE_BASE_URL` is set
+   * (`{base}/{alias}.tar.zst`). Omitted when remote install is off.
+   */
+  packageUrl?: string;
   description: string;
 };

@@ -1,5 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
+use std::net::Ipv4Addr;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -338,20 +339,60 @@ fn validate_update(
     fields
 }
 
-/// Starts the VM synchronously: claim `starting`, prepare the disk and
-/// config, spawn Firecracker, wait for its API, then record `running`.
-/// Any failure lands the record on `error` with no process left behind.
-pub async fn start_vm(
+/// Claims a VM start and persists `starting` before any slow disk or guest
+/// work begins. Keeping this transition separate lets the HTTP endpoint
+/// acknowledge the dashboard immediately while the pipeline reports its
+/// individual stages through the existing polling API.
+async fn claim_start(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
-) -> Result<Json<VmResponse>, AppError> {
+) -> Result<(Uuid, VmRecord), AppError> {
     let id = parse_id(&id, request_id.0)?;
     let (claimed, previous) = claim_transition(&state, id, VmState::Starting, request_id.0)?;
     if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
         set_memory_state(&state, id, previous);
         return Err(error);
     }
+
+    Ok((id, claimed))
+}
+
+/// Starts a VM from the HTTP API without waiting for slow disk preparation or
+/// guest network readiness. The response is deliberately `starting`; the
+/// dashboard already polls that record and its startup timeline, so it can
+/// show real stage-by-stage progress instead of a false HTTP timeout.
+pub async fn start_vm_request(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmResponse>, AppError> {
+    let (id, claimed) = claim_start(State(state.clone()), Extension(request_id), Path(id)).await?;
+
+    let state_for_task = state.clone();
+    let response_record = claimed.clone();
+    tokio::spawn(async move {
+        let _ = finish_start(&state_for_task, id, claimed, request_id).await;
+    });
+
+    let lease = lease_for(&state, id).await;
+    Ok(Json(vm_response(&response_record, lease.as_ref())))
+}
+
+/// Starts the VM synchronously: claim `starting`, prepare the disk and
+/// config, spawn Firecracker, wait for its API, then record `running`.
+/// Any failure lands the record on `error` with no process left behind.
+///
+/// This test-only helper preserves direct lifecycle assertions; the public
+/// HTTP route uses [`start_vm_request`] so a normal boot cannot exceed the
+/// general REST request timeout.
+#[cfg(test)]
+pub async fn start_vm(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<VmResponse>, AppError> {
+    let (id, claimed) = claim_start(State(state.clone()), Extension(request_id), Path(id)).await?;
 
     // Detached: a slow disk copy (queued behind `disk_prep_permits` when
     // many VMs start at once) can outlive the per-request timeout in
@@ -504,6 +545,16 @@ pub async fn delete_vm(
         vms.remove(&id).expect("record checked under the same lock")
     };
 
+    // A VM may be stopped because the guest exited or because the API was
+    // recovering from an interrupted lifecycle. In both cases its TAP and
+    // nft policy can still exist even though no process is currently tracked.
+    // Tear them down before releasing the lease, so a later VM cannot be
+    // assigned an address that host firewall state still points at. This is
+    // deliberately best-effort: deletion must still be able to remove a
+    // corrupt/partially-created VM record, and `teardown_vm_network` logs
+    // any helper-side failure for recovery diagnostics.
+    teardown_vm_network(&state, id).await;
+
     let store = state.store.clone();
     let artifact_paths =
         crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&removed.storage_root), id);
@@ -649,7 +700,13 @@ async fn run_start(state: &AppState, vm: &VmRecord) -> Result<FirecrackerProcess
     // Set up before the disk copy so a network failure fails fast, without
     // paying for a multi-GB copy first. Any failure *after* this succeeds
     // must tear the TAP + policy back down — see the loop below.
-    let network = setup_vm_network(state, vm.id, vm.egress_policy, vm.micro_network_id).await?;
+    let network = setup_vm_network_with_conflict_recovery(
+        state,
+        vm.id,
+        vm.egress_policy,
+        vm.micro_network_id,
+    )
+    .await?;
 
     let result = finish_run_start(state, vm, template, &network).await;
     if result.is_err() {
@@ -664,6 +721,10 @@ async fn finish_run_start(
     template: std::sync::Arc<crate::templates::TemplateVersion>,
     network: &VmNetwork,
 ) -> Result<FirecrackerProcess, String> {
+    // Rocky Linux 9's stock kernel supports virtio-pci but not Firecracker's
+    // default virtio-mmio transport. Capture this before the template Arc is
+    // moved into the blocking disk/configuration task below.
+    let enable_pci = template.requires_pci_transport();
     // Bounds how many VMs copy/grow a rootfs disk at once — see
     // `DISK_PREP_CONCURRENCY`'s doc comment. Held across the blocking task
     // below, released once that VM's disk+config are ready.
@@ -751,6 +812,7 @@ async fn finish_run_start(
         &state.runtime.firecracker_binary,
         &runtime,
         vm.id,
+        enable_pci,
         state.runtime.ready_timeout,
     )
     .await
@@ -845,6 +907,125 @@ fn find_network_sentinel(buffer: &[u8]) -> Option<Result<(), String>> {
     None
 }
 
+/// A bounded recovery budget for nft policies whose owners predate the
+/// current API database. Each retry moves only the starting VM to a new
+/// address; it never overwrites or removes the existing host policy.
+const MAX_FIREWALL_IP_CONFLICT_RECOVERIES: usize = 8;
+
+/// A network setup failure that can be safely recovered by changing the new
+/// VM's lease, versus every other setup failure which must surface as-is.
+#[derive(Debug)]
+enum VmNetworkSetupError {
+    FirewallIpConflict {
+        ipv4: Ipv4Addr,
+        helper_detail: String,
+    },
+    Other(String),
+}
+
+impl VmNetworkSetupError {
+    fn into_message(self) -> String {
+        match self {
+            Self::FirewallIpConflict {
+                ipv4,
+                helper_detail,
+            } => format!(
+                "firewall policy application failed: {}",
+                describe_policy_apply_error(ipv4, &helper_detail)
+            ),
+            Self::Other(message) => message,
+        }
+    }
+}
+
+/// Starts with the VM's durable lease, but moves that *new* VM to another
+/// address if host firewall state says its address belongs to an untracked
+/// (often orphaned) MicroVM. This preserves the old policy and process while
+/// letting a healthy new VM start on the next available address.
+async fn setup_vm_network_with_conflict_recovery(
+    state: &AppState,
+    vm_id: Uuid,
+    egress_policy: EgressPolicy,
+    micro_network_id: Uuid,
+) -> Result<VmNetwork, String> {
+    let mut unavailable_ipv4s = HashSet::new();
+
+    loop {
+        match setup_vm_network(state, vm_id, egress_policy, micro_network_id).await {
+            Ok(network) => return Ok(network),
+            Err(VmNetworkSetupError::Other(error)) => return Err(error),
+            Err(VmNetworkSetupError::FirewallIpConflict {
+                ipv4,
+                helper_detail,
+            }) => {
+                // A repeated conflict means IPAM unexpectedly returned an
+                // address it was told to avoid. Do not loop indefinitely or
+                // mutate the foreign policy in that case.
+                if !unavailable_ipv4s.insert(ipv4) {
+                    return Err(VmNetworkSetupError::FirewallIpConflict {
+                        ipv4,
+                        helper_detail,
+                    }
+                    .into_message());
+                }
+                if unavailable_ipv4s.len() > MAX_FIREWALL_IP_CONFLICT_RECOVERIES {
+                    return Err(format!(
+                        "firewall policy application failed after trying {MAX_FIREWALL_IP_CONFLICT_RECOVERIES} replacement IPv4 leases; the host still has conflicting MicroVM policies. Last conflict: {}",
+                        describe_policy_apply_error(ipv4, &helper_detail)
+                    ));
+                }
+
+                let replacement =
+                    rotate_conflicted_lease(state, vm_id, micro_network_id, &unavailable_ipv4s)
+                        .await?;
+                tracing::warn!(
+                    vm_id = %vm_id,
+                    conflicted_ipv4 = %ipv4,
+                    replacement_ipv4 = %replacement.ipv4,
+                    "moved starting VM to a new lease because an existing host firewall policy owns its original IPv4"
+                );
+
+                // The replacement is durable before this point, and must be
+                // visible to dnsmasq before the guest starts. `setup_vm_network`
+                // will also re-run the full network reconcile on the retry.
+                sync_dhcp_leases(state).await?;
+            }
+        }
+    }
+}
+
+/// Persists a conflict-free replacement lease without touching another VM's
+/// host resources. The Store operation uses one SQLite transaction, so an
+/// exhausted subnet leaves the original lease active.
+async fn rotate_conflicted_lease(
+    state: &AppState,
+    vm_id: Uuid,
+    micro_network_id: Uuid,
+    unavailable_ipv4s: &HashSet<Ipv4Addr>,
+) -> Result<Lease, String> {
+    let store = state.store.clone();
+    let network = tokio::task::spawn_blocking(move || store.micro_network(micro_network_id))
+        .await
+        .map_err(|error| format!("micro network lookup task failed: {error}"))?
+        .map_err(|error| format!("micro network lookup failed: {error}"))?
+        .ok_or_else(|| {
+            format!("no MicroNetwork with id {micro_network_id} exists for vm {vm_id}")
+        })?;
+    let subnet = SubnetSpec::parse(network.id, &network.subnet_cidr).ok_or_else(|| {
+        format!(
+            "MicroNetwork {} has an unparseable subnet {:?}",
+            network.id, network.subnet_cidr
+        )
+    })?;
+
+    let store = state.store.clone();
+    let unavailable_ipv4s = unavailable_ipv4s.clone();
+    tokio::task::spawn_blocking(move || store.rotate_lease(vm_id, subnet, &unavailable_ipv4s))
+        .await
+        .map_err(|error| format!("lease rotation task failed: {error}"))?
+        .map_err(|error| format!("could not rotate conflicted IPv4 lease: {error}"))
+}
+
 /// Ensures the bridge/firewall are up, creates `vm_id`'s TAP, and applies its
 /// isolation policy for its (already-allocated, see `create_vm`) lease. Any
 /// failure after the TAP is created tears the TAP itself back down before
@@ -855,26 +1036,28 @@ async fn setup_vm_network(
     vm_id: Uuid,
     egress_policy: EgressPolicy,
     micro_network_id: Uuid,
-) -> Result<VmNetwork, String> {
+) -> Result<VmNetwork, VmNetworkSetupError> {
     let store = state.store.clone();
     let lease = tokio::task::spawn_blocking(move || store.active_lease(vm_id))
         .await
-        .map_err(|error| format!("lease lookup task failed: {error}"))?
-        .map_err(|error| format!("lease lookup failed: {error}"))?
-        .ok_or_else(|| format!("vm {vm_id} has no allocated lease"))?;
+        .map_err(|error| VmNetworkSetupError::Other(format!("lease lookup task failed: {error}")))?
+        .map_err(|error| VmNetworkSetupError::Other(format!("lease lookup failed: {error}")))?
+        .ok_or_else(|| VmNetworkSetupError::Other(format!("vm {vm_id} has no allocated lease")))?;
 
     // Re-applied on every start, not just at create: bridges, nftables rules
     // and dnsmasq's config do not survive a host reboot (or a net-helper
     // restart), and a VM start is the one moment the network it needs has to
     // genuinely exist. Unlike the same call at daemon startup, a failure here
     // fails the start — this VM would have nowhere to attach.
-    crate::handlers::micro_networks::ensure_all_networks(state).await?;
+    crate::handlers::micro_networks::ensure_all_networks(state)
+        .await
+        .map_err(VmNetworkSetupError::Other)?;
 
     let tap_name = state
         .network
         .create_tap(vm_id, micro_network_id)
         .await
-        .map_err(|error| format!("tap creation failed: {error}"))?;
+        .map_err(|error| VmNetworkSetupError::Other(format!("tap creation failed: {error}")))?;
 
     if let Err(error) = state
         .network
@@ -888,13 +1071,43 @@ async fn setup_vm_network(
         // so this matches teardown_vm_network's own order everywhere else.
         let _ = state.network.remove_vm_policy(vm_id).await;
         let _ = state.network.delete_tap(vm_id).await;
-        return Err(format!("firewall policy application failed: {error}"));
+        let helper_detail = error.to_string();
+        return if is_firewall_ip_conflict(&helper_detail) {
+            Err(VmNetworkSetupError::FirewallIpConflict {
+                ipv4: lease.ipv4,
+                helper_detail,
+            })
+        } else {
+            Err(VmNetworkSetupError::Other(format!(
+                "firewall policy application failed: {helper_detail}"
+            )))
+        };
     }
 
     Ok(VmNetwork {
         tap_name,
         guest_mac: lease.mac,
     })
+}
+
+/// Turns nft's otherwise opaque duplicate verdict-map error into an action a
+/// caller can safely take. A different VM may still be using that IP, so a
+/// start request must never silently replace the existing host policy.
+fn describe_policy_apply_error(ipv4: Ipv4Addr, error: &str) -> String {
+    if is_firewall_ip_conflict(error) {
+        format!(
+            "IPv4 lease {ipv4} conflicts with an existing host firewall policy; a live or orphaned MicroVM may still own it. Stop or recover that VM before retrying. Helper detail: {error}"
+        )
+    } else {
+        error.to_owned()
+    }
+}
+
+/// `nft` reports an existing verdict-map element this way. Matching both the
+/// duplicate error and Firecrab's own map name avoids treating an unrelated
+/// host networking failure as an address conflict.
+fn is_firewall_ip_conflict(error: &str) -> bool {
+    error.contains("File exists") && (error.contains("vm_egress") || error.contains("vm_ingress"))
 }
 
 /// Reverses [`setup_vm_network`]: removes the firewall policy then the TAP.
@@ -1910,6 +2123,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn start_request_returns_starting_before_a_slow_guest_is_ready() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        // Keep the fake VMM from creating its API socket/sentinel long enough
+        // to prove the HTTP handler does not wait for guest boot completion.
+        let binary = fake_firecracker(
+            root,
+            &format!(
+                "time.sleep(0.15)\nsignal.signal(signal.SIGTERM, lambda *_: sys.exit(0)){SERVE_LOOP}"
+            ),
+        );
+        let state = test_state_with_binary(root, binary).await;
+        let vm = record("start-request", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(starting) = start_vm_request(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .expect("the start request acknowledges the claimed state");
+
+        assert_eq!(starting.state, VmState::Starting);
+        assert!(starting.startup_timeline.is_empty());
+
+        wait_for_state(&state, vm.id, VmState::Running).await;
+    }
+
+    #[tokio::test]
     async fn a_failed_start_marks_the_step_it_died_on() {
         let directory = short_tempdir();
         let root = directory.path();
@@ -2252,6 +2495,82 @@ while True:
     }
 
     #[tokio::test]
+    async fn start_rotates_past_orphaned_firewall_ips_without_replacing_them() {
+        use firecrab_helper_protocol::network::NetworkRequest;
+
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(
+            root,
+            &format!("signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)){SERVE_LOOP}"),
+        );
+        let state = test_state_with_binary(root, binary).await;
+        let network = seed_network(&state).await;
+
+        let socket_path = root.join("net-helper-ip-conflict.sock");
+        let (_helper, requests) = crate::network::test_support::spawn_policy_collision_helper(
+            &socket_path,
+            [Ipv4Addr::new(172, 30, 0, 2), Ipv4Addr::new(172, 30, 0, 3)],
+        );
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
+        let mut vm = record("collision-recovery", Uuid::new_v4());
+        vm.micro_network_id = network;
+        seed_vm(&state, &vm);
+        assert_eq!(
+            state.store.active_lease(vm.id).unwrap().unwrap().ipv4,
+            Ipv4Addr::new(172, 30, 0, 2)
+        );
+
+        let Json(started) = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .expect("a new VM moves past orphan-owned firewall IPs");
+        assert_eq!(started.state, VmState::Running);
+
+        let replacement = state.store.active_lease(vm.id).unwrap().unwrap();
+        assert_eq!(replacement.ipv4, Ipv4Addr::new(172, 30, 0, 4));
+
+        let requests = requests.lock().unwrap();
+        let policy_ips: Vec<Ipv4Addr> = requests
+            .iter()
+            .filter_map(|request| match request {
+                NetworkRequest::ApplyVmPolicy { ipv4, .. } => Some(*ipv4),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            policy_ips,
+            vec![
+                Ipv4Addr::new(172, 30, 0, 2),
+                Ipv4Addr::new(172, 30, 0, 3),
+                Ipv4Addr::new(172, 30, 0, 4),
+            ]
+        );
+        assert!(requests.iter().any(|request| {
+            matches!(
+                request,
+                NetworkRequest::SyncDhcpLeases { leases, .. }
+                    if leases.iter().any(|lease| lease.vm_id == vm.id && lease.ipv4 == replacement.ipv4)
+            )
+        }));
+        drop(requests);
+
+        let Json(stopped) = stop_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .expect("cleanup the test VM");
+        assert_eq!(stopped.state, VmState::Stopped);
+    }
+
+    #[tokio::test]
     async fn set_startup_step_updates_the_live_record_and_ignores_unknown_ids() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
@@ -2323,6 +2642,46 @@ while True:
         .await
         .unwrap_err();
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_tears_down_network_before_releasing_the_lease() {
+        let directory = short_tempdir();
+        let socket_path = directory.path().join("net-helper.sock");
+        let (_helper, log) =
+            crate::network::test_support::spawn_recording_helper(&socket_path, None);
+        let state = test_state(directory.path())
+            .await
+            .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+        let vm = record("network-cleanup", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let status = delete_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .expect("delete succeeds");
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let calls = log.lock().unwrap().clone();
+        let policy = calls
+            .iter()
+            .position(|operation| *operation == "remove_vm_policy")
+            .expect("VM policy is removed before deleting the lease");
+        let tap = calls
+            .iter()
+            .position(|operation| *operation == "delete_tap")
+            .expect("VM TAP is removed before deleting the lease");
+        let dhcp = calls
+            .iter()
+            .position(|operation| *operation == "sync_dhcp_leases")
+            .expect("DHCP snapshot is updated after delete");
+        assert!(
+            policy < tap && tap < dhcp,
+            "unexpected network calls: {calls:?}"
+        );
     }
 
     /// A delete that can't clear the artifact tree must not half-remove the
@@ -3077,6 +3436,18 @@ while True:
         assert_eq!(find_network_sentinel(&buffer), None);
         buffer.extend_from_slice(b"_READY 172.30.0.5\n");
         assert_eq!(find_network_sentinel(&buffer), Some(Ok(())));
+    }
+
+    #[test]
+    fn firewall_map_conflicts_tell_the_operator_not_to_overwrite_a_live_vm() {
+        let message = describe_policy_apply_error(
+            Ipv4Addr::new(172, 31, 0, 2),
+            "nft rejected the ruleset: add element inet firecrab vm_egress { 172.31.0.2 : jump vm_old_eg }: File exists",
+        );
+
+        assert!(message.contains("172.31.0.2"));
+        assert!(message.contains("live or orphaned MicroVM"));
+        assert!(message.contains("Stop or recover"));
     }
 
     #[tokio::test]

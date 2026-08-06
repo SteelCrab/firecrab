@@ -416,12 +416,27 @@ function PipelineStepper({
               </span>
             </span>
             <span className="step-started">{run ? clockTime(run.startedAtMs) : ""}</span>
-            {run?.detail && <span className="step-detail">{run.detail}</span>}
+            {run?.detail && <span className="step-detail">{startupFailureDetail(run.detail)}</span>}
           </li>
         );
       })}
     </ol>
   );
+}
+
+/** Gives the operator a safe, action-oriented explanation for an nft IP-map
+ * collision instead of exposing the raw ruleset syntax in the VM timeline. */
+function startupFailureDetail(detail: string): string {
+  const conflict = detail.match(
+    /(?:IPv4 lease|vm_egress\s*\{)\s*([0-9]+(?:\.[0-9]+){3})(?:\s+conflicts|\s*:)/,
+  );
+  if (conflict && detail.includes("File exists")) {
+    return `IP ${conflict[1]}은 기존 MicroVM이 사용 중입니다. 기존 VM을 중지하거나 복구한 뒤 다시 시도하세요.`;
+  }
+  if (detail.includes("conflicts with an existing host firewall policy")) {
+    return "기존 MicroVM의 호스트 네트워크 정책과 충돌합니다. 기존 VM을 중지하거나 복구한 뒤 다시 시도하세요.";
+  }
+  return detail;
 }
 
 function timestamp(): string {

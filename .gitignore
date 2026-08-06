@@ -13,6 +13,9 @@ doc-coverage.txt
 firecrab-frontend/dist/
 node_modules/
 
+# Packaged M2Image release artifacts (scripts/package-m2images.sh)
+/dist/
+
 # Data files
 /data/
 firecrab-api/data/

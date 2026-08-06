@@ -46,7 +46,7 @@ impl EgressPolicy {
 /// Everything the helper needs to render one VM's isolation + egress rules.
 /// The IPv4/MAC come from the VM's active lease; the helper never trusts a
 /// source address that does not match them.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VmPolicy {
     /// The VM this policy applies to.
     pub vm_id: Uuid,
@@ -110,8 +110,11 @@ struct FirewallState {
     /// uplink change and a MicroNetwork being added/removed re-apply, without
     /// this state needing to mirror every input that goes into rendering.
     applied_ruleset: Option<String>,
-    /// vm_id -> leased IPv4 of every VM whose policy is currently installed.
-    applied_vms: std::collections::HashMap<Uuid, Ipv4Addr>,
+    /// vm_id -> complete policy of every VM whose policy is currently
+    /// installed. Keeping the full value lets an identical re-apply be a
+    /// true no-op, while a changed lease or egress setting can be replaced
+    /// atomically.
+    applied_vms: std::collections::HashMap<Uuid, VmPolicy>,
 }
 
 impl FirewallActor {
@@ -159,10 +162,27 @@ pub async fn ensure_firewall(
 /// Independent of every other VM: only this VM's named chains and map
 /// elements are touched.
 pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<(), FirewallError> {
-    let ruleset = render_vm_policy(&policy);
     let mut state = actor.state.lock().await;
+    let previous = state.applied_vms.get(&policy.vm_id).copied();
+
+    // `ensure_all_networks` defensively reapplies policies for running VMs.
+    // An identical request needs no host mutation. Keeping this decision
+    // inside the helper's single-writer lock also prevents two simultaneous
+    // API requests from doing redundant nft work.
+    if previous == Some(policy) {
+        return Ok(());
+    }
+
+    // A different policy for the same VM (for example a renewed lease) owns
+    // the same chain names but may use different map keys. Delete the old
+    // objects and build the new ones in one nft transaction so other VMs are
+    // never affected and there is no unprotected intermediate state.
+    let ruleset = match previous {
+        Some(previous) => render_vm_policy_replacement(previous, &policy),
+        None => render_vm_policy(&policy),
+    };
     run_nft(&ruleset).await?;
-    state.applied_vms.insert(policy.vm_id, policy.ipv4);
+    state.applied_vms.insert(policy.vm_id, policy);
     Ok(())
 }
 
@@ -170,10 +190,10 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
 /// no-op. VM stop/delete calls this; it never touches the shared tables.
 pub async fn remove_vm_policy(actor: &FirewallActor, vm_id: Uuid) -> Result<(), FirewallError> {
     let mut state = actor.state.lock().await;
-    let Some(ipv4) = state.applied_vms.get(&vm_id).copied() else {
+    let Some(policy) = state.applied_vms.get(&vm_id).copied() else {
         return Ok(());
     };
-    run_nft(&render_vm_policy_removal(vm_id, ipv4)).await?;
+    run_nft(&render_vm_policy_removal(vm_id, policy.ipv4)).await?;
     state.applied_vms.remove(&vm_id);
     Ok(())
 }
@@ -333,9 +353,10 @@ fn render_apply_ruleset(
 }
 
 /// Renders one VM's isolation rules: L2 anti-spoofing tied to the lease, plus
-/// L3 egress/ingress verdicts. Every per-VM object is named after the vm_id
-/// and (re)built with add+flush, so re-applying or replacing this VM's policy
-/// is atomic and cannot disturb any other VM's chains or map elements.
+/// L3 egress/ingress verdicts. Every per-VM object is named after the vm_id.
+/// An identical policy is skipped by [`apply_vm_policy`]; a changed one is
+/// rendered through [`render_vm_policy_replacement`] so it cannot disturb
+/// any other VM's chains or map elements.
 fn render_vm_policy(policy: &VmPolicy) -> String {
     let tap = tap_name(policy.vm_id);
     let tag = policy.vm_id.simple();
@@ -379,6 +400,19 @@ fn render_vm_policy(policy: &VmPolicy) -> String {
          flush chain inet {TABLE_INET} vm_{tag}_in\n\
          {ingress_rule}\
          add element inet {TABLE_INET} vm_ingress {{ {ip} : jump vm_{tag}_in }}\n"
+    )
+}
+
+/// Replaces a previously installed policy for the same VM in one nft
+/// transaction. The old map elements must be deleted before their chains;
+/// then the new chain and map entries can be installed without conflicting
+/// with the old names or (when the lease changed) its old IPv4 map keys.
+fn render_vm_policy_replacement(previous: VmPolicy, policy: &VmPolicy) -> String {
+    debug_assert_eq!(previous.vm_id, policy.vm_id);
+    format!(
+        "{}{}",
+        render_vm_policy_removal(previous.vm_id, previous.ipv4),
+        render_vm_policy(policy)
     )
 }
 
@@ -683,6 +717,31 @@ mod tests {
     }
 
     #[test]
+    fn replacement_removes_the_old_policy_before_adding_the_new_one() {
+        let previous = sample_policy(EgressPolicy::Internet, false);
+        let replacement = VmPolicy {
+            ipv4: Ipv4Addr::new(172, 30, 0, 43),
+            egress: EgressPolicy::Isolated,
+            allow_host_ssh: true,
+            ..previous
+        };
+        let ruleset = render_vm_policy_replacement(previous, &replacement);
+
+        let old_element = ruleset
+            .find("delete element inet firecrab vm_egress { 172.30.0.42 }")
+            .expect("the old IP map key is removed");
+        let new_chain = ruleset
+            .find("add chain bridge firecrab_l2")
+            .expect("the replacement starts by adding new chains");
+        let new_element = ruleset
+            .find("add element inet firecrab vm_egress { 172.30.0.43 : jump")
+            .expect("the new IP map key is installed");
+
+        assert!(old_element < new_chain);
+        assert!(new_chain < new_element);
+    }
+
+    #[test]
     fn removal_deletes_map_elements_before_their_chains() {
         let vm = Uuid::from_u128(0x1234);
         let ruleset = render_vm_policy_removal(vm, Ipv4Addr::new(172, 30, 0, 42));
@@ -741,6 +800,27 @@ mod tests {
         assert_eq!(
             actor.state.lock().await.applied_ruleset.as_deref(),
             Some(applied.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn applying_an_identical_vm_policy_skips_nft_entirely() {
+        let actor = FirewallActor::new();
+        let policy = sample_policy(EgressPolicy::Internet, false);
+        actor
+            .state
+            .lock()
+            .await
+            .applied_vms
+            .insert(policy.vm_id, policy);
+
+        // If the identical request spawned nft, this unprivileged unit test
+        // would fail on a host without NET_ADMIN. Returning Ok proves an
+        // idempotent reapply causes no unnecessary host-side mutation.
+        assert!(apply_vm_policy(&actor, policy).await.is_ok());
+        assert_eq!(
+            actor.state.lock().await.applied_vms.get(&policy.vm_id),
+            Some(&policy)
         );
     }
 

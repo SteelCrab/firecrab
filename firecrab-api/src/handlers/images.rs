@@ -1,4 +1,4 @@
-//! `GET /api/images` catalog, install, and `DELETE /api/images/{alias}`.
+//! `GET /api/images` catalog, package acquisition, image installation, and delete.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -18,7 +18,7 @@ fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
     rootfs_bytes.div_ceil(GIB).try_into().unwrap_or(u16::MAX)
 }
 
-fn installed_response(template: &TemplateVersion) -> ImageResponse {
+fn installed_response(template: &TemplateVersion, package_url: Option<String>) -> ImageResponse {
     let rootfs_size_bytes = template.rootfs.length();
     ImageResponse {
         alias: template.name.clone(),
@@ -32,11 +32,16 @@ fn installed_response(template: &TemplateVersion) -> ImageResponse {
         min_disk_gb: min_disk_gb_for(rootfs_size_bytes),
         rootfs_size_bytes,
         installed: true,
+        package_url,
         description: String::new(),
     }
 }
 
-fn not_installed_response(alias: &str, version: &str) -> ImageResponse {
+fn not_installed_response(
+    alias: &str,
+    version: &str,
+    package_url: Option<String>,
+) -> ImageResponse {
     ImageResponse {
         alias: alias.to_owned(),
         version: version.to_owned(),
@@ -46,26 +51,39 @@ fn not_installed_response(alias: &str, version: &str) -> ImageResponse {
         min_disk_gb: 0,
         rootfs_size_bytes: 0,
         installed: false,
+        package_url,
         description: String::new(),
     }
 }
 
 /// `GET /api/images`: known templates (installed + not-yet-installed).
-/// Host paths are never included.
+/// Host paths are never included; each row may carry an official `packageUrl`.
 pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageResponse>> {
     let templates = state.templates.clone();
+    let package_base = state.image_packages.base_url().map(str::to_owned);
     let images = tokio::task::spawn_blocking(move || {
+        let package_for = |alias: &str| -> Option<String> {
+            package_base
+                .as_deref()
+                .map(|base| image_install::package_url(base, alias))
+        };
         let mut images: Vec<ImageResponse> = TemplateRegistry::known_specs()
             .into_iter()
-            .map(|spec| match templates.resolve_alias(&spec.alias) {
-                Some(template) => installed_response(template.as_ref()),
-                None => not_installed_response(&spec.alias, &spec.version),
+            .map(|spec| {
+                let url = package_for(&spec.alias);
+                match templates.resolve_alias(&spec.alias) {
+                    Some(template) => installed_response(template.as_ref(), url),
+                    None => not_installed_response(&spec.alias, &spec.version, url),
+                }
             })
             .collect();
         // Any extra registered aliases not in the built-in set (future registration API).
         for template in templates.list_aliases() {
             if !images.iter().any(|image| image.alias == template.name) {
-                images.push(installed_response(template.as_ref()));
+                images.push(installed_response(
+                    template.as_ref(),
+                    package_for(&template.name),
+                ));
             }
         }
         images.sort_by(|left, right| left.alias.cmp(&right.alias));
@@ -76,7 +94,88 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
     Json(images)
 }
 
-/// `GET /api/images/{alias}/install` — latest install job snapshot.
+/// `GET /api/images/{alias}/package` — latest package acquisition snapshot.
+///
+/// A verified archive survives an API restart, so an otherwise-idle tracker
+/// is reported as ready whenever the staged archive is still present.
+pub async fn get_image_package(
+    State(state): State<AppState>,
+    Path(alias): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<Json<ImageInstallResponse>, AppError> {
+    if TemplateRegistry::known_spec(&alias).is_none()
+        && state.templates.resolve_alias(&alias).is_none()
+    {
+        return Err(AppError::not_found(request_id.0));
+    }
+
+    let snapshot = state.image_packages.snapshot(&alias);
+    if snapshot.status == ImageInstallStatus::Idle
+        && image_install::staged_package_exists(state.templates.image_root_path(), &alias)
+    {
+        return Ok(Json(ImageInstallResponse {
+            alias,
+            status: ImageInstallStatus::Succeeded,
+            log: "package ready — using the verified local archive".to_owned(),
+            started_at_ms: None,
+            ended_at_ms: None,
+        }));
+    }
+    Ok(Json(snapshot))
+}
+
+/// `POST /api/images/{alias}/package` — download and verify a package only.
+/// It does not extract or register the image; that is the separate install
+/// action below.
+pub async fn start_image_package(
+    State(state): State<AppState>,
+    Path(alias): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<impl IntoResponse, AppError> {
+    let Some(spec) = TemplateRegistry::known_spec(&alias) else {
+        return Err(AppError::not_found(request_id.0));
+    };
+
+    // Replacing a cache while it is being extracted would make the two
+    // dashboard actions race.  A completed cache may be downloaded again so
+    // an operator can repair it after a failed image install.
+    if state.image_installs.is_running(&alias) {
+        return Err(AppError::conflict(
+            "install_in_progress",
+            "cannot replace the package while this image is installing",
+            request_id.0,
+        ));
+    }
+
+    let Some(base_url) = state.image_packages.base_url().map(str::to_owned) else {
+        return Err(AppError::unavailable(
+            "FIRECRAB_IMAGE_BASE_URL is not set; cannot download template packages",
+            request_id.0,
+        ));
+    };
+
+    let response = match state.image_packages.begin_with(&alias, "package install started") {
+        Ok(snapshot) => snapshot,
+        Err("running") => {
+            return Err(AppError::conflict(
+                "package_in_progress",
+                "a package download is already running for this template",
+                request_id.0,
+            ));
+        }
+        Err(_) => return Err(AppError::internal(request_id.0)),
+    };
+
+    let tracker = state.image_packages.clone();
+    let templates = (*state.templates).clone();
+    tokio::spawn(async move {
+        image_install::run_package_install(tracker, templates, base_url, spec).await;
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+/// `GET /api/images/{alias}/install` — latest image installation snapshot.
 pub async fn get_image_install(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -90,7 +189,8 @@ pub async fn get_image_install(
     Ok(Json(state.image_installs.snapshot(&alias)))
 }
 
-/// `POST /api/images/{alias}/install` — start (or reject) an async install.
+/// `POST /api/images/{alias}/install` — extract/register an image from its
+/// already prepared local package.  It performs no network download.
 pub async fn start_image_install(
     State(state): State<AppState>,
     Path(alias): Path<String>,
@@ -108,12 +208,21 @@ pub async fn start_image_install(
         ));
     }
 
-    let Some(base_url) = state.image_installs.base_url().map(str::to_owned) else {
-        return Err(AppError::unavailable(
-            "FIRECRAB_IMAGE_BASE_URL is not set; cannot download template images",
+    if state.image_packages.is_running(&alias) {
+        return Err(AppError::conflict(
+            "package_in_progress",
+            "wait for the package download to finish before installing the image",
             request_id.0,
         ));
-    };
+    }
+
+    if !image_install::staged_package_exists(state.templates.image_root_path(), &alias) {
+        return Err(AppError::conflict(
+            "package_required",
+            "package is not ready; run package install first",
+            request_id.0,
+        ));
+    }
 
     let response = match state.image_installs.begin(&alias) {
         Ok(snapshot) => snapshot,
@@ -130,7 +239,7 @@ pub async fn start_image_install(
     let tracker = state.image_installs.clone();
     let templates = (*state.templates).clone();
     tokio::spawn(async move {
-        image_install::run_install(tracker, templates, base_url, spec).await;
+        image_install::run_image_install(tracker, templates, spec).await;
     });
 
     Ok((StatusCode::ACCEPTED, Json(response)))
@@ -259,7 +368,7 @@ mod tests {
     async fn list_images_includes_not_installed_known_aliases() {
         let directory = tempdir().unwrap();
         let state = empty_state(directory.path()).await;
-        let Json(images) = list_images(State(state)).await;
+        let Json(images) = list_images(State(state.clone())).await;
         assert!(
             images
                 .iter()
@@ -269,6 +378,11 @@ mod tests {
             images
                 .iter()
                 .any(|image| image.alias == "alpine-3.24" && !image.installed)
+        );
+        assert!(
+            images
+                .iter()
+                .any(|image| image.alias == "rocky-9" && !image.installed)
         );
     }
 
@@ -302,24 +416,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_refuses_without_base_url() {
+    async fn package_install_refuses_when_remote_disabled() {
         let directory = tempdir().unwrap();
-        let state = empty_state(directory.path()).await;
-        let result = start_image_install(
+        let mut state = empty_state(directory.path()).await;
+        state.image_packages = ImageInstallTracker::disabled();
+        let result = start_image_package(
             State(state),
             Path("alpine-3.24".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
         let err = result.err().expect("should fail");
-        // IntoResponse path: check via status on a rebuilt error is awkward;
-        // match by re-calling logic — assert message through unavailable code.
         let response = err.into_response();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
-    async fn install_downloads_registers_and_marks_installed() {
+    async fn list_images_includes_package_url_when_base_set() {
+        let directory = tempdir().unwrap();
+        let mut state = empty_state(directory.path()).await;
+        state.image_packages = ImageInstallTracker::with_base_url("http://127.0.0.1:8765");
+        let Json(images) = list_images(State(state)).await;
+        let ubuntu = images
+            .iter()
+            .find(|image| image.alias == "ubuntu-26.04")
+            .unwrap();
+        assert!(!ubuntu.installed);
+        assert_eq!(
+            ubuntu.package_url.as_deref(),
+            Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst")
+        );
+    }
+
+    fn make_tar_zst(source: &std::path::Path, members: &[&str], dest: &std::path::Path) {
+        use std::process::{Command, Stdio};
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let tar = Command::new("tar")
+            .args(["-C"])
+            .arg(source)
+            .arg("-cf")
+            .arg("-")
+            .args(members)
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("tar");
+        let status = Command::new("zstd")
+            .args(["-q", "-f", "-o"])
+            .arg(dest)
+            .stdin(tar.stdout.unwrap())
+            .status()
+            .expect("zstd");
+        assert!(status.success(), "zstd failed");
+    }
+
+    #[tokio::test]
+    async fn package_then_image_install_registers_and_marks_installed() {
         let source = tempdir().unwrap();
         let dest = tempdir().unwrap();
         let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
@@ -329,6 +482,13 @@ mod tests {
             b"fake-alpine-initrd",
         );
         write_file(&source.path().join(&alpine.rootfs), b"fake-alpine-rootfs");
+        let members = [
+            alpine.kernel.to_str().unwrap(),
+            alpine.initrd.as_ref().unwrap().to_str().unwrap(),
+            alpine.rootfs.to_str().unwrap(),
+        ];
+        let package = crate::image_install::package_name(&alpine.alias);
+        make_tar_zst(source.path(), &members, &source.path().join(&package));
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -344,9 +504,9 @@ mod tests {
         let mut state = AppState::with_db_file(templates, dest.path().join("state.db"))
             .await
             .unwrap();
-        state.image_installs = ImageInstallTracker::with_base_url(base);
+        state.image_packages = ImageInstallTracker::with_base_url(base);
 
-        let accepted = start_image_install(
+        let accepted = start_image_package(
             State(state.clone()),
             Path("alpine-3.24".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
@@ -359,7 +519,7 @@ mod tests {
         let mut ok = false;
         for _ in 0..80 {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let Json(snap) = get_image_install(
+            let Json(snap) = get_image_package(
                 State(state.clone()),
                 Path("alpine-3.24".to_owned()),
                 Extension(RequestId(uuid::Uuid::nil())),
@@ -368,22 +528,109 @@ mod tests {
             .unwrap();
             if snap.status == ImageInstallStatus::Succeeded {
                 ok = true;
-                assert!(snap.log.contains("succeeded"));
+                assert!(snap.log.contains("package ready"));
+                for stage in ["source", "rootfs", "kernel", "package"] {
+                    assert!(snap.log.contains(&format!("[packer:{stage}] complete")));
+                }
                 break;
             }
             if snap.status == ImageInstallStatus::Failed {
-                panic!("install failed:\n{}", snap.log);
+                panic!("package install failed:\n{}", snap.log);
             }
         }
-        assert!(ok, "install did not succeed in time");
+        assert!(ok, "package install did not succeed in time");
+        assert!(
+            crate::image_install::staged_package_exists(
+                state.templates.image_root_path(),
+                "alpine-3.24"
+            )
+        );
+        assert!(
+            state.templates.resolve_alias("alpine-3.24").is_none(),
+            "package acquisition must not register an image"
+        );
+
+        let accepted = start_image_install(
+            State(state.clone()),
+            Path("alpine-3.24".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .expect("image install accepted");
+        assert_eq!(accepted.into_response().status(), StatusCode::ACCEPTED);
+
+        let mut installed = false;
+        for _ in 0..80 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let Json(snap) = get_image_install(
+                State(state.clone()),
+                Path("alpine-3.24".to_owned()),
+                Extension(RequestId(uuid::Uuid::nil())),
+            )
+            .await
+            .unwrap();
+            if snap.status == ImageInstallStatus::Succeeded {
+                installed = true;
+                assert!(snap.log.contains("template registered"));
+                break;
+            }
+            if snap.status == ImageInstallStatus::Failed {
+                panic!("image install failed:\n{}", snap.log);
+            }
+        }
+        assert!(installed, "image install did not succeed in time");
         assert!(state.templates.resolve_alias("alpine-3.24").is_some());
 
-        let Json(images) = list_images(State(state)).await;
+        let Json(images) = list_images(State(state.clone())).await;
         let alpine_row = images
             .iter()
             .find(|image| image.alias == "alpine-3.24")
             .unwrap();
         assert!(alpine_row.installed);
+
+        let deleted = delete_image(
+            State(state.clone()),
+            Path("alpine-3.24".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .expect("delete installed image");
+        assert_eq!(deleted, StatusCode::NO_CONTENT);
+        assert!(
+            crate::image_install::staged_package_exists(
+                state.templates.image_root_path(),
+                "alpine-3.24"
+            ),
+            "image deletion must preserve the prepared package"
+        );
+
+        let accepted = start_image_install(
+            State(state.clone()),
+            Path("alpine-3.24".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .expect("reinstall from cached package accepted");
+        assert_eq!(accepted.into_response().status(), StatusCode::ACCEPTED);
+        let mut reinstalled = false;
+        for _ in 0..80 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let Json(snap) = get_image_install(
+                State(state.clone()),
+                Path("alpine-3.24".to_owned()),
+                Extension(RequestId(uuid::Uuid::nil())),
+            )
+            .await
+            .unwrap();
+            if snap.status == ImageInstallStatus::Succeeded {
+                reinstalled = true;
+                break;
+            }
+            if snap.status == ImageInstallStatus::Failed {
+                panic!("cached image reinstall failed:\n{}", snap.log);
+            }
+        }
+        assert!(reinstalled, "cached image reinstall did not succeed in time");
     }
 
     #[tokio::test]
@@ -476,6 +723,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn image_install_requires_a_prepared_package() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        let result = start_image_install(
+            State(state),
+            Path("alpine-3.24".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await;
+        let response = result.err().expect("package must be required").into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "package_required");
+    }
+
+    #[tokio::test]
     async fn get_image_install_unknown_is_not_found() {
         let directory = tempdir().unwrap();
         let state = empty_state(directory.path()).await;
@@ -535,6 +801,13 @@ mod tests {
     async fn start_image_install_refuses_when_already_running() {
         let directory = tempdir().unwrap();
         let mut state = empty_state(directory.path()).await;
+        write_file(
+            &crate::image_install::staged_package_path(
+                state.templates.image_root_path(),
+                "alpine-3.24",
+            ),
+            b"already-prepared",
+        );
         state.image_installs = ImageInstallTracker::with_base_url("http://127.0.0.1:9");
         state.image_installs.begin("alpine-3.24").unwrap();
         let result = start_image_install(
@@ -640,7 +913,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_fails_on_http_404() {
+    async fn package_install_fails_on_http_404() {
         let source = tempdir().unwrap();
         let dest = tempdir().unwrap();
         // Empty source dir → downloads 404.
@@ -657,9 +930,9 @@ mod tests {
         let mut state = AppState::with_db_file(templates, dest.path().join("state.db"))
             .await
             .unwrap();
-        state.image_installs = ImageInstallTracker::with_base_url(format!("http://{addr}"));
+        state.image_packages = ImageInstallTracker::with_base_url(format!("http://{addr}"));
 
-        let _ = start_image_install(
+        let _ = start_image_package(
             State(state.clone()),
             Path("alpine-3.24".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
@@ -670,7 +943,7 @@ mod tests {
         let mut failed = false;
         for _ in 0..80 {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            let Json(snap) = get_image_install(
+            let Json(snap) = get_image_package(
                 State(state.clone()),
                 Path("alpine-3.24".to_owned()),
                 Extension(RequestId(uuid::Uuid::nil())),
@@ -683,8 +956,15 @@ mod tests {
                 break;
             }
         }
-        assert!(failed, "install should fail when artifacts are missing");
+        assert!(failed, "package install should fail when artifacts are missing");
         assert!(state.templates.resolve_alias("alpine-3.24").is_none());
+        assert!(
+            !crate::image_install::staged_package_exists(
+                state.templates.image_root_path(),
+                "alpine-3.24"
+            ),
+            "a failed download must not publish a ready package"
+        );
     }
 
     #[tokio::test]
