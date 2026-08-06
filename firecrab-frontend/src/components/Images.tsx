@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { BuildResponse, ImageInstallResponse, ImageResponse, VmResponse } from "../bindings";
 import {
   ApiClientError,
@@ -272,22 +272,40 @@ export default function Images() {
     void refreshList();
   }, [refreshList]);
 
+  // `Images` is conditionally mounted by the App shell (only while the
+  // "images" tab is active), so a poll started here can easily outlive the
+  // component if the user navigates away mid-install. Every tick must check
+  // this before touching state.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   // `startImageInstall` only kicks the install off — the backend always
   // answers with a single "install started" snapshot and does the real
   // extract/register work in the background, so the result must be polled
   // to a terminal status before the table can show "설치됨".
   const pollInstall = (alias: string) => {
     const tick = async () => {
+      if (!mountedRef.current) return;
       try {
         const latest = await getImageInstall(alias);
+        if (!mountedRef.current) return;
         setInstall((current) => keepNewestJobSnapshot(current, latest));
         if (latest.status === "running") {
           setTimeout(() => void tick(), 300);
         } else if (latest.status === "succeeded") {
           await refreshList();
         }
+        // "failed" is a confirmed terminal state too — stop without retrying.
       } catch {
-        /* keep last snapshot */
+        // A fetch failure is not positive confirmation the job reached a
+        // terminal state, so keep polling rather than freezing the log on a
+        // one-off network blip (unless the component is already gone).
+        if (mountedRef.current) setTimeout(() => void tick(), 300);
       }
     };
     void tick();
