@@ -336,7 +336,16 @@ pub(crate) fn recover_before_specialization(rootfs: &Path) -> Result<(), RootfsE
 /// `debugfs`'s own `write` command refuses to overwrite an existing file,
 /// so any prior version is removed first — making this safe to call again
 /// against an already-specialized disk.
-fn write_into_image(rootfs: &Path, guest_path: &str, content: &[u8]) -> Result<(), RootfsError> {
+///
+/// `pub(crate)` (rather than private) so `handlers::bootstrap`'s own tests
+/// can seed a fixture disk with the exact guest-side output paths a real
+/// bootstrap script run would have left behind, the same reuse Task 3 gave
+/// other single-file-scoped helpers.
+pub(crate) fn write_into_image(
+    rootfs: &Path,
+    guest_path: &str,
+    content: &[u8],
+) -> Result<(), RootfsError> {
     let staging = rootfs.with_extension("specialize.tmp");
     fs::write(&staging, content).map_err(|source| RootfsError::Specialize {
         path: rootfs.to_owned(),
@@ -371,10 +380,6 @@ fn write_into_image(rootfs: &Path, guest_path: &str, content: &[u8]) -> Result<(
 /// files of any size `debugfs`'s `dump` command supports — the filesystem
 /// itself is the only real limit, unlike `write_into_image`'s small
 /// identity files.
-// Not yet consumed — handlers::bootstrap::package_bootstrap (Task 8 of
-// this plan) wires this in; wiring it now would be out of this task's
-// scope.
-#[allow(dead_code)]
 pub fn dump_from_image(rootfs: &Path, guest_path: &str, dest: &Path) -> Result<(), RootfsError> {
     let output = run_debugfs(rootfs, &format!("dump {guest_path} {}", dest.display()))?;
 

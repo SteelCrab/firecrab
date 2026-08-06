@@ -331,14 +331,201 @@ pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, v
     }
 }
 
-/// Task 8 replaces this stub with the real implementation: extracts the
-/// finished rootfs from the builder VM's disk and packages it as
-/// `{alias}.tar.zst` for the existing `image_install.rs` pipeline.
+/// Dumps the finished rootfs/kernel/initrd out of the builder VM's disk,
+/// converts the raw kernel to an uncompressed ELF vmlinux the same way
+/// `install-{alpine,ubuntu,rocky}-rootfs.sh` always did on the host, packs
+/// everything into `{alias}.tar.zst` at the exact layout
+/// `templates.rs::default_specs()` expects, writes it to
+/// `image_install::staged_package_path` — the unmodified "가져오기"
+/// pipeline picks it up from there — then deletes the builder VM.
 async fn package_bootstrap(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
-    let _ = vm_id;
-    state
-        .bootstraps
-        .finish_err(bootstrap_id, "packaging not yet implemented");
+    let Some(session) = state.bootstraps.get(bootstrap_id) else {
+        return;
+    };
+    let Some(spec) = crate::templates::TemplateRegistry::known_spec(&session.alias) else {
+        state
+            .bootstraps
+            .finish_err(bootstrap_id, format!("no known spec for {}", session.alias));
+        return;
+    };
+
+    let result = package_bootstrap_inner(state, &session, &spec).await;
+
+    let _ = super::vms::delete_vm(
+        State(state.clone()),
+        Extension(RequestId(Uuid::new_v4())),
+        Path(vm_id.to_string()),
+    )
+    .await;
+
+    match result {
+        Ok(()) => state.bootstraps.finish_ok(bootstrap_id),
+        Err(reason) => state.bootstraps.finish_err(bootstrap_id, reason),
+    }
+}
+
+async fn package_bootstrap_inner(
+    state: &AppState,
+    session: &BootstrapResponse,
+    spec: &crate::templates::TemplateSpec,
+) -> Result<(), String> {
+    let vm_record = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&session.vm_id)
+        .cloned()
+        .ok_or_else(|| "builder VM record vanished before packaging".to_owned())?;
+    let disk_generation = vm_record
+        .disk_generation
+        .ok_or_else(|| "builder VM has no disk generation to package from".to_owned())?;
+    let artifact_paths = crate::artifacts::VmArtifactPaths::for_vm(
+        &state.vms_dir_for(&vm_record.storage_root),
+        session.vm_id,
+    );
+    let guest_disk = artifact_paths.rootfs(disk_generation);
+    let alias = session.alias.clone();
+    let spec = spec.clone();
+    let image_root = state.templates.image_root_path().to_path_buf();
+
+    tokio::task::spawn_blocking(move || {
+        build_package_blocking(&guest_disk, &alias, &spec, &image_root)
+    })
+    .await
+    .map_err(|error| format!("packaging task panicked: {error}"))?
+}
+
+/// The synchronous half of packaging: dump files, convert the kernel,
+/// stage them under a scratch directory in the right `kernel/`/`rootfs/`
+/// layout, tar+zstd, then publish atomically into the staged package
+/// cache (temp-file-then-rename, same discipline as
+/// `image_install::download_to`).
+fn build_package_blocking(
+    guest_disk: &std::path::Path,
+    alias: &str,
+    spec: &crate::templates::TemplateSpec,
+    image_root: &std::path::Path,
+) -> Result<(), String> {
+    let scratch = image_root
+        .join(".packages")
+        .join(format!(".{alias}-bootstrap-scratch"));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let kernel_dir = scratch.join("kernel");
+    let rootfs_dir = scratch.join("rootfs");
+    std::fs::create_dir_all(&kernel_dir)
+        .map_err(|e| format!("mkdir {}: {e}", kernel_dir.display()))?;
+    std::fs::create_dir_all(&rootfs_dir)
+        .map_err(|e| format!("mkdir {}: {e}", rootfs_dir.display()))?;
+
+    let raw_rootfs = scratch.join("rootfs.raw.ext4");
+    crate::rootfs::dump_from_image(
+        guest_disk,
+        "/root/fc-bootstrap/out/rootfs.ext4",
+        &raw_rootfs,
+    )
+    .map_err(|e| format!("dump rootfs: {e}"))?;
+    let rootfs_dest = scratch.join(&spec.rootfs); // spec.rootfs = "rootfs/<exact-filename>.ext4"
+    std::fs::create_dir_all(rootfs_dest.parent().unwrap()).ok();
+    std::fs::rename(&raw_rootfs, &rootfs_dest).map_err(|e| format!("place rootfs: {e}"))?;
+
+    let raw_kernel_name = if alias == "alpine-3.24" {
+        "vmlinuz-virt-raw"
+    } else {
+        "vmlinuz-raw"
+    };
+    let raw_kernel = scratch.join("kernel.raw");
+    crate::rootfs::dump_from_image(
+        guest_disk,
+        &format!("/root/fc-bootstrap/out/{raw_kernel_name}"),
+        &raw_kernel,
+    )
+    .map_err(|e| format!("dump kernel: {e}"))?;
+
+    let kernel_dest = scratch.join(&spec.kernel); // e.g. "kernel/vmlinux-ubuntu-26.04-x86_64"
+    std::fs::create_dir_all(kernel_dest.parent().unwrap()).ok();
+    // Compile-time repo-relative path, not `std::env::current_dir()`-based:
+    // the deployed `firecrab-api.service` unit pins `WorkingDirectory` to
+    // `@DATADIR@` (see `packaging/systemd/firecrab-api.service`), which has
+    // no `scripts/` subdirectory at all, so a cwd-relative join would fail
+    // in production every time regardless of where the process happens to
+    // be started from. `env!("CARGO_MANIFEST_DIR")` is the same convention
+    // `templates.rs::load_default` already uses to locate `images/`
+    // relative to this crate at compile time, and it resolves correctly
+    // here too: `install.sh` always runs `cargo build --release` in place
+    // inside the checked-out repo on the target host (see `install.sh`),
+    // so the path baked in at compile time is exactly this host's own
+    // checkout, independent of the service's runtime working directory.
+    let extract_vmlinux = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../scripts/firecracker-menual/extract-vmlinux");
+    let output = std::process::Command::new(&extract_vmlinux)
+        .arg(&raw_kernel)
+        .output()
+        .map_err(|e| format!("run extract-vmlinux ({}): {e}", extract_vmlinux.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "extract-vmlinux failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    std::fs::write(&kernel_dest, &output.stdout).map_err(|e| format!("write kernel: {e}"))?;
+
+    if let Some(initrd_relative) = &spec.initrd {
+        let raw_initrd = scratch.join("initramfs.raw");
+        crate::rootfs::dump_from_image(guest_disk, "/root/fc-bootstrap/out/initramfs", &raw_initrd)
+            .map_err(|e| format!("dump initrd: {e}"))?;
+        let initrd_dest = scratch.join(initrd_relative);
+        std::fs::create_dir_all(initrd_dest.parent().unwrap()).ok();
+        std::fs::rename(&raw_initrd, &initrd_dest).map_err(|e| format!("place initrd: {e}"))?;
+    }
+
+    let package_name = crate::image_install::package_name(alias);
+    let staged = crate::image_install::staged_package_path(image_root, alias);
+    let staging_temp = staged.with_file_name(format!(".{package_name}.building"));
+    std::fs::create_dir_all(staged.parent().unwrap()).ok();
+
+    let members: Vec<std::path::PathBuf> = if spec.initrd.is_some() {
+        vec![
+            spec.kernel.clone(),
+            spec.initrd.clone().unwrap(),
+            spec.rootfs.clone(),
+        ]
+    } else {
+        vec![spec.kernel.clone(), spec.rootfs.clone()]
+    };
+    let mut tar = std::process::Command::new("tar")
+        .arg("--sparse")
+        .arg("-C")
+        .arg(&scratch)
+        .arg("-cf")
+        .arg("-")
+        .args(&members)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn tar: {e}"))?;
+    let tar_stdout = tar.stdout.take().ok_or("tar stdout missing")?;
+    let zstd = std::process::Command::new("zstd")
+        .args(["-T0", "-19", "-f", "-o"])
+        .arg(&staging_temp)
+        .stdin(tar_stdout)
+        .status()
+        .map_err(|e| format!("run zstd: {e}"))?;
+    let tar_status = tar.wait().map_err(|e| format!("tar wait: {e}"))?;
+    // Both subprocesses must succeed: `!a.success() || !b.success()` is the
+    // De Morgan form of "error unless both tar and zstd succeeded" — it
+    // trips (and this function returns Err) if *either* one failed, not
+    // only if both did. Do not simplify this to `&&`: that would silently
+    // ignore a single failed subprocess (e.g. tar exiting non-zero while
+    // zstd still emits a zero-length or truncated archive from a closed
+    // pipe) and let a broken package get renamed into place as if it had
+    // succeeded.
+    if !tar_status.success() || !zstd.success() {
+        let _ = std::fs::remove_file(&staging_temp);
+        return Err(format!("packaging failed (tar {tar_status}, zstd {zstd})"));
+    }
+
+    std::fs::rename(&staging_temp, &staged).map_err(|e| format!("publish package: {e}"))?;
+    let _ = std::fs::remove_dir_all(&scratch);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -384,6 +571,179 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("run_bootstrap_script never subscribed to the console");
+    }
+
+    /// `debugfs`'s own `write` command doesn't create parent directories
+    /// (verified directly: writing into a path whose parent doesn't yet
+    /// exist fails with "File not found by ext2_lookup"), so a test fixture
+    /// that wants to seed `/root/fc-bootstrap/out/<file>` the way a real
+    /// bootstrap script run leaves it behind must `mkdir` each path
+    /// component first — the same thing `rootfs.rs`'s own
+    /// `real_rootfs_with_guest_dirs` test helper does for its fixtures.
+    /// `rootfs::run_debugfs` itself stays module-private, so this shells
+    /// out directly rather than widening that too.
+    fn mkdir_in_image(disk_path: &std::path::Path, guest_dir: &str) {
+        let output = std::process::Command::new("debugfs")
+            .arg("-w")
+            .arg("-R")
+            .arg(format!("mkdir {guest_dir}"))
+            .arg(disk_path)
+            .output()
+            .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("File not found"),
+            "mkdir {guest_dir} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Builds a small ext4 image at `disk_path` with `/root/fc-bootstrap/out`
+    /// already present, then seeds it with `files` (guest-relative paths
+    /// under that directory, e.g. `"rootfs.ext4"` -> content).
+    fn seed_builder_output_disk(disk_path: &std::path::Path, files: &[(&str, &[u8])]) {
+        std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(disk_path)
+            .arg("16M")
+            .status()
+            .unwrap();
+        for dir in ["/root", "/root/fc-bootstrap", "/root/fc-bootstrap/out"] {
+            mkdir_in_image(disk_path, dir);
+        }
+        for (name, content) in files {
+            crate::rootfs::write_into_image(
+                disk_path,
+                &format!("/root/fc-bootstrap/out/{name}"),
+                content,
+            )
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn package_bootstrap_writes_a_tar_zst_the_install_pipeline_can_read() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
+        crate::handlers::vms::test_support::seed_vm(&state, &vm);
+        let generation = Uuid::new_v4();
+        let artifact_paths =
+            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id);
+        artifact_paths.ensure_directories().unwrap();
+        let disk_path = artifact_paths.rootfs(generation);
+
+        // Build a small ext4 image on this disk path containing the exact
+        // guest-side layout package_bootstrap expects to find and dump out.
+        // `ubuntu-26.04` has `initrd: None` in `default_specs()`, so only
+        // `rootfs.ext4` and `vmlinuz-raw` (Ubuntu's raw-kernel dump
+        // filename per `bootstrap-ubuntu-in-guest.sh`) need seeding here.
+        seed_builder_output_disk(
+            &disk_path,
+            &[
+                ("rootfs.ext4", b"fake ext4 rootfs bytes"),
+                ("vmlinuz-raw", b"fake vmlinux elf bytes"),
+            ],
+        );
+        {
+            let mut vms = state.vms.lock().unwrap();
+            let stored = vms.get_mut(&vm.id).unwrap();
+            stored.disk_generation = Some(generation);
+        }
+
+        let bootstrap_id = state.bootstraps.begin("ubuntu-26.04", "alpine-3.24", vm.id);
+        state
+            .bootstraps
+            .set_status(bootstrap_id, BootstrapStatus::Packaging);
+
+        package_bootstrap(&state, bootstrap_id, vm.id).await;
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(
+            snapshot.status,
+            BootstrapStatus::Succeeded,
+            "log: {}",
+            snapshot.log
+        );
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+        );
+        assert!(staged.is_file());
+
+        let listing = std::process::Command::new("tar")
+            .arg("--use-compress-program=zstd")
+            .arg("-tf")
+            .arg(&staged)
+            .output()
+            .unwrap();
+        assert!(listing.status.success());
+        let members = String::from_utf8_lossy(&listing.stdout);
+        assert!(members.contains("kernel/vmlinux-ubuntu-26.04-x86_64"));
+        assert!(members.contains("rootfs/ubuntu-rootfs-26.04-amd64.ext4"));
+    }
+
+    /// Covers the `if let Some(initrd_relative) = &spec.initrd` branch in
+    /// `build_package_blocking` that the `ubuntu-26.04` test above never
+    /// exercises (Ubuntu's spec has `initrd: None`) — `alpine-3.24` does
+    /// carry an initrd, and its raw-kernel dump filename
+    /// (`vmlinuz-virt-raw`, per `bootstrap-alpine-in-guest.sh`) differs
+    /// from every other alias's `vmlinuz-raw`, which `build_package_blocking`
+    /// branches on explicitly.
+    #[tokio::test]
+    async fn package_bootstrap_includes_the_initrd_when_the_spec_has_one() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
+        crate::handlers::vms::test_support::seed_vm(&state, &vm);
+        let generation = Uuid::new_v4();
+        let artifact_paths =
+            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id);
+        artifact_paths.ensure_directories().unwrap();
+        let disk_path = artifact_paths.rootfs(generation);
+
+        seed_builder_output_disk(
+            &disk_path,
+            &[
+                ("rootfs.ext4", b"fake alpine rootfs bytes"),
+                ("vmlinuz-virt-raw", b"fake vmlinux elf bytes"),
+                ("initramfs", b"fake initramfs bytes"),
+            ],
+        );
+        {
+            let mut vms = state.vms.lock().unwrap();
+            let stored = vms.get_mut(&vm.id).unwrap();
+            stored.disk_generation = Some(generation);
+        }
+
+        let bootstrap_id = state.bootstraps.begin("alpine-3.24", "ubuntu-26.04", vm.id);
+        state
+            .bootstraps
+            .set_status(bootstrap_id, BootstrapStatus::Packaging);
+
+        package_bootstrap(&state, bootstrap_id, vm.id).await;
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(
+            snapshot.status,
+            BootstrapStatus::Succeeded,
+            "log: {}",
+            snapshot.log
+        );
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "alpine-3.24",
+        );
+        let listing = std::process::Command::new("tar")
+            .arg("--use-compress-program=zstd")
+            .arg("-tf")
+            .arg(&staged)
+            .output()
+            .unwrap();
+        assert!(listing.status.success());
+        let members = String::from_utf8_lossy(&listing.stdout);
+        assert!(members.contains("kernel/vmlinux-alpine-virt-x86_64"));
+        assert!(members.contains("kernel/initramfs-alpine-virt-x86_64"));
+        assert!(members.contains("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"));
     }
 
     #[tokio::test]
