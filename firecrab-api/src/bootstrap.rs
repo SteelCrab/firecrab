@@ -92,10 +92,9 @@ impl BootstrapTracker {
     /// transition it accompanies, so the compare-and-set has already
     /// decided whether this session is the one still moving.
     ///
-    /// Not yet called from `handlers::bootstrap` — wiring it into the
-    /// pipeline's status transitions is the next task's job, not this
-    /// one's. `#[allow(dead_code)]` is temporary and should come off once
-    /// that call site exists.
+    /// Not yet consumed — `handlers::bootstrap` (Task 4 of this plan,
+    /// "Thread the steps through the bootstrap pipeline") wires this in;
+    /// wiring it now would be out of this task's scope.
     #[allow(dead_code)]
     pub fn set_step(&self, id: Uuid, step: BootstrapStep) {
         let mut sessions = self
