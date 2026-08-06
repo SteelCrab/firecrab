@@ -798,6 +798,29 @@ mod tests {
     }
 
     #[test]
+    fn validation_accepts_a_complete_spec_and_rejects_an_empty_archive() {
+        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let members = vec![
+            "kernel/".to_owned(),
+            alpine.kernel.to_string_lossy().into_owned(),
+            alpine
+                .initrd
+                .as_ref()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            alpine.rootfs.to_string_lossy().into_owned(),
+        ];
+
+        validate_archive_members(&members).unwrap();
+        ensure_spec_members_present(&alpine, &members).unwrap();
+        assert_eq!(
+            validate_archive_members(&[]).unwrap_err(),
+            "archive is empty"
+        );
+    }
+
+    #[test]
     fn ensure_spec_requires_all_artifacts() {
         let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
         let members = vec![
@@ -864,6 +887,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn piped_tar_fallback_lists_and_extracts_a_valid_archive() {
+        let source = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        write_file(&source.path().join("kernel/vmlinux"), b"kernel-bytes");
+        write_file(&source.path().join("rootfs/root.ext4"), b"rootfs-bytes");
+        let archive = source.path().join("demo.tar.zst");
+        make_tar_zst(
+            source.path(),
+            &["kernel/vmlinux", "rootfs/root.ext4"],
+            &archive,
+        );
+
+        let listed = list_archive_members_piped_blocking(&archive).unwrap();
+        assert!(listed.status.success());
+        assert!(String::from_utf8_lossy(&listed.stdout).contains("kernel/vmlinux"));
+
+        extract_archive_piped_blocking(&archive, dest.path()).unwrap();
+        assert_eq!(
+            fs::read(dest.path().join("rootfs/root.ext4")).unwrap(),
+            b"rootfs-bytes"
+        );
+    }
+
     #[tokio::test]
     async fn list_rejects_when_member_escapes() {
         let source = tempdir().unwrap();
@@ -875,6 +922,54 @@ mod tests {
         let members = list_archive_members(&archive).await.unwrap();
         let err = validate_archive_members(&members).unwrap_err();
         assert!(err.contains("etc/passwd"));
+    }
+
+    #[tokio::test]
+    async fn image_install_reports_failure_when_no_package_has_been_staged() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let tracker = ImageInstallTracker::disabled();
+        tracker.begin(&spec.alias).unwrap();
+
+        run_image_install(tracker.clone(), templates, spec.clone()).await;
+
+        let snapshot = tracker.snapshot(&spec.alias);
+        assert_eq!(snapshot.status, ImageInstallStatus::Failed);
+        assert!(snapshot.log.contains("package is not ready"));
+    }
+
+    #[tokio::test]
+    async fn package_install_reports_a_download_failure_without_publishing_a_cache_entry() {
+        let directory = tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().fallback(|| async { axum::http::StatusCode::NOT_FOUND }),
+            )
+            .await
+            .ok();
+        });
+
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let tracker = ImageInstallTracker::with_base_url(format!("http://{addr}"));
+        tracker.begin(&spec.alias).unwrap();
+
+        run_package_install(
+            tracker.clone(),
+            templates.clone(),
+            format!("http://{addr}"),
+            spec.clone(),
+        )
+        .await;
+
+        let snapshot = tracker.snapshot(&spec.alias);
+        assert_eq!(snapshot.status, ImageInstallStatus::Failed);
+        assert!(snapshot.log.contains("package preparation failed"));
+        assert!(!staged_package_path(templates.image_root_path(), &spec.alias).exists());
     }
 
     #[tokio::test]

@@ -1592,4 +1592,50 @@ mod tests {
             "log: {log}"
         );
     }
+
+    #[tokio::test]
+    async fn bootstrap_script_failure_without_a_console_process_cleans_up_the_builder_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = seed_builder_vm(&state, VmState::Running);
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Running,
+        );
+
+        run_bootstrap_script(&state, bootstrap_id, vm.id).await;
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        assert!(
+            snapshot
+                .log
+                .contains("console process is no longer available")
+        );
+        assert!(state.vms.lock().unwrap().get(&vm.id).is_none());
+    }
+
+    #[tokio::test]
+    async fn package_bootstrap_rejects_an_unknown_target_alias_and_cleans_up() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = seed_builder_vm(&state, VmState::Created);
+        let bootstrap_id = seeded_session(
+            &state,
+            "not-a-template",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Packaging,
+        );
+
+        package_bootstrap(&state, bootstrap_id, vm.id).await;
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        assert!(snapshot.log.contains("no known spec for not-a-template"));
+        assert!(state.vms.lock().unwrap().get(&vm.id).is_none());
+    }
 }
