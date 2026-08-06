@@ -222,6 +222,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/images/builds/{buildId}/packages",
             post(handlers::builds::build_packages),
         )
+        .route(
+            "/api/images/builds/{buildId}/finalize",
+            post(handlers::builds::finalize_build),
+        )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
             "/api/storage/devices",

@@ -11,7 +11,9 @@
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use firecrab_api_types::{BuildResponse, BuildStatus, CreateVmRequest, EgressPolicy};
+use firecrab_api_types::{
+    BuildResponse, BuildStatus, CreateVmRequest, EgressPolicy, FinalizeBuildRequest,
+};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -19,6 +21,7 @@ use crate::extract::ValidatedJson;
 use crate::model::VmPurpose;
 use crate::server::RequestId;
 use crate::state::AppState;
+use crate::templates::TemplateRegistry;
 
 use super::vms::{create_vm, parse_id, start_vm_request};
 
@@ -247,6 +250,197 @@ async fn wait_for_package_outcome(
         }
     }
     None
+}
+
+/// `POST /api/images/builds/{buildId}/finalize` — stops the builder VM,
+/// pulls its rootfs disk out from under `delete_vm`'s artifact cleanup,
+/// strips guest identity, registers it as a new template version, then
+/// deletes the builder VM. `newAlias` in the request body determines
+/// whether this is an in-place rebuild (omitted) or a derived template
+/// (given) — decided here rather than at `start_build` time, since the
+/// operator may only know which they want after seeing what changed.
+pub async fn finalize_build(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(build_id): Path<String>,
+    ValidatedJson(body): ValidatedJson<FinalizeBuildRequest>,
+) -> Result<Json<BuildResponse>, AppError> {
+    let parsed_build_id = parse_id(&build_id, request_id.0)?;
+    let session = state
+        .builds
+        .get(parsed_build_id)
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+
+    // `build_packages` flips `had_package_action` right after it dispatches
+    // a command to the builder VM's console — before the outcome is known
+    // — so a session can still have one running here even though that flag
+    // already reads `true`. Finalizing mid-install would race
+    // `wait_for_package_outcome`'s poll for the very disk this handler is
+    // about to copy out from under it, so refuse outright rather than risk
+    // grabbing a half-written rootfs.
+    if session.status == BuildStatus::Installing {
+        return Err(AppError::conflict(
+            "build_in_progress",
+            "a package action is still running on this build; wait for it to finish before finalizing",
+            request_id.0,
+        ));
+    }
+
+    if !session.had_package_action {
+        return Err(AppError::conflict(
+            "no_changes",
+            "install, remove, or update at least one package before saving this build as an image",
+            request_id.0,
+        ));
+    }
+
+    let target_alias = body
+        .new_alias
+        .unwrap_or_else(|| session.source_alias.clone());
+    if target_alias != session.source_alias && TemplateRegistry::known_spec(&target_alias).is_some()
+    {
+        return Err(AppError::conflict(
+            "alias_reserved",
+            "that alias name is reserved for a built-in template",
+            request_id.0,
+        ));
+    }
+
+    state
+        .builds
+        .set_status(parsed_build_id, BuildStatus::Finalizing);
+
+    let _ = super::vms::stop_vm(
+        State(state.clone()),
+        Extension(request_id),
+        Path(session.vm_id.to_string()),
+    )
+    .await?;
+
+    if let Err(reason) = finalize_and_register(&state, &session, &target_alias, request_id.0).await
+    {
+        state.builds.finish_err(parsed_build_id, &reason);
+        // Best-effort: the disk/register failure above is the error this
+        // call reports, so a second failure here (delete_vm) is swallowed
+        // rather than masking it. If delete_vm itself fails, the builder VM
+        // record survives — `VmPurpose::Builder` hides it from `list_vms`,
+        // so it isn't operator-visible for cleanup; the session's own log
+        // (via `finish_err`) is the only trace, which is an accepted gap for
+        // this task rather than something Task 9 attempts to close.
+        let _ = super::vms::delete_vm(
+            State(state.clone()),
+            Extension(request_id),
+            Path(session.vm_id.to_string()),
+        )
+        .await;
+        return Err(AppError::internal(request_id.0));
+    }
+
+    super::vms::delete_vm(
+        State(state.clone()),
+        Extension(request_id),
+        Path(session.vm_id.to_string()),
+    )
+    .await?;
+
+    state.builds.finish_ok(parsed_build_id, &target_alias);
+    Ok(Json(
+        state
+            .builds
+            .get(parsed_build_id)
+            .expect("session still tracked"),
+    ))
+}
+
+/// Copies the builder VM's current-generation rootfs disk out, strips guest
+/// identity via `rootfs::finalize_template_disk`, and registers the result
+/// as a new template version under `target_alias`. Split out from
+/// `finalize_build` so this logic gets direct unit coverage without needing
+/// a real Firecracker process to produce a genuinely `Running` builder VM
+/// for `stop_vm` to act on first — the test fixture's Firecracker binary
+/// never actually boots one.
+pub(crate) async fn finalize_and_register(
+    state: &AppState,
+    session: &BuildResponse,
+    target_alias: &str,
+    request_id: Uuid,
+) -> Result<(), String> {
+    let vm_record = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&session.vm_id)
+        .cloned()
+        .ok_or_else(|| "builder VM record vanished before finalize".to_owned())?;
+
+    let source_version = state
+        .templates
+        .resolve_alias(&session.source_alias)
+        .ok_or_else(|| format!("source alias {} no longer resolves", session.source_alias))?;
+
+    let Some(disk_generation) = vm_record.disk_generation else {
+        return Err("builder VM has no disk generation to finalize".to_owned());
+    };
+    let artifact_paths = crate::artifacts::VmArtifactPaths::for_vm(
+        &state.vms_dir_for(&vm_record.storage_root),
+        session.vm_id,
+    );
+    let source_disk = artifact_paths.rootfs(disk_generation);
+
+    // A flat top-level filename (rather than nesting under a `rootfs/`
+    // subdirectory the way the built-in `default_specs` do) means this
+    // never has to `create_dir_all` a path component that might already
+    // exist as something else — image_root_path() itself is already a
+    // verified, existing directory.
+    let version_tag = format!("{target_alias}-{}", request_id.simple());
+    let dest_relative = std::path::PathBuf::from(format!("{version_tag}.ext4"));
+    let dest_path = state.templates.image_root_path().join(&dest_relative);
+
+    let finalize_result = tokio::task::spawn_blocking({
+        let source_disk = source_disk.clone();
+        let dest_path = dest_path.clone();
+        move || -> Result<(), String> {
+            std::fs::copy(&source_disk, &dest_path).map_err(|error| {
+                format!(
+                    "copy {} -> {}: {error}",
+                    source_disk.display(),
+                    dest_path.display()
+                )
+            })?;
+            crate::rootfs::finalize_template_disk(&dest_path)
+                .map_err(|error| format!("finalize {}: {error}", dest_path.display()))
+        }
+    })
+    .await
+    .map_err(|error| format!("finalize task panicked: {error}"))?;
+
+    if let Err(reason) = finalize_result {
+        let _ = std::fs::remove_file(&dest_path);
+        return Err(reason);
+    }
+
+    let spec = crate::templates::TemplateSpec {
+        alias: target_alias.to_owned(),
+        version: version_tag,
+        kernel: source_version.kernel.relative_path().to_path_buf(),
+        initrd: source_version
+            .initrd
+            .as_ref()
+            .map(|artifact| artifact.relative_path().to_path_buf()),
+        rootfs: dest_relative,
+        boot_args: source_version.boot_args.clone(),
+    };
+    let templates = state.templates.clone();
+    let register_result = tokio::task::spawn_blocking(move || templates.register_spec(spec))
+        .await
+        .map_err(|error| format!("register task panicked: {error}"))?;
+
+    if let Err(error) = register_result {
+        let _ = std::fs::remove_file(&dest_path);
+        return Err(error.to_string());
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -484,5 +678,276 @@ mod tests {
         assert_eq!(build.status, BuildStatus::Ready);
         assert!(build.had_package_action);
         assert!(build.log.contains("exited with code 1"));
+    }
+
+    #[tokio::test]
+    async fn finalize_build_rejects_a_session_with_no_successful_package_action() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+        let (_status, Json(build)) = start_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap();
+
+        let error = finalize_build(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build.build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest { new_alias: None }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn finalize_build_rejects_an_unknown_build_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = finalize_build(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(Uuid::new_v4().to_string()),
+            ValidatedJson(FinalizeBuildRequest { new_alias: None }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn finalize_build_rejects_a_reserved_alias_name() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+        let (_status, Json(build)) = start_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap();
+        state.builds.mark_package_action_done(build.build_id);
+
+        // "alpine-3.24" is one of TemplateRegistry::known_specs's built-in
+        // aliases — reserved even though this registry never actually
+        // installed it, so a derived build can't shadow it.
+        let error = finalize_build(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build.build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest {
+                new_alias: Some("alpine-3.24".to_owned()),
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    /// `build_packages` (Task 8) flips `had_package_action` as soon as it
+    /// successfully *dispatches* a command to the builder VM's console —
+    /// before `wait_for_package_outcome` observes any result — so a session
+    /// can be mid-install (`BuildStatus::Installing`) with the flag already
+    /// `true`. `finalize_build` must refuse this case even though the
+    /// `had_package_action` check alone would let it through, since the
+    /// disk it's about to copy could still be mid-write on the builder VM.
+    #[tokio::test]
+    async fn finalize_build_rejects_a_build_still_installing_packages() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+        let (_status, Json(build)) = start_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap();
+
+        state.builds.mark_package_action_done(build.build_id);
+        state
+            .builds
+            .set_status(build.build_id, BuildStatus::Installing);
+
+        let error = finalize_build(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build.build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest { new_alias: None }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    /// Full success-path coverage for the disk-copy/strip/register logic
+    /// lives here against `finalize_and_register` directly rather than
+    /// through `finalize_build`: `finalize_build` first calls
+    /// `handlers::vms::stop_vm`, which requires the VM to actually be
+    /// `Running` (`VmState::can_transition`) — something this test
+    /// fixture's Firecracker binary can never produce, since it never
+    /// really boots a process. Testing the extracted helper directly gives
+    /// this logic real coverage without fighting that constraint.
+    #[tokio::test]
+    async fn finalize_and_register_registers_a_new_template_version_when_disk_is_ready() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+
+        let (_status, Json(build)) = start_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap();
+
+        // Simulate a builder VM whose disk-prep step already ran (as it
+        // would have, early in a real `start_vm`, well before `Running`) —
+        // this fixture never actually boots Firecracker, so seed a real
+        // ext4 file at the disk generation path `finalize_and_register`
+        // expects instead.
+        let generation = Uuid::new_v4();
+        let artifact_paths =
+            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for("default"), build.vm_id);
+        artifact_paths.ensure_directories().unwrap();
+        let disk_path = artifact_paths.rootfs(generation);
+        std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(&disk_path)
+            .arg("8M")
+            .status()
+            .unwrap();
+        {
+            let mut vms = state.vms.lock().unwrap();
+            let vm = vms.get_mut(&build.vm_id).unwrap();
+            vm.disk_generation = Some(generation);
+        }
+
+        let session = state.builds.get(build.build_id).unwrap();
+        finalize_and_register(&state, &session, "my-nginx-base", Uuid::new_v4())
+            .await
+            .unwrap();
+
+        let registered = state.templates.resolve_alias("my-nginx-base");
+        assert!(registered.is_some());
+        assert_eq!(registered.unwrap().name, "my-nginx-base");
+    }
+
+    /// End-to-end coverage of `finalize_build`'s own orchestration (guard
+    /// checks already passed, `stop_vm`, `finalize_and_register`,
+    /// `delete_vm`, `finish_ok`) — not just the extracted helper. `stop_vm`
+    /// only requires `VmState::Running` in the in-memory record to proceed
+    /// (its own SIGTERM step is skipped when `state.processes` has no entry
+    /// for the VM, and `teardown_vm_network` is best-effort against the
+    /// fixture's always-ok network helper), so setting `Running` directly —
+    /// the same technique `build_packages`'s own Task 8 tests already use —
+    /// is enough to drive this without a real Firecracker process.
+    #[tokio::test]
+    async fn finalize_build_stops_the_builder_vm_registers_a_template_and_deletes_it() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+
+        let (_status, Json(build)) = start_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap();
+
+        let generation = Uuid::new_v4();
+        let artifact_paths =
+            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for("default"), build.vm_id);
+        artifact_paths.ensure_directories().unwrap();
+        let disk_path = artifact_paths.rootfs(generation);
+        std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(&disk_path)
+            .arg("8M")
+            .status()
+            .unwrap();
+        {
+            let mut vms = state.vms.lock().unwrap();
+            let vm = vms.get_mut(&build.vm_id).unwrap();
+            vm.disk_generation = Some(generation);
+            vm.state = VmState::Running;
+        }
+        state.builds.mark_package_action_done(build.build_id);
+
+        let Json(finalized) = finalize_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build.build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest {
+                new_alias: Some("my-nginx-base".to_owned()),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(finalized.status, BuildStatus::Succeeded);
+        assert_eq!(finalized.target_alias.as_deref(), Some("my-nginx-base"));
+        assert!(state.templates.resolve_alias("my-nginx-base").is_some());
+        // delete_vm ran: the builder VM record is gone.
+        assert!(state.vms.lock().unwrap().get(&build.vm_id).is_none());
+    }
+
+    /// When `finalize_and_register` fails (here: no disk generation was
+    /// ever recorded, so there's nothing to copy), `finalize_build` must
+    /// still record the failure and clean up the builder VM rather than
+    /// leaving it orphaned and hidden from `list_vms` forever.
+    #[tokio::test]
+    async fn finalize_build_cleans_up_the_builder_vm_when_the_disk_copy_fails() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+
+        let (_status, Json(build)) = start_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap();
+
+        // Running, but deliberately no disk_generation — the disk-prep step
+        // that would normally set it never ran in this fixture.
+        {
+            let mut vms = state.vms.lock().unwrap();
+            let vm = vms.get_mut(&build.vm_id).unwrap();
+            vm.state = VmState::Running;
+        }
+        state.builds.mark_package_action_done(build.build_id);
+
+        let error = finalize_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build.build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest { new_alias: None }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        let session = state.builds.get(build.build_id).unwrap();
+        assert_eq!(session.status, BuildStatus::Failed);
+        assert!(session.log.contains("no disk generation"));
+        // delete_vm still ran despite the finalize failure.
+        assert!(state.vms.lock().unwrap().get(&build.vm_id).is_none());
     }
 }
