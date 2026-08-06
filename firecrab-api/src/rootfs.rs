@@ -281,10 +281,14 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
 /// Prepares a builder VM's finished rootfs disk to become a new template
 /// version: recovers the ext4 journal (same as `specialize_guest`), then
 /// strips [`STRIP_PATHS`] identity files so every VM created from this new
-/// template gets its own fresh hostname/machine-id/SSH host keys instead of
-/// inheriting whatever the builder VM generated at boot. Deliberately does
-/// NOT set `/etc/hostname` the way `specialize_guest` does — a template has
-/// no VM id yet; that happens per-instance at create time.
+/// template gets its own fresh hostname/SSH host keys instead of inheriting
+/// whatever the builder VM generated at boot. Deliberately does NOT set
+/// `/etc/hostname` the way `specialize_guest` does — a template has no VM id
+/// yet; that happens per-instance at create time.
+// Not yet consumed — handlers::builds finalize handler (Task 9 of the
+// m2image-web-builder plan) wires this in; wiring it now would be out of
+// this task's scope.
+#[allow(dead_code)]
 pub fn finalize_template_disk(rootfs: &Path) -> Result<(), RootfsError> {
     recover_before_specialization(rootfs)?;
     for path in STRIP_PATHS {
