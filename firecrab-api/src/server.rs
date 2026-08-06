@@ -192,8 +192,8 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route(
-            "/api/vms/{id}/packages/update",
-            post(handlers::packages::update_packages),
+            "/api/vms/{id}/packages",
+            post(handlers::packages::run_package_action),
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))

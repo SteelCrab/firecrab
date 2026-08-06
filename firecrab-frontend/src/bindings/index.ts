@@ -20,6 +20,7 @@ export * from "./MicroStorageDetailResponse";
 export * from "./MicroStorageResponse";
 export * from "./MicroStorageVm";
 export * from "./NetworkInfoResponse";
+export * from "./PackageAction";
 export * from "./StartupStep";
 export * from "./StartupStepOutcome";
 export * from "./StartupStepRun";

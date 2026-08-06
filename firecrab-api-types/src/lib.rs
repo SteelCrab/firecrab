@@ -198,7 +198,26 @@ pub struct StartupStepRun {
     pub detail: Option<String>,
 }
 
-/// Outcome of the most recent `POST /api/vms/{id}/packages/update` run for
+/// What `POST /api/vms/{id}/packages` should do on the guest's console.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageActionKind {
+    Install,
+    Remove,
+    Update,
+}
+
+/// Body of `POST /api/vms/{id}/packages`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageAction {
+    pub action: PackageActionKind,
+    /// Required (non-empty) for `install`/`remove`; ignored for `update`.
+    #[serde(default)]
+    pub packages: Vec<String>,
+}
+
+/// Outcome of the most recent `POST /api/vms/{id}/packages` run for
 /// this VM — transient like `startup_step` (see
 /// `docs/30-tasks/task-guest-network-configuration.md`'s sibling doc for the console-
 /// sentinel pattern this reuses), not persisted across a restart.
