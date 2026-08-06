@@ -371,6 +371,10 @@ fn write_into_image(rootfs: &Path, guest_path: &str, content: &[u8]) -> Result<(
 /// files of any size `debugfs`'s `dump` command supports — the filesystem
 /// itself is the only real limit, unlike `write_into_image`'s small
 /// identity files.
+// Not yet consumed — handlers::bootstrap::package_bootstrap (Task 8 of
+// this plan) wires this in; wiring it now would be out of this task's
+// scope.
+#[allow(dead_code)]
 pub fn dump_from_image(rootfs: &Path, guest_path: &str, dest: &Path) -> Result<(), RootfsError> {
     let output = run_debugfs(rootfs, &format!("dump {guest_path} {}", dest.display()))?;
 
