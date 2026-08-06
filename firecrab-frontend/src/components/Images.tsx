@@ -3,7 +3,6 @@ import type { BootstrapResponse, BuildResponse, ImageInstallResponse, ImageRespo
 import {
   ApiClientError,
   buildPackages,
-  cancelBootstrap,
   cancelBuild,
   deleteImage,
   deleteVm,
@@ -363,23 +362,18 @@ function BootstrapPanel({
   // effect-scoped `cancelled` flag, since a bare `cancelled` flag only
   // guards the one scheduled tick it closes over, not the recursive chain
   // of ticks a real bootstrap session needs.
+  //
+  // Deliberately does NOT cancel the session on unmount: this component
+  // unmounts on every tab switch away from Images (not just an explicit
+  // dismissal), and cancelling mid-Packaging deletes the builder VM's disk
+  // out from under the concurrently-running packaging step, which can
+  // publish a truncated archive. A bootstrap simply keeps running on the
+  // backend and the panel resumes polling it next time Images mounts.
   const mountedRef = useRef(true);
-  /**
-   * The live session's id, held outside React state so the unmount cleanup
-   * can still reach it — mirrors `BuildModal`'s `buildIdRef`/`settledRef`
-   * pair. Cleared as soon as the session settles on its own, so a finished
-   * bootstrap is never "cancelled" retroactively.
-   */
-  const bootstrapIdRef = useRef<string | null>(null);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      // Navigating away mid-bootstrap would otherwise leave a session (and
-      // its builder VM) running with nothing in the UI tracking it.
-      const orphaned = bootstrapIdRef.current;
-      bootstrapIdRef.current = null;
-      if (orphaned) void cancelBootstrap(orphaned).catch(() => undefined);
     };
   }, []);
 
@@ -391,15 +385,9 @@ function BootstrapPanel({
         if (!mountedRef.current) return;
         setSession(snapshot);
         if (snapshot.status === "succeeded") {
-          // Settled: the backend already stopped, packaged and deleted the
-          // builder VM, so there is nothing left for unmount to cancel.
-          bootstrapIdRef.current = null;
           onFinished();
         } else if (snapshot.status !== "failed") {
           setTimeout(() => void tick(), 1000);
-        } else {
-          // Failed sessions have already torn their builder VM down too.
-          bootstrapIdRef.current = null;
         }
         // "failed" is a confirmed terminal state too — stop without retrying.
       } catch {
@@ -418,14 +406,7 @@ function BootstrapPanel({
     setError(null);
     try {
       const started = await startBootstrap(alias);
-      bootstrapIdRef.current = started.bootstrapId;
-      if (!mountedRef.current) {
-        // Unmounted while the POST was in flight, so the cleanup above ran
-        // before there was an id to cancel — hand it back here.
-        bootstrapIdRef.current = null;
-        void cancelBootstrap(started.bootstrapId).catch(() => undefined);
-        return;
-      }
+      if (!mountedRef.current) return;
       setSession(started);
       pollBootstrap(started.bootstrapId);
     } catch (err) {
