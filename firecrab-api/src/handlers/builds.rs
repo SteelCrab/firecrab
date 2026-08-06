@@ -310,12 +310,28 @@ pub async fn finalize_build(
         .builds
         .set_status(parsed_build_id, BuildStatus::Finalizing);
 
-    let _ = super::vms::stop_vm(
+    if let Err(error) = super::vms::stop_vm(
         State(state.clone()),
         Extension(request_id),
         Path(session.vm_id.to_string()),
     )
-    .await?;
+    .await
+    {
+        // Nothing has been registered yet at this point, so this really is
+        // an end-to-end failure — land the session on a terminal state
+        // rather than leaving it stuck at `Finalizing` forever. A retry
+        // would otherwise hit `stop_vm`'s state-transition guard every time
+        // (it only allows Running -> Stopping, and a first attempt may have
+        // already moved the VM partway), with no in-band way out.
+        state.builds.finish_err(
+            parsed_build_id,
+            format!(
+                "failed to stop builder VM {} before finalizing",
+                session.vm_id
+            ),
+        );
+        return Err(error);
+    }
 
     if let Err(reason) = finalize_and_register(&state, &session, &target_alias, request_id.0).await
     {
@@ -336,12 +352,28 @@ pub async fn finalize_build(
         return Err(AppError::internal(request_id.0));
     }
 
-    super::vms::delete_vm(
+    if super::vms::delete_vm(
         State(state.clone()),
         Extension(request_id),
         Path(session.vm_id.to_string()),
     )
-    .await?;
+    .await
+    .is_err()
+    {
+        // The template IS registered and usable by this point — the actual
+        // goal of this request already succeeded — so this is reported to
+        // the caller as success, not a build failure. VM cleanup here is
+        // genuinely best-effort; log the vm_id since `VmPurpose::Builder`
+        // hides it from `list_vms`, so this log line is the operator's only
+        // way to find it for manual removal.
+        state.builds.append_log(
+            parsed_build_id,
+            format!(
+                "warning: builder VM {} could not be deleted after finalize succeeded; remove it manually",
+                session.vm_id
+            ),
+        );
+    }
 
     state.builds.finish_ok(parsed_build_id, &target_alias);
     Ok(Json(
@@ -753,6 +785,39 @@ mod tests {
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
     }
 
+    /// If `stop_vm` itself fails, nothing has been registered yet — this is
+    /// a genuine end-to-end failure, so the session must land on
+    /// `BuildStatus::Failed` rather than sticking at `Finalizing` forever
+    /// (a retry would otherwise hit `stop_vm`'s Running -> Stopping guard
+    /// every time, with no in-band way out).
+    #[tokio::test]
+    async fn finalize_build_marks_the_session_failed_when_stop_vm_fails() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        // Left at the default `Created` state (never started) — `stop_vm`
+        // only allows Running -> Stopping, so this reproduces the same
+        // guard failure a half-transitioned VM from a prior finalize
+        // attempt would hit.
+        let vm = record("builder-vm", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let build_id = state.builds.begin("ubuntu-rootfs-26.04", vm.id);
+        state.builds.mark_package_action_done(build_id);
+
+        let error = finalize_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest { new_alias: None }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        let session = state.builds.get(build_id).unwrap();
+        assert_eq!(session.status, BuildStatus::Failed);
+        assert!(session.log.contains("failed to stop builder VM"));
+    }
+
     /// `build_packages` (Task 8) flips `had_package_action` as soon as it
     /// successfully *dispatches* a command to the builder VM's console —
     /// before `wait_for_package_outcome` observes any result — so a session
@@ -902,6 +967,93 @@ mod tests {
         assert!(state.templates.resolve_alias("my-nginx-base").is_some());
         // delete_vm ran: the builder VM record is gone.
         assert!(state.vms.lock().unwrap().get(&build.vm_id).is_none());
+    }
+
+    /// By the time the *final* `delete_vm` call runs, `finalize_and_register`
+    /// has already succeeded — the new template is registered and usable —
+    /// so a failure here must not be reported as a build failure. The
+    /// session should still reach `Succeeded` with `target_alias` set; VM
+    /// cleanup is best-effort, surfaced only as a log line (since
+    /// `VmPurpose::Builder` hides the VM from `list_vms`, that log line is
+    /// the operator's only way to find its `vm_id` for manual removal).
+    ///
+    /// Built directly via `record()`/`seed_vm()` rather than `start_build`:
+    /// `start_build` spawns a detached `finish_start` task that itself
+    /// touches this same VM's artifact directory (its own disk-prep step),
+    /// racing the permission change below and non-deterministically
+    /// resetting it back before `delete_vm` ever runs.
+    #[tokio::test]
+    async fn finalize_build_still_succeeds_when_the_final_delete_vm_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let vm = VmRecord {
+            state: VmState::Running,
+            ..record("builder-vm", Uuid::new_v4())
+        };
+        seed_vm(&state, &vm);
+        let build_id = state.builds.begin("ubuntu-rootfs-26.04", vm.id);
+        state.builds.mark_package_action_done(build_id);
+
+        let generation = Uuid::new_v4();
+        let artifact_paths =
+            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for("default"), vm.id);
+        artifact_paths.ensure_directories().unwrap();
+        let disk_path = artifact_paths.rootfs(generation);
+        std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(&disk_path)
+            .arg("8M")
+            .status()
+            .unwrap();
+        {
+            let mut vms = state.vms.lock().unwrap();
+            vms.get_mut(&vm.id).unwrap().disk_generation = Some(generation);
+        }
+
+        // Same trick as `handlers::vms::tests::delete_restores_the_record_when_artifact_removal_fails`,
+        // adapted: `finalize_and_register` only ever reads from
+        // `artifact_paths.disks` (never touches the VM's top-level
+        // directory), so stripping write permission from the top-level
+        // directory *after* the disk is staged breaks only the later
+        // `remove_dir_all` inside `delete_vm` — it needs write on this
+        // directory to unlink its `d/`/`r/` subdirectory entries, but not
+        // to read the disk file already inside `d/`.
+        let mut permissions = std::fs::metadata(&artifact_paths.dir)
+            .unwrap()
+            .permissions();
+        permissions.set_mode(0o500);
+        std::fs::set_permissions(&artifact_paths.dir, permissions).unwrap();
+
+        let result = finalize_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest {
+                new_alias: Some("my-nginx-base".to_owned()),
+            }),
+        )
+        .await;
+
+        // Restore permissions regardless of outcome so the tempdir can
+        // clean itself up.
+        let mut permissions = std::fs::metadata(&artifact_paths.dir)
+            .unwrap()
+            .permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&artifact_paths.dir, permissions).unwrap();
+
+        let Json(finalized) = result.expect("finalize_build must still report success");
+        assert_eq!(finalized.status, BuildStatus::Succeeded);
+        assert_eq!(finalized.target_alias.as_deref(), Some("my-nginx-base"));
+        assert!(state.templates.resolve_alias("my-nginx-base").is_some());
+        assert!(finalized.log.contains("could not be deleted"));
+        assert!(finalized.log.contains(&vm.id.to_string()));
+        // delete_vm's failure path re-inserts the record rather than
+        // silently dropping it.
+        assert!(state.vms.lock().unwrap().get(&vm.id).is_some());
     }
 
     /// When `finalize_and_register` fails (here: no disk generation was
