@@ -1036,3 +1036,51 @@ table.image-table .image-package-url a:hover {
 .vm-table tbody tr {
   cursor: default;
 }
+
+/* Live builder-VM console embedded in the bootstrap panel. Fixed height:
+   this sits inside a panel that must stay scannable, so the terminal gets a
+   bounded window rather than growing with output. */
+.inline-console {
+  margin-top: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.inline-console-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.inline-console-title {
+  font-weight: 600;
+}
+
+.inline-console-status {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.inline-console-status.connected {
+  color: var(--ready);
+  opacity: 1;
+}
+
+.inline-console-status.disconnected,
+.inline-console-status.reconnecting {
+  color: var(--amber);
+  opacity: 1;
+}
+
+.inline-console-surface {
+  height: 16rem;
+  padding: 0.4rem;
+  background: #171b22;
+}
+
