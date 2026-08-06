@@ -218,6 +218,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             // `get` is wired here so the crate keeps compiling task-by-task.
             get(handlers::builds::get_build),
         )
+        .route(
+            "/api/images/builds/{buildId}/packages",
+            post(handlers::builds::build_packages),
+        )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
             "/api/storage/devices",
