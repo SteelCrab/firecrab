@@ -589,10 +589,8 @@ table.image-table .image-package-url a:hover {
   text-decoration: underline;
 }
 
-/* Still used by the image table's template-OS logo (Images.tsx); the rest of
-   the Packer template-picker/pipeline chrome it used to belong to was
-   removed with PackerBuildPanel. */
-.packer-template-logo {
+/* The image table's per-row OS logo (Images.tsx). */
+.image-template-logo {
   flex: 0 0 auto;
   width: 4.4rem;
   height: 2rem;

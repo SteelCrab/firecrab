@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { BuildResponse, ImageInstallResponse, ImageResponse, VmResponse } from "../bindings";
 import {
   ApiClientError,
@@ -97,12 +97,53 @@ function BuildModal({
   const [saveMode, setSaveMode] = useState<"update" | "derive">("update");
   const [newAlias, setNewAlias] = useState("");
 
+  // A build session owns a real (hidden) VM, so it must never be left
+  // running with nothing tracking it. These refs carry that ownership
+  // outside React state, which the effect-scoped `cancelled` flags below
+  // deliberately stop updating once the modal is gone.
+  const buildIdRef = useRef<string | null>(null);
+  /** The session no longer needs tearing down (cancelled, or finalized). */
+  const settledRef = useRef(false);
+  /** The modal is gone; nothing will render or poll this session again. */
+  const closedRef = useRef(false);
+
+  /**
+   * Claims responsibility for tearing the session down, returning its id
+   * once. Stays un-settled while there is no id yet, so a close that races
+   * `startBuild`'s own response hands the job to that response instead of
+   * swallowing it.
+   */
+  const disownBuild = useCallback(() => {
+    if (settledRef.current || !buildIdRef.current) return null;
+    settledRef.current = true;
+    return buildIdRef.current;
+  }, []);
+
+  useEffect(
+    () => () => {
+      closedRef.current = true;
+      // Unmount safety net: closing the modal any way other than 취소 (an
+      // App-shell tab switch, say) would otherwise strand the builder VM.
+      const orphaned = disownBuild();
+      if (orphaned) void cancelBuild(orphaned).catch(() => undefined);
+    },
+    [disownBuild],
+  );
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
         const started = await startBuild(sourceAlias);
-        if (!cancelled) setBuild(started);
+        buildIdRef.current = started.buildId;
+        if (cancelled || closedRef.current) {
+          // The modal closed while this POST was still in flight, so the
+          // unmount cleanup above ran before there was any id to cancel.
+          const orphaned = disownBuild();
+          if (orphaned) void cancelBuild(orphaned).catch(() => undefined);
+          return;
+        }
+        setBuild(started);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       }
@@ -110,7 +151,7 @@ function BuildModal({
     return () => {
       cancelled = true;
     };
-  }, [sourceAlias]);
+  }, [sourceAlias, disownBuild]);
 
   useEffect(() => {
     if (!build || build.status === "succeeded" || build.status === "failed") return;
@@ -129,6 +170,27 @@ function BuildModal({
     };
   }, [build]);
 
+  // Every long step (boot, package install, finalize) reports through the
+  // session rather than its own HTTP response, so the terminal state only
+  // ever arrives via the poll above — including the one that closes this
+  // modal after a successful save.
+  const finishedRef = useRef(false);
+  useEffect(() => {
+    if (finishedRef.current || !build) return;
+    if (build.status === "succeeded") {
+      finishedRef.current = true;
+      // finalize already stopped and deleted the builder VM.
+      settledRef.current = true;
+      onFinalized();
+      onClose();
+    } else if (build.status === "failed") {
+      finishedRef.current = true;
+      setBusy(false);
+      // Left un-settled on purpose: a failed session still has a builder VM
+      // record behind it, which the unmount cleanup should remove.
+    }
+  }, [build, onFinalized, onClose]);
+
   const runPackages = async (action: "install" | "remove", input: string) => {
     if (!build) return;
     const packages = input.split(/\s+/).filter(Boolean);
@@ -136,8 +198,11 @@ function BuildModal({
     setBusy(true);
     setError(null);
     try {
-      const updated = await buildPackages(build.buildId, action, packages);
-      setBuild(updated);
+      // Returns the `installing` snapshot, not the finished one — the guest's
+      // package manager runs for minutes. The poll above shows its output and
+      // flips back to `ready` when it's done.
+      const accepted = await buildPackages(build.buildId, action, packages);
+      setBuild(accepted);
       if (action === "install") setInstallInput("");
       if (action === "remove") setRemoveInput("");
     } catch (err) {
@@ -156,20 +221,36 @@ function BuildModal({
     setBusy(true);
     setError(null);
     try {
-      await finalizeBuild(build.buildId, saveMode === "derive" ? newAlias.trim() : undefined);
-      onFinalized();
-      onClose();
+      // Accepted, not finished: copying a multi-GB rootfs, fscking it and
+      // registering it all happen after this responds. Stay open on the live
+      // status — the terminal effect above closes the modal once the session
+      // actually reaches `succeeded`.
+      const accepted = await finalizeBuild(
+        build.buildId,
+        saveMode === "derive" ? newAlias.trim() : undefined,
+      );
+      setBuild(accepted);
     } catch (err) {
       setError((err as Error).message);
-    } finally {
       setBusy(false);
     }
   };
 
   const handleCancel = async () => {
-    if (build) {
+    // The overlay's own click lands here, so an accidental click outside the
+    // modal must not silently destroy work — confirm the same way the image
+    // delete action does, but only once there is something to lose.
+    const atRisk = build !== null && (build.hadPackageAction || build.status !== "booting");
+    if (
+      atRisk &&
+      !window.confirm("이 빌드를 취소할까요?\n빌더 VM을 삭제하며, 설치한 패키지는 저장되지 않습니다.")
+    ) {
+      return;
+    }
+    const orphaned = disownBuild();
+    if (orphaned) {
       try {
-        await cancelBuild(build.buildId);
+        await cancelBuild(orphaned);
       } catch {
         /* best-effort */
       }
@@ -178,6 +259,7 @@ function BuildModal({
   };
 
   const ready = build?.status === "ready";
+  const saving = build?.status === "finalizing";
   const aliasTaken = newAlias.trim().length > 0 && installedAliases.includes(newAlias.trim());
 
   return (
@@ -231,11 +313,11 @@ function BuildModal({
         </fieldset>
         {aliasTaken && <div className="field-error">이미 사용 중인 이름입니다.</div>}
         <div className="package-row">
-          <button type="button" className="btn" onClick={() => void handleCancel()}>
+          <button type="button" className="btn" disabled={saving} onClick={() => void handleCancel()}>
             취소
           </button>
           <button type="button" className="btn primary" disabled={!ready || busy || aliasTaken} onClick={() => void handleFinalize()}>
-            {busy ? "저장 중…" : "이미지로 저장"}
+            {saving || busy ? "저장 중…" : "이미지로 저장"}
           </button>
         </div>
       </div>
@@ -256,7 +338,12 @@ export default function Images() {
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
   const [install, setInstall] = useState<ImageInstallResponse | null>(null);
   const [buildSourceAlias, setBuildSourceAlias] = useState<string | null>(null);
-  const [newBuildSource, setNewBuildSource] = useState<string>(KNOWN_TEMPLATES[0].alias);
+  // Deliberately not seeded from KNOWN_TEMPLATES: which templates are
+  // actually installed is only known once `images` loads, and a `<select>`
+  // whose value isn't among its options silently renders the first option
+  // instead — so a hardcoded default would start a build against an alias
+  // the user never saw (and the API 404s on).
+  const [newBuildSource, setNewBuildSource] = useState<string>("");
 
   const refreshList = useCallback(async () => {
     try {
@@ -271,6 +358,20 @@ export default function Images() {
   useEffect(() => {
     void refreshList();
   }, [refreshList]);
+
+  const installedAliases = useMemo(
+    () => (images ?? []).filter((image) => image.installed).map((image) => image.alias),
+    [images],
+  );
+
+  // Keep the build-source selection in step with what is installed: pick the
+  // first installed alias once the list arrives, and re-pick if the current
+  // choice is deleted out from under it.
+  useEffect(() => {
+    setNewBuildSource((current) =>
+      installedAliases.includes(current) ? current : (installedAliases[0] ?? ""),
+    );
+  }, [installedAliases]);
 
   // `Images` is conditionally mounted by the App shell (only while the
   // "images" tab is active), so a poll started here can easily outlive the
@@ -317,14 +418,25 @@ export default function Images() {
     try {
       const snap = await startImagePackage(alias);
       setPackageJobs((current) => ({ ...current, [alias]: snap }));
+      // Same unmount/error discipline as `pollInstall`: this poll can outlive
+      // the component (the App shell unmounts `Images` on a tab switch), and
+      // an unguarded throw here would become an unhandled rejection that
+      // silently ends the poll with the row stuck at "가져오는 중…".
       const poll = async () => {
-        const latest = await getImagePackage(alias);
-        setPackageJobs((current) => ({ ...current, [alias]: keepNewestJobSnapshot(current[alias], latest) }));
-        if (latest.status === "running") setTimeout(() => void poll(), 500);
-        else if (latest.status === "succeeded") {
-          const installed = await startImageInstall(alias);
-          setInstall(installed);
-          pollInstall(alias);
+        if (!mountedRef.current) return;
+        try {
+          const latest = await getImagePackage(alias);
+          if (!mountedRef.current) return;
+          setPackageJobs((current) => ({ ...current, [alias]: keepNewestJobSnapshot(current[alias], latest) }));
+          if (latest.status === "running") setTimeout(() => void poll(), 500);
+          else if (latest.status === "succeeded") {
+            const installed = await startImageInstall(alias);
+            if (!mountedRef.current) return;
+            setInstall(installed);
+            pollInstall(alias);
+          }
+        } catch (error) {
+          if (mountedRef.current) setActionError((error as Error).message);
         }
       };
       void poll();
@@ -393,8 +505,6 @@ export default function Images() {
     return <div className="empty">이미지 목록 불러오는 중…</div>;
   }
 
-  const installedAliases = (images ?? []).filter((image) => image.installed).map((image) => image.alias);
-
   return (
     <div className="stack">
       <section className="panel">
@@ -421,7 +531,7 @@ export default function Images() {
               return (
                 <tr key={image.alias}>
                   <td className="mono">
-                    {known && <img className="packer-template-logo" src={known.logoSrc} alt="" />}
+                    {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
                     {image.alias}
                   </td>
                   <td className="mono">{formatRootfsSize(image.rootfsSizeBytes)}</td>
@@ -466,7 +576,7 @@ export default function Images() {
               <option key={alias} value={alias}>{alias}</option>
             ))}
           </select>
-          <button type="button" className="btn primary" disabled={installedAliases.length === 0} onClick={() => setBuildSourceAlias(newBuildSource)}>
+          <button type="button" className="btn primary" disabled={!newBuildSource} onClick={() => setBuildSourceAlias(newBuildSource)}>
             + 새 이미지 빌드
           </button>
         </div>
