@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { BuildResponse, ImageInstallResponse, ImageResponse, VmResponse } from "../bindings";
+import type { BootstrapResponse, BuildResponse, ImageInstallResponse, ImageResponse, VmResponse } from "../bindings";
 import {
   ApiClientError,
   buildPackages,
@@ -7,11 +7,13 @@ import {
   deleteImage,
   deleteVm,
   finalizeBuild,
+  getBootstrap,
   getBuild,
   getImageInstall,
   getImagePackage,
   listImages,
   listVms,
+  startBootstrap,
   startBuild,
   startImageInstall,
   startImagePackage,
@@ -326,6 +328,103 @@ function BuildModal({
 }
 
 /**
+ * Bootstrap panel: triggers a from-scratch distro bootstrap and shows its
+ * live log. Only one bootstrap runs at a time (backend-enforced, 409 on a
+ * second start) — this component's own busy state mirrors that by polling
+ * `getBootstrap` and disabling every alias's button while any session it
+ * knows about is non-terminal.
+ */
+function BootstrapPanel({ onFinished }: { onFinished: () => void }) {
+  const [session, setSession] = useState<BootstrapResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // BootstrapPanel lives inside Images, which the App shell only mounts
+  // while the "images" tab is active — a bootstrap can run for minutes, so
+  // its poll (and even the initial startBootstrap POST) can easily outlive
+  // the component if the user switches tabs mid-run. Mirror Images's own
+  // mountedRef/pollInstall discipline (see above) rather than the
+  // effect-scoped `cancelled` flag, since a bare `cancelled` flag only
+  // guards the one scheduled tick it closes over, not the recursive chain
+  // of ticks a real bootstrap session needs.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const pollBootstrap = (bootstrapId: string) => {
+    const tick = async () => {
+      if (!mountedRef.current) return;
+      try {
+        const snapshot = await getBootstrap(bootstrapId);
+        if (!mountedRef.current) return;
+        setSession(snapshot);
+        if (snapshot.status === "succeeded") {
+          onFinished();
+        } else if (snapshot.status !== "failed") {
+          setTimeout(() => void tick(), 1000);
+        }
+        // "failed" is a confirmed terminal state too — stop without retrying.
+      } catch {
+        // A fetch failure is not positive confirmation the job reached a
+        // terminal state, so keep polling rather than freezing the log on a
+        // one-off network blip (unless the component is already gone).
+        if (mountedRef.current) setTimeout(() => void tick(), 1000);
+      }
+    };
+    void tick();
+  };
+
+  const start = async (alias: string) => {
+    setError(null);
+    try {
+      const started = await startBootstrap(alias);
+      if (!mountedRef.current) return;
+      setSession(started);
+      pollBootstrap(started.bootstrapId);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setError((err as Error).message);
+    }
+  };
+
+  const busy = session !== null && session.status !== "succeeded" && session.status !== "failed";
+
+  return (
+    <section className="panel">
+      <h2
+        className="panel-title"
+        title="공식 배포판을 처음부터 준비할 때 보통 docker나 sudo가 필요한데, 여기서는 그 대신 이미 있는 microVM 빌더를 재사용합니다 — 게스트 안에서는 이미 진짜 root라 별도 컨테이너나 권한 상승 없이 안전하게 처리됩니다."
+      >
+        배포판 부트스트랩
+      </h2>
+      {error && <div className="field-error">{error}</div>}
+      <div className="package-row">
+        {(["alpine-3.24", "ubuntu-26.04", "rocky-9"] as const).map((alias) => (
+          <button
+            key={alias}
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => void start(alias)}
+          >
+            {busy && session?.alias === alias ? `${alias} 부트스트랩 중…` : `${alias} 부트스트랩`}
+          </button>
+        ))}
+      </div>
+      {session && (
+        <>
+          <div className="state-badge">{session.status}</div>
+          <pre className="detail-log">{session.log}</pre>
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
  * Single M2Image inventory table plus an on-demand build modal. Package
  * download/install ("가져오기") is a per-row action here rather than a
  * separate panel — the two-stage Packer/Store split moved into BuildModal.
@@ -581,6 +680,8 @@ export default function Images() {
           </button>
         </div>
       </section>
+
+      <BootstrapPanel onFinished={() => void refreshList()} />
 
       {buildSourceAlias && (
         <BuildModal
