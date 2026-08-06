@@ -44,6 +44,9 @@ updated: 2026-08-02
 - [x] `package-m2images.sh` 와 한 줄로 이어지는 흐름 고정: `build → package → dist/m2images/{alias}.tar.zst`
 - [x] 수동 runbook: ubuntu-26.04 · alpine-3.24 · rocky-9 패키지를 재생성할 수 있음
 - [x] 산출물 SHA256(`SHA256SUMS`) 생성 및 `sha256sum -c` 검증
+- [x] 웹 대시보드에서 설치된 템플릿을 소스로 파생/리빌드 이미지 빌드
+      (builder microVM + 공유 패키지 엔진, docker/신규 특권 데몬 없음) —
+      설계: [2026-08-02-m2image-web-builder-design](../superpowers/specs/2026-08-02-m2image-web-builder-design.md)
 
 ### 빌드 검증 기록 (2026-08-02)
 
