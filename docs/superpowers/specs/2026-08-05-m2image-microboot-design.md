@@ -63,33 +63,46 @@ updated: 2026-08-05
 |---|---|---|
 | `alpine-3.24` | Alpine 공식 `netboot/vmlinuz-virt` + `netboot/initramfs-virt` (`dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/netboot/`) | `apk`가 실제로 동작하는 최소 환경(아래 "실제 부팅 검증" 참고). 자기 자신을 자기 자신으로 부트스트랩 |
 | `ubuntu-26.04` | 위 Alpine MicroBoot를 그대로 재사용 | outer(빌더) 환경엔 애초에 `apt`가 필요 없다 — `ubuntu-base-*.tar.gz` 자체에 apt가 내장돼 있고, outer는 `tar`/`mount`/`chroot`만 있으면 된다(기존 스크립트 분석과 동일한 결론) |
-| `rocky-9` | Rocky 공식 Container-Base(`Rocky-9-Container-Base.latest.x86_64.tar.xz`, `dl.rockylinux.org/pub/rocky/9/images/x86_64/`) 안의 단일 레이어를 루트로, Ubuntu 템플릿의 `linux-image-generic` 커널(virtio_blk/ext4 builtin, initrd 불필요)로 부팅 | outer 환경에 실제 동작하는 `dnf`/`rpm`이 필요(`dnf --installroot` 방식) — 아래 "실제 부팅 검증"에서 확인. 커널은 Rocky 전용일 필요 없음(dnf는 커널과 무관) — 이미 이 저장소에 있는 커널을 재사용해 별도 커널 조달이 필요 없다 |
+| `rocky-9` | 위 Alpine MicroBoot를 그대로 재사용 | dnf는 커널과 무관하지만 **libc와는 무관하지 않다** — Rocky Container-Base(`Rocky-9-Container-Base.latest.x86_64.tar.xz`, `dl.rockylinux.org/pub/rocky/9/images/x86_64/`)의 dnf/rpm은 glibc 바이너리라, musl 기반 Alpine 셸에서 직접 실행할 수 없다. 그래서 outer(Alpine) 셸은 그 아카이브를 받아 풀고 **그 안으로 chroot한 다음** dnf를 돌린다 — 지금 `install-rocky-rootfs.sh`/`bootstrap-rocky-in-guest.sh`가 이미 하는 구조(먼저 chroot, 그 다음 `dnf --installroot`) 그대로라 별도 Rocky 전용 커널이 필요 없다 |
 
 ### 실제 부팅 검증 (2026-08-05, 구현 착수 전 직접 확인)
 
 원래 이 설계는 "Alpine netboot 자체가 apk까지 내장된 완전한 환경"이라고
 가정했는데, 실제로 Firecracker에 `vmlinux-virt`(`extract-vmlinux`로 ELF
-추출)+`initramfs-virt`만 붙여 부팅해본 결과 **그 가정은 틀렸다**:
+추출)+`initramfs-virt`만 붙여 여러 조합으로 부팅해본 결과 **원래
+가정은 틀렸지만, 훨씬 깔끔한 대안을 실제로 찾아 검증했다**:
 
-- Alpine 자신의 `/init`(Alpine Init 3.14.0-r0)은 부팅 후 "Mounting boot
-  media"를 시도하고, CD/네트워크 저장소 등 인식 가능한 매체를 못 찾으면
-  **커널 패닉으로 죽는다** — 디스크를 안 붙여도, 빈 디스크를 붙여도
-  동일하게 실패했다(직접 재현 확인). `netboot`이라는 이름 그대로,
-  원래는 `alpine_repo=`/`ip=dhcp` 같은 커널 인자로 네트워크 너머의
-  진짜 시스템(스쿼시FS 등)을 받아오는 걸 전제로 만들어진 파일이지,
-  독립적으로 셸까지 뜨는 라이브 환경이 아니다.
-- `boot_args`에 `rdinit=/bin/sh`를 주면 Alpine의 `/init`을 완전히
-  건너뛰고 콘솔(ttyS0)로 진짜 인터랙티브 셸에 도달한다 — **직접 검증
-  완료**(콘솔에 명령을 흘려보내고 echo가 돌아오는 것까지 확인). `apk
-  --version`도 정상 동작(`apk-tools 3.0.6-r0`)해서, 도구 자체는
-  initramfs 안에 실제로 들어있음도 확인했다.
-- 다만 `rdinit=/bin/sh`는 Alpine `/init`이 원래 해주던 일(busybox
-  심볼릭 링크 설치로 `ls`/`mount`/`mkdir` 등을 PATH에 넣어주는 것,
-  `/proc`·`/sys`·`/dev` 마운트)을 전혀 안 해준다 — `mount`/`ls`조차
-  "not found"였다. 그래서 게스트 부트스트랩 스크립트 맨 앞에
-  **환경을 직접 갖추는 준비 단계**(`busybox --install`로 심볼릭 링크
-  생성, `/proc`·`/sys`·`/dev` 마운트, `PATH` 설정)를 새로 넣어야
-  한다 — 아래 "게스트 스크립트에 필요한 준비 단계" 참고.
+- Alpine 자신의 `/init`(Alpine Init 3.14.0-r0, 소스 직접 읽음)은
+  부팅 후 root 마운트("Mounting root")를 시도하고, 실패하면 자기 안에
+  `recovery_shell()`이라는 **정식 비상 셸 기능**이 있다: `$KOPT_panic`
+  (커널 인자 `panic=`에서 채워짐)이 비어 있으면
+  `echo "Launching initramfs emergency recovery shell." && /bin/busybox sh`
+  로 떨어지고, `panic=`이 설정돼 있으면 그 셸을 건너뛰고 진짜 커널
+  패닉으로 죽는다. **처음 실패한 시도들은 전부 기존 템플릿의 관행대로
+  `panic=1`을 그대로 복사해 넣은 게 원인이었다** — `panic=`을 아예
+  빼면(`console=ttyS0 reboot=k`만) 이 정식 복구 셸로 들어간다.
+- 이 정식 복구 셸에서 확인된 것(**전부 직접 검증 완료**):
+  - `/proc`, `/sys`, `/dev`가 **이미 마운트돼 있다** (Alpine 자신의
+    `/init`이 root 마운트를 시도하기 전에 이미 해놓은 일이라서).
+  - `PATH`가 정상적으로 설정돼 있다(`/sbin:/usr/sbin:/bin:/usr/bin`류).
+  - `busybox`(v1.37.0, multi-call) 전체와 `apk`(`apk-tools 3.0.6-r0`)가
+    정상 동작. `chroot`/`tar`/`wget`/`mount`/`umount`도 전부 `which`로
+    확인됨.
+  - **`mkfs.ext4`는 없다** — e2fsprogs가 이 initramfs엔 안 들어있다
+    (`/lib/modules/<커널버전>` 자체도 사실상 비어 있어서 `ext4`
+    커널 모듈도 없다 — Alpine의 실제 라이브 미디어는 이 둘을 별도
+    `modloop-virt`/네트워크로 채워 넣는데, 우리는 그 경로를 안 씀).
+  - `/sys/class/net`엔 `lo`만 있었다 — 다만 이건 테스트에 네트워크
+    인터페이스 자체를 안 붙여서고(TAP 설정까지 재현하진 않았다),
+    실제 빌더 VM은 오늘 코드가 이미 모든 부트스트랩 VM에 네트워크를
+    붙여준다(`builder_micro_network_id`) — 이 부분은 실제 구현
+    태스크에서 진짜 네트워크로 검증한다.
+- 결론: 게스트 부트스트랩 스크립트가 콘솔로 받는 첫 명령에서
+  `apk add e2fsprogs`(및 필요하면 `curl`)만 설치하면, 이후로는 기존
+  스크립트가 정상 설치된 Alpine 위에서 동작하던 것과 사실상 동일한
+  환경이 된다 — `/proc`·`/sys`·`/dev` 수동 마운트나 `busybox --install`
+  같은 준비 단계는 **필요 없다**(이전 초안에 있었지만 이번 검증으로
+  불필요함이 확인돼 삭제).
 - Rocky Container-Base는 평범한 tar가 아니라 **OCI 이미지 레이아웃**
   (`blobs/sha256/...`+`index.json`)이었다 — `docker pull`의 원본이니
   당연한 것이었는데 최초 서술에 이 사실이 빠져 있었다. 다행히 레이어가
@@ -118,18 +131,24 @@ updated: 2026-08-05
   │
   ▼
 [변경] 빌더 VM = MicroBoot로 직접 부팅
-       kernel/initrd = MicroBoot 아티팩트, boot_args의 rdinit=으로
-       initrd 자신을 root로 부팅(디스크 아님). disk = 스크래치
-       공간(기존처럼 소스 템플릿의 disk를 root로 쓰는 게 아님)
+       kernel/initrd = MicroBoot 아티팩트, boot_args에서 panic=을
+       빼서 Alpine 자신의 정식 복구 셸로 진입(디스크는 root 아님,
+       자리표시자 스크래치 파일)
   │
   ▼
-[신규] 콘솔로 준비 단계 실행: busybox --install, /proc·/sys·/dev
-       마운트, 스크래치 디스크 mkfs.ext4 + 마운트
+[신규] 콘솔로 apk add e2fsprogs 실행(mkfs.ext4 확보) — 그 외
+       /proc·/sys·/dev·PATH는 이미 준비돼 있어 추가 조치 불필요
   │
   ▼
-(이하 2026-08-03 설계와 완전히 동일 — 변경 없음, 작업 경로만
- 스크래치 디스크의 마운트 지점 아래로 조정)
-콘솔로 부트스트랩 스크립트 실행 → 결과물 추출·패키징 →
+콘솔로 부트스트랩 스크립트 실행(기존과 동일한 다운로드/chroot/설치
+로직, 최종 mkfs.ext4 -F -d 대상 경로만 /dev/vda로 변경)
+  │
+  ▼
+[변경] 패키징: MicroBoot 세션은 dump_from_image 생략 — 디스크
+       제너레이션 파일 자체가 이미 완성된 rootfs.ext4라 그대로 복사
+  │
+  ▼
+(이하 2026-08-03 설계와 완전히 동일 — 변경 없음)
 images/.packages/{alias}.tar.zst 저장 → 빌더 VM 삭제 →
 "로컬 패키지 설치" → TemplateRegistry 등록 → 사용자가 VM 생성 가능
 ```
@@ -186,54 +205,72 @@ MicroBoot 소스(URL 목록 + 체크섬)를 고정 매핑으로 갖고, 로컬 �
 `start_build`/`create_vm`을 그대로 재사용했다)에 따라 **내부 전용
 네임스페이스 등록 쪽을 권장**한다.
 
-### 부팅 방식 — 디스크가 아니라 initrd가 root
+### 부팅 방식 — 디스크가 아니라 Alpine의 정식 복구 셸이 진입점
 
 **중요한 정정**: 기존 모든 템플릿은 `root=/dev/vda` 방식으로, 템플릿의
 rootfs 아티팩트가 그대로 커널이 마운트하는 `/`가 된다. MicroBoot는 그
-방식을 안 쓴다 — `boot_args`에 `rdinit=/bin/sh`(정확한 값은 구현 시
-확정)를 둬서 커널이 **initrd 자신의 내용을 `/`로 부팅**하게 하고, 붙어
-있는 디스크(`/dev/vda`)는 커널이 루트로 마운트하지 않는다. `create_vm`/
-`FirecrackerConfig`(Rust) 자체는 안 바뀐다 — 어차피 `is_root_device`
-플래그는 Firecracker 쪽 장치 나열 순서 문제일 뿐, 커널이 실제로 뭘
-루트로 삼는지는 전적으로 `boot_args`가 결정한다.
+방식을 안 쓴다 — `boot_args`에서 `panic=`을 **빼서**(`console=ttyS0
+reboot=k`만 유지) Alpine의 `/init`이 root 마운트에 실패했을 때 자기
+안의 정식 `recovery_shell()`로 떨어지게 한다(위 "실제 부팅 검증" 참고).
+붙어 있는 디스크(`/dev/vda`)는 이 과정에서 root로 마운트되지 않고 그냥
+존재만 한다. `create_vm`/`FirecrackerConfig`(Rust) 자체는 안 바뀐다 —
+`is_root_device` 플래그는 Firecracker 쪽 장치 나열 순서 문제일 뿐,
+커널이 실제로 뭘 root로 삼는지는 전적으로 `boot_args`가 결정한다.
 
-### 스크래치 디스크 (구 "빈 디스크")
+### 스크래치 디스크 (구 "빈 디스크") — 마운트 없이, 블록 디바이스로 직접
 
-디스크가 root가 아니게 됐으니, 그 역할은 순수히 **게스트 부트스트랩
-스크립트가 직접 포맷해서 쓰는 스크래치 공간**이다 — 다운로드한 원본
-아카이브를 풀고, 대상 배포판을 chroot로 설치하고, 최종
-`rootfs.ext4`(host가 나중에 dump할 파일)를 만드는 전부가 이 디스크
-위에서 일어나야 한다(그래야 VM이 죽은 뒤에도 host가 그 파일을 꺼낼 수
-있다 — 게스트의 tmpfs/RAM 내용은 VM 종료와 함께 사라진다).
+디스크가 root가 아니게 됐으니, 그 역할은 순수히 **최종 결과물을 담아
+host가 나중에 꺼낼 수 있게 하는 저장소**다. 다운로드·chroot 설치 같은
+중간 작업 자체는 recovery 셸의 root(RAM 기반 tmpfs)에서 그냥 진행해도
+되고, 마지막에 이 저장소 원본이 필요할 뿐이다.
 
-MicroBoot로 등록하는 "템플릿"의 rootfs 아티팩트는 그래서 (기존
-배포판 rootfs처럼 이미 채워진 파일이 아니라) **빈 ext4 이미지**다.
-그 빈 디스크 자체를 MicroBoot 등록 시점에 한 번 만들어두거나, 빌더 VM
-생성 때마다 새로 만든다 — 크기 산정은 기존 `bootstrap_disk_gb` 로직을
-그대로 쓰되, 이제 "소스 템플릿의 디스크 크기"라는 하한 기준 자체가
-사라지므로(MicroBoot엔 원래 disk 내용이 없음) 대상 alias 기준 크기만
-남는다.
+이 코드베이스는 이미 "마운트 없이 ext4 다루기" 철학을 곳곳에 쓴다
+(`rootfs.rs`의 `debugfs` 기반 조작, `dump_from_image` 등, 2026-08-03
+설계가 명시한 원칙). 여기서도 그대로 적용된다: 기존 스크립트가 이미
+하던 마지막 단계 `mkfs.ext4 -F -d <staging> <출력파일>`을, **출력
+경로만 일반 파일이 아니라 `/dev/vda`(블록 디바이스)로 바꾸면 끝이다**
+— `mkfs.ext4`는 대상이 파일이든 블록 디바이스든 구분하지 않는다. 별도
+포맷+마운트 단계 자체가 필요 없다.
 
-### 게스트 스크립트에 필요한 준비 단계
+MicroBoot로 등록하는 "템플릿"의 rootfs 아티팩트는 (기존 배포판
+rootfs처럼 이미 채워진 파일이 아니라) 실제로는 아무 내용이나 상관없는
+**크기만 맞춘 자리표시자 파일**이다 — 어차피 게스트가 `mkfs.ext4 -F`로
+통째로 덮어쓴다(`-F`가 기존 파일시스템 흔적을 무시하고 강제 생성).
+크기 산정은 기존 `bootstrap_disk_gb` 로직을 그대로 쓰되, 이제 "소스
+템플릿의 디스크 크기"라는 하한 기준 자체가 사라지므로(MicroBoot엔
+원래 disk 내용이 없음) 대상 alias 기준 크기만 남는다.
 
-위 "실제 부팅 검증"에서 확인했듯, `rdinit=/bin/sh`로 도달한 셸은
-Alpine의 `/init`이 원래 해주던 환경 구성(busybox 심볼릭 링크,
-`/proc`·`/sys`·`/dev` 마운트)이 전혀 안 돼 있다. 3개
-`bootstrap-{alpine,ubuntu,rocky}-in-guest.sh` 스크립트 맨 앞에, 지금
-없는 준비 단계를 새로 추가해야 한다:
+### 게스트 스크립트에 필요한 준비 단계 — apk로 e2fsprogs 설치뿐
 
-1. `busybox --install -s <PATH상의 디렉터리>`로 `ls`/`mount`/`mkdir`
-   등 기본 명령을 PATH에 설치
-2. `/proc`, `/sys`, `/dev`를 각각 마운트
-3. 스크래치 디스크(`/dev/vda`)를 `mkfs.ext4`로 포맷하고 작업
-   디렉터리(예: `/mnt/work`)에 마운트 — 이후 기존 스크립트 로직
-   (원본 다운로드, chroot 설치, 최종 `mkfs.ext4 -d`)은 전부 이
-   마운트 지점 아래에서 실행되도록 경로만 조정한다
+위 "실제 부팅 검증"에서 확인했듯, Alpine의 정식 복구 셸은
+`/proc`·`/sys`·`/dev` 마운트와 `PATH` 설정이 이미 돼 있다 —
+수동으로 갖출 게 없다. 딱 하나 빠진 것: **e2fsprogs(`mkfs.ext4`)가
+이 initramfs엔 없다.** 3개 `bootstrap-{alpine,ubuntu,rocky}-in-guest.sh`
+스크립트 맨 앞에 필요한 준비는 이것 하나뿐이다:
 
-기존 스크립트의 핵심 로직(다운로드/chroot/설치/최종 이미지 생성)
-자체는 안 바뀐다 — 맨 앞에 이 준비 단계가 추가되고, 작업 경로가
-`/root/fc-bootstrap`(기존, 이미 마운트된 실제 OS 디스크 위)에서
-`/mnt/work/fc-bootstrap`(스크래치 디스크 위)로 바뀌는 것뿐이다.
+```sh
+apk add --no-cache e2fsprogs
+```
+
+(네트워크가 필요하므로, 빌더 VM에 이미 붙는 네트워크가 이 시점에
+살아있는지는 실제 구현 태스크에서 진짜 부팅으로 검증한다 — 위 "실제
+부팅 검증"의 마지막 항목 참고.)
+
+기존 스크립트의 핵심 로직(다운로드/chroot/설치)은 안 바뀐다. 최종
+이미지 생성 한 줄(`mkfs.ext4 -F -d <staging> <경로>`)의 `<경로>`만
+`/dev/vda`로 바뀐다.
+
+**패키징 단계의 중요한 분기**: 기존 흐름은 게스트 디스크 **안의 특정
+파일 하나**를 `dump_from_image`(debugfs)로 꺼낸다 — 디스크 자체는
+게스트의 전체 OS이고, 그 안 어딘가에 결과물 파일이 있기 때문이다.
+MicroBoot 흐름은 다르다: `mkfs.ext4 -F -d <staging> /dev/vda`는
+디스크 **전체를 통째로** 목표 rootfs로 덮어쓰므로, host 쪽의
+디스크-제너레이션 파일(`artifact_paths.rootfs(disk_generation)`)
+자체가 이미 완성된 `rootfs.ext4`다 — `dump_from_image` 호출이 아예
+필요 없고, 그 파일을 그대로 복사/rename해서 패키징하면 된다.
+`package_bootstrap`이 이 세션의 소스가 MicroBoot였는지 판단해 이
+경로로 분기해야 한다 — 정확한 판단 방법(세션에 플래그를 두는 등)은
+구현 플랜에서 정한다.
 
 ## 에러 처리
 
@@ -264,13 +301,14 @@ Alpine의 `/init`이 원래 해주던 환경 구성(busybox 심볼릭 링크,
       (Rocky는 OCI 레이어 추출 포함)
 - [ ] `pick_builder_source`를 MicroBoot 기반으로 교체(더 이상 설치된
       템플릿을 요구하지 않음)
-- [ ] 빌더 VM용 스크래치 디스크 생성 경로 추가(root 아님, `rdinit=`으로
-      initrd가 root)
-- [ ] 3개 게스트 스크립트에 준비 단계 추가(busybox --install,
-      /proc·/sys·/dev 마운트, 스크래치 디스크 mkfs+마운트) + 작업
-      경로를 스크래치 마운트 지점 아래로 조정
+- [ ] 빌더 VM용 자리표시자 스크래치 디스크 생성 경로 추가(`panic=`
+      없는 `boot_args`로 root 아닌 Alpine 복구 셸 진입)
+- [ ] 3개 게스트 스크립트 맨 앞에 `apk add --no-cache e2fsprogs` 추가,
+      최종 `mkfs.ext4 -F -d <staging> <경로>`의 경로를 `/dev/vda`로 변경
+- [ ] `package_bootstrap`이 MicroBoot 세션에서 `dump_from_image`를
+      생략하고 디스크 제너레이션 파일을 그대로 패키징하도록 분기
 - [ ] 설치된 템플릿 0개인 상태에서 `alpine-3.24` 웹 부트스트랩 성공
-      (수동 검증)
+      (수동 검증, 실제 네트워크 붙은 빌더 VM으로)
 - [ ] 동일 상태에서 `ubuntu-26.04`(Alpine MicroBoot 재사용) 성공
       (수동 검증)
 - [ ] 동일 상태에서 `rocky-9`(Container-Base MicroBoot) 성공(수동 검증)
