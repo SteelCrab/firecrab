@@ -185,10 +185,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .put(handlers::vms::update_vm)
                 .delete(handlers::vms::delete_vm),
         )
-        .route(
-            "/api/vms/{id}/start",
-            post(handlers::vms::start_vm_request),
-        )
+        .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route(
@@ -209,6 +206,17 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/images/{alias}/package",
             get(handlers::images::get_image_package).post(handlers::images::start_image_package),
+        )
+        .route(
+            "/api/images/{alias}/build",
+            post(handlers::builds::start_build),
+        )
+        .route("/api/images/builds", get(handlers::builds::list_builds))
+        .route(
+            "/api/images/builds/{buildId}",
+            // `cancel_build` (`.delete(...)`) is added in Task 10 — only
+            // `get` is wired here so the crate keeps compiling task-by-task.
+            get(handlers::builds::get_build),
         )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(
