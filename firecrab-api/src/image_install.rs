@@ -623,7 +623,11 @@ fn extract_archive_piped_blocking(archive: &Path, dest: &Path) -> Result<(), Str
     Ok(())
 }
 
-async fn download_to(client: &reqwest::Client, url: &str, dest: &Path) -> Result<(), String> {
+pub(crate) async fn download_to(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
             .await

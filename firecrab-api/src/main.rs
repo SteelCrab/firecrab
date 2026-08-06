@@ -8,6 +8,7 @@ mod firecracker;
 mod handlers;
 mod image_install;
 mod ipam;
+mod microboot;
 mod model;
 mod network;
 mod network_policy;
