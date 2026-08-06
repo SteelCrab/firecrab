@@ -383,9 +383,14 @@ pub async fn delete_staged_package(
     Path(alias): Path<String>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<StatusCode, AppError> {
-    // Same alias validation as `get_image_package`.
-    if TemplateRegistry::known_spec(&alias).is_none()
-        && state.templates.resolve_alias(&alias).is_none()
+    // Same reason `delete_image` excludes it: `__microboot` is internal
+    // (see crate::microboot). It never has anything under `.packages/`
+    // anyway (this would just fall through to `not_staged`), but excluding
+    // it explicitly keeps this handler's alias guard symmetric with
+    // `delete_image`'s.
+    if alias == crate::microboot::MICROBOOT_ALIAS
+        || (TemplateRegistry::known_spec(&alias).is_none()
+            && state.templates.resolve_alias(&alias).is_none())
     {
         return Err(AppError::not_found(request_id.0));
     }
@@ -1221,6 +1226,48 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn delete_staged_package_succeeds_even_when_the_alias_is_installed() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        write_file(&root.join("kernel/vmlinux"), b"kernel-bytes");
+        write_file(&root.join("rootfs/root.ext4"), b"rootfs-content-here");
+        let templates = TemplateRegistry::from_specs(
+            root,
+            [TemplateSpec {
+                alias: "demo".to_owned(),
+                version: "demo-v1".to_owned(),
+                kernel: Path::new("kernel/vmlinux").to_path_buf(),
+                initrd: None,
+                rootfs: Path::new("rootfs/root.ext4").to_path_buf(),
+                boot_args: "console=ttyS0".to_owned(),
+            }],
+        )
+        .unwrap();
+        let state = AppState::with_db_file(templates, root.join("state.db"))
+            .await
+            .unwrap();
+        assert!(state.templates.resolve_alias("demo").is_some());
+
+        let staged =
+            crate::image_install::staged_package_path(state.templates.image_root_path(), "demo");
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, b"pretend tar.zst").unwrap();
+
+        let status = delete_staged_package(
+            State(state.clone()),
+            Path("demo".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(!staged.is_file());
+        // Deleting the staged package must never touch the installed template.
+        assert!(state.templates.resolve_alias("demo").is_some());
     }
 
     #[tokio::test]

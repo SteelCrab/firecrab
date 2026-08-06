@@ -208,8 +208,8 @@ function OptionsMenu({
       </button>
       {open && (
         <ul className="options-menu-list">
-          {items.map((item) => (
-            <li key={item.label}>
+          {items.map((item, index) => (
+            <li key={index}>
               <button
                 type="button"
                 className="options-menu-item"
@@ -285,6 +285,9 @@ function ImageDetail({
         ? "다른 배포판 굽는 중"
         : "굽기";
 
+  // Ahead of the packageUrl branch on purpose: when both are available, a
+  // package already on this host wins over re-downloading the remote one —
+  // which would overwrite a just-bootstrapped local build.
   const installLabel = image.installed
     ? "설치됨"
     : image.packageStaged
@@ -315,7 +318,16 @@ function ImageDetail({
   // 실제로 배타적이다 — 세션이 `packageStaged`를 참으로 만들 수 있는
   // 시점(성공 종료)엔 이미 `bootstrapBusy`가 검사하는 비종결 상태를
   // 벗어난 뒤다.
-  const canCancelBootstrap = bootstrapIsMine && bootstrapBusy && bootstrapSession !== null;
+  // Only safe to cancel while the builder VM is still booting or running the
+  // guest script — matches the same gate `InlineConsole` below uses. Once
+  // packaging starts, `package_bootstrap` (backend) is reading the builder
+  // VM's disk and stopping/deleting it mid-read can publish a truncated
+  // archive; `finalizing` means the package is already staged and safe, so
+  // there's nothing left to "cancel" in the sense this button means.
+  const canCancelBootstrap =
+    bootstrapIsMine &&
+    bootstrapSession !== null &&
+    (bootstrapSession.status === "booting" || bootstrapSession.status === "running");
   const canDeleteStagedPackage = image.packageStaged && !canCancelBootstrap;
   const bakeDeleteLabel = canCancelBootstrap ? "부트스트랩 취소" : "구운 패키지 삭제";
   const handleBakeDeleteClick = () => {
@@ -730,6 +742,17 @@ export default function Images() {
     try {
       await deleteStagedPackage(alias);
       await refreshList();
+      setPackageJobs((current) => {
+        const next = { ...current };
+        delete next[alias];
+        return next;
+      });
+      if (
+        bootstrapSession?.alias === alias &&
+        (bootstrapSession.status === "succeeded" || bootstrapSession.status === "failed")
+      ) {
+        setBootstrapSession(null);
+      }
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
@@ -747,6 +770,7 @@ export default function Images() {
     try {
       await cancelBootstrap(bootstrapId);
       setBootstrapSession(null);
+      setBootstrapError(null);
     } catch (error) {
       setActionError((error as Error).message);
     }

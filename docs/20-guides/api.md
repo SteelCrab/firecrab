@@ -254,13 +254,15 @@ VM 생성 시 `template` alias는 `TemplateRegistry`(`firecrab-api/src/templates
 M2Image는 `FIRECRAB_IMAGE_BASE_URL`이 가리키는 베이스에서
 `{alias}.tar.zst`를 먼저 내려받아 구조를 확인한 뒤, 별도 이미지 설치에서
 그 로컬 패키지를 풀어 등록한다. 각 행의 `packageUrl`은 `{base}/{alias}.tar.zst`
-형태다. 준비된 로컬 패키지는 이미지 삭제 뒤에도 남아 재설치에 다시 쓸 수 있다.
+형태다. 준비된 로컬 패키지는 이미지 삭제 뒤에도 남아 재설치에 다시 쓸 수 있다 —
+`DELETE /api/images/{alias}/package`로 명시적으로 지우지 않는 한.
 
 | API | 역할 |
 |---|---|
 | `GET /api/images` | 알려진 템플릿 + `installed` + (설정 시) `packageUrl` |
 | `POST /api/images/{alias}/package` | `packageUrl` 비동기 다운로드 · 구조 검증 · 로컬 패키지 준비 (202) |
 | `GET /api/images/{alias}/package` | 패키지 설치 job 상태 · 단계별 로그 |
+| `DELETE /api/images/{alias}/package` | 스테이징만 되고 아직 설치 안 된 로컬 패키지 삭제 (진행 중 작업 있으면 409, 스테이징 안 됐으면 409) |
 | `POST /api/images/{alias}/install` | 준비된 로컬 패키지 해제 · 아티팩트 검증 · 핫 등록 (202) |
 | `GET /api/images/{alias}/install` | 이미지 설치 job 상태 · 진행 로그 |
 | `DELETE /api/images/{alias}` | 등록 해제 + orphan 파일 삭제 (사용 중 VM 있으면 409) |
