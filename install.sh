@@ -35,7 +35,7 @@ PKG_UPDATED=0   # index refreshed at most once
 # Help text, also printed before failing on an unknown option.
 usage() {
     cat <<'USAGE'
-Usage: sudo ./install.sh [OPTIONS]
+Usage: ./install.sh [OPTIONS]
 
   (no options)        install everything that is missing, then start firecrab
   --check             report what is missing and what would be installed
@@ -60,7 +60,16 @@ warn() { printf '\033[1;33m!!\033[0m  %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
-need_root() { [ "$(id -u)" -eq 0 ] || die "run as root: sudo ./install.sh $*"; }
+
+# Privilege escalation: empty when already root, "sudo" otherwise.
+# Individual commands that need root use $SUDO; the whole script runs as the
+# invoking user so that $HOME, SSH keys, and cargo are the user's, not root's.
+if [ "$(id -u)" -eq 0 ]; then
+    SUDO=""
+else
+    have sudo || die "sudo is required to run privileged steps; install it first"
+    SUDO="sudo"
+fi
 
 # Extra args after --doctor are forwarded to scripts/firecrab-doctor.sh.
 DOCTOR_ARGS=()
@@ -138,8 +147,8 @@ pkg_name() {
 pkg_refresh() {
     [ "$PKG_UPDATED" -eq 1 ] && return 0
     case "$PKG" in
-        apt-get) DEBIAN_FRONTEND=noninteractive apt-get update -qq ;;
-        apk) apk update -q ;;
+        apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get update -qq ;;
+        apk) $SUDO apk update -q ;;
         *) : ;;  # dnf/zypper/pacman refresh as part of install
     esac
     PKG_UPDATED=1
@@ -149,11 +158,11 @@ pkg_refresh() {
 pkg_install() {
     pkg_refresh
     case "$PKG" in
-        apt-get) DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" ;;
-        dnf) dnf install -y -q "$@" ;;
-        zypper) zypper --non-interactive install -y "$@" ;;
-        pacman) pacman -Sy --noconfirm --needed "$@" ;;
-        apk) apk add --no-cache "$@" ;;
+        apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "$@" ;;
+        dnf) $SUDO dnf install -y -q "$@" ;;
+        zypper) $SUDO zypper --non-interactive install -y "$@" ;;
+        pacman) $SUDO pacman -Sy --noconfirm --needed "$@" ;;
+        apk) $SUDO apk add --no-cache "$@" ;;
         *) return 1 ;;
     esac
 }
@@ -244,7 +253,7 @@ ensure_firecracker() {
     [ "$INSTALL_DEPS" -eq 1 ] || { warn "missing: firecracker (--no-deps; run scripts/install-firecracker.sh)"; return 1; }
 
     step "installing firecracker"
-    "$REPO_ROOT/scripts/install-firecracker.sh" || { warn "firecracker install failed"; return 1; }
+    $SUDO "$REPO_ROOT/scripts/install-firecracker.sh" || { warn "firecracker install failed"; return 1; }
     have firecracker
 }
 
@@ -312,30 +321,30 @@ ensure_account() {
         log "group $FIRECRAB_GROUP exists"
     else
         step "creating group $FIRECRAB_GROUP"
-        groupadd --system "$FIRECRAB_GROUP"
+        $SUDO groupadd --system "$FIRECRAB_GROUP"
     fi
 
     if id "$FIRECRAB_USER" >/dev/null 2>&1; then
         log "user $FIRECRAB_USER exists"
     else
         step "creating user $FIRECRAB_USER"
-        useradd --system --gid "$FIRECRAB_GROUP" --home-dir "$DATADIR" \
+        $SUDO useradd --system --gid "$FIRECRAB_GROUP" --home-dir "$DATADIR" \
                 --shell /usr/sbin/nologin "$FIRECRAB_USER"
     fi
 
     # The API spawns firecracker, which opens /dev/kvm.
     if getent group kvm >/dev/null && ! id -nG "$FIRECRAB_USER" | tr ' ' '\n' | grep -qx kvm; then
         step "adding $FIRECRAB_USER to the kvm group"
-        usermod --append --groups kvm "$FIRECRAB_USER"
+        $SUDO usermod --append --groups kvm "$FIRECRAB_USER"
     fi
 }
 
 # Data, config and install directories with their intended owners.
 ensure_directories() {
-    install -d -o root -g root -m 0755 "$LIBDIR" "$SHAREDIR"
-    install -d -o "$FIRECRAB_USER" -g "$FIRECRAB_GROUP" -m 0750 \
+    $SUDO install -d -o root -g root -m 0755 "$LIBDIR" "$SHAREDIR"
+    $SUDO install -d -o "$FIRECRAB_USER" -g "$FIRECRAB_GROUP" -m 0750 \
             "$DATADIR" "$DATADIR/data" "$DATADIR/images"
-    install -d -o root -g "$FIRECRAB_GROUP" -m 0750 "$CONFDIR"
+    $SUDO install -d -o root -g "$FIRECRAB_GROUP" -m 0750 "$CONFDIR"
     log "directories ready under $DATADIR, $CONFDIR"
 }
 
@@ -344,21 +353,21 @@ install_binaries() {
     local target="$REPO_ROOT/target/release"
     for binary in firecrab-api firecrab-net-helper; do
         [ -x "$target/$binary" ] || die "$target/$binary not found — the build did not produce it"
-        install -o root -g root -m 0755 "$target/$binary" "$LIBDIR/$binary"
+        $SUDO install -o root -g root -m 0755 "$target/$binary" "$LIBDIR/$binary"
     done
     # Host doctor is a shell script — no build step. On PATH as firecrab-doctor.
-    install -d -o root -g root -m 0755 "$PREFIX/bin"
-    install -o root -g root -m 0755 "$REPO_ROOT/scripts/firecrab-doctor.sh" \
+    $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
+    $SUDO install -o root -g root -m 0755 "$REPO_ROOT/scripts/firecrab-doctor.sh" \
         "$PREFIX/bin/firecrab-doctor"
     log "binaries installed to $LIBDIR (doctor → $PREFIX/bin/firecrab-doctor)"
 
     [ "$WITH_FRONTEND" -eq 1 ] || return 0
     local dist="$REPO_ROOT/firecrab-frontend/dist"
     [ -f "$dist/index.html" ] || die "$dist/index.html not found — the dashboard build did not produce it"
-    rm -rf "$SHAREDIR/dashboard"
-    install -d -o root -g root -m 0755 "$SHAREDIR/dashboard"
-    cp -r "$dist/." "$SHAREDIR/dashboard/"
-    chown -R root:root "$SHAREDIR/dashboard"
+    $SUDO rm -rf "$SHAREDIR/dashboard"
+    $SUDO install -d -o root -g root -m 0755 "$SHAREDIR/dashboard"
+    $SUDO cp -r "$dist/." "$SHAREDIR/dashboard/"
+    $SUDO chown -R root:root "$SHAREDIR/dashboard"
     log "dashboard installed to $SHAREDIR/dashboard"
 }
 
@@ -368,7 +377,7 @@ install_config() {
         log "keeping existing $CONFDIR/api.env"
         return 0
     fi
-    cat > "$CONFDIR/api.env" <<'ENVFILE'
+    $SUDO tee "$CONFDIR/api.env" > /dev/null <<'ENVFILE'
 # firecrab API settings. The unit already sets the image root, the dashboard
 # assets and the working directory; uncomment only what you want to change.
 #
@@ -385,8 +394,8 @@ install_config() {
 # FIRECRAB_IMAGE_BASE_URL=http://127.0.0.1:8765
 # Requires host tools: tar, zstd. Restart firecrab-api after changing this.
 ENVFILE
-    chown root:"$FIRECRAB_GROUP" "$CONFDIR/api.env"
-    chmod 0640 "$CONFDIR/api.env"
+    $SUDO chown root:"$FIRECRAB_GROUP" "$CONFDIR/api.env"
+    $SUDO chmod 0640 "$CONFDIR/api.env"
     log "wrote $CONFDIR/api.env"
 }
 
@@ -402,10 +411,10 @@ install_units() {
             -e "s|@FIRECRAB_USER@|$FIRECRAB_USER|g" \
             -e "s|@FIRECRAB_GROUP@|$FIRECRAB_GROUP|g" \
             -e "s|@FIRECRAB_UID@|$uid|g" \
-            "$REPO_ROOT/packaging/systemd/$unit" > "$UNITDIR/$unit"
-        chmod 0644 "$UNITDIR/$unit"
+            "$REPO_ROOT/packaging/systemd/$unit" | $SUDO tee "$UNITDIR/$unit" > /dev/null
+        $SUDO chmod 0644 "$UNITDIR/$unit"
     done
-    systemctl daemon-reload
+    $SUDO systemctl daemon-reload
     log "units installed to $UNITDIR"
 }
 
@@ -451,8 +460,8 @@ ensure_images() {
     # Prefer images already built in the repo: copying beats rebuilding.
     if repo_images_present; then
         step "copying images from the repo (existing ones are kept)"
-        cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
-        chown -R "$FIRECRAB_USER:$FIRECRAB_GROUP" "$DATADIR/images"
+        $SUDO cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
+        $SUDO chown -R "$FIRECRAB_USER:$FIRECRAB_GROUP" "$DATADIR/images"
         log "images ready in $DATADIR/images"
         return 0
     fi
@@ -491,8 +500,8 @@ ensure_images() {
             || warn "Rocky Linux image build failed (the Alpine one is still usable)"
     fi
 
-    cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
-    chown -R "$FIRECRAB_USER:$FIRECRAB_GROUP" "$DATADIR/images"
+    $SUDO cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
+    $SUDO chown -R "$FIRECRAB_USER:$FIRECRAB_GROUP" "$DATADIR/images"
     log "images ready in $DATADIR/images"
 }
 
@@ -500,7 +509,7 @@ ensure_images() {
 
 # Enables and starts both units, then confirms they really came up.
 start_units() {
-    systemctl enable --now "${UNITS[@]}"
+    $SUDO systemctl enable --now "${UNITS[@]}"
     sleep 1
     local failed=0
     for unit in "${UNITS[@]}"; do
@@ -535,7 +544,7 @@ do_check() {
     if [ "$gaps" -eq 0 ]; then
         log "host is ready — nothing missing"
     else
-        warn "run 'sudo ./install.sh' to install the above"
+        warn "run './install.sh' to install the above"
     fi
     step "for runtime host diagnostics (UFW, helper socket, wrong DB path): ./install.sh --doctor"
     return 0
@@ -553,7 +562,6 @@ do_doctor() {
 # or services. This is the part that differs per distribution, so it is what a
 # container without systemd (and CI's distro matrix) can usefully exercise.
 do_deps() {
-    need_root --deps-only
     detect_pkg || die "no known package manager (apt/dnf/zypper/pacman/apk)"
 
     ensure_runtime_deps || die "missing runtime dependencies (see above)"
@@ -566,7 +574,6 @@ do_deps() {
 
 # The default path: fill the gaps, build, lay out, start.
 do_install() {
-    need_root
     # Checked before anything is installed: refusing after pulling in five
     # packages would be a waste of the operator's time.
     check_systemd || die "this installer manages systemd units"
@@ -598,18 +605,17 @@ do_install() {
 
 # Removes what this script installed; data only with --purge.
 do_uninstall() {
-    need_root --uninstall
     for unit in "${UNITS[@]}"; do
-        systemctl disable --now "$unit" 2>/dev/null || true
-        rm -f "$UNITDIR/$unit"
+        $SUDO systemctl disable --now "$unit" 2>/dev/null || true
+        $SUDO rm -f "$UNITDIR/$unit"
     done
-    systemctl daemon-reload
+    $SUDO systemctl daemon-reload
     log "units removed"
 
-    rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
-    rm -f "$PREFIX/bin/firecrab-doctor"
-    rm -rf "$SHAREDIR/dashboard"
-    rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true
+    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
+    $SUDO rm -f "$PREFIX/bin/firecrab-doctor"
+    $SUDO rm -rf "$SHAREDIR/dashboard"
+    $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true
     log "binaries and dashboard removed"
 
     # Left alone on purpose: the account, the config and the data directory.
@@ -617,7 +623,7 @@ do_uninstall() {
     # they disappear on the next reboot.
     if [ "$PURGE" -eq 1 ]; then
         warn "purging $DATADIR and $CONFDIR (all VM disks and the database)"
-        rm -rf "$DATADIR" "$CONFDIR"
+        $SUDO rm -rf "$DATADIR" "$CONFDIR"
     else
         log "kept $DATADIR and $CONFDIR — pass --purge to delete them too"
     fi
