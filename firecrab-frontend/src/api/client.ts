@@ -13,6 +13,7 @@ import type {
   MicroStorageDetailResponse,
   MicroStorageResponse,
   NetworkInfoResponse,
+  PackageAction,
   StorageDeviceResponse,
   StorageRootResponse,
   UpdateMicroNetworkRequest,
@@ -117,6 +118,19 @@ export function startVm(id: string): Promise<VmResponse> {
 
 export function stopVm(id: string): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}/stop`, { method: "POST" });
+}
+
+/** Install, remove, or update packages on a running VM (`POST /api/vms/{id}/packages`). */
+export function runPackageAction(
+  id: string,
+  action: PackageAction["action"],
+  packages: string[] = [],
+): Promise<VmResponse> {
+  return fetchJson(`/api/vms/${encodeURIComponent(id)}/packages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, packages }),
+  });
 }
 
 export function getNetworkInfo(): Promise<NetworkInfoResponse> {

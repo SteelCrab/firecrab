@@ -748,6 +748,27 @@ table.image-table .image-package-url a:hover {
   word-break: break-word;
 }
 
+.package-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.package-row:last-child { margin-bottom: 0; }
+.package-row input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.55rem 0.65rem;
+  height: 2.5rem;
+}
+
 .empty {
   padding: 2rem 0.75rem;
   text-align: center;
