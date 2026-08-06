@@ -8,6 +8,7 @@ import {
   deleteVm,
   finalizeBuild,
   getBuild,
+  getImageInstall,
   getImagePackage,
   listImages,
   listVms,
@@ -271,6 +272,27 @@ export default function Images() {
     void refreshList();
   }, [refreshList]);
 
+  // `startImageInstall` only kicks the install off — the backend always
+  // answers with a single "install started" snapshot and does the real
+  // extract/register work in the background, so the result must be polled
+  // to a terminal status before the table can show "설치됨".
+  const pollInstall = (alias: string) => {
+    const tick = async () => {
+      try {
+        const latest = await getImageInstall(alias);
+        setInstall((current) => keepNewestJobSnapshot(current, latest));
+        if (latest.status === "running") {
+          setTimeout(() => void tick(), 300);
+        } else if (latest.status === "succeeded") {
+          await refreshList();
+        }
+      } catch {
+        /* keep last snapshot */
+      }
+    };
+    void tick();
+  };
+
   const handleFetchPackage = async (alias: string) => {
     setBusyAlias(alias);
     setActionError(null);
@@ -284,7 +306,7 @@ export default function Images() {
         else if (latest.status === "succeeded") {
           const installed = await startImageInstall(alias);
           setInstall(installed);
-          await refreshList();
+          pollInstall(alias);
         }
       };
       void poll();
@@ -375,9 +397,15 @@ export default function Images() {
               const job = packageJobs[image.alias];
               const fetching = job?.status === "running";
               const statusLabel = image.installed ? "설치됨" : job?.status === "succeeded" ? "패키지 준비됨" : "미설치";
+              // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
+              // fall back to plain alias text with no logo for those.
+              const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
               return (
                 <tr key={image.alias}>
-                  <td className="mono">{image.alias}</td>
+                  <td className="mono">
+                    {known && <img className="packer-template-logo" src={known.logoSrc} alt="" />}
+                    {image.alias}
+                  </td>
                   <td className="mono">{formatRootfsSize(image.rootfsSizeBytes)}</td>
                   <td>
                     <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
@@ -428,6 +456,7 @@ export default function Images() {
 
       {buildSourceAlias && (
         <BuildModal
+          key={buildSourceAlias}
           sourceAlias={buildSourceAlias}
           installedAliases={installedAliases}
           onClose={() => setBuildSourceAlias(null)}
