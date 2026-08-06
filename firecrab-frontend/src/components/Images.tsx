@@ -324,11 +324,25 @@ function ImageDetail({
   image,
   usedByVms,
   usedByError,
+  packageJob,
+  busyAlias,
+  install,
+  onInstallStaged,
+  onFetchPackage,
+  onDelete,
 }: {
   image: ImageResponse;
   usedByVms: VmResponse[] | null;
   usedByError: string | null;
+  packageJob: ImageInstallResponse | undefined;
+  busyAlias: string | null;
+  install: ImageInstallResponse | null;
+  onInstallStaged: (alias: string) => Promise<void>;
+  onFetchPackage: (alias: string) => Promise<void>;
+  onDelete: (alias: string) => Promise<void>;
 }) {
+  const fetching = packageJob?.status === "running";
+
   return (
     <div className="subpanel">
       <dl className="detail-fields mono">
@@ -355,6 +369,62 @@ function ImageDetail({
                 : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
         </dd>
       </dl>
+
+      <div className="package-row">
+        {image.installed ? (
+          <button type="button" className="btn" disabled>
+            설치됨
+          </button>
+        ) : image.packageStaged ? (
+          <button
+            type="button"
+            className="btn primary"
+            disabled={busyAlias === image.alias}
+            onClick={() => void onInstallStaged(image.alias)}
+            title="이 호스트에 준비된 로컬 패키지를 바로 설치합니다."
+          >
+            {busyAlias === image.alias ? "설치 중…" : "로컬 패키지 설치"}
+          </button>
+        ) : image.packageUrl ? (
+          <button
+            type="button"
+            className="btn primary"
+            disabled={fetching || busyAlias === image.alias}
+            onClick={() => void onFetchPackage(image.alias)}
+            title={image.packageUrl}
+          >
+            {fetching ? "가져오는 중…" : `가져오기 (${packageBasename(image.packageUrl)})`}
+          </button>
+        ) : (
+          <button type="button" className="btn" disabled>
+            패키지 URL 없음
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="btn danger"
+          disabled={!image.installed || busyAlias === image.alias}
+          onClick={() => void onDelete(image.alias)}
+        >
+          {busyAlias === image.alias ? "삭제 중…" : "삭제"}
+        </button>
+      </div>
+
+      {install && install.alias === image.alias && install.status !== "idle" && (
+        <>
+          <div className="log-export-bar">
+            <span className="log-export-bar-label">이미지 가져오기 로그 — {install.alias}</span>
+            <LogExportActions
+              text={install.log}
+              filename={logDownloadFilename("m2image-import", install.alias)}
+              buttonClassName="btn console-bar-btn"
+              disabled={!install.log}
+            />
+          </div>
+          <pre className="detail-log image-install-log">{install.log}</pre>
+        </>
+      )}
     </div>
   );
 }
@@ -583,13 +653,11 @@ export default function Images() {
               <th>이미지</th>
               <th>크기</th>
               <th>상태</th>
-              <th />
             </tr>
           </thead>
           <tbody>
             {(images ?? []).map((image) => {
               const job = packageJobs[image.alias];
-              const fetching = job?.status === "running";
               const statusLabel = image.installed
                 ? "설치됨"
                 : job?.status === "succeeded" || image.packageStaged
@@ -612,49 +680,23 @@ export default function Images() {
                   <td>
                     <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
                   </td>
-                  <td className="actions">
-                    {image.installed ? (
-                      <button type="button" className="btn danger" disabled={busyAlias === image.alias} onClick={() => void handleDelete(image.alias)}>
-                        {busyAlias === image.alias ? "삭제 중…" : "삭제"}
-                      </button>
-                    ) : image.packageStaged ? (
-                      // Ahead of the packageUrl branch on purpose: when both
-                      // are available, a package already on this host wins
-                      // over re-downloading the remote one — which would
-                      // overwrite a just-bootstrapped local build.
-                      <button
-                        type="button"
-                        className="btn primary"
-                        disabled={busyAlias === image.alias}
-                        onClick={() => void handleInstallStaged(image.alias)}
-                        title="이 호스트에 준비된 로컬 패키지를 바로 설치합니다."
-                      >
-                        {busyAlias === image.alias ? "설치 중…" : "로컬 패키지 설치"}
-                      </button>
-                    ) : image.packageUrl ? (
-                      <button type="button" className="btn primary" disabled={fetching || busyAlias === image.alias} onClick={() => void handleFetchPackage(image.alias)} title={image.packageUrl}>
-                        {fetching ? "가져오는 중…" : `가져오기 (${packageBasename(image.packageUrl)})`}
-                      </button>
-                    ) : (
-                      <span className="poll-note">패키지 URL 없음</span>
-                    )}
-                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
         {selectedImage && (
-          <ImageDetail image={selectedImage} usedByVms={usedByVms} usedByError={usedByError} />
-        )}
-        {install && install.status !== "idle" && (
-          <>
-            <div className="log-export-bar">
-              <span className="log-export-bar-label">이미지 가져오기 로그 — {install.alias}</span>
-              <LogExportActions text={install.log} filename={logDownloadFilename("m2image-import", install.alias)} buttonClassName="btn console-bar-btn" disabled={!install.log} />
-            </div>
-            <pre className="detail-log image-install-log">{install.log}</pre>
-          </>
+          <ImageDetail
+            image={selectedImage}
+            usedByVms={usedByVms}
+            usedByError={usedByError}
+            packageJob={packageJobs[selectedImage.alias]}
+            busyAlias={busyAlias}
+            install={install}
+            onInstallStaged={handleInstallStaged}
+            onFetchPackage={handleFetchPackage}
+            onDelete={handleDelete}
+          />
         )}
       </section>
 
