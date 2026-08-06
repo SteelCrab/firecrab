@@ -294,7 +294,13 @@ function ImageDetail({
         </button>
       </div>
 
-      {bootstrapIsMine && bootstrapError && <div className="field-error">{bootstrapError}</div>}
+      {/* `bootstrapIsMine`으로 걸지 않는다: `startBootstrap` POST 자체가
+          실패하면 이 alias의 세션이 아예 생기지 않아 `bootstrapIsMine`이
+          항상 거짓이 된다(위 Step 2 참고). `ImageDetail`은 한 번에 하나의
+          alias에만 렌더링되고, 선택이 바뀔 때마다 `bootstrapError`가
+          리셋되므로(Step 2의 effect) 이 상태는 항상 "지금 열려있는
+          alias의 에러"다. */}
+      {bootstrapError && <div className="field-error">{bootstrapError}</div>}
 
       {bootstrapIsMine && bootstrapSession && (
         <>
@@ -375,7 +381,12 @@ export default function Images() {
 
   // MicroNetworks의 `getMicroNetwork(selectedId)`와 같은 패턴 —
   // 목록 자체엔 없는, 선택 시점의 최신 사용처만 별도로 가져온다.
+  // `bootstrapError`도 함께 리셋: 세션이 아예 안 생긴 채 실패한 경우
+  // `bootstrapSession.alias`로는 "누구 에러인지"를 알 수 없으므로,
+  // 대신 선택이 바뀌는 시점에 이전 alias의 에러를 지우는 방식으로
+  // 항상 "지금 열려있는 alias의 에러"만 남긴다.
   useEffect(() => {
+    setBootstrapError(null);
     if (!selectedAlias) {
       setUsedByVms(null);
       setUsedByError(null);
