@@ -350,6 +350,27 @@ const BOOTSTRAP_STEP_LABEL: Record<BootstrapStep, string> = {
   finalizing: "마무리",
 };
 
+/** Guards against a single unbroken line (no `\n` to split on at all) still
+ *  blowing up the step box the same way the unsplit case would. */
+const STEP_DETAIL_PREVIEW_MAX = 160;
+
+/**
+ * Short label for a failed step's box. On the primary failure path
+ * (`bootstrap.rs::run_bootstrap_script`), `run.detail` is `"bootstrap
+ * script exited with code {n}"` followed by a newline and then up to
+ * `OUTPUT_TAIL_CAP` (8 KiB) of echoed guest script plus console output —
+ * that full text is already shown, correctly, in the `.detail-log` `<pre>`
+ * below the stepper, so this box only ever needs the first line. Capped in
+ * length too, in case a future producer of `detail` hands back one very
+ * long line with no newline at all.
+ */
+function stepDetailPreview(detail: string): string {
+  const firstLine = detail.split("\n", 1)[0];
+  return firstLine.length > STEP_DETAIL_PREVIEW_MAX
+    ? `${firstLine.slice(0, STEP_DETAIL_PREVIEW_MAX)}…`
+    : firstLine;
+}
+
 /**
  * Four-box progress view over one bootstrap session, mirroring
  * `VmDetailModal`'s `PipelineStepper` so a VM start and a bootstrap read the
@@ -386,7 +407,9 @@ function BootstrapStepper({ timeline }: { timeline: BootstrapStepRun[] }) {
                 {status === "succeeded" ? "✓" : status === "failed" ? "✕" : ""}
               </span>
             </span>
-            {run?.detail && <span className="step-detail">{run.detail}</span>}
+            {run?.detail && (
+              <span className="step-detail">{stepDetailPreview(run.detail)}</span>
+            )}
           </li>
         );
       })}

@@ -501,6 +501,13 @@ table.vm-table {
   font-size: 0.66rem;
   color: var(--error);
   word-break: break-word;
+  /* Defense-in-depth, independent of whatever the caller passes in: the
+     full detail (bootstrap failures can carry ~8 KiB of echoed script) is
+     always shown in full in `.detail-log` below the stepper, so this box
+     never needs to grow past a few lines regardless of what any future
+     caller hands it. */
+  max-height: 3.6em;
+  overflow: hidden;
 }
 
 .pipeline-step.succeeded .step-bar {
