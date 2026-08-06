@@ -31,7 +31,7 @@ const KNOWN_TEMPLATES = [
   { alias: "rocky-9", label: "Rocky Linux", logoSrc: "https://raw.githubusercontent.com/rocky-linux/branding/main/logo/src/icon-primary.svg" },
 ] as const;
 
-/** Last path segment of an official package URL for the table cell. */
+/** Last path segment of an official package URL, shown on the "가져오기" button. */
 function packageBasename(url: string): string {
   try {
     const path = new URL(url).pathname;
@@ -185,7 +185,7 @@ function ImageDetail({
   onFetchPackage,
   onDelete,
   bootstrapSession,
-  bootstrapStarting,
+  bootstrapStartingAlias,
   bootstrapError,
   onStartBootstrap,
 }: {
@@ -199,20 +199,27 @@ function ImageDetail({
   onFetchPackage: (alias: string) => Promise<void>;
   onDelete: (alias: string) => Promise<void>;
   bootstrapSession: BootstrapResponse | null;
-  bootstrapStarting: boolean;
+  bootstrapStartingAlias: string | null;
   bootstrapError: string | null;
   onStartBootstrap: (alias: string) => Promise<void>;
 }) {
   const fetching = packageJob?.status === "running";
+  // Bootstrapping this alias would spend ~30 minutes producing a package
+  // the install step then refuses (`already_installed`) or that is already
+  // sitting on disk waiting to be installed.
   const blockedByStatus = image.installed || image.packageStaged;
   const bootstrapBusy =
-    bootstrapStarting ||
+    bootstrapStartingAlias !== null ||
     (bootstrapSession !== null && bootstrapSession.status !== "succeeded" && bootstrapSession.status !== "failed");
-  const bootstrapIsMine = bootstrapSession?.alias === image.alias;
+  const bootstrapIsMine =
+    bootstrapStartingAlias === image.alias || bootstrapSession?.alias === image.alias;
 
   return (
     <div className="subpanel">
       <dl className="detail-fields mono">
+        <dt>alias</dt>
+        <dd>{image.alias}</dd>
+
         <dt>버전</dt>
         <dd>{image.version}</dd>
 
@@ -222,8 +229,24 @@ function ImageDetail({
         <dt>rootfs 크기</dt>
         <dd>{formatRootfsSize(image.rootfsSizeBytes)}</dd>
 
+        <dt>상태</dt>
+        <dd>
+          {image.installed
+            ? "설치됨"
+            : packageJob?.status === "succeeded" || image.packageStaged
+              ? "패키지 준비됨"
+              : "미설치"}
+        </dd>
+
         <dt>설명</dt>
         <dd>{image.description || "—"}</dd>
+
+        {image.packageUrl && (
+          <>
+            <dt>패키지 URL</dt>
+            <dd>{image.packageUrl}</dd>
+          </>
+        )}
 
         <dt>사용 중인 VM</dt>
         <dd>
@@ -243,15 +266,19 @@ function ImageDetail({
           className="btn"
           disabled={blockedByStatus || bootstrapBusy}
           title={
-            blockedByStatus
-              ? "이미 설치됐거나 설치할 패키지가 이미 준비되어 있습니다."
-              : bootstrapBusy && !bootstrapIsMine
-                ? "다른 배포판의 부트스트랩이 진행 중입니다."
-                : "공식 배포판을 처음부터 준비합니다 — 이미 있는 microVM 빌더를 재사용해 별도 컨테이너나 권한 상승 없이 처리합니다."
+            blockedByStatus || (bootstrapBusy && !bootstrapIsMine)
+              ? undefined
+              : "공식 배포판을 처음부터 준비합니다 — 이미 있는 microVM 빌더를 재사용해 별도 컨테이너나 권한 상승 없이 처리합니다."
           }
           onClick={() => void onStartBootstrap(image.alias)}
         >
-          {bootstrapIsMine && bootstrapBusy ? "굽는 중…" : "굽기"}
+          {blockedByStatus
+            ? "이미 설치됨/패키지 준비됨"
+            : bootstrapIsMine && bootstrapBusy
+              ? "굽는 중…"
+              : bootstrapBusy
+                ? "다른 배포판 굽는 중"
+                : "굽기"}
         </button>
 
         {image.installed ? (
@@ -259,6 +286,10 @@ function ImageDetail({
             설치됨
           </button>
         ) : image.packageStaged ? (
+          // Ahead of the packageUrl branch on purpose: when both
+          // are available, a package already on this host wins
+          // over re-downloading the remote one — which would
+          // overwrite a just-bootstrapped local build.
           <button
             type="button"
             className="btn primary"
@@ -296,10 +327,10 @@ function ImageDetail({
 
       {/* `bootstrapIsMine`으로 걸지 않는다: `startBootstrap` POST 자체가
           실패하면 이 alias의 세션이 아예 생기지 않아 `bootstrapIsMine`이
-          항상 거짓이 된다(위 Step 2 참고). `ImageDetail`은 한 번에 하나의
-          alias에만 렌더링되고, 선택이 바뀔 때마다 `bootstrapError`가
-          리셋되므로(Step 2의 effect) 이 상태는 항상 "지금 열려있는
-          alias의 에러"다. */}
+          항상 거짓이 된다. `ImageDetail`은 한 번에 하나의 alias에만
+          렌더링되고, `Images()`의 `selectedAlias`-change effect가 선택이
+          바뀔 때마다 `bootstrapError`를 리셋하므로 이 상태는 항상
+          "지금 열려있는 alias의 에러"다. */}
       {bootstrapError && <div className="field-error">{bootstrapError}</div>}
 
       {bootstrapIsMine && bootstrapSession && (
@@ -353,12 +384,16 @@ export default function Images() {
   const [bootstrapSession, setBootstrapSession] = useState<BootstrapResponse | null>(null);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   /**
-   * True from the click itself, not from the response — mirrors
+   * Set from the click itself, not from the response — mirrors
    * `handleInstallStaged` 등의 `busyAlias` 가드와 같은 이유: 응답이
    * 오기 전 더블클릭이 두 번째 POST를 쏴서 빌더 VM이 두 개 뜨는 것을
-   * 막는다. 백엔드도 세션 하나만 허용하므로(409) 이중 방어다.
+   * 막는다. 백엔드도 세션 하나만 허용하므로(409) 이중 방어다. alias를
+   * 함께 들고 있는 이유: `startBootstrap` 자체가 실패하면
+   * `bootstrapSession`이 이 alias로 채워지지 않으므로, "지금 이 alias의
+   * 요청이 진행 중"이라는 사실을 세션과 무관하게 알아야 굽기 버튼이
+   * 자기 자신의 요청을 "다른 배포판 굽는 중"으로 잘못 표시하지 않는다.
    */
-  const [bootstrapStarting, setBootstrapStarting] = useState(false);
+  const [bootstrapStartingAlias, setBootstrapStartingAlias] = useState<string | null>(null);
 
   const refreshList = useCallback(async () => {
     try {
@@ -379,6 +414,14 @@ export default function Images() {
   const [usedByVms, setUsedByVms] = useState<VmResponse[] | null>(null);
   const [usedByError, setUsedByError] = useState<string | null>(null);
 
+  const refreshUsedByVms = useCallback((alias: string) => {
+    setUsedByVms(null);
+    setUsedByError(null);
+    listVms()
+      .then((vms) => setUsedByVms(vms.filter((vm) => vm.template === alias)))
+      .catch((error) => setUsedByError((error as Error).message));
+  }, []);
+
   // MicroNetworks의 `getMicroNetwork(selectedId)`와 같은 패턴 —
   // 목록 자체엔 없는, 선택 시점의 최신 사용처만 별도로 가져온다.
   // `bootstrapError`도 함께 리셋: 세션이 아예 안 생긴 채 실패한 경우
@@ -392,17 +435,18 @@ export default function Images() {
       setUsedByError(null);
       return;
     }
-    setUsedByVms(null);
-    setUsedByError(null);
-    listVms()
-      .then((vms) => setUsedByVms(vms.filter((vm) => vm.template === selectedAlias)))
-      .catch((error) => setUsedByError((error as Error).message));
-  }, [selectedAlias]);
+    refreshUsedByVms(selectedAlias);
+  }, [selectedAlias, refreshUsedByVms]);
 
   // `Images` is conditionally mounted by the App shell (only while the
   // "images" tab is active), so a poll started here can easily outlive the
-  // component if the user navigates away mid-install. Every tick must check
-  // this before touching state.
+  // component if the user navigates away mid-install or mid-bootstrap.
+  // Every tick must check this before touching state. Deliberately does NOT
+  // cancel an in-flight bootstrap session on unmount: cancelling mid-Packaging
+  // deletes the builder VM's disk out from under the concurrently-running
+  // packaging step, which can publish a truncated archive. A bootstrap simply
+  // keeps running on the backend and this panel resumes polling it next time
+  // Images mounts.
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -438,9 +482,8 @@ export default function Images() {
     void tick();
   };
 
-  // 옛 BootstrapPanel.pollBootstrap과 동일한 폴링 규율 — 404는 취소로
-  // 삭제된 세션이라는 확정 신호(그만 폴링), 그 외 에러는 일시적일 수
-  // 있으니 계속 폴링한다.
+  // 404는 취소로 삭제된 세션이라는 확정 신호(그만 폴링), 그 외 에러는
+  // 일시적일 수 있으니 계속 폴링한다.
   const pollBootstrap = (bootstrapId: string) => {
     const tick = async () => {
       if (!mountedRef.current) return;
@@ -466,8 +509,8 @@ export default function Images() {
   };
 
   const handleStartBootstrap = async (alias: string) => {
-    if (bootstrapStarting) return;
-    setBootstrapStarting(true);
+    if (bootstrapStartingAlias !== null) return;
+    setBootstrapStartingAlias(alias);
     setBootstrapError(null);
     try {
       const started = await startBootstrap(alias);
@@ -478,7 +521,7 @@ export default function Images() {
       if (!mountedRef.current) return;
       setBootstrapError((err as Error).message);
     } finally {
-      if (mountedRef.current) setBootstrapStarting(false);
+      if (mountedRef.current) setBootstrapStartingAlias(null);
     }
   };
 
@@ -585,6 +628,13 @@ export default function Images() {
       }
       await refreshList();
       if (install?.alias === alias) setInstall(null);
+      if (
+        bootstrapSession?.alias === alias &&
+        (bootstrapSession.status === "succeeded" || bootstrapSession.status === "failed")
+      ) {
+        setBootstrapSession(null);
+      }
+      if (selectedAlias === alias) refreshUsedByVms(alias);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
@@ -652,7 +702,7 @@ export default function Images() {
             onFetchPackage={handleFetchPackage}
             onDelete={handleDelete}
             bootstrapSession={bootstrapSession}
-            bootstrapStarting={bootstrapStarting}
+            bootstrapStartingAlias={bootstrapStartingAlias}
             bootstrapError={bootstrapError}
             onStartBootstrap={handleStartBootstrap}
           />
