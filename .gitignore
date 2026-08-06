@@ -18,6 +18,9 @@ node_modules/
 
 # Data files
 /data/
+
+# Local git worktrees (superpowers:using-git-worktrees)
+/.worktrees/
 firecrab-api/data/
 
 .playwright-mcp
