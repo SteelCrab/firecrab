@@ -475,6 +475,51 @@ pub(crate) async fn finalize_and_register(
     Ok(())
 }
 
+/// `DELETE /api/images/builds/{buildId}` — tears down the builder VM
+/// without registering anything. Safe to call at any point in a session's
+/// lifecycle (booting, ready, mid-install) since it goes through the same
+/// `delete_vm` path a user-initiated VM delete would.
+pub async fn cancel_build(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(build_id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let parsed_build_id = parse_id(&build_id, request_id.0)?;
+    let session = state
+        .builds
+        .get(parsed_build_id)
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+
+    // A VM still `Starting`/`Running` needs `stop_vm` before `delete_vm`
+    // accepts it — mirror the frontend's own stop-then-delete sequence for
+    // a running instance (`Images.tsx`'s `removeVmsUsingImage`).
+    let can_delete_now = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&session.vm_id)
+        .map(|vm| vm.state.can_delete())
+        .unwrap_or(true);
+    if !can_delete_now {
+        let _ = super::vms::stop_vm(
+            State(state.clone()),
+            Extension(request_id),
+            Path(session.vm_id.to_string()),
+        )
+        .await;
+    }
+
+    let _ = super::vms::delete_vm(
+        State(state.clone()),
+        Extension(request_id),
+        Path(session.vm_id.to_string()),
+    )
+    .await;
+
+    state.builds.remove(parsed_build_id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1101,5 +1146,46 @@ mod tests {
         assert!(session.log.contains("no disk generation"));
         // delete_vm still ran despite the finalize failure.
         assert!(state.vms.lock().unwrap().get(&build.vm_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_build_deletes_the_builder_vm_and_drops_the_session() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+        let (_status, Json(build)) = start_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap();
+
+        let status = cancel_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build.build_id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(state.builds.get(build.build_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_build_rejects_an_unknown_build_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = cancel_build(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 }

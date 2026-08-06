@@ -214,9 +214,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/images/builds", get(handlers::builds::list_builds))
         .route(
             "/api/images/builds/{buildId}",
-            // `cancel_build` (`.delete(...)`) is added in Task 10 — only
-            // `get` is wired here so the crate keeps compiling task-by-task.
-            get(handlers::builds::get_build),
+            get(handlers::builds::get_build).delete(handlers::builds::cancel_build),
         )
         .route(
             "/api/images/builds/{buildId}/packages",
