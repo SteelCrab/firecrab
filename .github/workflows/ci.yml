@@ -139,7 +139,7 @@ jobs:
     # booting a guest, which needs an image build (see --no-images below).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -352,7 +352,7 @@ jobs:
           fi
         shell: sh -e {0}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: --check reports this distro's package manager
         run: ./install.sh --check
@@ -390,7 +390,7 @@ jobs:
           - ubuntu-24.04
           - ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -485,7 +485,7 @@ jobs:
             template: alpine-3.24
             runner: '["self-hosted","linux","arm64","kvm"]'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Host and KVM
         run: |
