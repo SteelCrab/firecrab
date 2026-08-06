@@ -15,7 +15,7 @@
 - 대상 alias는 지금과 동일한 3개(alpine-3.24/ubuntu-26.04/rocky-9)로 고정 — 목록 확장 로직은 추가하지 않는다.
 - 새 CSS 규칙을 추가하지 않는다 — `is-selected`, `subpanel`, `detail-fields`, `package-row`, `state-badge`, `detail-log`, `inline-console-ended`, `log-export-bar` 등 필요한 클래스가 `firecrab-frontend/src/index.css`에 이미 있다(`table.image-table tbody tr.is-selected`가 이미 정의돼 있음, 지금까지 쓰이지 않았을 뿐).
 - 각 태스크가 끝난 시점에 `npm run build`(빌드 디렉터리: `firecrab-frontend`)와 `npm run lint`가 반드시 통과해야 한다.
-- 매 태스크 끝에 커밋한다. **주의: 이 리포지토리는 에이전트가 직접 `git commit`을 실행하지 않는 방침이다** — 각 태스크의 "커밋" 스텝은 커밋 명령을 실행하는 대신 "스테이징 후 권장 커밋 메시지를 사용자에게 제시"로 대체한다.
+- 매 태스크 끝에 실제로 `git commit`한다. 이 작업은 이 플랜 전용으로 격리된 git worktree(별도 브랜치)에서 진행되며, 태스크 리뷰·수정 루프가 커밋 diff를 비교하는 데 커밋이 반드시 필요하다 — "에이전트가 직접 커밋하지 않는다"는 방침은 사용자의 실제 작업 브랜치에 적용되는 것이지 이 격리된 워크트리에는 적용되지 않는다. 이 브랜치를 사용자 브랜치에 실제로 병합할지는 모든 태스크와 최종 리뷰가 끝난 뒤 `finishing-a-development-branch` 단계에서 사용자가 결정한다.
 
 ---
 
@@ -36,7 +36,9 @@
 
 ---
 
-### Task 1: 표를 순수 인벤토리로 정리하고 행 클릭 선택 + 최소 상세 패널 추가
+### Task 1: 행 클릭 선택 + 최소 상세 패널 추가 (표 구조는 아직 그대로 둠)
+
+**중요 — 왜 액션 열을 아직 지우지 않는가:** `firecrab-frontend`는 `tsconfig.app.json`에 `noUnusedLocals`/`noUnusedParameters`가 켜져 있다. 표의 액션 열(`<td className="actions">`)을 지우면 그 안에서만 쓰이던 `busyAlias`/`handleInstallStaged`/`handleFetchPackage`/`handleDelete`/`packageBasename`/`fetching`이 그 순간 전부 미사용 상태가 되어 **빌드가 깨진다** — 이 함수들의 새 호출처(`ImageDetail`)는 Task 3에서야 생긴다. 그래서 액션 열 제거와 `ImageDetail`로의 이전은 Task 3에서 **한 스텝 안에 동시에** 한다(제거와 재사용이 같은 커밋에 있어야 미사용 구간이 아예 생기지 않는다). 이번 Task 1은 표 구조를 전혀 건드리지 않고 순수 추가만 한다.
 
 **Files:**
 - Modify: `firecrab-frontend/src/components/Images.tsx`
@@ -44,125 +46,29 @@
 **Interfaces:**
 - Produces: `Images()` 안에 `const [selectedAlias, setSelectedAlias] = useState<string | null>(null);`. 이후 모든 태스크가 이 state를 그대로 재사용한다(이름 바뀌지 않음).
 - Produces: 새 컴포넌트 `function ImageDetail({ image }: { image: ImageResponse })` — 이후 태스크들이 여기에 prop을 추가해 나간다(컴포넌트 이름 `ImageDetail` 고정, 이후 태스크에서 참조).
+- 알려진 임시 상태(버그 아님, 리뷰에서 지적할 필요 없음): 이 태스크가 끝난 시점엔 표 행에 `onClick`(선택 토글)이 걸리면서 그 안의 기존 삭제/설치 버튼도 함께 살아있다 — 그 버튼을 클릭하면 클릭 이벤트가 행까지 버블링되어 선택도 같이 토글된다. 액션 버튼 자체가 Task 3에서 행 밖(상세 패널)으로 옮겨지면서 이 상태는 사라진다. `stopPropagation`을 추가하는 등의 대응은 하지 않는다 — 어차피 한 태스크 뒤에 지워질 코드에 들이는 노력이다.
 
-- [ ] **Step 1: 표 헤더에서 액션 열 제거**
+- [ ] **Step 1: 표 본문 행에 선택 토글(`onClick`)과 `is-selected` 클래스 추가 (그 외 행 내용은 전혀 바꾸지 않음)**
 
-`firecrab-frontend/src/components/Images.tsx`에서 (현재 517-524줄 부근):
-
-```tsx
-          <thead>
-            <tr>
-              <th>이미지</th>
-              <th>크기</th>
-              <th>상태</th>
-              <th />
-            </tr>
-          </thead>
-```
-
-마지막 `<th />`를 지운다:
+`firecrab-frontend/src/components/Images.tsx`에서 (현재 526줄 부근) `<tr key={image.alias}>`를:
 
 ```tsx
-          <thead>
-            <tr>
-              <th>이미지</th>
-              <th>크기</th>
-              <th>상태</th>
-            </tr>
-          </thead>
-```
-
-- [ ] **Step 2: 표 본문 행에서 액션 열·`fetching`·행 클릭 선택을 배선**
-
-현재(526-576줄 부근):
-
-```tsx
-            {(images ?? []).map((image) => {
-              const job = packageJobs[image.alias];
-              const fetching = job?.status === "running";
-              const statusLabel = image.installed
-                ? "설치됨"
-                : job?.status === "succeeded" || image.packageStaged
-                  ? "패키지 준비됨"
-                  : "미설치";
-              // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
-              // fall back to plain alias text with no logo for those.
-              const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
-              return (
                 <tr key={image.alias}>
-                  <td className="mono">
-                    {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
-                    {image.alias}
-                  </td>
-                  <td className="mono">{formatRootfsSize(image.rootfsSizeBytes)}</td>
-                  <td>
-                    <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
-                  </td>
-                  <td className="actions">
-                    {image.installed ? (
-                      <button type="button" className="btn danger" disabled={busyAlias === image.alias} onClick={() => void handleDelete(image.alias)}>
-                        {busyAlias === image.alias ? "삭제 중…" : "삭제"}
-                      </button>
-                    ) : image.packageStaged ? (
-                      // Ahead of the packageUrl branch on purpose: when both
-                      // are available, a package already on this host wins
-                      // over re-downloading the remote one — which would
-                      // overwrite a just-bootstrapped local build.
-                      <button
-                        type="button"
-                        className="btn primary"
-                        disabled={busyAlias === image.alias}
-                        onClick={() => void handleInstallStaged(image.alias)}
-                        title="이 호스트에 준비된 로컬 패키지를 바로 설치합니다."
-                      >
-                        {busyAlias === image.alias ? "설치 중…" : "로컬 패키지 설치"}
-                      </button>
-                    ) : image.packageUrl ? (
-                      <button type="button" className="btn primary" disabled={fetching || busyAlias === image.alias} onClick={() => void handleFetchPackage(image.alias)} title={image.packageUrl}>
-                        {fetching ? "가져오는 중…" : `가져오기 (${packageBasename(image.packageUrl)})`}
-                      </button>
-                    ) : (
-                      <span className="poll-note">패키지 URL 없음</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
 ```
 
-다음으로 교체한다(`fetching`은 이 스코프에서 더 쓰이지 않으므로 제거 — `noUnusedLocals`가 켜져 있어 그대로 두면 빌드가 실패한다. 실제 설치 버튼 로직은 Task 3에서 `ImageDetail` 안에 다시 등장한다):
+다음으로 교체한다(같은 줄, 딱 이 부분만):
 
 ```tsx
-            {(images ?? []).map((image) => {
-              const job = packageJobs[image.alias];
-              const statusLabel = image.installed
-                ? "설치됨"
-                : job?.status === "succeeded" || image.packageStaged
-                  ? "패키지 준비됨"
-                  : "미설치";
-              // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
-              // fall back to plain alias text with no logo for those.
-              const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
-              return (
                 <tr
                   key={image.alias}
                   className={selectedAlias === image.alias ? "is-selected" : undefined}
                   onClick={() => setSelectedAlias(selectedAlias === image.alias ? null : image.alias)}
                 >
-                  <td className="mono">
-                    {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
-                    {image.alias}
-                  </td>
-                  <td className="mono">{formatRootfsSize(image.rootfsSizeBytes)}</td>
-                  <td>
-                    <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
-                  </td>
-                </tr>
-              );
-            })}
 ```
 
-- [ ] **Step 3: `selectedAlias` state와 파생 `selectedImage` 추가**
+행 안의 `<td>` 4개(이미지/크기/상태/액션)는 이 스텝에서 한 글자도 바꾸지 않는다 — `job`/`fetching`/`busyAlias`/`handleDelete` 등 기존 로직 전부 그대로 남는다.
+
+- [ ] **Step 2: `selectedAlias` state와 파생 `selectedImage` 추가**
 
 `Images()` 함수 본문 맨 위, `const [install, setInstall] = useState<ImageInstallResponse | null>(null);` 바로 아래(현재 330줄 부근)에 추가:
 
@@ -176,7 +82,7 @@
   const selectedImage = (images ?? []).find((image) => image.alias === selectedAlias) ?? null;
 ```
 
-- [ ] **Step 4: `ImageDetail` 최소 버전 추가 + 렌더링**
+- [ ] **Step 3: `ImageDetail` 최소 버전 추가 + 렌더링**
 
 `Images()` 함수 정의 바로 위(즉 `BootstrapPanel` 함수 정의와 `export default function Images()` 사이)에 새 컴포넌트를 추가한다:
 
@@ -214,28 +120,29 @@ function ImageDetail({ image }: { image: ImageResponse }) {
         {install && install.status !== "idle" && (
 ```
 
-- [ ] **Step 5: 빌드 + 린트 확인**
+- [ ] **Step 4: 빌드 + 린트 확인**
 
 Run: `cd firecrab-frontend && npm run build`
-Expected: `tsc -b`와 `vite build`가 에러 없이 끝난다(unused-local 에러가 없어야 한다 — `fetching`을 지우지 않았다면 여기서 실패한다).
+Expected: `tsc -b`와 `vite build`가 에러 없이 끝난다. 이 태스크는 순수 추가만 했으므로(기존 코드를 하나도 지우지 않음) unused-local 에러가 날 이유가 없다 — 만약 난다면 Step 1~3에서 뭔가를 실수로 지운 것이니 원래 내용과 diff를 대조한다.
 
 Run: `cd firecrab-frontend && npm run lint`
 Expected: 에러 0건.
 
-- [ ] **Step 6: 브라우저 수동 확인**
+- [ ] **Step 5: 브라우저 수동 확인**
 
 Run: `cd firecrab-frontend && npm run dev` (별도 터미널에서 API 서버도 실행 중이어야 함 — `docs/20-guides/web.md` 참고)
 
-브라우저에서 Images 탭 진입 → 이미지 행 하나를 클릭 → 표 아래에 버전/최소 디스크/rootfs 크기/설명이 담긴 박스가 열리는지 확인 → 같은 행을 다시 클릭 → 박스가 닫히는지 확인 → 다른 행 클릭 → 박스 내용이 그 행 것으로 바뀌는지 확인. 액션 버튼(설치/삭제/굽기)이 아직 하나도 없는 것은 이 태스크에서는 정상이다(Task 3·4에서 추가됨).
+브라우저에서 Images 탭 진입 → 이미지 행 하나를 클릭 → 표 아래에 버전/최소 디스크/rootfs 크기/설명이 담긴 박스가 열리는지 확인 → 같은 행을 다시 클릭 → 박스가 닫히는지 확인 → 다른 행 클릭 → 박스 내용이 그 행 것으로 바뀌는지 확인. 액션 버튼(설치/삭제/굽기)이 이미 상세 패널이 아닌 행 안에 남아있고, 그걸 클릭하면 선택도 같이 토글되는 것은 이 태스크에서는 정상이다(Task 3에서 행 밖으로 옮겨지며 사라짐 — 위 Interfaces의 "알려진 임시 상태" 참고).
 
-- [ ] **Step 7: 커밋 준비 (직접 커밋하지 않음)**
+- [ ] **Step 6: 커밋**
 
 ```bash
+cd firecrab-frontend && npm run build && npm run lint
 git add firecrab-frontend/src/components/Images.tsx
-git status --short
+git commit -m "refactor(frontend): make the image table row-selectable"
 ```
 
-사용자에게 다음을 제시한다: "스테이징 완료. 권장 커밋 메시지: `refactor(frontend): make the image table row-selectable`" — 실제 `git commit`은 사용자가 실행하거나 명시적으로 요청할 때만 한다.
+이 저장소의 "직접 커밋하지 않는다" 방침은 사용자의 실제 작업 브랜치에 적용되는 것이다 — 지금은 이 플랜 전용으로 격리된 git worktree(`sdd/m2image-detail-panel` 브랜치)에서 작업 중이며, 여기서의 커밋은 태스크 리뷰/수정 루프가 diff를 비교하는 데 반드시 필요하다. 이 브랜치를 실제로 병합할지는 나중에 `finishing-a-development-branch` 단계에서 사용자가 결정한다 — 지금은 정상적으로 커밋한다.
 
 ---
 
@@ -335,18 +242,21 @@ Expected: 에러 0건.
 
 이미 설치된 템플릿으로 VM을 하나 생성 → Images 탭에서 그 템플릿 이미지 행 클릭 → "사용 중인 VM"에 방금 만든 VM이 `이름 [상태]` 형식으로 나오는지 확인. VM이 없는 이미지를 클릭했을 땐 "없음"이 나오는지 확인.
 
-- [ ] **Step 6: 커밋 준비 (직접 커밋하지 않음)**
+- [ ] **Step 6: 커밋**
 
 ```bash
+cd firecrab-frontend && npm run build && npm run lint
 git add firecrab-frontend/src/components/Images.tsx
-git status --short
+git commit -m "feat(frontend): list the VMs using an image in its detail panel"
 ```
 
-권장 커밋 메시지: `feat(frontend): list the VMs using an image in its detail panel`.
+이 작업은 이 플랜 전용으로 격리된 git worktree(별도 브랜치)에서 진행 중이다 — "에이전트가 직접 커밋하지 않는다"는 방침은 사용자의 실제 작업 브랜치에 적용되는 것이지 이 워크트리에는 적용되지 않는다. 여기서의 커밋은 태스크 리뷰 루프가 diff를 비교하는 데 필요하므로 정상적으로 커밋한다.
 
 ---
 
-### Task 3: 설치·삭제 액션을 상세 패널로 이동
+### Task 3: 설치·삭제 액션을 상세 패널로 이동, 표에서 액션 열 제거
+
+**이 태스크가 표의 액션 열 제거까지 함께 하는 이유:** Task 1은 표 구조를 건드리지 않고 행 선택만 추가했다 — 액션 열(`<td className="actions">`, 그 안의 `busyAlias`/`handleInstallStaged`/`handleFetchPackage`/`handleDelete`/`packageBasename`/`fetching` 사용)이 아직 그대로 남아있다. 이번 태스크는 그 액션 열을 지우는 것과 동시에(Step 2 하나에서) 같은 함수들을 `ImageDetail`의 새 prop으로 다시 연결한다 — 제거와 재사용을 분리하면 그 사이에 `noUnusedLocals` 빌드 에러가 나는 순간이 생긴다.
 
 **Files:**
 - Modify: `firecrab-frontend/src/components/Images.tsx`
@@ -354,6 +264,7 @@ git status --short
 **Interfaces:**
 - Consumes: `Images()`의 기존 `busyAlias`(state), `packageJobs`(state), `install`(state), `handleInstallStaged`/`handleFetchPackage`/`handleDelete`(기존 함수, 시그니처 `(alias: string) => Promise<void>` 그대로 — 이번 태스크에서 정의를 바꾸지 않는다).
 - Produces: `ImageDetail`에 `packageJob: ImageInstallResponse | undefined`, `busyAlias: string | null`, `install: ImageInstallResponse | null`, `onInstallStaged: (alias: string) => Promise<void>`, `onFetchPackage: (alias: string) => Promise<void>`, `onDelete: (alias: string) => Promise<void>` prop 추가 — Task 4가 이 중 `busyAlias` prop 옆에 부트스트랩 관련 prop들을 추가한다.
+- 순서 주의: Step 1을 적용한 직후(Step 2 적용 전) 파일은 일시적으로 타입 에러 상태다(`ImageDetail` 호출부가 아직 새 필수 prop을 넘기지 않음) — 정상이다. 이 태스크의 모든 스텝을 다 적용한 뒤에만 빌드가 통과하면 된다.
 
 - [ ] **Step 1: `ImageDetail`에 설치/삭제 prop과 액션 UI 추가**
 
@@ -470,7 +381,126 @@ function ImageDetail({
 }
 ```
 
-- [ ] **Step 2: 옛 설치 로그 블록 제거 + 호출부에 새 prop 배선**
+- [ ] **Step 2: 표에서 액션 열 제거(Task 1이 그대로 남겨둔 부분)**
+
+표 헤더 (현재 그대로 남아있는 `<th />`까지 포함한 4열):
+
+```tsx
+          <thead>
+            <tr>
+              <th>이미지</th>
+              <th>크기</th>
+              <th>상태</th>
+              <th />
+            </tr>
+          </thead>
+```
+
+마지막 `<th />`를 지워 3열로 만든다:
+
+```tsx
+          <thead>
+            <tr>
+              <th>이미지</th>
+              <th>크기</th>
+              <th>상태</th>
+            </tr>
+          </thead>
+```
+
+표 본문 행(Task 1이 `<tr>`에 `onClick`/`className`만 추가하고 나머지는 그대로 둔 상태):
+
+```tsx
+            {(images ?? []).map((image) => {
+              const job = packageJobs[image.alias];
+              const fetching = job?.status === "running";
+              const statusLabel = image.installed
+                ? "설치됨"
+                : job?.status === "succeeded" || image.packageStaged
+                  ? "패키지 준비됨"
+                  : "미설치";
+              // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
+              // fall back to plain alias text with no logo for those.
+              const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
+              return (
+                <tr
+                  key={image.alias}
+                  className={selectedAlias === image.alias ? "is-selected" : undefined}
+                  onClick={() => setSelectedAlias(selectedAlias === image.alias ? null : image.alias)}
+                >
+                  <td className="mono">
+                    {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
+                    {image.alias}
+                  </td>
+                  <td className="mono">{formatRootfsSize(image.rootfsSizeBytes)}</td>
+                  <td>
+                    <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
+                  </td>
+                  <td className="actions">
+                    {image.installed ? (
+                      <button type="button" className="btn danger" disabled={busyAlias === image.alias} onClick={() => void handleDelete(image.alias)}>
+                        {busyAlias === image.alias ? "삭제 중…" : "삭제"}
+                      </button>
+                    ) : image.packageStaged ? (
+                      // Ahead of the packageUrl branch on purpose: when both
+                      // are available, a package already on this host wins
+                      // over re-downloading the remote one — which would
+                      // overwrite a just-bootstrapped local build.
+                      <button
+                        type="button"
+                        className="btn primary"
+                        disabled={busyAlias === image.alias}
+                        onClick={() => void handleInstallStaged(image.alias)}
+                        title="이 호스트에 준비된 로컬 패키지를 바로 설치합니다."
+                      >
+                        {busyAlias === image.alias ? "설치 중…" : "로컬 패키지 설치"}
+                      </button>
+                    ) : image.packageUrl ? (
+                      <button type="button" className="btn primary" disabled={fetching || busyAlias === image.alias} onClick={() => void handleFetchPackage(image.alias)} title={image.packageUrl}>
+                        {fetching ? "가져오는 중…" : `가져오기 (${packageBasename(image.packageUrl)})`}
+                      </button>
+                    ) : (
+                      <span className="poll-note">패키지 URL 없음</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+```
+
+`fetching`과 `<td className="actions">` 전체를 지운다(`job`은 `statusLabel` 계산에 계속 쓰이므로 남긴다):
+
+```tsx
+            {(images ?? []).map((image) => {
+              const job = packageJobs[image.alias];
+              const statusLabel = image.installed
+                ? "설치됨"
+                : job?.status === "succeeded" || image.packageStaged
+                  ? "패키지 준비됨"
+                  : "미설치";
+              // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
+              // fall back to plain alias text with no logo for those.
+              const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
+              return (
+                <tr
+                  key={image.alias}
+                  className={selectedAlias === image.alias ? "is-selected" : undefined}
+                  onClick={() => setSelectedAlias(selectedAlias === image.alias ? null : image.alias)}
+                >
+                  <td className="mono">
+                    {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
+                    {image.alias}
+                  </td>
+                  <td className="mono">{formatRootfsSize(image.rootfsSizeBytes)}</td>
+                  <td>
+                    <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
+                  </td>
+                </tr>
+              );
+            })}
+```
+
+- [ ] **Step 3: 옛 설치 로그 블록 제거 + 호출부에 새 prop 배선**
 
 `</table>` 다음의 기존 블록(Task 1에서 그대로 뒀던 부분, 현재 파일에서는 `{selectedImage && <ImageDetail .../>}` 바로 다음에 위치):
 
@@ -507,11 +537,11 @@ function ImageDetail({
         )}
 ```
 
-- [ ] **Step 3: 표 본문에서 이제 안 쓰는 `packageBasename` import/헬퍼 확인**
+- [ ] **Step 4: 표 본문에서 이제 안 쓰는 `packageBasename` import/헬퍼 확인**
 
 `packageBasename`은 `ImageDetail` 안에서 계속 쓰이므로 삭제하지 않는다 — 이 스텝은 실수로 지우지 않았는지 확인하는 점검 스텝이다. `grep -n "packageBasename" firecrab-frontend/src/components/Images.tsx`로 여전히 1곳 이상 쓰이는지 확인한다.
 
-- [ ] **Step 4: 빌드 + 린트 확인**
+- [ ] **Step 5: 빌드 + 린트 확인**
 
 Run: `cd firecrab-frontend && npm run build`
 Expected: 에러 없음.
@@ -519,18 +549,19 @@ Expected: 에러 없음.
 Run: `cd firecrab-frontend && npm run lint`
 Expected: 에러 0건.
 
-- [ ] **Step 5: 브라우저 수동 확인**
+- [ ] **Step 6: 브라우저 수동 확인**
 
-`FIRECRAB_IMAGE_BASE_URL`이 설정된 환경에서: 미설치 이미지 행 클릭 → "가져오기 (파일명)" 클릭 → 상세 패널 안에 "이미지 가져오기 로그" 블록이 뜨고 진행되는지 확인 → 완료 후 표 상태가 "설치됨"으로 바뀌고 설치 버튼이 "설치됨"(비활성)으로 바뀌는지 확인. 설치된 이미지에서 "삭제" 클릭 → 확인창 → 삭제 후 표에서 상태가 "미설치"로 돌아오는지 확인. VM이 그 이미지를 쓰고 있을 때 삭제를 누르면 기존과 동일하게 "사용 중인 VM ...개가 있습니다" 확인창이 뜨는지도 확인.
+`FIRECRAB_IMAGE_BASE_URL`이 설정된 환경에서: 미설치 이미지 행 클릭 → "가져오기 (파일명)" 클릭 → 상세 패널 안에 "이미지 가져오기 로그" 블록이 뜨고 진행되는지 확인 → 완료 후 표 상태가 "설치됨"으로 바뀌고 설치 버튼이 "설치됨"(비활성)으로 바뀌는지 확인. 설치된 이미지에서 "삭제" 클릭 → 확인창 → 삭제 후 표에서 상태가 "미설치"로 돌아오는지 확인. VM이 그 이미지를 쓰고 있을 때 삭제를 누르면 기존과 동일하게 "사용 중인 VM ...개가 있습니다" 확인창이 뜨는지도 확인. 표에는 이제 액션 열이 없다(3열만 있어야 한다).
 
-- [ ] **Step 6: 커밋 준비 (직접 커밋하지 않음)**
+- [ ] **Step 7: 커밋**
 
 ```bash
+cd firecrab-frontend && npm run build && npm run lint
 git add firecrab-frontend/src/components/Images.tsx
-git status --short
+git commit -m "refactor(frontend): move install/delete actions into the image detail panel"
 ```
 
-권장 커밋 메시지: `refactor(frontend): move install/delete actions into the image detail panel`.
+이 작업은 이 플랜 전용으로 격리된 git worktree(별도 브랜치)에서 진행 중이다 — "에이전트가 직접 커밋하지 않는다"는 방침은 사용자의 실제 작업 브랜치에 적용되는 것이지 이 워크트리에는 적용되지 않는다. 여기서의 커밋은 태스크 리뷰 루프가 diff를 비교하는 데 필요하므로 정상적으로 커밋한다.
 
 ---
 
@@ -855,14 +886,15 @@ Expected: 에러 0건.
 
 미설치 alias(예: rocky-9) 행 클릭 → 상세 안 "굽기" 클릭 → 상태뱃지+스텝퍼+라이브 콘솔(부팅/실행 중)+로그가 상세 패널 안에 뜨는지 확인. 진행 중에 다른 alias 행을 클릭 → 그 alias의 "굽기" 버튼이 "다른 배포판의 부트스트랩이 진행 중입니다" 툴팁과 함께 비활성인지 확인 → 원래 굽던 alias로 돌아가면 진행 상황(스텝퍼/로그)이 그대로 이어지는지 확인. 완료 후 "패키지 준비됨" 상태로 바뀌고 "설치" 버튼이 활성화되는지 확인.
 
-- [ ] **Step 8: 커밋 준비 (직접 커밋하지 않음)**
+- [ ] **Step 8: 커밋**
 
 ```bash
+cd firecrab-frontend && npm run build && npm run lint
 git add firecrab-frontend/src/components/Images.tsx
-git status --short
+git commit -m "refactor(frontend): fold the standalone bootstrap panel into the image detail panel"
 ```
 
-권장 커밋 메시지: `refactor(frontend): fold the standalone bootstrap panel into the image detail panel`.
+이 작업은 이 플랜 전용으로 격리된 git worktree(별도 브랜치)에서 진행 중이다 — "에이전트가 직접 커밋하지 않는다"는 방침은 사용자의 실제 작업 브랜치에 적용되는 것이지 이 워크트리에는 적용되지 않는다. 여기서의 커밋은 태스크 리뷰 루프가 diff를 비교하는 데 필요하므로 정상적으로 커밋한다.
 
 ---
 
@@ -904,16 +936,17 @@ Expected: 에러 0건.
 4. 삭제 → 사용 중 VM 있는 경우/없는 경우 각각
 5. 굽기 진행 중 다른 alias 선택 시 그 alias의 굽기 버튼이 "다른 배포판 굽는 중"으로 비활성
 
-- [ ] **Step 4: 커밋 준비 (직접 커밋하지 않음)**
+- [ ] **Step 4: 커밋**
 
-Step 1에서 정리할 게 있었다면:
+Step 1에서 정리할 게 있었다면(빌드+린트가 여전히 깨끗한지 다시 확인 후):
 
 ```bash
+cd firecrab-frontend && npm run build && npm run lint
 git add firecrab-frontend/src/components/Images.tsx
-git status --short
+git commit -m "chore(frontend): drop dead code left over from the detail-panel refactor"
 ```
 
-권장 커밋 메시지: `chore(frontend): drop dead code left over from the detail-panel refactor` — 정리할 게 없었다면 이 스텝은 생략(빈 커밋 없음).
+이 작업은 이 플랜 전용으로 격리된 git worktree(별도 브랜치)에서 진행 중이다 — "에이전트가 직접 커밋하지 않는다"는 방침은 사용자의 실제 작업 브랜치에 적용되는 것이지 이 워크트리에는 적용되지 않는다. 정리할 게 없었다면 이 스텝은 생략한다(빈 커밋 없음).
 
 ## 완료 기준
 
