@@ -14,8 +14,16 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+/// Manifest of every template registered at runtime (image install or web
+/// build), relative to the image root. Rebuilt into the registry on the next
+/// startup so a template that was never part of [`default_specs`] — a web
+/// build's derived alias, or an in-place rebuild's new version — does not
+/// silently disappear on restart, taking every VM created from it with it.
+const REGISTRATIONS_FILE: &str = ".templates.json";
 
 /// `openat2` `RESOLVE_*` flag: reject crossing a mount point.
 const RESOLVE_NO_XDEV: u64 = 0x01;
@@ -52,7 +60,12 @@ pub enum TemplateError {
 
 /// One template to register: an alias, its pinned version tag, and the
 /// artifacts/boot args that version resolves to.
-#[derive(Debug, Clone)]
+///
+/// Serializable because runtime registrations are persisted verbatim into
+/// [`REGISTRATIONS_FILE`] — a spec is exactly the input `register_spec`
+/// needs, so replaying it at startup reproduces the same registry state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TemplateSpec {
     /// Stable, user-facing name (e.g. `ubuntu-26.04`); what the API accepts.
     pub alias: String,
@@ -159,6 +172,10 @@ pub struct TemplateRegistry {
     /// "stuck at disk prep with many VMs" bug). Invalidated by length or
     /// mtime moving, which any real content change updates.
     verify_cache: Arc<Mutex<HashMap<(u64, u64), CachedHash>>>,
+    /// Serializes the read-modify-write of [`REGISTRATIONS_FILE`], which two
+    /// concurrent registrations would otherwise interleave into a manifest
+    /// missing one of them.
+    manifest_lock: Arc<Mutex<()>>,
 }
 
 impl Clone for TemplateRegistry {
@@ -169,6 +186,7 @@ impl Clone for TemplateRegistry {
             aliases: self.aliases.clone(),
             versions: self.versions.clone(),
             verify_cache: self.verify_cache.clone(),
+            manifest_lock: self.manifest_lock.clone(),
         }
     }
 }
@@ -220,7 +238,40 @@ impl TemplateRegistry {
             );
         }
 
-        Self::from_specs(image_root, present)
+        let registry = Self::from_specs(image_root, present)?;
+        registry.restore_registrations();
+        Ok(registry)
+    }
+
+    /// Replays [`REGISTRATIONS_FILE`] over the built-in set, so templates
+    /// registered while the previous process was running (an installed
+    /// image, a web build's derived alias, an in-place rebuild) resolve
+    /// again. Replaying through the normal `register_spec` path means a
+    /// restored alias is verified exactly the way a live registration is,
+    /// and an entry that supersedes a built-in alias re-pins it while the
+    /// built-in version stays addressable for VMs still pinned to it.
+    ///
+    /// Best-effort per entry: a manifest naming files that have since been
+    /// deleted must not take the whole API down at startup, for the same
+    /// reason [`load_from`](Self::load_from) skips unbuilt built-ins.
+    fn restore_registrations(&self) {
+        for spec in self.read_registrations() {
+            if !artifacts_present(&self.image_root_path, &spec) {
+                tracing::warn!(
+                    template = spec.alias,
+                    "registered template's artifacts are missing; skipping this template"
+                );
+                continue;
+            }
+            let alias = spec.alias.clone();
+            if let Err(error) = self.register_spec_inner(spec, false) {
+                tracing::warn!(
+                    template = alias,
+                    error = %error,
+                    "registered template could not be restored; skipping this template"
+                );
+            }
+        }
     }
 
     /// Builds a registry from an explicit image root and template specs,
@@ -272,6 +323,7 @@ impl TemplateRegistry {
             aliases: Arc::new(Mutex::new(aliases)),
             versions: Arc::new(Mutex::new(versions)),
             verify_cache: Arc::new(Mutex::new(HashMap::new())),
+            manifest_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -360,41 +412,30 @@ impl TemplateRegistry {
         let removed = versions.remove(&key)?;
 
         // Paths still held by other versions must not be deleted.
-        let still_referenced: std::collections::HashSet<PathBuf> = versions
-            .values()
-            .flat_map(|template| {
-                std::iter::once(template.kernel.relative_path().to_path_buf())
-                    .chain(std::iter::once(
-                        template.rootfs.relative_path().to_path_buf(),
-                    ))
-                    .chain(
-                        template
-                            .initrd
-                            .as_ref()
-                            .map(|artifact| artifact.relative_path().to_path_buf()),
-                    )
-            })
-            .collect();
+        let orphan_paths = self.orphan_paths(&removed, &versions);
 
-        let orphan_paths: Vec<PathBuf> = std::iter::once(removed.kernel.relative_path())
-            .chain(std::iter::once(removed.rootfs.relative_path()))
-            .chain(
-                removed
-                    .initrd
-                    .as_ref()
-                    .map(|artifact| artifact.relative_path()),
-            )
-            .filter(|relative| !still_referenced.contains(*relative))
-            .map(|relative| self.image_root_path.join(relative))
-            .collect();
+        drop(versions);
+        drop(aliases);
+        self.forget_registration(alias);
 
         Some((removed, orphan_paths))
     }
 
     /// Verify artifacts already under the image root and pin them as a live
-    /// alias. Used after a successful download/install so create can use the
-    /// template without restarting the API.
+    /// alias. Used after a successful download/install (and after a web
+    /// build's finalize) so create can use the template without restarting
+    /// the API — and recorded in [`REGISTRATIONS_FILE`] so it survives one.
     pub fn register_spec(&self, spec: TemplateSpec) -> Result<Arc<TemplateVersion>, TemplateError> {
+        self.register_spec_inner(spec, true)
+    }
+
+    /// `persist` is false only while replaying the manifest at startup —
+    /// rewriting each entry as it is restored would be pure churn.
+    fn register_spec_inner(
+        &self,
+        spec: TemplateSpec,
+        persist: bool,
+    ) -> Result<Arc<TemplateVersion>, TemplateError> {
         let initrd = spec
             .initrd
             .as_ref()
@@ -406,9 +447,16 @@ impl TemplateRegistry {
             kernel: verify_artifact(&self.image_root, &spec.kernel)?,
             initrd,
             rootfs: verify_artifact(&self.image_root, &spec.rootfs)?,
-            boot_args: spec.boot_args,
+            boot_args: spec.boot_args.clone(),
         });
         let version_key = (spec.alias.clone(), version.version.clone());
+
+        // Persisted before the in-memory maps change so a manifest that
+        // can't be written fails the registration outright, rather than
+        // handing back a template that silently evaporates on restart.
+        if persist {
+            self.persist_registration(&spec)?;
+        }
 
         let mut versions = self
             .versions
@@ -424,6 +472,154 @@ impl TemplateRegistry {
         versions.insert(version_key.clone(), version.clone());
         aliases.insert(spec.alias, version_key);
         Ok(version)
+    }
+
+    /// Drops a `(name, version)` that no alias points at any more and
+    /// returns the artifact paths no remaining version references.
+    ///
+    /// Registering a new version for an alias leaves the previous one in the
+    /// map on purpose — VMs pin `(template, template_version)` and must keep
+    /// booting. Once nothing pins it, though, an in-place rebuild would
+    /// otherwise accumulate one unreachable rootfs per rebuild, so callers
+    /// that know no VM refers to it use this to reclaim the space. Returns
+    /// `None` for an unknown version, or one an alias still resolves to.
+    pub fn prune_version(&self, name: &str, version: &str) -> Option<Vec<PathBuf>> {
+        let aliases = self
+            .aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut versions = self
+            .versions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let key = (name.to_owned(), version.to_owned());
+        if aliases.values().any(|pinned| *pinned == key) {
+            return None;
+        }
+        let removed = versions.remove(&key)?;
+        Some(self.orphan_paths(&removed, &versions))
+    }
+
+    /// Absolute paths of `removed`'s artifacts that no version in
+    /// `remaining` still references — i.e. safe for the caller to delete.
+    fn orphan_paths(
+        &self,
+        removed: &TemplateVersion,
+        remaining: &HashMap<(String, String), Arc<TemplateVersion>>,
+    ) -> Vec<PathBuf> {
+        let still_referenced: std::collections::HashSet<PathBuf> = remaining
+            .values()
+            .flat_map(|template| {
+                std::iter::once(template.kernel.relative_path().to_path_buf())
+                    .chain(std::iter::once(
+                        template.rootfs.relative_path().to_path_buf(),
+                    ))
+                    .chain(
+                        template
+                            .initrd
+                            .as_ref()
+                            .map(|artifact| artifact.relative_path().to_path_buf()),
+                    )
+            })
+            .collect();
+
+        std::iter::once(removed.kernel.relative_path())
+            .chain(std::iter::once(removed.rootfs.relative_path()))
+            .chain(
+                removed
+                    .initrd
+                    .as_ref()
+                    .map(|artifact| artifact.relative_path()),
+            )
+            .filter(|relative| !still_referenced.contains(*relative))
+            .map(|relative| self.image_root_path.join(relative))
+            .collect()
+    }
+
+    /// Absolute path of the runtime registration manifest.
+    fn registrations_path(&self) -> PathBuf {
+        self.image_root_path.join(REGISTRATIONS_FILE)
+    }
+
+    /// Every runtime registration recorded so far, newest write wins. A
+    /// missing or unreadable manifest reads as empty: it only ever augments
+    /// the built-in set, so losing it degrades to pre-persistence behavior
+    /// instead of failing startup.
+    fn read_registrations(&self) -> Vec<TemplateSpec> {
+        let path = self.registrations_path();
+        match fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "template registration manifest is unreadable; ignoring it"
+                );
+                Vec::new()
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %error,
+                    "template registration manifest could not be read; ignoring it"
+                );
+                Vec::new()
+            }
+        }
+    }
+
+    /// Records `spec` as `alias`'s current registration, replacing any
+    /// earlier entry for the same alias — the registry itself only ever
+    /// resolves one version per alias, so a second entry could only ever
+    /// disagree with the live pin.
+    fn persist_registration(&self, spec: &TemplateSpec) -> Result<(), TemplateError> {
+        let _guard = self
+            .manifest_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut entries = self.read_registrations();
+        entries.retain(|entry| entry.alias != spec.alias);
+        entries.push(spec.clone());
+        self.write_registrations(&entries)
+    }
+
+    /// Drops `alias` from the manifest so a deleted template doesn't come
+    /// back (as a warning about missing artifacts) on the next startup.
+    fn forget_registration(&self, alias: &str) {
+        let _guard = self
+            .manifest_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut entries = self.read_registrations();
+        let before = entries.len();
+        entries.retain(|entry| entry.alias != alias);
+        if entries.len() == before {
+            return;
+        }
+        if let Err(error) = self.write_registrations(&entries) {
+            // The alias is already gone from the live registry and its files
+            // are about to be deleted, so a stale entry is only startup
+            // noise (it is skipped as "artifacts are missing") — not worth
+            // failing an otherwise-complete delete over.
+            tracing::warn!(
+                alias,
+                error = %error,
+                "could not update the template registration manifest after delete"
+            );
+        }
+    }
+
+    /// Writes the manifest through a temporary file so an interrupted write
+    /// can never leave a half-serialized manifest that reads as empty.
+    fn write_registrations(&self, entries: &[TemplateSpec]) -> Result<(), TemplateError> {
+        let path = self.registrations_path();
+        let temporary = path.with_extension("json.tmp");
+        let bytes = serde_json::to_vec_pretty(entries)
+            .map_err(|error| TemplateError::Io(io::Error::other(error)))?;
+        fs::write(&temporary, &bytes)?;
+        fs::rename(&temporary, &path)?;
+        Ok(())
     }
 
     /// Re-verifies `artifact`'s identity (device/inode/length) and content
@@ -544,8 +740,9 @@ fn default_specs() -> [TemplateSpec; 3] {
             kernel: PathBuf::from("kernel/vmlinux-rocky-9-x86_64"),
             initrd: Some(PathBuf::from("kernel/initramfs-rocky-9-x86_64")),
             rootfs: PathBuf::from("rootfs/rocky-rootfs-9-x86_64.ext4"),
-            boot_args: "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw"
-                .to_owned(),
+            boot_args:
+                "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw"
+                    .to_owned(),
         },
     ]
 }
@@ -704,6 +901,155 @@ mod tests {
         assert!(registry.resolve_alias("alpine-3.24").is_some());
         assert!(registry.resolve_alias("ubuntu-26.04").is_none());
         assert!(registry.resolve_alias("rocky-9").is_none());
+    }
+
+    /// A template registered at runtime (web build, or an install of a
+    /// built-in) only lived in memory: after a restart its alias vanished
+    /// from `GET /api/images`, its rootfs became an orphan file, and every
+    /// VM created from it failed to start with "template X/Y is not
+    /// registered". The registration manifest is what closes that.
+    #[test]
+    fn registered_templates_survive_a_restart() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::create_dir_all(root.join("kernel")).unwrap();
+        fs::write(root.join("kernel/vmlinux"), b"kernel").unwrap();
+        fs::write(root.join("my-nginx-base-abc123.ext4"), b"rootfs").unwrap();
+
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        assert!(registry.resolve_alias("my-nginx-base").is_none());
+        registry
+            .register_spec(TemplateSpec {
+                alias: "my-nginx-base".to_owned(),
+                version: "my-nginx-base-abc123".to_owned(),
+                kernel: PathBuf::from("kernel/vmlinux"),
+                initrd: None,
+                rootfs: PathBuf::from("my-nginx-base-abc123.ext4"),
+                boot_args: "console=ttyS0 root=/dev/vda rw".to_owned(),
+            })
+            .unwrap();
+
+        // A brand new registry over the same image root == an API restart.
+        let restarted = TemplateRegistry::load_from(root).unwrap();
+        let restored = restarted
+            .resolve_alias("my-nginx-base")
+            .expect("a registered template must survive a restart");
+        assert_eq!(restored.version, "my-nginx-base-abc123");
+        assert_eq!(restored.boot_args, "console=ttyS0 root=/dev/vda rw");
+        // Reachable by its pinned version too, which is what a VM created
+        // from it resolves through on start.
+        assert!(
+            restarted
+                .resolve_version("my-nginx-base", "my-nginx-base-abc123")
+                .is_some()
+        );
+    }
+
+    /// Deleting a template must not leave it in the manifest, or every
+    /// later startup would re-report it as a template with missing files.
+    #[test]
+    fn unregistering_a_template_drops_it_from_the_restart_manifest() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        registry
+            .register_spec(TemplateSpec {
+                alias: "derived".to_owned(),
+                version: "derived-v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: String::new(),
+            })
+            .unwrap();
+        assert_eq!(registry.read_registrations().len(), 1);
+
+        registry.unregister_alias("derived").unwrap();
+
+        assert!(registry.read_registrations().is_empty());
+        assert!(
+            TemplateRegistry::load_from(root)
+                .unwrap()
+                .resolve_alias("derived")
+                .is_none()
+        );
+    }
+
+    /// A manifest naming files that were deleted out from under it must not
+    /// take API startup down with it — same reasoning as skipping a
+    /// built-in template whose images aren't built yet.
+    #[test]
+    fn a_registration_whose_artifacts_are_gone_is_skipped_at_startup() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        registry
+            .register_spec(TemplateSpec {
+                alias: "derived".to_owned(),
+                version: "derived-v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: String::new(),
+            })
+            .unwrap();
+        fs::remove_file(root.join("rootfs")).unwrap();
+
+        let restarted = TemplateRegistry::load_from(root).expect("startup must not fail");
+        assert!(restarted.resolve_alias("derived").is_none());
+    }
+
+    #[test]
+    fn prune_version_refuses_a_version_an_alias_still_resolves_to() {
+        let directory = tempdir().unwrap();
+        let registry = create_registry(directory.path());
+
+        assert!(
+            registry
+                .prune_version("ubuntu-rootfs-26.04", "v1")
+                .is_none()
+        );
+        assert!(registry.resolve_alias("ubuntu-rootfs-26.04").is_some());
+        assert!(registry.prune_version("nope", "v1").is_none());
+    }
+
+    #[test]
+    fn prune_version_drops_an_unpinned_version_and_reports_its_orphans() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs-old"), b"old").unwrap();
+        fs::write(root.join("rootfs-new"), b"new").unwrap();
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        for (version, rootfs) in [("v1", "rootfs-old"), ("v2", "rootfs-new")] {
+            registry
+                .register_spec(TemplateSpec {
+                    alias: "derived".to_owned(),
+                    version: version.to_owned(),
+                    kernel: PathBuf::from("kernel"),
+                    initrd: None,
+                    rootfs: PathBuf::from(rootfs),
+                    boot_args: String::new(),
+                })
+                .unwrap();
+        }
+
+        let orphans = registry.prune_version("derived", "v1").unwrap();
+
+        assert_eq!(
+            orphans,
+            vec![root.canonicalize().unwrap().join("rootfs-old")]
+        );
+        assert!(registry.resolve_version("derived", "v1").is_none());
+        // The alias's live version and the kernel both survive.
+        assert!(registry.resolve_version("derived", "v2").is_some());
+        assert!(root.join("kernel").is_file());
     }
 
     fn create_registry(root: &Path) -> TemplateRegistry {

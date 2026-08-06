@@ -154,7 +154,10 @@ pub async fn start_image_package(
         ));
     };
 
-    let response = match state.image_packages.begin_with(&alias, "package install started") {
+    let response = match state
+        .image_packages
+        .begin_with(&alias, "package install started")
+    {
         Ok(snapshot) => snapshot,
         Err("running") => {
             return Err(AppError::conflict(
@@ -280,9 +283,15 @@ pub async fn delete_image(
             .vms
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Builder VMs are deliberately excluded. They are transient build
+        // artifacts, not user resources: `list_vms` hides them, so the
+        // dashboard's recovery flow (which offers to delete the listed VMs
+        // and retry) can neither show nor remove one — a build in flight
+        // would block the delete with a conflict the operator can't act on.
+        // `cancel_build`/`finalize_build` own their lifecycle instead.
         let users: Vec<String> = vms
             .values()
-            .filter(|vm| vm.template == alias)
+            .filter(|vm| vm.template == alias && vm.purpose == crate::model::VmPurpose::Instance)
             .map(|vm| {
                 format!(
                     "{} [{}]",
@@ -539,12 +548,10 @@ mod tests {
             }
         }
         assert!(ok, "package install did not succeed in time");
-        assert!(
-            crate::image_install::staged_package_exists(
-                state.templates.image_root_path(),
-                "alpine-3.24"
-            )
-        );
+        assert!(crate::image_install::staged_package_exists(
+            state.templates.image_root_path(),
+            "alpine-3.24"
+        ));
         assert!(
             state.templates.resolve_alias("alpine-3.24").is_none(),
             "package acquisition must not register an image"
@@ -630,7 +637,10 @@ mod tests {
                 panic!("cached image reinstall failed:\n{}", snap.log);
             }
         }
-        assert!(reinstalled, "cached image reinstall did not succeed in time");
+        assert!(
+            reinstalled,
+            "cached image reinstall did not succeed in time"
+        );
     }
 
     #[tokio::test]
@@ -732,7 +742,10 @@ mod tests {
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
-        let response = result.err().expect("package must be required").into_response();
+        let response = result
+            .err()
+            .expect("package must be required")
+            .into_response();
         assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -956,7 +969,10 @@ mod tests {
                 break;
             }
         }
-        assert!(failed, "package install should fail when artifacts are missing");
+        assert!(
+            failed,
+            "package install should fail when artifacts are missing"
+        );
         assert!(state.templates.resolve_alias("alpine-3.24").is_none());
         assert!(
             !crate::image_install::staged_package_exists(

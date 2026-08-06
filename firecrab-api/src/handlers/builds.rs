@@ -8,22 +8,47 @@
 //! `VmPurpose::Builder` so `list_vms` hides it. This avoids reimplementing
 //! any part of VM lifecycle, network setup, or console handling for builds.
 
+use std::time::Duration;
+
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{
     BuildResponse, BuildStatus, CreateVmRequest, EgressPolicy, FinalizeBuildRequest,
+    PackageUpdateStatus,
 };
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
-use crate::model::VmPurpose;
+use crate::model::{VmPurpose, VmState};
 use crate::server::RequestId;
 use crate::state::AppState;
 use crate::templates::TemplateRegistry;
 
+use super::packages::PACKAGE_UPDATE_TIMEOUT;
 use super::vms::{create_vm, parse_id, start_vm_request};
+
+/// How often every background poll in this module samples the shared VM map.
+/// Matches the cadence the dashboard itself polls a build session at, so a
+/// status change is never more than one tick away from being visible.
+const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How long a builder VM may take to reach `Running` before its session is
+/// failed. Generous on purpose: `start_vm`'s pipeline copies a multi-GB
+/// rootfs (queued behind `disk_prep_permits`) before the guest even boots,
+/// so this is a "something is genuinely wrong" bound, not a latency budget.
+const BUILDER_BOOT_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// How long a package action may stay `Running` on the builder VM before
+/// this module stops waiting for its outcome. Deliberately longer than
+/// [`PACKAGE_UPDATE_TIMEOUT`], which is what actually bounds the console
+/// wait: `run_action` always records a terminal `packageUpdate` by then, so
+/// waiting a little past it means a real outcome is observed instead of the
+/// session flipping back to `Ready` while the guest is still installing —
+/// exactly the race `finalize_build`'s `Installing` guard exists to close.
+const PACKAGE_OUTCOME_TIMEOUT: Duration =
+    PACKAGE_UPDATE_TIMEOUT.saturating_add(Duration::from_secs(60));
 
 /// `POST /api/images/{alias}/build` — boots a builder VM off `alias`'s
 /// currently installed version and registers a new build session. Returns
@@ -65,7 +90,7 @@ pub async fn start_build(
     // Response deliberately discarded: `start_build`'s own response reflects
     // the build session, not the VM's just-issued `starting` snapshot — the
     // dashboard polls `GET /api/images/builds/{buildId}` for that instead.
-    let _ = start_vm_request(
+    let _vm_response = start_vm_request(
         State(state.clone()),
         Extension(request_id),
         Path(created.id.to_string()),
@@ -73,10 +98,88 @@ pub async fn start_build(
     .await?;
 
     let build_id = state.builds.begin(&alias, created.id);
+
+    // `start_vm_request` returns as soon as the VM is claimed `Starting` —
+    // its real boot pipeline runs on a detached task. Nothing else ever
+    // observes that VM reaching `Running`, so without this watcher the
+    // session would sit at `Booting` forever and the dashboard's build
+    // modal (which gates every control on `ready`) would stay inert.
+    let state_for_watch = state.clone();
+    tokio::spawn(async move {
+        watch_builder_boot(&state_for_watch, build_id, created.id).await;
+    });
+
     Ok((
         StatusCode::ACCEPTED,
         Json(state.builds.get(build_id).expect("just inserted")),
     ))
+}
+
+/// Polls the builder VM's lifecycle state until it reaches `Running`
+/// (session becomes `Ready`), lands on a terminal failure, or
+/// [`BUILDER_BOOT_TIMEOUT`] elapses (session becomes `Failed`).
+///
+/// Every transition is compare-and-set against `Booting`, so a session that
+/// something else already advanced (a cancel that dropped it, a request that
+/// moved it on) is left alone rather than clobbered by a late tick.
+pub(crate) async fn watch_builder_boot(state: &AppState, build_id: Uuid, vm_id: Uuid) {
+    let deadline = tokio::time::Instant::now() + BUILDER_BOOT_TIMEOUT;
+    loop {
+        // A session that is gone (cancelled) or already past `Booting` has
+        // no transition left for this watcher to make.
+        match state.builds.get(build_id) {
+            Some(session) if session.status == BuildStatus::Booting => {}
+            _ => return,
+        }
+
+        let vm_state = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&vm_id)
+            .map(|vm| vm.state);
+
+        match vm_state {
+            Some(VmState::Running) => {
+                state.builds.append_log(
+                    build_id,
+                    "builder VM is running — install or remove packages, then save",
+                );
+                state
+                    .builds
+                    .set_status_from(build_id, BuildStatus::Booting, BuildStatus::Ready);
+                return;
+            }
+            // `run_start` lands a failed boot on `Error`; the exit monitor
+            // lands a guest that died right after start on `Stopped`. Both
+            // mean this session will never become usable.
+            Some(state_now @ (VmState::Error | VmState::Stopped)) => {
+                state.builds.finish_err_from(
+                    build_id,
+                    BuildStatus::Booting,
+                    format!("builder VM {vm_id} failed to boot (state: {state_now:?})"),
+                );
+                return;
+            }
+            // The record vanished under us — only `delete_vm` does that, and
+            // for a builder VM that means the session was torn down.
+            None => return,
+            Some(_) => {}
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            state.builds.finish_err_from(
+                build_id,
+                BuildStatus::Booting,
+                format!(
+                    "builder VM {vm_id} did not reach running within {}s",
+                    BUILDER_BOOT_TIMEOUT.as_secs()
+                ),
+            );
+            return;
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
 }
 
 /// Names the builder VM so it's recognizable if an operator inspects
@@ -164,6 +267,15 @@ pub async fn get_build(
 /// `handlers::packages::run_package_action` (same validation, same
 /// sentinel-wait mechanics) and mirrors its resulting `packageUpdate`
 /// status into the build session's own log.
+///
+/// Returns as soon as the command has been dispatched, with the session in
+/// `Installing` — a real `apt-get install` runs for minutes, far past
+/// `enforce_limits`' request timeout, and axum drops a timed-out handler's
+/// future, which would strand the session in `Installing` forever. The
+/// outcome is recorded by a detached task instead (same shape as
+/// `run_package_action` itself, and as every other long operation here),
+/// and the dashboard's existing 1s poll of `GET /api/images/builds/{id}`
+/// picks it up.
 pub async fn build_packages(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -176,66 +288,93 @@ pub async fn build_packages(
         .get(build_id)
         .ok_or_else(|| AppError::not_found(request_id.0))?;
 
+    // Only a `Ready` session can take one. `Booting` has no console to write
+    // to yet (and its boot watcher stops watching the moment the status
+    // moves, which would strand the session); `Installing` would interleave a
+    // second command into the same serial console; anything later is done.
+    if session.status != BuildStatus::Ready {
+        return Err(AppError::conflict(
+            "build_not_ready",
+            "this build is not ready for package changes right now",
+            request_id.0,
+        ));
+    }
+
     state.builds.set_status(build_id, BuildStatus::Installing);
     state.builds.append_log(
         build_id,
         format!("{:?} {}", body.action, body.packages.join(" ")),
     );
 
-    let vm_response = super::packages::run_package_action(
+    let _vm_response = super::packages::run_package_action(
         State(state.clone()),
         Extension(request_id),
         Path(session.vm_id.to_string()),
         Json(body),
     )
     .await
-    .inspect_err(|_| state.builds.set_status(build_id, BuildStatus::Ready))?;
+    .inspect_err(|_| {
+        state
+            .builds
+            .set_status_from(build_id, BuildStatus::Installing, BuildStatus::Ready);
+    })?;
 
-    // run_package_action detaches the actual console wait onto a spawned
-    // task and returns immediately with `Running` — poll it here the same
-    // way `packages.rs`'s own tests do, so build_packages's caller gets a
-    // definite outcome instead of another poll loop layered on top.
-    //
     // Reaching this point means run_package_action successfully dispatched
     // the command to the builder VM's console, so this session now has a
     // package action to its name regardless of how the action ultimately
-    // resolves — `finalize_build` (Task 9) gates on this flag to refuse
-    // registering a template from a session that never customized anything.
+    // resolves — `finalize_build` gates on this flag to refuse registering a
+    // template from a session that never customized anything.
     state.builds.mark_package_action_done(build_id);
 
-    let outcome = wait_for_package_outcome(&state, session.vm_id).await;
-    match outcome {
-        Some(firecrab_api_types::PackageUpdateStatus::Succeeded { output_tail }) => {
+    let state_for_task = state.clone();
+    let vm_id = session.vm_id;
+    tokio::spawn(async move {
+        record_package_outcome(&state_for_task, build_id, vm_id).await;
+    });
+
+    Ok(Json(
+        state.builds.get(build_id).expect("session still tracked"),
+    ))
+}
+
+/// Waits for the console action `build_packages` just dispatched to reach a
+/// terminal `packageUpdate`, mirrors it into the session log, and returns
+/// the session to `Ready` so it can be finalized.
+async fn record_package_outcome(state: &AppState, build_id: Uuid, vm_id: Uuid) {
+    match wait_for_package_outcome(state, vm_id).await {
+        Some(PackageUpdateStatus::Succeeded { output_tail }) => {
             state.builds.append_log(build_id, output_tail);
-            state.builds.set_status(build_id, BuildStatus::Ready);
         }
-        Some(firecrab_api_types::PackageUpdateStatus::Failed {
+        Some(PackageUpdateStatus::Failed {
             reason,
             output_tail,
         }) => {
             state
                 .builds
                 .append_log(build_id, format!("{reason}\n{output_tail}"));
-            state.builds.set_status(build_id, BuildStatus::Ready);
         }
-        _ => state.builds.set_status(build_id, BuildStatus::Ready),
+        // `run_action` always records a terminal status well inside
+        // `PACKAGE_OUTCOME_TIMEOUT`, so this only happens if the VM record
+        // itself went away (cancel/delete) — say so rather than silently
+        // reporting the session ready again.
+        _ => state.builds.append_log(
+            build_id,
+            "package action outcome was never observed on the builder VM",
+        ),
     }
-
-    let _ = vm_response;
-    Ok(Json(
-        state.builds.get(build_id).expect("session still tracked"),
-    ))
+    // Compare-and-set: a cancel or a failure elsewhere may already have
+    // moved this session on, and this task owns only the `Installing` exit.
+    state
+        .builds
+        .set_status_from(build_id, BuildStatus::Installing, BuildStatus::Ready);
 }
 
-/// Polls `state.vms[vm_id].package_update` until it leaves `Running` or a
-/// bounded number of attempts elapse — `run_package_action`'s console wait
-/// runs on a detached task, so this is the only way to observe its result
-/// from a caller that itself must return a single HTTP response.
-async fn wait_for_package_outcome(
-    state: &AppState,
-    vm_id: Uuid,
-) -> Option<firecrab_api_types::PackageUpdateStatus> {
-    for _ in 0..600 {
+/// Polls `state.vms[vm_id].package_update` until it leaves `Running` or
+/// [`PACKAGE_OUTCOME_TIMEOUT`] elapses — `run_package_action`'s console wait
+/// runs on a detached task, so this is the only way to observe its result.
+async fn wait_for_package_outcome(state: &AppState, vm_id: Uuid) -> Option<PackageUpdateStatus> {
+    let deadline = tokio::time::Instant::now() + PACKAGE_OUTCOME_TIMEOUT;
+    loop {
         let status = state
             .vms
             .lock()
@@ -243,13 +382,15 @@ async fn wait_for_package_outcome(
             .get(&vm_id)
             .and_then(|vm| vm.package_update.clone());
         match status {
-            Some(firecrab_api_types::PackageUpdateStatus::Running) | None => {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            Some(PackageUpdateStatus::Running) | None => {
+                if tokio::time::Instant::now() >= deadline {
+                    return None;
+                }
+                tokio::time::sleep(POLL_INTERVAL).await;
             }
             other => return other,
         }
     }
-    None
 }
 
 /// `POST /api/images/builds/{buildId}/finalize` — stops the builder VM,
@@ -259,6 +400,15 @@ async fn wait_for_package_outcome(
 /// whether this is an in-place rebuild (omitted) or a derived template
 /// (given) — decided here rather than at `start_build` time, since the
 /// operator may only know which they want after seeing what changed.
+///
+/// Only the guards run inline; everything from `stop_vm` onward happens on a
+/// detached task and the response carries the session's in-flight
+/// `Finalizing` snapshot. Copying a multi-GB rootfs and running `e2fsck`
+/// over it takes far longer than `enforce_limits`' request timeout, and
+/// axum drops a timed-out handler's future — which would abandon the copied
+/// disk unregistered, leave the session stuck at `Finalizing`, and strand a
+/// stopped-but-undeleted builder VM. The dashboard polls
+/// `GET /api/images/builds/{buildId}` for the terminal result instead.
 pub async fn finalize_build(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -271,14 +421,34 @@ pub async fn finalize_build(
         .get(parsed_build_id)
         .ok_or_else(|| AppError::not_found(request_id.0))?;
 
+    // A finished session has no builder VM left to stop, copy from, or
+    // delete — retrying one would fail at `stop_vm` and overwrite its real
+    // terminal status (including a `Succeeded` that genuinely registered a
+    // template) with a bogus `Failed`.
+    if matches!(session.status, BuildStatus::Succeeded | BuildStatus::Failed) {
+        return Err(AppError::conflict(
+            "build_finished",
+            "this build session has already finished; start a new build to make more changes",
+            request_id.0,
+        ));
+    }
+
+    if session.status == BuildStatus::Finalizing {
+        return Err(AppError::conflict(
+            "build_in_progress",
+            "this build is already being saved as an image",
+            request_id.0,
+        ));
+    }
+
     // `build_packages` flips `had_package_action` right after it dispatches
     // a command to the builder VM's console — before the outcome is known
     // — so a session can still have one running here even though that flag
     // already reads `true`. Finalizing mid-install would race
-    // `wait_for_package_outcome`'s poll for the very disk this handler is
+    // `record_package_outcome`'s poll for the very disk this handler is
     // about to copy out from under it, so refuse outright rather than risk
     // grabbing a half-written rootfs.
-    if session.status == BuildStatus::Installing {
+    if session.status == BuildStatus::Installing || package_action_running(&state, session.vm_id) {
         return Err(AppError::conflict(
             "build_in_progress",
             "a package action is still running on this build; wait for it to finish before finalizing",
@@ -310,12 +480,57 @@ pub async fn finalize_build(
         .builds
         .set_status(parsed_build_id, BuildStatus::Finalizing);
 
-    if let Err(error) = super::vms::stop_vm(
+    let state_for_task = state.clone();
+    let session_for_task = session.clone();
+    tokio::spawn(async move {
+        run_finalize(
+            &state_for_task,
+            parsed_build_id,
+            session_for_task,
+            target_alias,
+            request_id,
+        )
+        .await;
+    });
+
+    Ok(Json(
+        state
+            .builds
+            .get(parsed_build_id)
+            .expect("session still tracked"),
+    ))
+}
+
+/// Whether the builder VM still has a package action in flight. Independent
+/// second opinion to the session's own `Installing` status: the two live in
+/// different places (`BuildTracker` vs. `VmRecord.package_update`) and can
+/// drift if a package action is started against the VM directly.
+fn package_action_running(state: &AppState, vm_id: Uuid) -> bool {
+    state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&vm_id)
+        .is_some_and(|vm| matches!(vm.package_update, Some(PackageUpdateStatus::Running)))
+}
+
+/// The whole of `finalize_build` past its guards, run detached: stop the
+/// builder VM, snapshot and register its disk, then delete the VM. Reports
+/// exclusively through the build session, which is what the caller polls.
+async fn run_finalize(
+    state: &AppState,
+    build_id: Uuid,
+    session: BuildResponse,
+    target_alias: String,
+    request_id: RequestId,
+) {
+    if super::vms::stop_vm(
         State(state.clone()),
         Extension(request_id),
         Path(session.vm_id.to_string()),
     )
     .await
+    .is_err()
     {
         // Nothing has been registered yet at this point, so this really is
         // an end-to-end failure — land the session on a terminal state
@@ -324,32 +539,30 @@ pub async fn finalize_build(
         // (it only allows Running -> Stopping, and a first attempt may have
         // already moved the VM partway), with no in-band way out.
         state.builds.finish_err(
-            parsed_build_id,
+            build_id,
             format!(
                 "failed to stop builder VM {} before finalizing",
                 session.vm_id
             ),
         );
-        return Err(error);
+        return;
     }
 
-    if let Err(reason) = finalize_and_register(&state, &session, &target_alias, request_id.0).await
-    {
-        state.builds.finish_err(parsed_build_id, &reason);
-        // Best-effort: the disk/register failure above is the error this
-        // call reports, so a second failure here (delete_vm) is swallowed
-        // rather than masking it. If delete_vm itself fails, the builder VM
-        // record survives — `VmPurpose::Builder` hides it from `list_vms`,
-        // so it isn't operator-visible for cleanup; the session's own log
-        // (via `finish_err`) is the only trace, which is an accepted gap for
-        // this task rather than something Task 9 attempts to close.
+    if let Err(reason) = finalize_and_register(state, &session, &target_alias, request_id.0).await {
+        state.builds.finish_err(build_id, &reason);
+        // Best-effort: the disk/register failure above is what this session
+        // reports, so a second failure here (delete_vm) is swallowed rather
+        // than masking it. If delete_vm itself fails, the builder VM record
+        // survives — `VmPurpose::Builder` hides it from `list_vms`, so it
+        // isn't operator-visible for cleanup; the session's own log (via
+        // `finish_err`) is the only trace, an accepted gap.
         let _ = super::vms::delete_vm(
             State(state.clone()),
             Extension(request_id),
             Path(session.vm_id.to_string()),
         )
         .await;
-        return Err(AppError::internal(request_id.0));
+        return;
     }
 
     if super::vms::delete_vm(
@@ -361,13 +574,13 @@ pub async fn finalize_build(
     .is_err()
     {
         // The template IS registered and usable by this point — the actual
-        // goal of this request already succeeded — so this is reported to
-        // the caller as success, not a build failure. VM cleanup here is
-        // genuinely best-effort; log the vm_id since `VmPurpose::Builder`
-        // hides it from `list_vms`, so this log line is the operator's only
-        // way to find it for manual removal.
+        // goal of this request already succeeded — so the session still
+        // reports success, not a build failure. VM cleanup here is genuinely
+        // best-effort; log the vm_id since `VmPurpose::Builder` hides the VM
+        // from `list_vms`, so this log line is the operator's only way to
+        // find it for manual removal.
         state.builds.append_log(
-            parsed_build_id,
+            build_id,
             format!(
                 "warning: builder VM {} could not be deleted after finalize succeeded; remove it manually",
                 session.vm_id
@@ -375,13 +588,7 @@ pub async fn finalize_build(
         );
     }
 
-    state.builds.finish_ok(parsed_build_id, &target_alias);
-    Ok(Json(
-        state
-            .builds
-            .get(parsed_build_id)
-            .expect("session still tracked"),
-    ))
+    state.builds.finish_ok(build_id, &target_alias);
 }
 
 /// Copies the builder VM's current-generation rootfs disk out, strips guest
@@ -451,9 +658,13 @@ pub(crate) async fn finalize_and_register(
         return Err(reason);
     }
 
+    // Captured before registering: `register_spec` overwrites the alias pin,
+    // after which there is no way left to find what it used to point at.
+    let superseded = state.templates.resolve_alias(target_alias);
+
     let spec = crate::templates::TemplateSpec {
         alias: target_alias.to_owned(),
-        version: version_tag,
+        version: version_tag.clone(),
         kernel: source_version.kernel.relative_path().to_path_buf(),
         initrd: source_version
             .initrd
@@ -472,7 +683,63 @@ pub(crate) async fn finalize_and_register(
         return Err(error.to_string());
     }
 
+    if let Some(superseded) = superseded
+        && superseded.version != version_tag
+    {
+        prune_superseded_build(state, target_alias, &superseded);
+    }
+
     Ok(())
+}
+
+/// Reclaims the rootfs an in-place rebuild just replaced.
+///
+/// Each finalize mints a fresh version tag and a fresh `.ext4`, and
+/// `register_spec` keeps the old version addressable so VMs pinned to it
+/// still boot — without this, every rebuild of the same alias would leave
+/// one more unreachable multi-GB file behind. Deliberately narrow: only a
+/// rootfs a previous *web build* produced is ever removed (those sit flat at
+/// the image root, where nothing else writes; built-in and downloaded
+/// artifacts always live under `kernel/` or `rootfs/`), and only when no VM
+/// record still pins that version.
+fn prune_superseded_build(
+    state: &AppState,
+    alias: &str,
+    superseded: &crate::templates::TemplateVersion,
+) {
+    let is_build_artifact = superseded.rootfs.relative_path().components().count() == 1;
+    if !is_build_artifact {
+        return;
+    }
+
+    let still_pinned = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .values()
+        .any(|vm| vm.template == alias && vm.template_version == superseded.version);
+    if still_pinned {
+        return;
+    }
+
+    let Some(orphans) = state
+        .templates
+        .prune_version(&superseded.name, &superseded.version)
+    else {
+        return;
+    };
+    for path in orphans {
+        if let Err(error) = std::fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                alias,
+                path = %path.display(),
+                error = %error,
+                "could not remove the rootfs superseded by this build"
+            );
+        }
+    }
 }
 
 /// `DELETE /api/images/builds/{buildId}` — tears down the builder VM
@@ -567,6 +834,68 @@ mod tests {
         panic!("run_action never subscribed to the console");
     }
 
+    /// Seeds a builder VM plus its tracked session directly, instead of
+    /// going through `start_build`.
+    ///
+    /// `start_build` leaves two detached tasks running against the same VM —
+    /// `finish_start` (which fails against the fixture's non-existent
+    /// Firecracker binary and lands the record on `Error`) and
+    /// `watch_builder_boot` (which turns that into a `Failed` session) — so
+    /// any test that wants to drive the VM/session states itself races them.
+    /// Tests that specifically exercise `start_build`'s own wiring still call
+    /// it; everything downstream of `Ready` starts from here.
+    fn seeded_session(state: &AppState, vm_state: VmState) -> (VmRecord, Uuid) {
+        let vm = VmRecord {
+            state: vm_state,
+            ..record("builder-vm", Uuid::new_v4())
+        };
+        seed_vm(state, &vm);
+        let build_id = state.builds.begin("ubuntu-rootfs-26.04", vm.id);
+        (vm, build_id)
+    }
+
+    /// Waits for a detached task to move a session to `expected`. Every long
+    /// build operation now reports through the tracker rather than its HTTP
+    /// response, so this is what stands in for awaiting the handler itself.
+    async fn wait_for_build_status(
+        state: &AppState,
+        build_id: Uuid,
+        expected: BuildStatus,
+    ) -> BuildResponse {
+        for _ in 0..400 {
+            if let Some(session) = state.builds.get(build_id)
+                && session.status == expected
+            {
+                return session;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!(
+            "build session never reached {expected:?} (last: {:?})",
+            state.builds.get(build_id).map(|session| session.status)
+        );
+    }
+
+    /// Writes a real (tiny) ext4 file where `finalize_and_register` expects
+    /// the builder VM's current-generation disk, since this fixture never
+    /// boots Firecracker and so never runs the real disk-prep step.
+    fn seed_builder_disk(state: &AppState, vm_id: Uuid) -> Uuid {
+        let generation = Uuid::new_v4();
+        let artifact_paths =
+            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for("default"), vm_id);
+        artifact_paths.ensure_directories().unwrap();
+        let status = std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F"])
+            .arg(artifact_paths.rootfs(generation))
+            .arg("8M")
+            .status()
+            .unwrap();
+        assert!(status.success(), "mkfs.ext4 failed");
+        let mut vms = state.vms.lock().unwrap();
+        vms.get_mut(&vm_id).unwrap().disk_generation = Some(generation);
+        generation
+    }
+
     #[tokio::test]
     async fn start_build_rejects_an_unknown_source_alias() {
         let directory = tempdir().unwrap();
@@ -608,6 +937,71 @@ mod tests {
         assert!(!listed.iter().any(|vm| vm.id == build.vm_id));
     }
 
+    /// Nothing else in the system observes a builder VM reaching `Running`,
+    /// so without this watcher a session sits at `Booting` forever and the
+    /// dashboard's build modal — which gates every control on `ready` —
+    /// stays permanently inert.
+    #[tokio::test]
+    async fn watch_builder_boot_marks_the_session_ready_once_the_vm_runs() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (vm, build_id) = seeded_session(&state, VmState::Starting);
+
+        let state_for_watch = state.clone();
+        let watcher = tokio::spawn(async move {
+            watch_builder_boot(&state_for_watch, build_id, vm.id).await;
+        });
+
+        // Still `Starting`: the watcher must keep waiting, not guess.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            state.builds.get(build_id).unwrap().status,
+            BuildStatus::Booting
+        );
+
+        state.vms.lock().unwrap().get_mut(&vm.id).unwrap().state = VmState::Running;
+
+        let session = wait_for_build_status(&state, build_id, BuildStatus::Ready).await;
+        assert!(session.log.contains("builder VM is running"));
+        watcher.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn watch_builder_boot_fails_the_session_when_the_vm_lands_on_error() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (vm, build_id) = seeded_session(&state, VmState::Error);
+
+        watch_builder_boot(&state, build_id, vm.id).await;
+
+        let session = state.builds.get(build_id).unwrap();
+        assert_eq!(session.status, BuildStatus::Failed);
+        assert!(session.log.contains("failed to boot"));
+        assert!(session.ended_at_ms.is_some());
+    }
+
+    /// End-to-end proof the watcher is actually spawned by `start_build`:
+    /// the fixture's Firecracker binary doesn't exist, so the builder VM's
+    /// real start pipeline fails and the session must follow it to `Failed`
+    /// instead of sitting at `Booting`.
+    #[tokio::test]
+    async fn start_build_fails_the_session_when_the_builder_vm_never_boots() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+
+        let (_status, Json(build)) = start_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(build.status, BuildStatus::Booting);
+
+        wait_for_build_status(&state, build.build_id, BuildStatus::Failed).await;
+    }
+
     #[tokio::test]
     async fn start_build_reports_unavailable_when_no_internet_micro_network_exists() {
         let directory = tempdir().unwrap();
@@ -635,22 +1029,15 @@ mod tests {
     async fn build_packages_requires_the_builder_vm_to_be_running() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
-        let (_status, Json(build)) = start_build(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path("ubuntu-rootfs-26.04".to_owned()),
-        )
-        .await
-        .unwrap();
+        // Session says `Ready`, VM says otherwise — `run_package_action`'s own
+        // state guard must surface that as a normal conflict, not a panic.
+        let (_vm, build_id) = seeded_session(&state, VmState::Stopped);
+        state.builds.set_status(build_id, BuildStatus::Ready);
 
-        // The fixture Firecracker binary doesn't exist, so the builder VM never
-        // reaches Running — build_packages must surface that as a normal
-        // conflict, not panic.
         let error = build_packages(
             State(state),
             Extension(RequestId(Uuid::new_v4())),
-            Path(build.build_id.to_string()),
+            Path(build_id.to_string()),
             Json(firecrab_api_types::PackageAction {
                 action: firecrab_api_types::PackageActionKind::Install,
                 packages: vec!["curl".to_owned()],
@@ -660,6 +1047,35 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    /// A `Booting` session has no console to write to yet, and moving its
+    /// status is what tells `watch_builder_boot` to stop watching — so a
+    /// package action before `Ready` would strand the session there.
+    #[tokio::test]
+    async fn build_packages_is_refused_before_the_session_is_ready() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (_vm, build_id) = seeded_session(&state, VmState::Starting);
+
+        let error = build_packages(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build_id.to_string()),
+            Json(firecrab_api_types::PackageAction {
+                action: firecrab_api_types::PackageActionKind::Install,
+                packages: vec!["curl".to_owned()],
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(
+            state.builds.get(build_id).unwrap().status,
+            BuildStatus::Booting,
+            "a refused action must leave the session watchable"
+        );
     }
 
     #[tokio::test]
@@ -682,8 +1098,13 @@ mod tests {
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 
+    /// `build_packages` must return as soon as the command is dispatched:
+    /// a real `apt-get install` runs for minutes, far past the 10s request
+    /// timeout in `server.rs`, and axum drops a timed-out handler's future —
+    /// which would strand the session in `Installing` forever and
+    /// permanently block finalize. The outcome arrives via a later poll.
     #[tokio::test]
-    async fn build_packages_records_a_succeeded_outcome_and_marks_the_action_done() {
+    async fn build_packages_returns_installing_before_the_action_finishes() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
         let vm = VmRecord {
@@ -693,28 +1114,34 @@ mod tests {
         seed_vm(&state, &vm);
         let console = register_fake_process(&state, vm.id);
         let build_id = state.builds.begin("ubuntu-rootfs-26.04", vm.id);
+        state.builds.set_status(build_id, BuildStatus::Ready);
 
-        let handle = tokio::spawn(build_packages(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path(build_id.to_string()),
-            Json(firecrab_api_types::PackageAction {
-                action: firecrab_api_types::PackageActionKind::Update,
-                packages: Vec::new(),
-            }),
-        ));
+        // No sentinel has been pushed yet — a handler that waited for the
+        // outcome inline could not possibly return here.
+        let Json(build) = tokio::time::timeout(
+            Duration::from_secs(5),
+            build_packages(
+                State(state.clone()),
+                Extension(RequestId(Uuid::new_v4())),
+                Path(build_id.to_string()),
+                Json(firecrab_api_types::PackageAction {
+                    action: firecrab_api_types::PackageActionKind::Update,
+                    packages: Vec::new(),
+                }),
+            ),
+        )
+        .await
+        .expect("build_packages must not block on the package action")
+        .expect("build_packages returned an error");
+
+        assert_eq!(build.status, BuildStatus::Installing);
+        assert!(build.had_package_action);
 
         wait_for_console_subscriber(&console).await;
         console.push_output(b"FIRECRAB_PKG_UPDATE_DONE:0\n");
 
-        let Json(build) = handle
-            .await
-            .expect("build_packages task panicked")
-            .expect("build_packages returned an error");
-
-        assert_eq!(build.status, BuildStatus::Ready);
-        assert!(build.had_package_action);
-        assert!(build.log.contains("FIRECRAB_PKG_UPDATE_DONE:0"));
+        let settled = wait_for_build_status(&state, build_id, BuildStatus::Ready).await;
+        assert!(settled.log.contains("FIRECRAB_PKG_UPDATE_DONE:0"));
     }
 
     #[tokio::test]
@@ -729,8 +1156,9 @@ mod tests {
         seed_vm(&state, &vm);
         let console = register_fake_process(&state, vm.id);
         let build_id = state.builds.begin("alpine-3.24", vm.id);
+        state.builds.set_status(build_id, BuildStatus::Ready);
 
-        let handle = tokio::spawn(build_packages(
+        let _accepted = build_packages(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             Path(build_id.to_string()),
@@ -738,48 +1166,139 @@ mod tests {
                 action: firecrab_api_types::PackageActionKind::Install,
                 packages: vec!["curl".to_owned()],
             }),
-        ));
+        )
+        .await
+        .expect("build_packages returned an error");
 
         wait_for_console_subscriber(&console).await;
         console.push_output(b"FIRECRAB_PKG_UPDATE_DONE:1\n");
 
-        let Json(build) = handle
-            .await
-            .expect("build_packages task panicked")
-            .expect("build_packages returned an error");
-
-        // Even though the package action itself failed, build_packages must
-        // leave the session in a normal, resumable state rather than stuck
-        // in `Installing` — and the session did have a package action run
+        // Even though the package action itself failed, the session must
+        // come back to a normal, resumable state rather than stay stuck in
+        // `Installing` — and the session did have a package action run
         // against it, so `had_package_action` still flips to true.
-        assert_eq!(build.status, BuildStatus::Ready);
+        let build = wait_for_build_status(&state, build_id, BuildStatus::Ready).await;
         assert!(build.had_package_action);
         assert!(build.log.contains("exited with code 1"));
     }
 
+    /// The session's `Installing` window must actually cover the guest's
+    /// package run, since that is the only thing stopping `finalize_build`
+    /// from copying a rootfs that is still being written to.
     #[tokio::test]
-    async fn finalize_build_rejects_a_session_with_no_successful_package_action() {
+    async fn finalize_build_is_refused_while_a_dispatched_package_action_is_still_running() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
-        let (_status, Json(build)) = start_build(
+        let vm = VmRecord {
+            state: VmState::Running,
+            ..record("builder-vm", Uuid::new_v4())
+        };
+        seed_vm(&state, &vm);
+        let console = register_fake_process(&state, vm.id);
+        let build_id = state.builds.begin("ubuntu-rootfs-26.04", vm.id);
+        state.builds.set_status(build_id, BuildStatus::Ready);
+
+        let _accepted = build_packages(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            Path("ubuntu-rootfs-26.04".to_owned()),
+            Path(build_id.to_string()),
+            Json(firecrab_api_types::PackageAction {
+                action: firecrab_api_types::PackageActionKind::Update,
+                packages: Vec::new(),
+            }),
         )
         .await
         .unwrap();
+        wait_for_console_subscriber(&console).await;
+
+        let error = finalize_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest { new_alias: None }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+
+        console.push_output(b"FIRECRAB_PKG_UPDATE_DONE:0\n");
+        wait_for_build_status(&state, build_id, BuildStatus::Ready).await;
+    }
+
+    /// Second, independent guard: `BuildStatus` and `VmRecord.package_update`
+    /// live in different places and can drift (a package action started
+    /// against the builder VM directly never touches the session), so a VM
+    /// still reporting `Running` must block finalize on its own.
+    #[tokio::test]
+    async fn finalize_build_is_refused_while_the_vm_reports_a_running_package_update() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (vm, build_id) = seeded_session(&state, VmState::Running);
+        state.builds.mark_package_action_done(build_id);
+        state.builds.set_status(build_id, BuildStatus::Ready);
+        state
+            .vms
+            .lock()
+            .unwrap()
+            .get_mut(&vm.id)
+            .unwrap()
+            .package_update = Some(PackageUpdateStatus::Running);
 
         let error = finalize_build(
             State(state),
             Extension(RequestId(Uuid::new_v4())),
-            Path(build.build_id.to_string()),
+            Path(build_id.to_string()),
             ValidatedJson(FinalizeBuildRequest { new_alias: None }),
         )
         .await
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn finalize_build_rejects_a_session_with_no_successful_package_action() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (_vm, build_id) = seeded_session(&state, VmState::Running);
+        state.builds.set_status(build_id, BuildStatus::Ready);
+
+        let error = finalize_build(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest { new_alias: None }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    /// Re-finalizing a finished session used to run `stop_vm` against an
+    /// already-deleted VM, overwriting a real `Succeeded` (template
+    /// registered and all) with a bogus `Failed`.
+    #[tokio::test]
+    async fn finalize_build_refuses_a_session_that_already_finished() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (_vm, build_id) = seeded_session(&state, VmState::Running);
+        state.builds.mark_package_action_done(build_id);
+        state.builds.finish_ok(build_id, "my-nginx-base");
+
+        let error = finalize_build(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(build_id.to_string()),
+            ValidatedJson(FinalizeBuildRequest { new_alias: None }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        let session = state.builds.get(build_id).unwrap();
+        assert_eq!(session.status, BuildStatus::Succeeded);
+        assert_eq!(session.target_alias.as_deref(), Some("my-nginx-base"));
     }
 
     #[tokio::test]
@@ -803,15 +1322,9 @@ mod tests {
     async fn finalize_build_rejects_a_reserved_alias_name() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
-        let (_status, Json(build)) = start_build(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path("ubuntu-rootfs-26.04".to_owned()),
-        )
-        .await
-        .unwrap();
-        state.builds.mark_package_action_done(build.build_id);
+        let (_vm, build_id) = seeded_session(&state, VmState::Running);
+        state.builds.mark_package_action_done(build_id);
+        state.builds.set_status(build_id, BuildStatus::Ready);
 
         // "alpine-3.24" is one of TemplateRegistry::known_specs's built-in
         // aliases — reserved even though this registry never actually
@@ -819,7 +1332,7 @@ mod tests {
         let error = finalize_build(
             State(state),
             Extension(RequestId(Uuid::new_v4())),
-            Path(build.build_id.to_string()),
+            Path(build_id.to_string()),
             ValidatedJson(FinalizeBuildRequest {
                 new_alias: Some("alpine-3.24".to_owned()),
             }),
@@ -843,55 +1356,43 @@ mod tests {
         // only allows Running -> Stopping, so this reproduces the same
         // guard failure a half-transitioned VM from a prior finalize
         // attempt would hit.
-        let vm = record("builder-vm", Uuid::new_v4());
-        seed_vm(&state, &vm);
-        let build_id = state.builds.begin("ubuntu-rootfs-26.04", vm.id);
+        let (_vm, build_id) = seeded_session(&state, VmState::Created);
         state.builds.mark_package_action_done(build_id);
+        state.builds.set_status(build_id, BuildStatus::Ready);
 
-        let error = finalize_build(
+        let Json(accepted) = finalize_build(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             Path(build_id.to_string()),
             ValidatedJson(FinalizeBuildRequest { new_alias: None }),
         )
         .await
-        .unwrap_err();
+        .unwrap();
+        assert_eq!(accepted.status, BuildStatus::Finalizing);
 
-        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
-        let session = state.builds.get(build_id).unwrap();
-        assert_eq!(session.status, BuildStatus::Failed);
+        let session = wait_for_build_status(&state, build_id, BuildStatus::Failed).await;
         assert!(session.log.contains("failed to stop builder VM"));
     }
 
-    /// `build_packages` (Task 8) flips `had_package_action` as soon as it
+    /// `build_packages` flips `had_package_action` as soon as it
     /// successfully *dispatches* a command to the builder VM's console —
-    /// before `wait_for_package_outcome` observes any result — so a session
-    /// can be mid-install (`BuildStatus::Installing`) with the flag already
-    /// `true`. `finalize_build` must refuse this case even though the
+    /// before any result is observed — so a session can be mid-install
+    /// (`BuildStatus::Installing`) with the flag already `true`.
+    /// `finalize_build` must refuse this case even though the
     /// `had_package_action` check alone would let it through, since the
     /// disk it's about to copy could still be mid-write on the builder VM.
     #[tokio::test]
     async fn finalize_build_rejects_a_build_still_installing_packages() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
-        let (_status, Json(build)) = start_build(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path("ubuntu-rootfs-26.04".to_owned()),
-        )
-        .await
-        .unwrap();
-
-        state.builds.mark_package_action_done(build.build_id);
-        state
-            .builds
-            .set_status(build.build_id, BuildStatus::Installing);
+        let (_vm, build_id) = seeded_session(&state, VmState::Running);
+        state.builds.mark_package_action_done(build_id);
+        state.builds.set_status(build_id, BuildStatus::Installing);
 
         let error = finalize_build(
             State(state),
             Extension(RequestId(Uuid::new_v4())),
-            Path(build.build_id.to_string()),
+            Path(build_id.to_string()),
             ValidatedJson(FinalizeBuildRequest { new_alias: None }),
         )
         .await
@@ -912,39 +1413,15 @@ mod tests {
     async fn finalize_and_register_registers_a_new_template_version_when_disk_is_ready() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
-
-        let (_status, Json(build)) = start_build(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path("ubuntu-rootfs-26.04".to_owned()),
-        )
-        .await
-        .unwrap();
-
         // Simulate a builder VM whose disk-prep step already ran (as it
         // would have, early in a real `start_vm`, well before `Running`) —
         // this fixture never actually boots Firecracker, so seed a real
         // ext4 file at the disk generation path `finalize_and_register`
         // expects instead.
-        let generation = Uuid::new_v4();
-        let artifact_paths =
-            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for("default"), build.vm_id);
-        artifact_paths.ensure_directories().unwrap();
-        let disk_path = artifact_paths.rootfs(generation);
-        std::process::Command::new("mkfs.ext4")
-            .args(["-q", "-F"])
-            .arg(&disk_path)
-            .arg("8M")
-            .status()
-            .unwrap();
-        {
-            let mut vms = state.vms.lock().unwrap();
-            let vm = vms.get_mut(&build.vm_id).unwrap();
-            vm.disk_generation = Some(generation);
-        }
+        let (vm, build_id) = seeded_session(&state, VmState::Running);
+        seed_builder_disk(&state, vm.id);
 
-        let session = state.builds.get(build.build_id).unwrap();
+        let session = state.builds.get(build_id).unwrap();
         finalize_and_register(&state, &session, "my-nginx-base", Uuid::new_v4())
             .await
             .unwrap();
@@ -952,6 +1429,115 @@ mod tests {
         let registered = state.templates.resolve_alias("my-nginx-base");
         assert!(registered.is_some());
         assert_eq!(registered.unwrap().name, "my-nginx-base");
+    }
+
+    /// Every finalize mints a new version tag and a new flat `.ext4` at the
+    /// image root, and `register_spec` keeps the superseded version
+    /// addressable — so without pruning, each in-place rebuild would leave
+    /// another unreachable multi-GB rootfs behind forever.
+    #[tokio::test]
+    async fn finalize_and_register_removes_the_rootfs_a_rebuild_supersedes() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (vm, build_id) = seeded_session(&state, VmState::Running);
+        let session = state.builds.get(build_id).unwrap();
+
+        seed_builder_disk(&state, vm.id);
+        finalize_and_register(&state, &session, "my-nginx-base", Uuid::new_v4())
+            .await
+            .unwrap();
+        let first = state.templates.resolve_alias("my-nginx-base").unwrap();
+        let first_rootfs = state.templates.artifact_path(&first.rootfs);
+        assert!(first_rootfs.is_file());
+
+        // Rebuild the same alias in place from the same session.
+        seed_builder_disk(&state, vm.id);
+        finalize_and_register(&state, &session, "my-nginx-base", Uuid::new_v4())
+            .await
+            .unwrap();
+
+        let second = state.templates.resolve_alias("my-nginx-base").unwrap();
+        assert_ne!(second.version, first.version);
+        assert!(state.templates.artifact_path(&second.rootfs).is_file());
+        assert!(
+            !first_rootfs.is_file(),
+            "the superseded build's rootfs must not linger at {}",
+            first_rootfs.display()
+        );
+        assert!(
+            state
+                .templates
+                .resolve_version("my-nginx-base", &first.version)
+                .is_none()
+        );
+    }
+
+    /// The prune above must never touch a rootfs a VM still boots from, nor
+    /// a built-in/downloaded artifact (which live under `kernel/`/`rootfs/`,
+    /// unlike a build's own flat file).
+    #[tokio::test]
+    async fn finalize_and_register_keeps_a_superseded_rootfs_a_vm_still_pins() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (vm, build_id) = seeded_session(&state, VmState::Running);
+        let session = state.builds.get(build_id).unwrap();
+
+        seed_builder_disk(&state, vm.id);
+        finalize_and_register(&state, &session, "my-nginx-base", Uuid::new_v4())
+            .await
+            .unwrap();
+        let first = state.templates.resolve_alias("my-nginx-base").unwrap();
+        let first_rootfs = state.templates.artifact_path(&first.rootfs);
+
+        // A VM created from that first build version.
+        let pinned = VmRecord {
+            template: "my-nginx-base".to_owned(),
+            template_version: first.version.clone(),
+            ..record("pinned-vm", Uuid::new_v4())
+        };
+        seed_vm(&state, &pinned);
+
+        seed_builder_disk(&state, vm.id);
+        finalize_and_register(&state, &session, "my-nginx-base", Uuid::new_v4())
+            .await
+            .unwrap();
+
+        assert!(
+            first_rootfs.is_file(),
+            "a rootfs a VM still pins must survive the rebuild"
+        );
+        assert!(
+            state
+                .templates
+                .resolve_version("my-nginx-base", &first.version)
+                .is_some()
+        );
+    }
+
+    /// An in-place rebuild of a *built-in* alias must leave the distro's own
+    /// rootfs alone — it lives under `rootfs/`, is reusable for a reinstall,
+    /// and nothing about superseding an alias pin makes it deletable.
+    #[tokio::test]
+    async fn finalize_and_register_never_deletes_a_built_in_rootfs() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (vm, build_id) = seeded_session(&state, VmState::Running);
+        let session = state.builds.get(build_id).unwrap();
+        let source = state
+            .templates
+            .resolve_alias("ubuntu-rootfs-26.04")
+            .unwrap();
+        let source_rootfs = state.templates.artifact_path(&source.rootfs);
+
+        seed_builder_disk(&state, vm.id);
+        finalize_and_register(&state, &session, "ubuntu-rootfs-26.04", Uuid::new_v4())
+            .await
+            .unwrap();
+
+        assert!(
+            source_rootfs.is_file(),
+            "the source template's own rootfs must survive an in-place rebuild"
+        );
     }
 
     /// End-to-end coverage of `finalize_build`'s own orchestration (guard
@@ -967,51 +1553,30 @@ mod tests {
     async fn finalize_build_stops_the_builder_vm_registers_a_template_and_deletes_it() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+        let (vm, build_id) = seeded_session(&state, VmState::Running);
+        seed_builder_disk(&state, vm.id);
+        state.builds.mark_package_action_done(build_id);
+        state.builds.set_status(build_id, BuildStatus::Ready);
 
-        let (_status, Json(build)) = start_build(
+        // The response is the in-flight snapshot; the terminal state arrives
+        // on the session, which is what the dashboard polls.
+        let Json(accepted) = finalize_build(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            Path("ubuntu-rootfs-26.04".to_owned()),
-        )
-        .await
-        .unwrap();
-
-        let generation = Uuid::new_v4();
-        let artifact_paths =
-            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for("default"), build.vm_id);
-        artifact_paths.ensure_directories().unwrap();
-        let disk_path = artifact_paths.rootfs(generation);
-        std::process::Command::new("mkfs.ext4")
-            .args(["-q", "-F"])
-            .arg(&disk_path)
-            .arg("8M")
-            .status()
-            .unwrap();
-        {
-            let mut vms = state.vms.lock().unwrap();
-            let vm = vms.get_mut(&build.vm_id).unwrap();
-            vm.disk_generation = Some(generation);
-            vm.state = VmState::Running;
-        }
-        state.builds.mark_package_action_done(build.build_id);
-
-        let Json(finalized) = finalize_build(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path(build.build_id.to_string()),
+            Path(build_id.to_string()),
             ValidatedJson(FinalizeBuildRequest {
                 new_alias: Some("my-nginx-base".to_owned()),
             }),
         )
         .await
         .unwrap();
+        assert_eq!(accepted.status, BuildStatus::Finalizing);
 
-        assert_eq!(finalized.status, BuildStatus::Succeeded);
+        let finalized = wait_for_build_status(&state, build_id, BuildStatus::Succeeded).await;
         assert_eq!(finalized.target_alias.as_deref(), Some("my-nginx-base"));
         assert!(state.templates.resolve_alias("my-nginx-base").is_some());
         // delete_vm ran: the builder VM record is gone.
-        assert!(state.vms.lock().unwrap().get(&build.vm_id).is_none());
+        assert!(state.vms.lock().unwrap().get(&vm.id).is_none());
     }
 
     /// By the time the *final* `delete_vm` call runs, `finalize_and_register`
@@ -1034,29 +1599,12 @@ mod tests {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
 
-        let vm = VmRecord {
-            state: VmState::Running,
-            ..record("builder-vm", Uuid::new_v4())
-        };
-        seed_vm(&state, &vm);
-        let build_id = state.builds.begin("ubuntu-rootfs-26.04", vm.id);
+        let (vm, build_id) = seeded_session(&state, VmState::Running);
         state.builds.mark_package_action_done(build_id);
-
-        let generation = Uuid::new_v4();
+        state.builds.set_status(build_id, BuildStatus::Ready);
+        seed_builder_disk(&state, vm.id);
         let artifact_paths =
             crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for("default"), vm.id);
-        artifact_paths.ensure_directories().unwrap();
-        let disk_path = artifact_paths.rootfs(generation);
-        std::process::Command::new("mkfs.ext4")
-            .args(["-q", "-F"])
-            .arg(&disk_path)
-            .arg("8M")
-            .status()
-            .unwrap();
-        {
-            let mut vms = state.vms.lock().unwrap();
-            vms.get_mut(&vm.id).unwrap().disk_generation = Some(generation);
-        }
 
         // Same trick as `handlers::vms::tests::delete_restores_the_record_when_artifact_removal_fails`,
         // adapted: `finalize_and_register` only ever reads from
@@ -1072,7 +1620,7 @@ mod tests {
         permissions.set_mode(0o500);
         std::fs::set_permissions(&artifact_paths.dir, permissions).unwrap();
 
-        let result = finalize_build(
+        let _accepted = finalize_build(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             Path(build_id.to_string()),
@@ -1080,18 +1628,18 @@ mod tests {
                 new_alias: Some("my-nginx-base".to_owned()),
             }),
         )
-        .await;
+        .await
+        .expect("finalize_build must accept the request");
 
-        // Restore permissions regardless of outcome so the tempdir can
-        // clean itself up.
+        let finalized = wait_for_build_status(&state, build_id, BuildStatus::Succeeded).await;
+
+        // Restore permissions so the tempdir can clean itself up.
         let mut permissions = std::fs::metadata(&artifact_paths.dir)
             .unwrap()
             .permissions();
         permissions.set_mode(0o700);
         std::fs::set_permissions(&artifact_paths.dir, permissions).unwrap();
 
-        let Json(finalized) = result.expect("finalize_build must still report success");
-        assert_eq!(finalized.status, BuildStatus::Succeeded);
         assert_eq!(finalized.target_alias.as_deref(), Some("my-nginx-base"));
         assert!(state.templates.resolve_alias("my-nginx-base").is_some());
         assert!(finalized.log.contains("could not be deleted"));
@@ -1109,43 +1657,25 @@ mod tests {
     async fn finalize_build_cleans_up_the_builder_vm_when_the_disk_copy_fails() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
-
-        let (_status, Json(build)) = start_build(
-            State(state.clone()),
-            Extension(RequestId(Uuid::new_v4())),
-            Path("ubuntu-rootfs-26.04".to_owned()),
-        )
-        .await
-        .unwrap();
-
         // Running, but deliberately no disk_generation — the disk-prep step
         // that would normally set it never ran in this fixture.
-        {
-            let mut vms = state.vms.lock().unwrap();
-            let vm = vms.get_mut(&build.vm_id).unwrap();
-            vm.state = VmState::Running;
-        }
-        state.builds.mark_package_action_done(build.build_id);
+        let (vm, build_id) = seeded_session(&state, VmState::Running);
+        state.builds.mark_package_action_done(build_id);
+        state.builds.set_status(build_id, BuildStatus::Ready);
 
-        let error = finalize_build(
+        let _accepted = finalize_build(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            Path(build.build_id.to_string()),
+            Path(build_id.to_string()),
             ValidatedJson(FinalizeBuildRequest { new_alias: None }),
         )
         .await
-        .unwrap_err();
+        .expect("finalize_build must accept the request");
 
-        assert_eq!(
-            error.into_response().status(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-        let session = state.builds.get(build.build_id).unwrap();
-        assert_eq!(session.status, BuildStatus::Failed);
+        let session = wait_for_build_status(&state, build_id, BuildStatus::Failed).await;
         assert!(session.log.contains("no disk generation"));
         // delete_vm still ran despite the finalize failure.
-        assert!(state.vms.lock().unwrap().get(&build.vm_id).is_none());
+        assert!(state.vms.lock().unwrap().get(&vm.id).is_none());
     }
 
     #[tokio::test]

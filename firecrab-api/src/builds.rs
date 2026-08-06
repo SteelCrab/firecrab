@@ -11,17 +11,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use firecrab_api_types::{BuildResponse, BuildStatus};
 use uuid::Uuid;
 
-// Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
-// plan) wires this in; wiring it now would be out of this task's scope.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct BuildTracker {
     sessions: Arc<Mutex<HashMap<Uuid, BuildResponse>>>,
 }
 
-// Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
-// plan) wires this in; wiring it now would be out of this task's scope.
-#[allow(dead_code)]
 impl BuildTracker {
     /// Registers a new session in `Booting` and returns its id.
     pub fn begin(&self, source_alias: &str, vm_id: Uuid) -> Uuid {
@@ -73,6 +67,32 @@ impl BuildTracker {
         }
     }
 
+    /// Compare-and-set variant of [`set_status`](Self::set_status): only
+    /// advances a session that is still in `expected`, returning whether it
+    /// applied. Detached background tasks (the boot watcher and the package
+    /// outcome recorder in `handlers::builds`) each own exactly one status
+    /// transition, and must never clobber a status a later request already
+    /// moved past — e.g. a slow boot watcher writing `Ready` over a session
+    /// that has since reached `Finalizing`.
+    pub fn set_status_from(
+        &self,
+        build_id: Uuid,
+        expected: BuildStatus,
+        next: BuildStatus,
+    ) -> bool {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match sessions.get_mut(&build_id) {
+            Some(session) if session.status == expected => {
+                session.status = next;
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn append_log(&self, build_id: Uuid, line: impl AsRef<str>) {
         if let Some(session) = self
             .sessions
@@ -115,6 +135,34 @@ impl BuildTracker {
         }
     }
 
+    /// Compare-and-set variant of [`finish_err`](Self::finish_err), for the
+    /// same reason [`set_status_from`](Self::set_status_from) exists: a
+    /// detached watcher must not turn a session that has already moved on
+    /// (or already finished) into a fresh `Failed`.
+    pub fn finish_err_from(
+        &self,
+        build_id: Uuid,
+        expected: BuildStatus,
+        reason: impl AsRef<str>,
+    ) -> bool {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match sessions.get_mut(&build_id) {
+            Some(session) if session.status == expected => {
+                session.status = BuildStatus::Failed;
+                session.log.push('\n');
+                session
+                    .log
+                    .push_str(&format!("[{}] {}", clock(now_ms()), reason.as_ref()));
+                session.ended_at_ms = Some(now_ms());
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Drops a session from the tracker (cancel path — the caller is
     /// responsible for tearing down the builder VM itself first).
     pub fn remove(&self, build_id: Uuid) {
@@ -139,9 +187,6 @@ impl BuildTracker {
     }
 }
 
-// Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
-// plan) wires this in; wiring it now would be out of this task's scope.
-#[allow(dead_code)]
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -149,9 +194,6 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-// Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
-// plan) wires this in; wiring it now would be out of this task's scope.
-#[allow(dead_code)]
 fn clock(epoch_ms: u64) -> String {
     // Plain epoch-seconds label (e.g. "1712s"), not a full timestamp —
     // good enough for a human skimming the log.
@@ -234,6 +276,42 @@ mod tests {
         tracker.mark_package_action_done(build_id);
 
         assert!(tracker.get(build_id).unwrap().had_package_action);
+    }
+
+    /// The boot watcher owns exactly one `Booting -> Ready` transition, so
+    /// it must be a no-op once anything else has advanced the session.
+    #[test]
+    fn set_status_from_only_applies_while_the_session_is_in_the_expected_status() {
+        let tracker = BuildTracker::default();
+        let build_id = tracker.begin("alpine-3.24", Uuid::new_v4());
+
+        assert!(tracker.set_status_from(build_id, BuildStatus::Booting, BuildStatus::Ready));
+        assert_eq!(tracker.get(build_id).unwrap().status, BuildStatus::Ready);
+
+        // Already past `Booting` — a late watcher must not rewind it.
+        tracker.set_status(build_id, BuildStatus::Finalizing);
+        assert!(!tracker.set_status_from(build_id, BuildStatus::Booting, BuildStatus::Ready));
+        assert_eq!(
+            tracker.get(build_id).unwrap().status,
+            BuildStatus::Finalizing
+        );
+        assert!(!tracker.set_status_from(Uuid::new_v4(), BuildStatus::Booting, BuildStatus::Ready));
+    }
+
+    #[test]
+    fn finish_err_from_only_fails_a_session_still_in_the_expected_status() {
+        let tracker = BuildTracker::default();
+        let build_id = tracker.begin("alpine-3.24", Uuid::new_v4());
+
+        tracker.set_status(build_id, BuildStatus::Ready);
+        assert!(!tracker.finish_err_from(build_id, BuildStatus::Booting, "boot timed out"));
+        assert_eq!(tracker.get(build_id).unwrap().status, BuildStatus::Ready);
+
+        assert!(tracker.finish_err_from(build_id, BuildStatus::Ready, "boot timed out"));
+        let snapshot = tracker.get(build_id).unwrap();
+        assert_eq!(snapshot.status, BuildStatus::Failed);
+        assert!(snapshot.log.contains("boot timed out"));
+        assert!(snapshot.ended_at_ms.is_some());
     }
 
     #[test]

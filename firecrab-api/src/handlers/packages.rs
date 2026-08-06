@@ -26,7 +26,7 @@ use super::vms::{lease_for, parse_id, vm_response};
 /// more generous than the boot-readiness timeout: apt/apk output is only
 /// observable through the guest's own (slow, character-oriented) serial
 /// console, and a real upgrade can pull a meaningful amount of data.
-const PACKAGE_UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
+pub(crate) const PACKAGE_UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Bytes of the command's own output kept for the response's `outputTail` —
 /// enough for the last several dozen lines without holding a full apt/apk
