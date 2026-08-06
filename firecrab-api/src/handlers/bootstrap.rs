@@ -13,7 +13,9 @@ use std::time::Duration;
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use firecrab_api_types::{BootstrapResponse, BootstrapStatus, CreateVmRequest, EgressPolicy};
+use firecrab_api_types::{
+    BootstrapResponse, BootstrapStatus, BootstrapStep, CreateVmRequest, EgressPolicy,
+};
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -350,6 +352,12 @@ pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, v
         return;
     }
 
+    // The builder is up and answering; everything from here until the
+    // sentinel is the guest script doing the actual install.
+    state
+        .bootstraps
+        .set_step(bootstrap_id, BootstrapStep::InstallingSystem);
+
     let heredoc = format!(
         "cat > /root/fc-bootstrap.sh <<'FIRECRAB_BOOTSTRAP_SCRIPT_EOF'\n{script}\nFIRECRAB_BOOTSTRAP_SCRIPT_EOF\nsh /root/fc-bootstrap.sh; echo \"{BOOTSTRAP_DONE_SENTINEL}:$?\"\n"
     );
@@ -372,6 +380,9 @@ pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, v
                 BootstrapStatus::Running,
                 BootstrapStatus::Packaging,
             ) {
+                state
+                    .bootstraps
+                    .set_step(bootstrap_id, BootstrapStep::Packaging);
                 let state_for_package = state.clone();
                 tokio::spawn(async move {
                     package_bootstrap(&state_for_package, bootstrap_id, vm_id).await;
@@ -561,6 +572,11 @@ async fn package_bootstrap(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
         teardown_builder_vm(state, vm_id, request_id).await;
         return;
     }
+
+    // Package is staged; the session's remaining work is teardown.
+    state
+        .bootstraps
+        .set_step(bootstrap_id, BootstrapStep::Finalizing);
 
     if super::vms::delete_vm(
         State(state.clone()),
@@ -801,6 +817,7 @@ mod tests {
     use crate::console::ConsoleBroker;
     use crate::firecracker::VmProcess;
     use crate::handlers::vms::test_support::test_state;
+    use firecrab_api_types::{BootstrapStep, BootstrapStepOutcome};
 
     /// Registers a fake console+process for `id`, the same way
     /// `handlers::packages`'s and `handlers::builds`'s own tests do —
@@ -1282,6 +1299,72 @@ mod tests {
         let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
         assert_eq!(snapshot.status, BootstrapStatus::Packaging);
         assert!(snapshot.log.contains(BOOTSTRAP_DONE_SENTINEL));
+    }
+
+    /// `run_bootstrap_script` advances the step timeline at both of its own
+    /// transitions: once the console probe confirms a shell is live (opens
+    /// `InstallingSystem`, closing `StartingBuilderVm`), and again once the
+    /// script's completion sentinel arrives with exit code 0 (opens
+    /// `Packaging`, closing `InstallingSystem`). Same `join!` structure and
+    /// fixtures as
+    /// `run_bootstrap_script_records_the_console_output_and_reaches_running_terminal_wait`
+    /// above, for the identical reason given in that test's comment: a
+    /// separate `tokio::spawn` for `run_bootstrap_script` would race the
+    /// `package_bootstrap` successor task it spawns on its own success path.
+    /// That means `package_bootstrap` has not run by the time this
+    /// assertion runs, so `Packaging` is asserted still open (`Running`),
+    /// not `Succeeded` — asserting on the final timeline after the `join!`
+    /// rather than trying to catch an intermediate state mid-run.
+    #[tokio::test]
+    async fn running_the_script_advances_the_step_timeline_through_installing_and_packaging() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = seed_builder_vm(&state, VmState::Running);
+        let console = register_fake_process(&state, vm.id);
+        let bootstrap_id = seeded_session(
+            &state,
+            "ubuntu-26.04",
+            "alpine-3.24",
+            vm.id,
+            BootstrapStatus::Running,
+        );
+
+        let vm_id = vm.id;
+        let push_sentinel = async {
+            wait_for_console_subscriber(&console).await;
+            console.push_output(format!("{CONSOLE_PROBE_SENTINEL}:0\n").as_bytes());
+            console.push_output(format!("{}:0\n", BOOTSTRAP_DONE_SENTINEL).as_bytes());
+        };
+        tokio::join!(
+            run_bootstrap_script(&state, bootstrap_id, vm_id),
+            push_sentinel
+        );
+
+        let session = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(session.status, BootstrapStatus::Packaging);
+        assert_eq!(session.current_step, Some(BootstrapStep::Packaging));
+        assert_eq!(session.step_timeline.len(), 3);
+        assert_eq!(
+            session.step_timeline[0].step,
+            BootstrapStep::StartingBuilderVm
+        );
+        assert_eq!(
+            session.step_timeline[0].outcome,
+            BootstrapStepOutcome::Succeeded
+        );
+        assert_eq!(
+            session.step_timeline[1].step,
+            BootstrapStep::InstallingSystem
+        );
+        assert_eq!(
+            session.step_timeline[1].outcome,
+            BootstrapStepOutcome::Succeeded
+        );
+        assert_eq!(session.step_timeline[2].step, BootstrapStep::Packaging);
+        assert_eq!(
+            session.step_timeline[2].outcome,
+            BootstrapStepOutcome::Running
+        );
     }
 
     #[tokio::test]
