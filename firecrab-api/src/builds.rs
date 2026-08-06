@@ -11,11 +11,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use firecrab_api_types::{BuildResponse, BuildStatus};
 use uuid::Uuid;
 
+// Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
+// plan) wires this in; wiring it now would be out of this task's scope.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct BuildTracker {
     sessions: Arc<Mutex<HashMap<Uuid, BuildResponse>>>,
 }
 
+// Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
+// plan) wires this in; wiring it now would be out of this task's scope.
+#[allow(dead_code)]
 impl BuildTracker {
     /// Registers a new session in `Booting` and returns its id.
     pub fn begin(&self, source_alias: &str, vm_id: Uuid) -> Uuid {
@@ -133,6 +139,9 @@ impl BuildTracker {
     }
 }
 
+// Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
+// plan) wires this in; wiring it now would be out of this task's scope.
+#[allow(dead_code)]
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -140,9 +149,12 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+// Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
+// plan) wires this in; wiring it now would be out of this task's scope.
+#[allow(dead_code)]
 fn clock(epoch_ms: u64) -> String {
-    // Matches image_install.rs's clock() — plain epoch-seconds label, not a
-    // full timestamp; good enough for a human skimming the log.
+    // Plain epoch-seconds label (e.g. "1712s"), not a full timestamp —
+    // good enough for a human skimming the log.
     format!("{}s", epoch_ms / 1000)
 }
 
@@ -222,5 +234,16 @@ mod tests {
         tracker.mark_package_action_done(build_id);
 
         assert!(tracker.get(build_id).unwrap().had_package_action);
+    }
+
+    #[test]
+    fn remove_evicts_a_tracked_session() {
+        let tracker = BuildTracker::default();
+        let build_id = tracker.begin("alpine-3.24", Uuid::new_v4());
+        assert!(tracker.get(build_id).is_some());
+
+        tracker.remove(build_id);
+
+        assert!(tracker.get(build_id).is_none());
     }
 }

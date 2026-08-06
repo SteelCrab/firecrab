@@ -80,6 +80,9 @@ pub struct AppState {
     /// Async package acquisition jobs (`POST /api/images/{alias}/package`).
     pub(crate) image_packages: ImageInstallTracker,
     /// Async image-build sessions (`POST /api/images/{alias}/build`).
+    // Not yet consumed — handlers::builds (Task 7 of the m2image-web-builder
+    // plan) wires this in; wiring it now would be out of this task's scope.
+    #[allow(dead_code)]
     pub(crate) builds: crate::builds::BuildTracker,
 }
 
