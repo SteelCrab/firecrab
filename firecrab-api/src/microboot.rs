@@ -313,6 +313,44 @@ mod tests {
         assert!(!dest.exists());
     }
 
+    #[test]
+    fn register_blocking_builds_and_registers_a_complete_microboot_spec() {
+        let dir = temp_image_root();
+        let registry =
+            TemplateRegistry::from_specs(dir.path(), std::iter::empty()).expect("empty registry");
+        let raw_kernel = dir.path().join("vmlinuz-virt.raw");
+        // `/usr/bin/true` is a small real ELF binary on the Linux hosts
+        // Firecracker supports, so extract-vmlinux takes its pass-through
+        // path without scanning the much larger test executable.
+        std::fs::copy("/usr/bin/true", &raw_kernel).unwrap();
+
+        // `register_spec` verifies every referenced artifact, including the
+        // initrd that the asynchronous download path normally creates.
+        let initrd = dir.path().join(initrd_relative());
+        std::fs::create_dir_all(initrd.parent().unwrap()).unwrap();
+        std::fs::write(&initrd, b"fake initrd").unwrap();
+
+        register_blocking(&registry, dir.path(), &raw_kernel).expect("register microboot");
+
+        let spec = registry
+            .resolve_alias(MICROBOOT_ALIAS)
+            .expect("registered MicroBoot spec");
+        assert_eq!(spec.version, MICROBOOT_VERSION);
+        assert_eq!(spec.kernel.relative_path(), kernel_relative());
+        assert_eq!(
+            spec.initrd
+                .as_ref()
+                .map(|artifact| artifact.relative_path()),
+            Some(initrd_relative().as_path())
+        );
+        assert_eq!(spec.rootfs.relative_path(), rootfs_placeholder_relative());
+        assert_eq!(
+            std::fs::read(dir.path().join(kernel_relative())).unwrap(),
+            std::fs::read(&raw_kernel).unwrap()
+        );
+        assert!(dir.path().join(rootfs_placeholder_relative()).is_file());
+    }
+
     /// Both assertions here stand in for a live boot: the first is what
     /// `rootfs::prepare_rootfs`'s `grow()` does to every VM's disk copy
     /// before Firecracker ever starts, the second is what
