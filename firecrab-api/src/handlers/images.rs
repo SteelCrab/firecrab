@@ -93,8 +93,15 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
                 }
             })
             .collect();
-        // Any extra registered aliases not in the built-in set (future registration API).
+        // Any extra registered aliases not in the built-in set (future
+        // registration API) — except the internal MicroBoot builder source
+        // (crate::microboot), which is registered into TemplateRegistry
+        // purely so create_vm's existing machinery can provision it, and
+        // must never appear as an installable image.
         for template in templates.list_aliases() {
+            if template.name == crate::microboot::MICROBOOT_ALIAS {
+                continue;
+            }
             if !images.iter().any(|image| image.alias == template.name) {
                 images.push(installed_response(
                     template.as_ref(),
@@ -1069,6 +1076,38 @@ mod tests {
             images
                 .iter()
                 .any(|image| image.alias == "custom-image" && image.installed)
+        );
+    }
+
+    #[tokio::test]
+    async fn list_images_never_surfaces_the_internal_microboot_alias() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        write_file(&root.join("kernel/vmlinux"), b"k");
+        write_file(&root.join("rootfs/root.ext4"), b"r");
+        let templates = TemplateRegistry::from_specs(
+            root,
+            [TemplateSpec {
+                alias: crate::microboot::MICROBOOT_ALIAS.to_owned(),
+                version: "v1".to_owned(),
+                kernel: Path::new("kernel/vmlinux").to_path_buf(),
+                initrd: None,
+                rootfs: Path::new("rootfs/root.ext4").to_path_buf(),
+                boot_args: "console=ttyS0 reboot=k".to_owned(),
+            }],
+        )
+        .unwrap();
+        let state = AppState::with_db_file(templates, root.join("state.db"))
+            .await
+            .unwrap();
+
+        let Json(images) = list_images(State(state)).await;
+
+        assert!(
+            images
+                .iter()
+                .all(|image| image.alias != crate::microboot::MICROBOOT_ALIAS),
+            "microboot must never appear in /api/images: {images:?}"
         );
     }
 }
