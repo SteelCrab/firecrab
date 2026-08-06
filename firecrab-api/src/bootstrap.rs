@@ -180,6 +180,8 @@ fn insert_session(
             source_alias: source_alias.to_owned(),
             vm_id,
             status: BootstrapStatus::Booting,
+            current_step: None,
+            step_timeline: Vec::new(),
             log: format!("[{}] builder VM starting", clock(now)),
             started_at_ms: now,
             ended_at_ms: None,

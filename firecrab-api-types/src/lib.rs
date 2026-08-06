@@ -745,6 +745,58 @@ pub enum BootstrapStatus {
     Failed,
 }
 
+/// A named phase of one bootstrap session, exposed so the dashboard can
+/// show *where* a multi-minute run is instead of a single opaque status.
+/// Deliberately coarser than the code's own phase boundaries — four boxes
+/// that mean something to an operator, mirroring [`StartupStep`]'s four —
+/// with the fine-grained detail of the longest one left to the live
+/// console instead of more enum variants
+/// (`docs/superpowers/specs/2026-08-05-bootstrap-progress-ui-design.md`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum BootstrapStep {
+    /// Resolving the MicroBoot builder source, creating the builder VM,
+    /// and waiting for a shell to answer on its console.
+    StartingBuilderVm,
+    /// The guest script is running: download, chroot install, mkfs. By far
+    /// the longest phase, and the one the live console is for.
+    InstallingSystem,
+    /// Builder VM stopped; its disk is being dumped and compressed into
+    /// `{alias}.tar.zst`.
+    Packaging,
+    /// Package staged; tearing the builder VM down.
+    Finalizing,
+}
+
+/// How one [`BootstrapStep`] ended, or that it hasn't yet. Structurally
+/// identical to [`StartupStepOutcome`] but kept separate, matching how
+/// `BootstrapStatus` and `VmState` are separate types rather than one
+/// shared lifecycle enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum BootstrapStepOutcome {
+    /// Still in progress — `ended_at_ms` is `None`.
+    Running,
+    /// Finished and moved on to the next step.
+    Succeeded,
+    /// The session failed here. No later step ever began.
+    Failed,
+}
+
+/// One pass through a [`BootstrapStep`], with the wall-clock times it
+/// spanned. Server-timed for the same reason [`StartupStepRun`] is: the
+/// dashboard's poll interval is far coarser than the fastest steps take.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapStepRun {
+    pub step: BootstrapStep,
+    pub started_at_ms: u64,
+    pub ended_at_ms: Option<u64>,
+    pub outcome: BootstrapStepOutcome,
+    /// Failure reason, only ever set on a `Failed` step.
+    pub detail: Option<String>,
+}
+
 /// Status + log for one bootstrap session
 /// (`POST /api/images/{alias}/bootstrap`, `GET`/`DELETE /api/images/bootstrap/{bootstrapId}`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -765,6 +817,13 @@ pub struct BootstrapResponse {
     /// WebSocket (`/ws/vms/{id}/console`) to show live output.
     pub vm_id: Uuid,
     pub status: BootstrapStatus,
+    /// The step currently open, `None` once the session is terminal.
+    #[serde(default)]
+    pub current_step: Option<BootstrapStep>,
+    /// Every step this session has entered, in order. `#[serde(default)]`
+    /// so a dashboard talking to an older server still deserializes.
+    #[serde(default)]
+    pub step_timeline: Vec<BootstrapStepRun>,
     pub log: String,
     pub started_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1110,5 +1169,37 @@ mod tests {
         let decoded: MicroNetworkResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, response);
         assert!(json.contains("\"subnetCidr\":\"172.31.0.0/24\""));
+    }
+
+    #[test]
+    fn bootstrap_step_run_serializes_camel_case_for_the_dashboard() {
+        let run = BootstrapStepRun {
+            step: BootstrapStep::InstallingSystem,
+            started_at_ms: 1_700_000_000_000,
+            ended_at_ms: None,
+            outcome: BootstrapStepOutcome::Running,
+            detail: None,
+        };
+        let json = serde_json::to_value(&run).expect("serialize");
+        assert_eq!(json["step"], "installingSystem");
+        assert_eq!(json["startedAtMs"], 1_700_000_000_000_u64);
+        assert_eq!(json["endedAtMs"], serde_json::Value::Null);
+        assert_eq!(json["outcome"], "running");
+    }
+
+    #[test]
+    fn bootstrap_response_carries_an_empty_timeline_by_default() {
+        let json = serde_json::json!({
+            "bootstrapId": "00000000-0000-0000-0000-000000000000",
+            "alias": "alpine-3.24",
+            "sourceAlias": "__microboot",
+            "vmId": "00000000-0000-0000-0000-000000000000",
+            "status": "booting",
+            "log": "",
+            "startedAtMs": 0,
+        });
+        let parsed: BootstrapResponse = serde_json::from_value(json).expect("deserialize");
+        assert!(parsed.step_timeline.is_empty());
+        assert_eq!(parsed.current_step, None);
     }
 }
