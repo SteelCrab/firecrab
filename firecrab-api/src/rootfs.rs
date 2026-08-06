@@ -363,6 +363,36 @@ fn write_into_image(rootfs: &Path, guest_path: &str, content: &[u8]) -> Result<(
     }
 }
 
+/// Extracts `guest_path` from `rootfs`'s ext4 image to `dest` on the host,
+/// without mounting — the read counterpart to [`write_into_image`]. Used to
+/// pull a bootstrap builder's freshly-assembled target rootfs/kernel/initrd
+/// files out of its own disk once the guest-side script has finished
+/// building them (`handlers::bootstrap::package_bootstrap`). Works for
+/// files of any size `debugfs`'s `dump` command supports — the filesystem
+/// itself is the only real limit, unlike `write_into_image`'s small
+/// identity files.
+pub fn dump_from_image(rootfs: &Path, guest_path: &str, dest: &Path) -> Result<(), RootfsError> {
+    let output = run_debugfs(rootfs, &format!("dump {guest_path} {}", dest.display()))?;
+
+    // debugfs's own exit code doesn't reliably reflect whether `dump` found
+    // the path (same caveat as `write_into_image`), so success is confirmed
+    // positively: a real dump produces a non-empty file at `dest`.
+    match fs::metadata(dest) {
+        Ok(metadata) if metadata.len() > 0 => Ok(()),
+        _ => {
+            let _ = fs::remove_file(dest);
+            Err(RootfsError::Specialize {
+                path: rootfs.to_owned(),
+                detail: format!(
+                    "debugfs did not produce a non-empty {} for {guest_path}: {}",
+                    dest.display(),
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            })
+        }
+    }
+}
+
 /// Best-effort removal of `guest_path` from `rootfs`'s image. Whether the
 /// path exists on this particular distro's template varies, and debugfs's
 /// exit code can't distinguish "removed" from "wasn't there" from "failed"
@@ -864,5 +894,32 @@ mod tests {
         finalize_template_disk(&rootfs).unwrap();
         // Calling it again on a disk with nothing left to strip must not error.
         finalize_template_disk(&rootfs).unwrap();
+    }
+
+    #[test]
+    fn dump_from_image_extracts_a_file_written_earlier() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        write_into_image(&rootfs, "/etc/payload", b"hello from the guest disk\n").unwrap();
+
+        let dest_dir = tempdir().unwrap();
+        let dest = dest_dir.path().join("payload.out");
+        dump_from_image(&rootfs, "/etc/payload", &dest).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), b"hello from the guest disk\n");
+    }
+
+    #[test]
+    fn dump_from_image_fails_clearly_for_a_missing_guest_path() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        let dest_dir = tempdir().unwrap();
+        let dest = dest_dir.path().join("missing.out");
+
+        let error = dump_from_image(&rootfs, "/etc/does-not-exist", &dest);
+
+        assert!(error.is_err());
     }
 }
