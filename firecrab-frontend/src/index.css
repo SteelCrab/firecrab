@@ -1084,3 +1084,9 @@ table.image-table .image-package-url a:hover {
   background: #171b22;
 }
 
+.inline-console-ended {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+

@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { BootstrapResponse, BuildResponse, ImageInstallResponse, ImageResponse, VmResponse } from "../bindings";
+import type {
+  BootstrapResponse,
+  BootstrapStep,
+  BootstrapStepRun,
+  BuildResponse,
+  ImageInstallResponse,
+  ImageResponse,
+  VmResponse,
+} from "../bindings";
 import {
   ApiClientError,
   buildPackages,
@@ -21,6 +29,7 @@ import {
 } from "../api/client";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
+import InlineConsole from "./InlineConsole";
 
 const KNOWN_TEMPLATES = [
   { alias: "alpine-3.24", label: "Alpine Linux", logoSrc: "https://www.alpinelinux.org/alpinelinux-logo.svg" },
@@ -327,6 +336,72 @@ function BuildModal({
   );
 }
 
+const BOOTSTRAP_STEPS: BootstrapStep[] = [
+  "startingBuilderVm",
+  "installingSystem",
+  "packaging",
+  "finalizing",
+];
+
+const BOOTSTRAP_STEP_LABEL: Record<BootstrapStep, string> = {
+  startingBuilderVm: "빌더 VM 준비",
+  installingSystem: "시스템 설치",
+  packaging: "패키징",
+  finalizing: "마무리",
+};
+
+/**
+ * Four-box progress view over one bootstrap session, mirroring
+ * `VmDetailModal`'s `PipelineStepper` so a VM start and a bootstrap read the
+ * same way. Durations come from the server's own timestamps — the 1s poll is
+ * far too coarse to time the short steps — and only the open step ticks
+ * locally between polls.
+ */
+function BootstrapStepper({ timeline }: { timeline: BootstrapStepRun[] }) {
+  const [now, setNow] = useState(() => Date.now());
+  const hasOpenStep = timeline.some((run) => run.outcome === "running");
+  useEffect(() => {
+    if (!hasOpenStep) return;
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [hasOpenStep]);
+
+  const runFor = (step: BootstrapStep) => timeline.find((run) => run.step === step);
+
+  return (
+    <ol className="pipeline">
+      {BOOTSTRAP_STEPS.map((step) => {
+        const run = runFor(step);
+        const status = run ? run.outcome : "pending";
+        const elapsed = run ? (run.endedAtMs ?? now) - run.startedAtMs : null;
+
+        return (
+          <li key={step} className={`pipeline-step ${status}`}>
+            <span className="step-label">{BOOTSTRAP_STEP_LABEL[step]}</span>
+            <span className="step-bar">
+              <span className="step-time">
+                {elapsed === null ? "—" : formatElapsed(elapsed)}
+              </span>
+              <span className="step-mark">
+                {status === "succeeded" ? "✓" : status === "failed" ? "✕" : ""}
+              </span>
+            </span>
+            {run?.detail && <span className="step-detail">{run.detail}</span>}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** Same shape as `VmDetailModal`'s `duration()`. */
+function formatElapsed(millis: number): string {
+  if (millis < 1000) return `${millis}ms`;
+  const seconds = Math.round(millis / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 /**
  * Bootstrap panel: triggers a from-scratch distro bootstrap and shows its
  * live log. Only one bootstrap runs at a time (backend-enforced, 409 on a
@@ -390,10 +465,15 @@ function BootstrapPanel({
           setTimeout(() => void tick(), 1000);
         }
         // "failed" is a confirmed terminal state too — stop without retrying.
-      } catch {
-        // A fetch failure is not positive confirmation the job reached a
-        // terminal state, so keep polling rather than freezing the log on a
-        // one-off network blip (unless the component is already gone).
+      } catch (err) {
+        // A cancelled session is deleted from the tracker, so 404 is a real
+        // "this is over" answer, not a blip — stop and clear the panel.
+        // Anything else is not positive confirmation of a terminal state, so
+        // keep polling rather than freezing on one bad response.
+        if (err instanceof ApiClientError && err.status === 404) {
+          if (mountedRef.current) setSession(null);
+          return;
+        }
         if (mountedRef.current) setTimeout(() => void tick(), 1000);
       }
     };
@@ -449,6 +529,18 @@ function BootstrapPanel({
       {session && (
         <>
           <div className="state-badge">{session.status}</div>
+          <BootstrapStepper timeline={session.stepTimeline} />
+          {/* The builder VM only exists while the session is pre-terminal:
+              `packaging` is entered *after* stop_vm returns, and the VM is
+              deleted at the end. Gate on status, never on vmId — that field
+              keeps its value after the VM it names is gone. */}
+          {session.status === "booting" || session.status === "running" ? (
+            <InlineConsole vmId={session.vmId} />
+          ) : (
+            <p className="inline-console-ended">
+              빌더 VM이 정리되어 콘솔 연결이 종료되었습니다.
+            </p>
+          )}
           <pre className="detail-log">{session.log}</pre>
         </>
       )}
