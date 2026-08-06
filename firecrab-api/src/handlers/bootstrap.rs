@@ -461,7 +461,14 @@ fn build_package_blocking(
         .arg(&raw_kernel)
         .output()
         .map_err(|e| format!("run extract-vmlinux ({}): {e}", extract_vmlinux.display()))?;
-    if !output.status.success() {
+    // `extract-vmlinux`'s own exit code doesn't reliably reflect whether it
+    // actually found a vmlinux (verified directly: on a raw kernel it can't
+    // recognize, it prints "Cannot find vmlinux." to stderr but still exits
+    // 0 with empty stdout, since its final `echo` becomes the script's last
+    // command) — the same caveat `rootfs.rs` already documents for
+    // `debugfs`, so success is confirmed positively here too: a real
+    // extraction always produces a non-empty stdout.
+    if !output.status.success() || output.stdout.is_empty() {
         return Err(format!(
             "extract-vmlinux failed: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -597,6 +604,26 @@ mod tests {
         );
     }
 
+    /// A minimal 64-byte ELF64 header (x86-64 executable, no sections) —
+    /// enough for `readelf -h` to accept it, which is what
+    /// `extract-vmlinux`'s own `check_vmlinux` uses to recognize an
+    /// already-uncompressed vmlinux and `cat` it straight through
+    /// (verified directly against the real script). Arbitrary non-ELF
+    /// bytes won't do here: `extract-vmlinux` exits 0 with empty stdout
+    /// when it can't recognize its input at all (its final `echo` is the
+    /// last command run, not an explicit `exit 1`), which is exactly the
+    /// unreliable-exit-code case `build_package_blocking` now guards
+    /// against by also requiring non-empty stdout — so a test fixture that
+    /// used unrecognizable bytes here would fail for a different reason
+    /// than the one it's meant to test.
+    const FAKE_ELF64_HEADER: &[u8] = &[
+        0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x02, 0x00, 0x3e, 0x00, 0x01, 0x00, 0x00, 0x00, 0x60, 0xa7, 0x49, 0x03, 0x00, 0x00,
+        0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x88, 0x1d, 0x30, 0x03, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x38, 0x00, 0x03, 0x00, 0x40, 0x00,
+        0x2f, 0x00, 0x2e, 0x00,
+    ];
+
     /// Builds a small ext4 image at `disk_path` with `/root/fc-bootstrap/out`
     /// already present, then seeds it with `files` (guest-relative paths
     /// under that directory, e.g. `"rootfs.ext4"` -> content).
@@ -641,7 +668,7 @@ mod tests {
             &disk_path,
             &[
                 ("rootfs.ext4", b"fake ext4 rootfs bytes"),
-                ("vmlinuz-raw", b"fake vmlinux elf bytes"),
+                ("vmlinuz-raw", FAKE_ELF64_HEADER),
             ],
         );
         {
@@ -682,6 +709,68 @@ mod tests {
         assert!(members.contains("rootfs/ubuntu-rootfs-26.04-amd64.ext4"));
     }
 
+    /// `extract-vmlinux`'s own exit code doesn't reliably reflect whether it
+    /// found a vmlinux (verified directly against the real script: given
+    /// input it can't recognize, it exits 0 with empty stdout — its final
+    /// `echo "Cannot find vmlinux."` becomes the script's last command,
+    /// there's no explicit terminal `exit 1`). Without also checking for
+    /// non-empty stdout, `build_package_blocking` would silently package a
+    /// 0-byte kernel as a "successful" bootstrap. This seeds a raw kernel
+    /// `extract-vmlinux` genuinely cannot recognize (plain text, not an ELF
+    /// or any known compressed kernel format) and asserts packaging fails
+    /// loudly instead.
+    #[tokio::test]
+    async fn package_bootstrap_fails_when_extract_vmlinux_cannot_recognize_the_raw_kernel() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
+        crate::handlers::vms::test_support::seed_vm(&state, &vm);
+        let generation = Uuid::new_v4();
+        let artifact_paths =
+            crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(&vm.storage_root), vm.id);
+        artifact_paths.ensure_directories().unwrap();
+        let disk_path = artifact_paths.rootfs(generation);
+
+        seed_builder_output_disk(
+            &disk_path,
+            &[
+                ("rootfs.ext4", b"fake ext4 rootfs bytes"),
+                (
+                    "vmlinuz-raw",
+                    b"not an elf or a known compressed kernel format",
+                ),
+            ],
+        );
+        {
+            let mut vms = state.vms.lock().unwrap();
+            let stored = vms.get_mut(&vm.id).unwrap();
+            stored.disk_generation = Some(generation);
+        }
+
+        let bootstrap_id = state.bootstraps.begin("ubuntu-26.04", "alpine-3.24", vm.id);
+        state
+            .bootstraps
+            .set_status(bootstrap_id, BootstrapStatus::Packaging);
+
+        package_bootstrap(&state, bootstrap_id, vm.id).await;
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        assert!(
+            snapshot.log.contains("extract-vmlinux failed"),
+            "log: {}",
+            snapshot.log
+        );
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+        );
+        assert!(
+            !staged.is_file(),
+            "a failed extraction must not publish a package"
+        );
+    }
+
     /// Covers the `if let Some(initrd_relative) = &spec.initrd` branch in
     /// `build_package_blocking` that the `ubuntu-26.04` test above never
     /// exercises (Ubuntu's spec has `initrd: None`) — `alpine-3.24` does
@@ -705,7 +794,7 @@ mod tests {
             &disk_path,
             &[
                 ("rootfs.ext4", b"fake alpine rootfs bytes"),
-                ("vmlinuz-virt-raw", b"fake vmlinux elf bytes"),
+                ("vmlinuz-virt-raw", FAKE_ELF64_HEADER),
                 ("initramfs", b"fake initramfs bytes"),
             ],
         );
