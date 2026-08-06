@@ -687,17 +687,7 @@ fn build_package_blocking(
     // Compile-time repo-relative path, not `std::env::current_dir()`-based:
     // the deployed `firecrab-api.service` unit pins `WorkingDirectory` to
     // `@DATADIR@` (see `packaging/systemd/firecrab-api.service`), which has
-    // no `scripts/` subdirectory at all, so a cwd-relative join would fail
-    // in production every time regardless of where the process happens to
-    // be started from. `env!("CARGO_MANIFEST_DIR")` is the same convention
-    // `templates.rs::load_default` already uses to locate `images/`
-    // relative to this crate at compile time, and it resolves correctly
-    // here too: `install.sh` always runs `cargo build --release` in place
-    // inside the checked-out repo on the target host (see `install.sh`),
-    // so the path baked in at compile time is exactly this host's own
-    // checkout, independent of the service's runtime working directory.
-    let extract_vmlinux = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../scripts/firecracker-menual/extract-vmlinux");
+    let extract_vmlinux = crate::microboot::resolve_extract_vmlinux();
     let output = std::process::Command::new(&extract_vmlinux)
         .arg(&raw_kernel)
         .output()

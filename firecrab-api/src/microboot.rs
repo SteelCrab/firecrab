@@ -258,12 +258,21 @@ fn create_placeholder_rootfs(rootfs_dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Same `extract-vmlinux` invocation `handlers::bootstrap`'s packaging step
-/// already uses (compile-time repo-relative path — see that call site's own
-/// doc comment for why `env!("CARGO_MANIFEST_DIR")` and not `current_dir()`).
+/// Resolves the `extract-vmlinux` script path. Checks next to the running
+/// binary first (installed layout), then falls back to the compile-time
+/// repo-relative path (dev layout).
+pub(crate) fn resolve_extract_vmlinux() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        let candidate = exe.parent().unwrap_or(Path::new("")).join("extract-vmlinux");
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/firecracker-menual/extract-vmlinux")
+}
+
 fn extract_vmlinux(raw_kernel: &Path, dest: &Path) -> Result<(), String> {
-    let extract_vmlinux =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/firecracker-menual/extract-vmlinux");
+    let extract_vmlinux = resolve_extract_vmlinux();
     let output = std::process::Command::new(&extract_vmlinux)
         .arg(raw_kernel)
         .output()

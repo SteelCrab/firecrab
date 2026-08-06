@@ -141,7 +141,7 @@ check_firecracker() {
     else
         fail "firecracker: binary not found on PATH" \
             "" \
-            "run scripts/install-firecracker.sh or sudo ./install.sh"
+            "run scripts/install-firecracker.sh or ./install.sh"
         return
     fi
     if [ ! -x "$bin" ]; then
@@ -552,7 +552,7 @@ check_data_root() {
 
     skip "data: no firecrab.db and no data directory yet" \
         "looked at $PWD/data and $DATADIR" \
-        "sudo ./install.sh   # or mkdir -p data when developing from the repo root"
+        "./install.sh   # or mkdir -p data when developing from the repo root"
 }
 
 # Template artifacts expected by firecrab-api/src/templates.rs default_specs().
@@ -608,7 +608,7 @@ check_images() {
     if [ "${#roots[@]}" -eq 0 ]; then
         fail "images: no image root found" \
             "looked at FIRECRAB_IMAGE_ROOT, $PWD/images, $DATADIR/images" \
-            "sudo ./install.sh   # or build with scripts/firecracker-menual/install-alpine-rootfs.sh"
+            "./install.sh   # or build with scripts/firecracker-menual/install-alpine-rootfs.sh"
         return
     fi
 
@@ -636,7 +636,7 @@ check_images() {
         if [ "$any" -eq 0 ]; then
             fail "images: no guest rootfs found under ${roots[*]}" \
                 "" \
-                "sudo ./install.sh  or copy images into $DATADIR/images"
+                "./install.sh  or copy images into $DATADIR/images"
             return
         fi
     fi
