@@ -3,6 +3,7 @@ import type { BootstrapResponse, BuildResponse, ImageInstallResponse, ImageRespo
 import {
   ApiClientError,
   buildPackages,
+  cancelBootstrap,
   cancelBuild,
   deleteImage,
   deleteVm,
@@ -334,9 +335,25 @@ function BuildModal({
  * `getBootstrap` and disabling every alias's button while any session it
  * knows about is non-terminal.
  */
-function BootstrapPanel({ onFinished }: { onFinished: () => void }) {
+function BootstrapPanel({
+  onFinished,
+  unavailableAliases,
+}: {
+  onFinished: () => void;
+  /** Already installed, or already holding a staged package — either way
+   *  `POST /api/images/{alias}/install`'s own guard would reject a bootstrap
+   *  result for it, so don't offer to spend 30 minutes producing one. */
+  unavailableAliases: string[];
+}) {
   const [session, setSession] = useState<BootstrapResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * True from the click itself, not from the response. `busy` below only
+   * becomes true once `startBootstrap` has resolved, which leaves a window
+   * where a double-click fires a second POST — and two POSTs that both pass
+   * the backend's single-session check boot two builder VMs.
+   */
+  const [starting, setStarting] = useState(false);
 
   // BootstrapPanel lives inside Images, which the App shell only mounts
   // while the "images" tab is active — a bootstrap can run for minutes, so
@@ -347,10 +364,22 @@ function BootstrapPanel({ onFinished }: { onFinished: () => void }) {
   // guards the one scheduled tick it closes over, not the recursive chain
   // of ticks a real bootstrap session needs.
   const mountedRef = useRef(true);
+  /**
+   * The live session's id, held outside React state so the unmount cleanup
+   * can still reach it — mirrors `BuildModal`'s `buildIdRef`/`settledRef`
+   * pair. Cleared as soon as the session settles on its own, so a finished
+   * bootstrap is never "cancelled" retroactively.
+   */
+  const bootstrapIdRef = useRef<string | null>(null);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      // Navigating away mid-bootstrap would otherwise leave a session (and
+      // its builder VM) running with nothing in the UI tracking it.
+      const orphaned = bootstrapIdRef.current;
+      bootstrapIdRef.current = null;
+      if (orphaned) void cancelBootstrap(orphaned).catch(() => undefined);
     };
   }, []);
 
@@ -362,9 +391,15 @@ function BootstrapPanel({ onFinished }: { onFinished: () => void }) {
         if (!mountedRef.current) return;
         setSession(snapshot);
         if (snapshot.status === "succeeded") {
+          // Settled: the backend already stopped, packaged and deleted the
+          // builder VM, so there is nothing left for unmount to cancel.
+          bootstrapIdRef.current = null;
           onFinished();
         } else if (snapshot.status !== "failed") {
           setTimeout(() => void tick(), 1000);
+        } else {
+          // Failed sessions have already torn their builder VM down too.
+          bootstrapIdRef.current = null;
         }
         // "failed" is a confirmed terminal state too — stop without retrying.
       } catch {
@@ -378,19 +413,31 @@ function BootstrapPanel({ onFinished }: { onFinished: () => void }) {
   };
 
   const start = async (alias: string) => {
+    if (starting) return;
+    setStarting(true);
     setError(null);
     try {
       const started = await startBootstrap(alias);
-      if (!mountedRef.current) return;
+      bootstrapIdRef.current = started.bootstrapId;
+      if (!mountedRef.current) {
+        // Unmounted while the POST was in flight, so the cleanup above ran
+        // before there was an id to cancel — hand it back here.
+        bootstrapIdRef.current = null;
+        void cancelBootstrap(started.bootstrapId).catch(() => undefined);
+        return;
+      }
       setSession(started);
       pollBootstrap(started.bootstrapId);
     } catch (err) {
       if (!mountedRef.current) return;
       setError((err as Error).message);
+    } finally {
+      if (mountedRef.current) setStarting(false);
     }
   };
 
-  const busy = session !== null && session.status !== "succeeded" && session.status !== "failed";
+  const busy =
+    starting || (session !== null && session.status !== "succeeded" && session.status !== "failed");
 
   return (
     <section className="panel">
@@ -402,17 +449,21 @@ function BootstrapPanel({ onFinished }: { onFinished: () => void }) {
       </h2>
       {error && <div className="field-error">{error}</div>}
       <div className="package-row">
-        {(["alpine-3.24", "ubuntu-26.04", "rocky-9"] as const).map((alias) => (
-          <button
-            key={alias}
-            type="button"
-            className="btn"
-            disabled={busy}
-            onClick={() => void start(alias)}
-          >
-            {busy && session?.alias === alias ? `${alias} 부트스트랩 중…` : `${alias} 부트스트랩`}
-          </button>
-        ))}
+        {(["alpine-3.24", "ubuntu-26.04", "rocky-9"] as const).map((alias) => {
+          const unavailable = unavailableAliases.includes(alias);
+          return (
+            <button
+              key={alias}
+              type="button"
+              className="btn"
+              disabled={busy || unavailable}
+              title={unavailable ? "이미 설치됐거나 설치할 패키지가 이미 준비되어 있습니다." : undefined}
+              onClick={() => void start(alias)}
+            >
+              {busy && session?.alias === alias ? `${alias} 부트스트랩 중…` : `${alias} 부트스트랩`}
+            </button>
+          );
+        })}
       </div>
       {session && (
         <>
@@ -463,6 +514,17 @@ export default function Images() {
     [images],
   );
 
+  // Bootstrapping either of these would spend ~30 minutes producing a package
+  // the install step then refuses (`already_installed`) or that is already
+  // sitting on disk waiting to be installed.
+  const bootstrapBlockedAliases = useMemo(
+    () =>
+      (images ?? [])
+        .filter((image) => image.installed || image.packageStaged)
+        .map((image) => image.alias),
+    [images],
+  );
+
   // Keep the build-source selection in step with what is installed: pick the
   // first installed alias once the list arrives, and re-pick if the current
   // choice is deleted out from under it.
@@ -509,6 +571,27 @@ export default function Images() {
       }
     };
     void tick();
+  };
+
+  /**
+   * Install straight from an archive already staged on this host — what a
+   * finished 배포판 부트스트랩 leaves behind. Deliberately skips
+   * `startImagePackage`: there is nothing to download (and on a host with no
+   * `FIRECRAB_IMAGE_BASE_URL` there is nowhere to download from), so this
+   * goes directly to the same install + poll the remote path ends with.
+   */
+  const handleInstallStaged = async (alias: string) => {
+    setBusyAlias(alias);
+    setActionError(null);
+    try {
+      const started = await startImageInstall(alias);
+      setInstall(started);
+      pollInstall(alias);
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setBusyAlias(null);
+    }
   };
 
   const handleFetchPackage = async (alias: string) => {
@@ -623,7 +706,11 @@ export default function Images() {
             {(images ?? []).map((image) => {
               const job = packageJobs[image.alias];
               const fetching = job?.status === "running";
-              const statusLabel = image.installed ? "설치됨" : job?.status === "succeeded" ? "패키지 준비됨" : "미설치";
+              const statusLabel = image.installed
+                ? "설치됨"
+                : job?.status === "succeeded" || image.packageStaged
+                  ? "패키지 준비됨"
+                  : "미설치";
               // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
               // fall back to plain alias text with no logo for those.
               const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
@@ -647,6 +734,20 @@ export default function Images() {
                           {busyAlias === image.alias ? "삭제 중…" : "삭제"}
                         </button>
                       </>
+                    ) : image.packageStaged ? (
+                      // Ahead of the packageUrl branch on purpose: when both
+                      // are available, a package already on this host wins
+                      // over re-downloading the remote one — which would
+                      // overwrite a just-bootstrapped local build.
+                      <button
+                        type="button"
+                        className="btn primary"
+                        disabled={busyAlias === image.alias}
+                        onClick={() => void handleInstallStaged(image.alias)}
+                        title="이 호스트에 준비된 로컬 패키지를 바로 설치합니다."
+                      >
+                        {busyAlias === image.alias ? "설치 중…" : "로컬 패키지 설치"}
+                      </button>
                     ) : image.packageUrl ? (
                       <button type="button" className="btn primary" disabled={fetching || busyAlias === image.alias} onClick={() => void handleFetchPackage(image.alias)} title={image.packageUrl}>
                         {fetching ? "가져오는 중…" : `가져오기 (${packageBasename(image.packageUrl)})`}
@@ -681,7 +782,7 @@ export default function Images() {
         </div>
       </section>
 
-      <BootstrapPanel onFinished={() => void refreshList()} />
+      <BootstrapPanel onFinished={() => void refreshList()} unavailableAliases={bootstrapBlockedAliases} />
 
       {buildSourceAlias && (
         <BuildModal

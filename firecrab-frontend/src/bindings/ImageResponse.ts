@@ -15,5 +15,12 @@ export type ImageResponse = {
    * (`{base}/{alias}.tar.zst`). Omitted when remote install is off.
    */
   packageUrl?: string;
+  /**
+   * A package archive for this alias is already staged locally, so
+   * `POST /api/images/{alias}/install` can extract it with no download.
+   * Independent of `packageUrl`: a web bootstrap stages one on hosts that
+   * have no remote base URL configured at all.
+   */
+  packageStaged?: boolean;
   description: string;
 };

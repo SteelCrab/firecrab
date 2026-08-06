@@ -625,6 +625,15 @@ pub struct ImageResponse {
     /// set (`{base}/{alias}.tar.zst`). `None` when remote install is off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_url: Option<String>,
+    /// Whether a package archive for this alias is already staged locally
+    /// (`image_install::staged_package_exists`), so
+    /// `POST /api/images/{alias}/install` can extract it with no download at
+    /// all. Deliberately independent of `package_url`: a web bootstrap
+    /// (`handlers::bootstrap`) stages one on a host that has no
+    /// `FIRECRAB_IMAGE_BASE_URL` configured, and the dashboard has to be
+    /// able to offer that install without a remote URL to point at.
+    #[serde(default)]
+    pub package_staged: bool,
     /// Short operator-facing note (may be empty).
     pub description: String,
 }
@@ -1017,10 +1026,12 @@ mod tests {
             rootfs_size_bytes: 2 * 1024 * 1024 * 1024u64,
             installed: true,
             package_url: Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst".to_owned()),
+            package_staged: true,
             description: String::new(),
         };
         let json = serde_json::to_value(&image).unwrap();
         assert_eq!(json["alias"], "ubuntu-26.04");
+        assert_eq!(json["packageStaged"], true);
         assert_eq!(json["minDiskGb"], 2);
         assert_eq!(json["rootfsSizeBytes"], 2 * 1024 * 1024 * 1024u64);
         assert_eq!(json["kernelSha256"], "k".repeat(64));

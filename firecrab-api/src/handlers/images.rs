@@ -18,7 +18,11 @@ fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
     rootfs_bytes.div_ceil(GIB).try_into().unwrap_or(u16::MAX)
 }
 
-fn installed_response(template: &TemplateVersion, package_url: Option<String>) -> ImageResponse {
+fn installed_response(
+    template: &TemplateVersion,
+    package_url: Option<String>,
+    package_staged: bool,
+) -> ImageResponse {
     let rootfs_size_bytes = template.rootfs.length();
     ImageResponse {
         alias: template.name.clone(),
@@ -33,6 +37,7 @@ fn installed_response(template: &TemplateVersion, package_url: Option<String>) -
         rootfs_size_bytes,
         installed: true,
         package_url,
+        package_staged,
         description: String::new(),
     }
 }
@@ -41,6 +46,7 @@ fn not_installed_response(
     alias: &str,
     version: &str,
     package_url: Option<String>,
+    package_staged: bool,
 ) -> ImageResponse {
     ImageResponse {
         alias: alias.to_owned(),
@@ -52,12 +58,16 @@ fn not_installed_response(
         rootfs_size_bytes: 0,
         installed: false,
         package_url,
+        package_staged,
         description: String::new(),
     }
 }
 
 /// `GET /api/images`: known templates (installed + not-yet-installed).
-/// Host paths are never included; each row may carry an official `packageUrl`.
+/// Host paths are never included; each row may carry an official `packageUrl`
+/// and/or a `packageStaged` flag for an archive already sitting in the local
+/// cache — the latter is how a web-bootstrapped image becomes installable on
+/// a host with no `FIRECRAB_IMAGE_BASE_URL` at all.
 pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageResponse>> {
     let templates = state.templates.clone();
     let package_base = state.image_packages.base_url().map(str::to_owned);
@@ -67,13 +77,19 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
                 .as_deref()
                 .map(|base| image_install::package_url(base, alias))
         };
+        // One `is_file()` per alias, on the same blocking task that already
+        // does this catalog's other per-alias filesystem work.
+        let image_root = templates.image_root_path();
+        let staged_for =
+            |alias: &str| -> bool { image_install::staged_package_exists(image_root, alias) };
         let mut images: Vec<ImageResponse> = TemplateRegistry::known_specs()
             .into_iter()
             .map(|spec| {
                 let url = package_for(&spec.alias);
+                let staged = staged_for(&spec.alias);
                 match templates.resolve_alias(&spec.alias) {
-                    Some(template) => installed_response(template.as_ref(), url),
-                    None => not_installed_response(&spec.alias, &spec.version, url),
+                    Some(template) => installed_response(template.as_ref(), url, staged),
+                    None => not_installed_response(&spec.alias, &spec.version, url, staged),
                 }
             })
             .collect();
@@ -83,6 +99,7 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
                 images.push(installed_response(
                     template.as_ref(),
                     package_for(&template.name),
+                    staged_for(&template.name),
                 ));
             }
         }
@@ -454,6 +471,49 @@ mod tests {
         assert_eq!(
             ubuntu.package_url.as_deref(),
             Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst")
+        );
+    }
+
+    /// The gap that made a completed web bootstrap unreachable from the UI:
+    /// `packageUrl` is derived purely from `FIRECRAB_IMAGE_BASE_URL`, so on a
+    /// host without one — the common dev case, and exactly the case web
+    /// bootstrap exists for — a freshly staged archive showed up as
+    /// "패키지 URL 없음" with no way to install it. `packageStaged` reports
+    /// the local archive independently, which is what the dashboard's local
+    /// install button keys off.
+    #[tokio::test]
+    async fn list_images_reports_a_staged_package_even_with_no_remote_base_url() {
+        let directory = tempdir().unwrap();
+        let mut state = empty_state(directory.path()).await;
+        state.image_packages = ImageInstallTracker::disabled();
+
+        // Nothing staged yet: no URL and no local archive.
+        let Json(before) = list_images(State(state.clone())).await;
+        let ubuntu = before
+            .iter()
+            .find(|image| image.alias == "ubuntu-26.04")
+            .unwrap();
+        assert!(ubuntu.package_url.is_none());
+        assert!(!ubuntu.package_staged);
+
+        // Stand in for what `handlers::bootstrap::package_bootstrap` writes.
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+        );
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, b"pretend tar.zst").unwrap();
+
+        let Json(after) = list_images(State(state)).await;
+        let ubuntu = after
+            .iter()
+            .find(|image| image.alias == "ubuntu-26.04")
+            .unwrap();
+        assert!(ubuntu.package_staged);
+        assert!(!ubuntu.installed);
+        assert!(
+            ubuntu.package_url.is_none(),
+            "a locally staged package must not fabricate a remote URL"
         );
     }
 
