@@ -681,30 +681,6 @@ table.image-table .image-package-url a:hover {
   height: 2.5rem;
 }
 
-/* Build modal (Images.tsx) — same fixed/full-viewport backdrop pattern as
-   .console-overlay/.console-panel, but a light panel box since the content
-   is form fields, not a dark console. */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(23, 27, 34, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  z-index: 20;
-}
-.modal {
-  width: min(640px, 100%);
-  max-height: calc(100vh - 4rem);
-  overflow-y: auto;
-  background: var(--bg-panel);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 1.5rem;
-  box-shadow: 0 1.5rem 3rem rgba(23, 27, 34, 0.35);
-}
-
 .empty {
   padding: 2rem 0.75rem;
   text-align: center;

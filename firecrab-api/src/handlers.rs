@@ -1,5 +1,5 @@
 pub mod bootstrap;
-pub mod builds;
+pub mod builder_vm;
 pub mod console;
 pub mod images;
 pub mod micro_networks;

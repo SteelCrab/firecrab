@@ -314,9 +314,9 @@ pub async fn delete_image(
         // Builder VMs are deliberately excluded. They are transient build
         // artifacts, not user resources: `list_vms` hides them, so the
         // dashboard's recovery flow (which offers to delete the listed VMs
-        // and retry) can neither show nor remove one — a build in flight
+        // and retry) can neither show nor remove one — a bootstrap in flight
         // would block the delete with a conflict the operator can't act on.
-        // `cancel_build`/`finalize_build` own their lifecycle instead.
+        // `handlers::bootstrap` owns their lifecycle instead.
         let users: Vec<String> = vms
             .values()
             .filter(|vm| vm.template == alias && vm.purpose == crate::model::VmPurpose::Instance)

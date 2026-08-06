@@ -474,33 +474,6 @@ impl TemplateRegistry {
         Ok(version)
     }
 
-    /// Drops a `(name, version)` that no alias points at any more and
-    /// returns the artifact paths no remaining version references.
-    ///
-    /// Registering a new version for an alias leaves the previous one in the
-    /// map on purpose — VMs pin `(template, template_version)` and must keep
-    /// booting. Once nothing pins it, though, an in-place rebuild would
-    /// otherwise accumulate one unreachable rootfs per rebuild, so callers
-    /// that know no VM refers to it use this to reclaim the space. Returns
-    /// `None` for an unknown version, or one an alias still resolves to.
-    pub fn prune_version(&self, name: &str, version: &str) -> Option<Vec<PathBuf>> {
-        let aliases = self
-            .aliases
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut versions = self
-            .versions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-        let key = (name.to_owned(), version.to_owned());
-        if aliases.values().any(|pinned| *pinned == key) {
-            return None;
-        }
-        let removed = versions.remove(&key)?;
-        Some(self.orphan_paths(&removed, &versions))
-    }
-
     /// Absolute paths of `removed`'s artifacts that no version in
     /// `remaining` still references — i.e. safe for the caller to delete.
     fn orphan_paths(
@@ -1003,53 +976,6 @@ mod tests {
 
         let restarted = TemplateRegistry::load_from(root).expect("startup must not fail");
         assert!(restarted.resolve_alias("derived").is_none());
-    }
-
-    #[test]
-    fn prune_version_refuses_a_version_an_alias_still_resolves_to() {
-        let directory = tempdir().unwrap();
-        let registry = create_registry(directory.path());
-
-        assert!(
-            registry
-                .prune_version("ubuntu-rootfs-26.04", "v1")
-                .is_none()
-        );
-        assert!(registry.resolve_alias("ubuntu-rootfs-26.04").is_some());
-        assert!(registry.prune_version("nope", "v1").is_none());
-    }
-
-    #[test]
-    fn prune_version_drops_an_unpinned_version_and_reports_its_orphans() {
-        let directory = tempdir().unwrap();
-        let root = directory.path();
-        fs::write(root.join("kernel"), b"kernel").unwrap();
-        fs::write(root.join("rootfs-old"), b"old").unwrap();
-        fs::write(root.join("rootfs-new"), b"new").unwrap();
-        let registry = TemplateRegistry::load_from(root).unwrap();
-        for (version, rootfs) in [("v1", "rootfs-old"), ("v2", "rootfs-new")] {
-            registry
-                .register_spec(TemplateSpec {
-                    alias: "derived".to_owned(),
-                    version: version.to_owned(),
-                    kernel: PathBuf::from("kernel"),
-                    initrd: None,
-                    rootfs: PathBuf::from(rootfs),
-                    boot_args: String::new(),
-                })
-                .unwrap();
-        }
-
-        let orphans = registry.prune_version("derived", "v1").unwrap();
-
-        assert_eq!(
-            orphans,
-            vec![root.canonicalize().unwrap().join("rootfs-old")]
-        );
-        assert!(registry.resolve_version("derived", "v1").is_none());
-        // The alias's live version and the kernel both survive.
-        assert!(registry.resolve_version("derived", "v2").is_some());
-        assert!(root.join("kernel").is_file());
     }
 
     fn create_registry(root: &Path) -> TemplateRegistry {

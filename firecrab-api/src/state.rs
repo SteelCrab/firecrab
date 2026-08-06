@@ -79,8 +79,6 @@ pub struct AppState {
     pub(crate) image_installs: ImageInstallTracker,
     /// Async package acquisition jobs (`POST /api/images/{alias}/package`).
     pub(crate) image_packages: ImageInstallTracker,
-    /// Async image-build sessions (`POST /api/images/{alias}/build`).
-    pub(crate) builds: crate::builds::BuildTracker,
     /// Async from-scratch distro bootstrap sessions (`POST /api/images/{alias}/bootstrap`).
     pub(crate) bootstraps: crate::bootstrap::BootstrapTracker,
 }
@@ -122,7 +120,6 @@ impl AppState {
             network: NetworkClient::from_env(),
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
-            builds: crate::builds::BuildTracker::default(),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
         })
     }

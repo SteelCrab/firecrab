@@ -208,29 +208,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::images::get_image_package).post(handlers::images::start_image_package),
         )
         .route(
-            "/api/images/{alias}/build",
-            post(handlers::builds::start_build),
-        )
-        .route(
             "/api/images/{alias}/bootstrap",
             post(handlers::bootstrap::start_bootstrap),
         )
         .route(
             "/api/images/bootstrap/{bootstrapId}",
             get(handlers::bootstrap::get_bootstrap).delete(handlers::bootstrap::cancel_bootstrap),
-        )
-        .route("/api/images/builds", get(handlers::builds::list_builds))
-        .route(
-            "/api/images/builds/{buildId}",
-            get(handlers::builds::get_build).delete(handlers::builds::cancel_build),
-        )
-        .route(
-            "/api/images/builds/{buildId}/packages",
-            post(handlers::builds::build_packages),
-        )
-        .route(
-            "/api/images/builds/{buildId}/finalize",
-            post(handlers::builds::finalize_build),
         )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(

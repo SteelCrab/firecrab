@@ -36,8 +36,8 @@ pub enum VmPurpose {
     /// A user-created VM, shown in the normal MicroVM list.
     #[default]
     Instance,
-    /// A short-lived VM driving an image build (`handlers::builds`) — never
-    /// shown in `list_vms`, only in `GET /api/images/builds`.
+    /// A short-lived VM driving an image job (`handlers::bootstrap`) — never
+    /// shown in `list_vms`; its own session endpoint reports on it instead.
     Builder,
 }
 

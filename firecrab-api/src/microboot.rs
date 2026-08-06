@@ -14,9 +14,9 @@ use crate::templates::TemplateSpec;
 
 /// Internal-only alias this registers under. `handlers::images::list_images`
 /// keeps it out of `/api/images` by comparing against this exact constant
-/// (not by any `__` prefix rule), and `handlers::vms::validate_create` and
-/// `handlers::builds::start_build` reject it by the same comparison so it
-/// can't be driven as if it were a user-facing template.
+/// (not by any `__` prefix rule), and `handlers::vms::validate_create`
+/// rejects it by the same comparison so it can't be driven as if it were a
+/// user-facing template.
 pub(crate) const MICROBOOT_ALIAS: &str = "__microboot";
 
 /// Bumped whenever anything this module pins changes — the artifact URLs,

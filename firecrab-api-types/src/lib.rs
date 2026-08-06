@@ -670,63 +670,6 @@ pub struct ImageInstallResponse {
     pub ended_at_ms: Option<u64>,
 }
 
-/// Lifecycle of one image-build session (`handlers::builds`).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BuildStatus {
-    /// Builder VM is being created/started.
-    Booting,
-    /// VM is running and network-ready; packages can be installed/removed.
-    Ready,
-    /// A package install/remove/update is in progress on the builder VM.
-    Installing,
-    /// Stopping the VM and registering the resulting template.
-    Finalizing,
-    /// Registered as a new template version; builder VM has been deleted.
-    Succeeded,
-    /// Failed at any stage; see `log`. Builder VM has been deleted.
-    Failed,
-}
-
-/// Status + log for one build session
-/// (`POST /api/images/{alias}/build`, `GET /api/images/builds[/{buildId}]`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct BuildResponse {
-    pub build_id: Uuid,
-    /// Source template alias this build started from.
-    pub source_alias: String,
-    /// Target alias: same as `source_alias` (in-place rebuild) or a new
-    /// alias (derived template) — set at `finalize` time from the request,
-    /// `None` until finalize is called.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_alias: Option<String>,
-    /// Builder VM id, so the dashboard can reuse the existing console
-    /// WebSocket (`/ws/vms/{id}/console`) to show live boot/package output.
-    pub vm_id: Uuid,
-    pub status: BuildStatus,
-    pub log: String,
-    pub started_at_ms: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ended_at_ms: Option<u64>,
-    /// Whether at least one package install/remove/update has completed on
-    /// this session's VM. `POST .../finalize` refuses a session where this
-    /// is still `false`, so an unmodified template can't be re-registered
-    /// as if it were new.
-    #[serde(default)]
-    pub had_package_action: bool,
-}
-
-/// Body of `POST /api/images/builds/{buildId}/finalize`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct FinalizeBuildRequest {
-    /// Omitted → rebuild the source alias in place (new version, same
-    /// alias). `Some` → register as a new, distinct alias.
-    #[serde(default)]
-    pub new_alias: Option<String>,
-}
-
 /// Lifecycle of one from-scratch distro bootstrap session (`handlers::bootstrap`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

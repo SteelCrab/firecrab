@@ -1,10 +1,7 @@
 //! In-process tracker for from-scratch distro bootstrap sessions
-//! (`POST /api/images/{alias}/bootstrap` and friends) — mirrors
-//! `builds::BuildTracker`'s mechanics exactly, but for a session kind whose
-//! terminal action is "package as a `.tar.zst`" rather than "register a
-//! template directly", so it's kept as its own tracker/type rather than
-//! overloading `BuildTracker`'s `BuildStatus` with states that don't apply
-//! to a customize-an-installed-template session (see
+//! (`POST /api/images/{alias}/bootstrap` and friends) — same shape as the
+//! image-install tracker, but for a session whose terminal action is
+//! "package as a `.tar.zst`" for `image_install.rs` to pick up (see
 //! `docs/superpowers/specs/2026-08-03-m2image-web-rebuild-design.md`).
 
 use std::collections::HashMap;
@@ -64,9 +61,8 @@ impl BootstrapTracker {
     }
 
     /// Compare-and-set: only advances a session still in `expected`,
-    /// returning whether it applied — same reasoning as
-    /// `BuildTracker::set_status_from` (a detached watcher must never
-    /// clobber a status a later request already moved past).
+    /// returning whether it applied — a detached watcher must never clobber
+    /// a status a later request already moved past.
     pub fn set_status_from(
         &self,
         id: Uuid,
@@ -153,8 +149,8 @@ impl BootstrapTracker {
         }
     }
 
-    /// Compare-and-set variant of [`finish_err`](Self::finish_err) — for
-    /// the same reason `BuildTracker::finish_err_from` exists.
+    /// Compare-and-set variant of [`finish_err`](Self::finish_err), for the
+    /// same reason [`set_status_from`](Self::set_status_from) is one.
     pub fn finish_err_from(
         &self,
         id: Uuid,

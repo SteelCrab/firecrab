@@ -3,26 +3,20 @@ import type {
   BootstrapResponse,
   BootstrapStep,
   BootstrapStepRun,
-  BuildResponse,
   ImageInstallResponse,
   ImageResponse,
   VmResponse,
 } from "../bindings";
 import {
   ApiClientError,
-  buildPackages,
-  cancelBuild,
   deleteImage,
   deleteVm,
-  finalizeBuild,
   getBootstrap,
-  getBuild,
   getImageInstall,
   getImagePackage,
   listImages,
   listVms,
   startBootstrap,
-  startBuild,
   startImageInstall,
   startImagePackage,
   stopVm,
@@ -83,257 +77,6 @@ function keepNewestJobSnapshot(
     return current;
   }
   return incoming;
-}
-
-/**
- * Build modal: boot a builder VM off `sourceAlias`, install/remove packages
- * on its console, then save the result as a new or updated template.
- */
-function BuildModal({
-  sourceAlias,
-  installedAliases,
-  onClose,
-  onFinalized,
-}: {
-  sourceAlias: string;
-  installedAliases: string[];
-  onClose: () => void;
-  onFinalized: () => void;
-}) {
-  const [build, setBuild] = useState<BuildResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [installInput, setInstallInput] = useState("");
-  const [removeInput, setRemoveInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [saveMode, setSaveMode] = useState<"update" | "derive">("update");
-  const [newAlias, setNewAlias] = useState("");
-
-  // A build session owns a real (hidden) VM, so it must never be left
-  // running with nothing tracking it. These refs carry that ownership
-  // outside React state, which the effect-scoped `cancelled` flags below
-  // deliberately stop updating once the modal is gone.
-  const buildIdRef = useRef<string | null>(null);
-  /** The session no longer needs tearing down (cancelled, or finalized). */
-  const settledRef = useRef(false);
-  /** The modal is gone; nothing will render or poll this session again. */
-  const closedRef = useRef(false);
-
-  /**
-   * Claims responsibility for tearing the session down, returning its id
-   * once. Stays un-settled while there is no id yet, so a close that races
-   * `startBuild`'s own response hands the job to that response instead of
-   * swallowing it.
-   */
-  const disownBuild = useCallback(() => {
-    if (settledRef.current || !buildIdRef.current) return null;
-    settledRef.current = true;
-    return buildIdRef.current;
-  }, []);
-
-  useEffect(
-    () => () => {
-      closedRef.current = true;
-      // Unmount safety net: closing the modal any way other than 취소 (an
-      // App-shell tab switch, say) would otherwise strand the builder VM.
-      const orphaned = disownBuild();
-      if (orphaned) void cancelBuild(orphaned).catch(() => undefined);
-    },
-    [disownBuild],
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const started = await startBuild(sourceAlias);
-        buildIdRef.current = started.buildId;
-        if (cancelled || closedRef.current) {
-          // The modal closed while this POST was still in flight, so the
-          // unmount cleanup above ran before there was any id to cancel.
-          const orphaned = disownBuild();
-          if (orphaned) void cancelBuild(orphaned).catch(() => undefined);
-          return;
-        }
-        setBuild(started);
-      } catch (err) {
-        if (!cancelled) setError((err as Error).message);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [sourceAlias, disownBuild]);
-
-  useEffect(() => {
-    if (!build || build.status === "succeeded" || build.status === "failed") return;
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const snapshot = await getBuild(build.buildId);
-        if (!cancelled) setBuild(snapshot);
-      } catch {
-        /* keep last snapshot */
-      }
-    }, 1000);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [build]);
-
-  // Every long step (boot, package install, finalize) reports through the
-  // session rather than its own HTTP response, so the terminal state only
-  // ever arrives via the poll above — including the one that closes this
-  // modal after a successful save.
-  const finishedRef = useRef(false);
-  useEffect(() => {
-    if (finishedRef.current || !build) return;
-    if (build.status === "succeeded") {
-      finishedRef.current = true;
-      // finalize already stopped and deleted the builder VM.
-      settledRef.current = true;
-      onFinalized();
-      onClose();
-    } else if (build.status === "failed") {
-      finishedRef.current = true;
-      setBusy(false);
-      // Left un-settled on purpose: a failed session still has a builder VM
-      // record behind it, which the unmount cleanup should remove.
-    }
-  }, [build, onFinalized, onClose]);
-
-  const runPackages = async (action: "install" | "remove", input: string) => {
-    if (!build) return;
-    const packages = input.split(/\s+/).filter(Boolean);
-    if (packages.length === 0) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // Returns the `installing` snapshot, not the finished one — the guest's
-      // package manager runs for minutes. The poll above shows its output and
-      // flips back to `ready` when it's done.
-      const accepted = await buildPackages(build.buildId, action, packages);
-      setBuild(accepted);
-      if (action === "install") setInstallInput("");
-      if (action === "remove") setRemoveInput("");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleFinalize = async () => {
-    if (!build) return;
-    if (saveMode === "derive" && !newAlias.trim()) {
-      setError("새 이미지 이름을 입력하세요.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      // Accepted, not finished: copying a multi-GB rootfs, fscking it and
-      // registering it all happen after this responds. Stay open on the live
-      // status — the terminal effect above closes the modal once the session
-      // actually reaches `succeeded`.
-      const accepted = await finalizeBuild(
-        build.buildId,
-        saveMode === "derive" ? newAlias.trim() : undefined,
-      );
-      setBuild(accepted);
-    } catch (err) {
-      setError((err as Error).message);
-      setBusy(false);
-    }
-  };
-
-  const handleCancel = async () => {
-    // The overlay's own click lands here, so an accidental click outside the
-    // modal must not silently destroy work — confirm the same way the image
-    // delete action does, but only once there is something to lose.
-    const atRisk = build !== null && (build.hadPackageAction || build.status !== "booting");
-    if (
-      atRisk &&
-      !window.confirm("이 빌드를 취소할까요?\n빌더 VM을 삭제하며, 설치한 패키지는 저장되지 않습니다.")
-    ) {
-      return;
-    }
-    const orphaned = disownBuild();
-    if (orphaned) {
-      try {
-        await cancelBuild(orphaned);
-      } catch {
-        /* best-effort */
-      }
-    }
-    onClose();
-  };
-
-  const ready = build?.status === "ready";
-  const saving = build?.status === "finalizing";
-  const aliasTaken = newAlias.trim().length > 0 && installedAliases.includes(newAlias.trim());
-
-  return (
-    <div className="modal-overlay" onClick={handleCancel}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
-        <h2 className="panel-title">M2Image-builder — {sourceAlias}</h2>
-        {error && <div className="field-error">{error}</div>}
-        <div className="state-badge">{build?.status ?? "시작 중…"}</div>
-        <pre className="detail-log">{build?.log ?? ""}</pre>
-        <div className="package-row">
-          <input
-            type="text"
-            placeholder="설치할 패키지 (공백으로 구분)"
-            value={installInput}
-            onChange={(event) => setInstallInput(event.target.value)}
-            disabled={!ready || busy}
-          />
-          <button type="button" className="btn" disabled={!ready || busy || !installInput.trim()} onClick={() => void runPackages("install", installInput)}>
-            설치
-          </button>
-        </div>
-        <div className="package-row">
-          <input
-            type="text"
-            placeholder="삭제할 패키지 (공백으로 구분)"
-            value={removeInput}
-            onChange={(event) => setRemoveInput(event.target.value)}
-            disabled={!ready || busy}
-          />
-          <button type="button" className="btn danger" disabled={!ready || busy || !removeInput.trim()} onClick={() => void runPackages("remove", removeInput)}>
-            삭제
-          </button>
-        </div>
-        <fieldset className="package-row">
-          <label>
-            <input type="radio" checked={saveMode === "update"} onChange={() => setSaveMode("update")} />
-            같은 이미지 갱신 ({sourceAlias})
-          </label>
-          <label>
-            <input type="radio" checked={saveMode === "derive"} onChange={() => setSaveMode("derive")} />
-            새 이미지로 저장
-          </label>
-          {saveMode === "derive" && (
-            <input
-              type="text"
-              placeholder="새 이미지 이름"
-              value={newAlias}
-              onChange={(event) => setNewAlias(event.target.value)}
-            />
-          )}
-        </fieldset>
-        {aliasTaken && <div className="field-error">이미 사용 중인 이름입니다.</div>}
-        <div className="package-row">
-          <button type="button" className="btn" disabled={saving} onClick={() => void handleCancel()}>
-            취소
-          </button>
-          <button type="button" className="btn primary" disabled={!ready || busy || aliasTaken} onClick={() => void handleFinalize()}>
-            {saving || busy ? "저장 중…" : "이미지로 저장"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 const BOOTSTRAP_STEPS: BootstrapStep[] = [
@@ -574,9 +317,9 @@ function BootstrapPanel({
 }
 
 /**
- * Single M2Image inventory table plus an on-demand build modal. Package
- * download/install ("가져오기") is a per-row action here rather than a
- * separate panel — the two-stage Packer/Store split moved into BuildModal.
+ * Single M2Image inventory table plus the from-scratch bootstrap panel.
+ * Package download/install ("가져오기") is a per-row action here rather than
+ * a separate panel.
  */
 export default function Images() {
   const [images, setImages] = useState<ImageResponse[] | null>(null);
@@ -585,13 +328,6 @@ export default function Images() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
   const [install, setInstall] = useState<ImageInstallResponse | null>(null);
-  const [buildSourceAlias, setBuildSourceAlias] = useState<string | null>(null);
-  // Deliberately not seeded from KNOWN_TEMPLATES: which templates are
-  // actually installed is only known once `images` loads, and a `<select>`
-  // whose value isn't among its options silently renders the first option
-  // instead — so a hardcoded default would start a build against an alias
-  // the user never saw (and the API 404s on).
-  const [newBuildSource, setNewBuildSource] = useState<string>("");
 
   const refreshList = useCallback(async () => {
     try {
@@ -607,11 +343,6 @@ export default function Images() {
     void refreshList();
   }, [refreshList]);
 
-  const installedAliases = useMemo(
-    () => (images ?? []).filter((image) => image.installed).map((image) => image.alias),
-    [images],
-  );
-
   // Bootstrapping either of these would spend ~30 minutes producing a package
   // the install step then refuses (`already_installed`) or that is already
   // sitting on disk waiting to be installed.
@@ -622,15 +353,6 @@ export default function Images() {
         .map((image) => image.alias),
     [images],
   );
-
-  // Keep the build-source selection in step with what is installed: pick the
-  // first installed alias once the list arrives, and re-pick if the current
-  // choice is deleted out from under it.
-  useEffect(() => {
-    setNewBuildSource((current) =>
-      installedAliases.includes(current) ? current : (installedAliases[0] ?? ""),
-    );
-  }, [installedAliases]);
 
   // `Images` is conditionally mounted by the App shell (only while the
   // "images" tab is active), so a poll started here can easily outlive the
@@ -824,14 +546,9 @@ export default function Images() {
                   </td>
                   <td className="actions">
                     {image.installed ? (
-                      <>
-                        <button type="button" className="btn" disabled={busyAlias === image.alias} onClick={() => setBuildSourceAlias(image.alias)}>
-                          빌드
-                        </button>
-                        <button type="button" className="btn danger" disabled={busyAlias === image.alias} onClick={() => void handleDelete(image.alias)}>
-                          {busyAlias === image.alias ? "삭제 중…" : "삭제"}
-                        </button>
-                      </>
+                      <button type="button" className="btn danger" disabled={busyAlias === image.alias} onClick={() => void handleDelete(image.alias)}>
+                        {busyAlias === image.alias ? "삭제 중…" : "삭제"}
+                      </button>
                     ) : image.packageStaged ? (
                       // Ahead of the packageUrl branch on purpose: when both
                       // are available, a package already on this host wins
@@ -868,29 +585,9 @@ export default function Images() {
             <pre className="detail-log image-install-log">{install.log}</pre>
           </>
         )}
-        <div className="package-row">
-          <select value={newBuildSource} onChange={(event) => setNewBuildSource(event.target.value)}>
-            {installedAliases.map((alias) => (
-              <option key={alias} value={alias}>{alias}</option>
-            ))}
-          </select>
-          <button type="button" className="btn primary" disabled={!newBuildSource} onClick={() => setBuildSourceAlias(newBuildSource)}>
-            + 새 이미지 빌드
-          </button>
-        </div>
       </section>
 
       <BootstrapPanel onFinished={() => void refreshList()} unavailableAliases={bootstrapBlockedAliases} />
-
-      {buildSourceAlias && (
-        <BuildModal
-          key={buildSourceAlias}
-          sourceAlias={buildSourceAlias}
-          installedAliases={installedAliases}
-          onClose={() => setBuildSourceAlias(null)}
-          onFinalized={() => void refreshList()}
-        />
-      )}
     </div>
   );
 }

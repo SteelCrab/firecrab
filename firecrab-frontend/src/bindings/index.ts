@@ -4,8 +4,6 @@ export * from "./BootstrapStatus";
 export * from "./BootstrapStep";
 export * from "./BootstrapStepOutcome";
 export * from "./BootstrapStepRun";
-export * from "./BuildResponse";
-export * from "./BuildStatus";
 export * from "./AssignVmStorageRequest";
 export * from "./CreateMicroNetworkRequest";
 export * from "./CreateMicroStorageRequest";

@@ -278,21 +278,6 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     Ok(())
 }
 
-/// Prepares a builder VM's finished rootfs disk to become a new template
-/// version: recovers the ext4 journal (same as `specialize_guest`), then
-/// strips [`STRIP_PATHS`] identity files so every VM created from this new
-/// template gets its own fresh hostname/SSH host keys instead of inheriting
-/// whatever the builder VM generated at boot. Deliberately does NOT set
-/// `/etc/hostname` the way `specialize_guest` does — a template has no VM id
-/// yet; that happens per-instance at create time.
-pub fn finalize_template_disk(rootfs: &Path) -> Result<(), RootfsError> {
-    recover_before_specialization(rootfs)?;
-    for path in STRIP_PATHS {
-        remove_from_image(rootfs, path);
-    }
-    Ok(())
-}
-
 /// Recovers an ext4 journal before [`specialize_guest`] makes any
 /// direct `debugfs -w` changes. `-p` deliberately limits e2fsck to its
 /// automatic safe repairs; unlike `-y`, it does not make a destructive or
@@ -863,46 +848,6 @@ mod tests {
         run_debugfs(&rootfs, "mkdir /etc").unwrap();
 
         specialize_guest(&rootfs, id).unwrap();
-    }
-
-    #[test]
-    fn finalize_template_disk_strips_identity_and_recovers_the_journal() {
-        let directory = tempdir().unwrap();
-        let rootfs = directory.path().join("rootfs.ext4");
-        real_rootfs_with_guest_dirs(&rootfs);
-
-        // Seed an entropy seed the way a booted guest would have written one.
-        let staging = directory.path().join("seed.tmp");
-        fs::write(&staging, b"template-shared-secret").unwrap();
-        run_debugfs(
-            &rootfs,
-            &format!("write {} /var/lib/systemd/random-seed", staging.display()),
-        )
-        .unwrap();
-
-        finalize_template_disk(&rootfs).unwrap();
-
-        // After finalization, the entropy seed should be removed.
-        let output = run_debugfs(&rootfs, "stat /var/lib/systemd/random-seed").unwrap();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stderr.contains("not found") || stderr.contains("File not found") || stdout.is_empty(),
-            "Expected file to be missing, but got stderr: {}, stdout: {}",
-            stderr,
-            stdout
-        );
-    }
-
-    #[test]
-    fn finalize_template_disk_is_idempotent_on_an_already_clean_disk() {
-        let directory = tempdir().unwrap();
-        let rootfs = directory.path().join("rootfs.ext4");
-        real_rootfs_with_guest_dirs(&rootfs);
-
-        finalize_template_disk(&rootfs).unwrap();
-        // Calling it again on a disk with nothing left to strip must not error.
-        finalize_template_disk(&rootfs).unwrap();
     }
 
     #[test]

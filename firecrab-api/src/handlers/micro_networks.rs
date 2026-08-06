@@ -424,7 +424,7 @@ fn valid_name(name: &str) -> bool {
 }
 
 /// Test-only fixtures shared with sibling handler modules (e.g.
-/// `handlers::builds`) that need a MicroNetwork already in the store,
+/// `handlers::builder_vm`) that need a MicroNetwork already in the store,
 /// without duplicating this module's own create-then-validate flow.
 #[cfg(test)]
 pub(crate) mod test_support {

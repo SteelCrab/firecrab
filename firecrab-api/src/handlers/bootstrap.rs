@@ -24,13 +24,20 @@ use crate::model::VmState;
 use crate::server::RequestId;
 use crate::state::AppState;
 
-use super::builds::{builder_micro_network_id, builder_vm_name, mark_as_builder};
+use super::builder_vm::{
+    builder_disk_gb, builder_micro_network_id, builder_vm_name, mark_as_builder,
+};
 use super::vms::{create_vm, parse_id, start_vm_request};
 
-/// Matches `handlers::builds`'s own poll cadence.
+/// How often every background poll in this module samples the shared VM map.
+/// Matches the cadence the dashboard itself polls a bootstrap session at, so
+/// a status change is never more than one tick away from being visible.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Generous on purpose, same reasoning as `handlers::builds::BUILDER_BOOT_TIMEOUT`.
+/// How long a builder VM may take to reach `Running` before its session is
+/// failed. Generous on purpose: `start_vm`'s pipeline copies a multi-GB
+/// rootfs (queued behind `disk_prep_permits`) before the guest even boots,
+/// so this is a "something is genuinely wrong" bound, not a latency budget.
 const BUILDER_BOOT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The 3 aliases this feature can bootstrap — deliberately not
@@ -88,8 +95,8 @@ fn script_for(alias: &str) -> &'static str {
 
 /// `POST /api/images/{alias}/bootstrap` — boots a builder VM off any
 /// already-installed template and registers a new bootstrap session for
-/// `alias`. Returns immediately, same convention as `start_build`; the
-/// caller polls `GET /api/images/bootstrap/{bootstrapId}`.
+/// `alias`. Returns immediately — the caller polls
+/// `GET /api/images/bootstrap/{bootstrapId}` for progress.
 pub async fn start_bootstrap(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -140,8 +147,7 @@ pub async fn start_bootstrap(
         // source template itself needs to boot at all — a source rootfs
         // bigger than the target's build budget would otherwise fail
         // create validation (`handlers::images::min_disk_gb_for`).
-        disk_gb: bootstrap_disk_gb(&alias)
-            .max(super::builds::builder_disk_gb(source.rootfs.length())),
+        disk_gb: bootstrap_disk_gb(&alias).max(builder_disk_gb(source.rootfs.length())),
         egress_policy: EgressPolicy::Internet,
         micro_network_id,
         storage_root: None,
@@ -237,14 +243,16 @@ async fn pick_builder_source(state: &AppState, request_id: Uuid) -> Result<Strin
 }
 
 /// Polls the builder VM's lifecycle state until it reaches `Running`
-/// (session becomes `Running`... — see note below), a terminal failure, or
-/// [`BUILDER_BOOT_TIMEOUT`] elapses. Mirrors
-/// `handlers::builds::watch_builder_boot` exactly (same CAS-against-`Booting`
-/// safety reasoning), adapted to `BootstrapStatus`'s own states — note this
-/// module's `Running` means "VM up, bootstrap script executing", not
-/// `BuildStatus::Ready`'s "VM up, waiting for a command" — because a
-/// bootstrap session has no separate `Ready`-then-command step: the whole
-/// script is dispatched as soon as the VM is usable (Task 7).
+/// (session becomes `Running`), a terminal failure, or
+/// [`BUILDER_BOOT_TIMEOUT`] elapses.
+///
+/// Every transition is compare-and-set against `Booting`, so a session that
+/// something else already advanced (a cancel that dropped it, a request that
+/// moved it on) is left alone rather than clobbered by a late tick. Note
+/// this module's `Running` means "VM up, bootstrap script executing", not
+/// "VM up, waiting for a command": a bootstrap session has no separate
+/// ready-then-command step — the whole script is dispatched as soon as the
+/// VM is usable (Task 7).
 pub(crate) async fn watch_bootstrap_boot(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
     let deadline = tokio::time::Instant::now() + BUILDER_BOOT_TIMEOUT;
     loop {
@@ -488,8 +496,7 @@ fn spawn_progress_heartbeat(state: &AppState, bootstrap_id: Uuid) -> tokio::task
 /// an unhandled error is unreachable from the dashboard — its Firecracker
 /// process, TAP device, IP lease and multi-GB disk would all leak with no
 /// in-product way to reclaim them. Same stop-then-delete sequence
-/// `cancel_bootstrap` and `handlers::builds::cancel_build` use, and
-/// best-effort for the same reason: the failure already being reported is
+/// `cancel_bootstrap` uses, and best-effort for the same reason: the failure already being reported is
 /// the one that matters, not a second one raised while cleaning up after it.
 async fn teardown_builder_vm(state: &AppState, vm_id: Uuid, request_id: RequestId) {
     let can_delete_now = state
@@ -526,8 +533,7 @@ async fn teardown_builder_vm(state: &AppState, vm_id: Uuid, request_id: RequestI
 /// (`POST /api/images/{alias}/install`) with no remote package URL involved
 /// — then deletes the builder VM.
 ///
-/// Ordering is load-bearing and mirrors `handlers::builds::run_finalize`:
-/// stop first, package second, delete last.
+/// Ordering is load-bearing: stop first, package second, delete last.
 async fn package_bootstrap(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
     let request_id = RequestId(Uuid::new_v4());
     let Some(session) = state.bootstraps.get(bootstrap_id) else {
@@ -785,9 +791,9 @@ pub async fn get_bootstrap(
 }
 
 /// `DELETE /api/images/bootstrap/{bootstrapId}` — tears down the builder VM
-/// without packaging anything. Mirrors `handlers::builds::cancel_build`
-/// exactly (same stop-then-delete-if-needed sequence, same best-effort
-/// swallowing of VM teardown errors).
+/// without packaging anything: the same stop-then-delete-if-needed sequence
+/// [`teardown_builder_vm`] runs, with VM teardown errors swallowed the same
+/// best-effort way.
 pub async fn cancel_bootstrap(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -820,7 +826,7 @@ mod tests {
     use firecrab_api_types::{BootstrapStep, BootstrapStepOutcome};
 
     /// Registers a fake console+process for `id`, the same way
-    /// `handlers::packages`'s and `handlers::builds`'s own tests do —
+    /// `handlers::packages`'s own tests do —
     /// `run_bootstrap_script` requires a live `VmProcess` to write the
     /// heredoc + sentinel-wait command to, and the test fixture never
     /// actually boots Firecracker.
@@ -882,8 +888,7 @@ mod tests {
     /// reviews. `stop_vm` needs nothing beyond this in-memory state to
     /// succeed (its SIGTERM step is skipped when `state.processes` has no
     /// entry for the VM, and `teardown_vm_network` is best-effort against
-    /// the fixture's always-ok network helper), the same technique
-    /// `handlers::builds`'s own finalize tests use.
+    /// the fixture's always-ok network helper).
     fn seed_builder_vm(state: &AppState, vm_state: VmState) -> crate::model::VmRecord {
         let vm = crate::model::VmRecord {
             state: vm_state,
