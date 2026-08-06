@@ -373,6 +373,51 @@ pub async fn delete_image(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `DELETE /api/images/{alias}/package` — deletes a staged-but-not-installed
+/// local package (`.packages/{alias}.tar.zst`). Independent of `delete_image`
+/// (which only ever acts on an *installed* template): a staged package can be
+/// deleted even for an alias that's still installed, since the staged archive
+/// only feeds a future (re)install and isn't itself load-bearing.
+pub async fn delete_staged_package(
+    State(state): State<AppState>,
+    Path(alias): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<StatusCode, AppError> {
+    // Same alias validation as `get_image_package`.
+    if TemplateRegistry::known_spec(&alias).is_none()
+        && state.templates.resolve_alias(&alias).is_none()
+    {
+        return Err(AppError::not_found(request_id.0));
+    }
+
+    // A download/verify or an install-from-staged may be reading or writing
+    // this exact file right now.
+    if state.image_packages.is_running(&alias) || state.image_installs.is_running(&alias) {
+        return Err(AppError::conflict(
+            "package_in_progress",
+            "cannot delete while a package download or install is running for this template",
+            request_id.0,
+        ));
+    }
+
+    let path = image_install::staged_package_path(state.templates.image_root_path(), &alias);
+    if !path.is_file() {
+        return Err(AppError::conflict(
+            "not_staged",
+            "no staged package exists for this alias",
+            request_id.0,
+        ));
+    }
+
+    if let Err(error) = tokio::fs::remove_file(&path).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            return Err(AppError::internal(request_id.0));
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 use axum::Extension;
 
 #[cfg(test)]
@@ -1113,5 +1158,84 @@ mod tests {
                 .all(|image| image.alias != crate::microboot::MICROBOOT_ALIAS),
             "microboot must never appear in /api/images: {images:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn delete_staged_package_removes_the_staged_archive() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+        );
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, b"pretend tar.zst").unwrap();
+
+        let status = delete_staged_package(
+            State(state),
+            Path("ubuntu-26.04".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(!staged.is_file());
+    }
+
+    #[tokio::test]
+    async fn delete_staged_package_refuses_when_nothing_is_staged() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+
+        let error = delete_staged_package(
+            State(state),
+            Path("ubuntu-26.04".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn delete_staged_package_refuses_while_a_package_download_is_running() {
+        let directory = tempdir().unwrap();
+        let mut state = empty_state(directory.path()).await;
+        state.image_packages = ImageInstallTracker::with_base_url("http://example");
+        state.image_packages.begin("ubuntu-26.04").unwrap();
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+        );
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, b"pretend tar.zst").unwrap();
+
+        let error = delete_staged_package(
+            State(state),
+            Path("ubuntu-26.04".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn delete_staged_package_unknown_alias_is_not_found() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+
+        let error = delete_staged_package(
+            State(state),
+            Path("no-such-alias".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 }

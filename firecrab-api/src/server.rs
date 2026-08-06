@@ -205,7 +205,9 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/images/{alias}/package",
-            get(handlers::images::get_image_package).post(handlers::images::start_image_package),
+            get(handlers::images::get_image_package)
+                .post(handlers::images::start_image_package)
+                .delete(handlers::images::delete_staged_package),
         )
         .route(
             "/api/images/{alias}/bootstrap",
