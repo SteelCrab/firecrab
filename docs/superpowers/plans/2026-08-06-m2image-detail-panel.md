@@ -642,6 +642,51 @@ git commit -m "refactor(frontend): move install/delete actions into the image de
   };
 ```
 
+**왜 이 스텝이 필요한가:** `handleStartBootstrap`이 `startBootstrap(alias)` POST 자체에서 실패하면(네트워크 오류, 또는 이미 다른 부트스트랩이 진행 중이라 백엔드가 409를 반환하는 경우) `bootstrapSession`은 그대로 `null`이거나 이전 alias의 값에 머문다 — 이 alias의 세션이 아직 한 번도 만들어진 적이 없기 때문이다. Step 4에서 만들 에러 표시를 `bootstrapSession?.alias === image.alias`(`bootstrapIsMine`) 조건에 걸면, 세션이 아예 없는 이 실패 케이스에서 조건이 항상 거짓이 되어 **에러가 상태에는 저장되지만 화면 어디에도 뜨지 않는다** — 사용자는 "굽기"를 눌렀는데 버튼이 잠깐 비활성됐다가 아무 설명 없이 다시 "굽기"로 돌아오는 것만 본다. `ImageDetail`은 한 번에 하나의 alias에 대해서만 렌더링되므로, `bootstrapError`를 세션 유무와 무관하게 "지금 열려있는 alias의 것"으로 취급하면 된다 — 선택이 바뀔 때 이전 alias의 남은 에러를 지우기만 하면 충분하다.
+
+Task 2에서 만든 사용 중 VM 조회 effect(`Images()` 안, `selectedAlias`가 바뀔 때 `usedByVms`/`usedByError`를 리셋하는 부분)를 아래처럼 수정해 `bootstrapError`도 같이 리셋한다:
+
+```tsx
+  // MicroNetworks의 `getMicroNetwork(selectedId)`와 같은 패턴 —
+  // 목록 자체엔 없는, 선택 시점의 최신 사용처만 별도로 가져온다.
+  useEffect(() => {
+    if (!selectedAlias) {
+      setUsedByVms(null);
+      setUsedByError(null);
+      return;
+    }
+    setUsedByVms(null);
+    setUsedByError(null);
+    listVms()
+      .then((vms) => setUsedByVms(vms.filter((vm) => vm.template === selectedAlias)))
+      .catch((error) => setUsedByError((error as Error).message));
+  }, [selectedAlias]);
+```
+
+다음으로 교체(맨 앞에 `setBootstrapError(null);` 한 줄 추가 — 이 effect는 이제 "선택이 바뀔 때 그 이전 alias에 딸려있던 화면 상태를 정리한다"는 책임까지 겸한다):
+
+```tsx
+  // MicroNetworks의 `getMicroNetwork(selectedId)`와 같은 패턴 —
+  // 목록 자체엔 없는, 선택 시점의 최신 사용처만 별도로 가져온다.
+  // `bootstrapError`도 함께 리셋: 세션이 아예 안 생긴 채 실패한 경우
+  // `bootstrapSession.alias`로는 "누구 에러인지"를 알 수 없으므로,
+  // 대신 선택이 바뀌는 시점에 이전 alias의 에러를 지우는 방식으로
+  // 항상 "지금 열려있는 alias의 에러"만 남긴다.
+  useEffect(() => {
+    setBootstrapError(null);
+    if (!selectedAlias) {
+      setUsedByVms(null);
+      setUsedByError(null);
+      return;
+    }
+    setUsedByVms(null);
+    setUsedByError(null);
+    listVms()
+      .then((vms) => setUsedByVms(vms.filter((vm) => vm.template === selectedAlias)))
+      .catch((error) => setUsedByError((error as Error).message));
+  }, [selectedAlias]);
+```
+
 - [ ] **Step 3: 이제 안 쓰는 `bootstrapBlockedAliases` 제거**
 
 ```tsx
@@ -794,7 +839,13 @@ function ImageDetail({
         </button>
       </div>
 
-      {bootstrapIsMine && bootstrapError && <div className="field-error">{bootstrapError}</div>}
+      {/* `bootstrapIsMine`으로 걸지 않는다: `startBootstrap` POST 자체가
+          실패하면 이 alias의 세션이 아예 생기지 않아 `bootstrapIsMine`이
+          항상 거짓이 된다(위 Step 2 참고). `ImageDetail`은 한 번에 하나의
+          alias에만 렌더링되고, 선택이 바뀔 때마다 `bootstrapError`가
+          리셋되므로(Step 2의 effect) 이 상태는 항상 "지금 열려있는
+          alias의 에러"다. */}
+      {bootstrapError && <div className="field-error">{bootstrapError}</div>}
 
       {bootstrapIsMine && bootstrapSession && (
         <>
