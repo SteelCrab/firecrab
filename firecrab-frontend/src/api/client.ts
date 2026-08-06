@@ -1,6 +1,7 @@
 import type {
   ApiError,
   AssignVmStorageRequest,
+  BuildResponse,
   CreateMicroNetworkRequest,
   CreateMicroStorageRequest,
   CreateVmRequest,
@@ -272,6 +273,60 @@ export async function deleteMicroNetwork(id: string): Promise<void> {
   let response: Response;
   try {
     response = await fetch(`/api/micro-networks/${id}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+}
+
+/** Boot a builder VM off `alias` (`POST /api/images/{alias}/build`). */
+export function startBuild(alias: string): Promise<BuildResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/build`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+/** List every tracked build session (`GET /api/images/builds`). */
+export function listBuilds(): Promise<BuildResponse[]> {
+  return fetchJson("/api/images/builds");
+}
+
+/** Poll one build session (`GET /api/images/builds/{buildId}`). */
+export function getBuild(buildId: string): Promise<BuildResponse> {
+  return fetchJson(`/api/images/builds/${encodeURIComponent(buildId)}`);
+}
+
+/** Install/remove/update packages on a build session's VM. */
+export function buildPackages(
+  buildId: string,
+  action: PackageAction["action"],
+  packages: string[] = [],
+): Promise<BuildResponse> {
+  return fetchJson(`/api/images/builds/${encodeURIComponent(buildId)}/packages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, packages }),
+  });
+}
+
+/** Register the build's current disk as a template (`POST .../finalize`). */
+export function finalizeBuild(buildId: string, newAlias?: string): Promise<BuildResponse> {
+  return fetchJson(`/api/images/builds/${encodeURIComponent(buildId)}/finalize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ newAlias: newAlias ?? null }),
+  });
+}
+
+/** Cancel a build and delete its builder VM (`DELETE /api/images/builds/{buildId}`). */
+export async function cancelBuild(buildId: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/images/builds/${encodeURIComponent(buildId)}`, { method: "DELETE" });
   } catch (error) {
     throw ApiClientError.transport(transportDetail(error));
   }
