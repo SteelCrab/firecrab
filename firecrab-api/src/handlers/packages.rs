@@ -167,12 +167,21 @@ pub async fn run_package_action(
         .cloned()
         .ok_or_else(|| AppError::vm_not_running(request_id.0))?;
 
-    if let Some(vm) = state
-        .vms
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get_mut(&id)
     {
+        let mut vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vm = vms
+            .get_mut(&id)
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        if matches!(vm.package_update, Some(PackageUpdateStatus::Running)) {
+            return Err(AppError::conflict(
+                "package_update_in_progress",
+                "a package action is already running for this VM",
+                request_id.0,
+            ));
+        }
         vm.package_update = Some(PackageUpdateStatus::Running);
     }
 
@@ -405,6 +414,43 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn update_packages_rejects_when_an_action_is_already_running() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = VmRecord {
+            state: VmState::Running,
+            package_update: Some(PackageUpdateStatus::Running),
+            ..record("test-vm", Uuid::new_v4())
+        };
+        seed_vm(&state, &vm);
+        register_fake_process(&state, vm.id);
+
+        let error = run_package_action(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+            Json(PackageAction {
+                action: PackageActionKind::Update,
+                packages: Vec::new(),
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        assert!(matches!(
+            state
+                .vms
+                .lock()
+                .unwrap()
+                .get(&vm.id)
+                .unwrap()
+                .package_update,
+            Some(PackageUpdateStatus::Running)
+        ));
     }
 
     #[tokio::test]
