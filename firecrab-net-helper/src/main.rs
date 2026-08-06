@@ -480,7 +480,7 @@ mod tests {
     ) -> (PathBuf, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
         let path = dir.path().join("helper.sock");
         let config = Arc::new(
-            HelperConfig::from_values(path.to_str().expect("utf-8 path"), None)
+            HelperConfig::from_values(path.to_str().expect("utf-8 path"), None, bridge::DEFAULT_BRIDGE_MTU)
                 .expect("helper config"),
         );
         let listener = bind_socket(&config.socket_path).expect("bind helper socket");
@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn own_uid_is_allowed_and_configured_uid_is_added() {
-        let config = HelperConfig::from_values("/tmp/x.sock", Some("12345")).expect("config");
+        let config = HelperConfig::from_values("/tmp/x.sock", Some("12345"), bridge::DEFAULT_BRIDGE_MTU).expect("config");
         assert!(config.peer_allowed(effective_uid()));
         assert!(config.peer_allowed(12345));
         assert!(!config.peer_allowed(54321));
@@ -502,7 +502,7 @@ mod tests {
     #[test]
     fn non_numeric_allowed_uid_is_rejected() {
         assert!(matches!(
-            HelperConfig::from_values("/tmp/x.sock", Some("wheel")),
+            HelperConfig::from_values("/tmp/x.sock", Some("wheel"), bridge::DEFAULT_BRIDGE_MTU),
             Err(StartupError::InvalidAllowedUid(_))
         ));
     }
@@ -512,7 +512,7 @@ mod tests {
         // Read-only rtnetlink lookups need no special privilege, so this is
         // safe to run unprivileged: the delete never reaches the point of
         // needing CAP_NET_ADMIN because find_link reports nothing to delete.
-        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU).expect("helper config");
         let request = NetworkRequest::DeleteTap {
             vm_id: Uuid::new_v4(),
         };
@@ -521,7 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn apply_vm_policy_rejects_an_unknown_egress_id_as_invalid_request() {
-        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU).expect("helper config");
         let request = NetworkRequest::ApplyVmPolicy {
             vm_id: Uuid::nil(),
             ipv4: "172.30.0.9".parse().unwrap(),
@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_micro_network_bridge_rejects_an_out_of_range_prefix_as_invalid_request() {
-        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU).expect("helper config");
         for prefix in [0, 7, 31, 32] {
             let request = NetworkRequest::EnsureMicroNetworkBridge {
                 micro_network_id: Uuid::nil(),

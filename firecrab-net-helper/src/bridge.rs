@@ -172,22 +172,22 @@ pub async fn delete_micro_network_bridge(
     let (connection, handle, _) = new_connection().map_err(BridgeError::Connection)?;
     tokio::spawn(connection);
 
-    let mut links = handle.link().get().match_name(name).execute();
+    let mut links = handle.link().get().match_name(name.clone()).execute();
     let link = match links.try_next().await {
         Ok(link) => link,
         Err(rtnetlink::Error::NetlinkError(message)) if message.raw_code() == -libc::ENODEV => None,
         Err(error) => return Err(BridgeError::Netlink(error)),
     };
-    let Some(link) = link else {
-        return Ok(());
-    };
-
-    handle
-        .link()
-        .del(link.header.index)
-        .execute()
-        .await
-        .map_err(BridgeError::Netlink)
+    if let Some(link) = link {
+        handle
+            .link()
+            .del(link.header.index)
+            .execute()
+            .await
+            .map_err(BridgeError::Netlink)?;
+    }
+    crate::firewall::remove_iptables_forward_for_bridge(&name).await;
+    Ok(())
 }
 
 async fn ensure_bridge_for(

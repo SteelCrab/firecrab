@@ -117,6 +117,12 @@ pkg_name() {
         *:iproute2)   echo "iproute2" ;;
         *:nftables)   echo "nftables" ;;
         *:dnsmasq)    echo "dnsmasq" ;;
+        # dhcp_release is shipped separately on Debian/Ubuntu and Alpine.
+        # On RHEL/Fedora it does not exist as a separate package.
+        apt-get:dnsmasq-utils) echo "dnsmasq-utils" ;;
+        apk:dnsmasq-utils)     echo "dnsmasq-utils" ;;
+        dnf:dnsmasq-utils)     echo "dnsmasq" ;;
+        *:dnsmasq-utils)       echo "dnsmasq-utils" ;;
         apk:e2fsprogs) echo "e2fsprogs-extra" ;;
         *:e2fsprogs)  echo "e2fsprogs" ;;
         *:curl)       echo "curl" ;;
@@ -234,6 +240,9 @@ ensure_runtime_deps() {
     ensure ip iproute2   || failed=1
     ensure nft nftables  || failed=1
     ensure dnsmasq dnsmasq || failed=1
+    # dhcp_release releases DHCP leases on VM stop; VMs can still run without
+    # it but leases accumulate until they expire (default 1 h).
+    ensure dhcp_release dnsmasq-utils || warn "dhcp_release not found; install dnsmasq-utils to release leases on VM stop"
     ensure mkfs.ext4 e2fsprogs || failed=1
     ensure curl curl     || failed=1
     ensure find findutils || failed=1
@@ -515,7 +524,8 @@ ensure_images() {
 
 # Enables and starts both units, then confirms they really came up.
 start_units() {
-    $SUDO systemctl enable --now "${UNITS[@]}"
+    $SUDO systemctl enable "${UNITS[@]}"
+    $SUDO systemctl restart "${UNITS[@]}"
     sleep 1
     local failed=0
     for unit in "${UNITS[@]}"; do

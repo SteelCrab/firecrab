@@ -152,6 +152,13 @@ pub async fn ensure_firewall(
     }
 
     run_nft(&ruleset).await?;
+    // Best-effort iptables compat: coexist with Docker's FORWARD DROP policy.
+    ensure_iptables_compat(
+        &bridge_names(micro_networks),
+        &egress_subnet_cidrs(micro_networks),
+        &uplink,
+    )
+    .await;
     // A global (re)apply flushes the tables, so no per-VM policy survives it.
     state.applied_vms.clear();
     state.applied_ruleset = Some(ruleset);
@@ -442,6 +449,67 @@ fn render_remove_ruleset() -> String {
          add table bridge {TABLE_BRIDGE}\n\
          delete table bridge {TABLE_BRIDGE}\n"
     )
+}
+
+/// Best-effort: insert iptables FORWARD ACCEPT rules for every Firecrab bridge
+/// and iptables NAT MASQUERADE rules for every egress subnet. This coexists
+/// with Docker and other tools that configure `iptables -P FORWARD DROP`: our
+/// FORWARD ACCEPT rules are checked with `-C` first (idempotent) and appended
+/// only if absent. All failures are silently ignored — the nftables path is
+/// canonical; this is purely a compatibility shim for iptables-managed hosts.
+async fn ensure_iptables_compat(bridges: &[String], egress_subnets: &[String], uplink: &str) {
+    for bridge in bridges {
+        for dir in ["-i", "-o"] {
+            let already = Command::new("iptables")
+                .args(["-C", "FORWARD", dir, bridge, "-j", "ACCEPT"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !already {
+                let _ = Command::new("iptables")
+                    .args(["-A", "FORWARD", dir, bridge, "-j", "ACCEPT"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await;
+            }
+        }
+    }
+    for subnet in egress_subnets {
+        let already = Command::new("iptables")
+            .args(["-t", "nat", "-C", "POSTROUTING", "-s", subnet, "-o", uplink, "-j", "MASQUERADE"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !already {
+            let _ = Command::new("iptables")
+                .args(["-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-o", uplink, "-j", "MASQUERADE"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+        }
+    }
+}
+
+/// Removes iptables FORWARD ACCEPT rules for a bridge that is being torn down.
+/// Best-effort; silently ignores errors (rule already absent, iptables not
+/// available).
+pub async fn remove_iptables_forward_for_bridge(bridge: &str) {
+    for dir in ["-i", "-o"] {
+        let _ = Command::new("iptables")
+            .args(["-D", "FORWARD", dir, bridge, "-j", "ACCEPT"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
 }
 
 /// Applies `ruleset` as a single atomic transaction: `nft -f -` accepts the
