@@ -701,6 +701,7 @@ mod tests {
         VmRecord {
             id: Uuid::new_v4(),
             name: "test-vm".to_owned(),
+            purpose: crate::model::VmPurpose::Instance,
             state: VmState::Created,
             template: "ubuntu-26.04".to_owned(),
             template_version: "ubuntu-26.04-v1".to_owned(),

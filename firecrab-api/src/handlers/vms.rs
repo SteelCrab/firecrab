@@ -158,6 +158,7 @@ pub async fn create_vm(
     let vm = VmRecord {
         id: Uuid::new_v4(),
         name: req.name,
+        purpose: crate::model::VmPurpose::Instance,
         template: template.name.clone(),
         template_version: template.version.clone(),
         template_kernel_sha256: template.kernel.sha256().to_owned(),
@@ -1363,7 +1364,10 @@ fn sorted_responses(
     vms: &HashMap<Uuid, VmRecord>,
     leases: &HashMap<Uuid, Lease>,
 ) -> Vec<VmResponse> {
-    let mut records: Vec<&VmRecord> = vms.values().collect();
+    let mut records: Vec<&VmRecord> = vms
+        .values()
+        .filter(|vm| vm.purpose == crate::model::VmPurpose::Instance)
+        .collect();
     records.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
     records
         .into_iter()
@@ -1675,6 +1679,7 @@ pub(crate) mod test_support {
         VmRecord {
             id,
             name: name.to_owned(),
+            purpose: crate::model::VmPurpose::Instance,
             state: VmState::Created,
             template: "ubuntu-rootfs-26.04".to_owned(),
             template_version: "v1".to_owned(),
@@ -1857,6 +1862,22 @@ mod tests {
     #[test]
     fn lists_empty_map_as_empty_vec() {
         assert!(sorted_responses(&HashMap::new(), &HashMap::new()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_vms_excludes_builder_purpose_records() {
+        let directory = tempdir().unwrap();
+        let state = test_support::test_state(directory.path()).await;
+        let mut builder_vm = test_support::record("hidden-builder", Uuid::new_v4());
+        builder_vm.purpose = crate::model::VmPurpose::Builder;
+        test_support::seed_vm(&state, &builder_vm);
+        let instance_vm = test_support::record("visible-instance", Uuid::new_v4());
+        test_support::seed_vm(&state, &instance_vm);
+
+        let Json(listed) = list_vms(State(state)).await;
+
+        assert!(listed.iter().any(|vm| vm.id == instance_vm.id));
+        assert!(!listed.iter().any(|vm| vm.id == builder_vm.id));
     }
 
     fn memory_state(state: &AppState, id: Uuid) -> Option<VmState> {

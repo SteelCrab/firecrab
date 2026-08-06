@@ -39,33 +39,34 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     micro_network_id TEXT,
     storage_root TEXT NOT NULL DEFAULT 'default',
     disk_generation TEXT,
-    last_runtime_id TEXT
+    last_runtime_id TEXT,
+    purpose TEXT NOT NULL DEFAULT 'instance'
 ) STRICT";
 
 /// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id FROM vms";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose FROM vms";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
 
 /// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
     template_boot_args_sha256, cpu, ram, disk_gb, egress_policy, micro_network_id, storage_root, \
-    disk_generation, last_runtime_id) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
+    disk_generation, last_runtime_id, purpose) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
 
 /// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12, \
-    micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16 \
-    WHERE id = ?1";
+    micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16, \
+    purpose = ?17 WHERE id = ?1";
 
 /// Schema for the `micro_networks` table (`docs/30-tasks/task-micro-network.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
@@ -188,6 +189,21 @@ fn migrate_disk_generation_columns(conn: &Connection) -> Result<(), PersistenceE
         if !has_column {
             conn.execute(sql, [])?;
         }
+    }
+    Ok(())
+}
+
+/// Adds `purpose` to a `vms` table created before it existed. `'instance'`
+/// matches the only kind of VM that could exist before builder VMs did.
+fn migrate_purpose_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let has_column: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name = 'purpose'")?
+        .exists([])?;
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE vms ADD COLUMN purpose TEXT NOT NULL DEFAULT 'instance'",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -386,6 +402,7 @@ impl Store {
         migrate_micro_network_columns(&conn)?;
         migrate_storage_root_column(&conn)?;
         migrate_disk_generation_columns(&conn)?;
+        migrate_purpose_column(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
             conn.execute(index_sql, [])?;
@@ -425,6 +442,7 @@ impl Store {
                 VmRecord {
                     id,
                     name: row.get(1)?,
+                    purpose: decode_purpose(&id_text, &row.get::<_, String>(16)?)?,
                     state: decode_state(&id_text, &state_text)?,
                     template: row.get(3)?,
                     template_version: row.get(4)?,
@@ -807,6 +825,7 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.storage_root,
             vm.disk_generation.map(|id| id.to_string()),
             vm.last_runtime_id.map(|id| id.to_string()),
+            vm.purpose.id(),
         ],
     )
 }
@@ -873,6 +892,19 @@ fn decode_egress_policy(
     })
 }
 
+/// Inverse of `VmPurpose::id`; fails on any string that isn't a known
+/// purpose id.
+fn decode_purpose(id: &str, purpose: &str) -> Result<crate::model::VmPurpose, PersistenceError> {
+    match purpose {
+        "instance" => Ok(crate::model::VmPurpose::Instance),
+        "builder" => Ok(crate::model::VmPurpose::Builder),
+        other => Err(PersistenceError::CorruptRecord {
+            id: id.to_owned(),
+            reason: format!("unknown purpose {other:?}"),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
@@ -883,6 +915,7 @@ mod tests {
         VmRecord {
             id,
             name: name.to_owned(),
+            purpose: crate::model::VmPurpose::Instance,
             state: VmState::Created,
             template: "ubuntu-26.04".to_owned(),
             template_version: "ubuntu-26.04-v1".to_owned(),
@@ -1086,6 +1119,18 @@ mod tests {
             store.set_micro_network_internet(id, false).unwrap_err(),
             PersistenceError::MissingMicroNetwork { id: missing } if missing == id
         ));
+    }
+
+    #[test]
+    fn purpose_round_trips_through_insert_and_load() {
+        let dir = tempdir().unwrap();
+        let store = Store::open(&dir.path().join("test.db")).unwrap();
+        let mut vm = record(Uuid::new_v4(), "builder-vm");
+        vm.purpose = crate::model::VmPurpose::Builder;
+        store.insert(&vm).unwrap();
+
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded[&vm.id].purpose, crate::model::VmPurpose::Builder);
     }
 
     #[test]

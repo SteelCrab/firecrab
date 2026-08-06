@@ -27,6 +27,29 @@ pub struct Lease {
     pub mac: MacAddr,
 }
 
+/// What a VM record represents. Only `Builder` VMs are hidden from the
+/// dashboard's normal list — everything else about their lifecycle (start,
+/// console, stop, delete) is identical to a user-created instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VmPurpose {
+    /// A user-created VM, shown in the normal MicroVM list.
+    #[default]
+    Instance,
+    /// A short-lived VM driving an image build (`handlers::builds`) — never
+    /// shown in `list_vms`, only in `GET /api/images/builds`.
+    Builder,
+}
+
+impl VmPurpose {
+    pub fn id(self) -> &'static str {
+        match self {
+            VmPurpose::Instance => "instance",
+            VmPurpose::Builder => "builder",
+        }
+    }
+}
+
 /// The full server-side VM record, persisted in [`crate::persistence::Store`]
 /// — a superset of [`firecrab_api_types::VmResponse`] with fields (template
 /// artifact hashes) the API response never exposes.
@@ -36,6 +59,10 @@ pub struct VmRecord {
     pub id: Uuid,
     /// User-supplied name.
     pub name: String,
+    /// What this record represents — see [VmPurpose]. `#[serde(default)]`
+    /// because legacy `vms.json` records predate this field.
+    #[serde(default)]
+    pub purpose: VmPurpose,
     /// Current lifecycle state.
     pub state: VmState,
     /// Template alias this VM was created from.
