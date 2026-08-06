@@ -726,6 +726,11 @@ async fn finish_run_start(
     // default virtio-mmio transport. Capture this before the template Arc is
     // moved into the blocking disk/configuration task below.
     let enable_pci = template.requires_pci_transport();
+    // Same reasoning as `enable_pci` above: `template` is moved into the
+    // spawn_blocking closure below, so anything this function still needs
+    // afterward — like gating the network-ready wait on MicroBoot below —
+    // has to be captured before that move, not read off `template` again.
+    let is_microboot = template.name == crate::microboot::MICROBOOT_ALIAS;
     // Bounds how many VMs copy/grow a rootfs disk at once — see
     // `DISK_PREP_CONCURRENCY`'s doc comment. Held across the blocking task
     // below, released once that VM's disk+config are ready.
@@ -820,12 +825,22 @@ async fn finish_run_start(
     .map_err(|error| error.to_string())?;
 
     set_startup_step(state, vm.id, StartupStep::ConfiguringNetwork);
-    // Not registered with register_and_watch yet, so `process` dropping on
-    // an early return here still kills it (spawn_vm's Command sets
-    // kill_on_drop) — no separate cleanup needed on this path.
-    wait_for_network_ready(process.console(), state.runtime.network_ready_timeout)
-        .await
-        .map_err(|error| format!("network readiness check failed: {error}"))?;
+    // MicroBoot's guest never gets past a bare Alpine recovery shell (see
+    // crate::microboot's doc comment) — nothing there can ever print the
+    // FIRECRAB_NETWORK_READY sentinel a real template's own baked-in
+    // network-ready service normally does, so waiting for it here would
+    // just fail every MicroBoot-templated VM after network_ready_timeout.
+    // The guest scripts bring their own interface up manually instead
+    // (`handlers::bootstrap`'s pushed script); this only skips the host's
+    // passive wait, not networking itself.
+    if !is_microboot {
+        // Not registered with register_and_watch yet, so `process` dropping
+        // on an early return here still kills it (spawn_vm's Command sets
+        // kill_on_drop) — no separate cleanup needed on this path.
+        wait_for_network_ready(process.console(), state.runtime.network_ready_timeout)
+            .await
+            .map_err(|error| format!("network readiness check failed: {error}"))?;
+    }
 
     Ok(process)
 }
@@ -1780,11 +1795,14 @@ mod tests {
     use axum::response::IntoResponse;
     use tempfile::tempdir;
 
+    use std::path::PathBuf;
+
     use super::test_support::{record, seed_vm, test_state, test_state_with_binary};
     use super::*;
     use crate::firecracker::test_support::{
         SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, process_alive, short_tempdir,
     };
+    use crate::templates::TemplateSpec;
 
     #[test]
     fn validates_vm_names() {
@@ -2215,6 +2233,63 @@ mod tests {
             .position(|run| run.outcome == StartupStepOutcome::Failed)
             .unwrap();
         assert_eq!(failed_index, timeline.len() - 1);
+    }
+
+    /// Unlike `SERVE_LOOP`, deliberately never prints `FIRECRAB_NETWORK_READY`
+    /// — a real MicroBoot guest never can (crate::microboot's doc comment),
+    /// so a VM templated `__microboot` must reach `Running` without it.
+    const SERVE_LOOP_NO_NETWORK_SENTINEL: &str = r#"
+print("booted", flush=True)
+srv = socket.socket(socket.AF_UNIX)
+srv.bind(sock_path)
+srv.listen(1)
+while True:
+    conn, _ = srv.accept()
+    conn.recv(1024)
+    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+    conn.close()
+"#;
+
+    #[tokio::test]
+    async fn starting_a_vm_templated_as_microboot_skips_the_network_ready_wait() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(root, SERVE_LOOP_NO_NETWORK_SENTINEL);
+        let state = test_state_with_binary(root, binary).await;
+        // test_state_with_binary already wrote real kernel/rootfs fixture
+        // files at root/"kernel" and root/"rootfs" for "ubuntu-rootfs-26.04"
+        // — register a second alias, __microboot, pointing at those same
+        // verified files, so this test proves the *template name* is what
+        // gates the skip, without needing crate::microboot's real network
+        // download.
+        state
+            .templates
+            .register_spec(TemplateSpec {
+                alias: crate::microboot::MICROBOOT_ALIAS.to_owned(),
+                version: "v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: "console=ttyS0 reboot=k".to_owned(),
+            })
+            .unwrap();
+        let mut vm = record("microboot-builder", Uuid::new_v4());
+        vm.template = crate::microboot::MICROBOOT_ALIAS.to_owned();
+        seed_vm(&state, &vm);
+
+        let Json(started) = tokio::time::timeout(
+            Duration::from_secs(2),
+            start_vm(
+                State(state.clone()),
+                Extension(RequestId(Uuid::new_v4())),
+                axum::extract::Path(vm.id.to_string()),
+            ),
+        )
+        .await
+        .expect("start_vm should not hang waiting on a network-ready sentinel that never arrives")
+        .unwrap();
+
+        assert_eq!(started.state, VmState::Running);
     }
 
     #[tokio::test]
