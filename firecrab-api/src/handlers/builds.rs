@@ -205,4 +205,27 @@ mod tests {
         let Json(listed) = crate::handlers::vms::list_vms(State(state)).await;
         assert!(!listed.iter().any(|vm| vm.id == build.vm_id));
     }
+
+    #[tokio::test]
+    async fn start_build_reports_unavailable_when_no_internet_micro_network_exists() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        // Deliberately no `seed_internet_micro_network` call here — this
+        // exercises `builder_micro_network_id`'s "no internet-enabled
+        // MicroNetwork exists" branch, which every other test in this
+        // module sidesteps by seeding one.
+
+        let error = start_build(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("ubuntu-rootfs-26.04".to_owned()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 }
