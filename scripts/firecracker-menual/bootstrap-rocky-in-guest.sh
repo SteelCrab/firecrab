@@ -1,13 +1,18 @@
 #!/bin/sh
-# Runs entirely inside a firecrab builder VM that is itself already
-# rocky-9 (enforced by handlers::bootstrap::requires_matching_source,
-# since this needs dnf already present in the outer guest — unlike
-# Alpine/Ubuntu, Rocky has no minimal base tarball with its own bundled
-# package manager to chroot into first). Adapted from
-# install-rocky-rootfs.sh's write_configure_script, minus the outer
-# `docker run --cap-add=SYS_ADMIN ...` wrapper — a real microVM guest
-# already has mount/chroot natively, no capability grant needed.
+# Runs entirely inside a firecrab MicroBoot builder VM (Alpine's own
+# recovery shell — see crate::microboot's doc comment), not inside an
+# installed rocky-9 template. Rocky's dnf/rpm are glibc binaries the
+# musl-based outer shell can't run directly, so this script downloads
+# Rocky's own official Container-Base image and chroots into it first —
+# everything from that point on (dnf --installroot into $staging) is
+# unchanged from install-rocky-rootfs.sh's own write_configure_script,
+# minus its outer `docker run --cap-add=SYS_ADMIN ...` wrapper.
 set -eu
+
+udhcpc -i eth0 -n -q >/dev/null 2>&1 || {
+  printf '[FAIL] %s\n' 'could not obtain a DHCP lease on eth0' >&2
+  exit 1
+}
 
 work=/root/fc-bootstrap
 staging="$work/staging"
@@ -32,7 +37,7 @@ trap cleanup_chroot_mounts EXIT
 
 mount_chroot_fs() {
   mount -t proc proc "$staging/proc"
-  chroot_mounts="$staging/proc"
+  chroot_mounts="$staging/proc $chroot_mounts"
   mount --rbind /sys "$staging/sys"
   mount --make-rslave "$staging/sys"
   chroot_mounts="$staging/sys $chroot_mounts"
@@ -48,14 +53,69 @@ rm -rf "$work"
 mkdir -p "$staging/etc/pki" "$staging/dev" "$staging/proc" "$staging/sys" "$staging/run" "$out"
 cp -a /etc/pki/rpm-gpg "$staging/etc/pki/"
 
+# Rocky's dnf/rpm are glibc binaries; MicroBoot's outer shell is Alpine
+# (musl) and cannot run them directly (verified live: dnf/rpm exist inside
+# the extracted Container-Base but exec fails from outside a matching
+# libc environment). Download Rocky's own official Container-Base — the
+# same artifact `docker pull rockylinux:9` resolves to — and chroot into
+# IT first, so the dnf that actually runs below is Rocky's own, under its
+# own glibc. This container_root is discarded once dnf finishes (it never
+# becomes part of the target rootfs in $staging).
+container_root="$work/container-base"
+container_archive="$work/rocky-container-base.tar.xz"
+mkdir -p "$container_root"
+
+info 'installing e2fsprogs and container tooling into the outer (MicroBoot) shell'
+apk add --no-cache --repository 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' \
+  e2fsprogs jq \
+  || fail 'could not install e2fsprogs/jq into the outer shell'
+
+info 'downloading Rocky 9 Container-Base'
+curl -fsSL 'https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-Container-Base.latest.x86_64.tar.xz' \
+  -o "$container_archive" || fail 'could not download Rocky Container-Base'
+
+# Container-Base is an OCI image layout (blobs/sha256/... + index.json),
+# not a flat rootfs tarball — verified live. It has exactly one manifest
+# and one layer; extract that one layer's tar+gzip blob directly rather
+# than pulling in full OCI tooling for a single-layer image.
+oci_dir="$work/container-oci"
+mkdir -p "$oci_dir"
+tar -xJf "$container_archive" -C "$oci_dir"
+manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' "$oci_dir/index.json")
+[ -n "$manifest_digest" ] && [ "$manifest_digest" != null ] \
+  || fail 'could not read Container-Base manifest digest from index.json'
+layer_digest=$(jq -r '.layers[0].digest | sub("^sha256:"; "")' "$oci_dir/blobs/sha256/$manifest_digest")
+[ -n "$layer_digest" ] && [ "$layer_digest" != null ] \
+  || fail 'could not read Container-Base layer digest from its manifest'
+
+info 'extracting Rocky 9 Container-Base'
+tar -xzf "$oci_dir/blobs/sha256/$layer_digest" -C "$container_root"
+test -x "$container_root/usr/bin/rpm" || fail 'Container-Base is missing usr/bin/rpm'
+test -e "$container_root/usr/bin/dnf" || fail 'Container-Base is missing usr/bin/dnf'
+
+mount -t proc proc "$container_root/proc"
+mount --rbind /sys "$container_root/sys"
+mount --make-rslave "$container_root/sys"
+mount --rbind /dev "$container_root/dev"
+mount --make-rslave "$container_root/dev"
+cp /etc/resolv.conf "$container_root/etc/resolv.conf" 2>/dev/null || true
+chroot_mounts="$container_root/proc $container_root/sys $container_root/dev $chroot_mounts"
+
 dnf_common="--disablerepo=* --enablerepo=baseos,appstream --setopt=baseos.mirrorlist= --setopt=baseos.baseurl=${baseos_url} --setopt=appstream.mirrorlist= --setopt=appstream.baseurl=${appstream_url} --setopt=install_weak_deps=False --setopt=keepcache=False"
 
 info 'installing Rocky Linux 9 guest packages into the staging root'
 mount_chroot_fs
+# Bind the in-progress target root and dnf's repo config into the
+# Container-Base chroot so `chroot "$container_root" dnf --installroot=...`
+# can see and populate $staging exactly as a native `dnf` invocation would.
+mkdir -p "$container_root$staging" "$container_root/etc/yum.repos.d"
+mount --rbind "$staging" "$container_root$staging"
+mount --make-rslave "$container_root$staging"
+chroot_mounts="$container_root$staging $chroot_mounts"
 # package/flag lists are deliberate whitespace lists.
 # shellcheck disable=SC2086
-dnf -q -y --installroot="$staging" --releasever=9 --setopt=reposdir=/etc/yum.repos.d \
-  $dnf_common install $rootfs_packages
+chroot "$container_root" dnf -q -y --installroot="$staging" --releasever=9 \
+  --setopt=reposdir=/etc/yum.repos.d $dnf_common install $rootfs_packages
 
 rm -rf "$staging/var/cache/dnf" "$staging/var/log/dnf"* "$staging/var/cache/yum" "$staging/var/log/yum"* 2>/dev/null || true
 
@@ -190,14 +250,24 @@ truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
 mkfs.ext4 -F -L rootfs -d "$staging" "$out/rootfs.ext4.tmp"
 mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 
-# Everything under $out is read back off this VM's *block device* by the
-# host (`rootfs::dump_from_image` via debugfs) once the VM is stopped, so
-# the guest's page cache must be flushed to the device before this script
-# exits — otherwise the host reads a truncated or entirely absent file and
-# packages it as if it were a complete rootfs.
+# MicroBoot boots off its own initrd (RAM), not off /dev/vda — nothing
+# under $work persists once this VM stops. Wrap the whole finished $out
+# directory (rootfs.ext4 + the raw kernel/initrd files) directly onto the
+# real block device as its own ext4 filesystem, so the host's
+# debugfs-based dump (`rootfs::dump_from_image`) can read them back at
+# their root (e.g. /rootfs.ext4, not /root/fc-bootstrap/out/rootfs.ext4)
+# after this VM is stopped.
+info 'publishing $out onto /dev/vda'
+mkfs.ext4 -F -L fcbootout -d "$out" /dev/vda
+
+# Everything on /dev/vda is read back by the host
+# (`rootfs::dump_from_image` via debugfs) once the VM is stopped, so the
+# guest's page cache must be flushed to the device before this script
+# exits — otherwise the host reads a truncated or entirely absent image
+# and packages it as if it were complete.
 sync
 
 # Same reasoning as the Alpine/Ubuntu scripts: extract-vmlinux runs on the
-# HOST (Task 8) against $out/vmlinuz-raw once it's dumped out of this
-# guest's own disk.
+# HOST against vmlinuz-raw once it's been dumped off this guest's own
+# disk.
 info 'bootstrap complete'
