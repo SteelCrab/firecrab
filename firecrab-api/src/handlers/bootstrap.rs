@@ -84,16 +84,6 @@ fn script_for(alias: &str) -> &'static str {
     }
 }
 
-/// Alpine and Ubuntu bootstrap by chrooting into a freshly-downloaded base
-/// that carries its own package manager, so any installed template can
-/// serve as the outer builder environment. Rocky's bootstrap needs `dnf`
-/// already present in the *outer* guest (see
-/// `scripts/firecracker-menual/bootstrap-rocky-in-guest.sh`'s doc comment),
-/// so its own builder VM must itself already be `rocky-9`.
-fn requires_matching_source(target_alias: &str) -> bool {
-    target_alias == "rocky-9"
-}
-
 /// `POST /api/images/{alias}/bootstrap` — boots a builder VM off any
 /// already-installed template and registers a new bootstrap session for
 /// `alias`. Returns immediately, same convention as `start_build`; the
@@ -121,7 +111,7 @@ pub async fn start_bootstrap(
         ));
     }
 
-    let source_alias = pick_builder_source(&state, &alias, request_id.0)?;
+    let source_alias = pick_builder_source(&state, request_id.0).await?;
     let source = state
         .templates
         .resolve_alias(&source_alias)
@@ -204,35 +194,31 @@ fn bootstrap_disk_gb(target_alias: &str) -> u16 {
     }
 }
 
-/// Picks an already-installed template to boot as the builder VM.
-/// `requires_matching_source` narrows this to the target itself for
-/// aliases whose bootstrap needs the outer guest to already have that
-/// distro's own package manager (currently just `rocky-9`, see its own
-/// doc comment) — everything else accepts any installed alias, preferring
-/// the smallest rootfs since it boots fastest.
-fn pick_builder_source(
-    state: &AppState,
-    target_alias: &str,
-    request_id: Uuid,
-) -> Result<String, AppError> {
-    let candidates = state.templates.list_aliases();
-    let mut eligible: Vec<_> = candidates
-        .into_iter()
-        .filter(|version| !requires_matching_source(target_alias) || version.name == target_alias)
-        .collect();
-    eligible.sort_by_key(|version| version.rootfs.length());
-
-    eligible
-        .into_iter()
-        .next()
-        .map(|version| version.name.clone())
-        .ok_or_else(|| {
+/// Ensures the shared MicroBoot builder source is downloaded, converted and
+/// registered (a no-op after the first call — see `crate::microboot`'s own
+/// doc comment), and returns its alias for `CreateVmRequest.template`. No
+/// longer depends on any template being installed: this is what closes the
+/// bootstrap boundary `docs/superpowers/specs/2026-08-03-m2image-web-rebuild-design.md`
+/// left open (`docs/superpowers/specs/2026-08-05-m2image-microboot-design.md`).
+///
+/// `ensure_registered`'s failure detail is a dynamic `String` (a download or
+/// filesystem error), while `AppError::unavailable` takes a `&'static str`
+/// message (every other `AppError` constructor in this crate does too — see
+/// `error.rs`) — so, matching the convention `handlers::micro_networks` and
+/// `handlers::vms` already use for dynamic failures, the real reason is
+/// logged via `tracing::error!` and the client gets a fixed, still-actionable
+/// message instead.
+async fn pick_builder_source(state: &AppState, request_id: Uuid) -> Result<String, AppError> {
+    crate::microboot::ensure_registered(state)
+        .await
+        .map_err(|reason| {
+            tracing::error!(
+                request_id = %request_id,
+                reason,
+                "failed to prepare the MicroBoot builder source"
+            );
             AppError::unavailable(
-                if requires_matching_source(target_alias) {
-                    "bootstrapping rocky-9 needs rocky-9 already installed to provide dnf — install it first"
-                } else {
-                    "no template is installed yet to serve as the builder VM — install one first"
-                },
+                "failed to prepare the MicroBoot builder source for bootstrapping — see server logs",
                 request_id,
             )
         })
@@ -1212,23 +1198,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_bootstrap_rejects_when_no_matching_source_is_installed() {
+    async fn start_bootstrap_succeeds_with_no_installed_templates_once_microboot_is_registered() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
         crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
+        // test_state's one registered template, "ubuntu-rootfs-26.04", isn't
+        // any of the 3 bootstrap-target aliases and (before this task)
+        // wouldn't have satisfied rocky-9's old matching-source rule either
+        // — this fixture is deliberately unchanged from the test it
+        // replaces, to prove the same "no real target template installed"
+        // situation that used to 503 now succeeds. Register __microboot
+        // directly (mirroring Task 1's own registration test) rather than
+        // exercising a real network download here.
+        state
+            .templates
+            .register_spec(crate::templates::TemplateSpec {
+                alias: crate::microboot::MICROBOOT_ALIAS.to_owned(),
+                version: "v1".to_owned(),
+                kernel: std::path::PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: std::path::PathBuf::from("rootfs"),
+                boot_args: "console=ttyS0 reboot=k".to_owned(),
+            })
+            .unwrap();
 
-        let error = start_bootstrap(
+        let (status, Json(session)) = start_bootstrap(
             State(state),
             Extension(RequestId(Uuid::new_v4())),
             Path("rocky-9".to_owned()),
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(
-            error.into_response().status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(session.alias, "rocky-9");
     }
 
     #[tokio::test]

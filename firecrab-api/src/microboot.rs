@@ -49,10 +49,9 @@ fn rootfs_placeholder_relative() -> PathBuf {
 ///
 /// Returns the alias to pass as `CreateVmRequest.template` — always
 /// `MICROBOOT_ALIAS` on success.
-// Not yet called from `handlers::bootstrap::pick_builder_source` — that
-// wiring lands in a later task of this plan. Until then nothing in this
-// crate calls the production path, only the tests below.
-#[allow(dead_code)]
+///
+/// Called from `handlers::bootstrap::pick_builder_source`, which is now the
+/// only thing that decides a bootstrap's builder-VM source.
 pub(crate) async fn ensure_registered(state: &AppState) -> Result<String, String> {
     if state.templates.resolve_alias(MICROBOOT_ALIAS).is_some() {
         return Ok(MICROBOOT_ALIAS.to_owned());
