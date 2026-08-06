@@ -208,10 +208,14 @@ mod tests {
             })
             .expect("register fixture spec");
 
-        assert!(registry.resolve_alias(MICROBOOT_ALIAS).is_some());
-        // ensure_registered's fast path only needs `state.templates` to
-        // already resolve the alias — assert that resolution directly
-        // rather than constructing a full AppState (which needs a live
-        // store/runtime this unit test has no reason to stand up).
+        let state = crate::state::AppState::with_db_file(registry, dir.path().join("state.db"))
+            .await
+            .expect("build minimal AppState");
+
+        // The fast path returns before any network call, so this exercises
+        // ensure_registered itself with zero real downloads.
+        let result = ensure_registered(&state).await;
+
+        assert_eq!(result, Ok(MICROBOOT_ALIAS.to_owned()));
     }
 }
