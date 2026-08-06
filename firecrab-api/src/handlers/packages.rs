@@ -236,6 +236,17 @@ pub(crate) async fn wait_for_completion(
     receiver: &mut broadcast::Receiver<Vec<u8>>,
     timeout: Duration,
 ) -> Result<(i32, String), String> {
+    wait_for_completion_with_sentinel(receiver, timeout, DONE_SENTINEL).await
+}
+
+/// Same as [`wait_for_completion`] but against an arbitrary sentinel string
+/// — `handlers::bootstrap` uses its own distinct sentinel so a bootstrap's
+/// completion can never be confused with a package action's.
+pub(crate) async fn wait_for_completion_with_sentinel(
+    receiver: &mut broadcast::Receiver<Vec<u8>>,
+    timeout: Duration,
+    sentinel: &str,
+) -> Result<(i32, String), String> {
     let mut tail = Vec::new();
     let wait = async {
         loop {
@@ -246,7 +257,7 @@ pub(crate) async fn wait_for_completion(
                         let excess = tail.len() - OUTPUT_TAIL_CAP;
                         tail.drain(..excess);
                     }
-                    if let Some(code) = find_done_sentinel(&tail) {
+                    if let Some(code) = find_sentinel(&tail, sentinel) {
                         return Ok((code, String::from_utf8_lossy(&tail).into_owned()));
                     }
                 }
@@ -267,14 +278,14 @@ pub(crate) async fn wait_for_completion(
         .unwrap_or_else(|_| Err("timed out waiting for the update to finish".to_owned()))
 }
 
-/// Finds the last complete `FIRECRAB_PKG_UPDATE_DONE:<code>` line in
-/// `buffer` and parses its exit code. The literal command text itself
-/// (echoed back as it's typed, containing the unexpanded `$?`) never
-/// parses as a number, so it can't be mistaken for the real result.
-pub(crate) fn find_done_sentinel(buffer: &[u8]) -> Option<i32> {
+/// Finds the last complete `<sentinel>:<code>` line in `buffer` and parses
+/// its exit code. The literal command text itself (echoed back as it's
+/// typed, containing the unexpanded `$?`) never parses as a number, so it
+/// can't be mistaken for the real result.
+pub(crate) fn find_sentinel(buffer: &[u8], sentinel: &str) -> Option<i32> {
     let text = String::from_utf8_lossy(buffer);
     text.lines().rev().find_map(|line| {
-        let (_, rest) = line.split_once(DONE_SENTINEL)?;
+        let (_, rest) = line.split_once(sentinel)?;
         rest.trim_start_matches(':').trim().parse().ok()
     })
 }
@@ -545,20 +556,23 @@ mod tests {
         let buffer = b"Reading package lists...\n\
             echo \"FIRECRAB_PKG_UPDATE_DONE:$?\"\n\
             FIRECRAB_PKG_UPDATE_DONE:0\n";
-        assert_eq!(find_done_sentinel(buffer), Some(0));
+        assert_eq!(find_sentinel(buffer, DONE_SENTINEL), Some(0));
     }
 
     #[test]
     fn find_done_sentinel_reports_a_nonzero_exit_code() {
         assert_eq!(
-            find_done_sentinel(b"FIRECRAB_PKG_UPDATE_DONE:100\n"),
+            find_sentinel(b"FIRECRAB_PKG_UPDATE_DONE:100\n", DONE_SENTINEL),
             Some(100)
         );
     }
 
     #[test]
     fn find_done_sentinel_is_none_before_the_command_finishes() {
-        assert_eq!(find_done_sentinel(b"Reading package lists...\n"), None);
+        assert_eq!(
+            find_sentinel(b"Reading package lists...\n", DONE_SENTINEL),
+            None
+        );
     }
 
     #[tokio::test]

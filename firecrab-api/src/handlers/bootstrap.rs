@@ -37,6 +37,34 @@ const BUILDER_BOOT_TIMEOUT: Duration = Duration::from_secs(600);
 /// guest script (Task 6 covers exactly these 3, no more).
 const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24", "ubuntu-26.04", "rocky-9"];
 
+/// Sentinel the pushed script prints once it's done, followed by `:` and
+/// its exit code — same shape as `packages::DONE_SENTINEL`, kept as its
+/// own distinct string so a bootstrap's completion can never be confused
+/// with an unrelated package action finishing on the same console.
+const BOOTSTRAP_DONE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_DONE";
+
+/// How long the guest-side bootstrap script may run before this module
+/// gives up waiting — real network downloads (hundreds of MB) plus a real
+/// package install, so far more generous than
+/// `packages::PACKAGE_UPDATE_TIMEOUT`.
+const BOOTSTRAP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(1800);
+
+const ALPINE_SCRIPT: &str =
+    include_str!("../../../scripts/firecracker-menual/bootstrap-alpine-in-guest.sh");
+const UBUNTU_SCRIPT: &str =
+    include_str!("../../../scripts/firecracker-menual/bootstrap-ubuntu-in-guest.sh");
+const ROCKY_SCRIPT: &str =
+    include_str!("../../../scripts/firecracker-menual/bootstrap-rocky-in-guest.sh");
+
+fn script_for(alias: &str) -> &'static str {
+    match alias {
+        "alpine-3.24" => ALPINE_SCRIPT,
+        "ubuntu-26.04" => UBUNTU_SCRIPT,
+        "rocky-9" => ROCKY_SCRIPT,
+        other => unreachable!("start_bootstrap already rejected unknown alias {other}"),
+    }
+}
+
 /// Alpine and Ubuntu bootstrap by chrooting into a freshly-downloaded base
 /// that carries its own package manager, so any installed template can
 /// serve as the outer builder environment. Rocky's bootstrap needs `dnf`
@@ -195,11 +223,16 @@ pub(crate) async fn watch_bootstrap_boot(state: &AppState, bootstrap_id: Uuid, v
                     bootstrap_id,
                     "builder VM is running — starting bootstrap script",
                 );
-                state.bootstraps.set_status_from(
+                if state.bootstraps.set_status_from(
                     bootstrap_id,
                     BootstrapStatus::Booting,
                     BootstrapStatus::Running,
-                );
+                ) {
+                    let state_for_script = state.clone();
+                    tokio::spawn(async move {
+                        run_bootstrap_script(&state_for_script, bootstrap_id, vm_id).await;
+                    });
+                }
                 return;
             }
             Some(state_now @ (VmState::Error | VmState::Stopped)) => {
@@ -229,13 +262,129 @@ pub(crate) async fn watch_bootstrap_boot(state: &AppState, bootstrap_id: Uuid, v
     }
 }
 
+/// Writes the guest-native bootstrap script for `state.bootstraps.get(id).alias`
+/// to the builder VM's console as a single heredoc (so the whole script
+/// lands as one shell invocation — no chunking or base64 needed, since
+/// `write_input` writes raw bytes to the guest's stdin pipe and the
+/// guest's own shell parses embedded newlines exactly the way it would
+/// typed input, including multi-line constructs), waits for
+/// [`BOOTSTRAP_DONE_SENTINEL`], and advances the session on success.
+pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
+    let Some(session) = state.bootstraps.get(bootstrap_id) else {
+        return;
+    };
+    let script = script_for(&session.alias);
+
+    let Some(process) = state
+        .processes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&vm_id)
+        .cloned()
+    else {
+        state.bootstraps.finish_err_from(
+            bootstrap_id,
+            BootstrapStatus::Running,
+            "builder VM's console process is no longer available",
+        );
+        return;
+    };
+
+    let (_backlog, mut receiver) = process.console.subscribe();
+    let heredoc = format!(
+        "cat > /root/fc-bootstrap.sh <<'FIRECRAB_BOOTSTRAP_SCRIPT_EOF'\n{script}\nFIRECRAB_BOOTSTRAP_SCRIPT_EOF\nsh /root/fc-bootstrap.sh; echo \"{BOOTSTRAP_DONE_SENTINEL}:$?\"\n"
+    );
+    process.console.write_input(heredoc.as_bytes()).await;
+
+    match super::packages::wait_for_completion_with_sentinel(
+        &mut receiver,
+        BOOTSTRAP_SCRIPT_TIMEOUT,
+        BOOTSTRAP_DONE_SENTINEL,
+    )
+    .await
+    {
+        Ok((0, tail)) => {
+            state.bootstraps.append_log(bootstrap_id, tail);
+            if state.bootstraps.set_status_from(
+                bootstrap_id,
+                BootstrapStatus::Running,
+                BootstrapStatus::Packaging,
+            ) {
+                let state_for_package = state.clone();
+                tokio::spawn(async move {
+                    package_bootstrap(&state_for_package, bootstrap_id, vm_id).await;
+                });
+            }
+        }
+        Ok((code, tail)) => {
+            state.bootstraps.finish_err_from(
+                bootstrap_id,
+                BootstrapStatus::Running,
+                format!("bootstrap script exited with code {code}\n{tail}"),
+            );
+        }
+        Err(reason) => {
+            state
+                .bootstraps
+                .finish_err_from(bootstrap_id, BootstrapStatus::Running, reason);
+        }
+    }
+}
+
+/// Task 8 replaces this stub with the real implementation: extracts the
+/// finished rootfs from the builder VM's disk and packages it as
+/// `{alias}.tar.zst` for the existing `image_install.rs` pipeline.
+async fn package_bootstrap(state: &AppState, bootstrap_id: Uuid, vm_id: Uuid) {
+    let _ = vm_id;
+    state
+        .bootstraps
+        .finish_err(bootstrap_id, "packaging not yet implemented");
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use axum::response::IntoResponse;
     use tempfile::tempdir;
+    use tokio::sync::watch;
 
     use super::*;
+    use crate::console::ConsoleBroker;
+    use crate::firecracker::VmProcess;
     use crate::handlers::vms::test_support::test_state;
+
+    /// Registers a fake console+process for `id`, the same way
+    /// `handlers::packages`'s and `handlers::builds`'s own tests do —
+    /// `run_bootstrap_script` requires a live `VmProcess` to write the
+    /// heredoc + sentinel-wait command to, and the test fixture never
+    /// actually boots Firecracker.
+    fn register_fake_process(state: &AppState, id: Uuid) -> Arc<ConsoleBroker> {
+        let console = Arc::new(ConsoleBroker::new());
+        let (_exited_tx, exited_rx) = watch::channel(false);
+        state.processes.lock().unwrap().insert(
+            id,
+            VmProcess {
+                pid: 0,
+                exited: exited_rx,
+                console: console.clone(),
+            },
+        );
+        console
+    }
+
+    /// See `handlers::packages`'s identical helper: `run_bootstrap_script`
+    /// returns as soon as it has *spawned*, which only then subscribes to
+    /// the console — output pushed before that subscription would be lost.
+    async fn wait_for_console_subscriber(console: &ConsoleBroker) {
+        for _ in 0..200 {
+            if console.subscriber_count() > 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("run_bootstrap_script never subscribed to the console");
+    }
 
     #[tokio::test]
     async fn start_bootstrap_rejects_an_unknown_target_alias() {
@@ -271,5 +420,46 @@ mod tests {
             error.into_response().status(),
             StatusCode::SERVICE_UNAVAILABLE
         );
+    }
+
+    #[tokio::test]
+    async fn run_bootstrap_script_records_the_console_output_and_reaches_running_terminal_wait() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
+        crate::handlers::vms::test_support::seed_vm(&state, &vm);
+        let console = register_fake_process(&state, vm.id);
+        let bootstrap_id = state.bootstraps.begin("ubuntu-26.04", "alpine-3.24", vm.id);
+        state
+            .bootstraps
+            .set_status(bootstrap_id, BootstrapStatus::Running);
+
+        let vm_id = vm.id;
+        let push_sentinel = async {
+            wait_for_console_subscriber(&console).await;
+            console.push_output(format!("{}:0\n", BOOTSTRAP_DONE_SENTINEL).as_bytes());
+        };
+        // Driven with `join!` on this same task rather than a separate
+        // `tokio::spawn` + `.await`: `run_bootstrap_script`'s own success
+        // path spawns `package_bootstrap` (Task 8's stub, which fails the
+        // session immediately — see its doc comment) as its very last step,
+        // right after moving the session to `Packaging`. Spawning
+        // `run_bootstrap_script` itself as a separate task would let the
+        // runtime schedule that spawned successor ahead of this test's
+        // resumption, so the assertion below could observe `Failed`
+        // instead — a race that's real today only because the stub
+        // finishes instantly; Task 8's real implementation will take
+        // actual wall-clock time. Running everything on one task means the
+        // assertion executes synchronously in the same poll cycle
+        // `run_bootstrap_script` completes in, before the runtime gets a
+        // chance to run that spawned successor.
+        tokio::join!(
+            run_bootstrap_script(&state, bootstrap_id, vm_id),
+            push_sentinel
+        );
+
+        let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
+        assert_eq!(snapshot.status, BootstrapStatus::Packaging);
+        assert!(snapshot.log.contains(BOOTSTRAP_DONE_SENTINEL));
     }
 }
