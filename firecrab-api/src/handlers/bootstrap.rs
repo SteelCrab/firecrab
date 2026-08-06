@@ -23,7 +23,7 @@ use crate::server::RequestId;
 use crate::state::AppState;
 
 use super::builds::{builder_micro_network_id, builder_vm_name, mark_as_builder};
-use super::vms::{create_vm, start_vm_request};
+use super::vms::{create_vm, parse_id, start_vm_request};
 
 /// Matches `handlers::builds`'s own poll cadence.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -535,6 +535,62 @@ fn build_package_blocking(
     Ok(())
 }
 
+/// `GET /api/images/bootstrap/{bootstrapId}`.
+pub async fn get_bootstrap(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<BootstrapResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    state
+        .bootstraps
+        .get(id)
+        .map(Json)
+        .ok_or_else(|| AppError::not_found(request_id.0))
+}
+
+/// `DELETE /api/images/bootstrap/{bootstrapId}` — tears down the builder VM
+/// without packaging anything. Mirrors `handlers::builds::cancel_build`
+/// exactly (same stop-then-delete-if-needed sequence, same best-effort
+/// swallowing of VM teardown errors).
+pub async fn cancel_bootstrap(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let parsed_id = parse_id(&id, request_id.0)?;
+    let session = state
+        .bootstraps
+        .get(parsed_id)
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+
+    let can_delete_now = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&session.vm_id)
+        .map(|vm| vm.state.can_delete())
+        .unwrap_or(true);
+    if !can_delete_now {
+        let _ = super::vms::stop_vm(
+            State(state.clone()),
+            Extension(request_id),
+            Path(session.vm_id.to_string()),
+        )
+        .await;
+    }
+
+    let _ = super::vms::delete_vm(
+        State(state.clone()),
+        Extension(request_id),
+        Path(session.vm_id.to_string()),
+    )
+    .await;
+
+    state.bootstraps.remove(parsed_id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -910,5 +966,60 @@ mod tests {
         let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
         assert_eq!(snapshot.status, BootstrapStatus::Packaging);
         assert!(snapshot.log.contains(BOOTSTRAP_DONE_SENTINEL));
+    }
+
+    #[tokio::test]
+    async fn get_bootstrap_returns_the_tracked_session() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let id = state
+            .bootstraps
+            .begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4());
+
+        let Json(found) = get_bootstrap(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(found.bootstrap_id, id);
+    }
+
+    #[tokio::test]
+    async fn get_bootstrap_404s_for_an_unknown_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let error = get_bootstrap(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn cancel_bootstrap_deletes_the_builder_vm_and_drops_the_session() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = crate::handlers::vms::test_support::record("builder", Uuid::new_v4());
+        crate::handlers::vms::test_support::seed_vm(&state, &vm);
+        let id = state.bootstraps.begin("ubuntu-26.04", "alpine-3.24", vm.id);
+
+        let status = cancel_bootstrap(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(state.bootstraps.get(id).is_none());
     }
 }
