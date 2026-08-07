@@ -130,30 +130,59 @@ body {
   max-width: 1080px;
 }
 
-/* 좁아지면 라벨을 접어 아이콘 레일로 */
+/* 좁아지면 라벨을 접어 좌측 아이콘 레일로 유지한다.
+   모바일에서도 상단 가로 줄로 펼치지 않는다 — 아이콘이 화면 가운데로
+   흩어지지 않고 좌측에 고정된다. */
 @media (max-width: 1000px) {
-  .shell-body { grid-template-columns: 3.5rem minmax(0, 1fr); }
-  .shell-nav { padding: 1.5rem 0.4rem; }
-  .shell-nav-item { justify-content: center; padding: 0.6rem 0.2rem; }
+  .shell-body { grid-template-columns: 3.25rem minmax(0, 1fr); }
+  .shell-nav {
+    padding: 1.25rem 0.35rem;
+    /* sticky 레일이 뷰포트 높이를 채우도록 */
+    align-self: stretch;
+    min-height: calc(100dvh - 6rem);
+  }
+  .shell-nav ul {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.15rem;
+  }
+  .shell-nav-item {
+    justify-content: center;
+    padding: 0.65rem 0.2rem;
+  }
   .shell-nav-label { display: none; }
 }
 
-/* 더 좁아지면 내비를 콘텐츠 위 가로 줄로 */
 @media (max-width: 700px) {
-  .shell-header { padding: 1.5rem 1rem 1rem; }
-  .shell-body { grid-template-columns: minmax(0, 1fr); }
+  .shell-header { padding: 1.25rem 0.85rem 0.85rem; }
+  /* 가로 줄로 바꾸지 않고 좌측 아이콘 레일 유지 */
+  .shell-body { grid-template-columns: 3rem minmax(0, 1fr); }
   .shell-nav {
-    position: static;
-    min-height: 0;
-    padding: 0.5rem;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    min-height: calc(100dvh - 5.5rem);
+    padding: 0.85rem 0.25rem;
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
   }
-  .shell-nav ul { flex-direction: row; overflow-x: auto; }
-  .shell-nav-item { width: auto; border-left: 0; border-bottom: 2px solid transparent; }
-  .shell-nav-item.active { border-left: 0; border-bottom-color: var(--ember); }
-  .shell-nav-label { display: inline; }
-  .shell-content { padding: 1.25rem 1rem 2.5rem; }
+  .shell-nav ul {
+    flex-direction: column;
+    overflow-x: visible;
+    overflow-y: auto;
+  }
+  .shell-nav-item {
+    width: 100%;
+    justify-content: center;
+    border-left: 2px solid transparent;
+    border-bottom: 0;
+    padding: 0.55rem 0.15rem;
+  }
+  .shell-nav-item.active {
+    border-left-color: var(--ember);
+    border-bottom-color: transparent;
+  }
+  .shell-nav-label { display: none; }
+  .shell-content { padding: 1rem 0.85rem 2.5rem; }
 }
 
 .eyebrow {
