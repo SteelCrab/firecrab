@@ -175,6 +175,10 @@ cat >"$staging/etc/fstab" <<'EOF'
 /dev/vda / ext4 defaults 0 1
 EOF
 : >"$staging/etc/machine-id"
+install -d -m 0755 "$staging/etc/modules-load.d"
+cat >"$staging/etc/modules-load.d/firecrab-network.conf" <<'EOF'
+virtio_net
+EOF
 rm -f "$staging/etc/resolv.conf"
 cat >"$staging/etc/resolv.conf" <<'EOF'
 nameserver 172.30.0.1
