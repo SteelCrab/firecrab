@@ -49,7 +49,7 @@ jobs:
         # Not -D warnings: several workspace crates carry dead_code warnings
         # for network-automation pieces (IPAM, egress policy, ...) that are
         # already merged ahead of the task that wires them up
-        # (docs/30-tasks/task-vm-tap-automation.md, docs/30-tasks/task-guest-network-configuration.md).
+        # (public-docs/networking.md).
         # Denying warnings here would fail CI on legitimate WIP, not bugs.
         run: cargo clippy --workspace --all-targets
 
@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Documentation links
-        # Doc-to-doc links and the docs/ paths quoted in Rust comments, shell
+        # Public doc links and public-docs paths quoted in source and scripts.
         # scripts and the READMEs are plain strings — nothing else in this
         # pipeline notices when a file moves out from under them.
         run: python3 scripts/check-doc-links.py

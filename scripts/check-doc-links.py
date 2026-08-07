@@ -1,32 +1,22 @@
 #!/usr/bin/env python3
-"""Verify every documentation link still resolves.
+"""Validate the public English documentation."""
 
-Two kinds of reference rot are possible here and neither one fails a build on
-its own, so this is the only thing that catches them:
-
-1. Relative links between docs — they break whenever a file moves, and the
-   depth-sensitive `../` prefixes make that easy to get subtly wrong.
-2. `docs/...` paths quoted in Rust doc comments, shell scripts, CI and the
-   READMEs. Those are plain strings; the compiler never looks at them.
-
-Exits non-zero if anything is unresolvable, so CI can gate on it.
-"""
-import os
 import re
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-DOCS = REPO / "docs"
+PUBLIC_DOCS = REPO / "public-docs"
+MAX_LINES = 170
 
-# `](target)`, optionally angle-bracketed, optionally followed by a title.
 LINK_RE = re.compile(r"\]\(\s*<?([^)>\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
-# A repo-rooted docs path mentioned anywhere in source/config.
-DOCS_PATH_RE = re.compile(r"docs/[\w./-]+\.(?:md|py|sh)")
+PUBLIC_PATH_RE = re.compile(r"public-docs/[\w./-]+\.(?:md|py|sh)")
+LEGACY_PATH_RE = re.compile(r"(?<!public-)docs/[\w./-]+\.(?:md|py|sh)")
+KOREAN_RE = re.compile(r"[가-힣]")
 
 SKIP_PREFIXES = ("http://", "https://", "mailto:", "#", "data:", "tel:")
+IGNORED_PARTS = {"node_modules", "target", ".git", "__pycache__"}
 
-# Files that quote doc paths in comments or prose.
 SOURCE_GLOBS = [
     "firecrab-api/src/**/*.rs",
     "firecrab-api-types/src/**/*.rs",
@@ -41,80 +31,93 @@ SOURCE_GLOBS = [
     ".github/workflows/*.yml",
 ]
 
-IGNORED_PARTS = {"node_modules", "target", ".git", "__pycache__"}
-
 
 def is_ignored(path: Path) -> bool:
     return any(part in IGNORED_PARTS for part in path.parts)
 
 
-def check_doc_links() -> list[str]:
-    """Relative links inside docs/, resolved from each file's own directory."""
-    problems = []
-    for doc in sorted(DOCS.rglob("*.md")):
-        if is_ignored(doc):
+def check_public_docs() -> list[str]:
+    problems: list[str] = []
+    root = PUBLIC_DOCS.resolve()
+
+    for doc in sorted(PUBLIC_DOCS.rglob("*.md")):
+        relative = doc.relative_to(REPO)
+
+        if doc.is_symlink():
+            target = doc.resolve()
+            if not target.is_file():
+                problems.append(f"{relative}: broken symbolic link")
+            elif not target.is_relative_to(root):
+                problems.append(f"{relative}: symbolic link leaves public-docs")
             continue
+
         text = doc.read_text(encoding="utf-8")
+        lines = text.splitlines()
+
+        if len(lines) > MAX_LINES:
+            problems.append(f"{relative}: {len(lines)} lines exceeds {MAX_LINES}")
+
+        for line_number, line in enumerate(lines, start=1):
+            if KOREAN_RE.search(line):
+                problems.append(f"{relative}:{line_number}: Korean text is not public documentation")
+
         in_fenced_code = False
-        for line_number, line in enumerate(text.splitlines(), start=1):
+        for line_number, line in enumerate(lines, start=1):
             if re.match(r"^\s*(`{3,}|~{3,})", line):
                 in_fenced_code = not in_fenced_code
                 continue
             if in_fenced_code:
                 continue
+
             for target in LINK_RE.findall(line):
                 if target.startswith(SKIP_PREFIXES):
                     continue
                 path_part = target.split("#", 1)[0]
                 if not path_part:
                     continue
-                resolved = (doc.parent / path_part).resolve()
-                if not resolved.exists():
-                    where = doc.relative_to(REPO)
-                    problems.append(f"{where}:{line_number}: {target}")
+                if not (doc.parent / path_part).resolve().exists():
+                    problems.append(f"{relative}:{line_number}: broken link {target}")
+
     return problems
 
 
 def check_source_references() -> list[str]:
-    """`docs/...` paths quoted from source, scripts, CI and the READMEs."""
-    problems = []
+    problems: list[str] = []
     seen: set[Path] = set()
+
     for pattern in SOURCE_GLOBS:
         for path in sorted(REPO.glob(pattern)):
             if is_ignored(path) or path in seen:
                 continue
             seen.add(path)
+
             try:
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 continue
+
             for line_number, line in enumerate(text.splitlines(), start=1):
-                for reference in DOCS_PATH_RE.findall(line):
+                for reference in LEGACY_PATH_RE.findall(line):
+                    relative = path.relative_to(REPO)
+                    problems.append(f"{relative}:{line_number}: private docs reference {reference}")
+                for reference in PUBLIC_PATH_RE.findall(line):
                     if not (REPO / reference).exists():
-                        where = path.relative_to(REPO)
-                        problems.append(f"{where}:{line_number}: {reference}")
+                        relative = path.relative_to(REPO)
+                        problems.append(f"{relative}:{line_number}: broken reference {reference}")
+
     return problems
 
 
 def main() -> int:
-    doc_problems = check_doc_links()
-    source_problems = check_source_references()
+    problems = check_public_docs() + check_source_references()
 
-    for title, problems in (
-        ("문서 간 링크", doc_problems),
-        ("코드·스크립트의 docs 경로", source_problems),
-    ):
-        if problems:
-            print(f"\n{title} — 깨진 참조 {len(problems)}건")
-            for problem in problems:
-                print(f"  {problem}")
-
-    total = len(doc_problems) + len(source_problems)
-    if total:
-        print(f"\n총 {total}건이 해결되지 않습니다.")
+    if problems:
+        print(f"Public documentation check failed with {len(problems)} problem(s).")
+        for problem in problems:
+            print(f"  {problem}")
         return 1
 
-    print("문서 링크와 코드의 docs 경로가 모두 해결됩니다.")
+    print("Public documentation is English, linked, and at most 170 lines per file.")
     return 0
 
 
