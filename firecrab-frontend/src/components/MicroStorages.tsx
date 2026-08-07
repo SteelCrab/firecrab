@@ -13,6 +13,7 @@ import {
   listMicroStorages,
   listStorageDevices,
 } from "../api/client";
+import { useI18n } from "../i18n";
 
 /**
  * MicroStorage management — register host mount paths as named storage pools
@@ -20,6 +21,7 @@ import {
  * already-mounted path (or type one). See docs/20-guides/micro-storage.md.
  */
 export default function MicroStorages() {
+  const { t } = useI18n();
   const [pools, setPools] = useState<MicroStorageResponse[] | null>(null);
   const [devices, setDevices] = useState<StorageDeviceResponse[]>([]);
   const [name, setName] = useState("");
@@ -78,7 +80,7 @@ export default function MicroStorages() {
   };
 
   const handleDelete = async (pool: MicroStorageResponse) => {
-    if (busyId || !window.confirm(`MicroStorage "${pool.name}"을(를) 삭제할까요?`)) return;
+    if (busyId || !window.confirm(t(`Delete MicroStorage "${pool.name}"?`, `MicroStorage "${pool.name}"을(를) 삭제할까요?`))) return;
     setBusyId(pool.id);
     try {
       await deleteMicroStorage(pool.id);
@@ -110,8 +112,10 @@ export default function MicroStorages() {
     <section className="panel">
       <h2 className="panel-title">MicroStorage</h2>
       <p className="poll-note" style={{ marginBottom: "0.75rem" }}>
-        호스트에 이미 마운트된 경로를 등록합니다. 파티션 생성·포맷은 하지 않습니다 — OS에서
-        마운트한 뒤 여기서 이름만 붙이면 됩니다.
+        {t(
+          "Register a path already mounted on the host. Partitioning and formatting stay in the OS; mount it there, then name it here.",
+          "호스트에 이미 마운트된 경로를 등록합니다. 파티션 생성·포맷은 하지 않습니다 — OS에서 마운트한 뒤 여기서 이름만 붙이면 됩니다.",
+        )}
       </p>
 
       <form className="create-grid" onSubmit={handleSubmit}>
@@ -142,7 +146,7 @@ export default function MicroStorages() {
         <div className="field">
           <label>&nbsp;</label>
           <button className="btn primary" type="submit" disabled={submitting}>
-            {submitting ? "등록 중…" : "등록"}
+            {submitting ? t("Registering…", "등록 중…") : t("Register", "등록")}
           </button>
           <span className="field-error"></span>
         </div>
@@ -151,7 +155,7 @@ export default function MicroStorages() {
       {devices.length > 0 && (
         <>
           <h3 className="panel-title" style={{ marginTop: "1rem" }}>
-            마운트된 파티션 (선택하면 path 채움)
+            {t("Mounted partitions (select to fill path)", "마운트된 파티션 (선택하면 path 채움)")}
           </h3>
           <div className="table-scroll">
             <table className="vm-table">
@@ -179,7 +183,7 @@ export default function MicroStorages() {
                         className="btn"
                         onClick={() => pickDevice(device)}
                       >
-                        선택
+                        {t("Select", "선택")}
                       </button>
                     </td>
                   </tr>
@@ -191,13 +195,13 @@ export default function MicroStorages() {
       )}
 
       <h3 className="panel-title" style={{ marginTop: "1rem" }}>
-        등록된 MicroStorage
+        {t("Registered MicroStorage", "등록된 MicroStorage")}
       </h3>
       {listError && <div className="field-error">{listError}</div>}
       {pools === null ? (
-        <div className="empty">불러오는 중…</div>
+        <div className="empty">{t("Loading…", "불러오는 중…")}</div>
       ) : pools.length === 0 ? (
-        <div className="empty">등록된 MicroStorage가 없습니다.</div>
+        <div className="empty">{t("No MicroStorage registered.", "등록된 MicroStorage가 없습니다.")}</div>
       ) : (
         <div className="table-scroll">
           <table className="vm-table">
@@ -232,7 +236,7 @@ export default function MicroStorages() {
                         handleDelete(pool);
                       }}
                     >
-                      삭제
+                      {t("Delete", "삭제")}
                     </button>
                   </td>
                 </tr>
@@ -244,7 +248,7 @@ export default function MicroStorages() {
 
       {selectedId && (
         <div style={{ marginTop: "1rem" }}>
-          <h3 className="panel-title">상세</h3>
+          <h3 className="panel-title">{t("Details", "상세")}</h3>
           {detailError && <div className="field-error">{detailError}</div>}
           {detail && (
             <dl className="detail-fields mono">
@@ -259,7 +263,7 @@ export default function MicroStorages() {
               <dt>VMs</dt>
               <dd>
                 {detail.vms.length === 0
-                  ? "없음"
+                  ? t("None", "없음")
                   : detail.vms.map((vm) => `${vm.name} (${vm.state}, ${vm.diskGb} GiB)`).join(", ")}
               </dd>
             </dl>
