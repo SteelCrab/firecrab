@@ -31,7 +31,9 @@ rootfs_size='2G'
 rootfs_hostname='firecrab'
 baseos_url='https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/'
 appstream_url='https://download.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/'
-rootfs_packages='kernel dracut systemd systemd-udev NetworkManager iproute iputils bind-utils curl ca-certificates procps-ng openssh-server kmod util-linux dhcp-client e2fsprogs'
+# dnf must be inside the guest (see install-rocky-rootfs.sh); dashboard package
+# actions invoke `dnf` on the serial console.
+rootfs_packages='kernel dracut systemd systemd-udev NetworkManager iproute iputils bind-utils curl ca-certificates procps-ng openssh-server kmod util-linux dhcp-client e2fsprogs dnf'
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
@@ -161,6 +163,28 @@ chroot_mounts="$container_root$staging $chroot_mounts"
 # shellcheck disable=SC2086
 chroot "$container_root" dnf -q -y --installroot="$staging" --releasever=9 \
   --setopt=reposdir=/etc/yum.repos.d $dnf_common install $rootfs_packages
+
+# Fixed public baseurls — stock mirrorlist needs $rltype, which this image lacks.
+cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<'EOF'
+[baseos]
+name=Rocky Linux $releasever - BaseOS (firecrab)
+baseurl=https://download.rockylinux.org/pub/rocky/$releasever/BaseOS/$basearch/os/
+gpgcheck=1
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+
+[appstream]
+name=Rocky Linux $releasever - AppStream (firecrab)
+baseurl=https://download.rockylinux.org/pub/rocky/$releasever/AppStream/$basearch/os/
+gpgcheck=1
+enabled=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
+EOF
+if [ -f "$staging/etc/yum.repos.d/rocky.repo" ]; then
+  sed -i 's/^enabled=1/enabled=0/' "$staging/etc/yum.repos.d/rocky.repo"
+fi
+test -x "$staging/usr/bin/dnf" || test -x "$staging/bin/dnf" || \
+  fail 'Rocky rootfs is missing /usr/bin/dnf after package install'
 
 rm -rf "$staging/var/cache/dnf" "$staging/var/log/dnf"* "$staging/var/cache/yum" "$staging/var/log/yum"* 2>/dev/null || true
 
