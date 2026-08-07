@@ -13,6 +13,7 @@ use crate::image_install::ImageInstallTracker;
 use crate::model::VmRecord;
 use crate::network::NetworkClient;
 use crate::persistence::{self, PersistenceError, Store};
+use crate::process_metrics::ProcessMetricsTracker;
 use crate::storage::StorageRegistry;
 use crate::templates::TemplateRegistry;
 
@@ -81,6 +82,8 @@ pub struct AppState {
     pub(crate) image_packages: ImageInstallTracker,
     /// Async from-scratch distro bootstrap sessions (`POST /api/images/{alias}/bootstrap`).
     pub(crate) bootstraps: crate::bootstrap::BootstrapTracker,
+    /// Previous `/proc` jiffy samples used to derive host-process CPU %.
+    pub(crate) process_metrics: Arc<Mutex<ProcessMetricsTracker>>,
 }
 
 impl AppState {
@@ -121,6 +124,7 @@ impl AppState {
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
+            process_metrics: Arc::new(Mutex::new(ProcessMetricsTracker::default())),
         })
     }
 
