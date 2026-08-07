@@ -37,3 +37,4 @@ export * from "./UpdateVmResourcesRequest";
 export * from "./VmLogResponse";
 export * from "./VmResponse";
 export * from "./VmState";
+export * from "./VmUsageSample";
