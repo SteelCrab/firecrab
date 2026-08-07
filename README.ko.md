@@ -7,7 +7,7 @@
 
 <h1 align="center">firecrab</h1>
 
-<p align="center"><a href="https://firecracker-microvm.github.io/">AWS Firecracker</a> 기반의 사설 microVM 클라우드</p>
+<p align="center">내 서버에서 바로 쓰는 경량 microVM 플랫폼</p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -15,88 +15,126 @@
   <a href="./README.ja.md">日本語</a>
 </p>
 
-## 소개
+firecrab은 사용자가 관리하는 Linux 호스트에서 격리된
+[Firecracker](https://firecracker-microvm.github.io/) microVM을 실행·관리합니다.
+Rust API, 브라우저 대시보드, 두 개의 작은 시스템 서비스가 결합되어 VM을 만들 때 이미지,
+네트워크, 디스크 위치, 외부 통신 정책을 함께 선택할 수 있습니다.
 
-firecrab은 자체 Linux 호스트 위에 [AWS Firecracker](https://firecracker-microvm.github.io/)
-microVM 기반의 사설 클라우드를 구축하는 경량 컨트롤 플레인입니다. Firecracker는 AWS Lambda·
-Fargate를 구동하는 바로 그 KVM 기반 VMM(Virtual Machine Monitor)으로, 일반 VM보다 훨씬 빠르게
-(수백 ms 단위) 부팅하면서도 하드웨어 가상화 수준의 격리를 그대로 제공합니다. firecrab은 이
-Firecracker를 AWS 종속 없이 직접 호스팅하여, 온프레미스 서버에서도 동일한 이점(빠른 기동, 강한
-격리, 낮은 오버헤드)을 누릴 수 있게 합니다.
+강한 격리가 필요하지만 완전한 클라우드 컨트롤 플레인까지는 필요 없는 사설 단일 호스트
+microVM 환경을 위한 도구입니다. 호스팅 서비스나 멀티 호스트 스케줄러는 아닙니다.
 
-기존 KVM·VMware 기반의 무거운 레거시 VM을 더 가볍고 빠른 microVM으로 옮기는 마이그레이션 경로를
-겨냥해 설계되었습니다. 웹 대시보드나 REST API로 VM을 생성·시작·중지·삭제할 수 있고, VM마다
-브라우저에서 바로 시리얼 콘솔에 접속해 부팅 로그부터 셸까지 실시간으로 확인할 수 있습니다.
+## 핵심 기능
 
-Rust로 작성된 API 서버(`firecrab-api`)가 SQLite에 VM 상태를 저장하고 Firecracker 프로세스를 직접
-관리하며, 커널·rootfs 템플릿은 해시로 무결성을 검증한 뒤 서빙합니다. 브리지·TAP·방화벽처럼 root
-권한이 필요한 호스트 네트워크 작업은 별도의 권한 분리된 helper 프로세스(`firecrab-net-helper`)가
-Unix 소켓을 통해서만 처리하며, API 서버 자체는 비특권 프로세스로 동작합니다.
+- **MicroVM 실행:** VM 생성·조회·비활성 VM 수정·시작·중지·삭제와 VM별 브라우저 시리얼
+  콘솔을 제공합니다.
+- **격리 네트워크 선택:** 명시적 **MicroNetwork**를 만들고 VM을 하나에 배치합니다. IPv4,
+  MAC, hostname은 유지되며 네트워크끼리는 격리됩니다. VM별 인터넷 허용 또는 격리 egress를
+  선택할 수 있습니다.
+- **이미지·디스크 관리:** 템플릿 설치·삭제, 임시 builder VM에서 지원 배포판 부트스트랩,
+  설정된 저장소 루트 또는 **MicroStorage** 풀에 VM 디스크 배치를 지원합니다.
+- **상태 확인:** 대시보드에서 시작 진행 상황, 콘솔 로그, 호스트 상태를 확인합니다. 대시보드는
+  영어와 한국어를 지원합니다.
+- **작은 권한 범위:** API는 비특권으로 실행하며, 별도 `firecrab-net-helper`가 호스트
+  네트워크에 필요한 capability만 가집니다.
 
-## 주요 기능
+## 구조
 
-- VM 전체 생명주기를 다루는 REST API + React 대시보드
-- 복수 부팅 템플릿(Ubuntu, Alpine)
-- WebSocket 기반 실시간 시리얼 콘솔
-- SQLite 상태 저장, 권한 분리된 helper 프로세스를 통한 호스트 네트워크 격리
-
-## 설치 (권장)
-
-KVM과 네트워크만 되는 리눅스 호스트라면:
-
-```sh
-git clone https://github.com/SteelCrab/firecrab && cd firecrab
-sudo ./install.sh
+```text
+브라우저 대시보드 / REST 클라이언트
+              │ HTTP + WebSocket
+              ▼
+  firecrab-api (Rust, SQLite, Firecracker 프로세스 관리자)
+       │                         │
+       │ Unix socket             └── Firecracker → VM마다 하나의 프로세스
+       ▼
+firecrab-net-helper (특권, capability 제한)
+       └── bridge · TAP · nftables · dnsmasq
 ```
 
-이게 전부입니다. 설치 스크립트가 없는 것을 찾아 직접 채웁니다 — 패키지는 호스트에 있는
-관리자(apt/dnf/zypper/pacman/apk)로, Firecracker·Rust 툴체인·게스트 이미지까지. 그다음
-서비스 계정을 만들고 systemd 데몬 2개를 설치해 `http://127.0.0.1:3000/`에 대시보드를 띄웁니다.
-다시 실행해도 안전합니다 — 중복이 아니라 복구로 동작합니다.
+API는 템플릿 아티팩트를 검증한 뒤 사용하며, 설치 환경에서는 빌드된 대시보드도 직접
+서빙합니다. 자세한 내용은 [아키텍처](docs/10-overview/architecture.md)를 참고하세요.
+
+## Linux 호스트에 설치
+
+`/dev/kvm`, 네트워크, `sudo` 권한이 있는 일반 사용자 계정이 필요합니다. 설치기는 **`sudo`를
+앞에 붙이지 않고** 일반 사용자로 실행하세요. 소스 빌드와 사용자 도구는 호출한 사용자의 소유로
+유지하고, 패키지·systemd·호스트 설정처럼 필요한 개별 단계에서만 내부적으로 `sudo`를 사용합니다.
 
 ```sh
-./install.sh --check            # 무엇이 없는지 먼저 확인 (root 불필요, 아무것도 바꾸지 않음)
-./install.sh --doctor           # host 설정 진단 (UFW, 소켓, 잘못된 DB 경로 등)
-sudo ./install.sh --uninstall   # 데몬 제거. --purge 없이는 VM 데이터 보존
+git clone https://github.com/SteelCrab/firecrab.git
+cd firecrab
+./install.sh
 ```
 
-KVM은 스크립트가 대신 설치할 수 없는 유일한 항목입니다 — `/dev/kvm`이 없으면 BIOS에서
-가상화를 켜세요(이 호스트가 VM이면 중첩 가상화). 옵션·설치 위치·업그레이드·제거·문제 해결은
-[docs/20-guides/install.md](docs/20-guides/install.md)에 정리돼 있습니다.
-
-## 소스에서 실행 (개발)
-
-설치 없이 터미널 3개로 띄웁니다 — 특권 네트워크 헬퍼, API, 그리고 브라우저가 API에 닿게
-해주는 프록시가 붙은 Vite 개발 서버입니다.
+자주 쓰는 설치기 옵션:
 
 ```sh
-# 1 — 특권 네트워크 헬퍼 (bridge, TAP, 방화벽, DHCP)
+./install.sh --check                 # 필요 조건과 예정 변경 사항 확인
+./install.sh --doctor                # KVM, 방화벽, 소켓, 호스트 설정 진단
+./install.sh --with-ubuntu-image
+./install.sh --with-rocky-image
+./install.sh --uninstall         # 기본적으로 데이터 유지
+./install.sh --uninstall --purge # /var/lib/firecrab도 제거
+```
+
+기본 설치는 대시보드와 Alpine 게스트 이미지를 빌드합니다. `/dev/kvm`이 없다면 스크립트가
+대신 활성화할 수 없으므로 하드웨어 가상화(또는 중첩 가상화)를 먼저 켜야 합니다. 모든 옵션,
+설치 경로, 업그레이드, 문제 해결은 [설치 가이드](docs/20-guides/install.md)에 있습니다.
+
+## 빠른 시작
+
+설치 후 `http://127.0.0.1:3000/`을 열고 다음 순서로 진행하세요.
+
+1. **MicroNetwork**를 만듭니다.
+2. 설치된 이미지를 고르고, 그 네트워크에 VM을 생성합니다.
+3. VM을 시작해 `running`이 되면 **Terminal**을 엽니다.
+
+네트워크를 먼저 만드는 것은 의도된 흐름입니다. firecrab에는 숨은 기본 서브넷이 없으므로,
+모든 VM은 운영자가 선택한 네트워크에 배치됩니다.
+
+요청 형식, 생명주기 의미, 오류 envelope는 [API 가이드](docs/20-guides/api.md)를, 이미지 패키지와
+브라우저 부트스트랩은 [이미지 가이드](docs/20-guides/m2image-builder.md)를 참고하세요.
+
+## 소스에서 개발
+
+network helper, API, Vite 대시보드를 위해 세 개의 터미널을 사용합니다. 로컬 데이터
+경로가 작업 디렉터리 기준이므로 API는 반드시 저장소 루트에서 실행하세요.
+
+```sh
+# 터미널 1 — 특권 네트워크 작업
 cargo build -p firecrab-net-helper
 sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
-     ./target/debug/firecrab-net-helper
+  ./target/debug/firecrab-net-helper
 
-# 2 — API 서버 (저장소 루트에서 실행 — 경로가 작업 디렉터리 기준입니다)
+# 터미널 2 — API와 Firecracker 관리자
 cargo run -p firecrab-api
 
-# 3 — 대시보드 개발 서버
-cd firecrab-frontend && npm run dev
+# 터미널 3 — 대시보드: http://localhost:8080/
+npm install --prefix firecrab-frontend
+npm run dev --prefix firecrab-frontend
 ```
 
-`http://localhost:8080/`에 접속하세요. 전체 사용법은 [docs/20-guides/web.md](docs/20-guides/web.md)를 참고하세요.
-
-3번 터미널 없이 빌드된 대시보드를 API가 직접 서빙하게 할 수도 있습니다.
+로컬에서 설치 환경과 비슷하게 실행하려면 대시보드를 빌드한 뒤 API가 직접 서빙하게 합니다.
 
 ```sh
-cd firecrab-frontend && npm run build && cd ..
+npm run build --prefix firecrab-frontend
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
-# http://localhost:3000/
+# http://127.0.0.1:3000/
 ```
+
+Rust 테스트는 다음처럼 실행합니다.
+
+```sh
+cargo test --workspace
+```
+
+더 많은 개발 노트와 브라우저 워크플로는 [웹 대시보드 가이드](docs/20-guides/web.md)에 있습니다.
 
 ## 문서
 
-설계 노트·태스크 계획·검증 절차·버그 기록은 모두 [`docs/`](docs/HOME.md)에 있습니다.
-Obsidian 볼트로 바로 열립니다(`docs/` 폴더를 볼트로 지정).
+한국어 문서 볼트 [`docs/`](docs/HOME.md)에는 아키텍처, 가이드, API 계약, 검증 절차, 버그
+기록이 있으며 Obsidian 볼트로 바로 열 수 있습니다.
 
 ## 라이선스
 
-[Apache License, Version 2.0](./LICENSE)에 따라 배포됩니다.
+[Apache License, Version 2.0](./LICENSE)로 배포됩니다.

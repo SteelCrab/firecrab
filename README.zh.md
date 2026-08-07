@@ -7,7 +7,7 @@
 
 <h1 align="center">firecrab</h1>
 
-<p align="center">基于 <a href="https://firecracker-microvm.github.io/">AWS Firecracker</a> 的私有 microVM 云平台</p>
+<p align="center">可直接运行在自有服务器上的轻量 microVM 平台</p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -15,86 +15,121 @@
   <a href="./README.ja.md">日本語</a>
 </p>
 
-## 简介
+firecrab 在你管理的 Linux 主机上运行和管理隔离的
+[Firecracker](https://firecracker-microvm.github.io/) microVM。它把 Rust API、浏览器
+仪表盘和两个小型系统服务组合在一起；创建 VM 时可同时选择镜像、网络、磁盘位置和出站策略。
 
-firecrab 是一个轻量级控制平面，用于在自建 Linux 主机上基于
-[AWS Firecracker](https://firecracker-microvm.github.io/) microVM 构建私有云。Firecracker
-正是驱动 AWS Lambda、Fargate 的同一套基于 KVM 的 VMM（虚拟机监控器）——启动时间仅需几百毫秒，
-远快于一般虚拟机，同时仍具备硬件级虚拟化隔离。firecrab 直接运行 Firecracker，不依赖 AWS，因此
-在自有服务器上也能获得同样的启动速度、强隔离性与低开销。
+它面向私有的单主机 microVM 环境：适合需要比容器更强隔离、但不需要完整云控制平面的工作负载。
+它不是托管服务，也不是多主机调度器。
 
-它面向将较重的传统虚拟机（KVM、VMware）迁移到更轻量、更快的 microVM 的场景而设计。通过网页控制台
-或 REST API 创建、启动、停止和删除虚拟机，并可直接在浏览器中连接任意虚拟机的串行控制台，实时查看
-启动日志并获得可交互的 shell。
+## 核心功能
 
-由 Rust 编写的 API 服务器（`firecrab-api`）将虚拟机状态存储在 SQLite 中并直接管理 Firecracker
-进程，内核/根文件系统模板会先经过哈希完整性校验才对外提供。需要 root 权限的主机网络操作
-（网桥、TAP、防火墙）全部由独立的、权限分离的 helper 进程（`firecrab-net-helper`）通过 Unix
-套接字处理，API 服务器本身以非特权方式运行。
+- **运行 microVM：** 创建、查看、编辑未运行的 VM、启动、停止、删除，并使用每台 VM 的
+  浏览器串口控制台。
+- **选择隔离网络：** 创建显式 **MicroNetwork**，每台 VM 都放入其中之一。IPv4、MAC 和
+  hostname 会保留；网络彼此隔离，并可为每台 VM 选择互联网或隔离 egress。
+- **管理镜像与磁盘：** 安装或删除模板，在临时 builder VM 中引导支持的发行版，并将 VM 磁盘
+  放在配置的存储根目录或已注册的 **MicroStorage** 池中。
+- **了解运行状态：** 在英文或韩文仪表盘中查看启动进度、控制台日志和主机状态。
+- **缩小主机权限：** API 以非特权方式运行；独立的 `firecrab-net-helper` 仅持有主机网络
+  所需的 capability。
 
-## 主要功能
+## 架构
 
-- 覆盖完整虚拟机生命周期的 REST API + React 控制台
-- 多种启动模板（Ubuntu、Alpine）
-- 基于 WebSocket 的实时串行控制台
-- SQLite 状态存储，通过特权 helper 进程实现主机网络隔离
-
-## 安装（推荐）
-
-只要是支持 KVM 且能联网的 Linux 主机：
-
-```sh
-git clone https://github.com/SteelCrab/firecrab && cd firecrab
-sudo ./install.sh
+```text
+浏览器仪表盘 / REST 客户端
+              │ HTTP + WebSocket
+              ▼
+  firecrab-api（Rust、SQLite、Firecracker 进程管理器）
+       │                         │
+       │ Unix socket             └── Firecracker → 每个 microVM 一个进程
+       ▼
+firecrab-net-helper（特权、capability 受限）
+       └── bridge · TAP · nftables · dnsmasq
 ```
 
-这就够了。安装脚本会自行找出缺失的部分并装好 —— 用主机自带的包管理器
-（apt/dnf/zypper/pacman/apk）安装依赖，再装 Firecracker、Rust 工具链和一个客户机镜像，
-然后创建服务账户、安装两个 systemd 守护进程，并在 `http://127.0.0.1:3000/` 提供仪表盘。
-重复执行是安全的 —— 它会修复而不是重复安装。
+API 会在使用前验证模板工件；已安装的部署中，API 也会直接提供构建后的仪表盘。详见
+[架构文档](docs/10-overview/architecture.md)。
+
+## 在 Linux 主机上安装
+
+需要一台具有 `/dev/kvm`、网络访问和可使用 `sudo` 的普通用户的 Linux 主机。请以该普通用户
+运行安装程序，**不要**在脚本前加 `sudo`。它会让源码构建和用户工具归调用用户所有，只对软件包、
+systemd 与主机设置等需要权限的单独操作在内部使用 `sudo`。
 
 ```sh
-./install.sh --check            # 先看缺什么（无需 root，不改动任何东西）
-./install.sh --doctor           # 诊断主机配置（UFW、套接字、错误的 DB 路径等）
-sudo ./install.sh --uninstall   # 移除守护进程；不加 --purge 则保留 VM 数据
+git clone https://github.com/SteelCrab/firecrab.git
+cd firecrab
+./install.sh
 ```
 
-KVM 是唯一无法替你安装的东西 —— 如果没有 `/dev/kvm`，请在 BIOS 中开启虚拟化
-（若该主机本身是虚拟机，则开启嵌套虚拟化）。完整用法（选项、安装位置、升级、卸载、故障排查）见
-[docs/20-guides/install.md](docs/20-guides/install.md)。
-
-## 从源码运行（开发）
-
-无需安装，三个终端：特权网络 helper、API，以及带代理、让浏览器能访问 API 的 Vite 开发服务器。
+常用安装选项：
 
 ```sh
-# 1 — 特权网络 helper（bridge、TAP、防火墙、DHCP）
+./install.sh --check                 # 报告前置条件和计划变更
+./install.sh --doctor                # 诊断 KVM、防火墙、socket 和主机设置
+./install.sh --with-ubuntu-image
+./install.sh --with-rocky-image
+./install.sh --uninstall         # 默认保留数据
+./install.sh --uninstall --purge # 同时删除 /var/lib/firecrab
+```
+
+默认安装会构建仪表盘和 Alpine 客户机镜像。脚本不能启用 KVM：若没有 `/dev/kvm`，请先启用硬件
+虚拟化（或嵌套虚拟化）。所有选项、安装路径、升级和排错请参阅[安装指南](docs/20-guides/install.md)。
+
+## 快速开始
+
+安装后打开 `http://127.0.0.1:3000/`，然后：
+
+1. 创建 **MicroNetwork**。
+2. 选择已安装的镜像，并在该网络中创建 VM。
+3. 启动 VM，待其变为 `running` 后打开 **Terminal**。
+
+先创建网络是有意的：firecrab 没有隐藏的默认子网，每台 VM 都放在操作者选择的网络中。
+
+请求格式、生命周期语义和错误 envelope 见 [API 指南](docs/20-guides/api.md)。镜像包与浏览器引导
+流程见[镜像指南](docs/20-guides/m2image-builder.md)。
+
+## 从源码开发
+
+使用三个终端：network helper、API 和 Vite 仪表盘。由于本地数据路径相对于工作目录，必须从
+仓库根目录运行 API。
+
+```sh
+# 终端 1 — 特权网络操作
 cargo build -p firecrab-net-helper
 sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
-     ./target/debug/firecrab-net-helper
+  ./target/debug/firecrab-net-helper
 
-# 2 — API 服务器（在仓库根目录运行：路径相对于工作目录）
+# 终端 2 — API 与 Firecracker 管理器
 cargo run -p firecrab-api
 
-# 3 — 仪表盘开发服务器
-cd firecrab-frontend && npm run dev
+# 终端 3 — 仪表盘：http://localhost:8080/
+npm install --prefix firecrab-frontend
+npm run dev --prefix firecrab-frontend
 ```
 
-打开 `http://localhost:8080/`。完整使用说明见 [docs/20-guides/web.md](docs/20-guides/web.md)。
-
-也可以让 API 直接提供已构建的仪表盘，省掉第三个终端：
+如要在本地模拟生产部署，请构建仪表盘并让 API 直接提供它：
 
 ```sh
-cd firecrab-frontend && npm run build && cd ..
+npm run build --prefix firecrab-frontend
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
-# http://localhost:3000/
+# http://127.0.0.1:3000/
 ```
+
+运行 Rust 测试套件：
+
+```sh
+cargo test --workspace
+```
+
+更多开发说明和浏览器工作流见[网页仪表盘指南](docs/20-guides/web.md)。
 
 ## 文档
 
-设计说明、任务计划、验证步骤与缺陷记录都在 [`docs/`](docs/HOME.md)，
-可直接作为 Obsidian 仓库打开。正文为韩语。
+韩文文档库 [`docs/`](docs/HOME.md) 包含架构、指南、API 合约、验证步骤和缺陷记录，也可直接作为
+Obsidian 库打开。
 
 ## 许可证
 
-遵循 [Apache License, Version 2.0](./LICENSE) 许可证发布。
+采用 [Apache License, Version 2.0](./LICENSE)。

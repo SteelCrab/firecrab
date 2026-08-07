@@ -7,7 +7,7 @@
 
 <h1 align="center">firecrab</h1>
 
-<p align="center"><a href="https://firecracker-microvm.github.io/">AWS Firecracker</a> を基盤としたプライベート microVM クラウド</p>
+<p align="center">自分のサーバーですぐ使える軽量 microVM プラットフォーム</p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -15,91 +15,130 @@
   <a href="./README.zh.md">中文</a>
 </p>
 
-## 概要
+firecrab は、管理下の Linux ホストで隔離された
+[Firecracker](https://firecracker-microvm.github.io/) microVM を実行・管理します。Rust API、
+ブラウザダッシュボード、二つの小さなシステムサービスを組み合わせ、VM 作成時にイメージ、
+ネットワーク、ディスクの配置先、外向き通信ポリシーまで選べます。
 
-firecrab は、自前の Linux ホスト上に
-[AWS Firecracker](https://firecracker-microvm.github.io/) microVM ベースのプライベートクラウド
-を構築する軽量なコントロールプレーンである。Firecracker は AWS Lambda・Fargate を動かしているのと
-同じ KVM ベースの VMM（Virtual Machine Monitor）で、一般的な VM よりはるかに高速に（数百 ms 単位で）
-起動しながら、ハードウェア仮想化レベルの分離をそのまま提供する。firecrab はこの Firecracker を
-AWS に依存せず直接ホストすることで、オンプレミスのサーバーでも同じ利点（高速起動・強力な分離・
-低オーバーヘッド）を得られるようにする。
-
-既存の KVM・VMware ベースの重量級レガシー VM を、より軽量で高速な microVM へ移行する経路を想定して
-設計されている。Web ダッシュボードまたは REST API から VM を作成・起動・停止・削除し、各 VM の
-シリアルコンソールにブラウザから直接接続して、起動ログからシェルまでリアルタイムに確認できる。
-
-Rust で書かれた API サーバー（`firecrab-api`）が VM の状態を SQLite に保存し、Firecracker
-プロセスを直接管理する。カーネル・rootfs テンプレートはハッシュで完全性を検証してから配信される。
-ブリッジ・TAP・ファイアウォールなど root 権限が必要なホストネットワーク操作は、権限分離された
-別の helper プロセス（`firecrab-net-helper`）が Unix ソケット経由でのみ処理し、API サーバー自体は
-非特権プロセスとして動作する。
+コンテナより強い隔離が必要で、完全なクラウドコントロールプレーンまでは不要な、プライベートな
+単一ホスト microVM 環境のためのツールです。ホステッドサービスや複数ホストのスケジューラでは
+ありません。
 
 ## 主な機能
 
-- VM のライフサイクル全体を扱う REST API + React ダッシュボード
-- 複数の起動テンプレート（Ubuntu、Alpine）
-- WebSocket によるリアルタイムシリアルコンソール
-- SQLite によるステート管理、権限分離された helper プロセスによるホストネットワーク分離
+- **microVM の実行:** VM の作成・参照・停止中 VM の編集・起動・停止・削除と、VM ごとの
+  ブラウザベースのシリアルコンソールを提供します。
+- **隔離ネットワークの選択:** 明示的な **MicroNetwork** を作成し、各 VM を一つに配置します。
+  IPv4・MAC・hostname は保持され、ネットワーク同士は隔離されます。VM ごとにインターネット許可
+  または隔離の egress を選べます。
+- **イメージとディスクの管理:** テンプレートのインストール・削除、暫定 builder VM での対応
+  ディストリビューションのブートストラップ、設定済みストレージルートまたは登録済み
+  **MicroStorage** プールへの VM ディスク配置をサポートします。
+- **状態の確認:** 英語・韓国語対応のダッシュボードで起動進捗、コンソールログ、ホスト状態を確認できます。
+- **ホスト権限を最小化:** API は非特権で動作し、独立した `firecrab-net-helper` はホストネットワークに
+  必要な capability だけを持ちます。
 
-## インストール(推奨)
+## アーキテクチャ
 
-KVM が使えてネットワークにつながる Linux ホストであれば:
-
-```sh
-git clone https://github.com/SteelCrab/firecrab && cd firecrab
-sudo ./install.sh
+```text
+ブラウザダッシュボード / REST クライアント
+              │ HTTP + WebSocket
+              ▼
+  firecrab-api（Rust、SQLite、Firecracker プロセス管理）
+       │                         │
+       │ Unix socket             └── Firecracker → microVM ごとに一つのプロセス
+       ▼
+firecrab-net-helper（特権、capability 制限）
+       └── bridge · TAP · nftables · dnsmasq
 ```
 
-これだけです。インストーラーが足りないものを自分で見つけて導入します — パッケージは
-ホストにある管理コマンド(apt/dnf/zypper/pacman/apk)経由で、さらに Firecracker、
-Rust ツールチェーン、ゲストイメージまで。そのうえでサービスアカウントを作成し、
-systemd デーモン 2 つを導入して `http://127.0.0.1:3000/` にダッシュボードを提供します。
-再実行しても安全で、重複ではなく修復として動きます。
+API はテンプレートアーティファクトを検証してから使用し、インストール済みの環境ではビルド済み
+ダッシュボードも直接配信します。詳細は[アーキテクチャ](docs/10-overview/architecture.md)を参照してください。
+
+## Linux ホストへのインストール
+
+`/dev/kvm`、ネットワーク接続、`sudo` を実行できる一般ユーザーがいる Linux ホストが必要です。
+インストーラはその一般ユーザーとして実行し、スクリプトの前に **`sudo` を付けないで**ください。
+ソースビルドとユーザー向けツールは起動ユーザーの所有のままにし、パッケージ、systemd、ホスト設定
+など権限が必要な個別操作だけで内部的に `sudo` を使います。
 
 ```sh
-./install.sh --check            # 何が足りないかを先に確認(root 不要・変更なし)
-./install.sh --doctor           # ホスト設定の診断(UFW・ソケット・DB パスなど)
-sudo ./install.sh --uninstall   # デーモンを削除。--purge を付けなければ VM データは残る
+git clone https://github.com/SteelCrab/firecrab.git
+cd firecrab
+./install.sh
 ```
 
-KVM だけは代わりに導入できません — `/dev/kvm` が無い場合は BIOS で仮想化を有効に
-してください(このホスト自体が VM ならネステッド仮想化)。オプション・配置場所・アップグレード・アンインストール・トラブルシュートは
-[docs/20-guides/install.md](docs/20-guides/install.md) を参照。
-
-## ソースから実行(開発)
-
-インストールせずターミナル 3 つで動かします — 特権ネットワークヘルパー、API、そして
-ブラウザから API へ届かせるプロキシ付きの Vite 開発サーバーです。
+よく使うインストーラのオプション:
 
 ```sh
-# 1 — 特権ネットワークヘルパー(bridge, TAP, ファイアウォール, DHCP)
+./install.sh --check                 # 前提条件と予定変更を確認
+./install.sh --doctor                # KVM、ファイアウォール、socket、ホスト設定を診断
+./install.sh --with-ubuntu-image
+./install.sh --with-rocky-image
+./install.sh --uninstall         # デフォルトではデータを保持
+./install.sh --uninstall --purge # /var/lib/firecrab も削除
+```
+
+標準のインストールはダッシュボードと Alpine ゲストイメージをビルドします。スクリプトは KVM を
+有効化できません。`/dev/kvm` がない場合は、先にハードウェア仮想化（またはネステッド仮想化）を
+有効にしてください。すべてのオプション、配置先、アップグレード、トラブルシューティングは
+[インストールガイド](docs/20-guides/install.md)にあります。
+
+## クイックスタート
+
+インストール後に `http://127.0.0.1:3000/` を開き、次の順に進めます。
+
+1. **MicroNetwork** を作成します。
+2. インストール済みイメージを選び、そのネットワークに VM を作成します。
+3. VM を起動し、`running` になったら **Terminal** を開きます。
+
+先にネットワークを作るのは意図した流れです。firecrab には隠れたデフォルトサブネットがないため、
+すべての VM は運用者が選択したネットワークに配置されます。
+
+リクエスト形式、ライフサイクルの意味、エラー envelope は[API ガイド](docs/20-guides/api.md)を、
+イメージパッケージとブラウザ主導のブートストラップは[イメージガイド](docs/20-guides/m2image-builder.md)
+を参照してください。
+
+## ソースから開発
+
+network helper、API、Vite ダッシュボード用に三つの端末を使います。ローカルデータのパスは作業
+ディレクトリ基準なので、API は必ずリポジトリルートから実行してください。
+
+```sh
+# 端末 1 — 特権ネットワーク操作
 cargo build -p firecrab-net-helper
 sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
-     ./target/debug/firecrab-net-helper
+  ./target/debug/firecrab-net-helper
 
-# 2 — API サーバー(リポジトリのルートで実行 — パスは作業ディレクトリ基準)
+# 端末 2 — API と Firecracker マネージャ
 cargo run -p firecrab-api
 
-# 3 — ダッシュボード開発サーバー
-cd firecrab-frontend && npm run dev
+# 端末 3 — ダッシュボード: http://localhost:8080/
+npm install --prefix firecrab-frontend
+npm run dev --prefix firecrab-frontend
 ```
 
-`http://localhost:8080/` を開く。使い方の詳細は [docs/20-guides/web.md](docs/20-guides/web.md) を参照。
-
-3 番目のターミナルを使わず、ビルド済みダッシュボードを API から配信することもできます。
+ローカルで本番に近い形で実行するには、ダッシュボードをビルドして API に直接配信させます。
 
 ```sh
-cd firecrab-frontend && npm run build && cd ..
+npm run build --prefix firecrab-frontend
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
-# http://localhost:3000/
+# http://127.0.0.1:3000/
 ```
+
+Rust のテストスイートは次で実行します。
+
+```sh
+cargo test --workspace
+```
+
+開発時の注意点とブラウザのワークフローは[Web ダッシュボードガイド](docs/20-guides/web.md)にあります。
 
 ## ドキュメント
 
-設計ノート・タスク計画・検証手順・バグ記録は [`docs/`](docs/HOME.md) にあります。
-Obsidian のヴォルトとしてそのまま開けます。本文は韓国語です。
+韓国語のドキュメントボルト [`docs/`](docs/HOME.md) には、アーキテクチャ、ガイド、API 契約、
+検証手順、バグ記録があります。Obsidian ボルトとして直接開くこともできます。
 
 ## ライセンス
 
-[Apache License, Version 2.0](./LICENSE) の下で配布される。
+[Apache License, Version 2.0](./LICENSE) で提供します。

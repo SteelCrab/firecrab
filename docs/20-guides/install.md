@@ -2,7 +2,7 @@
 tags:
   - firecrab
   - guide
-updated: 2026-07-31
+updated: 2026-08-07
 ---
 
 # 설치 (`install.sh`)
@@ -12,8 +12,12 @@ systemd 데몬 2개(`firecrab-net-helper`, `firecrab-api`)를 띄우고, 대시�
 
 ```sh
 git clone https://github.com/SteelCrab/firecrab && cd firecrab
-sudo ./install.sh
+./install.sh
 ```
+
+`install.sh` 자체를 `sudo`로 실행하지 않는다. 호출한 일반 사용자의 홈·Cargo·Node 환경에서
+빌드한 뒤, 패키지 설치·systemd·호스트 파일처럼 권한이 필요한 **개별 명령에만** 내부적으로
+`sudo`를 사용한다. 그래야 빌드 결과와 사용자 도구가 root 소유가 되지 않는다.
 
 끝나면 `http://127.0.0.1:3000/`에서 대시보드가 뜬다. 개발용 3터미널 실행은
 [web.md](web.md)를 참고한다.
@@ -25,7 +29,7 @@ sudo ./install.sh
 | 리눅스 + systemd | 필수 | 유닛을 설치할 수 없어 중단 |
 | KVM (`/dev/kvm`) | 필수 | 설치는 계속되지만 VM이 시작되지 않음 — **스크립트가 대신 설치할 수 없는 유일한 항목** |
 | 네트워크 | 필수 | 패키지·firecracker·이미지를 받지 못함 |
-| root | 필수 (`--check` / `--doctor`는 예외) | `sudo ./install.sh` |
+| sudo 권한이 있는 일반 사용자 | 필수 (`--check` / `--doctor`는 예외) | `./install.sh` — 스크립트 앞에 `sudo`를 붙이지 않음 |
 | 패키지 관리자 | apt-get / dnf / zypper / pacman / apk | 감지 실패 시 부족한 것을 안내만 하고 직접 설치해야 함 |
 
 KVM이 없다는 건 보통 BIOS에서 가상화가 꺼져 있거나, 이 호스트 자체가 VM인데 중첩 가상화가
@@ -80,7 +84,7 @@ KVM이 없다는 건 보통 BIOS에서 가상화가 꺼져 있거나, 이 호스
 | `UNITDIR` | `/etc/systemd/system` |
 
 ```sh
-sudo DATADIR=/srv/firecrab PREFIX=/opt ./install.sh
+DATADIR=/srv/firecrab PREFIX=/opt ./install.sh
 ```
 
 ## 설치가 하는 일
@@ -149,7 +153,7 @@ systemctl restart firecrab-api         # 설정 변경 후
 
 - **설정 변경**: `/etc/firecrab/api.env` 수정 → `systemctl restart firecrab-api`
   (사용 가능한 변수는 [api.md](api.md)의 환경 변수 표 참고)
-- **업그레이드**: `git pull` 후 `sudo ./install.sh` 재실행 — 빌드·배치만 갱신되고
+- **업그레이드**: `git pull` 후 `./install.sh` 재실행 — 빌드·배치만 갱신되고
   데이터와 `api.env`는 그대로
 - **이미지 추가 (수동)**: `$DATADIR/images/`에 넣고 `systemctl restart firecrab-api`
   (템플릿 파일명은 `firecrab-api/src/templates.rs`의 `default_specs()` 기준)
@@ -168,7 +172,7 @@ M2Image 설치는 **패키지 베이스 URL**에서 `{alias}.tar.zst`를 받는�
 | 패키지 설치 | `POST /api/images/{alias}/package` (비동기 다운로드 · 구조 검증) |
 | 이미지 설치 | `POST /api/images/{alias}/install` (준비된 패키지 해제 · 검증 · 등록) |
 
-호스트에 게스트 이미지 없이 설치한 경우(`sudo ./install.sh --no-images`)에도
+호스트에 게스트 이미지 없이 설치한 경우(`./install.sh --no-images`)에도
 대시보드 **이미지** 메뉴로 템플릿을 받을 수 있다.
 
 1. 패키지 베이스 URL을 `api.env`에 넣는다 (재설치해도 기존 파일은 보존됨):
@@ -202,8 +206,8 @@ FIRECRAB_IMAGE_BASE_URL=http://127.0.0.1:8765 cargo run -p firecrab-api
 ## 제거
 
 ```sh
-sudo ./install.sh --uninstall           # 유닛·바이너리·대시보드만
-sudo ./install.sh --uninstall --purge   # 데이터까지 (되돌릴 수 없음)
+./install.sh --uninstall           # 유닛·바이너리·대시보드만
+./install.sh --uninstall --purge   # 데이터까지 (되돌릴 수 없음)
 ```
 
 - 남는 것: 서비스 계정, `$CONFDIR`, `$DATADIR` (`--purge` 없이는)
@@ -231,7 +235,7 @@ sudo ./install.sh --uninstall --purge   # 데이터까지 (되돌릴 수 없음)
 | shellcheck | `install.sh` + `scripts/firecrab-doctor.sh` 인용·단어 분리 실수 |
 | `--check` | 비특권 동작 + `/var/lib/firecrab`을 만들지 않음 |
 | `--doctor` | 비특권·무변경, exit 0/1 |
-| `sudo ./install.sh --no-images` | 계정·디렉터리·유닛·기동, `firecrab-doctor` 배치 |
+| `./install.sh --no-images` | 계정·디렉터리·유닛·기동, `firecrab-doctor` 배치 |
 | 설치 후 doctor | host 경로 정상; 이미지 FAIL만 허용(`--no-images`) |
 | 소켓·그룹 확인 | `root firecrab 660`, firecrab이 kvm 그룹 |
 | capability | `fcbr0` 주소, dnsmasq 생존, 67번 포트 바인딩, `operation not permitted` 없음 |
