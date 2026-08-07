@@ -183,6 +183,17 @@ cargo test --workspace
 英語の技術ドキュメント [`public-docs/`](public-docs/README.md) には、アーキテクチャ、インストール、運用、
 API 契約、トラブルシューティングがまとめられています。
 
+## 貢献
+
+<p align="center">
+  <a href="./CONTRIBUTING.md#a-note-from-the-maintainer">
+    <img src="assets/icons/contributors.png" alt="Contributors" width="96" />
+  </a>
+</p>
+
+[メンテナからのメモ](./CONTRIBUTING.md#a-note-from-the-maintainer)、開発環境、チェック項目、PR の進め方、ドキュメント規約は
+[CONTRIBUTING.md](./CONTRIBUTING.md) を参照してください。
+
 ## ライセンス
 
 [Apache License, Version 2.0](./LICENSE) で提供します。

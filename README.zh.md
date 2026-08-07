@@ -168,6 +168,17 @@ cargo test --workspace
 
 英文技术文档 [`public-docs/`](public-docs/README.md) 包含架构、安装、运维、API 合约和故障排查指南。
 
+## 贡献
+
+<p align="center">
+  <a href="./CONTRIBUTING.md#a-note-from-the-maintainer">
+    <img src="assets/icons/contributors.png" alt="Contributors" width="96" />
+  </a>
+</p>
+
+[维护者的话](./CONTRIBUTING.md#a-note-from-the-maintainer)、开发环境、检查项、PR 约定与文档规则见
+[CONTRIBUTING.md](./CONTRIBUTING.md)。
+
 ## 许可证
 
 采用 [Apache License, Version 2.0](./LICENSE)。

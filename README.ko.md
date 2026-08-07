@@ -178,6 +178,17 @@ cargo test --workspace
 영문 기술 문서 [`public-docs/`](public-docs/README.md)에는 아키텍처, 설치, 운영, API 계약과 문제 해결
 가이드가 정리되어 있습니다.
 
+## 기여
+
+<p align="center">
+  <a href="./CONTRIBUTING.md#a-note-from-the-maintainer">
+    <img src="assets/icons/contributors.png" alt="Contributors" width="96" />
+  </a>
+</p>
+
+[유지자 노트](./CONTRIBUTING.md#a-note-from-the-maintainer)와 함께, 개발 환경·검사 항목·PR 기대 사항·문서 규칙은
+[CONTRIBUTING.md](./CONTRIBUTING.md)를 보세요.
+
 ## 라이선스
 
 [Apache License, Version 2.0](./LICENSE)로 배포됩니다.

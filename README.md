@@ -187,6 +187,17 @@ More development notes and browser workflow details are in the [web dashboard gu
 The English technical documentation in [`public-docs/`](public-docs/README.md) covers architecture,
 installation, operations, API contracts, and troubleshooting.
 
+## Contributing
+
+<p align="center">
+  <a href="./CONTRIBUTING.md">
+    <img src="assets/icons/contributors.png" alt="Contributors" width="96" />
+  </a>
+</p>
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the [maintainer’s note](./CONTRIBUTING.md#a-note-from-the-maintainer),
+development setup, checks, pull request expectations, and documentation rules.
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](./LICENSE).
