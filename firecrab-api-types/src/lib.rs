@@ -293,6 +293,30 @@ pub struct VmResponse {
     /// Storage root id this VM's disk lives under (`{root}/vms/{id}/`).
     /// Fixed at creation so a later config change cannot orphan the files.
     pub storage_root: String,
+    /// Host Firecracker process CPU usage since the previous sample, as a
+    /// percent of one host core. `None` when the VM is not running, the
+    /// process is missing, or this is the first sample (no delta yet).
+    /// This is **not** guest-internal CPU accounting.
+    pub cpu_usage_percent: Option<f32>,
+    /// Host Firecracker process RSS in MiB. `None` when not running or the
+    /// process cannot be sampled. This is host process memory, not guest
+    /// free RAM.
+    pub memory_used_mib: Option<u64>,
+    /// Recent host-process samples for sparklines (oldest first, bounded).
+    /// Empty when the VM is not running or has never been sampled.
+    pub usage_history: Vec<VmUsageSample>,
+}
+
+/// One host-process usage sample for dashboard graphs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmUsageSample {
+    /// Unix epoch milliseconds when the sample was taken.
+    pub at_ms: u64,
+    /// CPU percent of one host core for the interval ending at this sample.
+    pub cpu_usage_percent: Option<f32>,
+    /// Process RSS in MiB at this sample.
+    pub memory_used_mib: Option<u64>,
 }
 
 /// One selectable place a VM disk may be created — env root, default, or a
@@ -963,10 +987,20 @@ mod tests {
             hostname: "fc-abc123456789".to_owned(),
             micro_network_id: Uuid::nil(),
             storage_root: "default".to_owned(),
+            cpu_usage_percent: Some(12.5),
+            memory_used_mib: Some(180),
+            usage_history: vec![VmUsageSample {
+                at_ms: 1_700_000_000_000,
+                cpu_usage_percent: Some(12.5),
+                memory_used_mib: Some(180),
+            }],
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
         assert_eq!(serde_json::from_str::<VmResponse>(&json).unwrap(), response);
+        assert!(json.contains("\"cpuUsagePercent\":12.5"));
+        assert!(json.contains("\"memoryUsedMib\":180"));
+        assert!(json.contains("\"usageHistory\""));
     }
 
     #[test]
@@ -1016,9 +1050,15 @@ mod tests {
             hostname: "fc-abc123456789".to_owned(),
             micro_network_id: Uuid::nil(),
             storage_root: "default".to_owned(),
+            cpu_usage_percent: None,
+            memory_used_mib: None,
+            usage_history: Vec::new(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
+        assert!(json.contains("\"cpuUsagePercent\":null"));
+        assert!(json.contains("\"memoryUsedMib\":null"));
+        assert!(json.contains("\"usageHistory\":[]"));
     }
 
     #[test]

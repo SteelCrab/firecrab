@@ -389,6 +389,11 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(&id);
+        state
+            .process_metrics
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear(id);
 
         let clean_exit = status.as_ref().is_ok_and(|status| status.success());
         let updated = {

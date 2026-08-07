@@ -4,5 +4,6 @@ import type { PackageUpdateStatus } from "./PackageUpdateStatus";
 import type { StartupStep } from "./StartupStep";
 import type { StartupStepRun } from "./StartupStepRun";
 import type { VmState } from "./VmState";
+import type { VmUsageSample } from "./VmUsageSample";
 
-export type VmResponse = { id: string, name: string, state: VmState, template: string, templateVersion: string, cpu: number, ram: number, diskGb: number, startupStep: StartupStep | null, startupTimeline: Array<StartupStepRun>, egressPolicy: EgressPolicy, packageUpdate: PackageUpdateStatus | null, ipv4: string | null, mac: string | null, hostname: string, microNetworkId: string, storageRoot: string, };
+export type VmResponse = { id: string, name: string, state: VmState, template: string, templateVersion: string, cpu: number, ram: number, diskGb: number, startupStep: StartupStep | null, startupTimeline: Array<StartupStepRun>, egressPolicy: EgressPolicy, packageUpdate: PackageUpdateStatus | null, ipv4: string | null, mac: string | null, hostname: string, microNetworkId: string, storageRoot: string, /** Host Firecracker process CPU % of one core; null when unknown. */ cpuUsagePercent: number | null, /** Host Firecracker process RSS MiB; null when unknown. */ memoryUsedMib: number | null, /** Recent host-process samples for sparklines. */ usageHistory: Array<VmUsageSample>, };

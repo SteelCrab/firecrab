@@ -21,6 +21,7 @@ import { isEditableState } from "../model";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
+import UsageCharts from "./UsageCharts";
 import { useI18n } from "../i18n";
 
 const STARTUP_STEPS: StartupStep[] = [
@@ -47,6 +48,11 @@ const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
 };
 
 const POLL_MILLIS = 750;
+
+function formatCpuPercent(value: number): string {
+  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded}%`;
+}
 
 interface VmDetailModalProps {
   vmId: string;
@@ -258,7 +264,22 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     onChange={(event) => setEditCpu(event.target.value)}
                   />
                 ) : (
-                  vm.cpu
+                  <span className="detail-spec-pair">
+                    <span className="detail-spec-alloc">{vm.cpu}</span>
+                    {vm.state === "running" && (
+                      <span
+                        className="detail-spec-live"
+                        title={t(
+                          "Host process CPU % of one core",
+                          "호스트 프로세스 CPU (코어 1개 기준)",
+                        )}
+                      >
+                        {vm.cpuUsagePercent != null
+                          ? formatCpuPercent(vm.cpuUsagePercent)
+                          : "—"}
+                      </span>
+                    )}
+                  </span>
                 )}
               </dd>
               <dt>ram</dt>
@@ -266,7 +287,22 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                 {editing ? (
                   <RamStepper id="vm-edit-ram" value={editRam} onChange={setEditRam} />
                 ) : (
-                  `${vm.ram} MiB`
+                  <span className="detail-spec-pair">
+                    <span className="detail-spec-alloc">{vm.ram} MiB</span>
+                    {vm.state === "running" && (
+                      <span
+                        className="detail-spec-live"
+                        title={t(
+                          "Host Firecracker process RSS — not guest free RAM",
+                          "호스트 Firecracker 프로세스 RSS — 게스트 여유 메모리 아님",
+                        )}
+                      >
+                        {vm.memoryUsedMib != null
+                          ? `${vm.memoryUsedMib} MiB`
+                          : "—"}
+                      </span>
+                    )}
+                  </span>
                 )}
               </dd>
               <dt>disk</dt>
@@ -284,6 +320,11 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   `${vm.diskGb} GiB`
                 )}
               </dd>
+              {vm.state === "running" && (vm.usageHistory?.length ?? 0) > 0 && (
+                <dd className="detail-usage-charts">
+                  <UsageCharts history={vm.usageHistory ?? []} ramMib={vm.ram} />
+                </dd>
+              )}
               <dt>MicroNetwork</dt>
               <dd>{microNetworkLabel}</dd>
               <dt>MicroStorage</dt>
