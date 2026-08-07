@@ -236,7 +236,7 @@ fn subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
 }
 
 /// The subnets allowed out of the host — MicroNetworks with internet on
-/// (`docs/30-tasks/task-micro-network.md`).
+/// (`public-docs/networking.md`).
 fn egress_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
     micro_networks
         .iter()

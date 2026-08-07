@@ -1,7 +1,7 @@
 //! Per-VM writable disk management: copies a verified template rootfs into a
 //! generation-scoped file under `{vm}/disks/{generation}.ext4` on first
 //! prepare, and grows it when capacity increases. Stop/start reuses the same
-//! active generation file (`docs/30-tasks/task-vm-rootfs-and-artifacts.md`).
+//! active generation file (`public-docs/storage.md`).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom};
@@ -626,7 +626,7 @@ mod tests {
     }
 
     /// A VM whose `diskGb` was edited upward after it already had a disk
-    /// (`docs/30-tasks/task-vm-resource-update.md`) needs the *next* `prepare_rootfs` call
+    /// (`public-docs/storage.md`) needs the *next* `prepare_rootfs` call
     /// — the "reuse existing disk" path, not the "fresh copy" one — to
     /// actually grow it.
     #[test]

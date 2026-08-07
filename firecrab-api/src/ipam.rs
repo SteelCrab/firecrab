@@ -1,6 +1,6 @@
 //! IP address and MAC allocation management (IPAM): hands out unique
 //! IPv4/MAC leases from a MicroNetwork's subnet
-//! (`docs/30-tasks/task-micro-network.md`) — backed by SQLite so allocation
+//! (`public-docs/networking.md`) — backed by SQLite so allocation
 //! is atomic under concurrent VM creation.
 
 use std::collections::HashSet;

@@ -54,7 +54,7 @@ firecrab-net-helper (privileged, capability-bounded)
 ```
 
 The API verifies template artifacts before using them and serves the built dashboard
-itself in an installed deployment. See the detailed [architecture](docs/10-overview/architecture.md).
+itself in an installed deployment. See the detailed [architecture](public-docs/architecture.md).
 
 ## Install on a Linux host
 
@@ -84,7 +84,7 @@ Useful installer modes:
 The default install builds the dashboard and an Alpine guest image. KVM cannot be
 enabled by the script: if `/dev/kvm` is absent, enable hardware virtualization (or
 nested virtualization) first. For every option, install path, upgrade detail, and
-troubleshooting step, read the [installation guide](docs/20-guides/install.md).
+troubleshooting step, read the [installation guide](public-docs/installation.md).
 
 ## Quick start
 
@@ -144,8 +144,8 @@ create VMs.
 ![M2Image list](assets/dashboard/images.png)
 
 For API request formats, lifecycle semantics, and error envelopes, see the
-[API guide](docs/20-guides/api.md). For image packages and browser-driven bootstrap,
-see the [image guide](docs/20-guides/m2image-builder.md).
+[API guide](public-docs/api.md). For image packages and browser-driven bootstrap,
+see the [image guide](public-docs/images.md).
 
 ## Develop from source
 
@@ -180,11 +180,11 @@ Run the Rust test suite with:
 cargo test --workspace
 ```
 
-More development notes and browser workflow details are in the [web dashboard guide](docs/20-guides/web.md).
+More development notes and browser workflow details are in the [web dashboard guide](public-docs/dashboard.md).
 
 ## Documentation
 
-The English technical documentation in [`docs/`](docs/README.md) covers architecture,
+The English technical documentation in [`public-docs/`](public-docs/README.md) covers architecture,
 installation, operations, API contracts, and troubleshooting.
 
 ## License

@@ -42,7 +42,7 @@ pub struct HttpConfig {
     pub max_concurrent_requests: usize,
     pub request_timeout: Duration,
     /// Directory of built dashboard assets to serve, or `None` to serve none
-    /// (`docs/30-tasks/task-host-frontend-serving.md`). Set when an installed deploy
+    /// (`public-docs/dashboard.md`). Set when an installed deploy
     /// should answer the browser itself instead of needing a Vite dev server
     /// alongside it; unset during development, where `npm run dev` proxies
     /// to this API.

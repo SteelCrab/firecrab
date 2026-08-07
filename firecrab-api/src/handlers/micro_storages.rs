@@ -1,5 +1,5 @@
 //! MicroStorage CRUD — named host paths VMs can put disks on
-//! (`docs/30-tasks/task-vm-physical-disk-selection.md`).
+//! (`public-docs/storage.md`).
 
 use std::collections::BTreeMap;
 use std::fs;

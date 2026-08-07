@@ -9,7 +9,7 @@
 #        ./install.sh --doctor
 #        firecrab-doctor   (after install)
 #
-# See docs/30-tasks/task-host-doctor.md
+# See public-docs/troubleshooting.md
 set -Eeuo pipefail
 
 DIGEST=0
@@ -443,7 +443,7 @@ check_ufw() {
         # No bridges yet — cannot assert per-bridge rules. Warn that UFW is
         # active so the operator knows to re-check after the first network.
         skip "ufw: active, but no firecrab bridges (fcbr0/mnb*) yet" \
-            "new bridges need DHCP/DNS and route allows (docs/20-guides/troubleshooting.md)" \
+            "new bridges need DHCP/DNS and route allows (public-docs/troubleshooting.md)" \
             "after net-helper starts: sudo ufw allow in on fcbr0 to any port 67 proto udp; …"
         return
     fi
@@ -702,7 +702,7 @@ check_image_install_tools() {
             none|NONE|-)
                 skip "image-install: remote disabled (FIRECRAB_IMAGE_BASE_URL=${FIRECRAB_IMAGE_BASE_URL})" \
                     "dashboard will not download packages; seed images/ on the host" \
-                    "see docs/20-guides/install.md (M2Image)"
+                    "see public-docs/installation.md (M2Image)"
                 return
                 ;;
         esac
@@ -711,7 +711,7 @@ check_image_install_tools() {
     fi
     skip "image-install: FIRECRAB_IMAGE_BASE_URL unset" \
         "dashboard cannot download templates until the URL is set in api.env" \
-        "see docs/20-guides/install.md (M2Image)"
+        "see public-docs/installation.md (M2Image)"
 }
 
 # --- run ---------------------------------------------------------------------

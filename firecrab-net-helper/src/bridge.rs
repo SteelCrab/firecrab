@@ -133,7 +133,7 @@ pub async fn ensure_bridge(actor: &BridgeActor, mtu: u32) -> Result<(), BridgeEr
 }
 
 /// Ensure a MicroNetwork's own bridge is present and usable
-/// (`docs/30-tasks/task-micro-network.md`) — same idempotent create-if-missing
+/// (`public-docs/networking.md`) — same idempotent create-if-missing
 /// behavior as [`ensure_bridge`], just for a bridge named/addressed after a
 /// MicroNetwork instead of the fixed default network. The interface name is
 /// derived from `micro_network_id`, never taken from a string the caller

@@ -38,7 +38,7 @@ const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
 };
 
 // Derived client-side from the polled `startupStep` value — no dedicated
-// backend log field. See docs/40-tests/vm-detail-modal.md for why.
+// backend log field. See public-docs/dashboard.md for why.
 const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
   preparingDisk: "Preparing disk (copying rootfs template)…",
   generatingConfig: "Disk ready → generating Firecracker configuration…",
@@ -449,7 +449,7 @@ function clockTime(epochMillis: number): string {
 
 /**
  * The start pipeline as a row of timed steps, like a CI build log
- * (`docs/30-tasks/task-vm-startup-timeline.md`). Durations come from the
+ * (`public-docs/api.md`). Durations come from the
  * server's own timestamps — polling is far too coarse to time a 2-second
  * disk copy — and only the still-running step ticks locally.
  */

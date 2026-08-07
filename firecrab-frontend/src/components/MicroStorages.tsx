@@ -18,7 +18,7 @@ import { useI18n } from "../i18n";
 /**
  * MicroStorage management — register host mount paths as named storage pools
  * and see which VMs use each. Creating a partition is *not* in scope; pick an
- * already-mounted path (or type one). See docs/20-guides/micro-storage.md.
+ * already-mounted path (or type one). See public-docs/storage.md.
  */
 export default function MicroStorages() {
   const { t } = useI18n();

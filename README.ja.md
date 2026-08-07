@@ -53,7 +53,7 @@ firecrab-net-helper（特権、capability 制限）
 ```
 
 API はテンプレートアーティファクトを検証してから使用し、インストール済みの環境ではビルド済み
-ダッシュボードも直接配信します。詳細は[アーキテクチャ](docs/10-overview/architecture.md)を参照してください。
+ダッシュボードも直接配信します。詳細は[アーキテクチャ](public-docs/architecture.md)を参照してください。
 
 ## Linux ホストへのインストール
 
@@ -82,7 +82,7 @@ cd firecrab
 標準のインストールはダッシュボードと Alpine ゲストイメージをビルドします。スクリプトは KVM を
 有効化できません。`/dev/kvm` がない場合は、先にハードウェア仮想化（またはネステッド仮想化）を
 有効にしてください。すべてのオプション、配置先、アップグレード、トラブルシューティングは
-[インストールガイド](docs/20-guides/install.md)にあります。
+[インストールガイド](public-docs/installation.md)にあります。
 
 ## クイックスタート
 
@@ -139,8 +139,8 @@ cd firecrab
 
 ![M2Image の一覧](assets/dashboard/images.png)
 
-リクエスト形式、ライフサイクルの意味、エラー envelope は[API ガイド](docs/20-guides/api.md)を、
-イメージパッケージとブラウザ主導のブートストラップは[イメージガイド](docs/20-guides/m2image-builder.md)
+リクエスト形式、ライフサイクルの意味、エラー envelope は[API ガイド](public-docs/api.md)を、
+イメージパッケージとブラウザ主導のブートストラップは[イメージガイド](public-docs/images.md)
 を参照してください。
 
 ## ソースから開発
@@ -176,11 +176,11 @@ Rust のテストスイートは次で実行します。
 cargo test --workspace
 ```
 
-開発時の注意点とブラウザのワークフローは[Web ダッシュボードガイド](docs/20-guides/web.md)にあります。
+開発時の注意点とブラウザのワークフローは[Web ダッシュボードガイド](public-docs/dashboard.md)にあります。
 
 ## ドキュメント
 
-英語の技術ドキュメント [`docs/`](docs/README.md) には、アーキテクチャ、インストール、運用、
+英語の技術ドキュメント [`public-docs/`](public-docs/README.md) には、アーキテクチャ、インストール、運用、
 API 契約、トラブルシューティングがまとめられています。
 
 ## ライセンス

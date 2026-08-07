@@ -148,7 +148,7 @@ pub struct UpdateVmResourcesRequest {
 
 /// A named phase of `start_vm`'s pipeline, exposed only while `state ==
 /// Starting` so the dashboard can show *why* a VM hasn't reached `running`
-/// yet instead of a bare spinner (`docs/30-tasks/task-vm-startup-progress.md`).
+/// yet instead of a bare spinner (`public-docs/api.md`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupStep {
@@ -160,7 +160,7 @@ pub enum StartupStep {
     StartingProcess,
     /// Waiting for the guest to confirm (over its serial console) that
     /// DHCP and DNS actually came up, since there's no guest agent to ask
-    /// directly (`docs/30-tasks/task-guest-network-configuration.md`).
+    /// directly (`public-docs/networking.md`).
     ConfiguringNetwork,
 }
 
@@ -182,7 +182,7 @@ pub enum StartupStepOutcome {
 /// steps take — timing them client-side would round a 2-second disk copy up
 /// to the poll interval or miss it entirely. So the server records when each
 /// step opened and closed, and the client only formats it
-/// (`docs/30-tasks/task-vm-startup-timeline.md`).
+/// (`public-docs/api.md`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StartupStepRun {
@@ -219,8 +219,8 @@ pub struct PackageAction {
 
 /// Outcome of the most recent `POST /api/vms/{id}/packages` run for
 /// this VM — transient like `startup_step` (see
-/// `docs/30-tasks/task-guest-network-configuration.md`'s sibling doc for the console-
-/// sentinel pattern this reuses), not persisted across a restart.
+/// `public-docs/api.md` and `public-docs/networking.md` for the
+/// console-sentinel pattern this reuses), not persisted across a restart.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     rename_all = "camelCase",
@@ -288,7 +288,7 @@ pub struct VmResponse {
     /// kept after the start finishes so the timeline stays readable.
     pub startup_timeline: Vec<StartupStepRun>,
     /// MicroNetwork this VM belongs to. Fixed at creation — its lease comes
-    /// out of that network's subnet (`docs/30-tasks/task-micro-network.md`).
+    /// out of that network's subnet (`public-docs/networking.md`).
     pub micro_network_id: Uuid,
     /// Storage root id this VM's disk lives under (`{root}/vms/{id}/`).
     /// Fixed at creation so a later config change cannot orphan the files.
@@ -296,7 +296,7 @@ pub struct VmResponse {
 }
 
 /// One selectable place a VM disk may be created — env root, default, or a
-/// MicroStorage (`docs/30-tasks/task-vm-physical-disk-selection.md`). Clients
+/// MicroStorage (`public-docs/storage.md`). Clients
 /// pick by `id` only; paths are never free-form on create.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -439,7 +439,7 @@ fn internet_enabled_default() -> bool {
 }
 
 /// A MicroNetwork — one of firecrab's own virtual networks
-/// (`docs/30-tasks/task-micro-network.md`). A named CIDR reservation backed by a real
+/// (`public-docs/networking.md`). A named CIDR reservation backed by a real
 /// host bridge; routing-table separation and VM membership are follow-up work.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -455,12 +455,12 @@ pub struct MicroNetworkResponse {
     pub gateway: String,
     /// Whether its VMs may reach anything outside Firecrab. `false` is a
     /// closed network: no NAT, and nothing routed out of it
-    /// (`docs/30-tasks/task-micro-network.md`).
+    /// (`public-docs/networking.md`).
     pub internet_enabled: bool,
 }
 
 /// Response for `GET /api/network`: the host network firecrab has set up,
-/// read-only for now (see `docs/30-tasks/task-network-configuration-dashboard.md` — making
+/// read-only for now (see `public-docs/networking.md` — making
 /// this genuinely editable needs a larger IPAM/bridge refactor).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -478,7 +478,7 @@ pub struct NetworkInfoResponse {
 /// Response for `GET /api/micro-networks/{id}`: one network broken out into
 /// the services it is actually made of, so the dashboard can show what a
 /// MicroNetwork gives a VM rather than just its name and CIDR
-/// (`docs/30-tasks/task-micro-network.md`).
+/// (`public-docs/networking.md`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroNetworkDetailResponse {
@@ -594,7 +594,7 @@ pub struct HostStatusResponse {
 
 /// One entry from `GET /api/images` — a template registry alias the create
 /// form can offer, with digests and a disk floor. Host paths are never
-/// exposed (`docs/30-tasks/task-m2image-catalog-api.md`).
+/// exposed (`public-docs/images.md`).
 ///
 /// Uninstalled built-in templates still appear so the dashboard can offer
 /// **official package links** (`package_url`) and kick off
@@ -694,7 +694,7 @@ pub enum BootstrapStatus {
 /// that mean something to an operator, mirroring [`StartupStep`]'s four —
 /// with the fine-grained detail of the longest one left to the live
 /// console instead of more enum variants
-/// (`docs/superpowers/specs/2026-08-05-bootstrap-progress-ui-design.md`).
+/// (`public-docs/images.md`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum BootstrapStep {

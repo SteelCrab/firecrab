@@ -1,5 +1,5 @@
 //! Read-only host/network info for the dashboard's status panel (see
-//! `docs/30-tasks/task-network-configuration-dashboard.md`). The subnet/bridge
+//! `public-docs/networking.md`). The subnet/bridge
 //! come from the first MicroNetwork when any exist — prefer
 //! `GET /api/micro-networks` for the full set. Host status is a live
 //! snapshot read straight from `/proc` and `df`.

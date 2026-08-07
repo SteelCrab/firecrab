@@ -5,7 +5,7 @@
 //! `TemplateRegistry` under an alias no `/api/images` consumer ever
 //! surfaces, purely so the existing `create_vm` disk-provisioning and
 //! artifact-verification machinery works unchanged. See
-//! `docs/superpowers/specs/2026-08-05-m2image-microboot-design.md`.
+//! `public-docs/images.md`.
 
 use std::path::{Path, PathBuf};
 

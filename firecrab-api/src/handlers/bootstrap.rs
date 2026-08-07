@@ -6,7 +6,7 @@
 //! then dump the result out of the builder VM's disk and package it as
 //! `{alias}.tar.zst` for the existing `image_install.rs` pipeline to pick
 //! up unchanged. See
-//! `docs/superpowers/specs/2026-08-03-m2image-web-rebuild-design.md`.
+//! `public-docs/images.md`.
 
 use std::time::Duration;
 
@@ -216,8 +216,8 @@ fn bootstrap_disk_gb(target_alias: &str) -> u16 {
 /// registered (a no-op after the first call — see `crate::microboot`'s own
 /// doc comment), and returns its alias for `CreateVmRequest.template`. No
 /// longer depends on any template being installed: this is what closes the
-/// bootstrap boundary `docs/superpowers/specs/2026-08-03-m2image-web-rebuild-design.md`
-/// left open (`docs/superpowers/specs/2026-08-05-m2image-microboot-design.md`).
+/// bootstrap boundary `public-docs/images.md`
+/// left open (`public-docs/images.md`).
 ///
 /// `ensure_registered`'s failure detail is a dynamic `String` (a download or
 /// filesystem error), while `AppError::unavailable` takes a `&'static str`

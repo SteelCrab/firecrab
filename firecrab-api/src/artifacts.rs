@@ -3,7 +3,7 @@
 //!
 //! Host paths are always derived from the configured vms root +
 //! server-generated UUIDs — never from user-supplied absolute paths
-//! (`docs/30-tasks/task-vm-rootfs-and-artifacts.md`).
+//! (`public-docs/storage.md`).
 
 use std::fs;
 use std::io;

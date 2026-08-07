@@ -49,7 +49,7 @@ firecrab-net-helper（特权、capability 受限）
 ```
 
 API 会在使用前验证模板工件；已安装的部署中，API 也会直接提供构建后的仪表盘。详见
-[架构文档](docs/10-overview/architecture.md)。
+[架构文档](public-docs/architecture.md)。
 
 ## 在 Linux 主机上安装
 
@@ -75,7 +75,7 @@ cd firecrab
 ```
 
 默认安装会构建仪表盘和 Alpine 客户机镜像。脚本不能启用 KVM：若没有 `/dev/kvm`，请先启用硬件
-虚拟化（或嵌套虚拟化）。所有选项、安装路径、升级和排错请参阅[安装指南](docs/20-guides/install.md)。
+虚拟化（或嵌套虚拟化）。所有选项、安装路径、升级和排错请参阅[安装指南](public-docs/installation.md)。
 
 ## 快速开始
 
@@ -126,8 +126,8 @@ ID；可通过 **阻止互联网/启用互联网** 改变整个网络经 NAT 的
 
 ![M2Image 列表](assets/dashboard/images.png)
 
-请求格式、生命周期语义和错误 envelope 见 [API 指南](docs/20-guides/api.md)。镜像包与浏览器引导
-流程见[镜像指南](docs/20-guides/m2image-builder.md)。
+请求格式、生命周期语义和错误 envelope 见 [API 指南](public-docs/api.md)。镜像包与浏览器引导
+流程见[镜像指南](public-docs/images.md)。
 
 ## 从源码开发
 
@@ -162,11 +162,11 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 cargo test --workspace
 ```
 
-更多开发说明和浏览器工作流见[网页仪表盘指南](docs/20-guides/web.md)。
+更多开发说明和浏览器工作流见[网页仪表盘指南](public-docs/dashboard.md)。
 
 ## 文档
 
-英文技术文档 [`docs/`](docs/README.md) 包含架构、安装、运维、API 合约和故障排查指南。
+英文技术文档 [`public-docs/`](public-docs/README.md) 包含架构、安装、运维、API 合约和故障排查指南。
 
 ## 许可证
 

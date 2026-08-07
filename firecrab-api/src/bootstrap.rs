@@ -2,7 +2,7 @@
 //! (`POST /api/images/{alias}/bootstrap` and friends) — same shape as the
 //! image-install tracker, but for a session whose terminal action is
 //! "package as a `.tar.zst`" for `image_install.rs` to pick up (see
-//! `docs/superpowers/specs/2026-08-03-m2image-web-rebuild-design.md`).
+//! `public-docs/images.md`).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

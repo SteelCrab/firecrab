@@ -52,7 +52,7 @@ firecrab-net-helper (특권, capability 제한)
 ```
 
 API는 템플릿 아티팩트를 검증한 뒤 사용하며, 설치 환경에서는 빌드된 대시보드도 직접
-서빙합니다. 자세한 내용은 [아키텍처](docs/10-overview/architecture.md)를 참고하세요.
+서빙합니다. 자세한 내용은 [아키텍처](public-docs/architecture.md)를 참고하세요.
 
 ## Linux 호스트에 설치
 
@@ -79,7 +79,7 @@ cd firecrab
 
 기본 설치는 대시보드와 Alpine 게스트 이미지를 빌드합니다. `/dev/kvm`이 없다면 스크립트가
 대신 활성화할 수 없으므로 하드웨어 가상화(또는 중첩 가상화)를 먼저 켜야 합니다. 모든 옵션,
-설치 경로, 업그레이드, 문제 해결은 [설치 가이드](docs/20-guides/install.md)에 있습니다.
+설치 경로, 업그레이드, 문제 해결은 [설치 가이드](public-docs/installation.md)에 있습니다.
 
 ## 빠른 시작
 
@@ -135,8 +135,8 @@ VM을 생성합니다. 아래 목록은 상태, 이미지, 리소스, ID를 3초
 
 ![M2Image 목록 화면](assets/dashboard/images.png)
 
-요청 형식, 생명주기 의미, 오류 envelope는 [API 가이드](docs/20-guides/api.md)를, 이미지 패키지와
-브라우저 부트스트랩은 [이미지 가이드](docs/20-guides/m2image-builder.md)를 참고하세요.
+요청 형식, 생명주기 의미, 오류 envelope는 [API 가이드](public-docs/api.md)를, 이미지 패키지와
+브라우저 부트스트랩은 [이미지 가이드](public-docs/images.md)를 참고하세요.
 
 ## 소스에서 개발
 
@@ -171,11 +171,11 @@ Rust 테스트는 다음처럼 실행합니다.
 cargo test --workspace
 ```
 
-더 많은 개발 노트와 브라우저 워크플로는 [웹 대시보드 가이드](docs/20-guides/web.md)에 있습니다.
+더 많은 개발 노트와 브라우저 워크플로는 [웹 대시보드 가이드](public-docs/dashboard.md)에 있습니다.
 
 ## 문서
 
-영문 기술 문서 [`docs/`](docs/README.md)에는 아키텍처, 설치, 운영, API 계약과 문제 해결
+영문 기술 문서 [`public-docs/`](public-docs/README.md)에는 아키텍처, 설치, 운영, API 계약과 문제 해결
 가이드가 정리되어 있습니다.
 
 ## 라이선스

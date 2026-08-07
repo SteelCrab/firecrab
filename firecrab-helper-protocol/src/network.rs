@@ -120,7 +120,7 @@ pub enum NetworkRequest {
     /// Idempotently ensure the shared bridge/subnet/gateway exist.
     EnsureBridge,
     /// Idempotently ensure a MicroNetwork's own bridge/subnet/gateway exist
-    /// (`docs/30-tasks/task-micro-network.md`). The interface name is derived from
+    /// (`public-docs/networking.md`). The interface name is derived from
     /// `micro_network_id` (see [`micro_network_bridge_name`]), never taken
     /// as a string from the API — only the numeric gateway/prefix, which
     /// carry no shell/nftables injection surface, cross the boundary

@@ -65,7 +65,7 @@ impl NetworkClient {
     }
 
     /// Idempotently ensures a MicroNetwork's own bridge exists, gated at
-    /// `gateway`/`prefix` (`docs/30-tasks/task-micro-network.md`).
+    /// `gateway`/`prefix` (`public-docs/networking.md`).
     pub async fn ensure_micro_network_bridge(
         &self,
         micro_network_id: Uuid,

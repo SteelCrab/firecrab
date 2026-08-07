@@ -1,4 +1,4 @@
-//! MicroNetwork CRUD (`docs/30-tasks/task-micro-network.md`) — a named CIDR
+//! MicroNetwork CRUD (`public-docs/networking.md`) — a named CIDR
 //! reservation that also provisions a real bridge on the host and is wired
 //! into the network services VMs need: its own dnsmasq range, its own NAT
 //! rule, and a default deny on traffic routed to any other network. VRF
