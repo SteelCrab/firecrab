@@ -509,15 +509,29 @@ table.vm-table {
 .usage-charts.is-compact {
   gap: 0.5rem 0.75rem;
 }
+.usage-charts.is-large {
+  gap: 1rem 1.25rem;
+  margin: 0.5rem 0 0;
+}
 .usage-charts-empty {
   margin: 0.25rem 0;
   font-size: 0.78rem;
   color: var(--dim, var(--shell));
 }
+.usage-charts-empty.is-large {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.9rem;
+}
 .usage-spark {
   flex: 1 1 10rem;
   min-width: 8rem;
   max-width: 16rem;
+}
+.usage-spark.is-large,
+.usage-charts.is-large .usage-spark {
+  flex: 1 1 16rem;
+  min-width: 14rem;
+  max-width: none;
 }
 .usage-spark-head {
   display: flex;
@@ -527,14 +541,31 @@ table.vm-table {
   margin-bottom: 0.15rem;
   font-size: 0.72rem;
 }
+.usage-spark.is-large .usage-spark-head,
+.usage-charts.is-large .usage-spark-head {
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+}
 .usage-spark-label {
   color: var(--dim, var(--shell));
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.usage-spark.is-large .usage-spark-label,
+.usage-charts.is-large .usage-spark-label {
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
 .usage-spark-unit {
   color: var(--ink);
   font-size: 0.78rem;
+}
+.usage-spark.is-large .usage-spark-unit,
+.usage-charts.is-large .usage-spark-unit {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .usage-spark-svg {
   display: block;
@@ -543,9 +574,22 @@ table.vm-table {
   background: color-mix(in srgb, var(--bg-panel, #1a1f28) 80%, transparent);
   border: 1px solid var(--line);
 }
-.detail-usage-charts {
-  margin: 0.5rem 0 0.25rem;
-  grid-column: 1 / -1;
+.usage-spark.is-large .usage-spark-svg,
+.usage-charts.is-large .usage-spark-svg {
+  border-radius: 6px;
+  min-height: 96px;
+}
+.detail-usage-panel {
+  margin-top: 1rem;
+}
+.detail-usage-panel .panel-title {
+  margin-bottom: 0.25rem;
+}
+.detail-usage-hint {
+  margin: 0 0 0.65rem;
+  font-size: 0.8rem;
+  color: var(--dim, var(--shell));
+  line-height: 1.4;
 }
 /* Detail modal: allocated left, live usage right (tabular). */
 .detail-spec-pair {
@@ -822,27 +866,6 @@ table.image-table .image-package-url a:hover {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.package-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.75rem;
-}
-.package-row:last-child { margin-bottom: 0; }
-.package-row input {
-  flex: 1;
-  min-width: 0;
-  box-sizing: border-box;
-  font-family: var(--font-mono);
-  font-size: 0.9rem;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 0.55rem 0.65rem;
-  height: 2.5rem;
 }
 
 .empty {

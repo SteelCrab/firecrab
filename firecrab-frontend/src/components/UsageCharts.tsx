@@ -5,7 +5,14 @@ interface UsageChartsProps {
   history: VmUsageSample[];
   /** Allocated RAM in MiB — used as a soft scale upper bound for memory. */
   ramMib: number;
-  /** Compact layout for the console detail strip. */
+  /**
+   * Layout size:
+   * - `compact` — console side strip
+   * - `default` — inline / modest
+   * - `large` — dedicated observability panel
+   */
+  size?: "compact" | "default" | "large";
+  /** @deprecated Prefer `size="compact"`. */
   compact?: boolean;
 }
 
@@ -30,15 +37,27 @@ function lastMem(history: VmUsageSample[]): number | null {
   return null;
 }
 
+const SIZE_GEOMETRY = {
+  compact: { height: 36, width: 160, strokeWidth: 1.5 },
+  default: { height: 48, width: 220, strokeWidth: 1.5 },
+  large: { height: 96, width: 420, strokeWidth: 2.25 },
+} as const;
+
 /**
  * Dual sparklines for host Firecracker process CPU % and RSS.
  * Pure SVG — no chart library.
  */
-export default function UsageCharts({ history, ramMib, compact = false }: UsageChartsProps) {
+export default function UsageCharts({
+  history,
+  ramMib,
+  size,
+  compact = false,
+}: UsageChartsProps) {
   const { t } = useI18n();
+  const resolvedSize = size ?? (compact ? "compact" : "default");
   if (history.length < 2) {
     return (
-      <p className="usage-charts-empty">
+      <p className={`usage-charts-empty${resolvedSize === "large" ? " is-large" : ""}`}>
         {t("Collecting samples…", "샘플 수집 중…")}
       </p>
     );
@@ -50,12 +69,11 @@ export default function UsageCharts({ history, ramMib, compact = false }: UsageC
   );
   const cpuNow = lastCpu(history);
   const memNow = lastMem(history);
-  const height = compact ? 36 : 48;
-  const width = compact ? 160 : 220;
+  const { height, width, strokeWidth } = SIZE_GEOMETRY[resolvedSize];
 
   return (
     <div
-      className={`usage-charts${compact ? " is-compact" : ""}`}
+      className={`usage-charts is-${resolvedSize}`}
       title={t(
         "Host Firecracker process — not guest free RAM",
         "호스트 Firecracker 프로세스 — 게스트 여유 메모리 아님",
@@ -70,6 +88,8 @@ export default function UsageCharts({ history, ramMib, compact = false }: UsageC
         stroke="var(--ember, #c43e12)"
         fill="rgba(196, 62, 18, 0.12)"
         yMaxHint={100}
+        strokeWidth={strokeWidth}
+        size={resolvedSize}
       />
       <Sparkline
         label={t("Memory", "메모리")}
@@ -84,6 +104,8 @@ export default function UsageCharts({ history, ramMib, compact = false }: UsageC
         stroke="var(--ready, #2f9e6b)"
         fill="rgba(47, 158, 107, 0.12)"
         yMaxHint={Math.max(ramMib, 1)}
+        strokeWidth={strokeWidth}
+        size={resolvedSize}
       />
     </div>
   );
@@ -99,6 +121,8 @@ interface SparklineProps {
   fill: string;
   /** Preferred upper bound; raised if data exceeds it. */
   yMaxHint: number;
+  strokeWidth?: number;
+  size?: "compact" | "default" | "large";
 }
 
 function Sparkline({
@@ -110,9 +134,11 @@ function Sparkline({
   stroke,
   fill,
   yMaxHint,
+  strokeWidth = 1.5,
+  size = "default",
 }: SparklineProps) {
-  const padX = 2;
-  const padY = 3;
+  const padX = size === "large" ? 4 : 2;
+  const padY = size === "large" ? 6 : 3;
   const innerW = width - padX * 2;
   const innerH = height - padY * 2;
   const known = values.filter((v): v is number => v != null && Number.isFinite(v));
@@ -151,7 +177,7 @@ function Sparkline({
   }
 
   return (
-    <div className="usage-spark">
+    <div className={`usage-spark${size === "large" ? " is-large" : ""}`}>
       <div className="usage-spark-head">
         <span className="usage-spark-label">{label}</span>
         <span className="usage-spark-unit mono">{unit}</span>
@@ -163,6 +189,7 @@ function Sparkline({
         height={height}
         role="img"
         aria-label={`${label} ${unit}`}
+        preserveAspectRatio="none"
       >
         {areaD && <path d={areaD} fill={fill} stroke="none" />}
         {lineParts.length > 0 && (
@@ -170,7 +197,7 @@ function Sparkline({
             d={lineParts.join(" ")}
             fill="none"
             stroke={stroke}
-            strokeWidth={1.5}
+            strokeWidth={strokeWidth}
             strokeLinejoin="round"
             strokeLinecap="round"
           />
