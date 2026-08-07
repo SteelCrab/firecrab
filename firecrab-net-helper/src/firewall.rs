@@ -480,7 +480,18 @@ async fn ensure_iptables_compat(bridges: &[String], egress_subnets: &[String], u
     }
     for subnet in egress_subnets {
         let already = Command::new("iptables")
-            .args(["-t", "nat", "-C", "POSTROUTING", "-s", subnet, "-o", uplink, "-j", "MASQUERADE"])
+            .args([
+                "-t",
+                "nat",
+                "-C",
+                "POSTROUTING",
+                "-s",
+                subnet,
+                "-o",
+                uplink,
+                "-j",
+                "MASQUERADE",
+            ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -489,7 +500,18 @@ async fn ensure_iptables_compat(bridges: &[String], egress_subnets: &[String], u
             .unwrap_or(false);
         if !already {
             let _ = Command::new("iptables")
-                .args(["-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-o", uplink, "-j", "MASQUERADE"])
+                .args([
+                    "-t",
+                    "nat",
+                    "-A",
+                    "POSTROUTING",
+                    "-s",
+                    subnet,
+                    "-o",
+                    uplink,
+                    "-j",
+                    "MASQUERADE",
+                ])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()

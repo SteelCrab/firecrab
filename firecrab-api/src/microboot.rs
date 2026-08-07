@@ -263,7 +263,10 @@ fn create_placeholder_rootfs(rootfs_dest: &Path) -> Result<(), String> {
 /// repo-relative path (dev layout).
 pub(crate) fn resolve_extract_vmlinux() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
-        let candidate = exe.parent().unwrap_or(Path::new("")).join("extract-vmlinux");
+        let candidate = exe
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join("extract-vmlinux");
         if candidate.exists() {
             return candidate;
         }
