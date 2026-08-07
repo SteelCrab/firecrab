@@ -50,6 +50,11 @@ Use `localhost` because the development origin is exact.
 The list refreshes every three seconds.
 The detail view shows start progress and logs.
 
+While a VM is `running`, the list, detail view, and terminal page show host
+Firecracker process CPU percent and RSS next to the allocated CPU and RAM.
+Detail and terminal also draw short sparklines from recent samples.
+Those values are host process usage, not guest free memory.
+
 Resource changes are allowed only while the VM is inactive.
 Disk size can grow but cannot shrink.
 
