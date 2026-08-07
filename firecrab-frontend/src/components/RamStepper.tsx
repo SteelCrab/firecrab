@@ -1,4 +1,5 @@
 import { stepRamValue } from "../model";
+import { useI18n } from "../i18n";
 
 interface RamStepperProps {
   id: string;
@@ -11,6 +12,7 @@ interface RamStepperProps {
  * same up/down interaction with buttons that jump between the fixed set of
  * options in `RAM_OPTIONS_MIB`. */
 export default function RamStepper({ id, value, onChange }: RamStepperProps) {
+  const { t } = useI18n();
   const step = (direction: 1 | -1) => {
     onChange(String(stepRamValue(Number(value) || 0, direction)));
   };
@@ -19,10 +21,10 @@ export default function RamStepper({ id, value, onChange }: RamStepperProps) {
     <div className="ram-stepper">
       <input id={id} className="ram-stepper-value" value={value} readOnly inputMode="numeric" />
       <div className="ram-stepper-buttons">
-        <button type="button" className="ram-stepper-btn" onClick={() => step(1)} aria-label="ram 증가">
+        <button type="button" className="ram-stepper-btn" onClick={() => step(1)} aria-label={t("Increase RAM", "RAM 증가")}>
           ▲
         </button>
-        <button type="button" className="ram-stepper-btn" onClick={() => step(-1)} aria-label="ram 감소">
+        <button type="button" className="ram-stepper-btn" onClick={() => step(-1)} aria-label={t("Decrease RAM", "RAM 감소")}>
           ▼
         </button>
       </div>

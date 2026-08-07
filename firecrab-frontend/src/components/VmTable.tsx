@@ -2,6 +2,7 @@ import type { VmResponse } from "../bindings";
 import type { VmAction } from "../model";
 import { availableActions } from "../model";
 import { consolePageUrl } from "../navigation";
+import { useI18n } from "../i18n";
 
 interface VmTableProps {
   vms: VmResponse[];
@@ -13,8 +14,9 @@ interface VmTableProps {
 }
 
 export default function VmTable({ vms, busy, onAction, onOpenDetail }: VmTableProps) {
+  const { t } = useI18n();
   if (vms.length === 0) {
-    return <div className="empty">VM이 없습니다 — 위에서 생성하세요</div>;
+    return <div className="empty">{t("No VMs yet — create one above.", "VM이 없습니다 — 위에서 생성하세요")}</div>;
   }
 
   // The table has more columns than a narrow shell can show; it scrolls
@@ -24,14 +26,14 @@ export default function VmTable({ vms, busy, onAction, onOpenDetail }: VmTablePr
       <table className="vm-table">
         <thead>
           <tr>
-            <th>name</th>
-            <th>state</th>
-            <th>image</th>
+            <th>{t("Name", "이름")}</th>
+            <th>{t("State", "상태")}</th>
+            <th>{t("Image", "이미지")}</th>
             <th>cpu</th>
             <th>ram</th>
-            <th>disk</th>
+            <th>{t("Disk", "디스크")}</th>
             <th>id</th>
-            <th className="actions">actions</th>
+            <th className="actions">{t("Actions", "작업")}</th>
           </tr>
         </thead>
         <tbody>
@@ -58,6 +60,7 @@ interface RowProps {
 }
 
 function Row({ vm, busy, onAction, onOpenDetail }: RowProps) {
+  const { t } = useI18n();
   const shortId = vm.id.split("-")[0] ?? "";
 
   return (
@@ -85,9 +88,9 @@ function Row({ vm, busy, onAction, onOpenDetail }: RowProps) {
             href={consolePageUrl(vm.id)}
             target="_blank"
             rel="noopener noreferrer"
-            title="시리얼 콘솔 (새 탭)"
+            title={t("Serial console (new tab)", "시리얼 콘솔 (새 탭)")}
           >
-            terminal
+            {t("Terminal", "터미널")}
           </a>
         )}
         {availableActions(vm.state).map((action) => (
