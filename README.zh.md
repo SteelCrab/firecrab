@@ -87,6 +87,45 @@ cd firecrab
 
 先创建网络是有意的：firecrab 没有隐藏的默认子网，每台 VM 都放在操作者选择的网络中。
 
+## 仪表盘导览
+
+![firecrab M2 仪表盘演示](assets/dashboard/firecrab-m2.gif)
+
+仪表盘通过左侧导航将日常操作分为 **MicroVM**、每台 VM 的 **终端**、**网络** 和
+**镜像**。
+
+### MicroVM
+
+在表单中选择名称、镜像、CPU、RAM、磁盘、存储位置、MicroNetwork 和出站策略后创建 VM。下方列表
+每三秒刷新状态、镜像、资源和 ID；运行中的 VM 会显示 **终端** 和 **停止** 操作。选择 VM 名称可查看
+启动进度、日志、网络、存储及其他详情。
+
+![MicroVM 创建与列表](assets/dashboard/microvm.png)
+
+### 终端
+
+运行中的 VM 可通过 **终端** 在独立标签页打开浏览器串口控制台。它实时显示启动输出与登录提示并接受
+命令。工具栏可调整显示设置、复制或保存控制台日志，以及切换到仅终端视图；下方各面板显示 VM 的
+常规信息、规格、网络和存储。
+
+![VM 浏览器串口终端](assets/dashboard/terminal.png)
+
+### 网络
+
+可使用名称、子网 CIDR 和互联网策略创建 **MicroNetwork**。列表显示每个网络的网关、互联网状态和
+ID；可通过 **阻止互联网/启用互联网** 改变整个网络经 NAT 的出站访问，或删除该网络。选择一行可查看
+子网地址使用情况、bridge/TAP、NAT、防火墙和成员 VM 的详情。
+
+![MicroNetwork 创建与列表](assets/dashboard/networks.png)
+
+### 镜像
+
+**M2Image** 列表显示每个镜像的大小及 `软件包已就绪`、`已安装` 等状态。选择一行可查看其别名、
+版本、最小磁盘、rootfs 大小、状态以及正在使用该镜像的 VM。`…` 菜单会根据状态提供软件包安装、
+镜像导入、引导或删除操作。只有已安装的镜像可以用于创建 VM。
+
+![M2Image 列表](assets/dashboard/images.png)
+
 请求格式、生命周期语义和错误 envelope 见 [API 指南](docs/20-guides/api.md)。镜像包与浏览器引导
 流程见[镜像指南](docs/20-guides/m2image-builder.md)。
 

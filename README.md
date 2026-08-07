@@ -97,6 +97,52 @@ Open `http://127.0.0.1:3000/` after installation, then:
 Creating the network first is intentional: firecrab has no hidden default subnet, so
 every VM is placed in a network chosen by the operator.
 
+## Dashboard walkthrough
+
+![firecrab M2 dashboard demo](assets/dashboard/firecrab-m2.gif)
+
+The dashboard separates day-to-day operation into **MicroVM**, a per-VM
+**Terminal**, **Networks**, and **Images** in the left navigation.
+
+### MicroVM
+
+The form creates a VM from its name, image, CPU, RAM, disk, storage location,
+MicroNetwork, and egress policy. The list below refreshes state, image, resources, and
+ID every three seconds; running VMs expose **Terminal** and **stop** actions. Select a
+VM name for startup progress, logs, network, storage, and other details.
+
+![MicroVM creation and list](assets/dashboard/microvm.png)
+
+### Terminal
+
+**Terminal** opens a running VM's browser serial console in a separate tab. It streams
+boot output and the login prompt in real time and accepts commands. The toolbar lets
+you adjust display settings, copy or save console logs, and switch to a
+terminal-only view; the lower panels show the VM's general information, specs,
+network, and storage.
+
+![VM browser serial terminal](assets/dashboard/terminal.png)
+
+### Networks
+
+Create a **MicroNetwork** with its name, subnet CIDR, and internet policy. The list
+shows each network's gateway, internet state, and ID. Use **Block internet** or
+**Enable internet** to change NAT-backed outbound access for the whole network, or
+delete it. Selecting a row reveals subnet address use, bridge/TAP, NAT, firewall, and
+member VM details.
+
+![MicroNetwork creation and list](assets/dashboard/networks.png)
+
+### Images
+
+The **M2Image** list shows each image's size and state, such as `Package ready` or
+`Installed`. Select a row to inspect its alias, version, minimum disk, rootfs size,
+state, and the VMs that use it. The `…` menu offers state-appropriate package install,
+image import, bootstrap, or delete actions. Only installed images can be used to
+create VMs.
+
+![M2Image list](assets/dashboard/images.png)
+
 For API request formats, lifecycle semantics, and error envelopes, see the
 [API guide](docs/20-guides/api.md). For image packages and browser-driven bootstrap,
 see the [image guide](docs/20-guides/m2image-builder.md).
