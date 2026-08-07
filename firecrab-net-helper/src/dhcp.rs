@@ -68,6 +68,9 @@ pub enum DhcpError {
     /// Couldn't signal the running dnsmasq process to reload.
     #[error("failed to reload the running dnsmasq process")]
     Reload(#[source] io::Error),
+    /// Couldn't inspect the supervised dnsmasq process.
+    #[error("failed to inspect the running dnsmasq process")]
+    Inspect(#[source] io::Error),
 }
 
 /// Single-writer actor: every reservation-file rewrite goes through one
@@ -271,7 +274,14 @@ pub async fn sync_dhcp_leases(
 ) -> Result<(), DhcpError> {
     let mut state = actor.state.lock().await;
     let networks_changed = state.served_networks.as_deref() != Some(micro_networks);
-    if is_stale_snapshot(state.applied_revision, revision, networks_changed) {
+    let dnsmasq_running = owned_child_running(&mut state)?
+        || (state.child.is_none() && running_orphan_pid().await.is_some());
+    if can_skip_snapshot(
+        state.applied_revision,
+        revision,
+        networks_changed,
+        dnsmasq_running,
+    ) {
         return Ok(());
     }
 
@@ -324,6 +334,35 @@ fn is_stale_snapshot(applied_revision: Option<u64>, revision: u64, networks_chan
     !networks_changed && applied_revision.is_some_and(|applied| applied >= revision)
 }
 
+/// A duplicate lease snapshot is safe to skip only while the process serving
+/// it is still alive. VM starts resend the same revision, so this health gate
+/// is also how a crashed dnsmasq is recovered without operator intervention.
+fn can_skip_snapshot(
+    applied_revision: Option<u64>,
+    revision: u64,
+    networks_changed: bool,
+    dnsmasq_running: bool,
+) -> bool {
+    dnsmasq_running && is_stale_snapshot(applied_revision, revision, networks_changed)
+}
+
+/// Reaps an exited supervised child and reports whether it is still running.
+/// Merely retaining a [`Child`] handle is not a liveness check: an exited,
+/// unreaped child still has a PID and accepts `kill(pid, 0)` as a zombie.
+fn owned_child_running(state: &mut DhcpState) -> Result<bool, DhcpError> {
+    let Some(child) = state.child.as_mut() else {
+        return Ok(false);
+    };
+    match child.try_wait().map_err(DhcpError::Inspect)? {
+        None => Ok(true),
+        Some(status) => {
+            eprintln!("[WARN] dnsmasq exited with {status}; restarting it on this DHCP sync");
+            state.child = None;
+            Ok(false)
+        }
+    }
+}
+
 /// Terminates whatever dnsmasq is currently running — this process's own
 /// child if it has one, otherwise an orphan left by a previous net-helper
 /// lifetime (found via its pid file). Best-effort: if nothing is running, or
@@ -342,14 +381,28 @@ async fn stop_running_dnsmasq(state: &mut DhcpState) {
 }
 
 /// Reads dnsmasq's own pid file and returns its pid if that process is
-/// still alive — a `kill(pid, 0)` existence probe, not a real signal.
+/// still alive and is not a zombie. `kill(pid, 0)` alone is insufficient:
+/// Linux reports success for an unreaped zombie, which cannot serve DHCP or
+/// react to SIGHUP.
 async fn running_orphan_pid() -> Option<u32> {
     let text = tokio::fs::read_to_string(PID_FILE).await.ok()?;
     let pid: u32 = text.trim().parse().ok()?;
     // SAFETY: signal 0 sends nothing; it only probes whether `pid` exists
     // and is signalable, per kill(2).
-    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
-    alive.then_some(pid)
+    if unsafe { libc::kill(pid as i32, 0) } != 0 {
+        return None;
+    }
+    let stat = tokio::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .await
+        .ok()?;
+    (proc_state(&stat) != Some('Z')).then_some(pid)
+}
+
+/// Extracts the one-character process state after `/proc/<pid>/stat`'s
+/// parenthesized command name. Use the last delimiter because a command name
+/// itself may contain `)` characters.
+fn proc_state(stat: &str) -> Option<char> {
+    stat.rsplit_once(") ")?.1.chars().next()
 }
 
 /// Tells `pid` (not necessarily a process this instance spawned) to
@@ -485,11 +538,10 @@ async fn spawn_dnsmasq(
 /// Tells a running dnsmasq to re-read its hosts file.
 fn reload(child: &mut Child) -> Result<(), DhcpError> {
     let Some(pid) = child.id() else {
-        // Already exited; nothing to signal. The next sync_dhcp_leases call
-        // will find `state.child` still `Some` but this reload a no-op —
-        // acceptable since a crashed dnsmasq needs an operator/supervisor
-        // restart regardless, same as any other unexpectedly-dead daemon.
-        return Ok(());
+        return Err(DhcpError::Reload(io::Error::new(
+            io::ErrorKind::NotFound,
+            "dnsmasq has already exited",
+        )));
     };
     // SAFETY: sending a signal is memory-safe; a stale/reused pid only
     // risks misdelivering the signal, not memory unsafety.
@@ -749,12 +801,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_ignores_a_stale_or_duplicate_revision() {
+    async fn sync_ignores_a_stale_or_duplicate_revision_while_dnsmasq_is_alive() {
         let actor = DhcpActor::new();
         {
             let mut state = actor.state.lock().await;
             state.applied_revision = Some(5);
             state.served_networks = Some(Vec::new());
+            state.child = Some(
+                Command::new("sleep")
+                    .arg("60")
+                    .spawn()
+                    .expect("spawn stand-in dnsmasq"),
+            );
         }
 
         // Would fail trying to actually spawn/bind dnsmasq for real if it
@@ -780,6 +838,15 @@ mod tests {
             .await
             .is_ok()
         );
+
+        let mut child = actor
+            .state
+            .lock()
+            .await
+            .child
+            .take()
+            .expect("stand-in child remains tracked");
+        child.kill().await.expect("stop stand-in dnsmasq");
     }
 
     #[test]
@@ -795,5 +862,18 @@ mod tests {
         assert!(!is_stale_snapshot(Some(5), 3, true));
         // Nothing applied yet is never stale.
         assert!(!is_stale_snapshot(None, 0, false));
+    }
+
+    #[test]
+    fn a_stale_snapshot_is_reapplied_when_dnsmasq_is_dead() {
+        assert!(can_skip_snapshot(Some(5), 5, false, true));
+        assert!(!can_skip_snapshot(Some(5), 5, false, false));
+    }
+
+    #[test]
+    fn proc_state_distinguishes_a_zombie_even_with_parentheses_in_comm() {
+        assert_eq!(proc_state("42 (dnsmasq) S 1 2 3"), Some('S'));
+        assert_eq!(proc_state("42 (dns)masq) Z 1 2 3"), Some('Z'));
+        assert_eq!(proc_state("malformed"), None);
     }
 }

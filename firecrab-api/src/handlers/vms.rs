@@ -745,10 +745,12 @@ async fn finish_run_start(
     template: std::sync::Arc<crate::templates::TemplateVersion>,
     network: &VmNetwork,
 ) -> Result<FirecrackerProcess, String> {
-    // Rocky Linux 9's stock kernel supports virtio-pci but not Firecracker's
-    // default virtio-mmio transport. Capture this before the template Arc is
-    // moved into the blocking disk/configuration task below.
+    // Capture transport-derived values before the template Arc is moved into
+    // the blocking disk/configuration task below. `runtime_boot_args` also
+    // repairs legacy registrations (Ubuntu's `pci=off`, Rocky's missing
+    // virtio_net preload) without requiring users to recreate their VMs.
     let enable_pci = template.requires_pci_transport();
+    let runtime_boot_args = template.runtime_boot_args();
     // Same reasoning as `enable_pci` above: `template` is moved into the
     // spawn_blocking closure below, so anything this function still needs
     // afterward — like gating the network-ready wait on MicroBoot below —
@@ -804,7 +806,7 @@ async fn finish_run_start(
             &record,
             &kernel,
             initrd.as_deref(),
-            &template.boot_args,
+            &runtime_boot_args,
             Some(&network),
         )
         .map_err(|error| format!("config generation failed: {error}"))?;
@@ -2366,6 +2368,74 @@ while True:
         assert_eq!(db_state(&state, vm.id), Some(VmState::Stopped));
         assert!(!process_alive(pid));
         assert!(state.processes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_repairs_a_legacy_ubuntu_mmio_registration() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(
+            root,
+            &format!(
+                "if '--enable-pci' not in sys.argv:\n    raise SystemExit('missing --enable-pci')\nsignal.signal(signal.SIGTERM, lambda *_: sys.exit(0)){SERVE_LOOP}"
+            ),
+        );
+        let state = test_state_with_binary(root, binary).await;
+        state
+            .templates
+            .register_spec(TemplateSpec {
+                alias: "ubuntu-26.04".to_owned(),
+                version: "ubuntu-26.04-v2".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: "console=ttyS0 pci=off root=/dev/vda rw".to_owned(),
+            })
+            .unwrap();
+
+        let mut vm = record("legacy-ubuntu", Uuid::new_v4());
+        vm.template = "ubuntu-26.04".to_owned();
+        vm.template_version = "ubuntu-26.04-v2".to_owned();
+        seed_vm(&state, &vm);
+
+        let Json(started) = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(started.state, VmState::Running);
+        let runtime_id = state
+            .vms
+            .lock()
+            .unwrap()
+            .get(&vm.id)
+            .and_then(|live| live.last_runtime_id)
+            .expect("start must retain its runtime id");
+        let config_path = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id)
+            .runtime(runtime_id)
+            .config;
+        let config: serde_json::Value =
+            serde_json::from_slice(&fs::read(config_path).unwrap()).unwrap();
+        let boot_args = config["boot-source"]["boot_args"].as_str().unwrap();
+        assert!(!boot_args.split_whitespace().any(|arg| arg == "pci=off"));
+        assert!(boot_args.contains("root=/dev/vda"));
+        assert!(
+            boot_args
+                .split_whitespace()
+                .any(|arg| arg == "net.ifnames=0")
+        );
+
+        let Json(stopped) = stop_vm(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stopped.state, VmState::Stopped);
     }
 
     async fn stop_tolerates_a_failed_teardown_step(fail_operation: &'static str) {

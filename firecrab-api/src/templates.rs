@@ -142,14 +142,41 @@ impl TemplateVersion {
     }
 
     /// Whether this image must be started with Firecracker's PCI transport
-    /// enabled. Firecracker normally presents virtio devices over MMIO, but
-    /// Rocky Linux 9's stock EL9 kernel deliberately has
-    /// `CONFIG_VIRTIO_MMIO` disabled while keeping `CONFIG_VIRTIO_PCI`
-    /// built in. Its rootfs and dracut initramfs are otherwise valid, so
-    /// choose PCI for this one built-in template rather than replacing the
-    /// distro kernel with an unrelated one.
+    /// enabled. Rocky Linux 9 needs PCI because its stock kernel disables
+    /// `CONFIG_VIRTIO_MMIO`. Ubuntu 26.04 also uses PCI because its stock
+    /// kernel rejects Firecracker 1.16's command-line MMIO regions as busy,
+    /// while its virtio-pci transport is built in.
     pub fn requires_pci_transport(&self) -> bool {
-        self.name == "rocky-9"
+        matches!(self.name.as_str(), "rocky-9" | "ubuntu-26.04")
+    }
+
+    /// Returns the kernel command line adjusted for the transport selected
+    /// by [`Self::requires_pci_transport`]. This intentionally happens at
+    /// start time so VMs pinned to registrations made before the transport
+    /// fix also recover on their next start.
+    pub fn runtime_boot_args(&self) -> String {
+        let enable_pci = self.requires_pci_transport();
+        let mut args: Vec<&str> = self
+            .boot_args
+            .split_whitespace()
+            .filter(|arg| !(enable_pci && *arg == "pci=off"))
+            .collect();
+
+        // The EL9 initramfs contains virtio_net, but does not load it merely
+        // because the PCI device exists. Force it before switching to the
+        // rootfs so NetworkManager sees the interface immediately.
+        if self.name == "rocky-9" && !args.contains(&"rd.driver.pre=virtio_net") {
+            args.push("rd.driver.pre=virtio_net");
+        }
+
+        // Both distro images configure their network manager for `eth0`.
+        // PCI's predictable naming would otherwise expose the NIC as an
+        // ens*/enp* device and leave that configuration unmatched.
+        if enable_pci && !args.contains(&"net.ifnames=0") {
+            args.push("net.ifnames=0");
+        }
+
+        args.join(" ")
     }
 }
 
@@ -1214,21 +1241,43 @@ mod tests {
         assert!(rocky.boot_args.contains("net.ifnames=0"));
 
         let directory = tempdir().unwrap();
-        for relative in [&rocky.kernel, &rocky.rootfs]
-            .into_iter()
-            .chain(rocky.initrd.as_ref())
-        {
-            let path = directory.path().join(relative);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, b"image").unwrap();
+        for spec in &specs {
+            for relative in [&spec.kernel, &spec.rootfs]
+                .into_iter()
+                .chain(spec.initrd.as_ref())
+            {
+                let path = directory.path().join(relative);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, b"image").unwrap();
+            }
         }
-        let registry = TemplateRegistry::from_specs(directory.path(), [rocky.clone()]).unwrap();
-        assert!(
-            registry
-                .resolve_alias("rocky-9")
-                .expect("Rocky template resolves")
-                .requires_pci_transport()
+        let registry = TemplateRegistry::from_specs(directory.path(), specs).unwrap();
+
+        let ubuntu = registry
+            .resolve_alias("ubuntu-26.04")
+            .expect("Ubuntu template resolves");
+        assert!(ubuntu.requires_pci_transport());
+        assert!(!ubuntu.runtime_boot_args().contains("pci=off"));
+        assert!(ubuntu.runtime_boot_args().contains("root=/dev/vda"));
+        assert!(ubuntu.runtime_boot_args().contains("net.ifnames=0"));
+
+        let rocky = registry
+            .resolve_alias("rocky-9")
+            .expect("Rocky template resolves");
+        assert!(rocky.requires_pci_transport());
+        assert_eq!(
+            rocky
+                .runtime_boot_args()
+                .matches("rd.driver.pre=virtio_net")
+                .count(),
+            1
         );
+
+        let alpine = registry
+            .resolve_alias("alpine-3.24")
+            .expect("Alpine template resolves");
+        assert!(!alpine.requires_pci_transport());
+        assert!(alpine.runtime_boot_args().contains("pci=off"));
     }
 
     #[test]

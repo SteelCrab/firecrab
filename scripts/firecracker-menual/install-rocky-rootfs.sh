@@ -9,6 +9,8 @@
 # EL9 configures virtio-pci but deliberately leaves CONFIG_VIRTIO_MMIO off.
 # The Rocky template therefore asks the VMM for PCI transport at runtime;
 # its initramfs still carries virtio_blk/net and ext4 for the guest rootfs.
+# virtio_net is explicitly loaded because EL9 does not request it early
+# enough from Firecracker's minimal PCI topology on every boot.
 
 set -euo pipefail
 
@@ -168,6 +170,10 @@ nameserver 172.30.0.1
 EOF_RESOLV
 
 : >"$staging/etc/machine-id"
+install -d -m 0755 "$staging/etc/modules-load.d"
+cat >"$staging/etc/modules-load.d/firecrab-network.conf" <<'EOF_MODULES'
+virtio_net
+EOF_MODULES
 install -d -m 0755 "$staging/etc/NetworkManager/system-connections"
 cat >"$staging/etc/NetworkManager/system-connections/firecrab-ethernet.nmconnection" <<'EOF_NETWORK'
 [connection]

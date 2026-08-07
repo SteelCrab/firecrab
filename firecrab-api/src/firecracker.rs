@@ -492,10 +492,8 @@ pub async fn spawn_vm(
         .stdout(Stdio::piped())
         .stderr(Stdio::from(stderr))
         .kill_on_drop(true);
-    // Firecracker defaults to virtio-mmio. Rocky Linux 9's stock kernel has
-    // that transport disabled but ships virtio-pci, so only its template
-    // opts into the VMM's PCI device model. Other templates retain the
-    // smaller/default MMIO layout.
+    // Firecracker defaults to virtio-mmio. Templates whose distro kernels
+    // need the PCI device model opt in through `requires_pci_transport`.
     if enable_pci {
         command.arg("--enable-pci");
     }
