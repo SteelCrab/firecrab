@@ -17,7 +17,7 @@ ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
 series='26.04'
 rootfs_size='2G'
 rootfs_hostname='firecrab'
-rootfs_packages='systemd systemd-sysv udev kmod util-linux linux-image-generic iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server'
+rootfs_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-generic iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server'
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
@@ -111,19 +111,42 @@ install -d -m 0755 "${mount_dir}/usr/local/sbin"
 cat >"${mount_dir}/usr/local/sbin/firecrab-network-ready.sh" <<'EOF'
 #!/bin/sh
 set -eu
+# network-online does not mean DHCP finished or systemd-resolved's stub is up.
+# Poll for IPv4, repair a dangling resolved stub, then accept getent or dig@gw.
 ipv4=""
-for _ in $(seq 1 10); do
-  ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+for _ in $(seq 1 15); do
+  ipv4=$(ip -4 -o addr show scope global 2>/dev/null | \
+    awk '$2 != "lo" { split($4, a, "/"); print a[1]; exit }')
   [ -n "$ipv4" ] && break
   sleep 1
 done
 if [ -z "$ipv4" ]; then
   echo "FIRECRAB_NETWORK_FAILED no-ipv4-address"
-elif getent hosts example.com >/dev/null 2>&1; then
-  echo "FIRECRAB_NETWORK_READY $ipv4"
-else
-  echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
+  exit 0
 fi
+gw=$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')
+if [ -n "$gw" ] && [ ! -e /run/systemd/resolve/stub-resolv.conf ]; then
+  if [ -L /etc/resolv.conf ] || [ ! -s /etc/resolv.conf ]; then
+    rm -f /etc/resolv.conf
+    printf 'nameserver %s\n' "$gw" > /etc/resolv.conf
+  fi
+fi
+dns_ok() {
+  getent hosts example.com >/dev/null 2>&1 && return 0
+  if [ -n "$gw" ] && command -v dig >/dev/null 2>&1; then
+    ans=$(dig +short +time=2 +tries=1 @"$gw" example.com A 2>/dev/null || true)
+    [ -n "$ans" ] && return 0
+  fi
+  return 1
+}
+for _ in $(seq 1 15); do
+  if dns_ok; then
+    echo "FIRECRAB_NETWORK_READY $ipv4"
+    exit 0
+  fi
+  sleep 1
+done
+echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
 EOF
 chmod 0755 "${mount_dir}/usr/local/sbin/firecrab-network-ready.sh"
 cat >"${mount_dir}/etc/systemd/system/firecrab-network-ready.service" <<'EOF'
@@ -180,17 +203,28 @@ vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V 
 [ -n "$vmlinuz_path" ] || fail 'linux-image-generic did not install a vmlinuz'
 cp "$vmlinuz_path" "$out/vmlinuz-raw"
 
-# Enable systemd-resolved so the DHCP-provided DNS server is used at
-# runtime. Without this, resolv.conf stays as the static copy from the
-# MicroBoot builder chroot install (nameserver 172.30.0.1 — the builder
-# network's gateway, which does not exist on regular VM networks), causing
-# FIRECRAB_NETWORK_FAILED dns-unreachable on every VM start.
-# systemd-networkd's DHCP=yes already pushes DHCP-learned DNS to
-# systemd-resolved by default (UseDNS=yes); all we need is the service
-# enabled and the canonical stub symlink in place.
-ln -sf /lib/systemd/system/systemd-resolved.service \
-  "${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-resolved.service"
-ln -sfn /run/systemd/resolve/stub-resolv.conf "${mount_dir}/etc/resolv.conf"
+# Enable systemd-resolved only when the package actually shipped a unit.
+# Enabling the wants symlink without the package leaves resolv.conf pointing
+# at a stub that never appears (dns-unreachable despite working host DNS).
+resolved_unit=""
+for candidate in \
+  "${mount_dir}/lib/systemd/system/systemd-resolved.service" \
+  "${mount_dir}/usr/lib/systemd/system/systemd-resolved.service"
+do
+  if [ -e "$candidate" ]; then
+    resolved_unit=$candidate
+    break
+  fi
+done
+if [ -n "$resolved_unit" ]; then
+  ln -sf /lib/systemd/system/systemd-resolved.service \
+    "${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-resolved.service"
+  ln -sfn /run/systemd/resolve/stub-resolv.conf "${mount_dir}/etc/resolv.conf"
+else
+  # Fallback: readiness script will rewrite resolv.conf to the DHCP gateway.
+  rm -f "${mount_dir}/etc/systemd/system/multi-user.target.wants/systemd-resolved.service"
+  printf 'nameserver 1.1.1.1\n' >"${mount_dir}/etc/resolv.conf"
+fi
 
 cleanup_mounts
 

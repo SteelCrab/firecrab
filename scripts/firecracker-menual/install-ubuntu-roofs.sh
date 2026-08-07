@@ -23,7 +23,7 @@ rootfs_hostname='firecrab'
 # self-built vanilla kernel every template used to share, so security
 # patches and driver support follow Ubuntu's own release cadence instead
 # of this project having to track kernel.org itself.
-rootfs_boot_packages='systemd systemd-sysv udev kmod util-linux linux-image-generic'
+rootfs_boot_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-generic'
 rootfs_packages="${rootfs_boot_packages} iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server"
 
 mount_dir=''
@@ -430,15 +430,13 @@ install_network_ready_sentinel() {
   write_root_file "${mount_dir}/usr/local/sbin/firecrab-network-ready.sh" <<'EOF'
 #!/bin/sh
 set -eu
-# network-online.target only orders unit *starts*, it doesn't guarantee
-# systemd-networkd's DHCP transaction has actually completed by the time
-# this runs — checking eth0 once right away routinely races a lease that
-# lands a few hundred ms later. Poll briefly instead of trusting the
-# ordering dependency to mean "has an address" (matches the retry loop
-# install-alpine-rootfs.sh already uses for the same race).
+# network-online only orders unit *starts* — DHCP and DNS may still be
+# unfinished. Poll for IPv4, repair a dangling systemd-resolved stub, then
+# accept getent or dig@gateway (host dnsmasq).
 ipv4=""
-for _ in $(seq 1 10); do
-  ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+for _ in $(seq 1 15); do
+  ipv4=$(ip -4 -o addr show scope global 2>/dev/null | \
+    awk '$2 != "lo" { split($4, a, "/"); print a[1]; exit }')
   if [ -n "$ipv4" ]; then
     break
   fi
@@ -446,11 +444,31 @@ for _ in $(seq 1 10); do
 done
 if [ -z "$ipv4" ]; then
   echo "FIRECRAB_NETWORK_FAILED no-ipv4-address"
-elif getent hosts example.com >/dev/null 2>&1; then
-  echo "FIRECRAB_NETWORK_READY $ipv4"
-else
-  echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
+  exit 0
 fi
+gw=$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')
+if [ -n "$gw" ] && [ ! -e /run/systemd/resolve/stub-resolv.conf ]; then
+  if [ -L /etc/resolv.conf ] || [ ! -s /etc/resolv.conf ]; then
+    rm -f /etc/resolv.conf
+    printf 'nameserver %s\n' "$gw" > /etc/resolv.conf
+  fi
+fi
+dns_ok() {
+  getent hosts example.com >/dev/null 2>&1 && return 0
+  if [ -n "$gw" ] && command -v dig >/dev/null 2>&1; then
+    ans=$(dig +short +time=2 +tries=1 @"$gw" example.com A 2>/dev/null || true)
+    [ -n "$ans" ] && return 0
+  fi
+  return 1
+}
+for _ in $(seq 1 15); do
+  if dns_ok; then
+    echo "FIRECRAB_NETWORK_READY $ipv4"
+    exit 0
+  fi
+  sleep 1
+done
+echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
 EOF
   chmod 0755 "${mount_dir}/usr/local/sbin/firecrab-network-ready.sh"
 
