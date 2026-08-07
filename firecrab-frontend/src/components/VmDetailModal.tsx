@@ -21,11 +21,7 @@ import { isEditableState } from "../model";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
-
-const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
-  internet: "인터넷 허용",
-  isolated: "격리(게이트웨이만 허용)",
-};
+import { useI18n } from "../i18n";
 
 const STARTUP_STEPS: StartupStep[] = [
   "preparingDisk",
@@ -35,19 +31,19 @@ const STARTUP_STEPS: StartupStep[] = [
 ];
 
 const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
-  preparingDisk: "디스크 준비",
-  generatingConfig: "설정 생성",
-  startingProcess: "프로세스 시작",
-  configuringNetwork: "네트워크 확인",
+  preparingDisk: "Preparing disk",
+  generatingConfig: "Generating configuration",
+  startingProcess: "Starting process",
+  configuringNetwork: "Checking network",
 };
 
 // Derived client-side from the polled `startupStep` value — no dedicated
 // backend log field. See docs/40-tests/vm-detail-modal.md for why.
 const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
-  preparingDisk: "디스크 준비 중 (rootfs 템플릿 복사)...",
-  generatingConfig: "디스크 준비 완료 → Firecracker 설정 생성 중...",
-  startingProcess: "설정 생성 완료 → Firecracker 프로세스 시작 중...",
-  configuringNetwork: "프로세스 시작 완료 → guest DHCP/DNS 확인 중...",
+  preparingDisk: "Preparing disk (copying rootfs template)…",
+  generatingConfig: "Disk ready → generating Firecracker configuration…",
+  startingProcess: "Configuration ready → starting Firecracker process…",
+  configuringNetwork: "Process started → checking guest DHCP/DNS…",
 };
 
 const POLL_MILLIS = 750;
@@ -64,6 +60,7 @@ interface VmDetailModalProps {
  * once Firecracker has produced any) below.
  */
 export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps) {
+  const { t } = useI18n();
   const [vm, setVm] = useState<VmResponse | null>(
     () => vms.find((candidate) => candidate.id === vmId) ?? null,
   );
@@ -139,7 +136,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     if (!vm) return;
     const packages = input ? input.split(/\s+/).filter(Boolean) : [];
     if (action !== "update" && packages.length === 0) {
-      setPackageError("패키지 이름을 입력하세요.");
+      setPackageError(t("Enter at least one package name.", "패키지 이름을 입력하세요."));
       return;
     }
     setPackageBusy(action);
@@ -186,7 +183,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
           seen = Math.max(seen, index);
         } else if (nextVm.state === "running" && seen < STARTUP_STEPS.length - 1) {
           seen = STARTUP_STEPS.length - 1;
-          lines = [...lines, `[${timestamp()}] 준비 완료 — VM이 시작되었습니다.`];
+          lines = [...lines, `[${timestamp()}] Ready — VM started.`];
         }
 
         setVm(nextVm);
@@ -219,11 +216,12 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
         ? highestStepSeen
         : -1;
 
-  const logText = [...pipelineLines, consoleLog].filter(Boolean).join("\n") || "아직 출력이 없습니다.";
+  const emptyLog = t("No output yet.", "아직 출력이 없습니다.");
+  const logText = [...pipelineLines, consoleLog].filter(Boolean).join("\n") || emptyLog;
 
   const microNetwork = microNetworks.find((network) => network.id === vm?.microNetworkId);
   const microNetworkLabel = !vm?.microNetworkId
-    ? "기본 네트워크"
+    ? t("Default network", "기본 네트워크")
     : microNetwork
       ? `${microNetwork.name} (${microNetwork.subnetCidr})`
       : vm.microNetworkId;
@@ -237,7 +235,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     <div className="console-overlay">
       <div className="console-panel">
         <div className="console-bar">
-          <span className="console-title">{`VM 상세 — ${vm?.name ?? vmId}`}</span>
+          <span className="console-title">{t(`VM details — ${vm?.name ?? vmId}`, `VM 상세 — ${vm?.name ?? vmId}`)}</span>
           {vm && <span className={`state-badge ${vm.state}`}>{vm.state}</span>}
           <button className="btn console-close" onClick={onClose}>
             ✕
@@ -307,7 +305,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   storageRootLabel
                 )}
               </dd>
-              <dt>외부 통신</dt>
+              <dt>{t("Egress", "외부 통신")}</dt>
               <dd>
                 {editing ? (
                   <select
@@ -315,14 +313,14 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     value={editEgressPolicy}
                     onChange={(event) => setEditEgressPolicy(event.target.value as EgressPolicy)}
                   >
-                    {(Object.keys(EGRESS_POLICY_LABEL) as EgressPolicy[]).map((policy) => (
+                    {(["internet", "isolated"] as EgressPolicy[]).map((policy) => (
                       <option key={policy} value={policy}>
-                        {EGRESS_POLICY_LABEL[policy]}
+                        {policy === "internet" ? t("Internet access", "인터넷 허용") : t("Isolated (gateway only)", "격리(게이트웨이만 허용)")}
                       </option>
                     ))}
                   </select>
                 ) : (
-                  EGRESS_POLICY_LABEL[vm.egressPolicy]
+                  vm.egressPolicy === "internet" ? t("Internet access", "인터넷 허용") : t("Isolated (gateway only)", "격리(게이트웨이만 허용)")
                 )}
               </dd>
               <dt>ip</dt>
@@ -339,25 +337,25 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                 {editing ? (
                   <>
                     <button className="btn primary" onClick={handleSave} disabled={saving}>
-                      {saving ? "저장 중…" : "저장"}
+                      {saving ? t("Saving…", "저장 중…") : t("Save", "저장")}
                     </button>
                     <button className="btn" onClick={cancelEditing} disabled={saving}>
-                      취소
+                      {t("Cancel", "취소")}
                     </button>
                     {saveError && <span className="field-error">{saveError.message}</span>}
                   </>
                 ) : (
                   <button className="btn" onClick={startEditing}>
-                    수정
+                    {t("Edit", "수정")}
                   </button>
                 )}
               </div>
             )}
             <PipelineStepper currentIndex={currentIndex} timeline={vm?.startupTimeline ?? []} />
             <div className="log-export-bar">
-              <span className="log-export-bar-label">시작 · 콘솔 로그</span>
+              <span className="log-export-bar-label">{t("Startup · console log", "시작 · 콘솔 로그")}</span>
               <LogExportActions
-                text={logText === "아직 출력이 없습니다." ? "" : logText}
+                text={logText === emptyLog ? "" : logText}
                 filename={logDownloadFilename("vm-log", vm?.name ?? vmId)}
                 buttonClassName="btn console-bar-btn"
               />
@@ -367,12 +365,12 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
             </pre>
             {vm && vm.state === "running" && (
               <section className="panel">
-                <h2 className="panel-title">패키지</h2>
+                <h2 className="panel-title">{t("Packages", "패키지")}</h2>
                 {packageError && <div className="field-error">{packageError}</div>}
                 <div className="package-row">
                   <input
                     type="text"
-                    placeholder="설치할 패키지 (공백으로 구분)"
+                    placeholder={t("Packages to install (space-separated)", "설치할 패키지 (공백으로 구분)")}
                     value={installInput}
                     onChange={(event) => setInstallInput(event.target.value)}
                     disabled={packageBusy !== null}
@@ -383,13 +381,13 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     disabled={packageBusy !== null || !installInput.trim()}
                     onClick={() => void runPackages("install", installInput)}
                   >
-                    {packageBusy === "install" ? "설치 중…" : "설치"}
+                    {packageBusy === "install" ? t("Installing…", "설치 중…") : t("Install", "설치")}
                   </button>
                 </div>
                 <div className="package-row">
                   <input
                     type="text"
-                    placeholder="삭제할 패키지 (공백으로 구분)"
+                    placeholder={t("Packages to remove (space-separated)", "삭제할 패키지 (공백으로 구분)")}
                     value={removeInput}
                     onChange={(event) => setRemoveInput(event.target.value)}
                     disabled={packageBusy !== null}
@@ -400,7 +398,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     disabled={packageBusy !== null || !removeInput.trim()}
                     onClick={() => void runPackages("remove", removeInput)}
                   >
-                    {packageBusy === "remove" ? "삭제 중…" : "삭제"}
+                    {packageBusy === "remove" ? t("Removing…", "삭제 중…") : t("Remove", "삭제")}
                   </button>
                 </div>
                 <div className="package-row">
@@ -410,7 +408,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     disabled={packageBusy !== null}
                     onClick={() => void runPackages("update")}
                   >
-                    {packageBusy === "update" ? "업데이트 중…" : "전체 패키지 업데이트"}
+                    {packageBusy === "update" ? t("Updating…", "업데이트 중…") : t("Update all packages", "전체 패키지 업데이트")}
                   </button>
                 </div>
                 {vm.packageUpdate && vm.packageUpdate.state !== "running" && (
@@ -424,7 +422,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
             )}
           </div>
         ) : (
-          <div className="empty">불러오는 중…</div>
+          <div className="empty">{t("Loading…", "불러오는 중…")}</div>
         )}
       </div>
     </div>
