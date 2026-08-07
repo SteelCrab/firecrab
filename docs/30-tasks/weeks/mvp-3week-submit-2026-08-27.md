@@ -307,7 +307,7 @@ main
 - API: [api](../../20-guides/api.md) · 대시보드: [web](../../20-guides/web.md)
 - CI 부팅 매트릭스: [m2-ci-boot-matrix](../../20-guides/m2-ci-boot-matrix.md)
 - MicroStorage: [micro-storage](../../20-guides/micro-storage.md)
-- 명시 MicroNetwork: [explicit-micro-network](../../20-guides/explicit-micro-network.md) *(워크트리 초안, 커밋 여부 별도)*
+- 명시 MicroNetwork: `docs/20-guides/explicit-micro-network.md` *(별도 관리 초안)*
 - 백로그: [week4-tasks](week4-tasks.md) · [week5-tasks](week5-tasks.md)
 - 대회 초안: 저장소 루트 `오픈소스개발자대회.md`
 - 이미지 카탈로그: [task-m2image-catalog-api](../task-m2image-catalog-api.md)
