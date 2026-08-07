@@ -39,9 +39,5 @@ firecrab-api/data/
 id_rsa*
 id_ed25519*
 
-# Obsidian vault (docs/) — share the settings, not the per-machine window state
-docs/.obsidian/workspace.json
-docs/.obsidian/workspace-mobile.json
-docs/.obsidian/cache
-docs/.obsidian/plugins/
-docs/__pycache__/
+# Local design notes and project records are never published.
+/docs/
