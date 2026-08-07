@@ -1,10 +1,10 @@
 pub mod bootstrap;
 pub mod builder_vm;
 pub mod console;
+pub mod console_sentinel;
 pub mod images;
 pub mod micro_networks;
 pub mod micro_storages;
 pub mod network;
-pub mod packages;
 pub mod storage;
 pub mod vms;

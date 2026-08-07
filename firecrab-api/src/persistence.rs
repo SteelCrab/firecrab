@@ -463,7 +463,6 @@ impl Store {
                     last_runtime_id: decode_optional_id(&id_text, row.get(15)?)?,
                     startup_step: None,
                     startup_timeline: Vec::new(),
-                    package_update: None,
                 },
             );
         }
@@ -932,7 +931,6 @@ mod tests {
             last_runtime_id: None,
             startup_step: None,
             startup_timeline: Vec::new(),
-            package_update: None,
         }
     }
 

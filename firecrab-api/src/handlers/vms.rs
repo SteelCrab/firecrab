@@ -198,7 +198,6 @@ pub async fn create_vm(
         state: VmState::Created,
         startup_step: None,
         startup_timeline: Vec::new(),
-        package_update: None,
     };
 
     let store = state.store.clone();
@@ -1442,7 +1441,6 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         startup_step: vm.startup_step,
         startup_timeline: vm.startup_timeline.clone(),
         egress_policy: vm.egress_policy,
-        package_update: vm.package_update.clone(),
         ipv4: lease.map(|lease| lease.ipv4.to_string()),
         mac: lease.map(|lease| lease.mac.to_string()),
         hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
@@ -1726,7 +1724,7 @@ fn valid_vm_name(name: &str) -> bool {
 }
 
 /// Test-only fixtures shared with sibling handler modules (e.g.
-/// `handlers::packages`) that need a running-VM-with-a-process to exercise
+/// console-sentinel helpers) that need a running-VM-with-a-process to exercise
 /// their own handlers, without duplicating this module's DB/rootfs setup.
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -1765,7 +1763,6 @@ pub(crate) mod test_support {
             last_runtime_id: None,
             startup_step: None,
             startup_timeline: Vec::new(),
-            package_update: None,
         }
     }
 

@@ -47,7 +47,7 @@ const BUILDER_BOOT_TIMEOUT: Duration = Duration::from_secs(600);
 const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24", "ubuntu-26.04", "rocky-9"];
 
 /// Sentinel the pushed script prints once it's done, followed by `:` and
-/// its exit code — same shape as `packages::DONE_SENTINEL`, kept as its
+/// its exit code — same shape as other console sentinels, kept as its
 /// own distinct string so a bootstrap's completion can never be confused
 /// with an unrelated package action finishing on the same console.
 const BOOTSTRAP_DONE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_DONE";
@@ -55,7 +55,7 @@ const BOOTSTRAP_DONE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_DONE";
 /// How long the guest-side bootstrap script may run before this module
 /// gives up waiting — real network downloads (hundreds of MB) plus a real
 /// package install, so far more generous than
-/// `packages::PACKAGE_UPDATE_TIMEOUT`.
+/// a long guest-side install.
 const BOOTSTRAP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// Marker the console-readiness probe asks the guest's shell to echo back,
@@ -372,7 +372,7 @@ pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, v
     process.console.write_input(heredoc.as_bytes()).await;
 
     let heartbeat = spawn_progress_heartbeat(state, bootstrap_id);
-    let outcome = super::packages::wait_for_completion_with_sentinel(
+    let outcome = super::console_sentinel::wait_for_completion_with_sentinel(
         &mut receiver,
         BOOTSTRAP_SCRIPT_TIMEOUT,
         BOOTSTRAP_DONE_SENTINEL,
@@ -426,7 +426,7 @@ pub(crate) async fn run_bootstrap_script(state: &AppState, bootstrap_id: Uuid, v
 /// a literal code: the tty's own line discipline echoes typed bytes back
 /// even with no process reading them, so only an unexpanded-`$?`-turned-
 /// number proves a shell actually consumed the input (the same reason
-/// `packages::find_sentinel` can't be fooled by the echoed command text).
+/// `console_sentinel::find_sentinel` can't be fooled by the echoed command text).
 async fn wait_for_console_shell(
     console: &crate::console::ConsoleBroker,
     receiver: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
@@ -435,7 +435,7 @@ async fn wait_for_console_shell(
         console
             .write_input(format!("echo \"{CONSOLE_PROBE_SENTINEL}:$?\"\n").as_bytes())
             .await;
-        match super::packages::wait_for_completion_with_sentinel(
+        match super::console_sentinel::wait_for_completion_with_sentinel(
             receiver,
             CONSOLE_PROBE_TIMEOUT,
             CONSOLE_PROBE_SENTINEL,
@@ -816,7 +816,7 @@ mod tests {
     use firecrab_api_types::{BootstrapStep, BootstrapStepOutcome};
 
     /// Registers a fake console+process for `id`, the same way
-    /// `handlers::packages`'s own tests do —
+    /// `handlers::console_sentinel`'s own tests do —
     /// `run_bootstrap_script` requires a live `VmProcess` to write the
     /// heredoc + sentinel-wait command to, and the test fixture never
     /// actually boots Firecracker.
@@ -834,7 +834,7 @@ mod tests {
         console
     }
 
-    /// See `handlers::packages`'s identical helper: `run_bootstrap_script`
+    /// See `handlers::console_sentinel`'s identical helper: `run_bootstrap_script`
     /// returns as soon as it has *spawned*, which only then subscribes to
     /// the console — output pushed before that subscription would be lost.
     async fn wait_for_console_subscriber(console: &ConsoleBroker) {
