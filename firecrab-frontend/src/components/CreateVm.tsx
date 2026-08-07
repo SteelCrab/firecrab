@@ -16,11 +16,7 @@ import type {
   VmResponse,
 } from "../bindings";
 import RamStepper from "./RamStepper";
-
-const EGRESS_POLICY_LABEL: Record<EgressPolicy, string> = {
-  internet: "인터넷 허용",
-  isolated: "격리(게이트웨이만 허용)",
-};
+import { useI18n } from "../i18n";
 
 const FIELDS_WITH_OWN_ERROR = [
   "name",
@@ -63,6 +59,7 @@ function templateLabel(image: ImageResponse): string {
 }
 
 export default function CreateVm({ onCreated, onError }: CreateVmProps) {
+  const { t } = useI18n();
   const [name, setName] = useState("");
   const [template, setTemplate] = useState<string>("");
   const [images, setImages] = useState<ImageResponse[]>([]);
@@ -195,11 +192,11 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   );
 
   const imageHint = imagesLoading
-    ? "이미지 불러오는 중…"
+    ? t("Loading images…", "이미지 불러오는 중…")
     : imagesError
-      ? "이미지 목록을 불러오지 못했습니다"
+      ? t("Unable to load the image catalog", "이미지 목록을 불러오지 못했습니다")
       : noTemplates
-        ? "설치된 이미지가 없습니다 (install.sh 또는 이미지 설치 필요)"
+        ? t("No installed images. Run install.sh or install an image.", "설치된 이미지가 없습니다 (install.sh 또는 이미지 설치 필요)")
         : null;
 
   return (
@@ -237,7 +234,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         </select>
         {fieldError("template")}
         {(imagesError || noTemplates) && !fieldErrors?.fieldError("template") && (
-          <span className="field-error">{imagesError ?? "생성하려면 먼저 이미지를 설치하세요"}</span>
+          <span className="field-error">{imagesError ?? t("Install an image before creating a VM.", "생성하려면 먼저 이미지를 설치하세요")}</span>
         )}
       </div>
       <div className="field">
@@ -272,7 +269,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       {/* Always render storage so the 5-column grid stays aligned even
           when the host has no extra storage roots yet. */}
       <div className="field">
-        <label htmlFor="vm-storage">저장 위치</label>
+        <label htmlFor="vm-storage">{t("Storage location", "저장 위치")}</label>
         <select
           id="vm-storage"
           value={storageRoot}
@@ -300,8 +297,8 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         >
           <option value={NO_NETWORK} disabled>
             {microNetworks.length === 0
-              ? "먼저 MicroNetwork를 만드세요"
-              : "MicroNetwork 선택"}
+              ? t("Create a MicroNetwork first", "먼저 MicroNetwork를 만드세요")
+              : t("Select a MicroNetwork", "MicroNetwork 선택")}
           </option>
           {microNetworks.map((network) => (
             <option key={network.id} value={network.id}>
@@ -312,15 +309,17 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         {fieldError("microNetworkId")}
       </div>
       <div className="field">
-        <label htmlFor="vm-egress-policy">외부 통신</label>
+        <label htmlFor="vm-egress-policy">{t("Egress", "외부 통신")}</label>
         <select
           id="vm-egress-policy"
           value={egressPolicy}
           onChange={(event) => setEgressPolicy(event.target.value as EgressPolicy)}
         >
-          {(Object.keys(EGRESS_POLICY_LABEL) as EgressPolicy[]).map((policy) => (
+          {(["internet", "isolated"] as EgressPolicy[]).map((policy) => (
             <option key={policy} value={policy}>
-              {EGRESS_POLICY_LABEL[policy]}
+              {policy === "internet"
+                ? t("Internet access", "인터넷 허용")
+                : t("Isolated (gateway only)", "격리(게이트웨이만 허용)")}
             </option>
           ))}
         </select>
@@ -340,7 +339,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           type="submit"
           disabled={!canSubmit}
         >
-          {submitting ? "생성 중…" : "생성"}
+          {submitting ? t("Creating…", "생성 중…") : t("Create", "생성")}
         </button>
         <span className="field-error" aria-hidden />
       </div>

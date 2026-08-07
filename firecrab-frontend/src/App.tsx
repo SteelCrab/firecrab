@@ -13,6 +13,7 @@ import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import Shell from "./components/Shell";
 import { useAppRoute } from "./navigation";
+import { useI18n } from "./i18n";
 
 const POLL_MILLIS = 3_000;
 // After repeated failures assume the API is down and poll gently.
@@ -39,7 +40,7 @@ type Msg =
   // `vm` is null when the VM was deleted.
   | { type: "actionSucceeded"; id: string; vm: VmResponse | null }
   | { type: "actionFailed"; id: string; message: string }
-  | { type: "created"; vm: VmResponse }
+  | { type: "created"; vm: VmResponse; message: string }
   | { type: "error"; message: string }
   | { type: "dismissBanner" };
 
@@ -83,7 +84,7 @@ function reduce(state: Dashboard, msg: Msg): Dashboard {
     case "created":
       return {
         ...state,
-        banner: { kind: "info", text: `생성됨: ${msg.vm.name} (${msg.vm.id})` },
+        banner: { kind: "info", text: msg.message },
         vms: upsert(state.vms, msg.vm),
       };
     case "error":
@@ -102,6 +103,7 @@ const initialState: Dashboard = {
 };
 
 export default function App() {
+  const { t } = useI18n();
   const [state, dispatch] = useReducer(reduce, initialState);
   // Generation token so React StrictMode's mount→unmount→remount does not
   // leave a stuck "in flight" flag that skips the real first list fetch.
@@ -141,7 +143,7 @@ export default function App() {
   const onAction = useCallback(
     (id: string, action: VmAction) => {
       if (state.busy.has(id)) return;
-      if (action === "delete" && !confirmDelete()) return;
+      if (action === "delete" && !confirmDelete(t)) return;
 
       dispatch({ type: "actionStarted", id });
       (async () => {
@@ -162,17 +164,22 @@ export default function App() {
         }
       })();
     },
-    [state.busy, runRefresh],
+    [state.busy, runRefresh, t],
   );
 
-  const onCreated = useCallback((vm: VmResponse) => dispatch({ type: "created", vm }), []);
+  const onCreated = useCallback(
+    (vm: VmResponse) => dispatch({ type: "created", vm, message: t(`Created: ${vm.name} (${vm.id})`, `생성됨: ${vm.name} (${vm.id})`) }),
+    [t],
+  );
   const onError = useCallback((message: string) => dispatch({ type: "error", message }), []);
   const dismiss = useCallback(() => dispatch({ type: "dismissBanner" }), []);
 
   const onOpenDetail = useCallback((id: string) => setOpenDetailId(id), []);
   const onCloseDetail = useCallback(() => setOpenDetailId(null), []);
 
-  const pollNote = slowMode ? "API 연결 안 됨 — 15s 간격 재시도" : `${POLL_MILLIS / 1000}s polling`;
+  const pollNote = slowMode
+    ? t("API unavailable — retrying every 15s", "API 연결 안 됨 — 15s 간격 재시도")
+    : t(`Polling every ${POLL_MILLIS / 1000}s`, `${POLL_MILLIS / 1000}초마다 폴링`);
 
   // Terminal owns the whole viewport — no shell chrome, no modal clip box.
   if (route.kind === "console") {
@@ -188,12 +195,12 @@ export default function App() {
         {view === "vms" && (
           <>
             <section className="panel">
-              <h2 className="panel-title">NEW MICROVM</h2>
+              <h2 className="panel-title">{t("New MicroVM", "새 MicroVM")}</h2>
               <CreateVm onCreated={onCreated} onError={onError} />
             </section>
             <section className="panel">
               <h2 className="panel-title">
-                <span>{`MicroVM list (${state.vms.length})`}</span>
+                <span>{t(`MicroVMs (${state.vms.length})`, `MicroVM 목록 (${state.vms.length})`)}</span>
                 <span className="poll-note">{pollNote}</span>
               </h2>
               {state.loaded ? (
@@ -204,7 +211,7 @@ export default function App() {
                   onOpenDetail={onOpenDetail}
                 />
               ) : (
-                <div className="empty">불러오는 중…</div>
+                <div className="empty">{t("Loading…", "불러오는 중…")}</div>
               )}
             </section>
           </>
@@ -221,6 +228,6 @@ export default function App() {
   );
 }
 
-function confirmDelete(): boolean {
-  return window.confirm("VM 레코드와 디스크를 삭제할까요?");
+function confirmDelete(t: (english: string, korean: string) => string): boolean {
+  return window.confirm(t("Delete this VM record and its disk?", "VM 레코드와 디스크를 삭제할까요?"));
 }

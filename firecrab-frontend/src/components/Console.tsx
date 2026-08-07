@@ -2,21 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { EgressPolicy, VmResponse } from "../bindings";
+import type { VmResponse } from "../bindings";
 import { getVm, getVmLog } from "../api/client";
 import { formatVmExportBundle, serializeXtermBuffer } from "../lib/formatVmLog";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
+import { useI18n } from "../i18n";
 
 type Status = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";
-
-const STATUS_LABEL: Record<Status, string> = {
-  connecting: "연결 중…",
-  connected: "연결됨",
-  reconnecting: "재연결 중…",
-  disconnected: "연결 끊김",
-  failed: "연결 실패",
-};
 
 const STATUS_CLASS: Record<Status, string> = {
   connecting: "connecting",
@@ -24,11 +17,6 @@ const STATUS_CLASS: Record<Status, string> = {
   reconnecting: "connecting",
   disconnected: "error",
   failed: "error",
-};
-
-const EGRESS_LABEL: Record<EgressPolicy, string> = {
-  internet: "인터넷 허용",
-  isolated: "격리",
 };
 
 /** Named color schemes — font family stays IBM Plex Mono to match the shell. */
@@ -124,6 +112,7 @@ interface ConsoleProps {
  * hides chrome (bar + details) so only the terminal remains.
  */
 export default function Console({ vmId, onClose }: ConsoleProps) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -436,9 +425,9 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
             type="button"
             className="btn console-bar-btn"
             onClick={handleClose}
-            title="창 닫기"
+            title={t("Close window", "창 닫기")}
           >
-            창 닫기
+            {t("Close", "창 닫기")}
           </button>
 
           <span className="console-title" title={vmId}>
@@ -451,7 +440,15 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
             aria-live="polite"
           >
             <span className="console-status-dot" aria-hidden />
-            {STATUS_LABEL[status]}
+            {status === "connecting"
+              ? t("Connecting…", "연결 중…")
+              : status === "connected"
+                ? t("Connected", "연결됨")
+                : status === "reconnecting"
+                  ? t("Reconnecting…", "재연결 중…")
+                  : status === "disconnected"
+                    ? t("Disconnected", "연결 끊김")
+                    : t("Connection failed", "연결 실패")}
           </span>
 
           {canRetry && (
@@ -459,9 +456,9 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               type="button"
               className="btn console-bar-btn"
               onClick={reconnectNow}
-              title="지금 다시 연결"
+              title={t("Reconnect now", "지금 다시 연결")}
             >
-              재연결
+              {t("Reconnect", "재연결")}
             </button>
           )}
 
@@ -472,14 +469,14 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               onClick={() => setSettingsOpen((o) => !o)}
               aria-expanded={settingsOpen}
               aria-haspopup="true"
-              title="폰트 · 색상"
+              title={t("Font · colors", "폰트 · 색상")}
             >
-              표시
+              {t("Display", "표시")}
             </button>
             {settingsOpen && (
-              <div className="console-settings-pop" role="dialog" aria-label="터미널 표시 설정">
+              <div className="console-settings-pop" role="dialog" aria-label={t("Terminal display settings", "터미널 표시 설정")}>
                 <label className="console-settings-row">
-                  <span>글자 크기</span>
+                  <span>{t("Font size", "글자 크기")}</span>
                   <select
                     value={prefs.fontSize}
                     onChange={(e) => setPrefs((p) => ({ ...p, fontSize: Number(e.target.value) }))}
@@ -492,7 +489,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                   </select>
                 </label>
                 <label className="console-settings-row">
-                  <span>색 테마</span>
+                  <span>{t("Color theme", "색 테마")}</span>
                   <select
                     value={prefs.themeId}
                     onChange={(e) =>
@@ -514,8 +511,8 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
             text={buildExportText}
             filename={logDownloadFilename("console", vm?.name ?? vmId)}
             buttonClassName="btn console-bar-btn"
-            copyLabel="로그 복사"
-            downloadLabel="로그 저장"
+            copyLabel={t("Copy log", "로그 복사")}
+            downloadLabel={t("Save log", "로그 저장")}
           />
 
           <button
@@ -525,12 +522,12 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               setTerminalOnly(true);
               setSettingsOpen(false);
             }}
-            title="툴바·세부정보를 숨기고 터미널만 표시 (Esc로 복귀)"
+            title={t("Hide the toolbar and details; show terminal only (Esc to return)", "툴바·세부정보를 숨기고 터미널만 표시 (Esc로 복귀)")}
           >
-            터미널만
+            {t("Terminal only", "터미널만")}
           </button>
 
-          <button type="button" className="btn console-close" onClick={handleClose} title="닫기">
+          <button type="button" className="btn console-close" onClick={handleClose} title={t("Close", "닫기")}>
             ✕
           </button>
         </div>
@@ -551,24 +548,24 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
           type="button"
           className="console-exit-only"
           onClick={() => setTerminalOnly(false)}
-          title="툴바·세부정보 다시 표시 (Esc)"
+          title={t("Show toolbar and details (Esc)", "툴바·세부정보 다시 표시 (Esc)")}
         >
-          세부정보 보기
+          {t("Show details", "세부정보 보기")}
         </button>
       )}
 
       {!terminalOnly && (
-        <aside className="console-detail" aria-label="VM 세부정보">
+        <aside className="console-detail" aria-label={t("VM details", "VM 세부정보")}>
           <div className="console-detail-head">
-            <h2 className="console-detail-title">세부정보</h2>
+            <h2 className="console-detail-title">{t("Details", "세부정보")}</h2>
             {vm && <span className={`state-badge ${vm.state}`}>{vm.state}</span>}
             <button
               type="button"
               className="btn console-bar-btn"
               onClick={() => setTerminalOnly(true)}
-              title="터미널만 보기"
+              title={t("Show terminal only", "터미널만 보기")}
             >
-              터미널만
+              {t("Terminal only", "터미널만")}
             </button>
           </div>
           {vmError && !vm ? (
@@ -576,7 +573,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
           ) : vm ? (
             <div className="console-detail-grid">
               <section className="console-detail-group" aria-label="기본">
-                <h3 className="console-detail-group-title">기본</h3>
+                <h3 className="console-detail-group-title">{t("General", "기본")}</h3>
                 <dl className="console-detail-fields mono">
                   <dt>name</dt>
                   <dd>{vm.name}</dd>
@@ -589,7 +586,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                 </dl>
               </section>
               <section className="console-detail-group" aria-label="스펙">
-                <h3 className="console-detail-group-title">스펙</h3>
+                <h3 className="console-detail-group-title">{t("Specs", "스펙")}</h3>
                 <dl className="console-detail-fields mono">
                   <dt>cpu</dt>
                   <dd>{vm.cpu}</dd>
@@ -600,20 +597,20 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                 </dl>
               </section>
               <section className="console-detail-group" aria-label="네트워크">
-                <h3 className="console-detail-group-title">네트워크</h3>
+                <h3 className="console-detail-group-title">{t("Network", "네트워크")}</h3>
                 <dl className="console-detail-fields mono">
                   <dt>ipv4</dt>
                   <dd>{vm.ipv4 ?? "—"}</dd>
                   <dt>mac</dt>
                   <dd>{vm.mac ?? "—"}</dd>
                   <dt>egress</dt>
-                  <dd>{EGRESS_LABEL[vm.egressPolicy] ?? vm.egressPolicy}</dd>
+                  <dd>{vm.egressPolicy === "internet" ? t("Internet access", "인터넷 허용") : t("Isolated", "격리")}</dd>
                   <dt>network</dt>
                   <dd title={vm.microNetworkId}>{vm.microNetworkId}</dd>
                 </dl>
               </section>
               <section className="console-detail-group" aria-label="스토리지">
-                <h3 className="console-detail-group-title">스토리지</h3>
+                <h3 className="console-detail-group-title">{t("Storage", "스토리지")}</h3>
                 <dl className="console-detail-fields mono">
                   <dt>storage</dt>
                   <dd>{vm.storageRoot || "default"}</dd>
@@ -621,7 +618,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               </section>
             </div>
           ) : (
-            <p className="console-detail-loading">불러오는 중…</p>
+            <p className="console-detail-loading">{t("Loading…", "불러오는 중…")}</p>
           )}
         </aside>
       )}

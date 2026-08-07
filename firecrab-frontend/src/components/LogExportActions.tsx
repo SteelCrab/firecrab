@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { copyText, downloadText } from "../lib/textExport";
+import { useI18n } from "../i18n";
 
 export type TextSource = string | (() => string | Promise<string>);
 
@@ -35,9 +36,10 @@ export default function LogExportActions({
   disabled = false,
   className = "",
   buttonClassName = "btn",
-  copyLabel = "복사",
-  downloadLabel = "다운로드",
+  copyLabel,
+  downloadLabel,
 }: LogExportActionsProps) {
+  const { t } = useI18n();
   const [feedback, setFeedback] = useState<Feedback>("idle");
   const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -76,34 +78,34 @@ export default function LogExportActions({
     feedback === "busy"
       ? "…"
       : feedback === "empty"
-        ? "내용 없음"
+        ? t("No content", "내용 없음")
         : feedback === "failed"
-          ? "실패"
+          ? t("Failed", "실패")
           : feedback === "copied"
-            ? "복사됨"
+            ? t("Copied", "복사됨")
             : feedback === "saved"
-              ? "저장됨"
+              ? t("Saved", "저장됨")
               : null;
 
   return (
-    <div className={`log-export-actions ${className}`.trim()} role="group" aria-label="로그 내보내기">
+    <div className={`log-export-actions ${className}`.trim()} role="group" aria-label={t("Export log", "로그 내보내기")}>
       <button
         type="button"
         className={buttonClassName}
         disabled={disabled || feedback === "busy"}
         onClick={() => void run("copy")}
-        title="로그 전체를 클립보드에 복사"
+        title={t("Copy the full log to the clipboard", "로그 전체를 클립보드에 복사")}
       >
-        {copyLabel}
+        {copyLabel ?? t("Copy", "복사")}
       </button>
       <button
         type="button"
         className={buttonClassName}
         disabled={disabled || feedback === "busy"}
         onClick={() => void run("download")}
-        title="로그 전체를 텍스트 파일로 저장"
+        title={t("Save the full log as a text file", "로그 전체를 텍스트 파일로 저장")}
       >
-        {downloadLabel}
+        {downloadLabel ?? t("Download", "다운로드")}
       </button>
       {statusText && (
         <span className="log-export-status" role="status" aria-live="polite">

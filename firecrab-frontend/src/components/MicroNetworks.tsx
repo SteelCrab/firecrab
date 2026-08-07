@@ -9,6 +9,7 @@ import {
   listMicroNetworks,
   updateMicroNetwork,
 } from "../api/client";
+import { useI18n } from "../i18n";
 
 /**
  * MicroNetwork management (`docs/30-tasks/task-micro-network.md`) — firecrab's own
@@ -17,6 +18,7 @@ import {
  * the create form. Deleting is refused while VMs are still in it.
  */
 export default function MicroNetworks() {
+  const { t } = useI18n();
   const [networks, setNetworks] = useState<MicroNetworkResponse[] | null>(null);
   const [name, setName] = useState("");
   const [subnetCidr, setSubnetCidr] = useState("");
@@ -81,7 +83,7 @@ export default function MicroNetworks() {
   };
 
   const handleDelete = async (network: MicroNetworkResponse) => {
-    if (busyId || !window.confirm(`MicroNetwork "${network.name}"을(를) 삭제할까요?`)) return;
+    if (busyId || !window.confirm(t(`Delete MicroNetwork "${network.name}"?`, `MicroNetwork "${network.name}"을(를) 삭제할까요?`))) return;
     setBusyId(network.id);
     try {
       await deleteMicroNetwork(network.id);
@@ -143,21 +145,21 @@ export default function MicroNetworks() {
           {fieldError("subnetCidr")}
         </div>
         <div className="field">
-          <label htmlFor="mn-internet">인터넷</label>
+          <label htmlFor="mn-internet">{t("Internet", "인터넷")}</label>
           <select
             id="mn-internet"
             value={internetEnabled ? "on" : "off"}
             onChange={(event) => setInternetEnabled(event.target.value === "on")}
           >
-            <option value="on">연결 (NAT)</option>
-            <option value="off">차단 (내부 전용)</option>
+            <option value="on">{t("Enabled (NAT)", "연결 (NAT)")}</option>
+            <option value="off">{t("Blocked (internal only)", "차단 (내부 전용)")}</option>
           </select>
           <span className="field-error"></span>
         </div>
         <div className="field">
           <label>&nbsp;</label>
           <button className="btn primary" type="submit" disabled={submitting}>
-            {submitting ? "생성 중…" : "생성"}
+            {submitting ? t("Creating…", "생성 중…") : t("Create", "생성")}
           </button>
           <span className="field-error"></span>
         </div>
@@ -166,9 +168,9 @@ export default function MicroNetworks() {
       {listError && <div className="field-error">{listError}</div>}
 
       {networks === null ? (
-        <div className="empty">불러오는 중…</div>
+        <div className="empty">{t("Loading…", "불러오는 중…")}</div>
       ) : networks.length === 0 ? (
-        <div className="empty">MicroNetwork가 없습니다 — 위에서 생성하세요</div>
+        <div className="empty">{t("No MicroNetworks yet — create one above.", "MicroNetwork가 없습니다 — 위에서 생성하세요")}</div>
       ) : (
         <div className="table-scroll">
           <table className="vm-table">
@@ -177,9 +179,9 @@ export default function MicroNetworks() {
                 <th>name</th>
                 <th>subnet CIDR</th>
                 <th>gateway</th>
-                <th>인터넷</th>
+                <th>{t("Internet", "인터넷")}</th>
                 <th>id</th>
-                <th className="actions">actions</th>
+                <th className="actions">{t("Actions", "작업")}</th>
               </tr>
             </thead>
             <tbody>
@@ -192,7 +194,7 @@ export default function MicroNetworks() {
                   <td className="name">{network.name}</td>
                   <td className="mono">{network.subnetCidr}</td>
                   <td className="mono">{network.gateway}</td>
-                  <td>{network.internetEnabled ? "연결" : "차단"}</td>
+                  <td>{network.internetEnabled ? t("Enabled", "연결") : t("Blocked", "차단")}</td>
                   <td className="mono" title={network.id}>
                     {network.id.split("-")[0]}
                   </td>
@@ -202,15 +204,15 @@ export default function MicroNetworks() {
                       disabled={busyId === network.id}
                       title={
                         network.internetEnabled
-                          ? "NAT을 떼고 외부로 나가는 트래픽을 차단합니다"
-                          : "NAT을 붙여 외부 통신을 허용합니다"
+                          ? t("Remove NAT and block outbound traffic", "NAT을 떼고 외부로 나가는 트래픽을 차단합니다")
+                          : t("Attach NAT and allow outbound traffic", "NAT을 붙여 외부 통신을 허용합니다")
                       }
                       onClick={(event) => {
                         event.stopPropagation();
                         handleToggleInternet(network);
                       }}
                     >
-                      {network.internetEnabled ? "인터넷 차단" : "인터넷 연결"}
+                      {network.internetEnabled ? t("Block internet", "인터넷 차단") : t("Enable internet", "인터넷 연결")}
                     </button>
                     <button
                       className="btn danger"
@@ -220,7 +222,7 @@ export default function MicroNetworks() {
                         handleDelete(network);
                       }}
                     >
-                      delete
+                      {t("Delete", "삭제")}
                     </button>
                   </td>
                 </tr>
@@ -244,54 +246,55 @@ function MicroNetworkDetail({
   detail: MicroNetworkDetailResponse | null;
   error: string | null;
 }) {
+  const { t } = useI18n();
   if (error) return <div className="field-error">{error}</div>;
-  if (!detail) return <div className="empty">상세 불러오는 중…</div>;
+  if (!detail) return <div className="empty">{t("Loading details…", "상세 불러오는 중…")}</div>;
 
   const { subnet, bridge, nat, firewall } = detail;
   return (
     <div className="subpanel">
       <dl className="detail-fields mono">
-        <dt>네트워크 ID</dt>
+        <dt>{t("Network ID", "네트워크 ID")}</dt>
         <dd>{detail.id}</dd>
 
-        <dt>서브넷</dt>
+        <dt>{t("Subnet", "서브넷")}</dt>
         <dd>
           {subnet.cidr} · gateway {subnet.gateway}
           <br />
-          주소 {subnet.allocatedAddresses}/{subnet.usableAddresses} 사용 중 · {subnet.dhcp}
+          {t("Addresses", "주소")} {subnet.allocatedAddresses}/{subnet.usableAddresses} {t("used", "사용 중")} · {subnet.dhcp}
         </dd>
 
-        <dt>브릿지</dt>
+        <dt>{t("Bridge", "브릿지")}</dt>
         <dd>
-          {bridge.name} · TAP {bridge.attachedTaps}개 연결
+          {bridge.name} · TAP {bridge.attachedTaps} {t("attached", "개 연결")}
         </dd>
 
         <dt>NAT</dt>
         <dd>
           {nat.enabled
-            ? `${nat.sourceCidr} → ${nat.uplink || "(uplink 없음)"}`
-            : "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop"}
+            ? `${nat.sourceCidr} → ${nat.uplink || t("(no uplink)", "(uplink 없음)")}`
+            : t("Internet blocked — no masquerading; outbound traffic is dropped", "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop")}
         </dd>
 
-        <dt>방화벽</dt>
+        <dt>{t("Firewall", "방화벽")}</dt>
         <dd>
           {[
-            firewall.eastWestBlocked && "VM 간 차단",
-            firewall.crossNetworkBlocked && "다른 네트워크 차단",
-            firewall.antiSpoofing && "IP/MAC 위조 차단",
+            firewall.eastWestBlocked && t("VM-to-VM blocked", "VM 간 차단"),
+            firewall.crossNetworkBlocked && t("Cross-network blocked", "다른 네트워크 차단"),
+            firewall.antiSpoofing && t("IP/MAC spoofing blocked", "IP/MAC 위조 차단"),
           ]
             .filter(Boolean)
             .join(" · ")}
           <br />
-          기본 외부 통신: {firewall.defaultEgress}
+          {t("Default egress", "기본 외부 통신")}: {firewall.defaultEgress}
         </dd>
 
-        <dt>소속 VM</dt>
+        <dt>{t("Member VMs", "소속 VM")}</dt>
         <dd>
           {detail.vms.length === 0
-            ? "없음"
+            ? t("None", "없음")
             : detail.vms
-                .map((vm) => `${vm.name} (${vm.ipv4 ?? "주소 없음"}, ${vm.state})`)
+                .map((vm) => `${vm.name} (${vm.ipv4 ?? t("no address", "주소 없음")}, ${vm.state})`)
                 .join(", ")}
         </dd>
       </dl>

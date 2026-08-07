@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { Locale } from "./i18n";
 
 /**
  * The console's five destinations. The glyph is what the nav shows once it
@@ -8,14 +9,18 @@ import { useCallback, useEffect, useState } from "react";
  * — mixing constants and hooks in there breaks Vite's fast refresh.
  */
 export const VIEWS = [
-  { id: "vms", label: "MicroVM", glyph: "▣" },
-  { id: "networks", label: "네트워크", glyph: "◇" },
-  { id: "storages", label: "스토리지", glyph: "▤" },
-  { id: "images", label: "이미지", glyph: "◈" },
-  { id: "host", label: "호스트", glyph: "◉" },
+  { id: "vms", labels: { en: "MicroVM", ko: "MicroVM" }, glyph: "▣" },
+  { id: "networks", labels: { en: "Networks", ko: "네트워크" }, glyph: "◇" },
+  { id: "storages", labels: { en: "Storage", ko: "스토리지" }, glyph: "▤" },
+  { id: "images", labels: { en: "Images", ko: "이미지" }, glyph: "◈" },
+  { id: "host", labels: { en: "Host", ko: "호스트" }, glyph: "◉" },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];
+
+export function viewLabel(view: (typeof VIEWS)[number], locale: Locale): string {
+  return view.labels[locale];
+}
 
 const DEFAULT_VIEW: ViewId = "vms";
 

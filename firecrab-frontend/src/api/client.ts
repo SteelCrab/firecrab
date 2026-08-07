@@ -44,7 +44,7 @@ export class ApiClientError extends Error {
   }
 
   static transport(detail: string): ApiClientError {
-    return new ApiClientError(`API에 연결할 수 없습니다: ${detail}`);
+    return new ApiClientError(`Unable to connect to the API: ${detail}`);
   }
 
   /** Per-field validation detail from a 400 response, if any. */
@@ -65,7 +65,7 @@ async function fail(response: Response): Promise<ApiClientError> {
     // Vite returns empty 502/503 when firecrab-api is down or restarting.
     if (response.status === 502 || response.status === 503 || response.status === 504) {
       return ApiClientError.transport(
-        `API 서버에 연결할 수 없습니다 (HTTP ${response.status}). firecrab-api가 실행 중인지 확인하세요.`,
+        `Unable to reach the API server (HTTP ${response.status}). Check that firecrab-api is running.`,
       );
     }
     return ApiClientError.transport(`unexpected response (HTTP ${response.status})`);

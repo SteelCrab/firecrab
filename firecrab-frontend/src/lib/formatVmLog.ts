@@ -1,10 +1,10 @@
 import type { StartupStep, StartupStepRun, VmResponse } from "../bindings";
 
 const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
-  preparingDisk: "디스크 준비",
-  generatingConfig: "설정 생성",
-  startingProcess: "프로세스 시작",
-  configuringNetwork: "네트워크 확인",
+  preparingDisk: "Preparing disk",
+  generatingConfig: "Generating configuration",
+  startingProcess: "Starting process",
+  configuringNetwork: "Checking network",
 };
 
 function durationMs(millis: number): string {
@@ -16,7 +16,7 @@ function durationMs(millis: number): string {
 
 /** One timeline row per known step run, plain text for copy/download. */
 export function formatStartupTimeline(timeline: StartupStepRun[]): string {
-  if (timeline.length === 0) return "(타임라인 없음)";
+  if (timeline.length === 0) return "(no timeline)";
   return timeline
     .map((run) => {
       const label = STARTUP_STEP_LABEL[run.step] ?? run.step;
