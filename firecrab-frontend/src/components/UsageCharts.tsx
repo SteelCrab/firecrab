@@ -72,13 +72,7 @@ export default function UsageCharts({
   const { height, width, strokeWidth } = SIZE_GEOMETRY[resolvedSize];
 
   return (
-    <div
-      className={`usage-charts is-${resolvedSize}`}
-      title={t(
-        "Host Firecracker process — not guest free RAM",
-        "호스트 Firecracker 프로세스 — 게스트 여유 메모리 아님",
-      )}
-    >
+    <div className={`usage-charts is-${resolvedSize}`}>
       <Sparkline
         label={t("CPU", "CPU")}
         unit={cpuNow != null ? formatCpuPercent(cpuNow) : "—"}

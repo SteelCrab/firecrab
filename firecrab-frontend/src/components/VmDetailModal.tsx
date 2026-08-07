@@ -48,11 +48,6 @@ const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
 
 const POLL_MILLIS = 750;
 
-function formatCpuPercent(value: number): string {
-  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
-  return `${rounded}%`;
-}
-
 interface VmDetailModalProps {
   vmId: string;
   vms: VmResponse[];
@@ -238,22 +233,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     onChange={(event) => setEditCpu(event.target.value)}
                   />
                 ) : (
-                  <span className="detail-spec-pair">
-                    <span className="detail-spec-alloc">{vm.cpu}</span>
-                    {vm.state === "running" && (
-                      <span
-                        className="detail-spec-live"
-                        title={t(
-                          "Host process CPU % of one core",
-                          "호스트 프로세스 CPU (코어 1개 기준)",
-                        )}
-                      >
-                        {vm.cpuUsagePercent != null
-                          ? formatCpuPercent(vm.cpuUsagePercent)
-                          : "—"}
-                      </span>
-                    )}
-                  </span>
+                  vm.cpu
                 )}
               </dd>
               <dt>ram</dt>
@@ -261,22 +241,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                 {editing ? (
                   <RamStepper id="vm-edit-ram" value={editRam} onChange={setEditRam} />
                 ) : (
-                  <span className="detail-spec-pair">
-                    <span className="detail-spec-alloc">{vm.ram} MiB</span>
-                    {vm.state === "running" && (
-                      <span
-                        className="detail-spec-live"
-                        title={t(
-                          "Host Firecracker process RSS — not guest free RAM",
-                          "호스트 Firecracker 프로세스 RSS — 게스트 여유 메모리 아님",
-                        )}
-                      >
-                        {vm.memoryUsedMib != null
-                          ? `${vm.memoryUsedMib} MiB`
-                          : "—"}
-                      </span>
-                    )}
-                  </span>
+                  `${vm.ram} MiB`
                 )}
               </dd>
               <dt>disk</dt>
@@ -364,12 +329,6 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
             {vm.state === "running" && (
               <section className="panel detail-usage-panel" aria-label={t("Resource usage", "리소스 관측")}>
                 <h2 className="panel-title">{t("Resource usage", "리소스 관측")}</h2>
-                <p className="detail-usage-hint">
-                  {t(
-                    "Host Firecracker process CPU % and RSS (not guest free RAM).",
-                    "호스트 Firecracker 프로세스 CPU %와 RSS (게스트 여유 메모리 아님).",
-                  )}
-                </p>
                 {(vm.usageHistory?.length ?? 0) > 0 ? (
                   <UsageCharts
                     history={vm.usageHistory ?? []}

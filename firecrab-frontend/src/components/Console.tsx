@@ -68,11 +68,6 @@ const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 15000;
 const VM_POLL_MS = 3_000;
 
-function formatCpuPercent(value: number): string {
-  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
-  return `${rounded}%`;
-}
-
 interface ConsolePrefs {
   fontSize: number;
   themeId: ThemeId;
@@ -593,65 +588,14 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               </section>
               <section className="console-detail-group" aria-label="스펙">
                 <h3 className="console-detail-group-title">{t("Specs", "스펙")}</h3>
-                <table
-                  className="console-specs-table mono"
-                  title={
-                    vm.state === "running"
-                      ? t(
-                          "Live = host Firecracker process (not guest free RAM)",
-                          "Live = 호스트 Firecracker 프로세스 (게스트 여유 메모리 아님)",
-                        )
-                      : undefined
-                  }
-                >
-                  <thead>
-                    <tr>
-                      <th scope="col" className="console-specs-metric" />
-                      <th scope="col">{t("Alloc", "할당")}</th>
-                      {vm.state === "running" && (
-                        <th scope="col">{t("Live", "사용")}</th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <th scope="row">cpu</th>
-                      <td>{vm.cpu}</td>
-                      {vm.state === "running" && (
-                        <td>
-                          {vm.cpuUsagePercent != null
-                            ? formatCpuPercent(vm.cpuUsagePercent)
-                            : "—"}
-                        </td>
-                      )}
-                    </tr>
-                    <tr>
-                      <th scope="row">ram</th>
-                      <td>{vm.ram} MiB</td>
-                      {vm.state === "running" && (
-                        <td>
-                          {vm.memoryUsedMib != null
-                            ? `${vm.memoryUsedMib} MiB`
-                            : "—"}
-                        </td>
-                      )}
-                    </tr>
-                    <tr>
-                      <th scope="row">disk</th>
-                      <td>{vm.diskGb} GiB</td>
-                      {vm.state === "running" && <td className="is-muted">—</td>}
-                    </tr>
-                  </tbody>
-                </table>
-                {vm.state === "running" && (vm.usageHistory?.length ?? 0) > 0 && (
-                  <div className="console-detail-usage">
-                    <UsageCharts
-                      history={vm.usageHistory ?? []}
-                      ramMib={vm.ram}
-                      compact
-                    />
-                  </div>
-                )}
+                <dl className="console-detail-fields mono">
+                  <dt>cpu</dt>
+                  <dd>{vm.cpu}</dd>
+                  <dt>ram</dt>
+                  <dd>{vm.ram} MiB</dd>
+                  <dt>disk</dt>
+                  <dd>{vm.diskGb} GiB</dd>
+                </dl>
               </section>
               <section className="console-detail-group" aria-label="네트워크">
                 <h3 className="console-detail-group-title">{t("Network", "네트워크")}</h3>
@@ -673,6 +617,27 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                   <dd>{vm.storageRoot || "default"}</dd>
                 </dl>
               </section>
+              {vm.state === "running" && (
+                <section
+                  className="console-detail-group console-detail-usage-group"
+                  aria-label={t("Resource usage", "리소스 관측")}
+                >
+                  <h3 className="console-detail-group-title">
+                    {t("Resource usage", "리소스 관측")}
+                  </h3>
+                  {(vm.usageHistory?.length ?? 0) > 0 ? (
+                    <UsageCharts
+                      history={vm.usageHistory ?? []}
+                      ramMib={vm.ram}
+                      size="default"
+                    />
+                  ) : (
+                    <p className="usage-charts-empty">
+                      {t("Collecting samples…", "샘플 수집 중…")}
+                    </p>
+                  )}
+                </section>
+              )}
             </div>
           ) : (
             <p className="console-detail-loading">{t("Loading…", "불러오는 중…")}</p>

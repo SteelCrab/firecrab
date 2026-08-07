@@ -32,6 +32,8 @@ export default function VmTable({ vms, busy, onAction, onOpenDetail }: VmTablePr
             <th>cpu</th>
             <th>ram</th>
             <th>{t("Disk", "디스크")}</th>
+            <th>{t("CPU use", "CPU 사용")}</th>
+            <th>{t("Memory use", "메모리 사용")}</th>
             <th>id</th>
             <th className="actions">{t("Actions", "작업")}</th>
           </tr>
@@ -79,35 +81,19 @@ function Row({ vm, busy, onAction, onOpenDetail }: RowProps) {
         <span className={`state-badge ${vm.state}`}>{vm.state}</span>
       </td>
       <td className="mono">{vm.template}</td>
-      <td className="mono">
-        <div>{vm.cpu}</div>
-        {vm.state === "running" && vm.cpuUsagePercent != null && (
-          <div
-            className="usage-sub"
-            title={t(
-              "Host Firecracker process CPU (one core)",
-              "호스트 Firecracker 프로세스 CPU (코어 1개 기준)",
-            )}
-          >
-            {formatCpuPercent(vm.cpuUsagePercent)}
-          </div>
-        )}
-      </td>
-      <td className="mono">
-        <div>{vm.ram} MiB</div>
-        {vm.state === "running" && vm.memoryUsedMib != null && (
-          <div
-            className="usage-sub"
-            title={t(
-              "Host Firecracker process RSS (not guest free RAM)",
-              "호스트 Firecracker 프로세스 RSS (게스트 여유 메모리 아님)",
-            )}
-          >
-            {vm.memoryUsedMib} / {vm.ram} MiB
-          </div>
-        )}
-      </td>
+      <td className="mono">{vm.cpu}</td>
+      <td className="mono">{vm.ram} MiB</td>
       <td className="mono">{vm.diskGb} GiB</td>
+      <td className="mono usage-cell">
+        {vm.state === "running" && vm.cpuUsagePercent != null
+          ? formatCpuPercent(vm.cpuUsagePercent)
+          : "—"}
+      </td>
+      <td className="mono usage-cell">
+        {vm.state === "running" && vm.memoryUsedMib != null
+          ? `${vm.memoryUsedMib} / ${vm.ram} MiB`
+          : "—"}
+      </td>
       <td className="mono" title={vm.id}>
         {shortId}
       </td>
