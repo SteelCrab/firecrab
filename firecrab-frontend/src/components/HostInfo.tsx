@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import type { HostStatusResponse, NetworkInfoResponse } from "../bindings";
 import { getHostStatus, getNetworkInfo } from "../api/client";
+import { useI18n } from "../i18n";
 
 const POLL_MILLIS = 2000;
 
 /** Read-only view of the host's network config and live resource status. */
 export default function HostInfo() {
+  const { locale, t } = useI18n();
   const [network, setNetwork] = useState<NetworkInfoResponse | null>(null);
   const [status, setStatus] = useState<HostStatusResponse | null>(null);
 
@@ -33,7 +35,7 @@ export default function HostInfo() {
 
   return (
     <section className="panel">
-      <h2 className="panel-title">HOST 정보</h2>
+      <h2 className="panel-title">{t("Host", "호스트 정보")}</h2>
       {network ? (
         <dl className="detail-fields mono">
           <dt>bridge</dt>
@@ -46,7 +48,7 @@ export default function HostInfo() {
           <dd>{network.uplink}</dd>
         </dl>
       ) : (
-        <div className="empty">불러오는 중…</div>
+        <div className="empty">{t("Loading…", "불러오는 중…")}</div>
       )}
       {status ? (
         <dl className="detail-fields mono">
@@ -54,17 +56,17 @@ export default function HostInfo() {
           <dd>{status.loadAverage1m.toFixed(2)}</dd>
           <dt>memory</dt>
           <dd>
-            {formatMib(status.memoryTotalMib - status.memoryAvailableMib)} / {formatMib(status.memoryTotalMib)} 사용 중
+            {formatMib(status.memoryTotalMib - status.memoryAvailableMib)} / {formatMib(status.memoryTotalMib)} {t("used", "사용 중")}
           </dd>
           <dt>disk</dt>
           <dd>
-            {formatGib(status.diskTotalGib - status.diskAvailableGib)} / {formatGib(status.diskTotalGib)} 사용 중
+            {formatGib(status.diskTotalGib - status.diskAvailableGib)} / {formatGib(status.diskTotalGib)} {t("used", "사용 중")}
           </dd>
           <dt>uptime</dt>
-          <dd>{formatUptime(status.uptimeSeconds)}</dd>
+          <dd>{formatUptime(status.uptimeSeconds, locale)}</dd>
         </dl>
       ) : (
-        <div className="empty">불러오는 중…</div>
+        <div className="empty">{t("Loading…", "불러오는 중…")}</div>
       )}
     </section>
   );
@@ -78,13 +80,13 @@ function formatGib(gib: number): string {
   return `${gib.toFixed(1)} GiB`;
 }
 
-function formatUptime(seconds: number): string {
+function formatUptime(seconds: number, locale: "en" | "ko"): string {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const parts = [];
-  if (days > 0) parts.push(`${days}일`);
-  if (days > 0 || hours > 0) parts.push(`${hours}시간`);
-  parts.push(`${minutes}분`);
+  if (days > 0) parts.push(locale === "ko" ? `${days}일` : `${days}d`);
+  if (days > 0 || hours > 0) parts.push(locale === "ko" ? `${hours}시간` : `${hours}h`);
+  parts.push(locale === "ko" ? `${minutes}분` : `${minutes}m`);
   return parts.join(" ");
 }
