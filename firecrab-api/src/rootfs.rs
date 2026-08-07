@@ -354,10 +354,7 @@ fn patch_network_ready_script(rootfs: &Path) -> Result<(), RootfsError> {
 /// Best-effort `chmod` inside the image. debugfs does not fail the host
 /// process when the field write is refused, so callers treat this as soft.
 fn set_guest_file_mode(rootfs: &Path, guest_path: &str, mode: &str) {
-    let _ = run_debugfs(
-        rootfs,
-        &format!("set_inode_field {guest_path} mode {mode}"),
-    );
+    let _ = run_debugfs(rootfs, &format!("set_inode_field {guest_path} mode {mode}"));
 }
 
 fn guest_path_exists(rootfs: &Path, guest_path: &str) -> bool {
