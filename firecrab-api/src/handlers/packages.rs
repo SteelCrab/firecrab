@@ -199,7 +199,7 @@ pub async fn run_package_action(
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
     let lease = lease_for(&state, id).await;
-    Ok(Json(vm_response(&vm, lease.as_ref())))
+    Ok(Json(vm_response(&state, &vm, lease.as_ref())))
 }
 
 /// Writes `command` to the guest's console, waits for its completion

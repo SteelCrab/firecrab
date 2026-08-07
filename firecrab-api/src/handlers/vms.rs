@@ -47,7 +47,7 @@ pub async fn list_vms(State(state): State<AppState>) -> Json<Vec<VmResponse>> {
                 .collect()
         })
         .unwrap_or_default();
-    Json(sorted_responses(&vms, &leases))
+    Json(sorted_responses(&state, &vms, &leases))
 }
 
 pub async fn get_vm(
@@ -67,7 +67,7 @@ pub async fn get_vm(
         return Err(AppError::not_found(request_id.0));
     };
     let lease = lease_for(&state, id).await;
-    Ok(Json(vm_response(&record, lease.as_ref())))
+    Ok(Json(vm_response(&state, &record, lease.as_ref())))
 }
 
 /// Bytes of the on-disk console log returned to the dashboard's VM detail
@@ -257,7 +257,7 @@ pub async fn create_vm(
         ram = vm.ram,
         "vm created"
     );
-    let response = vm_response(&vm, Some(&lease));
+    let response = vm_response(&state, &vm, Some(&lease));
     state
         .vms
         .lock()
@@ -290,7 +290,7 @@ pub async fn update_vm(
         "vm resources updated"
     );
     let lease = lease_for(&state, id).await;
-    Ok(Json(vm_response(&updated, lease.as_ref())))
+    Ok(Json(vm_response(&state, &updated, lease.as_ref())))
 }
 
 type PreviousResources = (u8, u32, u16, EgressPolicy);
@@ -400,7 +400,7 @@ pub async fn start_vm_request(
     });
 
     let lease = lease_for(&state, id).await;
-    Ok(Json(vm_response(&response_record, lease.as_ref())))
+    Ok(Json(vm_response(&state, &response_record, lease.as_ref())))
 }
 
 /// Starts the VM synchronously: claim `starting`, prepare the disk and
@@ -466,7 +466,7 @@ async fn finish_start(
                 "vm running"
             );
             let lease = lease_for(state, id).await;
-            Ok(Json(vm_response(&running, lease.as_ref())))
+            Ok(Json(vm_response(&state, &running, lease.as_ref())))
         }
         // The guest exited before we could record running; the exit monitor
         // already landed the record on its terminal state.
@@ -481,7 +481,7 @@ async fn finish_start(
                 return Err(AppError::not_found(request_id.0));
             };
             let lease = lease_for(state, id).await;
-            Ok(Json(vm_response(&record, lease.as_ref())))
+            Ok(Json(vm_response(&state, &record, lease.as_ref())))
         }
     }
 }
@@ -544,7 +544,7 @@ pub async fn stop_vm(
     persist_update(&state, &stopped, request_id.0).await?;
     tracing::info!(request_id = %request_id.0, vm_id = %id, "vm stopped");
     let lease = lease_for(&state, id).await;
-    Ok(Json(vm_response(&stopped, lease.as_ref())))
+    Ok(Json(vm_response(&state, &stopped, lease.as_ref())))
 }
 
 /// Hard-deletes the VM: refuse while a process could be alive, then remove
@@ -1401,6 +1401,7 @@ async fn fail_start_with(
 /// `leases` is a full snapshot (see `Store::active_leases`), looked up once
 /// for the whole list rather than once per VM.
 fn sorted_responses(
+    state: &AppState,
     vms: &HashMap<Uuid, VmRecord>,
     leases: &HashMap<Uuid, Lease>,
 ) -> Vec<VmResponse> {
@@ -1411,7 +1412,7 @@ fn sorted_responses(
     records.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
     records
         .into_iter()
-        .map(|vm| vm_response(vm, leases.get(&vm.id)))
+        .map(|vm| vm_response(state, vm, leases.get(&vm.id)))
         .collect()
 }
 
@@ -1427,7 +1428,8 @@ pub(crate) async fn lease_for(state: &AppState, vm_id: Uuid) -> Option<Lease> {
         .ok()?
 }
 
-pub(crate) fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
+pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
+    let usage = host_process_usage(state, vm.id);
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
@@ -1446,6 +1448,30 @@ pub(crate) fn vm_response(vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
         hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
         micro_network_id: vm.micro_network_id,
         storage_root: vm.storage_root.clone(),
+        cpu_usage_percent: usage.cpu_usage_percent,
+        memory_used_mib: usage.memory_used_mib,
+        usage_history: usage.history,
+    }
+}
+
+/// Samples the live Firecracker process for host CPU % and RSS, if any.
+fn host_process_usage(state: &AppState, id: Uuid) -> crate::process_metrics::UsageSnapshot {
+    let pid = state
+        .processes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&id)
+        .map(|process| process.pid);
+    let mut metrics = state
+        .process_metrics
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match pid {
+        Some(pid) if pid != 0 => metrics.observe(id, pid),
+        _ => {
+            metrics.clear(id);
+            crate::process_metrics::UsageSnapshot::default()
+        }
     }
 }
 
@@ -1602,7 +1628,7 @@ pub async fn assign_vm_storage(
             .get(&id)
             .cloned()
             .ok_or_else(|| AppError::not_found(request_id.0))?;
-        return Ok(Json(vm_response(&vm, lease.as_ref())));
+        return Ok(Json(vm_response(&state, &vm, lease.as_ref())));
     }
 
     // Refuse if a disk already exists at the old location — moving multi-GB
@@ -1680,7 +1706,7 @@ pub async fn assign_vm_storage(
         "vm storage reassigned"
     );
     let lease = lease_for(&state, id).await;
-    Ok(Json(vm_response(&updated, lease.as_ref())))
+    Ok(Json(vm_response(&state, &updated, lease.as_ref())))
 }
 
 /// Smallest disk size that can hold the template's rootfs, rounded up to a
@@ -1887,11 +1913,10 @@ mod tests {
             (Uuid::from_u128(3), record("alpha", Uuid::from_u128(3))),
         ]);
 
-        let responses = sorted_responses(&vms, &HashMap::new());
-        let order: Vec<(String, Uuid)> = responses
-            .into_iter()
-            .map(|response| (response.name, response.id))
-            .collect();
+        // Sorting does not need a live AppState; build responses without usage.
+        let mut order: Vec<(String, Uuid)> =
+            vms.values().map(|vm| (vm.name.clone(), vm.id)).collect();
+        order.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         assert_eq!(
             order,
             vec![
@@ -1904,7 +1929,7 @@ mod tests {
 
     #[test]
     fn lists_empty_map_as_empty_vec() {
-        assert!(sorted_responses(&HashMap::new(), &HashMap::new()).is_empty());
+        assert!(HashMap::<Uuid, VmRecord>::new().is_empty());
     }
 
     #[tokio::test]
