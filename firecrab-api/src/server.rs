@@ -177,7 +177,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     let rest = Router::new()
         .route(
             "/api/vms",
-            get(handlers::vms::list_vms).post(handlers::vms::create_vm),
+            get(handlers::vms::list_vms).post(handlers::vms::create_vm_route),
         )
         .route(
             "/api/vms/{id}",
@@ -185,12 +185,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .put(handlers::vms::update_vm)
                 .delete(handlers::vms::delete_vm),
         )
-        .route("/api/vms/{id}/start", post(handlers::vms::start_vm))
+        .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route(
-            "/api/vms/{id}/packages/update",
-            post(handlers::packages::update_packages),
+            "/api/vms/{id}/packages",
+            post(handlers::packages::run_package_action),
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
@@ -202,6 +202,20 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/images/{alias}/install",
             get(handlers::images::get_image_install).post(handlers::images::start_image_install),
+        )
+        .route(
+            "/api/images/{alias}/package",
+            get(handlers::images::get_image_package)
+                .post(handlers::images::start_image_package)
+                .delete(handlers::images::delete_staged_package),
+        )
+        .route(
+            "/api/images/{alias}/bootstrap",
+            post(handlers::bootstrap::start_bootstrap),
+        )
+        .route(
+            "/api/images/bootstrap/{bootstrapId}",
+            get(handlers::bootstrap::get_bootstrap).delete(handlers::bootstrap::cancel_bootstrap),
         )
         .route("/api/storage", get(handlers::storage::list_storage))
         .route(

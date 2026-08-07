@@ -14,6 +14,7 @@ import {
   getVmLog,
   listMicroNetworks,
   listStorageRoots,
+  runPackageAction,
   updateVmResources,
 } from "../api/client";
 import { isEditableState } from "../model";
@@ -81,6 +82,10 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
   const [storageRoots, setStorageRoots] = useState<StorageRootResponse[]>([]);
+  const [installInput, setInstallInput] = useState("");
+  const [removeInput, setRemoveInput] = useState("");
+  const [packageBusy, setPackageBusy] = useState<"install" | "remove" | "update" | null>(null);
+  const [packageError, setPackageError] = useState<string | null>(null);
 
   // Only to resolve the VM's microNetworkId into a readable name/subnet; a
   // failed load just falls back to showing the raw id.
@@ -127,6 +132,27 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
       setSaveError(error as ApiClientError);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const runPackages = async (action: "install" | "remove" | "update", input?: string) => {
+    if (!vm) return;
+    const packages = input ? input.split(/\s+/).filter(Boolean) : [];
+    if (action !== "update" && packages.length === 0) {
+      setPackageError("패키지 이름을 입력하세요.");
+      return;
+    }
+    setPackageBusy(action);
+    setPackageError(null);
+    try {
+      const updated = await runPackageAction(vm.id, action, packages);
+      setVm(updated);
+      if (action === "install") setInstallInput("");
+      if (action === "remove") setRemoveInput("");
+    } catch (error) {
+      setPackageError((error as Error).message);
+    } finally {
+      setPackageBusy(null);
     }
   };
 
@@ -339,6 +365,63 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
             <pre className="detail-log" ref={logRef}>
               {logText}
             </pre>
+            {vm && vm.state === "running" && (
+              <section className="panel">
+                <h2 className="panel-title">패키지</h2>
+                {packageError && <div className="field-error">{packageError}</div>}
+                <div className="package-row">
+                  <input
+                    type="text"
+                    placeholder="설치할 패키지 (공백으로 구분)"
+                    value={installInput}
+                    onChange={(event) => setInstallInput(event.target.value)}
+                    disabled={packageBusy !== null}
+                  />
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={packageBusy !== null || !installInput.trim()}
+                    onClick={() => void runPackages("install", installInput)}
+                  >
+                    {packageBusy === "install" ? "설치 중…" : "설치"}
+                  </button>
+                </div>
+                <div className="package-row">
+                  <input
+                    type="text"
+                    placeholder="삭제할 패키지 (공백으로 구분)"
+                    value={removeInput}
+                    onChange={(event) => setRemoveInput(event.target.value)}
+                    disabled={packageBusy !== null}
+                  />
+                  <button
+                    type="button"
+                    className="btn danger"
+                    disabled={packageBusy !== null || !removeInput.trim()}
+                    onClick={() => void runPackages("remove", removeInput)}
+                  >
+                    {packageBusy === "remove" ? "삭제 중…" : "삭제"}
+                  </button>
+                </div>
+                <div className="package-row">
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={packageBusy !== null}
+                    onClick={() => void runPackages("update")}
+                  >
+                    {packageBusy === "update" ? "업데이트 중…" : "전체 패키지 업데이트"}
+                  </button>
+                </div>
+                {vm.packageUpdate && vm.packageUpdate.state !== "running" && (
+                  <pre className="detail-log">
+                    {vm.packageUpdate.state === "succeeded"
+                      ? vm.packageUpdate.outputTail
+                      : `${vm.packageUpdate.reason}\n${vm.packageUpdate.outputTail}`}
+                  </pre>
+                )}
+              </section>
+            )}
           </div>
         ) : (
           <div className="empty">불러오는 중…</div>
@@ -416,12 +499,27 @@ function PipelineStepper({
               </span>
             </span>
             <span className="step-started">{run ? clockTime(run.startedAtMs) : ""}</span>
-            {run?.detail && <span className="step-detail">{run.detail}</span>}
+            {run?.detail && <span className="step-detail">{startupFailureDetail(run.detail)}</span>}
           </li>
         );
       })}
     </ol>
   );
+}
+
+/** Gives the operator a safe, action-oriented explanation for an nft IP-map
+ * collision instead of exposing the raw ruleset syntax in the VM timeline. */
+function startupFailureDetail(detail: string): string {
+  const conflict = detail.match(
+    /(?:IPv4 lease|vm_egress\s*\{)\s*([0-9]+(?:\.[0-9]+){3})(?:\s+conflicts|\s*:)/,
+  );
+  if (conflict && detail.includes("File exists")) {
+    return `IP ${conflict[1]}은 기존 MicroVM이 사용 중입니다. 기존 VM을 중지하거나 복구한 뒤 다시 시도하세요.`;
+  }
+  if (detail.includes("conflicts with an existing host firewall policy")) {
+    return "기존 MicroVM의 호스트 네트워크 정책과 충돌합니다. 기존 VM을 중지하거나 복구한 뒤 다시 시도하세요.";
+  }
+  return detail;
 }
 
 function timestamp(): string {

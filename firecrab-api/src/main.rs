@@ -1,4 +1,5 @@
 mod artifacts;
+mod bootstrap;
 mod console;
 mod error;
 mod extract;
@@ -6,6 +7,7 @@ mod firecracker;
 mod handlers;
 mod image_install;
 mod ipam;
+mod microboot;
 mod model;
 mod network;
 mod network_policy;
@@ -90,6 +92,9 @@ async fn run() -> Result<(), StartupError> {
     if let Err(error) = handlers::micro_networks::ensure_all_networks(&state).await {
         tracing::warn!(error, "initial network resync failed");
     }
+    // Fetch the shared bootstrap builder source now, in the background, so
+    // the request that needs it doesn't have to — see spawn_warmup.
+    microboot::spawn_warmup(state.clone());
     let app = build_router(state, &config);
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr)

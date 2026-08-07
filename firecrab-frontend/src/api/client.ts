@@ -1,6 +1,7 @@
 import type {
   ApiError,
   AssignVmStorageRequest,
+  BootstrapResponse,
   CreateMicroNetworkRequest,
   CreateMicroStorageRequest,
   CreateVmRequest,
@@ -13,6 +14,7 @@ import type {
   MicroStorageDetailResponse,
   MicroStorageResponse,
   NetworkInfoResponse,
+  PackageAction,
   StorageDeviceResponse,
   StorageRootResponse,
   UpdateMicroNetworkRequest,
@@ -119,6 +121,19 @@ export function stopVm(id: string): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}/stop`, { method: "POST" });
 }
 
+/** Install, remove, or update packages on a running VM (`POST /api/vms/{id}/packages`). */
+export function runPackageAction(
+  id: string,
+  action: PackageAction["action"],
+  packages: string[] = [],
+): Promise<VmResponse> {
+  return fetchJson(`/api/vms/${encodeURIComponent(id)}/packages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, packages }),
+  });
+}
+
 export function getNetworkInfo(): Promise<NetworkInfoResponse> {
   return fetchJson("/api/network");
 }
@@ -132,14 +147,26 @@ export function listImages(): Promise<ImageResponse[]> {
   return fetchJson("/api/images");
 }
 
-/** Start async template install (`POST /api/images/{alias}/install`). */
+/** Start package download + verification (`POST /api/images/{alias}/package`). */
+export function startImagePackage(alias: string): Promise<ImageInstallResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/package`, {
+    method: "POST",
+  });
+}
+
+/** Poll package download + verification (`GET /api/images/{alias}/package`). */
+export function getImagePackage(alias: string): Promise<ImageInstallResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/package`);
+}
+
+/** Install a prepared local package (`POST /api/images/{alias}/install`). */
 export function startImageInstall(alias: string): Promise<ImageInstallResponse> {
   return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`, {
     method: "POST",
   });
 }
 
-/** Poll install job status + log (`GET /api/images/{alias}/install`). */
+/** Poll image installation status + log (`GET /api/images/{alias}/install`). */
 export function getImageInstall(alias: string): Promise<ImageInstallResponse> {
   return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`);
 }
@@ -149,6 +176,19 @@ export async function deleteImage(alias: string): Promise<void> {
   let response: Response;
   try {
     response = await fetch(`/api/images/${encodeURIComponent(alias)}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+}
+
+/** Delete a staged-but-not-installed package (`DELETE /api/images/{alias}/package`). */
+export async function deleteStagedPackage(alias: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/images/${encodeURIComponent(alias)}/package`, { method: "DELETE" });
   } catch (error) {
     throw ApiClientError.transport(transportDetail(error));
   }
@@ -246,6 +286,29 @@ export async function deleteMicroNetwork(id: string): Promise<void> {
   let response: Response;
   try {
     response = await fetch(`/api/micro-networks/${id}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+}
+
+/** Bootstrap a distro from scratch inside a builder VM (`POST /api/images/{alias}/bootstrap`). */
+export function startBootstrap(alias: string): Promise<BootstrapResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/bootstrap`, { method: "POST" });
+}
+
+/** Poll one bootstrap session (`GET /api/images/bootstrap/{bootstrapId}`). */
+export function getBootstrap(bootstrapId: string): Promise<BootstrapResponse> {
+  return fetchJson(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`);
+}
+
+/** Cancel a bootstrap and delete its builder VM (`DELETE /api/images/bootstrap/{bootstrapId}`). */
+export async function cancelBootstrap(bootstrapId: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`, { method: "DELETE" });
   } catch (error) {
     throw ApiClientError.transport(transportDetail(error));
   }

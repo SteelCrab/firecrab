@@ -34,6 +34,7 @@ RUST_LOG=firecrab_api=debug cargo run
 | `FIRECRAB_ENV` | (없음) | `production`이면 `FIRECRAB_ALLOWED_ORIGINS` 기본값이 빈 값(=CORS 전체 차단)이 됨 |
 | `FIRECRAB_ALLOWED_ORIGINS` | `http://localhost:8080` (비-production) | 콤마로 구분된 허용 Origin 목록. CORS 및 `Origin` 헤더 검사에 사용 |
 | `FIRECRAB_IMAGE_ROOT` | `../images` (crate 기준 상대경로) | 템플릿 커널/rootfs 이미지가 위치한 루트 디렉터리 |
+| `FIRECRAB_IMAGE_BASE_URL` | (없음) | M2Image 패키지 베이스. `{base}/{alias}.tar.zst`를 **패키지 설치** 단계에서 내려받는다. 미설정·빈 값/`none`/`-`면 package API가 503. 패키징: `scripts/package-m2images.sh` |
 | `FIRECRAB_FIRECRACKER_BIN` | `firecracker` (PATH 탐색) | VM 시작 시 실행할 Firecracker 바이너리 경로 |
 | `FIRECRAB_STATIC_ROOT` | (없음, 설치 시 유닛이 지정 — [install.md](install.md)) | 대시보드 빌드 산출물(`dist/`) 경로. 지정하면 API가 직접 서빙하고 없는 경로는 `index.html`로 폴백. `index.html`이 없으면 무시하고 경고만 남김 |
 | `FIRECRAB_STORAGE_ROOTS` | (없음 → `default=data`) | VM 디스크 저장 위치(env). `id=path` 쌍을 `:`로 구분. UI/API로 등록하는 [MicroStorage](micro-storage.md)와 함께 `GET /api/storage`에 합쳐진다 |
@@ -247,6 +248,28 @@ VM 생성 시 `template` alias는 `TemplateRegistry`(`firecrab-api/src/templates
 - 레지스트리 로드 시 각 아티팩트의 SHA-256/디바이스/inode/크기를 기록해두고, VM 생성 시점에 재검증하여 파일이 변경되었으면 요청을 거부
 - VM 레코드에는 해석된 `template_version`과 커널/rootfs/boot-args의 SHA-256 해시가 함께 저장됨
 - `template_version`은 `<alias>-v<n>` 형식 (예: `ubuntu-26.04` → `ubuntu-26.04-v1`)
+
+## M2Image 카탈로그 · 설치
+
+M2Image는 `FIRECRAB_IMAGE_BASE_URL`이 가리키는 베이스에서
+`{alias}.tar.zst`를 먼저 내려받아 구조를 확인한 뒤, 별도 이미지 설치에서
+그 로컬 패키지를 풀어 등록한다. 각 행의 `packageUrl`은 `{base}/{alias}.tar.zst`
+형태다. 준비된 로컬 패키지는 이미지 삭제 뒤에도 남아 재설치에 다시 쓸 수 있다 —
+`DELETE /api/images/{alias}/package`로 명시적으로 지우지 않는 한.
+
+| API | 역할 |
+|---|---|
+| `GET /api/images` | 알려진 템플릿 + `installed` + (설정 시) `packageUrl` |
+| `POST /api/images/{alias}/package` | `packageUrl` 비동기 다운로드 · 구조 검증 · 로컬 패키지 준비 (202) |
+| `GET /api/images/{alias}/package` | 패키지 설치 job 상태 · 단계별 로그 |
+| `DELETE /api/images/{alias}/package` | 스테이징만 되고 아직 설치 안 된 로컬 패키지 삭제 (진행 중 작업 있으면 409, 스테이징 안 됐으면 409) |
+| `POST /api/images/{alias}/install` | 준비된 로컬 패키지 해제 · 아티팩트 검증 · 핫 등록 (202) |
+| `GET /api/images/{alias}/install` | 이미지 설치 job 상태 · 진행 로그 |
+| `DELETE /api/images/{alias}` | 등록 해제 + orphan 파일 삭제 (사용 중 VM 있으면 409) |
+
+`FIRECRAB_IMAGE_BASE_URL`이 없으면 **패키지 설치**는 `503`이다. 로컬 패키지가
+없는 상태에서 이미지 설치를 호출하면 `409 package_required`를 반환한다. 패키지 형식·게시:
+`scripts/package-m2images.sh`, [install.md](install.md).
 
 ## 데이터 저장
 

@@ -85,6 +85,9 @@ struct HelperConfig {
     socket_path: PathBuf,
     /// UIDs allowed to connect, checked via `SO_PEERCRED`.
     allowed_peer_uids: HashSet<u32>,
+    /// MTU to apply to all bridges. Set from `FIRECRAB_BRIDGE_MTU` or
+    /// auto-detected from the host's default-route uplink at startup.
+    bridge_mtu: u32,
     /// Shared firewall state (single-writer mutex inside).
     firewall: firewall::FirewallActor,
     /// Shared bridge-creation state (single-writer mutex inside).
@@ -95,15 +98,26 @@ struct HelperConfig {
 
 impl HelperConfig {
     /// Reads configuration from the process environment.
-    fn load() -> Result<Self, StartupError> {
+    async fn load() -> Result<Self, StartupError> {
         let socket_path =
             env::var("FIRECRAB_NET_HELPER_SOCK").unwrap_or_else(|_| DEFAULT_SOCKET_PATH.to_owned());
         let allowed_uid = env::var("FIRECRAB_NET_HELPER_ALLOWED_UID").ok();
-        Self::from_values(&socket_path, allowed_uid.as_deref())
+        let bridge_mtu = match env::var("FIRECRAB_BRIDGE_MTU").ok() {
+            Some(val) => val
+                .trim()
+                .parse::<u32>()
+                .unwrap_or(bridge::DEFAULT_BRIDGE_MTU),
+            None => bridge::detect_uplink_mtu().await,
+        };
+        Self::from_values(&socket_path, allowed_uid.as_deref(), bridge_mtu)
     }
 
     /// Builds config from already-parsed values (used directly by tests).
-    fn from_values(socket_path: &str, allowed_uid: Option<&str>) -> Result<Self, StartupError> {
+    fn from_values(
+        socket_path: &str,
+        allowed_uid: Option<&str>,
+        bridge_mtu: u32,
+    ) -> Result<Self, StartupError> {
         // The helper always trusts its own uid so unprivileged local
         // development needs no extra configuration; production adds the
         // API service uid explicitly.
@@ -119,6 +133,7 @@ impl HelperConfig {
         Ok(Self {
             socket_path: PathBuf::from(socket_path),
             allowed_peer_uids,
+            bridge_mtu,
             firewall: firewall::FirewallActor::new(),
             bridge: bridge::BridgeActor::new(),
             dhcp: dhcp::DhcpActor::new(),
@@ -157,12 +172,13 @@ async fn main() -> ExitCode {
 
 /// Loads config, binds the socket, and serves until shutdown.
 async fn run() -> Result<(), StartupError> {
-    let config = Arc::new(HelperConfig::load()?);
+    let config = Arc::new(HelperConfig::load().await?);
     // Required for NAT'd VM egress to work at all; previously a manual
     // operator step (docs/30-tasks/task-shared-bridge-network.md). Global and
     // idempotent, so doing it once here (rather than on every ensure_bridge
     // call) is enough.
     bridge::enable_ip_forward().map_err(StartupError::IpForward)?;
+    println!("[INFO] bridge MTU: {}", config.bridge_mtu);
     let listener = bind_socket(&config.socket_path)?;
     println!(
         "[INFO] net-helper listening on {}",
@@ -322,13 +338,11 @@ fn validate_micro_networks(micro_networks: &[MicroNetworkSpec]) -> Result<(), He
 /// Routes a validated request to the matching bridge/firewall operation.
 async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), HelperFailure> {
     match request {
-        NetworkRequest::EnsureBridge => {
-            bridge::ensure_bridge(&config.bridge)
-                .await
-                .map_err(|error| HelperFailure::Internal {
-                    detail: error_chain(&error),
-                })
-        }
+        NetworkRequest::EnsureBridge => bridge::ensure_bridge(&config.bridge, config.bridge_mtu)
+            .await
+            .map_err(|error| HelperFailure::Internal {
+                detail: error_chain(&error),
+            }),
         NetworkRequest::EnsureMicroNetworkBridge {
             micro_network_id,
             gateway,
@@ -342,11 +356,17 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
             // 8 keeps the reserved range from swallowing most of the host's
             // own address space.
             validate_prefix(prefix)?;
-            bridge::ensure_micro_network_bridge(&config.bridge, micro_network_id, gateway, prefix)
-                .await
-                .map_err(|error| HelperFailure::Internal {
-                    detail: error_chain(&error),
-                })
+            bridge::ensure_micro_network_bridge(
+                &config.bridge,
+                micro_network_id,
+                gateway,
+                prefix,
+                config.bridge_mtu,
+            )
+            .await
+            .map_err(|error| HelperFailure::Internal {
+                detail: error_chain(&error),
+            })
         }
         NetworkRequest::RemoveMicroNetworkBridge { micro_network_id } => {
             bridge::delete_micro_network_bridge(&config.bridge, micro_network_id)
@@ -461,8 +481,12 @@ mod tests {
     ) -> (PathBuf, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
         let path = dir.path().join("helper.sock");
         let config = Arc::new(
-            HelperConfig::from_values(path.to_str().expect("utf-8 path"), None)
-                .expect("helper config"),
+            HelperConfig::from_values(
+                path.to_str().expect("utf-8 path"),
+                None,
+                bridge::DEFAULT_BRIDGE_MTU,
+            )
+            .expect("helper config"),
         );
         let listener = bind_socket(&config.socket_path).expect("bind helper socket");
         let (stop, stopped) = oneshot::channel::<()>();
@@ -474,7 +498,9 @@ mod tests {
 
     #[test]
     fn own_uid_is_allowed_and_configured_uid_is_added() {
-        let config = HelperConfig::from_values("/tmp/x.sock", Some("12345")).expect("config");
+        let config =
+            HelperConfig::from_values("/tmp/x.sock", Some("12345"), bridge::DEFAULT_BRIDGE_MTU)
+                .expect("config");
         assert!(config.peer_allowed(effective_uid()));
         assert!(config.peer_allowed(12345));
         assert!(!config.peer_allowed(54321));
@@ -483,7 +509,7 @@ mod tests {
     #[test]
     fn non_numeric_allowed_uid_is_rejected() {
         assert!(matches!(
-            HelperConfig::from_values("/tmp/x.sock", Some("wheel")),
+            HelperConfig::from_values("/tmp/x.sock", Some("wheel"), bridge::DEFAULT_BRIDGE_MTU),
             Err(StartupError::InvalidAllowedUid(_))
         ));
     }
@@ -493,7 +519,8 @@ mod tests {
         // Read-only rtnetlink lookups need no special privilege, so this is
         // safe to run unprivileged: the delete never reaches the point of
         // needing CAP_NET_ADMIN because find_link reports nothing to delete.
-        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
         let request = NetworkRequest::DeleteTap {
             vm_id: Uuid::new_v4(),
         };
@@ -502,7 +529,8 @@ mod tests {
 
     #[tokio::test]
     async fn apply_vm_policy_rejects_an_unknown_egress_id_as_invalid_request() {
-        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
         let request = NetworkRequest::ApplyVmPolicy {
             vm_id: Uuid::nil(),
             ipv4: "172.30.0.9".parse().unwrap(),
@@ -518,7 +546,8 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_micro_network_bridge_rejects_an_out_of_range_prefix_as_invalid_request() {
-        let config = HelperConfig::from_values("/tmp/x.sock", None).expect("helper config");
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
         for prefix in [0, 7, 31, 32] {
             let request = NetworkRequest::EnsureMicroNetworkBridge {
                 micro_network_id: Uuid::nil(),

@@ -13,8 +13,14 @@ doc-coverage.txt
 firecrab-frontend/dist/
 node_modules/
 
+# Packaged M2Image release artifacts (scripts/package-m2images.sh)
+/dist/
+
 # Data files
 /data/
+
+# Local git worktrees (superpowers:using-git-worktrees)
+/.worktrees/
 firecrab-api/data/
 
 .playwright-mcp

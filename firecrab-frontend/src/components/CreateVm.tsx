@@ -46,20 +46,6 @@ function storageLabel(root: StorageRootResponse): string {
   return `${label} (${root.path})${free}`;
 }
 
-/** Actual rootfs image size (same basis as the images page "disk" column). */
-function formatRootfsSize(bytes: number | undefined | null): string {
-  const n = typeof bytes === "number" ? bytes : Number(bytes);
-  if (!Number.isFinite(n) || n <= 0) return "";
-  const gib = n / 1024 ** 3;
-  if (gib >= 1) {
-    const rounded = gib >= 10 || Number.isInteger(gib) ? gib.toFixed(0) : gib.toFixed(2);
-    return `${rounded} GiB`;
-  }
-  const mib = n / 1024 ** 2;
-  const rounded = mib >= 10 || Number.isInteger(mib) ? mib.toFixed(0) : mib.toFixed(1);
-  return `${rounded} MiB`;
-}
-
 /** VM disk floor in whole GiB, derived only from image disk bytes. */
 function diskFloorGb(image: ImageResponse): number {
   const bytes = image.rootfsSizeBytes;
@@ -71,8 +57,9 @@ function diskFloorGb(image: ImageResponse): number {
 }
 
 function templateLabel(image: ImageResponse): string {
-  const size = formatRootfsSize(image.rootfsSizeBytes);
-  return size ? `${image.alias} · ${size}` : image.alias;
+  // `alias` is the user-facing image name and pinned version (`ubuntu-26.04`).
+  // Disk size is configured in its own field, so keep this select unambiguous.
+  return image.alias;
 }
 
 export default function CreateVm({ onCreated, onError }: CreateVmProps) {

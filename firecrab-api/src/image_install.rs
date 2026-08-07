@@ -1,9 +1,22 @@
-//! Async image install jobs: download template artifacts into the image root
-//! from `FIRECRAB_IMAGE_BASE_URL`, verify, and hot-register them.
+//! Async M2Image jobs: first download and structurally verify a per-alias
+//! `.tar.zst` package from `FIRECRAB_IMAGE_BASE_URL`, then separately extract
+//! its kernel/rootfs into the image root and hot-register the template.
+//!
+//! Layout (matches `scripts/package-m2images.sh` and flat package hosts):
+//!
+//! ```text
+//! {FIRECRAB_IMAGE_BASE_URL}/{alias}.tar.zst
+//! ```
+//!
+//! Unset / empty / `none` / `-` disables remote install (hosts that only use
+//! pre-seeded `images/`).
+//!
+//! Archive members must be relative paths under `kernel/` or `rootfs/` only.
 
 use std::collections::HashMap;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,12 +25,21 @@ use tokio::io::AsyncWriteExt;
 
 use crate::templates::{TemplateRegistry, TemplateSpec};
 
+/// Absolute package URL for a template alias under `base`.
+pub fn package_url(base: &str, alias: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim().trim_end_matches('/'),
+        package_name(alias)
+    )
+}
+
 /// In-process install job tracker (one job per alias).
 #[derive(Debug, Clone, Default)]
 pub struct ImageInstallTracker {
     jobs: Arc<Mutex<HashMap<String, ImageInstallJob>>>,
-    /// Base URL for artifact downloads (`FIRECRAB_IMAGE_BASE_URL`), trailing
-    /// slash stripped. `None` when not configured — install refuses to start.
+    /// Base URL for package downloads (`FIRECRAB_IMAGE_BASE_URL`), trailing
+    /// slash stripped. `None` when remote install is disabled.
     base_url: Option<String>,
 }
 
@@ -31,12 +53,12 @@ struct ImageInstallJob {
 }
 
 impl ImageInstallTracker {
-    /// Read `FIRECRAB_IMAGE_BASE_URL` (optional).
+    /// Read `FIRECRAB_IMAGE_BASE_URL`. Unset / empty / `none` / `-` → remote
+    /// install disabled.
     pub fn from_env() -> Self {
         let base_url = env::var("FIRECRAB_IMAGE_BASE_URL")
             .ok()
-            .map(|value| value.trim().trim_end_matches('/').to_owned())
-            .filter(|value| !value.is_empty());
+            .and_then(|value| normalize_base_url(&value));
         Self {
             jobs: Arc::new(Mutex::new(HashMap::new())),
             base_url,
@@ -44,24 +66,31 @@ impl ImageInstallTracker {
     }
 
     /// Test/helper constructor with an explicit base URL.
+    /// Empty / `none` / `-` disables remote install.
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
-        let base = base_url.into();
-        let base_url = {
-            let trimmed = base.trim().trim_end_matches('/');
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_owned())
-            }
-        };
         Self {
             jobs: Arc::new(Mutex::new(HashMap::new())),
-            base_url,
+            base_url: normalize_base_url(&base_url.into()),
+        }
+    }
+
+    /// Remote install disabled (no package base).
+    pub fn disabled() -> Self {
+        Self {
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+            base_url: None,
         }
     }
 
     pub fn base_url(&self) -> Option<&str> {
         self.base_url.as_deref()
+    }
+
+    /// Package URL for `alias` when a base is configured.
+    pub fn package_url_for(&self, alias: &str) -> Option<String> {
+        self.base_url
+            .as_deref()
+            .map(|base| package_url(base, alias))
     }
 
     pub fn snapshot(&self, alias: &str) -> ImageInstallResponse {
@@ -80,6 +109,17 @@ impl ImageInstallTracker {
 
     /// Returns `Err("running")` if a job is already running for this alias.
     pub fn begin(&self, alias: &str) -> Result<ImageInstallResponse, &'static str> {
+        self.begin_with(alias, "install started")
+    }
+
+    /// Start a job with a caller-owned label.  Package preparation and image
+    /// installation share the same tracker mechanics but must be distinct in
+    /// operator-visible logs.
+    pub fn begin_with(
+        &self,
+        alias: &str,
+        started_message: &str,
+    ) -> Result<ImageInstallResponse, &'static str> {
         let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(existing) = jobs.get(alias)
             && existing.status == ImageInstallStatus::Running
@@ -90,7 +130,7 @@ impl ImageInstallTracker {
         let job = ImageInstallJob {
             alias: alias.to_owned(),
             status: ImageInstallStatus::Running,
-            log: vec![format!("[{}] install started", clock(now))],
+            log: vec![format!("[{}] {started_message}", clock(now))],
             started_at_ms: Some(now),
             ended_at_ms: None,
         };
@@ -108,13 +148,17 @@ impl ImageInstallTracker {
     }
 
     pub fn finish_ok(&self, alias: &str) {
+        self.finish_ok_with(alias, "install succeeded — template registered");
+    }
+
+    /// Mark a job successful with a phase-specific completion message.
+    /// Package acquisition and image registration are deliberately separate
+    /// jobs, so their terminal logs must not claim the other phase ran.
+    pub fn finish_ok_with(&self, alias: &str, message: impl Into<String>) {
         let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(job) = jobs.get_mut(alias) {
             let now = now_ms();
-            job.log.push(format!(
-                "[{}] install succeeded — template registered",
-                clock(now)
-            ));
+            job.log.push(format!("[{}] {}", clock(now), message.into()));
             job.status = ImageInstallStatus::Succeeded;
             job.ended_at_ms = Some(now);
         }
@@ -177,8 +221,66 @@ fn clock(epoch_ms: u64) -> String {
     format!("{h:02}:{m:02}:{s:02}")
 }
 
-/// Download every artifact for `spec` into the registry image root, then
-/// register it. Progress lines go to `tracker`.
+/// Package filename for a template alias (`ubuntu-26.04` → `ubuntu-26.04.tar.zst`).
+pub fn package_name(alias: &str) -> String {
+    format!("{alias}.tar.zst")
+}
+
+/// Persistent local package cache. A package remains here after the image is
+/// installed or removed so the two dashboard actions stay independent:
+/// download/verify once, then install the image from that verified package.
+pub fn staged_package_path(image_root: &Path, alias: &str) -> PathBuf {
+    image_root.join(".packages").join(package_name(alias))
+}
+
+/// Whether an alias has a package ready for the separate image-install step.
+pub fn staged_package_exists(image_root: &Path, alias: &str) -> bool {
+    staged_package_path(image_root, alias).is_file()
+}
+
+/// Parse an operator-supplied base URL. Empty / `none` / `-` → disabled.
+fn normalize_base_url(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") || trimmed == "-" {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+/// Download and verify a package, leaving it in the persistent local package
+/// cache for a later [`run_image_install`] call.
+pub async fn run_package_install(
+    tracker: ImageInstallTracker,
+    templates: TemplateRegistry,
+    base_url: String,
+    spec: TemplateSpec,
+) {
+    let alias = spec.alias.clone();
+    if let Err(error) = download_package_once(&tracker, &templates, &base_url, &spec).await {
+        tracker.finish_err(&alias, format!("package preparation failed: {error}"));
+        return;
+    }
+    tracker.finish_ok_with(&alias, "package ready — archive verified");
+}
+
+/// Extract and register an image from a package prepared by
+/// [`run_package_install`].  This deliberately performs no network download.
+pub async fn run_image_install(
+    tracker: ImageInstallTracker,
+    templates: TemplateRegistry,
+    spec: TemplateSpec,
+) {
+    let alias = spec.alias.clone();
+    if let Err(error) = install_staged_package_once(&tracker, &templates, &spec).await {
+        tracker.finish_err(&alias, error);
+        return;
+    }
+    tracker.finish_ok(&alias);
+}
+
+/// Backward-compatible combined operation for callers outside the dashboard.
+/// The dashboard uses the two explicit operations above.
 pub async fn run_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
@@ -186,37 +288,125 @@ pub async fn run_install(
     spec: TemplateSpec,
 ) {
     let alias = spec.alias.clone();
-    if let Err(error) = install_once(&tracker, &templates, &base_url, &spec).await {
+    if let Err(error) = download_package_once(&tracker, &templates, &base_url, &spec).await {
+        tracker.finish_err(&alias, error);
+        return;
+    }
+    if let Err(error) = install_staged_package_once(&tracker, &templates, &spec).await {
         tracker.finish_err(&alias, error);
         return;
     }
     tracker.finish_ok(&alias);
 }
 
-async fn install_once(
+async fn download_package_once(
     tracker: &ImageInstallTracker,
     templates: &TemplateRegistry,
     base_url: &str,
     spec: &TemplateSpec,
 ) -> Result<(), String> {
     let root = templates.image_root_path().to_path_buf();
-    let artifacts: Vec<&Path> = std::iter::once(spec.kernel.as_path())
-        .chain(std::iter::once(spec.rootfs.as_path()))
-        .chain(spec.initrd.as_deref())
-        .collect();
+    let package = package_name(&spec.alias);
+    let url = format!("{base_url}/{package}");
+    let archive = staged_package_path(&root, &spec.alias);
+
+    // Emit a real stage event before checking host prerequisites.  Otherwise
+    // an unavailable `tar`/`zstd` binary leaves every Packer stage at
+    // "waiting" even though this job already failed.
+    tracker.append_log(&spec.alias, "[packer:source] preparing local package cache");
+    ensure_host_tools()?;
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("firecrab-api/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|error| format!("http client: {error}"))?;
 
-    for relative in artifacts {
-        let rel = relative.to_string_lossy().replace('\\', "/");
-        let url = format!("{base_url}/{rel}");
-        tracker.append_log(&spec.alias, format!("downloading {rel}"));
-        download_to(&client, &url, &root.join(relative)).await?;
-        tracker.append_log(&spec.alias, format!("downloaded {rel}"));
+    // A final cache entry is only published after structural verification.
+    // Otherwise a failed download/validation could look ready after restart.
+    let temporary = archive.with_file_name(format!(".{package}.download"));
+    let partial = partial_download_path(&temporary);
+    let _ = tokio::fs::remove_file(&temporary).await;
+    let _ = tokio::fs::remove_file(&partial).await;
+    tracker.append_log(
+        &spec.alias,
+        format!("[packer:source] downloading {package}"),
+    );
+    if let Err(error) = download_to(&client, &url, &temporary).await {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(error);
     }
+    tracker.append_log(&spec.alias, format!("[packer:source] downloaded {package}"));
+    tracker.append_log(&spec.alias, "[packer:source] complete");
+
+    if let Err(error) = verify_package_members(tracker, &temporary, spec).await {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        let _ = tokio::fs::remove_file(&partial).await;
+        return Err(error);
+    }
+    tokio::fs::rename(&temporary, &archive)
+        .await
+        .map_err(|error| format!("publish {}: {error}", archive.display()))?;
+    tracker.append_log(
+        &spec.alias,
+        "[packer:package] local package cache published",
+    );
+    tracker.append_log(&spec.alias, "[packer:package] complete");
+    Ok(())
+}
+
+async fn verify_package_members(
+    tracker: &ImageInstallTracker,
+    archive: &Path,
+    spec: &TemplateSpec,
+) -> Result<(), String> {
+    tracker.append_log(&spec.alias, "[packer:rootfs] checking rootfs artifact");
+    let members = list_archive_members(archive).await?;
+    validate_archive_members(&members)?;
+    ensure_spec_members_present(spec, &members)?;
+    tracker.append_log(
+        &spec.alias,
+        format!("[packer:rootfs] verified {}", spec.rootfs.display()),
+    );
+    tracker.append_log(&spec.alias, "[packer:rootfs] complete");
+    tracker.append_log(
+        &spec.alias,
+        format!("[packer:kernel] verified {}", spec.kernel.display()),
+    );
+    if let Some(initrd) = &spec.initrd {
+        tracker.append_log(
+            &spec.alias,
+            format!("[packer:kernel] verified {}", initrd.display()),
+        );
+    }
+    tracker.append_log(&spec.alias, "[packer:kernel] complete");
+    tracker.append_log(&spec.alias, "[packer:package] archive member check passed");
+    Ok(())
+}
+
+async fn install_staged_package_once(
+    tracker: &ImageInstallTracker,
+    templates: &TemplateRegistry,
+    spec: &TemplateSpec,
+) -> Result<(), String> {
+    let root = templates.image_root_path().to_path_buf();
+    let archive = staged_package_path(&root, &spec.alias);
+
+    ensure_host_tools()?;
+    if !archive.is_file() {
+        return Err(format!(
+            "package is not ready for {} — run package install first",
+            spec.alias
+        ));
+    }
+
+    // Verify again immediately before extraction: the package may have been
+    // prepared by an earlier API process and must not be trusted by path alone.
+    verify_package_members(tracker, &archive, spec).await?;
+
+    tracker.append_log(&spec.alias, "extracting into image root");
+    extract_archive(&archive, &root).await?;
+    tracker.append_log(&spec.alias, "extracted");
 
     tracker.append_log(&spec.alias, "verifying artifacts and registering");
     let templates = templates.clone();
@@ -228,17 +418,222 @@ async fn install_once(
     Ok(())
 }
 
-async fn download_to(client: &reqwest::Client, url: &str, dest: &Path) -> Result<(), String> {
+fn ensure_host_tools() -> Result<(), String> {
+    for tool in ["tar", "zstd"] {
+        if which(tool).is_none() {
+            return Err(format!(
+                "{tool} not found on PATH — install it to download template images \
+                 (Debian/Ubuntu: apt install tar zstd)"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn which(bin: &str) -> Option<PathBuf> {
+    env::var_os("PATH").and_then(|paths| {
+        env::split_paths(&paths).find_map(|dir| {
+            let candidate = dir.join(bin);
+            candidate.is_file().then_some(candidate)
+        })
+    })
+}
+
+/// Members must be relative paths under `kernel/` or `rootfs/` with no `..`.
+pub fn is_safe_archive_member(name: &str) -> bool {
+    // tar may emit trailing slashes for directories.
+    let trimmed = name.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.starts_with('/') {
+        return false;
+    }
+    let path = Path::new(trimmed);
+    let mut components = path.components();
+    let Some(Component::Normal(first)) = components.next() else {
+        return false;
+    };
+    let first = first.to_string_lossy();
+    if first != "kernel" && first != "rootfs" {
+        return false;
+    }
+    for component in components {
+        match component {
+            Component::Normal(_) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn validate_archive_members(members: &[String]) -> Result<(), String> {
+    if members.is_empty() {
+        return Err("archive is empty".to_owned());
+    }
+    for member in members {
+        if !is_safe_archive_member(member) {
+            return Err(format!(
+                "refusing archive member `{member}` (only kernel/ and rootfs/ relative paths allowed)"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_spec_members_present(spec: &TemplateSpec, members: &[String]) -> Result<(), String> {
+    let files: Vec<String> = members
+        .iter()
+        .filter(|m| !m.ends_with('/'))
+        .map(|m| m.trim_end_matches('/').to_owned())
+        .collect();
+    let required: Vec<&Path> = std::iter::once(spec.kernel.as_path())
+        .chain(std::iter::once(spec.rootfs.as_path()))
+        .chain(spec.initrd.as_deref())
+        .collect();
+    for relative in required {
+        let rel = relative.to_string_lossy().replace('\\', "/");
+        if !files.iter().any(|f| f == &rel) {
+            return Err(format!("archive missing required member `{rel}`"));
+        }
+    }
+    Ok(())
+}
+
+async fn list_archive_members(archive: &Path) -> Result<Vec<String>, String> {
+    let archive = archive.to_path_buf();
+    tokio::task::spawn_blocking(move || list_archive_members_blocking(&archive))
+        .await
+        .map_err(|error| format!("list archive task panicked: {error}"))?
+}
+
+fn list_archive_members_blocking(archive: &Path) -> Result<Vec<String>, String> {
+    let listed = Command::new("tar")
+        .args(["--use-compress-program=zstd", "-tf"])
+        .arg(archive)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    let tar = match listed {
+        Ok(output) if output.status.success() => output,
+        Ok(_) | Err(_) => list_archive_members_piped_blocking(archive)?,
+    };
+
+    if !tar.status.success() {
+        let err = String::from_utf8_lossy(&tar.stderr);
+        return Err(format!("tar -t failed ({}): {}", tar.status, err.trim()));
+    }
+
+    Ok(String::from_utf8_lossy(&tar.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+fn list_archive_members_piped_blocking(archive: &Path) -> Result<std::process::Output, String> {
+    let mut zstd = Command::new("zstd")
+        .args(["-dc", "--"])
+        .arg(archive)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("spawn zstd: {error}"))?;
+
+    let stdout = zstd
+        .stdout
+        .take()
+        .ok_or_else(|| "zstd stdout missing".to_owned())?;
+
+    let tar = Command::new("tar")
+        .args(["-t"])
+        .stdin(stdout)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("tar -t: {error}"))?;
+
+    let zstd_status = zstd.wait().map_err(|error| format!("zstd wait: {error}"))?;
+    if !zstd_status.success() {
+        return Err(format!("zstd decompress failed ({zstd_status})"));
+    }
+    Ok(tar)
+}
+
+async fn extract_archive(archive: &Path, dest: &Path) -> Result<(), String> {
+    let archive = archive.to_path_buf();
+    let dest = dest.to_path_buf();
+    tokio::task::spawn_blocking(move || extract_archive_blocking(&archive, &dest))
+        .await
+        .map_err(|error| format!("extract task panicked: {error}"))?
+}
+
+fn extract_archive_blocking(archive: &Path, dest: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|error| format!("mkdir {}: {error}", dest.display()))?;
+
+    let status = Command::new("tar")
+        .args(["--use-compress-program=zstd", "-xf"])
+        .arg(archive)
+        .arg("-C")
+        .arg(dest)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .status();
+
+    match status {
+        Ok(code) if code.success() => Ok(()),
+        Ok(code) => extract_archive_piped_blocking(archive, dest).map_err(|piped| {
+            format!("tar extract failed ({code}); pipe fallback also failed: {piped}")
+        }),
+        Err(error) => extract_archive_piped_blocking(archive, dest)
+            .map_err(|piped| format!("tar spawn failed ({error}); pipe fallback: {piped}")),
+    }
+}
+
+fn extract_archive_piped_blocking(archive: &Path, dest: &Path) -> Result<(), String> {
+    let mut zstd = Command::new("zstd")
+        .args(["-dc", "--"])
+        .arg(archive)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("spawn zstd: {error}"))?;
+
+    let stdout = zstd
+        .stdout
+        .take()
+        .ok_or_else(|| "zstd stdout missing".to_owned())?;
+
+    let tar = Command::new("tar")
+        .args(["-x", "-C"])
+        .arg(dest)
+        .stdin(stdout)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("tar -x: {error}"))?;
+
+    let zstd_status = zstd.wait().map_err(|error| format!("zstd wait: {error}"))?;
+    if !zstd_status.success() {
+        return Err(format!("zstd decompress failed ({zstd_status})"));
+    }
+    if !tar.status.success() {
+        let err = String::from_utf8_lossy(&tar.stderr);
+        return Err(format!("tar -x failed ({}): {}", tar.status, err.trim()));
+    }
+    Ok(())
+}
+
+pub(crate) async fn download_to(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|error| format!("mkdir {}: {error}", parent.display()))?;
     }
-    let tmp = {
-        let mut path = dest.as_os_str().to_owned();
-        path.push(".partial");
-        PathBuf::from(path)
-    };
+    let tmp = partial_download_path(dest);
 
     let response = client
         .get(url)
@@ -271,10 +666,21 @@ async fn download_to(client: &reqwest::Client, url: &str, dest: &Path) -> Result
     Ok(())
 }
 
+/// Work file used while streaming an archive download.  Keeping it separate
+/// from the verified cache prevents a restart from mistaking a partial file
+/// for a package that is ready to install.
+fn partial_download_path(dest: &Path) -> PathBuf {
+    let mut path = dest.as_os_str().to_owned();
+    path.push(".partial");
+    PathBuf::from(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use firecrab_api_types::ImageInstallStatus;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn tracker_begin_running_and_clear() {
@@ -306,9 +712,41 @@ mod tests {
     }
 
     #[test]
-    fn with_base_url_empty_is_none() {
-        let tracker = ImageInstallTracker::with_base_url("   ");
-        assert!(tracker.base_url().is_none());
+    fn with_base_url_empty_or_none_disables() {
+        assert!(
+            ImageInstallTracker::with_base_url("   ")
+                .base_url()
+                .is_none()
+        );
+        assert!(
+            ImageInstallTracker::with_base_url("none")
+                .base_url()
+                .is_none()
+        );
+        assert!(ImageInstallTracker::with_base_url("-").base_url().is_none());
+        assert!(ImageInstallTracker::disabled().base_url().is_none());
+    }
+
+    #[test]
+    fn package_url_joins_base_and_alias() {
+        assert_eq!(
+            package_url("http://127.0.0.1:8765/", "ubuntu-26.04"),
+            "http://127.0.0.1:8765/ubuntu-26.04.tar.zst"
+        );
+        assert_eq!(
+            package_url("http://mirror.example/m2", "alpine-3.24"),
+            "http://mirror.example/m2/alpine-3.24.tar.zst"
+        );
+        let tracker = ImageInstallTracker::with_base_url("http://127.0.0.1:8765");
+        assert_eq!(
+            tracker.package_url_for("ubuntu-26.04").as_deref(),
+            Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst")
+        );
+        assert!(
+            ImageInstallTracker::disabled()
+                .package_url_for("ubuntu-26.04")
+                .is_none()
+        );
     }
 
     #[test]
@@ -323,5 +761,264 @@ mod tests {
     fn clock_formats_hh_mm_ss() {
         // 1h 2m 3s past epoch → 01:02:03
         assert_eq!(clock(3_723_000), "01:02:03");
+    }
+
+    #[test]
+    fn package_name_uses_alias_tar_zst() {
+        assert_eq!(package_name("alpine-3.24"), "alpine-3.24.tar.zst");
+        assert_eq!(package_name("ubuntu-26.04"), "ubuntu-26.04.tar.zst");
+        assert_eq!(package_name("rocky-9"), "rocky-9.tar.zst");
+    }
+
+    #[test]
+    fn safe_member_allows_kernel_and_rootfs() {
+        assert!(is_safe_archive_member("kernel/vmlinux"));
+        assert!(is_safe_archive_member("rootfs/root.ext4"));
+        assert!(is_safe_archive_member("kernel/nested/file"));
+        assert!(is_safe_archive_member("rootfs/dir/"));
+    }
+
+    #[test]
+    fn safe_member_rejects_traversal_and_other_roots() {
+        assert!(!is_safe_archive_member("../kernel/x"));
+        assert!(!is_safe_archive_member("kernel/../x"));
+        assert!(!is_safe_archive_member("/kernel/x"));
+        assert!(!is_safe_archive_member("etc/passwd"));
+        assert!(!is_safe_archive_member(""));
+        // Top-level `kernel` / `rootfs` directory entries from tar are fine.
+        assert!(is_safe_archive_member("kernel"));
+        assert!(is_safe_archive_member("rootfs/"));
+        assert!(!is_safe_archive_member("data/vms/x"));
+    }
+
+    #[test]
+    fn validate_rejects_bad_member() {
+        let err = validate_archive_members(&["kernel/ok".into(), "../evil".into()]).unwrap_err();
+        assert!(err.contains("../evil"));
+    }
+
+    #[test]
+    fn validation_accepts_a_complete_spec_and_rejects_an_empty_archive() {
+        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let members = vec![
+            "kernel/".to_owned(),
+            alpine.kernel.to_string_lossy().into_owned(),
+            alpine
+                .initrd
+                .as_ref()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            alpine.rootfs.to_string_lossy().into_owned(),
+        ];
+
+        validate_archive_members(&members).unwrap();
+        ensure_spec_members_present(&alpine, &members).unwrap();
+        assert_eq!(
+            validate_archive_members(&[]).unwrap_err(),
+            "archive is empty"
+        );
+    }
+
+    #[test]
+    fn ensure_spec_requires_all_artifacts() {
+        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let members = vec![
+            alpine.kernel.to_string_lossy().into_owned(),
+            alpine.rootfs.to_string_lossy().into_owned(),
+            // missing initrd
+        ];
+        let err = ensure_spec_members_present(&alpine, &members).unwrap_err();
+        assert!(err.contains("initramfs") || err.contains("missing"));
+    }
+
+    fn write_file(path: &Path, bytes: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, bytes).unwrap();
+    }
+
+    fn make_tar_zst(source: &Path, members: &[&str], dest: &Path) {
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let tar = Command::new("tar")
+            .args(["-C"])
+            .arg(source)
+            .arg("-cf")
+            .arg("-")
+            .args(members)
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("tar");
+        let status = Command::new("zstd")
+            .args(["-q", "-f", "-o"])
+            .arg(dest)
+            .stdin(tar.stdout.unwrap())
+            .status()
+            .expect("zstd");
+        assert!(status.success(), "zstd failed");
+    }
+
+    #[tokio::test]
+    async fn extract_safe_archive_places_files() {
+        let source = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        write_file(&source.path().join("kernel/vmlinux"), b"kernel-bytes");
+        write_file(&source.path().join("rootfs/root.ext4"), b"rootfs-bytes");
+        let archive = source.path().join("demo.tar.zst");
+        make_tar_zst(
+            source.path(),
+            &["kernel/vmlinux", "rootfs/root.ext4"],
+            &archive,
+        );
+
+        let members = list_archive_members(&archive).await.unwrap();
+        validate_archive_members(&members).unwrap();
+        extract_archive(&archive, dest.path()).await.unwrap();
+        assert_eq!(
+            fs::read(dest.path().join("kernel/vmlinux")).unwrap(),
+            b"kernel-bytes"
+        );
+        assert_eq!(
+            fs::read(dest.path().join("rootfs/root.ext4")).unwrap(),
+            b"rootfs-bytes"
+        );
+    }
+
+    #[test]
+    fn piped_tar_fallback_lists_and_extracts_a_valid_archive() {
+        let source = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        write_file(&source.path().join("kernel/vmlinux"), b"kernel-bytes");
+        write_file(&source.path().join("rootfs/root.ext4"), b"rootfs-bytes");
+        let archive = source.path().join("demo.tar.zst");
+        make_tar_zst(
+            source.path(),
+            &["kernel/vmlinux", "rootfs/root.ext4"],
+            &archive,
+        );
+
+        let listed = list_archive_members_piped_blocking(&archive).unwrap();
+        assert!(listed.status.success());
+        assert!(String::from_utf8_lossy(&listed.stdout).contains("kernel/vmlinux"));
+
+        extract_archive_piped_blocking(&archive, dest.path()).unwrap();
+        assert_eq!(
+            fs::read(dest.path().join("rootfs/root.ext4")).unwrap(),
+            b"rootfs-bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_rejects_when_member_escapes() {
+        let source = tempdir().unwrap();
+        // Craft a tar with a bad path using GNU tar --transform is awkward;
+        // write a member under `etc/` which fails our allowlist.
+        write_file(&source.path().join("etc/passwd"), b"nope");
+        let archive = source.path().join("bad.tar.zst");
+        make_tar_zst(source.path(), &["etc/passwd"], &archive);
+        let members = list_archive_members(&archive).await.unwrap();
+        let err = validate_archive_members(&members).unwrap_err();
+        assert!(err.contains("etc/passwd"));
+    }
+
+    #[tokio::test]
+    async fn image_install_reports_failure_when_no_package_has_been_staged() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let tracker = ImageInstallTracker::disabled();
+        tracker.begin(&spec.alias).unwrap();
+
+        run_image_install(tracker.clone(), templates, spec.clone()).await;
+
+        let snapshot = tracker.snapshot(&spec.alias);
+        assert_eq!(snapshot.status, ImageInstallStatus::Failed);
+        assert!(snapshot.log.contains("package is not ready"));
+    }
+
+    #[tokio::test]
+    async fn package_install_reports_a_download_failure_without_publishing_a_cache_entry() {
+        let directory = tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().fallback(|| async { axum::http::StatusCode::NOT_FOUND }),
+            )
+            .await
+            .ok();
+        });
+
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let tracker = ImageInstallTracker::with_base_url(format!("http://{addr}"));
+        tracker.begin(&spec.alias).unwrap();
+
+        run_package_install(
+            tracker.clone(),
+            templates.clone(),
+            format!("http://{addr}"),
+            spec.clone(),
+        )
+        .await;
+
+        let snapshot = tracker.snapshot(&spec.alias);
+        assert_eq!(snapshot.status, ImageInstallStatus::Failed);
+        assert!(snapshot.log.contains("package preparation failed"));
+        assert!(!staged_package_path(templates.image_root_path(), &spec.alias).exists());
+    }
+
+    #[tokio::test]
+    async fn install_once_from_local_http_registers() {
+        let source = tempdir().unwrap();
+        let dest = tempdir().unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        write_file(&source.path().join(&alpine.kernel), b"fake-alpine-kernel");
+        write_file(
+            &source.path().join(alpine.initrd.as_ref().unwrap()),
+            b"fake-alpine-initrd",
+        );
+        write_file(&source.path().join(&alpine.rootfs), b"fake-alpine-rootfs");
+
+        let members = [
+            alpine.kernel.to_str().unwrap(),
+            alpine.initrd.as_ref().unwrap().to_str().unwrap(),
+            alpine.rootfs.to_str().unwrap(),
+        ];
+        let package = package_name(&alpine.alias);
+        let archive_path = source.path().join(&package);
+        make_tar_zst(source.path(), &members, &archive_path);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = axum::Router::new().fallback_service(tower_http::services::ServeDir::new(
+            source.path().to_path_buf(),
+        ));
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+
+        let templates = TemplateRegistry::from_specs(dest.path(), std::iter::empty()).unwrap();
+        let tracker = ImageInstallTracker::with_base_url(format!("http://{addr}"));
+        tracker.begin(&alpine.alias).unwrap();
+        run_install(
+            tracker.clone(),
+            templates.clone(),
+            format!("http://{addr}"),
+            alpine.clone(),
+        )
+        .await;
+        let snap = tracker.snapshot(&alpine.alias);
+        assert_eq!(
+            snap.status,
+            ImageInstallStatus::Succeeded,
+            "log:\n{}",
+            snap.log
+        );
+        assert!(templates.resolve_alias("alpine-3.24").is_some());
     }
 }

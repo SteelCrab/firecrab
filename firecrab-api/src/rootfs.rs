@@ -79,6 +79,25 @@ pub enum RootfsError {
         /// The tool's stderr output.
         stderr: String,
     },
+    /// Couldn't spawn `e2fsck` to safely recover a guest filesystem before
+    /// modifying it offline.
+    #[error("failed to run e2fsck recovery on rootfs at {path}: {source}")]
+    RecoveryTool {
+        /// The rootfs path being recovered.
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    /// `e2fsck -p` could not safely recover a guest filesystem. The disk is
+    /// deliberately left untouched by specialization so the user's data can
+    /// be recovered with an explicit manual repair.
+    #[error("e2fsck could not safely recover rootfs at {path}: {detail}")]
+    RecoveryFailed {
+        /// The rootfs path that needs manual recovery.
+        path: PathBuf,
+        /// Combined diagnostic output from `e2fsck`.
+        detail: String,
+    },
     /// `debugfs` didn't confirm writing a file into the guest's rootfs.
     #[error("failed to specialize guest rootfs at {path}: {detail}")]
     Specialize {
@@ -244,10 +263,13 @@ const STRIP_PATHS: &[&str] = &[
 /// Per-VM guest specialization: writes this VM's deterministic hostname
 /// (see `firecrab_helper_protocol::network::guest_hostname`) into
 /// `/etc/hostname`, then strips [`STRIP_PATHS`] — all directly on the VM's
-/// own rootfs file via `debugfs -w` (no mount, no root needed; the same
-/// style already used for `e2fsck`/`resize2fs` in [`grow`]). Idempotent:
-/// safe to call again against an already-specialized disk.
+/// own rootfs file via `debugfs -w` (no mount, no root needed). Before those
+/// offline writes, it runs `e2fsck -p` so an abruptly stopped guest's ext4
+/// journal is recovered using only e2fsck's automatic safe repairs.
+/// Idempotent: safe to call again against an already-specialized disk.
 pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
+    recover_before_specialization(rootfs)?;
+
     let hostname = firecrab_helper_protocol::network::guest_hostname(id);
     write_into_image(rootfs, "/etc/hostname", format!("{hostname}\n").as_bytes())?;
     for path in STRIP_PATHS {
@@ -256,11 +278,59 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     Ok(())
 }
 
+/// Recovers an ext4 journal before [`specialize_guest`] makes any
+/// direct `debugfs -w` changes. `-p` deliberately limits e2fsck to its
+/// automatic safe repairs; unlike `-y`, it does not make a destructive or
+/// ambiguous repair decision on behalf of the VM owner.
+pub(crate) fn recover_before_specialization(rootfs: &Path) -> Result<(), RootfsError> {
+    let output = Command::new("e2fsck")
+        .arg("-p")
+        .arg(rootfs)
+        .output()
+        .map_err(|source| RootfsError::RecoveryTool {
+            path: rootfs.to_owned(),
+            source,
+        })?;
+
+    // e2fsck uses 1 to report that it safely corrected errors. Any other
+    // non-zero status needs operator attention, so refuse to write further
+    // into the image and leave its existing contents available for recovery.
+    if output
+        .status
+        .code()
+        .is_some_and(|code| code == 0 || code == 1)
+    {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let detail = match (stdout.is_empty(), stderr.is_empty()) {
+        (false, false) => format!("{stdout}\n{stderr}"),
+        (false, true) => stdout,
+        (true, false) => stderr,
+        (true, true) => format!("e2fsck exited with status {}", output.status),
+    };
+    Err(RootfsError::RecoveryFailed {
+        path: rootfs.to_owned(),
+        detail,
+    })
+}
+
 /// Writes `content` as `guest_path` inside `rootfs`'s ext4 image.
 /// `debugfs`'s own `write` command refuses to overwrite an existing file,
 /// so any prior version is removed first — making this safe to call again
 /// against an already-specialized disk.
-fn write_into_image(rootfs: &Path, guest_path: &str, content: &[u8]) -> Result<(), RootfsError> {
+///
+/// `pub(crate)` (rather than private) so `handlers::bootstrap`'s own tests
+/// can seed a fixture disk with the exact guest-side output paths a real
+/// bootstrap script run would have left behind, the same reuse Task 3 gave
+/// other single-file-scoped helpers.
+pub(crate) fn write_into_image(
+    rootfs: &Path,
+    guest_path: &str,
+    content: &[u8],
+) -> Result<(), RootfsError> {
     let staging = rootfs.with_extension("specialize.tmp");
     fs::write(&staging, content).map_err(|source| RootfsError::Specialize {
         path: rootfs.to_owned(),
@@ -284,6 +354,36 @@ fn write_into_image(rootfs: &Path, guest_path: &str, content: &[u8]) -> Result<(
                 String::from_utf8_lossy(&output.stderr)
             ),
         })
+    }
+}
+
+/// Extracts `guest_path` from `rootfs`'s ext4 image to `dest` on the host,
+/// without mounting — the read counterpart to [`write_into_image`]. Used to
+/// pull a bootstrap builder's freshly-assembled target rootfs/kernel/initrd
+/// files out of its own disk once the guest-side script has finished
+/// building them (`handlers::bootstrap::package_bootstrap`). Works for
+/// files of any size `debugfs`'s `dump` command supports — the filesystem
+/// itself is the only real limit, unlike `write_into_image`'s small
+/// identity files.
+pub fn dump_from_image(rootfs: &Path, guest_path: &str, dest: &Path) -> Result<(), RootfsError> {
+    let output = run_debugfs(rootfs, &format!("dump {guest_path} {}", dest.display()))?;
+
+    // debugfs's own exit code doesn't reliably reflect whether `dump` found
+    // the path (same caveat as `write_into_image`), so success is confirmed
+    // positively: a real dump produces a non-empty file at `dest`.
+    match fs::metadata(dest) {
+        Ok(metadata) if metadata.len() > 0 => Ok(()),
+        _ => {
+            let _ = fs::remove_file(dest);
+            Err(RootfsError::Specialize {
+                path: rootfs.to_owned(),
+                detail: format!(
+                    "debugfs did not produce a non-empty {} for {guest_path}: {}",
+                    dest.display(),
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            })
+        }
     }
 }
 
@@ -614,6 +714,26 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).into_owned()
     }
 
+    fn filesystem_state(path: &Path) -> String {
+        let output = Command::new("debugfs")
+            .arg("-R")
+            .arg("show_super_stats")
+            .arg(path)
+            .output()
+            .expect("debugfs must be installed for this test");
+        assert!(
+            output.status.success(),
+            "debugfs could not inspect superblock: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("Filesystem state:"))
+            .expect("debugfs must report the filesystem state")
+            .trim()
+            .to_owned()
+    }
+
     #[test]
     fn specialize_guest_writes_the_deterministic_hostname() {
         let directory = tempdir().unwrap();
@@ -627,6 +747,38 @@ mod tests {
         assert_eq!(
             debugfs_cat(&rootfs, "/etc/hostname"),
             format!("{hostname}\n")
+        );
+    }
+
+    /// A Firecracker process can be killed before the guest has cleanly
+    /// unmounted ext4. The next start must recover that state before its
+    /// direct debugfs writes, rather than leaving the filesystem dirty (or
+    /// relying on debugfs to handle journal recovery itself).
+    #[test]
+    fn specialize_guest_recovers_an_unclean_ext4_before_offline_writes() {
+        let directory = tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+
+        let output = run_debugfs(&rootfs, "set_super_value state 0").unwrap();
+        assert!(
+            output.status.success(),
+            "failed to mark test rootfs unclean"
+        );
+        assert_eq!(filesystem_state(&rootfs), "not clean");
+
+        specialize_guest(&rootfs, id).unwrap();
+
+        let hostname = firecrab_helper_protocol::network::guest_hostname(id);
+        assert_eq!(
+            debugfs_cat(&rootfs, "/etc/hostname"),
+            format!("{hostname}\n")
+        );
+        assert_eq!(
+            filesystem_state(&rootfs),
+            "clean",
+            "e2fsck -p must finish recovery before debugfs writes"
         );
     }
 
@@ -696,5 +848,32 @@ mod tests {
         run_debugfs(&rootfs, "mkdir /etc").unwrap();
 
         specialize_guest(&rootfs, id).unwrap();
+    }
+
+    #[test]
+    fn dump_from_image_extracts_a_file_written_earlier() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        write_into_image(&rootfs, "/etc/payload", b"hello from the guest disk\n").unwrap();
+
+        let dest_dir = tempdir().unwrap();
+        let dest = dest_dir.path().join("payload.out");
+        dump_from_image(&rootfs, "/etc/payload", &dest).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), b"hello from the guest disk\n");
+    }
+
+    #[test]
+    fn dump_from_image_fails_clearly_for_a_missing_guest_path() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        let dest_dir = tempdir().unwrap();
+        let dest = dest_dir.path().join("missing.out");
+
+        let error = dump_from_image(&rootfs, "/etc/does-not-exist", &dest);
+
+        assert!(error.is_err());
     }
 }

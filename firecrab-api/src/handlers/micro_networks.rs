@@ -423,6 +423,39 @@ fn valid_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// Test-only fixtures shared with sibling handler modules (e.g.
+/// `handlers::builder_vm`) that need a MicroNetwork already in the store,
+/// without duplicating this module's own create-then-validate flow.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use firecrab_api_types::MicroNetworkResponse;
+    use uuid::Uuid;
+
+    use super::AppState;
+    use crate::ipam::SubnetSpec;
+
+    /// Inserts a MicroNetwork with internet egress enabled directly into
+    /// the store, bypassing `create_micro_network`'s HTTP validation —
+    /// callers just need a network `builder_micro_network_id` can find.
+    pub(crate) fn seed_internet_micro_network(state: &AppState) -> Uuid {
+        let id = Uuid::new_v4();
+        let cidr = "172.31.0.0/24";
+        let subnet = SubnetSpec::parse(id, cidr).expect("valid literal CIDR");
+        let network = MicroNetworkResponse {
+            id,
+            name: "test-net".to_owned(),
+            subnet_cidr: cidr.to_owned(),
+            gateway: subnet.gateway().to_string(),
+            internet_enabled: true,
+        };
+        state
+            .store
+            .insert_micro_network(&network)
+            .expect("seed micro network");
+        id
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::extract::Extension;

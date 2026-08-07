@@ -1,15 +1,16 @@
-//! OS package update: runs `apt`/`apk` upgrade on a running VM's serial
-//! console and reports the result. Reuses the same "print a fixed sentinel,
-//! scan the console for it" pattern `wait_for_network_ready`
-//! (`handlers::vms`) uses for boot readiness, since there's no guest agent
-//! to ask directly (`docs/30-tasks/task-guest-network-configuration.md`).
+//! OS package actions: runs `apt`/`apk`/`dnf` install, remove, or upgrade on
+//! a running VM's serial console and reports the result. Reuses the same
+//! "print a fixed sentinel, scan the console for it" pattern
+//! `wait_for_network_ready` (`handlers::vms`) uses for boot readiness, since
+//! there's no guest agent to ask directly
+//! (`docs/30-tasks/task-guest-network-configuration.md`).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
-use firecrab_api_types::{PackageUpdateStatus, VmResponse};
+use firecrab_api_types::{PackageAction, PackageActionKind, PackageUpdateStatus, VmResponse};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -25,25 +26,26 @@ use super::vms::{lease_for, parse_id, vm_response};
 /// more generous than the boot-readiness timeout: apt/apk output is only
 /// observable through the guest's own (slow, character-oriented) serial
 /// console, and a real upgrade can pull a meaningful amount of data.
-const PACKAGE_UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
+pub(crate) const PACKAGE_UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Bytes of the command's own output kept for the response's `outputTail` —
 /// enough for the last several dozen lines without holding a full apt/apk
 /// transcript in memory for the life of the VM.
-const OUTPUT_TAIL_CAP: usize = 8 * 1024;
+pub(crate) const OUTPUT_TAIL_CAP: usize = 8 * 1024;
 
 /// Sentinel the update command prints once it's done, followed by `:` and
 /// its exit code (e.g. `FIRECRAB_PKG_UPDATE_DONE:0`).
 const DONE_SENTINEL: &str = "FIRECRAB_PKG_UPDATE_DONE";
 
 /// The guest distro families this project ships templates for, inferred
-/// from the template alias rather than stored separately — `ubuntu-*` and
-/// `alpine-*` are the only aliases `TemplateRegistry::load_default` ever
-/// registers.
+/// from the template alias rather than stored separately — `ubuntu-*`,
+/// `alpine-*`, and `rocky-*` are the built-in families
+/// `TemplateRegistry::load_default` registers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PackageManager {
     Apt,
     Apk,
+    Dnf,
 }
 
 impl PackageManager {
@@ -52,34 +54,87 @@ impl PackageManager {
             Some(Self::Apt)
         } else if template.starts_with("alpine") {
             Some(Self::Apk)
+        } else if template.starts_with("rocky") {
+            Some(Self::Dnf)
         } else {
             None
         }
     }
 
-    /// The shell command run on the guest's console, wrapped in a subshell
-    /// so the final `$?` reflects the compound command's own exit status
-    /// rather than just the trailing `echo`.
-    fn update_command(self) -> &'static str {
-        match self {
-            Self::Apt => "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y",
-            Self::Apk => "apk update && apk upgrade",
+    /// The shell command run on the guest's console for one package action,
+    /// wrapped in a subshell so the final `$?` reflects the compound
+    /// command's own exit status rather than just the trailing `echo`.
+    fn command_for(self, action: PackageActionKind, packages: &[String]) -> String {
+        let joined = packages.join(" ");
+        match (self, action) {
+            (Self::Apt, PackageActionKind::Update) => {
+                "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y".to_owned()
+            }
+            (Self::Apt, PackageActionKind::Install) => {
+                format!("DEBIAN_FRONTEND=noninteractive apt-get install -y {joined}")
+            }
+            (Self::Apt, PackageActionKind::Remove) => {
+                format!("DEBIAN_FRONTEND=noninteractive apt-get remove -y {joined}")
+            }
+            (Self::Apk, PackageActionKind::Update) => "apk update && apk upgrade".to_owned(),
+            (Self::Apk, PackageActionKind::Install) => format!("apk add {joined}"),
+            (Self::Apk, PackageActionKind::Remove) => format!("apk del {joined}"),
+            (Self::Dnf, PackageActionKind::Update) => "dnf -y upgrade --refresh".to_owned(),
+            (Self::Dnf, PackageActionKind::Install) => format!("dnf -y install {joined}"),
+            (Self::Dnf, PackageActionKind::Remove) => format!("dnf -y remove {joined}"),
         }
     }
 }
 
-/// Starts an OS package update on the guest's console and returns
-/// immediately with `packageUpdate: {"state":"running"}` — the update
-/// itself can run for minutes, far past `enforce_limits`' request timeout,
-/// so it's detached the same way `start_vm` detaches its own pipeline (see
-/// that function's doc comment in `handlers::vms`). The dashboard's
-/// existing polling picks up the eventual `succeeded`/`failed` result.
-pub async fn update_packages(
+const MAX_PACKAGES_PER_ACTION: usize = 32;
+
+/// Guards every package name that reaches the guest's console verbatim —
+/// the sentinel-wait command is built by string concatenation, so this is
+/// the only thing standing between an arbitrary UI input and shell
+/// injection into the VM's own console.
+fn validate_package_names(packages: &[String]) -> Result<(), String> {
+    if packages.is_empty() {
+        return Err("at least one package is required".to_owned());
+    }
+    if packages.len() > MAX_PACKAGES_PER_ACTION {
+        return Err(format!(
+            "too many packages: {} (max {MAX_PACKAGES_PER_ACTION})",
+            packages.len()
+        ));
+    }
+    let is_valid_name = |name: &str| {
+        let mut chars = name.chars();
+        matches!(chars.next(), Some(c) if c.is_ascii_alphanumeric())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
+    };
+    match packages.iter().find(|name| !is_valid_name(name)) {
+        Some(bad) => Err(format!("invalid package name: {bad:?}")),
+        None => Ok(()),
+    }
+}
+
+/// Starts an OS package action (install/remove/update) on the guest's
+/// console and returns immediately with `packageUpdate: {"state":"running"}`
+/// — the action itself can run for minutes, far past `enforce_limits`'
+/// request timeout, so it's detached the same way `start_vm` detaches its
+/// own pipeline (see that function's doc comment in `handlers::vms`). The
+/// dashboard's existing polling picks up the eventual `succeeded`/`failed`
+/// result.
+pub async fn run_package_action(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
     Path(id): Path<String>,
+    Json(body): Json<PackageAction>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+
+    if body.action != PackageActionKind::Update
+        && let Err(reason) = validate_package_names(&body.packages)
+    {
+        let mut fields = BTreeMap::new();
+        fields.insert("packages".to_owned(), reason);
+        return Err(AppError::validation(fields, request_id.0));
+    }
 
     let template = {
         let vms = state
@@ -112,18 +167,28 @@ pub async fn update_packages(
         .cloned()
         .ok_or_else(|| AppError::vm_not_running(request_id.0))?;
 
-    if let Some(vm) = state
-        .vms
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get_mut(&id)
     {
+        let mut vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vm = vms
+            .get_mut(&id)
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        if matches!(vm.package_update, Some(PackageUpdateStatus::Running)) {
+            return Err(AppError::conflict(
+                "package_update_in_progress",
+                "a package action is already running for this VM",
+                request_id.0,
+            ));
+        }
         vm.package_update = Some(PackageUpdateStatus::Running);
     }
 
     let state_for_task = state.clone();
+    let command = manager.command_for(body.action, &body.packages);
     tokio::spawn(async move {
-        run_update(&state_for_task, id, process, manager).await;
+        run_action(&state_for_task, id, process, command).await;
     });
 
     let vm = state
@@ -137,10 +202,10 @@ pub async fn update_packages(
     Ok(Json(vm_response(&vm, lease.as_ref())))
 }
 
-/// Writes the update command to the guest's console, waits for its
-/// completion sentinel (or the timeout/console closing), and records the
-/// resulting [`PackageUpdateStatus`].
-async fn run_update(state: &AppState, id: Uuid, process: VmProcess, manager: PackageManager) {
+/// Writes `command` to the guest's console, waits for its completion
+/// sentinel (or the timeout/console closing), and records the resulting
+/// [`PackageUpdateStatus`].
+async fn run_action(state: &AppState, id: Uuid, process: VmProcess, command: String) {
     // Subscribed before the command is even sent, so nothing the command
     // prints can land only in the backlog and be missed — see
     // `wait_for_network_ready`'s doc comment for the same reasoning. The
@@ -148,11 +213,8 @@ async fn run_update(state: &AppState, id: Uuid, process: VmProcess, manager: Pac
     // scanning it could match a previous run's sentinel still in scrollback
     // and report a false, instant success.
     let (_backlog, mut receiver) = process.console.subscribe();
-    let command = format!(
-        "({}); echo \"{DONE_SENTINEL}:$?\"\n",
-        manager.update_command()
-    );
-    process.console.write_input(command.as_bytes()).await;
+    let full_command = format!("({command}); echo \"{DONE_SENTINEL}:$?\"\n");
+    process.console.write_input(full_command.as_bytes()).await;
 
     let status = match wait_for_completion(&mut receiver, PACKAGE_UPDATE_TIMEOUT).await {
         Ok((0, tail)) => PackageUpdateStatus::Succeeded { output_tail: tail },
@@ -179,9 +241,20 @@ async fn run_update(state: &AppState, id: Uuid, process: VmProcess, manager: Pac
 /// Reads console output until [`DONE_SENTINEL`] appears, the console
 /// closes, or `timeout` elapses — `Ok` carries the guest-reported exit code
 /// plus the output seen so far (capped at [`OUTPUT_TAIL_CAP`]).
-async fn wait_for_completion(
+pub(crate) async fn wait_for_completion(
     receiver: &mut broadcast::Receiver<Vec<u8>>,
     timeout: Duration,
+) -> Result<(i32, String), String> {
+    wait_for_completion_with_sentinel(receiver, timeout, DONE_SENTINEL).await
+}
+
+/// Same as [`wait_for_completion`] but against an arbitrary sentinel string
+/// — `handlers::bootstrap` uses its own distinct sentinel so a bootstrap's
+/// completion can never be confused with a package action's.
+pub(crate) async fn wait_for_completion_with_sentinel(
+    receiver: &mut broadcast::Receiver<Vec<u8>>,
+    timeout: Duration,
+    sentinel: &str,
 ) -> Result<(i32, String), String> {
     let mut tail = Vec::new();
     let wait = async {
@@ -193,7 +266,7 @@ async fn wait_for_completion(
                         let excess = tail.len() - OUTPUT_TAIL_CAP;
                         tail.drain(..excess);
                     }
-                    if let Some(code) = find_done_sentinel(&tail) {
+                    if let Some(code) = find_sentinel(&tail, sentinel) {
                         return Ok((code, String::from_utf8_lossy(&tail).into_owned()));
                     }
                 }
@@ -214,14 +287,14 @@ async fn wait_for_completion(
         .unwrap_or_else(|_| Err("timed out waiting for the update to finish".to_owned()))
 }
 
-/// Finds the last complete `FIRECRAB_PKG_UPDATE_DONE:<code>` line in
-/// `buffer` and parses its exit code. The literal command text itself
-/// (echoed back as it's typed, containing the unexpanded `$?`) never
-/// parses as a number, so it can't be mistaken for the real result.
-fn find_done_sentinel(buffer: &[u8]) -> Option<i32> {
+/// Finds the last complete `<sentinel>:<code>` line in `buffer` and parses
+/// its exit code. The literal command text itself (echoed back as it's
+/// typed, containing the unexpanded `$?`) never parses as a number, so it
+/// can't be mistaken for the real result.
+pub(crate) fn find_sentinel(buffer: &[u8], sentinel: &str) -> Option<i32> {
     let text = String::from_utf8_lossy(buffer);
     text.lines().rev().find_map(|line| {
-        let (_, rest) = line.split_once(DONE_SENTINEL)?;
+        let (_, rest) = line.split_once(sentinel)?;
         rest.trim_start_matches(':').trim().parse().ok()
     })
 }
@@ -254,10 +327,10 @@ mod tests {
         console
     }
 
-    /// `update_packages` returns as soon as it has *spawned* `run_update`,
+    /// `run_package_action` returns as soon as it has *spawned* `run_action`,
     /// which only then subscribes to the console. Output pushed before that
-    /// subscription reaches nothing but the backlog `run_update` deliberately
-    /// discards, so the sentinel would be lost for good and the update would
+    /// subscription reaches nothing but the backlog `run_action` deliberately
+    /// discards, so the sentinel would be lost for good and the action would
     /// hang until its 10-minute timeout — no polling budget can recover it.
     async fn wait_for_console_subscriber(console: &ConsoleBroker) {
         for _ in 0..200 {
@@ -266,7 +339,7 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        panic!("run_update never subscribed to the console");
+        panic!("run_action never subscribed to the console");
     }
 
     #[tokio::test]
@@ -276,10 +349,14 @@ mod tests {
         let vm = record("test-vm", Uuid::new_v4());
         seed_vm(&state, &vm);
 
-        let error = update_packages(
+        let error = run_package_action(
             State(state),
             Extension(RequestId(Uuid::new_v4())),
             Path(vm.id.to_string()),
+            Json(PackageAction {
+                action: PackageActionKind::Update,
+                packages: Vec::new(),
+            }),
         )
         .await
         .unwrap_err();
@@ -299,10 +376,14 @@ mod tests {
         seed_vm(&state, &vm);
         register_fake_process(&state, vm.id);
 
-        let error = update_packages(
+        let error = run_package_action(
             State(state),
             Extension(RequestId(Uuid::new_v4())),
             Path(vm.id.to_string()),
+            Json(PackageAction {
+                action: PackageActionKind::Update,
+                packages: Vec::new(),
+            }),
         )
         .await
         .unwrap_err();
@@ -320,15 +401,56 @@ mod tests {
         };
         seed_vm(&state, &vm);
 
-        let error = update_packages(
+        let error = run_package_action(
             State(state),
             Extension(RequestId(Uuid::new_v4())),
             Path(vm.id.to_string()),
+            Json(PackageAction {
+                action: PackageActionKind::Update,
+                packages: Vec::new(),
+            }),
         )
         .await
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn update_packages_rejects_when_an_action_is_already_running() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = VmRecord {
+            state: VmState::Running,
+            package_update: Some(PackageUpdateStatus::Running),
+            ..record("test-vm", Uuid::new_v4())
+        };
+        seed_vm(&state, &vm);
+        register_fake_process(&state, vm.id);
+
+        let error = run_package_action(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+            Json(PackageAction {
+                action: PackageActionKind::Update,
+                packages: Vec::new(),
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+        assert!(matches!(
+            state
+                .vms
+                .lock()
+                .unwrap()
+                .get(&vm.id)
+                .unwrap()
+                .package_update,
+            Some(PackageUpdateStatus::Running)
+        ));
     }
 
     #[tokio::test]
@@ -342,10 +464,14 @@ mod tests {
         seed_vm(&state, &vm);
         let console = register_fake_process(&state, vm.id);
 
-        let Json(body) = update_packages(
+        let Json(body) = run_package_action(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             Path(vm.id.to_string()),
+            Json(PackageAction {
+                action: PackageActionKind::Update,
+                packages: Vec::new(),
+            }),
         )
         .await
         .unwrap();
@@ -381,10 +507,14 @@ mod tests {
         seed_vm(&state, &vm);
         let console = register_fake_process(&state, vm.id);
 
-        let _ = update_packages(
+        let _ = run_package_action(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
             Path(vm.id.to_string()),
+            Json(PackageAction {
+                action: PackageActionKind::Update,
+                packages: Vec::new(),
+            }),
         )
         .await
         .unwrap();
@@ -407,6 +537,49 @@ mod tests {
         panic!("package update never reached Failed");
     }
 
+    #[tokio::test]
+    async fn run_package_action_rejects_install_with_no_packages() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = VmRecord {
+            state: VmState::Running,
+            ..record("test-vm", Uuid::new_v4())
+        };
+        seed_vm(&state, &vm);
+        register_fake_process(&state, vm.id);
+
+        let error = run_package_action(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+            Json(PackageAction {
+                action: PackageActionKind::Install,
+                packages: Vec::new(),
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn command_for_maps_install_and_remove_per_distro() {
+        let packages = vec!["nginx".to_owned()];
+        assert_eq!(
+            PackageManager::Apt.command_for(PackageActionKind::Install, &packages),
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y nginx"
+        );
+        assert_eq!(
+            PackageManager::Apk.command_for(PackageActionKind::Remove, &packages),
+            "apk del nginx"
+        );
+        assert_eq!(
+            PackageManager::Dnf.command_for(PackageActionKind::Install, &packages),
+            "dnf -y install nginx"
+        );
+    }
+
     #[test]
     fn package_manager_is_inferred_from_the_template_alias() {
         assert_eq!(
@@ -417,6 +590,10 @@ mod tests {
             PackageManager::for_template("alpine-3.24"),
             Some(PackageManager::Apk)
         );
+        assert_eq!(
+            PackageManager::for_template("rocky-9"),
+            Some(PackageManager::Dnf)
+        );
         assert_eq!(PackageManager::for_template("windows-11"), None);
     }
 
@@ -425,20 +602,23 @@ mod tests {
         let buffer = b"Reading package lists...\n\
             echo \"FIRECRAB_PKG_UPDATE_DONE:$?\"\n\
             FIRECRAB_PKG_UPDATE_DONE:0\n";
-        assert_eq!(find_done_sentinel(buffer), Some(0));
+        assert_eq!(find_sentinel(buffer, DONE_SENTINEL), Some(0));
     }
 
     #[test]
     fn find_done_sentinel_reports_a_nonzero_exit_code() {
         assert_eq!(
-            find_done_sentinel(b"FIRECRAB_PKG_UPDATE_DONE:100\n"),
+            find_sentinel(b"FIRECRAB_PKG_UPDATE_DONE:100\n", DONE_SENTINEL),
             Some(100)
         );
     }
 
     #[test]
     fn find_done_sentinel_is_none_before_the_command_finishes() {
-        assert_eq!(find_done_sentinel(b"Reading package lists...\n"), None);
+        assert_eq!(
+            find_sentinel(b"Reading package lists...\n", DONE_SENTINEL),
+            None
+        );
     }
 
     #[tokio::test]
@@ -496,5 +676,29 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.contains("closed"));
+    }
+
+    #[test]
+    fn validate_package_names_rejects_shell_metacharacters() {
+        let error = validate_package_names(&["nginx; rm -rf /".to_owned()]).unwrap_err();
+        assert!(error.contains("invalid package name"));
+    }
+
+    #[test]
+    fn validate_package_names_rejects_more_than_the_cap() {
+        let packages: Vec<String> = (0..33).map(|n| format!("pkg{n}")).collect();
+        let error = validate_package_names(&packages).unwrap_err();
+        assert!(error.contains("too many packages"));
+    }
+
+    #[test]
+    fn validate_package_names_accepts_ordinary_names() {
+        assert!(validate_package_names(&["nginx".to_owned(), "postgresql-16".to_owned()]).is_ok());
+    }
+
+    #[test]
+    fn validate_package_names_rejects_empty_list() {
+        let error = validate_package_names(&[]).unwrap_err();
+        assert!(error.contains("at least one package"));
     }
 }

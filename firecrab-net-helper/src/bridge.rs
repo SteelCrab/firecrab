@@ -20,8 +20,8 @@ use uuid::Uuid;
 
 /// Name of the single Firecrab-owned Linux bridge shared by every VM.
 pub const BRIDGE_NAME: &str = "fcbr0";
-/// MTU applied to the bridge and its link.
-pub const BRIDGE_MTU: u32 = 1500;
+/// MTU used when the host's uplink MTU cannot be determined.
+pub const DEFAULT_BRIDGE_MTU: u32 = 1500;
 /// Bridge's own address on the VPC subnet, also the VMs' default gateway.
 pub const BRIDGE_GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
 /// Network address of the Firecrab VPC subnet (172.30.0.0/24).
@@ -37,6 +37,7 @@ struct BridgeConfig<'a> {
     gateway: Ipv4Addr,
     network: Ipv4Addr,
     prefix: u8,
+    mtu: u32,
 }
 
 /// Failure modes for [`ensure_bridge`].
@@ -117,7 +118,7 @@ impl BridgeActor {
 /// This adds only the bridge, its gateway address and link state. It never
 /// removes host routes or addresses, and it intentionally does not change the
 /// global IPv4 forwarding sysctl.
-pub async fn ensure_bridge(actor: &BridgeActor) -> Result<(), BridgeError> {
+pub async fn ensure_bridge(actor: &BridgeActor, mtu: u32) -> Result<(), BridgeError> {
     ensure_bridge_for(
         actor,
         &BridgeConfig {
@@ -125,6 +126,7 @@ pub async fn ensure_bridge(actor: &BridgeActor) -> Result<(), BridgeError> {
             gateway: BRIDGE_GATEWAY,
             network: BRIDGE_NETWORK,
             prefix: BRIDGE_PREFIX,
+            mtu,
         },
     )
     .await
@@ -141,6 +143,7 @@ pub async fn ensure_micro_network_bridge(
     micro_network_id: Uuid,
     gateway: Ipv4Addr,
     prefix: u8,
+    mtu: u32,
 ) -> Result<(), BridgeError> {
     let name = micro_network_bridge_name(micro_network_id);
     let network = Ipv4Addr::from(u32::from(gateway) & prefix_mask(prefix));
@@ -151,6 +154,7 @@ pub async fn ensure_micro_network_bridge(
             gateway,
             network,
             prefix,
+            mtu,
         },
     )
     .await
@@ -168,22 +172,22 @@ pub async fn delete_micro_network_bridge(
     let (connection, handle, _) = new_connection().map_err(BridgeError::Connection)?;
     tokio::spawn(connection);
 
-    let mut links = handle.link().get().match_name(name).execute();
+    let mut links = handle.link().get().match_name(name.clone()).execute();
     let link = match links.try_next().await {
         Ok(link) => link,
         Err(rtnetlink::Error::NetlinkError(message)) if message.raw_code() == -libc::ENODEV => None,
         Err(error) => return Err(BridgeError::Netlink(error)),
     };
-    let Some(link) = link else {
-        return Ok(());
-    };
-
-    handle
-        .link()
-        .del(link.header.index)
-        .execute()
-        .await
-        .map_err(BridgeError::Netlink)
+    if let Some(link) = link {
+        handle
+            .link()
+            .del(link.header.index)
+            .execute()
+            .await
+            .map_err(BridgeError::Netlink)?;
+    }
+    crate::firewall::remove_iptables_forward_for_bridge(&name).await;
+    Ok(())
 }
 
 async fn ensure_bridge_for(
@@ -204,7 +208,7 @@ async fn ensure_bridge_for(
             assert_subnet_available(&handle, config, None).await?;
             handle
                 .link()
-                .add(LinkBridge::new(config.name).mtu(BRIDGE_MTU).build())
+                .add(LinkBridge::new(config.name).mtu(config.mtu).build())
                 .execute()
                 .await
                 .map_err(BridgeError::Netlink)?;
@@ -220,7 +224,7 @@ async fn ensure_bridge_for(
         .link()
         .change(
             LinkUnspec::new_with_index(bridge.header.index)
-                .mtu(BRIDGE_MTU)
+                .mtu(config.mtu)
                 .up()
                 .build(),
         )
@@ -419,6 +423,53 @@ fn cidrs_overlap(a_network: Ipv4Addr, a_prefix: u8, b_network: Ipv4Addr, b_prefi
     let shared_prefix = a_prefix.min(b_prefix);
     ipv4_to_u32(a_network) & prefix_mask(shared_prefix)
         == ipv4_to_u32(b_network) & prefix_mask(shared_prefix)
+}
+
+/// Detects the MTU of the host's default-route uplink interface.
+///
+/// Walks the IPv4 routing table to find the default route (destination
+/// 0.0.0.0/0), then reads that interface's MTU. Falls back to
+/// `DEFAULT_BRIDGE_MTU` if the route or its MTU cannot be determined —
+/// for example on hosts with no default route, or when rtnetlink fails.
+///
+/// This is used to set bridge MTU to match the effective path MTU,
+/// preventing TLS/PMTUD failures in guest VMs on hosts with overlay
+/// networks (e.g. Calico VXLAN, WireGuard) that reduce the usable MTU.
+pub async fn detect_uplink_mtu() -> u32 {
+    let Ok((connection, handle, _)) = new_connection() else {
+        return DEFAULT_BRIDGE_MTU;
+    };
+    tokio::spawn(connection);
+
+    // Find the default route's outgoing interface index.
+    let mut routes = handle.route().get(RouteMessage::default()).execute();
+    let mut uplink_index: Option<u32> = None;
+    while let Ok(Some(route)) = routes.try_next().await {
+        if route.header.address_family != AddressFamily::Inet {
+            continue;
+        }
+        // Default route: destination prefix length 0 (0.0.0.0/0).
+        if route.header.destination_prefix_length == 0 {
+            uplink_index = route_output_interface(&route);
+            break;
+        }
+    }
+
+    let Some(index) = uplink_index else {
+        return DEFAULT_BRIDGE_MTU;
+    };
+
+    // Read the MTU of that interface.
+    let mut links = handle.link().get().match_index(index).execute();
+    if let Ok(Some(link)) = links.try_next().await {
+        for attr in &link.attributes {
+            if let rtnetlink::packet_route::link::LinkAttribute::Mtu(mtu) = attr {
+                return *mtu;
+            }
+        }
+    }
+
+    DEFAULT_BRIDGE_MTU
 }
 
 /// Big-endian numeric form of an IPv4 address, for bitmask arithmetic.

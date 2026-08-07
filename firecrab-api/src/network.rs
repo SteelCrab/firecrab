@@ -32,7 +32,7 @@ pub enum NetworkError {
     Frame(#[from] FrameError),
     #[error("network helper answered for a different request")]
     MismatchedResponse,
-    #[error("network helper rejected the request")]
+    #[error("network helper rejected the request: {0}")]
     Helper(#[source] HelperFailure),
 }
 
@@ -283,6 +283,38 @@ pub(crate) mod test_support {
         (handle, log)
     }
 
+    /// Fake helper for VM-start recovery tests. It acts like a host whose
+    /// firewall still owns `conflicting_ipv4s`: only `ApplyVmPolicy` for one
+    /// of those addresses fails, while every other network operation succeeds.
+    /// The complete requests are recorded so callers can assert both the
+    /// policy attempts and the DHCP refresh after a lease rotation.
+    pub fn spawn_policy_collision_helper(
+        socket_path: &Path,
+        conflicting_ipv4s: impl IntoIterator<Item = Ipv4Addr>,
+    ) -> (tokio::task::JoinHandle<()>, Arc<Mutex<Vec<NetworkRequest>>>) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_for_task = Arc::clone(&requests);
+        let conflicting_ipv4s = Arc::new(
+            conflicting_ipv4s
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>(),
+        );
+        let listener = UnixListener::bind(socket_path).expect("bind fake net-helper socket");
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(serve_policy_collision(
+                    stream,
+                    Arc::clone(&requests_for_task),
+                    Arc::clone(&conflicting_ipv4s),
+                ));
+            }
+        });
+        (handle, requests)
+    }
+
     async fn serve_recording(
         mut stream: UnixStream,
         log: Arc<Mutex<Vec<&'static str>>>,
@@ -301,6 +333,38 @@ pub(crate) mod test_support {
                 })
             } else {
                 Ok(())
+            };
+            let response = NetworkResponseEnvelope {
+                version: PROTOCOL_VERSION,
+                request_id: envelope.request_id,
+                result,
+            };
+            if write_frame(&mut stream, &response).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    async fn serve_policy_collision(
+        mut stream: UnixStream,
+        requests: Arc<Mutex<Vec<NetworkRequest>>>,
+        conflicting_ipv4s: Arc<std::collections::HashSet<Ipv4Addr>>,
+    ) {
+        loop {
+            let envelope: NetworkRequestEnvelope = match read_frame(&mut stream).await {
+                Ok(envelope) => envelope,
+                Err(_) => return,
+            };
+            requests.lock().unwrap().push(envelope.request.clone());
+            let result = match &envelope.request {
+                NetworkRequest::ApplyVmPolicy { ipv4, .. } if conflicting_ipv4s.contains(ipv4) => {
+                    Err(HelperFailure::Internal {
+                        detail: format!(
+                            "nft rejected the ruleset: add element inet firecrab vm_egress {{ {ipv4} : jump vm_orphan_eg }}: File exists"
+                        ),
+                    })
+                }
+                _ => Ok(()),
             };
             let response = NetworkResponseEnvelope {
                 version: PROTOCOL_VERSION,
@@ -380,14 +444,19 @@ mod tests {
             result: Err(HelperFailure::UnsupportedOperation),
         });
 
-        let result = client(&path, HELPER_TIMEOUT)
+        let error = client(&path, HELPER_TIMEOUT)
             .call(NetworkRequest::EnsureFirewall {
                 micro_networks: Vec::new(),
             })
-            .await;
+            .await
+            .expect_err("a helper failure must be returned to the API");
+        assert_eq!(
+            error.to_string(),
+            "network helper rejected the request: operation is not implemented yet"
+        );
         assert!(matches!(
-            result,
-            Err(NetworkError::Helper(HelperFailure::UnsupportedOperation))
+            error,
+            NetworkError::Helper(HelperFailure::UnsupportedOperation)
         ));
     }
 

@@ -389,6 +389,66 @@ a.btn {
   background: var(--bg);
 }
 
+.subpanel-header {
+  display: flex;
+  justify-content: flex-end;
+}
+.options-menu {
+  position: relative;
+}
+.options-menu-trigger {
+  border: none;
+  background: transparent;
+  color: var(--shell);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.options-menu-trigger:hover {
+  background: var(--bg);
+}
+.options-menu-list {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 10;
+  min-width: 10rem;
+  margin-top: 0.25rem;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  box-shadow: 0 0.5rem 1.5rem rgba(23, 27, 34, 0.18);
+  list-style: none;
+  padding: 0.25rem;
+}
+.options-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 0.45rem 0.6rem;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  border-radius: 3px;
+}
+.options-menu-item:hover:not(:disabled) {
+  background: var(--bg);
+}
+.options-menu-item:disabled {
+  color: var(--dim);
+  cursor: default;
+}
+.options-menu-item.danger {
+  color: var(--error);
+}
+.options-menu-item.danger:disabled {
+  color: var(--dim);
+}
+
 table.vm-table {
   width: 100%;
   border-collapse: collapse;
@@ -453,6 +513,14 @@ table.vm-table {
 }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
+/* M2Image 표의 상태 셀 — 뱃지와 "⋯" 옵션 메뉴 트리거를 한 줄에 나란히. */
+table.image-table .state-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 /* 시작 파이프라인 — CI 빌드 로그처럼 단계별 소요 시간을 가로로 (task-vm-startup-timeline) */
 .pipeline {
   list-style: none;
@@ -502,6 +570,19 @@ table.vm-table {
   color: var(--error);
   word-break: break-word;
 }
+/* `.step-detail` is shared with `VmDetailModal`'s PipelineStepper, where
+   the step-detail span is the *only* place a startup failure reason is
+   shown anywhere in the UI (its own `.detail-log` is built from static
+   step labels + console output, never from `run.detail`) — clamping it
+   there would silently hide the one thing an operator needs to see. This
+   modifier is opt-in and applied only in the bootstrap panel (Images.tsx),
+   where it's safe for the opposite reason: the same text this clamps is
+   always shown in full, unclamped, in the `.detail-log` `<pre>` directly
+   below this stepper. Do not move this onto `.step-detail` itself. */
+.step-detail-clamped {
+  max-height: 3.6em;
+  overflow: hidden;
+}
 
 .pipeline-step.succeeded .step-bar {
   border-color: var(--ready);
@@ -524,11 +605,82 @@ table.vm-table {
   min-height: 8rem;
 }
 
+.store-import-dock {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: -0.2rem 0 0.9rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.store-import-copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 11rem;
+}
+.store-import-copy strong {
+  color: var(--shell);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+.store-import-copy small {
+  color: var(--dim);
+  font-size: 0.7rem;
+}
+.store-import-picker {
+  display: grid;
+  flex: 1 1 15rem;
+  gap: 0.2rem;
+  min-width: 0;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+}
+.store-import-picker select {
+  min-width: 0;
+  height: 2rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font: inherit;
+}
+.store-import-picker select:disabled { color: var(--dim); }
+
 table.image-table tbody tr {
   cursor: pointer;
 }
 table.image-table tbody tr.is-selected td {
   background: rgba(196, 62, 18, 0.06);
+}
+table.image-table .image-package-url {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+table.image-table .image-package-url a {
+  color: var(--accent, #c43e12);
+  text-decoration: none;
+}
+table.image-table .image-package-url a:hover {
+  text-decoration: underline;
+}
+
+/* The image table's per-row OS logo (Images.tsx). */
+.image-template-logo {
+  flex: 0 0 auto;
+  width: 4.4rem;
+  height: 2rem;
+  object-fit: contain;
+  object-position: left center;
+}
+@media (max-width: 700px) {
+  .store-import-dock { align-items: stretch; flex-direction: column; }
+  .store-import-dock .btn { width: 100%; }
 }
 
 /* Copy / download controls shared by detail modal + console toolbar. */
@@ -574,6 +726,27 @@ table.image-table tbody tr.is-selected td {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.package-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.package-row:last-child { margin-bottom: 0; }
+.package-row input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.55rem 0.65rem;
+  height: 2.5rem;
 }
 
 .empty {
@@ -920,3 +1093,57 @@ table.image-table tbody tr.is-selected td {
 .vm-table tbody tr {
   cursor: default;
 }
+
+/* Live builder-VM console embedded in the bootstrap panel. Fixed height:
+   this sits inside a panel that must stay scannable, so the terminal gets a
+   bounded window rather than growing with output. */
+.inline-console {
+  margin-top: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.inline-console-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--bg-panel);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.inline-console-title {
+  font-weight: 600;
+}
+
+.inline-console-status {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.inline-console-status.connected {
+  color: var(--ready);
+  opacity: 1;
+}
+
+.inline-console-status.disconnected,
+.inline-console-status.reconnecting {
+  color: var(--amber);
+  opacity: 1;
+}
+
+.inline-console-surface {
+  height: 16rem;
+  padding: 0.4rem;
+  background: #171b22;
+}
+
+.inline-console-ended {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+

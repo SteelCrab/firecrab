@@ -198,7 +198,26 @@ pub struct StartupStepRun {
     pub detail: Option<String>,
 }
 
-/// Outcome of the most recent `POST /api/vms/{id}/packages/update` run for
+/// What `POST /api/vms/{id}/packages` should do on the guest's console.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageActionKind {
+    Install,
+    Remove,
+    Update,
+}
+
+/// Body of `POST /api/vms/{id}/packages`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageAction {
+    pub action: PackageActionKind,
+    /// Required (non-empty) for `install`/`remove`; ignored for `update`.
+    #[serde(default)]
+    pub packages: Vec<String>,
+}
+
+/// Outcome of the most recent `POST /api/vms/{id}/packages` run for
 /// this VM — transient like `startup_step` (see
 /// `docs/30-tasks/task-guest-network-configuration.md`'s sibling doc for the console-
 /// sentinel pattern this reuses), not persisted across a restart.
@@ -576,6 +595,10 @@ pub struct HostStatusResponse {
 /// One entry from `GET /api/images` — a template registry alias the create
 /// form can offer, with digests and a disk floor. Host paths are never
 /// exposed (`docs/30-tasks/task-m2image-catalog-api.md`).
+///
+/// Uninstalled built-in templates still appear so the dashboard can offer
+/// **official package links** (`package_url`) and kick off
+/// `POST /api/images/{alias}/install`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageResponse {
@@ -598,6 +621,19 @@ pub struct ImageResponse {
     pub rootfs_size_bytes: u64,
     /// Whether the artifacts are present and verified on this host.
     pub installed: bool,
+    /// Package download URL for this alias when `FIRECRAB_IMAGE_BASE_URL` is
+    /// set (`{base}/{alias}.tar.zst`). `None` when remote install is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_url: Option<String>,
+    /// Whether a package archive for this alias is already staged locally
+    /// (`image_install::staged_package_exists`), so
+    /// `POST /api/images/{alias}/install` can extract it with no download at
+    /// all. Deliberately independent of `package_url`: a web bootstrap
+    /// (`handlers::bootstrap`) stages one on a host that has no
+    /// `FIRECRAB_IMAGE_BASE_URL` configured, and the dashboard has to be
+    /// able to offer that install without a remote URL to point at.
+    #[serde(default)]
+    pub package_staged: bool,
     /// Short operator-facing note (may be empty).
     pub description: String,
 }
@@ -630,6 +666,109 @@ pub struct ImageInstallResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at_ms: Option<u64>,
     /// Epoch millis when the attempt finished, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+}
+
+/// Lifecycle of one from-scratch distro bootstrap session (`handlers::bootstrap`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BootstrapStatus {
+    /// Builder VM is being created/started.
+    Booting,
+    /// The bootstrap script (download + chroot install + mkfs) is running
+    /// on the builder VM's console.
+    Running,
+    /// VM stopped; extracting rootfs/kernel/initrd from its disk and
+    /// packaging them into `{alias}.tar.zst`.
+    Packaging,
+    /// Package written to the local install cache; builder VM deleted.
+    Succeeded,
+    /// Failed at any stage; see `log`. Builder VM has been deleted.
+    Failed,
+}
+
+/// A named phase of one bootstrap session, exposed so the dashboard can
+/// show *where* a multi-minute run is instead of a single opaque status.
+/// Deliberately coarser than the code's own phase boundaries — four boxes
+/// that mean something to an operator, mirroring [`StartupStep`]'s four —
+/// with the fine-grained detail of the longest one left to the live
+/// console instead of more enum variants
+/// (`docs/superpowers/specs/2026-08-05-bootstrap-progress-ui-design.md`).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum BootstrapStep {
+    /// Resolving the MicroBoot builder source, creating the builder VM,
+    /// and waiting for a shell to answer on its console.
+    StartingBuilderVm,
+    /// The guest script is running: download, chroot install, mkfs. By far
+    /// the longest phase, and the one the live console is for.
+    InstallingSystem,
+    /// Builder VM stopped; its disk is being dumped and compressed into
+    /// `{alias}.tar.zst`.
+    Packaging,
+    /// Package staged; tearing the builder VM down.
+    Finalizing,
+}
+
+/// How one [`BootstrapStep`] ended, or that it hasn't yet. Structurally
+/// identical to [`StartupStepOutcome`] but kept separate, matching how
+/// `BootstrapStatus` and `VmState` are separate types rather than one
+/// shared lifecycle enum.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum BootstrapStepOutcome {
+    /// Still in progress — `ended_at_ms` is `None`.
+    Running,
+    /// Finished and moved on to the next step.
+    Succeeded,
+    /// The session failed here. No later step ever began.
+    Failed,
+}
+
+/// One pass through a [`BootstrapStep`], with the wall-clock times it
+/// spanned. Server-timed for the same reason [`StartupStepRun`] is: the
+/// dashboard's poll interval is far coarser than the fastest steps take.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapStepRun {
+    pub step: BootstrapStep,
+    pub started_at_ms: u64,
+    pub ended_at_ms: Option<u64>,
+    pub outcome: BootstrapStepOutcome,
+    /// Failure reason, only ever set on a `Failed` step.
+    pub detail: Option<String>,
+}
+
+/// Status + log for one bootstrap session
+/// (`POST /api/images/{alias}/bootstrap`, `GET`/`DELETE /api/images/bootstrap/{bootstrapId}`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapResponse {
+    pub bootstrap_id: Uuid,
+    /// The target being bootstrapped (`alpine-3.24`, `ubuntu-26.04`, or `rocky-9`).
+    pub alias: String,
+    /// Which template the disposable builder VM booted from — always the
+    /// internal MicroBoot alias since `firecrab_api::microboot` replaced
+    /// the old "pick an already-installed template" logic. Deliberately
+    /// still reported: it is diagnostic provenance for this one session,
+    /// not an installable image, and a bootstrap that failed early is much
+    /// harder to reason about without knowing what it booted. Unlike
+    /// `/api/images`, nothing here invites the reader to install it.
+    pub source_alias: String,
+    /// Builder VM id, so the dashboard can reuse the existing console
+    /// WebSocket (`/ws/vms/{id}/console`) to show live output.
+    pub vm_id: Uuid,
+    pub status: BootstrapStatus,
+    /// The step currently open, `None` once the session is terminal.
+    #[serde(default)]
+    pub current_step: Option<BootstrapStep>,
+    /// Every step this session has entered, in order. `#[serde(default)]`
+    /// so a dashboard talking to an older server still deserializes.
+    #[serde(default)]
+    pub step_timeline: Vec<BootstrapStepRun>,
+    pub log: String,
+    pub started_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at_ms: Option<u64>,
 }
@@ -893,14 +1032,21 @@ mod tests {
             min_disk_gb: 2,
             rootfs_size_bytes: 2 * 1024 * 1024 * 1024u64,
             installed: true,
+            package_url: Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst".to_owned()),
+            package_staged: true,
             description: String::new(),
         };
         let json = serde_json::to_value(&image).unwrap();
         assert_eq!(json["alias"], "ubuntu-26.04");
+        assert_eq!(json["packageStaged"], true);
         assert_eq!(json["minDiskGb"], 2);
         assert_eq!(json["rootfsSizeBytes"], 2 * 1024 * 1024 * 1024u64);
         assert_eq!(json["kernelSha256"], "k".repeat(64));
         assert_eq!(json["installed"], true);
+        assert_eq!(
+            json["packageUrl"],
+            "http://127.0.0.1:8765/ubuntu-26.04.tar.zst"
+        );
         assert!(json.get("initrdSha256").is_none());
     }
 
@@ -966,5 +1112,37 @@ mod tests {
         let decoded: MicroNetworkResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, response);
         assert!(json.contains("\"subnetCidr\":\"172.31.0.0/24\""));
+    }
+
+    #[test]
+    fn bootstrap_step_run_serializes_camel_case_for_the_dashboard() {
+        let run = BootstrapStepRun {
+            step: BootstrapStep::InstallingSystem,
+            started_at_ms: 1_700_000_000_000,
+            ended_at_ms: None,
+            outcome: BootstrapStepOutcome::Running,
+            detail: None,
+        };
+        let json = serde_json::to_value(&run).expect("serialize");
+        assert_eq!(json["step"], "installingSystem");
+        assert_eq!(json["startedAtMs"], 1_700_000_000_000_u64);
+        assert_eq!(json["endedAtMs"], serde_json::Value::Null);
+        assert_eq!(json["outcome"], "running");
+    }
+
+    #[test]
+    fn bootstrap_response_carries_an_empty_timeline_by_default() {
+        let json = serde_json::json!({
+            "bootstrapId": "00000000-0000-0000-0000-000000000000",
+            "alias": "alpine-3.24",
+            "sourceAlias": "__microboot",
+            "vmId": "00000000-0000-0000-0000-000000000000",
+            "status": "booting",
+            "log": "",
+            "startedAtMs": 0,
+        });
+        let parsed: BootstrapResponse = serde_json::from_value(json).expect("deserialize");
+        assert!(parsed.step_timeline.is_empty());
+        assert_eq!(parsed.current_step, None);
     }
 }

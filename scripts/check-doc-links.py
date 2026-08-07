@@ -55,7 +55,13 @@ def check_doc_links() -> list[str]:
         if is_ignored(doc):
             continue
         text = doc.read_text(encoding="utf-8")
+        in_fenced_code = False
         for line_number, line in enumerate(text.splitlines(), start=1):
+            if re.match(r"^\s*(`{3,}|~{3,})", line):
+                in_fenced_code = not in_fenced_code
+                continue
+            if in_fenced_code:
+                continue
             for target in LINK_RE.findall(line):
                 if target.startswith(SKIP_PREFIXES):
                     continue

@@ -385,6 +385,7 @@ jobs:
         template:
           - alpine-3.24
           - ubuntu-26.04
+          - rocky-9
         # GitHub-hosted Linux images with nested KVM (x86_64).
         host:
           - ubuntu-24.04
@@ -415,12 +416,13 @@ jobs:
           uname -a
 
       - name: Install firecrab with guest image(s)
-        # Alpine is the default image build; Ubuntu needs --with-ubuntu-image.
+        # Alpine is the default image build; Ubuntu and Rocky are opt-in.
         run: |
           set -euo pipefail
           INSTALL=(sudo -E env "PATH=$PATH" ./install.sh)
           case "${{ matrix.template }}" in
             ubuntu-*) INSTALL+=(--with-ubuntu-image) ;;
+            rocky-*) INSTALL+=(--with-rocky-image) ;;
           esac
           "${INSTALL[@]}"
 
@@ -463,23 +465,35 @@ jobs:
           - host: debian-12
             template: ubuntu-26.04
             runner: '["self-hosted","linux","x64","kvm","debian-12"]'
+          - host: debian-12
+            template: rocky-9
+            runner: '["self-hosted","linux","x64","kvm","debian-12"]'
           - host: fedora
             template: alpine-3.24
             runner: '["self-hosted","linux","x64","kvm","fedora"]'
           - host: fedora
             template: ubuntu-26.04
+            runner: '["self-hosted","linux","x64","kvm","fedora"]'
+          - host: fedora
+            template: rocky-9
             runner: '["self-hosted","linux","x64","kvm","fedora"]'
           - host: archlinux
             template: alpine-3.24
             runner: '["self-hosted","linux","x64","kvm","arch"]'
           - host: archlinux
             template: ubuntu-26.04
+            runner: '["self-hosted","linux","x64","kvm","arch"]'
+          - host: archlinux
+            template: rocky-9
             runner: '["self-hosted","linux","x64","kvm","arch"]'
           - host: opensuse
             template: alpine-3.24
             runner: '["self-hosted","linux","x64","kvm","opensuse"]'
           - host: opensuse
             template: ubuntu-26.04
+            runner: '["self-hosted","linux","x64","kvm","opensuse"]'
+          - host: opensuse
+            template: rocky-9
             runner: '["self-hosted","linux","x64","kvm","opensuse"]'
           - host: aarch64
             template: alpine-3.24
@@ -499,6 +513,7 @@ jobs:
           INSTALL=(sudo -E env "PATH=$PATH" ./install.sh)
           case "${{ matrix.template }}" in
             ubuntu-*) INSTALL+=(--with-ubuntu-image) ;;
+            rocky-*) INSTALL+=(--with-rocky-image) ;;
           esac
           "${INSTALL[@]}"
 
