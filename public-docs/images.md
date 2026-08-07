@@ -22,6 +22,9 @@ Build one alias when needed.
 Docker is used for Alpine and Rocky.
 Ubuntu also uses a temporary privileged chroot.
 
+Rocky guests include `dnf` so dashboard package actions work.
+Rebuild `rocky-9` after pulling rootfs script fixes before testing dnf.
+
 ## Output
 
 ```text
