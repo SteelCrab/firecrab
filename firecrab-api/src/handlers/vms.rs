@@ -2422,6 +2422,11 @@ while True:
         let boot_args = config["boot-source"]["boot_args"].as_str().unwrap();
         assert!(!boot_args.split_whitespace().any(|arg| arg == "pci=off"));
         assert!(boot_args.contains("root=/dev/vda"));
+        assert!(
+            boot_args
+                .split_whitespace()
+                .any(|arg| arg == "net.ifnames=0")
+        );
 
         let Json(stopped) = stop_vm(
             State(state),

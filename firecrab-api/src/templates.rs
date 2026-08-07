@@ -169,6 +169,13 @@ impl TemplateVersion {
             args.push("rd.driver.pre=virtio_net");
         }
 
+        // Both distro images configure their network manager for `eth0`.
+        // PCI's predictable naming would otherwise expose the NIC as an
+        // ens*/enp* device and leave that configuration unmatched.
+        if enable_pci && !args.contains(&"net.ifnames=0") {
+            args.push("net.ifnames=0");
+        }
+
         args.join(" ")
     }
 }
@@ -1252,6 +1259,7 @@ mod tests {
         assert!(ubuntu.requires_pci_transport());
         assert!(!ubuntu.runtime_boot_args().contains("pci=off"));
         assert!(ubuntu.runtime_boot_args().contains("root=/dev/vda"));
+        assert!(ubuntu.runtime_boot_args().contains("net.ifnames=0"));
 
         let rocky = registry
             .resolve_alias("rocky-9")
