@@ -26,6 +26,7 @@ import {
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import InlineConsole from "./InlineConsole";
+import { useI18n } from "../i18n";
 
 const KNOWN_TEMPLATES = [
   { alias: "alpine-3.24", label: "Alpine Linux", logoSrc: "https://www.alpinelinux.org/alpinelinux-logo.svg" },
@@ -88,12 +89,18 @@ const BOOTSTRAP_STEPS: BootstrapStep[] = [
   "finalizing",
 ];
 
-const BOOTSTRAP_STEP_LABEL: Record<BootstrapStep, string> = {
-  startingBuilderVm: "빌더 VM 준비",
-  installingSystem: "시스템 설치",
-  packaging: "패키징",
-  finalizing: "마무리",
-};
+function bootstrapStepLabel(
+  step: BootstrapStep,
+  t: (english: string, korean: string) => string,
+): string {
+  switch (step) {
+    case "startingBuilderVm": return t("Preparing builder VM", "빌더 VM 준비");
+    case "installingSystem": return t("Installing system", "시스템 설치");
+    case "packaging": return t("Packaging", "패키징");
+    case "finalizing": return t("Finalizing", "마무리");
+  }
+}
+
 
 /** Guards against a single unbroken line (no `\n` to split on at all) still
  *  blowing up the step box the same way the unsplit case would. */
@@ -124,6 +131,7 @@ function stepDetailPreview(detail: string): string {
  * locally between polls.
  */
 function BootstrapStepper({ timeline }: { timeline: BootstrapStepRun[] }) {
+  const { t } = useI18n();
   const [now, setNow] = useState(() => Date.now());
   const hasOpenStep = timeline.some((run) => run.outcome === "running");
   useEffect(() => {
@@ -143,7 +151,7 @@ function BootstrapStepper({ timeline }: { timeline: BootstrapStepRun[] }) {
 
         return (
           <li key={step} className={`pipeline-step ${status}`}>
-            <span className="step-label">{BOOTSTRAP_STEP_LABEL[step]}</span>
+          <span className="step-label">{bootstrapStepLabel(step, t)}</span>
             <span className="step-bar">
               <span className="step-time">
                 {elapsed === null ? "—" : formatElapsed(elapsed)}
@@ -242,6 +250,7 @@ function OptionsMenu({
 function computeMenuItems(
   image: ImageResponse,
   ctx: {
+    t: (english: string, korean: string) => string;
     packageJob: ImageInstallResponse | undefined;
     busyAlias: string | null;
     bootstrapSession: BootstrapResponse | null;
@@ -255,6 +264,7 @@ function computeMenuItems(
   },
 ): { label: string; onClick: () => void; disabled: boolean; danger?: boolean }[] {
   const {
+    t,
     packageJob,
     busyAlias,
     bootstrapSession,
@@ -278,27 +288,27 @@ function computeMenuItems(
     bootstrapStartingAlias === image.alias || bootstrapSession?.alias === image.alias;
 
   const bakeLabel = blockedByStatus
-    ? "구울 필요 없음"
+    ? t("No build needed", "구울 필요 없음")
     : bootstrapIsMine && bootstrapBusy
-      ? "굽는 중…"
+      ? t("Building…", "굽는 중…")
       : bootstrapBusy
-        ? "다른 배포판 굽는 중"
-        : "굽기";
+        ? t("Another distribution is building", "다른 배포판 굽는 중")
+        : t("Build", "굽기");
 
   // Ahead of the packageUrl branch on purpose: when both are available, a
   // package already on this host wins over re-downloading the remote one —
   // which would overwrite a just-bootstrapped local build.
   const installLabel = image.installed
-    ? "설치됨"
+    ? t("Installed", "설치됨")
     : image.packageStaged
       ? busyAlias === image.alias
-        ? "설치 중…"
-        : "로컬 패키지 설치"
+        ? t("Installing…", "설치 중…")
+        : t("Install local package", "로컬 패키지 설치")
       : image.packageUrl
         ? fetching
-          ? "가져오는 중…"
-          : `가져오기 (${packageBasename(image.packageUrl)})`
-        : "패키지 URL 없음";
+          ? t("Fetching…", "가져오는 중…")
+          : t(`Fetch (${packageBasename(image.packageUrl)})`, `가져오기 (${packageBasename(image.packageUrl)})`)
+        : t("No package URL", "패키지 URL 없음");
   const installDisabled = image.installed
     ? true
     : image.packageStaged
@@ -311,7 +321,7 @@ function computeMenuItems(
     else if (image.packageUrl) void onFetchPackage(image.alias);
   };
 
-  const deleteLabel = busyAlias === image.alias ? "삭제 중…" : "삭제";
+  const deleteLabel = busyAlias === image.alias ? t("Deleting…", "삭제 중…") : t("Delete", "삭제");
 
   // "굽기삭제"는 상태에 따라 서로 다른 두 동작을 겸한다: 이 alias에 대해
   // 지금 실행 중인 세션 취소, 또는 완료돼 스테이징된 패키지 삭제. 둘은
@@ -329,19 +339,19 @@ function computeMenuItems(
     bootstrapSession !== null &&
     (bootstrapSession.status === "booting" || bootstrapSession.status === "running");
   const canDeleteStagedPackage = image.packageStaged && !canCancelBootstrap;
-  const bakeDeleteLabel = canCancelBootstrap ? "부트스트랩 취소" : "구운 패키지 삭제";
+  const bakeDeleteLabel = canCancelBootstrap ? t("Cancel build", "부트스트랩 취소") : t("Delete built package", "구운 패키지 삭제");
   const handleBakeDeleteClick = () => {
     if (canCancelBootstrap && bootstrapSession) {
       if (
         !window.confirm(
-          "진행 중인 부트스트랩을 취소할까요?\n빌더 VM을 삭제하며, 지금까지 진행된 내용은 저장되지 않습니다.",
+          t("Cancel the build in progress?\nThe builder VM will be deleted and its progress will be lost.", "진행 중인 부트스트랩을 취소할까요?\n빌더 VM을 삭제하며, 지금까지 진행된 내용은 저장되지 않습니다."),
         )
       ) {
         return;
       }
       void onCancelBootstrap(bootstrapSession.bootstrapId);
     } else if (canDeleteStagedPackage) {
-      if (!window.confirm(`'${image.alias}' 구운 패키지를 삭제할까요?`)) return;
+      if (!window.confirm(t(`Delete the built package '${image.alias}'?`, `'${image.alias}' 구운 패키지를 삭제할까요?`))) return;
       void onDeleteStagedPackage(image.alias);
     }
   };
@@ -391,6 +401,7 @@ function ImageDetail({
   bootstrapStartingAlias: string | null;
   bootstrapError: string | null;
 }) {
+  const { t } = useI18n();
   // The "⋯" actions menu now lives in the table row (always visible, next to
   // the 상태 badge) instead of here — this panel is info + in-progress
   // output only. `bootstrapIsMine` still gates that output to the session
@@ -404,42 +415,42 @@ function ImageDetail({
         <dt>alias</dt>
         <dd>{image.alias}</dd>
 
-        <dt>버전</dt>
+        <dt>{t("Version", "버전")}</dt>
         <dd>{image.version}</dd>
 
-        <dt>최소 디스크</dt>
+        <dt>{t("Minimum disk", "최소 디스크")}</dt>
         <dd>{image.minDiskGb} GiB</dd>
 
-        <dt>rootfs 크기</dt>
+        <dt>{t("Rootfs size", "rootfs 크기")}</dt>
         <dd>{formatRootfsSize(image.rootfsSizeBytes)}</dd>
 
-        <dt>상태</dt>
+        <dt>{t("Status", "상태")}</dt>
         <dd>
           {image.installed
-            ? "설치됨"
+            ? t("Installed", "설치됨")
             : packageJob?.status === "succeeded" || image.packageStaged
-              ? "패키지 준비됨"
-              : "미설치"}
+              ? t("Package ready", "패키지 준비됨")
+              : t("Not installed", "미설치")}
         </dd>
 
-        <dt>설명</dt>
+        <dt>{t("Description", "설명")}</dt>
         <dd>{image.description || "—"}</dd>
 
         {image.packageUrl && (
           <>
-            <dt>패키지 URL</dt>
+            <dt>{t("Package URL", "패키지 URL")}</dt>
             <dd>{image.packageUrl}</dd>
           </>
         )}
 
-        <dt>사용 중인 VM</dt>
+        <dt>{t("VMs using it", "사용 중인 VM")}</dt>
         <dd>
           {usedByError
             ? usedByError
             : usedByVms === null
-              ? "불러오는 중…"
+              ? t("Loading…", "불러오는 중…")
               : usedByVms.length === 0
-                ? "없음"
+                ? t("None", "없음")
                 : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
         </dd>
       </dl>
@@ -463,7 +474,7 @@ function ImageDetail({
           {bootstrapSession.status === "booting" || bootstrapSession.status === "running" ? (
             <InlineConsole vmId={bootstrapSession.vmId} />
           ) : (
-            <p className="inline-console-ended">빌더 VM이 정리되어 콘솔 연결이 종료되었습니다.</p>
+            <p className="inline-console-ended">{t("The builder VM was cleaned up, so its console connection ended.", "빌더 VM이 정리되어 콘솔 연결이 종료되었습니다.")}</p>
           )}
           <pre className="detail-log">{bootstrapSession.log}</pre>
         </>
@@ -472,7 +483,7 @@ function ImageDetail({
       {install && install.alias === image.alias && install.status !== "idle" && (
         <>
           <div className="log-export-bar">
-            <span className="log-export-bar-label">이미지 가져오기 로그 — {install.alias}</span>
+            <span className="log-export-bar-label">{t("Image import log", "이미지 가져오기 로그")} — {install.alias}</span>
             <LogExportActions
               text={install.log}
               filename={logDownloadFilename("m2image-import", install.alias)}
@@ -493,6 +504,7 @@ function ImageDetail({
  * panel (`ImageDetail`) rather than separate panels.
  */
 export default function Images() {
+  const { t } = useI18n();
   const [images, setImages] = useState<ImageResponse[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [busyAlias, setBusyAlias] = useState<string | null>(null);
@@ -802,7 +814,7 @@ export default function Images() {
   };
 
   if (images === null && !listError) {
-    return <div className="empty">이미지 목록 불러오는 중…</div>;
+    return <div className="empty">{t("Loading image catalog…", "이미지 목록 불러오는 중…")}</div>;
   }
 
   return (
@@ -814,19 +826,19 @@ export default function Images() {
         <table className="vm-table image-table">
           <thead>
             <tr>
-              <th>이미지</th>
-              <th>크기</th>
-              <th>상태</th>
+              <th>{t("Image", "이미지")}</th>
+              <th>{t("Size", "크기")}</th>
+              <th>{t("Status", "상태")}</th>
             </tr>
           </thead>
           <tbody>
             {(images ?? []).map((image) => {
               const job = packageJobs[image.alias];
               const statusLabel = image.installed
-                ? "설치됨"
+                ? t("Installed", "설치됨")
                 : job?.status === "succeeded" || image.packageStaged
-                  ? "패키지 준비됨"
-                  : "미설치";
+                  ? t("Package ready", "패키지 준비됨")
+                  : t("Not installed", "미설치");
               // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
               // fall back to plain alias text with no logo for those.
               const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
@@ -848,6 +860,7 @@ export default function Images() {
                     <span onClick={(event) => event.stopPropagation()}>
                       <OptionsMenu
                         items={computeMenuItems(image, {
+                          t,
                           packageJob: job,
                           busyAlias,
                           bootstrapSession,
