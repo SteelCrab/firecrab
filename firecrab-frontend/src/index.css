@@ -442,6 +442,12 @@ a.btn {
   color: var(--dim);
   cursor: default;
 }
+.options-menu-item.danger {
+  color: var(--error);
+}
+.options-menu-item.danger:disabled {
+  color: var(--dim);
+}
 
 table.vm-table {
   width: 100%;
@@ -506,6 +512,14 @@ table.vm-table {
   animation: pulse 1s ease-in-out infinite;
 }
 @keyframes pulse { 50% { opacity: 0.25; } }
+
+/* M2Image 표의 상태 셀 — 뱃지와 "⋯" 옵션 메뉴 트리거를 한 줄에 나란히. */
+table.image-table .state-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
 
 /* 시작 파이프라인 — CI 빌드 로그처럼 단계별 소요 시간을 가로로 (task-vm-startup-timeline) */
 .pipeline {

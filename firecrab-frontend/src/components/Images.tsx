@@ -180,7 +180,7 @@ function formatElapsed(millis: number): string {
 function OptionsMenu({
   items,
 }: {
-  items: { label: string; onClick: () => void; disabled: boolean }[];
+  items: { label: string; onClick: () => void; disabled: boolean; danger?: boolean }[];
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -212,7 +212,7 @@ function OptionsMenu({
             <li key={index}>
               <button
                 type="button"
-                className="options-menu-item"
+                className={`options-menu-item${item.danger ? " danger" : ""}`}
                 disabled={item.disabled}
                 onClick={() => {
                   setOpen(false);
@@ -233,39 +233,39 @@ function OptionsMenu({
  * 선택된 이미지 하나의 상세 정보 + 액션. 표 아래 인라인으로 열리며,
  * MicroNetworks/MicroStorages의 행 클릭 → 상세 패턴과 동일하다.
  */
-function ImageDetail({
-  image,
-  usedByVms,
-  usedByError,
-  packageJob,
-  busyAlias,
-  install,
-  onInstallStaged,
-  onFetchPackage,
-  onDelete,
-  bootstrapSession,
-  bootstrapStartingAlias,
-  bootstrapError,
-  onStartBootstrap,
-  onCancelBootstrap,
-  onDeleteStagedPackage,
-}: {
-  image: ImageResponse;
-  usedByVms: VmResponse[] | null;
-  usedByError: string | null;
-  packageJob: ImageInstallResponse | undefined;
-  busyAlias: string | null;
-  install: ImageInstallResponse | null;
-  onInstallStaged: (alias: string) => Promise<void>;
-  onFetchPackage: (alias: string) => Promise<void>;
-  onDelete: (alias: string) => Promise<void>;
-  bootstrapSession: BootstrapResponse | null;
-  bootstrapStartingAlias: string | null;
-  bootstrapError: string | null;
-  onStartBootstrap: (alias: string) => Promise<void>;
-  onCancelBootstrap: (bootstrapId: string) => Promise<void>;
-  onDeleteStagedPackage: (alias: string) => Promise<void>;
-}) {
+/**
+ * Builds the "⋯" menu's 4 items for one image — shared by the always-visible
+ * per-row trigger (table) and, indirectly, by whichever row is expanded
+ * (`ImageDetail` no longer owns this: the menu now lives in the table row so
+ * it's visible without expanding anything).
+ */
+function computeMenuItems(
+  image: ImageResponse,
+  ctx: {
+    packageJob: ImageInstallResponse | undefined;
+    busyAlias: string | null;
+    bootstrapSession: BootstrapResponse | null;
+    bootstrapStartingAlias: string | null;
+    onInstallStaged: (alias: string) => Promise<void>;
+    onFetchPackage: (alias: string) => Promise<void>;
+    onDelete: (alias: string) => Promise<void>;
+    onStartBootstrap: (alias: string) => Promise<void>;
+    onCancelBootstrap: (bootstrapId: string) => Promise<void>;
+    onDeleteStagedPackage: (alias: string) => Promise<void>;
+  },
+): { label: string; onClick: () => void; disabled: boolean; danger?: boolean }[] {
+  const {
+    packageJob,
+    busyAlias,
+    bootstrapSession,
+    bootstrapStartingAlias,
+    onInstallStaged,
+    onFetchPackage,
+    onDelete,
+    onStartBootstrap,
+    onCancelBootstrap,
+    onDeleteStagedPackage,
+  } = ctx;
   const fetching = packageJob?.status === "running";
   // Bootstrapping this alias would spend ~30 minutes producing a package
   // the install step then refuses (`already_installed`) or that is already
@@ -319,11 +319,11 @@ function ImageDetail({
   // 시점(성공 종료)엔 이미 `bootstrapBusy`가 검사하는 비종결 상태를
   // 벗어난 뒤다.
   // Only safe to cancel while the builder VM is still booting or running the
-  // guest script — matches the same gate `InlineConsole` below uses. Once
-  // packaging starts, `package_bootstrap` (backend) is reading the builder
-  // VM's disk and stopping/deleting it mid-read can publish a truncated
-  // archive; `finalizing` means the package is already staged and safe, so
-  // there's nothing left to "cancel" in the sense this button means.
+  // guest script — matches the same gate `InlineConsole` in `ImageDetail`
+  // uses. Once packaging starts, `package_bootstrap` (backend) is reading
+  // the builder VM's disk and stopping/deleting it mid-read can publish a
+  // truncated archive; `finalizing` means the package is already staged and
+  // safe, so there's nothing left to "cancel" in the sense this button means.
   const canCancelBootstrap =
     bootstrapIsMine &&
     bootstrapSession !== null &&
@@ -346,35 +346,60 @@ function ImageDetail({
     }
   };
 
+  return [
+    {
+      label: bakeLabel,
+      disabled: blockedByStatus || bootstrapBusy,
+      onClick: () => void onStartBootstrap(image.alias),
+    },
+    {
+      label: installLabel,
+      disabled: installDisabled,
+      onClick: handleInstallClick,
+    },
+    {
+      label: deleteLabel,
+      disabled: !image.installed || busyAlias === image.alias,
+      onClick: () => void onDelete(image.alias),
+      danger: true,
+    },
+    {
+      label: bakeDeleteLabel,
+      disabled: !canCancelBootstrap && !canDeleteStagedPackage,
+      onClick: handleBakeDeleteClick,
+      danger: true,
+    },
+  ];
+}
+
+function ImageDetail({
+  image,
+  usedByVms,
+  usedByError,
+  packageJob,
+  install,
+  bootstrapSession,
+  bootstrapStartingAlias,
+  bootstrapError,
+}: {
+  image: ImageResponse;
+  usedByVms: VmResponse[] | null;
+  usedByError: string | null;
+  packageJob: ImageInstallResponse | undefined;
+  install: ImageInstallResponse | null;
+  bootstrapSession: BootstrapResponse | null;
+  bootstrapStartingAlias: string | null;
+  bootstrapError: string | null;
+}) {
+  // The "⋯" actions menu now lives in the table row (always visible, next to
+  // the 상태 badge) instead of here — this panel is info + in-progress
+  // output only. `bootstrapIsMine` still gates that output to the session
+  // that actually belongs to this alias.
+  const bootstrapIsMine =
+    bootstrapStartingAlias === image.alias || bootstrapSession?.alias === image.alias;
+
   return (
     <div className="subpanel">
-      <div className="subpanel-header">
-        <OptionsMenu
-          items={[
-            {
-              label: bakeLabel,
-              disabled: blockedByStatus || bootstrapBusy,
-              onClick: () => void onStartBootstrap(image.alias),
-            },
-            {
-              label: installLabel,
-              disabled: installDisabled,
-              onClick: handleInstallClick,
-            },
-            {
-              label: deleteLabel,
-              disabled: !image.installed || busyAlias === image.alias,
-              onClick: () => void onDelete(image.alias),
-            },
-            {
-              label: bakeDeleteLabel,
-              disabled: !canCancelBootstrap && !canDeleteStagedPackage,
-              onClick: handleBakeDeleteClick,
-            },
-          ]}
-        />
-      </div>
-
       <dl className="detail-fields mono">
         <dt>alias</dt>
         <dd>{image.alias}</dd>
@@ -816,8 +841,26 @@ export default function Images() {
                     {image.alias}
                   </td>
                   <td className="mono">{formatRootfsSize(image.rootfsSizeBytes)}</td>
-                  <td>
+                  <td className="state-cell">
                     <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
+                    {/* Stops the row's own onClick (select/deselect) from firing
+                        when the user is just opening or using this menu. */}
+                    <span onClick={(event) => event.stopPropagation()}>
+                      <OptionsMenu
+                        items={computeMenuItems(image, {
+                          packageJob: job,
+                          busyAlias,
+                          bootstrapSession,
+                          bootstrapStartingAlias,
+                          onInstallStaged: handleInstallStaged,
+                          onFetchPackage: handleFetchPackage,
+                          onDelete: handleDelete,
+                          onStartBootstrap: handleStartBootstrap,
+                          onCancelBootstrap: handleCancelBootstrap,
+                          onDeleteStagedPackage: handleDeleteStagedPackage,
+                        })}
+                      />
+                    </span>
                   </td>
                 </tr>
               );
@@ -830,17 +873,10 @@ export default function Images() {
             usedByVms={usedByVms}
             usedByError={usedByError}
             packageJob={packageJobs[selectedImage.alias]}
-            busyAlias={busyAlias}
             install={install}
-            onInstallStaged={handleInstallStaged}
-            onFetchPackage={handleFetchPackage}
-            onDelete={handleDelete}
             bootstrapSession={bootstrapSession}
             bootstrapStartingAlias={bootstrapStartingAlias}
             bootstrapError={bootstrapError}
-            onStartBootstrap={handleStartBootstrap}
-            onCancelBootstrap={handleCancelBootstrap}
-            onDeleteStagedPackage={handleDeleteStagedPackage}
           />
         )}
       </section>

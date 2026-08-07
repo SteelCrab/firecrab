@@ -2367,7 +2367,12 @@ function BootstrapPanel({ onFinished }: { onFinished: () => void }) {
 
   return (
     <section className="panel">
-      <h2 className="panel-title">배포판 부트스트랩</h2>
+      <h2
+        className="panel-title"
+        title="공식 배포판을 처음부터 준비할 때 보통 docker나 sudo가 필요한데, 여기서는 그 대신 이미 있는 microVM 빌더를 재사용합니다 — 게스트 안에서는 이미 진짜 root라 별도 컨테이너나 권한 상승 없이 안전하게 처리됩니다."
+      >
+        배포판 부트스트랩
+      </h2>
       {error && <div className="field-error">{error}</div>}
       <div className="package-row">
         {(["alpine-3.24", "ubuntu-26.04", "rocky-9"] as const).map((alias) => (
@@ -2392,6 +2397,8 @@ function BootstrapPanel({ onFinished }: { onFinished: () => void }) {
   );
 }
 ```
+
+The panel title's `title` attribute is the browser's native hover tooltip (no extra CSS/JS needed) — it answers "왜 docker나 sudo 없이 microVM으로 부트스트랩하는가" right where the operator would ask it, echoing the design doc's own "확인된 사실"/"아키텍처" rationale in one hover-length sentence rather than requiring a doc lookup.
 
 In the `Images` component's returned JSX, render `<BootstrapPanel onFinished={() => void refreshList()} />` — place it near where the existing "+ 새 이미지 빌드" control lives, since both are "start something new" affordances on this same screen.
 
