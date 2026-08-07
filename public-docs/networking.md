@@ -1,0 +1,93 @@
+# Networking
+
+A MicroNetwork is a named IPv4 subnet.
+It gives VMs a bridge, DHCP, NAT, and firewall policy.
+
+## Create
+
+```sh
+curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "lab",
+    "subnetCidr": "172.31.0.0/24",
+    "internetEnabled": true
+  }'
+```
+
+The gateway is the first usable address.
+CIDRs must not overlap.
+
+Choose a private range that does not conflict with host routes.
+
+## Attach a VM
+
+Pass the network UUID as `microNetworkId` when creating a VM.
+The field is required.
+
+Each running VM gets a stored IPv4 and MAC lease.
+Its TAP interface is attached to the network bridge.
+
+## Internet policy
+
+The network field `internetEnabled` controls NAT for the subnet.
+
+```sh
+curl -s -X PATCH http://127.0.0.1:3000/api/micro-networks/<id> \
+  -H 'Content-Type: application/json' \
+  -d '{"internetEnabled":false}'
+```
+
+The VM field `egressPolicy` controls one VM.
+Its values are `internet` and `isolated`.
+
+Both settings must allow internet traffic.
+DHCP and gateway DNS remain available to isolated VMs.
+
+## Host objects
+
+MicroNetwork bridge names start with `mnb`.
+VM TAP names start with `fct`.
+
+```sh
+ip -br link show type bridge
+ip -br addr
+sudo nft list table inet firecrab
+```
+
+The helper runs dnsmasq for DHCP.
+It uses nftables for NAT, isolation, and anti-spoofing.
+
+Traffic between different MicroNetworks is blocked.
+
+## Inspect
+
+```sh
+curl -s http://127.0.0.1:3000/api/micro-networks
+curl -s http://127.0.0.1:3000/api/micro-networks/<id>
+```
+
+The detail response shows address use, bridge state, NAT, policy, and member VMs.
+
+## Delete
+
+```sh
+curl -i -X DELETE http://127.0.0.1:3000/api/micro-networks/<id>
+```
+
+Deletion returns `409` while a VM belongs to the network.
+
+## Recovery
+
+SQLite is the source of truth.
+The services recreate missing runtime network state after restart.
+
+Do not edit firecrab nftables rules by hand.
+Reconciliation can replace manual changes.
+
+## Related
+
+- [Architecture](architecture.md)
+- [API](api.md)
+- [Operations](operations.md)
+- [Troubleshooting](troubleshooting.md)
