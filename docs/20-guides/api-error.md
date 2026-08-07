@@ -1,54 +1,7 @@
----
-tags:
-  - firecrab
-  - guide
-  - api
-updated: 2026-07-22
----
+# API errors
 
-# API 에러
-
-모든 에러는 동일한 JSON envelope로 반환된다. `error.requestId`는 응답의 `X-Request-Id` 헤더와 동일한 값이다.
-
-## 응답 형식
-
-```json
-{
-  "error": {
-    "code": "validation_failed",
-    "message": "request validation failed",
-    "fields": { "cpu": "must be between 1 and 32" },
-    "requestId": "<uuid>"
-  }
-}
-```
-
-- `fields`는 필드 검증 실패 시에만 포함됨
-- DB 경로, 내부 오류 상세 등은 응답에 노출하지 않음
-
-## 에러 코드
-
-| code | status | 설명 |
-| --- | --- | --- |
-| `validation_failed` | 400 | 요청 필드 검증 실패 (`fields`에 상세 사유 포함) |
-| `invalid_json` | 400 | JSON body가 아니거나 파싱 실패 |
-| `unsupported_media_type` | 415 | `Content-Type`이 `application/json`이 아님 |
-| `request_too_large` | 413 | 요청 바디가 64 KiB 초과 |
-| `forbidden_origin` | 403 | 허용되지 않은 Origin |
-| `too_many_requests` | 429 | 동시 요청 한도(128) 초과 |
-| `request_timeout` | 504 | 처리 시간 10초 초과 |
-| `not_found` | 404 | 정의되지 않은 라우트 |
-| `internal_error` | 500 | 서버 내부 오류 (저장 실패 포함 — 실패한 VM은 메모리에도 반영되지 않음) |
-
-## 예시 — 지원하지 않는 템플릿
-
-```sh
-curl -X POST http://localhost:3000/api/vms \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"bad-vm","template":"not-supported","cpu":1,"ram":512}'
-```
-
-응답 (400 Bad Request):
+Every API error uses the same JSON shape.
+The request ID also appears in the `X-Request-Id` response header.
 
 ```json
 {
@@ -56,9 +9,40 @@ curl -X POST http://localhost:3000/api/vms \
     "code": "validation_failed",
     "message": "request validation failed",
     "fields": {
-      "template": "is not supported"
+      "cpu": "must be between 1 and 32"
     },
     "requestId": "<uuid>"
   }
 }
 ```
+
+`fields` is empty when the error does not belong to one input field.
+Internal paths and private error details are not returned.
+
+## Common codes
+
+| Code | Status | Meaning |
+| --- | --- | --- |
+| `validation_failed` | 400 | One or more fields are invalid |
+| `invalid_json` | 400 | The body is not one valid JSON object |
+| `forbidden_origin` | 403 | The browser origin is not allowed |
+| `not_found` | 404 | The resource or route does not exist |
+| `invalid_state` | 409 | The VM state blocks the operation |
+| `in_use` | 409 | Another resource still depends on this resource |
+| `vm_not_running` | 409 | The VM has no active console |
+| `unsupported_media_type` | 415 | The content type is not JSON |
+| `request_too_large` | 413 | The body is larger than 64 KiB |
+| `too_many_requests` | 429 | The request concurrency limit was reached |
+| `internal_error` | 500 | The server failed without exposing details |
+| `unavailable` | 503 | A required service or setting is missing |
+| `request_timeout` | 504 | REST processing took more than 10 seconds |
+
+Image jobs also use specific `409` codes.
+Examples include `already_installed`, `package_required`, and `install_in_progress`.
+
+## Debug an error
+
+1. Copy the `requestId` from the response.
+2. Find the same ID in the `firecrab-api` log.
+3. Fix field errors before retrying.
+4. Read [troubleshooting](troubleshooting.md) for runtime failures.

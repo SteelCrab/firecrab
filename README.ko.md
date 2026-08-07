@@ -175,8 +175,8 @@ cargo test --workspace
 
 ## 문서
 
-한국어 문서 볼트 [`docs/`](docs/HOME.md)에는 아키텍처, 가이드, API 계약, 검증 절차, 버그
-기록이 있으며 Obsidian 볼트로 바로 열 수 있습니다.
+영문 기술 문서 [`docs/`](docs/README.md)에는 아키텍처, 설치, 운영, API 계약과 문제 해결
+가이드가 정리되어 있습니다.
 
 ## 라이선스
 

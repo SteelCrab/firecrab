@@ -1,36 +1,17 @@
----
-tags:
-  - firecrab
-status: 미완료
-scope: N주차
-updated: YYYY-MM-DD
----
+# Task title
 
-# 제목
+## Goal
 
-> [!summary] 한 줄 요약
-> 무엇을 왜 하는지 2~3줄.
+State the result in one sentence.
 
-## 왜
+## Work
 
-- 지금 어떤 상태라서 문제인가
-- 안 하면 무엇이 막히나
+- List the implementation steps.
 
-## AWS로 비유하면
+## Acceptance criteria
 
-| firecrab | AWS 대응 |
-|---|---|
-|  |  |
+- List observable results.
 
-## 작업
+## References
 
-- [ ] 
-- [ ] 
-
-## 완료 기준
-
-- 무엇이 관측되면 끝난 것인가(테스트로 확인 가능한 형태로)
-
-## 참고
-
-- 테스트 절차는 `40-tests/`의 해당 문서로 링크 (플레이스홀더를 링크로 두면 링크 체커가 잡는다)
+- Add relative links to source and design documents.

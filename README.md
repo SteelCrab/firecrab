@@ -184,9 +184,8 @@ More development notes and browser workflow details are in the [web dashboard gu
 
 ## Documentation
 
-The Korean documentation vault in [`docs/`](docs/HOME.md) contains the architecture,
-guides, API contract, verification procedures, and bug records. It can also be opened
-directly as an Obsidian vault.
+The English technical documentation in [`docs/`](docs/README.md) covers architecture,
+installation, operations, API contracts, and troubleshooting.
 
 ## License
 

@@ -1,142 +1,90 @@
----
-tags:
-  - firecrab
-  - guide
-updated: 2026-07-22
----
+# Network helper
 
-# firecrab-net-helper
+`firecrab-net-helper` performs privileged host network operations.
+The API stays unprivileged and talks to the helper through a Unix socket.
 
-`firecrab-net-helper`는 bridge, TAP, firewall처럼 host 네트워크 권한이 필요한 작업을 대신 수행하는 작은 helper 데몬이다.
+## Responsibilities
 
-API 서버가 직접 `CAP_NET_ADMIN` 권한을 가지지 않도록 분리하는 것이 목적이다. API 서버는 비특권 프로세스로 실행되고, 네트워크 변경은 정해진 protocol을 통해 helper에게만 요청한다.
+The helper can:
 
-```text
-firecrab-api
-  비특권 프로세스
-        |
-        | Unix domain socket
-        | length-prefixed JSON request
-        v
-firecrab-net-helper
-  CAP_NET_ADMIN 보유
-        |
-        +-- bridge / TAP 설정
-        +-- nftables firewall 설정
-```
+- Create and remove MicroNetwork bridges.
+- Create and remove VM TAP interfaces.
+- Apply nftables NAT, isolation, and anti-spoofing rules.
+- Run and reload dnsmasq DHCP state.
+- Enable IPv4 forwarding.
 
-## 왜 분리하나
+The helper does not manage VM records or Firecracker processes.
 
-네트워크 설정에는 높은 권한이 필요하다. 이 권한을 API 서버 전체에 주면 API 서버의 버그나 취약점이 host 네트워크 권한으로 이어질 수 있다.
+## Trust boundary
 
-helper 방식에서는 API 서버가 할 수 있는 일을 protocol에 정의된 작업으로 제한한다. 예를 들어 API 서버가 임의 shell command, 임의 interface 이름, 임의 nftables rule을 helper에게 전달할 수 없다.
+The protocol accepts typed UUIDs, IP addresses, and policy IDs.
+The helper derives bridge, TAP, and hostname values itself.
 
-## 현재 상태
+The socket permission is not the only check.
+The helper also checks the peer UID with `SO_PEERCRED`.
 
-현재 helper는 protocol 경계와 권한 확인까지만 구현되어 있다.
+## Configuration
 
-- 소켓 연결 수락
-- peer UID 확인
-- length-prefixed JSON frame 읽기/쓰기
-- protocol version 확인
-- 허용된 `NetworkRequest`만 파싱
-- 아직 실제 bridge/TAP/firewall 작업은 미구현
-
-그래서 정상 요청을 보내도 현재 응답은 `unsupported_operation`이다. 이것은 지금 단계에서는 정상 동작이다.
-
-## Protocol
-
-요청은 `firecrab-helper-protocol` crate의 `NetworkRequest` enum으로 제한된다.
-
-허용되는 작업:
-
-- `ensure_bridge`
-- `ensure_firewall`
-- `create_tap`
-- `delete_tap`
-- `apply_vm_policy`
-- `remove_vm_policy`
-
-frame 형식:
-
-```text
-u32 big-endian length + JSON payload
-```
-
-주요 규칙:
-
-- 최대 frame 크기는 64 KiB
-- malformed JSON은 응답 없이 연결 종료
-- protocol version이 다르면 `unsupported_version` 응답 후 연결 종료
-- 인증되지 않은 UID는 응답 없이 연결 종료
-- 동시 연결은 최대 16개
-- 요청 timeout은 10초
-
-## 환경 변수
-
-| 변수 | 기본값 | 설명 |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `FIRECRAB_NET_HELPER_SOCK` | `/run/firecrab/net-helper.sock` | helper Unix socket 경로 |
-| `FIRECRAB_NET_HELPER_ALLOWED_UID` | 없음 | 추가로 허용할 API 서버 UID |
+| `FIRECRAB_NET_HELPER_SOCK` | `/run/firecrab/net-helper.sock` | Unix socket path |
+| `FIRECRAB_NET_HELPER_ALLOWED_UID` | Helper UID only | Extra API service UID |
+| `FIRECRAB_BRIDGE_MTU` | Detected uplink MTU | MTU for firecrab bridges |
 
-## 개발 실행
+The API and helper must use the same socket path.
 
-개발 중에는 `/tmp/firecrab-net.sock`을 사용하면 root 권한 없이 protocol 왕복을 확인하기 쉽다.
+## Development run
+
+Use the provided script for local work.
 
 ```sh
-FIRECRAB_NET_HELPER_SOCK=/tmp/firecrab-net.sock cargo run -p firecrab-net-helper
+./scripts/dev-net-helper.sh
 ```
 
-정상 실행되면 다음과 비슷하게 출력된다.
+Or build and run the helper directly.
 
-```text
-[INFO] net-helper listening on /tmp/firecrab-net.sock
+```sh
+cargo build -p firecrab-net-helper
+sudo -u root -g "$(id -gn)" \
+  FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
+  ./target/debug/firecrab-net-helper
 ```
 
-## systemd 배포 예시
+Start the API from another terminal.
 
-```ini
-# /etc/systemd/system/firecrab-net-helper.service
-[Unit]
-Description=Firecrab privileged network helper
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/firecrab-net-helper
-Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=<firecrab-api service UID>
-User=firecrab-net
-Group=firecrab
-AmbientCapabilities=CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-PrivateTmp=yes
-RuntimeDirectory=firecrab
-RuntimeDirectoryMode=0750
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
+```sh
+cargo run -p firecrab-api
 ```
 
-배포 시 주의할 점:
+## Installed service
 
-- helper 실행 파일은 일반 사용자가 수정할 수 없어야 한다.
-- socket은 helper가 `0660` 권한으로 생성한다.
-- API 서비스 계정을 `firecrab` 그룹에 넣어 socket 접근을 허용한다.
-- 최종 인증은 group 권한이 아니라 `SO_PEERCRED` UID 검사로 한다.
-- API와 helper는 같은 protocol version으로 함께 배포해야 한다.
+`install.sh` installs two systemd units.
+It configures the API user as an allowed helper peer.
 
-## API 연동
+```sh
+systemctl status firecrab-net-helper firecrab-api
+ls -l /run/firecrab/net-helper.sock
+journalctl -u firecrab-net-helper -f
+```
 
-API 쪽 클라이언트는 `firecrab-api/src/network.rs`의 `NetworkClient`다.
+Start the helper before the API.
+VM start fails when the helper socket is unavailable.
 
-현재 동작:
+## Protocol operations
 
-- 호출마다 helper socket에 연결
-- request마다 UUID `request_id` 생성
-- 응답의 `request_id`가 요청과 같은지 확인
-- timeout은 5초
+The current protocol includes these operations:
 
-VM start/stop 흐름에서 실제 TAP 생성과 firewall 정책 적용은 이후 네트워크 자동화 task에서 연결한다.
+- Ensure or remove a MicroNetwork bridge.
+- Rebuild the owned firewall rules.
+- Create or delete a TAP interface.
+- Apply or remove one VM policy.
+- Replace the full DHCP lease snapshot.
+
+Requests and responses use length-prefixed JSON frames.
+The protocol has an explicit version.
+
+## Related documents
+
+- [Architecture](../10-overview/architecture.md)
+- [MicroNetwork](explicit-micro-network.md)
+- [Troubleshooting](troubleshooting.md)

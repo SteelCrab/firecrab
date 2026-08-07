@@ -166,8 +166,7 @@ cargo test --workspace
 
 ## 文档
 
-韩文文档库 [`docs/`](docs/HOME.md) 包含架构、指南、API 合约、验证步骤和缺陷记录，也可直接作为
-Obsidian 库打开。
+英文技术文档 [`docs/`](docs/README.md) 包含架构、安装、运维、API 合约和故障排查指南。
 
 ## 许可证
 

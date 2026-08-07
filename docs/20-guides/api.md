@@ -1,284 +1,182 @@
----
-tags:
-  - firecrab
-  - guide
-updated: 2026-07-31
----
+# REST API
 
-# API
+`firecrab-api` manages images, networks, storage, and microVMs.
+It listens on `127.0.0.1:3000` by default.
 
-`firecrab-api`는 MicroVM 관리를 위한 REST API 서버
+## Run the API
 
-## 실행
+Run it from the repository root.
+The default data paths use the current working directory.
 
 ```sh
-cd firecrab-api
-cargo run
+cargo run -p firecrab-api
 ```
 
-`127.0.0.1:3000` 에서 HTTP 서버가 시작 (기본값은 loopback 바인딩, 인증/TLS 없이도 허용됨)
-
-모든 요청(method/path/status/소요시간/request_id)과 VM lifecycle 이벤트가 stdout에 로그로 출력된다. 로그 레벨은 `RUST_LOG`로 조절 (기본 `firecrab_api=info`):
+Set a more detailed log level when needed.
 
 ```sh
-RUST_LOG=firecrab_api=debug cargo run
+RUST_LOG=firecrab_api=debug cargo run -p firecrab-api
 ```
 
-### 환경 변수
+## Common rules
 
-| 변수 | 기본값 | 설명 |
+- JSON requests must use `Content-Type: application/json`.
+- A request body can be at most 64 KiB.
+- Every response has an `X-Request-Id` header.
+- REST requests have a 10 second server deadline.
+- At most 128 REST requests run at the same time.
+- Unknown `/api` and `/ws` paths return a JSON error.
+
+See [API errors](api-error.md) for the error body.
+
+## Configuration
+
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `FIRECRAB_BIND_ADDR` | `127.0.0.1:3000` | 서버 바인드 주소. loopback이 아닌 주소는 `FIRECRAB_AUTHENTICATION_ENABLED`와 `FIRECRAB_TLS_ENABLED`가 모두 켜져 있어야 허용됨 |
-| `FIRECRAB_AUTHENTICATION_ENABLED` | (없음) | `1`/`true`/`yes`면 활성화 |
-| `FIRECRAB_TLS_ENABLED` | (없음) | `1`/`true`/`yes`면 활성화 |
-| `FIRECRAB_ENV` | (없음) | `production`이면 `FIRECRAB_ALLOWED_ORIGINS` 기본값이 빈 값(=CORS 전체 차단)이 됨 |
-| `FIRECRAB_ALLOWED_ORIGINS` | `http://localhost:8080` (비-production) | 콤마로 구분된 허용 Origin 목록. CORS 및 `Origin` 헤더 검사에 사용 |
-| `FIRECRAB_IMAGE_ROOT` | `../images` (crate 기준 상대경로) | 템플릿 커널/rootfs 이미지가 위치한 루트 디렉터리 |
-| `FIRECRAB_IMAGE_BASE_URL` | (없음) | M2Image 패키지 베이스. `{base}/{alias}.tar.zst`를 **패키지 설치** 단계에서 내려받는다. 미설정·빈 값/`none`/`-`면 package API가 503. 패키징: `scripts/package-m2images.sh` |
-| `FIRECRAB_FIRECRACKER_BIN` | `firecracker` (PATH 탐색) | VM 시작 시 실행할 Firecracker 바이너리 경로 |
-| `FIRECRAB_STATIC_ROOT` | (없음, 설치 시 유닛이 지정 — [install.md](install.md)) | 대시보드 빌드 산출물(`dist/`) 경로. 지정하면 API가 직접 서빙하고 없는 경로는 `index.html`로 폴백. `index.html`이 없으면 무시하고 경고만 남김 |
-| `FIRECRAB_STORAGE_ROOTS` | (없음 → `default=data`) | VM 디스크 저장 위치(env). `id=path` 쌍을 `:`로 구분. UI/API로 등록하는 [MicroStorage](micro-storage.md)와 함께 `GET /api/storage`에 합쳐진다 |
+| `FIRECRAB_BIND_ADDR` | `127.0.0.1:3000` | HTTP listen address |
+| `FIRECRAB_ALLOWED_ORIGINS` | `http://localhost:8080` in development | Allowed browser origins |
+| `FIRECRAB_ENV` | empty | `production` disables the development origin default |
+| `FIRECRAB_IMAGE_ROOT` | `images` resolved by the API | Kernel and rootfs directory |
+| `FIRECRAB_IMAGE_BASE_URL` | empty | Base URL for M2Image packages |
+| `FIRECRAB_FIRECRACKER_BIN` | `firecracker` from `PATH` | Firecracker executable |
+| `FIRECRAB_STATIC_ROOT` | empty | Built dashboard directory |
+| `FIRECRAB_STORAGE_ROOTS` | `default=data` | Colon-separated `id=path` storage roots |
+| `FIRECRAB_NET_HELPER_SOCK` | `/run/firecrab/net-helper.sock` | Network helper socket |
 
-### 네트워크 helper 상태
+A non-loopback bind requires both authentication and TLS flags.
+The current flags are `FIRECRAB_AUTHENTICATION_ENABLED` and `FIRECRAB_TLS_ENABLED`.
 
-`firecrab-api`에는 `firecrab-net-helper`와 통신하는 `NetworkClient`가 준비되어 있지만, 현재 VM start/stop 흐름에는 아직 연결되어 있지 않다. 따라서 지금 API 실행에는 network helper가 필수 조건이 아니다.
+## VM endpoints
 
-- helper protocol: [net-helper.md](net-helper.md)
-- helper socket 환경 변수: `FIRECRAB_NET_HELPER_SOCK` (helper와 API 클라이언트가 공유할 경로, 기본값 `/run/firecrab/net-helper.sock`)
-- 실제 bridge/TAP/firewall 자동화는 TAP/network task에서 start/stop 흐름에 연결 예정
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/vms` | List VMs |
+| `POST` | `/api/vms` | Create a VM record |
+| `GET` | `/api/vms/{id}` | Get one VM |
+| `PUT` | `/api/vms/{id}` | Update inactive VM resources |
+| `DELETE` | `/api/vms/{id}` | Delete an inactive VM and its disk |
+| `POST` | `/api/vms/{id}/start` | Start a VM |
+| `POST` | `/api/vms/{id}/stop` | Stop a VM |
+| `GET` | `/api/vms/{id}/log` | Read the VM log |
+| `POST` | `/api/vms/{id}/packages` | Run a guest package action |
+| `PUT` | `/api/vms/{id}/storage` | Assign storage before a disk exists |
+| `GET` | `/ws/vms/{id}/console` | Open the serial console WebSocket |
 
-## 요청/응답 공통 사항
+### Create a VM
 
-- 요청 바디는 `application/json`만 허용하며 최대 64 KiB로 제한됨
-- 모든 응답에는 `X-Request-Id` 헤더가 포함됨 (에러 응답의 `error.requestId`와 동일한 값)
-- 동시 처리 가능한 요청 수는 128개로 제한되며, 초과 시 `429 Too Many Requests` 반환
-- 요청 처리 시간이 10초를 초과하면 `504 Gateway Timeout` 반환
-- 허용되지 않은 Origin에서의 요청은 `403 Forbidden` 반환
-
-에러 응답 형식과 코드는 [api-error.md](api-error.md) 참고.
-
-## 현재 API
-
-### 1) MicroVM 생성 — POST /api/vms
+Create a MicroNetwork before creating a VM.
+There is no hidden default subnet.
 
 ```sh
-curl -X POST http://localhost:3000/api/vms \
+NETWORK_ID=$(curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
   -H 'Content-Type: application/json' \
-  -d '{"name":"test-vm","template":"ubuntu-26.04","cpu":5,"ram":512}'
-```
-
-요청 필드 검증 규칙:
-
-| 필드 | 규칙 |
-| --- | --- |
-| `name` | 1~64자, ASCII 영숫자로 시작, 영숫자/`.`/`_`/`-`만 허용 |
-| `template` | 템플릿 레지스트리에 등록된 alias만 허용 (`ubuntu-26.04`) |
-| `cpu` | 1~32 (정수) |
-| `ram` | 128~32768 (MiB) |
-| `microNetworkId` | **필수.** `GET /api/micro-networks`의 id. 암시 기본 서브넷 없음 |
-| `storageRoot` | 선택. `GET /api/storage`의 id. 생략 시 첫 등록 root. 여유 공간 < `diskGb`면 거부 |
-| `diskGb` | 템플릿 rootfs 이상 ~ 500 GiB |
-
-응답 (201 Created):
-
-```json
-{
-  "id": "<uuid>",
-  "name": "test-vm",
-  "state": "created",
-  "template": "ubuntu-26.04",
-  "templateVersion": "ubuntu-26.04-v1",
-  "cpu": 5,
-  "ram": 512
-}
-```
-
-### 2) MicroVM 목록 조회 — GET /api/vms
-
-```sh
-curl http://localhost:3000/api/vms
-```
-
-모든 VM을 이름 오름차순(같은 이름은 id 순)으로 반환. pagination 없음.
-
-응답 (200 OK):
-
-```json
-[
-  {
-    "id": "<uuid>",
-    "name": "test-vm",
-    "state": "created",
-    "template": "ubuntu-26.04",
-    "templateVersion": "ubuntu-26.04-v1",
-    "cpu": 5,
-    "ram": 512
-  }
-]
-```
-
-VM이 없으면 `[]` 반환.
-
-### 3) MicroVM 상세 조회 — GET /api/vms/{id}
-
-생성 응답의 `id`를 그대로 사용해 조회한다. 생성 → id 추출 → 조회 흐름 예시:
-
-```sh
-VM_ID=$(curl -s -X POST http://localhost:3000/api/vms \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"test-vm","template":"ubuntu-26.04","cpu":5,"ram":512}' \
+  -d '{"name":"lab","subnetCidr":"172.30.0.0/24","internetEnabled":true}' \
   | jq -r '.id')
 
-curl http://localhost:3000/api/vms/$VM_ID
-```
-
-응답 (200 OK): 생성 응답과 동일한 형식
-
-```json
-{
-  "id": "<uuid>",
-  "name": "test-vm",
-  "state": "created",
-  "template": "ubuntu-26.04",
-  "templateVersion": "ubuntu-26.04-v1",
-  "cpu": 5,
-  "ram": 512
-}
-```
-
-- 없는 UUID: `404 not_found`
-- UUID 형식이 아닌 id: `400 validation_failed` (`fields.id`)
-
-```sh
-# 없는 UUID
-curl -i http://localhost:3000/api/vms/00000000-0000-0000-0000-000000000000
-
-# UUID 형식이 아닌 id
-curl -i http://localhost:3000/api/vms/not-a-uuid
-```
-
-### 4) MicroVM 시작 — POST /api/vms/{id}/start
-
-동기 처리: rootfs 준비(템플릿 복사) → Firecracker config 생성 → 프로세스 spawn → API socket readiness 확인 → `running` 저장.
-
-```sh
-curl -X POST http://localhost:3000/api/vms/$VM_ID/start
-```
-
-- 허용 상태: `created`/`stopped`/`error` → 성공 시 200 + `VmResponse` (`state: "running"`)
-- 그 외 상태: `409 invalid_state` (`fields.state`에 현재 상태)
-- 시작 실패(스폰 실패, readiness timeout 등): 상태를 `error`로 저장하고 `500` 반환, 프로세스 잔여물 없음
-- 재시작 시 기존 VM 디스크(`rootfs.ext4`)를 재사용해 데이터가 보존됨
-
-### 5) MicroVM 중지 — POST /api/vms/{id}/stop
-
-동기 처리: `stopping` 저장 → SIGTERM → 유예시간(5s) 초과 시 SIGKILL → `stopped` 저장.
-
-```sh
-curl -X POST http://localhost:3000/api/vms/$VM_ID/stop
-```
-
-- 허용 상태: `running` → 성공 시 200 + `VmResponse` (`state: "stopped"`)
-- 그 외 상태: `409 invalid_state`
-
-### 6) MicroVM 삭제 — DELETE /api/vms/{id}
-
-Hard delete: `data/vms/{id}` 디렉터리(디스크 포함)와 레코드를 제거.
-
-```sh
-curl -i -X DELETE http://localhost:3000/api/vms/$VM_ID
-```
-
-- `starting`/`running`/`stopping` 상태면 `409 invalid_state` — 먼저 stop 필요
-- 성공 시 `204 No Content`, 이후 조회는 404
-
-### VM 상태 lifecycle
-
-```
-created ──start──▶ starting ──▶ running ──stop──▶ stopping ──▶ stopped ──start──▶ …
-                      │            │                  │
-                      ▼            ▼(내부 종료)        ▼
-                    error        stopped/error      error
-```
-
-- Guest 내부 종료(poweroff 등)는 종료 감시가 자동 반영: 정상 종료 → `stopped`, 비정상 종료(crash, kill) → `error`
-- 서버 재시작 시 이전 실행이 남긴 `starting`/`running`/`stopping` 레코드는 `stopped`로 정리됨 (유령 running 방지)
-- 삭제는 `created`/`stopped`/`error`에서만 허용
-
-## 저장 위치 · MicroStorage
-
-상세 개념·블로그 톤 설명: [micro-storage.md](micro-storage.md).
-
-| API | 역할 |
-|---|---|
-| `GET /api/storage` | 선택 가능 root 통합 목록 (default/env + MicroStorage) |
-| `GET /api/storage/devices` | 마운트된 파티션 탐색 (등록 후보; 포맷/파티션 생성 없음) |
-| `GET/POST /api/micro-storages` | 풀 목록 / 등록 `{name,path}` |
-| `GET/DELETE /api/micro-storages/{id}` | 상세(VM 목록) / 삭제 (VM 있으면 409) |
-| `PUT /api/vms/{id}/storage` | 수동 재할당 `{storageRoot}` (비활성 + rootfs 없을 때만) |
-
-```sh
-curl -s http://localhost:3000/api/storage
-curl -s http://localhost:3000/api/storage/devices
-curl -s -X POST http://localhost:3000/api/micro-storages \
+curl -s -X POST http://127.0.0.1:3000/api/vms \
   -H 'Content-Type: application/json' \
-  -d '{"name":"disk2","path":"/mnt/disk2"}'
-curl -s -X PUT http://localhost:3000/api/vms/$VM_ID/storage \
-  -H 'Content-Type: application/json' \
-  -d '{"storageRoot":"<micro-storage-uuid>"}'
+  -d "{
+    \"name\": \"demo\",
+    \"template\": \"alpine-3.24\",
+    \"cpu\": 1,
+    \"ram\": 512,
+    \"diskGb\": 2,
+    \"microNetworkId\": \"$NETWORK_ID\",
+    \"egressPolicy\": \"internet\"
+  }"
 ```
 
-## VM 디렉터리
-
-VM별 런타임 파일은 `{storageRoot의 path}/vms/{id}/` 아래에 생성된다.
-env·MicroStorage 미사용 시 path는 `data` → 기존과 같이 `data/vms/{id}/`.
-
-| 파일 | 내용 |
+| Field | Rule |
 | --- | --- |
-| `rootfs.ext4` | 템플릿에서 복사된 VM 전용 writable 디스크 (stop 후에도 보존, delete 시 제거) |
-| `firecracker.json` | boot-source/drives/machine-config가 담긴 Firecracker 설정 (start마다 재생성) |
-| `firecracker.sock` | Firecracker API socket (프로세스 종료 시 제거) |
-| `console.log` | VM 부팅/콘솔 출력 (start마다 새로 씀) |
+| `name` | 1 to 64 safe name characters |
+| `template` | Installed image alias |
+| `cpu` | 1 to 32 |
+| `ram` | 128 to 32768 MiB and a power of two |
+| `diskGb` | At least the image size and at most 500 GiB |
+| `microNetworkId` | Existing MicroNetwork UUID |
+| `egressPolicy` | `internet` or `isolated` |
+| `storageRoot` | Optional ID from `GET /api/storage` |
 
-## 템플릿 레지스트리
+The response status is `201 Created`.
+The returned `id` is used by later operations.
 
-VM 생성 시 `template` alias는 `TemplateRegistry`(`firecrab-api/src/templates.rs`)를 통해 불변 버전으로 해석된다.
+### Start and stop
 
-- 커널/rootfs 이미지는 `FIRECRAB_IMAGE_ROOT` 아래에서만 열리며, `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | ...)`로 경로 탈출·심볼릭 링크를 차단
-- 레지스트리 로드 시 각 아티팩트의 SHA-256/디바이스/inode/크기를 기록해두고, VM 생성 시점에 재검증하여 파일이 변경되었으면 요청을 거부
-- VM 레코드에는 해석된 `template_version`과 커널/rootfs/boot-args의 SHA-256 해시가 함께 저장됨
-- `template_version`은 `<alias>-v<n>` 형식 (예: `ubuntu-26.04` → `ubuntu-26.04-v1`)
+```sh
+curl -s -X POST http://127.0.0.1:3000/api/vms/$VM_ID/start
+curl -s -X POST http://127.0.0.1:3000/api/vms/$VM_ID/stop
+```
 
-## M2Image 카탈로그 · 설치
+Start is allowed from `created`, `stopped`, or `error`.
+Stop is allowed from `running`.
 
-M2Image는 `FIRECRAB_IMAGE_BASE_URL`이 가리키는 베이스에서
-`{alias}.tar.zst`를 먼저 내려받아 구조를 확인한 뒤, 별도 이미지 설치에서
-그 로컬 패키지를 풀어 등록한다. 각 행의 `packageUrl`은 `{base}/{alias}.tar.zst`
-형태다. 준비된 로컬 패키지는 이미지 삭제 뒤에도 남아 재설치에 다시 쓸 수 있다 —
-`DELETE /api/images/{alias}/package`로 명시적으로 지우지 않는 한.
+Delete is allowed from `created`, `stopped`, or `error`.
+Delete removes the VM record and local disk files.
 
-| API | 역할 |
-|---|---|
-| `GET /api/images` | 알려진 템플릿 + `installed` + (설정 시) `packageUrl` |
-| `POST /api/images/{alias}/package` | `packageUrl` 비동기 다운로드 · 구조 검증 · 로컬 패키지 준비 (202) |
-| `GET /api/images/{alias}/package` | 패키지 설치 job 상태 · 단계별 로그 |
-| `DELETE /api/images/{alias}/package` | 스테이징만 되고 아직 설치 안 된 로컬 패키지 삭제 (진행 중 작업 있으면 409, 스테이징 안 됐으면 409) |
-| `POST /api/images/{alias}/install` | 준비된 로컬 패키지 해제 · 아티팩트 검증 · 핫 등록 (202) |
-| `GET /api/images/{alias}/install` | 이미지 설치 job 상태 · 진행 로그 |
-| `DELETE /api/images/{alias}` | 등록 해제 + orphan 파일 삭제 (사용 중 VM 있으면 409) |
+## VM states
 
-`FIRECRAB_IMAGE_BASE_URL`이 없으면 **패키지 설치**는 `503`이다. 로컬 패키지가
-없는 상태에서 이미지 설치를 호출하면 `409 package_required`를 반환한다. 패키지 형식·게시:
-`scripts/package-m2images.sh`, [install.md](install.md).
+```text
+created -> starting -> running -> stopping -> stopped
+              |           |          |
+              +-> error <-+----------+
+```
 
-## 데이터 저장
+An unexpected guest exit becomes `error`.
+A clean guest shutdown becomes `stopped`.
 
-VM 레코드는 실행 디렉터리 기준 `data/firecrab.db`(SQLite, WAL mode)의 `vms` 테이블에 저장되며, 서버 재시작 시 여기서 복원된다.
+## MicroNetwork endpoints
 
-- 저장 실패 시 해당 VM은 메모리에도 반영되지 않고 `500 internal_error`를 반환
-- 레거시 `data/vms.json`이 있으면 시작 시 1회 import 후 `vms.json.imported`로 이름을 바꿔 보관
-- 시작 시 손상된 `vms.json`은 빈 목록으로 무시되지 않고 서버가 원인과 함께 시작 실패
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/micro-networks` | List networks |
+| `POST` | `/api/micro-networks` | Create a network |
+| `GET` | `/api/micro-networks/{id}` | Get network details |
+| `PATCH` | `/api/micro-networks/{id}` | Change the internet policy |
+| `DELETE` | `/api/micro-networks/{id}` | Delete an unused network |
 
-## 브라우저 테스트 페이지
+See the [MicroNetwork guide](explicit-micro-network.md).
 
-`firecrab-frontend`로 분리되어 있다. [web.md](web.md) 참고.
+## Storage endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/storage` | List all selectable storage roots |
+| `GET` | `/api/storage/devices` | List mounted storage candidates |
+| `GET` | `/api/micro-storages` | List registered pools |
+| `POST` | `/api/micro-storages` | Register a mounted directory |
+| `GET` | `/api/micro-storages/{id}` | Get a pool and its VMs |
+| `DELETE` | `/api/micro-storages/{id}` | Delete an unused pool |
+
+See the [MicroStorage guide](micro-storage.md).
+
+## Image endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/images` | List known images |
+| `DELETE` | `/api/images/{alias}` | Remove an unused image |
+| `GET`, `POST` | `/api/images/{alias}/package` | Inspect or start package download |
+| `DELETE` | `/api/images/{alias}/package` | Remove a staged package |
+| `GET`, `POST` | `/api/images/{alias}/install` | Inspect or start image install |
+| `POST` | `/api/images/{alias}/bootstrap` | Start a builder VM |
+| `GET`, `DELETE` | `/api/images/bootstrap/{bootstrapId}` | Inspect or cancel bootstrap |
+
+Package and image work can return `202 Accepted`.
+Poll the matching `GET` endpoint for progress.
+
+See the [M2Image guide](m2image-builder.md).
+
+## Host endpoints
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/host` | Host health and capacity |
+| `GET` | `/api/network` | Host network information |
+
+## Data and files
+
+SQLite state is stored in `data/firecrab.db` by default.
+VM artifacts are stored below the selected storage root.
+
+The disk generation is durable across stop and start.
+Runtime configuration, sockets, and logs are created for each start.

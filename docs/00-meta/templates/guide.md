@@ -1,22 +1,26 @@
----
-tags:
-  - firecrab
-  - guide
-updated: YYYY-MM-DD
----
+# Guide title
 
-# 제목
+State what the guide helps the reader do.
 
-> [!summary] 한 줄 요약
-> 이 문서로 무엇을 할 수 있는지.
+## Requirements
 
-## 준비물
+- List required tools.
+- List required permissions.
 
-## 사용
+## Steps
 
 ```sh
+command
 ```
 
-## 동작
+Explain the expected result.
 
-## 파일
+## Checks
+
+```sh
+verification-command
+```
+
+## Related documents
+
+- Add relative links to related guides.

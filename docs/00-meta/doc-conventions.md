@@ -1,112 +1,58 @@
----
-tags:
-  - firecrab
-  - meta
-updated: 2026-07-30
----
+# Documentation style
 
-# 문서 규칙
+Write public technical documentation in clear English.
+Keep project records in their existing folders.
 
-> [!summary] 한 줄 요약
-> 폴더가 문서의 **유형**을, frontmatter가 **상태**를 정한다.
-> 링크는 상대 마크다운 링크만 쓴다 — GitHub에서도 읽혀야 하기 때문.
+## File layout
 
-## 폴더
+| Folder | Purpose |
+| --- | --- |
+| `10-overview` | Stable concepts and architecture |
+| `20-guides` | Installation and operation guides |
+| `30-tasks` | Implementation history |
+| `40-tests` | Detailed verification records |
+| `50-bugs` | Bug investigations |
+| `90-appendix` | Reference material |
 
-| 폴더 | 무엇이 들어가나 | 판단 기준 |
-|---|---|---|
-| `10-overview` | 아키텍처·용어·AWS 대응 | 기능이 바뀌어도 잘 안 변하는 설명 |
-| `20-guides` | 설치·API·대시보드·트러블슈팅 | "쓰는 법" |
-| `30-tasks` | 태스크 하나당 한 파일 | "무엇을 할 것인가" — 상태가 변함 |
-| `30-tasks/weeks` | 주차별 계획 | 순서와 이유 |
-| `40-tests` | 기능별 검증 절차 | "바꾼 게 맞는지 어떻게 확인하나" |
-| `50-bugs` | 겪은 버그의 조사 기록 | 원인을 못 찾아 헤맸던 것만 |
-| `90-appendix` | 원본 수동 절차 등 | 참고용, 유지보수 대상 아님 |
+Use English file names.
+Use lower-case kebab-case for new files.
 
-파일명은 영어, 본문은 한국어다. 코드 주석·커밋·PR은 영어이므로,
-코드에서 참조하는 문서 경로도 영어여야 한다.
+## Writing
 
-## frontmatter
+Put one sentence on each source line.
+Keep each paragraph between one and three sentences.
+Use short words when they are accurate.
+Explain a new term when it first appears.
+Move commands and data into fenced code blocks.
 
-```yaml
----
-tags:
-  - firecrab          # 전부 공통
-  - network           # 영역
-status: 미완료         # 30-tasks/ 에만
-scope: 4주차           # 30-tasks/ 에만
-updated: 2026-07-30
----
-```
+Do not use YAML frontmatter in public documents.
+Do not use Obsidian callouts, wiki links, or Dataview blocks.
 
-- `status`는 **넷뿐**이다 — `미완료` · `진행 중` · `완료` · `보류`.
-  Dataview가 이 값으로 묶으므로 자유 문구를 넣지 않는다.
-  덧붙일 말이 있으면 `caveat:` 필드나 본문 콜아웃으로 뺀다
-- `scope`는 `N주차`. 어느 주차에도 안 걸린 태스크는 `scope`를 생략하고 `status: 보류`
-- `updated`는 실제로 문서를 고친 날. 임의로 미래 날짜를 넣지 않는다
+## Links
 
-## 콜아웃
-
-네 가지만 쓴다. 늘어나면 의미가 흐려진다.
+Use relative Markdown links.
+Relative links work on GitHub and in local editors.
 
 ```markdown
-> [!summary] 한 줄 요약
-> 이 문서가 무엇인지 2~3줄. 모든 문서의 첫 블록.
-
-> [!note] 곁가지
-> 알면 좋지만 몰라도 되는 것.
-
-> [!important] 놓치면 안 되는 설계 결정
-> 신뢰 경계, 순서 의존성처럼 지키지 않으면 깨지는 것.
-
-> [!warning] 함정
-> 실제로 한 번 당한 것. 무엇이 어떻게 잘못되는지까지 쓴다.
+[MicroNetwork](../20-guides/explicit-micro-network.md)
 ```
 
-## 링크
-
-**상대 마크다운 링크만 쓴다.**
-
-```markdown
-[MicroNetwork](../30-tasks/task-micro-network.md)   ✅
-[[task-micro-network]]                              ❌
-```
-
-위키링크(`[[...]]`)는 GitHub에서 렌더링되지 않는다. 이 저장소는 README가 4개 언어로
-공개돼 있어 GitHub 가독성을 포기할 수 없다.
-
-Obsidian 설정에서 **"위키링크 사용"을 꺼두면** 자동완성이 마크다운 링크를 넣는다:
-`설정 → 파일 및 링크 → 위키링크 사용` 해제, `새 링크 형식`은 `상대 경로`.
-
-> [!important] 링크는 CI가 검사한다
-> `scripts/check-doc-links.py`가 문서 간 링크와, 코드·스크립트·README에 적힌
-> `docs/...` 경로를 전부 해석해 본다. 깨지면 CI가 실패한다.
-> 문서를 옮겼으면 이 스크립트를 돌려보고 커밋한다.
+Run the link checker after moving or editing documents.
 
 ```sh
 python3 scripts/check-doc-links.py
 ```
 
-## 문서 유형별 뼈대
+## Recommended sections
 
-템플릿: [task](templates/task.md) · [guide](templates/guide.md) ·
-[test](templates/test.md) · [bug](templates/bug.md)
+A guide should use these sections when they are useful:
 
-| 유형 | 절 |
-|---|---|
-| task | 요약 → 왜/개요 → AWS 대응 → 작업 → 완료 기준 → 참고 |
-| guide | 요약 → 준비물 → 사용 → 동작 → 파일 |
-| test | 요약 → 자동 테스트(개수 포함) → 확인 항목 → 수동 확인(세션 1/2/3) → 완료 기준 대조 |
-| bug | 증상 → 재현 → 원인 → 수정 → 회귀 방지 |
+1. Purpose
+2. Requirements
+3. Steps
+4. How it works
+5. Checks
+6. Troubleshooting
 
-## Obsidian 플러그인
-
-- **Dataview** (커뮤니티) — MOC의 자동 집계에 필요. 없으면 그 블록만 코드로 보인다
-- 그 외 필수 플러그인은 없다
-
-## 쓰지 않는 것
-
-- **위키링크** — 위 참고
-- **파일명 한글** — 코드가 참조하는 경로라서
-- **`type:` frontmatter** — 폴더가 이미 유형을 정한다. 필드를 하나 더 두면 어긋날 수 있다
-- **완료된 태스크 삭제** — 기록으로 남긴다. `status: 완료`로만 바꾼다
+A reference should lead with the most common fields or commands.
+Keep background information near the end.

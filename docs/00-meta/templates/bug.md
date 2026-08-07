@@ -1,27 +1,23 @@
----
-tags:
-  - firecrab
-  - bug
-updated: YYYY-MM-DD
----
+# Bug title
 
-# 증상을 그대로 제목으로
+## Symptoms
 
-> [!summary] 한 줄 요약
-> 무엇이 어떻게 잘못됐고, 원인은 무엇이었나.
+Describe what the operator sees.
 
-## 증상
+## Reproduction
 
-## 재현
+1. List the smallest known steps.
 
-## 조사 과정
+## Cause
 
-- 무엇을 의심했고 왜 아니었는지도 남긴다(다음 사람이 같은 길을 안 가도록)
+Explain the confirmed cause.
 
-## 원인
+## Fix
 
-## 수정
+Explain the change.
 
-## 회귀 방지
+## Regression check
 
-- 어떤 테스트가 이걸 다시 잡아주나
+```sh
+test-command
+```
