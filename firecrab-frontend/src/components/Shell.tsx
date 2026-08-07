@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { VIEWS } from "../navigation";
+import { VIEWS, viewLabel } from "../navigation";
 import type { ViewId } from "../navigation";
+import { useI18n } from "../i18n";
 
 interface ShellProps {
   view: ViewId;
@@ -14,6 +15,7 @@ interface ShellProps {
  * no breakpoint state to keep in sync with the stylesheet.
  */
 export default function Shell({ view, onSelectView, children }: ShellProps) {
+  const { locale, setLocale, t } = useI18n();
   return (
     <div className="shell">
       <header className="shell-header">
@@ -24,11 +26,24 @@ export default function Shell({ view, onSelectView, children }: ShellProps) {
             <span className="cursor">_</span>
           </h1>
         </div>
+        <label className="language-select">
+          <span className="sr-only">{t("Language", "언어")}</span>
+          <select
+            value={locale}
+            onChange={(event) => setLocale(event.target.value as "en" | "ko")}
+            aria-label={t("Language", "언어")}
+          >
+            <option value="en">English</option>
+            <option value="ko">한국어</option>
+          </select>
+        </label>
       </header>
       <div className="shell-body">
-        <nav className="shell-nav" aria-label="주요 메뉴">
+        <nav className="shell-nav" aria-label={t("Main navigation", "주요 메뉴")}>
           <ul>
-            {VIEWS.map((item) => (
+            {VIEWS.map((item) => {
+              const label = viewLabel(item, locale);
+              return (
               <li key={item.id}>
                 <button
                   type="button"
@@ -36,17 +51,18 @@ export default function Shell({ view, onSelectView, children }: ShellProps) {
                   aria-current={item.id === view ? "page" : undefined}
                   // The rail hides the label, so the accessible name has to
                   // come from here; `title` gives the same text on hover.
-                  aria-label={item.label}
-                  title={item.label}
+                  aria-label={label}
+                  title={label}
                   onClick={() => onSelectView(item.id)}
                 >
                   <span className="shell-nav-glyph" aria-hidden="true">
                     {item.glyph}
                   </span>
-                  <span className="shell-nav-label">{item.label}</span>
+                  <span className="shell-nav-label">{label}</span>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </nav>
         <main className="shell-content">{children}</main>

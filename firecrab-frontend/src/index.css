@@ -61,6 +61,27 @@ body {
 .shell-brand { position: relative; }
 .shell-brand .eyebrow { margin-bottom: 0.4rem; }
 .shell-brand .wordmark { margin-bottom: 0; }
+.language-select { position: relative; }
+.language-select select {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  padding: 0.48rem 1.8rem 0.48rem 0.65rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* 내비 폭은 여기서만 바꾼다 — 축소 단계마다 이 값 하나로 전환된다. */
 .shell-body {
@@ -1146,4 +1167,3 @@ table.image-table .image-package-url a:hover {
   font-size: 0.85rem;
   opacity: 0.7;
 }
-
