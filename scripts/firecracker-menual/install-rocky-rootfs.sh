@@ -264,11 +264,31 @@ done
 
 if [ -z "$ipv4" ]; then
     echo "FIRECRAB_NETWORK_FAILED no-ipv4-address"
-elif getent hosts example.com >/dev/null 2>&1; then
-    echo "FIRECRAB_NETWORK_READY $ipv4"
-else
-    echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
+    exit 0
 fi
+gw=$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')
+if [ -n "$gw" ] && [ ! -e /run/systemd/resolve/stub-resolv.conf ]; then
+    if [ -L /etc/resolv.conf ] || [ ! -s /etc/resolv.conf ]; then
+        rm -f /etc/resolv.conf
+        printf 'nameserver %s\n' "$gw" > /etc/resolv.conf
+    fi
+fi
+dns_ok() {
+    getent hosts example.com >/dev/null 2>&1 && return 0
+    if [ -n "$gw" ] && command -v dig >/dev/null 2>&1; then
+        ans=$(dig +short +time=2 +tries=1 @"$gw" example.com A 2>/dev/null || true)
+        [ -n "$ans" ] && return 0
+    fi
+    return 1
+}
+for _ in $(seq 1 15); do
+    if dns_ok; then
+        echo "FIRECRAB_NETWORK_READY $ipv4"
+        exit 0
+    fi
+    sleep 1
+done
+echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
 EOF_SENTINEL
 chmod 0755 "$staging/usr/local/sbin/firecrab-network-ready.sh"
 

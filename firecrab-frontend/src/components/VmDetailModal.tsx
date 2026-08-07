@@ -14,7 +14,6 @@ import {
   getVmLog,
   listMicroNetworks,
   listStorageRoots,
-  runPackageAction,
   updateVmResources,
 } from "../api/client";
 import { isEditableState } from "../model";
@@ -49,11 +48,6 @@ const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
 
 const POLL_MILLIS = 750;
 
-function formatCpuPercent(value: number): string {
-  const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
-  return `${rounded}%`;
-}
-
 interface VmDetailModalProps {
   vmId: string;
   vms: VmResponse[];
@@ -85,10 +79,6 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
   const [storageRoots, setStorageRoots] = useState<StorageRootResponse[]>([]);
-  const [installInput, setInstallInput] = useState("");
-  const [removeInput, setRemoveInput] = useState("");
-  const [packageBusy, setPackageBusy] = useState<"install" | "remove" | "update" | null>(null);
-  const [packageError, setPackageError] = useState<string | null>(null);
 
   // Only to resolve the VM's microNetworkId into a readable name/subnet; a
   // failed load just falls back to showing the raw id.
@@ -135,27 +125,6 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
       setSaveError(error as ApiClientError);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const runPackages = async (action: "install" | "remove" | "update", input?: string) => {
-    if (!vm) return;
-    const packages = input ? input.split(/\s+/).filter(Boolean) : [];
-    if (action !== "update" && packages.length === 0) {
-      setPackageError(t("Enter at least one package name.", "패키지 이름을 입력하세요."));
-      return;
-    }
-    setPackageBusy(action);
-    setPackageError(null);
-    try {
-      const updated = await runPackageAction(vm.id, action, packages);
-      setVm(updated);
-      if (action === "install") setInstallInput("");
-      if (action === "remove") setRemoveInput("");
-    } catch (error) {
-      setPackageError((error as Error).message);
-    } finally {
-      setPackageBusy(null);
     }
   };
 
@@ -264,22 +233,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     onChange={(event) => setEditCpu(event.target.value)}
                   />
                 ) : (
-                  <span className="detail-spec-pair">
-                    <span className="detail-spec-alloc">{vm.cpu}</span>
-                    {vm.state === "running" && (
-                      <span
-                        className="detail-spec-live"
-                        title={t(
-                          "Host process CPU % of one core",
-                          "호스트 프로세스 CPU (코어 1개 기준)",
-                        )}
-                      >
-                        {vm.cpuUsagePercent != null
-                          ? formatCpuPercent(vm.cpuUsagePercent)
-                          : "—"}
-                      </span>
-                    )}
-                  </span>
+                  vm.cpu
                 )}
               </dd>
               <dt>ram</dt>
@@ -287,22 +241,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                 {editing ? (
                   <RamStepper id="vm-edit-ram" value={editRam} onChange={setEditRam} />
                 ) : (
-                  <span className="detail-spec-pair">
-                    <span className="detail-spec-alloc">{vm.ram} MiB</span>
-                    {vm.state === "running" && (
-                      <span
-                        className="detail-spec-live"
-                        title={t(
-                          "Host Firecracker process RSS — not guest free RAM",
-                          "호스트 Firecracker 프로세스 RSS — 게스트 여유 메모리 아님",
-                        )}
-                      >
-                        {vm.memoryUsedMib != null
-                          ? `${vm.memoryUsedMib} MiB`
-                          : "—"}
-                      </span>
-                    )}
-                  </span>
+                  `${vm.ram} MiB`
                 )}
               </dd>
               <dt>disk</dt>
@@ -320,11 +259,6 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   `${vm.diskGb} GiB`
                 )}
               </dd>
-              {vm.state === "running" && (vm.usageHistory?.length ?? 0) > 0 && (
-                <dd className="detail-usage-charts">
-                  <UsageCharts history={vm.usageHistory ?? []} ramMib={vm.ram} />
-                </dd>
-              )}
               <dt>MicroNetwork</dt>
               <dd>{microNetworkLabel}</dd>
               <dt>MicroStorage</dt>
@@ -392,6 +326,22 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                 )}
               </div>
             )}
+            {vm.state === "running" && (
+              <section className="panel detail-usage-panel" aria-label={t("Resource usage", "리소스 관측")}>
+                <h2 className="panel-title">{t("Resource usage", "리소스 관측")}</h2>
+                {(vm.usageHistory?.length ?? 0) > 0 ? (
+                  <UsageCharts
+                    history={vm.usageHistory ?? []}
+                    ramMib={vm.ram}
+                    size="large"
+                  />
+                ) : (
+                  <p className="usage-charts-empty is-large">
+                    {t("Collecting samples…", "샘플 수집 중…")}
+                  </p>
+                )}
+              </section>
+            )}
             <PipelineStepper currentIndex={currentIndex} timeline={vm?.startupTimeline ?? []} />
             <div className="log-export-bar">
               <span className="log-export-bar-label">{t("Startup · console log", "시작 · 콘솔 로그")}</span>
@@ -404,63 +354,6 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
             <pre className="detail-log" ref={logRef}>
               {logText}
             </pre>
-            {vm && vm.state === "running" && (
-              <section className="panel">
-                <h2 className="panel-title">{t("Packages", "패키지")}</h2>
-                {packageError && <div className="field-error">{packageError}</div>}
-                <div className="package-row">
-                  <input
-                    type="text"
-                    placeholder={t("Packages to install (space-separated)", "설치할 패키지 (공백으로 구분)")}
-                    value={installInput}
-                    onChange={(event) => setInstallInput(event.target.value)}
-                    disabled={packageBusy !== null}
-                  />
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={packageBusy !== null || !installInput.trim()}
-                    onClick={() => void runPackages("install", installInput)}
-                  >
-                    {packageBusy === "install" ? t("Installing…", "설치 중…") : t("Install", "설치")}
-                  </button>
-                </div>
-                <div className="package-row">
-                  <input
-                    type="text"
-                    placeholder={t("Packages to remove (space-separated)", "삭제할 패키지 (공백으로 구분)")}
-                    value={removeInput}
-                    onChange={(event) => setRemoveInput(event.target.value)}
-                    disabled={packageBusy !== null}
-                  />
-                  <button
-                    type="button"
-                    className="btn danger"
-                    disabled={packageBusy !== null || !removeInput.trim()}
-                    onClick={() => void runPackages("remove", removeInput)}
-                  >
-                    {packageBusy === "remove" ? t("Removing…", "삭제 중…") : t("Remove", "삭제")}
-                  </button>
-                </div>
-                <div className="package-row">
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={packageBusy !== null}
-                    onClick={() => void runPackages("update")}
-                  >
-                    {packageBusy === "update" ? t("Updating…", "업데이트 중…") : t("Update all packages", "전체 패키지 업데이트")}
-                  </button>
-                </div>
-                {vm.packageUpdate && vm.packageUpdate.state !== "running" && (
-                  <pre className="detail-log">
-                    {vm.packageUpdate.state === "succeeded"
-                      ? vm.packageUpdate.outputTail
-                      : `${vm.packageUpdate.reason}\n${vm.packageUpdate.outputTail}`}
-                  </pre>
-                )}
-              </section>
-            )}
           </div>
         ) : (
           <div className="empty">{t("Loading…", "불러오는 중…")}</div>

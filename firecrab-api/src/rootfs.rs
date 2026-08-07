@@ -275,7 +275,100 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     for path in STRIP_PATHS {
         remove_from_image(rootfs, path);
     }
+    // Ubuntu templates historically enabled systemd-resolved's stub resolv.conf
+    // without installing the package, so getent always failed while dig@gateway
+    // worked. Rewrite the readiness script whenever the path already exists.
+    patch_network_ready_script(rootfs)?;
     Ok(())
+}
+
+/// Guest path for the Ubuntu/Rocky network readiness oneshot.
+const NETWORK_READY_SCRIPT_PATH: &str = "/usr/local/sbin/firecrab-network-ready.sh";
+
+/// Hardened readiness probe: wait for IPv4, repair a dangling resolved stub
+/// by pointing resolv.conf at the DHCP gateway, then accept either getent or
+/// dig@gateway success. See `public-docs/troubleshooting.md`.
+const NETWORK_READY_SCRIPT: &str = r#"#!/bin/sh
+set -eu
+
+ipv4=""
+for _ in $(seq 1 15); do
+  ipv4=$(ip -4 -o addr show scope global 2>/dev/null | \
+    awk '$2 != "lo" { split($4, a, "/"); print a[1]; exit }')
+  [ -n "$ipv4" ] && break
+  sleep 1
+done
+
+if [ -z "$ipv4" ]; then
+  echo "FIRECRAB_NETWORK_FAILED no-ipv4-address"
+  exit 0
+fi
+
+gw=$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')
+
+# Some images symlink resolv.conf to systemd-resolved's stub without shipping
+# the package — /run/systemd/resolve/stub-resolv.conf never appears.
+if [ -n "$gw" ] && [ ! -e /run/systemd/resolve/stub-resolv.conf ]; then
+  if [ -L /etc/resolv.conf ] || [ ! -s /etc/resolv.conf ]; then
+    rm -f /etc/resolv.conf
+    printf 'nameserver %s\n' "$gw" > /etc/resolv.conf
+  fi
+fi
+
+dns_ok() {
+  getent hosts example.com >/dev/null 2>&1 && return 0
+  if [ -n "$gw" ] && command -v dig >/dev/null 2>&1; then
+    ans=$(dig +short +time=2 +tries=1 @"$gw" example.com A 2>/dev/null || true)
+    [ -n "$ans" ] && return 0
+  fi
+  return 1
+}
+
+for _ in $(seq 1 15); do
+  if dns_ok; then
+    echo "FIRECRAB_NETWORK_READY $ipv4"
+    exit 0
+  fi
+  sleep 1
+done
+echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
+"#;
+
+/// Replaces the guest readiness script when the template already has one
+/// (Ubuntu/Rocky). Alpine uses OpenRC and is left alone.
+fn patch_network_ready_script(rootfs: &Path) -> Result<(), RootfsError> {
+    if !guest_path_exists(rootfs, NETWORK_READY_SCRIPT_PATH) {
+        return Ok(());
+    }
+    write_into_image(
+        rootfs,
+        NETWORK_READY_SCRIPT_PATH,
+        NETWORK_READY_SCRIPT.as_bytes(),
+    )?;
+    // debugfs `write` creates regular files as 0664; the oneshot unit
+    // invokes this path directly, so it must stay executable.
+    set_guest_file_mode(rootfs, NETWORK_READY_SCRIPT_PATH, "0100755");
+    Ok(())
+}
+
+/// Best-effort `chmod` inside the image. debugfs does not fail the host
+/// process when the field write is refused, so callers treat this as soft.
+fn set_guest_file_mode(rootfs: &Path, guest_path: &str, mode: &str) {
+    let _ = run_debugfs(rootfs, &format!("set_inode_field {guest_path} mode {mode}"));
+}
+
+fn guest_path_exists(rootfs: &Path, guest_path: &str) -> bool {
+    match run_debugfs(rootfs, &format!("stat {guest_path}")) {
+        Ok(output) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            !text.contains("File not found") && !text.to_ascii_lowercase().contains("doesn't exist")
+        }
+        Err(_) => false,
+    }
 }
 
 /// Recovers an ext4 journal before [`specialize_guest`] makes any

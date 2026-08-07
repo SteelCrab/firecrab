@@ -9,7 +9,6 @@ use uuid::Uuid;
 
 pub use firecrab_api_types::CreateVmRequest;
 pub use firecrab_api_types::EgressPolicy;
-pub use firecrab_api_types::PackageUpdateStatus;
 pub use firecrab_api_types::UpdateVmResourcesRequest;
 pub use firecrab_api_types::VmState;
 pub use firecrab_api_types::{StartupStep, StartupStepOutcome, StartupStepRun};
@@ -118,12 +117,6 @@ pub struct VmRecord {
     /// start, so there is no half-finished timeline worth persisting.
     #[serde(skip)]
     pub startup_timeline: Vec<StartupStepRun>,
-    /// Outcome of the most recent `packages/update` run, if any — never
-    /// persisted; a restart loses no state a fresh run can't reproduce, and
-    /// it's purely informational (unlike `state`, nothing else in the
-    /// lifecycle depends on it).
-    #[serde(skip)]
-    pub package_update: Option<PackageUpdateStatus>,
 }
 
 /// Matches the fixed rootfs template size that applied before disk capacity

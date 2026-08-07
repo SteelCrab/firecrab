@@ -198,54 +198,6 @@ pub struct StartupStepRun {
     pub detail: Option<String>,
 }
 
-/// What `POST /api/vms/{id}/packages` should do on the guest's console.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum PackageActionKind {
-    Install,
-    Remove,
-    Update,
-}
-
-/// Body of `POST /api/vms/{id}/packages`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct PackageAction {
-    pub action: PackageActionKind,
-    /// Required (non-empty) for `install`/`remove`; ignored for `update`.
-    #[serde(default)]
-    pub packages: Vec<String>,
-}
-
-/// Outcome of the most recent `POST /api/vms/{id}/packages` run for
-/// this VM — transient like `startup_step` (see
-/// `public-docs/api.md` and `public-docs/networking.md` for the
-/// console-sentinel pattern this reuses), not persisted across a restart.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    tag = "state"
-)]
-pub enum PackageUpdateStatus {
-    /// The update command is running on the guest's console; no verdict yet.
-    Running,
-    /// The update command completed with an exit code of `0`.
-    Succeeded {
-        /// Tail of the command's console output, for a quick look without
-        /// opening the terminal.
-        output_tail: String,
-    },
-    /// The update command completed with a non-zero exit code, or the
-    /// console closed/timed out before it could.
-    Failed {
-        /// Human-readable failure reason.
-        reason: String,
-        /// Tail of the command's console output, if any was captured.
-        output_tail: String,
-    },
-}
-
 /// A VM record as returned by the list/detail/create/update endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -270,9 +222,6 @@ pub struct VmResponse {
     pub startup_step: Option<StartupStep>,
     /// Outbound network posture.
     pub egress_policy: EgressPolicy,
-    /// Status of the most recent (or in-progress) OS package update run,
-    /// if one has ever been triggered for this VM.
-    pub package_update: Option<PackageUpdateStatus>,
     /// Allocated IPv4 address, if this VM currently holds an active lease
     /// (see `Store::active_lease` — allocated at create, kept through
     /// stop/start, freed only on delete).
@@ -978,10 +927,6 @@ mod tests {
             startup_step: None,
             startup_timeline: Vec::new(),
             egress_policy: EgressPolicy::Internet,
-            package_update: Some(PackageUpdateStatus::Failed {
-                reason: "exited with code 100".to_owned(),
-                output_tail: "E: Unable to locate package\n".to_owned(),
-            }),
             ipv4: Some("172.30.0.5".to_owned()),
             mac: Some("02:fc:00:00:00:05".to_owned()),
             hostname: "fc-abc123456789".to_owned(),
@@ -1001,23 +946,7 @@ mod tests {
         assert!(json.contains("\"cpuUsagePercent\":12.5"));
         assert!(json.contains("\"memoryUsedMib\":180"));
         assert!(json.contains("\"usageHistory\""));
-    }
-
-    #[test]
-    fn package_update_status_is_internally_tagged_camel_case() {
-        assert_eq!(
-            serde_json::to_string(&PackageUpdateStatus::Running).unwrap(),
-            "{\"state\":\"running\"}"
-        );
-        let succeeded = PackageUpdateStatus::Succeeded {
-            output_tail: "done\n".to_owned(),
-        };
-        let json = serde_json::to_string(&succeeded).unwrap();
-        assert_eq!(json, "{\"state\":\"succeeded\",\"outputTail\":\"done\\n\"}");
-        assert_eq!(
-            serde_json::from_str::<PackageUpdateStatus>(&json).unwrap(),
-            succeeded
-        );
+        assert!(!json.contains("packageUpdate"));
     }
 
     #[test]
@@ -1044,7 +973,6 @@ mod tests {
             startup_step: Some(StartupStep::PreparingDisk),
             startup_timeline: Vec::new(),
             egress_policy: EgressPolicy::Internet,
-            package_update: None,
             ipv4: None,
             mac: None,
             hostname: "fc-abc123456789".to_owned(),

@@ -522,11 +522,9 @@ table.vm-table {
 }
 .vm-table tr:last-child td { border-bottom: 0; }
 .vm-table .mono { font-family: var(--font-mono); font-size: 0.82rem; color: var(--shell); }
-.vm-table .usage-sub {
-  margin-top: 0.15rem;
-  font-size: 0.72rem;
-  color: var(--muted, var(--shell));
-  opacity: 0.85;
+.vm-table .usage-cell {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .usage-charts {
@@ -538,15 +536,29 @@ table.vm-table {
 .usage-charts.is-compact {
   gap: 0.5rem 0.75rem;
 }
+.usage-charts.is-large {
+  gap: 1rem 1.25rem;
+  margin: 0.5rem 0 0;
+}
 .usage-charts-empty {
   margin: 0.25rem 0;
   font-size: 0.78rem;
   color: var(--dim, var(--shell));
 }
+.usage-charts-empty.is-large {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.9rem;
+}
 .usage-spark {
   flex: 1 1 10rem;
   min-width: 8rem;
   max-width: 16rem;
+}
+.usage-spark.is-large,
+.usage-charts.is-large .usage-spark {
+  flex: 1 1 16rem;
+  min-width: 14rem;
+  max-width: none;
 }
 .usage-spark-head {
   display: flex;
@@ -556,14 +568,31 @@ table.vm-table {
   margin-bottom: 0.15rem;
   font-size: 0.72rem;
 }
+.usage-spark.is-large .usage-spark-head,
+.usage-charts.is-large .usage-spark-head {
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+}
 .usage-spark-label {
   color: var(--dim, var(--shell));
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.usage-spark.is-large .usage-spark-label,
+.usage-charts.is-large .usage-spark-label {
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
 .usage-spark-unit {
   color: var(--ink);
   font-size: 0.78rem;
+}
+.usage-spark.is-large .usage-spark-unit,
+.usage-charts.is-large .usage-spark-unit {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .usage-spark-svg {
   display: block;
@@ -572,30 +601,26 @@ table.vm-table {
   background: color-mix(in srgb, var(--bg-panel, #1a1f28) 80%, transparent);
   border: 1px solid var(--line);
 }
-.detail-usage-charts {
-  margin: 0.5rem 0 0.25rem;
+.usage-spark.is-large .usage-spark-svg,
+.usage-charts.is-large .usage-spark-svg {
+  border-radius: 6px;
+  min-height: 96px;
+}
+.detail-usage-panel {
+  margin-top: 1rem;
+}
+.detail-usage-panel .panel-title {
+  margin-bottom: 0.65rem;
+}
+.console-detail-usage-group {
   grid-column: 1 / -1;
 }
-/* Detail modal: allocated left, live usage right (tabular). */
-.detail-spec-pair {
-  display: inline-grid;
-  grid-template-columns: minmax(4.5rem, auto) minmax(3.5rem, auto);
-  gap: 0.75rem;
-  align-items: baseline;
-  font-variant-numeric: tabular-nums;
+.console-detail-usage-group .usage-charts {
+  margin: 0;
 }
-.detail-spec-alloc {
-  color: var(--ink);
-}
-.detail-spec-live {
-  color: var(--shell);
-  text-align: right;
-  min-width: 3.5rem;
-}
-.console-detail-usage {
-  margin-top: 0.35rem;
-  padding-top: 0.35rem;
-  border-top: 1px solid var(--line);
+.console-detail-usage-group .usage-spark {
+  max-width: none;
+  min-width: 10rem;
 }
 .vm-table .name { font-weight: 600; }
 .link-button {
@@ -853,27 +878,6 @@ table.image-table .image-package-url a:hover {
   word-break: break-word;
 }
 
-.package-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.75rem;
-}
-.package-row:last-child { margin-bottom: 0; }
-.package-row input {
-  flex: 1;
-  min-width: 0;
-  box-sizing: border-box;
-  font-family: var(--font-mono);
-  font-size: 0.9rem;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 0.55rem 0.65rem;
-  height: 2.5rem;
-}
-
 .empty {
   padding: 2rem 0.75rem;
   text-align: center;
@@ -1036,7 +1040,7 @@ table.image-table .image-package-url a:hover {
   height: 100%;
 }
 
-/* Bottom VM metadata — four field groups instead of one wide row. */
+/* Bottom VM metadata — field groups; Resource usage spans full width when running. */
 .console-detail {
   flex: 0 0 auto;
   background: var(--bg-panel);
@@ -1091,50 +1095,6 @@ table.image-table .image-package-url a:hover {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--shell);
-}
-/* Specs: aligned Alloc / Live columns (no duplicated usage row). */
-.console-specs-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 0;
-  font-size: 0.74rem;
-  table-layout: fixed;
-}
-.console-specs-table th,
-.console-specs-table td {
-  padding: 0.18rem 0.35rem;
-  text-align: right;
-  vertical-align: baseline;
-  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-}
-.console-specs-table thead th {
-  color: var(--shell);
-  font-weight: 600;
-  font-size: 0.65rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  border-bottom: 1px solid var(--line);
-}
-.console-specs-table tbody th[scope="row"],
-.console-specs-table .console-specs-metric {
-  text-align: left;
-  color: var(--shell);
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  width: 3.2rem;
-}
-.console-specs-table tbody td {
-  color: var(--ink);
-  font-variant-numeric: tabular-nums;
-}
-.console-specs-table tbody td.is-muted {
-  color: var(--shell);
-  opacity: 0.55;
-}
-.console-specs-table tbody tr:last-child th,
-.console-specs-table tbody tr:last-child td {
-  border-bottom: 0;
 }
 .console-detail-fields {
   display: grid;
