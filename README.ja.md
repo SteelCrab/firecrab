@@ -155,11 +155,13 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
   ./target/debug/firecrab-net-helper
 
 # 端末 2 — API と Firecracker マネージャ
-pkill -f 'firecrab-api'
+# 任意: 以前の firecrab-api バイナリのみ終了（無ければ無視）
+pkill -x firecrab-api 2>/dev/null || true
 cargo run -p firecrab-api
 
 # 端末 3 — ダッシュボード: http://localhost:8080/
-pkill -f 'vite'
+# 任意: この checkout の Vite のみ終了（無ければ無視）
+pkill -f '[f]irecrab-frontend/node_modules/.bin/vite' 2>/dev/null || true
 npm install --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```

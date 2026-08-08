@@ -159,11 +159,13 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
   ./target/debug/firecrab-net-helper
 
 # Terminal 2 — API and Firecracker manager
-pkill -f 'firecrab-api'
+# Optional: stop a previous API binary only (ignore if none)
+pkill -x firecrab-api 2>/dev/null || true
 cargo run -p firecrab-api
 
 # Terminal 3 — dashboard at http://localhost:8080/
-pkill -f 'vite'
+# Optional: stop a previous Vite from this checkout (ignore if none)
+pkill -f '[f]irecrab-frontend/node_modules/.bin/vite' 2>/dev/null || true
 npm install --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```

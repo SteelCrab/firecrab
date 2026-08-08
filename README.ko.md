@@ -150,11 +150,13 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
   ./target/debug/firecrab-net-helper
 
 # 터미널 2 — API와 Firecracker 관리자
-pkill -f 'firecrab-api'
+# 선택: 이전 firecrab-api 바이너리만 종료 (없으면 무시)
+pkill -x firecrab-api 2>/dev/null || true
 cargo run -p firecrab-api
 
 # 터미널 3 — 대시보드: http://localhost:8080/
-pkill -f 'vite'
+# 선택: 이 체크아웃의 Vite만 종료 (없으면 무시)
+pkill -f '[f]irecrab-frontend/node_modules/.bin/vite' 2>/dev/null || true
 npm install --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```
