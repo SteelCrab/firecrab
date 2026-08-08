@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::{Extension, Path, State};
@@ -844,6 +845,7 @@ async fn finish_run_start(
         vm.id,
         enable_pci,
         state.runtime.ready_timeout,
+        Arc::clone(&state.process_metrics),
     )
     .await
     .map_err(|error| error.to_string())?;
@@ -1428,7 +1430,7 @@ pub(crate) async fn lease_for(state: &AppState, vm_id: Uuid) -> Option<Lease> {
 }
 
 pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
-    let usage = host_process_usage(state, vm.id);
+    let usage = host_process_usage(state, vm);
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
@@ -1448,29 +1450,29 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         storage_root: vm.storage_root.clone(),
         cpu_usage_percent: usage.cpu_usage_percent,
         memory_used_mib: usage.memory_used_mib,
+        memory_total_mib: usage.memory_total_mib,
+        memory_used_percent: usage.memory_used_percent,
         usage_history: usage.history,
     }
 }
 
-/// Samples the live Firecracker process for host CPU % and RSS, if any.
-fn host_process_usage(state: &AppState, id: Uuid) -> crate::process_metrics::UsageSnapshot {
-    let pid = state
-        .processes
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .get(&id)
-        .map(|process| process.pid);
-    let mut metrics = state
+/// Latest Firecrab Guest Agent samples (console transport).
+///
+/// Does **not** clear the tracker on poll. Clearing while `starting` (process
+/// not yet registered) wiped samples already ingested after stop→start.
+/// Clear remains in the Firecracker exit monitor only.
+fn host_process_usage(
+    state: &AppState,
+    vm: &crate::model::VmRecord,
+) -> crate::process_metrics::UsageSnapshot {
+    if !matches!(vm.state, VmState::Running | VmState::Starting) {
+        return crate::process_metrics::UsageSnapshot::default();
+    }
+    state
         .process_metrics
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match pid {
-        Some(pid) if pid != 0 => metrics.observe(id, pid),
-        _ => {
-            metrics.clear(id);
-            crate::process_metrics::UsageSnapshot::default()
-        }
-    }
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .snapshot(vm.id)
 }
 
 /// Highest disk size the create form accepts; keeps a mistyped value from
