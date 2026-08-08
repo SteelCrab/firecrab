@@ -389,6 +389,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
             mac,
             egress_policy,
             allow_host_ssh,
+            port_forwards,
         } => {
             // Resolve the API-supplied egress ID against the helper's own
             // allowlist; an unknown ID is a client error, not an internal one.
@@ -403,6 +404,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                 mac,
                 egress,
                 allow_host_ssh,
+                port_forwards,
             };
             firewall::apply_vm_policy(&config.firewall, policy)
                 .await
@@ -537,6 +539,7 @@ mod tests {
             mac: "02:fc:00:00:00:09".parse().unwrap(),
             egress_policy: "0.0.0.0/0".to_owned(),
             allow_host_ssh: false,
+            port_forwards: Vec::new(),
         };
         assert!(matches!(
             dispatch(request, &config).await,

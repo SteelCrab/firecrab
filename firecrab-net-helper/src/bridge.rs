@@ -93,6 +93,14 @@ pub enum BridgeError {
         #[source]
         source: io::Error,
     },
+    /// Writing the per-interface route_localnet sysctl failed.
+    #[error("failed to enable route_localnet on {name}")]
+    RouteLocalnet {
+        /// The bridge's name.
+        name: String,
+        #[source]
+        source: io::Error,
+    },
 }
 
 /// Single-writer guard: `main.rs` spawns one task per accepted connection,
@@ -249,6 +257,7 @@ async fn ensure_bridge_for(
         .await
         .map_err(BridgeError::Netlink)?;
     disable_ipv6(config.name)?;
+    enable_route_localnet(config.name)?;
     ensure_gateway(&handle, bridge.header.index, config).await
 }
 
@@ -273,6 +282,20 @@ fn disable_ipv6(name: &str) -> Result<(), BridgeError> {
             source,
         }),
     }
+}
+
+/// Lets the kernel route packets sourced from or destined to 127.0.0.0/8
+/// through this bridge instead of dropping them as martian. Required for
+/// port-forward DNAT to work when the connecting process is on the host
+/// itself (e.g. `curl localhost:<host_port>`): after DNAT rewrites the
+/// destination to a VM's address, the packet still carries its original
+/// 127.0.0.1 source and must route out through the bridge to reach the VM.
+fn enable_route_localnet(name: &str) -> Result<(), BridgeError> {
+    let path = format!("/proc/sys/net/ipv4/conf/{name}/route_localnet");
+    fs::write(&path, "1").map_err(|source| BridgeError::RouteLocalnet {
+        name: name.to_owned(),
+        source,
+    })
 }
 
 /// Looks up a bridge by name, if it already exists.

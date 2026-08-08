@@ -35,6 +35,12 @@ pub(crate) fn validate_uplink(name: &str) -> Result<(), FirewallError> {
 /// off contributes no rule here, so its addresses are never translated (the
 /// forward-path drop in `firewall.rs` is what actually stops the traffic;
 /// this keeps the NAT table from claiming otherwise).
+///
+/// Also masquerades any 127.0.0.0/8-sourced packet unconditionally: a
+/// host-local port-forward DNAT (`curl localhost:<host_port>`, rewritten by
+/// `firewall.rs`'s `vm_*_dnat_out` chain) leaves the original loopback
+/// source untouched, and a VM has no route back to 127.0.0.1, so it must be
+/// rewritten to the bridge's own address before the packet leaves the host.
 pub(crate) fn render_postrouting_chain(uplink: &str, subnets: &[String]) -> String {
     let dispatch: String = subnets
         .iter()
@@ -45,6 +51,7 @@ pub(crate) fn render_postrouting_chain(uplink: &str, subnets: &[String]) -> Stri
     format!(
         "\tchain postrouting_dispatch {{\n\
          \t\ttype nat hook postrouting priority srcnat; policy accept;\n\
+         \t\tip saddr 127.0.0.0/8 masquerade\n\
          {dispatch}\
          \t}}\n\
          \tchain firecrab_postrouting {{\n\
