@@ -2,6 +2,12 @@
 
 export type VmUsageSample = {
   atMs: number,
+  /** Guest CPU busy percent. */
   cpuUsagePercent: number | null,
+  /** Guest used memory MiB. */
   memoryUsedMib: number | null,
+  /** Guest total memory MiB. */
+  memoryTotalMib: number | null,
+  /** Guest used memory percent of MemTotal. */
+  memoryUsedPercent: number | null,
 };
