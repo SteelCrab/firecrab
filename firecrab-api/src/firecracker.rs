@@ -367,6 +367,13 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
         api_sock,
         console,
     } = process;
+    // Drop any leftover samples from a previous generation before this PID
+    // starts reporting (exit monitors only clear when they still own the map).
+    state
+        .process_metrics
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear(id);
     state
         .processes
         .lock()
@@ -401,8 +408,10 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
                     processes.remove(&id);
                     true
                 }
-                Some(_) => false, // newer generation already registered
-                None => true,     // already removed; still clear metrics below
+                // Newer generation already registered, or this id is no longer
+                // in the map (stop/start race). Do not claim ownership — a late
+                // monitor must not wipe the new process's metrics or flip state.
+                Some(_) | None => false,
             }
         };
         if still_ours {
@@ -562,6 +571,10 @@ fn spawn_console_reader(
     let mut log_file = tokio::fs::File::from_std(log_file);
     tokio::spawn(async move {
         let mut buffer = [0_u8; CONSOLE_READ_CHUNK];
+        // Shared filter for the log file so FIRECRAB_USAGE never lands on disk
+        // (dashboard log view reads this file). Terminal filtering is owned by
+        // ConsoleBroker; metrics always see the raw chunk first.
+        let mut log_usage_filter = Vec::new();
         loop {
             let read = match stdout.read(&mut buffer).await {
                 Ok(0) => break,
@@ -572,15 +585,18 @@ fn spawn_console_reader(
                 }
             };
             let chunk = &buffer[..read];
-            if let Err(error) = log_file.write_all(chunk).await {
-                tracing::warn!(vm_id = %id, %error, "failed to tee console output to log file");
-            }
-            // Ingest metrics from the raw stream first; push_output strips
-            // FIRECRAB_USAGE lines from interactive terminal viewers.
+            // Ingest metrics from the raw stream first.
             process_metrics
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .ingest_console(id, chunk);
+            let for_log =
+                crate::console::filter_guest_usage_for_terminal(&mut log_usage_filter, chunk);
+            if !for_log.is_empty()
+                && let Err(error) = log_file.write_all(&for_log).await
+            {
+                tracing::warn!(vm_id = %id, %error, "failed to tee console output to log file");
+            }
             console.push_output(chunk);
         }
     });

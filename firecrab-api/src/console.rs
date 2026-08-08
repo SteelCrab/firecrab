@@ -133,11 +133,12 @@ impl Default for ConsoleBroker {
     }
 }
 
-/// Drops complete lines that carry guest-agent metrics so they never reach
-/// the interactive serial UI. Incomplete trailing data is only held when it
-/// could still become a `FIRECRAB_USAGE` line — ordinary typing and shell
-/// prompts flush immediately so the terminal stays responsive.
-fn filter_guest_usage_for_terminal(pending: &mut Vec<u8>, chunk: &[u8]) -> Vec<u8> {
+/// Drops complete lines that carry metrics-agent reports so they never reach
+/// interactive terminals **or** the on-disk console log. Incomplete trailing
+/// data is only held when it could still become a `FIRECRAB_USAGE` line —
+/// ordinary typing and shell prompts flush immediately so the terminal stays
+/// responsive.
+pub(crate) fn filter_guest_usage_for_terminal(pending: &mut Vec<u8>, chunk: &[u8]) -> Vec<u8> {
     pending.extend_from_slice(chunk);
     // Cap so a pathological flood without newlines cannot grow forever.
     const MAX_PENDING: usize = 8 * 1024;
