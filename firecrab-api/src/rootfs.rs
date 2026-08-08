@@ -540,7 +540,10 @@ pub(crate) fn remove_from_image(rootfs: &Path, guest_path: &str) {
 }
 
 /// Runs one `debugfs -w -R <command>` invocation against `rootfs`.
-pub(crate) fn run_debugfs(rootfs: &Path, command: &str) -> Result<std::process::Output, RootfsError> {
+pub(crate) fn run_debugfs(
+    rootfs: &Path,
+    command: &str,
+) -> Result<std::process::Output, RootfsError> {
     Command::new("debugfs")
         .arg("-w")
         .arg("-R")
