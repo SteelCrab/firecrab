@@ -203,13 +203,31 @@ pub async fn create_vm(
 
     let store = state.store.clone();
     let record = vm.clone();
-    tokio::task::spawn_blocking(move || store.insert(&record))
-        .await
-        .map_err(|_| AppError::internal(request_id.0))?
-        .map_err(|error| {
-            tracing::error!(request_id = %request_id.0, %error, "failed to persist VM state");
+    let shell_ids = req.shell_ids.clone();
+    tokio::task::spawn_blocking(move || {
+        store.insert(&record)?;
+        if !shell_ids.is_empty() {
+            let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
+            store.set_vm_shells(record.id, &pins)?;
+        }
+        Ok::<_, crate::persistence::PersistenceError>(())
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?
+    .map_err(|error| match error {
+        crate::persistence::PersistenceError::MissingShell { .. } => {
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "shellIds".to_owned(),
+                "one or more shells were not found".to_owned(),
+            );
+            AppError::validation(fields, request_id.0)
+        }
+        other => {
+            tracing::error!(request_id = %request_id.0, %other, "failed to persist VM state");
             AppError::internal(request_id.0)
-        })?;
+        }
+    })?;
 
     // Allocated up front (not on first start) so it persists across every
     // stop/start of this VM and is only ever freed by a successful delete —
@@ -221,7 +239,11 @@ pub async fn create_vm(
         Err(error) => {
             let store = state.store.clone();
             let vm_id = vm.id;
-            let _ = tokio::task::spawn_blocking(move || store.delete(vm_id)).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = store.clear_vm_shells(vm_id);
+                store.delete(vm_id)
+            })
+            .await;
             return Err(error);
         }
     };
@@ -235,7 +257,11 @@ pub async fn create_vm(
         Err(error) => {
             tracing::error!(request_id = %request_id.0, vm_id = %vm_id, %error, "failed to allocate vm lease");
             let store = state.store.clone();
-            let _ = tokio::task::spawn_blocking(move || store.delete(vm_id)).await;
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = store.clear_vm_shells(vm_id);
+                store.delete(vm_id)
+            })
+            .await;
             return Err(AppError::internal(request_id.0));
         }
     };
@@ -265,6 +291,87 @@ pub async fn create_vm(
         .insert(vm.id, vm);
 
     Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Replaces pinned shell revisions for a VM that has no live process.
+/// Each id resolves to its **latest** revision at pin time.
+pub async fn update_vm_shells(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    ValidatedJson(req): ValidatedJson<firecrab_api_types::UpdateVmShellsRequest>,
+) -> Result<Json<VmResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    if req.shell_ids.len() > crate::shells::MAX_SHELLS_PER_VM {
+        let mut fields = BTreeMap::new();
+        fields.insert(
+            "shellIds".to_owned(),
+            format!("at most {} shells per VM", crate::shells::MAX_SHELLS_PER_VM),
+        );
+        return Err(AppError::validation(fields, request_id.0));
+    }
+    // Reject duplicates — order is significant for inject sequence.
+    let mut seen = std::collections::HashSet::new();
+    for shell_id in &req.shell_ids {
+        if !seen.insert(*shell_id) {
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "shellIds".to_owned(),
+                "must not contain duplicates".to_owned(),
+            );
+            return Err(AppError::validation(fields, request_id.0));
+        }
+    }
+
+    {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vm = vms
+            .get(&id)
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        if !vm.state.can_edit_resources() {
+            return Err(AppError::invalid_state(vm.state, request_id.0));
+        }
+    }
+
+    let store = state.store.clone();
+    let shell_ids = req.shell_ids.clone();
+    tokio::task::spawn_blocking(move || {
+        let pins = if shell_ids.is_empty() {
+            Vec::new()
+        } else {
+            store.resolve_latest_shell_revisions(&shell_ids)?
+        };
+        store.set_vm_shells(id, &pins)
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?
+    .map_err(|error| match error {
+        crate::persistence::PersistenceError::MissingShell { .. } => {
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "shellIds".to_owned(),
+                "one or more shells were not found".to_owned(),
+            );
+            AppError::validation(fields, request_id.0)
+        }
+        other => {
+            tracing::error!(request_id = %request_id.0, %other, "failed to pin vm shells");
+            AppError::internal(request_id.0)
+        }
+    })?;
+
+    let record = state
+        .vms
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+    let lease = lease_for(&state, id).await;
+    Ok(Json(vm_response(&state, &record, lease.as_ref())))
 }
 
 /// Replaces cpu/ram/disk for a VM that has no live process. Applies on the
@@ -599,6 +706,7 @@ pub async fn delete_vm(
         // — see Store::active_lease's doc comment. NotLeased shouldn't
         // happen (every VM gets one at create_vm), but isn't worth failing
         // an otherwise-successful delete over.
+        let _ = store.clear_vm_shells(id);
         match store.release_lease(id) {
             Ok(()) | Err(IpamError::NotLeased { .. }) => Ok(()),
             Err(error) => Err(error.to_string()),
@@ -771,6 +879,7 @@ async fn finish_run_start(
     let vms_dir = state.vms_dir_for(&vm.storage_root);
     let state_for_blocking = state.clone();
     let network = network.clone();
+    let store_for_shells = state.store.clone();
     // One durable disk generation per VM; allocated on first prepare and
     // reused for every later start so guest data survives stop/start.
     let generation = record.disk_generation.unwrap_or_else(Uuid::new_v4);
@@ -786,6 +895,11 @@ async fn finish_run_start(
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
         rootfs::specialize_guest(&rootfs, record.id)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        let shell_scripts = store_for_shells
+            .list_vm_shell_scripts(record.id)
+            .map_err(|error| format!("shell pin load failed: {error}"))?;
+        crate::shells::install(&rootfs, &shell_scripts)
+            .map_err(|error| format!("shell inject failed: {error}"))?;
 
         set_startup_step(
             &state_for_blocking,
@@ -1431,6 +1545,10 @@ pub(crate) async fn lease_for(state: &AppState, vm_id: Uuid) -> Option<Lease> {
 
 pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>) -> VmResponse {
     let usage = host_process_usage(state, vm);
+    let shell_refs = state
+        .store
+        .list_vm_shell_refs(vm.id)
+        .unwrap_or_else(|_| Vec::new());
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
@@ -1453,6 +1571,7 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         memory_total_mib: usage.memory_total_mib,
         memory_used_percent: usage.memory_used_percent,
         usage_history: usage.history,
+        shell_refs,
     }
 }
 
@@ -1492,6 +1611,23 @@ fn is_valid_ram_mib(ram: u32) -> bool {
 
 fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
+    if req.shell_ids.len() > crate::shells::MAX_SHELLS_PER_VM {
+        fields.insert(
+            "shellIds".to_owned(),
+            format!("at most {} shells per VM", crate::shells::MAX_SHELLS_PER_VM),
+        );
+    } else {
+        let mut seen = std::collections::HashSet::new();
+        for shell_id in &req.shell_ids {
+            if !seen.insert(*shell_id) {
+                fields.insert(
+                    "shellIds".to_owned(),
+                    "must not contain duplicates".to_owned(),
+                );
+                break;
+            }
+        }
+    }
     if !valid_vm_name(&req.name) {
         fields.insert(
             "name".to_owned(),
@@ -1878,6 +2014,7 @@ mod tests {
             egress_policy: Default::default(),
             micro_network_id: Uuid::from_u128(1),
             storage_root: None,
+            shell_ids: Vec::new(),
         };
 
         let too_small = validate_create(&base, &state);
@@ -3059,6 +3196,7 @@ while True:
             egress_policy: Default::default(),
             micro_network_id,
             storage_root: None,
+            shell_ids: Vec::new(),
         }
     }
 

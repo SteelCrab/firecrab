@@ -16,6 +16,7 @@ mod persistence;
 mod process_metrics;
 mod rootfs;
 mod server;
+mod shells;
 mod state;
 mod storage;
 mod templates;

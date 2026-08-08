@@ -55,9 +55,20 @@ export default function Shell({ view, onSelectView, children }: ShellProps) {
                   title={label}
                   onClick={() => onSelectView(item.id)}
                 >
-                  <span className="shell-nav-glyph" aria-hidden="true">
-                    {item.glyph}
-                  </span>
+                  {"icon" in item && item.icon ? (
+                    <img
+                      className="shell-nav-icon"
+                      src={item.icon}
+                      alt=""
+                      width={18}
+                      height={18}
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <span className="shell-nav-glyph" aria-hidden="true">
+                      {item.glyph}
+                    </span>
+                  )}
                   <span className="shell-nav-label">{label}</span>
                 </button>
               </li>

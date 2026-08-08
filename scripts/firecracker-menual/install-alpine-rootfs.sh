@@ -28,7 +28,8 @@ docker_image='alpine:latest'
 # virtio_blk/ext4 are modules here rather than builtin, so the initramfs-virt
 # Alpine builds alongside it (mkinitfs) has to ship as the VM's initrd too —
 # without it the kernel can never reach /dev/vda to mount the real root.
-rootfs_packages='alpine-baselayout busybox openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
+# bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu/Rocky).
+rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
 
 info() {
   printf '[INFO] %s\n' "$1"

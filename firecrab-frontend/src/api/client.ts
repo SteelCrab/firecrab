@@ -4,6 +4,8 @@ import type {
   BootstrapResponse,
   CreateMicroNetworkRequest,
   CreateMicroStorageRequest,
+  CreateShellRequest,
+  CreateShellRevisionRequest,
   CreateVmRequest,
   ErrorResponse,
   HostStatusResponse,
@@ -14,9 +16,13 @@ import type {
   MicroStorageDetailResponse,
   MicroStorageResponse,
   NetworkInfoResponse,
+  ShellDetailResponse,
+  ShellResponse,
+  ShellRevisionResponse,
   StorageDeviceResponse,
   StorageRootResponse,
   UpdateMicroNetworkRequest,
+  UpdateVmShellsRequest,
   UpdateVmResourcesRequest,
   VmLogResponse,
   VmResponse,
@@ -278,6 +284,61 @@ export async function deleteMicroNetwork(id: string): Promise<void> {
   if (!response.ok) {
     throw await fail(response);
   }
+}
+
+export function listShells(): Promise<ShellResponse[]> {
+  return fetchJson("/api/shells");
+}
+
+export function getShell(id: string): Promise<ShellDetailResponse> {
+  return fetchJson(`/api/shells/${id}`);
+}
+
+export function createShell(request: CreateShellRequest): Promise<ShellRevisionResponse> {
+  return fetchJson("/api/shells", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export function createShellRevision(
+  id: string,
+  request: CreateShellRevisionRequest,
+): Promise<ShellRevisionResponse> {
+  return fetchJson(`/api/shells/${id}/revisions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+/** Full body of one immutable revision (including past versions). */
+export function getShellRevision(
+  shellId: string,
+  revisionId: string,
+): Promise<ShellRevisionResponse> {
+  return fetchJson(`/api/shells/${shellId}/revisions/${revisionId}`);
+}
+
+export async function deleteShell(id: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/shells/${id}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+}
+
+export function updateVmShells(id: string, request: UpdateVmShellsRequest): Promise<VmResponse> {
+  return fetchJson(`/api/vms/${id}/shells`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
 }
 
 /** Bootstrap a distro from scratch inside a builder VM (`POST /api/images/{alias}/bootstrap`). */

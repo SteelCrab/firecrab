@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   EgressPolicy,
   MicroNetworkResponse,
+  ShellResponse,
   StartupStep,
   StartupStepRun,
   StorageRootResponse,
@@ -13,13 +14,16 @@ import {
   getVm,
   getVmLog,
   listMicroNetworks,
+  listShells,
   listStorageRoots,
   updateVmResources,
+  updateVmShells,
 } from "../api/client";
 import { isEditableState } from "../model";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
+import ShellCheckboxList from "./ShellCheckboxList";
 import UsageCharts from "./UsageCharts";
 import { useI18n } from "../i18n";
 
@@ -75,6 +79,8 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [editDisk, setEditDisk] = useState("2");
   const [editEgressPolicy, setEditEgressPolicy] = useState<EgressPolicy>("internet");
   const [editStorageRoot, setEditStorageRoot] = useState("default");
+  const [editShellIds, setEditShellIds] = useState<string[]>([]);
+  const [catalogShells, setCatalogShells] = useState<ShellResponse[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
@@ -85,6 +91,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   useEffect(() => {
     listMicroNetworks().then(setMicroNetworks).catch(() => setMicroNetworks([]));
     listStorageRoots().then(setStorageRoots).catch(() => setStorageRoots([]));
+    listShells().then(setCatalogShells).catch(() => setCatalogShells([]));
   }, []);
 
   const startEditing = () => {
@@ -94,8 +101,11 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     setEditDisk(String(vm.diskGb));
     setEditEgressPolicy(vm.egressPolicy);
     setEditStorageRoot(vm.storageRoot || "default");
+    setEditShellIds((vm.shellRefs ?? []).map((ref) => ref.shellId));
     setSaveError(null);
     setEditing(true);
+    // Refresh catalog so latest versions show on the checkboxes.
+    listShells().then(setCatalogShells).catch(() => setCatalogShells([]));
   };
 
   const cancelEditing = () => {
@@ -119,6 +129,9 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
       if (editStorageRoot && editStorageRoot !== vm.storageRoot) {
         updated = await assignVmStorage(vm.id, { storageRoot: editStorageRoot });
       }
+      // Always re-pin from checkboxes: resolves each id to latest revision
+      // (empty list clears pins). Applies on the next start.
+      updated = await updateVmShells(vm.id, { shellIds: editShellIds });
       setVm(updated);
       setEditing(false);
     } catch (error) {
@@ -296,6 +309,33 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   </select>
                 ) : (
                   vm.egressPolicy === "internet" ? t("Internet access", "인터넷 허용") : t("Isolated (gateway only)", "격리(게이트웨이만 허용)")
+                )}
+              </dd>
+              <dt>{t("Shells", "Shell")}</dt>
+              <dd>
+                {editing ? (
+                  <div className="detail-shell-check">
+                    <ShellCheckboxList
+                      shells={catalogShells}
+                      selectedIds={editShellIds}
+                      onChange={setEditShellIds}
+                      disabled={saving}
+                      idPrefix="vm-detail-shell"
+                      emptyLabel={t(
+                        "No shells in catalog — create under Shells first.",
+                        "등록된 Shell이 없습니다. 먼저 Shell 메뉴에서 만드세요.",
+                      )}
+                    />
+                    {saveError?.fieldError("shellIds") && (
+                      <span className="field-error">{saveError.fieldError("shellIds")}</span>
+                    )}
+                  </div>
+                ) : (vm.shellRefs ?? []).length === 0 ? (
+                  "—"
+                ) : (
+                  (vm.shellRefs ?? [])
+                    .map((ref) => `${ref.name}@v${ref.version}`)
+                    .join(", ")
                 )}
               </dd>
               <dt>ip</dt>

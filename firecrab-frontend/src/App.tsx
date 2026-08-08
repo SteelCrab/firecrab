@@ -12,6 +12,7 @@ import Images from "./components/Images";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import Shell from "./components/Shell";
+import Shells from "./components/Shells";
 import { useAppRoute } from "./navigation";
 import { useI18n } from "./i18n";
 
@@ -220,8 +221,9 @@ export default function App() {
             the moment you navigate away. */}
         {view === "networks" && <MicroNetworks />}
         {view === "storages" && <MicroStorages />}
-        {view === "host" && <HostInfo />}
         {view === "images" && <Images />}
+        {view === "shells" && <Shells />}
+        {view === "host" && <HostInfo />}
       </div>
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
     </Shell>

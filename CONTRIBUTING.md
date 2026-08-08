@@ -117,6 +117,20 @@ shellcheck install.sh scripts/firecrab-doctor.sh
 
 `check-doc-links.py` enforces published docs rules: English only, max **170 lines** per `public-docs/**/*.md` file, valid relative links, and no stale `docs/` paths in tracked sources.
 
+## Issues
+
+Use the **Task** issue template (`.github/ISSUE_TEMPLATE/task.md`) when opening work items:
+
+```text
+## Summary
+## Motivation
+## Scope (MVP)
+## Acceptance
+## Notes
+```
+
+Keep bodies short (see [#55](https://github.com/SteelCrab/firecrab/issues/55), [#56](https://github.com/SteelCrab/firecrab/issues/56), [#59](https://github.com/SteelCrab/firecrab/issues/59)). Prefer one concern per issue.
+
 ## Pull requests
 
 1. **Fork** (or use a branch on the main repo if you have write access).

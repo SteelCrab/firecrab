@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use firecrab_api_types::MicroNetworkResponse;
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -97,6 +97,33 @@ const SELECT_ALL_MICRO_STORAGES_SQL: &str = "SELECT id, name, path FROM micro_st
 
 const INSERT_MICRO_STORAGE_SQL: &str =
     "INSERT INTO micro_storages (id, name, path) VALUES (?1, ?2, ?3)";
+
+/// Shell repository catalog (`feat/shell-repository` / issue #60).
+const CREATE_SHELLS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS shells (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+) STRICT";
+
+const CREATE_SHELL_REVISIONS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS shell_revisions (
+    id TEXT PRIMARY KEY,
+    shell_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE (shell_id, version)
+) STRICT";
+
+const CREATE_VM_SHELLS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vm_shells (
+    vm_id TEXT NOT NULL,
+    shell_id TEXT NOT NULL,
+    revision_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (vm_id, shell_id)
+) STRICT";
 
 /// Adds `disk_gb` to a `vms` table created before the column existed (a
 /// bare `CREATE TABLE IF NOT EXISTS` doesn't retrofit new columns onto an
@@ -335,6 +362,20 @@ pub enum PersistenceError {
         /// The conflicting path.
         path: String,
     },
+    /// An operation targeted a Shell id with no matching row.
+    #[error("Shell {id} does not exist in the database")]
+    MissingShell {
+        /// The id that wasn't found.
+        id: Uuid,
+    },
+    /// Shell still pinned on one or more VMs.
+    #[error("Shell {id} is still pinned on {count} VM(s)")]
+    ShellInUse {
+        /// Shell id.
+        id: Uuid,
+        /// How many VMs still pin it.
+        count: u32,
+    },
     /// Couldn't read the legacy `vms.json` file.
     #[error("failed to read legacy VM data from {path}: {source}")]
     LegacyRead {
@@ -413,6 +454,9 @@ impl Store {
         // leaves an older table's columns as they were.
         migrate_internet_enabled_column(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
+        conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
+        conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
+        conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -655,6 +699,399 @@ impl Store {
             |row| row.get(0),
         )?;
         Ok(count as u32)
+    }
+
+    /// Creates a shell and its first revision (version 1).
+    pub fn create_shell(
+        &self,
+        id: Uuid,
+        name: &str,
+        description: Option<&str>,
+        revision_id: Uuid,
+        content: &str,
+        content_sha256: &str,
+        now_ms: u64,
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "INSERT INTO shells (id, name, description, created_at_ms, updated_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                id.to_string(),
+                name,
+                description,
+                now_ms as i64,
+                now_ms as i64
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO shell_revisions \
+             (id, shell_id, version, content, content_sha256, created_at_ms) \
+             VALUES (?1, ?2, 1, ?3, ?4, ?5)",
+            params![
+                revision_id.to_string(),
+                id.to_string(),
+                content,
+                content_sha256,
+                now_ms as i64
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Appends a new immutable revision; returns its version number.
+    pub fn add_shell_revision(
+        &self,
+        shell_id: Uuid,
+        revision_id: Uuid,
+        content: &str,
+        content_sha256: &str,
+        now_ms: u64,
+    ) -> Result<u32, PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx
+            .prepare("SELECT 1 FROM shells WHERE id = ?1")?
+            .exists(params![shell_id.to_string()])?;
+        if !exists {
+            return Err(PersistenceError::MissingShell { id: shell_id });
+        }
+        let next: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(version), 0) + 1 FROM shell_revisions WHERE shell_id = ?1",
+            params![shell_id.to_string()],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO shell_revisions \
+             (id, shell_id, version, content, content_sha256, created_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                revision_id.to_string(),
+                shell_id.to_string(),
+                next,
+                content,
+                content_sha256,
+                now_ms as i64
+            ],
+        )?;
+        tx.execute(
+            "UPDATE shells SET updated_at_ms = ?2 WHERE id = ?1",
+            params![shell_id.to_string(), now_ms as i64],
+        )?;
+        tx.commit()?;
+        Ok(next as u32)
+    }
+
+    /// Lists every shell with latest revision summary.
+    pub fn list_shells(&self) -> Result<Vec<firecrab_api_types::ShellResponse>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT s.id, s.name, s.description, s.created_at_ms, s.updated_at_ms, \
+                    r.id, r.version, r.content_sha256 \
+             FROM shells s \
+             LEFT JOIN shell_revisions r ON r.shell_id = s.id \
+               AND r.version = (SELECT MAX(version) FROM shell_revisions WHERE shell_id = s.id) \
+             ORDER BY s.name COLLATE NOCASE, s.id",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id_text: String = row.get(0)?;
+            let id = Uuid::parse_str(&id_text).map_err(|_| PersistenceError::CorruptRecord {
+                id: id_text.clone(),
+                reason: "shell id is not a UUID".to_owned(),
+            })?;
+            let rev_id: Option<String> = row.get(5)?;
+            let latest_revision_id =
+                rev_id
+                    .as_deref()
+                    .map(Uuid::parse_str)
+                    .transpose()
+                    .map_err(|_| PersistenceError::CorruptRecord {
+                        id: id_text.clone(),
+                        reason: "revision id is not a UUID".to_owned(),
+                    })?;
+            let version: Option<i64> = row.get(6)?;
+            out.push(firecrab_api_types::ShellResponse {
+                id,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                latest_version: version.unwrap_or(0) as u32,
+                latest_revision_id,
+                content_sha256: row.get(7)?,
+                created_at_ms: row.get::<_, i64>(3)? as u64,
+                updated_at_ms: row.get::<_, i64>(4)? as u64,
+            });
+        }
+        Ok(out)
+    }
+
+    /// One immutable revision with full body (must belong to `shell_id`).
+    pub fn shell_revision(
+        &self,
+        shell_id: Uuid,
+        revision_id: Uuid,
+    ) -> Result<Option<firecrab_api_types::ShellRevisionResponse>, PersistenceError> {
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT id, version, content_sha256, content, created_at_ms \
+                 FROM shell_revisions WHERE id = ?1 AND shell_id = ?2",
+                params![revision_id.to_string(), shell_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((rev_text, version, content_sha256, content, created_at_ms)) = row else {
+            return Ok(None);
+        };
+        let parsed_revision_id =
+            Uuid::parse_str(&rev_text).map_err(|_| PersistenceError::CorruptRecord {
+                id: rev_text.clone(),
+                reason: "revision id is not a UUID".to_owned(),
+            })?;
+        Ok(Some(firecrab_api_types::ShellRevisionResponse {
+            shell_id,
+            revision_id: parsed_revision_id,
+            version: version as u32,
+            content_sha256,
+            content,
+            created_at_ms: created_at_ms as u64,
+        }))
+    }
+
+    /// Shell detail: metadata + all revisions (newest first) + latest body.
+    pub fn shell_detail(
+        &self,
+        id: Uuid,
+    ) -> Result<Option<firecrab_api_types::ShellDetailResponse>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT id, name, description, created_at_ms, updated_at_ms FROM shells WHERE id = ?1",
+        )?;
+        let mut rows = statement.query(params![id.to_string()])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let id_text: String = row.get(0)?;
+        let shell_id = Uuid::parse_str(&id_text).map_err(|_| PersistenceError::CorruptRecord {
+            id: id_text.clone(),
+            reason: "shell id is not a UUID".to_owned(),
+        })?;
+        let name: String = row.get(1)?;
+        let description: Option<String> = row.get(2)?;
+        let created_at_ms = row.get::<_, i64>(3)? as u64;
+        let updated_at_ms = row.get::<_, i64>(4)? as u64;
+
+        let mut rev_stmt = conn.prepare(
+            "SELECT id, version, content_sha256, created_at_ms, content \
+             FROM shell_revisions WHERE shell_id = ?1 ORDER BY version DESC",
+        )?;
+        let mut rev_rows = rev_stmt.query(params![id.to_string()])?;
+        let mut revisions = Vec::new();
+        let mut latest_content = None;
+        while let Some(rev) = rev_rows.next()? {
+            let rev_id_text: String = rev.get(0)?;
+            let revision_id =
+                Uuid::parse_str(&rev_id_text).map_err(|_| PersistenceError::CorruptRecord {
+                    id: rev_id_text.clone(),
+                    reason: "revision id is not a UUID".to_owned(),
+                })?;
+            let content: String = rev.get(4)?;
+            if latest_content.is_none() {
+                latest_content = Some(content.clone());
+            }
+            revisions.push(firecrab_api_types::ShellRevisionSummary {
+                id: revision_id,
+                version: rev.get::<_, i64>(1)? as u32,
+                content_sha256: rev.get(2)?,
+                created_at_ms: rev.get::<_, i64>(3)? as u64,
+                size_bytes: content.len() as u32,
+            });
+        }
+        Ok(Some(firecrab_api_types::ShellDetailResponse {
+            id: shell_id,
+            name,
+            description,
+            created_at_ms,
+            updated_at_ms,
+            revisions,
+            latest_content,
+        }))
+    }
+
+    /// Deletes a shell and its revisions when no VM pins it.
+    pub fn delete_shell(&self, id: Uuid) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let exists: bool = tx
+            .prepare("SELECT 1 FROM shells WHERE id = ?1")?
+            .exists(params![id.to_string()])?;
+        if !exists {
+            return Err(PersistenceError::MissingShell { id });
+        }
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM vm_shells WHERE shell_id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )?;
+        if count > 0 {
+            return Err(PersistenceError::ShellInUse {
+                id,
+                count: count as u32,
+            });
+        }
+        tx.execute(
+            "DELETE FROM shell_revisions WHERE shell_id = ?1",
+            params![id.to_string()],
+        )?;
+        tx.execute("DELETE FROM shells WHERE id = ?1", params![id.to_string()])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Resolves each shell id to its latest revision id (errors if any missing).
+    pub fn resolve_latest_shell_revisions(
+        &self,
+        shell_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid)>, PersistenceError> {
+        let conn = self.lock();
+        let mut out = Vec::with_capacity(shell_ids.len());
+        for shell_id in shell_ids {
+            let rev: Option<String> = conn
+                .query_row(
+                    "SELECT id FROM shell_revisions WHERE shell_id = ?1 \
+                     ORDER BY version DESC LIMIT 1",
+                    params![shell_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(rev_text) = rev else {
+                return Err(PersistenceError::MissingShell { id: *shell_id });
+            };
+            let revision_id =
+                Uuid::parse_str(&rev_text).map_err(|_| PersistenceError::CorruptRecord {
+                    id: rev_text.clone(),
+                    reason: "revision id is not a UUID".to_owned(),
+                })?;
+            out.push((*shell_id, revision_id));
+        }
+        Ok(out)
+    }
+
+    /// Replaces all shell pins for a VM (ordered).
+    pub fn set_vm_shells(
+        &self,
+        vm_id: Uuid,
+        pins: &[(Uuid, Uuid)],
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM vm_shells WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )?;
+        for (position, (shell_id, revision_id)) in pins.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO vm_shells (vm_id, shell_id, revision_id, position) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    vm_id.to_string(),
+                    shell_id.to_string(),
+                    revision_id.to_string(),
+                    position as i64
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Clears shell pins when a VM is deleted.
+    pub fn clear_vm_shells(&self, vm_id: Uuid) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            "DELETE FROM vm_shells WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Pinned shell refs for API responses.
+    pub fn list_vm_shell_refs(
+        &self,
+        vm_id: Uuid,
+    ) -> Result<Vec<firecrab_api_types::ShellRef>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT vs.shell_id, vs.revision_id, r.version, s.name \
+             FROM vm_shells vs \
+             JOIN shells s ON s.id = vs.shell_id \
+             JOIN shell_revisions r ON r.id = vs.revision_id \
+             WHERE vs.vm_id = ?1 \
+             ORDER BY vs.position ASC",
+        )?;
+        let mut rows = statement.query(params![vm_id.to_string()])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let shell_text: String = row.get(0)?;
+            let rev_text: String = row.get(1)?;
+            let shell_id =
+                Uuid::parse_str(&shell_text).map_err(|_| PersistenceError::CorruptRecord {
+                    id: shell_text.clone(),
+                    reason: "shell id is not a UUID".to_owned(),
+                })?;
+            let revision_id =
+                Uuid::parse_str(&rev_text).map_err(|_| PersistenceError::CorruptRecord {
+                    id: rev_text.clone(),
+                    reason: "revision id is not a UUID".to_owned(),
+                })?;
+            out.push(firecrab_api_types::ShellRef {
+                shell_id,
+                revision_id,
+                version: row.get::<_, i64>(2)? as u32,
+                name: row.get(3)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Ordered script bodies for start inject.
+    pub fn list_vm_shell_scripts(
+        &self,
+        vm_id: Uuid,
+    ) -> Result<Vec<crate::shells::ShellScript>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT vs.revision_id, r.content \
+             FROM vm_shells vs \
+             JOIN shell_revisions r ON r.id = vs.revision_id \
+             WHERE vs.vm_id = ?1 \
+             ORDER BY vs.position ASC",
+        )?;
+        let mut rows = statement.query(params![vm_id.to_string()])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let rev_text: String = row.get(0)?;
+            let revision_id =
+                Uuid::parse_str(&rev_text).map_err(|_| PersistenceError::CorruptRecord {
+                    id: rev_text.clone(),
+                    reason: "revision id is not a UUID".to_owned(),
+                })?;
+            out.push(crate::shells::ShellScript {
+                revision_id,
+                content: row.get(1)?,
+            });
+        }
+        Ok(out)
     }
 
     /// Allocate an IPv4 + MAC for `vm_id` inside a `BEGIN IMMEDIATE`
@@ -965,6 +1402,38 @@ mod tests {
             store.update(&record(Uuid::new_v4(), "ghost")),
             Err(PersistenceError::MissingVm { .. })
         ));
+    }
+
+    #[test]
+    fn shell_revisions_pin_and_block_delete_while_in_use() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("shells.db")).unwrap();
+        let shell_id = Uuid::new_v4();
+        let rev1 = Uuid::new_v4();
+        store
+            .create_shell(shell_id, "web-init", None, rev1, "echo a\n", "aa", 1)
+            .unwrap();
+        let rev2 = Uuid::new_v4();
+        let version = store
+            .add_shell_revision(shell_id, rev2, "echo b\n", "bb", 2)
+            .unwrap();
+        assert_eq!(version, 2);
+
+        let pins = store.resolve_latest_shell_revisions(&[shell_id]).unwrap();
+        assert_eq!(pins, vec![(shell_id, rev2)]);
+
+        let vm = record(Uuid::new_v4(), "with-shell");
+        store.insert(&vm).unwrap();
+        store.set_vm_shells(vm.id, &pins).unwrap();
+        assert_eq!(store.list_vm_shell_scripts(vm.id).unwrap().len(), 1);
+        assert!(matches!(
+            store.delete_shell(shell_id),
+            Err(PersistenceError::ShellInUse { count: 1, .. })
+        ));
+
+        store.clear_vm_shells(vm.id).unwrap();
+        store.delete_shell(shell_id).unwrap();
+        assert!(store.shell_detail(shell_id).unwrap().is_none());
     }
 
     #[test]

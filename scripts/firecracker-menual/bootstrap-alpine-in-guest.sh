@@ -16,7 +16,8 @@ out="$work/out"
 alpine_releases_base='https://dl-cdn.alpinelinux.org/alpine'
 rootfs_size='512M'
 rootfs_hostname='firecrab'
-rootfs_packages='alpine-baselayout busybox openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
+# bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu/Rocky).
+rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
