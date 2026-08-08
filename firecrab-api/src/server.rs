@@ -263,6 +263,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/vms/{id}/shells",
             axum::routing::put(handlers::vms::update_vm_shells),
         )
+        .route(
+            "/api/vms/{id}/port-forwards",
+            axum::routing::put(handlers::vms::update_vm_port_forwards),
+        )
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(limits, enforce_limits));

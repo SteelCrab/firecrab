@@ -204,11 +204,15 @@ pub async fn create_vm(
     let store = state.store.clone();
     let record = vm.clone();
     let shell_ids = req.shell_ids.clone();
+    let port_forwards = req.port_forwards.clone();
     tokio::task::spawn_blocking(move || {
         store.insert(&record)?;
         if !shell_ids.is_empty() {
             let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
             store.set_vm_shells(record.id, &pins)?;
+        }
+        if !port_forwards.is_empty() {
+            store.set_vm_port_forwards(record.id, &port_forwards)?;
         }
         Ok::<_, crate::persistence::PersistenceError>(())
     })
@@ -241,6 +245,7 @@ pub async fn create_vm(
             let vm_id = vm.id;
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = store.clear_vm_shells(vm_id);
+                let _ = store.clear_vm_port_forwards(vm_id);
                 store.delete(vm_id)
             })
             .await;
@@ -370,6 +375,107 @@ pub async fn update_vm_shells(
         .get(&id)
         .cloned()
         .ok_or_else(|| AppError::not_found(request_id.0))?;
+    let lease = lease_for(&state, id).await;
+    Ok(Json(vm_response(&state, &record, lease.as_ref())))
+}
+
+/// Replaces port forwarding rules for a VM.
+/// If the VM is currently running, the rules are atomically re-applied in nftables.
+pub async fn update_vm_port_forwards(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    ValidatedJson(req): ValidatedJson<firecrab_api_types::UpdateVmPortForwardsRequest>,
+) -> Result<Json<VmResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+
+    let mut fields = BTreeMap::new();
+    let mut seen = std::collections::HashSet::new();
+    for pf in &req.port_forwards {
+        if pf.host_port == 0 {
+            fields.insert("portForwards".to_owned(), "host port cannot be 0".to_owned());
+            break;
+        }
+        if pf.guest_port == 0 {
+            fields.insert("portForwards".to_owned(), "guest port cannot be 0".to_owned());
+            break;
+        }
+        if !seen.insert((pf.host_port, pf.protocol)) {
+            fields.insert(
+                "portForwards".to_owned(),
+                format!("host port {}/{} specified more than once", pf.host_port, pf.protocol),
+            );
+            break;
+        }
+    }
+    if !fields.contains_key("portForwards") {
+        if let Ok(all_pfs) = state.store.list_all_port_forwards() {
+            for (owner_id, existing_pf) in all_pfs {
+                if owner_id != id
+                    && req
+                        .port_forwards
+                        .iter()
+                        .any(|pf| pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol)
+                {
+                    fields.insert(
+                        "portForwards".to_owned(),
+                        "one or more host ports are already in use by another VM".to_owned(),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+    if !fields.is_empty() {
+        return Err(AppError::validation(fields, request_id.0));
+    }
+
+    let (record, is_running) = {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let vm = vms
+            .get(&id)
+            .ok_or_else(|| AppError::not_found(request_id.0))?;
+        (vm.clone(), vm.state == VmState::Running)
+    };
+
+    let store = state.store.clone();
+    let forwards = req.port_forwards.clone();
+    tokio::task::spawn_blocking(move || store.set_vm_port_forwards(id, &forwards))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, %error, "failed to update port forwards");
+            AppError::internal(request_id.0)
+        })?;
+
+    if is_running {
+        if let Some(lease) = state.store.active_lease(id).ok().flatten() {
+            let port_forwards_specs = req
+                .port_forwards
+                .iter()
+                .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
+                    host_port: pf.host_port,
+                    guest_port: pf.guest_port,
+                    protocol: pf.protocol.to_string(),
+                })
+                .collect();
+            let _ = state
+                .network
+                .apply_vm_policy(
+                    id,
+                    lease.ipv4,
+                    lease.mac,
+                    record.egress_policy,
+                    false,
+                    port_forwards_specs,
+                )
+                .await;
+        }
+    }
+
     let lease = lease_for(&state, id).await;
     Ok(Json(vm_response(&state, &record, lease.as_ref())))
 }
@@ -707,6 +813,7 @@ pub async fn delete_vm(
         // happen (every VM gets one at create_vm), but isn't worth failing
         // an otherwise-successful delete over.
         let _ = store.clear_vm_shells(id);
+        let _ = store.clear_vm_port_forwards(id);
         match store.release_lease(id) {
             Ok(()) | Err(IpamError::NotLeased { .. }) => Ok(()),
             Err(error) => Err(error.to_string()),
@@ -1215,9 +1322,21 @@ async fn setup_vm_network(
         .await
         .map_err(|error| VmNetworkSetupError::Other(format!("tap creation failed: {error}")))?;
 
+    let port_forwards = state
+        .store
+        .list_vm_port_forwards(vm_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
+            host_port: pf.host_port,
+            guest_port: pf.guest_port,
+            protocol: pf.protocol.to_string(),
+        })
+        .collect();
+
     if let Err(error) = state
         .network
-        .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false)
+        .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false, port_forwards)
         .await
     {
         // A failed apply_vm_policy leaves nothing installed (nft applies a
@@ -1342,9 +1461,20 @@ pub(crate) async fn reapply_running_vm_policies(state: &AppState) -> Result<(), 
     .map_err(|error| format!("running vm lookup failed: {error}"))?;
 
     for (vm_id, egress_policy, lease) in running {
+        let port_forwards = state
+            .store
+            .list_vm_port_forwards(vm_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
+                host_port: pf.host_port,
+                guest_port: pf.guest_port,
+                protocol: pf.protocol.to_string(),
+            })
+            .collect();
         state
             .network
-            .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false)
+            .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false, port_forwards)
             .await
             .map_err(|error| format!("policy reapply failed for vm {vm_id}: {error}"))?;
     }
@@ -1549,6 +1679,10 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         .store
         .list_vm_shell_refs(vm.id)
         .unwrap_or_else(|_| Vec::new());
+    let port_forwards = state
+        .store
+        .list_vm_port_forwards(vm.id)
+        .unwrap_or_else(|_| Vec::new());
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
@@ -1572,6 +1706,7 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         memory_used_percent: usage.memory_used_percent,
         usage_history: usage.history,
         shell_refs,
+        port_forwards,
     }
 }
 
@@ -1701,6 +1836,45 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
                     }
                 },
             );
+        }
+    }
+    if !req.port_forwards.is_empty() {
+        let mut seen = std::collections::HashSet::new();
+        for pf in &req.port_forwards {
+            if pf.host_port == 0 {
+                fields.insert(
+                    "portForwards".to_owned(),
+                    "host port cannot be 0".to_owned(),
+                );
+                break;
+            }
+            if pf.guest_port == 0 {
+                fields.insert(
+                    "portForwards".to_owned(),
+                    "guest port cannot be 0".to_owned(),
+                );
+                break;
+            }
+            if !seen.insert((pf.host_port, pf.protocol)) {
+                fields.insert(
+                    "portForwards".to_owned(),
+                    format!("host port {}/{} specified more than once", pf.host_port, pf.protocol),
+                );
+                break;
+            }
+        }
+        if !fields.contains_key("portForwards") {
+            if let Ok(all_pfs) = state.store.list_all_port_forwards() {
+                for (_, existing_pf) in all_pfs {
+                    if req.port_forwards.iter().any(|pf| pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol) {
+                        fields.insert(
+                            "portForwards".to_owned(),
+                            "one or more host ports are already in use by another VM".to_owned(),
+                        );
+                        break;
+                    }
+                }
+            }
         }
     }
     fields
@@ -2015,6 +2189,7 @@ mod tests {
             micro_network_id: Uuid::from_u128(1),
             storage_root: None,
             shell_ids: Vec::new(),
+            port_forwards: Vec::new(),
         };
 
         let too_small = validate_create(&base, &state);
@@ -3197,6 +3372,7 @@ while True:
             micro_network_id,
             storage_root: None,
             shell_ids: Vec::new(),
+            port_forwards: Vec::new(),
         }
     }
 

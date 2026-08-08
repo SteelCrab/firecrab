@@ -125,6 +125,14 @@ const CREATE_VM_SHELLS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vm_shells (
     PRIMARY KEY (vm_id, shell_id)
 ) STRICT";
 
+const CREATE_PORT_FORWARDS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS port_forwards (
+    vm_id TEXT NOT NULL,
+    host_port INTEGER NOT NULL,
+    guest_port INTEGER NOT NULL,
+    protocol TEXT NOT NULL DEFAULT 'tcp',
+    PRIMARY KEY (vm_id, host_port, protocol)
+) STRICT";
+
 /// Adds `disk_gb` to a `vms` table created before the column existed (a
 /// bare `CREATE TABLE IF NOT EXISTS` doesn't retrofit new columns onto an
 /// already-created table). `2` matches the fixed rootfs template size that
@@ -457,6 +465,7 @@ impl Store {
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
+        conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -1090,6 +1099,107 @@ impl Store {
                 revision_id,
                 content: row.get(1)?,
             });
+        }
+        Ok(out)
+    }
+
+    /// Stores (replaces) a VM's port forwarding rules in SQLite.
+    pub fn set_vm_port_forwards(
+        &self,
+        vm_id: Uuid,
+        forwards: &[firecrab_api_types::PortForward],
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM port_forwards WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )?;
+        for pf in forwards {
+            tx.execute(
+                "INSERT INTO port_forwards (vm_id, host_port, guest_port, protocol) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    vm_id.to_string(),
+                    i64::from(pf.host_port),
+                    i64::from(pf.guest_port),
+                    pf.protocol.to_string(),
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Clears all port forwarding rules for a VM.
+    pub fn clear_vm_port_forwards(&self, vm_id: Uuid) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            "DELETE FROM port_forwards WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Fetches all port forwarding rules for a VM.
+    pub fn list_vm_port_forwards(
+        &self,
+        vm_id: Uuid,
+    ) -> Result<Vec<firecrab_api_types::PortForward>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT host_port, guest_port, protocol FROM port_forwards WHERE vm_id = ?1 ORDER BY host_port ASC",
+        )?;
+        let mut rows = statement.query(params![vm_id.to_string()])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let host_port: u16 = row.get::<_, i64>(0)? as u16;
+            let guest_port: u16 = row.get::<_, i64>(1)? as u16;
+            let proto_str: String = row.get(2)?;
+            let protocol = if proto_str.eq_ignore_ascii_case("udp") {
+                firecrab_api_types::PortProtocol::Udp
+            } else {
+                firecrab_api_types::PortProtocol::Tcp
+            };
+            out.push(firecrab_api_types::PortForward {
+                host_port,
+                guest_port,
+                protocol,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Fetches all port forwarding rules across all VMs.
+    pub fn list_all_port_forwards(
+        &self,
+    ) -> Result<Vec<(Uuid, firecrab_api_types::PortForward)>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT vm_id, host_port, guest_port, protocol FROM port_forwards",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let vm_text: String = row.get(0)?;
+            let vm_id = Uuid::parse_str(&vm_text).map_err(|_| PersistenceError::CorruptRecord {
+                id: vm_text.clone(),
+                reason: "vm_id is not a UUID".to_owned(),
+            })?;
+            let host_port: u16 = row.get::<_, i64>(1)? as u16;
+            let guest_port: u16 = row.get::<_, i64>(2)? as u16;
+            let proto_str: String = row.get(3)?;
+            let protocol = if proto_str.eq_ignore_ascii_case("udp") {
+                firecrab_api_types::PortProtocol::Udp
+            } else {
+                firecrab_api_types::PortProtocol::Tcp
+            };
+            out.push((
+                vm_id,
+                firecrab_api_types::PortForward {
+                    host_port,
+                    guest_port,
+                    protocol,
+                },
+            ));
         }
         Ok(out)
     }
