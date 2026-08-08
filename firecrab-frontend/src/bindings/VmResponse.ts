@@ -5,4 +5,34 @@ import type { StartupStepRun } from "./StartupStepRun";
 import type { VmState } from "./VmState";
 import type { VmUsageSample } from "./VmUsageSample";
 
-export type VmResponse = { id: string, name: string, state: VmState, template: string, templateVersion: string, cpu: number, ram: number, diskGb: number, startupStep: StartupStep | null, startupTimeline: Array<StartupStepRun>, egressPolicy: EgressPolicy, ipv4: string | null, mac: string | null, hostname: string, microNetworkId: string, storageRoot: string, /** Host Firecracker process CPU % of one core; null when unknown. */ cpuUsagePercent: number | null, /** Host Firecracker process RSS MiB; null when unknown. */ memoryUsedMib: number | null, /** Recent host-process samples for sparklines. */ usageHistory: Array<VmUsageSample>, };
+export type VmResponse = {
+  id: string,
+  name: string,
+  state: VmState,
+  template: string,
+  templateVersion: string,
+  cpu: number,
+  ram: number,
+  diskGb: number,
+  startupStep: StartupStep | null,
+  startupTimeline: Array<StartupStepRun>,
+  egressPolicy: EgressPolicy,
+  ipv4: string | null,
+  mac: string | null,
+  hostname: string,
+  microNetworkId: string,
+  storageRoot: string,
+  /**
+   * Guest OS CPU busy percent from the Metrics Agent (`FIRECRAB_USAGE cpu_pct=`).
+   * null until the agent reports or the VM is not running.
+   */
+  cpuUsagePercent: number | null,
+  /** Guest used memory MiB (MemTotal − MemAvailable); null until reported. */
+  memoryUsedMib: number | null,
+  /** Guest MemTotal MiB; null until reported. */
+  memoryTotalMib: number | null,
+  /** Guest used memory percent of MemTotal; null until reported. */
+  memoryUsedPercent: number | null,
+  /** Recent Metrics Agent samples for sparklines (oldest first, bounded). */
+  usageHistory: Array<VmUsageSample>,
+};

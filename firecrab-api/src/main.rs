@@ -4,6 +4,7 @@ mod console;
 mod error;
 mod extract;
 mod firecracker;
+mod guest_agent;
 mod handlers;
 mod image_install;
 mod ipam;

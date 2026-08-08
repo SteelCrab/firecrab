@@ -41,6 +41,9 @@ pub struct ConsoleBroker {
 struct ConsoleState {
     backlog: VecDeque<u8>,
     output: broadcast::Sender<Vec<u8>>,
+    /// Incomplete line held so we can drop full `FIRECRAB_USAGE` lines without
+    /// leaking them into interactive terminal viewers.
+    line_filter: Vec<u8>,
 }
 
 impl ConsoleBroker {
@@ -50,6 +53,7 @@ impl ConsoleBroker {
             state: Mutex::new(ConsoleState {
                 backlog: VecDeque::new(),
                 output,
+                line_filter: Vec::new(),
             }),
             stdin: tokio::sync::Mutex::new(None),
         }
@@ -77,15 +81,23 @@ impl ConsoleBroker {
     /// Called from the single console-reader task with each chunk read off
     /// the guest's console. No subscribers is not an error — the bytes still
     /// join the backlog for whoever connects next.
+    ///
+    /// Complete lines containing `FIRECRAB_USAGE` (legacy guest-agent console
+    /// transport) are stripped so interactive terminals stay readable; the
+    /// console reader still feeds raw bytes to the metrics tracker first.
     pub fn push_output(&self, chunk: &[u8]) {
         let mut state = self.lock();
-        state.backlog.extend(chunk.iter().copied());
+        let visible = filter_guest_usage_for_terminal(&mut state.line_filter, chunk);
+        if visible.is_empty() {
+            return;
+        }
+        state.backlog.extend(visible.iter().copied());
         let overflow = state.backlog.len().saturating_sub(MAX_BACKLOG_BYTES);
         if overflow > 0 {
             state.backlog.drain(..overflow);
         }
         // No receivers yet is expected (no viewer connected) and not an error.
-        let _ = state.output.send(chunk.to_vec());
+        let _ = state.output.send(visible);
     }
 
     /// Backlog-so-far plus a receiver for everything from this point on.
@@ -119,6 +131,46 @@ impl Default for ConsoleBroker {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Drops complete lines that carry metrics-agent reports so they never reach
+/// interactive terminals **or** the on-disk console log. Incomplete trailing
+/// data is only held when it could still become a `FIRECRAB_USAGE` line —
+/// ordinary typing and shell prompts flush immediately so the terminal stays
+/// responsive.
+pub(crate) fn filter_guest_usage_for_terminal(pending: &mut Vec<u8>, chunk: &[u8]) -> Vec<u8> {
+    pending.extend_from_slice(chunk);
+    // Cap so a pathological flood without newlines cannot grow forever.
+    const MAX_PENDING: usize = 8 * 1024;
+    if pending.len() > MAX_PENDING {
+        let excess = pending.len() - MAX_PENDING;
+        pending.drain(..excess);
+    }
+    let mut out = Vec::with_capacity(pending.len());
+    while let Some(pos) = pending.iter().position(|&b| b == b'\n') {
+        let mut line: Vec<u8> = pending.drain(..=pos).collect();
+        let is_usage = String::from_utf8_lossy(&line).contains("FIRECRAB_USAGE");
+        if !is_usage {
+            out.append(&mut line);
+        }
+    }
+    if !pending.is_empty() && !could_become_usage_line(pending) {
+        out.extend_from_slice(pending);
+        pending.clear();
+    }
+    out
+}
+
+fn could_become_usage_line(buf: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(buf);
+    let trimmed = text.trim_start_matches(|c: char| c == '\r' || c.is_ascii_control());
+    if trimmed.contains("FIRECRAB_USAGE") {
+        return true;
+    }
+    if trimmed.is_empty() {
+        return false;
+    }
+    "FIRECRAB_USAGE".starts_with(trimmed)
 }
 
 #[cfg(test)]
@@ -176,6 +228,21 @@ mod tests {
         broker.push_output(b"nobody is listening");
         let (backlog, _receiver) = broker.subscribe();
         assert_eq!(backlog, b"nobody is listening");
+    }
+
+    #[test]
+    fn usage_lines_are_hidden_from_terminal_backlog() {
+        let broker = ConsoleBroker::new();
+        broker.push_output(b"hello\n");
+        broker.push_output(
+            b"FIRECRAB_USAGE cpu_pct=1.0 mem_used_mib=1 mem_total_mib=2 mem_used_pct=50.0\n",
+        );
+        broker.push_output(b"world\n");
+        let (backlog, _receiver) = broker.subscribe();
+        let text = String::from_utf8_lossy(&backlog);
+        assert!(text.contains("hello"));
+        assert!(text.contains("world"));
+        assert!(!text.contains("FIRECRAB_USAGE"));
     }
 
     #[tokio::test]

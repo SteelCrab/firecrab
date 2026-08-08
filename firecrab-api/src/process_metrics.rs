@@ -1,13 +1,14 @@
-//! Host Firecracker process CPU and RSS sampling for running VMs.
+//! Guest OS resource samples for running VMs (Firecrab Metrics Agent).
 //!
-//! Values come from Linux `/proc/<pid>` and describe the **host process**,
-//! not guest-internal free memory or guest CPU accounting. CPU percent is
-//! derived from utime+stime jiffy deltas between successive samples.
-//! A bounded ring buffer keeps recent points for dashboard sparklines.
+//! Source: lines printed by `firecrab-guest-agent` (see [`crate::guest_agent`])
+//! on the serial console (`FIRECRAB_USAGE …`). Values are **guest** CPU % and
+//! memory used (CloudWatch Agent–style: MemTotal − MemAvailable), not host
+//! Firecracker process RSS. Interactive terminals strip those lines via
+//! [`crate::console::ConsoleBroker`]; the metrics tracker still reads the
+//! raw console stream.
 
 use std::collections::{HashMap, VecDeque};
-use std::fs;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use firecrab_api_types::VmUsageSample;
 use uuid::Uuid;
@@ -15,83 +16,122 @@ use uuid::Uuid;
 /// How many samples to keep per VM (dashboard polls ~3s → ~3 minutes).
 const HISTORY_CAP: usize = 60;
 
-/// Latest CPU and memory sample for one VM, plus sparkline history.
+/// Prefix of every agent report line (must stay stable for parsers).
+pub const USAGE_LINE_PREFIX: &str = "FIRECRAB_USAGE";
+
+/// Latest guest sample for one VM, plus sparkline history.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UsageSnapshot {
-    /// Percent of one host core since the previous sample, if known.
+    /// Guest CPU busy percent (0–100 typical; multi-core averaged).
     pub cpu_usage_percent: Option<f32>,
-    /// Process RSS in MiB, if `/proc` could be read.
+    /// Guest used memory in MiB (`MemTotal − MemAvailable`).
     pub memory_used_mib: Option<u64>,
-    /// Oldest-first recent samples (includes this observation when present).
+    /// Guest total memory in MiB (`MemTotal`).
+    pub memory_total_mib: Option<u64>,
+    /// Guest used memory percent of MemTotal.
+    pub memory_used_percent: Option<f32>,
+    /// Oldest-first recent samples.
     pub history: Vec<VmUsageSample>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct LastSample {
-    at: Instant,
-    jiffies: u64,
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GuestSample {
+    cpu_usage_percent: Option<f32>,
+    memory_used_mib: Option<u64>,
+    memory_total_mib: Option<u64>,
+    memory_used_percent: Option<f32>,
 }
 
-/// Per-VM previous jiffy sample and ring buffer for graphs.
+/// Per-VM latest guest sample and ring buffer for graphs.
 #[derive(Debug, Default)]
 pub struct ProcessMetricsTracker {
-    last: HashMap<Uuid, LastSample>,
+    latest: HashMap<Uuid, GuestSample>,
     history: HashMap<Uuid, VecDeque<VmUsageSample>>,
+    /// Incomplete UTF-8 / partial lines across console chunks.
+    line_bufs: HashMap<Uuid, String>,
 }
 
 impl ProcessMetricsTracker {
-    /// Samples `pid` and updates the running CPU delta for `id`.
-    pub fn observe(&mut self, id: Uuid, pid: u32) -> UsageSnapshot {
-        let Some(sample) = read_process_sample(pid) else {
-            self.last.remove(&id);
-            self.history.remove(&id);
-            return UsageSnapshot::default();
+    /// Returns the last guest sample and history without sampling the host.
+    pub fn snapshot(&self, id: Uuid) -> UsageSnapshot {
+        let Some(sample) = self.latest.get(&id).copied() else {
+            return UsageSnapshot {
+                history: self
+                    .history
+                    .get(&id)
+                    .map(|ring| ring.iter().cloned().collect())
+                    .unwrap_or_default(),
+                ..UsageSnapshot::default()
+            };
         };
+        UsageSnapshot {
+            cpu_usage_percent: sample.cpu_usage_percent,
+            memory_used_mib: sample.memory_used_mib,
+            memory_total_mib: sample.memory_total_mib,
+            memory_used_percent: sample.memory_used_percent,
+            history: self
+                .history
+                .get(&id)
+                .map(|ring| ring.iter().cloned().collect())
+                .unwrap_or_default(),
+        }
+    }
 
-        let memory_used_mib = Some(sample.rss_kib / 1024);
-        let cpu_usage_percent = self
-            .last
-            .get(&id)
-            .and_then(|prev| cpu_percent(prev, &sample));
+    /// Feeds raw console output; extracts complete `FIRECRAB_USAGE` lines.
+    pub fn ingest_console(&mut self, id: Uuid, chunk: &[u8]) {
+        let text = String::from_utf8_lossy(chunk);
+        let buf = self.line_bufs.entry(id).or_default();
+        buf.push_str(&text);
+        // Cap partial buffer so a flood cannot grow unbounded.
+        // Drain only at a UTF-8 char boundary — a raw byte cut can panic.
+        const MAX_PARTIAL: usize = 8 * 1024;
+        if buf.len() > MAX_PARTIAL {
+            let excess = buf.len() - MAX_PARTIAL;
+            let cut = floor_char_boundary(buf, excess);
+            if cut > 0 {
+                buf.drain(..cut);
+            }
+        }
+        let mut complete = Vec::new();
+        while let Some(pos) = buf.find('\n') {
+            let mut line = buf.drain(..=pos).collect::<String>();
+            if line.ends_with('\n') {
+                line.pop();
+            }
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            complete.push(line);
+        }
+        for line in complete {
+            if let Some(sample) = parse_usage_line(&line) {
+                self.record(id, sample);
+            }
+        }
+    }
 
-        self.last.insert(
-            id,
-            LastSample {
-                at: sample.at,
-                jiffies: sample.jiffies,
-            },
-        );
+    /// Drops state when a process is no longer tracked.
+    pub fn clear(&mut self, id: Uuid) {
+        self.latest.remove(&id);
+        self.history.remove(&id);
+        self.line_bufs.remove(&id);
+    }
 
+    fn record(&mut self, id: Uuid, sample: GuestSample) {
+        self.latest.insert(id, sample);
         let point = VmUsageSample {
             at_ms: unix_ms_now(),
-            cpu_usage_percent,
-            memory_used_mib,
+            cpu_usage_percent: sample.cpu_usage_percent,
+            memory_used_mib: sample.memory_used_mib,
+            memory_total_mib: sample.memory_total_mib,
+            memory_used_percent: sample.memory_used_percent,
         };
         let ring = self.history.entry(id).or_default();
         ring.push_back(point);
         while ring.len() > HISTORY_CAP {
             ring.pop_front();
         }
-
-        UsageSnapshot {
-            cpu_usage_percent,
-            memory_used_mib,
-            history: ring.iter().cloned().collect(),
-        }
     }
-
-    /// Drops the previous sample and history when a process is no longer tracked.
-    pub fn clear(&mut self, id: Uuid) {
-        self.last.remove(&id);
-        self.history.remove(&id);
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RawSample {
-    at: Instant,
-    jiffies: u64,
-    rss_kib: u64,
 }
 
 fn unix_ms_now() -> u64 {
@@ -101,158 +141,151 @@ fn unix_ms_now() -> u64 {
         .unwrap_or(0)
 }
 
-fn read_process_sample(pid: u32) -> Option<RawSample> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    let jiffies = parse_stat_jiffies(&stat)?;
-    let rss_kib = parse_status_rss_kib(&status)?;
-    Some(RawSample {
-        at: Instant::now(),
-        jiffies,
-        rss_kib,
-    })
+/// Largest index `≤ idx` that is a char boundary (stable without nightly APIs).
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    let mut i = idx;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
-fn cpu_percent(prev: &LastSample, sample: &RawSample) -> Option<f32> {
-    if sample.jiffies < prev.jiffies {
+/// Parses `FIRECRAB_USAGE cpu_pct=1.2 mem_used_mib=3 mem_total_mib=4 mem_used_pct=5.6`.
+fn parse_usage_line(line: &str) -> Option<GuestSample> {
+    let line = line.trim();
+    // Allow ANSI / getty noise before the marker.
+    let start = line.find(USAGE_LINE_PREFIX)?;
+    let rest = line[start + USAGE_LINE_PREFIX.len()..].trim();
+    if rest.is_empty() {
         return None;
     }
-    let elapsed = sample.at.duration_since(prev.at).as_secs_f32();
-    if elapsed <= 0.0 {
-        return None;
-    }
-    let delta_jiffies = (sample.jiffies - prev.jiffies) as f32;
-    let hz = clock_ticks_per_second() as f32;
-    if hz <= 0.0 {
-        return None;
-    }
-    // Percent of one host CPU core; multi-vCPU VMs may exceed 100.
-    Some((delta_jiffies / hz) / elapsed * 100.0)
-}
 
-fn clock_ticks_per_second() -> i64 {
-    // SAFETY: `_SC_CLK_TCK` is a valid sysconf name; a negative return is
-    // treated as a hard-coded fallback below.
-    let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
-    if ticks > 0 { ticks } else { 100 }
-}
+    let mut cpu_usage_percent = None;
+    let mut memory_used_mib = None;
+    let mut memory_total_mib = None;
+    let mut memory_used_percent = None;
 
-/// Parses utime+stime jiffies from a `/proc/<pid>/stat` body.
-///
-/// The `comm` field is parenthesized and may contain spaces, so we split
-/// after the last `)` and use field offsets from the man page (utime=14,
-/// stime=15 overall → indices 11 and 12 after the state field).
-pub(crate) fn parse_stat_jiffies(stat: &str) -> Option<u64> {
-    let end = stat.rfind(')')?;
-    let rest = stat.get(end + 1..)?.trim_start();
-    let mut fields = rest.split_whitespace();
-    // fields: state ppid pgrp session tty_nr tpgid flags minflt cminflt
-    // majflt cmajflt utime stime ...
-    let utime: u64 = fields.nth(11)?.parse().ok()?;
-    let stime: u64 = fields.next()?.parse().ok()?;
-    Some(utime.saturating_add(stime))
-}
-
-/// Parses `VmRSS` (kB) from a `/proc/<pid>/status` body.
-pub(crate) fn parse_status_rss_kib(status: &str) -> Option<u64> {
-    for line in status.lines() {
-        let Some(rest) = line.strip_prefix("VmRSS:") else {
+    for token in rest.split_whitespace() {
+        let Some((key, value)) = token.split_once('=') else {
             continue;
         };
-        return rest.split_whitespace().next()?.parse().ok();
+        match key {
+            "cpu_pct" => cpu_usage_percent = value.parse().ok(),
+            "mem_used_mib" => memory_used_mib = value.parse().ok(),
+            "mem_total_mib" => memory_total_mib = value.parse().ok(),
+            "mem_used_pct" => memory_used_percent = value.parse().ok(),
+            _ => {}
+        }
     }
-    None
+
+    if cpu_usage_percent.is_none()
+        && memory_used_mib.is_none()
+        && memory_total_mib.is_none()
+        && memory_used_percent.is_none()
+    {
+        return None;
+    }
+
+    Some(GuestSample {
+        cpu_usage_percent,
+        memory_used_mib,
+        memory_total_mib,
+        memory_used_percent,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
-    fn parses_stat_jiffies_with_spaces_in_comm() {
-        // Synthetic line: utime=100 stime=50 after the (comm) section.
-        let stat = "1 (fire cracker) S 0 0 0 0 -1 0 0 0 0 0 100 50 0 0 20 0 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
-        assert_eq!(parse_stat_jiffies(stat), Some(150));
+    fn parse_usage_line_full() {
+        let s = parse_usage_line(
+            "FIRECRAB_USAGE cpu_pct=12.5 mem_used_mib=900 mem_total_mib=2048 mem_used_pct=44.0",
+        )
+        .unwrap();
+        assert_eq!(s.cpu_usage_percent, Some(12.5));
+        assert_eq!(s.memory_used_mib, Some(900));
+        assert_eq!(s.memory_total_mib, Some(2048));
+        assert_eq!(s.memory_used_percent, Some(44.0));
     }
 
     #[test]
-    fn parses_vmrss_kib() {
-        let status = "Name:\tfirecracker\nVmSize:\t204800 kB\nVmRSS:\t184320 kB\n";
-        assert_eq!(parse_status_rss_kib(status), Some(184_320));
+    fn parse_usage_line_tolerates_prefix_noise() {
+        let s = parse_usage_line(
+            "\x1b[0mFIRECRAB_USAGE cpu_pct=1.0 mem_used_mib=10 mem_total_mib=100 mem_used_pct=10.0\n",
+        )
+        .unwrap();
+        assert_eq!(s.cpu_usage_percent, Some(1.0));
     }
 
     #[test]
-    fn observe_first_sample_has_memory_only() {
+    fn ingest_console_splits_across_chunks() {
         let mut tracker = ProcessMetricsTracker::default();
         let id = Uuid::from_u128(1);
-        // Sample "self" — this test process always has a /proc entry.
-        let pid = std::process::id();
-        let first = tracker.observe(id, pid);
-        assert!(first.memory_used_mib.is_some());
-        assert!(first.cpu_usage_percent.is_none());
-        assert_eq!(first.history.len(), 1);
-
-        std::thread::sleep(Duration::from_millis(50));
-        // Burn a little CPU so the second sample is non-zero more often.
-        let mut n = 0u64;
-        for i in 0..200_000 {
-            n = n.wrapping_add(i);
-        }
-        std::hint::black_box(n);
-
-        let second = tracker.observe(id, pid);
-        assert!(second.memory_used_mib.is_some());
-        assert!(second.cpu_usage_percent.is_some());
-        assert!(second.cpu_usage_percent.unwrap() >= 0.0);
-        assert_eq!(second.history.len(), 2);
+        tracker.ingest_console(id, b"FIRECRAB_USAGE cpu_pct=2.0 mem_used_");
+        assert!(tracker.snapshot(id).cpu_usage_percent.is_none());
+        tracker.ingest_console(id, b"mib=50 mem_total_mib=200 mem_used_pct=25.0\ntrailing");
+        let snap = tracker.snapshot(id);
+        assert_eq!(snap.cpu_usage_percent, Some(2.0));
+        assert_eq!(snap.memory_used_mib, Some(50));
+        assert_eq!(snap.memory_total_mib, Some(200));
+        assert_eq!(snap.memory_used_percent, Some(25.0));
+        assert_eq!(snap.history.len(), 1);
     }
 
     #[test]
     fn history_is_capped() {
         let mut tracker = ProcessMetricsTracker::default();
         let id = Uuid::from_u128(9);
-        let pid = std::process::id();
-        for _ in 0..(HISTORY_CAP + 5) {
-            let _ = tracker.observe(id, pid);
+        for i in 0..(HISTORY_CAP + 5) {
+            tracker.ingest_console(
+                id,
+                format!("FIRECRAB_USAGE cpu_pct={i}.0 mem_used_mib=1 mem_total_mib=2 mem_used_pct=50.0\n")
+                    .as_bytes(),
+            );
         }
-        let snap = tracker.observe(id, pid);
-        assert_eq!(snap.history.len(), HISTORY_CAP);
+        assert_eq!(tracker.snapshot(id).history.len(), HISTORY_CAP);
     }
 
     #[test]
-    fn clear_drops_previous_sample() {
+    fn clear_drops_state() {
         let mut tracker = ProcessMetricsTracker::default();
         let id = Uuid::from_u128(2);
-        let pid = std::process::id();
-        let _ = tracker.observe(id, pid);
+        tracker.ingest_console(
+            id,
+            b"FIRECRAB_USAGE cpu_pct=9.0 mem_used_mib=1 mem_total_mib=2 mem_used_pct=50.0\n",
+        );
         tracker.clear(id);
-        let again = tracker.observe(id, pid);
-        assert!(again.cpu_usage_percent.is_none());
-        assert!(again.memory_used_mib.is_some());
-        assert_eq!(again.history.len(), 1);
+        assert_eq!(tracker.snapshot(id), UsageSnapshot::default());
     }
 
     #[test]
-    fn missing_pid_returns_none() {
+    fn ignores_unrelated_lines() {
         let mut tracker = ProcessMetricsTracker::default();
-        let snap = tracker.observe(Uuid::from_u128(3), u32::MAX);
-        assert_eq!(snap, UsageSnapshot::default());
+        let id = Uuid::from_u128(3);
+        tracker.ingest_console(id, b"FIRECRAB_NETWORK_READY 1.2.3.4\n");
+        assert_eq!(tracker.snapshot(id), UsageSnapshot::default());
     }
 
     #[test]
-    fn cpu_percent_from_jiffy_delta() {
-        let prev = LastSample {
-            at: Instant::now() - Duration::from_secs(1),
-            jiffies: 100,
-        };
-        let sample = RawSample {
-            at: Instant::now(),
-            jiffies: 100 + clock_ticks_per_second() as u64, // ~1 second of one core
-            rss_kib: 1024,
-        };
-        let pct = cpu_percent(&prev, &sample).unwrap();
-        // About 100% of one core; allow clock skew on CI.
-        assert!(pct > 50.0 && pct < 150.0, "pct={pct}");
+    fn partial_buffer_cap_does_not_panic_on_multibyte_boundary() {
+        let mut tracker = ProcessMetricsTracker::default();
+        let id = Uuid::from_u128(4);
+        // Fill past MAX_PARTIAL with multi-byte UTF-8 so a naïve byte cut
+        // would land mid-character.
+        let mut flood = String::new();
+        while flood.len() < 9 * 1024 {
+            flood.push('한'); // 3-byte codepoint
+        }
+        tracker.ingest_console(id, flood.as_bytes());
+        tracker.ingest_console(
+            id,
+            b"FIRECRAB_USAGE cpu_pct=1.0 mem_used_mib=1 mem_total_mib=2 mem_used_pct=50.0\n",
+        );
+        assert_eq!(tracker.snapshot(id).cpu_usage_percent, Some(1.0));
     }
 }

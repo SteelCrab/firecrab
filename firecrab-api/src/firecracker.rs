@@ -7,7 +7,7 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -367,6 +367,13 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
         api_sock,
         console,
     } = process;
+    // Drop any leftover samples from a previous generation before this PID
+    // starts reporting (exit monitors only clear when they still own the map).
+    state
+        .process_metrics
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear(id);
     state
         .processes
         .lock()
@@ -381,19 +388,39 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
         );
 
     let state = state.clone();
+    let watched_pid = pid;
     tokio::spawn(async move {
         let status = child.wait().await;
         let _ = fs::remove_file(&api_sock);
-        state
-            .processes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&id);
-        state
-            .process_metrics
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clear(id);
+
+        // Only tear down map/metrics entries for *this* process. After a
+        // quick stop→start the new generation may already be registered under
+        // the same VM id; a late exit monitor must not remove it or wipe the
+        // new guest-agent samples (the root cause of empty Resource usage
+        // after restart).
+        let still_ours = {
+            let mut processes = state
+                .processes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            match processes.get(&id) {
+                Some(current) if current.pid == watched_pid => {
+                    processes.remove(&id);
+                    true
+                }
+                // Newer generation already registered, or this id is no longer
+                // in the map (stop/start race). Do not claim ownership — a late
+                // monitor must not wipe the new process's metrics or flip state.
+                Some(_) | None => false,
+            }
+        };
+        if still_ours {
+            state
+                .process_metrics
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clear(id);
+        }
 
         let clean_exit = status.as_ref().is_ok_and(|status| status.success());
         let updated = {
@@ -403,10 +430,11 @@ pub fn register_and_watch(state: &AppState, id: Uuid, process: FirecrackerProces
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             match vms.get_mut(&id) {
                 Some(vm)
-                    if matches!(
-                        vm.state,
-                        VmState::Starting | VmState::Running | VmState::Stopping
-                    ) =>
+                    if still_ours
+                        && matches!(
+                            vm.state,
+                            VmState::Starting | VmState::Running | VmState::Stopping
+                        ) =>
                 {
                     vm.state = if vm.state == VmState::Stopping || clean_exit {
                         VmState::Stopped
@@ -456,6 +484,7 @@ pub async fn spawn_vm(
     id: Uuid,
     enable_pci: bool,
     ready_timeout: Duration,
+    process_metrics: Arc<Mutex<crate::process_metrics::ProcessMetricsTracker>>,
 ) -> Result<FirecrackerProcess, FirecrackerError> {
     fs::create_dir_all(&runtime.dir).map_err(|source| FirecrackerError::CreateDirectory {
         path: runtime.dir.clone(),
@@ -513,7 +542,7 @@ pub async fn spawn_vm(
     let stdout = child.stdout.take().expect("stdout was piped");
     let console = Arc::new(ConsoleBroker::new());
     console.attach_stdin(stdin).await;
-    spawn_console_reader(id, stdout, log_file, Arc::clone(&console));
+    spawn_console_reader(id, stdout, log_file, Arc::clone(&console), process_metrics);
 
     if let Err(error) = wait_ready(&api_sock, ready_timeout).await {
         let _ = child.kill().await;
@@ -537,10 +566,15 @@ fn spawn_console_reader(
     mut stdout: tokio::process::ChildStdout,
     log_file: File,
     console: Arc<ConsoleBroker>,
+    process_metrics: Arc<Mutex<crate::process_metrics::ProcessMetricsTracker>>,
 ) {
     let mut log_file = tokio::fs::File::from_std(log_file);
     tokio::spawn(async move {
         let mut buffer = [0_u8; CONSOLE_READ_CHUNK];
+        // Shared filter for the log file so FIRECRAB_USAGE never lands on disk
+        // (dashboard log view reads this file). Terminal filtering is owned by
+        // ConsoleBroker; metrics always see the raw chunk first.
+        let mut log_usage_filter = Vec::new();
         loop {
             let read = match stdout.read(&mut buffer).await {
                 Ok(0) => break,
@@ -551,7 +585,16 @@ fn spawn_console_reader(
                 }
             };
             let chunk = &buffer[..read];
-            if let Err(error) = log_file.write_all(chunk).await {
+            // Ingest metrics from the raw stream first.
+            process_metrics
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .ingest_console(id, chunk);
+            let for_log =
+                crate::console::filter_guest_usage_for_terminal(&mut log_usage_filter, chunk);
+            if !for_log.is_empty()
+                && let Err(error) = log_file.write_all(&for_log).await
+            {
                 tracing::warn!(vm_id = %id, %error, "failed to tee console output to log file");
             }
             console.push_output(chunk);
@@ -729,6 +772,12 @@ mod tests {
         paths.create_runtime(Uuid::new_v4()).unwrap()
     }
 
+    fn test_metrics() -> Arc<Mutex<crate::process_metrics::ProcessMetricsTracker>> {
+        Arc::new(Mutex::new(
+            crate::process_metrics::ProcessMetricsTracker::default(),
+        ))
+    }
+
     #[test]
     fn config_reflects_requested_resources() {
         let directory = tempdir().unwrap();
@@ -889,9 +938,16 @@ mod tests {
         let mut runtime = runtime_for(&vms_dir, id);
         fs::write(&runtime.config, "{}").unwrap();
 
-        let process = spawn_vm(&binary, &runtime, id, false, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let process = spawn_vm(
+            &binary,
+            &runtime,
+            id,
+            false,
+            Duration::from_secs(5),
+            test_metrics(),
+        )
+        .await
+        .unwrap();
         let pid = process.pid().unwrap() as i32;
         assert!(process_alive(pid));
 
@@ -923,9 +979,16 @@ mod tests {
         let runtime = runtime_for(&vms_dir, id);
         fs::write(&runtime.config, "{}").unwrap();
 
-        let error = spawn_vm(&binary, &runtime, id, false, Duration::from_millis(500))
-            .await
-            .unwrap_err();
+        let error = spawn_vm(
+            &binary,
+            &runtime,
+            id,
+            false,
+            Duration::from_millis(500),
+            test_metrics(),
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(error, FirecrackerError::NotReady { .. }));
         assert!(!process_alive(fake_pid(&runtime)));
@@ -943,9 +1006,16 @@ mod tests {
         let runtime = runtime_for(&vms_dir, id);
         fs::write(&runtime.config, "{}").unwrap();
 
-        let process = spawn_vm(&binary, &runtime, id, false, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let process = spawn_vm(
+            &binary,
+            &runtime,
+            id,
+            false,
+            Duration::from_secs(5),
+            test_metrics(),
+        )
+        .await
+        .unwrap();
         let pid = process.pid().unwrap() as i32;
         let started = std::time::Instant::now();
 
@@ -969,9 +1039,16 @@ mod tests {
         let runtime = runtime_for(&vms_dir, id);
         fs::write(&runtime.config, "{}").unwrap();
 
-        let process = spawn_vm(&binary, &runtime, id, true, Duration::from_secs(5))
-            .await
-            .unwrap();
+        let process = spawn_vm(
+            &binary,
+            &runtime,
+            id,
+            true,
+            Duration::from_secs(5),
+            test_metrics(),
+        )
+        .await
+        .unwrap();
         stop_vm(process, Duration::from_secs(5)).await.unwrap();
     }
 }
