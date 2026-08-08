@@ -155,9 +155,11 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
   ./target/debug/firecrab-net-helper
 
 # 端末 2 — API と Firecracker マネージャ
+pkill -f 'firecrab-api'
 cargo run -p firecrab-api
 
 # 端末 3 — ダッシュボード: http://localhost:8080/
+pkill -f 'vite'
 npm install --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```

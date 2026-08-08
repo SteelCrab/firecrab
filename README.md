@@ -159,9 +159,11 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
   ./target/debug/firecrab-net-helper
 
 # Terminal 2 — API and Firecracker manager
+pkill -f 'firecrab-api'
 cargo run -p firecrab-api
 
 # Terminal 3 — dashboard at http://localhost:8080/
+pkill -f 'vite'
 npm install --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```

@@ -150,9 +150,11 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
   ./target/debug/firecrab-net-helper
 
 # 터미널 2 — API와 Firecracker 관리자
+pkill -f 'firecrab-api'
 cargo run -p firecrab-api
 
 # 터미널 3 — 대시보드: http://localhost:8080/
+pkill -f 'vite'
 npm install --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```

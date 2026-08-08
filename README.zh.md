@@ -141,9 +141,11 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
   ./target/debug/firecrab-net-helper
 
 # 终端 2 — API 与 Firecracker 管理器
+pkill -f 'firecrab-api'
 cargo run -p firecrab-api
 
 # 终端 3 — 仪表盘：http://localhost:8080/
+pkill -f 'vite'
 npm install --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```
