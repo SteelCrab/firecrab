@@ -22,14 +22,17 @@ export type VmResponse = {
   hostname: string,
   microNetworkId: string,
   storageRoot: string,
-  /** Guest OS CPU busy % from Guest Agent; null until reported. */
+  /**
+   * Guest OS CPU busy percent from the Metrics Agent (`FIRECRAB_USAGE cpu_pct=`).
+   * null until the agent reports or the VM is not running.
+   */
   cpuUsagePercent: number | null,
-  /** Guest used memory MiB; null until reported. */
+  /** Guest used memory MiB (MemTotal − MemAvailable); null until reported. */
   memoryUsedMib: number | null,
   /** Guest MemTotal MiB; null until reported. */
   memoryTotalMib: number | null,
-  /** Guest used memory % of MemTotal; null until reported. */
+  /** Guest used memory percent of MemTotal; null until reported. */
   memoryUsedPercent: number | null,
-  /** Recent guest-agent samples for sparklines. */
+  /** Recent Metrics Agent samples for sparklines (oldest first, bounded). */
   usageHistory: Array<VmUsageSample>,
 };
