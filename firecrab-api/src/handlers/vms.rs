@@ -217,7 +217,10 @@ pub async fn create_vm(
     .map_err(|error| match error {
         crate::persistence::PersistenceError::MissingShell { .. } => {
             let mut fields = BTreeMap::new();
-            fields.insert("shellIds".to_owned(), "one or more shells were not found".to_owned());
+            fields.insert(
+                "shellIds".to_owned(),
+                "one or more shells were not found".to_owned(),
+            );
             AppError::validation(fields, request_id.0)
         }
         other => {
@@ -303,10 +306,7 @@ pub async fn update_vm_shells(
         let mut fields = BTreeMap::new();
         fields.insert(
             "shellIds".to_owned(),
-            format!(
-                "at most {} shells per VM",
-                crate::shells::MAX_SHELLS_PER_VM
-            ),
+            format!("at most {} shells per VM", crate::shells::MAX_SHELLS_PER_VM),
         );
         return Err(AppError::validation(fields, request_id.0));
     }
@@ -315,7 +315,10 @@ pub async fn update_vm_shells(
     for shell_id in &req.shell_ids {
         if !seen.insert(*shell_id) {
             let mut fields = BTreeMap::new();
-            fields.insert("shellIds".to_owned(), "must not contain duplicates".to_owned());
+            fields.insert(
+                "shellIds".to_owned(),
+                "must not contain duplicates".to_owned(),
+            );
             return Err(AppError::validation(fields, request_id.0));
         }
     }
@@ -348,7 +351,10 @@ pub async fn update_vm_shells(
     .map_err(|error| match error {
         crate::persistence::PersistenceError::MissingShell { .. } => {
             let mut fields = BTreeMap::new();
-            fields.insert("shellIds".to_owned(), "one or more shells were not found".to_owned());
+            fields.insert(
+                "shellIds".to_owned(),
+                "one or more shells were not found".to_owned(),
+            );
             AppError::validation(fields, request_id.0)
         }
         other => {
@@ -1608,10 +1614,7 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
     if req.shell_ids.len() > crate::shells::MAX_SHELLS_PER_VM {
         fields.insert(
             "shellIds".to_owned(),
-            format!(
-                "at most {} shells per VM",
-                crate::shells::MAX_SHELLS_PER_VM
-            ),
+            format!("at most {} shells per VM", crate::shells::MAX_SHELLS_PER_VM),
         );
     } else {
         let mut seen = std::collections::HashSet::new();

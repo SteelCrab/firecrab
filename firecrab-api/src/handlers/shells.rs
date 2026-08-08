@@ -246,7 +246,10 @@ fn validate_content(content: &str, fields: &mut BTreeMap<String, String>) {
             format!("must be at most {MAX_SHELL_CONTENT_BYTES} bytes"),
         );
     } else if content.contains('\0') {
-        fields.insert("content".to_owned(), "must not contain NUL bytes".to_owned());
+        fields.insert(
+            "content".to_owned(),
+            "must not contain NUL bytes".to_owned(),
+        );
     }
 }
 

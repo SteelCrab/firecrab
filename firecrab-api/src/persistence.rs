@@ -785,9 +785,7 @@ impl Store {
     }
 
     /// Lists every shell with latest revision summary.
-    pub fn list_shells(
-        &self,
-    ) -> Result<Vec<firecrab_api_types::ShellResponse>, PersistenceError> {
+    pub fn list_shells(&self) -> Result<Vec<firecrab_api_types::ShellResponse>, PersistenceError> {
         let conn = self.lock();
         let mut statement = conn.prepare(
             "SELECT s.id, s.name, s.description, s.created_at_ms, s.updated_at_ms, \
@@ -806,14 +804,15 @@ impl Store {
                 reason: "shell id is not a UUID".to_owned(),
             })?;
             let rev_id: Option<String> = row.get(5)?;
-            let latest_revision_id = rev_id
-                .as_deref()
-                .map(Uuid::parse_str)
-                .transpose()
-                .map_err(|_| PersistenceError::CorruptRecord {
-                    id: id_text.clone(),
-                    reason: "revision id is not a UUID".to_owned(),
-                })?;
+            let latest_revision_id =
+                rev_id
+                    .as_deref()
+                    .map(Uuid::parse_str)
+                    .transpose()
+                    .map_err(|_| PersistenceError::CorruptRecord {
+                        id: id_text.clone(),
+                        reason: "revision id is not a UUID".to_owned(),
+                    })?;
             let version: Option<i64> = row.get(6)?;
             out.push(firecrab_api_types::ShellResponse {
                 id,
