@@ -132,6 +132,45 @@ pub struct CreateVmRequest {
     /// **latest** revision and is stored as an immutable pin until updated.
     #[serde(default)]
     pub shell_ids: Vec<Uuid>,
+    /// Inbound port forwarding rules (DNAT) from host ports to guest ports.
+    #[serde(default)]
+    pub port_forwards: Vec<PortForward>,
+}
+
+/// Network protocol for a port forward rule.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum PortProtocol {
+    Tcp,
+    Udp,
+}
+
+impl Default for PortProtocol {
+    fn default() -> Self {
+        Self::Tcp
+    }
+}
+
+impl std::fmt::Display for PortProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tcp => write!(f, "tcp"),
+            Self::Udp => write!(f, "udp"),
+        }
+    }
+}
+
+/// An inbound port forwarding rule (DNAT).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub struct PortForward {
+    /// Host port (1–65535).
+    pub host_port: u16,
+    /// Guest port inside the VM (1–65535).
+    pub guest_port: u16,
+    /// Protocol (`tcp` or `udp`).
+    #[serde(default)]
+    pub protocol: PortProtocol,
 }
 
 /// Body for `PUT /api/vms/{id}/shells`: replace pinned shells (inactive VMs).
@@ -140,6 +179,14 @@ pub struct CreateVmRequest {
 pub struct UpdateVmShellsRequest {
     /// Shell ids to pin (latest revision each). Empty clears all pins.
     pub shell_ids: Vec<Uuid>,
+}
+
+/// Body for `PUT /api/vms/{id}/port-forwards`: replace port forwarding rules.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpdateVmPortForwardsRequest {
+    /// Inbound port forwarding rules (DNAT).
+    pub port_forwards: Vec<PortForward>,
 }
 
 /// One pinned shell revision on a VM (`public-docs` shell repository).
@@ -370,6 +417,9 @@ pub struct VmResponse {
     /// Shell revisions pinned on this VM (injected on each start).
     #[serde(default)]
     pub shell_refs: Vec<ShellRef>,
+    /// Inbound port forwarding rules (DNAT) from host ports to guest ports.
+    #[serde(default)]
+    pub port_forwards: Vec<PortForward>,
 }
 
 /// One guest-agent usage sample for dashboard graphs.
@@ -1065,6 +1115,7 @@ mod tests {
                 memory_used_percent: Some(35.2),
             }],
             shell_refs: Vec::new(),
+            port_forwards: Vec::new(),
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
@@ -1112,6 +1163,7 @@ mod tests {
             memory_used_percent: None,
             usage_history: Vec::new(),
             shell_refs: Vec::new(),
+            port_forwards: Vec::new(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
