@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { VmResponse } from "../bindings";
-import { getVm, getVmLog } from "../api/client";
+import type { PortForward, PortProtocol, VmResponse } from "../bindings";
+import { getVm, getVmLog, updateVmPortForwards } from "../api/client";
 import { formatVmExportBundle, serializeXtermBuffer } from "../lib/formatVmLog";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
@@ -136,6 +136,49 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   useEffect(() => {
     terminalOnlyRef.current = terminalOnly;
   }, [terminalOnly]);
+
+  const [editingPortForwards, setEditingPortForwards] = useState(false);
+  const [pfDraft, setPfDraft] = useState<PortForward[]>([]);
+  const [pfSaving, setPfSaving] = useState(false);
+  const [pfError, setPfError] = useState<string | null>(null);
+
+  const startEditingPortForwards = () => {
+    setPfDraft(vm?.portForwards ? [...vm.portForwards] : []);
+    setPfError(null);
+    setEditingPortForwards(true);
+  };
+
+  const addDraftPf = () => {
+    setPfDraft((current) => [...current, { hostPort: 8080, guestPort: 80, protocol: "tcp" }]);
+  };
+
+  const removeDraftPf = (index: number) => {
+    setPfDraft((current) => current.filter((_, i) => i !== index));
+  };
+
+  const updateDraftPf = (index: number, field: keyof PortForward, value: any) => {
+    setPfDraft((current) => {
+      const next = [...current];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
+  const savePortForwards = async () => {
+    if (!vm) return;
+    setPfSaving(true);
+    setPfError(null);
+    try {
+      const valid = pfDraft.filter((pf) => pf.hostPort > 0 && pf.guestPort > 0);
+      const updatedVm = await updateVmPortForwards(vm.id, { portForwards: valid });
+      setVm(updatedVm);
+      setEditingPortForwards(false);
+    } catch (err: any) {
+      setPfError(err.message || "Failed to update port forwards");
+    } finally {
+      setPfSaving(false);
+    }
+  };
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current !== null) {
@@ -609,6 +652,143 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                   <dt>network</dt>
                   <dd title={vm.microNetworkId}>{vm.microNetworkId}</dd>
                 </dl>
+              </section>
+              <section className="console-detail-group" style={{ gridColumn: "span 2" }} aria-label="포트 포워딩">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+                  <h3 className="console-detail-group-title" style={{ margin: 0 }}>
+                    {t("Port Forwarding", "포트 포워딩")}
+                  </h3>
+                  {!editingPortForwards && (
+                    <button
+                      type="button"
+                      className="btn small secondary"
+                      onClick={startEditingPortForwards}
+                      style={{ fontSize: "0.75rem", padding: "0.25rem 0.6rem" }}
+                    >
+                      {t("Edit Rules", "규칙 수정")}
+                    </button>
+                  )}
+                </div>
+
+                {!editingPortForwards ? (
+                  (vm.portForwards?.length ?? 0) > 0 ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                      {vm.portForwards!.map((pf, idx) => (
+                        <div
+                          key={idx}
+                          style={{
+                            background: "var(--bg-subtle, rgba(255, 255, 255, 0.04))",
+                            padding: "0.4rem 0.7rem",
+                            borderRadius: "6px",
+                            border: "1px solid var(--border-color, rgba(255, 255, 255, 0.1))",
+                            display: "flex",
+                            gap: "0.6rem",
+                            alignItems: "center",
+                            fontSize: "0.85rem",
+                            fontFamily: "var(--font-mono, monospace)",
+                          }}
+                        >
+                          <span style={{ color: "var(--muted, #888)" }}>
+                            VM <strong style={{ color: "var(--fg, #fff)" }}>:{pf.guestPort}</strong>
+                          </span>
+                          <span style={{ color: "var(--accent, #646cff)" }}>➔</span>
+                          <span style={{ color: "var(--muted, #888)" }}>
+                            Host <strong style={{ color: "var(--fg, #fff)" }}>:{pf.hostPort}</strong>
+                          </span>
+                          <span
+                            className="badge"
+                            style={{
+                              fontSize: "0.7rem",
+                              textTransform: "uppercase",
+                              padding: "0.1rem 0.4rem",
+                            }}
+                          >
+                            {pf.protocol}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ fontSize: "0.8rem", color: "var(--muted, #888)", margin: 0 }}>
+                      {t("No active port forwarding rules.", "설정된 포트 포워딩 규칙이 없습니다.")}
+                    </p>
+                  )
+                ) : (
+                  <div
+                    style={{
+                      background: "var(--bg-subtle, rgba(0, 0, 0, 0.2))",
+                      padding: "0.75rem",
+                      borderRadius: "6px",
+                      border: "1px solid var(--border-color, rgba(255, 255, 255, 0.15))",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "0.6rem",
+                    }}
+                  >
+                    {pfDraft.map((pf, idx) => (
+                      <div key={idx} style={{ display: "flex", gap: "0.6rem", alignItems: "flex-end" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                          <span style={{ fontSize: "0.7rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                            {t("VM Guest Port", "VM 내부 포트")}
+                          </span>
+                          <input
+                            type="number"
+                            placeholder="80"
+                            value={pf.guestPort || ""}
+                            onChange={(e) => updateDraftPf(idx, "guestPort", Number(e.target.value))}
+                            style={{ width: "110px" }}
+                          />
+                        </div>
+                        <span style={{ color: "var(--muted, #888)", paddingBottom: "0.4rem", fontSize: "0.9rem" }}>➔</span>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                          <span style={{ fontSize: "0.7rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                            {t("Host Port", "호스트 포트")}
+                          </span>
+                          <input
+                            type="number"
+                            placeholder="8080"
+                            value={pf.hostPort || ""}
+                            onChange={(e) => updateDraftPf(idx, "hostPort", Number(e.target.value))}
+                            style={{ width: "110px" }}
+                          />
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                          <span style={{ fontSize: "0.7rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                            {t("Protocol", "프로토콜")}
+                          </span>
+                          <select
+                            value={pf.protocol}
+                            onChange={(e) => updateDraftPf(idx, "protocol", e.target.value as PortProtocol)}
+                            style={{ width: "80px" }}
+                          >
+                            <option value="tcp">TCP</option>
+                            <option value="udp">UDP</option>
+                          </select>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn small danger"
+                          onClick={() => removeDraftPf(idx)}
+                          style={{ padding: "0.35rem 0.6rem" }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    {pfError && <p className="field-error" style={{ margin: 0 }}>{pfError}</p>}
+                    <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.2rem" }}>
+                      <button type="button" className="btn small secondary" onClick={addDraftPf}>
+                        + {t("Add Rule", "규칙 추가")}
+                      </button>
+                      <button type="button" className="btn small primary" disabled={pfSaving} onClick={savePortForwards}>
+                        {pfSaving ? t("Saving…", "저장 중…") : t("Save Rules", "규칙 저장")}
+                      </button>
+                      <button type="button" className="btn small ghost" onClick={() => setEditingPortForwards(false)}>
+                        {t("Cancel", "취소")}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </section>
               <section className="console-detail-group" aria-label="스토리지">
                 <h3 className="console-detail-group-title">{t("Storage", "스토리지")}</h3>

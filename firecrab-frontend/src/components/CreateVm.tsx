@@ -13,6 +13,8 @@ import type {
   EgressPolicy,
   ImageResponse,
   MicroNetworkResponse,
+  PortForward,
+  PortProtocol,
   ShellResponse,
   StorageRootResponse,
   VmResponse,
@@ -30,6 +32,7 @@ const FIELDS_WITH_OWN_ERROR = [
   "microNetworkId",
   "storageRoot",
   "shellIds",
+  "portForwards",
 ] as const;
 
 /** Empty select value until the user picks a MicroNetwork (required). */
@@ -79,6 +82,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [storageRoot, setStorageRoot] = useState<string>("");
   const [shells, setShells] = useState<ShellResponse[]>([]);
   const [shellIds, setShellIds] = useState<string[]>([]);
+  const [portForwards, setPortForwards] = useState<PortForward[]>([]);
   /** Bumped after a successful create so Shell checkboxes remount cleared. */
   const [formEpoch, setFormEpoch] = useState(0);
   const [submitting, setSubmitting] = useState(false);
@@ -171,9 +175,27 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     }
   };
 
+  const addPortForward = () => {
+    setPortForwards((current) => [...current, { hostPort: 8080, guestPort: 80, protocol: "tcp" }]);
+  };
+
+  const removePortForward = (index: number) => {
+    setPortForwards((current) => current.filter((_, i) => i !== index));
+  };
+
+  const updatePortForward = (index: number, field: keyof PortForward, value: any) => {
+    setPortForwards((current) => {
+      const next = [...current];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
+
+    const validPortForwards = portForwards.filter((pf) => pf.hostPort > 0 && pf.guestPort > 0);
 
     const request: CreateVmRequest = {
       name: name.trim(),
@@ -185,16 +207,17 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       microNetworkId: microNetworkId,
       storageRoot: storageRoot || null,
       shellIds: shellIds.length > 0 ? shellIds : undefined,
+      portForwards: validPortForwards.length > 0 ? validPortForwards : undefined,
     };
 
     setSubmitting(true);
     setFieldErrors(null);
     try {
       const vm = await createVm(request);
-      // Clear identity + shell pins so the next create does not re-send the
-      // same checks (controlled checkboxes alone can stick if the list remounts late).
+      // Clear identity + shell pins + port forwards so the next create does not re-send
       setName("");
       setShellIds([]);
+      setPortForwards([]);
       setFieldErrors(null);
       setFormEpoch((epoch) => epoch + 1);
       listShells()
@@ -367,6 +390,81 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           )}
         />
         {fieldError("shellIds")}
+      </div>
+      <div className="field" style={{ gridColumn: "1 / -1" }}>
+        <label>{t("Port Forwarding", "포트 포워딩")}</label>
+        <div className="port-forwards-list" style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {portForwards.map((pf, idx) => (
+            <div
+              key={idx}
+              style={{
+                display: "flex",
+                gap: "0.75rem",
+                alignItems: "flex-end",
+                background: "var(--bg-subtle, rgba(255, 255, 255, 0.03))",
+                padding: "0.6rem 0.8rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border-color, rgba(255, 255, 255, 0.1))",
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                  {t("VM Guest Port", "VM 내부 포트")}
+                </span>
+                <input
+                  type="number"
+                  placeholder="80"
+                  value={pf.guestPort || ""}
+                  onChange={(e) => updatePortForward(idx, "guestPort", Number(e.target.value))}
+                  style={{ width: "130px" }}
+                />
+              </div>
+              <span style={{ fontSize: "1rem", color: "var(--muted, #888)", paddingBottom: "0.4rem" }}>➔</span>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                  {t("Host Port", "호스트 포트")}
+                </span>
+                <input
+                  type="number"
+                  placeholder="8080"
+                  value={pf.hostPort || ""}
+                  onChange={(e) => updatePortForward(idx, "hostPort", Number(e.target.value))}
+                  style={{ width: "130px" }}
+                />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                  {t("Protocol", "프로토콜")}
+                </span>
+                <select
+                  value={pf.protocol}
+                  onChange={(e) => updatePortForward(idx, "protocol", e.target.value as PortProtocol)}
+                  style={{ width: "85px" }}
+                >
+                  <option value="tcp">TCP</option>
+                  <option value="udp">UDP</option>
+                </select>
+              </div>
+              <button
+                type="button"
+                className="btn small danger"
+                onClick={() => removePortForward(idx)}
+                style={{ padding: "0.4rem 0.75rem" }}
+              >
+                {t("Remove", "삭제")}
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="btn small secondary"
+            onClick={addPortForward}
+            style={{ width: "fit-content", marginTop: "0.2rem" }}
+          >
+            + {t("Add Port Forward Rule", "포트 포워딩 규칙 추가")}
+          </button>
+        </div>
+        {fieldError("portForwards")}
       </div>
       <div className="field field-submit">
         <label htmlFor="vm-create-submit">&nbsp;</label>

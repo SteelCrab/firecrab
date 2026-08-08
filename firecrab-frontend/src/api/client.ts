@@ -23,6 +23,7 @@ import type {
   StorageRootResponse,
   UpdateMicroNetworkRequest,
   UpdateVmShellsRequest,
+  UpdateVmPortForwardsRequest,
   UpdateVmResourcesRequest,
   VmLogResponse,
   VmResponse,
@@ -335,6 +336,14 @@ export async function deleteShell(id: string): Promise<void> {
 
 export function updateVmShells(id: string, request: UpdateVmShellsRequest): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}/shells`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export function updateVmPortForwards(id: string, request: UpdateVmPortForwardsRequest): Promise<VmResponse> {
+  return fetchJson(`/api/vms/${id}/port-forwards`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
