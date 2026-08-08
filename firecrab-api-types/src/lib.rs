@@ -242,30 +242,36 @@ pub struct VmResponse {
     /// Storage root id this VM's disk lives under (`{root}/vms/{id}/`).
     /// Fixed at creation so a later config change cannot orphan the files.
     pub storage_root: String,
-    /// Host Firecracker process CPU usage since the previous sample, as a
-    /// percent of one host core. `None` when the VM is not running, the
-    /// process is missing, or this is the first sample (no delta yet).
-    /// This is **not** guest-internal CPU accounting.
+    /// Guest OS CPU busy percent from the Firecrab Guest Agent
+    /// (`FIRECRAB_USAGE cpu_pct=`). `None` when the agent has not reported yet
+    /// or the VM is not running. Not host Firecracker process CPU.
     pub cpu_usage_percent: Option<f32>,
-    /// Host Firecracker process RSS in MiB. `None` when not running or the
-    /// process cannot be sampled. This is host process memory, not guest
-    /// free RAM.
+    /// Guest used memory in MiB (`MemTotal − MemAvailable`). `None` until the
+    /// guest agent reports.
     pub memory_used_mib: Option<u64>,
-    /// Recent host-process samples for sparklines (oldest first, bounded).
+    /// Guest total memory in MiB (`MemTotal`). `None` until the agent reports.
+    pub memory_total_mib: Option<u64>,
+    /// Guest used memory as a percent of MemTotal. `None` until reported.
+    pub memory_used_percent: Option<f32>,
+    /// Recent guest-agent samples for sparklines (oldest first, bounded).
     /// Empty when the VM is not running or has never been sampled.
     pub usage_history: Vec<VmUsageSample>,
 }
 
-/// One host-process usage sample for dashboard graphs.
+/// One guest-agent usage sample for dashboard graphs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VmUsageSample {
     /// Unix epoch milliseconds when the sample was taken.
     pub at_ms: u64,
-    /// CPU percent of one host core for the interval ending at this sample.
+    /// Guest CPU busy percent for the interval ending at this sample.
     pub cpu_usage_percent: Option<f32>,
-    /// Process RSS in MiB at this sample.
+    /// Guest used memory in MiB at this sample.
     pub memory_used_mib: Option<u64>,
+    /// Guest total memory in MiB at this sample.
+    pub memory_total_mib: Option<u64>,
+    /// Guest used memory percent of MemTotal at this sample.
+    pub memory_used_percent: Option<f32>,
 }
 
 /// One selectable place a VM disk may be created — env root, default, or a
@@ -934,10 +940,14 @@ mod tests {
             storage_root: "default".to_owned(),
             cpu_usage_percent: Some(12.5),
             memory_used_mib: Some(180),
+            memory_total_mib: Some(512),
+            memory_used_percent: Some(35.2),
             usage_history: vec![VmUsageSample {
                 at_ms: 1_700_000_000_000,
                 cpu_usage_percent: Some(12.5),
                 memory_used_mib: Some(180),
+                memory_total_mib: Some(512),
+                memory_used_percent: Some(35.2),
             }],
         };
 
@@ -945,6 +955,8 @@ mod tests {
         assert_eq!(serde_json::from_str::<VmResponse>(&json).unwrap(), response);
         assert!(json.contains("\"cpuUsagePercent\":12.5"));
         assert!(json.contains("\"memoryUsedMib\":180"));
+        assert!(json.contains("\"memoryTotalMib\":512"));
+        assert!(json.contains("\"memoryUsedPercent\":35.2"));
         assert!(json.contains("\"usageHistory\""));
         assert!(!json.contains("packageUpdate"));
     }
@@ -980,12 +992,16 @@ mod tests {
             storage_root: "default".to_owned(),
             cpu_usage_percent: None,
             memory_used_mib: None,
+            memory_total_mib: None,
+            memory_used_percent: None,
             usage_history: Vec::new(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
         assert!(json.contains("\"cpuUsagePercent\":null"));
         assert!(json.contains("\"memoryUsedMib\":null"));
+        assert!(json.contains("\"memoryTotalMib\":null"));
+        assert!(json.contains("\"memoryUsedPercent\":null"));
         assert!(json.contains("\"usageHistory\":[]"));
     }
 
