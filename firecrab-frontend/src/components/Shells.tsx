@@ -352,7 +352,7 @@ export default function Shells() {
                   <span className="mono shell-inspect-file-ver">
                     {" "}
                     · v{viewedRevision.version}
-                    {viewedRevision.id === latestRevisionId
+                    {viewedRevision.revisionId === latestRevisionId
                       ? ` (${t("latest", "최신")})`
                       : ""}
                   </span>
