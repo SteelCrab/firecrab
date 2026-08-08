@@ -83,10 +83,14 @@ impl ProcessMetricsTracker {
         let buf = self.line_bufs.entry(id).or_default();
         buf.push_str(&text);
         // Cap partial buffer so a flood cannot grow unbounded.
+        // Drain only at a UTF-8 char boundary — a raw byte cut can panic.
         const MAX_PARTIAL: usize = 8 * 1024;
         if buf.len() > MAX_PARTIAL {
             let excess = buf.len() - MAX_PARTIAL;
-            buf.drain(..excess);
+            let cut = floor_char_boundary(buf, excess);
+            if cut > 0 {
+                buf.drain(..cut);
+            }
         }
         let mut complete = Vec::new();
         while let Some(pos) = buf.find('\n') {
@@ -135,6 +139,18 @@ fn unix_ms_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Largest index `≤ idx` that is a char boundary (stable without nightly APIs).
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    let mut i = idx;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 /// Parses `FIRECRAB_USAGE cpu_pct=1.2 mem_used_mib=3 mem_total_mib=4 mem_used_pct=5.6`.
@@ -253,5 +269,23 @@ mod tests {
         let id = Uuid::from_u128(3);
         tracker.ingest_console(id, b"FIRECRAB_NETWORK_READY 1.2.3.4\n");
         assert_eq!(tracker.snapshot(id), UsageSnapshot::default());
+    }
+
+    #[test]
+    fn partial_buffer_cap_does_not_panic_on_multibyte_boundary() {
+        let mut tracker = ProcessMetricsTracker::default();
+        let id = Uuid::from_u128(4);
+        // Fill past MAX_PARTIAL with multi-byte UTF-8 so a naïve byte cut
+        // would land mid-character.
+        let mut flood = String::new();
+        while flood.len() < 9 * 1024 {
+            flood.push('한'); // 3-byte codepoint
+        }
+        tracker.ingest_console(id, flood.as_bytes());
+        tracker.ingest_console(
+            id,
+            b"FIRECRAB_USAGE cpu_pct=1.0 mem_used_mib=1 mem_total_mib=2 mem_used_pct=50.0\n",
+        );
+        assert_eq!(tracker.snapshot(id).cpu_usage_percent, Some(1.0));
     }
 }
