@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { Locale } from "./i18n";
 
 /**
- * The console's five destinations. The glyph is what the nav shows once it
- * collapses to a rail.
+ * Dashboard destinations. `glyph` is the text rail mark; optional `icon`
+ * is a small image (e.g. Shell repository bash cube) shown instead.
  *
  * Kept out of `components/Shell.tsx` so that file exports only its component
  * — mixing constants and hooks in there breaks Vite's fast refresh.
@@ -13,6 +13,12 @@ export const VIEWS = [
   { id: "networks", labels: { en: "Networks", ko: "네트워크" }, glyph: "◇" },
   { id: "storages", labels: { en: "Storage", ko: "스토리지" }, glyph: "▤" },
   { id: "images", labels: { en: "Images", ko: "이미지" }, glyph: "◈" },
+  {
+    id: "shells",
+    labels: { en: "Shells", ko: "Shell" },
+    glyph: "$",
+    icon: "/bash.png",
+  },
   { id: "host", labels: { en: "Host", ko: "호스트" }, glyph: "◉" },
 ] as const;
 

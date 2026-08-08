@@ -5,6 +5,7 @@ import {
   createVm,
   listImages,
   listMicroNetworks,
+  listShells,
   listStorageRoots,
 } from "../api/client";
 import type {
@@ -12,10 +13,12 @@ import type {
   EgressPolicy,
   ImageResponse,
   MicroNetworkResponse,
+  ShellResponse,
   StorageRootResponse,
   VmResponse,
 } from "../bindings";
 import RamStepper from "./RamStepper";
+import ShellCheckboxList from "./ShellCheckboxList";
 import { useI18n } from "../i18n";
 
 const FIELDS_WITH_OWN_ERROR = [
@@ -26,6 +29,7 @@ const FIELDS_WITH_OWN_ERROR = [
   "diskGb",
   "microNetworkId",
   "storageRoot",
+  "shellIds",
 ] as const;
 
 /** Empty select value until the user picks a MicroNetwork (required). */
@@ -73,6 +77,10 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
   const [storageRoots, setStorageRoots] = useState<StorageRootResponse[]>([]);
   const [storageRoot, setStorageRoot] = useState<string>("");
+  const [shells, setShells] = useState<ShellResponse[]>([]);
+  const [shellIds, setShellIds] = useState<string[]>([]);
+  /** Bumped after a successful create so Shell checkboxes remount cleared. */
+  const [formEpoch, setFormEpoch] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
 
@@ -130,6 +138,14 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         if (!cancelled) setStorageRoots([]);
       });
 
+    listShells()
+      .then((next) => {
+        if (!cancelled) setShells(next);
+      })
+      .catch(() => {
+        if (!cancelled) setShells([]);
+      });
+
     return () => {
       cancelled = true;
     };
@@ -168,13 +184,22 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       egressPolicy,
       microNetworkId: microNetworkId,
       storageRoot: storageRoot || null,
+      shellIds: shellIds.length > 0 ? shellIds : undefined,
     };
 
     setSubmitting(true);
     setFieldErrors(null);
     try {
       const vm = await createVm(request);
+      // Clear identity + shell pins so the next create does not re-send the
+      // same checks (controlled checkboxes alone can stick if the list remounts late).
       setName("");
+      setShellIds([]);
+      setFieldErrors(null);
+      setFormEpoch((epoch) => epoch + 1);
+      listShells()
+        .then(setShells)
+        .catch(() => setShells([]));
       onCreated(vm);
     } catch (error) {
       const apiError = error as ApiClientError;
@@ -325,11 +350,23 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         </select>
         <span className="field-error" aria-hidden />
       </div>
-      {/* Empty track so the submit button sits in the last column under disk. */}
-      <div className="field field-spacer" aria-hidden>
-        <label>&nbsp;</label>
-        <div className="field-spacer-box" />
-        <span className="field-error" />
+      <div className="field">
+        <label id="vm-shells-label">
+          {t("Shells (optional)", "Shell (선택)")}
+        </label>
+        <ShellCheckboxList
+          key={`vm-create-shells-${formEpoch}`}
+          shells={shells}
+          selectedIds={shellIds}
+          onChange={setShellIds}
+          disabled={submitting}
+          idPrefix={`vm-create-shell-${formEpoch}`}
+          emptyLabel={t(
+            "No shells yet — create one under Shells, then come back.",
+            "등록된 Shell이 없습니다. Shell 메뉴에서 만든 뒤 다시 오세요.",
+          )}
+        />
+        {fieldError("shellIds")}
       </div>
       <div className="field field-submit">
         <label htmlFor="vm-create-submit">&nbsp;</label>
