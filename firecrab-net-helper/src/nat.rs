@@ -36,22 +36,40 @@ pub(crate) fn validate_uplink(name: &str) -> Result<(), FirewallError> {
 /// forward-path drop in `firewall.rs` is what actually stops the traffic;
 /// this keeps the NAT table from claiming otherwise).
 ///
-/// Also masquerades any 127.0.0.0/8-sourced packet unconditionally: a
-/// host-local port-forward DNAT (`curl localhost:<host_port>`, rewritten by
-/// `firewall.rs`'s `vm_*_dnat_out` chain) leaves the original loopback
-/// source untouched, and a VM has no route back to 127.0.0.1, so it must be
-/// rewritten to the bridge's own address before the packet leaves the host.
-pub(crate) fn render_postrouting_chain(uplink: &str, subnets: &[String]) -> String {
-    let dispatch: String = subnets
+/// Also masquerades a 127.0.0.0/8-sourced packet destined to one of
+/// `vm_subnets`: a host-local port-forward DNAT (`curl
+/// localhost:<host_port>`, rewritten by `firewall.rs`'s `vm_*_dnat_out`
+/// chain) leaves the original loopback source untouched, and a VM has no
+/// route back to 127.0.0.1, so it must be rewritten to the bridge's own
+/// address before the packet leaves the host. Scoped to `ip daddr
+/// vm_subnets` specifically — an earlier, unscoped version of this rule
+/// masqueraded *every* loopback-sourced packet crossing the postrouting
+/// hook, which includes ordinary intra-host loopback traffic (e.g.
+/// systemd-resolved's 127.0.0.53 stub resolver), and broke host DNS
+/// resolution.
+pub(crate) fn render_postrouting_chain(
+    uplink: &str,
+    vm_subnets: &[String],
+    egress_subnets: &[String],
+) -> String {
+    let dispatch: String = egress_subnets
         .iter()
         .map(|subnet| {
             format!("\t\tip saddr {subnet} oifname \"{uplink}\" jump firecrab_postrouting\n")
         })
         .collect();
+    let loopback_hairpin = if vm_subnets.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\t\tip saddr 127.0.0.0/8 ip daddr {{ {} }} masquerade\n",
+            vm_subnets.join(", ")
+        )
+    };
     format!(
         "\tchain postrouting_dispatch {{\n\
          \t\ttype nat hook postrouting priority srcnat; policy accept;\n\
-         \t\tip saddr 127.0.0.0/8 masquerade\n\
+         {loopback_hairpin}\
          {dispatch}\
          \t}}\n\
          \tchain firecrab_postrouting {{\n\

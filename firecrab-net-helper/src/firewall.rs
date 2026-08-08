@@ -276,7 +276,8 @@ fn render_apply_ruleset(
     nat::validate_uplink(uplink)?;
     let bridges = bridge_names(micro_networks);
     let subnets = subnet_cidrs(micro_networks);
-    let postrouting = nat::render_postrouting_chain(uplink, &egress_subnet_cidrs(micro_networks));
+    let postrouting =
+        nat::render_postrouting_chain(uplink, &subnets, &egress_subnet_cidrs(micro_networks));
 
     // One dispatch pair per bridge: the per-VM verdict maps below are keyed
     // by leased IP (globally unique across networks, since their subnets
@@ -629,8 +630,23 @@ mod tests {
             )));
         }
         // All of them masquerade through the one shared chain, plus the
-        // unconditional loopback-source rule for host-local port forwards.
+        // loopback-source rule for host-local port forwards.
         assert_eq!(ruleset.matches("masquerade").count(), 2);
+    }
+
+    #[test]
+    fn loopback_masquerade_is_scoped_to_vm_subnets_only() {
+        // A prior version of this rule masqueraded every 127.0.0.0/8-sourced
+        // packet unconditionally, which also caught ordinary host loopback
+        // traffic (e.g. systemd-resolved's 127.0.0.53 stub) and broke host
+        // DNS resolution. It must stay scoped to `ip daddr <vm subnets>` so
+        // it only ever touches traffic actually headed into a Firecrab VM.
+        let networks = [sample_network(0x1234, "172.31.0.1", 24)];
+        let ruleset = render_apply_ruleset("eth0", &networks).unwrap();
+        assert!(ruleset.contains("ip saddr 127.0.0.0/8 ip daddr { 172.31.0.0/24 } masquerade"));
+
+        let ruleset_empty = render_apply_ruleset("eth0", &[]).unwrap();
+        assert!(!ruleset_empty.contains("ip saddr 127.0.0.0/8"));
     }
 
     #[test]
