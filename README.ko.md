@@ -143,12 +143,13 @@ revision이 게스트에 주입되고 network-ready 이후 한 번 실행됩니�
 
 | 이미지 | Init | 인터프리터 |
 | --- | --- | --- |
-| Alpine | OpenRC oneshot | **POSIX `/bin/sh` 권장** (기본 bash 없음) |
+| Alpine | OpenRC oneshot | `/bin/sh`; `#!/bin/bash` 는 부팅 시 `apk add bash` (또는 bash 포함 이미지) |
 | Ubuntu | systemd oneshot | `/bin/sh` 또는 `#!/bin/bash` |
 | Rocky | systemd oneshot | `/bin/sh` 또는 `#!/bin/bash` |
 
-콘솔 마커: `FIRECRAB_SHELL_*` (`START` / `OK` / `FAILED` / `DONE`). Alpine에서 bash
-전용 스크립트는 `FIRECRAB_SHELL_FAILED … no-bash` 로 실패합니다.
+콘솔 마커: `FIRECRAB_SHELL_*` (`START` / `OK` / `FAILED` / `DONE`). Alpine에 bash가
+없으면 network-ready 이후 `apk add bash`를 시도하고, 실패 시 `/bin/sh`로
+폴백합니다 (`FIRECRAB_SHELL_WARN`).
 
 ![Shell 저장소](assets/dashboard/bash.png)
 

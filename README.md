@@ -154,12 +154,13 @@ Works on every built-in image:
 
 | Image | Init | Interpreter notes |
 | --- | --- | --- |
-| Alpine | OpenRC oneshot | Prefer **POSIX `/bin/sh`** (no bash by default) |
+| Alpine | OpenRC oneshot | `/bin/sh`; `#!/bin/bash` via runtime `apk add bash` (or image with bash) |
 | Ubuntu | systemd oneshot | `/bin/sh` or `#!/bin/bash` |
 | Rocky | systemd oneshot | `/bin/sh` or `#!/bin/bash` |
 
 Console markers use the `FIRECRAB_SHELL_*` prefix (`START` / `OK` / `FAILED` /
-`DONE`). A bash-only script on Alpine fails with `FIRECRAB_SHELL_FAILED … no-bash`.
+`DONE`). On Alpine without bash yet, the runner tries `apk add bash` after
+network-ready; if that fails it falls back to `/bin/sh` (`FIRECRAB_SHELL_WARN`).
 
 ![Shell repository](assets/dashboard/bash.png)
 

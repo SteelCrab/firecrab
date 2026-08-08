@@ -145,6 +145,25 @@ if [ ! -d "$dir" ]; then
   exit 0
 fi
 
+# Alpine templates ship ash only. If any pinned script asks for bash, try
+# `apk add bash` once (network-ready already ran) so Ubuntu-style #!/bin/bash
+# scripts work without rebuilding the image.
+any_bash=0
+for f in "$dir"/*.sh; do
+  [ -f "$f" ] || continue
+  line1=$(sed -n '1p' "$f" 2>/dev/null || true)
+  case "$line1" in
+    *bash*) any_bash=1 ;;
+  esac
+done
+if [ "$any_bash" -eq 1 ] && ! command -v bash >/dev/null 2>&1; then
+  if command -v apk >/dev/null 2>&1; then
+    log "FIRECRAB_SHELL_INFO installing bash (apk)"
+    # Best-effort; isolated guests or missing repos leave bash absent.
+    apk add --no-cache bash >/dev/console 2>&1 || true
+  fi
+fi
+
 failed=0
 for f in "$dir"/*.sh; do
   [ -f "$f" ] || continue
@@ -185,22 +204,32 @@ for f in "$dir"/*.sh; do
       esac
       ;;
   esac
-  # Alpine has no bash — fail clearly instead of ash syntax errors on [[ / arrays.
+  # Still no bash after apk attempt: fall back to /bin/sh so simple scripts
+  # (echo, pwd) still run; pure bashisms will fail with a normal shell error.
   if [ "$need_bash" -eq 1 ]; then
     case "$interp" in
       *bash) ;;
       *)
-        log "FIRECRAB_SHELL_FAILED $base no-bash"
-        failed=1
-        continue
+        log "FIRECRAB_SHELL_WARN $base no-bash-using-sh"
+        interp="/bin/sh"
         ;;
     esac
   fi
   log "FIRECRAB_SHELL_START $base interp=$interp"
-  if "$interp" "$f"; then
+  # Capture script stdout/stderr then dual-write (journal may drop oneshot output).
+  out="/run/firecrab-shell-$base.out"
+  if "$interp" "$f" >"$out" 2>&1; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] && log "$line"
+    done <"$out" 2>/dev/null || true
+    rm -f "$out" 2>/dev/null || true
     log "FIRECRAB_SHELL_OK $base"
   else
     rc=$?
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] && log "$line"
+    done <"$out" 2>/dev/null || true
+    rm -f "$out" 2>/dev/null || true
     log "FIRECRAB_SHELL_FAILED $base $rc"
     failed=1
   fi
@@ -512,10 +541,11 @@ mod tests {
     }
 
     #[test]
-    fn runner_mentions_console_and_no_bash() {
+    fn runner_mentions_console_and_alpine_bash() {
         let r = runner_script();
         assert!(r.contains("/dev/console"));
-        assert!(r.contains("no-bash"));
+        assert!(r.contains("apk add"));
+        assert!(r.contains("no-bash-using-sh"));
         assert!(r.contains(SHELLS_DIR));
     }
 }
