@@ -99,14 +99,16 @@ export default function Shells() {
     // Latest body is already on the detail payload — avoid an extra round-trip.
     const latest = detail.revisions[0];
     if (latest && latest.id === viewingRevisionId && detail.latestContent != null) {
-      setViewedRevision({
+      const rev = {
         shellId: detail.id,
         revisionId: latest.id,
         version: latest.version,
         contentSha256: latest.contentSha256,
         content: detail.latestContent,
         createdAtMs: latest.createdAtMs,
-      });
+      };
+      setViewedRevision(rev);
+      setReviseContent(rev.content);
       setRevisionLoading(false);
       setRevisionLoadError(null);
       return;
@@ -120,6 +122,7 @@ export default function Shells() {
       .then((rev) => {
         if (!cancelled) {
           setViewedRevision(rev);
+          setReviseContent(rev.content);
           setRevisionLoading(false);
         }
       })
@@ -206,12 +209,6 @@ export default function Shells() {
     if (viewingRevisionId === rev.id) return;
     setViewingRevisionId(rev.id);
     setRevisionLoadError(null);
-  };
-
-  const useViewedAsNewBase = () => {
-    if (viewedRevision) {
-      setReviseContent(viewedRevision.content);
-    }
   };
 
   const fieldError = (field: string) => (
@@ -348,136 +345,93 @@ export default function Shells() {
           {detailError && <div className="field-error">{detailError}</div>}
           {!detail && !detailError && <div className="empty">{t("Loading…", "불러오는 중…")}</div>}
           {detail && (
-            <div className="shell-inspect-split">
-              {/* Left: catalog metadata only — no script body */}
-              <aside className="shell-inspect-meta panel" aria-label={t("Shell details", "Shell 상세")}>
-                <h3 className="panel-title">{detail.name}</h3>
-                {detail.description ? (
-                  <p className="poll-note shell-inspect-desc">{detail.description}</p>
+            <div className="shell-inspect-unified panel">
+              <h3 className="panel-title">
+                {detail.name}
+                {viewedRevision ? (
+                  <span className="mono shell-inspect-file-ver">
+                    {" "}
+                    · v{viewedRevision.version}
+                    {viewedRevision.id === latestRevisionId
+                      ? ` (${t("latest", "최신")})`
+                      : ""}
+                  </span>
                 ) : null}
-                <dl className="shell-inspect-dl mono">
-                  <dt>id</dt>
-                  <dd title={detail.id}>{detail.id.slice(0, 8)}…</dd>
-                  <dt>{t("created", "생성")}</dt>
-                  <dd>{formatRevisionTime(detail.createdAtMs)}</dd>
-                  <dt>{t("updated", "갱신")}</dt>
-                  <dd>{formatRevisionTime(detail.updatedAtMs)}</dd>
-                </dl>
+              </h3>
+              {detail.description ? (
+                <p className="poll-note shell-inspect-desc">{detail.description}</p>
+              ) : null}
 
-                <h4 className="shell-inspect-subhead">{t("Versions", "버전")}</h4>
-                <p className="poll-note shell-inspect-hint">
-                  {t(
-                    "Select a version to open its file on the right.",
-                    "버전을 선택하면 오른쪽에서 파일을 엽니다.",
-                  )}
-                </p>
-                <div className="table-scroll">
-                  <table className="vm-table shell-rev-table">
-                    <thead>
-                      <tr>
-                        <th>ver</th>
-                        <th>sha256</th>
-                        <th>size</th>
-                        <th>{t("created", "생성")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detail.revisions.map((rev) => {
-                        const isViewing = viewingRevisionId === rev.id;
-                        const isLatest = rev.id === latestRevisionId;
-                        return (
-                          <tr
-                            key={rev.id}
-                            className={isViewing ? "selected" : undefined}
-                            onClick={() => selectRevision(rev)}
-                            style={{ cursor: "pointer" }}
-                            title={t("Open script file", "스크립트 파일 열기")}
-                          >
-                            <td className="mono">
-                              v{rev.version}
-                              {isLatest ? (
-                                <span className="poll-note"> ({t("latest", "최신")})</span>
-                              ) : null}
-                            </td>
-                            <td className="mono">{rev.contentSha256.slice(0, 10)}…</td>
-                            <td>{rev.sizeBytes} B</td>
-                            <td className="mono">{formatRevisionTime(rev.createdAtMs)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+              <div className="table-scroll" style={{ marginBottom: "0.75rem" }}>
+                <table className="vm-table shell-rev-table">
+                  <thead>
+                    <tr>
+                      <th>ver</th>
+                      <th>sha256</th>
+                      <th>size</th>
+                      <th>{t("created", "생성")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detail.revisions.map((rev) => {
+                      const isViewing = viewingRevisionId === rev.id;
+                      const isLatest = rev.id === latestRevisionId;
+                      return (
+                        <tr
+                          key={rev.id}
+                          className={isViewing ? "selected" : undefined}
+                          onClick={() => selectRevision(rev)}
+                          style={{ cursor: "pointer" }}
+                          title={t("Load this version into the editor", "이 버전을 편집기에 불러오기")}
+                        >
+                          <td className="mono">
+                            v{rev.version}
+                            {isLatest ? (
+                              <span className="poll-note"> ({t("latest", "최신")})</span>
+                            ) : null}
+                          </td>
+                          <td className="mono">{rev.contentSha256.slice(0, 10)}…</td>
+                          <td>{rev.sizeBytes} B</td>
+                          <td className="mono">{formatRevisionTime(rev.createdAtMs)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
 
-                <h4 className="shell-inspect-subhead">{t("Publish new revision", "새 버전 게시")}</h4>
-                <form className="shell-inspect-publish" onSubmit={handleRevise}>
-                  <div className="field">
-                    <label htmlFor="shell-revise">
-                      {t("Script body", "스크립트 본문")}
-                    </label>
+              <form className="shell-inspect-publish" onSubmit={handleRevise}>
+                <div className="field">
+                  <label htmlFor="shell-revise">
+                    {t("Shell file", "Shell 파일")}
+                    <span className="poll-note">
+                      {" "}
+                      — {t("edit and publish as a new revision", "수정 후 새 버전으로 게시")}
+                    </span>
+                  </label>
+                  {revisionLoadError && <div className="field-error">{revisionLoadError}</div>}
+                  {revisionLoading && !viewedRevision ? (
+                    <div className="empty">{t("Loading…", "불러오는 중…")}</div>
+                  ) : (
                     <textarea
                       id="shell-revise"
-                      className="shell-content-editor mono"
-                      rows={6}
+                      className="shell-content-editor shell-file-editor mono"
+                      rows={14}
                       value={reviseContent}
                       onChange={(event) => setReviseContent(event.target.value)}
                       spellCheck={false}
                     />
-                    {fieldError("content")}
-                  </div>
-                  <div className="shell-inspect-actions">
-                    <button className="btn primary" type="submit" disabled={revising}>
-                      {revising
-                        ? t("Publishing…", "게시 중…")
-                        : t("Publish", "게시")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={!viewedRevision}
-                      onClick={useViewedAsNewBase}
-                      title={t(
-                        "Copy the open file into the editor",
-                        "열린 파일을 편집기에 복사",
-                      )}
-                    >
-                      {t("Copy from file", "파일에서 복사")}
-                    </button>
-                  </div>
-                </form>
-              </aside>
-
-              {/* Right: shell file only */}
-              <section
-                className="shell-inspect-file panel"
-                aria-label={t("Shell file", "Shell 파일")}
-              >
-                <div className="shell-inspect-file-bar">
-                  <h3 className="panel-title">
-                    {t("Shell file", "Shell 파일")}
-                    {viewedRevision ? (
-                      <span className="mono shell-inspect-file-ver">
-                        {" "}
-                        · {detail.name} · v{viewedRevision.version}
-                      </span>
-                    ) : null}
-                  </h3>
+                  )}
+                  {fieldError("content")}
                 </div>
-                {revisionLoadError && <div className="field-error">{revisionLoadError}</div>}
-                {revisionLoading && !viewedRevision && (
-                  <div className="empty">{t("Loading file…", "파일 불러오는 중…")}</div>
-                )}
-                {!revisionLoading && !viewedRevision && !revisionLoadError && (
-                  <div className="empty">
-                    {t("Select a version on the left.", "왼쪽에서 버전을 선택하세요.")}
-                  </div>
-                )}
-                {viewedRevision && (
-                  <pre className="shell-file-body mono" tabIndex={0}>
-                    {viewedRevision.content}
-                  </pre>
-                )}
-              </section>
+                <div className="shell-inspect-actions">
+                  <button className="btn primary" type="submit" disabled={revising || revisionLoading}>
+                    {revising
+                      ? t("Publishing…", "게시 중…")
+                      : t("Publish new revision", "새 버전 게시")}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
         </div>

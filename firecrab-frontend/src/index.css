@@ -161,59 +161,18 @@ form.shell-create-grid .field-span-2 {
   grid-column: 1 / -1;
 }
 
-/* Shell repository: metadata | script file side-by-side */
-.shell-inspect-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
-  gap: 0.85rem;
-  align-items: start;
-}
-@media (max-width: 860px) {
-  .shell-inspect-split {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-.shell-inspect-meta,
-.shell-inspect-file {
+/* Shell repository: one panel — version list + editable file + publish */
+.shell-inspect-unified {
   margin: 0;
   min-width: 0;
   padding: 1rem 1.1rem;
 }
-.shell-inspect-meta .panel-title,
-.shell-inspect-file .panel-title {
+.shell-inspect-unified .panel-title {
   margin-bottom: 0.65rem;
   padding-bottom: 0.45rem;
 }
 .shell-inspect-desc {
   margin: 0 0 0.65rem;
-}
-.shell-inspect-dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.2rem 0.65rem;
-  margin: 0 0 0.85rem;
-  font-size: 0.78rem;
-}
-.shell-inspect-dl dt {
-  color: var(--shell);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 0.68rem;
-}
-.shell-inspect-dl dd {
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.shell-inspect-subhead {
-  margin: 0.75rem 0 0.35rem;
-  font-size: 0.85rem;
-  font-weight: 650;
-  color: var(--ink);
-}
-.shell-inspect-hint {
-  margin: 0 0 0.4rem;
 }
 .shell-rev-table {
   font-size: 0.82rem;
@@ -221,9 +180,11 @@ form.shell-create-grid .field-span-2 {
 .shell-inspect-publish .field {
   margin-bottom: 0.45rem;
 }
-.shell-inspect-publish .shell-content-editor {
-  min-height: 5.5rem;
-  max-height: 12rem;
+.shell-inspect-publish .shell-file-editor {
+  min-height: 14rem;
+  max-height: min(70vh, 36rem);
+  width: 100%;
+  resize: vertical;
 }
 .shell-inspect-actions {
   display: flex;
@@ -231,34 +192,10 @@ form.shell-create-grid .field-span-2 {
   gap: 0.4rem;
   margin-top: 0.35rem;
 }
-.shell-inspect-file-bar {
-  margin-bottom: 0.5rem;
-}
-.shell-inspect-file-bar .panel-title {
-  margin: 0;
-  font-size: 1rem;
-}
 .shell-inspect-file-ver {
   font-weight: 500;
   font-size: 0.85rem;
   color: var(--shell);
-}
-/* Dedicated script file pane — only the shell body lives here */
-.shell-file-body {
-  margin: 0;
-  min-height: 14rem;
-  max-height: min(70vh, 36rem);
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  line-height: 1.5;
-  padding: 0.75rem 0.85rem;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--ink);
 }
 
 /* Shell pin checkboxes (create VM + detail edit) — readable mid size. */
