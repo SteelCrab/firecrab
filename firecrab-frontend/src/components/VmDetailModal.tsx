@@ -337,7 +337,10 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   />
                 ) : (
                   <p className="usage-charts-empty is-large">
-                    {t("Collecting samples…", "샘플 수집 중…")}
+                    {t(
+                      "Waiting for Guest Agent… (restart the VM if this persists)",
+                      "게스트 에이전트 대기 중… (계속되면 VM을 재시작해 주세요)",
+                    )}
                   </p>
                 )}
               </section>

@@ -91,7 +91,11 @@ function Row({ vm, busy, onAction, onOpenDetail }: RowProps) {
       </td>
       <td className="mono usage-cell">
         {vm.state === "running" && vm.memoryUsedMib != null
-          ? `${vm.memoryUsedMib} / ${vm.ram} MiB`
+          ? `${vm.memoryUsedMib} / ${vm.memoryTotalMib ?? vm.ram} MiB${
+              vm.memoryUsedPercent != null
+                ? ` (${formatCpuPercent(vm.memoryUsedPercent)})`
+                : ""
+            }`
           : "—"}
       </td>
       <td className="mono" title={vm.id}>

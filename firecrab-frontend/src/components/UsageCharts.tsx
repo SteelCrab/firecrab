@@ -29,9 +29,25 @@ function lastCpu(history: VmUsageSample[]): number | null {
   return null;
 }
 
-function lastMem(history: VmUsageSample[]): number | null {
+function lastMemUsed(history: VmUsageSample[]): number | null {
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const v = history[i]?.memoryUsedMib;
+    if (v != null) return v;
+  }
+  return null;
+}
+
+function lastMemTotal(history: VmUsageSample[], fallbackRam: number): number {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const v = history[i]?.memoryTotalMib;
+    if (v != null && v > 0) return v;
+  }
+  return Math.max(fallbackRam, 1);
+}
+
+function lastMemPct(history: VmUsageSample[]): number | null {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const v = history[i]?.memoryUsedPercent;
     if (v != null) return v;
   }
   return null;
@@ -44,7 +60,7 @@ const SIZE_GEOMETRY = {
 } as const;
 
 /**
- * Dual sparklines for host Firecracker process CPU % and RSS.
+ * Dual sparklines for guest OS CPU % and memory used (Guest Agent).
  * Pure SVG — no chart library.
  */
 export default function UsageCharts({
@@ -55,6 +71,16 @@ export default function UsageCharts({
 }: UsageChartsProps) {
   const { t } = useI18n();
   const resolvedSize = size ?? (compact ? "compact" : "default");
+  if (history.length < 1) {
+    return (
+      <p className={`usage-charts-empty${resolvedSize === "large" ? " is-large" : ""}`}>
+        {t(
+          "Waiting for Guest Agent…",
+          "게스트 에이전트 대기 중…",
+        )}
+      </p>
+    );
+  }
   if (history.length < 2) {
     return (
       <p className={`usage-charts-empty${resolvedSize === "large" ? " is-large" : ""}`}>
@@ -64,12 +90,23 @@ export default function UsageCharts({
   }
 
   const cpuValues = history.map((s) => s.cpuUsagePercent);
-  const memValues = history.map((s) =>
-    s.memoryUsedMib != null ? s.memoryUsedMib : null,
+  // Chart memory as used % when available (CloudWatch-style scale 0–100).
+  const memPctValues = history.map((s) =>
+    s.memoryUsedPercent != null
+      ? s.memoryUsedPercent
+      : s.memoryUsedMib != null && s.memoryTotalMib != null && s.memoryTotalMib > 0
+        ? (s.memoryUsedMib / s.memoryTotalMib) * 100
+        : null,
   );
   const cpuNow = lastCpu(history);
-  const memNow = lastMem(history);
+  const memUsed = lastMemUsed(history);
+  const memTotal = lastMemTotal(history, ramMib);
+  const memPct = lastMemPct(history);
   const { height, width, strokeWidth } = SIZE_GEOMETRY[resolvedSize];
+  const memUnit =
+    memUsed != null
+      ? `${memUsed} / ${memTotal} MiB${memPct != null ? ` (${formatCpuPercent(memPct)})` : ""}`
+      : "—";
 
   return (
     <div className={`usage-charts is-${resolvedSize}`}>
@@ -87,17 +124,13 @@ export default function UsageCharts({
       />
       <Sparkline
         label={t("Memory", "메모리")}
-        unit={
-          memNow != null
-            ? `${memNow} / ${ramMib} MiB`
-            : "—"
-        }
-        values={memValues}
+        unit={memUnit}
+        values={memPctValues}
         width={width}
         height={height}
         stroke="var(--ready, #2f9e6b)"
         fill="rgba(47, 158, 107, 0.12)"
-        yMaxHint={Math.max(ramMib, 1)}
+        yMaxHint={100}
         strokeWidth={strokeWidth}
         size={resolvedSize}
       />
