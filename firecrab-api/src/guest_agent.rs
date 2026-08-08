@@ -130,7 +130,7 @@ depend() {
 /// No-ops only when the image has neither `/usr/local` nor an existing
 /// `/usr/local/sbin` (nothing we can write into offline).
 pub(crate) fn install(rootfs: &Path) -> Result<(), RootfsError> {
-    if !ensure_bin_dir(rootfs) {
+    if !ensure_bin_dir(rootfs)? {
         return Ok(());
     }
     write_into_image(rootfs, BIN_PATH, AGENT_SCRIPT.as_bytes())?;
@@ -142,8 +142,7 @@ pub(crate) fn install(rootfs: &Path) -> Result<(), RootfsError> {
         // (a regular file is ignored with "is not a symlink").
         // debugfs syntax: `symlink <linkpath> <target>`.
         if guest_path_exists(rootfs, "/etc/systemd/system/multi-user.target.wants") {
-            remove_from_image(rootfs, WANTS_PATH);
-            let _ = run_debugfs(rootfs, &format!("symlink {WANTS_PATH} {UNIT_PATH}"));
+            ensure_symlink(rootfs, WANTS_PATH, UNIT_PATH)?;
         }
     }
 
@@ -153,11 +152,7 @@ pub(crate) fn install(rootfs: &Path) -> Result<(), RootfsError> {
         write_into_image(rootfs, OPENRC_PATH, OPENRC_SERVICE.as_bytes())?;
         set_guest_file_mode(rootfs, OPENRC_PATH, "0100755");
         if guest_path_exists(rootfs, "/etc/runlevels/default") {
-            remove_from_image(rootfs, OPENRC_RUNLEVEL_PATH);
-            let _ = run_debugfs(
-                rootfs,
-                &format!("symlink {OPENRC_RUNLEVEL_PATH} {OPENRC_PATH}"),
-            );
+            ensure_symlink(rootfs, OPENRC_RUNLEVEL_PATH, OPENRC_PATH)?;
         }
     }
     Ok(())
@@ -165,15 +160,35 @@ pub(crate) fn install(rootfs: &Path) -> Result<(), RootfsError> {
 
 /// Ensures `/usr/local/sbin` exists so the agent script can be installed.
 /// Alpine templates ship `/usr/local` without `sbin`.
-fn ensure_bin_dir(rootfs: &Path) -> bool {
+fn ensure_bin_dir(rootfs: &Path) -> Result<bool, RootfsError> {
     if guest_path_exists(rootfs, "/usr/local/sbin") {
-        return true;
+        return Ok(true);
     }
     if !guest_path_exists(rootfs, "/usr/local") {
-        return false;
+        return Ok(false);
     }
     let _ = run_debugfs(rootfs, "mkdir /usr/local/sbin");
-    guest_path_exists(rootfs, "/usr/local/sbin")
+    if !guest_path_exists(rootfs, "/usr/local/sbin") {
+        return Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: "debugfs failed to create /usr/local/sbin for metrics agent".into(),
+        });
+    }
+    Ok(true)
+}
+
+/// Creates `link` → `target` inside the image and verifies the link exists.
+/// debugfs may exit 0 even when the command failed, so we check positively.
+fn ensure_symlink(rootfs: &Path, link: &str, target: &str) -> Result<(), RootfsError> {
+    remove_from_image(rootfs, link);
+    let _ = run_debugfs(rootfs, &format!("symlink {link} {target}"));
+    if !guest_path_exists(rootfs, link) {
+        return Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: format!("debugfs failed to create symlink {link} → {target}"),
+        });
+    }
+    Ok(())
 }
 
 /// Shell fragment injected into the systemd network-ready oneshot so the
