@@ -279,18 +279,19 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     // without installing the package, so getent always failed while dig@gateway
     // worked. Rewrite the readiness script whenever the path already exists.
     patch_network_ready_script(rootfs)?;
+    // Metrics Agent: guest OS CPU/mem samples for the dashboard (own module).
+    crate::guest_agent::install(rootfs)?;
     Ok(())
 }
 
 /// Guest path for the Ubuntu/Rocky network readiness oneshot.
 const NETWORK_READY_SCRIPT_PATH: &str = "/usr/local/sbin/firecrab-network-ready.sh";
+/// Alpine OpenRC network readiness service (template-provided).
+const NETWORK_READY_OPENRC_PATH: &str = "/etc/init.d/firecrab-network-ready";
 
-/// Hardened readiness probe: wait for IPv4, repair a dangling resolved stub
-/// by pointing resolv.conf at the DHCP gateway, then accept either getent or
-/// dig@gateway success. See `public-docs/troubleshooting.md`.
-const NETWORK_READY_SCRIPT: &str = r#"#!/bin/sh
-set -eu
-
+/// Hardened readiness probe body (IPv4 + DNS). Metrics Agent kick is
+/// prepended from [`crate::guest_agent`] so agent paths stay single-sourced.
+const NETWORK_READY_PROBE: &str = r#"
 ipv4=""
 for _ in $(seq 1 15); do
   ipv4=$(ip -4 -o addr show scope global 2>/dev/null | \
@@ -334,30 +335,80 @@ done
 echo "FIRECRAB_NETWORK_FAILED dns-unreachable"
 "#;
 
-/// Replaces the guest readiness script when the template already has one
-/// (Ubuntu/Rocky). Alpine uses OpenRC and is left alone.
+/// Alpine OpenRC network-ready probe body (kick injected separately).
+const NETWORK_READY_OPENRC_PROBE: &str = r#"
+	ipv4=""
+	for _ in $(seq 1 10); do
+		ipv4=$(ip -4 -o addr show eth0 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+		[ -n "$ipv4" ] && break
+		sleep 1
+	done
+	if [ -z "$ipv4" ]; then
+		echo "FIRECRAB_NETWORK_FAILED no-ipv4-address" >/dev/console
+	elif getent hosts example.com >/dev/null 2>&1; then
+		echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
+	else
+		echo "FIRECRAB_NETWORK_FAILED dns-unreachable" >/dev/console
+	fi
+"#;
+
+fn network_ready_script() -> String {
+    format!(
+        "#!/bin/sh\nset -eu\n\n{}{}",
+        crate::guest_agent::network_ready_kick_systemd(),
+        NETWORK_READY_PROBE
+    )
+}
+
+fn network_ready_openrc() -> String {
+    format!(
+        r#"#!/sbin/openrc-run
+description="Firecrab network readiness sentinel"
+
+depend() {{
+	need net
+	after dhcpcd
+}}
+
+start() {{
+{}{}}}
+"#,
+        crate::guest_agent::network_ready_kick_openrc(),
+        NETWORK_READY_OPENRC_PROBE
+    )
+}
+
+/// Replaces the guest readiness script when the template already has one.
+/// Ubuntu/Rocky: systemd oneshot script. Alpine: OpenRC init script.
 fn patch_network_ready_script(rootfs: &Path) -> Result<(), RootfsError> {
-    if !guest_path_exists(rootfs, NETWORK_READY_SCRIPT_PATH) {
-        return Ok(());
+    if guest_path_exists(rootfs, NETWORK_READY_SCRIPT_PATH) {
+        write_into_image(
+            rootfs,
+            NETWORK_READY_SCRIPT_PATH,
+            network_ready_script().as_bytes(),
+        )?;
+        // debugfs `write` creates regular files as 0664; the oneshot unit
+        // invokes this path directly, so it must stay executable.
+        set_guest_file_mode(rootfs, NETWORK_READY_SCRIPT_PATH, "0100755");
     }
-    write_into_image(
-        rootfs,
-        NETWORK_READY_SCRIPT_PATH,
-        NETWORK_READY_SCRIPT.as_bytes(),
-    )?;
-    // debugfs `write` creates regular files as 0664; the oneshot unit
-    // invokes this path directly, so it must stay executable.
-    set_guest_file_mode(rootfs, NETWORK_READY_SCRIPT_PATH, "0100755");
+    if guest_path_exists(rootfs, NETWORK_READY_OPENRC_PATH) {
+        write_into_image(
+            rootfs,
+            NETWORK_READY_OPENRC_PATH,
+            network_ready_openrc().as_bytes(),
+        )?;
+        set_guest_file_mode(rootfs, NETWORK_READY_OPENRC_PATH, "0100755");
+    }
     Ok(())
 }
 
 /// Best-effort `chmod` inside the image. debugfs does not fail the host
 /// process when the field write is refused, so callers treat this as soft.
-fn set_guest_file_mode(rootfs: &Path, guest_path: &str, mode: &str) {
+pub(crate) fn set_guest_file_mode(rootfs: &Path, guest_path: &str, mode: &str) {
     let _ = run_debugfs(rootfs, &format!("set_inode_field {guest_path} mode {mode}"));
 }
 
-fn guest_path_exists(rootfs: &Path, guest_path: &str) -> bool {
+pub(crate) fn guest_path_exists(rootfs: &Path, guest_path: &str) -> bool {
     match run_debugfs(rootfs, &format!("stat {guest_path}")) {
         Ok(output) => {
             let text = format!(
@@ -484,12 +535,12 @@ pub fn dump_from_image(rootfs: &Path, guest_path: &str, dest: &Path) -> Result<(
 /// path exists on this particular distro's template varies, and debugfs's
 /// exit code can't distinguish "removed" from "wasn't there" from "failed"
 /// regardless — so the outcome is deliberately never inspected.
-fn remove_from_image(rootfs: &Path, guest_path: &str) {
+pub(crate) fn remove_from_image(rootfs: &Path, guest_path: &str) {
     let _ = run_debugfs(rootfs, &format!("rm {guest_path}"));
 }
 
 /// Runs one `debugfs -w -R <command>` invocation against `rootfs`.
-fn run_debugfs(rootfs: &Path, command: &str) -> Result<std::process::Output, RootfsError> {
+pub(crate) fn run_debugfs(rootfs: &Path, command: &str) -> Result<std::process::Output, RootfsError> {
     Command::new("debugfs")
         .arg("-w")
         .arg("-R")
