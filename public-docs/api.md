@@ -73,6 +73,7 @@ The response has status `201` and includes the VM UUID.
 | `microNetworkId` | Existing network UUID |
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional storage ID |
+| `shellIds` | Optional Shell repository ids (latest revision pinned) |
 
 ## Other endpoints
 
@@ -80,6 +81,7 @@ The response has status `201` and includes the VM UUID.
 | --- | --- |
 | MicroNetwork | `/api/micro-networks` and `/{id}` |
 | MicroStorage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
+| Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}`; VM pin `PUT /api/vms/{id}/shells` (Alpine OpenRC + Ubuntu/Rocky systemd; prefer POSIX `/bin/sh`) |
 | Images | `/api/images`, `/package`, `/install`, `/bootstrap` |
 | Host | `/api/host` and `/api/network` |
 

@@ -135,6 +135,23 @@ VM을 생성합니다. 아래 목록은 상태, 이미지, 리소스, ID를 3초
 
 ![M2Image 목록 화면](assets/dashboard/images.png)
 
+### Shell
+
+**Shell 저장소**는 버전 관리되는 게스트 스크립트를 보관합니다. Shell을 만들고 불변
+revision을 게시하며, MicroVM 생성·수정 시 연결할 수 있습니다. 시작할 때마다 고정된
+revision이 게스트에 주입되고 network-ready 이후 한 번 실행됩니다.
+
+| 이미지 | Init | 인터프리터 |
+| --- | --- | --- |
+| Alpine | OpenRC oneshot | **POSIX `/bin/sh` 권장** (기본 bash 없음) |
+| Ubuntu | systemd oneshot | `/bin/sh` 또는 `#!/bin/bash` |
+| Rocky | systemd oneshot | `/bin/sh` 또는 `#!/bin/bash` |
+
+콘솔 마커: `FIRECRAB_SHELL_*` (`START` / `OK` / `FAILED` / `DONE`). Alpine에서 bash
+전용 스크립트는 `FIRECRAB_SHELL_FAILED … no-bash` 로 실패합니다.
+
+![Shell 저장소](assets/dashboard/bash.png)
+
 요청 형식, 생명주기 의미, 오류 envelope는 [API 가이드](public-docs/api.md)를, 이미지 패키지와
 브라우저 부트스트랩은 [이미지 가이드](public-docs/images.md)를 참고하세요.
 
