@@ -151,6 +151,7 @@ pub async fn start_bootstrap(
         egress_policy: EgressPolicy::Internet,
         micro_network_id,
         storage_root: None,
+        shell_ids: Vec::new(),
     };
 
     let (_status, Json(created)) = create_vm(

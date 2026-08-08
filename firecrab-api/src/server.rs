@@ -243,6 +243,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .patch(handlers::micro_networks::update_micro_network)
                 .delete(handlers::micro_networks::delete_micro_network),
         )
+        .route(
+            "/api/shells",
+            get(handlers::shells::list_shells).post(handlers::shells::create_shell),
+        )
+        .route(
+            "/api/shells/{id}",
+            get(handlers::shells::get_shell).delete(handlers::shells::delete_shell),
+        )
+        .route(
+            "/api/shells/{id}/revisions",
+            post(handlers::shells::create_shell_revision),
+        )
+        .route(
+            "/api/shells/{id}/revisions/{revision_id}",
+            get(handlers::shells::get_shell_revision),
+        )
+        .route(
+            "/api/vms/{id}/shells",
+            axum::routing::put(handlers::vms::update_vm_shells),
+        )
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(limits, enforce_limits));

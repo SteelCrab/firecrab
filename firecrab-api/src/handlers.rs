@@ -6,5 +6,6 @@ pub mod images;
 pub mod micro_networks;
 pub mod micro_storages;
 pub mod network;
+pub mod shells;
 pub mod storage;
 pub mod vms;

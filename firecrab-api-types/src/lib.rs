@@ -128,6 +128,117 @@ pub struct CreateVmRequest {
     /// `data/vms` layout when the env var is unset).
     #[serde(default)]
     pub storage_root: Option<String>,
+    /// Shell repository ids to pin at create time. Each id resolves to its
+    /// **latest** revision and is stored as an immutable pin until updated.
+    #[serde(default)]
+    pub shell_ids: Vec<Uuid>,
+}
+
+/// Body for `PUT /api/vms/{id}/shells`: replace pinned shells (inactive VMs).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct UpdateVmShellsRequest {
+    /// Shell ids to pin (latest revision each). Empty clears all pins.
+    pub shell_ids: Vec<Uuid>,
+}
+
+/// One pinned shell revision on a VM (`public-docs` shell repository).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellRef {
+    /// Catalog shell id.
+    pub shell_id: Uuid,
+    /// Immutable revision id pinned for this VM.
+    pub revision_id: Uuid,
+    /// Monotonic revision number within the shell (1, 2, …).
+    pub version: u32,
+    /// Shell display name at pin time (current catalog name).
+    pub name: String,
+}
+
+/// A shell in the catalog (latest revision summary).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellResponse {
+    pub id: Uuid,
+    pub name: String,
+    /// Optional operator note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Latest revision number, or 0 if somehow empty (should not happen).
+    pub latest_version: u32,
+    /// Latest revision id, if any revision exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_revision_id: Option<Uuid>,
+    /// SHA-256 (hex) of the latest revision body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
+    /// Created at, Unix ms.
+    pub created_at_ms: u64,
+    /// Updated when a new revision is added, Unix ms.
+    pub updated_at_ms: u64,
+}
+
+/// Full shell detail including revision history (bodies omitted except latest).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellDetailResponse {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    /// Newest first.
+    pub revisions: Vec<ShellRevisionSummary>,
+    /// Full body of the latest revision (for edit UI).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_content: Option<String>,
+}
+
+/// One immutable shell revision (metadata; body only on create response).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellRevisionSummary {
+    pub id: Uuid,
+    pub version: u32,
+    pub content_sha256: String,
+    pub created_at_ms: u64,
+    /// Byte length of the script body.
+    pub size_bytes: u32,
+}
+
+/// Body for `POST /api/shells` — creates the shell and its first revision.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateShellRequest {
+    /// 1–64 safe name characters.
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Script body (`/bin/sh`). Size-capped by the API.
+    pub content: String,
+}
+
+/// Body for `POST /api/shells/{id}/revisions` — appends an immutable revision.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CreateShellRevisionRequest {
+    /// New script body.
+    pub content: String,
+}
+
+/// Response after creating a shell or a revision, and for
+/// `GET /api/shells/{id}/revisions/{revision_id}` (includes full body).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellRevisionResponse {
+    pub shell_id: Uuid,
+    pub revision_id: Uuid,
+    pub version: u32,
+    pub content_sha256: String,
+    pub content: String,
+    pub created_at_ms: u64,
 }
 
 /// Body for `PUT /api/vms/{id}`: replaces cpu/ram/disk for a VM that isn't
@@ -256,6 +367,9 @@ pub struct VmResponse {
     /// Recent guest-agent samples for sparklines (oldest first, bounded).
     /// Empty when the VM is not running or has never been sampled.
     pub usage_history: Vec<VmUsageSample>,
+    /// Shell revisions pinned on this VM (injected on each start).
+    #[serde(default)]
+    pub shell_refs: Vec<ShellRef>,
 }
 
 /// One guest-agent usage sample for dashboard graphs.
@@ -835,6 +949,7 @@ mod tests {
         let json = r#"{"name":"vm","template":"ubuntu-rootfs-26.04","ram":512,"cpu":1,"diskGb":2,"microNetworkId":"00000000-0000-0000-0000-000000000001"}"#;
         let request: CreateVmRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.egress_policy, EgressPolicy::Internet);
+        assert!(request.shell_ids.is_empty());
     }
 
     #[test]
@@ -949,6 +1064,7 @@ mod tests {
                 memory_total_mib: Some(512),
                 memory_used_percent: Some(35.2),
             }],
+            shell_refs: Vec::new(),
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
@@ -995,6 +1111,7 @@ mod tests {
             memory_total_mib: None,
             memory_used_percent: None,
             usage_history: Vec::new(),
+            shell_refs: Vec::new(),
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
