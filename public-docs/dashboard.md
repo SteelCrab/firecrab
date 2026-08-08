@@ -50,10 +50,13 @@ Use `localhost` because the development origin is exact.
 The list refreshes every three seconds.
 The detail view shows start progress and logs.
 
-While a VM is `running`, the list, detail view, and terminal page show host
-Firecracker process CPU percent and RSS next to the allocated CPU and RAM.
-Detail and terminal also draw short sparklines from recent samples.
-Those values are host process usage, not guest free memory.
+While a VM is `running`, the list, detail view, and terminal page show
+**guest OS** CPU percent and memory used (MemTotal − MemAvailable) when the
+Firecrab Metrics Agent is running inside the guest (systemd on Ubuntu/Rocky,
+OpenRC on Alpine). Detail and terminal also draw short sparklines from recent
+samples. Values are `null` until the agent reports (missing agent does not
+block VM start). A stop/start after an API upgrade reinstalls the agent into
+the guest disk.
 
 Resource changes are allowed only while the VM is inactive.
 Disk size can grow but cannot shrink.
