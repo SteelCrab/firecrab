@@ -18,6 +18,7 @@ Every page covers one topic.
 | Topic | Document |
 | --- | --- |
 | Components and data flow | [Architecture](architecture.md) |
+| Detailed runtime architecture | [Architecture details](architecter.md) |
 | Terms and resource model | [Core concepts](concepts.md) |
 | Host setup | [Installation](installation.md) |
 | Browser UI | [Dashboard](dashboard.md) |
