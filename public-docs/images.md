@@ -35,24 +35,12 @@ dist/m2images/
   SHA256SUMS
 ```
 
-Verify packages before publishing them.
+Verify packages after building them.
 
 ```sh
 sha256sum -c dist/m2images/SHA256SUMS
 tar --list --zstd --file dist/m2images/alpine-3.24.tar.zst
 ```
-
-## Publish
-
-Serve packages at `<base-url>/<alias>.tar.zst`.
-By default the API uses the public MicroRegistry. Set
-`FIRECRAB_IMAGE_BASE_URL` to use another package base URL, or set it to
-`none` to disable remote installs.
-
-The API downloads and validates a package first.
-It installs the staged package in a separate step.
-
-Deleting an installed image does not delete its staged package.
 
 ## Bootstrap
 
@@ -71,6 +59,13 @@ Rocky bootstrap needs an installed Rocky builder image.
 
 Only installed images appear in the VM create form.
 Image files live below `FIRECRAB_IMAGE_ROOT`.
+
+By default the API uses the public MicroRegistry.
+Set `FIRECRAB_IMAGE_BASE_URL` to use another package source, or set it to
+`none` to disable remote installs.
+
+The API downloads and validates a package before installing it.
+Deleting an installed image does not delete its staged package.
 
 The API validates paths and artifacts before use.
 Restart the API after replacing files outside the API workflow.
