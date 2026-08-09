@@ -37,6 +37,18 @@ microVM 환경을 위한 도구입니다. 호스팅 서비스나 멀티 호스�
 - **작은 권한 범위:** API는 비특권으로 실행하며, 별도 `firecrab-net-helper`가 호스트
   네트워크에 필요한 capability만 가집니다.
 
+## firecrab의 차별점
+
+| 영역 | 컨테이너 런타임 | Firecracker 단독 사용 | firecrab |
+| --- | --- | --- | --- |
+| 격리 경계 | 프로세스가 호스트 커널을 공유 | 하드웨어 가상화 microVM | 하드웨어 가상화 microVM |
+| 일상 운영 | 런타임 CLI와 API | 저수준 머신 설정과 API | VM 생명주기를 위한 브라우저 대시보드와 REST API |
+| 네트워크 | 런타임 관리 네트워크와 포트 공개 | TAP, 주소, DHCP, 방화벽을 운영자가 구성 | 고정 IP/MAC, 격리, 외부 통신 정책을 갖춘 명시적 MicroNetwork |
+| 이미지 | OCI 이미지 레이어 | 커널과 root filesystem을 직접 제공 | MicroRegistry 또는 격리된 MicroBoot builder VM의 검증된 M2Image |
+| 스토리지 | volume과 bind mount | block device를 직접 제공 | 설정된 root 또는 MicroStorage 풀에 배치하는 VM별 디스크 |
+| 호스트 권한 분리 | 런타임에 따라 다름 | 주변 통합 방식에 따라 다름 | 비특권 API와 capability가 제한된 network helper |
+| 적용 범위 | 컨테이너 애플리케이션 패키징과 실행 | 가상화 구성 요소 | 단일 Linux 호스트의 실용적인 사설 microVM 관리 |
+
 ## 구조
 
 ```text
@@ -134,24 +146,6 @@ VM을 생성합니다. 아래 목록은 상태, 이미지, 리소스, ID를 3초
 수행합니다. VM 생성에는 설치된 이미지만 사용할 수 있습니다.
 
 ![M2Image 목록 화면](assets/dashboard/images.png)
-
-### Shell
-
-**Shell 저장소**는 버전 관리되는 게스트 스크립트를 보관합니다. Shell을 만들고 불변
-revision을 게시하며, MicroVM 생성·수정 시 연결할 수 있습니다. 시작할 때마다 고정된
-revision이 게스트에 주입되고 network-ready 이후 한 번 실행됩니다.
-
-| 이미지 | Init | 인터프리터 |
-| --- | --- | --- |
-| Alpine | OpenRC oneshot | `/bin/sh`; `#!/bin/bash` 는 부팅 시 `apk add bash` (또는 bash 포함 이미지) |
-| Ubuntu | systemd oneshot | `/bin/sh` 또는 `#!/bin/bash` |
-| Rocky | systemd oneshot | `/bin/sh` 또는 `#!/bin/bash` |
-
-콘솔 마커: `FIRECRAB_SHELL_*` (`START` / `OK` / `FAILED` / `DONE`). Alpine에 bash가
-없으면 network-ready 이후 `apk add bash`를 시도하고, 실패 시 `/bin/sh`로
-폴백합니다 (`FIRECRAB_SHELL_WARN`).
-
-![Shell 저장소](assets/dashboard/bash.png)
 
 요청 형식, 생명주기 의미, 오류 envelope는 [API 가이드](public-docs/api.md)를, 이미지 패키지와
 브라우저 부트스트랩은 [이미지 가이드](public-docs/images.md)를 참고하세요.

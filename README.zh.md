@@ -34,6 +34,18 @@ firecrab 在你管理的 Linux 主机上运行和管理隔离的
 - **缩小主机权限：** API 以非特权方式运行；独立的 `firecrab-net-helper` 仅持有主机网络
   所需的 capability。
 
+## firecrab 的差异
+
+| 维度 | 容器运行时 | 单独使用 Firecracker | firecrab |
+| --- | --- | --- | --- |
+| 隔离边界 | 进程共享主机内核 | 硬件虚拟化 microVM | 硬件虚拟化 microVM |
+| 日常操作 | 运行时 CLI 和 API | 底层机器配置和 API | 面向 VM 生命周期的浏览器仪表盘和 REST API |
+| 网络 | 运行时管理的网络和端口发布 | TAP、地址、DHCP 和防火墙由操作者构建 | 具有固定 IP/MAC、隔离和出站策略的显式 MicroNetwork |
+| 镜像 | OCI 镜像层 | 手动提供内核和根文件系统 | 来自 MicroRegistry 或隔离 MicroBoot builder VM 的已验证 M2Image |
+| 存储 | volume 和 bind mount | 手动提供 block device | 放置在配置根目录或 MicroStorage 池中的每 VM 磁盘 |
+| 主机权限拆分 | 取决于运行时 | 取决于周边集成方式 | 非特权 API 加 capability 受限的 network helper |
+| 适用范围 | 打包并运行容器化应用 | 虚拟化构建模块 | 在单台 Linux 主机上进行实用的私有 microVM 管理 |
+
 ## 架构
 
 ```text

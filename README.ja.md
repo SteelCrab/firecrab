@@ -38,6 +38,18 @@ firecrab は、管理下の Linux ホストで隔離された
 - **ホスト権限を最小化:** API は非特権で動作し、独立した `firecrab-net-helper` はホストネットワークに
   必要な capability だけを持ちます。
 
+## firecrab の違い
+
+| 項目 | コンテナランタイム | Firecracker 単体 | firecrab |
+| --- | --- | --- | --- |
+| 隔離境界 | プロセスがホストカーネルを共有 | ハードウェア仮想化 microVM | ハードウェア仮想化 microVM |
+| 日常運用 | ランタイムの CLI と API | 低レベルなマシン設定と API | VM ライフサイクル用のブラウザダッシュボードと REST API |
+| ネットワーク | ランタイム管理のネットワークとポート公開 | TAP、アドレス、DHCP、ファイアウォールを運用者が構築 | 固定 IP/MAC、隔離、egress ポリシーを持つ明示的な MicroNetwork |
+| イメージ | OCI イメージレイヤー | カーネルと root filesystem を手動で提供 | MicroRegistry または隔離された MicroBoot builder VM から取得する検証済み M2Image |
+| ストレージ | volume と bind mount | block device を手動で提供 | 設定済みルートまたは MicroStorage プールに配置する VM ごとのディスク |
+| ホスト権限の分離 | ランタイムに依存 | 周辺の統合方法に依存 | 非特権 API と capability を制限した network helper |
+| 対象範囲 | コンテナ化アプリのパッケージ化と実行 | 仮想化の構成要素 | 単一 Linux ホストでの実用的なプライベート microVM 管理 |
+
 ## アーキテクチャ
 
 ```text
