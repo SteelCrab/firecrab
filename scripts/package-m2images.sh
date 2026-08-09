@@ -9,6 +9,7 @@
 #   ./scripts/package-m2images.sh              # alpine + ubuntu + rocky
 #   ./scripts/package-m2images.sh --alias alpine-3.24
 #   IMAGE_ROOT=/var/lib/firecrab/images OUT_DIR=dist/m2images ./scripts/package-m2images.sh
+#   ZSTD_THREADS=4 ./scripts/package-m2images.sh # override the safe 2-thread default
 #
 # Publish (manual — do not run from automation without review):
 #   ./scripts/publish-m2images.sh --alias ubuntu-26.04
@@ -22,6 +23,7 @@ repo_dir=$(cd -- "${script_dir}/.." && pwd -P)
 IMAGE_ROOT=${IMAGE_ROOT:-${FIRECRAB_IMAGE_ROOT:-$repo_dir/images}}
 OUT_DIR=${OUT_DIR:-$repo_dir/dist/m2images}
 ZSTD_LEVEL=${ZSTD_LEVEL:-19}
+ZSTD_THREADS=${ZSTD_THREADS:-2}
 ALIAS_FILTER=all
 MOTD_FILE=${MOTD_FILE:-$repo_dir/assets/firecrab-motd}
 
@@ -58,6 +60,9 @@ done
 
 [ -d "$IMAGE_ROOT" ] || fail "image root not found: $IMAGE_ROOT"
 [ -f "$MOTD_FILE" ] || fail "MOTD file not found: $MOTD_FILE"
+case "$ZSTD_THREADS" in
+  ''|*[!0-9]*) fail "ZSTD_THREADS must be a non-negative integer" ;;
+esac
 
 # Print relative artifact paths for a known alias (one per line).
 # Keep in sync with firecrab-api/src/templates.rs default_specs().
@@ -128,9 +133,10 @@ package_one() {
 
   info "packing $alias → $out"
   # --sparse keeps large ext4 images from ballooning when mostly free space.
-  # Pipe through zstd so the GitHub asset stays under the 2 GiB limit.
+  # Keep compression from starving running VMs; 0 remains an explicit opt-in
+  # to zstd's all-core mode through ZSTD_THREADS=0.
   tar --sparse -C "$staging" -cf - "${files[@]}" \
-    | zstd -T0 -"$ZSTD_LEVEL" -f -o "$out"
+    | zstd -T"$ZSTD_THREADS" -"$ZSTD_LEVEL" -f -o "$out"
 
   local bytes
   bytes=$(wc -c <"$out" | tr -d ' ')

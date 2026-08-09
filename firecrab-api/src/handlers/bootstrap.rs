@@ -77,6 +77,10 @@ const CONSOLE_PROBE_ATTEMPTS: usize = 10;
 /// rare enough not to bury the real output the script emits at the end.
 const BOOTSTRAP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Packaging runs beside customer VMs, so using zstd's `-T0` all-core mode
+/// can starve a booting guest long enough to trigger its network timeout.
+const PACKAGE_ZSTD_THREADS: &str = "-T2";
+
 const ALPINE_SCRIPT: &str =
     include_str!("../../../scripts/firecracker-menual/bootstrap-alpine-in-guest.sh");
 const UBUNTU_SCRIPT: &str =
@@ -744,7 +748,7 @@ fn build_package_blocking(
         .map_err(|e| format!("spawn tar: {e}"))?;
     let tar_stdout = tar.stdout.take().ok_or("tar stdout missing")?;
     let zstd = std::process::Command::new("zstd")
-        .args(["-T0", "-19", "-f", "-o"])
+        .args([PACKAGE_ZSTD_THREADS, "-19", "-f", "-o"])
         .arg(&staging_temp)
         .stdin(tar_stdout)
         .status()
