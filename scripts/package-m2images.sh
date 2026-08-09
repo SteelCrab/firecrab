@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pack known M2Image templates from a local image root into
-# `{alias}.tar.zst` archives for GitHub Releases (flat asset names).
+# `{alias}.tar.zst` archives for a distribution/version package registry.
 #
 # Layout inside each archive matches TemplateSpec relative paths:
 #   kernel/...  rootfs/...
@@ -11,14 +11,13 @@
 #   IMAGE_ROOT=/var/lib/firecrab/images OUT_DIR=dist/m2images ./scripts/package-m2images.sh
 #
 # Publish (manual — do not run from automation without review):
-#   gh release create v0.1.0 \
-#     --title "v0.1.0" \
-#     dist/m2images/*.tar.zst dist/m2images/SHA256SUMS
+#   ./scripts/publish-m2images.sh --alias ubuntu-26.04
 
 set -euo pipefail
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-repo_dir=$(CDPATH= cd -- "${script_dir}/.." && pwd -P)
+unset CDPATH
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(cd -- "${script_dir}/.." && pwd -P)
 
 IMAGE_ROOT=${IMAGE_ROOT:-${FIRECRAB_IMAGE_ROOT:-$repo_dir/images}}
 OUT_DIR=${OUT_DIR:-$repo_dir/dist/m2images}
@@ -137,7 +136,5 @@ info "writing $OUT_DIR/SHA256SUMS"
 
 info "done ($packed archive(s) in $OUT_DIR)"
 info "publish example:"
-info "  gh release create v0.1.0 \\"
-info "    --title 'v0.1.0' \\"
-info "    $OUT_DIR/*.tar.zst $OUT_DIR/SHA256SUMS"
-info "then set FIRECRAB_IMAGE_BASE_URL=https://github.com/<org>/<repo>/releases/download/v0.1.0"
+info "  ./scripts/publish-m2images.sh --alias <alias>"
+info "after publishing, set FIRECRAB_IMAGE_BASE_URL=https://registry.firecrab.dev"

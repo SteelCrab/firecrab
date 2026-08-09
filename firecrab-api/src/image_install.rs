@@ -2,10 +2,10 @@
 //! `.tar.zst` package from `FIRECRAB_IMAGE_BASE_URL`, then separately extract
 //! its kernel/rootfs into the image root and hot-register the template.
 //!
-//! Layout (matches `scripts/package-m2images.sh` and flat package hosts):
+//! Layout (matches `scripts/package-m2images.sh` and the package registry):
 //!
 //! ```text
-//! {FIRECRAB_IMAGE_BASE_URL}/{alias}.tar.zst
+//! {FIRECRAB_IMAGE_BASE_URL}/{distro}/{version}/{alias}.tar.zst
 //! ```
 //!
 //! Unset / empty / `none` / `-` disables remote install (hosts that only use
@@ -30,7 +30,7 @@ pub fn package_url(base: &str, alias: &str) -> String {
     format!(
         "{}/{}",
         base.trim().trim_end_matches('/'),
-        package_name(alias)
+        package_path(alias)
     )
 }
 
@@ -226,6 +226,21 @@ pub fn package_name(alias: &str) -> String {
     format!("{alias}.tar.zst")
 }
 
+/// Public registry path for a known M2Image package. Unknown aliases keep the
+/// historic flat layout so locally registered/custom templates remain usable.
+pub fn package_path(alias: &str) -> String {
+    let directory = match alias {
+        "alpine-3.24" => Some("alpine/3.24"),
+        "ubuntu-26.04" => Some("ubuntu/26.04"),
+        "rocky-9" => Some("rocky/9"),
+        _ => None,
+    };
+    match directory {
+        Some(directory) => format!("{directory}/{}", package_name(alias)),
+        None => package_name(alias),
+    }
+}
+
 /// Persistent local package cache. A package remains here after the image is
 /// installed or removed so the two dashboard actions stay independent:
 /// download/verify once, then install the image from that verified package.
@@ -307,7 +322,8 @@ async fn download_package_once(
 ) -> Result<(), String> {
     let root = templates.image_root_path().to_path_buf();
     let package = package_name(&spec.alias);
-    let url = format!("{base_url}/{package}");
+    let remote_package = package_path(&spec.alias);
+    let url = package_url(base_url, &spec.alias);
     let archive = staged_package_path(&root, &spec.alias);
 
     // Emit a real stage event before checking host prerequisites.  Otherwise
@@ -329,14 +345,17 @@ async fn download_package_once(
     let _ = tokio::fs::remove_file(&partial).await;
     tracker.append_log(
         &spec.alias,
-        format!("[packer:source] downloading {package}"),
+        format!("[packer:source] downloading {remote_package}"),
     );
     if let Err(error) = download_to(&client, &url, &temporary).await {
         let _ = tokio::fs::remove_file(&temporary).await;
         let _ = tokio::fs::remove_file(&partial).await;
         return Err(error);
     }
-    tracker.append_log(&spec.alias, format!("[packer:source] downloaded {package}"));
+    tracker.append_log(
+        &spec.alias,
+        format!("[packer:source] downloaded {remote_package}"),
+    );
     tracker.append_log(&spec.alias, "[packer:source] complete");
 
     if let Err(error) = verify_package_members(tracker, &temporary, spec).await {
@@ -728,19 +747,23 @@ mod tests {
     }
 
     #[test]
-    fn package_url_joins_base_and_alias() {
+    fn package_url_uses_distribution_version_tree_for_known_aliases() {
         assert_eq!(
             package_url("http://127.0.0.1:8765/", "ubuntu-26.04"),
-            "http://127.0.0.1:8765/ubuntu-26.04.tar.zst"
+            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst"
         );
         assert_eq!(
             package_url("http://mirror.example/m2", "alpine-3.24"),
-            "http://mirror.example/m2/alpine-3.24.tar.zst"
+            "http://mirror.example/m2/alpine/3.24/alpine-3.24.tar.zst"
+        );
+        assert_eq!(
+            package_url("http://mirror.example/m2", "rocky-9"),
+            "http://mirror.example/m2/rocky/9/rocky-9.tar.zst"
         );
         let tracker = ImageInstallTracker::with_base_url("http://127.0.0.1:8765");
         assert_eq!(
             tracker.package_url_for("ubuntu-26.04").as_deref(),
-            Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst")
+            Some("http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst")
         );
         assert!(
             ImageInstallTracker::disabled()
@@ -768,6 +791,11 @@ mod tests {
         assert_eq!(package_name("alpine-3.24"), "alpine-3.24.tar.zst");
         assert_eq!(package_name("ubuntu-26.04"), "ubuntu-26.04.tar.zst");
         assert_eq!(package_name("rocky-9"), "rocky-9.tar.zst");
+    }
+
+    #[test]
+    fn package_path_keeps_custom_aliases_flat() {
+        assert_eq!(package_path("derived-nginx"), "derived-nginx.tar.zst");
     }
 
     #[test]
@@ -989,8 +1017,8 @@ mod tests {
             alpine.initrd.as_ref().unwrap().to_str().unwrap(),
             alpine.rootfs.to_str().unwrap(),
         ];
-        let package = package_name(&alpine.alias);
-        let archive_path = source.path().join(&package);
+        let archive_path = source.path().join(package_path(&alpine.alias));
+        fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
         make_tar_zst(source.path(), &members, &archive_path);
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

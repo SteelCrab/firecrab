@@ -252,11 +252,12 @@ function computeMenuItems(
   ctx: {
     t: (english: string, korean: string) => string;
     packageJob: ImageInstallResponse | undefined;
+    install: ImageInstallResponse | null;
     busyAlias: string | null;
     bootstrapSession: BootstrapResponse | null;
     bootstrapStartingAlias: string | null;
     onInstallStaged: (alias: string) => Promise<void>;
-    onFetchPackage: (alias: string) => Promise<void>;
+    onDownloadPackage: (alias: string) => Promise<void>;
     onDelete: (alias: string) => Promise<void>;
     onStartBootstrap: (alias: string) => Promise<void>;
     onCancelBootstrap: (bootstrapId: string) => Promise<void>;
@@ -266,17 +267,19 @@ function computeMenuItems(
   const {
     t,
     packageJob,
+    install,
     busyAlias,
     bootstrapSession,
     bootstrapStartingAlias,
     onInstallStaged,
-    onFetchPackage,
+    onDownloadPackage,
     onDelete,
     onStartBootstrap,
     onCancelBootstrap,
     onDeleteStagedPackage,
   } = ctx;
   const fetching = packageJob?.status === "running";
+  const installing = install?.alias === image.alias && install.status === "running";
   // Bootstrapping this alias would spend ~30 minutes producing a package
   // the install step then refuses (`already_installed`) or that is already
   // sitting on disk waiting to be installed.
@@ -301,24 +304,24 @@ function computeMenuItems(
   const installLabel = image.installed
     ? t("Installed", "설치됨")
     : image.packageStaged
-      ? busyAlias === image.alias
+      ? installing || busyAlias === image.alias
         ? t("Installing…", "설치 중…")
         : t("Install local package", "로컬 패키지 설치")
       : image.packageUrl
         ? fetching
-          ? t("Fetching…", "가져오는 중…")
-          : t(`Fetch (${packageBasename(image.packageUrl)})`, `가져오기 (${packageBasename(image.packageUrl)})`)
+          ? t("Downloading…", "다운로드 중…")
+          : t(`Download (${packageBasename(image.packageUrl)})`, `다운로드 (${packageBasename(image.packageUrl)})`)
         : t("No package URL", "패키지 URL 없음");
   const installDisabled = image.installed
     ? true
     : image.packageStaged
-      ? busyAlias === image.alias
+      ? installing || busyAlias === image.alias
       : image.packageUrl
         ? fetching || busyAlias === image.alias
         : true;
   const handleInstallClick = () => {
     if (image.packageStaged) void onInstallStaged(image.alias);
-    else if (image.packageUrl) void onFetchPackage(image.alias);
+    else if (image.packageUrl) void onDownloadPackage(image.alias);
   };
 
   const deleteLabel = busyAlias === image.alias ? t("Deleting…", "삭제 중…") : t("Delete", "삭제");
@@ -494,12 +497,27 @@ function ImageDetail({
           <pre className="detail-log image-install-log">{install.log}</pre>
         </>
       )}
+
+      {packageJob && packageJob.alias === image.alias && packageJob.status !== "idle" && (
+        <>
+          <div className="log-export-bar">
+            <span className="log-export-bar-label">{t("Package download log", "패키지 다운로드 로그")} — {packageJob.alias}</span>
+            <LogExportActions
+              text={packageJob.log}
+              filename={logDownloadFilename("m2image-download", packageJob.alias)}
+              buttonClassName="btn console-bar-btn"
+              disabled={!packageJob.log}
+            />
+          </div>
+          <pre className="detail-log image-install-log">{packageJob.log}</pre>
+        </>
+      )}
     </div>
   );
 }
 
 /**
- * Single M2Image inventory table. Package download/install ("가져오기") and
+ * Single M2Image inventory table. Package download/install ("다운로드") and
  * from-scratch bootstrap ("굽기") are both actions inside the per-row detail
  * panel (`ImageDetail`) rather than separate panels.
  */
@@ -677,7 +695,7 @@ export default function Images() {
     }
   };
 
-  const handleFetchPackage = async (alias: string) => {
+  const handleDownloadPackage = async (alias: string) => {
     setBusyAlias(alias);
     setActionError(null);
     try {
@@ -686,7 +704,7 @@ export default function Images() {
       // Same unmount/error discipline as `pollInstall`: this poll can outlive
       // the component (the App shell unmounts `Images` on a tab switch), and
       // an unguarded throw here would become an unhandled rejection that
-      // silently ends the poll with the row stuck at "가져오는 중…".
+      // silently ends the poll with the row stuck at "다운로드 중…".
       const poll = async () => {
         if (!mountedRef.current) return;
         try {
@@ -695,10 +713,7 @@ export default function Images() {
           setPackageJobs((current) => ({ ...current, [alias]: keepNewestJobSnapshot(current[alias], latest) }));
           if (latest.status === "running") setTimeout(() => void poll(), 500);
           else if (latest.status === "succeeded") {
-            const installed = await startImageInstall(alias);
-            if (!mountedRef.current) return;
-            setInstall(installed);
-            pollInstall(alias);
+            await refreshList();
           }
         } catch (error) {
           if (mountedRef.current) setActionError((error as Error).message);
@@ -862,11 +877,12 @@ export default function Images() {
                         items={computeMenuItems(image, {
                           t,
                           packageJob: job,
+                          install,
                           busyAlias,
                           bootstrapSession,
                           bootstrapStartingAlias,
                           onInstallStaged: handleInstallStaged,
-                          onFetchPackage: handleFetchPackage,
+                          onDownloadPackage: handleDownloadPackage,
                           onDelete: handleDelete,
                           onStartBootstrap: handleStartBootstrap,
                           onCancelBootstrap: handleCancelBootstrap,

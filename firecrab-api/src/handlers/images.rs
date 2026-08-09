@@ -531,7 +531,7 @@ mod tests {
         assert!(!ubuntu.installed);
         assert_eq!(
             ubuntu.package_url.as_deref(),
-            Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst")
+            Some("http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst")
         );
     }
 
@@ -617,8 +617,10 @@ mod tests {
             alpine.initrd.as_ref().unwrap().to_str().unwrap(),
             alpine.rootfs.to_str().unwrap(),
         ];
-        let package = crate::image_install::package_name(&alpine.alias);
-        make_tar_zst(source.path(), &members, &source.path().join(&package));
+        let package = crate::image_install::package_path(&alpine.alias);
+        let archive = source.path().join(package);
+        fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        make_tar_zst(source.path(), &members, &archive);
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

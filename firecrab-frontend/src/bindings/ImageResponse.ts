@@ -12,7 +12,8 @@ export type ImageResponse = {
   installed: boolean;
   /**
    * Package download URL when `FIRECRAB_IMAGE_BASE_URL` is set
-   * (`{base}/{alias}.tar.zst`). Omitted when remote install is off.
+   * (`{base}/{distro}/{version}/{alias}.tar.zst` for built-ins).
+   * Omitted when remote install is off.
    */
   packageUrl?: string;
   /**
