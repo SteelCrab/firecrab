@@ -30,11 +30,17 @@ use crate::templates::{TemplateRegistry, TemplateSpec};
 pub const DEFAULT_IMAGE_BASE_URL: &str = "https://registry.firecrab.dev";
 
 /// Architecture label used by MicroRegistry catalog entries and object keys.
-pub fn host_architecture() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" => "aarch64",
-        _ => "x86_64",
-    }
+#[cfg(target_arch = "aarch64")]
+pub const HOST_ARCHITECTURE: &str = "aarch64";
+/// Architecture label used by MicroRegistry catalog entries and object keys.
+#[cfg(target_arch = "x86_64")]
+pub const HOST_ARCHITECTURE: &str = "x86_64";
+
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+compile_error!("Firecrab supports only x86_64 and aarch64 hosts");
+
+pub const fn host_architecture() -> &'static str {
+    HOST_ARCHITECTURE
 }
 
 /// Absolute package URL for a template alias under `base`.

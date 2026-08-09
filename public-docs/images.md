@@ -73,7 +73,7 @@ Set `FIRECRAB_IMAGE_BASE_URL` to use another package source, or set it to
 `none` to disable remote installs.
 
 MicroRegistry selects packages matching the host architecture.
-Legacy catalog entries without an architecture are treated as x86_64.
+Every catalog entry must declare either `x86_64` or `aarch64` explicitly.
 
 The API downloads and validates a package before installing it.
 Deleting an installed image does not delete its staged package.

@@ -819,6 +819,24 @@ mod tests {
     use crate::handlers::vms::test_support::test_state;
     use firecrab_api_types::{BootstrapStep, BootstrapStepOutcome};
 
+    #[cfg(target_arch = "aarch64")]
+    const TEST_ARCHITECTURE: &str = "aarch64";
+    #[cfg(target_arch = "aarch64")]
+    const TEST_UBUNTU_ROOTFS_ARCHITECTURE: &str = "arm64";
+    #[cfg(target_arch = "aarch64")]
+    const TEST_UBUNTU_KERNEL: &str = "kernel/Image-ubuntu-26.04-aarch64";
+    #[cfg(target_arch = "aarch64")]
+    const TEST_ALPINE_KERNEL: &str = "kernel/Image-alpine-virt-aarch64";
+
+    #[cfg(target_arch = "x86_64")]
+    const TEST_ARCHITECTURE: &str = "x86_64";
+    #[cfg(target_arch = "x86_64")]
+    const TEST_UBUNTU_ROOTFS_ARCHITECTURE: &str = "amd64";
+    #[cfg(target_arch = "x86_64")]
+    const TEST_UBUNTU_KERNEL: &str = "kernel/vmlinux-ubuntu-26.04-x86_64";
+    #[cfg(target_arch = "x86_64")]
+    const TEST_ALPINE_KERNEL: &str = "kernel/vmlinux-alpine-virt-x86_64";
+
     /// Registers a fake console+process for `id`, the same way
     /// `handlers::console_sentinel`'s own tests do —
     /// `run_bootstrap_script` requires a live `VmProcess` to write the
@@ -871,12 +889,14 @@ mod tests {
         0x2f, 0x00, 0x2e, 0x00,
     ];
 
+    #[cfg(target_arch = "aarch64")]
     fn fake_kernel_header() -> &'static [u8] {
-        if crate::image_install::host_architecture() == "aarch64" {
-            b"MZ\0\0fake ARM64 PE Image"
-        } else {
-            FAKE_ELF64_HEADER
-        }
+        b"MZ\0\0fake ARM64 PE Image"
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn fake_kernel_header() -> &'static [u8] {
+        FAKE_ELF64_HEADER
     }
 
     /// Seeds a builder VM record in `vm_state`.
@@ -1033,20 +1053,9 @@ mod tests {
             .unwrap();
         assert!(listing.status.success());
         let members = String::from_utf8_lossy(&listing.stdout);
-        let architecture = crate::image_install::host_architecture();
-        let rootfs_architecture = if architecture == "aarch64" {
-            "arm64"
-        } else {
-            "amd64"
-        };
-        let kernel = if architecture == "aarch64" {
-            "kernel/Image-ubuntu-26.04-aarch64".to_owned()
-        } else {
-            "kernel/vmlinux-ubuntu-26.04-x86_64".to_owned()
-        };
-        assert!(members.contains(&kernel));
+        assert!(members.contains(TEST_UBUNTU_KERNEL));
         assert!(members.contains(&format!(
-            "rootfs/ubuntu-rootfs-26.04-{rootfs_architecture}.ext4"
+            "rootfs/ubuntu-rootfs-26.04-{TEST_UBUNTU_ROOTFS_ARCHITECTURE}.ext4"
         )));
         // The builder VM is gone: a successful bootstrap must not leave a
         // Firecracker process, TAP, IP lease and multi-GB disk behind —
@@ -1220,15 +1229,11 @@ mod tests {
             .unwrap();
         assert!(listing.status.success());
         let members = String::from_utf8_lossy(&listing.stdout);
-        let architecture = crate::image_install::host_architecture();
-        let kernel = if architecture == "aarch64" {
-            "kernel/Image-alpine-virt-aarch64".to_owned()
-        } else {
-            "kernel/vmlinux-alpine-virt-x86_64".to_owned()
-        };
-        assert!(members.contains(&kernel));
-        assert!(members.contains(&format!("kernel/initramfs-alpine-virt-{architecture}")));
-        assert!(members.contains(&format!("rootfs/alpine-rootfs-3.24.1-{architecture}.ext4")));
+        assert!(members.contains(TEST_ALPINE_KERNEL));
+        assert!(members.contains(&format!("kernel/initramfs-alpine-virt-{TEST_ARCHITECTURE}")));
+        assert!(members.contains(&format!(
+            "rootfs/alpine-rootfs-3.24.1-{TEST_ARCHITECTURE}.ext4"
+        )));
     }
 
     #[tokio::test]
