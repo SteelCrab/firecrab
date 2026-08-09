@@ -684,7 +684,8 @@ pub struct MicroNetworkNat {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroNetworkFirewall {
-    /// VMs inside this network cannot reach each other.
+    /// Whether VMs inside this network are prevented from reaching each
+    /// other. Firecrab permits this traffic, so this is currently false.
     pub east_west_blocked: bool,
     /// Traffic routed to any other Firecrab network is dropped.
     pub cross_network_blocked: bool,

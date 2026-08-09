@@ -11,9 +11,8 @@ use crate::PROTOCOL_VERSION;
 
 /// Prefix for every Firecrab-owned TAP interface name. TAP interface names
 /// are bounded by IFNAMSIZ (16 bytes incl. NUL): `fct` + 12 hex of
-/// sha256(vm_id) = 15 chars. The prefix is distinct from the bridge name
-/// (`fcbr0`) so an east-west wildcard (`fct*`) never matches the bridge
-/// itself.
+/// sha256(vm_id) = 15 chars. The prefix is distinct from MicroNetwork bridge
+/// names so rules and diagnostics can identify VM-facing interfaces.
 pub const TAP_PREFIX: &str = "fct";
 
 /// The deterministic TAP interface name for a VM. Both `firecrab-api` (to

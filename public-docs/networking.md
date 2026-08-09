@@ -58,6 +58,10 @@ sudo nft list table inet firecrab
 The helper runs dnsmasq for DHCP.
 It uses nftables for NAT, isolation, and anti-spoofing.
 
+VMs attached to the same MicroNetwork can communicate directly over their
+leased IPv4 addresses. This traffic stays on that network's Linux bridge and
+does not require internet access or an `internet` VM egress policy.
+
 Traffic between different MicroNetworks is blocked.
 
 ## Inspect
