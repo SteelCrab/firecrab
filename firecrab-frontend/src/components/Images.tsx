@@ -380,18 +380,21 @@ function computeMenuItems(
 
 function ImageDetail({
   image,
+  registryMinDiskGb,
   usedByVms,
   usedByError,
   packageJob,
   install,
 }: {
   image: ImageResponse;
+  registryMinDiskGb?: number;
   usedByVms: VmResponse[] | null;
   usedByError: string | null;
   packageJob: ImageInstallResponse | undefined;
   install: ImageInstallResponse | null;
 }) {
   const { t } = useI18n();
+  const minDiskGb = Math.max(image.minDiskGb, registryMinDiskGb ?? 0);
 
   return (
     <div className="subpanel">
@@ -403,7 +406,7 @@ function ImageDetail({
         <dd>{image.version}</dd>
 
         <dt>{t("Minimum disk", "최소 디스크")}</dt>
-        <dd>{image.minDiskGb} GiB</dd>
+        <dd>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</dd>
 
         <dt>{t("Rootfs size", "rootfs 크기")}</dt>
         <dd>{formatRootfsSize(image.rootfsSizeBytes)}</dd>
@@ -1132,16 +1135,18 @@ export default function Images() {
           <thead>
             <tr>
               <th>{t("Image", "이미지")}</th>
-              <th>{t("Size", "크기")}</th>
+              <th>{t("Minimum disk", "최소 디스크")}</th>
               <th>{t("Status", "상태")}</th>
             </tr>
           </thead>
           <tbody>
             {(images ?? []).map((image) => {
               const job = packageJobs[image.alias];
+              const registryMinDiskGb = registry?.images.find((entry) => entry.alias === image.alias)?.minDiskGb;
+              const minDiskGb = Math.max(image.minDiskGb, registryMinDiskGb ?? 0);
               const statusLabel = image.installed
                 ? t("Installed", "설치됨")
-                : job?.status === "succeeded" || image.packageStaged
+                : image.packageStaged
                   ? t("Package ready", "패키지 준비됨")
                   : t("Not installed", "미설치");
               // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
@@ -1157,7 +1162,7 @@ export default function Images() {
                     {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
                     {image.alias}
                   </td>
-                  <td className="mono">{formatRootfsSize(image.rootfsSizeBytes)}</td>
+                  <td className="mono">{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</td>
                   <td className="state-cell">
                     <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
                     {/* Stops the row's own onClick (select/deselect) from firing
@@ -1184,6 +1189,7 @@ export default function Images() {
         {selectedImage && (
           <ImageDetail
             image={selectedImage}
+            registryMinDiskGb={registry?.images.find((entry) => entry.alias === selectedImage.alias)?.minDiskGb}
             usedByVms={usedByVms}
             usedByError={usedByError}
             packageJob={packageJobs[selectedImage.alias]}
