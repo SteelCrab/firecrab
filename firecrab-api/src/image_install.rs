@@ -25,6 +25,10 @@ use tokio::io::AsyncWriteExt;
 
 use crate::templates::{TemplateRegistry, TemplateSpec};
 
+/// Default public MicroRegistry. Operators may override it for a private
+/// registry, or set `FIRECRAB_IMAGE_BASE_URL=none` to disable remote access.
+pub const DEFAULT_IMAGE_BASE_URL: &str = "https://registry.firecrab.dev";
+
 /// Absolute package URL for a template alias under `base`.
 pub fn package_url(base: &str, alias: &str) -> String {
     format!(
@@ -53,15 +57,13 @@ struct ImageInstallJob {
 }
 
 impl ImageInstallTracker {
-    /// Read `FIRECRAB_IMAGE_BASE_URL`. Unset / empty / `none` / `-` → remote
-    /// install disabled.
+    /// Read `FIRECRAB_IMAGE_BASE_URL`. Unset uses the public MicroRegistry;
+    /// empty / `none` / `-` explicitly disables remote install.
     pub fn from_env() -> Self {
-        let base_url = env::var("FIRECRAB_IMAGE_BASE_URL")
-            .ok()
-            .and_then(|value| normalize_base_url(&value));
-        Self {
-            jobs: Arc::new(Mutex::new(HashMap::new())),
-            base_url,
+        match env::var("FIRECRAB_IMAGE_BASE_URL") {
+            Ok(base_url) => Self::with_base_url(base_url),
+            Err(env::VarError::NotPresent) => Self::with_base_url(DEFAULT_IMAGE_BASE_URL),
+            Err(env::VarError::NotUnicode(_)) => Self::disabled(),
         }
     }
 

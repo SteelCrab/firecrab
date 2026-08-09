@@ -190,6 +190,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route(
+            "/api/microregistry",
+            get(handlers::microregistry::list_microregistry),
+        )
         .route("/api/images", get(handlers::images::list_images))
         .route(
             "/api/images/{alias}",

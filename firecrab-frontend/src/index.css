@@ -405,6 +405,37 @@ form.shell-create-grid .field-span-2 {
   gap: 1rem;
 }
 
+.microregistry-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.microregistry-source {
+  overflow: hidden;
+  max-width: 32rem;
+  color: var(--dim);
+  font-size: 0.68rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+.microregistry-refresh {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.68rem;
+}
+.microregistry-intro {
+  margin: -0.45rem 0 1.1rem;
+  color: var(--dim);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.microregistry-empty { margin: 0; }
+.microregistry-table .actions { text-align: right; }
+.microregistry-image { font-weight: 600; }
+
 .poll-note {
   font-family: var(--font-mono);
   font-size: 0.7rem;

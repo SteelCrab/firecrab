@@ -16,6 +16,8 @@ export * from "./HostStatusResponse";
 export * from "./ImageInstallResponse";
 export * from "./ImageInstallStatus";
 export * from "./ImageResponse";
+export * from "./MicroRegistryImageResponse";
+export * from "./MicroRegistryResponse";
 export * from "./MicroNetworkBridge";
 export * from "./MicroNetworkDetailResponse";
 export * from "./MicroNetworkFirewall";

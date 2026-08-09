@@ -11,6 +11,7 @@ import type {
   HostStatusResponse,
   ImageInstallResponse,
   ImageResponse,
+  MicroRegistryResponse,
   MicroNetworkDetailResponse,
   MicroNetworkResponse,
   MicroStorageDetailResponse,
@@ -138,6 +139,11 @@ export function getHostStatus(): Promise<HostStatusResponse> {
 /** Template registry aliases available for create (`GET /api/images`). */
 export function listImages(): Promise<ImageResponse[]> {
   return fetchJson("/api/images");
+}
+
+/** Published M2Image packages and this host's matching cache/install state. */
+export function getMicroRegistry(): Promise<MicroRegistryResponse> {
+  return fetchJson("/api/microregistry");
 }
 
 /** Start package download + verification (`POST /api/images/{alias}/package`). */

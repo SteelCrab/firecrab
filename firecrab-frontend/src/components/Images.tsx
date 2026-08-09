@@ -5,6 +5,7 @@ import type {
   BootstrapStepRun,
   ImageInstallResponse,
   ImageResponse,
+  MicroRegistryResponse,
   VmResponse,
 } from "../bindings";
 import {
@@ -16,6 +17,7 @@ import {
   getBootstrap,
   getImageInstall,
   getImagePackage,
+  getMicroRegistry,
   listImages,
   listVms,
   startBootstrap,
@@ -525,6 +527,8 @@ export default function Images() {
   const { t } = useI18n();
   const [images, setImages] = useState<ImageResponse[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [registry, setRegistry] = useState<MicroRegistryResponse | null>(null);
+  const [registryError, setRegistryError] = useState<string | null>(null);
   const [busyAlias, setBusyAlias] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
@@ -554,9 +558,20 @@ export default function Images() {
     }
   }, []);
 
+  const refreshRegistry = useCallback(async () => {
+    try {
+      const next = await getMicroRegistry();
+      setRegistry(next);
+      setRegistryError(null);
+    } catch (error) {
+      setRegistryError((error as Error).message);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshList();
-  }, [refreshList]);
+    void refreshRegistry();
+  }, [refreshList, refreshRegistry]);
 
   const selectedImage = (images ?? []).find((image) => image.alias === selectedAlias) ?? null;
 
@@ -618,7 +633,7 @@ export default function Images() {
         if (latest.status === "running") {
           setTimeout(() => void tick(), 300);
         } else if (latest.status === "succeeded") {
-          await refreshList();
+          await Promise.all([refreshList(), refreshRegistry()]);
         }
         // "failed" is a confirmed terminal state too — stop without retrying.
       } catch {
@@ -641,7 +656,7 @@ export default function Images() {
         if (!mountedRef.current) return;
         setBootstrapSession(snapshot);
         if (snapshot.status === "succeeded") {
-          await refreshList();
+          await Promise.all([refreshList(), refreshRegistry()]);
         } else if (snapshot.status !== "failed") {
           setTimeout(() => void tick(), 1000);
         }
@@ -713,7 +728,7 @@ export default function Images() {
           setPackageJobs((current) => ({ ...current, [alias]: keepNewestJobSnapshot(current[alias], latest) }));
           if (latest.status === "running") setTimeout(() => void poll(), 500);
           else if (latest.status === "succeeded") {
-            await refreshList();
+            await Promise.all([refreshList(), refreshRegistry()]);
           }
         } catch (error) {
           if (mountedRef.current) setActionError((error as Error).message);
@@ -772,7 +787,7 @@ export default function Images() {
         await removeVmsUsingImage(users);
         await deleteImage(alias);
       }
-      await refreshList();
+      await Promise.all([refreshList(), refreshRegistry()]);
       if (install?.alias === alias) setInstall(null);
       if (
         bootstrapSession?.alias === alias &&
@@ -793,7 +808,7 @@ export default function Images() {
     setActionError(null);
     try {
       await deleteStagedPackage(alias);
-      await refreshList();
+      await Promise.all([refreshList(), refreshRegistry()]);
       setPackageJobs((current) => {
         const next = { ...current };
         delete next[alias];
@@ -834,6 +849,100 @@ export default function Images() {
 
   return (
     <div className="stack">
+      <section className="panel microregistry-panel">
+        <h2 className="panel-title">
+          <span>MicroRegistry</span>
+          <span className="microregistry-title-actions">
+            <span className="microregistry-source" title={registry?.source ?? "https://registry.firecrab.dev/catalog.json"}>
+              {registry?.source ?? "registry.firecrab.dev"}
+            </span>
+            <button type="button" className="btn microregistry-refresh" onClick={() => void refreshRegistry()}>
+              {t("Refresh", "새로고침")}
+            </button>
+          </span>
+        </h2>
+        <p className="microregistry-intro">
+          {t(
+            "Published M2Image packages. Download verifies the package on this host; install registers a prepared local package.",
+            "공개된 M2Image 패키지입니다. 다운로드는 이 호스트에서 검증하고, 설치는 준비된 로컬 패키지를 등록합니다.",
+          )}
+        </p>
+        {registryError && <div className="field-error">{registryError}</div>}
+        {registry === null && !registryError && (
+          <div className="empty microregistry-empty">{t("Loading MicroRegistry…", "MicroRegistry 불러오는 중…")}</div>
+        )}
+        {registry && registry.images.length === 0 && (
+          <div className="empty microregistry-empty">{t("No published packages yet.", "아직 게시된 패키지가 없습니다.")}</div>
+        )}
+        {registry && registry.images.length > 0 && (
+          <div className="table-scroll">
+            <table className="vm-table microregistry-table">
+              <thead>
+                <tr>
+                  <th>{t("Image", "이미지")}</th>
+                  <th>{t("Version", "버전")}</th>
+                  <th>{t("Minimum disk", "최소 디스크")}</th>
+                  <th>{t("Status", "상태")}</th>
+                  <th className="actions">{t("Action", "동작")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {registry.images.map((entry) => {
+                  const packageJob = packageJobs[entry.alias];
+                  const installing = install?.alias === entry.alias && install.status === "running";
+                  const downloading = packageJob?.status === "running";
+                  const actionBusy = busyAlias === entry.alias || installing || downloading;
+                  const statusLabel = entry.installed
+                    ? t("Installed", "설치됨")
+                    : entry.packageStaged || packageJob?.status === "succeeded"
+                      ? t("Package ready", "패키지 준비됨")
+                      : entry.downloadable
+                        ? t("Available", "사용 가능")
+                        : t("Unsupported", "지원 안 됨");
+                  const actionLabel = entry.installed
+                    ? t("Installed", "설치됨")
+                    : entry.packageStaged || packageJob?.status === "succeeded"
+                      ? actionBusy
+                        ? t("Installing…", "설치 중…")
+                        : t("Install", "설치")
+                      : downloading
+                        ? t("Downloading…", "다운로드 중…")
+                        : t("Download", "다운로드");
+                  const actionDisabled = entry.installed || actionBusy || !entry.downloadable;
+                  const doAction = () => {
+                    if (entry.packageStaged || packageJob?.status === "succeeded") {
+                      void handleInstallStaged(entry.alias);
+                    } else {
+                      void handleDownloadPackage(entry.alias);
+                    }
+                  };
+                  return (
+                    <tr key={entry.alias}>
+                      <td className="mono microregistry-image" title={entry.package}>{entry.alias}</td>
+                      <td className="mono">{entry.version}</td>
+                      <td className="mono">{entry.minDiskGb} GiB</td>
+                      <td>
+                        <span className={`state-badge${entry.installed ? " running" : ""}`}>{statusLabel}</span>
+                      </td>
+                      <td className="actions">
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={actionDisabled}
+                          onClick={doAction}
+                          title={entry.downloadable ? entry.package : t("This Firecrab version cannot install this alias.", "이 Firecrab 버전은 이 별칭을 설치할 수 없습니다.")}
+                        >
+                          {actionLabel}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
       <section className="panel">
         <h2 className="panel-title">M2Image</h2>
         {listError && <div className="field-error">{listError}</div>}

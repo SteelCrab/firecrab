@@ -776,6 +776,45 @@ pub struct ImageResponse {
     pub description: String,
 }
 
+/// One verified M2Image package advertised by Firecrab MicroRegistry.
+///
+/// This is deliberately separate from [`ImageResponse`]. The image endpoint
+/// describes templates available to the VM create form; this type describes
+/// immutable packages published in the remote registry and the matching state
+/// on the current host.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroRegistryImageResponse {
+    /// Stable package alias, such as `ubuntu-26.04`.
+    pub alias: String,
+    /// Monotonically increasing publisher version for this alias.
+    pub version: String,
+    /// Registry-relative package object key.
+    pub package: String,
+    /// SHA256 of the compressed package archive.
+    pub sha256: String,
+    /// Smallest disk (GiB) that can contain the published rootfs.
+    pub min_disk_gb: u16,
+    /// RFC 3339 publication timestamp supplied by the registry.
+    pub published_at: String,
+    /// The matching template is already registered on this host.
+    pub installed: bool,
+    /// The package is verified and waiting in this host's local cache.
+    pub package_staged: bool,
+    /// Firecrab knows how to install this alias from a package archive.
+    pub downloadable: bool,
+}
+
+/// Response for `GET /api/microregistry`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroRegistryResponse {
+    /// Public catalog URL used for this response.
+    pub source: String,
+    /// Published packages, sorted by alias.
+    pub images: Vec<MicroRegistryImageResponse>,
+}
+
 /// Lifecycle of an image install job (`POST/GET /api/images/{alias}/install`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
