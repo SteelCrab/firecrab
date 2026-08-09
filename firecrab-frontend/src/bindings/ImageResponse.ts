@@ -1,5 +1,7 @@
 // Mirrors firecrab_api_types::ImageResponse (camelCase wire shape).
 
+import type { PackageOrigin } from "./PackageOrigin";
+
 export type ImageResponse = {
   alias: string;
   version: string;
@@ -23,5 +25,7 @@ export type ImageResponse = {
    * have no remote base URL configured at all.
    */
   packageStaged?: boolean;
+  /** Producer of the staged package, when known. */
+  packageOrigin?: PackageOrigin;
   description: string;
 };

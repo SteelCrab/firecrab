@@ -18,6 +18,7 @@ export * from "./ImageInstallStatus";
 export * from "./ImageResponse";
 export * from "./MicroRegistryImageResponse";
 export * from "./MicroRegistryResponse";
+export * from "./PackageOrigin";
 export * from "./MicroNetworkBridge";
 export * from "./MicroNetworkDetailResponse";
 export * from "./MicroNetworkFirewall";

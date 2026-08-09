@@ -20,7 +20,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus};
+use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, PackageOrigin};
 use tokio::io::AsyncWriteExt;
 
 use crate::templates::{TemplateRegistry, TemplateSpec};
@@ -275,6 +275,50 @@ pub fn staged_package_path(image_root: &Path, alias: &str) -> PathBuf {
     image_root.join(".packages").join(package_name(alias))
 }
 
+fn staged_package_origin_path(image_root: &Path, alias: &str) -> PathBuf {
+    image_root
+        .join(".packages")
+        .join(format!("{}.origin", package_name(alias)))
+}
+
+/// Persist the producer next to a staged archive so dashboard ownership
+/// remains correct across API restarts.
+pub fn write_staged_package_origin(
+    image_root: &Path,
+    alias: &str,
+    origin: PackageOrigin,
+) -> std::io::Result<()> {
+    let path = staged_package_origin_path(image_root, alias);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("origin.tmp");
+    let value = match origin {
+        PackageOrigin::MicroRegistry => "microRegistry\n",
+        PackageOrigin::MicroBoot => "microBoot\n",
+    };
+    std::fs::write(&temporary, value)?;
+    std::fs::rename(temporary, path)
+}
+
+/// Producer of the staged package, or `None` for legacy/unmarked archives.
+pub fn staged_package_origin(image_root: &Path, alias: &str) -> Option<PackageOrigin> {
+    let value = std::fs::read_to_string(staged_package_origin_path(image_root, alias)).ok()?;
+    match value.trim() {
+        "microRegistry" => Some(PackageOrigin::MicroRegistry),
+        "microBoot" => Some(PackageOrigin::MicroBoot),
+        _ => None,
+    }
+}
+
+pub fn clear_staged_package_origin(image_root: &Path, alias: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(staged_package_origin_path(image_root, alias)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 /// Whether an alias has a package ready for the separate image-install step.
 pub fn staged_package_exists(image_root: &Path, alias: &str) -> bool {
     staged_package_path(image_root, alias).is_file()
@@ -397,6 +441,12 @@ async fn download_package_once(
     tokio::fs::rename(&temporary, &archive)
         .await
         .map_err(|error| format!("publish {}: {error}", archive.display()))?;
+    if let Err(error) =
+        write_staged_package_origin(&root, &spec.alias, PackageOrigin::MicroRegistry)
+    {
+        let _ = tokio::fs::remove_file(&archive).await;
+        return Err(format!("publish package origin: {error}"));
+    }
     tracker.append_log(
         &spec.alias,
         "[packer:package] local package cache published",
@@ -849,6 +899,23 @@ mod tests {
     }
 
     #[test]
+    fn staged_package_origin_round_trips_and_clears() {
+        let directory = tempdir().unwrap();
+        write_staged_package_origin(
+            directory.path(),
+            "alpine-3.24",
+            PackageOrigin::MicroRegistry,
+        )
+        .unwrap();
+        assert_eq!(
+            staged_package_origin(directory.path(), "alpine-3.24"),
+            Some(PackageOrigin::MicroRegistry)
+        );
+        clear_staged_package_origin(directory.path(), "alpine-3.24").unwrap();
+        assert_eq!(staged_package_origin(directory.path(), "alpine-3.24"), None);
+    }
+
+    #[test]
     fn package_path_keeps_custom_aliases_flat() {
         assert_eq!(package_path("derived-nginx"), "derived-nginx.tar.zst");
     }
@@ -1101,6 +1168,10 @@ mod tests {
             ImageInstallStatus::Succeeded,
             "log:\n{}",
             snap.log
+        );
+        assert_eq!(
+            staged_package_origin(dest.path(), &alpine.alias),
+            Some(PackageOrigin::MicroRegistry)
         );
         assert!(templates.resolve_alias("alpine-3.24").is_some());
     }

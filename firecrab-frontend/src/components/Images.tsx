@@ -524,11 +524,16 @@ function MicroBootPanel({
                 session !== null &&
                 (session.status === "booting" || session.status === "running");
               const building = isMine && bootstrapBusy;
+              const microBootPackageReady =
+                image.packageStaged && image.packageOrigin === "microBoot";
+              const packageOwnedElsewhere = image.packageStaged && !microBootPackageReady;
               const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
               const statusLabel = building
                 ? session?.status ?? t("Starting", "시작 중")
-                : image.packageStaged
+                : microBootPackageReady
                   ? t("Package ready", "패키지 준비됨")
+                  : packageOwnedElsewhere
+                    ? t("Package managed by M2Image", "M2Image에서 관리 중")
                   : image.installed
                     ? t("Installed", "설치됨")
                     : t("Ready to build", "빌드 가능");
@@ -539,8 +544,10 @@ function MicroBootPanel({
                   : "";
               const actionLabel = canCancel
                 ? t("Cancel build", "빌드 취소")
-                : image.packageStaged
+                : microBootPackageReady
                   ? t("Delete built package", "구운 패키지 삭제")
+                  : packageOwnedElsewhere
+                    ? t("Managed by M2Image", "M2Image에서 관리")
                   : building
                     ? t("Building…", "빌드 중…")
                     : image.installed
@@ -550,8 +557,10 @@ function MicroBootPanel({
                         : t("Build", "빌드");
               const actionDisabled = canCancel
                 ? false
-                : image.packageStaged
+                : microBootPackageReady
                   ? bootstrapBusy
+                  : packageOwnedElsewhere
+                    ? true
                   : image.installed || bootstrapBusy;
               const handleAction = () => {
                 if (canCancel && session) {
@@ -562,7 +571,7 @@ function MicroBootPanel({
                   void onCancel(session.bootstrapId);
                   return;
                 }
-                if (image.packageStaged) {
+                if (microBootPackageReady) {
                   if (!window.confirm(t(
                     `Delete the built package '${image.alias}'?`,
                     `'${image.alias}' 구운 패키지를 삭제할까요?`,
@@ -583,7 +592,7 @@ function MicroBootPanel({
                   <td className="actions">
                     <button
                       type="button"
-                      className={`btn${canCancel || image.packageStaged ? " danger" : ""}`}
+                      className={`btn${canCancel || microBootPackageReady ? " danger" : ""}`}
                       disabled={actionDisabled}
                       onClick={handleAction}
                     >
@@ -1052,6 +1061,13 @@ export default function Images() {
               <tbody>
                 {registry.images.map((entry) => {
                   const packageJob = packageJobs[entry.alias];
+                  // Legacy staged archives predate origin sidecars. Treat
+                  // them as registry downloads; all new MicroBoot builds are
+                  // explicitly marked and therefore never land here.
+                  const registryPackageReady =
+                    entry.packageStaged && entry.packageOrigin !== "microBoot";
+                  const microBootPackageReady =
+                    entry.packageStaged && entry.packageOrigin === "microBoot";
                   const installing = install?.alias === entry.alias && install.status === "running";
                   const downloading = packageJob?.status === "running";
                   const downloadFailed = packageJob?.status === "failed";
@@ -1065,23 +1081,28 @@ export default function Images() {
                         : `${t("Downloading", "다운로드 중")} ${downloadPercent}%`
                     : downloadFailed
                       ? t("Download failed", "다운로드 실패")
-                    : entry.packageStaged
+                    : registryPackageReady
                       ? t("Package ready", "패키지 준비됨")
+                      : microBootPackageReady
+                        ? t("Built locally", "로컬 빌드 완료")
                       : entry.downloadable
                         ? t("Available", "사용 가능")
                         : t("Unsupported", "지원 안 됨");
                   const actionLabel = entry.installed
                     ? t("Installed", "설치됨")
-                    : entry.packageStaged
+                    : registryPackageReady
                       ? actionBusy
                         ? t("Installing…", "설치 중…")
                         : t("Install", "설치")
+                      : microBootPackageReady
+                        ? t("Managed by MicroBoot", "MicroBoot에서 관리")
                       : downloading
                         ? t("Downloading…", "다운로드 중…")
                         : t("Download", "다운로드");
-                  const actionDisabled = entry.installed || actionBusy || !entry.downloadable;
+                  const actionDisabled =
+                    entry.installed || actionBusy || microBootPackageReady || !entry.downloadable;
                   const doAction = () => {
-                    if (entry.packageStaged) {
+                    if (registryPackageReady) {
                       void handleInstallStaged(entry.alias);
                     } else {
                       void handleDownloadPackage(entry.alias);
@@ -1108,6 +1129,22 @@ export default function Images() {
                         >
                           {actionLabel}
                         </button>
+                        {registryPackageReady && (
+                          <button
+                            type="button"
+                            className="btn danger"
+                            disabled={actionBusy}
+                            onClick={() => {
+                              if (!window.confirm(t(
+                                `Delete the downloaded package '${entry.alias}'?`,
+                                `'${entry.alias}' 다운로드 패키지를 삭제할까요?`,
+                              ))) return;
+                              void handleDeleteStagedPackage(entry.alias);
+                            }}
+                          >
+                            {t("Delete package", "패키지 삭제")}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

@@ -116,16 +116,20 @@ pub async fn list_microregistry(
     let mut images = catalog
         .images
         .into_iter()
-        .map(|image| MicroRegistryImageResponse {
-            installed: templates.resolve_alias(&image.alias).is_some(),
-            package_staged: image_install::staged_package_exists(&image_root, &image.alias),
-            downloadable: TemplateRegistry::known_spec(&image.alias).is_some(),
-            alias: image.alias,
-            version: image.version,
-            package: image.package,
-            sha256: image.sha256,
-            min_disk_gb: image.min_disk_gb,
-            published_at: image.published_at,
+        .map(|image| {
+            let package_origin = image_install::staged_package_origin(&image_root, &image.alias);
+            MicroRegistryImageResponse {
+                installed: templates.resolve_alias(&image.alias).is_some(),
+                package_staged: image_install::staged_package_exists(&image_root, &image.alias),
+                package_origin,
+                downloadable: TemplateRegistry::known_spec(&image.alias).is_some(),
+                alias: image.alias,
+                version: image.version,
+                package: image.package,
+                sha256: image.sha256,
+                min_disk_gb: image.min_disk_gb,
+                published_at: image.published_at,
+            }
         })
         .collect::<Vec<_>>();
     images.sort_by(|left, right| left.alias.cmp(&right.alias));

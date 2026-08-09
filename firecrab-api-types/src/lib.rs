@@ -772,8 +772,20 @@ pub struct ImageResponse {
     /// able to offer that install without a remote URL to point at.
     #[serde(default)]
     pub package_staged: bool,
+    /// How the staged package was created. Absent for legacy packages whose
+    /// provenance predates origin tracking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_origin: Option<PackageOrigin>,
     /// Short operator-facing note (may be empty).
     pub description: String,
+}
+
+/// Producer of a package in the host's local `.packages` cache.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PackageOrigin {
+    MicroRegistry,
+    MicroBoot,
 }
 
 /// One verified M2Image package advertised by Firecrab MicroRegistry.
@@ -801,6 +813,9 @@ pub struct MicroRegistryImageResponse {
     pub installed: bool,
     /// The package is verified and waiting in this host's local cache.
     pub package_staged: bool,
+    /// Producer of the staged package, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_origin: Option<PackageOrigin>,
     /// Firecrab knows how to install this alias from a package archive.
     pub downloadable: bool,
 }
@@ -1228,11 +1243,13 @@ mod tests {
             installed: true,
             package_url: Some("http://127.0.0.1:8765/ubuntu-26.04.tar.zst".to_owned()),
             package_staged: true,
+            package_origin: Some(PackageOrigin::MicroRegistry),
             description: String::new(),
         };
         let json = serde_json::to_value(&image).unwrap();
         assert_eq!(json["alias"], "ubuntu-26.04");
         assert_eq!(json["packageStaged"], true);
+        assert_eq!(json["packageOrigin"], "microRegistry");
         assert_eq!(json["minDiskGb"], 2);
         assert_eq!(json["rootfsSizeBytes"], 2 * 1024 * 1024 * 1024u64);
         assert_eq!(json["kernelSha256"], "k".repeat(64));

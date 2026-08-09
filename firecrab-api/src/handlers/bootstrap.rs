@@ -764,6 +764,14 @@ fn build_package_blocking(
     }
 
     std::fs::rename(&staging_temp, &staged).map_err(|e| format!("publish package: {e}"))?;
+    if let Err(error) = crate::image_install::write_staged_package_origin(
+        image_root,
+        alias,
+        firecrab_api_types::PackageOrigin::MicroBoot,
+    ) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(format!("publish package origin: {error}"));
+    }
     let _ = std::fs::remove_dir_all(&scratch);
     Ok(())
 }
@@ -1007,6 +1015,13 @@ mod tests {
             "ubuntu-26.04",
         );
         assert!(staged.is_file());
+        assert_eq!(
+            crate::image_install::staged_package_origin(
+                state.templates.image_root_path(),
+                "ubuntu-26.04"
+            ),
+            Some(firecrab_api_types::PackageOrigin::MicroBoot)
+        );
 
         let listing = std::process::Command::new("tar")
             .arg("--use-compress-program=zstd")

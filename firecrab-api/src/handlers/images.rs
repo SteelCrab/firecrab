@@ -4,7 +4,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, ImageResponse};
+use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, ImageResponse, PackageOrigin};
 
 use crate::error::AppError;
 use crate::image_install;
@@ -22,6 +22,7 @@ fn installed_response(
     template: &TemplateVersion,
     package_url: Option<String>,
     package_staged: bool,
+    package_origin: Option<PackageOrigin>,
 ) -> ImageResponse {
     let rootfs_size_bytes = template.rootfs.length();
     ImageResponse {
@@ -38,6 +39,7 @@ fn installed_response(
         installed: true,
         package_url,
         package_staged,
+        package_origin,
         description: String::new(),
     }
 }
@@ -47,6 +49,7 @@ fn not_installed_response(
     version: &str,
     package_url: Option<String>,
     package_staged: bool,
+    package_origin: Option<PackageOrigin>,
 ) -> ImageResponse {
     ImageResponse {
         alias: alias.to_owned(),
@@ -59,6 +62,7 @@ fn not_installed_response(
         installed: false,
         package_url,
         package_staged,
+        package_origin,
         description: String::new(),
     }
 }
@@ -82,14 +86,18 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
         let image_root = templates.image_root_path();
         let staged_for =
             |alias: &str| -> bool { image_install::staged_package_exists(image_root, alias) };
+        let origin_for = |alias: &str| -> Option<PackageOrigin> {
+            image_install::staged_package_origin(image_root, alias)
+        };
         let mut images: Vec<ImageResponse> = TemplateRegistry::known_specs()
             .into_iter()
             .map(|spec| {
                 let url = package_for(&spec.alias);
                 let staged = staged_for(&spec.alias);
+                let origin = origin_for(&spec.alias);
                 match templates.resolve_alias(&spec.alias) {
-                    Some(template) => installed_response(template.as_ref(), url, staged),
-                    None => not_installed_response(&spec.alias, &spec.version, url, staged),
+                    Some(template) => installed_response(template.as_ref(), url, staged, origin),
+                    None => not_installed_response(&spec.alias, &spec.version, url, staged, origin),
                 }
             })
             .collect();
@@ -107,6 +115,7 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
                     template.as_ref(),
                     package_for(&template.name),
                     staged_for(&template.name),
+                    origin_for(&template.name),
                 ));
             }
         }
@@ -421,6 +430,11 @@ pub async fn delete_staged_package(
             return Err(AppError::internal(request_id.0));
         }
     }
+    if image_install::clear_staged_package_origin(state.templates.image_root_path(), &alias)
+        .is_err()
+    {
+        return Err(AppError::internal(request_id.0));
+    }
 
     state.image_packages.clear(&alias);
     Ok(StatusCode::NO_CONTENT)
@@ -567,6 +581,12 @@ mod tests {
         );
         fs::create_dir_all(staged.parent().unwrap()).unwrap();
         fs::write(&staged, b"pretend tar.zst").unwrap();
+        crate::image_install::write_staged_package_origin(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+            PackageOrigin::MicroRegistry,
+        )
+        .unwrap();
 
         let Json(after) = list_images(State(state)).await;
         let ubuntu = after
@@ -1193,6 +1213,13 @@ mod tests {
 
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(!staged.is_file());
+        assert_eq!(
+            crate::image_install::staged_package_origin(
+                state.templates.image_root_path(),
+                "ubuntu-26.04"
+            ),
+            None
+        );
         assert_eq!(
             state.image_packages.snapshot("ubuntu-26.04").status,
             ImageInstallStatus::Idle
