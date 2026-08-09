@@ -11,9 +11,6 @@
 #   IMAGE_ROOT=/var/lib/firecrab/images OUT_DIR=dist/m2images ./scripts/package-m2images.sh
 #   ZSTD_THREADS=4 ./scripts/package-m2images.sh # override the safe 2-thread default
 #
-# Publish (manual — do not run from automation without review):
-#   ./scripts/publish-m2images.sh --alias ubuntu-26.04
-
 set -euo pipefail
 
 unset CDPATH
@@ -212,6 +209,3 @@ info "writing $OUT_DIR/SHA256SUMS"
 )
 
 info "done ($packed archive(s) in $OUT_DIR)"
-info "publish example:"
-info "  ./scripts/publish-m2images.sh --alias <alias> --arch $M2IMAGE_ARCH"
-info "after publishing, set FIRECRAB_IMAGE_BASE_URL=https://registry.firecrab.dev"
