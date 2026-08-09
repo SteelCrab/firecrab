@@ -36,17 +36,6 @@ const KNOWN_TEMPLATES = [
   { alias: "rocky-9", label: "Rocky Linux", logoSrc: "https://raw.githubusercontent.com/rocky-linux/branding/main/logo/src/icon-primary.svg" },
 ] as const;
 
-/** Last path segment of an official package URL, shown on the "가져오기" button. */
-function packageBasename(url: string): string {
-  try {
-    const path = new URL(url).pathname;
-    const seg = path.split("/").filter(Boolean).pop();
-    return seg || url;
-  } catch {
-    return url;
-  }
-}
-
 /** Human size for the real rootfs artifact (not the ceiled min-disk floor). */
 function formatRootfsSize(bytes: number | undefined | null): string {
   const n = typeof bytes === "number" ? bytes : Number(bytes);
@@ -301,74 +290,20 @@ function OptionsMenu({
   );
 }
 
-/**
- * 선택된 이미지 하나의 상세 정보 + 액션. 표 아래 인라인으로 열리며,
- * MicroNetworks/MicroStorages의 행 클릭 → 상세 패턴과 동일하다.
- */
-/**
- * Builds the "⋯" menu's 4 items for one image — shared by the always-visible
- * per-row trigger (table) and, indirectly, by whichever row is expanded
- * (`ImageDetail` no longer owns this: the menu now lives in the table row so
- * it's visible without expanding anything).
- */
+/** 선택한 로컬 이미지의 상세 정보를 표 아래에 표시한다. */
 function computeMenuItems(
   image: ImageResponse,
   ctx: {
     t: (english: string, korean: string) => string;
-    packageJob: ImageInstallResponse | undefined;
-    install: ImageInstallResponse | null;
     busyAlias: string | null;
-    onInstallStaged: (alias: string) => Promise<void>;
-    onDownloadPackage: (alias: string) => Promise<void>;
     onDelete: (alias: string) => Promise<void>;
   },
 ): { label: string; onClick: () => void; disabled: boolean; danger?: boolean }[] {
-  const {
-    t,
-    packageJob,
-    install,
-    busyAlias,
-    onInstallStaged,
-    onDownloadPackage,
-    onDelete,
-  } = ctx;
-  const fetching = packageJob?.status === "running";
-  const installing = install?.alias === image.alias && install.status === "running";
-
-  // Ahead of the packageUrl branch on purpose: when both are available, a
-  // package already on this host wins over re-downloading the remote one —
-  // which would overwrite a just-bootstrapped local build.
-  const installLabel = image.installed
-    ? t("Installed", "설치됨")
-    : image.packageStaged
-      ? installing || busyAlias === image.alias
-        ? t("Installing…", "설치 중…")
-        : t("Install local package", "로컬 패키지 설치")
-      : image.packageUrl
-        ? fetching
-          ? t("Downloading…", "다운로드 중…")
-          : t(`Download (${packageBasename(image.packageUrl)})`, `다운로드 (${packageBasename(image.packageUrl)})`)
-        : t("No package URL", "패키지 URL 없음");
-  const installDisabled = image.installed
-    ? true
-    : image.packageStaged
-      ? installing || busyAlias === image.alias
-      : image.packageUrl
-        ? fetching || busyAlias === image.alias
-        : true;
-  const handleInstallClick = () => {
-    if (image.packageStaged) void onInstallStaged(image.alias);
-    else if (image.packageUrl) void onDownloadPackage(image.alias);
-  };
+  const { t, busyAlias, onDelete } = ctx;
 
   const deleteLabel = busyAlias === image.alias ? t("Deleting…", "삭제 중…") : t("Delete", "삭제");
 
   return [
-    {
-      label: installLabel,
-      disabled: installDisabled,
-      onClick: handleInstallClick,
-    },
     {
       label: deleteLabel,
       disabled: !image.installed || busyAlias === image.alias,
@@ -383,15 +318,11 @@ function ImageDetail({
   registryMinDiskGb,
   usedByVms,
   usedByError,
-  packageJob,
-  install,
 }: {
   image: ImageResponse;
   registryMinDiskGb?: number;
   usedByVms: VmResponse[] | null;
   usedByError: string | null;
-  packageJob: ImageInstallResponse | undefined;
-  install: ImageInstallResponse | null;
 }) {
   const { t } = useI18n();
   const minDiskGb = Math.max(image.minDiskGb, registryMinDiskGb ?? 0);
@@ -415,20 +346,11 @@ function ImageDetail({
         <dd>
           {image.installed
             ? t("Installed", "설치됨")
-            : image.packageStaged
-              ? t("Package ready", "패키지 준비됨")
-              : t("Not installed", "미설치")}
+            : t("Not installed", "미설치")}
         </dd>
 
         <dt>{t("Description", "설명")}</dt>
         <dd>{image.description || "—"}</dd>
-
-        {image.packageUrl && (
-          <>
-            <dt>{t("Package URL", "패키지 URL")}</dt>
-            <dd>{image.packageUrl}</dd>
-          </>
-        )}
 
         <dt>{t("VMs using it", "사용 중인 VM")}</dt>
         <dd>
@@ -441,36 +363,34 @@ function ImageDetail({
                 : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
         </dd>
       </dl>
+    </div>
+  );
+}
 
-      {install && install.alias === image.alias && install.status !== "idle" && (
-        <>
-          <div className="log-export-bar">
-            <span className="log-export-bar-label">{t("Image import log", "이미지 가져오기 로그")} — {install.alias}</span>
-            <LogExportActions
-              text={install.log}
-              filename={logDownloadFilename("m2image-import", install.alias)}
-              buttonClassName="btn console-bar-btn"
-              disabled={!install.log}
-            />
-          </div>
-          <pre className="detail-log image-install-log">{install.log}</pre>
-        </>
-      )}
+function ImageJobLog({
+  job,
+  kind,
+}: {
+  job: ImageInstallResponse;
+  kind: "download" | "import";
+}) {
+  const { t } = useI18n();
+  const label = kind === "download"
+    ? t("Package download log", "패키지 다운로드 로그")
+    : t("Image import log", "이미지 가져오기 로그");
 
-      {packageJob && packageJob.alias === image.alias && packageJob.status !== "idle" && (
-        <>
-          <div className="log-export-bar">
-            <span className="log-export-bar-label">{t("Package download log", "패키지 다운로드 로그")} — {packageJob.alias}</span>
-            <LogExportActions
-              text={packageJob.log}
-              filename={logDownloadFilename("m2image-download", packageJob.alias)}
-              buttonClassName="btn console-bar-btn"
-              disabled={!packageJob.log}
-            />
-          </div>
-          <pre className="detail-log image-install-log">{packageJob.log}</pre>
-        </>
-      )}
+  return (
+    <div className="subpanel">
+      <div className="log-export-bar">
+        <span className="log-export-bar-label">{label} — {job.alias}</span>
+        <LogExportActions
+          text={job.log}
+          filename={logDownloadFilename(`m2image-${kind}`, job.alias)}
+          buttonClassName="btn console-bar-btn"
+          disabled={!job.log}
+        />
+      </div>
+      <pre className="detail-log image-install-log">{job.log}</pre>
     </div>
   );
 }
@@ -478,18 +398,22 @@ function ImageDetail({
 function MicroBootPanel({
   images,
   session,
+  install,
   startingAlias,
   error,
   onStart,
   onCancel,
+  onInstall,
   onDeletePackage,
 }: {
   images: ImageResponse[];
   session: BootstrapResponse | null;
+  install: ImageInstallResponse | null;
   startingAlias: string | null;
   error: string | null;
   onStart: (alias: string) => Promise<void>;
   onCancel: (bootstrapId: string) => Promise<void>;
+  onInstall: (alias: string) => Promise<void>;
   onDeletePackage: (alias: string) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -527,13 +451,14 @@ function MicroBootPanel({
               const microBootPackageReady =
                 image.packageStaged && image.packageOrigin === "microBoot";
               const packageOwnedElsewhere = image.packageStaged && !microBootPackageReady;
+              const installing = install?.alias === image.alias && install.status === "running";
               const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
               const statusLabel = building
                 ? session?.status ?? t("Starting", "시작 중")
                 : microBootPackageReady
                   ? t("Package ready", "패키지 준비됨")
                   : packageOwnedElsewhere
-                    ? t("Package managed by M2Image", "M2Image에서 관리 중")
+                    ? t("Package managed by MicroRegistry", "MicroRegistry에서 관리 중")
                   : image.installed
                     ? t("Installed", "설치됨")
                     : t("Ready to build", "빌드 가능");
@@ -544,10 +469,8 @@ function MicroBootPanel({
                   : "";
               const actionLabel = canCancel
                 ? t("Cancel build", "빌드 취소")
-                : microBootPackageReady
-                  ? t("Delete built package", "구운 패키지 삭제")
-                  : packageOwnedElsewhere
-                    ? t("Managed by M2Image", "M2Image에서 관리")
+                : packageOwnedElsewhere
+                  ? t("Managed by MicroRegistry", "MicroRegistry에서 관리")
                   : building
                     ? t("Building…", "빌드 중…")
                     : image.installed
@@ -557,10 +480,8 @@ function MicroBootPanel({
                         : t("Build", "빌드");
               const actionDisabled = canCancel
                 ? false
-                : microBootPackageReady
-                  ? bootstrapBusy
-                  : packageOwnedElsewhere
-                    ? true
+                : packageOwnedElsewhere
+                  ? true
                   : image.installed || bootstrapBusy;
               const handleAction = () => {
                 if (canCancel && session) {
@@ -569,14 +490,6 @@ function MicroBootPanel({
                     "진행 중인 빌드를 취소할까요?\n빌더 VM을 삭제하며, 지금까지 진행된 내용은 저장되지 않습니다.",
                   ))) return;
                   void onCancel(session.bootstrapId);
-                  return;
-                }
-                if (microBootPackageReady) {
-                  if (!window.confirm(t(
-                    `Delete the built package '${image.alias}'?`,
-                    `'${image.alias}' 구운 패키지를 삭제할까요?`,
-                  ))) return;
-                  void onDeletePackage(image.alias);
                   return;
                 }
                 void onStart(image.alias);
@@ -590,14 +503,41 @@ function MicroBootPanel({
                   </td>
                   <td><span className={`state-badge${statusClass}`}>{statusLabel}</span></td>
                   <td className="actions">
-                    <button
-                      type="button"
-                      className={`btn${canCancel || microBootPackageReady ? " danger" : ""}`}
-                      disabled={actionDisabled}
-                      onClick={handleAction}
-                    >
-                      {actionLabel}
-                    </button>
+                    {microBootPackageReady && !canCancel ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn"
+                          disabled={installing || bootstrapBusy}
+                          onClick={() => void onInstall(image.alias)}
+                        >
+                          {installing ? t("Installing…", "설치 중…") : t("Install", "설치")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn danger"
+                          disabled={installing || bootstrapBusy}
+                          onClick={() => {
+                            if (!window.confirm(t(
+                              `Delete the built package '${image.alias}'?`,
+                              `'${image.alias}' 구운 패키지를 삭제할까요?`,
+                            ))) return;
+                            void onDeletePackage(image.alias);
+                          }}
+                        >
+                          {t("Delete package", "패키지 삭제")}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className={`btn${canCancel ? " danger" : ""}`}
+                        disabled={actionDisabled}
+                        onClick={handleAction}
+                      >
+                        {actionLabel}
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -633,6 +573,9 @@ function MicroBootPanel({
           <pre className="detail-log">{session.log}</pre>
         </div>
       )}
+      {install && install.status !== "idle" && (
+        <ImageJobLog job={install} kind="import" />
+      )}
     </section>
   );
 }
@@ -653,6 +596,7 @@ export default function Images() {
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
   const packagePollingRef = useRef(new Set<string>());
   const [install, setInstall] = useState<ImageInstallResponse | null>(null);
+  const [installOrigin, setInstallOrigin] = useState<"microRegistry" | "microBoot" | null>(null);
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
   const [bootstrapSession, setBootstrapSession] = useState<BootstrapResponse | null>(null);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
@@ -863,9 +807,13 @@ export default function Images() {
    * `FIRECRAB_IMAGE_BASE_URL` there is nowhere to download from), so this
    * goes directly to the same install + poll the remote path ends with.
    */
-  const handleInstallStaged = async (alias: string) => {
+  const handleInstallStaged = async (
+    alias: string,
+    origin: "microRegistry" | "microBoot",
+  ) => {
     setBusyAlias(alias);
     setActionError(null);
+    setInstallOrigin(origin);
     try {
       const started = await startImageInstall(alias);
       setInstall(started);
@@ -874,9 +822,14 @@ export default function Images() {
       if (error instanceof ApiClientError && error.apiError?.code === "already_installed") {
         await Promise.all([refreshList(), refreshRegistry()]);
         setInstall(null);
+        setInstallOrigin(null);
         return;
       }
-      if (error instanceof ApiClientError && error.apiError?.code === "package_required") {
+      if (
+        origin === "microRegistry" &&
+        error instanceof ApiClientError &&
+        error.apiError?.code === "package_required"
+      ) {
         await refreshRegistry();
         await handleDownloadPackage(alias);
         return;
@@ -1103,7 +1056,7 @@ export default function Images() {
                     entry.installed || actionBusy || microBootPackageReady || !entry.downloadable;
                   const doAction = () => {
                     if (registryPackageReady) {
-                      void handleInstallStaged(entry.alias);
+                      void handleInstallStaged(entry.alias, "microRegistry");
                     } else {
                       void handleDownloadPackage(entry.alias);
                     }
@@ -1153,11 +1106,18 @@ export default function Images() {
             </table>
           </div>
         )}
+        {Object.values(packageJobs)
+          .filter((job) => job.status !== "idle")
+          .map((job) => <ImageJobLog key={`download-${job.alias}`} job={job} kind="download" />)}
+        {installOrigin === "microRegistry" && install && install.status !== "idle" && (
+          <ImageJobLog job={install} kind="import" />
+        )}
     </section>
   );
 
   return (
     <div className="stack">
+      {actionError && <div className="field-error">{actionError}</div>}
       <section className="panel">
         <h2 className="panel-title">M2Image</h2>
         <p className="panel-intro">
@@ -1167,7 +1127,6 @@ export default function Images() {
           )}
         </p>
         {listError && <div className="field-error">{listError}</div>}
-        {actionError && <div className="field-error">{actionError}</div>}
         <table className="vm-table image-table">
           <thead>
             <tr>
@@ -1178,14 +1137,11 @@ export default function Images() {
           </thead>
           <tbody>
             {(images ?? []).map((image) => {
-              const job = packageJobs[image.alias];
               const registryMinDiskGb = registry?.images.find((entry) => entry.alias === image.alias)?.minDiskGb;
               const minDiskGb = Math.max(image.minDiskGb, registryMinDiskGb ?? 0);
               const statusLabel = image.installed
                 ? t("Installed", "설치됨")
-                : image.packageStaged
-                  ? t("Package ready", "패키지 준비됨")
-                  : t("Not installed", "미설치");
+                : t("Not installed", "미설치");
               // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
               // fall back to plain alias text with no logo for those.
               const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
@@ -1204,19 +1160,17 @@ export default function Images() {
                     <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
                     {/* Stops the row's own onClick (select/deselect) from firing
                         when the user is just opening or using this menu. */}
-                    <span onClick={(event) => event.stopPropagation()}>
-                      <OptionsMenu
-                        items={computeMenuItems(image, {
-                          t,
-                          packageJob: job,
-                          install,
-                          busyAlias,
-                          onInstallStaged: handleInstallStaged,
-                          onDownloadPackage: handleDownloadPackage,
-                          onDelete: handleDelete,
-                        })}
-                      />
-                    </span>
+                    {image.installed && (
+                      <span onClick={(event) => event.stopPropagation()}>
+                        <OptionsMenu
+                          items={computeMenuItems(image, {
+                            t,
+                            busyAlias,
+                            onDelete: handleDelete,
+                          })}
+                        />
+                      </span>
+                    )}
                   </td>
                 </tr>
               );
@@ -1229,8 +1183,6 @@ export default function Images() {
             registryMinDiskGb={registry?.images.find((entry) => entry.alias === selectedImage.alias)?.minDiskGb}
             usedByVms={usedByVms}
             usedByError={usedByError}
-            packageJob={packageJobs[selectedImage.alias]}
-            install={install}
           />
         )}
       </section>
@@ -1238,10 +1190,12 @@ export default function Images() {
       <MicroBootPanel
         images={images ?? []}
         session={bootstrapSession}
+        install={installOrigin === "microBoot" ? install : null}
         startingAlias={bootstrapStartingAlias}
         error={bootstrapError}
         onStart={handleStartBootstrap}
         onCancel={handleCancelBootstrap}
+        onInstall={(alias) => handleInstallStaged(alias, "microBoot")}
         onDeletePackage={handleDeleteStagedPackage}
       />
     </div>
