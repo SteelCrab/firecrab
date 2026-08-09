@@ -138,17 +138,12 @@ pub struct CreateVmRequest {
 }
 
 /// Network protocol for a port forward rule.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum PortProtocol {
+    #[default]
     Tcp,
     Udp,
-}
-
-impl Default for PortProtocol {
-    fn default() -> Self {
-        Self::Tcp
-    }
 }
 
 impl std::fmt::Display for PortProtocol {

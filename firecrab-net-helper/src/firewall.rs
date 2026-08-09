@@ -397,7 +397,11 @@ fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
     let mut dnat_prerouting_rules = String::new();
     let mut dnat_output_rules = String::new();
     for pf in &policy.port_forwards {
-        let proto = if pf.protocol.eq_ignore_ascii_case("udp") { "udp" } else { "tcp" };
+        let proto = if pf.protocol.eq_ignore_ascii_case("udp") {
+            "udp"
+        } else {
+            "tcp"
+        };
         let hp = pf.host_port;
         let gp = pf.guest_port;
         dnat_prerouting_rules.push_str(&format!(
@@ -890,7 +894,9 @@ mod tests {
         // Prerouting DNAT only matches traffic arriving on the uplink, so
         // routed traffic between VMs (or any other host-forwarded traffic)
         // hitting the same destination port cannot be hijacked to this VM.
-        assert!(ruleset.contains("vm_") && ruleset.contains("_dnat iifname \"wan0\" tcp dport 8080"));
+        assert!(
+            ruleset.contains("vm_") && ruleset.contains("_dnat iifname \"wan0\" tcp dport 8080")
+        );
     }
 
     #[test]

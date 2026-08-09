@@ -393,17 +393,26 @@ pub async fn update_vm_port_forwards(
     let mut seen = std::collections::HashSet::new();
     for pf in &req.port_forwards {
         if pf.host_port == 0 {
-            fields.insert("portForwards".to_owned(), "host port cannot be 0".to_owned());
+            fields.insert(
+                "portForwards".to_owned(),
+                "host port cannot be 0".to_owned(),
+            );
             break;
         }
         if pf.guest_port == 0 {
-            fields.insert("portForwards".to_owned(), "guest port cannot be 0".to_owned());
+            fields.insert(
+                "portForwards".to_owned(),
+                "guest port cannot be 0".to_owned(),
+            );
             break;
         }
         if !seen.insert((pf.host_port, pf.protocol)) {
             fields.insert(
                 "portForwards".to_owned(),
-                format!("host port {}/{} specified more than once", pf.host_port, pf.protocol),
+                format!(
+                    "host port {}/{} specified more than once",
+                    pf.host_port, pf.protocol
+                ),
             );
             break;
         }
@@ -412,10 +421,9 @@ pub async fn update_vm_port_forwards(
         if let Ok(all_pfs) = state.store.list_all_port_forwards() {
             for (owner_id, existing_pf) in all_pfs {
                 if owner_id != id
-                    && req
-                        .port_forwards
-                        .iter()
-                        .any(|pf| pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol)
+                    && req.port_forwards.iter().any(|pf| {
+                        pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
+                    })
                 {
                     fields.insert(
                         "portForwards".to_owned(),
@@ -1336,7 +1344,14 @@ async fn setup_vm_network(
 
     if let Err(error) = state
         .network
-        .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false, port_forwards)
+        .apply_vm_policy(
+            vm_id,
+            lease.ipv4,
+            lease.mac,
+            egress_policy,
+            false,
+            port_forwards,
+        )
         .await
     {
         // A failed apply_vm_policy leaves nothing installed (nft applies a
@@ -1474,7 +1489,14 @@ pub(crate) async fn reapply_running_vm_policies(state: &AppState) -> Result<(), 
             .collect();
         state
             .network
-            .apply_vm_policy(vm_id, lease.ipv4, lease.mac, egress_policy, false, port_forwards)
+            .apply_vm_policy(
+                vm_id,
+                lease.ipv4,
+                lease.mac,
+                egress_policy,
+                false,
+                port_forwards,
+            )
             .await
             .map_err(|error| format!("policy reapply failed for vm {vm_id}: {error}"))?;
     }
@@ -1858,7 +1880,10 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             if !seen.insert((pf.host_port, pf.protocol)) {
                 fields.insert(
                     "portForwards".to_owned(),
-                    format!("host port {}/{} specified more than once", pf.host_port, pf.protocol),
+                    format!(
+                        "host port {}/{} specified more than once",
+                        pf.host_port, pf.protocol
+                    ),
                 );
                 break;
             }
@@ -1866,7 +1891,9 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
         if !fields.contains_key("portForwards") {
             if let Ok(all_pfs) = state.store.list_all_port_forwards() {
                 for (_, existing_pf) in all_pfs {
-                    if req.port_forwards.iter().any(|pf| pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol) {
+                    if req.port_forwards.iter().any(|pf| {
+                        pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
+                    }) {
                         fields.insert(
                             "portForwards".to_owned(),
                             "one or more host ports are already in use by another VM".to_owned(),

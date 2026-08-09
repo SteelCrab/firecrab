@@ -1173,9 +1173,8 @@ impl Store {
         &self,
     ) -> Result<Vec<(Uuid, firecrab_api_types::PortForward)>, PersistenceError> {
         let conn = self.lock();
-        let mut statement = conn.prepare(
-            "SELECT vm_id, host_port, guest_port, protocol FROM port_forwards",
-        )?;
+        let mut statement =
+            conn.prepare("SELECT vm_id, host_port, guest_port, protocol FROM port_forwards")?;
         let mut rows = statement.query([])?;
         let mut out = Vec::new();
         while let Some(row) = rows.next()? {
