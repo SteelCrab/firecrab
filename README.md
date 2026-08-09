@@ -39,15 +39,22 @@ full cloud control plane. It is not a hosted service or a multi-host scheduler.
 - **Keep host privileges small:** the API runs unprivileged; the separate
   `firecrab-net-helper` owns only the capabilities needed for host networking.
 
-## Platform comparison
+## Which one should I use?
 
-| Platform | Virtualization model | Primary scope | Multi-host | Difference from firecrab |
-| --- | --- | --- | --- | --- |
-| **firecrab** | Firecracker/KVM microVMs | Private microVM management on one Linux host | No | Focuses on a small single-host control plane with a built-in dashboard, explicit MicroNetworks, M2Images, and a narrowly privileged network helper |
-| [Docker Engine](https://docs.docker.com/engine/) | Application containers sharing the host kernel | Building and running containerized applications | [Optional with Swarm](https://docs.docker.com/engine/swarm/) | Uses the container/OCI application model; firecrab gives every workload its own guest kernel and manages it as a VM |
-| [Incus](https://linuxcontainers.org/incus/docs/main/) | LXC system/application containers and QEMU VMs | Full-system instance infrastructure from one host to a cluster | Yes | Covers more instance types, storage drivers, networks, and clustering; firecrab is intentionally narrower and Firecracker-only |
-| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | KVM VMs and LXC containers | Datacenter virtualization with HA, migration, and integrated storage | Yes | Targets broader enterprise and cluster operations; firecrab targets lightweight private microVM operation without a datacenter control plane |
-| [Firecracker](https://firecracker-microvm.github.io/) | Minimal KVM-based microVM VMM | Building block for serverless and container platforms | No control plane | Supplies the VMM itself; firecrab adds image, network, storage, lifecycle, persistence, and browser management around it |
+**firecrab is for people who want VM-level isolation on one Linux server without
+running a full datacenter platform or assembling Firecracker by hand.**
+
+| Product | What it is for | Choose it when | How it feels compared with firecrab |
+| --- | --- | --- | --- |
+| **firecrab** | Private Firecracker microVMs on one Linux host | You want to create isolated Linux VMs and manage their images, networks, storage, and terminals from one dashboard | The focused option: smaller than a general-purpose virtualization platform, but ready to use rather than a low-level VMM |
+| [Docker Engine](https://docs.docker.com/engine/) | Packaging and running applications as containers | Your workload is an application that should be built, shipped, and scaled as an OCI container | Application-first and usually denser; firecrab is VM-first and gives each workload its own guest kernel |
+| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | Managing complete virtualization servers and clusters | You need Windows and Linux VMs, LXC containers, backups, migration, HA, or datacenter storage | Much broader infrastructure management; firecrab is lighter and deliberately limited to private Linux microVMs |
+| [Incus](https://linuxcontainers.org/incus/docs/main/) | Managing system containers and conventional VMs | You need many instance types, storage and network backends, remote hosts, or clustering | More flexible and cloud-like; firecrab offers a smaller opinionated workflow centered on Firecracker microVMs |
+| [Firecracker](https://firecracker-microvm.github.io/) | A low-level engine for building microVM platforms | You are developing your own serverless, sandbox, or container runtime and will build the surrounding control plane | Firecracker is the engine; firecrab is the usable product around it, adding images, networking, storage, persistence, and a web UI |
+
+In short, firecrab provides a VM boundary instead of Docker's container boundary,
+stays smaller and simpler than Proxmox VE or Incus, and is ready to operate unlike
+Firecracker on its own.
 
 ## Architecture
 

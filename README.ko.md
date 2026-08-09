@@ -37,15 +37,21 @@ microVM 환경을 위한 도구입니다. 호스팅 서비스나 멀티 호스�
 - **작은 권한 범위:** API는 비특권으로 실행하며, 별도 `firecrab-net-helper`가 호스트
   네트워크에 필요한 capability만 가집니다.
 
-## 플랫폼 비교
+## 무엇을 선택해야 하나요?
 
-| 플랫폼 | 가상화 모델 | 주요 범위 | 멀티 호스트 | firecrab과의 차이 |
-| --- | --- | --- | --- | --- |
-| **firecrab** | Firecracker/KVM microVM | 단일 Linux 호스트의 사설 microVM 관리 | 미지원 | 내장 대시보드, 명시적 MicroNetwork, M2Image, 권한이 제한된 network helper를 갖춘 작은 단일 호스트 control plane에 집중 |
-| [Docker Engine](https://docs.docker.com/engine/) | 호스트 커널을 공유하는 application container | 컨테이너 애플리케이션 빌드와 실행 | [Swarm 사용 시 지원](https://docs.docker.com/engine/swarm/) | container/OCI 애플리케이션 모델을 사용하며, firecrab은 workload마다 별도 guest kernel을 제공하고 VM으로 관리 |
-| [Incus](https://linuxcontainers.org/incus/docs/main/) | LXC system/application container와 QEMU VM | 단일 호스트부터 cluster까지의 full-system instance 인프라 | 지원 | 더 많은 instance 유형, storage driver, network, clustering을 지원하며, firecrab은 의도적으로 범위를 줄여 Firecracker에 집중 |
-| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | KVM VM과 LXC container | HA, migration, 통합 storage를 갖춘 datacenter 가상화 | 지원 | 더 넓은 enterprise·cluster 운영을 대상으로 하며, firecrab은 datacenter control plane 없이 가벼운 사설 microVM 운영에 집중 |
-| [Firecracker](https://firecracker-microvm.github.io/) | 최소형 KVM 기반 microVM VMM | serverless·container 플랫폼용 구성 요소 | control plane 없음 | VMM 자체를 제공하며, firecrab은 그 위에 image, network, storage, lifecycle, persistence, browser 관리를 추가 |
+**firecrab은 단일 Linux 서버에서 VM 수준의 격리는 필요하지만, 거대한 데이터센터 플랫폼을
+운영하거나 Firecracker를 직접 조립하고 싶지는 않은 사용자를 위한 제품입니다.**
+
+| 제품 | 무엇을 위한 제품인가 | 이런 경우 선택하세요 | firecrab과 비교하면 |
+| --- | --- | --- | --- |
+| **firecrab** | 단일 Linux 서버의 사설 Firecracker microVM | 격리된 Linux VM의 이미지, 네트워크, 저장소, 터미널을 하나의 대시보드에서 관리하고 싶을 때 | 범용 가상화 플랫폼보다 작고 단순하지만, 저수준 VMM과 달리 바로 사용할 수 있는 완성형 제품 |
+| [Docker Engine](https://docs.docker.com/engine/) | 애플리케이션을 컨테이너로 패키징하고 실행 | 애플리케이션을 OCI 컨테이너로 빌드·배포·확장하려고 할 때 | 애플리케이션 중심이며 한 서버에 더 많이 실행하기 좋고, firecrab은 각 작업에 독립된 게스트 커널을 제공하는 VM 중심 제품 |
+| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | 가상화 서버와 클러스터 전체 관리 | Windows·Linux VM, LXC, 백업, 마이그레이션, HA, 데이터센터 스토리지가 필요할 때 | 훨씬 넓은 인프라를 관리하며, firecrab은 가벼운 사설 Linux microVM 운영에 의도적으로 집중 |
+| [Incus](https://linuxcontainers.org/incus/docs/main/) | 시스템 컨테이너와 일반 VM 관리 | 다양한 인스턴스, 저장소·네트워크 방식, 원격 호스트, 클러스터링이 필요할 때 | 더 유연하고 클라우드에 가까우며, firecrab은 Firecracker microVM 중심의 작고 명확한 운영 흐름을 제공 |
+| [Firecracker](https://firecracker-microvm.github.io/) | microVM 플랫폼을 만들기 위한 저수준 엔진 | 자체 서버리스, 샌드박스, 컨테이너 런타임과 관리 계층을 개발할 때 | Firecracker는 엔진이고, firecrab은 그 위에 이미지, 네트워크, 저장소, 상태 보존, 웹 UI를 더한 사용 가능한 제품 |
+
+한마디로 firecrab은 Docker의 컨테이너 경계 대신 VM 경계를 제공하고, Proxmox VE나
+Incus보다 작고 단순하며, Firecracker 단독 사용과 달리 바로 운영할 수 있습니다.
 
 ## 구조
 
