@@ -131,6 +131,7 @@ impl NetworkClient {
         mac: MacAddr,
         egress_policy: EgressPolicy,
         allow_host_ssh: bool,
+        port_forwards: Vec<firecrab_helper_protocol::network::PortForwardSpec>,
     ) -> Result<(), NetworkError> {
         self.call(NetworkRequest::ApplyVmPolicy {
             vm_id,
@@ -138,6 +139,7 @@ impl NetworkClient {
             mac,
             egress_policy: egress_policy.id().to_owned(),
             allow_host_ssh,
+            port_forwards,
         })
         .await
     }

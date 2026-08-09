@@ -152,6 +152,7 @@ pub async fn start_bootstrap(
         micro_network_id,
         storage_root: None,
         shell_ids: Vec::new(),
+        port_forwards: Vec::new(),
     };
 
     let (_status, Json(created)) = create_vm(

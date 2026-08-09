@@ -335,6 +335,37 @@ fn validate_micro_networks(micro_networks: &[MicroNetworkSpec]) -> Result<(), He
         .try_for_each(|network| validate_prefix(network.prefix))
 }
 
+/// Re-validates port forwards against the same rules the API already
+/// enforces — the helper is the trust boundary (same reasoning as
+/// `validate_micro_networks` and the `egress_policy` allowlist lookup) and
+/// does not assume the caller's own check already caught a malformed value.
+/// In particular, an unrecognized protocol must be rejected outright:
+/// `firewall::render_vm_policy` treats anything that isn't `"udp"` as TCP,
+/// so a bad value silently reaching it would render a DNAT rule the caller
+/// never asked for instead of failing loudly.
+fn validate_port_forwards(
+    port_forwards: &[firecrab_helper_protocol::network::PortForwardSpec],
+) -> Result<(), HelperFailure> {
+    for pf in port_forwards {
+        if pf.host_port == 0 {
+            return Err(HelperFailure::InvalidRequest {
+                detail: "port forward host_port cannot be 0".to_owned(),
+            });
+        }
+        if pf.guest_port == 0 {
+            return Err(HelperFailure::InvalidRequest {
+                detail: "port forward guest_port cannot be 0".to_owned(),
+            });
+        }
+        if !pf.protocol.eq_ignore_ascii_case("tcp") && !pf.protocol.eq_ignore_ascii_case("udp") {
+            return Err(HelperFailure::InvalidRequest {
+                detail: format!("port forward protocol {:?} must be tcp or udp", pf.protocol),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Routes a validated request to the matching bridge/firewall operation.
 async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), HelperFailure> {
     match request {
@@ -389,6 +420,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
             mac,
             egress_policy,
             allow_host_ssh,
+            port_forwards,
         } => {
             // Resolve the API-supplied egress ID against the helper's own
             // allowlist; an unknown ID is a client error, not an internal one.
@@ -397,12 +429,14 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: format!("unknown egress policy id {egress_policy:?}"),
                 }
             })?;
+            validate_port_forwards(&port_forwards)?;
             let policy = firewall::VmPolicy {
                 vm_id,
                 ipv4,
                 mac,
                 egress,
                 allow_host_ssh,
+                port_forwards,
             };
             firewall::apply_vm_policy(&config.firewall, policy)
                 .await
@@ -537,11 +571,49 @@ mod tests {
             mac: "02:fc:00:00:00:09".parse().unwrap(),
             egress_policy: "0.0.0.0/0".to_owned(),
             allow_host_ssh: false,
+            port_forwards: Vec::new(),
         };
         assert!(matches!(
             dispatch(request, &config).await,
             Err(HelperFailure::InvalidRequest { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn apply_vm_policy_rejects_a_zero_port_or_unknown_protocol_as_invalid_request() {
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
+        let base = |port_forwards| NetworkRequest::ApplyVmPolicy {
+            vm_id: Uuid::nil(),
+            ipv4: "172.30.0.9".parse().unwrap(),
+            mac: "02:fc:00:00:00:09".parse().unwrap(),
+            egress_policy: "internet".to_owned(),
+            allow_host_ssh: false,
+            port_forwards,
+        };
+        let cases = [
+            vec![firecrab_helper_protocol::network::PortForwardSpec {
+                host_port: 0,
+                guest_port: 80,
+                protocol: "tcp".to_owned(),
+            }],
+            vec![firecrab_helper_protocol::network::PortForwardSpec {
+                host_port: 8080,
+                guest_port: 0,
+                protocol: "tcp".to_owned(),
+            }],
+            vec![firecrab_helper_protocol::network::PortForwardSpec {
+                host_port: 8080,
+                guest_port: 80,
+                protocol: "icmp".to_owned(),
+            }],
+        ];
+        for port_forwards in cases {
+            assert!(matches!(
+                dispatch(base(port_forwards), &config).await,
+                Err(HelperFailure::InvalidRequest { .. })
+            ));
+        }
     }
 
     #[tokio::test]

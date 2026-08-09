@@ -171,6 +171,9 @@ pub enum NetworkRequest {
         egress_policy: String,
         /// Whether host SSH access should be permitted for this VM.
         allow_host_ssh: bool,
+        /// Inbound port forwarding rules (DNAT).
+        #[serde(default)]
+        port_forwards: Vec<PortForwardSpec>,
     },
     /// Remove a VM's firewall/anti-spoofing rules.
     RemoveVmPolicy {
@@ -243,6 +246,17 @@ impl MicroNetworkSpec {
     pub fn bridge_name(&self) -> String {
         micro_network_bridge_name(self.micro_network_id)
     }
+}
+
+/// One inbound port forwarding rule specification for [`NetworkRequest::ApplyVmPolicy`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct PortForwardSpec {
+    /// Host port (1–65535).
+    pub host_port: u16,
+    /// Guest port inside the VM (1–65535).
+    pub guest_port: u16,
+    /// Protocol ("tcp" or "udp").
+    pub protocol: String,
 }
 
 /// One VM's reservation for [`NetworkRequest::SyncDhcpLeases`]. No hostname

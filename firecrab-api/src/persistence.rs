@@ -125,6 +125,23 @@ const CREATE_VM_SHELLS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vm_shells (
     PRIMARY KEY (vm_id, shell_id)
 ) STRICT";
 
+const CREATE_PORT_FORWARDS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS port_forwards (
+    vm_id TEXT NOT NULL,
+    host_port INTEGER NOT NULL,
+    guest_port INTEGER NOT NULL,
+    protocol TEXT NOT NULL DEFAULT 'tcp',
+    PRIMARY KEY (vm_id, host_port, protocol)
+) STRICT";
+
+/// A host port can only ever forward to one VM at a time: the primary key
+/// above only rules out the same VM claiming a port twice, so without this a
+/// second VM could still be given a `host_port`/`protocol` already owned by
+/// another. Handlers pre-check this too (`list_all_port_forwards`), but that
+/// check-then-insert is racy under concurrent requests; this index is what
+/// actually makes the conflict impossible rather than just unlikely.
+const CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL: &str = "CREATE UNIQUE INDEX IF NOT EXISTS port_forwards_host_port_protocol \
+     ON port_forwards(host_port, protocol)";
+
 /// Adds `disk_gb` to a `vms` table created before the column existed (a
 /// bare `CREATE TABLE IF NOT EXISTS` doesn't retrofit new columns onto an
 /// already-created table). `2` matches the fixed rootfs template size that
@@ -362,6 +379,14 @@ pub enum PersistenceError {
         /// The conflicting path.
         path: String,
     },
+    /// A host port/protocol is already forwarded to another VM.
+    #[error("host port {host_port}/{protocol} is already in use by another VM")]
+    DuplicatePortForward {
+        /// The conflicting host port.
+        host_port: u16,
+        /// The conflicting protocol ("tcp" or "udp").
+        protocol: String,
+    },
     /// An operation targeted a Shell id with no matching row.
     #[error("Shell {id} does not exist in the database")]
     MissingShell {
@@ -457,6 +482,8 @@ impl Store {
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
+        conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
+        conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -1090,6 +1117,122 @@ impl Store {
                 revision_id,
                 content: row.get(1)?,
             });
+        }
+        Ok(out)
+    }
+
+    /// Stores (replaces) a VM's port forwarding rules in SQLite.
+    pub fn set_vm_port_forwards(
+        &self,
+        vm_id: Uuid,
+        forwards: &[firecrab_api_types::PortForward],
+    ) -> Result<(), PersistenceError> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM port_forwards WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )?;
+        for pf in forwards {
+            let result = tx.execute(
+                "INSERT INTO port_forwards (vm_id, host_port, guest_port, protocol) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    vm_id.to_string(),
+                    i64::from(pf.host_port),
+                    i64::from(pf.guest_port),
+                    pf.protocol.to_string(),
+                ],
+            );
+            match result {
+                Ok(_) => {}
+                // The app-level cross-VM check callers do first is racy
+                // under concurrent requests; this unique index (see its own
+                // doc comment) is what actually rules the conflict out, so
+                // its violation has to surface as the same typed error.
+                Err(rusqlite::Error::SqliteFailure(err, _))
+                    if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+                {
+                    return Err(PersistenceError::DuplicatePortForward {
+                        host_port: pf.host_port,
+                        protocol: pf.protocol.to_string(),
+                    });
+                }
+                Err(error) => return Err(PersistenceError::Database(error)),
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Clears all port forwarding rules for a VM.
+    pub fn clear_vm_port_forwards(&self, vm_id: Uuid) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            "DELETE FROM port_forwards WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Fetches all port forwarding rules for a VM.
+    pub fn list_vm_port_forwards(
+        &self,
+        vm_id: Uuid,
+    ) -> Result<Vec<firecrab_api_types::PortForward>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT host_port, guest_port, protocol FROM port_forwards WHERE vm_id = ?1 ORDER BY host_port ASC",
+        )?;
+        let mut rows = statement.query(params![vm_id.to_string()])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let host_port: u16 = row.get::<_, i64>(0)? as u16;
+            let guest_port: u16 = row.get::<_, i64>(1)? as u16;
+            let proto_str: String = row.get(2)?;
+            let protocol = if proto_str.eq_ignore_ascii_case("udp") {
+                firecrab_api_types::PortProtocol::Udp
+            } else {
+                firecrab_api_types::PortProtocol::Tcp
+            };
+            out.push(firecrab_api_types::PortForward {
+                host_port,
+                guest_port,
+                protocol,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Fetches all port forwarding rules across all VMs.
+    pub fn list_all_port_forwards(
+        &self,
+    ) -> Result<Vec<(Uuid, firecrab_api_types::PortForward)>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement =
+            conn.prepare("SELECT vm_id, host_port, guest_port, protocol FROM port_forwards")?;
+        let mut rows = statement.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let vm_text: String = row.get(0)?;
+            let vm_id = Uuid::parse_str(&vm_text).map_err(|_| PersistenceError::CorruptRecord {
+                id: vm_text.clone(),
+                reason: "vm_id is not a UUID".to_owned(),
+            })?;
+            let host_port: u16 = row.get::<_, i64>(1)? as u16;
+            let guest_port: u16 = row.get::<_, i64>(2)? as u16;
+            let proto_str: String = row.get(3)?;
+            let protocol = if proto_str.eq_ignore_ascii_case("udp") {
+                firecrab_api_types::PortProtocol::Udp
+            } else {
+                firecrab_api_types::PortProtocol::Tcp
+            };
+            out.push((
+                vm_id,
+                firecrab_api_types::PortForward {
+                    host_port,
+                    guest_port,
+                    protocol,
+                },
+            ));
         }
         Ok(out)
     }
@@ -1759,6 +1902,40 @@ mod tests {
             Store::open(&directory.path().join("firecrab.db")),
             Err(PersistenceError::LegacyDeserialize { .. })
         ));
+    }
+
+    #[test]
+    fn set_vm_port_forwards_rejects_a_host_port_already_owned_by_another_vm() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let vm_a = record(Uuid::new_v4(), "vm-a");
+        let vm_b = record(Uuid::new_v4(), "vm-b");
+        store.insert(&vm_a).unwrap();
+        store.insert(&vm_b).unwrap();
+
+        let claimed = firecrab_api_types::PortForward {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: firecrab_api_types::PortProtocol::Tcp,
+        };
+        store
+            .set_vm_port_forwards(vm_a.id, std::slice::from_ref(&claimed))
+            .unwrap();
+
+        // The unique index (not just the application-level pre-check the
+        // handler already does) is what must reject this — this is exactly
+        // the case a check-then-insert race could otherwise let through.
+        let result = store.set_vm_port_forwards(vm_b.id, &[claimed]);
+        assert!(
+            matches!(
+                &result,
+                Err(PersistenceError::DuplicatePortForward { host_port: 8080, protocol })
+                    if protocol == "tcp"
+            ),
+            "expected a typed conflict, got {result:?}"
+        );
+        // The whole write must have rolled back, not left a partial row.
+        assert!(store.list_vm_port_forwards(vm_b.id).unwrap().is_empty());
     }
 
     #[test]

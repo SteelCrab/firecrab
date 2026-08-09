@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type {
   EgressPolicy,
   MicroNetworkResponse,
+  PortForward,
+  PortProtocol,
   ShellResponse,
   StartupStep,
   StartupStepRun,
@@ -16,10 +18,12 @@ import {
   listMicroNetworks,
   listShells,
   listStorageRoots,
+  updateVmPortForwards,
   updateVmResources,
   updateVmShells,
 } from "../api/client";
 import { isEditableState } from "../model";
+import { isValidPort } from "../lib/portForward";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
@@ -80,6 +84,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [editEgressPolicy, setEditEgressPolicy] = useState<EgressPolicy>("internet");
   const [editStorageRoot, setEditStorageRoot] = useState("default");
   const [editShellIds, setEditShellIds] = useState<string[]>([]);
+  const [editPortForwards, setEditPortForwards] = useState<PortForward[]>([]);
   const [catalogShells, setCatalogShells] = useState<ShellResponse[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
@@ -94,6 +99,22 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     listShells().then(setCatalogShells).catch(() => setCatalogShells([]));
   }, []);
 
+  const addEditPortForward = () => {
+    setEditPortForwards((current) => [...current, { hostPort: 8080, guestPort: 80, protocol: "tcp" }]);
+  };
+
+  const removeEditPortForward = (index: number) => {
+    setEditPortForwards((current) => current.filter((_, i) => i !== index));
+  };
+
+  const updateEditPortForward = (index: number, field: keyof PortForward, value: any) => {
+    setEditPortForwards((current) => {
+      const next = [...current];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
   const startEditing = () => {
     if (!vm) return;
     setEditCpu(String(vm.cpu));
@@ -102,6 +123,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     setEditEgressPolicy(vm.egressPolicy);
     setEditStorageRoot(vm.storageRoot || "default");
     setEditShellIds((vm.shellRefs ?? []).map((ref) => ref.shellId));
+    setEditPortForwards((vm.portForwards ?? []).map((pf) => ({ ...pf })));
     setSaveError(null);
     setEditing(true);
     // Refresh catalog so latest versions show on the checkboxes.
@@ -115,6 +137,22 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
 
   const handleSave = async () => {
     if (!vm) return;
+    // Incomplete rows must block the save, not be silently dropped — the
+    // row stays in the editor so the user can fix or explicitly remove it.
+    const incompleteIndex = editPortForwards.findIndex(
+      (pf) => !isValidPort(pf.hostPort) || !isValidPort(pf.guestPort),
+    );
+    if (incompleteIndex !== -1) {
+      setSaveError(
+        ApiClientError.api(400, {
+          code: "validation",
+          message: "Every port forward needs a host and guest port (1-65535).",
+          fields: { portForwards: "host and guest port must be 1-65535" },
+          requestId: "",
+        }),
+      );
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -132,6 +170,10 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
       // Always re-pin from checkboxes: resolves each id to latest revision
       // (empty list clears pins). Applies on the next start.
       updated = await updateVmShells(vm.id, { shellIds: editShellIds });
+
+      // Update port forwards (already validated above — every row is complete).
+      updated = await updateVmPortForwards(vm.id, { portForwards: editPortForwards });
+
       setVm(updated);
       setEditing(false);
     } catch (error) {
@@ -335,6 +377,74 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                 ) : (
                   (vm.shellRefs ?? [])
                     .map((ref) => `${ref.name}@v${ref.version}`)
+                    .join(", ")
+                )}
+              </dd>
+              <dt>ports</dt>
+              <dd>
+                {editing ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    {editPortForwards.map((pf, idx) => (
+                      <div key={idx} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                        <input
+                          className="detail-edit-input"
+                          type="number"
+                          placeholder="80"
+                          value={pf.guestPort || ""}
+                          onChange={(e) => updateEditPortForward(idx, "guestPort", Number(e.target.value))}
+                          style={{
+                            width: "5rem",
+                            borderColor: isValidPort(pf.guestPort) ? undefined : "var(--danger, #e5484d)",
+                          }}
+                        />
+                        <span style={{ color: "var(--shell)" }}>:</span>
+                        <input
+                          className="detail-edit-input"
+                          type="number"
+                          placeholder="8080"
+                          value={pf.hostPort || ""}
+                          onChange={(e) => updateEditPortForward(idx, "hostPort", Number(e.target.value))}
+                          style={{
+                            width: "5rem",
+                            borderColor: isValidPort(pf.hostPort) ? undefined : "var(--danger, #e5484d)",
+                          }}
+                        />
+                        <select
+                          className="detail-edit-input"
+                          value={pf.protocol}
+                          onChange={(e) => updateEditPortForward(idx, "protocol", e.target.value as PortProtocol)}
+                          style={{ width: "4.5rem" }}
+                        >
+                          <option value="tcp">tcp</option>
+                          <option value="udp">udp</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="btn small danger"
+                          onClick={() => removeEditPortForward(idx)}
+                          style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem" }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      className="btn small secondary"
+                      onClick={addEditPortForward}
+                      style={{ width: "fit-content", marginTop: "0.2rem" }}
+                    >
+                      + {t("Add Rule", "규칙 추가")}
+                    </button>
+                    {saveError?.fieldError("portForwards") && (
+                      <span className="field-error">{saveError.fieldError("portForwards")}</span>
+                    )}
+                  </div>
+                ) : (vm.portForwards ?? []).length === 0 ? (
+                  "—"
+                ) : (
+                  (vm.portForwards ?? [])
+                    .map((pf) => `${pf.guestPort}:${pf.hostPort}/${pf.protocol}`)
                     .join(", ")
                 )}
               </dd>
