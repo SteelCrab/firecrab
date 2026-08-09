@@ -5,7 +5,7 @@
 use std::net::Ipv4Addr;
 use std::process::Stdio;
 
-use firecrab_helper_protocol::network::{MacAddr, MicroNetworkSpec, TAP_PREFIX, tap_name};
+use firecrab_helper_protocol::network::{MacAddr, MicroNetworkSpec, tap_name};
 use rtnetlink::new_connection;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
@@ -325,8 +325,8 @@ fn render_apply_ruleset(
     // Routed traffic aimed at any Firecrab subnet is denied before the
     // per-VM egress map is consulted: that is what keeps two MicroNetworks
     // from reaching each other now that the host routes all of them. Traffic
-    // within one subnet is switched, not routed, and is denied separately by
-    // the bridge table's tap-to-tap rule.
+    // within one subnet is switched, not routed, and is intentionally allowed
+    // so VMs in the same MicroNetwork can communicate with each other.
     // Empty MicroNetwork set: still block link-local/loopback as destinations
     // for any future per-VM policy; no trailing comma that would break nft.
     let internal_destinations = if subnets.is_empty() {
@@ -388,10 +388,6 @@ fn render_apply_ruleset(
          \tchain prerouting {{\n\
          \t\ttype filter hook prerouting priority -300; policy accept;\n\
          \t\tiifname vmap @l2_ingress\n\
-         \t}}\n\
-         \tchain forward {{\n\
-         \t\ttype filter hook forward priority -200; policy accept;\n\
-         \t\tiifname \"{TAP_PREFIX}*\" oifname \"{TAP_PREFIX}*\" drop\n\
          \t}}\n\
          }}\n"
     ))
@@ -797,11 +793,14 @@ mod tests {
     }
 
     #[test]
-    fn global_ruleset_denies_east_west_between_firecrab_taps() {
+    fn global_ruleset_allows_east_west_within_a_micro_network() {
         let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
-        assert!(ruleset.contains("iifname \"fct*\" oifname \"fct*\" drop"));
-        // The wildcard must not be able to match the bridge itself.
-        assert!(!"fcbr0".starts_with("fct"));
+        // TAPs in the same MicroNetwork share one Linux bridge, so leaving
+        // bridge forwarding at its accept default permits their L2 traffic.
+        // Different MicroNetworks use different bridges and their routed
+        // traffic is denied by firecrab_egress above.
+        assert!(!ruleset.contains("iifname \"fct*\" oifname \"fct*\" drop"));
+        assert!(!ruleset.contains("type filter hook forward priority -200"));
     }
 
     #[test]

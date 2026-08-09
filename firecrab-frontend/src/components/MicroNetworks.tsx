@@ -279,7 +279,9 @@ function MicroNetworkDetail({
         <dt>{t("Firewall", "방화벽")}</dt>
         <dd>
           {[
-            firewall.eastWestBlocked && t("VM-to-VM blocked", "VM 간 차단"),
+            firewall.eastWestBlocked
+              ? t("VM-to-VM blocked", "VM 간 차단")
+              : t("VM-to-VM allowed", "VM 간 통신 허용"),
             firewall.crossNetworkBlocked && t("Cross-network blocked", "다른 네트워크 차단"),
             firewall.antiSpoofing && t("IP/MAC spoofing blocked", "IP/MAC 위조 차단"),
           ]

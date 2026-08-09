@@ -132,7 +132,7 @@ pub async fn get_micro_network(
             source_cidr: network.subnet_cidr,
         },
         firewall: MicroNetworkFirewall {
-            east_west_blocked: true,
+            east_west_blocked: false,
             cross_network_blocked: true,
             anti_spoofing: true,
             default_egress: EgressPolicy::default(),
@@ -646,7 +646,7 @@ mod tests {
         assert!(detail.nat.enabled);
         assert_eq!(detail.nat.source_cidr, "172.31.0.0/24");
         // Firewall posture is what the rendered ruleset enforces.
-        assert!(detail.firewall.east_west_blocked);
+        assert!(!detail.firewall.east_west_blocked);
         assert!(detail.firewall.cross_network_blocked);
         assert!(detail.firewall.anti_spoofing);
         assert!(detail.vms.is_empty());
