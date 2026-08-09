@@ -210,18 +210,28 @@ form.shell-create-grid .field-span-2 {
 .shell-check-list:disabled {
   opacity: 0.65;
 }
+.shell-check-scroll {
+  max-height: 7rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+}
 .shell-check-ul {
   list-style: none;
   margin: 0;
   padding: 0.35rem 0.5rem;
-  max-height: 9.5rem;
-  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 4px;
   background: var(--bg);
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
+}
+.shell-check-scroll .shell-check-ul {
+  border: 0;
+  border-radius: 0;
 }
 .shell-check-label {
   display: flex;
