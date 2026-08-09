@@ -1161,6 +1161,7 @@ export default function Images() {
           />
         )}
       </section>
+      {registryPanel}
       <MicroBootPanel
         images={images ?? []}
         session={bootstrapSession}
@@ -1170,7 +1171,6 @@ export default function Images() {
         onCancel={handleCancelBootstrap}
         onDeletePackage={handleDeleteStagedPackage}
       />
-      {registryPanel}
     </div>
   );
 }
