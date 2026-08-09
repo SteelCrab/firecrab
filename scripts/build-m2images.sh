@@ -15,20 +15,22 @@ set -euo pipefail
 
 script_dir=$(CDPATH=; cd -- "$(dirname -- "$0")" && pwd -P)
 repo_dir=$(CDPATH=; cd -- "${script_dir}/.." && pwd -P)
-out_dir=${OUT_DIR:-"${repo_dir}/dist/m2images"}
+out_dir=${OUT_DIR:-}
 alias_filter=all
 
 usage() {
   cat <<'EOF'
 Usage: ./scripts/build-m2images.sh [--alias alpine-3.24|ubuntu-26.04|rocky-9]
 
-Builds the selected Firecracker template(s), packages them into OUT_DIR
-(default: dist/m2images), and verifies OUT_DIR/SHA256SUMS.
+Builds host-native Firecracker template(s), packages them into OUT_DIR, and
+verifies OUT_DIR/SHA256SUMS. x86_64 defaults to dist/m2images; ARM64 defaults
+to dist/m2images/aarch64.
 
 The full MVP release build is:
   ./scripts/build-m2images.sh
 
 Ubuntu needs sudo for its temporary chroot. Alpine and Rocky build in Docker.
+Rocky Linux 9 is currently x86_64-only; ARM64 builds Alpine and Ubuntu.
 EOF
 }
 
@@ -61,8 +63,27 @@ case "$alias_filter" in
   *) fail "unknown --alias $alias_filter (want alpine-3.24, ubuntu-26.04, or rocky-9)" ;;
 esac
 
-[ "$(uname -m)" = x86_64 ] || fail 'MVP package aliases currently target x86_64 builders only'
-command -v docker >/dev/null 2>&1 || fail 'docker is required for the Alpine and Rocky builders'
+case "$(uname -m)" in
+  x86_64|amd64) m2image_arch=x86_64 ;;
+  aarch64|arm64) m2image_arch=aarch64 ;;
+  *) fail "unsupported architecture: $(uname -m)" ;;
+esac
+
+if [ -z "$out_dir" ]; then
+  if [ "$m2image_arch" = aarch64 ]; then
+    out_dir="${repo_dir}/dist/m2images/aarch64"
+  else
+    out_dir="${repo_dir}/dist/m2images"
+  fi
+fi
+
+case "$alias_filter" in
+  all|alpine-3.24|rocky-9)
+    command -v docker >/dev/null 2>&1 || fail 'docker is required for the selected image builder(s)'
+    ;;
+esac
+[ "$m2image_arch" = x86_64 ] || [ "$alias_filter" != rocky-9 ] \
+  || fail 'Rocky Linux 9 template builder currently supports x86_64 only'
 command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum is required'
 
 build_alpine() {
@@ -84,7 +105,11 @@ case "$alias_filter" in
   all)
     build_alpine
     build_ubuntu
-    build_rocky
+    if [ "$m2image_arch" = x86_64 ]; then
+      build_rocky
+    else
+      info 'skipping rocky-9: no ARM64 builder is available'
+    fi
     ;;
   alpine-3.24)
     build_alpine
@@ -98,7 +123,7 @@ case "$alias_filter" in
 esac
 
 info "packaging ${alias_filter} into ${out_dir}"
-IMAGE_ROOT="${repo_dir}/images" OUT_DIR="$out_dir" \
+IMAGE_ROOT="${repo_dir}/images" OUT_DIR="$out_dir" M2IMAGE_ARCH="$m2image_arch" \
   "${script_dir}/package-m2images.sh" --alias "$alias_filter"
 
 info "verifying ${out_dir}/SHA256SUMS"

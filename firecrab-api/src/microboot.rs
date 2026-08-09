@@ -7,6 +7,7 @@
 //! artifact-verification machinery works unchanged. See
 //! `public-docs/images.md`.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::state::AppState;
@@ -25,12 +26,25 @@ pub(crate) const MICROBOOT_ALIAS: &str = "__microboot";
 /// `images/.templates.json` is re-derived rather than silently reused: that
 /// file is replayed at every startup, and without this check a host that
 /// bootstrapped once would keep booting builders off the stale spec forever.
-const MICROBOOT_VERSION: &str = "v2";
+const MICROBOOT_VERSION: &str = "v4";
 
-const KERNEL_URL: &str =
-    "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/netboot/vmlinuz-virt";
-const INITRD_URL: &str =
-    "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/netboot/initramfs-virt";
+fn netboot_url(filename: &str) -> String {
+    netboot_url_for_arch(crate::image_install::host_architecture(), filename)
+}
+
+fn netboot_url_for_arch(architecture: &str, filename: &str) -> String {
+    format!(
+        "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/{architecture}/netboot/{filename}"
+    )
+}
+
+fn microboot_boot_args() -> String {
+    if crate::image_install::host_architecture() == "aarch64" {
+        "keep_bootcon console=ttyS0 reboot=k".to_owned()
+    } else {
+        "console=ttyS0 reboot=k".to_owned()
+    }
+}
 
 /// Kept as its own subdirectory of the image root (parallel to `kernel/`,
 /// `rootfs/`, `.packages/`) so this cache is trivially distinguishable from
@@ -40,7 +54,15 @@ const CACHE_DIR: &str = ".microboot";
 /// Relative (to the image root) paths `register()` pins as this alias's
 /// `TemplateSpec`.
 fn kernel_relative() -> PathBuf {
-    Path::new(CACHE_DIR).join("vmlinux-virt")
+    kernel_relative_for_arch(crate::image_install::host_architecture())
+}
+fn kernel_relative_for_arch(architecture: &str) -> PathBuf {
+    let filename = if architecture == "aarch64" {
+        "Image-virt"
+    } else {
+        "vmlinux-virt"
+    };
+    Path::new(CACHE_DIR).join(filename)
 }
 fn initrd_relative() -> PathBuf {
     Path::new(CACHE_DIR).join("initramfs-virt")
@@ -104,8 +126,10 @@ pub(crate) async fn ensure_registered(state: &AppState) -> Result<String, String
     let kernel_cached = tokio::fs::try_exists(&raw_kernel).await.unwrap_or(false);
     let initrd_cached = tokio::fs::try_exists(&initrd_dest).await.unwrap_or(false);
     if !kernel_cached || !initrd_cached {
-        crate::image_install::download_to(&client, KERNEL_URL, &raw_kernel).await?;
-        crate::image_install::download_to(&client, INITRD_URL, &initrd_dest).await?;
+        crate::image_install::download_to(&client, &netboot_url("vmlinuz-virt"), &raw_kernel)
+            .await?;
+        crate::image_install::download_to(&client, &netboot_url("initramfs-virt"), &initrd_dest)
+            .await?;
     }
 
     let templates = state.templates.clone();
@@ -162,8 +186,8 @@ pub(crate) fn spawn_warmup(state: AppState) {
     });
 }
 
-/// The blocking half: convert the downloaded `vmlinuz-virt` (a compressed
-/// bzImage) to the ELF `vmlinux` Firecracker needs, create a small
+/// The blocking half: prepare the downloaded `vmlinuz-virt` as an x86_64
+/// ELF vmlinux or ARM64 PE Image, create a small
 /// placeholder rootfs artifact (its content is irrelevant — the guest
 /// overwrites the real disk it grows into via `mkfs.ext4 -F`, see the
 /// design doc's "스크래치 디스크" section), and register the spec.
@@ -173,7 +197,7 @@ fn register_blocking(
     raw_kernel: &Path,
 ) -> Result<(), String> {
     let kernel_dest = image_root.join(kernel_relative());
-    extract_vmlinux(raw_kernel, &kernel_dest)?;
+    prepare_kernel_image(raw_kernel, &kernel_dest)?;
 
     let rootfs_dest = image_root.join(rootfs_placeholder_relative());
     create_placeholder_rootfs(&rootfs_dest)?;
@@ -189,7 +213,7 @@ fn register_blocking(
             // (mkinitfs-generated) fails to find real boot media and falls
             // into its own recovery_shell() instead of a hard kernel panic
             // (verified live: /proc, /sys, /dev, PATH already set up there).
-            boot_args: "console=ttyS0 reboot=k".to_owned(),
+            boot_args: microboot_boot_args(),
         })
         .map_err(|error| format!("register microboot template: {error}"))?;
     Ok(())
@@ -302,6 +326,45 @@ fn extract_vmlinux(raw_kernel: &Path, dest: &Path) -> Result<(), String> {
         .map_err(|error| format!("write {}: {error}", dest.display()))
 }
 
+pub(crate) fn prepare_kernel_image(raw_kernel: &Path, dest: &Path) -> Result<(), String> {
+    prepare_kernel_image_for_arch(raw_kernel, dest, crate::image_install::host_architecture())
+}
+
+fn prepare_kernel_image_for_arch(
+    raw_kernel: &Path,
+    dest: &Path,
+    architecture: &str,
+) -> Result<(), String> {
+    if architecture != "aarch64" {
+        return extract_vmlinux(raw_kernel, dest);
+    }
+
+    let mut file = std::fs::File::open(raw_kernel)
+        .map_err(|error| format!("open {}: {error}", raw_kernel.display()))?;
+    let mut magic = [0_u8; 2];
+    file.read_exact(&mut magic)
+        .map_err(|error| format!("read ARM64 kernel {}: {error}", raw_kernel.display()))?;
+    if magic != *b"MZ" {
+        return Err(format!(
+            "ARM64 kernel is not a PE Image: {}",
+            raw_kernel.display()
+        ));
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("mkdir {}: {error}", parent.display()))?;
+    }
+    std::fs::copy(raw_kernel, dest)
+        .map(|_| ())
+        .map_err(|error| {
+            format!(
+                "copy {} to {}: {error}",
+                raw_kernel.display(),
+                dest.display()
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +389,30 @@ mod tests {
     }
 
     #[test]
+    fn arm64_kernel_keeps_the_pe_image_instead_of_extracting_elf() {
+        let dir = temp_image_root();
+        let raw = dir.path().join("Image.raw");
+        std::fs::write(&raw, b"MZ\0\0firecracker-arm64-image").unwrap();
+        let dest = dir.path().join("Image-virt");
+
+        prepare_kernel_image_for_arch(&raw, &dest, "aarch64").unwrap();
+
+        assert_eq!(std::fs::read(dest).unwrap(), std::fs::read(raw).unwrap());
+    }
+
+    #[test]
+    fn arm64_microboot_uses_architecture_specific_urls_and_kernel_name() {
+        assert_eq!(
+            netboot_url_for_arch("aarch64", "vmlinuz-virt"),
+            "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/netboot/vmlinuz-virt"
+        );
+        assert_eq!(
+            kernel_relative_for_arch("aarch64"),
+            PathBuf::from(".microboot/Image-virt")
+        );
+    }
+
+    #[test]
     fn register_blocking_builds_and_registers_a_complete_microboot_spec() {
         let dir = temp_image_root();
         let registry =
@@ -334,7 +421,11 @@ mod tests {
         // `/usr/bin/true` is a small real ELF binary on the Linux hosts
         // Firecracker supports, so extract-vmlinux takes its pass-through
         // path without scanning the much larger test executable.
-        std::fs::copy("/usr/bin/true", &raw_kernel).unwrap();
+        if crate::image_install::host_architecture() == "aarch64" {
+            std::fs::write(&raw_kernel, b"MZ\0\0fake ARM64 PE Image").unwrap();
+        } else {
+            std::fs::copy("/usr/bin/true", &raw_kernel).unwrap();
+        }
 
         // `register_spec` verifies every referenced artifact, including the
         // initrd that the asynchronous download path normally creates.

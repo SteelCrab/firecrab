@@ -41,7 +41,7 @@ mkdir -p "$staging" "$out"
 
 arch=$(uname -m)
 case "$arch" in
-  x86_64) ;;
+  x86_64|aarch64) ;;
   *) fail "unsupported architecture: $arch" ;;
 esac
 
@@ -207,7 +207,7 @@ mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 # debugfs-based dump (`rootfs::dump_from_image`) can read them back at
 # their root (e.g. /rootfs.ext4, not /root/fc-bootstrap/out/rootfs.ext4)
 # after this VM is stopped.
-info 'publishing $out onto /dev/vda'
+info "publishing $out onto /dev/vda"
 mkfs.ext4 -F -L fcbootout -d "$out" /dev/vda
 
 # Everything on /dev/vda is read back by the host

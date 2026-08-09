@@ -30,12 +30,18 @@ struct Catalog {
 #[serde(rename_all = "camelCase")]
 struct CatalogImage {
     alias: String,
+    #[serde(default = "default_catalog_architecture")]
+    architecture: String,
     #[serde(deserialize_with = "catalog_version")]
     version: String,
     package: String,
     sha256: String,
     min_disk_gb: u16,
     published_at: String,
+}
+
+fn default_catalog_architecture() -> String {
+    "x86_64".to_owned()
 }
 
 /// Accept both the first publisher's numeric version and the current string
@@ -116,6 +122,7 @@ pub async fn list_microregistry(
     let mut images = catalog
         .images
         .into_iter()
+        .filter(|image| image.architecture == image_install::host_architecture())
         .map(|image| {
             let package_origin = image_install::staged_package_origin(&image_root, &image.alias);
             MicroRegistryImageResponse {
@@ -163,6 +170,7 @@ mod tests {
                 Json(json!({
                     "images": [{
                         "alias": "ubuntu-26.04",
+                        "architecture": image_install::host_architecture(),
                         "version": 3,
                         "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
                         "sha256": "aabb",
@@ -170,9 +178,18 @@ mod tests {
                         "publishedAt": "2026-08-09T10:00:00Z"
                     }, {
                         "alias": "example-1",
+                        "architecture": image_install::host_architecture(),
                         "version": "1",
                         "package": "example/1/example-1.tar.zst",
                         "sha256": "ccdd",
+                        "minDiskGb": 1,
+                        "publishedAt": "2026-08-09T10:00:00Z"
+                    }, {
+                        "alias": "wrong-architecture",
+                        "architecture": if image_install::host_architecture() == "aarch64" { "x86_64" } else { "aarch64" },
+                        "version": "1",
+                        "package": "wrong/package.tar.zst",
+                        "sha256": "eeff",
                         "minDiskGb": 1,
                         "publishedAt": "2026-08-09T10:00:00Z"
                     }]
@@ -200,5 +217,22 @@ mod tests {
         assert!(response.images[1].downloadable);
         assert!(!response.images[1].installed);
         assert!(!response.images[1].package_staged);
+    }
+
+    #[test]
+    fn legacy_catalog_entries_default_to_x86_64() {
+        let catalog: Catalog = serde_json::from_value(json!({
+            "images": [{
+                "alias": "ubuntu-26.04",
+                "version": 1,
+                "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
+                "sha256": "aabb",
+                "minDiskGb": 2,
+                "publishedAt": "2026-08-09T10:00:00Z"
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(catalog.images[0].architecture, "x86_64");
     }
 }

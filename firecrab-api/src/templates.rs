@@ -147,7 +147,8 @@ impl TemplateVersion {
     /// kernel rejects Firecracker 1.16's command-line MMIO regions as busy,
     /// while its virtio-pci transport is built in.
     pub fn requires_pci_transport(&self) -> bool {
-        matches!(self.name.as_str(), "rocky-9" | "ubuntu-26.04")
+        self.name == "rocky-9"
+            || (self.name == "ubuntu-26.04" && std::env::consts::ARCH != "aarch64")
     }
 
     /// Returns the kernel command line adjusted for the transport selected
@@ -230,8 +231,8 @@ struct CachedHash {
 }
 
 impl TemplateRegistry {
-    /// Loads the registry's built-in template set (`ubuntu-26.04`,
-    /// `alpine-3.24`, `rocky-9`) from `images/` (or `FIRECRAB_IMAGE_ROOT` if set).
+    /// Loads the host architecture's built-in template set from `images/`
+    /// (or `FIRECRAB_IMAGE_ROOT` if set). Rocky Linux is currently x86_64-only.
     pub fn load_default() -> Result<Self, TemplateError> {
         let default_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../images");
         let image_root = env::var_os("FIRECRAB_IMAGE_ROOT")
@@ -367,7 +368,7 @@ impl TemplateRegistry {
 
     /// Built-in template specs the project knows about (installed or not).
     pub fn known_specs() -> Vec<TemplateSpec> {
-        default_specs().to_vec()
+        default_specs()
     }
 
     /// Look up a built-in spec by alias.
@@ -694,11 +695,15 @@ fn artifacts_present(image_root: &Path, spec: &TemplateSpec) -> bool {
         .all(|relative| image_root.join(relative).is_file())
 }
 
-fn default_specs() -> [TemplateSpec; 3] {
-    // Alpine is the default image built by install.sh and supports both
-    // Firecracker host architectures. The other distro builders/package
-    // aliases are currently release-produced for x86_64 only.
-    let alpine_arch = match std::env::consts::ARCH {
+fn default_specs() -> Vec<TemplateSpec> {
+    default_specs_for_arch(std::env::consts::ARCH)
+}
+
+fn default_specs_for_arch(host_arch: &str) -> Vec<TemplateSpec> {
+    // Alpine and Ubuntu support both Firecracker host architectures. Rocky's
+    // official builder and package remain x86_64-only, so it is omitted from
+    // the built-in ARM64 catalog instead of advertising an unusable template.
+    let alpine_arch = match host_arch {
         "aarch64" => "aarch64",
         _ => "x86_64",
     };
@@ -707,8 +712,26 @@ fn default_specs() -> [TemplateSpec; 3] {
     } else {
         "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
     };
+    let (ubuntu_kernel, ubuntu_rootfs_arch, ubuntu_boot_args) = if alpine_arch == "aarch64" {
+        (
+            "kernel/Image-ubuntu-26.04-aarch64",
+            "arm64",
+            "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw",
+        )
+    } else {
+        (
+            "kernel/vmlinux-ubuntu-26.04-x86_64",
+            "amd64",
+            "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw",
+        )
+    };
+    let alpine_kernel = if alpine_arch == "aarch64" {
+        "kernel/Image-alpine-virt-aarch64".to_owned()
+    } else {
+        "kernel/vmlinux-alpine-virt-x86_64".to_owned()
+    };
 
-    [
+    let mut specs = vec![
         TemplateSpec {
             alias: "ubuntu-26.04".to_owned(),
             version: "ubuntu-26.04-v2".to_owned(),
@@ -716,10 +739,12 @@ fn default_specs() -> [TemplateSpec; 3] {
             // install-ubuntu-roofs.sh) rather than a self-built
             // vanilla one — virtio_blk/ext4 are builtin, no initrd
             // needed (public-docs/images.md).
-            kernel: PathBuf::from("kernel/vmlinux-ubuntu-26.04-x86_64"),
+            kernel: PathBuf::from(ubuntu_kernel),
             initrd: None,
-            rootfs: PathBuf::from("rootfs/ubuntu-rootfs-26.04-amd64.ext4"),
-            boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw".to_owned(),
+            rootfs: PathBuf::from(format!(
+                "rootfs/ubuntu-rootfs-26.04-{ubuntu_rootfs_arch}.ext4"
+            )),
+            boot_args: ubuntu_boot_args.to_owned(),
         },
         TemplateSpec {
             alias: "alpine-3.24".to_owned(),
@@ -734,14 +759,17 @@ fn default_specs() -> [TemplateSpec; 3] {
             // builtin here) isn't loaded yet, and fails with a
             // misleading "No such file or directory" instead of
             // triggering the kernel's on-demand module load.
-            kernel: PathBuf::from(format!("kernel/vmlinux-alpine-virt-{alpine_arch}")),
+            kernel: PathBuf::from(alpine_kernel),
             initrd: Some(PathBuf::from(format!(
                 "kernel/initramfs-alpine-virt-{alpine_arch}"
             ))),
             rootfs: PathBuf::from(format!("rootfs/alpine-rootfs-3.24.1-{alpine_arch}.ext4")),
             boot_args: alpine_boot_args.to_owned(),
         },
-        TemplateSpec {
+    ];
+
+    if alpine_arch != "aarch64" {
+        specs.push(TemplateSpec {
             alias: "rocky-9".to_owned(),
             version: "rocky-9-v1".to_owned(),
             // EL9's distro kernel keeps virtio_blk/net and ext4 as modules,
@@ -757,8 +785,10 @@ fn default_specs() -> [TemplateSpec; 3] {
             boot_args:
                 "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw"
                     .to_owned(),
-        },
-    ]
+        });
+    }
+
+    specs
 }
 
 /// Rejects absolute paths, empty paths, and any `.`/`..` component.
@@ -1210,28 +1240,44 @@ mod tests {
     #[test]
     fn default_specs_match_each_distros_own_kernel_and_initrd_requirement() {
         let specs = default_specs();
+        let alpine_arch = match std::env::consts::ARCH {
+            "aarch64" => "aarch64",
+            _ => "x86_64",
+        };
         let ubuntu = specs
             .iter()
             .find(|spec| spec.alias == "ubuntu-26.04")
             .expect("ubuntu-26.04 is one of the default specs");
-        assert_eq!(
-            ubuntu.kernel,
-            PathBuf::from("kernel/vmlinux-ubuntu-26.04-x86_64")
-        );
+        let expected_ubuntu_kernel = if alpine_arch == "aarch64" {
+            "kernel/Image-ubuntu-26.04-aarch64"
+        } else {
+            "kernel/vmlinux-ubuntu-26.04-x86_64"
+        };
+        assert_eq!(ubuntu.kernel, PathBuf::from(expected_ubuntu_kernel));
         assert_eq!(ubuntu.initrd, None);
+        assert_eq!(
+            ubuntu.rootfs,
+            PathBuf::from(if alpine_arch == "aarch64" {
+                "rootfs/ubuntu-rootfs-26.04-arm64.ext4"
+            } else {
+                "rootfs/ubuntu-rootfs-26.04-amd64.ext4"
+            })
+        );
+        assert_eq!(
+            ubuntu.boot_args.contains("keep_bootcon"),
+            alpine_arch == "aarch64"
+        );
 
         let alpine = specs
             .iter()
             .find(|spec| spec.alias == "alpine-3.24")
             .expect("alpine-3.24 is one of the default specs");
-        let alpine_arch = match std::env::consts::ARCH {
-            "aarch64" => "aarch64",
-            _ => "x86_64",
+        let expected_alpine_kernel = if alpine_arch == "aarch64" {
+            "kernel/Image-alpine-virt-aarch64"
+        } else {
+            "kernel/vmlinux-alpine-virt-x86_64"
         };
-        assert_eq!(
-            alpine.kernel,
-            PathBuf::from(format!("kernel/vmlinux-alpine-virt-{alpine_arch}"))
-        );
+        assert_eq!(alpine.kernel, PathBuf::from(expected_alpine_kernel));
         assert_eq!(
             alpine.initrd,
             Some(PathBuf::from(format!(
@@ -1248,22 +1294,24 @@ mod tests {
             alpine_arch == "aarch64"
         );
 
-        let rocky = specs
-            .iter()
-            .find(|spec| spec.alias == "rocky-9")
-            .expect("rocky-9 is one of the default specs");
-        assert_eq!(rocky.kernel, PathBuf::from("kernel/vmlinux-rocky-9-x86_64"));
-        assert_eq!(
-            rocky.initrd,
-            Some(PathBuf::from("kernel/initramfs-rocky-9-x86_64"))
-        );
-        assert_eq!(
-            rocky.rootfs,
-            PathBuf::from("rootfs/rocky-rootfs-9-x86_64.ext4")
-        );
-        assert!(rocky.boot_args.contains("rootfstype=ext4"));
-        assert!(!rocky.boot_args.contains("pci=off"));
-        assert!(rocky.boot_args.contains("net.ifnames=0"));
+        let rocky = specs.iter().find(|spec| spec.alias == "rocky-9");
+        if alpine_arch == "aarch64" {
+            assert!(rocky.is_none(), "Rocky 9 packages are x86_64-only");
+        } else {
+            let rocky = rocky.expect("rocky-9 is an x86_64 default spec");
+            assert_eq!(rocky.kernel, PathBuf::from("kernel/vmlinux-rocky-9-x86_64"));
+            assert_eq!(
+                rocky.initrd,
+                Some(PathBuf::from("kernel/initramfs-rocky-9-x86_64"))
+            );
+            assert_eq!(
+                rocky.rootfs,
+                PathBuf::from("rootfs/rocky-rootfs-9-x86_64.ext4")
+            );
+            assert!(rocky.boot_args.contains("rootfstype=ext4"));
+            assert!(!rocky.boot_args.contains("pci=off"));
+            assert!(rocky.boot_args.contains("net.ifnames=0"));
+        }
 
         let directory = tempdir().unwrap();
         for spec in &specs {
@@ -1281,28 +1329,80 @@ mod tests {
         let ubuntu = registry
             .resolve_alias("ubuntu-26.04")
             .expect("Ubuntu template resolves");
-        assert!(ubuntu.requires_pci_transport());
-        assert!(!ubuntu.runtime_boot_args().contains("pci=off"));
-        assert!(ubuntu.runtime_boot_args().contains("root=/dev/vda"));
-        assert!(ubuntu.runtime_boot_args().contains("net.ifnames=0"));
-
-        let rocky = registry
-            .resolve_alias("rocky-9")
-            .expect("Rocky template resolves");
-        assert!(rocky.requires_pci_transport());
+        assert_eq!(ubuntu.requires_pci_transport(), alpine_arch != "aarch64");
         assert_eq!(
-            rocky
-                .runtime_boot_args()
-                .matches("rd.driver.pre=virtio_net")
-                .count(),
-            1
+            ubuntu.runtime_boot_args().contains("pci=off"),
+            alpine_arch == "aarch64"
         );
+        assert!(ubuntu.runtime_boot_args().contains("root=/dev/vda"));
+        assert_eq!(
+            ubuntu.runtime_boot_args().contains("net.ifnames=0"),
+            alpine_arch != "aarch64"
+        );
+
+        if alpine_arch != "aarch64" {
+            let rocky = registry
+                .resolve_alias("rocky-9")
+                .expect("Rocky template resolves");
+            assert!(rocky.requires_pci_transport());
+            assert_eq!(
+                rocky
+                    .runtime_boot_args()
+                    .matches("rd.driver.pre=virtio_net")
+                    .count(),
+                1
+            );
+        }
 
         let alpine = registry
             .resolve_alias("alpine-3.24")
             .expect("Alpine template resolves");
         assert!(!alpine.requires_pci_transport());
         assert!(alpine.runtime_boot_args().contains("pci=off"));
+    }
+
+    #[test]
+    fn arm64_default_specs_use_arm_artifacts_and_omit_rocky() {
+        let specs = default_specs_for_arch("aarch64");
+        assert_eq!(
+            specs
+                .iter()
+                .map(|spec| spec.alias.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ubuntu-26.04", "alpine-3.24"]
+        );
+
+        let ubuntu = specs
+            .iter()
+            .find(|spec| spec.alias == "ubuntu-26.04")
+            .unwrap();
+        assert_eq!(
+            ubuntu.kernel,
+            PathBuf::from("kernel/Image-ubuntu-26.04-aarch64")
+        );
+        assert_eq!(
+            ubuntu.rootfs,
+            PathBuf::from("rootfs/ubuntu-rootfs-26.04-arm64.ext4")
+        );
+        assert!(ubuntu.boot_args.contains("keep_bootcon"));
+        assert!(ubuntu.boot_args.contains("pci=off"));
+
+        let alpine = specs
+            .iter()
+            .find(|spec| spec.alias == "alpine-3.24")
+            .unwrap();
+        assert_eq!(
+            alpine.kernel,
+            PathBuf::from("kernel/Image-alpine-virt-aarch64")
+        );
+        assert_eq!(
+            alpine.initrd,
+            Some(PathBuf::from("kernel/initramfs-alpine-virt-aarch64"))
+        );
+        assert_eq!(
+            alpine.rootfs,
+            PathBuf::from("rootfs/alpine-rootfs-3.24.1-aarch64.ext4")
+        );
     }
 
     #[test]

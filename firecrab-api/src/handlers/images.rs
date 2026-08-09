@@ -546,10 +546,12 @@ mod tests {
             .find(|image| image.alias == "ubuntu-26.04")
             .unwrap();
         assert!(!ubuntu.installed);
-        assert_eq!(
-            ubuntu.package_url.as_deref(),
-            Some("http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst")
-        );
+        let expected_url = if std::env::consts::ARCH == "aarch64" {
+            "http://127.0.0.1:8765/ubuntu/26.04/aarch64/ubuntu-26.04.tar.zst"
+        } else {
+            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst"
+        };
+        assert_eq!(ubuntu.package_url.as_deref(), Some(expected_url));
     }
 
     /// The gap that made a completed web bootstrap unreachable from the UI:

@@ -591,7 +591,9 @@ template_artifacts() {
     case "$(uname -m 2>/dev/null || printf unknown)" in
         aarch64|arm64)
             cat <<'EOF'
-kernel/vmlinux-alpine-virt-aarch64
+kernel/Image-ubuntu-26.04-aarch64
+rootfs/ubuntu-rootfs-26.04-arm64.ext4
+kernel/Image-alpine-virt-aarch64
 kernel/initramfs-alpine-virt-aarch64
 rootfs/alpine-rootfs-3.24.1-aarch64.ext4
 EOF
