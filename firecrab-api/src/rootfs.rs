@@ -260,18 +260,35 @@ const STRIP_PATHS: &[&str] = &[
     "/var/lib/dhcpcd/dhcpcd-eth0.lease",
 ];
 
+const FIRECRAB_MOTD: &str = r#"███████╗██╗██████╗ ███████╗ ██████╗██████╗  █████╗ ██████╗
+██╔════╝██║██╔══██╗██╔════╝██╔════╝██╔══██╗██╔══██╗██╔══██╗
+█████╗  ██║██████╔╝█████╗  ██║     ██████╔╝███████║██████╔╝
+██╔══╝  ██║██╔══██╗██╔══╝  ██║     ██╔══██╗██╔══██║██╔══██╗
+██║     ██║██║  ██║███████╗╚██████╗██║  ██║██║  ██║██████╔╝
+╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝
+
+███╗   ███╗██████╗      ██████╗     ██████╗    ██╗
+████╗ ████║╚════██╗    ██╔═████╗   ██╔═████╗  ███║
+██╔████╔██║ █████╔╝    ██║██╔██║   ██║██╔██║  ╚██║
+██║╚██╔╝██║██╔═══╝     ████╔╝██║   ████╔╝██║   ██║
+██║ ╚═╝ ██║███████╗    ╚██████╔╝██╗╚██████╔╝██╗██║
+╚═╝     ╚═╝╚══════╝     ╚═════╝ ╚═╝ ╚═════╝ ╚═╝╚═╝
+"#;
+
 /// Per-VM guest specialization: writes this VM's deterministic hostname
 /// (see `firecrab_helper_protocol::network::guest_hostname`) into
-/// `/etc/hostname`, then strips [`STRIP_PATHS`] — all directly on the VM's
-/// own rootfs file via `debugfs -w` (no mount, no root needed). Before those
-/// offline writes, it runs `e2fsck -p` so an abruptly stopped guest's ext4
-/// journal is recovered using only e2fsck's automatic safe repairs.
+/// `/etc/hostname`, installs the Firecrab `/etc/motd`, then strips
+/// [`STRIP_PATHS`] — all directly on the VM's own rootfs file via `debugfs -w`
+/// (no mount, no root needed). Before those offline writes, it runs `e2fsck
+/// -p` so an abruptly stopped guest's ext4 journal is recovered using only
+/// e2fsck's automatic safe repairs.
 /// Idempotent: safe to call again against an already-specialized disk.
 pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     recover_before_specialization(rootfs)?;
 
     let hostname = firecrab_helper_protocol::network::guest_hostname(id);
     write_into_image(rootfs, "/etc/hostname", format!("{hostname}\n").as_bytes())?;
+    write_into_image(rootfs, "/etc/motd", FIRECRAB_MOTD.as_bytes())?;
     for path in STRIP_PATHS {
         remove_from_image(rootfs, path);
     }
@@ -895,6 +912,17 @@ mod tests {
             debugfs_cat(&rootfs, "/etc/hostname"),
             format!("{hostname}\n")
         );
+    }
+
+    #[test]
+    fn specialize_guest_installs_the_firecrab_motd() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+
+        specialize_guest(&rootfs, Uuid::new_v4()).unwrap();
+
+        assert_eq!(debugfs_cat(&rootfs, "/etc/motd"), FIRECRAB_MOTD);
     }
 
     /// A Firecracker process can be killed before the guest has cleanly
