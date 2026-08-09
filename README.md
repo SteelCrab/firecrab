@@ -39,6 +39,18 @@ full cloud control plane. It is not a hosted service or a multi-host scheduler.
 - **Keep host privileges small:** the API runs unprivileged; the separate
   `firecrab-net-helper` owns only the capabilities needed for host networking.
 
+## What makes firecrab different
+
+| Area | Container runtime | Firecracker alone | firecrab |
+| --- | --- | --- | --- |
+| Isolation boundary | Processes share the host kernel | Hardware-virtualized microVM | Hardware-virtualized microVM |
+| Daily operation | Runtime CLI and APIs | Low-level machine configuration and API | Browser dashboard and REST API for the VM lifecycle |
+| Networking | Runtime-managed networks and port publishing | TAP, addressing, DHCP, and firewall are operator-built | Explicit MicroNetworks with persistent IP/MAC, isolation, and egress policy |
+| Images | OCI image layers | Kernel and root filesystem supplied manually | Verified M2Images from MicroRegistry or an isolated MicroBoot builder VM |
+| Storage | Volumes and bind mounts | Block devices supplied manually | Per-VM disks placed on configured roots or MicroStorage pools |
+| Host privilege split | Depends on the runtime | Depends on the surrounding integration | Unprivileged API plus a capability-bounded network helper |
+| Intended scope | Package and run containerized applications | Virtualization building block | Practical, private microVM management on one Linux host |
+
 ## Architecture
 
 ```text
