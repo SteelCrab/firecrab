@@ -67,20 +67,58 @@ function packageDownloadPercent(job: ImageInstallResponse): number | null {
   return Math.min(100, Math.round(((job.downloadedBytes ?? 0) / total) * 100));
 }
 
+function formatTransferRate(bytesPerSecond: number | null): string {
+  if (bytesPerSecond === null || !Number.isFinite(bytesPerSecond)) return "—";
+  if (bytesPerSecond >= 1024 ** 3) return `${(bytesPerSecond / 1024 ** 3).toFixed(1)} GiB/s`;
+  if (bytesPerSecond >= 1024 ** 2) return `${(bytesPerSecond / 1024 ** 2).toFixed(1)} MiB/s`;
+  if (bytesPerSecond >= 1024) return `${(bytesPerSecond / 1024).toFixed(1)} KiB/s`;
+  return `${Math.round(bytesPerSecond)} B/s`;
+}
+
 /** Download-only progress. Terminal states use the normal status badge. */
 function PackageDownloadProgress({ job }: { job: ImageInstallResponse }) {
   const measuredPercent = packageDownloadPercent(job);
   const barPercent = measuredPercent ?? 35;
+  const sampleRef = useRef({
+    startedAtMs: job.startedAtMs,
+    downloadedBytes: job.downloadedBytes ?? 0,
+    sampledAtMs: Date.now(),
+  });
+  const [bytesPerSecond, setBytesPerSecond] = useState<number | null>(() => {
+    const elapsedMs = job.startedAtMs ? Date.now() - job.startedAtMs : 0;
+    return elapsedMs > 0 ? ((job.downloadedBytes ?? 0) * 1000) / elapsedMs : null;
+  });
+
+  useEffect(() => {
+    const now = Date.now();
+    const downloadedBytes = job.downloadedBytes ?? 0;
+    const previous = sampleRef.current;
+    if (previous.startedAtMs !== job.startedAtMs) {
+      const elapsedMs = job.startedAtMs ? now - job.startedAtMs : 0;
+      setBytesPerSecond(elapsedMs > 0 ? (downloadedBytes * 1000) / elapsedMs : null);
+    } else {
+      const elapsedMs = now - previous.sampledAtMs;
+      const transferredBytes = downloadedBytes - previous.downloadedBytes;
+      if (elapsedMs > 0 && transferredBytes >= 0) {
+        setBytesPerSecond((transferredBytes * 1000) / elapsedMs);
+      }
+    }
+    sampleRef.current = { startedAtMs: job.startedAtMs, downloadedBytes, sampledAtMs: now };
+  }, [job.downloadedBytes, job.startedAtMs]);
+
   return (
-    <span
-      className={`package-progress-track${measuredPercent === null ? " indeterminate" : ""}`}
-      role="progressbar"
-      aria-label="M2Image package download"
-      aria-valuenow={measuredPercent ?? undefined}
-      aria-valuemin={0}
-      aria-valuemax={100}
-    >
-      <span className="package-progress-fill" style={{ width: `${barPercent}%` }} />
+    <span className="package-progress">
+      <span
+        className={`package-progress-track${measuredPercent === null ? " indeterminate" : ""}`}
+        role="progressbar"
+        aria-label="M2Image package download"
+        aria-valuenow={measuredPercent ?? undefined}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <span className="package-progress-fill" style={{ width: `${barPercent}%` }} />
+      </span>
+      <span className="package-progress-speed">{formatTransferRate(bytesPerSecond)}</span>
     </span>
   );
 }
