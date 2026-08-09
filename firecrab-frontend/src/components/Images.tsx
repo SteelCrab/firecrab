@@ -61,50 +61,6 @@ function formatRootfsSize(bytes: number | undefined | null): string {
   return `${rounded} MiB`;
 }
 
-function formatTransferredBytes(bytes: number | undefined): string {
-  if (bytes === undefined || !Number.isFinite(bytes)) return "—";
-  if (bytes === 0) return "0 B";
-  return formatRootfsSize(bytes);
-}
-
-/** A compact, solid-line package transfer indicator for the registry table. */
-function PackageDownloadProgress({
-  job,
-  t,
-}: {
-  job: ImageInstallResponse;
-  t: (english: string, korean: string) => string;
-}) {
-  const isComplete = job.status === "succeeded";
-  const isFailed = job.status === "failed";
-  const total = job.totalBytes;
-  const downloaded = job.downloadedBytes ?? 0;
-  const percent = isComplete
-    ? 100
-    : total && total > 0
-      ? Math.min(100, Math.round((downloaded / total) * 100))
-      : 35;
-  const transfer = total && total > 0
-    ? `${formatTransferredBytes(downloaded)} / ${formatTransferredBytes(total)} · ${percent}%`
-    : downloaded > 0
-      ? formatTransferredBytes(downloaded)
-      : t("Connecting…", "연결 중…");
-  const label = isComplete
-    ? t("Package ready", "패키지 준비됨")
-    : isFailed
-      ? t("Download failed", "다운로드 실패")
-      : `${t("Downloading", "다운로드 중")} · ${transfer}`;
-
-  return (
-    <div className={`package-progress ${isComplete ? "complete" : isFailed ? "failed" : "running"}`}>
-      <span className="package-progress-track" role="progressbar" aria-label={label} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
-        <span className="package-progress-fill" style={{ width: `${percent}%` }} />
-      </span>
-      <span className="package-progress-label">{label}</span>
-    </div>
-  );
-}
-
 /**
  * A poll may have left the browser before the POST that starts a newer job.
  * Do not let that older `idle`/`running` response erase the state returned by
@@ -1058,12 +1014,6 @@ export default function Images() {
                       <td className="mono">{entry.minDiskGb} GiB</td>
                       <td className="microregistry-status">
                         <span className={`state-badge${entry.installed ? " running" : ""}`}>{statusLabel}</span>
-                        {/* An installed template wins over an old completed package
-                            job. Keeping its green transfer bar here made one row
-                            simultaneously read "Installed" and "Package ready". */}
-                        {!entry.installed && packageJob && packageJob.status !== "idle" && (
-                          <PackageDownloadProgress job={packageJob} t={t} />
-                        )}
                       </td>
                       <td className="actions">
                         <button

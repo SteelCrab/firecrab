@@ -462,32 +462,6 @@ form.shell-create-grid .field-span-2 {
 .microregistry-status { min-width: 12rem; }
 .microboot-table td:nth-child(2) { min-width: 10rem; }
 .microboot-session { margin-top: 1rem; }
-.package-progress { margin-top: 0.45rem; min-width: 10rem; }
-.package-progress-track {
-  display: block;
-  width: 100%;
-  height: 3px;
-  overflow: hidden;
-  background: var(--line);
-}
-.package-progress-fill {
-  display: block;
-  height: 100%;
-  background: var(--shell);
-  transition: width 180ms linear;
-}
-.package-progress.complete .package-progress-fill { background: var(--ready); }
-.package-progress.failed .package-progress-fill { background: var(--error); }
-.package-progress-label {
-  display: block;
-  margin-top: 0.28rem;
-  color: var(--dim);
-  font-family: var(--font-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-}
-
 .poll-note {
   font-family: var(--font-mono);
   font-size: 0.7rem;
