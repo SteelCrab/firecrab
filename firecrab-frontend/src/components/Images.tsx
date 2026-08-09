@@ -1005,7 +1005,12 @@ export default function Images() {
                       <td className="mono">{entry.minDiskGb} GiB</td>
                       <td className="microregistry-status">
                         <span className={`state-badge${entry.installed ? " running" : ""}`}>{statusLabel}</span>
-                        {packageJob && packageJob.status !== "idle" && <PackageDownloadProgress job={packageJob} t={t} />}
+                        {/* An installed template wins over an old completed package
+                            job. Keeping its green transfer bar here made one row
+                            simultaneously read "Installed" and "Package ready". */}
+                        {!entry.installed && packageJob && packageJob.status !== "idle" && (
+                          <PackageDownloadProgress job={packageJob} t={t} />
+                        )}
                       </td>
                       <td className="actions">
                         <button
