@@ -47,41 +47,49 @@ export default function ShellCheckboxList({
     onChange(selectedIds.filter((id) => id !== shellId));
   };
 
+  const shellList = (
+    <ul className="shell-check-ul">
+      {shells.map((shell) => {
+        const checked = selectedIds.includes(shell.id);
+        const inputId = `${idPrefix}-${shell.id}`;
+        const blockNew = atCap && !checked;
+        return (
+          <li key={shell.id}>
+            <label
+              htmlFor={inputId}
+              className={
+                blockNew ? "shell-check-label is-capped" : "shell-check-label"
+              }
+            >
+              <input
+                id={inputId}
+                type="checkbox"
+                checked={checked}
+                disabled={disabled || blockNew}
+                onChange={(event) => toggle(shell.id, event.target.checked)}
+              />
+              <span className="shell-check-name" title={shell.description ?? shell.name}>
+                {shell.name}
+              </span>
+              <span className="shell-check-meta mono">v{shell.latestVersion}</span>
+            </label>
+          </li>
+        );
+      })}
+    </ul>
+  );
+
   return (
     <fieldset
       className="shell-check-list"
       disabled={disabled}
       aria-label={t("Shells", "Shell")}
     >
-      <ul className="shell-check-ul">
-        {shells.map((shell) => {
-          const checked = selectedIds.includes(shell.id);
-          const inputId = `${idPrefix}-${shell.id}`;
-          const blockNew = atCap && !checked;
-          return (
-            <li key={shell.id}>
-              <label
-                htmlFor={inputId}
-                className={
-                  blockNew ? "shell-check-label is-capped" : "shell-check-label"
-                }
-              >
-                <input
-                  id={inputId}
-                  type="checkbox"
-                  checked={checked}
-                  disabled={disabled || blockNew}
-                  onChange={(event) => toggle(shell.id, event.target.checked)}
-                />
-                <span className="shell-check-name" title={shell.description ?? shell.name}>
-                  {shell.name}
-                </span>
-                <span className="shell-check-meta mono">v{shell.latestVersion}</span>
-              </label>
-            </li>
-          );
-        })}
-      </ul>
+      {shells.length >= 3 ? (
+        <div className="shell-check-scroll">{shellList}</div>
+      ) : (
+        shellList
+      )}
       {atCap ? (
         <p className="poll-note shell-check-hint">
           {t(`Max ${MAX_SHELLS_PER_VM} shells`, `최대 ${MAX_SHELLS_PER_VM}개`)}
@@ -90,4 +98,3 @@ export default function ShellCheckboxList({
     </fieldset>
   );
 }
-
