@@ -61,6 +61,50 @@ function formatRootfsSize(bytes: number | undefined | null): string {
   return `${rounded} MiB`;
 }
 
+function formatTransferredBytes(bytes: number | undefined): string {
+  if (bytes === undefined || !Number.isFinite(bytes)) return "—";
+  if (bytes === 0) return "0 B";
+  return formatRootfsSize(bytes);
+}
+
+/** A compact, solid-line package transfer indicator for the registry table. */
+function PackageDownloadProgress({
+  job,
+  t,
+}: {
+  job: ImageInstallResponse;
+  t: (english: string, korean: string) => string;
+}) {
+  const isComplete = job.status === "succeeded";
+  const isFailed = job.status === "failed";
+  const total = job.totalBytes;
+  const downloaded = job.downloadedBytes ?? 0;
+  const percent = isComplete
+    ? 100
+    : total && total > 0
+      ? Math.min(100, Math.round((downloaded / total) * 100))
+      : 35;
+  const transfer = total && total > 0
+    ? `${formatTransferredBytes(downloaded)} / ${formatTransferredBytes(total)} · ${percent}%`
+    : downloaded > 0
+      ? formatTransferredBytes(downloaded)
+      : t("Connecting…", "연결 중…");
+  const label = isComplete
+    ? t("Package ready", "패키지 준비됨")
+    : isFailed
+      ? t("Download failed", "다운로드 실패")
+      : `${t("Downloading", "다운로드 중")} · ${transfer}`;
+
+  return (
+    <div className={`package-progress ${isComplete ? "complete" : isFailed ? "failed" : "running"}`}>
+      <span className="package-progress-track" role="progressbar" aria-label={label} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+        <span className="package-progress-fill" style={{ width: `${percent}%` }} />
+      </span>
+      <span className="package-progress-label">{label}</span>
+    </div>
+  );
+}
+
 /**
  * A poll may have left the browser before the POST that starts a newer job.
  * Do not let that older `idle`/`running` response erase the state returned by
@@ -532,6 +576,7 @@ export default function Images() {
   const [busyAlias, setBusyAlias] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
+  const packagePollingRef = useRef(new Set<string>());
   const [install, setInstall] = useState<ImageInstallResponse | null>(null);
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
   const [bootstrapSession, setBootstrapSession] = useState<BootstrapResponse | null>(null);
@@ -563,6 +608,23 @@ export default function Images() {
       const next = await getMicroRegistry();
       setRegistry(next);
       setRegistryError(null);
+      // `GET /api/images/{alias}/package` is backed by the server-side job
+      // tracker. Rehydrate it after a browser refresh so a running package
+      // transfer immediately regains both its bar and its poll loop.
+      const snapshots = await Promise.allSettled(
+        next.images
+          .filter((image) => image.downloadable)
+          .map((image) => getImagePackage(image.alias)),
+      );
+      setPackageJobs((current) => {
+        const merged = { ...current };
+        for (const result of snapshots) {
+          if (result.status === "fulfilled") {
+            merged[result.value.alias] = keepNewestJobSnapshot(merged[result.value.alias], result.value);
+          }
+        }
+        return merged;
+      });
     } catch (error) {
       setRegistryError((error as Error).message);
     }
@@ -618,6 +680,41 @@ export default function Images() {
       mountedRef.current = false;
     };
   }, []);
+
+  const pollPackage = useCallback((alias: string) => {
+    if (packagePollingRef.current.has(alias)) return;
+    packagePollingRef.current.add(alias);
+    const tick = async () => {
+      if (!mountedRef.current) {
+        packagePollingRef.current.delete(alias);
+        return;
+      }
+      try {
+        const latest = await getImagePackage(alias);
+        if (!mountedRef.current) {
+          packagePollingRef.current.delete(alias);
+          return;
+        }
+        setPackageJobs((current) => ({ ...current, [alias]: keepNewestJobSnapshot(current[alias], latest) }));
+        if (latest.status === "running") {
+          setTimeout(() => void tick(), 500);
+          return;
+        }
+        packagePollingRef.current.delete(alias);
+        if (latest.status === "succeeded") await Promise.all([refreshList(), refreshRegistry()]);
+      } catch (error) {
+        packagePollingRef.current.delete(alias);
+        if (mountedRef.current) setActionError((error as Error).message);
+      }
+    };
+    void tick();
+  }, [refreshList, refreshRegistry]);
+
+  useEffect(() => {
+    for (const job of Object.values(packageJobs)) {
+      if (job.status === "running") pollPackage(job.alias);
+    }
+  }, [packageJobs, pollPackage]);
 
   // `startImageInstall` only kicks the install off — the backend always
   // answers with a single "install started" snapshot and does the real
@@ -716,25 +813,7 @@ export default function Images() {
     try {
       const snap = await startImagePackage(alias);
       setPackageJobs((current) => ({ ...current, [alias]: snap }));
-      // Same unmount/error discipline as `pollInstall`: this poll can outlive
-      // the component (the App shell unmounts `Images` on a tab switch), and
-      // an unguarded throw here would become an unhandled rejection that
-      // silently ends the poll with the row stuck at "다운로드 중…".
-      const poll = async () => {
-        if (!mountedRef.current) return;
-        try {
-          const latest = await getImagePackage(alias);
-          if (!mountedRef.current) return;
-          setPackageJobs((current) => ({ ...current, [alias]: keepNewestJobSnapshot(current[alias], latest) }));
-          if (latest.status === "running") setTimeout(() => void poll(), 500);
-          else if (latest.status === "succeeded") {
-            await Promise.all([refreshList(), refreshRegistry()]);
-          }
-        } catch (error) {
-          if (mountedRef.current) setActionError((error as Error).message);
-        }
-      };
-      void poll();
+      pollPackage(alias);
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
@@ -891,9 +970,12 @@ export default function Images() {
                   const packageJob = packageJobs[entry.alias];
                   const installing = install?.alias === entry.alias && install.status === "running";
                   const downloading = packageJob?.status === "running";
+                  const downloadFailed = packageJob?.status === "failed";
                   const actionBusy = busyAlias === entry.alias || installing || downloading;
                   const statusLabel = entry.installed
                     ? t("Installed", "설치됨")
+                    : downloadFailed
+                      ? t("Download failed", "다운로드 실패")
                     : entry.packageStaged || packageJob?.status === "succeeded"
                       ? t("Package ready", "패키지 준비됨")
                       : entry.downloadable
@@ -921,8 +1003,9 @@ export default function Images() {
                       <td className="mono microregistry-image" title={entry.package}>{entry.alias}</td>
                       <td className="mono">{entry.version}</td>
                       <td className="mono">{entry.minDiskGb} GiB</td>
-                      <td>
+                      <td className="microregistry-status">
                         <span className={`state-badge${entry.installed ? " running" : ""}`}>{statusLabel}</span>
+                        {packageJob && packageJob.status !== "idle" && <PackageDownloadProgress job={packageJob} t={t} />}
                       </td>
                       <td className="actions">
                         <button

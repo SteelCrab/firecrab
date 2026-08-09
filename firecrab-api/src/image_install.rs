@@ -54,6 +54,8 @@ struct ImageInstallJob {
     log: Vec<String>,
     started_at_ms: Option<u64>,
     ended_at_ms: Option<u64>,
+    downloaded_bytes: Option<u64>,
+    total_bytes: Option<u64>,
 }
 
 impl ImageInstallTracker {
@@ -105,6 +107,8 @@ impl ImageInstallTracker {
                 log: String::new(),
                 started_at_ms: None,
                 ended_at_ms: None,
+                downloaded_bytes: None,
+                total_bytes: None,
             },
         }
     }
@@ -135,6 +139,8 @@ impl ImageInstallTracker {
             log: vec![format!("[{}] {started_message}", clock(now))],
             started_at_ms: Some(now),
             ended_at_ms: None,
+            downloaded_bytes: None,
+            total_bytes: None,
         };
         let response = job.to_response();
         jobs.insert(alias.to_owned(), job);
@@ -146,6 +152,23 @@ impl ImageInstallTracker {
         if let Some(job) = jobs.get_mut(alias) {
             job.log
                 .push(format!("[{}] {}", clock(now_ms()), line.into()));
+        }
+    }
+
+    /// Publish current streamed package bytes for a browser that reconnects
+    /// or refreshes while the background job remains active.
+    pub fn set_download_progress(
+        &self,
+        alias: &str,
+        downloaded_bytes: u64,
+        total_bytes: Option<u64>,
+    ) {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(job) = jobs.get_mut(alias)
+            && job.status == ImageInstallStatus::Running
+        {
+            job.downloaded_bytes = Some(downloaded_bytes);
+            job.total_bytes = total_bytes;
         }
     }
 
@@ -202,6 +225,8 @@ impl ImageInstallJob {
             log: self.log.join("\n"),
             started_at_ms: self.started_at_ms,
             ended_at_ms: self.ended_at_ms,
+            downloaded_bytes: self.downloaded_bytes,
+            total_bytes: self.total_bytes,
         }
     }
 }
@@ -349,7 +374,11 @@ async fn download_package_once(
         &spec.alias,
         format!("[packer:source] downloading {remote_package}"),
     );
-    if let Err(error) = download_to(&client, &url, &temporary).await {
+    if let Err(error) = download_to_with_progress(&client, &url, &temporary, |downloaded, total| {
+        tracker.set_download_progress(&spec.alias, downloaded, total);
+    })
+    .await
+    {
         let _ = tokio::fs::remove_file(&temporary).await;
         let _ = tokio::fs::remove_file(&partial).await;
         return Err(error);
@@ -649,6 +678,21 @@ pub(crate) async fn download_to(
     url: &str,
     dest: &Path,
 ) -> Result<(), String> {
+    download_to_with_progress(client, url, dest, |_downloaded, _total| {}).await
+}
+
+/// Stream an object to disk and report persisted byte counts after each
+/// successful write. Package downloads use this for dashboard progress while
+/// callers such as MicroBoot can keep using [`download_to`] with no tracker.
+async fn download_to_with_progress<F>(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    mut report_progress: F,
+) -> Result<(), String>
+where
+    F: FnMut(u64, Option<u64>),
+{
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent)
             .await
@@ -665,6 +709,10 @@ pub(crate) async fn download_to(
         return Err(format!("GET {url}: HTTP {}", response.status()));
     }
 
+    let total_bytes = response.content_length();
+    let mut downloaded_bytes = 0_u64;
+    report_progress(downloaded_bytes, total_bytes);
+
     let mut file = tokio::fs::File::create(&tmp)
         .await
         .map_err(|error| format!("create {}: {error}", tmp.display()))?;
@@ -675,6 +723,8 @@ pub(crate) async fn download_to(
         file.write_all(&chunk)
             .await
             .map_err(|error| format!("write {}: {error}", tmp.display()))?;
+        downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
+        report_progress(downloaded_bytes, total_bytes);
     }
     file.flush()
         .await
@@ -716,8 +766,11 @@ mod tests {
 
         tracker.append_log("a", "step");
         tracker.append_log("missing", "ignored");
+        tracker.set_download_progress("a", 512, Some(1024));
         let mid = tracker.snapshot("a");
         assert!(mid.log.contains("step"));
+        assert_eq!(mid.downloaded_bytes, Some(512));
+        assert_eq!(mid.total_bytes, Some(1024));
 
         tracker.finish_ok("a");
         assert!(!tracker.is_running("a"));

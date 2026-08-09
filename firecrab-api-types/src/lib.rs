@@ -845,6 +845,13 @@ pub struct ImageInstallResponse {
     /// Epoch millis when the attempt finished, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at_ms: Option<u64>,
+    /// Bytes streamed into the package download cache. Omitted for image
+    /// extraction jobs and before a package server has answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloaded_bytes: Option<u64>,
+    /// Total package bytes advertised by the package server, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
 }
 
 /// Lifecycle of one from-scratch distro bootstrap session (`handlers::bootstrap`).

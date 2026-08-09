@@ -143,6 +143,8 @@ pub async fn get_image_package(
             log: "package ready — using the verified local archive".to_owned(),
             started_at_ms: None,
             ended_at_ms: None,
+            downloaded_bytes: None,
+            total_bytes: None,
         }));
     }
     Ok(Json(snapshot))
