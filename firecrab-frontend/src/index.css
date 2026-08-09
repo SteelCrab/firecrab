@@ -422,11 +422,35 @@ form.shell-create-grid .field-span-2 {
   text-transform: none;
   white-space: nowrap;
 }
+.microregistry-source:hover { color: var(--shell); }
+.registry-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--dim);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  white-space: nowrap;
+}
+.registry-health::before {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.registry-health.online { color: var(--ready); }
+.registry-health.online::before { background: var(--ready); }
+.registry-health.offline { color: var(--error); }
+.registry-health.offline::before { background: var(--error); }
 .microregistry-refresh {
   padding: 0.3rem 0.55rem;
   font-size: 0.68rem;
 }
-.microregistry-intro {
+.microregistry-intro,
+.panel-intro {
   margin: -0.45rem 0 1.1rem;
   color: var(--dim);
   font-size: 0.82rem;
@@ -436,6 +460,8 @@ form.shell-create-grid .field-span-2 {
 .microregistry-table .actions { text-align: right; }
 .microregistry-image { font-weight: 600; }
 .microregistry-status { min-width: 12rem; }
+.microboot-table td:nth-child(2) { min-width: 10rem; }
+.microboot-session { margin-top: 1rem; }
 .package-progress { margin-top: 0.45rem; min-width: 10rem; }
 .package-progress-track {
   display: block;
