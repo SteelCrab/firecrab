@@ -1376,6 +1376,22 @@ table.image-table .image-package-url a:hover {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
+.console-port-forward-group {
+  grid-column: span 2;
+}
+.console-port-forward-list {
+  grid-auto-rows: minmax(1.4rem, auto);
+  row-gap: 0.3rem;
+  max-height: 4.8rem;
+  overflow-y: auto;
+  padding-right: 0.35rem;
+  scrollbar-gutter: stable;
+}
+@media (max-width: 520px) {
+  .console-port-forward-group {
+    grid-column: span 1;
+  }
+}
 .console-detail .mono {
   font-family: var(--font-mono);
 }

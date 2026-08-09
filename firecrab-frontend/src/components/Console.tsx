@@ -610,10 +610,10 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                   <dd title={vm.microNetworkId}>{vm.microNetworkId}</dd>
                 </dl>
               </section>
-              <section className="console-detail-group" style={{ gridColumn: "span 2" }} aria-label="포트 포워딩">
+              <section className="console-detail-group console-port-forward-group" aria-label="포트 포워딩">
                 <h3 className="console-detail-group-title">{t("Port Forwarding", "포트 포워딩")}</h3>
                 {(vm.portForwards?.length ?? 0) > 0 ? (
-                  <dl className="console-detail-fields mono">
+                  <dl className="console-detail-fields console-port-forward-list mono">
                     {vm.portForwards!.map((pf, index) => (
                       <div key={`${pf.protocol}-${pf.hostPort}-${pf.guestPort}-${index}`} style={{ display: "contents" }}>
                         <dt>{t(`Rule ${String(index + 1).padStart(2, "0")}`, `규칙 ${String(index + 1).padStart(2, "0")}`)}</dt>
