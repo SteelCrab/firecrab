@@ -349,9 +349,6 @@ function ImageDetail({
             : t("Not installed", "미설치")}
         </dd>
 
-        <dt>{t("Description", "설명")}</dt>
-        <dd>{image.description || "—"}</dd>
-
         <dt>{t("VMs using it", "사용 중인 VM")}</dt>
         <dd>
           {usedByError
