@@ -34,21 +34,27 @@ firecrab 在你管理的 Linux 主机上运行和管理隔离的
 - **缩小主机权限：** API 以非特权方式运行；独立的 `firecrab-net-helper` 仅持有主机网络
   所需的 capability。
 
-## 应该选择哪一个？
+## 平台比较
 
-**firecrab 面向这样的用户：需要在单台 Linux 服务器上获得 VM 级隔离，但不想运行完整的
-数据中心平台，也不想手动组装 Firecracker。**
-
-| 产品 | 用来做什么 | 适合在何时选择 | 与 firecrab 相比 |
-| --- | --- | --- | --- |
-| **firecrab** | 单台 Linux 主机上的私有 Firecracker microVM | 希望从一个仪表盘管理隔离 Linux VM 的镜像、网络、存储和终端时 | 比通用虚拟化平台更小、更简单，同时不像底层 VMM 那样需要自行集成，可直接使用 |
-| [Docker Engine](https://docs.docker.com/engine/) | 将应用打包为容器并运行 | 希望以 OCI 容器方式构建、交付和扩展应用时 | 以应用为中心，通常密度更高；firecrab 以 VM 为中心，为每个工作负载提供独立 guest kernel |
-| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | 管理完整的虚拟化服务器和集群 | 需要 Windows/Linux VM、LXC、备份、迁移、HA 或数据中心存储时 | 管理范围广得多；firecrab 刻意专注于轻量的私有 Linux microVM 运维 |
-| [Incus](https://linuxcontainers.org/incus/docs/main/) | 管理系统容器和传统 VM | 需要多种实例、存储和网络后端、远程主机或集群时 | 更灵活、更接近云平台；firecrab 提供以 Firecracker microVM 为中心的小型、明确工作流 |
-| [Firecracker](https://firecracker-microvm.github.io/) | 构建 microVM 平台的底层引擎 | 开发自己的 serverless、sandbox、container runtime 和 control plane 时 | Firecracker 是引擎；firecrab 在其上增加镜像、网络、存储、持久化和 Web UI，成为可直接使用的产品 |
-
-简而言之，firecrab 提供 VM 边界而不是 Docker 的容器边界，比 Proxmox VE 或 Incus
-更小、更简单，并且不像单独使用 Firecracker 那样需要自行组装，可直接投入运维。
+| 类别 | **Firecrab** | VMware / ESXi | KVM + libvirt | OpenStack | 单独使用 Firecracker |
+| --- | --- | --- | --- | --- | --- |
+| 基本单位 | **microVM** | 普通 VM | 普通 VM | 普通 VM | microVM |
+| 虚拟化基础 | Firecracker + KVM | VMware Hypervisor | KVM/QEMU | 主要为 KVM/QEMU | KVM |
+| 主要目标 | **在单台服务器上简单运行 microVM** | 企业虚拟化 | 通用 Linux 虚拟化 | 大型私有云 | 运行 microVM |
+| 管理难度 | **力求简单** | 中等 | 中等~较高 | **非常高** | 高 |
+| Web 仪表盘 | ✅ | ✅ | 需单独搭建 | ✅ | ❌ |
+| VM 镜像管理 | **M2Image** | Template/Image | qcow2 等 | Glance | 手动管理 |
+| 虚拟网络 | **MicroNetwork** | vSwitch | bridge/libvirt network | Neutron | 手动实现 |
+| 磁盘管理 | **MicroStorage** | Datastore/VMDK | qcow2/LVM 等 | Cinder | 手动实现 |
+| 浏览器控制台 | ✅ | ✅ | 需要配置 | ✅ | ❌ |
+| VM 隔离 | **强** | 强 | 强 | 强 | **强** |
+| 启动速度 | **非常快** | 相对较慢 | 相对较慢 | 相对较慢 | **非常快** |
+| 资源开销 | **低** | 高 | 中等 | 高 | **非常低** |
+| 控制平面 | **最小化** | 有 | 几乎没有 | **大规模** | 无 |
+| 单服务器运行 | **核心目标** | 可以 | 可以 | 效率较低 | 可以 |
+| 集群/HA | 有限 / 扩展方向 | ✅ | 需单独配置 | ✅ | ❌ |
+| Kubernetes 集成 | 未来可扩展 Runtime | 可以 | 可以 | 可以 | 可与 containerd 集成 |
+| 适用环境 | **个人服务器、家庭实验室、边缘、开发服务器** | 企业数据中心 | Linux 服务器 | 大型云 | serverless/container 基础设施 |
 
 ## 架构
 

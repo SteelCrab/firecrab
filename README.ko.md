@@ -37,21 +37,27 @@ microVM 환경을 위한 도구입니다. 호스팅 서비스나 멀티 호스�
 - **작은 권한 범위:** API는 비특권으로 실행하며, 별도 `firecrab-net-helper`가 호스트
   네트워크에 필요한 capability만 가집니다.
 
-## 무엇을 선택해야 하나요?
+## 플랫폼 비교
 
-**firecrab은 단일 Linux 서버에서 VM 수준의 격리는 필요하지만, 거대한 데이터센터 플랫폼을
-운영하거나 Firecracker를 직접 조립하고 싶지는 않은 사용자를 위한 제품입니다.**
-
-| 제품 | 무엇을 위한 제품인가 | 이런 경우 선택하세요 | firecrab과 비교하면 |
-| --- | --- | --- | --- |
-| **firecrab** | 단일 Linux 서버의 사설 Firecracker microVM | 격리된 Linux VM의 이미지, 네트워크, 저장소, 터미널을 하나의 대시보드에서 관리하고 싶을 때 | 범용 가상화 플랫폼보다 작고 단순하지만, 저수준 VMM과 달리 바로 사용할 수 있는 완성형 제품 |
-| [Docker Engine](https://docs.docker.com/engine/) | 애플리케이션을 컨테이너로 패키징하고 실행 | 애플리케이션을 OCI 컨테이너로 빌드·배포·확장하려고 할 때 | 애플리케이션 중심이며 한 서버에 더 많이 실행하기 좋고, firecrab은 각 작업에 독립된 게스트 커널을 제공하는 VM 중심 제품 |
-| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | 가상화 서버와 클러스터 전체 관리 | Windows·Linux VM, LXC, 백업, 마이그레이션, HA, 데이터센터 스토리지가 필요할 때 | 훨씬 넓은 인프라를 관리하며, firecrab은 가벼운 사설 Linux microVM 운영에 의도적으로 집중 |
-| [Incus](https://linuxcontainers.org/incus/docs/main/) | 시스템 컨테이너와 일반 VM 관리 | 다양한 인스턴스, 저장소·네트워크 방식, 원격 호스트, 클러스터링이 필요할 때 | 더 유연하고 클라우드에 가까우며, firecrab은 Firecracker microVM 중심의 작고 명확한 운영 흐름을 제공 |
-| [Firecracker](https://firecracker-microvm.github.io/) | microVM 플랫폼을 만들기 위한 저수준 엔진 | 자체 서버리스, 샌드박스, 컨테이너 런타임과 관리 계층을 개발할 때 | Firecracker는 엔진이고, firecrab은 그 위에 이미지, 네트워크, 저장소, 상태 보존, 웹 UI를 더한 사용 가능한 제품 |
-
-한마디로 firecrab은 Docker의 컨테이너 경계 대신 VM 경계를 제공하고, Proxmox VE나
-Incus보다 작고 단순하며, Firecracker 단독 사용과 달리 바로 운영할 수 있습니다.
+| 구분 | **Firecrab** | VMware / ESXi | KVM + libvirt | OpenStack | Firecracker 단독 |
+| --- | --- | --- | --- | --- | --- |
+| 기본 단위 | **microVM** | 일반 VM | 일반 VM | 일반 VM | microVM |
+| 가상화 기반 | Firecracker + KVM | VMware Hypervisor | KVM/QEMU | 주로 KVM/QEMU | KVM |
+| 주요 목표 | **한 서버에서 간단한 microVM 운영** | 기업 가상화 | 범용 Linux 가상화 | 대규모 Private Cloud | microVM 실행 |
+| 관리 난이도 | **낮게 지향** | 중간 | 중간~높음 | **매우 높음** | 높음 |
+| 웹 대시보드 | ✅ | ✅ | 별도 구축 | ✅ | ❌ |
+| VM 이미지 관리 | **M2Image** | Template/Image | qcow2 등 | Glance | 직접 관리 |
+| 가상 네트워크 | **MicroNetwork** | vSwitch | bridge/libvirt network | Neutron | 직접 구현 |
+| 디스크 관리 | **MicroStorage** | Datastore/VMDK | qcow2/LVM 등 | Cinder | 직접 구현 |
+| 브라우저 콘솔 | ✅ | ✅ | 구성 필요 | ✅ | ❌ |
+| VM 격리 | **강함** | 강함 | 강함 | 강함 | **강함** |
+| 부팅 속도 | **매우 빠름** | 상대적으로 느림 | 상대적으로 느림 | 상대적으로 느림 | **매우 빠름** |
+| 리소스 오버헤드 | **낮음** | 높음 | 중간 | 높음 | **매우 낮음** |
+| Control Plane | **최소화** | 있음 | 거의 없음 | **대규모** | 없음 |
+| 단일 서버 운영 | **핵심 목표** | 가능 | 가능 | 비효율적 | 가능 |
+| 클러스터/HA | 제한적 / 확장 영역 | ✅ | 별도 구성 | ✅ | ❌ |
+| Kubernetes 연계 | 향후 Runtime 가능 | 가능 | 가능 | 가능 | containerd 연계 가능 |
+| 적합한 환경 | **개인 서버, 홈랩, Edge, 개발 서버** | 기업 데이터센터 | Linux 서버 | 대규모 클라우드 | 서버리스/컨테이너 인프라 |
 
 ## 구조
 

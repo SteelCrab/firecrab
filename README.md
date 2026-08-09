@@ -39,22 +39,27 @@ full cloud control plane. It is not a hosted service or a multi-host scheduler.
 - **Keep host privileges small:** the API runs unprivileged; the separate
   `firecrab-net-helper` owns only the capabilities needed for host networking.
 
-## Which one should I use?
+## Platform comparison
 
-**firecrab is for people who want VM-level isolation on one Linux server without
-running a full datacenter platform or assembling Firecracker by hand.**
-
-| Product | What it is for | Choose it when | How it feels compared with firecrab |
-| --- | --- | --- | --- |
-| **firecrab** | Private Firecracker microVMs on one Linux host | You want to create isolated Linux VMs and manage their images, networks, storage, and terminals from one dashboard | The focused option: smaller than a general-purpose virtualization platform, but ready to use rather than a low-level VMM |
-| [Docker Engine](https://docs.docker.com/engine/) | Packaging and running applications as containers | Your workload is an application that should be built, shipped, and scaled as an OCI container | Application-first and usually denser; firecrab is VM-first and gives each workload its own guest kernel |
-| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | Managing complete virtualization servers and clusters | You need Windows and Linux VMs, LXC containers, backups, migration, HA, or datacenter storage | Much broader infrastructure management; firecrab is lighter and deliberately limited to private Linux microVMs |
-| [Incus](https://linuxcontainers.org/incus/docs/main/) | Managing system containers and conventional VMs | You need many instance types, storage and network backends, remote hosts, or clustering | More flexible and cloud-like; firecrab offers a smaller opinionated workflow centered on Firecracker microVMs |
-| [Firecracker](https://firecracker-microvm.github.io/) | A low-level engine for building microVM platforms | You are developing your own serverless, sandbox, or container runtime and will build the surrounding control plane | Firecracker is the engine; firecrab is the usable product around it, adding images, networking, storage, persistence, and a web UI |
-
-In short, firecrab provides a VM boundary instead of Docker's container boundary,
-stays smaller and simpler than Proxmox VE or Incus, and is ready to operate unlike
-Firecracker on its own.
+| Category | **Firecrab** | VMware / ESXi | KVM + libvirt | OpenStack | Firecracker alone |
+| --- | --- | --- | --- | --- | --- |
+| Basic unit | **microVM** | VM | VM | VM | microVM |
+| Virtualization | Firecracker + KVM | VMware hypervisor | KVM/QEMU | Mainly KVM/QEMU | KVM |
+| Main goal | **Simple microVM operation on one server** | Enterprise virtualization | General-purpose Linux virtualization | Large private cloud | Run microVMs |
+| Management complexity | **Designed to be low** | Medium | Medium–high | **Very high** | High |
+| Web dashboard | ✅ | ✅ | Separate setup | ✅ | ❌ |
+| VM images | **M2Image** | Template/Image | qcow2, etc. | Glance | Manual |
+| Virtual network | **MicroNetwork** | vSwitch | bridge/libvirt network | Neutron | Manual implementation |
+| Disk management | **MicroStorage** | Datastore/VMDK | qcow2/LVM, etc. | Cinder | Manual implementation |
+| Browser console | ✅ | ✅ | Setup required | ✅ | ❌ |
+| VM isolation | **Strong** | Strong | Strong | Strong | **Strong** |
+| Boot speed | **Very fast** | Relatively slow | Relatively slow | Relatively slow | **Very fast** |
+| Resource overhead | **Low** | High | Medium | High | **Very low** |
+| Control plane | **Minimal** | Included | Almost none | **Large-scale** | None |
+| Single-server operation | **Primary goal** | Supported | Supported | Inefficient | Supported |
+| Cluster / HA | Limited / future extension | ✅ | Separate setup | ✅ | ❌ |
+| Kubernetes integration | Possible future runtime | Supported | Supported | Supported | containerd integration available |
+| Best fit | **Personal server, homelab, edge, development server** | Enterprise datacenter | Linux server | Large cloud | Serverless/container infrastructure |
 
 ## Architecture
 

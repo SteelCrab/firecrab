@@ -38,21 +38,27 @@ firecrab は、管理下の Linux ホストで隔離された
 - **ホスト権限を最小化:** API は非特権で動作し、独立した `firecrab-net-helper` はホストネットワークに
   必要な capability だけを持ちます。
 
-## どれを選ぶべきですか？
+## プラットフォーム比較
 
-**firecrab は、単一の Linux サーバーで VM レベルの隔離を必要としながら、大規模な
-データセンタープラットフォームの運用や Firecracker の手作業での組み立てを避けたい人向けです。**
-
-| 製品 | 何のための製品か | 選ぶべき場面 | firecrab と比べると |
-| --- | --- | --- | --- |
-| **firecrab** | 単一 Linux ホスト上のプライベート Firecracker microVM | 隔離された Linux VM のイメージ、ネットワーク、ストレージ、ターミナルを一つのダッシュボードで管理したいとき | 汎用仮想化プラットフォームより小さくシンプルで、低レベル VMM と違ってそのまま使える完成した製品 |
-| [Docker Engine](https://docs.docker.com/engine/) | アプリケーションをコンテナとしてパッケージ化して実行 | アプリを OCI コンテナとしてビルド、配布、スケールしたいとき | アプリケーション中心で一般に高密度。firecrab は VM 中心で workload ごとに独立した guest kernel を提供 |
-| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | 仮想化サーバーとクラスター全体の管理 | Windows/Linux VM、LXC、バックアップ、移行、HA、データセンターストレージが必要なとき | はるかに広いインフラを管理し、firecrab は軽量なプライベート Linux microVM 運用に意図的に集中 |
-| [Incus](https://linuxcontainers.org/incus/docs/main/) | システムコンテナと一般的な VM の管理 | 多様なインスタンス、ストレージ・ネットワークバックエンド、リモートホスト、クラスタリングが必要なとき | より柔軟でクラウドに近く、firecrab は Firecracker microVM 中心の小さく明確な運用フローを提供 |
-| [Firecracker](https://firecracker-microvm.github.io/) | microVM プラットフォームを構築するための低レベルエンジン | 独自の serverless、sandbox、container runtime、control plane を開発するとき | Firecracker はエンジン。firecrab はその上にイメージ、ネットワーク、ストレージ、永続化、Web UI を加えた利用可能な製品 |
-
-要するに firecrab は Docker のコンテナ境界ではなく VM 境界を提供し、Proxmox VE や
-Incus より小さくシンプルで、Firecracker 単体と違ってそのまま運用できます。
+| 区分 | **Firecrab** | VMware / ESXi | KVM + libvirt | OpenStack | Firecracker 単体 |
+| --- | --- | --- | --- | --- | --- |
+| 基本単位 | **microVM** | 一般的な VM | 一般的な VM | 一般的な VM | microVM |
+| 仮想化基盤 | Firecracker + KVM | VMware Hypervisor | KVM/QEMU | 主に KVM/QEMU | KVM |
+| 主な目的 | **単一サーバーでの簡単な microVM 運用** | エンタープライズ仮想化 | 汎用 Linux 仮想化 | 大規模 Private Cloud | microVM 実行 |
+| 管理難易度 | **低さを重視** | 中 | 中~高 | **非常に高い** | 高 |
+| Web ダッシュボード | ✅ | ✅ | 別途構築 | ✅ | ❌ |
+| VM イメージ管理 | **M2Image** | Template/Image | qcow2 など | Glance | 手動管理 |
+| 仮想ネットワーク | **MicroNetwork** | vSwitch | bridge/libvirt network | Neutron | 手動実装 |
+| ディスク管理 | **MicroStorage** | Datastore/VMDK | qcow2/LVM など | Cinder | 手動実装 |
+| ブラウザコンソール | ✅ | ✅ | 設定が必要 | ✅ | ❌ |
+| VM 隔離 | **強い** | 強い | 強い | 強い | **強い** |
+| 起動速度 | **非常に速い** | 比較的遅い | 比較的遅い | 比較的遅い | **非常に速い** |
+| リソースオーバーヘッド | **低い** | 高い | 中 | 高い | **非常に低い** |
+| Control Plane | **最小化** | あり | ほぼなし | **大規模** | なし |
+| 単一サーバー運用 | **主要目標** | 可能 | 可能 | 非効率 | 可能 |
+| クラスター/HA | 限定的 / 拡張領域 | ✅ | 別途構成 | ✅ | ❌ |
+| Kubernetes 連携 | 将来 Runtime として拡張可能 | 可能 | 可能 | 可能 | containerd 連携可能 |
+| 適した環境 | **個人サーバー、ホームラボ、Edge、開発サーバー** | 企業データセンター | Linux サーバー | 大規模クラウド | serverless/container 基盤 |
 
 ## アーキテクチャ
 
