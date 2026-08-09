@@ -38,17 +38,15 @@ firecrab は、管理下の Linux ホストで隔離された
 - **ホスト権限を最小化:** API は非特権で動作し、独立した `firecrab-net-helper` はホストネットワークに
   必要な capability だけを持ちます。
 
-## firecrab の違い
+## プラットフォーム比較
 
-| 項目 | コンテナランタイム | Firecracker 単体 | firecrab |
-| --- | --- | --- | --- |
-| 隔離境界 | プロセスがホストカーネルを共有 | ハードウェア仮想化 microVM | ハードウェア仮想化 microVM |
-| 日常運用 | ランタイムの CLI と API | 低レベルなマシン設定と API | VM ライフサイクル用のブラウザダッシュボードと REST API |
-| ネットワーク | ランタイム管理のネットワークとポート公開 | TAP、アドレス、DHCP、ファイアウォールを運用者が構築 | 固定 IP/MAC、隔離、egress ポリシーを持つ明示的な MicroNetwork |
-| イメージ | OCI イメージレイヤー | カーネルと root filesystem を手動で提供 | MicroRegistry または隔離された MicroBoot builder VM から取得する検証済み M2Image |
-| ストレージ | volume と bind mount | block device を手動で提供 | 設定済みルートまたは MicroStorage プールに配置する VM ごとのディスク |
-| ホスト権限の分離 | ランタイムに依存 | 周辺の統合方法に依存 | 非特権 API と capability を制限した network helper |
-| 対象範囲 | コンテナ化アプリのパッケージ化と実行 | 仮想化の構成要素 | 単一 Linux ホストでの実用的なプライベート microVM 管理 |
+| プラットフォーム | 仮想化モデル | 主な対象 | マルチホスト | firecrab との違い |
+| --- | --- | --- | --- | --- |
+| **firecrab** | Firecracker/KVM microVM | 単一 Linux ホストでのプライベート microVM 管理 | 非対応 | 組み込みダッシュボード、明示的な MicroNetwork、M2Image、権限を制限した network helper を備える小規模な単一ホスト control plane に集中 |
+| [Docker Engine](https://docs.docker.com/engine/) | ホストカーネルを共有する application container | コンテナ化アプリのビルドと実行 | [Swarm 使用時に対応](https://docs.docker.com/engine/swarm/) | container/OCI アプリケーションモデルを使用し、firecrab は workload ごとに独立した guest kernel を提供して VM として管理 |
+| [Incus](https://linuxcontainers.org/incus/docs/main/) | LXC system/application container と QEMU VM | 単一ホストから cluster までの full-system instance 基盤 | 対応 | より多くの instance 種別、storage driver、network、clustering を扱い、firecrab は意図的に範囲を絞って Firecracker に集中 |
+| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | KVM VM と LXC container | HA、migration、統合 storage を備えた datacenter 仮想化 | 対応 | より広い enterprise・cluster 運用を対象とし、firecrab は datacenter control plane を必要としない軽量なプライベート microVM 運用に集中 |
+| [Firecracker](https://firecracker-microvm.github.io/) | 最小構成の KVM ベース microVM VMM | serverless・container プラットフォームの構成要素 | control plane なし | VMM 自体を提供し、firecrab はその上に image、network、storage、lifecycle、persistence、browser 管理を追加 |
 
 ## アーキテクチャ
 

@@ -34,17 +34,15 @@ firecrab 在你管理的 Linux 主机上运行和管理隔离的
 - **缩小主机权限：** API 以非特权方式运行；独立的 `firecrab-net-helper` 仅持有主机网络
   所需的 capability。
 
-## firecrab 的差异
+## 平台比较
 
-| 维度 | 容器运行时 | 单独使用 Firecracker | firecrab |
-| --- | --- | --- | --- |
-| 隔离边界 | 进程共享主机内核 | 硬件虚拟化 microVM | 硬件虚拟化 microVM |
-| 日常操作 | 运行时 CLI 和 API | 底层机器配置和 API | 面向 VM 生命周期的浏览器仪表盘和 REST API |
-| 网络 | 运行时管理的网络和端口发布 | TAP、地址、DHCP 和防火墙由操作者构建 | 具有固定 IP/MAC、隔离和出站策略的显式 MicroNetwork |
-| 镜像 | OCI 镜像层 | 手动提供内核和根文件系统 | 来自 MicroRegistry 或隔离 MicroBoot builder VM 的已验证 M2Image |
-| 存储 | volume 和 bind mount | 手动提供 block device | 放置在配置根目录或 MicroStorage 池中的每 VM 磁盘 |
-| 主机权限拆分 | 取决于运行时 | 取决于周边集成方式 | 非特权 API 加 capability 受限的 network helper |
-| 适用范围 | 打包并运行容器化应用 | 虚拟化构建模块 | 在单台 Linux 主机上进行实用的私有 microVM 管理 |
+| 平台 | 虚拟化模型 | 主要范围 | 多主机 | 与 firecrab 的区别 |
+| --- | --- | --- | --- | --- |
+| **firecrab** | Firecracker/KVM microVM | 单台 Linux 主机上的私有 microVM 管理 | 不支持 | 专注于小型单主机控制平面，内置仪表盘、显式 MicroNetwork、M2Image 和权限受限的 network helper |
+| [Docker Engine](https://docs.docker.com/engine/) | 共享主机内核的应用容器 | 构建并运行容器化应用 | [使用 Swarm 时支持](https://docs.docker.com/engine/swarm/) | 使用 container/OCI 应用模型；firecrab 为每个工作负载提供独立 guest kernel，并将其作为 VM 管理 |
+| [Incus](https://linuxcontainers.org/incus/docs/main/) | LXC 系统/应用容器和 QEMU VM | 从单主机到集群的完整系统实例基础设施 | 支持 | 覆盖更多实例类型、存储驱动、网络和集群；firecrab 刻意缩小范围并专注于 Firecracker |
+| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | KVM VM 和 LXC 容器 | 带有 HA、迁移和集成存储的数据中心虚拟化 | 支持 | 面向更广泛的企业和集群运维；firecrab 面向不需要数据中心控制平面的轻量私有 microVM 运维 |
+| [Firecracker](https://firecracker-microvm.github.io/) | 最小化的 KVM microVM VMM | serverless 和 container 平台的构建模块 | 无控制平面 | 提供 VMM 本身；firecrab 在其上增加镜像、网络、存储、生命周期、持久化和浏览器管理 |
 
 ## 架构
 

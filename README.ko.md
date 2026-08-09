@@ -37,17 +37,15 @@ microVM 환경을 위한 도구입니다. 호스팅 서비스나 멀티 호스�
 - **작은 권한 범위:** API는 비특권으로 실행하며, 별도 `firecrab-net-helper`가 호스트
   네트워크에 필요한 capability만 가집니다.
 
-## firecrab의 차별점
+## 플랫폼 비교
 
-| 영역 | 컨테이너 런타임 | Firecracker 단독 사용 | firecrab |
-| --- | --- | --- | --- |
-| 격리 경계 | 프로세스가 호스트 커널을 공유 | 하드웨어 가상화 microVM | 하드웨어 가상화 microVM |
-| 일상 운영 | 런타임 CLI와 API | 저수준 머신 설정과 API | VM 생명주기를 위한 브라우저 대시보드와 REST API |
-| 네트워크 | 런타임 관리 네트워크와 포트 공개 | TAP, 주소, DHCP, 방화벽을 운영자가 구성 | 고정 IP/MAC, 격리, 외부 통신 정책을 갖춘 명시적 MicroNetwork |
-| 이미지 | OCI 이미지 레이어 | 커널과 root filesystem을 직접 제공 | MicroRegistry 또는 격리된 MicroBoot builder VM의 검증된 M2Image |
-| 스토리지 | volume과 bind mount | block device를 직접 제공 | 설정된 root 또는 MicroStorage 풀에 배치하는 VM별 디스크 |
-| 호스트 권한 분리 | 런타임에 따라 다름 | 주변 통합 방식에 따라 다름 | 비특권 API와 capability가 제한된 network helper |
-| 적용 범위 | 컨테이너 애플리케이션 패키징과 실행 | 가상화 구성 요소 | 단일 Linux 호스트의 실용적인 사설 microVM 관리 |
+| 플랫폼 | 가상화 모델 | 주요 범위 | 멀티 호스트 | firecrab과의 차이 |
+| --- | --- | --- | --- | --- |
+| **firecrab** | Firecracker/KVM microVM | 단일 Linux 호스트의 사설 microVM 관리 | 미지원 | 내장 대시보드, 명시적 MicroNetwork, M2Image, 권한이 제한된 network helper를 갖춘 작은 단일 호스트 control plane에 집중 |
+| [Docker Engine](https://docs.docker.com/engine/) | 호스트 커널을 공유하는 application container | 컨테이너 애플리케이션 빌드와 실행 | [Swarm 사용 시 지원](https://docs.docker.com/engine/swarm/) | container/OCI 애플리케이션 모델을 사용하며, firecrab은 workload마다 별도 guest kernel을 제공하고 VM으로 관리 |
+| [Incus](https://linuxcontainers.org/incus/docs/main/) | LXC system/application container와 QEMU VM | 단일 호스트부터 cluster까지의 full-system instance 인프라 | 지원 | 더 많은 instance 유형, storage driver, network, clustering을 지원하며, firecrab은 의도적으로 범위를 줄여 Firecracker에 집중 |
+| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | KVM VM과 LXC container | HA, migration, 통합 storage를 갖춘 datacenter 가상화 | 지원 | 더 넓은 enterprise·cluster 운영을 대상으로 하며, firecrab은 datacenter control plane 없이 가벼운 사설 microVM 운영에 집중 |
+| [Firecracker](https://firecracker-microvm.github.io/) | 최소형 KVM 기반 microVM VMM | serverless·container 플랫폼용 구성 요소 | control plane 없음 | VMM 자체를 제공하며, firecrab은 그 위에 image, network, storage, lifecycle, persistence, browser 관리를 추가 |
 
 ## 구조
 

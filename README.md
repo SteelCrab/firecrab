@@ -39,17 +39,15 @@ full cloud control plane. It is not a hosted service or a multi-host scheduler.
 - **Keep host privileges small:** the API runs unprivileged; the separate
   `firecrab-net-helper` owns only the capabilities needed for host networking.
 
-## What makes firecrab different
+## Platform comparison
 
-| Area | Container runtime | Firecracker alone | firecrab |
-| --- | --- | --- | --- |
-| Isolation boundary | Processes share the host kernel | Hardware-virtualized microVM | Hardware-virtualized microVM |
-| Daily operation | Runtime CLI and APIs | Low-level machine configuration and API | Browser dashboard and REST API for the VM lifecycle |
-| Networking | Runtime-managed networks and port publishing | TAP, addressing, DHCP, and firewall are operator-built | Explicit MicroNetworks with persistent IP/MAC, isolation, and egress policy |
-| Images | OCI image layers | Kernel and root filesystem supplied manually | Verified M2Images from MicroRegistry or an isolated MicroBoot builder VM |
-| Storage | Volumes and bind mounts | Block devices supplied manually | Per-VM disks placed on configured roots or MicroStorage pools |
-| Host privilege split | Depends on the runtime | Depends on the surrounding integration | Unprivileged API plus a capability-bounded network helper |
-| Intended scope | Package and run containerized applications | Virtualization building block | Practical, private microVM management on one Linux host |
+| Platform | Virtualization model | Primary scope | Multi-host | Difference from firecrab |
+| --- | --- | --- | --- | --- |
+| **firecrab** | Firecracker/KVM microVMs | Private microVM management on one Linux host | No | Focuses on a small single-host control plane with a built-in dashboard, explicit MicroNetworks, M2Images, and a narrowly privileged network helper |
+| [Docker Engine](https://docs.docker.com/engine/) | Application containers sharing the host kernel | Building and running containerized applications | [Optional with Swarm](https://docs.docker.com/engine/swarm/) | Uses the container/OCI application model; firecrab gives every workload its own guest kernel and manages it as a VM |
+| [Incus](https://linuxcontainers.org/incus/docs/main/) | LXC system/application containers and QEMU VMs | Full-system instance infrastructure from one host to a cluster | Yes | Covers more instance types, storage drivers, networks, and clustering; firecrab is intentionally narrower and Firecracker-only |
+| [Proxmox VE](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview) | KVM VMs and LXC containers | Datacenter virtualization with HA, migration, and integrated storage | Yes | Targets broader enterprise and cluster operations; firecrab targets lightweight private microVM operation without a datacenter control plane |
+| [Firecracker](https://firecracker-microvm.github.io/) | Minimal KVM-based microVM VMM | Building block for serverless and container platforms | No control plane | Supplies the VMM itself; firecrab adds image, network, storage, lifecycle, persistence, and browser management around it |
 
 ## Architecture
 
