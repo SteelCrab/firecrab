@@ -143,8 +143,6 @@ create VMs.
 
 ![M2Image list](assets/dashboard/images.png)
 
-### Shells
-
 The **Shell repository** stores versioned guest scripts. Create a shell, publish
 new immutable revisions, and pin them when creating (or editing) a MicroVM. On
 each start, firecrab injects the pinned revisions into the guest and runs them
