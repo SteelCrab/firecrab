@@ -143,25 +143,6 @@ create VMs.
 
 ![M2Image list](assets/dashboard/images.png)
 
-The **Shell repository** stores versioned guest scripts. Create a shell, publish
-new immutable revisions, and pin them when creating (or editing) a MicroVM. On
-each start, firecrab injects the pinned revisions into the guest and runs them
-once after network-ready.
-
-Works on every built-in image:
-
-| Image | Init | Interpreter notes |
-| --- | --- | --- |
-| Alpine | OpenRC oneshot | `/bin/sh`; `#!/bin/bash` via runtime `apk add bash` (or image with bash) |
-| Ubuntu | systemd oneshot | `/bin/sh` or `#!/bin/bash` |
-| Rocky | systemd oneshot | `/bin/sh` or `#!/bin/bash` |
-
-Console markers use the `FIRECRAB_SHELL_*` prefix (`START` / `OK` / `FAILED` /
-`DONE`). On Alpine without bash yet, the runner tries `apk add bash` after
-network-ready; if that fails it falls back to `/bin/sh` (`FIRECRAB_SHELL_WARN`).
-
-![Shell repository](assets/dashboard/bash.png)
-
 For API request formats, lifecycle semantics, and error envelopes, see the
 [API guide](public-docs/api.md). For image packages and browser-driven bootstrap,
 see the [image guide](public-docs/images.md).
