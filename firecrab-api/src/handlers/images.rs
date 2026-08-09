@@ -422,6 +422,7 @@ pub async fn delete_staged_package(
         }
     }
 
+    state.image_packages.clear(&alias);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1173,6 +1174,8 @@ mod tests {
     async fn delete_staged_package_removes_the_staged_archive() {
         let directory = tempdir().unwrap();
         let state = empty_state(directory.path()).await;
+        state.image_packages.begin("ubuntu-26.04").unwrap();
+        state.image_packages.finish_ok("ubuntu-26.04");
         let staged = crate::image_install::staged_package_path(
             state.templates.image_root_path(),
             "ubuntu-26.04",
@@ -1181,7 +1184,7 @@ mod tests {
         fs::write(&staged, b"pretend tar.zst").unwrap();
 
         let status = delete_staged_package(
-            State(state),
+            State(state.clone()),
             Path("ubuntu-26.04".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
@@ -1190,6 +1193,10 @@ mod tests {
 
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(!staged.is_file());
+        assert_eq!(
+            state.image_packages.snapshot("ubuntu-26.04").status,
+            ImageInstallStatus::Idle
+        );
     }
 
     #[tokio::test]

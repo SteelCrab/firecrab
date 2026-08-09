@@ -412,7 +412,7 @@ function ImageDetail({
         <dd>
           {image.installed
             ? t("Installed", "설치됨")
-            : packageJob?.status === "succeeded" || image.packageStaged
+            : image.packageStaged
               ? t("Package ready", "패키지 준비됨")
               : t("Not installed", "미설치")}
         </dd>
@@ -864,6 +864,11 @@ export default function Images() {
         setInstall(null);
         return;
       }
+      if (error instanceof ApiClientError && error.apiError?.code === "package_required") {
+        await refreshRegistry();
+        await handleDownloadPackage(alias);
+        return;
+      }
       setActionError((error as Error).message);
     } finally {
       setBusyAlias(null);
@@ -1057,14 +1062,14 @@ export default function Images() {
                         : `${t("Downloading", "다운로드 중")} ${downloadPercent}%`
                     : downloadFailed
                       ? t("Download failed", "다운로드 실패")
-                    : entry.packageStaged || packageJob?.status === "succeeded"
+                    : entry.packageStaged
                       ? t("Package ready", "패키지 준비됨")
                       : entry.downloadable
                         ? t("Available", "사용 가능")
                         : t("Unsupported", "지원 안 됨");
                   const actionLabel = entry.installed
                     ? t("Installed", "설치됨")
-                    : entry.packageStaged || packageJob?.status === "succeeded"
+                    : entry.packageStaged
                       ? actionBusy
                         ? t("Installing…", "설치 중…")
                         : t("Install", "설치")
@@ -1073,7 +1078,7 @@ export default function Images() {
                         : t("Download", "다운로드");
                   const actionDisabled = entry.installed || actionBusy || !entry.downloadable;
                   const doAction = () => {
-                    if (entry.packageStaged || packageJob?.status === "succeeded") {
+                    if (entry.packageStaged) {
                       void handleInstallStaged(entry.alias);
                     } else {
                       void handleDownloadPackage(entry.alias);
