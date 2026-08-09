@@ -205,7 +205,7 @@ pub async fn create_vm(
     let record = vm.clone();
     let shell_ids = req.shell_ids.clone();
     let port_forwards = req.port_forwards.clone();
-    tokio::task::spawn_blocking(move || {
+    let insert_result = tokio::task::spawn_blocking(move || {
         store.insert(&record)?;
         if !shell_ids.is_empty() {
             let pins = store.resolve_latest_shell_revisions(&shell_ids)?;
@@ -217,21 +217,49 @@ pub async fn create_vm(
         Ok::<_, crate::persistence::PersistenceError>(())
     })
     .await
-    .map_err(|_| AppError::internal(request_id.0))?
-    .map_err(|error| match error {
-        crate::persistence::PersistenceError::MissingShell { .. } => {
-            let mut fields = BTreeMap::new();
-            fields.insert(
-                "shellIds".to_owned(),
-                "one or more shells were not found".to_owned(),
-            );
-            AppError::validation(fields, request_id.0)
-        }
-        other => {
-            tracing::error!(request_id = %request_id.0, %other, "failed to persist VM state");
-            AppError::internal(request_id.0)
-        }
-    })?;
+    .map_err(|_| AppError::internal(request_id.0))?;
+
+    if let Err(error) = insert_result {
+        // `store.insert` above already committed on its own — it isn't in
+        // the same transaction as the shells/port-forwards writes that
+        // follow it — so a failure there has to be undone explicitly or a
+        // validation-error response would still leave an orphaned VM row
+        // behind. Same compensating pattern as the subnet-resolution
+        // failure below.
+        let store = state.store.clone();
+        let vm_id = vm.id;
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = store.clear_vm_shells(vm_id);
+            let _ = store.clear_vm_port_forwards(vm_id);
+            store.delete(vm_id)
+        })
+        .await;
+        return Err(match error {
+            crate::persistence::PersistenceError::MissingShell { .. } => {
+                let mut fields = BTreeMap::new();
+                fields.insert(
+                    "shellIds".to_owned(),
+                    "one or more shells were not found".to_owned(),
+                );
+                AppError::validation(fields, request_id.0)
+            }
+            crate::persistence::PersistenceError::DuplicatePortForward {
+                host_port,
+                protocol,
+            } => {
+                let mut fields = BTreeMap::new();
+                fields.insert(
+                    "portForwards".to_owned(),
+                    format!("host port {host_port}/{protocol} is already in use by another VM"),
+                );
+                AppError::validation(fields, request_id.0)
+            }
+            other => {
+                tracing::error!(request_id = %request_id.0, %other, "failed to persist VM state");
+                AppError::internal(request_id.0)
+            }
+        });
+    }
 
     // Allocated up front (not on first start) so it persists across every
     // stop/start of this VM and is only ever freed by a successful delete —
@@ -438,7 +466,7 @@ pub async fn update_vm_port_forwards(
         return Err(AppError::validation(fields, request_id.0));
     }
 
-    let (record, is_running) = {
+    let (record, is_active) = {
         let vms = state
             .vms
             .lock()
@@ -446,7 +474,25 @@ pub async fn update_vm_port_forwards(
         let vm = vms
             .get(&id)
             .ok_or_else(|| AppError::not_found(request_id.0))?;
-        (vm.clone(), vm.state == VmState::Running)
+        // `setup_vm_network` (and its DNAT/port-forward rules) is applied
+        // during `Starting`, before the VM reaches `Running` — a VM whose
+        // guest hasn't finished booting yet still has a live nft policy that
+        // needs to reflect a change made right now, not just once running.
+        (
+            vm.clone(),
+            matches!(vm.state, VmState::Running | VmState::Starting),
+        )
+    };
+
+    // Kept so a failed reapply below can restore exactly what was live
+    // before this request, instead of leaving the DB pointing at rules that
+    // were never actually installed on the host.
+    let previous_forwards = {
+        let store = state.store.clone();
+        tokio::task::spawn_blocking(move || store.list_vm_port_forwards(id))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+            .unwrap_or_default()
     };
 
     let store = state.store.clone();
@@ -454,12 +500,22 @@ pub async fn update_vm_port_forwards(
     tokio::task::spawn_blocking(move || store.set_vm_port_forwards(id, &forwards))
         .await
         .map_err(|_| AppError::internal(request_id.0))?
-        .map_err(|error| {
-            tracing::error!(request_id = %request_id.0, %error, "failed to update port forwards");
-            AppError::internal(request_id.0)
+        .map_err(|error| match error {
+            crate::persistence::PersistenceError::DuplicatePortForward { host_port, protocol } => {
+                let mut fields = BTreeMap::new();
+                fields.insert(
+                    "portForwards".to_owned(),
+                    format!("host port {host_port}/{protocol} is already in use by another VM"),
+                );
+                AppError::validation(fields, request_id.0)
+            }
+            other => {
+                tracing::error!(request_id = %request_id.0, %other, "failed to update port forwards");
+                AppError::internal(request_id.0)
+            }
         })?;
 
-    if is_running {
+    if is_active {
         if let Some(lease) = state.store.active_lease(id).ok().flatten() {
             let port_forwards_specs = req
                 .port_forwards
@@ -470,7 +526,7 @@ pub async fn update_vm_port_forwards(
                     protocol: pf.protocol.to_string(),
                 })
                 .collect();
-            let _ = state
+            if let Err(error) = state
                 .network
                 .apply_vm_policy(
                     id,
@@ -480,7 +536,19 @@ pub async fn update_vm_port_forwards(
                     false,
                     port_forwards_specs,
                 )
+                .await
+            {
+                tracing::error!(
+                    request_id = %request_id.0, %error,
+                    "failed to apply updated port forwards; rolling back the persisted rules"
+                );
+                let store = state.store.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    store.set_vm_port_forwards(id, &previous_forwards)
+                })
                 .await;
+                return Err(AppError::internal(request_id.0));
+            }
         }
     }
 
@@ -3044,6 +3112,99 @@ while True:
             calls[apply_at + 1..].contains(&"delete_tap"),
             "expected delete_tap after a failed apply_vm_policy, got {calls:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn update_port_forwards_reapplies_live_policy_for_a_starting_vm() {
+        // `setup_vm_network` installs the firewall policy during `Starting`,
+        // before the VM ever reaches `Running` — an update made in that
+        // window must still reach the live nft policy, not just the DB.
+        let directory = short_tempdir();
+        let root = directory.path();
+        let state = test_state(root).await;
+
+        let socket_path = root.join("net-helper-starting.sock");
+        let (_helper, log) =
+            crate::network::test_support::spawn_recording_helper(&socket_path, None);
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
+        let mut vm = record("starting-vm", Uuid::new_v4());
+        vm.state = VmState::Starting;
+        seed_vm(&state, &vm);
+
+        let response = update_vm_port_forwards(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(firecrab_api_types::UpdateVmPortForwardsRequest {
+                port_forwards: vec![firecrab_api_types::PortForward {
+                    host_port: 8080,
+                    guest_port: 80,
+                    protocol: firecrab_api_types::PortProtocol::Tcp,
+                }],
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.0.port_forwards.len(), 1);
+
+        assert!(
+            log.lock().unwrap().contains(&"apply_vm_policy"),
+            "a Starting VM's live policy must be reapplied, not just persisted"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_port_forwards_rolls_back_the_db_when_the_live_reapply_fails() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let state = test_state(root).await;
+
+        let mut vm = record("running-vm", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+
+        // Establish a known-good baseline while the fake helper still
+        // succeeds, so the rollback below has something real to restore.
+        let previous = vec![firecrab_api_types::PortForward {
+            host_port: 2222,
+            guest_port: 22,
+            protocol: firecrab_api_types::PortProtocol::Tcp,
+        }];
+        state.store.set_vm_port_forwards(vm.id, &previous).unwrap();
+
+        let socket_path = root.join("net-helper-pf-fail.sock");
+        let (_helper, _log) = crate::network::test_support::spawn_recording_helper(
+            &socket_path,
+            Some("apply_vm_policy"),
+        );
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+
+        let error = update_vm_port_forwards(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+            ValidatedJson(firecrab_api_types::UpdateVmPortForwardsRequest {
+                port_forwards: vec![firecrab_api_types::PortForward {
+                    host_port: 9999,
+                    guest_port: 90,
+                    protocol: firecrab_api_types::PortProtocol::Tcp,
+                }],
+            }),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        // The DB must reflect what's actually live, not the failed update —
+        // otherwise the response body would keep showing rules that were
+        // never installed on the host.
+        assert_eq!(state.store.list_vm_port_forwards(vm.id).unwrap(), previous);
     }
 
     #[tokio::test]
