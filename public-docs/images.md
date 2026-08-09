@@ -45,7 +45,9 @@ tar --list --zstd --file dist/m2images/alpine-3.24.tar.zst
 ## Publish
 
 Serve packages at `<base-url>/<alias>.tar.zst`.
-Set `FIRECRAB_IMAGE_BASE_URL` on the API.
+By default the API uses the public MicroRegistry. Set
+`FIRECRAB_IMAGE_BASE_URL` to use another package base URL, or set it to
+`none` to disable remote installs.
 
 The API downloads and validates a package first.
 It installs the staged package in a separate step.

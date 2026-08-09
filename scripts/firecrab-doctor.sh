@@ -14,6 +14,7 @@ set -Eeuo pipefail
 
 DIGEST=0
 DATADIR=${DATADIR:-/var/lib/firecrab}
+API_USER=${FIRECRAB_API_USER:-${FIRECRAB_USER:-}}
 HELPER_SOCK=${FIRECRAB_NET_HELPER_SOCK:-/run/firecrab/net-helper.sock}
 DNSMASQ_CONF=${FIRECRAB_DNSMASQ_CONF:-/run/firecrab/dnsmasq.conf}
 DNSMASQ_PID=${FIRECRAB_DNSMASQ_PID:-/run/firecrab/dnsmasq.pid}
@@ -56,7 +57,7 @@ Usage: firecrab-doctor [--digest] [-h|--help]
   --digest   also print sha256 (first 12 hex chars) of template images
   -h, --help this text
 
-Environment: DATADIR, FIRECRAB_NET_HELPER_SOCK, FIRECRAB_IMAGE_ROOT,
+Environment: DATADIR, FIRECRAB_API_USER, FIRECRAB_NET_HELPER_SOCK, FIRECRAB_IMAGE_ROOT,
              FIRECRAB_DNSMASQ_CONF, FIRECRAB_DNSMASQ_PID
 USAGE
 }
@@ -307,7 +308,7 @@ check_dnsmasq() {
 }
 
 check_helper_socket() {
-    local path mode owner group
+    local mode owner group owner_uid group_gid api_uid api_gids permission
 
     if [ ! -e "$HELPER_SOCK" ]; then
         fail "helper socket: $HELPER_SOCK does not exist" \
@@ -329,11 +330,40 @@ check_helper_socket() {
         mode=; owner=; group=
     fi
 
-    # Access: the API process must be able to connect. Test as current user.
-    if [ ! -r "$HELPER_SOCK" ] || [ ! -w "$HELPER_SOCK" ]; then
-        fail "helper socket: not accessible by current user" \
+    # Access must be evaluated for the API service account, not for the human
+    # running this read-only doctor. The install intentionally does not add the
+    # operator to the private firecrab group.
+    if [ -z "$API_USER" ] && have systemctl; then
+        API_USER=$(systemctl show -p User --value firecrab-api.service 2>/dev/null || true)
+    fi
+    # A directly-invoked development helper has no systemd unit; in that case
+    # its client is the current user. install.sh passes the configured service
+    # account explicitly, and an installed unit supplies it via systemctl.
+    API_USER=${API_USER:-$(id -un)}
+    if ! api_uid=$(id -u "$API_USER" 2>/dev/null); then
+        fail "helper socket: API account $API_USER does not exist" \
             "path=$HELPER_SOCK mode=${mode:-?} owner=${owner:-?}:${group:-?}" \
-            "unit Group= must match the API account group (socket is 0660); add user to that group"
+            "re-run ./install.sh to create the service account"
+        return
+    fi
+
+    owner_uid=$(stat -c '%u' "$HELPER_SOCK" 2>/dev/null || true)
+    group_gid=$(stat -c '%g' "$HELPER_SOCK" 2>/dev/null || true)
+    api_gids=$(id -G "$API_USER" 2>/dev/null || true)
+    permission=0
+    if [ "$api_uid" = "0" ]; then
+        permission=6
+    elif [ -n "$mode" ] && [ "$api_uid" = "$owner_uid" ]; then
+        permission=$(( (8#$mode / 64) % 8 ))
+    elif [ -n "$mode" ] && case " $api_gids " in *" $group_gid "*) true ;; *) false ;; esac; then
+        permission=$(( (8#$mode / 8) % 8 ))
+    elif [ -n "$mode" ]; then
+        permission=$(( 8#$mode % 8 ))
+    fi
+    if [ $((permission & 6)) -ne 6 ]; then
+        fail "helper socket: not accessible by API account $API_USER" \
+            "path=$HELPER_SOCK mode=${mode:-?} owner=${owner:-?}:${group:-?}" \
+            "unit Group= must match the API account group (socket is 0660)"
         return
     fi
 
@@ -558,7 +588,16 @@ check_data_root() {
 # Template artifacts expected by firecrab-api/src/templates.rs default_specs().
 # Paths are relative to an image root.
 template_artifacts() {
-    cat <<'EOF'
+    case "$(uname -m 2>/dev/null || printf unknown)" in
+        aarch64|arm64)
+            cat <<'EOF'
+kernel/vmlinux-alpine-virt-aarch64
+kernel/initramfs-alpine-virt-aarch64
+rootfs/alpine-rootfs-3.24.1-aarch64.ext4
+EOF
+            ;;
+        *)
+            cat <<'EOF'
 kernel/vmlinux-ubuntu-26.04-x86_64
 rootfs/ubuntu-rootfs-26.04-amd64.ext4
 kernel/vmlinux-alpine-virt-x86_64
@@ -568,6 +607,8 @@ kernel/vmlinux-rocky-9-x86_64
 kernel/initramfs-rocky-9-x86_64
 rootfs/rocky-rootfs-9-x86_64.ext4
 EOF
+            ;;
+    esac
 }
 
 resolve_image_roots() {
@@ -606,6 +647,12 @@ check_images() {
     mapfile -t roots < <(resolve_image_roots)
 
     if [ "${#roots[@]}" -eq 0 ]; then
+        if [ -e "$DATADIR" ] && [ ! -x "$DATADIR" ]; then
+            skip "images: $DATADIR is private to the service account" \
+                "the current user cannot inspect $DATADIR/images" \
+                "sudo firecrab-doctor   # inspect installed image contents"
+            return
+        fi
         fail "images: no image root found" \
             "looked at FIRECRAB_IMAGE_ROOT, $PWD/images, $DATADIR/images" \
             "./install.sh   # or build with scripts/firecracker-menual/install-alpine-rootfs.sh"
@@ -634,6 +681,12 @@ check_images() {
             fi
         done
         if [ "$any" -eq 0 ]; then
+            if [ -e "$DATADIR" ] && [ ! -x "$DATADIR" ]; then
+                skip "images: $DATADIR is private to the service account" \
+                    "the current user cannot inspect $DATADIR/images; accessible roots had no images" \
+                    "sudo firecrab-doctor   # inspect installed image contents"
+                return
+            fi
             fail "images: no guest rootfs found under ${roots[*]}" \
                 "" \
                 "./install.sh  or copy images into $DATADIR/images"
@@ -709,9 +762,9 @@ check_image_install_tools() {
         pass
         return
     fi
-    skip "image-install: FIRECRAB_IMAGE_BASE_URL unset" \
-        "dashboard cannot download templates until the URL is set in api.env" \
-        "see public-docs/installation.md (M2Image)"
+    # This matches ImageInstallTracker::from_env(): unset selects the public
+    # MicroRegistry. Empty/none/- explicitly disables remote image installs.
+    pass
 }
 
 # --- run ---------------------------------------------------------------------

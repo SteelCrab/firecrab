@@ -695,6 +695,19 @@ fn artifacts_present(image_root: &Path, spec: &TemplateSpec) -> bool {
 }
 
 fn default_specs() -> [TemplateSpec; 3] {
+    // Alpine is the default image built by install.sh and supports both
+    // Firecracker host architectures. The other distro builders/package
+    // aliases are currently release-produced for x86_64 only.
+    let alpine_arch = match std::env::consts::ARCH {
+        "aarch64" => "aarch64",
+        _ => "x86_64",
+    };
+    let alpine_boot_args = if alpine_arch == "aarch64" {
+        "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
+    } else {
+        "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
+    };
+
     [
         TemplateSpec {
             alias: "ubuntu-26.04".to_owned(),
@@ -721,11 +734,12 @@ fn default_specs() -> [TemplateSpec; 3] {
             // builtin here) isn't loaded yet, and fails with a
             // misleading "No such file or directory" instead of
             // triggering the kernel's on-demand module load.
-            kernel: PathBuf::from("kernel/vmlinux-alpine-virt-x86_64"),
-            initrd: Some(PathBuf::from("kernel/initramfs-alpine-virt-x86_64")),
-            rootfs: PathBuf::from("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"),
-            boot_args: "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
-                .to_owned(),
+            kernel: PathBuf::from(format!("kernel/vmlinux-alpine-virt-{alpine_arch}")),
+            initrd: Some(PathBuf::from(format!(
+                "kernel/initramfs-alpine-virt-{alpine_arch}"
+            ))),
+            rootfs: PathBuf::from(format!("rootfs/alpine-rootfs-3.24.1-{alpine_arch}.ext4")),
+            boot_args: alpine_boot_args.to_owned(),
         },
         TemplateSpec {
             alias: "rocky-9".to_owned(),
@@ -1210,18 +1224,29 @@ mod tests {
             .iter()
             .find(|spec| spec.alias == "alpine-3.24")
             .expect("alpine-3.24 is one of the default specs");
+        let alpine_arch = match std::env::consts::ARCH {
+            "aarch64" => "aarch64",
+            _ => "x86_64",
+        };
         assert_eq!(
             alpine.kernel,
-            PathBuf::from("kernel/vmlinux-alpine-virt-x86_64")
+            PathBuf::from(format!("kernel/vmlinux-alpine-virt-{alpine_arch}"))
         );
         assert_eq!(
             alpine.initrd,
-            Some(PathBuf::from("kernel/initramfs-alpine-virt-x86_64"))
+            Some(PathBuf::from(format!(
+                "kernel/initramfs-alpine-virt-{alpine_arch}"
+            )))
         );
         // virtio_blk/ext4 being modules on this kernel is exactly why the
         // initrd above is required — and why the kernel needs an explicit
         // hint to find the root filesystem type before that module loads.
         assert!(alpine.boot_args.contains("rootfstype=ext4"));
+        assert!(alpine.boot_args.contains("console=ttyS0"));
+        assert_eq!(
+            alpine.boot_args.contains("keep_bootcon"),
+            alpine_arch == "aarch64"
+        );
 
         let rocky = specs
             .iter()

@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 
 alpine_releases_base='https://dl-cdn.alpinelinux.org/alpine'
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
-kernel_image_name='vmlinux-alpine-virt-x86_64'
-initrd_image_name='initramfs-alpine-virt-x86_64'
+kernel_image_name=''
+initrd_image_name=''
 extract_vmlinux="${script_dir}/extract-vmlinux"
 build_dir="${repo_dir}/build/alpine-rootfs"
 rootfs_size='512M'
@@ -69,12 +69,31 @@ detect_alpine_arch() {
 }
 
 resolve_ssh_public_key() {
-  key_source="${HOME:-}/.ssh/id_ed25519.pub"
-
-  if [ -z "${HOME:-}" ] || [ ! -f "$key_source" ]; then
-    fail 'Host SSH public key not found: ~/.ssh/id_ed25519.pub'
+  key_source=${FIRECRAB_SSH_PUBLIC_KEY:-}
+  if [ -n "$key_source" ]; then
+    [ -s "$key_source" ] || fail "FIRECRAB_SSH_PUBLIC_KEY is not a readable public key: ${key_source}"
+    printf '%s\n' "$key_source"
+    return
   fi
 
+  if [ -n "${HOME:-}" ]; then
+    for key_source in \
+      "$HOME/.ssh/id_ed25519.pub" \
+      "$HOME/.ssh/id_ecdsa.pub" \
+      "$HOME/.ssh/id_rsa.pub"; do
+      if [ -s "$key_source" ]; then
+        printf '%s\n' "$key_source"
+        return
+      fi
+    done
+  fi
+
+  # SSH is optional: every Firecrab guest has an autologin serial console.
+  # Keep an empty bind-mount source so Docker can run the same configure path
+  # without modifying the operator's ~/.ssh directory behind their back.
+  key_source="${build_dir}/no-authorized-key.pub"
+  : >"$key_source"
+  info 'no host SSH public key found; building with serial-console access only' >&2
   printf '%s\n' "$key_source"
 }
 
@@ -321,6 +340,8 @@ main() {
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
   alpine_arch=$(detect_alpine_arch)
+  kernel_image_name="vmlinux-alpine-virt-${alpine_arch}"
+  initrd_image_name="initramfs-alpine-virt-${alpine_arch}"
   ssh_public_key=$(resolve_ssh_public_key)
 
   info "Alpine architecture: ${alpine_arch}"

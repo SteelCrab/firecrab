@@ -404,7 +404,7 @@ install_config() {
 #
 # M2Image install (Images page / POST /api/images/{alias}/install).
 # Points at a directory-style base that serves `{alias}.tar.zst` packages
-# (see scripts/package-m2images.sh). Unset = remote install disabled.
+# (see scripts/package-m2images.sh). Unset = use the public MicroRegistry.
 # Example local mirror:
 # FIRECRAB_IMAGE_BASE_URL=http://127.0.0.1:8765
 # Requires host tools: tar, zstd. Restart firecrab-api after changing this.
@@ -571,7 +571,8 @@ do_doctor() {
     local doctor="$REPO_ROOT/scripts/firecrab-doctor.sh"
     [ -x "$doctor" ] || die "missing $doctor"
     # Pass DATADIR through so the doctor matches this install layout.
-    DATADIR="$DATADIR" exec "$doctor" "${DOCTOR_ARGS[@]}"
+    DATADIR="$DATADIR" FIRECRAB_API_USER="$FIRECRAB_USER" \
+        exec "$doctor" "${DOCTOR_ARGS[@]}"
 }
 
 # Installs what firecrab needs and stops there — no account, directories, units
