@@ -23,6 +23,7 @@ IMAGE_ROOT=${IMAGE_ROOT:-${FIRECRAB_IMAGE_ROOT:-$repo_dir/images}}
 OUT_DIR=${OUT_DIR:-$repo_dir/dist/m2images}
 ZSTD_LEVEL=${ZSTD_LEVEL:-19}
 ALIAS_FILTER=all
+MOTD_FILE=${MOTD_FILE:-$repo_dir/assets/firecrab-motd}
 
 usage() {
   sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
@@ -51,11 +52,12 @@ done
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
-command -v tar >/dev/null 2>&1 || fail "tar is required"
-command -v zstd >/dev/null 2>&1 || fail "zstd is required"
-command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required"
+for command in tar zstd sha256sum debugfs; do
+  command -v "$command" >/dev/null 2>&1 || fail "$command is required"
+done
 
 [ -d "$IMAGE_ROOT" ] || fail "image root not found: $IMAGE_ROOT"
+[ -f "$MOTD_FILE" ] || fail "MOTD file not found: $MOTD_FILE"
 
 # Print relative artifact paths for a known alias (one per line).
 # Keep in sync with firecrab-api/src/templates.rs default_specs().
@@ -95,19 +97,39 @@ aliases_to_pack() {
 package_one() {
   local alias=$1
   local out=$OUT_DIR/${alias}.tar.zst
+  local staging=$PACK_WORK_DIR/$alias
   local -a files=()
   local rel
+  local rootfs_rel=
+
+  mkdir -p "$staging"
 
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     [ -f "$IMAGE_ROOT/$rel" ] || fail "missing $IMAGE_ROOT/$rel (build the template first)"
     files+=("$rel")
+    case "$rel" in rootfs/*) rootfs_rel=$rel ;; esac
+    mkdir -p "$staging/$(dirname -- "$rel")"
+    cp --reflink=auto --sparse=always -- "$IMAGE_ROOT/$rel" "$staging/$rel"
   done < <(artifacts_for "$alias")
+
+  [ -n "$rootfs_rel" ] || fail "no rootfs artifact configured for $alias"
+  cp -- "$MOTD_FILE" "$staging/.firecrab-motd"
+  (
+    cd "$staging"
+    debugfs -w -R 'rm /etc/motd' "$rootfs_rel" >/dev/null 2>&1 || true
+    motd_output=$(debugfs -w -R 'write .firecrab-motd /etc/motd' "$rootfs_rel" 2>&1)
+    case "$motd_output" in
+      *'Allocated inode'*) ;;
+      *) fail "could not install MOTD into $alias rootfs: $motd_output" ;;
+    esac
+  )
+  rm -f -- "$staging/.firecrab-motd"
 
   info "packing $alias → $out"
   # --sparse keeps large ext4 images from ballooning when mostly free space.
   # Pipe through zstd so the GitHub asset stays under the 2 GiB limit.
-  tar --sparse -C "$IMAGE_ROOT" -cf - "${files[@]}" \
+  tar --sparse -C "$staging" -cf - "${files[@]}" \
     | zstd -T0 -"$ZSTD_LEVEL" -f -o "$out"
 
   local bytes
@@ -116,6 +138,8 @@ package_one() {
 }
 
 mkdir -p "$OUT_DIR"
+PACK_WORK_DIR=$(mktemp -d "$OUT_DIR/.package.XXXXXX")
+trap 'rm -rf -- "$PACK_WORK_DIR"' EXIT
 
 packed=0
 while IFS= read -r alias; do
