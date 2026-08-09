@@ -7,7 +7,7 @@ use firecrab_helper_protocol::framing::{FrameError, read_frame, write_frame};
 pub use firecrab_helper_protocol::network::tap_name;
 use firecrab_helper_protocol::network::{
     DhcpLeaseEntry, HelperFailure, MacAddr, MicroNetworkSpec, NetworkRequest,
-    NetworkRequestEnvelope, NetworkResponseEnvelope,
+    NetworkRequestEnvelope, NetworkResponseEnvelope, VmPolicySpec,
 };
 use thiserror::Error;
 use tokio::net::UnixStream;
@@ -96,9 +96,13 @@ impl NetworkClient {
     pub async fn ensure_firewall(
         &self,
         micro_networks: Vec<MicroNetworkSpec>,
+        vm_policies: Vec<VmPolicySpec>,
     ) -> Result<(), NetworkError> {
-        self.call(NetworkRequest::EnsureFirewall { micro_networks })
-            .await
+        self.call(NetworkRequest::EnsureFirewall {
+            micro_networks,
+            vm_policies,
+        })
+        .await
     }
 
     /// Creates `vm_id`'s TAP device, attaches it to the MicroNetwork's
@@ -449,6 +453,7 @@ mod tests {
         let error = client(&path, HELPER_TIMEOUT)
             .call(NetworkRequest::EnsureFirewall {
                 micro_networks: Vec::new(),
+                vm_policies: Vec::new(),
             })
             .await
             .expect_err("a helper failure must be returned to the API");

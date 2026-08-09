@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Wire protocol version; bumped on any breaking envelope/request change.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 /// Linux `IFNAMSIZ - 1`: the longest name a network interface can have.
 pub const MAX_INTERFACE_NAME_LEN: usize = 15;
 

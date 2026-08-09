@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use uuid::Uuid;
 
 use crate::firecracker::{self, VmProcess};
@@ -76,6 +76,10 @@ pub struct AppState {
     pub(crate) disk_prep_permits: Arc<Semaphore>,
     /// Client for the privileged `firecrab-net-helper` (bridge/TAP/firewall).
     pub(crate) network: NetworkClient,
+    /// Serializes desired-state firewall snapshots with per-VM policy/TAP
+    /// mutations. Without this, an older snapshot from one concurrent start
+    /// could arrive after a newer one and remove the newer VM's policy.
+    pub(crate) network_mutations: Arc<AsyncMutex<()>>,
     /// Async image registration jobs (`POST /api/images/{alias}/install`).
     pub(crate) image_installs: ImageInstallTracker,
     /// Async package acquisition jobs (`POST /api/images/{alias}/package`).
@@ -121,6 +125,7 @@ impl AppState {
             storage: Arc::new(storage),
             disk_prep_permits: Arc::new(Semaphore::new(DISK_PREP_CONCURRENCY)),
             network: NetworkClient::from_env(),
+            network_mutations: Arc::new(AsyncMutex::new(())),
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),

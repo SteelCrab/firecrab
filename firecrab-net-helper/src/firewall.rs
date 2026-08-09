@@ -138,24 +138,34 @@ impl Default for FirewallActor {
     }
 }
 
-/// Detect the uplink, and (re)apply the Firecrab tables only if the rendered
-/// ruleset differs from what was last applied — i.e. on an uplink change or
-/// when a MicroNetwork is created/removed. Never touches any table/chain this
-/// helper does not own.
+/// Detect the uplink and reconcile the complete Firecrab firewall snapshot.
+/// Shared tables and every desired VM policy are sent to nft as one atomic
+/// transaction, so policies absent from `vm_policies` disappear as orphans
+/// while policies still belonging to active VMs never vanish between calls.
+/// Never touches any table/chain this helper does not own.
 pub async fn ensure_firewall(
     actor: &FirewallActor,
     micro_networks: &[MicroNetworkSpec],
+    vm_policies: &[VmPolicy],
 ) -> Result<(), FirewallError> {
     let (connection, handle, _) = new_connection().map_err(FirewallError::Connection)?;
     tokio::spawn(connection);
     let uplink = nat::detect_uplink(&handle).await?;
 
     let mut state = actor.state.lock().await;
-    let ruleset = render_apply_ruleset(&uplink, micro_networks)?;
-    if state.applied_ruleset.as_deref() == Some(ruleset.as_str()) {
+    let base_ruleset = render_apply_ruleset(&uplink, micro_networks)?;
+    let desired_vms: std::collections::HashMap<Uuid, (String, VmPolicy)> = vm_policies
+        .iter()
+        .cloned()
+        .map(|policy| (policy.vm_id, (uplink.clone(), policy)))
+        .collect();
+    if state.applied_ruleset.as_deref() == Some(base_ruleset.as_str())
+        && state.applied_vms == desired_vms
+    {
         return Ok(());
     }
 
+    let ruleset = render_reconciled_ruleset(base_ruleset.as_str(), &uplink, vm_policies);
     run_nft(&ruleset).await?;
     // Best-effort iptables compat: coexist with Docker's FORWARD DROP policy.
     ensure_iptables_compat(
@@ -164,10 +174,24 @@ pub async fn ensure_firewall(
         &uplink,
     )
     .await;
-    // A global (re)apply flushes the tables, so no per-VM policy survives it.
-    state.applied_vms.clear();
-    state.applied_ruleset = Some(ruleset);
+    state.applied_vms = desired_vms;
+    state.applied_ruleset = Some(base_ruleset);
     Ok(())
+}
+
+/// Appends a canonical, UUID-sorted VM policy snapshot to the base ruleset.
+/// The base begins by flushing the two Firecrab-owned tables, so any old
+/// policy not present in this output is removed in the same nft transaction
+/// that restores policies which are still desired.
+fn render_reconciled_ruleset(base_ruleset: &str, uplink: &str, vm_policies: &[VmPolicy]) -> String {
+    let mut ruleset = base_ruleset.to_owned();
+    let mut sorted_policies = vm_policies.iter().collect::<Vec<_>>();
+    sorted_policies.sort_by_key(|policy| policy.vm_id);
+    for policy in sorted_policies {
+        ruleset.push_str(&render_vm_policy(uplink, policy));
+        ruleset.push('\n');
+    }
+    ruleset
 }
 
 /// Install (or atomically replace) one VM's isolation + egress policy.
@@ -181,11 +205,11 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
     let mut state = actor.state.lock().await;
     let previous = state.applied_vms.get(&policy.vm_id).cloned();
 
-    // `ensure_all_networks` defensively reapplies policies for running VMs.
-    // An identical request (same policy *and* same uplink — see the comment
-    // on `applied_vms`) needs no host mutation. Keeping this decision inside
-    // the helper's single-writer lock also prevents two simultaneous API
-    // requests from doing redundant nft work.
+    // `ensure_all_networks` now includes active policies in its atomic
+    // snapshot, so setup's immediately-following per-VM apply is normally
+    // identical. It needs no host mutation. Keeping this decision inside the
+    // helper's single-writer lock also prevents two simultaneous API requests
+    // from doing redundant nft work.
     if previous.as_ref() == Some(&(uplink.clone(), policy.clone())) {
         return Ok(());
     }
@@ -266,13 +290,16 @@ fn offline_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
 }
 
 /// Renders the whole VM-independent desired state for both owned tables as
-/// one nft(8) script. `add table` + `flush table` before redeclaring keeps
+/// one nft(8) script. `add table` + `delete table` before recreating keeps
 /// this idempotent without ever touching a table this helper doesn't own.
+/// Deletion is required: nft's `flush table` removes rules but preserves
+/// named map/set elements, which is exactly where stale VM IPv4 ownership
+/// lives.
 ///
 /// Per-VM rules live in separate named chains + verdict-map elements (see
 /// [`render_vm_policy`]) so replacing one VM's policy never disturbs another.
-/// This global flush therefore only runs on an uplink change, when no per-VM
-/// state is expected to be present yet.
+/// The complete desired VM snapshot is appended to this recreation in the
+/// same transaction by [`render_reconciled_ruleset`].
 fn render_apply_ruleset(
     uplink: &str,
     micro_networks: &[MicroNetworkSpec],
@@ -326,7 +353,7 @@ fn render_apply_ruleset(
         // policy on `ip saddr` is safe even though the routed packet's
         // iifname is the bridge, not the individual TAP.
         "add table inet {TABLE_INET}\n\
-         flush table inet {TABLE_INET}\n\
+         delete table inet {TABLE_INET}\n\
          table inet {TABLE_INET} {{\n\
          \tmap vm_egress {{\n\
          \t\ttype ipv4_addr : verdict\n\
@@ -353,7 +380,7 @@ fn render_apply_ruleset(
          {postrouting}\
          }}\n\
          add table bridge {TABLE_BRIDGE}\n\
-         flush table bridge {TABLE_BRIDGE}\n\
+         delete table bridge {TABLE_BRIDGE}\n\
          table bridge {TABLE_BRIDGE} {{\n\
          \tmap l2_ingress {{\n\
          \t\ttype ifname : verdict\n\
@@ -778,10 +805,10 @@ mod tests {
     }
 
     #[test]
-    fn global_ruleset_is_idempotent_via_add_then_flush_and_owns_only_two_tables() {
+    fn global_ruleset_recreates_only_the_two_owned_tables() {
         let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
-        assert!(ruleset.contains("add table inet firecrab\nflush table inet firecrab"));
-        assert!(ruleset.contains("add table bridge firecrab_l2\nflush table bridge firecrab_l2"));
+        assert!(ruleset.contains("add table inet firecrab\ndelete table inet firecrab"));
+        assert!(ruleset.contains("add table bridge firecrab_l2\ndelete table bridge firecrab_l2"));
         assert!(!ruleset.contains("flush ruleset"));
     }
 
@@ -962,6 +989,24 @@ mod tests {
     }
 
     #[test]
+    fn reconciled_ruleset_keeps_desired_vms_and_drops_orphans() {
+        let desired = sample_policy(EgressPolicy::Internet, false);
+        let orphan = VmPolicy {
+            vm_id: Uuid::from_u128(0x9999),
+            ipv4: Ipv4Addr::new(172, 30, 0, 40),
+            ..desired.clone()
+        };
+        let base = render_apply_ruleset("eth0", &[]).unwrap();
+        let ruleset = render_reconciled_ruleset(&base, "eth0", std::slice::from_ref(&desired));
+
+        assert!(ruleset.contains("delete table inet firecrab"));
+        assert!(ruleset.contains(&format!("vm_{}", desired.vm_id.simple())));
+        assert!(ruleset.contains(&desired.ipv4.to_string()));
+        assert!(!ruleset.contains(&format!("vm_{}", orphan.vm_id.simple())));
+        assert!(!ruleset.contains(&orphan.ipv4.to_string()));
+    }
+
+    #[test]
     fn replacement_removes_the_old_policy_before_adding_the_new_one() {
         let previous = sample_policy(EgressPolicy::Internet, false);
         let replacement = VmPolicy {
@@ -1041,7 +1086,7 @@ mod tests {
         let actor = FirewallActor::new();
         actor.state.lock().await.applied_ruleset = Some(applied.clone());
 
-        assert!(ensure_firewall(&actor, &[]).await.is_ok());
+        assert!(ensure_firewall(&actor, &[], &[]).await.is_ok());
         assert_eq!(
             actor.state.lock().await.applied_ruleset.as_deref(),
             Some(applied.as_str())

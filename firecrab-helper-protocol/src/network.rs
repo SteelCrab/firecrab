@@ -146,6 +146,13 @@ pub enum NetworkRequest {
     EnsureFirewall {
         /// Every MicroNetwork that currently exists.
         micro_networks: Vec<MicroNetworkSpec>,
+        /// Complete desired policy snapshot for VMs whose host networking is
+        /// active. Rebuilding the shared tables and these policies in one nft
+        /// transaction removes orphaned entries without interrupting policies
+        /// that still belong to a live VM. Defaults to empty for requests from
+        /// an older API binary.
+        #[serde(default)]
+        vm_policies: Vec<VmPolicySpec>,
     },
     /// Create and attach a TAP device for a starting VM.
     CreateTap {
@@ -257,6 +264,27 @@ pub struct PortForwardSpec {
     pub guest_port: u16,
     /// Protocol ("tcp" or "udp").
     pub protocol: String,
+}
+
+/// One VM policy in the full snapshot carried by
+/// [`NetworkRequest::EnsureFirewall`]. This deliberately has the same typed
+/// fields as [`NetworkRequest::ApplyVmPolicy`]; the helper still resolves the
+/// egress id against its own allowlist before rendering any host rules.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VmPolicySpec {
+    /// The VM this policy applies to.
+    pub vm_id: Uuid,
+    /// The VM's allocated IPv4 address.
+    pub ipv4: Ipv4Addr,
+    /// The VM's Firecracker guest MAC.
+    pub mac: MacAddr,
+    /// ID resolved against the helper's allowlist; never a raw CIDR.
+    pub egress_policy: String,
+    /// Whether host SSH access should be permitted for this VM.
+    pub allow_host_ssh: bool,
+    /// Inbound port forwarding rules (DNAT).
+    #[serde(default)]
+    pub port_forwards: Vec<PortForwardSpec>,
 }
 
 /// One VM's reservation for [`NetworkRequest::SyncDhcpLeases`]. No hostname
@@ -409,6 +437,20 @@ mod tests {
 
         let envelope = NetworkRequestEnvelope::new(Uuid::nil(), NetworkRequest::EnsureBridge);
         assert_eq!(envelope.version, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn older_ensure_firewall_requests_default_to_an_empty_policy_snapshot() {
+        let request: NetworkRequest =
+            serde_json::from_str(r#"{"operation":"ensure_firewall","micro_networks":[]}"#)
+                .expect("deserialize an older API request");
+        assert_eq!(
+            request,
+            NetworkRequest::EnsureFirewall {
+                micro_networks: Vec::new(),
+                vm_policies: Vec::new(),
+            }
+        );
     }
 
     #[test]

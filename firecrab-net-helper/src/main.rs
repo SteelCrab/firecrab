@@ -28,7 +28,7 @@ use firecrab_helper_protocol::PROTOCOL_VERSION;
 use firecrab_helper_protocol::framing::{read_frame, write_frame};
 use firecrab_helper_protocol::network::{
     HelperFailure, MicroNetworkSpec, NetworkRequest, NetworkRequestEnvelope,
-    NetworkResponseEnvelope,
+    NetworkResponseEnvelope, VmPolicySpec,
 };
 use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
@@ -366,6 +366,61 @@ fn validate_port_forwards(
     Ok(())
 }
 
+/// Validates and converts the API's complete policy snapshot before any nft
+/// state is touched. Duplicate identities, addresses, and host ports would
+/// make the rendered snapshot ambiguous, so reject them at the privilege
+/// boundary with an actionable client error.
+fn validate_vm_policies(
+    specs: Vec<VmPolicySpec>,
+) -> Result<Vec<firewall::VmPolicy>, HelperFailure> {
+    let mut vm_ids = HashSet::new();
+    let mut ipv4s = HashSet::new();
+    let mut host_ports = HashSet::new();
+    let mut policies = Vec::with_capacity(specs.len());
+
+    for spec in specs {
+        if !vm_ids.insert(spec.vm_id) {
+            return Err(HelperFailure::InvalidRequest {
+                detail: format!("duplicate VM policy for {}", spec.vm_id),
+            });
+        }
+        if !ipv4s.insert(spec.ipv4) {
+            return Err(HelperFailure::InvalidRequest {
+                detail: format!("duplicate VM policy IPv4 {}", spec.ipv4),
+            });
+        }
+        validate_port_forwards(&spec.port_forwards)?;
+        for port_forward in &spec.port_forwards {
+            let key = (
+                port_forward.protocol.to_ascii_lowercase(),
+                port_forward.host_port,
+            );
+            if !host_ports.insert(key) {
+                return Err(HelperFailure::InvalidRequest {
+                    detail: format!(
+                        "duplicate host port {}/{} in VM policy snapshot",
+                        port_forward.host_port, port_forward.protocol
+                    ),
+                });
+            }
+        }
+        let egress = firewall::EgressPolicy::from_id(&spec.egress_policy).ok_or_else(|| {
+            HelperFailure::InvalidRequest {
+                detail: format!("unknown egress policy id {:?}", spec.egress_policy),
+            }
+        })?;
+        policies.push(firewall::VmPolicy {
+            vm_id: spec.vm_id,
+            ipv4: spec.ipv4,
+            mac: spec.mac,
+            egress,
+            allow_host_ssh: spec.allow_host_ssh,
+            port_forwards: spec.port_forwards,
+        });
+    }
+    Ok(policies)
+}
+
 /// Routes a validated request to the matching bridge/firewall operation.
 async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), HelperFailure> {
     match request {
@@ -406,9 +461,13 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: error_chain(&error),
                 })
         }
-        NetworkRequest::EnsureFirewall { micro_networks } => {
+        NetworkRequest::EnsureFirewall {
+            micro_networks,
+            vm_policies,
+        } => {
             validate_micro_networks(&micro_networks)?;
-            firewall::ensure_firewall(&config.firewall, &micro_networks)
+            let vm_policies = validate_vm_policies(vm_policies)?;
+            firewall::ensure_firewall(&config.firewall, &micro_networks, &vm_policies)
                 .await
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),
@@ -614,6 +673,28 @@ mod tests {
                 Err(HelperFailure::InvalidRequest { .. })
             ));
         }
+    }
+
+    #[test]
+    fn firewall_snapshot_rejects_duplicate_ipv4s_before_nft() {
+        let first = VmPolicySpec {
+            vm_id: Uuid::from_u128(1),
+            ipv4: "172.30.0.40".parse().unwrap(),
+            mac: "02:fc:00:00:00:01".parse().unwrap(),
+            egress_policy: "internet".to_owned(),
+            allow_host_ssh: false,
+            port_forwards: Vec::new(),
+        };
+        let second = VmPolicySpec {
+            vm_id: Uuid::from_u128(2),
+            mac: "02:fc:00:00:00:02".parse().unwrap(),
+            ..first.clone()
+        };
+
+        assert!(matches!(
+            validate_vm_policies(vec![first, second]),
+            Err(HelperFailure::InvalidRequest { detail }) if detail.contains("duplicate VM policy IPv4")
+        ));
     }
 
     #[tokio::test]

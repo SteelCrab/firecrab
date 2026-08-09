@@ -7,7 +7,7 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{VmLogResponse, VmResponse};
-use firecrab_helper_protocol::network::{DhcpLeaseEntry, MicroNetworkSpec};
+use firecrab_helper_protocol::network::{DhcpLeaseEntry, MicroNetworkSpec, VmPolicySpec};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -465,6 +465,11 @@ pub async fn update_vm_port_forwards(
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
+
+    // Keep the DB change and its live nft apply ordered with full firewall
+    // snapshots and VM setup/teardown. Otherwise a snapshot captured just
+    // before this write could arrive afterward and restore stale forwards.
+    let _network_guard = state.network_mutations.lock().await;
 
     let (record, is_active) = {
         let vms = state
@@ -1292,7 +1297,13 @@ async fn setup_vm_network_with_conflict_recovery(
     loop {
         match setup_vm_network(state, vm_id, egress_policy, micro_network_id).await {
             Ok(network) => return Ok(network),
-            Err(VmNetworkSetupError::Other(error)) => return Err(error),
+            Err(VmNetworkSetupError::Other(error)) => {
+                // The atomic firewall snapshot may already contain this
+                // Starting VM even when a later bridge/TAP/DHCP step fails.
+                // Make the failed start leave no host policy or TAP behind.
+                teardown_vm_network(state, vm_id).await;
+                return Err(error);
+            }
             Err(VmNetworkSetupError::FirewallIpConflict {
                 ipv4,
                 helper_detail,
@@ -1376,6 +1387,11 @@ async fn setup_vm_network(
     egress_policy: EgressPolicy,
     micro_network_id: Uuid,
 ) -> Result<VmNetwork, VmNetworkSetupError> {
+    // Held through reconcile + TAP + policy apply. Full snapshots and other
+    // per-VM network mutations must not interleave or an older snapshot can
+    // remove a policy installed by a concurrent start.
+    let _network_guard = state.network_mutations.lock().await;
+
     let store = state.store.clone();
     let lease = tokio::task::spawn_blocking(move || store.active_lease(vm_id))
         .await
@@ -1388,7 +1404,7 @@ async fn setup_vm_network(
     // restart), and a VM start is the one moment the network it needs has to
     // genuinely exist. Unlike the same call at daemon startup, a failure here
     // fails the start — this VM would have nowhere to attach.
-    crate::handlers::micro_networks::ensure_all_networks(state)
+    crate::handlers::micro_networks::ensure_all_networks_locked(state)
         .await
         .map_err(VmNetworkSetupError::Other)?;
 
@@ -1476,6 +1492,7 @@ fn is_firewall_ip_conflict(error: &str) -> bool {
 /// a guest-initiated poweroff or crash never goes through `stop_vm`, so it
 /// has to run from there instead.
 pub(crate) async fn teardown_vm_network(state: &AppState, vm_id: Uuid) {
+    let _network_guard = state.network_mutations.lock().await;
     if let Err(error) = state.network.remove_vm_policy(vm_id).await {
         tracing::warn!(vm_id = %vm_id, %error, "failed to remove vm firewall policy");
     }
@@ -1518,32 +1535,37 @@ pub(crate) async fn sync_dhcp_leases(state: &AppState) -> Result<(), String> {
         .map_err(|error| format!("dhcp sync failed: {error}"))
 }
 
-/// Reinstalls the per-VM policy of every VM that is currently running.
-///
-/// A global firewall (re)apply flushes the owned tables, which takes every
-/// per-VM chain and verdict-map entry with it — the helper says as much by
-/// clearing its `applied_vms`. Without this, a VM that was running when a
-/// network was created, deleted or switched on/off would keep its TAP and
-/// its address but silently lose all egress until someone restarted it.
-pub(crate) async fn reapply_running_vm_policies(state: &AppState) -> Result<(), String> {
+/// Builds the complete host-firewall policy snapshot for VMs whose network
+/// resources may currently be live. `Starting` is included because setup
+/// installs its policy before Firecracker is launched. `Stopping` is omitted
+/// so a concurrent reconcile cannot reinstall a policy after teardown has
+/// begun. The helper applies this snapshot atomically with the shared tables,
+/// so a reconcile cannot temporarily strip policy from another active VM and
+/// any policy absent here is removed as an orphan.
+pub(crate) async fn active_vm_policy_specs(state: &AppState) -> Result<Vec<VmPolicySpec>, String> {
     let store = state.store.clone();
-    let running = tokio::task::spawn_blocking(move || {
+    let active = tokio::task::spawn_blocking(move || {
         let vms = store.load_all()?;
-        let mut running = Vec::new();
-        for vm in vms.into_values().filter(|vm| vm.state == VmState::Running) {
-            // A running VM always has one; skipped rather than failed if not,
-            // since there is nothing to install for it either way.
+        let mut active = Vec::new();
+        for vm in vms
+            .into_values()
+            .filter(|vm| matches!(vm.state, VmState::Starting | VmState::Running))
+        {
+            // An active VM always has one; skipped rather than failed if not,
+            // since there is no address-keyed policy to install either way.
             if let Some(lease) = store.active_lease(vm.id).ok().flatten() {
-                running.push((vm.id, vm.egress_policy, lease));
+                active.push((vm.id, vm.egress_policy, lease));
             }
         }
-        Ok::<_, crate::persistence::PersistenceError>(running)
+        active.sort_by_key(|(vm_id, _, _)| *vm_id);
+        Ok::<_, crate::persistence::PersistenceError>(active)
     })
     .await
-    .map_err(|error| format!("running vm lookup task failed: {error}"))?
-    .map_err(|error| format!("running vm lookup failed: {error}"))?;
+    .map_err(|error| format!("active vm lookup task failed: {error}"))?
+    .map_err(|error| format!("active vm lookup failed: {error}"))?;
 
-    for (vm_id, egress_policy, lease) in running {
+    let mut policies = Vec::with_capacity(active.len());
+    for (vm_id, egress_policy, lease) in active {
         let port_forwards = state
             .store
             .list_vm_port_forwards(vm_id)
@@ -1555,20 +1577,16 @@ pub(crate) async fn reapply_running_vm_policies(state: &AppState) -> Result<(), 
                 protocol: pf.protocol.to_string(),
             })
             .collect();
-        state
-            .network
-            .apply_vm_policy(
-                vm_id,
-                lease.ipv4,
-                lease.mac,
-                egress_policy,
-                false,
-                port_forwards,
-            )
-            .await
-            .map_err(|error| format!("policy reapply failed for vm {vm_id}: {error}"))?;
+        policies.push(VmPolicySpec {
+            vm_id,
+            ipv4: lease.ipv4,
+            mac: lease.mac,
+            egress_policy: egress_policy.id().to_owned(),
+            allow_host_ssh: false,
+            port_forwards,
+        });
     }
-    Ok(())
+    Ok(policies)
 }
 
 /// The current set of MicroNetworks in the shape the privileged helper takes

@@ -297,7 +297,16 @@ async fn overlapping_network(
 /// start, after a network is created or deleted) costs nothing when things
 /// are already in place. Zero networks is a valid state (no bridges).
 pub(crate) async fn ensure_all_networks(state: &AppState) -> Result<(), String> {
+    let _network_guard = state.network_mutations.lock().await;
+    ensure_all_networks_locked(state).await
+}
+
+/// [`ensure_all_networks`] once the caller owns `network_mutations`. VM setup
+/// holds the same guard through its TAP and policy apply, preventing a stale
+/// concurrent snapshot from removing a newly installed VM policy.
+pub(crate) async fn ensure_all_networks_locked(state: &AppState) -> Result<(), String> {
     let micro_networks = crate::handlers::vms::micro_network_specs(state).await?;
+    let vm_policies = crate::handlers::vms::active_vm_policy_specs(state).await?;
 
     for network in &micro_networks {
         state
@@ -317,13 +326,9 @@ pub(crate) async fn ensure_all_networks(state: &AppState) -> Result<(), String> 
     // address, and without a NAT rule it never reaches the uplink.
     state
         .network
-        .ensure_firewall(micro_networks)
+        .ensure_firewall(micro_networks, vm_policies)
         .await
         .map_err(|error| format!("ensure_firewall failed: {error}"))?;
-    // The apply above flushes the tables when anything changed, taking every
-    // per-VM chain with it — so already-running VMs get their policy put
-    // back here rather than losing egress until someone restarts them.
-    crate::handlers::vms::reapply_running_vm_policies(state).await?;
     crate::handlers::vms::sync_dhcp_leases(state).await
 }
 
@@ -723,7 +728,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_puts_a_running_vms_policy_back_after_the_ruleset_flush() {
+    async fn reconcile_sends_active_vm_policy_in_the_atomic_firewall_snapshot() {
         let directory = tempdir().unwrap();
         let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
             .expect("empty template spec list should always verify");
@@ -731,7 +736,10 @@ mod tests {
             .await
             .expect("fresh temp db should open cleanly");
         let socket_path = directory.path().join("net-helper.sock");
-        let (_task, log) = crate::network::test_support::spawn_recording_helper(&socket_path, None);
+        let (_task, requests) = crate::network::test_support::spawn_policy_collision_helper(
+            &socket_path,
+            std::iter::empty(),
+        );
         let state =
             state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
 
@@ -744,22 +752,30 @@ mod tests {
             .store
             .allocate_lease(vm.id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)))
             .expect("seed lease");
-        log.lock().unwrap().clear();
+        requests.lock().unwrap().clear();
 
         ensure_all_networks(&state).await.expect("reconcile");
 
-        let operations = log.lock().unwrap().clone();
-        let firewall = operations
+        let requests = requests.lock().unwrap();
+        let snapshots = requests
             .iter()
-            .position(|op| *op == "ensure_firewall")
-            .expect("the global ruleset is applied");
-        let policy = operations
-            .iter()
-            .position(|op| *op == "apply_vm_policy")
-            .unwrap_or_else(|| panic!("a running VM's policy must be reinstalled: {operations:?}"));
+            .filter_map(|request| match request {
+                firecrab_helper_protocol::network::NetworkRequest::EnsureFirewall {
+                    vm_policies,
+                    ..
+                } => Some(vm_policies),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(snapshots.len(), 1, "requests: {requests:?}");
+        assert_eq!(snapshots[0].len(), 1);
+        assert_eq!(snapshots[0][0].vm_id, vm.id);
         assert!(
-            firewall < policy,
-            "the reinstall has to come after the flush, or it is flushed away again: {operations:?}"
+            !requests.iter().any(|request| matches!(
+                request,
+                firecrab_helper_protocol::network::NetworkRequest::ApplyVmPolicy { .. }
+            )),
+            "the snapshot must not require a second non-atomic apply: {requests:?}"
         );
     }
 
