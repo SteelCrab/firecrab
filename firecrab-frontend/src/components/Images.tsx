@@ -61,6 +61,30 @@ function formatRootfsSize(bytes: number | undefined | null): string {
   return `${rounded} MiB`;
 }
 
+function packageDownloadPercent(job: ImageInstallResponse): number | null {
+  const total = job.totalBytes;
+  if (!total || total <= 0) return null;
+  return Math.min(100, Math.round(((job.downloadedBytes ?? 0) / total) * 100));
+}
+
+/** Download-only progress. Terminal states use the normal status badge. */
+function PackageDownloadProgress({ job }: { job: ImageInstallResponse }) {
+  const measuredPercent = packageDownloadPercent(job);
+  const barPercent = measuredPercent ?? 35;
+  return (
+    <span
+      className={`package-progress-track${measuredPercent === null ? " indeterminate" : ""}`}
+      role="progressbar"
+      aria-label="M2Image package download"
+      aria-valuenow={measuredPercent ?? undefined}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <span className="package-progress-fill" style={{ width: `${barPercent}%` }} />
+    </span>
+  );
+}
+
 /**
  * A poll may have left the browser before the POST that starts a newer job.
  * Do not let that older `idle`/`running` response erase the state returned by
@@ -797,6 +821,11 @@ export default function Images() {
       setInstall(started);
       pollInstall(alias);
     } catch (error) {
+      if (error instanceof ApiClientError && error.apiError?.code === "already_installed") {
+        await Promise.all([refreshList(), refreshRegistry()]);
+        setInstall(null);
+        return;
+      }
       setActionError((error as Error).message);
     } finally {
       setBusyAlias(null);
@@ -981,8 +1010,13 @@ export default function Images() {
                   const downloading = packageJob?.status === "running";
                   const downloadFailed = packageJob?.status === "failed";
                   const actionBusy = busyAlias === entry.alias || installing || downloading;
+                  const downloadPercent = packageJob ? packageDownloadPercent(packageJob) : null;
                   const statusLabel = entry.installed
                     ? t("Installed", "설치됨")
+                    : downloading
+                      ? downloadPercent === null
+                        ? t("Downloading…", "다운로드 중…")
+                        : `${t("Downloading", "다운로드 중")} ${downloadPercent}%`
                     : downloadFailed
                       ? t("Download failed", "다운로드 실패")
                     : entry.packageStaged || packageJob?.status === "succeeded"
@@ -1013,7 +1047,10 @@ export default function Images() {
                       <td className="mono">{entry.version}</td>
                       <td className="mono">{entry.minDiskGb} GiB</td>
                       <td className="microregistry-status">
-                        <span className={`state-badge${entry.installed ? " running" : ""}`}>{statusLabel}</span>
+                        <span className={`state-badge${entry.installed ? " running" : downloading ? " starting" : downloadFailed ? " error" : ""}`}>
+                          {statusLabel}
+                        </span>
+                        {downloading && packageJob && <PackageDownloadProgress job={packageJob} />}
                       </td>
                       <td className="actions">
                         <button
