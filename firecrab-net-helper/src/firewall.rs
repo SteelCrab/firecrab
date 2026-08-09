@@ -112,11 +112,14 @@ struct FirewallState {
     /// uplink change and a MicroNetwork being added/removed re-apply, without
     /// this state needing to mirror every input that goes into rendering.
     applied_ruleset: Option<String>,
-    /// vm_id -> complete policy of every VM whose policy is currently
-    /// installed. Keeping the full value lets an identical re-apply be a
-    /// true no-op, while a changed lease or egress setting can be replaced
-    /// atomically.
-    applied_vms: std::collections::HashMap<Uuid, VmPolicy>,
+    /// vm_id -> (uplink, complete policy) of every VM whose policy is
+    /// currently installed. Keeping the full value lets an identical
+    /// re-apply be a true no-op, while a changed lease, egress setting, or
+    /// uplink can be replaced atomically. The uplink has to be part of this
+    /// key too: `render_vm_policy` bakes it into the DNAT rules' `iifname`
+    /// match, so an uplink change with an otherwise-identical `VmPolicy`
+    /// still needs a real reapply, not a no-op.
+    applied_vms: std::collections::HashMap<Uuid, (String, VmPolicy)>,
 }
 
 impl FirewallActor {
@@ -179,10 +182,11 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
     let previous = state.applied_vms.get(&policy.vm_id).cloned();
 
     // `ensure_all_networks` defensively reapplies policies for running VMs.
-    // An identical request needs no host mutation. Keeping this decision
-    // inside the helper's single-writer lock also prevents two simultaneous
-    // API requests from doing redundant nft work.
-    if previous.as_ref() == Some(&policy) {
+    // An identical request (same policy *and* same uplink — see the comment
+    // on `applied_vms`) needs no host mutation. Keeping this decision inside
+    // the helper's single-writer lock also prevents two simultaneous API
+    // requests from doing redundant nft work.
+    if previous.as_ref() == Some(&(uplink.clone(), policy.clone())) {
         return Ok(());
     }
 
@@ -191,11 +195,11 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
     // objects and build the new ones in one nft transaction so other VMs are
     // never affected and there is no unprotected intermediate state.
     let ruleset = match previous {
-        Some(previous) => render_vm_policy_replacement(&uplink, &previous, &policy),
+        Some((_, previous)) => render_vm_policy_replacement(&uplink, &previous, &policy),
         None => render_vm_policy(&uplink, &policy),
     };
     run_nft(&ruleset).await?;
-    state.applied_vms.insert(policy.vm_id, policy);
+    state.applied_vms.insert(policy.vm_id, (uplink, policy));
     Ok(())
 }
 
@@ -203,7 +207,7 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
 /// no-op. VM stop/delete calls this; it never touches the shared tables.
 pub async fn remove_vm_policy(actor: &FirewallActor, vm_id: Uuid) -> Result<(), FirewallError> {
     let mut state = actor.state.lock().await;
-    let Some(policy) = state.applied_vms.get(&vm_id).cloned() else {
+    let Some((_, policy)) = state.applied_vms.get(&vm_id).cloned() else {
         return Ok(());
     };
     run_nft(&render_vm_policy_removal(vm_id, policy.ipv4)).await?;
@@ -396,6 +400,7 @@ fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
 
     let mut dnat_prerouting_rules = String::new();
     let mut dnat_output_rules = String::new();
+    let mut dnat_forward_accept_rules = String::new();
     for pf in &policy.port_forwards {
         let proto = if pf.protocol.eq_ignore_ascii_case("udp") {
             "udp"
@@ -407,9 +412,24 @@ fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
         dnat_prerouting_rules.push_str(&format!(
             "add rule inet {TABLE_INET} vm_{tag}_dnat iifname \"{uplink}\" {proto} dport {hp} dnat ip to {ip}:{gp}\n"
         ));
+        // `fib daddr type local` restricts this to packets the host itself
+        // originated *to one of its own addresses* (127.0.0.1, its LAN/uplink
+        // IP, ...). Without it, this output-hook rule matches every locally
+        // generated packet on this port, including the host's own outbound
+        // connections to unrelated remote hosts on the same port — hijacking
+        // them to this VM instead of letting them leave normally.
         dnat_output_rules.push_str(&format!(
-            "add rule inet {TABLE_INET} vm_{tag}_dnat_out {proto} dport {hp} dnat ip to {ip}:{gp}\n"
+            "add rule inet {TABLE_INET} vm_{tag}_dnat_out fib daddr type local {proto} dport {hp} dnat ip to {ip}:{gp}\n"
         ));
+        // The prerouting DNAT above only rewrites the destination; it does
+        // not itself authorize forwarding. Without an explicit accept here,
+        // an externally-initiated forwarded connection's first (NEW, not yet
+        // established) packet falls through to firecrab_ingress's trailing
+        // drop, so external port forwarding would never actually work.
+        // `ct status dnat` keeps this scoped to traffic the rules above
+        // actually redirected, not just anything hitting the guest port.
+        dnat_forward_accept_rules
+            .push_str(&format!("{in_} {proto} dport {gp} ct status dnat accept\n"));
     }
 
     format!(
@@ -431,6 +451,7 @@ fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
          add chain inet {TABLE_INET} vm_{tag}_in\n\
          flush chain inet {TABLE_INET} vm_{tag}_in\n\
          {ingress_rule}\
+         {dnat_forward_accept_rules}\
          add element inet {TABLE_INET} vm_ingress {{ {ip} : jump vm_{tag}_in }}\n\
          add chain inet {TABLE_INET} vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}\n\
          flush chain inet {TABLE_INET} vm_{tag}_dnat\n\
@@ -872,14 +893,42 @@ mod tests {
             "add rule inet firecrab vm_{tag}_dnat iifname \"eth0\" tcp dport 8080 dnat ip to 172.30.0.42:80"
         )));
         assert!(ruleset.contains(&format!(
-            "add rule inet firecrab vm_{tag}_dnat_out tcp dport 8080 dnat ip to 172.30.0.42:80"
+            "add rule inet firecrab vm_{tag}_dnat_out fib daddr type local tcp dport 8080 dnat ip to 172.30.0.42:80"
         )));
         assert!(ruleset.contains(&format!(
             "add rule inet firecrab vm_{tag}_dnat iifname \"eth0\" udp dport 5353 dnat ip to 172.30.0.42:53"
         )));
         assert!(ruleset.contains(&format!(
-            "add rule inet firecrab vm_{tag}_dnat_out udp dport 5353 dnat ip to 172.30.0.42:53"
+            "add rule inet firecrab vm_{tag}_dnat_out fib daddr type local udp dport 5353 dnat ip to 172.30.0.42:53"
         )));
+        // Forwarded traffic is only useful once it's actually allowed through
+        // the per-VM ingress chain; without this, external clients hitting
+        // the forwarded port would be dropped by firecrab_ingress.
+        assert!(ruleset.contains(&format!(
+            "add rule inet firecrab vm_{tag}_in tcp dport 80 ct status dnat accept"
+        )));
+        assert!(ruleset.contains(&format!(
+            "add rule inet firecrab vm_{tag}_in udp dport 53 ct status dnat accept"
+        )));
+    }
+
+    #[test]
+    fn dnat_output_rule_only_matches_the_hosts_own_addresses() {
+        // Without `fib daddr type local`, this output-hook rule would
+        // redirect *every* locally generated packet on the host port,
+        // including the host's own unrelated outbound connections to a
+        // remote host that happens to use the same destination port.
+        let mut policy = sample_policy(EgressPolicy::Internet, false);
+        policy.port_forwards = vec![firecrab_helper_protocol::network::PortForwardSpec {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: "tcp".to_owned(),
+        }];
+        let ruleset = render_vm_policy("eth0", &policy);
+        assert!(
+            ruleset.contains("vm_")
+                && ruleset.contains("_dnat_out fib daddr type local tcp dport 8080")
+        );
     }
 
     #[test]
@@ -1001,6 +1050,10 @@ mod tests {
 
     #[tokio::test]
     async fn applying_an_identical_vm_policy_skips_nft_entirely() {
+        let (connection, handle, _) = new_connection().unwrap();
+        tokio::spawn(connection);
+        let real_uplink = nat::detect_uplink(&handle).await.unwrap();
+
         let actor = FirewallActor::new();
         let policy = sample_policy(EgressPolicy::Internet, false);
         actor
@@ -1008,7 +1061,7 @@ mod tests {
             .lock()
             .await
             .applied_vms
-            .insert(policy.vm_id, policy.clone());
+            .insert(policy.vm_id, (real_uplink.clone(), policy.clone()));
 
         // If the identical request spawned nft, this unprivileged unit test
         // would fail on a host without NET_ADMIN. Returning Ok proves an
@@ -1016,7 +1069,33 @@ mod tests {
         assert!(apply_vm_policy(&actor, policy.clone()).await.is_ok());
         assert_eq!(
             actor.state.lock().await.applied_vms.get(&policy.vm_id),
-            Some(&policy)
+            Some(&(real_uplink, policy))
+        );
+    }
+
+    #[tokio::test]
+    async fn applying_the_same_policy_under_a_different_uplink_is_not_a_no_op() {
+        // `render_vm_policy` bakes the uplink into the DNAT rules' `iifname`
+        // match, so a changed uplink with an otherwise byte-identical
+        // `VmPolicy` must still be treated as a real change, not skipped.
+        let actor = FirewallActor::new();
+        let policy = sample_policy(EgressPolicy::Internet, false);
+        actor.state.lock().await.applied_vms.insert(
+            policy.vm_id,
+            (
+                "stale-uplink-that-is-not-the-real-one".to_owned(),
+                policy.clone(),
+            ),
+        );
+
+        // Reaching real `nft`/rtnetlink here (rather than short-circuiting)
+        // is exactly what this test wants to prove happens; on a host
+        // without NET_ADMIN this call fails for privilege reasons, not
+        // because the no-op check wrongly skipped it.
+        let result = apply_vm_policy(&actor, policy).await;
+        assert!(
+            !matches!(result, Ok(())),
+            "expected a real nft attempt, not a skipped no-op"
         );
     }
 
