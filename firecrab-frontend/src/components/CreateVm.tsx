@@ -19,6 +19,7 @@ import type {
   StorageRootResponse,
   VmResponse,
 } from "../bindings";
+import { isValidPort } from "../lib/portForward";
 import RamStepper from "./RamStepper";
 import ShellCheckboxList from "./ShellCheckboxList";
 import { useI18n } from "../i18n";
@@ -87,6 +88,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [formEpoch, setFormEpoch] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
+  const [portForwardsError, setPortForwardsError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -195,7 +197,23 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     event.preventDefault();
     if (!canSubmit) return;
 
-    const validPortForwards = portForwards.filter((pf) => pf.hostPort > 0 && pf.guestPort > 0);
+    // Incomplete rows must block submission, not be silently dropped — a
+    // dropped row would leave the user believing a rule was created when it
+    // never left the browser. The row itself stays in the editor so they
+    // can fix or explicitly remove it.
+    const incompleteIndex = portForwards.findIndex(
+      (pf) => !isValidPort(pf.hostPort) || !isValidPort(pf.guestPort),
+    );
+    if (incompleteIndex !== -1) {
+      setPortForwardsError(
+        t(
+          "Every port forward needs a host and guest port (1-65535).",
+          "모든 포트 포워딩 규칙에는 호스트/게스트 포트(1-65535)가 필요합니다.",
+        ),
+      );
+      return;
+    }
+    setPortForwardsError(null);
 
     const request: CreateVmRequest = {
       name: name.trim(),
@@ -207,7 +225,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       microNetworkId: microNetworkId,
       storageRoot: storageRoot || null,
       shellIds: shellIds.length > 0 ? shellIds : undefined,
-      portForwards: validPortForwards.length > 0 ? validPortForwards : undefined,
+      portForwards: portForwards.length > 0 ? portForwards : undefined,
     };
 
     setSubmitting(true);
@@ -218,6 +236,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       setName("");
       setShellIds([]);
       setPortForwards([]);
+      setPortForwardsError(null);
       setFieldErrors(null);
       setFormEpoch((epoch) => epoch + 1);
       listShells()
@@ -416,7 +435,10 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                   placeholder="80"
                   value={pf.guestPort || ""}
                   onChange={(e) => updatePortForward(idx, "guestPort", Number(e.target.value))}
-                  style={{ width: "130px" }}
+                  style={{
+                    width: "130px",
+                    borderColor: isValidPort(pf.guestPort) ? undefined : "var(--danger, #e5484d)",
+                  }}
                 />
               </div>
               <span style={{ fontSize: "1rem", color: "var(--muted, #888)", paddingBottom: "0.4rem" }}>➔</span>
@@ -429,7 +451,10 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                   placeholder="8080"
                   value={pf.hostPort || ""}
                   onChange={(e) => updatePortForward(idx, "hostPort", Number(e.target.value))}
-                  style={{ width: "130px" }}
+                  style={{
+                    width: "130px",
+                    borderColor: isValidPort(pf.hostPort) ? undefined : "var(--danger, #e5484d)",
+                  }}
                 />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
@@ -464,6 +489,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
             + {t("Add Port Forward Rule", "포트 포워딩 규칙 추가")}
           </button>
         </div>
+        {portForwardsError && <span className="field-error">{portForwardsError}</span>}
         {fieldError("portForwards")}
       </div>
       <div className="field field-submit">

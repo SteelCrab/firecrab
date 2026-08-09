@@ -5,6 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import type { PortForward, PortProtocol, VmResponse } from "../bindings";
 import { getVm, getVmLog, updateVmPortForwards } from "../api/client";
 import { formatVmExportBundle, serializeXtermBuffer } from "../lib/formatVmLog";
+import { isValidPort } from "../lib/portForward";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import UsageCharts from "./UsageCharts";
@@ -166,11 +167,24 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
 
   const savePortForwards = async () => {
     if (!vm) return;
+    // Incomplete rows must block the save, not be silently dropped — the
+    // row stays in the editor so the user can fix or explicitly remove it.
+    const incompleteIndex = pfDraft.findIndex(
+      (pf) => !isValidPort(pf.hostPort) || !isValidPort(pf.guestPort),
+    );
+    if (incompleteIndex !== -1) {
+      setPfError(
+        t(
+          "Every port forward needs a host and guest port (1-65535).",
+          "모든 포트 포워딩 규칙에는 호스트/게스트 포트(1-65535)가 필요합니다.",
+        ),
+      );
+      return;
+    }
     setPfSaving(true);
     setPfError(null);
     try {
-      const valid = pfDraft.filter((pf) => pf.hostPort > 0 && pf.guestPort > 0);
-      const updatedVm = await updateVmPortForwards(vm.id, { portForwards: valid });
+      const updatedVm = await updateVmPortForwards(vm.id, { portForwards: pfDraft });
       setVm(updatedVm);
       setEditingPortForwards(false);
     } catch (err: any) {
@@ -736,7 +750,10 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                             placeholder="80"
                             value={pf.guestPort || ""}
                             onChange={(e) => updateDraftPf(idx, "guestPort", Number(e.target.value))}
-                            style={{ width: "110px" }}
+                            style={{
+                              width: "110px",
+                              borderColor: isValidPort(pf.guestPort) ? undefined : "var(--danger, #e5484d)",
+                            }}
                           />
                         </div>
                         <span style={{ color: "var(--muted, #888)", paddingBottom: "0.4rem", fontSize: "0.9rem" }}>➔</span>
@@ -749,7 +766,10 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                             placeholder="8080"
                             value={pf.hostPort || ""}
                             onChange={(e) => updateDraftPf(idx, "hostPort", Number(e.target.value))}
-                            style={{ width: "110px" }}
+                            style={{
+                              width: "110px",
+                              borderColor: isValidPort(pf.hostPort) ? undefined : "var(--danger, #e5484d)",
+                            }}
                           />
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem" }}>

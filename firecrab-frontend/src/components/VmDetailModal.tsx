@@ -23,6 +23,7 @@ import {
   updateVmShells,
 } from "../api/client";
 import { isEditableState } from "../model";
+import { isValidPort } from "../lib/portForward";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
@@ -136,6 +137,22 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
 
   const handleSave = async () => {
     if (!vm) return;
+    // Incomplete rows must block the save, not be silently dropped — the
+    // row stays in the editor so the user can fix or explicitly remove it.
+    const incompleteIndex = editPortForwards.findIndex(
+      (pf) => !isValidPort(pf.hostPort) || !isValidPort(pf.guestPort),
+    );
+    if (incompleteIndex !== -1) {
+      setSaveError(
+        ApiClientError.api(400, {
+          code: "validation",
+          message: "Every port forward needs a host and guest port (1-65535).",
+          fields: { portForwards: "host and guest port must be 1-65535" },
+          requestId: "",
+        }),
+      );
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -154,9 +171,8 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
       // (empty list clears pins). Applies on the next start.
       updated = await updateVmShells(vm.id, { shellIds: editShellIds });
 
-      // Update port forwards
-      const validPortForwards = editPortForwards.filter((pf) => pf.hostPort > 0 && pf.guestPort > 0);
-      updated = await updateVmPortForwards(vm.id, { portForwards: validPortForwards });
+      // Update port forwards (already validated above — every row is complete).
+      updated = await updateVmPortForwards(vm.id, { portForwards: editPortForwards });
 
       setVm(updated);
       setEditing(false);
@@ -376,7 +392,10 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                           placeholder="80"
                           value={pf.guestPort || ""}
                           onChange={(e) => updateEditPortForward(idx, "guestPort", Number(e.target.value))}
-                          style={{ width: "5rem" }}
+                          style={{
+                            width: "5rem",
+                            borderColor: isValidPort(pf.guestPort) ? undefined : "var(--danger, #e5484d)",
+                          }}
                         />
                         <span style={{ color: "var(--shell)" }}>:</span>
                         <input
@@ -385,7 +404,10 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                           placeholder="8080"
                           value={pf.hostPort || ""}
                           onChange={(e) => updateEditPortForward(idx, "hostPort", Number(e.target.value))}
-                          style={{ width: "5rem" }}
+                          style={{
+                            width: "5rem",
+                            borderColor: isValidPort(pf.hostPort) ? undefined : "var(--danger, #e5484d)",
+                          }}
                         />
                         <select
                           className="detail-edit-input"
