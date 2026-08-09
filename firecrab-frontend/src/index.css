@@ -1354,7 +1354,8 @@ table.image-table .image-package-url a:hover {
   font-family: var(--font-mono);
 }
 .console-detail-loading,
-.console-detail-error {
+.console-detail-error,
+.console-detail-empty {
   margin: 0;
   font-family: var(--font-mono);
   font-size: 0.78rem;
