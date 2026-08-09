@@ -1230,9 +1230,23 @@ async fn wait_for_network_ready(
         }
     };
 
-    tokio::time::timeout(timeout, wait)
-        .await
-        .unwrap_or_else(|_| Err("timed out waiting for network readiness".to_owned()))
+    match tokio::time::timeout(timeout, wait).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            // Tokio checks the deadline before polling the inner future. If
+            // the runtime was starved, the timeout and a queued console
+            // sentinel can therefore become ready together and the timeout
+            // wins even though the broker already recorded success. Re-read
+            // its atomic backlog snapshot before declaring failure.
+            network_timeout_result(console)
+        }
+    }
+}
+
+fn network_timeout_result(console: &crate::console::ConsoleBroker) -> Result<(), String> {
+    let (backlog, _receiver) = console.subscribe();
+    find_network_sentinel(&backlog)
+        .unwrap_or_else(|| Err("timed out waiting for network readiness".to_owned()))
 }
 
 /// Scans already-received console bytes for the sentinel line, re-run
@@ -4205,6 +4219,14 @@ while True:
         console.push_output(b"FIRECRAB_NETWORK_READY 172.30.0.5\n");
 
         assert_eq!(waiter.await.expect("waiter task panicked"), Ok(()));
+    }
+
+    #[test]
+    fn network_timeout_rechecks_the_latest_console_backlog() {
+        let console = crate::console::ConsoleBroker::new();
+        console.push_output(b"FIRECRAB_NETWORK_READY 172.30.0.5\n");
+
+        assert_eq!(network_timeout_result(&console), Ok(()));
     }
 
     #[test]
