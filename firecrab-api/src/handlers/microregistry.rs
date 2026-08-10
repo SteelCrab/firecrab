@@ -30,12 +30,34 @@ struct Catalog {
 #[serde(rename_all = "camelCase")]
 struct CatalogImage {
     alias: String,
+    architecture: CatalogArchitecture,
     #[serde(deserialize_with = "catalog_version")]
     version: String,
     package: String,
     sha256: String,
     min_disk_gb: u16,
     published_at: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+enum CatalogArchitecture {
+    #[serde(rename = "x86_64")]
+    X86_64,
+    #[serde(rename = "aarch64")]
+    Aarch64,
+}
+
+impl CatalogArchitecture {
+    fn is_host(&self) -> bool {
+        #[cfg(target_arch = "aarch64")]
+        {
+            *self == Self::Aarch64
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            *self == Self::X86_64
+        }
+    }
 }
 
 /// Accept both the first publisher's numeric version and the current string
@@ -116,6 +138,7 @@ pub async fn list_microregistry(
     let mut images = catalog
         .images
         .into_iter()
+        .filter(|image| image.architecture.is_host())
         .map(|image| {
             let package_origin = image_install::staged_package_origin(&image_root, &image.alias);
             MicroRegistryImageResponse {
@@ -148,6 +171,11 @@ mod tests {
     use tempfile::tempdir;
     use tokio::net::TcpListener;
 
+    #[cfg(target_arch = "aarch64")]
+    const OTHER_ARCHITECTURE: &str = "x86_64";
+    #[cfg(target_arch = "x86_64")]
+    const OTHER_ARCHITECTURE: &str = "aarch64";
+
     async fn empty_state(root: &std::path::Path) -> AppState {
         let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
         AppState::with_db_file(templates, root.join("state.db"))
@@ -163,6 +191,7 @@ mod tests {
                 Json(json!({
                     "images": [{
                         "alias": "ubuntu-26.04",
+                        "architecture": image_install::host_architecture(),
                         "version": 3,
                         "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
                         "sha256": "aabb",
@@ -170,9 +199,18 @@ mod tests {
                         "publishedAt": "2026-08-09T10:00:00Z"
                     }, {
                         "alias": "example-1",
+                        "architecture": image_install::host_architecture(),
                         "version": "1",
                         "package": "example/1/example-1.tar.zst",
                         "sha256": "ccdd",
+                        "minDiskGb": 1,
+                        "publishedAt": "2026-08-09T10:00:00Z"
+                    }, {
+                        "alias": "wrong-architecture",
+                        "architecture": OTHER_ARCHITECTURE,
+                        "version": "1",
+                        "package": "wrong/package.tar.zst",
+                        "sha256": "eeff",
                         "minDiskGb": 1,
                         "publishedAt": "2026-08-09T10:00:00Z"
                     }]
@@ -200,5 +238,22 @@ mod tests {
         assert!(response.images[1].downloadable);
         assert!(!response.images[1].installed);
         assert!(!response.images[1].package_staged);
+    }
+
+    #[test]
+    fn catalog_entries_require_an_explicit_architecture() {
+        let error = serde_json::from_value::<Catalog>(json!({
+            "images": [{
+                "alias": "ubuntu-26.04",
+                "version": 1,
+                "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
+                "sha256": "aabb",
+                "minDiskGb": 2,
+                "publishedAt": "2026-08-09T10:00:00Z"
+            }]
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("architecture"));
     }
 }

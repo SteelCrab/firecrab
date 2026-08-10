@@ -7,13 +7,10 @@
 #
 # Usage:
 #   ./scripts/package-m2images.sh              # alpine + ubuntu + rocky
-#   ./scripts/package-m2images.sh --alias alpine-3.24
+#   ./scripts/package-m2images.sh --alias alpine-3.24 [--arch x86_64|aarch64]
 #   IMAGE_ROOT=/var/lib/firecrab/images OUT_DIR=dist/m2images ./scripts/package-m2images.sh
 #   ZSTD_THREADS=4 ./scripts/package-m2images.sh # override the safe 2-thread default
 #
-# Publish (manual — do not run from automation without review):
-#   ./scripts/publish-m2images.sh --alias ubuntu-26.04
-
 set -euo pipefail
 
 unset CDPATH
@@ -21,14 +18,21 @@ script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 repo_dir=$(cd -- "${script_dir}/.." && pwd -P)
 
 IMAGE_ROOT=${IMAGE_ROOT:-${FIRECRAB_IMAGE_ROOT:-$repo_dir/images}}
-OUT_DIR=${OUT_DIR:-$repo_dir/dist/m2images}
+OUT_DIR=${OUT_DIR:-}
 ZSTD_LEVEL=${ZSTD_LEVEL:-19}
 ZSTD_THREADS=${ZSTD_THREADS:-2}
 ALIAS_FILTER=all
+M2IMAGE_ARCH=${M2IMAGE_ARCH:-}
 MOTD_FILE=${MOTD_FILE:-$repo_dir/assets/firecrab-motd}
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+Usage: ./scripts/package-m2images.sh [--alias <alias>] [--arch x86_64|aarch64]
+
+Packages host-native M2Image artifacts. The architecture defaults to uname -m.
+ARM64 packages default to dist/m2images/aarch64 so they cannot overwrite the
+x86_64 packages in dist/m2images.
+EOF
   exit 0
 }
 
@@ -44,6 +48,15 @@ while [ $# -gt 0 ]; do
       ALIAS_FILTER=${1#--alias=}
       shift
       ;;
+    --arch)
+      [ $# -ge 2 ] || { echo "missing value for --arch" >&2; exit 2; }
+      M2IMAGE_ARCH=$2
+      shift 2
+      ;;
+    --arch=*)
+      M2IMAGE_ARCH=${1#--arch=}
+      shift
+      ;;
     *)
       echo "unknown argument: $1" >&2
       exit 2
@@ -53,6 +66,23 @@ done
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+
+normalize_architecture() {
+  case "$1" in
+    x86_64|amd64) printf '%s\n' x86_64 ;;
+    aarch64|arm64) printf '%s\n' aarch64 ;;
+    *) fail "unsupported architecture: $1 (want x86_64 or aarch64)" ;;
+  esac
+}
+
+M2IMAGE_ARCH=$(normalize_architecture "${M2IMAGE_ARCH:-$(uname -m)}")
+if [ -z "$OUT_DIR" ]; then
+  if [ "$M2IMAGE_ARCH" = aarch64 ]; then
+    OUT_DIR=$repo_dir/dist/m2images/aarch64
+  else
+    OUT_DIR=$repo_dir/dist/m2images
+  fi
+fi
 
 for command in tar zstd sha256sum debugfs; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
@@ -69,17 +99,24 @@ esac
 artifacts_for() {
   case "$1" in
     alpine-3.24)
+      local alpine_kernel="kernel/vmlinux-alpine-virt-x86_64"
+      [ "$M2IMAGE_ARCH" = aarch64 ] && alpine_kernel="kernel/Image-alpine-virt-aarch64"
       printf '%s\n' \
-        kernel/vmlinux-alpine-virt-x86_64 \
-        kernel/initramfs-alpine-virt-x86_64 \
-        rootfs/alpine-rootfs-3.24.1-x86_64.ext4
+        "$alpine_kernel" \
+        "kernel/initramfs-alpine-virt-${M2IMAGE_ARCH}" \
+        "rootfs/alpine-rootfs-3.24.1-${M2IMAGE_ARCH}.ext4"
       ;;
     ubuntu-26.04)
+      local ubuntu_rootfs_arch=amd64
+      local ubuntu_kernel="kernel/vmlinux-ubuntu-26.04-x86_64"
+      [ "$M2IMAGE_ARCH" = aarch64 ] && ubuntu_rootfs_arch=arm64
+      [ "$M2IMAGE_ARCH" = aarch64 ] && ubuntu_kernel="kernel/Image-ubuntu-26.04-aarch64"
       printf '%s\n' \
-        kernel/vmlinux-ubuntu-26.04-x86_64 \
-        rootfs/ubuntu-rootfs-26.04-amd64.ext4
+        "$ubuntu_kernel" \
+        "rootfs/ubuntu-rootfs-26.04-${ubuntu_rootfs_arch}.ext4"
       ;;
     rocky-9)
+      [ "$M2IMAGE_ARCH" = x86_64 ] || fail 'rocky-9 packaging currently supports x86_64 only'
       printf '%s\n' \
         kernel/vmlinux-rocky-9-x86_64 \
         kernel/initramfs-rocky-9-x86_64 \
@@ -93,8 +130,15 @@ artifacts_for() {
 
 aliases_to_pack() {
   case "$ALIAS_FILTER" in
-    all) printf '%s\n' alpine-3.24 ubuntu-26.04 rocky-9 ;;
-    alpine-3.24|ubuntu-26.04|rocky-9) printf '%s\n' "$ALIAS_FILTER" ;;
+    all)
+      printf '%s\n' alpine-3.24 ubuntu-26.04
+      [ "$M2IMAGE_ARCH" = aarch64 ] || printf '%s\n' rocky-9
+      ;;
+    alpine-3.24|ubuntu-26.04) printf '%s\n' "$ALIAS_FILTER" ;;
+    rocky-9)
+      [ "$M2IMAGE_ARCH" = x86_64 ] || fail 'rocky-9 packaging currently supports x86_64 only'
+      printf '%s\n' "$ALIAS_FILTER"
+      ;;
     *) fail "unknown --alias $ALIAS_FILTER" ;;
   esac
 }
@@ -165,6 +209,3 @@ info "writing $OUT_DIR/SHA256SUMS"
 )
 
 info "done ($packed archive(s) in $OUT_DIR)"
-info "publish example:"
-info "  ./scripts/publish-m2images.sh --alias <alias>"
-info "after publishing, set FIRECRAB_IMAGE_BASE_URL=https://registry.firecrab.dev"

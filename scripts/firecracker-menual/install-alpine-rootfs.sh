@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 
 alpine_releases_base='https://dl-cdn.alpinelinux.org/alpine'
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
-kernel_image_name='vmlinux-alpine-virt-x86_64'
-initrd_image_name='initramfs-alpine-virt-x86_64'
+kernel_image_name=''
+initrd_image_name=''
 extract_vmlinux="${script_dir}/extract-vmlinux"
 build_dir="${repo_dir}/build/alpine-rootfs"
 rootfs_size='512M'
@@ -69,12 +69,31 @@ detect_alpine_arch() {
 }
 
 resolve_ssh_public_key() {
-  key_source="${HOME:-}/.ssh/id_ed25519.pub"
-
-  if [ -z "${HOME:-}" ] || [ ! -f "$key_source" ]; then
-    fail 'Host SSH public key not found: ~/.ssh/id_ed25519.pub'
+  key_source=${FIRECRAB_SSH_PUBLIC_KEY:-}
+  if [ -n "$key_source" ]; then
+    [ -s "$key_source" ] || fail "FIRECRAB_SSH_PUBLIC_KEY is not a readable public key: ${key_source}"
+    printf '%s\n' "$key_source"
+    return
   fi
 
+  if [ -n "${HOME:-}" ]; then
+    for key_source in \
+      "$HOME/.ssh/id_ed25519.pub" \
+      "$HOME/.ssh/id_ecdsa.pub" \
+      "$HOME/.ssh/id_rsa.pub"; do
+      if [ -s "$key_source" ]; then
+        printf '%s\n' "$key_source"
+        return
+      fi
+    done
+  fi
+
+  # SSH is optional: every Firecrab guest has an autologin serial console.
+  # Keep an empty bind-mount source so Docker can run the same configure path
+  # without modifying the operator's ~/.ssh directory behind their back.
+  key_source="${build_dir}/no-authorized-key.pub"
+  : >"$key_source"
+  info 'no host SSH public key found; building with serial-console access only' >&2
   printf '%s\n' "$key_source"
 }
 
@@ -240,10 +259,8 @@ test -L "${staging}/etc/runlevels/default/firecrab-network-ready" || { echo 'fir
 
 # linux-virt's boot files land under the staging root, not this container's
 # own /boot — pulled out to /kernel-out (mounted from the host) so the host
-# side can convert the compressed vmlinuz-virt to the uncompressed ELF
-# vmlinux Firecracker needs (extract-vmlinux isn't guaranteed to be usable
-# from inside this throwaway alpine:latest container, and the host already
-# has every decompressor it might need).
+# side can prepare the architecture-specific Firecracker kernel. x86_64
+# needs an uncompressed ELF vmlinux; ARM64 must retain the PE32+ Image.
 test -e "${staging}/boot/vmlinuz-virt" || { echo 'missing boot/vmlinuz-virt (linux-virt)' >&2; exit 1; }
 test -e "${staging}/boot/initramfs-virt" || { echo 'missing boot/initramfs-virt (linux-virt)' >&2; exit 1; }
 cp "${staging}/boot/vmlinuz-virt" /kernel-out/vmlinuz-virt-raw
@@ -264,12 +281,9 @@ echo "ROOTFS_IMAGE=${rootfs_image}"
 EOF
 }
 
-# Converts the raw vmlinuz-virt the container copied out to /kernel-out into
-# the uncompressed ELF vmlinux Firecracker expects (a compressed bzImage
-# fails with "Invalid Elf magic number") — run on the host, not inside the
-# throwaway alpine:latest container, since the host is already known to have
-# a usable decompressor (see extract-vmlinux's own fallback list) while a
-# fresh container might not.
+# Prepares the raw vmlinuz-virt copied out to /kernel-out. Firecracker expects
+# uncompressed ELF on x86_64, but the distro's PE32+ ARM64 Image must be kept
+# intact rather than passed through extract-vmlinux.
 extract_kernel() {
   raw_path="${kernel_artifact_dir}/vmlinuz-virt-raw"
   if [ ! -s "$raw_path" ]; then
@@ -278,14 +292,23 @@ extract_kernel() {
 
   kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
   kernel_image_tmp="${kernel_image_path}.tmp"
-  info "extracting ELF vmlinux from: ${raw_path}"
-  if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
-    rm -f "$kernel_image_tmp"
-    fail "extract-vmlinux could not extract an ELF vmlinux from ${raw_path}"
-  fi
-  if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
-    rm -f "$kernel_image_tmp"
-    fail "extracted kernel is not an ELF image: ${raw_path}"
+  if [ "$alpine_arch" = aarch64 ]; then
+    info "preserving ARM64 PE kernel Image from: ${raw_path}"
+    cp "$raw_path" "$kernel_image_tmp"
+    if ! file "$kernel_image_tmp" | grep -Eq 'PE32.*ARM64'; then
+      rm -f "$kernel_image_tmp"
+      fail "ARM64 kernel is not a PE32+ Image: ${raw_path}"
+    fi
+  else
+    info "extracting ELF vmlinux from: ${raw_path}"
+    if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
+      rm -f "$kernel_image_tmp"
+      fail "extract-vmlinux could not extract an ELF vmlinux from ${raw_path}"
+    fi
+    if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
+      rm -f "$kernel_image_tmp"
+      fail "extracted kernel is not an ELF image: ${raw_path}"
+    fi
   fi
   chmod 0644 "$kernel_image_tmp"
   mv "$kernel_image_tmp" "$kernel_image_path"
@@ -306,6 +329,7 @@ main() {
   fi
 
   require_command awk
+  require_command cp
   require_command curl
   require_command file
   require_command grep
@@ -321,6 +345,12 @@ main() {
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
   alpine_arch=$(detect_alpine_arch)
+  if [ "$alpine_arch" = aarch64 ]; then
+    kernel_image_name='Image-alpine-virt-aarch64'
+  else
+    kernel_image_name='vmlinux-alpine-virt-x86_64'
+  fi
+  initrd_image_name="initramfs-alpine-virt-${alpine_arch}"
   ssh_public_key=$(resolve_ssh_public_key)
 
   info "Alpine architecture: ${alpine_arch}"

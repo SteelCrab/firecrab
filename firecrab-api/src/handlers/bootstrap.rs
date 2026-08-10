@@ -109,6 +109,14 @@ pub async fn start_bootstrap(
     if !BOOTSTRAPPABLE_ALIASES.contains(&alias.as_str()) {
         return Err(AppError::not_found(request_id.0));
     }
+    if crate::templates::TemplateRegistry::known_spec(&alias).is_none() {
+        return Err(AppError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unsupported_architecture",
+            "this image is not available on the host architecture",
+            request_id.0,
+        ));
+    }
 
     // Cheap fast path so the overwhelmingly common "one already running"
     // rejection costs nothing — the *authoritative* single-session gate is
@@ -690,28 +698,10 @@ fn build_package_blocking(
 
     let kernel_dest = scratch.join(&spec.kernel); // e.g. "kernel/vmlinux-ubuntu-26.04-x86_64"
     std::fs::create_dir_all(kernel_dest.parent().unwrap()).ok();
-    // Compile-time repo-relative path, not `std::env::current_dir()`-based:
-    // the deployed `firecrab-api.service` unit pins `WorkingDirectory` to
-    // `@DATADIR@` (see `packaging/systemd/firecrab-api.service`), which has
-    let extract_vmlinux = crate::microboot::resolve_extract_vmlinux();
-    let output = std::process::Command::new(&extract_vmlinux)
-        .arg(&raw_kernel)
-        .output()
-        .map_err(|e| format!("run extract-vmlinux ({}): {e}", extract_vmlinux.display()))?;
-    // `extract-vmlinux`'s own exit code doesn't reliably reflect whether it
-    // actually found a vmlinux (verified directly: on a raw kernel it can't
-    // recognize, it prints "Cannot find vmlinux." to stderr but still exits
-    // 0 with empty stdout, since its final `echo` becomes the script's last
-    // command) — the same caveat `rootfs.rs` already documents for
-    // `debugfs`, so success is confirmed positively here too: a real
-    // extraction always produces a non-empty stdout.
-    if !output.status.success() || output.stdout.is_empty() {
-        return Err(format!(
-            "extract-vmlinux failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    std::fs::write(&kernel_dest, &output.stdout).map_err(|e| format!("write kernel: {e}"))?;
+    // x86_64 needs an extracted ELF vmlinux. ARM64 needs the guest's PE
+    // Image preserved byte-for-byte; feeding it to extract-vmlinux would
+    // create a kernel format Firecracker cannot load on ARM.
+    crate::microboot::prepare_kernel_image(&raw_kernel, &kernel_dest)?;
 
     if let Some(initrd_relative) = &spec.initrd {
         let raw_initrd = scratch.join("initramfs.raw");
@@ -829,6 +819,24 @@ mod tests {
     use crate::handlers::vms::test_support::test_state;
     use firecrab_api_types::{BootstrapStep, BootstrapStepOutcome};
 
+    #[cfg(target_arch = "aarch64")]
+    const TEST_ARCHITECTURE: &str = "aarch64";
+    #[cfg(target_arch = "aarch64")]
+    const TEST_UBUNTU_ROOTFS_ARCHITECTURE: &str = "arm64";
+    #[cfg(target_arch = "aarch64")]
+    const TEST_UBUNTU_KERNEL: &str = "kernel/Image-ubuntu-26.04-aarch64";
+    #[cfg(target_arch = "aarch64")]
+    const TEST_ALPINE_KERNEL: &str = "kernel/Image-alpine-virt-aarch64";
+
+    #[cfg(target_arch = "x86_64")]
+    const TEST_ARCHITECTURE: &str = "x86_64";
+    #[cfg(target_arch = "x86_64")]
+    const TEST_UBUNTU_ROOTFS_ARCHITECTURE: &str = "amd64";
+    #[cfg(target_arch = "x86_64")]
+    const TEST_UBUNTU_KERNEL: &str = "kernel/vmlinux-ubuntu-26.04-x86_64";
+    #[cfg(target_arch = "x86_64")]
+    const TEST_ALPINE_KERNEL: &str = "kernel/vmlinux-alpine-virt-x86_64";
+
     /// Registers a fake console+process for `id`, the same way
     /// `handlers::console_sentinel`'s own tests do —
     /// `run_bootstrap_script` requires a live `VmProcess` to write the
@@ -880,6 +888,16 @@ mod tests {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x38, 0x00, 0x03, 0x00, 0x40, 0x00,
         0x2f, 0x00, 0x2e, 0x00,
     ];
+
+    #[cfg(target_arch = "aarch64")]
+    fn fake_kernel_header() -> &'static [u8] {
+        b"MZ\0\0fake ARM64 PE Image"
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn fake_kernel_header() -> &'static [u8] {
+        FAKE_ELF64_HEADER
+    }
 
     /// Seeds a builder VM record in `vm_state`.
     ///
@@ -973,7 +991,7 @@ mod tests {
             &vm,
             &[
                 ("rootfs.ext4", b"fake ext4 rootfs bytes"),
-                ("vmlinuz-raw", FAKE_ELF64_HEADER),
+                ("vmlinuz-raw", fake_kernel_header()),
             ],
         );
 
@@ -1035,8 +1053,10 @@ mod tests {
             .unwrap();
         assert!(listing.status.success());
         let members = String::from_utf8_lossy(&listing.stdout);
-        assert!(members.contains("kernel/vmlinux-ubuntu-26.04-x86_64"));
-        assert!(members.contains("rootfs/ubuntu-rootfs-26.04-amd64.ext4"));
+        assert!(members.contains(TEST_UBUNTU_KERNEL));
+        assert!(members.contains(&format!(
+            "rootfs/ubuntu-rootfs-26.04-{TEST_UBUNTU_ROOTFS_ARCHITECTURE}.ext4"
+        )));
         // The builder VM is gone: a successful bootstrap must not leave a
         // Firecracker process, TAP, IP lease and multi-GB disk behind —
         // `VmPurpose::Builder` hides it from `list_vms`, so nothing in the
@@ -1067,7 +1087,7 @@ mod tests {
             &vm,
             &[
                 ("rootfs.ext4", b"fake ext4 rootfs bytes"),
-                ("vmlinuz-raw", FAKE_ELF64_HEADER),
+                ("vmlinuz-raw", fake_kernel_header()),
             ],
         );
 
@@ -1175,7 +1195,7 @@ mod tests {
             &vm,
             &[
                 ("rootfs.ext4", b"fake alpine rootfs bytes"),
-                ("vmlinuz-virt-raw", FAKE_ELF64_HEADER),
+                ("vmlinuz-virt-raw", fake_kernel_header()),
                 ("initramfs", b"fake initramfs bytes"),
             ],
         );
@@ -1209,9 +1229,11 @@ mod tests {
             .unwrap();
         assert!(listing.status.success());
         let members = String::from_utf8_lossy(&listing.stdout);
-        assert!(members.contains("kernel/vmlinux-alpine-virt-x86_64"));
-        assert!(members.contains("kernel/initramfs-alpine-virt-x86_64"));
-        assert!(members.contains("rootfs/alpine-rootfs-3.24.1-x86_64.ext4"));
+        assert!(members.contains(TEST_ALPINE_KERNEL));
+        assert!(members.contains(&format!("kernel/initramfs-alpine-virt-{TEST_ARCHITECTURE}")));
+        assert!(members.contains(&format!(
+            "rootfs/alpine-rootfs-3.24.1-{TEST_ARCHITECTURE}.ext4"
+        )));
     }
 
     #[tokio::test]

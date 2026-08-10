@@ -113,7 +113,9 @@ sudo nft list table inet firecrab
 
 ## Image download returns `503`
 
-Set `FIRECRAB_IMAGE_BASE_URL` and restart the API.
+The API uses the public MicroRegistry when `FIRECRAB_IMAGE_BASE_URL` is
+unset. If the variable is empty or set to `none`/`-`, set it to a package
+base URL (or unset it) and restart the API.
 The package URL must be `<base>/<alias>.tar.zst`.
 
 ## Image install has a permission error

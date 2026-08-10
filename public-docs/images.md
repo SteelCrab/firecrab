@@ -4,10 +4,14 @@ An M2Image contains a kernel and root filesystem.
 It is the source template for new VM disks.
 
 Supported aliases are `alpine-3.24`, `ubuntu-26.04`, and `rocky-9`.
+Alpine and Ubuntu support x86_64 and ARM64.
+Rocky Linux 9 is currently x86_64-only.
+ARM64 packages keep the distro PE32+ `Image`; x86_64 packages use an ELF
+`vmlinux`. Firecracker cannot boot an x86_64 kernel on an ARM64 host.
 
 ## Build
 
-Build all supported images on an x86_64 Linux host.
+Build all images supported by the current Linux host architecture.
 
 ```sh
 ./scripts/build-m2images.sh
@@ -33,24 +37,18 @@ dist/m2images/
   ubuntu-26.04.tar.zst
   rocky-9.tar.zst
   SHA256SUMS
+  aarch64/
+    alpine-3.24.tar.zst
+    ubuntu-26.04.tar.zst
+    SHA256SUMS
 ```
 
-Verify packages before publishing them.
+Verify packages after building them.
 
 ```sh
 sha256sum -c dist/m2images/SHA256SUMS
 tar --list --zstd --file dist/m2images/alpine-3.24.tar.zst
 ```
-
-## Publish
-
-Serve packages at `<base-url>/<alias>.tar.zst`.
-Set `FIRECRAB_IMAGE_BASE_URL` on the API.
-
-The API downloads and validates a package first.
-It installs the staged package in a separate step.
-
-Deleting an installed image does not delete its staged package.
 
 ## Bootstrap
 
@@ -69,6 +67,16 @@ Rocky bootstrap needs an installed Rocky builder image.
 
 Only installed images appear in the VM create form.
 Image files live below `FIRECRAB_IMAGE_ROOT`.
+
+By default the API uses the public MicroRegistry.
+Set `FIRECRAB_IMAGE_BASE_URL` to use another package source, or set it to
+`none` to disable remote installs.
+
+MicroRegistry selects packages matching the host architecture.
+Every catalog entry must declare either `x86_64` or `aarch64` explicitly.
+
+The API downloads and validates a package before installing it.
+Deleting an installed image does not delete its staged package.
 
 The API validates paths and artifacts before use.
 Restart the API after replacing files outside the API workflow.

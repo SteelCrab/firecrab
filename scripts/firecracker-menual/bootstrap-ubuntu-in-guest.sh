@@ -42,6 +42,7 @@ mkdir -p "$mount_dir" "$out"
 arch=amd64
 case "$(uname -m)" in
   x86_64) arch=amd64 ;;
+  aarch64) arch=arm64 ;;
   *) fail "unsupported architecture: $(uname -m)" ;;
 esac
 
@@ -249,7 +250,7 @@ mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 # dump (`rootfs::dump_from_image`) can read them back at their root (e.g.
 # /rootfs.ext4, not /root/fc-bootstrap/out/rootfs.ext4) after this VM is
 # stopped.
-info 'publishing $out onto /dev/vda'
+info "publishing $out onto /dev/vda"
 mkfs.ext4 -F -L fcbootout -d "$out" /dev/vda
 
 # Everything on /dev/vda is read back by the host

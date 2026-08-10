@@ -2,15 +2,15 @@
 
 set -euo pipefail
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 script_path="${script_dir}/$(basename -- "$0")"
 
 ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
 ubuntu_series_setting='latest'
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
-kernel_image_name='vmlinux-ubuntu-26.04-x86_64'
+kernel_image_name=''
 extract_vmlinux="${script_dir}/extract-vmlinux"
 build_dir="${repo_dir}/build/ubuntu-rootfs"
 rootfs_image=''
@@ -105,15 +105,27 @@ write_root_file() {
 
 install_authorized_ssh_key() {
   local key_source=''
+  local key_home=''
 
   if [ -n "${SUDO_USER:-}" ] && [ -n "${SUDO_UID:-}" ]; then
-    key_source=$(getent passwd "$SUDO_UID" | cut -d: -f6)/.ssh/id_ed25519.pub
+    key_home=$(getent passwd "$SUDO_UID" | cut -d: -f6)
   elif [ -n "${HOME:-}" ]; then
-    key_source="${HOME}/.ssh/id_ed25519.pub"
+    key_home=$HOME
   fi
 
-  if [ -z "$key_source" ] || [ ! -f "$key_source" ]; then
-    fail 'Host SSH public key not found: ~/.ssh/id_ed25519.pub'
+  if [ -n "$key_home" ]; then
+    for key_source in \
+      "$key_home/.ssh/id_ed25519.pub" \
+      "$key_home/.ssh/id_ecdsa.pub" \
+      "$key_home/.ssh/id_rsa.pub"; do
+      [ -s "$key_source" ] && break
+      key_source=''
+    done
+  fi
+
+  if [ -z "$key_source" ]; then
+    info 'no host SSH public key found; building with serial-console access only'
+    return
   fi
 
   install -d -m 0700 "${mount_dir}/root/.ssh"
@@ -500,34 +512,42 @@ install_rootfs_packages() {
   info "installing rootfs packages: ${rootfs_packages}"
   mount_chroot_fs
   chroot "$mount_dir" env DEBIAN_FRONTEND=noninteractive apt-get update
+  # shellcheck disable=SC2086
   chroot "$mount_dir" env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $rootfs_packages
   chroot "$mount_dir" apt-get clean
   rm -rf "${mount_dir}/var/lib/apt/lists/"*
   cleanup_chroot_mounts
 }
 
-# Pulls the vmlinuz linux-image-generic just installed out of the rootfs
-# build and converts it to the uncompressed ELF vmlinux Firecracker expects
-# (a compressed bzImage fails with "Invalid Elf magic number") — mirrors
-# what install-linux-kernel.sh's from-source build got for free via
-# `make vmlinux`, since a packaged kernel only ships the compressed form.
+# Pulls the distro kernel out of the rootfs. x86_64 is converted to the
+# uncompressed ELF vmlinux Firecracker expects. ARM64 keeps the packaged
+# PE32+ Image unchanged, which is the only kernel format Firecracker accepts
+# on that architecture.
 extract_kernel() {
   vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -n 1)
   if [ -z "$vmlinuz_path" ]; then
     fail "linux-image-generic did not install a vmlinuz under ${mount_dir}/boot"
   fi
-  info "extracting ELF vmlinux from: ${vmlinuz_path}"
-
   mkdir -p "$kernel_artifact_dir"
   kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
   kernel_image_tmp="${kernel_image_path}.tmp"
-  if ! "$extract_vmlinux" "$vmlinuz_path" >"$kernel_image_tmp"; then
-    rm -f "$kernel_image_tmp"
-    fail "extract-vmlinux could not extract an ELF vmlinux from ${vmlinuz_path}"
-  fi
-  if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
-    rm -f "$kernel_image_tmp"
-    fail "extracted kernel is not an ELF image: ${vmlinuz_path}"
+  if [ "$ubuntu_arch" = arm64 ]; then
+    info "preserving ARM64 PE kernel Image from: ${vmlinuz_path}"
+    cp "$vmlinuz_path" "$kernel_image_tmp"
+    if ! file "$kernel_image_tmp" | grep -Eq 'PE32.*ARM64'; then
+      rm -f "$kernel_image_tmp"
+      fail "ARM64 kernel is not a PE32+ Image: ${vmlinuz_path}"
+    fi
+  else
+    info "extracting ELF vmlinux from: ${vmlinuz_path}"
+    if ! "$extract_vmlinux" "$vmlinuz_path" >"$kernel_image_tmp"; then
+      rm -f "$kernel_image_tmp"
+      fail "extract-vmlinux could not extract an ELF vmlinux from ${vmlinuz_path}"
+    fi
+    if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
+      rm -f "$kernel_image_tmp"
+      fail "extracted kernel is not an ELF image: ${vmlinuz_path}"
+    fi
   fi
   chmod 0644 "$kernel_image_tmp"
   mv "$kernel_image_tmp" "$kernel_image_path"
@@ -557,10 +577,6 @@ verify_rootfs_content() {
 
   if [ ! -e "${mount_dir}/usr/sbin/sshd" ]; then
     fail "Rootfs did not install sshd. Check packages: ${rootfs_packages}"
-  fi
-
-  if [ ! -s "${mount_dir}/root/.ssh/authorized_keys" ]; then
-    fail 'Rootfs did not install /root/.ssh/authorized_keys.'
   fi
 
   if [ ! -e "${mount_dir}/etc/systemd/network/10-eth0.network" ]; then
@@ -613,9 +629,16 @@ verify_rootfs_content() {
   if [ ! -s "$kernel_image_path" ]; then
     fail "extract_kernel did not produce a kernel image: ${kernel_image_path}"
   fi
-  if ! file "$kernel_image_path" | grep -q 'ELF'; then
-    fail "Extracted kernel image is not ELF: ${kernel_image_path}"
-  fi
+  case "$ubuntu_arch" in
+    amd64)
+      file "$kernel_image_path" | grep -q 'ELF' \
+        || fail "Extracted kernel image is not ELF: ${kernel_image_path}"
+      ;;
+    arm64)
+      file "$kernel_image_path" | grep -Eq 'PE32.*ARM64' \
+        || fail "ARM64 kernel is not a PE32+ Image: ${kernel_image_path}"
+      ;;
+  esac
 }
 
 main() {
@@ -659,6 +682,10 @@ main() {
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
   ubuntu_arch=$(detect_ubuntu_arch)
+  case "$ubuntu_arch" in
+    amd64) kernel_image_name='vmlinux-ubuntu-26.04-x86_64' ;;
+    arm64) kernel_image_name='Image-ubuntu-26.04-aarch64' ;;
+  esac
   ubuntu_series=$(resolve_ubuntu_series)
   if [ -z "$rootfs_image" ]; then
     rootfs_image="${artifact_dir}/ubuntu-rootfs-${ubuntu_series}-${ubuntu_arch}.ext4"

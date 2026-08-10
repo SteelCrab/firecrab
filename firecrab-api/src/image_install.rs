@@ -5,7 +5,7 @@
 //! Layout (matches `scripts/package-m2images.sh` and the package registry):
 //!
 //! ```text
-//! {FIRECRAB_IMAGE_BASE_URL}/{distro}/{version}/{alias}.tar.zst
+//! {FIRECRAB_IMAGE_BASE_URL}/{distro}/{version}/[aarch64/]{alias}.tar.zst
 //! ```
 //!
 //! Unset / empty / `none` / `-` disables remote install (hosts that only use
@@ -28,6 +28,20 @@ use crate::templates::{TemplateRegistry, TemplateSpec};
 /// Default public MicroRegistry. Operators may override it for a private
 /// registry, or set `FIRECRAB_IMAGE_BASE_URL=none` to disable remote access.
 pub const DEFAULT_IMAGE_BASE_URL: &str = "https://registry.firecrab.dev";
+
+/// Architecture label used by MicroRegistry catalog entries and object keys.
+#[cfg(target_arch = "aarch64")]
+pub const HOST_ARCHITECTURE: &str = "aarch64";
+/// Architecture label used by MicroRegistry catalog entries and object keys.
+#[cfg(target_arch = "x86_64")]
+pub const HOST_ARCHITECTURE: &str = "x86_64";
+
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+compile_error!("Firecrab supports only x86_64 and aarch64 hosts");
+
+pub const fn host_architecture() -> &'static str {
+    HOST_ARCHITECTURE
+}
 
 /// Absolute package URL for a template alias under `base`.
 pub fn package_url(base: &str, alias: &str) -> String {
@@ -256,6 +270,13 @@ pub fn package_name(alias: &str) -> String {
 /// Public registry path for a known M2Image package. Unknown aliases keep the
 /// historic flat layout so locally registered/custom templates remain usable.
 pub fn package_path(alias: &str) -> String {
+    package_path_for_arch(alias, host_architecture())
+}
+
+/// Registry path for `alias` on an explicit Firecracker host architecture.
+/// x86_64 keeps the original layout; ARM64 uses a distinct subdirectory so
+/// publishing one architecture can never replace the other's package.
+pub fn package_path_for_arch(alias: &str, architecture: &str) -> String {
     let directory = match alias {
         "alpine-3.24" => Some("alpine/3.24"),
         "ubuntu-26.04" => Some("ubuntu/26.04"),
@@ -263,6 +284,9 @@ pub fn package_path(alias: &str) -> String {
         _ => None,
     };
     match directory {
+        Some(directory) if architecture == "aarch64" => {
+            format!("{directory}/aarch64/{}", package_name(alias))
+        }
         Some(directory) => format!("{directory}/{}", package_name(alias)),
         None => package_name(alias),
     }
@@ -853,27 +877,55 @@ mod tests {
 
     #[test]
     fn package_url_uses_distribution_version_tree_for_known_aliases() {
+        let architecture_segment = if host_architecture() == "aarch64" {
+            "/aarch64"
+        } else {
+            ""
+        };
         assert_eq!(
             package_url("http://127.0.0.1:8765/", "ubuntu-26.04"),
-            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst"
+            format!(
+                "http://127.0.0.1:8765/ubuntu/26.04{architecture_segment}/ubuntu-26.04.tar.zst"
+            )
         );
         assert_eq!(
             package_url("http://mirror.example/m2", "alpine-3.24"),
-            "http://mirror.example/m2/alpine/3.24/alpine-3.24.tar.zst"
+            format!(
+                "http://mirror.example/m2/alpine/3.24{architecture_segment}/alpine-3.24.tar.zst"
+            )
         );
         assert_eq!(
             package_url("http://mirror.example/m2", "rocky-9"),
-            "http://mirror.example/m2/rocky/9/rocky-9.tar.zst"
+            format!("http://mirror.example/m2/rocky/9{architecture_segment}/rocky-9.tar.zst")
         );
         let tracker = ImageInstallTracker::with_base_url("http://127.0.0.1:8765");
+        let expected_ubuntu_url = format!(
+            "http://127.0.0.1:8765/ubuntu/26.04{architecture_segment}/ubuntu-26.04.tar.zst"
+        );
         assert_eq!(
             tracker.package_url_for("ubuntu-26.04").as_deref(),
-            Some("http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst")
+            Some(expected_ubuntu_url.as_str())
         );
         assert!(
             ImageInstallTracker::disabled()
                 .package_url_for("ubuntu-26.04")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn arm64_packages_use_architecture_specific_registry_paths() {
+        assert_eq!(
+            package_path_for_arch("alpine-3.24", "aarch64"),
+            "alpine/3.24/aarch64/alpine-3.24.tar.zst"
+        );
+        assert_eq!(
+            package_path_for_arch("ubuntu-26.04", "aarch64"),
+            "ubuntu/26.04/aarch64/ubuntu-26.04.tar.zst"
+        );
+        assert_eq!(
+            package_path_for_arch("ubuntu-26.04", "x86_64"),
+            "ubuntu/26.04/ubuntu-26.04.tar.zst"
         );
     }
 
