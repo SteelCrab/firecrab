@@ -280,7 +280,7 @@ pub fn package_path_for_arch(alias: &str, architecture: &str) -> String {
     let directory = match alias {
         "alpine-3.24" => Some("alpine/3.24"),
         "ubuntu-26.04" => Some("ubuntu/26.04"),
-        "rocky-9" => Some("rocky/9.8"),
+        "rocky-9.8" => Some("rocky/9.8"),
         _ => None,
     };
     match directory {
@@ -895,8 +895,8 @@ mod tests {
             )
         );
         assert_eq!(
-            package_url("http://mirror.example/m2", "rocky-9"),
-            format!("http://mirror.example/m2/rocky/9.8{architecture_segment}/rocky-9.tar.zst")
+            package_url("http://mirror.example/m2", "rocky-9.8"),
+            format!("http://mirror.example/m2/rocky/9.8{architecture_segment}/rocky-9.8.tar.zst")
         );
         let tracker = ImageInstallTracker::with_base_url("http://127.0.0.1:8765");
         let expected_ubuntu_url = format!(
@@ -928,12 +928,12 @@ mod tests {
             "ubuntu/26.04/ubuntu-26.04.tar.zst"
         );
         assert_eq!(
-            package_path_for_arch("rocky-9", "aarch64"),
-            "rocky/9.8/aarch64/rocky-9.tar.zst"
+            package_path_for_arch("rocky-9.8", "aarch64"),
+            "rocky/9.8/aarch64/rocky-9.8.tar.zst"
         );
         assert_eq!(
-            package_path_for_arch("rocky-9", "x86_64"),
-            "rocky/9.8/rocky-9.tar.zst"
+            package_path_for_arch("rocky-9.8", "x86_64"),
+            "rocky/9.8/rocky-9.8.tar.zst"
         );
     }
 
@@ -955,7 +955,7 @@ mod tests {
     fn package_name_uses_alias_tar_zst() {
         assert_eq!(package_name("alpine-3.24"), "alpine-3.24.tar.zst");
         assert_eq!(package_name("ubuntu-26.04"), "ubuntu-26.04.tar.zst");
-        assert_eq!(package_name("rocky-9"), "rocky-9.tar.zst");
+        assert_eq!(package_name("rocky-9.8"), "rocky-9.8.tar.zst");
     }
 
     #[test]

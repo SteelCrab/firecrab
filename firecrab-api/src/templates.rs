@@ -165,7 +165,7 @@ impl TemplateVersion {
         // The EL9 initramfs contains virtio_net, but does not load it merely
         // because the PCI device exists. Force it before switching to the
         // rootfs so NetworkManager sees the interface immediately.
-        if self.name == "rocky-9" && !args.contains(&"rd.driver.pre=virtio_net") {
+        if self.name == "rocky-9.8" && !args.contains(&"rd.driver.pre=virtio_net") {
             args.push("rd.driver.pre=virtio_net");
         }
 
@@ -181,7 +181,7 @@ impl TemplateVersion {
 }
 
 fn requires_pci_transport_for_arch(name: &str, architecture: &str) -> bool {
-    matches!(name, "rocky-9" | "ubuntu-26.04") && architecture != "aarch64"
+    matches!(name, "rocky-9.8" | "ubuntu-26.04") && architecture != "aarch64"
 }
 
 /// Registry of verified template versions, resolved by alias or by exact
@@ -783,7 +783,7 @@ fn default_specs_for_arch(host_arch: &str) -> Vec<TemplateSpec> {
     ];
 
     specs.push(TemplateSpec {
-        alias: "rocky-9".to_owned(),
+        alias: "rocky-9.8".to_owned(),
         version: "rocky-9.8-v1".to_owned(),
         // Rocky 9.8 keeps virtio storage/network and ext4 in modules, so both
         // architectures use a generic dracut initramfs. x86_64 boots through
@@ -952,7 +952,7 @@ mod tests {
         let registry = TemplateRegistry::load_from(&root).expect("one built template");
         assert!(registry.resolve_alias("alpine-3.24").is_some());
         assert!(registry.resolve_alias("ubuntu-26.04").is_none());
-        assert!(registry.resolve_alias("rocky-9").is_none());
+        assert!(registry.resolve_alias("rocky-9.8").is_none());
     }
 
     /// A template registered at runtime (web build, or an install of a
@@ -1304,7 +1304,7 @@ mod tests {
 
         let rocky = specs
             .iter()
-            .find(|spec| spec.alias == "rocky-9")
+            .find(|spec| spec.alias == "rocky-9.8")
             .expect("rocky-9 is one of the default specs");
         assert_eq!(rocky.version, "rocky-9.8-v1");
         if alpine_arch == "aarch64" {
@@ -1368,7 +1368,7 @@ mod tests {
         );
 
         let rocky = registry
-            .resolve_alias("rocky-9")
+            .resolve_alias("rocky-9.8")
             .expect("Rocky template resolves");
         assert_eq!(rocky.requires_pci_transport(), alpine_arch != "aarch64");
         assert_eq!(
@@ -1398,7 +1398,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.alias.as_str())
                 .collect::<Vec<_>>(),
-            vec!["ubuntu-26.04", "alpine-3.24", "rocky-9"]
+            vec!["ubuntu-26.04", "alpine-3.24", "rocky-9.8"]
         );
 
         let ubuntu = specs
@@ -1433,7 +1433,7 @@ mod tests {
             PathBuf::from("rootfs/alpine-rootfs-3.24.1-aarch64.ext4")
         );
 
-        let rocky = specs.iter().find(|spec| spec.alias == "rocky-9").unwrap();
+        let rocky = specs.iter().find(|spec| spec.alias == "rocky-9.8").unwrap();
         assert_eq!(rocky.version, "rocky-9.8-v1");
         assert_eq!(
             rocky.kernel,
@@ -1449,8 +1449,8 @@ mod tests {
         );
         assert!(rocky.boot_args.contains("keep_bootcon"));
         assert!(rocky.boot_args.contains("pci=off"));
-        assert!(!requires_pci_transport_for_arch("rocky-9", "aarch64"));
-        assert!(requires_pci_transport_for_arch("rocky-9", "x86_64"));
+        assert!(!requires_pci_transport_for_arch("rocky-9.8", "aarch64"));
+        assert!(requires_pci_transport_for_arch("rocky-9.8", "x86_64"));
     }
 
     #[test]

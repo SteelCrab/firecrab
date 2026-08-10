@@ -44,7 +44,7 @@ const BUILDER_BOOT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `TemplateRegistry::known_specs()` directly, so a future built-in
 /// addition doesn't silently become bootstrap-eligible without its own
 /// guest script (Task 6 covers exactly these 3, no more).
-const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24", "ubuntu-26.04", "rocky-9"];
+const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24", "ubuntu-26.04", "rocky-9.8"];
 
 /// Sentinel the pushed script prints once it's done, followed by `:` and
 /// its exit code — same shape as other console sentinels, kept as its
@@ -92,7 +92,7 @@ fn script_for(alias: &str) -> &'static str {
     match alias {
         "alpine-3.24" => ALPINE_SCRIPT,
         "ubuntu-26.04" => UBUNTU_SCRIPT,
-        "rocky-9" => ROCKY_SCRIPT,
+        "rocky-9.8" => ROCKY_SCRIPT,
         other => unreachable!("start_bootstrap already rejected unknown alias {other}"),
     }
 }
@@ -222,7 +222,7 @@ pub async fn start_bootstrap(
 fn bootstrap_disk_gb(target_alias: &str) -> u16 {
     match target_alias {
         "alpine-3.24" => 4,
-        _ => 8, // ubuntu-26.04, rocky-9 — 2G rootfs_size each, per default_specs()
+        _ => 8, // ubuntu-26.04, rocky-9.8 — 2G rootfs_size each, per default_specs()
     }
 }
 
@@ -1259,7 +1259,7 @@ mod tests {
         crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
         // test_state's one registered template, "ubuntu-rootfs-26.04", isn't
         // any of the 3 bootstrap-target aliases and (before this task)
-        // wouldn't have satisfied rocky-9's old matching-source rule either
+        // wouldn't have satisfied rocky-9.8's old matching-source rule either
         // — this fixture is deliberately unchanged from the test it
         // replaces, to prove the same "no real target template installed"
         // situation that used to 503 now succeeds. Register __microboot
@@ -1283,13 +1283,13 @@ mod tests {
         let (status, Json(session)) = start_bootstrap(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            Path("rocky-9".to_owned()),
+            Path("rocky-9.8".to_owned()),
         )
         .await
         .unwrap();
 
         assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(session.alias, "rocky-9");
+        assert_eq!(session.alias, "rocky-9.8");
         assert_eq!(session.source_alias, crate::microboot::MICROBOOT_ALIAS);
 
         // The builder VM's own spec, not just the session's status. The RAM

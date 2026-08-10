@@ -346,7 +346,7 @@ mod tests {
 
         assert!(
             tracker
-                .try_begin("rocky-9", "alpine-3.24", Uuid::new_v4())
+                .try_begin("rocky-9.8", "alpine-3.24", Uuid::new_v4())
                 .is_none()
         );
 
@@ -355,7 +355,7 @@ mod tests {
         tracker.finish_ok(first);
         assert!(
             tracker
-                .try_begin("rocky-9", "alpine-3.24", Uuid::new_v4())
+                .try_begin("rocky-9.8", "alpine-3.24", Uuid::new_v4())
                 .is_some()
         );
     }
@@ -491,7 +491,7 @@ mod tests {
     fn failing_marks_the_step_that_was_open_and_carries_the_reason() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("rocky-9", "__microboot", Uuid::new_v4())
+            .try_begin("rocky-9.8", "__microboot", Uuid::new_v4())
             .expect("first session");
         tracker.set_step(id, BootstrapStep::InstallingSystem);
 

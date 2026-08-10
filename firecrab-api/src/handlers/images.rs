@@ -486,7 +486,7 @@ mod tests {
         assert!(
             images
                 .iter()
-                .any(|image| image.alias == "rocky-9" && !image.installed)
+                .any(|image| image.alias == "rocky-9.8" && !image.installed)
         );
     }
 

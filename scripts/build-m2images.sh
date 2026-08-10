@@ -20,7 +20,7 @@ alias_filter=all
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/build-m2images.sh [--alias alpine-3.24|ubuntu-26.04|rocky-9]
+Usage: ./scripts/build-m2images.sh [--alias alpine-3.24|ubuntu-26.04|rocky-9.8]
 
 Builds host-native Firecracker template(s), packages them into OUT_DIR, and
 verifies OUT_DIR/SHA256SUMS. x86_64 defaults to dist/m2images; ARM64 defaults
@@ -59,8 +59,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$alias_filter" in
-  all|alpine-3.24|ubuntu-26.04|rocky-9) ;;
-  *) fail "unknown --alias $alias_filter (want alpine-3.24, ubuntu-26.04, or rocky-9)" ;;
+  all|alpine-3.24|ubuntu-26.04|rocky-9.8) ;;
+  *) fail "unknown --alias $alias_filter (want alpine-3.24, ubuntu-26.04, or rocky-9.8)" ;;
 esac
 
 case "$(uname -m)" in
@@ -78,7 +78,7 @@ if [ -z "$out_dir" ]; then
 fi
 
 case "$alias_filter" in
-  all|alpine-3.24|rocky-9)
+  all|alpine-3.24|rocky-9.8)
     command -v docker >/dev/null 2>&1 || fail 'docker is required for the selected image builder(s)'
     ;;
 esac
@@ -111,7 +111,7 @@ case "$alias_filter" in
   ubuntu-26.04)
     build_ubuntu
     ;;
-  rocky-9)
+  rocky-9.8)
     build_rocky
     ;;
 esac

@@ -115,7 +115,7 @@ artifacts_for() {
         "$ubuntu_kernel" \
         "rootfs/ubuntu-rootfs-26.04-${ubuntu_rootfs_arch}.ext4"
       ;;
-    rocky-9)
+    rocky-9.8)
       local rocky_kernel="kernel/vmlinux-rocky-9.8-x86_64"
       [ "$M2IMAGE_ARCH" = aarch64 ] && rocky_kernel="kernel/Image-rocky-9.8-aarch64"
       printf '%s\n' \
@@ -124,7 +124,7 @@ artifacts_for() {
         "rootfs/rocky-rootfs-9.8-${M2IMAGE_ARCH}.ext4"
       ;;
     *)
-      fail "unknown alias: $1 (want alpine-3.24, ubuntu-26.04, or rocky-9)"
+      fail "unknown alias: $1 (want alpine-3.24, ubuntu-26.04, or rocky-9.8)"
       ;;
   esac
 }
@@ -135,7 +135,7 @@ aliases_to_pack() {
       printf '%s\n' alpine-3.24 ubuntu-26.04 rocky-9
       ;;
     alpine-3.24|ubuntu-26.04) printf '%s\n' "$ALIAS_FILTER" ;;
-    rocky-9)
+    rocky-9.8)
       printf '%s\n' "$ALIAS_FILTER"
       ;;
     *) fail "unknown --alias $ALIAS_FILTER" ;;
