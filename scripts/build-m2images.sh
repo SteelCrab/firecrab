@@ -29,8 +29,7 @@ to dist/m2images/aarch64. The architecture defaults to uname -m.
 The full MVP release build is:
   ./scripts/build-m2images.sh
 
-Ubuntu needs sudo for its temporary chroot. Alpine and Rocky build in Docker.
-Rocky Linux 9.8 builds on both x86_64 and ARM64.
+Ubuntu, Alpine, and Rocky Linux all build natively using official rootfs tarballs and sudo chroot.
 EOF
 }
 
@@ -93,11 +92,6 @@ if [ -z "$out_dir" ]; then
   fi
 fi
 
-case "$alias_filter" in
-  all|alpine-3.24|rocky-9.8)
-    command -v docker >/dev/null 2>&1 || fail 'docker is required for the selected image builder(s)'
-    ;;
-esac
 command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum is required'
 
 build_alpine() {
