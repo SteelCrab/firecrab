@@ -4,8 +4,8 @@ An M2Image contains a kernel and root filesystem.
 It is the source template for new VM disks.
 
 Supported aliases are `alpine-3.24`, `ubuntu-26.04`, and `rocky-9`.
-Alpine and Ubuntu support x86_64 and ARM64.
-Rocky Linux 9 is currently x86_64-only.
+All three support x86_64 and ARM64. The `rocky-9` alias is pinned to Rocky
+Linux 9.8 on both architectures.
 ARM64 packages keep the distro PE32+ `Image`; x86_64 packages use an ELF
 `vmlinux`. Firecracker cannot boot an x86_64 kernel on an ARM64 host.
 
@@ -26,7 +26,7 @@ Build one alias when needed.
 Docker is used for Alpine and Rocky.
 Ubuntu also uses a temporary privileged chroot.
 
-Rocky guests include `dnf` so dashboard package actions work.
+Rocky 9.8 guests include `dnf` so dashboard package actions work.
 Rebuild `rocky-9` after pulling rootfs script fixes before testing dnf.
 
 ## Output
@@ -40,6 +40,7 @@ dist/m2images/
   aarch64/
     alpine-3.24.tar.zst
     ubuntu-26.04.tar.zst
+    rocky-9.tar.zst
     SHA256SUMS
 ```
 

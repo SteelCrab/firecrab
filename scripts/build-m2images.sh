@@ -30,7 +30,7 @@ The full MVP release build is:
   ./scripts/build-m2images.sh
 
 Ubuntu needs sudo for its temporary chroot. Alpine and Rocky build in Docker.
-Rocky Linux 9 is currently x86_64-only; ARM64 builds Alpine and Ubuntu.
+Rocky Linux 9.8 builds on both x86_64 and ARM64.
 EOF
 }
 
@@ -82,8 +82,6 @@ case "$alias_filter" in
     command -v docker >/dev/null 2>&1 || fail 'docker is required for the selected image builder(s)'
     ;;
 esac
-[ "$m2image_arch" = x86_64 ] || [ "$alias_filter" != rocky-9 ] \
-  || fail 'Rocky Linux 9 template builder currently supports x86_64 only'
 command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum is required'
 
 build_alpine() {
@@ -97,7 +95,7 @@ build_ubuntu() {
 }
 
 build_rocky() {
-  info 'building rocky-9 from official Rocky BaseOS/AppStream packages and kernel'
+  info "building rocky-9 (Rocky Linux 9.8 ${m2image_arch}) from official BaseOS/AppStream packages and kernel"
   "${script_dir}/firecracker-menual/install-rocky-rootfs.sh"
 }
 
@@ -105,11 +103,7 @@ case "$alias_filter" in
   all)
     build_alpine
     build_ubuntu
-    if [ "$m2image_arch" = x86_64 ]; then
-      build_rocky
-    else
-      info 'skipping rocky-9: no ARM64 builder is available'
-    fi
+    build_rocky
     ;;
   alpine-3.24)
     build_alpine

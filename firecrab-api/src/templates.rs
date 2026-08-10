@@ -142,13 +142,12 @@ impl TemplateVersion {
     }
 
     /// Whether this image must be started with Firecracker's PCI transport
-    /// enabled. Rocky Linux 9 needs PCI because its stock kernel disables
-    /// `CONFIG_VIRTIO_MMIO`. Ubuntu 26.04 also uses PCI because its stock
-    /// kernel rejects Firecracker 1.16's command-line MMIO regions as busy,
-    /// while its virtio-pci transport is built in.
+    /// enabled. On x86_64, Rocky Linux 9.8 needs PCI because its stock kernel
+    /// disables `CONFIG_VIRTIO_MMIO`; Ubuntu 26.04 also uses PCI because its
+    /// stock kernel rejects Firecracker 1.16's command-line MMIO regions as
+    /// busy. Both distributions use virtio-mmio on aarch64.
     pub fn requires_pci_transport(&self) -> bool {
-        self.name == "rocky-9"
-            || (self.name == "ubuntu-26.04" && std::env::consts::ARCH != "aarch64")
+        requires_pci_transport_for_arch(&self.name, std::env::consts::ARCH)
     }
 
     /// Returns the kernel command line adjusted for the transport selected
@@ -179,6 +178,10 @@ impl TemplateVersion {
 
         args.join(" ")
     }
+}
+
+fn requires_pci_transport_for_arch(name: &str, architecture: &str) -> bool {
+    matches!(name, "rocky-9" | "ubuntu-26.04") && architecture != "aarch64"
 }
 
 /// Registry of verified template versions, resolved by alias or by exact
@@ -232,7 +235,7 @@ struct CachedHash {
 
 impl TemplateRegistry {
     /// Loads the host architecture's built-in template set from `images/`
-    /// (or `FIRECRAB_IMAGE_ROOT` if set). Rocky Linux is currently x86_64-only.
+    /// (or `FIRECRAB_IMAGE_ROOT` if set).
     pub fn load_default() -> Result<Self, TemplateError> {
         let default_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../images");
         let image_root = env::var_os("FIRECRAB_IMAGE_ROOT")
@@ -700,9 +703,9 @@ fn default_specs() -> Vec<TemplateSpec> {
 }
 
 fn default_specs_for_arch(host_arch: &str) -> Vec<TemplateSpec> {
-    // Alpine and Ubuntu support both Firecracker host architectures. Rocky's
-    // official builder and package remain x86_64-only, so it is omitted from
-    // the built-in ARM64 catalog instead of advertising an unusable template.
+    // Every built-in distribution supports both Firecracker host
+    // architectures. x86_64 kernels are extracted ELF vmlinux files; ARM64
+    // kernels retain their distro PE32+ Image format.
     let alpine_arch = match host_arch {
         "aarch64" => "aarch64",
         _ => "x86_64",
@@ -729,6 +732,17 @@ fn default_specs_for_arch(host_arch: &str) -> Vec<TemplateSpec> {
         "kernel/Image-alpine-virt-aarch64".to_owned()
     } else {
         "kernel/vmlinux-alpine-virt-x86_64".to_owned()
+    };
+    let (rocky_kernel, rocky_boot_args) = if alpine_arch == "aarch64" {
+        (
+            "kernel/Image-rocky-9.8-aarch64",
+            "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw",
+        )
+    } else {
+        (
+            "kernel/vmlinux-rocky-9.8-x86_64",
+            "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw",
+        )
     };
 
     let mut specs = vec![
@@ -768,25 +782,19 @@ fn default_specs_for_arch(host_arch: &str) -> Vec<TemplateSpec> {
         },
     ];
 
-    if alpine_arch != "aarch64" {
-        specs.push(TemplateSpec {
-            alias: "rocky-9".to_owned(),
-            version: "rocky-9-v1".to_owned(),
-            // EL9's distro kernel keeps virtio_blk/net and ext4 as modules,
-            // so the builder creates a generic dracut initramfs. It also
-            // deliberately disables CONFIG_VIRTIO_MMIO, while its PCI
-            // transport is builtin; `requires_pci_transport` makes the VMM
-            // expose matching PCI devices for this template. PCI would
-            // otherwise rename the builder's eth0 profile to ens2, so keep
-            // the guest's stable configuration name through the kernel args.
-            kernel: PathBuf::from("kernel/vmlinux-rocky-9-x86_64"),
-            initrd: Some(PathBuf::from("kernel/initramfs-rocky-9-x86_64")),
-            rootfs: PathBuf::from("rootfs/rocky-rootfs-9-x86_64.ext4"),
-            boot_args:
-                "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw"
-                    .to_owned(),
-        });
-    }
+    specs.push(TemplateSpec {
+        alias: "rocky-9".to_owned(),
+        version: "rocky-9.8-v1".to_owned(),
+        // Rocky 9.8 keeps virtio storage/network and ext4 in modules, so both
+        // architectures use a generic dracut initramfs. x86_64 boots through
+        // virtio-pci; aarch64 uses Firecracker's normal virtio-mmio transport.
+        kernel: PathBuf::from(rocky_kernel),
+        initrd: Some(PathBuf::from(format!(
+            "kernel/initramfs-rocky-9.8-{alpine_arch}"
+        ))),
+        rootfs: PathBuf::from(format!("rootfs/rocky-rootfs-9.8-{alpine_arch}.ext4")),
+        boot_args: rocky_boot_args.to_owned(),
+    });
 
     specs
 }
@@ -1294,24 +1302,43 @@ mod tests {
             alpine_arch == "aarch64"
         );
 
-        let rocky = specs.iter().find(|spec| spec.alias == "rocky-9");
+        let rocky = specs
+            .iter()
+            .find(|spec| spec.alias == "rocky-9")
+            .expect("rocky-9 is one of the default specs");
+        assert_eq!(rocky.version, "rocky-9.8-v1");
         if alpine_arch == "aarch64" {
-            assert!(rocky.is_none(), "Rocky 9 packages are x86_64-only");
-        } else {
-            let rocky = rocky.expect("rocky-9 is an x86_64 default spec");
-            assert_eq!(rocky.kernel, PathBuf::from("kernel/vmlinux-rocky-9-x86_64"));
+            assert_eq!(
+                rocky.kernel,
+                PathBuf::from("kernel/Image-rocky-9.8-aarch64")
+            );
             assert_eq!(
                 rocky.initrd,
-                Some(PathBuf::from("kernel/initramfs-rocky-9-x86_64"))
+                Some(PathBuf::from("kernel/initramfs-rocky-9.8-aarch64"))
             );
             assert_eq!(
                 rocky.rootfs,
-                PathBuf::from("rootfs/rocky-rootfs-9-x86_64.ext4")
+                PathBuf::from("rootfs/rocky-rootfs-9.8-aarch64.ext4")
             );
-            assert!(rocky.boot_args.contains("rootfstype=ext4"));
+            assert!(rocky.boot_args.contains("keep_bootcon"));
+            assert!(rocky.boot_args.contains("pci=off"));
+        } else {
+            assert_eq!(
+                rocky.kernel,
+                PathBuf::from("kernel/vmlinux-rocky-9.8-x86_64")
+            );
+            assert_eq!(
+                rocky.initrd,
+                Some(PathBuf::from("kernel/initramfs-rocky-9.8-x86_64"))
+            );
+            assert_eq!(
+                rocky.rootfs,
+                PathBuf::from("rootfs/rocky-rootfs-9.8-x86_64.ext4")
+            );
             assert!(!rocky.boot_args.contains("pci=off"));
             assert!(rocky.boot_args.contains("net.ifnames=0"));
         }
+        assert!(rocky.boot_args.contains("rootfstype=ext4"));
 
         let directory = tempdir().unwrap();
         for spec in &specs {
@@ -1340,19 +1367,21 @@ mod tests {
             alpine_arch != "aarch64"
         );
 
-        if alpine_arch != "aarch64" {
-            let rocky = registry
-                .resolve_alias("rocky-9")
-                .expect("Rocky template resolves");
-            assert!(rocky.requires_pci_transport());
-            assert_eq!(
-                rocky
-                    .runtime_boot_args()
-                    .matches("rd.driver.pre=virtio_net")
-                    .count(),
-                1
-            );
-        }
+        let rocky = registry
+            .resolve_alias("rocky-9")
+            .expect("Rocky template resolves");
+        assert_eq!(rocky.requires_pci_transport(), alpine_arch != "aarch64");
+        assert_eq!(
+            rocky.runtime_boot_args().contains("pci=off"),
+            alpine_arch == "aarch64"
+        );
+        assert_eq!(
+            rocky
+                .runtime_boot_args()
+                .matches("rd.driver.pre=virtio_net")
+                .count(),
+            1
+        );
 
         let alpine = registry
             .resolve_alias("alpine-3.24")
@@ -1362,14 +1391,14 @@ mod tests {
     }
 
     #[test]
-    fn arm64_default_specs_use_arm_artifacts_and_omit_rocky() {
+    fn arm64_default_specs_use_arm_artifacts_for_every_distribution() {
         let specs = default_specs_for_arch("aarch64");
         assert_eq!(
             specs
                 .iter()
                 .map(|spec| spec.alias.as_str())
                 .collect::<Vec<_>>(),
-            vec!["ubuntu-26.04", "alpine-3.24"]
+            vec!["ubuntu-26.04", "alpine-3.24", "rocky-9"]
         );
 
         let ubuntu = specs
@@ -1403,6 +1432,25 @@ mod tests {
             alpine.rootfs,
             PathBuf::from("rootfs/alpine-rootfs-3.24.1-aarch64.ext4")
         );
+
+        let rocky = specs.iter().find(|spec| spec.alias == "rocky-9").unwrap();
+        assert_eq!(rocky.version, "rocky-9.8-v1");
+        assert_eq!(
+            rocky.kernel,
+            PathBuf::from("kernel/Image-rocky-9.8-aarch64")
+        );
+        assert_eq!(
+            rocky.initrd,
+            Some(PathBuf::from("kernel/initramfs-rocky-9.8-aarch64"))
+        );
+        assert_eq!(
+            rocky.rootfs,
+            PathBuf::from("rootfs/rocky-rootfs-9.8-aarch64.ext4")
+        );
+        assert!(rocky.boot_args.contains("keep_bootcon"));
+        assert!(rocky.boot_args.contains("pci=off"));
+        assert!(!requires_pci_transport_for_arch("rocky-9", "aarch64"));
+        assert!(requires_pci_transport_for_arch("rocky-9", "x86_64"));
     }
 
     #[test]

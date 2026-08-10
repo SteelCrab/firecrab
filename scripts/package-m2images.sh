@@ -116,11 +116,12 @@ artifacts_for() {
         "rootfs/ubuntu-rootfs-26.04-${ubuntu_rootfs_arch}.ext4"
       ;;
     rocky-9)
-      [ "$M2IMAGE_ARCH" = x86_64 ] || fail 'rocky-9 packaging currently supports x86_64 only'
+      local rocky_kernel="kernel/vmlinux-rocky-9.8-x86_64"
+      [ "$M2IMAGE_ARCH" = aarch64 ] && rocky_kernel="kernel/Image-rocky-9.8-aarch64"
       printf '%s\n' \
-        kernel/vmlinux-rocky-9-x86_64 \
-        kernel/initramfs-rocky-9-x86_64 \
-        rootfs/rocky-rootfs-9-x86_64.ext4
+        "$rocky_kernel" \
+        "kernel/initramfs-rocky-9.8-${M2IMAGE_ARCH}" \
+        "rootfs/rocky-rootfs-9.8-${M2IMAGE_ARCH}.ext4"
       ;;
     *)
       fail "unknown alias: $1 (want alpine-3.24, ubuntu-26.04, or rocky-9)"
@@ -131,12 +132,10 @@ artifacts_for() {
 aliases_to_pack() {
   case "$ALIAS_FILTER" in
     all)
-      printf '%s\n' alpine-3.24 ubuntu-26.04
-      [ "$M2IMAGE_ARCH" = aarch64 ] || printf '%s\n' rocky-9
+      printf '%s\n' alpine-3.24 ubuntu-26.04 rocky-9
       ;;
     alpine-3.24|ubuntu-26.04) printf '%s\n' "$ALIAS_FILTER" ;;
     rocky-9)
-      [ "$M2IMAGE_ARCH" = x86_64 ] || fail 'rocky-9 packaging currently supports x86_64 only'
       printf '%s\n' "$ALIAS_FILTER"
       ;;
     *) fail "unknown --alias $ALIAS_FILTER" ;;

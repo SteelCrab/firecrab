@@ -1,40 +1,50 @@
 #!/usr/bin/env bash
-# Build a Firecracker-ready Rocky Linux 9 rootfs with Rocky's own EL9 kernel.
+# Build a Firecracker-ready Rocky Linux 9.8 rootfs with Rocky's own EL9 kernel.
 #
 # The result deliberately stays a direct ext4 file rather than Rocky's cloud
 # QCOW2 image: firecrab resizes and customizes rootfs files with e2fsprogs.
 # Everything privileged happens in a throwaway official Rocky container, so
 # the host needs Docker but no root chroot or loop mounts.
 #
-# EL9 configures virtio-pci but deliberately leaves CONFIG_VIRTIO_MMIO off.
-# The Rocky template therefore asks the VMM for PCI transport at runtime;
-# its initramfs still carries virtio_blk/net and ext4 for the guest rootfs.
-# virtio_net is explicitly loaded because EL9 does not request it early
-# enough from Firecracker's minimal PCI topology on every boot.
+# EL9 x86_64 uses virtio-pci because its kernel leaves CONFIG_VIRTIO_MMIO off.
+# Rocky's aarch64 kernel supports Firecracker's normal virtio-mmio transport.
+# Both initramfs variants carry their architecture's transport plus
+# virtio_blk/net and ext4 for the guest rootfs.
 
 set -euo pipefail
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
 build_dir="${repo_dir}/build/rocky-rootfs"
-kernel_image_name='vmlinux-rocky-9-x86_64'
-initrd_image_name='initramfs-rocky-9-x86_64'
-rootfs_image_name='rocky-rootfs-9-x86_64.ext4'
+rocky_release='9.8'
 rootfs_size='2G'
 rootfs_hostname='firecrab'
 docker_bin='docker'
+# Docker Hub publishes the official major-version tag as a multi-arch image;
+# the guest itself is pinned independently to the 9.8 BaseOS/AppStream URLs
+# below and rejected unless /etc/os-release reports VERSION_ID=9.8.
 docker_image='rockylinux:9'
 extract_vmlinux="${script_dir}/extract-vmlinux"
 
-# Use Rocky's fixed public repositories rather than the container image's
-# mirrorlist. The minimal Docker image does not define the `rltype` variable
-# that its mirrorlist URL expands, which otherwise leaves a literal `$rltype`
-# in the request and returns 404.
-rocky_baseos_url='https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/'
-rocky_appstream_url='https://download.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/'
+case "$(uname -m 2>/dev/null || printf unknown)" in
+  x86_64|amd64)
+    rocky_arch='x86_64'
+    kernel_image_name="vmlinux-rocky-${rocky_release}-x86_64"
+    ;;
+  aarch64|arm64)
+    rocky_arch='aarch64'
+    kernel_image_name="Image-rocky-${rocky_release}-aarch64"
+    ;;
+  *)
+    printf '[FAIL] Unsupported architecture. Rocky Linux 9.8 supports x86_64 and aarch64.\n' >&2
+    exit 1
+    ;;
+esac
+initrd_image_name="initramfs-rocky-${rocky_release}-${rocky_arch}"
+rootfs_image_name="rocky-rootfs-${rocky_release}-${rocky_arch}.ext4"
 
 # `kernel` provides the matching kernel-core/modules pair. Rocky's generic
 # kernel has virtio/ext4 as modules, so dracut below produces a generic initrd
@@ -86,9 +96,12 @@ rootfs_size=$1
 rootfs_hostname=$2
 rootfs_packages=$3
 initrd_image_name=$4
+rocky_release=$5
+rocky_arch=$6
+rootfs_image_name=$7
 
-baseos_url='https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/'
-appstream_url='https://download.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/'
+baseos_url="https://download.rockylinux.org/pub/rocky/${rocky_release}/BaseOS/${rocky_arch}/os/"
+appstream_url="https://download.rockylinux.org/pub/rocky/${rocky_release}/AppStream/${rocky_arch}/os/"
 
 info() { printf '[ROCKY] %s\n' "$*"; }
 fail() { printf '[ROCKY:FAIL] %s\n' "$*" >&2; exit 1; }
@@ -142,14 +155,14 @@ dnf_common=(
 info 'installing e2fsprogs in the throwaway builder container'
 dnf -q -y "${dnf_common[@]}" install e2fsprogs
 
-info 'installing Rocky Linux 9 guest packages into the staging root'
+info "installing Rocky Linux ${rocky_release} guest packages into the staging root"
 # EL9 kernel RPM post-processing invokes dracut under the install root. Give
 # that chroot the normal pseudo-filesystems before the transaction so its own
 # first initramfs pass succeeds; the explicit generic pass below then replaces
 # it with Firecracker's driver set.
 mount_chroot_fs
 # shellcheck disable=SC2086 -- package names are a deliberate whitespace list.
-dnf -q -y --installroot="$staging" --releasever=9 --setopt=reposdir=/etc/yum.repos.d \
+dnf -q -y --installroot="$staging" --releasever="$rocky_release" --setopt=reposdir=/etc/yum.repos.d \
   "${dnf_common[@]}" install $rootfs_packages
 
 # Stock rocky.repo mirrorlists expand $rltype, which this image never sets
@@ -325,30 +338,42 @@ kernel_version=$(basename "$(dirname "$vmlinuz_path")")
 initrd_path="$staging/boot/initramfs-${kernel_version}.img"
 kernel_config="$staging/usr/lib/modules/${kernel_version}/config"
 
-# Firecracker normally presents virtio devices over MMIO. Rocky's official
-# EL9 kernel intentionally omits that driver, but supports PCI transport.
-# Guard the image contract here so an upstream kernel package change cannot
-# silently produce a template which the runtime selector cannot boot.
-if ! grep -Eq '^CONFIG_VIRTIO_PCI=(y|m)$' "$kernel_config"; then
-  fail "Rocky kernel lacks CONFIG_VIRTIO_PCI: ${kernel_config}"
-fi
-if grep -qx '# CONFIG_VIRTIO_MMIO is not set' "$kernel_config"; then
-  info 'Rocky kernel has no virtio-mmio; the Rocky template will use Firecracker PCI transport'
-fi
+# Guard each architecture's transport contract so a kernel package change
+# cannot silently produce a template the runtime cannot boot.
+virtio_drivers='virtio_blk virtio_net ext4'
+case "$rocky_arch" in
+  x86_64)
+    grep -Eq '^CONFIG_VIRTIO_PCI=(y|m)$' "$kernel_config" \
+      || fail "Rocky x86_64 kernel lacks CONFIG_VIRTIO_PCI: ${kernel_config}"
+    if grep -q '^CONFIG_VIRTIO_PCI=m$' "$kernel_config"; then
+      virtio_drivers="${virtio_drivers} virtio_pci"
+    fi
+    ;;
+  aarch64)
+    grep -Eq '^CONFIG_VIRTIO_MMIO=(y|m)$' "$kernel_config" \
+      || fail "Rocky aarch64 kernel lacks CONFIG_VIRTIO_MMIO: ${kernel_config}"
+    if grep -q '^CONFIG_VIRTIO_MMIO=m$' "$kernel_config"; then
+      virtio_drivers="${virtio_drivers} virtio_mmio"
+    fi
+    ;;
+esac
 
 # A generic initramfs is necessary: it must not inherit the Docker builder's
-# host hardware and must contain the virtio PCI/block/network/ext4 modules
-# needed before / is mounted. The temporary mounts are private to this privileged builder
+# host hardware and must contain the architecture-appropriate virtio
+# transport plus block/network/ext4 modules needed before / is mounted. The
+# temporary mounts are private to this privileged builder
 # container; they let target-root dracut see normal /proc, /sys, /dev, and
 # /run while retaining the guest's own kernel modules and dracut files.
 info "building generic dracut initramfs for ${kernel_version}"
 chroot "$staging" /usr/bin/dracut --force --no-hostonly \
-  --add-drivers 'virtio_blk virtio_pci virtio_net ext4' \
+  --add-drivers "$virtio_drivers" \
   "/boot/initramfs-${kernel_version}.img" "$kernel_version"
 cleanup_chroot_mounts
 
 [ -s "$initrd_path" ] || fail "dracut did not create ${initrd_path}"
 test -e "$staging/etc/os-release" || fail 'missing /etc/os-release'
+grep -Eq '^VERSION_ID="?9\.8"?$' "$staging/etc/os-release" \
+  || fail 'Rocky rootfs is not pinned to VERSION_ID 9.8'
 test -e "$staging/sbin/init" || fail 'missing /sbin/init'
 test -x "$staging/usr/sbin/sshd" || fail 'missing sshd'
 test -s "$staging/root/.ssh/authorized_keys" || fail 'missing root authorized_keys'
@@ -363,7 +388,7 @@ cp "$vmlinuz_path" /kernel-out/vmlinuz-rocky-raw
 cp "$initrd_path" "/kernel-out/${initrd_image_name}"
 chmod 0644 /kernel-out/vmlinuz-rocky-raw "/kernel-out/${initrd_image_name}"
 
-rootfs_image="/out/rocky-rootfs-9-x86_64.ext4"
+rootfs_image="/out/${rootfs_image_name}"
 rootfs_tmp="${rootfs_image}.tmp"
 rm -f "$rootfs_tmp"
 truncate -s "$rootfs_size" "$rootfs_tmp"
@@ -375,20 +400,29 @@ echo "ROOTFS_IMAGE=${rootfs_image}"
 EOF
 }
 
-extract_kernel() {
+prepare_kernel() {
   local raw_path="${kernel_artifact_dir}/vmlinuz-rocky-raw"
   local kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
   local kernel_image_tmp="${kernel_image_path}.tmp"
 
   [ -s "$raw_path" ] || fail "Rocky kernel was not copied out to ${raw_path}"
-  info "extracting ELF vmlinux from: ${raw_path}"
-  if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
-    rm -f "$kernel_image_tmp"
-    fail "extract-vmlinux could not extract an ELF vmlinux from ${raw_path}"
-  fi
-  if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
-    rm -f "$kernel_image_tmp"
-    fail "extracted kernel is not an ELF image: ${raw_path}"
+  if [ "$rocky_arch" = aarch64 ]; then
+    info "preserving ARM64 PE kernel Image from: ${raw_path}"
+    cp "$raw_path" "$kernel_image_tmp"
+    if ! file "$kernel_image_tmp" | grep -Eq 'PE32\+.*(ARM64|Aarch64)'; then
+      rm -f "$kernel_image_tmp"
+      fail "Rocky aarch64 kernel is not a PE32+ ARM64 Image: ${raw_path}"
+    fi
+  else
+    info "extracting x86_64 ELF vmlinux from: ${raw_path}"
+    if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
+      rm -f "$kernel_image_tmp"
+      fail "extract-vmlinux could not extract an ELF vmlinux from ${raw_path}"
+    fi
+    if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
+      rm -f "$kernel_image_tmp"
+      fail "extracted kernel is not an ELF image: ${raw_path}"
+    fi
   fi
   chmod 0644 "$kernel_image_tmp"
   mv "$kernel_image_tmp" "$kernel_image_path"
@@ -402,12 +436,13 @@ extract_kernel() {
 
 main() {
   [ "$#" -eq 0 ] || fail 'install-rocky-rootfs.sh does not accept arguments.'
-  [ "$(uname -m)" = x86_64 ] || fail 'Rocky Linux 9 template builder currently supports x86_64 only.'
 
-  for command in docker file find grep mkdir mv rm sort tail uname; do
+  for command in cp docker file find grep mkdir mv rm sort tail uname; do
     require_command "$command"
   done
-  [ -x "$extract_vmlinux" ] || fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  if [ "$rocky_arch" = x86_64 ]; then
+    [ -x "$extract_vmlinux" ] || fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  fi
 
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
@@ -419,7 +454,7 @@ main() {
   mkdir -p "$staging_dir"
   write_configure_script "$configure_script"
 
-  info "building Rocky Linux 9 rootfs via official ${docker_image} + BaseOS/AppStream"
+  info "building Rocky Linux ${rocky_release} ${rocky_arch} rootfs via official ${docker_image} + BaseOS/AppStream"
   # dracut runs inside the newly-installed guest root and needs private bind
   # mounts for /proc, /sys, /dev, and /run. Mount needs SYS_ADMIN plus the
   # Docker profiles relaxed for that syscall; this remains narrower than a
@@ -434,9 +469,10 @@ main() {
     -v "${staging_dir}:/work/rootfs" \
     -v "${artifact_dir}:/out" \
     -v "${kernel_artifact_dir}:/kernel-out" \
-    "$docker_image" bash /configure.sh "$rootfs_size" "$rootfs_hostname" "$rootfs_packages" "$initrd_image_name"
+    "$docker_image" bash /configure.sh "$rootfs_size" "$rootfs_hostname" "$rootfs_packages" \
+      "$initrd_image_name" "$rocky_release" "$rocky_arch" "$rootfs_image_name"
 
-  extract_kernel
+  prepare_kernel
   [ -s "${artifact_dir}/${rootfs_image_name}" ] || \
     fail "Rocky rootfs image was not created: ${artifact_dir}/${rootfs_image_name}"
   info "Rocky rootfs image: ${artifact_dir}/${rootfs_image_name}"
