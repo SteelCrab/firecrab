@@ -20,11 +20,11 @@ alias_filter=all
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/build-m2images.sh [--alias alpine-3.24|ubuntu-26.04|rocky-9.8]
+Usage: ./scripts/build-m2images.sh [--alias <alias>] [--arch x86_64|aarch64]
 
-Builds host-native Firecracker template(s), packages them into OUT_DIR, and
+Builds Firecracker template(s), packages them into OUT_DIR, and
 verifies OUT_DIR/SHA256SUMS. x86_64 defaults to dist/m2images/x86_64; ARM64 defaults
-to dist/m2images/aarch64.
+to dist/m2images/aarch64. The architecture defaults to uname -m.
 
 The full MVP release build is:
   ./scripts/build-m2images.sh
@@ -36,6 +36,8 @@ EOF
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+
+ARCH_SELECTOR=${M2IMAGE_ARCH:-}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -52,6 +54,15 @@ while [ "$#" -gt 0 ]; do
       alias_filter=${1#--alias=}
       shift
       ;;
+    --arch)
+      [ "$#" -ge 2 ] || fail 'missing value for --arch'
+      ARCH_SELECTOR=$2
+      shift 2
+      ;;
+    --arch=*)
+      ARCH_SELECTOR=${1#--arch=}
+      shift
+      ;;
     *)
       fail "unknown argument: $1"
       ;;
@@ -63,11 +74,16 @@ case "$alias_filter" in
   *) fail "unknown --alias $alias_filter (want alpine-3.24, ubuntu-26.04, or rocky-9.8)" ;;
 esac
 
-case "$(uname -m)" in
-  x86_64|amd64) m2image_arch=x86_64 ;;
-  aarch64|arm64) m2image_arch=aarch64 ;;
-  *) fail "unsupported architecture: $(uname -m)" ;;
-esac
+normalize_architecture() {
+  case "$1" in
+    x86_64|amd64) printf '%s\n' x86_64 ;;
+    aarch64|arm64) printf '%s\n' aarch64 ;;
+    *) fail "unsupported architecture: $1 (want x86_64 or aarch64)" ;;
+  esac
+}
+
+m2image_arch=$(normalize_architecture "${ARCH_SELECTOR:-$(uname -m)}")
+export M2IMAGE_ARCH="$m2image_arch"
 
 if [ -z "$out_dir" ]; then
   if [ "$m2image_arch" = aarch64 ]; then
@@ -118,7 +134,7 @@ esac
 
 info "packaging ${alias_filter} into ${out_dir}"
 IMAGE_ROOT="${repo_dir}/images" OUT_DIR="$out_dir" M2IMAGE_ARCH="$m2image_arch" \
-  "${script_dir}/package-m2images.sh" --alias "$alias_filter"
+  "${script_dir}/package-m2images.sh" --alias "$alias_filter" --arch "$m2image_arch"
 
 info "verifying ${out_dir}/SHA256SUMS"
 (

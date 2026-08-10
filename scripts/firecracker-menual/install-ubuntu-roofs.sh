@@ -139,7 +139,7 @@ cleanup() {
 trap cleanup EXIT
 
 detect_ubuntu_arch() {
-  case "$(uname -m 2>/dev/null || printf 'unknown')" in
+  case "${M2IMAGE_ARCH:-${UBUNTU_ARCH:-$(uname -m 2>/dev/null || printf 'unknown')}}" in
     x86_64 | amd64)
       printf '%s\n' 'amd64'
       ;;

@@ -58,9 +58,12 @@ abs_dir() {
 }
 
 detect_alpine_arch() {
-  case "$(uname -m 2>/dev/null || printf 'unknown')" in
-    x86_64 | aarch64)
-      uname -m
+  case "${M2IMAGE_ARCH:-$(uname -m 2>/dev/null || printf 'unknown')}" in
+    x86_64 | amd64)
+      printf '%s\n' 'x86_64'
+      ;;
+    aarch64 | arm64)
+      printf '%s\n' 'aarch64'
       ;;
     *)
       fail 'Unsupported architecture. Alpine rootfs creation supports x86_64 and aarch64.'

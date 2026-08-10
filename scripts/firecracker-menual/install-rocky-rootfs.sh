@@ -29,7 +29,7 @@ docker_bin='docker'
 docker_image='rockylinux:9'
 extract_vmlinux="${script_dir}/extract-vmlinux"
 
-case "$(uname -m 2>/dev/null || printf unknown)" in
+case "${M2IMAGE_ARCH:-$(uname -m 2>/dev/null || printf unknown)}" in
   x86_64|amd64)
     rocky_arch='x86_64'
     kernel_image_name="vmlinux-rocky-${rocky_release}-x86_64"
