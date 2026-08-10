@@ -23,7 +23,7 @@ usage() {
 Usage: ./scripts/build-m2images.sh [--alias alpine-3.24|ubuntu-26.04|rocky-9.8]
 
 Builds host-native Firecracker template(s), packages them into OUT_DIR, and
-verifies OUT_DIR/SHA256SUMS. x86_64 defaults to dist/m2images; ARM64 defaults
+verifies OUT_DIR/SHA256SUMS. x86_64 defaults to dist/m2images/x86_64; ARM64 defaults
 to dist/m2images/aarch64.
 
 The full MVP release build is:
@@ -73,7 +73,7 @@ if [ -z "$out_dir" ]; then
   if [ "$m2image_arch" = aarch64 ]; then
     out_dir="${repo_dir}/dist/m2images/aarch64"
   else
-    out_dir="${repo_dir}/dist/m2images"
+    out_dir="${repo_dir}/dist/m2images/x86_64"
   fi
 fi
 

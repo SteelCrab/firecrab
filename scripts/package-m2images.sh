@@ -8,7 +8,7 @@
 # Usage:
 #   ./scripts/package-m2images.sh              # alpine + ubuntu + rocky
 #   ./scripts/package-m2images.sh --alias alpine-3.24 [--arch x86_64|aarch64]
-#   IMAGE_ROOT=/var/lib/firecrab/images OUT_DIR=dist/m2images ./scripts/package-m2images.sh
+#   IMAGE_ROOT=/var/lib/firecrab/images OUT_DIR=dist/m2images/x86_64 ./scripts/package-m2images.sh
 #   ZSTD_THREADS=4 ./scripts/package-m2images.sh # override the safe 2-thread default
 #
 set -euo pipefail
@@ -30,8 +30,8 @@ usage() {
 Usage: ./scripts/package-m2images.sh [--alias <alias>] [--arch x86_64|aarch64]
 
 Packages host-native M2Image artifacts. The architecture defaults to uname -m.
-ARM64 packages default to dist/m2images/aarch64 so they cannot overwrite the
-x86_64 packages in dist/m2images.
+x86_64 packages default to dist/m2images/x86_64; ARM64 packages default to
+dist/m2images/aarch64.
 EOF
   exit 0
 }
@@ -80,7 +80,7 @@ if [ -z "$OUT_DIR" ]; then
   if [ "$M2IMAGE_ARCH" = aarch64 ]; then
     OUT_DIR=$repo_dir/dist/m2images/aarch64
   else
-    OUT_DIR=$repo_dir/dist/m2images
+    OUT_DIR=$repo_dir/dist/m2images/x86_64
   fi
 fi
 
