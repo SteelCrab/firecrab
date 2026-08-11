@@ -101,10 +101,17 @@ upload() {
   local source=$1
   local key=$2
   local content_type=$3
+  local content_disposition=
   [ -f "$source" ] || fail "upload source not found: $source"
+
+  if [ "$content_type" = application/zstd ]; then
+    content_disposition="attachment; filename=\"$(basename -- "$key")\""
+  fi
 
   if [ "$backend" = rclone ]; then
     command=(rclone copyto "$source" "${rclone_remote}:${bucket}/${key}")
+    [ -z "$content_disposition" ] \
+      || command+=(--metadata-set "content-disposition=${content_disposition}")
     [ "$dry_run" -eq 0 ] || command+=(--dry-run)
   else
     bytes=$(wc -c <"$source" | tr -d ' ')
@@ -113,6 +120,8 @@ upload() {
     fi
     command=(wrangler r2 object put "${bucket}/${key}" --file "$source" --remote \
       --content-type "$content_type")
+    [ -z "$content_disposition" ] \
+      || command+=(--content-disposition "$content_disposition")
     [ "$content_type" != application/zstd ] || command+=(--cache-control 'public, max-age=31536000, immutable')
   fi
 
