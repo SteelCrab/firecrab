@@ -340,9 +340,28 @@ restore_output_ownership() {
   chown -h "${SUDO_UID}:${SUDO_GID}" "${artifact_dir}/alpine-rootfs.ext4" 2>/dev/null || true
 }
 
+# Alpine's linux-virt arm64 vmlinuz ships with the Linux/arm64 "Image" boot
+# header magic (ARM64_IMAGE_MAGIC, 4 bytes at offset 0x38) zeroed out, even
+# though its PE/EFI wrapper is otherwise intact and passes `file`'s PE32+
+# ARM64 detection. Firecracker's aarch64 kernel loader (rust-vmm
+# linux-loader) validates that field independently of the PE header and
+# refuses to boot with "invalid Image magic number" if it's missing, so
+# restore it before packaging.
+restore_arm64_image_magic() {
+  image_path=$1
+  source_path=$2
+  printf '\x41\x52\x4d\x64' | dd of="$image_path" bs=1 seek=56 count=4 conv=notrunc status=none 2>/dev/null
+  image_magic=$(od -An -tx1 -j56 -N4 "$image_path" | tr -d ' \n')
+  if [ "$image_magic" != '41524d64' ]; then
+    rm -f "$image_path"
+    fail "failed to restore ARM64 Image magic number in ${source_path}"
+  fi
+}
+
 # Prepares the raw vmlinuz-virt copied out to /kernel-out. Firecracker expects
 # uncompressed ELF on x86_64, but the distro's PE32+ ARM64 Image must be kept
-# intact rather than passed through extract-vmlinux.
+# intact (aside from the magic-number repair above) rather than passed
+# through extract-vmlinux.
 extract_kernel() {
   raw_path="${kernel_artifact_dir}/vmlinuz-virt-raw"
   if [ ! -s "$raw_path" ]; then
@@ -358,6 +377,7 @@ extract_kernel() {
       rm -f "$kernel_image_tmp"
       fail "ARM64 kernel is not a PE32+ Image: ${raw_path}"
     fi
+    restore_arm64_image_magic "$kernel_image_tmp" "$raw_path"
   else
     info "extracting ELF vmlinux from: ${raw_path}"
     if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then

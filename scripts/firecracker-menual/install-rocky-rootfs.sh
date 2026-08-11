@@ -429,6 +429,25 @@ echo "ROOTFS_IMAGE=${rootfs_image}"
 EOF
 }
 
+# Rocky's official arm64 vmlinuz ships with the Linux/arm64 "Image" boot
+# header magic (ARM64_IMAGE_MAGIC, 4 bytes at offset 0x38) zeroed out, even
+# though its PE/EFI wrapper is otherwise intact and passes `file`'s PE32+
+# ARM64 detection. Firecracker's aarch64 kernel loader (rust-vmm
+# linux-loader) validates that field independently of the PE header and
+# refuses to boot with "invalid Image magic number" if it's missing, so
+# restore it before packaging.
+restore_arm64_image_magic() {
+  local image_path=$1
+  local source_path=$2
+  printf '\x41\x52\x4d\x64' | dd of="$image_path" bs=1 seek=56 count=4 conv=notrunc status=none 2>/dev/null
+  local image_magic
+  image_magic=$(od -An -tx1 -j56 -N4 "$image_path" | tr -d ' \n')
+  if [ "$image_magic" != '41524d64' ]; then
+    rm -f "$image_path"
+    fail "failed to restore ARM64 Image magic number in ${source_path}"
+  fi
+}
+
 prepare_kernel() {
   local raw_path="${kernel_artifact_dir}/vmlinuz-rocky-raw"
   local kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
@@ -442,6 +461,7 @@ prepare_kernel() {
       rm -f "$kernel_image_tmp"
       fail "Rocky aarch64 kernel is not a PE32+ ARM64 Image: ${raw_path}"
     fi
+    restore_arm64_image_magic "$kernel_image_tmp" "$raw_path"
   else
     info "extracting x86_64 ELF vmlinux from: ${raw_path}"
     if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then

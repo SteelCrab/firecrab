@@ -519,10 +519,28 @@ install_rootfs_packages() {
   cleanup_chroot_mounts
 }
 
+# Ubuntu's official arm64 vmlinuz ships with the Linux/arm64 "Image" boot
+# header magic (ARM64_IMAGE_MAGIC, 4 bytes at offset 0x38) zeroed out, even
+# though its PE/EFI wrapper is otherwise intact and passes `file`'s PE32+
+# ARM64 detection. Firecracker's aarch64 kernel loader (rust-vmm
+# linux-loader) validates that field independently of the PE header and
+# refuses to boot with "invalid Image magic number" if it's missing, so
+# restore it before packaging.
+restore_arm64_image_magic() {
+  image_path=$1
+  source_path=$2
+  printf '\x41\x52\x4d\x64' | dd of="$image_path" bs=1 seek=56 count=4 conv=notrunc status=none 2>/dev/null
+  image_magic=$(od -An -tx1 -j56 -N4 "$image_path" | tr -d ' \n')
+  if [ "$image_magic" != '41524d64' ]; then
+    rm -f "$image_path"
+    fail "failed to restore ARM64 Image magic number in ${source_path}"
+  fi
+}
+
 # Pulls the distro kernel out of the rootfs. x86_64 is converted to the
 # uncompressed ELF vmlinux Firecracker expects. ARM64 keeps the packaged
-# PE32+ Image unchanged, which is the only kernel format Firecracker accepts
-# on that architecture.
+# PE32+ Image unchanged (aside from the magic-number repair above), which is
+# the only kernel format Firecracker accepts on that architecture.
 extract_kernel() {
   vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -n 1)
   if [ -z "$vmlinuz_path" ]; then
@@ -538,6 +556,7 @@ extract_kernel() {
       rm -f "$kernel_image_tmp"
       fail "ARM64 kernel is not a PE32+ Image: ${vmlinuz_path}"
     fi
+    restore_arm64_image_magic "$kernel_image_tmp" "$vmlinuz_path"
   else
     info "extracting ELF vmlinux from: ${vmlinuz_path}"
     if ! "$extract_vmlinux" "$vmlinuz_path" >"$kernel_image_tmp"; then
