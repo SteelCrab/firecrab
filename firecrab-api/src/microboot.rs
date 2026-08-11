@@ -26,7 +26,7 @@ pub(crate) const MICROBOOT_ALIAS: &str = "__microboot";
 /// `images/.templates.json` is re-derived rather than silently reused: that
 /// file is replayed at every startup, and without this check a host that
 /// bootstrapped once would keep booting builders off the stale spec forever.
-const MICROBOOT_VERSION: &str = "v4";
+const MICROBOOT_VERSION: &str = "v5";
 
 fn netboot_url(filename: &str) -> String {
     netboot_url_for_arch(crate::image_install::host_architecture(), filename)
