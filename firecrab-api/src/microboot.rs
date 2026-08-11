@@ -7,7 +7,7 @@
 //! artifact-verification machinery works unchanged. See
 //! `public-docs/images.md`.
 
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::state::AppState;
@@ -355,14 +355,40 @@ fn prepare_kernel_image_for_arch(
             .map_err(|error| format!("mkdir {}: {error}", parent.display()))?;
     }
     std::fs::copy(raw_kernel, dest)
-        .map(|_| ())
         .map_err(|error| {
             format!(
                 "copy {} to {}: {error}",
                 raw_kernel.display(),
                 dest.display()
             )
-        })
+        })?;
+    restore_arm64_image_magic(dest)
+}
+
+/// Offset of the Linux/arm64 "Image" boot header's `magic` field, per
+/// `Documentation/arch/arm64/booting.rst`.
+const ARM64_IMAGE_MAGIC_OFFSET: u64 = 0x38;
+/// `ARM64_IMAGE_MAGIC` (`0x644d5241`), little-endian.
+const ARM64_IMAGE_MAGIC: [u8; 4] = *b"ARMd";
+
+/// Alpine's official netboot `vmlinuz-virt` for aarch64 (what `ensure_registered`
+/// downloads this builder kernel from) ships with this field zeroed out, even
+/// though the PE/EFI wrapper checked above is intact and would pass a plain
+/// `file`-style PE/ARM64 sniff. Firecracker's aarch64 kernel loader (rust-vmm
+/// linux-loader) validates this field independently of the PE header and
+/// refuses to boot with "invalid Image magic number" if it doesn't match —
+/// confirmed live against a production build (see the M2Images magic-number
+/// fix in `scripts/firecracker-menual/install-*-rootfs.sh`, same defect, same
+/// upstream cause), so repair it here too.
+fn restore_arm64_image_magic(dest: &Path) -> Result<(), String> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dest)
+        .map_err(|error| format!("open {} for magic repair: {error}", dest.display()))?;
+    file.seek(SeekFrom::Start(ARM64_IMAGE_MAGIC_OFFSET))
+        .map_err(|error| format!("seek {} for magic repair: {error}", dest.display()))?;
+    file.write_all(&ARM64_IMAGE_MAGIC)
+        .map_err(|error| format!("write ARM64 Image magic into {}: {error}", dest.display()))
 }
 
 #[cfg(test)]
@@ -392,12 +418,39 @@ mod tests {
     fn arm64_kernel_keeps_the_pe_image_instead_of_extracting_elf() {
         let dir = temp_image_root();
         let raw = dir.path().join("Image.raw");
-        std::fs::write(&raw, b"MZ\0\0firecracker-arm64-image").unwrap();
+        let mut raw_bytes = vec![0_u8; 64];
+        raw_bytes[0] = b'M';
+        raw_bytes[1] = b'Z';
+        raw_bytes.extend_from_slice(b"firecracker-arm64-image");
+        std::fs::write(&raw, &raw_bytes).unwrap();
         let dest = dir.path().join("Image-virt");
 
         prepare_kernel_image_for_arch(&raw, &dest, "aarch64").unwrap();
 
-        assert_eq!(std::fs::read(dest).unwrap(), std::fs::read(raw).unwrap());
+        let mut expected = raw_bytes;
+        expected[0x38..0x3c].copy_from_slice(&ARM64_IMAGE_MAGIC);
+        assert_eq!(std::fs::read(dest).unwrap(), expected);
+    }
+
+    #[test]
+    fn arm64_kernel_gets_its_boot_magic_repaired() {
+        // Reproduces the exact production defect: Alpine's official
+        // netboot vmlinuz-virt for aarch64 has this field zeroed, which
+        // Firecracker's kernel loader rejects with "invalid Image magic
+        // number" even though the PE/EFI wrapper around it is intact.
+        let dir = temp_image_root();
+        let raw = dir.path().join("Image.raw");
+        let mut raw_bytes = vec![0_u8; 64];
+        raw_bytes[0] = b'M';
+        raw_bytes[1] = b'Z';
+        raw_bytes.extend_from_slice(b"payload");
+        std::fs::write(&raw, &raw_bytes).unwrap();
+        let dest = dir.path().join("Image-virt");
+
+        prepare_kernel_image_for_arch(&raw, &dest, "aarch64").unwrap();
+
+        let dest_bytes = std::fs::read(dest).unwrap();
+        assert_eq!(&dest_bytes[0x38..0x3c], &ARM64_IMAGE_MAGIC);
     }
 
     #[test]
@@ -422,7 +475,16 @@ mod tests {
         // Firecracker supports, so extract-vmlinux takes its pass-through
         // path without scanning the much larger test executable.
         if crate::image_install::host_architecture() == "aarch64" {
-            std::fs::write(&raw_kernel, b"MZ\0\0fake ARM64 PE Image").unwrap();
+            // Magic already correct at 0x38 so the repair step is a no-op
+            // and the byte-equality assertion below stays meaningful for
+            // what this test actually covers (registration, not repair —
+            // see `arm64_kernel_gets_its_boot_magic_repaired` for that).
+            let mut fake = vec![0_u8; 64];
+            fake[0] = b'M';
+            fake[1] = b'Z';
+            fake[0x38..0x3c].copy_from_slice(&ARM64_IMAGE_MAGIC);
+            fake.extend_from_slice(b"fake ARM64 PE Image");
+            std::fs::write(&raw_kernel, &fake).unwrap();
         } else {
             std::fs::copy("/usr/bin/true", &raw_kernel).unwrap();
         }
