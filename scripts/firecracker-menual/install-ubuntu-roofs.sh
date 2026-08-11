@@ -737,7 +737,13 @@ main() {
   verify_rootfs_content
 
   info "creating Ubuntu rootfs image: ${rootfs_image}"
-  mkfs.ext4 -F -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  # Disable orphan_file when the host's e2fsprogs supports it so images built
+  # by 1.47 remain readable on hosts/guests that still ship e2fsprogs 1.46.
+  if grep -qw orphan_file /etc/mke2fs.conf 2>/dev/null; then
+    mkfs.ext4 -F -O '^orphan_file' -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  else
+    mkfs.ext4 -F -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  fi
   rootfs_link_target=$(update_symlink "$rootfs_image" "$rootfs_link")
   restore_output_ownership
 
