@@ -196,7 +196,7 @@ jobs:
           test "$BEFORE" = "$AFTER" || { echo "--doctor mutated host state"; exit 1; }
 
       - name: Install
-        # --no-images: building a guest rootfs needs docker and ~10 minutes.
+        # --no-images: building a guest rootfs needs sudo/chroot and ~10 minutes.
         # Everything else — deps, account, directories, units, dashboard — is real.
         #
         # PATH is carried into sudo on purpose: rustup lives in the runner
@@ -431,7 +431,7 @@ jobs:
           uname -a
 
       - name: Install firecrab with guest image(s)
-        # Alpine is the default image build; Ubuntu and Rocky are opt-in.
+        # Alpine is the default image build; Ubuntu and Rocky 9.8 are opt-in.
         run: |
           set -euo pipefail
           INSTALL=(sudo -E env "PATH=$PATH" ./install.sh)

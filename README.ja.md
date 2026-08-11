@@ -104,7 +104,7 @@ cd firecrab
 ./install.sh --check                 # 前提条件と予定変更を確認
 ./install.sh --doctor                # KVM、ファイアウォール、socket、ホスト設定を診断
 ./install.sh --with-ubuntu-image
-./install.sh --with-rocky-image
+./install.sh --with-rocky-image      # Rocky Linux 9.8 をビルド
 ./install.sh --uninstall         # デフォルトではデータを保持
 ./install.sh --uninstall --purge # /var/lib/firecrab も削除
 ```

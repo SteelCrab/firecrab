@@ -44,7 +44,7 @@ Usage: ./install.sh [OPTIONS]
   --no-deps           never install packages/toolchains, only report gaps
   --no-images         do not build a guest image
   --with-ubuntu-image also build the Ubuntu image (large, needs root chroot)
-  --with-rocky-image  also build the Rocky Linux 9 image (large, uses Docker)
+  --with-rocky-image  also build Rocky Linux 9.8 (large, needs root chroot)
   --no-frontend       do not build/install the dashboard
   --uninstall         stop and remove units, binaries and dashboard
   --purge             with --uninstall, also delete /var/lib/firecrab (VM data!)
@@ -130,6 +130,8 @@ pkg_name() {
         # openSUSE or Debian install has neither.
         *:findutils)  echo "findutils" ;;
         *:tar)        echo "tar" ;;
+        apt-get:xz)   echo "xz-utils" ;;
+        *:xz)         echo "xz" ;;
         # Dashboard M2Image install decompresses `{alias}.tar.zst` packages.
         *:zstd)       echo "zstd" ;;
         # cargo needs a linker; rustup only warns that one is missing and the
@@ -143,8 +145,6 @@ pkg_name() {
         # `ensure_build_tools` carries on without the dashboard.
         zypper:node)  echo "nodejs-default npm-default" ;;
         *:node)       echo "nodejs npm" ;;
-        apt-get:docker) echo "docker.io" ;;
-        *:docker)     echo "docker" ;;
         *) echo "$generic" ;;
     esac
 }
@@ -435,6 +435,24 @@ install_units() {
 
 # --- guest images ----------------------------------------------------------
 
+ensure_image_build_deps() {
+    local failed=0
+
+    ensure chroot coreutils || failed=1
+    ensure file file || failed=1
+    ensure gzip gzip || failed=1
+    ensure install coreutils || failed=1
+    ensure mount util-linux || failed=1
+    ensure sha256sum coreutils || failed=1
+    ensure truncate coreutils || failed=1
+    ensure umount util-linux || failed=1
+    if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
+        ensure jq jq || failed=1
+        ensure xz xz || failed=1
+    fi
+    return $failed
+}
+
 # Whether a guest rootfs is already installed.
 images_present() {
     compgen -G "$DATADIR/images/rootfs/*.ext4" >/dev/null 2>&1
@@ -460,11 +478,8 @@ report_images() {
         log "images: already installed in $DATADIR/images"
         return 0
     fi
-    if have docker; then
-        warn "no guest image (would build the Alpine image with docker)"
-    else
-        warn "no guest image (would install docker, then build the Alpine image)"
-    fi
+    ensure_image_build_deps || true
+    warn "no guest image (would build Alpine with sudo + chroot + direct ext4)"
     return 1
 }
 
@@ -487,14 +502,10 @@ ensure_images() {
     fi
 
     # Nothing to copy: build one. Alpine only by default — it is ~10x smaller
-    # than Ubuntu's and builds in a container, needing no host chroot.
-    if ! ensure docker docker; then
-        warn "no docker — cannot build a guest image. Build it elsewhere and copy it into $DATADIR/images"
+    # than Ubuntu's and uses the same host-native chroot + direct ext4 model.
+    if ! ensure_image_build_deps; then
+        warn "missing host-native image build dependencies; build elsewhere and copy into $DATADIR/images"
         return 1
-    fi
-    if ! systemctl is-active --quiet docker 2>/dev/null; then
-        step "starting docker"
-        systemctl enable --now docker >/dev/null 2>&1 || warn "could not start docker"
     fi
 
     step "building the Alpine guest image (this takes a few minutes)"
@@ -510,9 +521,9 @@ ensure_images() {
     fi
 
     if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
-        step "building the Rocky Linux 9 guest image (large)"
+        step "building the Rocky Linux 9.8 guest image (large)"
         "$REPO_ROOT/scripts/firecracker-menual/install-rocky-rootfs.sh" \
-            || warn "Rocky Linux image build failed (the Alpine one is still usable)"
+            || warn "Rocky Linux 9.8 image build failed (the Alpine one is still usable)"
     fi
 
     $SUDO cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
@@ -582,6 +593,9 @@ do_deps() {
     detect_pkg || die "no known package manager (apt/dnf/zypper/pacman/apk)"
 
     ensure_runtime_deps || die "missing runtime dependencies (see above)"
+    if [ "$WITH_IMAGES" -eq 1 ]; then
+        ensure_image_build_deps || die "missing image build dependencies (see above)"
+    fi
     ensure_firecracker  || die "firecracker is required"
     ensure_build_tools  || die "build tools are required"
     check_kvm || warn "no KVM here; that only matters where VMs actually run"

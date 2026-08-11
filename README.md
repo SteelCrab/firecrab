@@ -106,7 +106,7 @@ Useful installer modes:
 ./install.sh --check                 # report prerequisites and planned changes
 ./install.sh --doctor                # diagnose KVM, firewall, socket, and host setup
 ./install.sh --with-ubuntu-image
-./install.sh --with-rocky-image
+./install.sh --with-rocky-image      # build pinned Rocky Linux 9.8
 ./install.sh --uninstall         # retain data by default
 ./install.sh --uninstall --purge # also remove /var/lib/firecrab
 ```

@@ -4,8 +4,8 @@ An M2Image contains a kernel and root filesystem.
 It is the source template for new VM disks.
 
 Supported aliases are `alpine-3.24`, `ubuntu-26.04`, and `rocky-9.8`.
-All three support x86_64 and ARM64. The `rocky-9.8` alias is pinned to Rocky
-Linux 9.8 on both architectures.
+All three support x86_64 and ARM64. Rocky is exposed only through the
+versioned `rocky-9.8` alias.
 ARM64 packages keep the distro PE32+ `Image`; x86_64 packages use an ELF
 `vmlinux`. Firecracker cannot boot an x86_64 kernel on an ARM64 host.
 
@@ -21,6 +21,7 @@ Build one alias when needed.
 
 ```sh
 ./scripts/build-m2images.sh --alias alpine-3.24
+./scripts/build-m2images.sh --alias rocky-9.8
 ```
 
 Build each architecture on a native host of the same architecture.
@@ -30,11 +31,16 @@ Build each architecture on a native host of the same architecture.
 ./scripts/build-m2images.sh --arch aarch64
 ```
 
-Docker is used for Alpine and Rocky.
-Ubuntu also uses a temporary privileged chroot.
+All release builders create ext4 directly with `mkfs.ext4 -d`; Docker is not
+used. Alpine and Ubuntu unpack their official base tarballs. Rocky 9.8
+downloads the official Container-Base archive as a tarball and uses Rocky's
+own `dnf` in a temporary privileged chroot; no container runtime is involved.
+The exact Rocky Container-Base build is pinned by `ROCKY_CONTAINER_BUILD` in
+`packaging/m2images.json` alongside the distribution version.
 
-Rocky 9.8 guests include `dnf` so dashboard package actions work.
-Rebuild `rocky-9.8` after pulling rootfs script fixes before testing dnf.
+The host builder uses `sudo` for chroot mounts and ownership-preserving
+extraction. Build x86_64 on x86_64 and ARM64 on ARM64; foreign-architecture
+chroots are rejected with an explicit error.
 
 ## Output
 
@@ -112,8 +118,8 @@ firecrab stops the builder before reading its disk.
 Only one bootstrap job can run at a time.
 The builder is removed after success, failure, or cancellation.
 
-Rocky bootstrap downloads the pinned official Container-Base into MicroBoot;
-it does not require an already-installed Rocky template.
+Rocky bootstrap downloads the pinned official Container-Base archive into
+MicroBoot and does not require an already-installed Rocky template or Docker.
 
 ## Install
 

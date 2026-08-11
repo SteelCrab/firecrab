@@ -6,8 +6,8 @@
 # Downloads the official Alpine minirootfs, chroots in and installs
 # packages/kernel via ITS OWN bundled apk (not the outer guest's), then
 # packs the result into an ext4 image via `mkfs.ext4 -d` (no loop mount).
-# Adapted from install-alpine-rootfs.sh's write_configure_script — same
-# package list/config files, minus the outer-docker-container wrapper.
+# Shares the host-native install-alpine-rootfs.sh package/configuration model,
+# adapted to publish through the temporary MicroBoot builder disk.
 set -eu
 
 work=/root/fc-bootstrap
@@ -18,7 +18,7 @@ alpine_series='@M2IMAGE_DISTRO_SERIES@'
 alpine_version='@M2IMAGE_DISTRO_VERSION@'
 rootfs_size='512M'
 rootfs_hostname='firecrab'
-# bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu/Rocky).
+# bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu).
 rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
 
 info() { printf '[INFO] %s\n' "$*"; }
@@ -30,7 +30,7 @@ cleanup_mounts() {
   # silently no-ops under `2>/dev/null || true`, leaving /proc mounted live
   # under $staging when `mkfs.ext4 -d` walks it next, which then fails
   # ("No such process") trying to copy /proc's ephemeral per-process files.
-  # Same lazy-umount fallback bootstrap-rocky-in-guest.sh's cleanup relies on
+  # Use the same lazy-unmount fallback as the other guest bootstrap script
   # (its own first attempt uses -R, so in practice it always lands here).
   umount "$staging/proc" 2>/dev/null || umount -l "$staging/proc" 2>/dev/null || true
   umount "$staging/sys" 2>/dev/null || umount -l "$staging/sys" 2>/dev/null || true
@@ -179,7 +179,7 @@ truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
 # those consumers on *every single VM start*, not just the guest's own boot:
 # `rootfs::prepare_rootfs` runs `e2fsck -f -y` before `resize2fs`, and
 # `specialize_guest` runs `e2fsck -p`. On a host still shipping e2fsprogs
-# 1.46.5 (Rocky 9, Ubuntu 22.04 — both supported by install.sh) every VM
+# e2fsprogs 1.46.5 hosts (for example Ubuntu 22.04) every VM
 # made from this template would fail to start. Building templates on the
 # host never hit this because host mkfs and host e2fsck matched; sourcing
 # the builder from MicroBoot is what split those two versions apart.

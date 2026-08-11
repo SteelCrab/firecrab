@@ -49,7 +49,7 @@ The default install builds the Alpine image.
 | `--no-deps` | Do not install missing tools |
 | `--no-images` | Skip guest image creation |
 | `--with-ubuntu-image` | Also build Ubuntu 26.04 |
-| `--with-rocky-image` | Also build Rocky Linux 9 |
+| `--with-rocky-image` | Also build Rocky Linux 9.8 without Docker |
 | `--no-frontend` | Skip the dashboard |
 | `--uninstall` | Remove services but keep data |
 | `--uninstall --purge` | Also delete VM data |
