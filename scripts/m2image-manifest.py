@@ -179,6 +179,8 @@ def build_catalog(
             entries.append(
                 {
                     "alias": alias,
+                    "distribution": image["distribution"],
+                    "series": image["series"],
                     "architecture": architecture,
                     "version": image["templateVersion"],
                     "distributionVersion": image["version"],

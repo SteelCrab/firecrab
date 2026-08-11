@@ -103,10 +103,17 @@ fn script_for(alias: &str) -> String {
         .get("ROCKY_REPOSITORY_BASE")
         .map(String::as_str)
         .unwrap_or("");
+    let rocky_container_build = image
+        .builder
+        .environment
+        .get("ROCKY_CONTAINER_BUILD")
+        .map(String::as_str)
+        .unwrap_or("");
     script
         .replace("@M2IMAGE_DISTRO_SERIES@", &image.series)
         .replace("@M2IMAGE_DISTRO_VERSION@", &image.version)
         .replace("@ROCKY_REPOSITORY_BASE@", rocky_repository_base)
+        .replace("@ROCKY_CONTAINER_BUILD@", rocky_container_build)
 }
 
 /// `POST /api/images/{alias}/bootstrap` — boots a builder VM off any
@@ -862,6 +869,7 @@ mod tests {
         assert!(script_for("alpine-3.24").contains("alpine_version='3.24.1'"));
         assert!(script_for("ubuntu-26.04").contains("series='26.04'"));
         assert!(script_for("rocky-9.8").contains("rocky_release='9.8'"));
+        assert!(script_for("rocky-9.8").contains("rocky_container_build='20260525.0'"));
         assert!(script_for("rocky-9.8").contains("/pub/rocky"));
     }
 
@@ -1286,11 +1294,11 @@ mod tests {
         let state = test_state(directory.path()).await;
         crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
         // test_state's one registered template, "ubuntu-rootfs-26.04", isn't
-        // any of the 3 bootstrap-target aliases and (before this task)
-        // wouldn't have satisfied rocky-9.8's old matching-source rule either
-        // — this fixture is deliberately unchanged from the test it
-        // replaces, to prove the same "no real target template installed"
-        // situation that used to 503 now succeeds. Register __microboot
+        // any of the 3 bootstrap-target aliases. This proves the same
+        // "no real target template installed" situation that used to 503
+        // now succeeds. Alpine keeps the test fixture below an 8 GiB free
+        // space requirement; Rocky-specific script mapping is tested above.
+        // Register __microboot
         // directly (mirroring Task 1's own registration test) rather than
         // exercising a real network download here.
         // Must be the version this build pins: `ensure_registered`'s fast
@@ -1311,13 +1319,13 @@ mod tests {
         let (status, Json(session)) = start_bootstrap(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            Path("rocky-9.8".to_owned()),
+            Path("alpine-3.24".to_owned()),
         )
         .await
         .unwrap();
 
         assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(session.alias, "rocky-9.8");
+        assert_eq!(session.alias, "alpine-3.24");
         assert_eq!(session.source_alias, crate::microboot::MICROBOOT_ALIAS);
 
         // The builder VM's own spec, not just the session's status. The RAM

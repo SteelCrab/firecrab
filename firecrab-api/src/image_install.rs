@@ -866,11 +866,7 @@ mod tests {
 
     #[test]
     fn package_url_uses_distribution_version_tree_for_known_aliases() {
-        let architecture_segment = if host_architecture() == "aarch64" {
-            "/aarch64"
-        } else {
-            ""
-        };
+        let architecture_segment = format!("/{}", host_architecture());
         assert_eq!(
             package_url("http://127.0.0.1:8765/", "ubuntu-26.04"),
             format!(
@@ -880,7 +876,7 @@ mod tests {
         assert_eq!(
             package_url("http://mirror.example/m2", "alpine-3.24"),
             format!(
-                "http://mirror.example/m2/alpine/3.24{architecture_segment}/alpine-3.24.tar.zst"
+                "http://mirror.example/m2/alpine/3.24.1{architecture_segment}/alpine-3.24.tar.zst"
             )
         );
         assert_eq!(
@@ -903,10 +899,10 @@ mod tests {
     }
 
     #[test]
-    fn arm64_packages_use_architecture_specific_registry_paths() {
+    fn packages_use_architecture_specific_registry_paths() {
         assert_eq!(
             package_path_for_arch("alpine-3.24", "aarch64"),
-            "alpine/3.24/aarch64/alpine-3.24.tar.zst"
+            "alpine/3.24.1/aarch64/alpine-3.24.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("ubuntu-26.04", "aarch64"),
@@ -914,7 +910,7 @@ mod tests {
         );
         assert_eq!(
             package_path_for_arch("ubuntu-26.04", "x86_64"),
-            "ubuntu/26.04/ubuntu-26.04.tar.zst"
+            "ubuntu/26.04/x86_64/ubuntu-26.04.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("rocky-9.8", "aarch64"),
@@ -922,7 +918,7 @@ mod tests {
         );
         assert_eq!(
             package_path_for_arch("rocky-9.8", "x86_64"),
-            "rocky/9.8/rocky-9.8.tar.zst"
+            "rocky/9.8/x86_64/rocky-9.8.tar.zst"
         );
     }
 

@@ -31,6 +31,7 @@ rootfs_size='2G'
 rootfs_hostname='firecrab'
 rocky_release='@M2IMAGE_DISTRO_VERSION@'
 rocky_repository_base='@ROCKY_REPOSITORY_BASE@'
+rocky_container_build='@ROCKY_CONTAINER_BUILD@'
 case "$(uname -m)" in
   x86_64)
     rocky_arch='x86_64'
@@ -45,7 +46,7 @@ case "$(uname -m)" in
 esac
 baseos_url="${rocky_repository_base}/${rocky_release}/BaseOS/${rocky_arch}/os/"
 appstream_url="${rocky_repository_base}/${rocky_release}/AppStream/${rocky_arch}/os/"
-container_name="Rocky-9-Container-Base.latest.${rocky_arch}.tar.xz"
+container_name="Rocky-9-Container-Base-${rocky_release}-${rocky_container_build}.${rocky_arch}.oci.tar.xz"
 container_url="${rocky_repository_base}/${rocky_release}/images/${rocky_arch}/${container_name}"
 # dnf must be inside the guest (see install-rocky-rootfs.sh); dashboard package
 # actions invoke `dnf` on the serial console.

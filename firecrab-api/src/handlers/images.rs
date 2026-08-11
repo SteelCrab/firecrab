@@ -549,7 +549,7 @@ mod tests {
         let expected_url = if std::env::consts::ARCH == "aarch64" {
             "http://127.0.0.1:8765/ubuntu/26.04/aarch64/ubuntu-26.04.tar.zst"
         } else {
-            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst"
+            "http://127.0.0.1:8765/ubuntu/26.04/x86_64/ubuntu-26.04.tar.zst"
         };
         assert_eq!(ubuntu.package_url.as_deref(), Some(expected_url));
     }
