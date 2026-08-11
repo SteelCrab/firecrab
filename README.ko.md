@@ -5,8 +5,6 @@
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
-<h1 align="center">firecrab</h1>
-
 ```text
 ███████ ██ ██████  ███████  ██████ ██████   █████  ██████
 ██      ██ ██   ██ ██      ██      ██   ██ ██   ██ ██   ██
