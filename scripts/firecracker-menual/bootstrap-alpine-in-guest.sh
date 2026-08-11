@@ -14,6 +14,8 @@ work=/root/fc-bootstrap
 staging="$work/staging"
 out="$work/out"
 alpine_releases_base='https://dl-cdn.alpinelinux.org/alpine'
+alpine_series='@M2IMAGE_DISTRO_SERIES@'
+alpine_version='@M2IMAGE_DISTRO_VERSION@'
 rootfs_size='512M'
 rootfs_hostname='firecrab'
 # bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu/Rocky).
@@ -62,33 +64,17 @@ info 'installing e2fsprogs into the outer (MicroBoot) shell'
 # from Alpine's own official minirootfs archive, which already ships a
 # pre-initialized apk database. curl: busybox only provides wget, not curl,
 # and this script uses curl throughout (found live: "curl: not found").
-apk add --no-cache --initdb --repository "${alpine_releases_base}/v3.24/main" e2fsprogs curl \
+apk add --no-cache --initdb --repository "${alpine_releases_base}/v${alpine_series}/main" e2fsprogs curl \
   || fail 'could not install e2fsprogs/curl into the outer shell'
 
-info 'resolving latest Alpine 3.24 minirootfs release'
-releases_yaml="$work/latest-releases.yaml"
-curl -fsSL "${alpine_releases_base}/v3.24/releases/${arch}/latest-releases.yaml" -o "$releases_yaml" \
-  || fail 'could not download Alpine release metadata'
-
-# intentional word splitting: awk emits four space-separated fields to
-# become positional parameters.
-# shellcheck disable=SC2046
-set -- $(awk '
-  function emit() { if (flavor == "alpine-minirootfs") { printf "%s %s %s %s", branch, version, file, sha256; found = 1 } }
-  /^-[[:space:]]*$/ { emit(); if (found) exit; branch=""; version=""; file=""; sha256=""; flavor=""; next }
-  /^  branch:/ { branch = $2 }
-  /^  version:/ { version = $2 }
-  /^  flavor:/ { flavor = $2 }
-  /^  file:/ { file = $2 }
-  /^  sha256:/ { sha256 = $2 }
-  END { if (!found) emit() }
-' "$releases_yaml")
-branch=$1
-version=$2
-archive_file=$3
-archive_sha256=$4
-[ -n "$branch" ] && [ -n "$archive_file" ] || fail 'could not resolve the Alpine minirootfs release'
-info "Alpine branch ${branch}, minirootfs version ${version}"
+branch="v${alpine_series}"
+archive_file="alpine-minirootfs-${alpine_version}-${arch}.tar.gz"
+checksum_file="$work/${archive_file}.sha256"
+curl -fsSL "${alpine_releases_base}/${branch}/releases/${arch}/${archive_file}.sha256" \
+  -o "$checksum_file" || fail 'could not download Alpine minirootfs checksum'
+archive_sha256=$(awk -v file="$archive_file" '$2 == file || $2 == "*" file { print $1; exit }' "$checksum_file")
+[ -n "$archive_sha256" ] || fail 'could not parse Alpine minirootfs checksum'
+info "Alpine branch ${branch}, minirootfs version ${alpine_version}"
 
 archive_path="$work/${archive_file}"
 curl -fsSL "${alpine_releases_base}/${branch}/releases/${arch}/${archive_file}" -o "$archive_path" \

@@ -156,7 +156,22 @@ jobs:
         run: rustup show
 
       - name: shellcheck
-        run: shellcheck install.sh scripts/firecrab-doctor.sh
+        run: |
+          shellcheck install.sh scripts/firecrab-doctor.sh \
+            scripts/build-m2images.sh scripts/package-m2images.sh \
+            scripts/publish-m2images-r2.sh \
+            scripts/firecracker-menual/install-alpine-rootfs.sh \
+            scripts/firecracker-menual/install-ubuntu-roofs.sh \
+            scripts/firecracker-menual/install-rocky-rootfs.sh
+          shellcheck -s sh \
+            scripts/firecracker-menual/bootstrap-alpine-in-guest.sh \
+            scripts/firecracker-menual/bootstrap-ubuntu-in-guest.sh \
+            scripts/firecracker-menual/bootstrap-rocky-in-guest.sh
+
+      - name: M2Image release manifest
+        run: |
+          python3 scripts/m2image-manifest.py validate
+          test "$(./scripts/build-m2images.sh --list | wc -l)" -eq 3
 
       - name: --help, --check, and --doctor (unprivileged, no mutation)
         # --check / --doctor have to work unprivileged and change nothing; a
@@ -385,7 +400,7 @@ jobs:
         template:
           - alpine-3.24
           - ubuntu-26.04
-          - rocky-9
+          - rocky-9.8
         # GitHub-hosted Linux images with nested KVM (x86_64).
         host:
           - ubuntu-24.04
@@ -466,7 +481,7 @@ jobs:
             template: ubuntu-26.04
             runner: '["self-hosted","linux","x64","kvm","debian-12"]'
           - host: debian-12
-            template: rocky-9
+            template: rocky-9.8
             runner: '["self-hosted","linux","x64","kvm","debian-12"]'
           - host: fedora
             template: alpine-3.24
@@ -475,7 +490,7 @@ jobs:
             template: ubuntu-26.04
             runner: '["self-hosted","linux","x64","kvm","fedora"]'
           - host: fedora
-            template: rocky-9
+            template: rocky-9.8
             runner: '["self-hosted","linux","x64","kvm","fedora"]'
           - host: archlinux
             template: alpine-3.24
@@ -484,7 +499,7 @@ jobs:
             template: ubuntu-26.04
             runner: '["self-hosted","linux","x64","kvm","arch"]'
           - host: archlinux
-            template: rocky-9
+            template: rocky-9.8
             runner: '["self-hosted","linux","x64","kvm","arch"]'
           - host: opensuse
             template: alpine-3.24
@@ -493,7 +508,7 @@ jobs:
             template: ubuntu-26.04
             runner: '["self-hosted","linux","x64","kvm","opensuse"]'
           - host: opensuse
-            template: rocky-9
+            template: rocky-9.8
             runner: '["self-hosted","linux","x64","kvm","opensuse"]'
           - host: aarch64
             template: alpine-3.24

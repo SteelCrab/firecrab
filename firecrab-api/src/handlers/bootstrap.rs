@@ -88,13 +88,25 @@ const UBUNTU_SCRIPT: &str =
 const ROCKY_SCRIPT: &str =
     include_str!("../../../scripts/firecracker-menual/bootstrap-rocky-in-guest.sh");
 
-fn script_for(alias: &str) -> &'static str {
-    match alias {
+fn script_for(alias: &str) -> String {
+    let script = match alias {
         "alpine-3.24" => ALPINE_SCRIPT,
         "ubuntu-26.04" => UBUNTU_SCRIPT,
         "rocky-9.8" => ROCKY_SCRIPT,
         other => unreachable!("start_bootstrap already rejected unknown alias {other}"),
-    }
+    };
+    let image = crate::m2image_manifest::image(alias)
+        .unwrap_or_else(|| panic!("bootstrap alias is missing from M2Image manifest: {alias}"));
+    let rocky_repository_base = image
+        .builder
+        .environment
+        .get("ROCKY_REPOSITORY_BASE")
+        .map(String::as_str)
+        .unwrap_or("");
+    script
+        .replace("@M2IMAGE_DISTRO_SERIES@", &image.series)
+        .replace("@M2IMAGE_DISTRO_VERSION@", &image.version)
+        .replace("@ROCKY_REPOSITORY_BASE@", rocky_repository_base)
 }
 
 /// `POST /api/images/{alias}/bootstrap` — boots a builder VM off any
@@ -836,6 +848,22 @@ mod tests {
     const TEST_UBUNTU_KERNEL: &str = "kernel/vmlinux-ubuntu-26.04-x86_64";
     #[cfg(target_arch = "x86_64")]
     const TEST_ALPINE_KERNEL: &str = "kernel/vmlinux-alpine-virt-x86_64";
+
+    #[test]
+    fn bootstrap_scripts_receive_distribution_versions_from_the_manifest() {
+        for alias in BOOTSTRAPPABLE_ALIASES {
+            let script = script_for(alias);
+            assert!(
+                !script.contains("@M2IMAGE_"),
+                "unresolved marker in {alias}"
+            );
+            assert!(!script.contains("@ROCKY_"), "unresolved marker in {alias}");
+        }
+        assert!(script_for("alpine-3.24").contains("alpine_version='3.24.1'"));
+        assert!(script_for("ubuntu-26.04").contains("series='26.04'"));
+        assert!(script_for("rocky-9.8").contains("rocky_release='9.8'"));
+        assert!(script_for("rocky-9.8").contains("/pub/rocky"));
+    }
 
     /// Registers a fake console+process for `id`, the same way
     /// `handlers::console_sentinel`'s own tests do —

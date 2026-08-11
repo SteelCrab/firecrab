@@ -1,78 +1,40 @@
 #!/usr/bin/env bash
-# Build and package the MVP M2Image templates.
-#
-# This is the single, reproducible entry point for a release builder:
-#
-#   ./scripts/build-m2images.sh
-#
-# It downloads only official Ubuntu/Alpine/Rocky inputs through the existing
-# distro builders, writes Firecracker-ready artifacts beneath `images/`, then
-# produces `dist/m2images/{alias}.tar.zst` and verifies `SHA256SUMS`.
-# Ubuntu's builder uses a temporary chroot, so it will request sudo when this
-# command reaches that step. The API service is deliberately not involved.
+# Build and package Firecracker M2Images from packaging/m2images.json.
 
 set -euo pipefail
 
-script_dir=$(CDPATH=; cd -- "$(dirname -- "$0")" && pwd -P)
-repo_dir=$(CDPATH=; cd -- "${script_dir}/.." && pwd -P)
+unset CDPATH
+script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(cd -- "${script_dir}/.." && pwd -P)
+manifest=${M2IMAGE_MANIFEST:-${repo_dir}/packaging/m2images.json}
+dist_dir=${DIST_DIR:-${repo_dir}/dist/m2images}
 out_dir=${OUT_DIR:-}
 alias_filter=all
+architecture=${M2IMAGE_ARCH:-}
+package_images=1
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/build-m2images.sh [--alias <alias>] [--arch x86_64|aarch64]
+Usage: ./scripts/build-m2images.sh [options]
 
-Builds Firecracker template(s), packages them into OUT_DIR, and
-verifies OUT_DIR/SHA256SUMS. x86_64 defaults to dist/m2images/x86_64; ARM64 defaults
-to dist/m2images/aarch64. The architecture defaults to uname -m.
+Options:
+  --alias <alias|all>         Build one manifest alias or all aliases (default: all)
+  --arch <x86_64|aarch64>    Target architecture (default: uname -m)
+  --manifest <path>          Alternate release manifest
+  --dist-dir <path>          Package root (default: dist/m2images)
+  --no-package               Build image files without packaging them
+  --list                     List configured aliases and exit
+  -h, --help                 Show this help
 
-The full MVP release build is:
-  ./scripts/build-m2images.sh
-
-Ubuntu needs sudo for its temporary chroot. Alpine and Rocky build in Docker.
-Rocky Linux 9.8 builds on both x86_64 and ARM64.
+The manifest pins distribution versions, builders, artifact paths, internal
+revisions, and Cloudflare R2 object keys. Build each architecture on a native
+host of that architecture; package outputs are written below <dist-dir>/<arch>.
 EOF
 }
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
-
-ARCH_SELECTOR=${M2IMAGE_ARCH:-}
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    --alias)
-      [ "$#" -ge 2 ] || fail 'missing value for --alias'
-      alias_filter=$2
-      shift 2
-      ;;
-    --alias=*)
-      alias_filter=${1#--alias=}
-      shift
-      ;;
-    --arch)
-      [ "$#" -ge 2 ] || fail 'missing value for --arch'
-      ARCH_SELECTOR=$2
-      shift 2
-      ;;
-    --arch=*)
-      ARCH_SELECTOR=${1#--arch=}
-      shift
-      ;;
-    *)
-      fail "unknown argument: $1"
-      ;;
-  esac
-done
-
-case "$alias_filter" in
-  all|alpine-3.24|ubuntu-26.04|rocky-9.8) ;;
-  *) fail "unknown --alias $alias_filter (want alpine-3.24, ubuntu-26.04, or rocky-9.8)" ;;
-esac
+require_command() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required"; }
 
 normalize_architecture() {
   case "$1" in
@@ -82,64 +44,83 @@ normalize_architecture() {
   esac
 }
 
-m2image_arch=$(normalize_architecture "${ARCH_SELECTOR:-$(uname -m)}")
-export M2IMAGE_ARCH="$m2image_arch"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --alias) [ "$#" -ge 2 ] || fail 'missing value for --alias'; alias_filter=$2; shift 2 ;;
+    --alias=*) alias_filter=${1#--alias=}; shift ;;
+    --arch) [ "$#" -ge 2 ] || fail 'missing value for --arch'; architecture=$2; shift 2 ;;
+    --arch=*) architecture=${1#--arch=}; shift ;;
+    --manifest) [ "$#" -ge 2 ] || fail 'missing value for --manifest'; manifest=$2; shift 2 ;;
+    --manifest=*) manifest=${1#--manifest=}; shift ;;
+    --dist-dir) [ "$#" -ge 2 ] || fail 'missing value for --dist-dir'; dist_dir=$2; shift 2 ;;
+    --dist-dir=*) dist_dir=${1#--dist-dir=}; shift ;;
+    --no-package) package_images=0; shift ;;
+    --list)
+      require_command python3
+      python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" aliases
+      exit 0
+      ;;
+    *) fail "unknown argument: $1" ;;
+  esac
+done
+
+require_command python3
+require_command sha256sum
+python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" validate >/dev/null
+architecture=$(normalize_architecture "${architecture:-$(uname -m)}")
+export M2IMAGE_ARCH=$architecture
 
 if [ -z "$out_dir" ]; then
-  if [ "$m2image_arch" = aarch64 ]; then
-    out_dir="${repo_dir}/dist/m2images/aarch64"
-  else
-    out_dir="${repo_dir}/dist/m2images/x86_64"
-  fi
+  out_dir="${dist_dir}/${architecture}"
 fi
 
-case "$alias_filter" in
-  all|alpine-3.24|rocky-9.8)
-    command -v docker >/dev/null 2>&1 || fail 'docker is required for the selected image builder(s)'
-    ;;
-esac
-command -v sha256sum >/dev/null 2>&1 || fail 'sha256sum is required'
-
-build_alpine() {
-  info 'building alpine-3.24 from the official Alpine minirootfs and linux-virt packages'
-  "${script_dir}/firecracker-menual/install-alpine-rootfs.sh"
-}
-
-build_ubuntu() {
-  info 'building ubuntu-26.04 from Ubuntu Base and linux-image-generic'
-  "${script_dir}/firecracker-menual/install-ubuntu-roofs.sh"
-}
-
-build_rocky() {
-  info "building rocky-9 (Rocky Linux 9.8 ${m2image_arch}) from official BaseOS/AppStream packages and kernel"
-  "${script_dir}/firecracker-menual/install-rocky-rootfs.sh"
-}
-
-case "$alias_filter" in
-  all)
-    build_alpine
-    build_ubuntu
-    build_rocky
-    ;;
-  alpine-3.24)
-    build_alpine
-    ;;
-  ubuntu-26.04)
-    build_ubuntu
-    ;;
-  rocky-9.8)
-    build_rocky
-    ;;
-esac
-
-info "packaging ${alias_filter} into ${out_dir}"
-IMAGE_ROOT="${repo_dir}/images" OUT_DIR="$out_dir" M2IMAGE_ARCH="$m2image_arch" \
-  "${script_dir}/package-m2images.sh" --alias "$alias_filter" --arch "$m2image_arch"
-
-info "verifying ${out_dir}/SHA256SUMS"
-(
-  cd "$out_dir"
-  sha256sum -c SHA256SUMS
+mapfile -t known_aliases < <(
+  python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" aliases
 )
+selected_aliases=()
+if [ "$alias_filter" = all ]; then
+  selected_aliases=("${known_aliases[@]}")
+else
+  for alias in "${known_aliases[@]}"; do
+    if [ "$alias" = "$alias_filter" ]; then
+      selected_aliases=("$alias")
+      break
+    fi
+  done
+  [ "${#selected_aliases[@]}" -eq 1 ] || fail "unknown --alias: $alias_filter"
+fi
 
-info 'M2Image package build complete'
+for alias in "${selected_aliases[@]}"; do
+  builder=$(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" \
+    field "$alias" builder.script)
+  version=$(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" \
+    field "$alias" version)
+  [ -x "${repo_dir}/${builder}" ] || fail "builder is not executable: ${repo_dir}/${builder}"
+
+  while IFS= read -r command; do
+    [ -n "$command" ] && require_command "$command"
+  done < <(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" requires "$alias")
+
+  while IFS=$'\t' read -r key value; do
+    [ -n "$key" ] || continue
+    printf -v "$key" '%s' "$value"
+    export "${key?}"
+  done < <(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" environment "$alias")
+
+  info "building ${alias} (distribution ${version}, ${architecture})"
+  "${repo_dir}/${builder}"
+done
+
+if [ "$package_images" -eq 1 ]; then
+  package_alias=$alias_filter
+  info "packaging ${package_alias} into ${out_dir}"
+  IMAGE_ROOT="${repo_dir}/images" OUT_DIR="$out_dir" DIST_DIR="$dist_dir" \
+    M2IMAGE_ARCH="$architecture" M2IMAGE_MANIFEST="$manifest" \
+    "${script_dir}/package-m2images.sh" --alias "$package_alias" --arch "$architecture"
+
+  info "verifying ${out_dir}/SHA256SUMS"
+  (cd "$out_dir" && sha256sum -c SHA256SUMS)
+fi
+
+info 'M2Image build complete'

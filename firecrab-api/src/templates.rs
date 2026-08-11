@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::m2image_manifest;
+
 /// Manifest of every template registered at runtime (image install or web
 /// build), relative to the image root. Rebuilt into the registry on the next
 /// startup so a template that was never part of [`default_specs`] — a web
@@ -142,7 +144,7 @@ impl TemplateVersion {
     }
 
     /// Whether this image must be started with Firecracker's PCI transport
-    /// enabled. On x86_64, Rocky Linux 9.8 needs PCI because its stock kernel
+    /// enabled. On x86_64, Rocky Linux needs PCI because its stock kernel
     /// disables `CONFIG_VIRTIO_MMIO`; Ubuntu 26.04 also uses PCI because its
     /// stock kernel rejects Firecracker 1.16's command-line MMIO regions as
     /// busy. Both distributions use virtio-mmio on aarch64.
@@ -165,7 +167,7 @@ impl TemplateVersion {
         // The EL9 initramfs contains virtio_net, but does not load it merely
         // because the PCI device exists. Force it before switching to the
         // rootfs so NetworkManager sees the interface immediately.
-        if self.name == "rocky-9.8" && !args.contains(&"rd.driver.pre=virtio_net") {
+        if self.name.starts_with("rocky-") && !args.contains(&"rd.driver.pre=virtio_net") {
             args.push("rd.driver.pre=virtio_net");
         }
 
@@ -181,7 +183,9 @@ impl TemplateVersion {
 }
 
 fn requires_pci_transport_for_arch(name: &str, architecture: &str) -> bool {
-    matches!(name, "rocky-9.8" | "ubuntu-26.04") && architecture != "aarch64"
+    m2image_manifest::image(name)
+        .is_some_and(|image| matches!(image.distribution.as_str(), "rocky" | "ubuntu"))
+        && architecture != "aarch64"
 }
 
 /// Registry of verified template versions, resolved by alias or by exact
@@ -703,100 +707,31 @@ fn default_specs() -> Vec<TemplateSpec> {
 }
 
 fn default_specs_for_arch(host_arch: &str) -> Vec<TemplateSpec> {
-    // Every built-in distribution supports both Firecracker host
-    // architectures. x86_64 kernels are extracted ELF vmlinux files; ARM64
-    // kernels retain their distro PE32+ Image format.
-    let alpine_arch = match host_arch {
-        "aarch64" => "aarch64",
-        _ => "x86_64",
-    };
-    let alpine_boot_args = if alpine_arch == "aarch64" {
-        "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
+    // The JSON release manifest is compiled into the API, so build,
+    // packaging, R2 paths, and runtime registration cannot drift apart.
+    let architecture = if host_arch == "aarch64" {
+        "aarch64"
     } else {
-        "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw"
+        "x86_64"
     };
-    let (ubuntu_kernel, ubuntu_rootfs_arch, ubuntu_boot_args) = if alpine_arch == "aarch64" {
-        (
-            "kernel/Image-ubuntu-26.04-aarch64",
-            "arm64",
-            "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw",
-        )
-    } else {
-        (
-            "kernel/vmlinux-ubuntu-26.04-x86_64",
-            "amd64",
-            "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw",
-        )
-    };
-    let alpine_kernel = if alpine_arch == "aarch64" {
-        "kernel/Image-alpine-virt-aarch64".to_owned()
-    } else {
-        "kernel/vmlinux-alpine-virt-x86_64".to_owned()
-    };
-    let (rocky_kernel, rocky_boot_args) = if alpine_arch == "aarch64" {
-        (
-            "kernel/Image-rocky-9.8-aarch64",
-            "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw",
-        )
-    } else {
-        (
-            "kernel/vmlinux-rocky-9.8-x86_64",
-            "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw",
-        )
-    };
-
-    let mut specs = vec![
-        TemplateSpec {
-            alias: "ubuntu-26.04".to_owned(),
-            version: "ubuntu-26.04-v2".to_owned(),
-            // Ubuntu's own linux-image-generic kernel (see
-            // install-ubuntu-roofs.sh) rather than a self-built
-            // vanilla one — virtio_blk/ext4 are builtin, no initrd
-            // needed (public-docs/images.md).
-            kernel: PathBuf::from(ubuntu_kernel),
-            initrd: None,
-            rootfs: PathBuf::from(format!(
-                "rootfs/ubuntu-rootfs-26.04-{ubuntu_rootfs_arch}.ext4"
-            )),
-            boot_args: ubuntu_boot_args.to_owned(),
-        },
-        TemplateSpec {
-            alias: "alpine-3.24".to_owned(),
-            version: "alpine-3.24.1-v3".to_owned(),
-            // Alpine's own linux-virt kernel (see
-            // install-alpine-rootfs.sh); unlike Ubuntu's, its
-            // virtio_blk/ext4 are modules, so the initrd Alpine
-            // itself builds for it is required to reach the root
-            // device at all. `rootfstype=ext4` is also required —
-            // without an explicit -t, mkinitfs's mount call can't
-            // guess a filesystem type whose module (ext4, also not
-            // builtin here) isn't loaded yet, and fails with a
-            // misleading "No such file or directory" instead of
-            // triggering the kernel's on-demand module load.
-            kernel: PathBuf::from(alpine_kernel),
-            initrd: Some(PathBuf::from(format!(
-                "kernel/initramfs-alpine-virt-{alpine_arch}"
-            ))),
-            rootfs: PathBuf::from(format!("rootfs/alpine-rootfs-3.24.1-{alpine_arch}.ext4")),
-            boot_args: alpine_boot_args.to_owned(),
-        },
-    ];
-
-    specs.push(TemplateSpec {
-        alias: "rocky-9.8".to_owned(),
-        version: "rocky-9.8-v1".to_owned(),
-        // Rocky 9.8 keeps virtio storage/network and ext4 in modules, so both
-        // architectures use a generic dracut initramfs. x86_64 boots through
-        // virtio-pci; aarch64 uses Firecracker's normal virtio-mmio transport.
-        kernel: PathBuf::from(rocky_kernel),
-        initrd: Some(PathBuf::from(format!(
-            "kernel/initramfs-rocky-9.8-{alpine_arch}"
-        ))),
-        rootfs: PathBuf::from(format!("rootfs/rocky-rootfs-9.8-{alpine_arch}.ext4")),
-        boot_args: rocky_boot_args.to_owned(),
-    });
-
-    specs
+    m2image_manifest::load()
+        .images
+        .into_iter()
+        .map(|image| {
+            let artifact = image
+                .artifacts
+                .get(architecture)
+                .unwrap_or_else(|| panic!("{} lacks {architecture} artifacts", image.alias));
+            TemplateSpec {
+                version: image.template_version,
+                alias: image.alias,
+                kernel: PathBuf::from(&artifact.kernel),
+                initrd: artifact.initrd.as_deref().map(PathBuf::from),
+                rootfs: PathBuf::from(&artifact.rootfs),
+                boot_args: artifact.boot_args.clone(),
+            }
+        })
+        .collect()
 }
 
 /// Rejects absolute paths, empty paths, and any `.`/`..` component.
@@ -1305,7 +1240,7 @@ mod tests {
         let rocky = specs
             .iter()
             .find(|spec| spec.alias == "rocky-9.8")
-            .expect("rocky-9 is one of the default specs");
+            .expect("rocky-9.8 is one of the default specs");
         assert_eq!(rocky.version, "rocky-9.8-v1");
         if alpine_arch == "aarch64" {
             assert_eq!(
@@ -1398,7 +1333,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.alias.as_str())
                 .collect::<Vec<_>>(),
-            vec!["ubuntu-26.04", "alpine-3.24", "rocky-9.8"]
+            vec!["alpine-3.24", "ubuntu-26.04", "rocky-9.8"]
         );
 
         let ubuntu = specs

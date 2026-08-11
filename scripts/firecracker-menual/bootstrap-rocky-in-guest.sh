@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs entirely inside a firecrab MicroBoot builder VM (Alpine's own
 # recovery shell — see crate::microboot's doc comment), not inside an
-# installed rocky-9 template. Rocky's dnf/rpm are glibc binaries the
+# installed Rocky template. Rocky's dnf/rpm are glibc binaries the
 # musl-based outer shell can't run directly, so this script downloads
 # Rocky's own official Container-Base image and chroots into it first —
 # everything from that point on (dnf --installroot into $staging) is
@@ -29,25 +29,24 @@ staging="$work/staging"
 out="$work/out"
 rootfs_size='2G'
 rootfs_hostname='firecrab'
-rocky_release='9.8'
-rocky_container_build='20260525.0'
+rocky_release='@M2IMAGE_DISTRO_VERSION@'
+rocky_repository_base='@ROCKY_REPOSITORY_BASE@'
 case "$(uname -m)" in
   x86_64)
     rocky_arch='x86_64'
-    container_sha256='1210df99dcf0ef4d73940244e6d703935175629598b09c0e430da20e76768402'
     ;;
   aarch64)
     rocky_arch='aarch64'
-    container_sha256='254dc06377bb63a5ab390cea33c2f26d71c4e0ff6ae1bc8a0fb0fbb86d992e89'
     ;;
   *)
     printf '[FAIL] unsupported Rocky architecture: %s\n' "$(uname -m)" >&2
     exit 1
     ;;
 esac
-baseos_url="https://download.rockylinux.org/pub/rocky/${rocky_release}/BaseOS/${rocky_arch}/os/"
-appstream_url="https://download.rockylinux.org/pub/rocky/${rocky_release}/AppStream/${rocky_arch}/os/"
-container_url="https://dl.rockylinux.org/pub/rocky/${rocky_release}/images/${rocky_arch}/Rocky-9-Container-Base-${rocky_release}-${rocky_container_build}.${rocky_arch}.oci.tar.xz"
+baseos_url="${rocky_repository_base}/${rocky_release}/BaseOS/${rocky_arch}/os/"
+appstream_url="${rocky_repository_base}/${rocky_release}/AppStream/${rocky_arch}/os/"
+container_name="Rocky-9-Container-Base.latest.${rocky_arch}.tar.xz"
+container_url="${rocky_repository_base}/${rocky_release}/images/${rocky_arch}/${container_name}"
 # dnf must be inside the guest (see install-rocky-rootfs.sh); dashboard package
 # actions invoke `dnf` on the serial console.
 rootfs_packages='kernel dracut systemd systemd-udev NetworkManager iproute iputils bind-utils curl ca-certificates procps-ng openssh-server kmod util-linux dhcp-client e2fsprogs dnf'
@@ -120,32 +119,44 @@ apk add --no-cache --initdb --repository 'https://dl-cdn.alpinelinux.org/alpine/
 info "downloading Rocky ${rocky_release} ${rocky_arch} Container-Base"
 curl -fsSL "$container_url" \
   -o "$container_archive" || fail 'could not download Rocky Container-Base'
+checksum_file="$work/${container_name}.CHECKSUM"
+curl -fsSL "${container_url}.CHECKSUM" -o "$checksum_file" \
+  || fail 'could not download Rocky Container-Base checksum'
+container_sha256=$(sed -n "s/^SHA256 (${container_name}) = //p" "$checksum_file")
+[ -n "$container_sha256" ] || fail 'could not parse Rocky Container-Base checksum'
 printf '%s  %s\n' "$container_sha256" "$container_archive" \
   | sha256sum -c - >/dev/null \
   || fail 'Rocky Container-Base checksum verification failed'
 
-# Container-Base is an OCI image layout (blobs/sha256/... + index.json),
-# not a flat rootfs tarball — verified live. It has exactly one manifest
-# and one layer; extract that one layer's tar+gzip blob directly rather
-# than pulling in full OCI tooling for a single-layer image.
+# Rocky has published both OCI and Docker archive layouts across releases.
+# Support both official layouts so a pinned distro version does not depend on
+# the current release's container packaging format.
 oci_dir="$work/container-oci"
 mkdir -p "$oci_dir"
 tar -xJf "$container_archive" -C "$oci_dir"
-manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' "$oci_dir/index.json")
-[ -n "$manifest_digest" ] && [ "$manifest_digest" != null ] \
-  || fail 'could not read Container-Base manifest digest from index.json'
-layer_digest=$(jq -r '.layers[0].digest | sub("^sha256:"; "")' "$oci_dir/blobs/sha256/$manifest_digest")
-[ -n "$layer_digest" ] && [ "$layer_digest" != null ] \
-  || fail 'could not read Container-Base layer digest from its manifest'
-
 info "extracting Rocky ${rocky_release} ${rocky_arch} Container-Base"
-tar -xzf "$oci_dir/blobs/sha256/$layer_digest" -C "$container_root"
+if [ -f "$oci_dir/index.json" ]; then
+  manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' "$oci_dir/index.json")
+  [ -n "$manifest_digest" ] && [ "$manifest_digest" != null ] \
+    || fail 'could not read Container-Base manifest digest from index.json'
+  layer_digest=$(jq -r '.layers[0].digest | sub("^sha256:"; "")' "$oci_dir/blobs/sha256/$manifest_digest")
+  [ -n "$layer_digest" ] && [ "$layer_digest" != null ] \
+    || fail 'could not read Container-Base layer digest from its manifest'
+  tar -xzf "$oci_dir/blobs/sha256/$layer_digest" -C "$container_root"
+elif [ -f "$oci_dir/manifest.json" ]; then
+  jq -r '.[0].Layers[]' "$oci_dir/manifest.json" | while IFS= read -r layer; do
+    [ -f "$oci_dir/$layer" ] || fail "Container-Base layer is missing: $layer"
+    tar -xf "$oci_dir/$layer" -C "$container_root"
+  done
+else
+  fail 'Container-Base is neither an OCI nor Docker archive'
+fi
 test -x "$container_root/usr/bin/rpm" || fail 'Container-Base is missing usr/bin/rpm'
 test -e "$container_root/usr/bin/dnf" || fail 'Container-Base is missing usr/bin/dnf'
 
 # Rocky's own RPM signing keys, which the repo configs below reference as
 # gpgkey=file:///etc/pki/rpm-gpg/... inside $staging. Under an installed
-# rocky-9 builder template these came from the outer shell's own
+# Rocky builder template these came from the outer shell's own
 # /etc/pki/rpm-gpg, but MicroBoot's outer shell is Alpine and has no such
 # directory (found live: "cp: can't stat '/etc/pki/rpm-gpg'") — Rocky's
 # Container-Base ships the identical keys, so take them from there.
@@ -184,18 +195,18 @@ chroot_mounts="$container_root$staging $chroot_mounts"
 chroot "$container_root" dnf -q -y --installroot="$staging" --releasever="$rocky_release" \
   --setopt=reposdir=/etc/yum.repos.d $dnf_common install $rootfs_packages
 
-# Fixed public baseurls — stock mirrorlist needs $rltype, which this image lacks.
-cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<'EOF'
+# Fixed version-pinned baseurls — stock mirrorlist needs $rltype, which this image lacks.
+cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<EOF
 [baseos]
-name=Rocky Linux $releasever - BaseOS (firecrab)
-baseurl=https://download.rockylinux.org/pub/rocky/$releasever/BaseOS/$basearch/os/
+name=Rocky Linux \$releasever - BaseOS (firecrab)
+baseurl=${rocky_repository_base}/\$releasever/BaseOS/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
 
 [appstream]
-name=Rocky Linux $releasever - AppStream (firecrab)
-baseurl=https://download.rockylinux.org/pub/rocky/$releasever/AppStream/$basearch/os/
+name=Rocky Linux \$releasever - AppStream (firecrab)
+baseurl=${rocky_repository_base}/\$releasever/AppStream/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
@@ -342,8 +353,9 @@ cleanup_chroot_mounts
 
 [ -s "$initrd_path" ] || fail "dracut did not create ${initrd_path}"
 test -e "$staging/etc/os-release" || fail 'missing /etc/os-release'
-grep -Eq '^VERSION_ID="?9\.8"?$' "$staging/etc/os-release" \
-  || fail 'Rocky rootfs is not pinned to VERSION_ID 9.8'
+installed_release=$(sed -n 's/^VERSION_ID=//p' "$staging/etc/os-release" | tr -d '"')
+[ "$installed_release" = "$rocky_release" ] \
+  || fail "Rocky rootfs is not pinned to VERSION_ID ${rocky_release}"
 test -e "$staging/sbin/init" || fail 'missing /sbin/init'
 test -x "$staging/usr/sbin/sshd" || fail 'missing sshd'
 network_profile="$staging/etc/NetworkManager/system-connections/firecrab-ethernet.nmconnection"

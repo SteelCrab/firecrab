@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a Firecracker-ready Rocky Linux 9.8 rootfs with Rocky's own EL9 kernel.
+# Build a Firecracker-ready version-pinned Rocky Linux rootfs with its EL9 kernel.
 #
 # The result deliberately stays a direct ext4 file rather than Rocky's cloud
 # QCOW2 image: firecrab resizes and customizes rootfs files with e2fsprogs.
@@ -19,13 +19,14 @@ repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
 build_dir="${repo_dir}/build/rocky-rootfs"
-rocky_release='9.8'
+rocky_release=${M2IMAGE_DISTRO_VERSION:-9.8}
+rocky_repository_base=${ROCKY_REPOSITORY_BASE:-https://download.rockylinux.org/pub/rocky}
 rootfs_size='2G'
 rootfs_hostname='firecrab'
 docker_bin='docker'
 # Docker Hub publishes the official major-version tag as a multi-arch image;
-# the guest itself is pinned independently to the 9.8 BaseOS/AppStream URLs
-# below and rejected unless /etc/os-release reports VERSION_ID=9.8.
+# the guest itself is pinned independently to the manifest-selected
+# BaseOS/AppStream URLs and rejected unless /etc/os-release matches.
 docker_image='rockylinux:9'
 extract_vmlinux="${script_dir}/extract-vmlinux"
 
@@ -39,7 +40,7 @@ case "${M2IMAGE_ARCH:-$(uname -m 2>/dev/null || printf unknown)}" in
     kernel_image_name="Image-rocky-${rocky_release}-aarch64"
     ;;
   *)
-    printf '[FAIL] Unsupported architecture. Rocky Linux 9.8 supports x86_64 and aarch64.\n' >&2
+    printf '[FAIL] Unsupported architecture. Rocky Linux supports x86_64 and aarch64.\n' >&2
     exit 1
     ;;
 esac
@@ -99,9 +100,10 @@ initrd_image_name=$4
 rocky_release=$5
 rocky_arch=$6
 rootfs_image_name=$7
+rocky_repository_base=$8
 
-baseos_url="https://download.rockylinux.org/pub/rocky/${rocky_release}/BaseOS/${rocky_arch}/os/"
-appstream_url="https://download.rockylinux.org/pub/rocky/${rocky_release}/AppStream/${rocky_arch}/os/"
+baseos_url="${rocky_repository_base}/${rocky_release}/BaseOS/${rocky_arch}/os/"
+appstream_url="${rocky_repository_base}/${rocky_release}/AppStream/${rocky_arch}/os/"
 
 info() { printf '[ROCKY] %s\n' "$*"; }
 fail() { printf '[ROCKY:FAIL] %s\n' "$*" >&2; exit 1; }
@@ -167,17 +169,17 @@ dnf -q -y --installroot="$staging" --releasever="$rocky_release" --setopt=reposd
 
 # Stock rocky.repo mirrorlists expand $rltype, which this image never sets
 # (same Docker BaseOS 404 the build avoids). Pin public baseurls for guest dnf.
-cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<'EOF_REPOS'
+cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<EOF_REPOS
 [baseos]
-name=Rocky Linux $releasever - BaseOS (firecrab)
-baseurl=https://download.rockylinux.org/pub/rocky/$releasever/BaseOS/$basearch/os/
+name=Rocky Linux \$releasever - BaseOS (firecrab)
+baseurl=${rocky_repository_base}/\$releasever/BaseOS/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
 
 [appstream]
-name=Rocky Linux $releasever - AppStream (firecrab)
-baseurl=https://download.rockylinux.org/pub/rocky/$releasever/AppStream/$basearch/os/
+name=Rocky Linux \$releasever - AppStream (firecrab)
+baseurl=${rocky_repository_base}/\$releasever/AppStream/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
@@ -372,8 +374,8 @@ cleanup_chroot_mounts
 
 [ -s "$initrd_path" ] || fail "dracut did not create ${initrd_path}"
 test -e "$staging/etc/os-release" || fail 'missing /etc/os-release'
-grep -Eq '^VERSION_ID="?9\.8"?$' "$staging/etc/os-release" \
-  || fail 'Rocky rootfs is not pinned to VERSION_ID 9.8'
+grep -Eq "^VERSION_ID=\"?${rocky_release//./\\.}\"?$" "$staging/etc/os-release" \
+  || fail "Rocky rootfs is not pinned to VERSION_ID ${rocky_release}"
 test -e "$staging/sbin/init" || fail 'missing /sbin/init'
 test -x "$staging/usr/sbin/sshd" || fail 'missing sshd'
 test -s "$staging/root/.ssh/authorized_keys" || fail 'missing root authorized_keys'
@@ -470,7 +472,8 @@ main() {
     -v "${artifact_dir}:/out" \
     -v "${kernel_artifact_dir}:/kernel-out" \
     "$docker_image" bash /configure.sh "$rootfs_size" "$rootfs_hostname" "$rootfs_packages" \
-      "$initrd_image_name" "$rocky_release" "$rocky_arch" "$rootfs_image_name"
+      "$initrd_image_name" "$rocky_release" "$rocky_arch" "$rootfs_image_name" \
+      "$rocky_repository_base"
 
   prepare_kernel
   [ -s "${artifact_dir}/${rootfs_image_name}" ] || \

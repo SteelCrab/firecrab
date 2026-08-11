@@ -946,7 +946,7 @@ pub struct BootstrapStepRun {
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapResponse {
     pub bootstrap_id: Uuid,
-    /// The target being bootstrapped (`alpine-3.24`, `ubuntu-26.04`, or `rocky-9`).
+    /// The target being bootstrapped (`alpine-3.24`, `ubuntu-26.04`, or `rocky-9.8`).
     pub alias: String,
     /// Which template the disposable builder VM booted from — always the
     /// internal MicroBoot alias since `firecrab_api::microboot` replaced

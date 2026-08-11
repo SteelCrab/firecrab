@@ -23,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, PackageOrigin};
 use tokio::io::AsyncWriteExt;
 
+use crate::m2image_manifest;
 use crate::templates::{TemplateRegistry, TemplateSpec};
 
 /// Default public MicroRegistry. Operators may override it for a private
@@ -274,22 +275,10 @@ pub fn package_path(alias: &str) -> String {
 }
 
 /// Registry path for `alias` on an explicit Firecracker host architecture.
-/// x86_64 keeps the original layout; ARM64 uses a distinct subdirectory so
-/// publishing one architecture can never replace the other's package.
+/// Built-in aliases come from the release manifest; custom aliases retain
+/// the historic flat layout.
 pub fn package_path_for_arch(alias: &str, architecture: &str) -> String {
-    let directory = match alias {
-        "alpine-3.24" => Some("alpine/3.24"),
-        "ubuntu-26.04" => Some("ubuntu/26.04"),
-        "rocky-9.8" => Some("rocky/9.8"),
-        _ => None,
-    };
-    match directory {
-        Some(directory) if architecture == "aarch64" => {
-            format!("{directory}/aarch64/{}", package_name(alias))
-        }
-        Some(directory) => format!("{directory}/{}", package_name(alias)),
-        None => package_name(alias),
-    }
+    m2image_manifest::registry_key(alias, architecture).unwrap_or_else(|| package_name(alias))
 }
 
 /// Persistent local package cache. A package remains here after the image is

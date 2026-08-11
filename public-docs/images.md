@@ -23,6 +23,13 @@ Build one alias when needed.
 ./scripts/build-m2images.sh --alias alpine-3.24
 ```
 
+Build each architecture on a native host of the same architecture.
+
+```sh
+./scripts/build-m2images.sh --arch x86_64
+./scripts/build-m2images.sh --arch aarch64
+```
+
 Docker is used for Alpine and Rocky.
 Ubuntu also uses a temporary privileged chroot.
 
@@ -33,10 +40,12 @@ Rebuild `rocky-9.8` after pulling rootfs script fixes before testing dnf.
 
 ```text
 dist/m2images/
-  alpine-3.24.tar.zst
-  ubuntu-26.04.tar.zst
-  rocky-9.8.tar.zst
-  SHA256SUMS
+  catalog.json
+  x86_64/
+    alpine-3.24.tar.zst
+    ubuntu-26.04.tar.zst
+    rocky-9.8.tar.zst
+    SHA256SUMS
   aarch64/
     alpine-3.24.tar.zst
     ubuntu-26.04.tar.zst
@@ -47,9 +56,50 @@ dist/m2images/
 Verify packages after building them.
 
 ```sh
-sha256sum -c dist/m2images/SHA256SUMS
-tar --list --zstd --file dist/m2images/alpine-3.24.tar.zst
+cd dist/m2images/x86_64
+sha256sum -c SHA256SUMS
+tar --list --zstd --file alpine-3.24.tar.zst
 ```
+
+## Release manifest
+
+`packaging/m2images.json` is the source of truth for distribution versions,
+release revisions, builders, artifact filenames, boot arguments, and R2
+object keys. `packaging/m2images.schema.json` documents its shape, and the
+same manifest is compiled into `firecrab-api` so runtime paths cannot drift
+from the build scripts.
+
+Validate it before a release.
+
+```sh
+python3 scripts/m2image-manifest.py validate
+./scripts/build-m2images.sh --list
+```
+
+To update a distribution, change its `series`, `version`, `revision`, builder
+environment, artifacts, and registry keys in the manifest. Use a new alias
+when compatibility changes (for example `rocky-9.8` to `rocky-9.9`); bump only
+`revision` when rebuilding the same pinned distribution release.
+
+## Publish to Cloudflare R2
+
+Configure an `rclone` S3 remote with provider `Cloudflare`, then publish the
+complete two-architecture release. A dry run validates every package and
+prints all destination object keys.
+
+```sh
+R2_BUCKET=firecrab-registry R2_REMOTE=r2 \
+  ./scripts/publish-m2images-r2.sh --dry-run
+
+R2_BUCKET=firecrab-registry R2_REMOTE=r2 \
+  ./scripts/publish-m2images-r2.sh
+```
+
+Packages are uploaded before `catalog.json`; the catalog is the publication
+commit point. The script requires every manifest alias for both architectures
+to prevent a partial release from replacing the public catalog. Wrangler v4
+is available as a fallback with `--backend wrangler`, but its 315 MB upload
+limit makes `rclone` the normal choice for compressed rootfs packages.
 
 ## Bootstrap
 
@@ -62,7 +112,8 @@ firecrab stops the builder before reading its disk.
 Only one bootstrap job can run at a time.
 The builder is removed after success, failure, or cancellation.
 
-Rocky bootstrap needs an installed Rocky builder image.
+Rocky bootstrap downloads the pinned official Container-Base into MicroBoot;
+it does not require an already-installed Rocky template.
 
 ## Install
 
@@ -84,11 +135,9 @@ Restart the API after replacing files outside the API workflow.
 
 ## Add an alias
 
-Update these parts together:
+For a new distribution family, add its manifest entry and builder, then update:
 
-- Image build script
-- Package output
-- `default_specs()` in `firecrab-api/src/templates.rs`
+- Bootstrap guest script mapping
 - CI boot matrix in `.github/workflows/ci.yml`
 
 ## Related

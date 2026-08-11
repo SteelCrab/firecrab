@@ -6,6 +6,8 @@ script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 
 alpine_releases_base='https://dl-cdn.alpinelinux.org/alpine'
+alpine_series=${M2IMAGE_DISTRO_SERIES:-3.24}
+alpine_version_setting=${M2IMAGE_DISTRO_VERSION:-3.24.1}
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
 kernel_image_name=''
@@ -21,7 +23,7 @@ rootfs_hostname='firecrab'
 # root-owned images/rootfs/ (see install-ubuntu-roofs.sh's directory, created
 # by that script's sudo re-exec). Docker gives us both without sudo.
 docker_bin='docker'
-docker_image='alpine:latest'
+docker_image=${ALPINE_BUILDER_IMAGE:-alpine:${alpine_series}}
 # linux-virt: Alpine's own officially-maintained cloud/virt kernel package
 # (public-docs/images.md) — replaces the self-built vanilla kernel
 # every template used to share. Unlike Ubuntu's linux-image-generic,
@@ -100,32 +102,24 @@ resolve_ssh_public_key() {
   printf '%s\n' "$key_source"
 }
 
-# Alpine's per-arch release feed lists every flavor (minirootfs, netboot,
-# uboot, ...); pick out the minirootfs record's branch/version/file/sha256.
+# Resolve the exact manifest-pinned minirootfs. A branch's
+# latest-releases.yaml changes whenever Alpine publishes a patch release, so
+# using it would make an alias such as alpine-3.24 silently change contents
+# while package paths and runtime specs still expect 3.24.1.
 resolve_alpine_minirootfs() {
-  releases_url="${alpine_releases_base}/latest-stable/releases/${alpine_arch}/latest-releases.yaml"
-  releases_yaml="${build_dir}/latest-releases.yaml"
+  local branch="v${alpine_series}"
+  local archive_name="alpine-minirootfs-${alpine_version_setting}-${alpine_arch}.tar.gz"
+  local checksum_url="${alpine_releases_base}/${branch}/releases/${alpine_arch}/${archive_name}.sha256"
+  local checksum_file="${build_dir}/${archive_name}.sha256"
+  local checksum=''
 
-  if ! curl -fsSL "$releases_url" -o "${releases_yaml}.tmp"; then
-    fail "Could not download Alpine release metadata: ${releases_url}"
+  if ! curl -fsSL "$checksum_url" -o "${checksum_file}.tmp"; then
+    fail "Could not download Alpine checksum: ${checksum_url}"
   fi
-  mv "${releases_yaml}.tmp" "$releases_yaml"
-
-  awk '
-    function emit() { if (flavor == "alpine-minirootfs") { printf "%s %s %s %s\n", branch, version, file, sha256; found = 1 } }
-    /^-[[:space:]]*$/ {
-      emit()
-      if (found) exit
-      branch = ""; version = ""; file = ""; sha256 = ""; flavor = ""
-      next
-    }
-    /^  branch:/ { branch = $2 }
-    /^  version:/ { version = $2 }
-    /^  flavor:/ { flavor = $2 }
-    /^  file:/ { file = $2 }
-    /^  sha256:/ { sha256 = $2 }
-    END { if (!found) emit() }
-  ' "$releases_yaml"
+  mv "${checksum_file}.tmp" "$checksum_file"
+  checksum=$(awk -v file="$archive_name" '$2 == file || $2 == "*" file { print $1; exit }' "$checksum_file")
+  [ -n "$checksum" ] || fail "Could not find ${archive_name} in ${checksum_url}"
+  printf '%s %s %s %s\n' "$branch" "$alpine_version_setting" "$archive_name" "$checksum"
 }
 
 write_configure_script() {
