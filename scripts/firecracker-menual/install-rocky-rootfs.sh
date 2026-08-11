@@ -26,6 +26,7 @@ rocky_container_build=${ROCKY_CONTAINER_BUILD:-20260525.0}
 rootfs_size='2G'
 rootfs_hostname='firecrab'
 extract_vmlinux="${script_dir}/extract-vmlinux"
+unwrap_arm64_image="${script_dir}/unwrap-arm64-image"
 container_mounts=()
 
 case "${M2IMAGE_ARCH:-$(uname -m 2>/dev/null || printf unknown)}" in
@@ -429,25 +430,10 @@ echo "ROOTFS_IMAGE=${rootfs_image}"
 EOF
 }
 
-# Rocky's official arm64 vmlinuz ships with the Linux/arm64 "Image" boot
-# header magic (ARM64_IMAGE_MAGIC, 4 bytes at offset 0x38) zeroed out, even
-# though its PE/EFI wrapper is otherwise intact and passes `file`'s PE32+
-# ARM64 detection. Firecracker's aarch64 kernel loader (rust-vmm
-# linux-loader) validates that field independently of the PE header and
-# refuses to boot with "invalid Image magic number" if it's missing, so
-# restore it before packaging.
-restore_arm64_image_magic() {
-  local image_path=$1
-  local source_path=$2
-  printf '\x41\x52\x4d\x64' | dd of="$image_path" bs=1 seek=56 count=4 conv=notrunc status=none 2>/dev/null
-  local image_magic
-  image_magic=$(od -An -tx1 -j56 -N4 "$image_path" | tr -d ' \n')
-  if [ "$image_magic" != '41524d64' ]; then
-    rm -f "$image_path"
-    fail "failed to restore ARM64 Image magic number in ${source_path}"
-  fi
-}
-
+# Firecracker expects uncompressed ELF on x86_64, and on aarch64 a bare
+# Linux/arm64 "Image" — not the EFI zboot wrapper Rocky ships vmlinuz as,
+# which only unpacks itself when EFI firmware runs its PE entry point. See
+# unwrap-arm64-image.
 prepare_kernel() {
   local raw_path="${kernel_artifact_dir}/vmlinuz-rocky-raw"
   local kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
@@ -455,13 +441,15 @@ prepare_kernel() {
 
   [ -s "$raw_path" ] || fail "Rocky kernel was not copied out to ${raw_path}"
   if [ "$rocky_arch" = aarch64 ]; then
-    info "preserving ARM64 PE kernel Image from: ${raw_path}"
-    cp "$raw_path" "$kernel_image_tmp"
-    if ! file "$kernel_image_tmp" | grep -Eq 'PE32\+.*(ARM64|Aarch64)'; then
+    info "unwrapping bare ARM64 kernel Image from: ${raw_path}"
+    if ! "$unwrap_arm64_image" "$raw_path" >"$kernel_image_tmp"; then
       rm -f "$kernel_image_tmp"
-      fail "Rocky aarch64 kernel is not a PE32+ ARM64 Image: ${raw_path}"
+      fail "could not unwrap a bootable ARM64 Image from ${raw_path}"
     fi
-    restore_arm64_image_magic "$kernel_image_tmp" "$raw_path"
+    if ! file "$kernel_image_tmp" | grep -q 'ARM64 boot executable Image'; then
+      rm -f "$kernel_image_tmp"
+      fail "unwrapped Rocky kernel is not an ARM64 boot Image: ${raw_path}"
+    fi
   else
     info "extracting x86_64 ELF vmlinux from: ${raw_path}"
     if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
@@ -600,6 +588,12 @@ main() {
   done
   if [ "$rocky_arch" = x86_64 ]; then
     [ -x "$extract_vmlinux" ] || fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  else
+    [ -x "$unwrap_arm64_image" ] || fail "unwrap-arm64-image helper not found or not executable: ${unwrap_arm64_image}"
+    # Rocky's arm64 vmlinuz is a gzip-compressed EFI zboot image; od reads
+    # that wrapper's headers, gzip unpacks its payload.
+    require_command gzip
+    require_command od
   fi
 
   if [ "$(id -u)" -ne 0 ]; then

@@ -6,8 +6,11 @@ It is the source template for new VM disks.
 Supported aliases are `alpine-3.24`, `ubuntu-26.04`, and `rocky-9.8`.
 All three support x86_64 and ARM64. Rocky is exposed only through the
 versioned `rocky-9.8` alias.
-ARM64 packages keep the distro PE32+ `Image`; x86_64 packages use an ELF
-`vmlinux`. Firecracker cannot boot an x86_64 kernel on an ARM64 host.
+ARM64 packages carry a bare Linux/arm64 `Image`, unwrapped from however the
+distro ships its `vmlinuz` (an EFI zboot stub, and on Ubuntu a UKI around
+that) — Firecracker has no EFI firmware, so it cannot unpack either layer
+itself. x86_64 packages use an ELF `vmlinux`. Firecracker cannot boot an
+x86_64 kernel on an ARM64 host.
 
 ## Build
 

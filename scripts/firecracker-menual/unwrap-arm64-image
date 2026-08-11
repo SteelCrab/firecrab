@@ -1,0 +1,131 @@
+#!/bin/sh
+# ----------------------------------------------------------------------
+# unwrap-arm64-image - peel distro wrappers off an aarch64 kernel until what
+# is left is the bare, uncompressed Linux/arm64 "Image", written to stdout.
+#
+# Firecracker has no EFI firmware, so it never runs the PE entry point that a
+# packaged vmlinuz relies on to unpack itself; its loader jumps straight to
+# the start of the file and requires ARM64_IMAGE_MAGIC ("ARMd") at offset
+# 0x38. Distro vmlinuz files are not that:
+#
+#   Alpine, Rocky   EFI zboot  - PE stub, "zimg" at 0x04, gzip payload
+#   Ubuntu          UKI        - PE whose .linux section holds the above
+#                                (zstd payload)
+#
+# An EFI zboot header's 0x38 field is its own linux_pe_magic (0x818223cd),
+# *not* a zeroed ARM64_IMAGE_MAGIC. Overwriting it with "ARMd" makes
+# Firecracker accept the file and start the vCPU on compressed bytes, so the
+# guest dies before emitting one console byte — a silent hang instead of an
+# honest "invalid Image magic number". Decompressing the payload instead
+# yields an Image whose magic is already correct.
+# ----------------------------------------------------------------------
+set -eu
+
+me=${0##*/}
+
+die() {
+	echo "$me: $*" >&2
+	exit 1
+}
+
+if [ $# -ne 1 ] || [ ! -s "$1" ]; then
+	echo "Usage: $me <kernel-image>" >&2
+	exit 2
+fi
+img=$1
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/unwrap-arm64-XXXXXX")
+trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+
+# Hex of the 4 bytes at offset $2, or empty when the file is shorter.
+magic4() { od -An -tx1 -j "$2" -N4 -- "$1" 2>/dev/null | tr -d ' \n'; }
+
+# Composed from single bytes rather than read with `od -tu4` so the result is
+# the file's little-endian value regardless of the build host's endianness.
+le_u32() {
+	_file=$1
+	_off=$2
+	# shellcheck disable=SC2046 # deliberate word splitting of od's output
+	set -- $(od -An -tu1 -j "$_off" -N4 -- "$_file" 2>/dev/null)
+	[ $# -eq 4 ] || die "truncated read at offset ${_off} of ${_file}"
+	echo $(($1 | ($2 << 8) | ($3 << 16) | ($4 << 24)))
+}
+
+le_u16() {
+	_file=$1
+	_off=$2
+	# shellcheck disable=SC2046 # deliberate word splitting of od's output
+	set -- $(od -An -tu1 -j "$_off" -N2 -- "$_file" 2>/dev/null)
+	[ $# -eq 2 ] || die "truncated read at offset ${_off} of ${_file}"
+	echo $(($1 | ($2 << 8)))
+}
+
+# `tail | head` rather than `dd bs=1`: these payloads are tens of megabytes,
+# which byte-at-a-time dd would take minutes to copy.
+slice() { tail -c "+$(($2 + 1))" -- "$1" | head -c "$3"; }
+
+# Prints "<offset> <size>" of a UKI's .linux section, or fails if there is no
+# PE section table carrying one.
+uki_linux_section() {
+	_f=$1
+	_pe=$(le_u32 "$_f" 60)
+	[ "$(magic4 "$_f" "$_pe")" = '50450000' ] || return 1
+	_nsec=$(le_u16 "$_f" $((_pe + 6)))
+	_optsz=$(le_u16 "$_f" $((_pe + 20)))
+	_tbl=$((_pe + 24 + _optsz))
+	_i=0
+	while [ "$_i" -lt "$_nsec" ]; do
+		_ent=$((_tbl + _i * 40))
+		if [ "$(slice "$_f" "$_ent" 8 | tr -d '\000')" = '.linux' ]; then
+			echo "$(le_u32 "$_f" $((_ent + 20))) $(le_u32 "$_f" $((_ent + 16)))"
+			return 0
+		fi
+		_i=$((_i + 1))
+	done
+	return 1
+}
+
+work="${tmp}/stage0"
+cp -- "$img" "$work"
+
+# Bounded so a malformed or hostile image cannot loop here forever; two
+# layers (UKI -> zboot) is the deepest anything upstream ships.
+stage=0
+while [ "$stage" -lt 4 ]; do
+	if [ "$(magic4 "$work" 56)" = '41524d64' ]; then
+		cat -- "$work"
+		exit 0
+	fi
+
+	next="${tmp}/stage$((stage + 1))"
+	if [ "$(magic4 "$work" 4)" = '7a696d67' ]; then
+		offset=$(le_u32 "$work" 8)
+		size=$(le_u32 "$work" 12)
+		compression=$(slice "$work" 24 32 | tr -d '\000')
+		case $compression in
+		gzip) decompress='gzip -dc' ;;
+		zstd) decompress='zstd -dc' ;;
+		xz) decompress='xz -dc' ;;
+		lzma) decompress='lzma -dc' ;;
+		lz4) decompress='lz4 -dc' ;;
+		lzo) decompress='lzop -dc' ;;
+		bzip2) decompress='bzip2 -dc' ;;
+		*) die "unsupported EFI zboot compression '${compression}' in ${img}" ;;
+		esac
+		# shellcheck disable=SC2086 # $decompress is a command + flag pair
+		slice "$work" "$offset" "$size" | $decompress >"$next" ||
+			die "could not ${compression}-decompress the EFI zboot payload of ${img}"
+	elif section=$(uki_linux_section "$work"); then
+		# shellcheck disable=SC2086 # "<offset> <size>" pair
+		set -- $section
+		slice "$work" "$1" "$2" >"$next"
+	else
+		break
+	fi
+
+	[ -s "$next" ] || die "empty result unwrapping ${img}"
+	work=$next
+	stage=$((stage + 1))
+done
+
+die "${img} is not a bootable ARM64 Image and carries no known wrapper (EFI zboot / UKI) around one: no ARM64_IMAGE_MAGIC at offset 0x38"

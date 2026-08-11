@@ -717,9 +717,11 @@ fn build_package_blocking(
 
     let kernel_dest = scratch.join(&spec.kernel); // e.g. "kernel/vmlinux-ubuntu-26.04-x86_64"
     std::fs::create_dir_all(kernel_dest.parent().unwrap()).ok();
-    // x86_64 needs an extracted ELF vmlinux. ARM64 needs the guest's PE
-    // Image preserved byte-for-byte; feeding it to extract-vmlinux would
-    // create a kernel format Firecracker cannot load on ARM.
+    // x86_64 needs an extracted ELF vmlinux. ARM64 needs the guest's
+    // vmlinuz unwrapped down to the bare Linux/arm64 Image (the distro
+    // ships it inside an EFI zboot stub, sometimes inside a UKI on top of
+    // that) — Firecracker has no EFI firmware to unpack either layer, and
+    // extract-vmlinux would produce a format it cannot load on ARM.
     crate::microboot::prepare_kernel_image(&raw_kernel, &kernel_dest)?;
 
     if let Some(initrd_relative) = &spec.initrd {
@@ -925,9 +927,28 @@ mod tests {
         0x2f, 0x00, 0x2e, 0x00,
     ];
 
+    /// A minimal bare Linux/arm64 `Image`: the `MZ` EFI-signature NOP up
+    /// front and `ARM64_IMAGE_MAGIC` ("ARMd") at offset 0x38.
+    /// `microboot::prepare_kernel_image` passes an already-bare Image
+    /// through untouched, so this stands in for a real kernel without
+    /// needing a compressed EFI zboot payload — and, unlike the bare `MZ`
+    /// prefix this replaced, it is a shape Firecracker would actually boot
+    /// rather than start a vCPU on and hang.
+    #[cfg(target_arch = "aarch64")]
+    const FAKE_ARM64_IMAGE: &[u8] = &{
+        let mut image = [0_u8; 64];
+        image[0] = b'M';
+        image[1] = b'Z';
+        image[0x38] = b'A';
+        image[0x39] = b'R';
+        image[0x3a] = b'M';
+        image[0x3b] = b'd';
+        image
+    };
+
     #[cfg(target_arch = "aarch64")]
     fn fake_kernel_header() -> &'static [u8] {
-        b"MZ\0\0fake ARM64 PE Image"
+        FAKE_ARM64_IMAGE
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1164,6 +1185,11 @@ mod tests {
     /// `extract-vmlinux` genuinely cannot recognize (plain text, not an ELF
     /// or any known compressed kernel format) and asserts packaging fails
     /// loudly instead.
+    ///
+    /// aarch64 never reaches `extract-vmlinux` — `prepare_kernel_image`
+    /// unwraps arm64 kernels itself — so the expected message differs by
+    /// host architecture. What both arms assert is the same property: an
+    /// unusable kernel fails the session rather than being packaged.
     #[tokio::test]
     async fn package_bootstrap_fails_when_extract_vmlinux_cannot_recognize_the_raw_kernel() {
         let directory = tempdir().unwrap();
@@ -1193,9 +1219,14 @@ mod tests {
 
         let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
         assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        let expected = if cfg!(target_arch = "aarch64") {
+            "is not a PE Image"
+        } else {
+            "extract-vmlinux failed"
+        };
         assert!(
-            snapshot.log.contains("extract-vmlinux failed"),
-            "log: {}",
+            snapshot.log.contains(expected),
+            "expected {expected:?} in log: {}",
             snapshot.log
         );
         let staged = crate::image_install::staged_package_path(

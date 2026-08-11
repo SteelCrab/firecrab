@@ -7,7 +7,6 @@
 //! artifact-verification machinery works unchanged. See
 //! `public-docs/images.md`.
 
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::state::AppState;
@@ -26,7 +25,7 @@ pub(crate) const MICROBOOT_ALIAS: &str = "__microboot";
 /// `images/.templates.json` is re-derived rather than silently reused: that
 /// file is replayed at every startup, and without this check a host that
 /// bootstrapped once would keep booting builders off the stale spec forever.
-const MICROBOOT_VERSION: &str = "v5";
+const MICROBOOT_VERSION: &str = "v6";
 
 fn netboot_url(filename: &str) -> String {
     netboot_url_for_arch(crate::image_install::host_architecture(), filename)
@@ -339,56 +338,207 @@ fn prepare_kernel_image_for_arch(
         return extract_vmlinux(raw_kernel, dest);
     }
 
-    let mut file = std::fs::File::open(raw_kernel)
-        .map_err(|error| format!("open {}: {error}", raw_kernel.display()))?;
-    let mut magic = [0_u8; 2];
-    file.read_exact(&mut magic)
-        .map_err(|error| format!("read ARM64 kernel {}: {error}", raw_kernel.display()))?;
-    if magic != *b"MZ" {
+    let raw = std::fs::read(raw_kernel)
+        .map_err(|error| format!("read {}: {error}", raw_kernel.display()))?;
+    if raw.get(..2) != Some(b"MZ") {
         return Err(format!(
             "ARM64 kernel is not a PE Image: {}",
             raw_kernel.display()
         ));
     }
+    let image = unwrap_arm64_image(&raw, raw_kernel)?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("mkdir {}: {error}", parent.display()))?;
     }
-    std::fs::copy(raw_kernel, dest)
-        .map_err(|error| {
-            format!(
-                "copy {} to {}: {error}",
-                raw_kernel.display(),
-                dest.display()
-            )
-        })?;
-    restore_arm64_image_magic(dest)
+    std::fs::write(dest, &image).map_err(|error| format!("write {}: {error}", dest.display()))
 }
 
 /// Offset of the Linux/arm64 "Image" boot header's `magic` field, per
 /// `Documentation/arch/arm64/booting.rst`.
-const ARM64_IMAGE_MAGIC_OFFSET: u64 = 0x38;
+const ARM64_IMAGE_MAGIC_OFFSET: usize = 0x38;
 /// `ARM64_IMAGE_MAGIC` (`0x644d5241`), little-endian.
 const ARM64_IMAGE_MAGIC: [u8; 4] = *b"ARMd";
 
-/// Alpine's official netboot `vmlinuz-virt` for aarch64 (what `ensure_registered`
-/// downloads this builder kernel from) ships with this field zeroed out, even
-/// though the PE/EFI wrapper checked above is intact and would pass a plain
-/// `file`-style PE/ARM64 sniff. Firecracker's aarch64 kernel loader (rust-vmm
-/// linux-loader) validates this field independently of the PE header and
-/// refuses to boot with "invalid Image magic number" if it doesn't match —
-/// confirmed live against a production build (see the M2Images magic-number
-/// fix in `scripts/firecracker-menual/install-*-rootfs.sh`, same defect, same
-/// upstream cause), so repair it here too.
-fn restore_arm64_image_magic(dest: &Path) -> Result<(), String> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(dest)
-        .map_err(|error| format!("open {} for magic repair: {error}", dest.display()))?;
-    file.seek(SeekFrom::Start(ARM64_IMAGE_MAGIC_OFFSET))
-        .map_err(|error| format!("seek {} for magic repair: {error}", dest.display()))?;
-    file.write_all(&ARM64_IMAGE_MAGIC)
-        .map_err(|error| format!("write ARM64 Image magic into {}: {error}", dest.display()))
+fn has_arm64_image_magic(image: &[u8]) -> bool {
+    image.get(ARM64_IMAGE_MAGIC_OFFSET..ARM64_IMAGE_MAGIC_OFFSET + 4)
+        == Some(&ARM64_IMAGE_MAGIC[..])
+}
+
+/// Peels distro kernel wrappers off `raw` until what's left is the bare,
+/// uncompressed Linux/arm64 `Image` that Firecracker's loader is the only
+/// thing able to boot — it has no EFI firmware, so it never runs the PE
+/// entry point that would otherwise self-decompress.
+///
+/// Alpine ships `vmlinuz-virt` for aarch64 as an **EFI zboot** image: a tiny
+/// PE stub with `zimg` at offset 4 wrapping a compressed payload. Its 0x38
+/// field is *not* a zeroed `ARM64_IMAGE_MAGIC` — it's zboot's own
+/// `linux_pe_magic` (`0x818223cd`), a different struct entirely. Stamping
+/// `ARMd` over it (what this function replaced) makes Firecracker's loader
+/// accept the file and start the vCPU on compressed bytes, so the guest
+/// dies before it can emit one console byte — the VM reaches `Running`
+/// instantly and then `handlers::bootstrap`'s console probe times out with
+/// nothing to show. Decompressing the payload yields an `Image` whose magic
+/// is already correct; no repair is needed or wanted.
+///
+/// Ubuntu wraps that zboot image in a **UKI** (a PE carrying the kernel in a
+/// `.linux` section), hence the recursion: unwrap, then re-test.
+fn unwrap_arm64_image(raw: &[u8], source: &Path) -> Result<Vec<u8>, String> {
+    let mut image = std::borrow::Cow::Borrowed(raw);
+    // Bounded so a malformed or hostile image can't spin here forever; two
+    // layers (UKI -> zboot) is the deepest anything upstream ships.
+    for _ in 0..4 {
+        if has_arm64_image_magic(&image) {
+            return Ok(image.into_owned());
+        }
+        let next = if let Some(payload) = zboot_payload(&image, source)? {
+            payload
+        } else if let Some(section) = uki_linux_section(&image) {
+            section.to_vec()
+        } else {
+            break;
+        };
+        image = std::borrow::Cow::Owned(next);
+    }
+    if has_arm64_image_magic(&image) {
+        return Ok(image.into_owned());
+    }
+    Err(format!(
+        "{} is not a bootable ARM64 Image and no known wrapper (EFI zboot / UKI) around one: \
+         no ARM64_IMAGE_MAGIC at offset 0x38",
+        source.display()
+    ))
+}
+
+/// Decompresses an EFI zboot image's payload, or returns `None` if `image`
+/// isn't one. Layout is `struct linux_efi_zboot_header` from
+/// `drivers/firmware/efi/libstub`: `MZ`, `zimg` at 4, payload offset/size at
+/// 8/12, and a NUL-padded compression name at 0x18.
+fn zboot_payload(image: &[u8], source: &Path) -> Result<Option<Vec<u8>>, String> {
+    if image.get(..2) != Some(b"MZ") || image.get(4..8) != Some(b"zimg") {
+        return Ok(None);
+    }
+    let word = |at: usize| -> Result<usize, String> {
+        image
+            .get(at..at + 4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map(|bytes| u32::from_le_bytes(bytes) as usize)
+            .ok_or_else(|| format!("{}: truncated EFI zboot header", source.display()))
+    };
+    let (offset, size) = (word(8)?, word(12)?);
+    let payload = image
+        .get(offset..offset.saturating_add(size))
+        .ok_or_else(|| {
+            format!(
+                "{}: EFI zboot payload runs past end of file",
+                source.display()
+            )
+        })?;
+    let compression = image
+        .get(0x18..ARM64_IMAGE_MAGIC_OFFSET)
+        .map(|name| {
+            String::from_utf8_lossy(name)
+                .trim_end_matches('\0')
+                .to_owned()
+        })
+        .unwrap_or_default();
+    // Shelling out matches how the rest of this crate handles archive
+    // formats (`image_install` pipes through `zstd`/`tar`) and keeps the
+    // decompressor set extensible without pulling in a codec crate per
+    // format that some distro might switch to next.
+    let decompressor: &[&str] = match compression.as_str() {
+        "gzip" => &["gzip", "-dc"],
+        "zstd" => &["zstd", "-dc"],
+        "xz" => &["xz", "-dc"],
+        "lzma" => &["lzma", "-dc"],
+        "lz4" => &["lz4", "-dc"],
+        "lzo" => &["lzop", "-dc"],
+        "bzip2" => &["bzip2", "-dc"],
+        other => {
+            return Err(format!(
+                "{}: unsupported EFI zboot compression {other:?}",
+                source.display()
+            ));
+        }
+    };
+    Ok(Some(run_decompressor(decompressor, payload, source)?))
+}
+
+fn run_decompressor(argv: &[&str], payload: &[u8], source: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let mut child = std::process::Command::new(argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "{}: spawn {} to decompress the EFI zboot payload: {error}",
+                source.display(),
+                argv[0]
+            )
+        })?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("{}: {} stdin missing", source.display(), argv[0]))?;
+    // Written on its own thread: the payload is tens of MB, far past the
+    // pipe buffer, so feeding it inline would deadlock against a child
+    // that can't drain stdin until we start reading its stdout.
+    let payload = payload.to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&payload));
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("{}: wait for {}: {error}", source.display(), argv[0]))?;
+    let _ = writer.join();
+    if !output.status.success() {
+        return Err(format!(
+            "{}: {} failed ({}): {}",
+            source.display(),
+            argv[0],
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout)
+}
+
+/// Returns a UKI's `.linux` section (the kernel it bundles alongside its
+/// stub, cmdline and DTBs), or `None` if `image` has no PE section table
+/// carrying one.
+fn uki_linux_section(image: &[u8]) -> Option<&[u8]> {
+    let read_u32 = |at: usize| -> Option<usize> {
+        image
+            .get(at..at + 4)
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map(|bytes| u32::from_le_bytes(bytes) as usize)
+    };
+    let read_u16 = |at: usize| -> Option<usize> {
+        image
+            .get(at..at + 2)
+            .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
+            .map(|bytes| u16::from_le_bytes(bytes) as usize)
+    };
+    let pe = read_u32(0x3c)?;
+    if image.get(pe..pe + 4)? != b"PE\0\0" {
+        return None;
+    }
+    let sections = read_u16(pe + 6)?;
+    let optional_header = read_u16(pe + 20)?;
+    let table = pe.checked_add(24)?.checked_add(optional_header)?;
+    (0..sections).find_map(|index| {
+        let entry = table.checked_add(index.checked_mul(40)?)?;
+        let name = image.get(entry..entry + 8)?;
+        if name.split(|byte| *byte == 0).next()? != b".linux" {
+            return None;
+        }
+        let size = read_u32(entry + 16)?;
+        let offset = read_u32(entry + 20)?;
+        image.get(offset..offset.checked_add(size)?)
+    })
 }
 
 #[cfg(test)]
@@ -414,43 +564,125 @@ mod tests {
         assert!(!dest.exists());
     }
 
-    #[test]
-    fn arm64_kernel_keeps_the_pe_image_instead_of_extracting_elf() {
-        let dir = temp_image_root();
-        let raw = dir.path().join("Image.raw");
-        let mut raw_bytes = vec![0_u8; 64];
-        raw_bytes[0] = b'M';
-        raw_bytes[1] = b'Z';
-        raw_bytes.extend_from_slice(b"firecracker-arm64-image");
-        std::fs::write(&raw, &raw_bytes).unwrap();
-        let dest = dir.path().join("Image-virt");
+    /// A bare Linux/arm64 `Image`: `MZ` (the EFI-signature NOP) up front and
+    /// `ARM64_IMAGE_MAGIC` at 0x38, which is what Firecracker's loader
+    /// requires and therefore what every path below has to end up producing.
+    fn bare_arm64_image(payload: &[u8]) -> Vec<u8> {
+        let mut image = vec![0_u8; 64];
+        image[0] = b'M';
+        image[1] = b'Z';
+        image[ARM64_IMAGE_MAGIC_OFFSET..ARM64_IMAGE_MAGIC_OFFSET + 4]
+            .copy_from_slice(&ARM64_IMAGE_MAGIC);
+        image.extend_from_slice(payload);
+        image
+    }
 
-        prepare_kernel_image_for_arch(&raw, &dest, "aarch64").unwrap();
+    /// Wraps `image` the way Alpine's and Rocky's aarch64 `vmlinuz` are
+    /// shipped: an EFI zboot stub (`zimg` at 4, payload offset/size at 8/12,
+    /// compression name at 0x18) around a compressed kernel. Note 0x38 holds
+    /// zboot's own `linux_pe_magic`, *not* a zeroed `ARM64_IMAGE_MAGIC` —
+    /// the distinction the old "repair" got wrong.
+    fn efi_zboot(image: &[u8], compression: &str, compress: &[&str]) -> Vec<u8> {
+        let payload = super::run_decompressor(compress, image, Path::new("test")).unwrap();
+        let offset = 512_u32;
+        let mut wrapped = vec![0_u8; offset as usize];
+        wrapped[0] = b'M';
+        wrapped[1] = b'Z';
+        wrapped[4..8].copy_from_slice(b"zimg");
+        wrapped[8..12].copy_from_slice(&offset.to_le_bytes());
+        wrapped[12..16].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+        wrapped[0x18..0x18 + compression.len()].copy_from_slice(compression.as_bytes());
+        wrapped[ARM64_IMAGE_MAGIC_OFFSET..ARM64_IMAGE_MAGIC_OFFSET + 4]
+            .copy_from_slice(&0x8182_23cd_u32.to_le_bytes());
+        wrapped.extend_from_slice(&payload);
+        wrapped
+    }
 
-        let mut expected = raw_bytes;
-        expected[0x38..0x3c].copy_from_slice(&ARM64_IMAGE_MAGIC);
-        assert_eq!(std::fs::read(dest).unwrap(), expected);
+    /// Wraps `image` in a minimal UKI — a PE whose section table carries the
+    /// kernel in `.linux` — the way Ubuntu ships its aarch64 `vmlinuz`.
+    fn unified_kernel_image(image: &[u8]) -> Vec<u8> {
+        let (pe, payload_at) = (0x40_usize, 0x200_usize);
+        let mut uki = vec![0_u8; payload_at];
+        uki[0] = b'M';
+        uki[1] = b'Z';
+        uki[0x3c..0x40].copy_from_slice(&(pe as u32).to_le_bytes());
+        uki[pe..pe + 4].copy_from_slice(b"PE\0\0");
+        uki[pe + 6..pe + 8].copy_from_slice(&1_u16.to_le_bytes()); // one section
+        uki[pe + 20..pe + 22].copy_from_slice(&0_u16.to_le_bytes()); // no optional header
+        let entry = pe + 24;
+        uki[entry..entry + 6].copy_from_slice(b".linux");
+        uki[entry + 16..entry + 20].copy_from_slice(&(image.len() as u32).to_le_bytes());
+        uki[entry + 20..entry + 24].copy_from_slice(&(payload_at as u32).to_le_bytes());
+        uki.extend_from_slice(image);
+        uki
     }
 
     #[test]
-    fn arm64_kernel_gets_its_boot_magic_repaired() {
-        // Reproduces the exact production defect: Alpine's official
-        // netboot vmlinuz-virt for aarch64 has this field zeroed, which
-        // Firecracker's kernel loader rejects with "invalid Image magic
-        // number" even though the PE/EFI wrapper around it is intact.
+    fn arm64_kernel_passes_a_bare_image_through_untouched() {
         let dir = temp_image_root();
         let raw = dir.path().join("Image.raw");
-        let mut raw_bytes = vec![0_u8; 64];
-        raw_bytes[0] = b'M';
-        raw_bytes[1] = b'Z';
-        raw_bytes.extend_from_slice(b"payload");
-        std::fs::write(&raw, &raw_bytes).unwrap();
+        let image = bare_arm64_image(b"firecracker-arm64-image");
+        std::fs::write(&raw, &image).unwrap();
         let dest = dir.path().join("Image-virt");
 
         prepare_kernel_image_for_arch(&raw, &dest, "aarch64").unwrap();
 
-        let dest_bytes = std::fs::read(dest).unwrap();
-        assert_eq!(&dest_bytes[0x38..0x3c], &ARM64_IMAGE_MAGIC);
+        assert_eq!(std::fs::read(dest).unwrap(), image);
+    }
+
+    /// The production defect this module got wrong twice. Alpine's aarch64
+    /// `vmlinuz-virt` is an EFI zboot image, and Firecracker has no EFI
+    /// firmware to run its PE entry point — so the payload has to be
+    /// decompressed here or the guest starts executing compressed bytes and
+    /// dies before emitting a single console character.
+    #[test]
+    fn arm64_kernel_is_decompressed_out_of_its_efi_zboot_wrapper() {
+        let dir = temp_image_root();
+        let raw = dir.path().join("vmlinuz-virt.raw");
+        let image = bare_arm64_image(b"alpine-virt");
+        std::fs::write(&raw, efi_zboot(&image, "gzip", &["gzip", "-c"])).unwrap();
+        let dest = dir.path().join("Image-virt");
+
+        prepare_kernel_image_for_arch(&raw, &dest, "aarch64").unwrap();
+
+        assert_eq!(std::fs::read(dest).unwrap(), image);
+    }
+
+    /// Ubuntu nests the zboot image inside a UKI, so unwrapping has to
+    /// recurse rather than handle exactly one layer.
+    #[test]
+    fn arm64_kernel_is_unwrapped_from_a_uki_wrapped_zboot_image() {
+        let dir = temp_image_root();
+        let raw = dir.path().join("vmlinuz.raw");
+        let image = bare_arm64_image(b"ubuntu-generic");
+        let nested = unified_kernel_image(&efi_zboot(&image, "zstd", &["zstd", "-c"]));
+        std::fs::write(&raw, nested).unwrap();
+        let dest = dir.path().join("Image-virt");
+
+        prepare_kernel_image_for_arch(&raw, &dest, "aarch64").unwrap();
+
+        assert_eq!(std::fs::read(dest).unwrap(), image);
+    }
+
+    /// The old code stamped `ARMd` onto anything starting with `MZ`, which
+    /// turned "Firecracker refuses to boot this" into "the VM starts and
+    /// then hangs silently" — strictly harder to debug. An unrecognized
+    /// wrapper must fail loudly instead.
+    #[test]
+    fn arm64_kernel_with_no_recognizable_image_is_rejected_not_stamped() {
+        let dir = temp_image_root();
+        let raw = dir.path().join("mystery.raw");
+        let mut bytes = vec![0_u8; 128];
+        bytes[0] = b'M';
+        bytes[1] = b'Z';
+        std::fs::write(&raw, &bytes).unwrap();
+        let dest = dir.path().join("Image-virt");
+
+        let result = prepare_kernel_image_for_arch(&raw, &dest, "aarch64");
+
+        let error = result.expect_err("an unbootable kernel must not be silently accepted");
+        assert!(error.contains("ARM64_IMAGE_MAGIC"), "error: {error}");
+        assert!(!dest.exists(), "no half-usable kernel may be left behind");
     }
 
     #[test]
@@ -475,16 +707,11 @@ mod tests {
         // Firecracker supports, so extract-vmlinux takes its pass-through
         // path without scanning the much larger test executable.
         if crate::image_install::host_architecture() == "aarch64" {
-            // Magic already correct at 0x38 so the repair step is a no-op
-            // and the byte-equality assertion below stays meaningful for
-            // what this test actually covers (registration, not repair —
-            // see `arm64_kernel_gets_its_boot_magic_repaired` for that).
-            let mut fake = vec![0_u8; 64];
-            fake[0] = b'M';
-            fake[1] = b'Z';
-            fake[0x38..0x3c].copy_from_slice(&ARM64_IMAGE_MAGIC);
-            fake.extend_from_slice(b"fake ARM64 PE Image");
-            std::fs::write(&raw_kernel, &fake).unwrap();
+            // Already a bare Image, so unwrapping is a pass-through and the
+            // byte-equality assertion below stays meaningful for what this
+            // test actually covers (registration, not unwrapping — see
+            // `arm64_kernel_is_decompressed_out_of_its_efi_zboot_wrapper`).
+            std::fs::write(&raw_kernel, bare_arm64_image(b"fake ARM64 PE Image")).unwrap();
         } else {
             std::fs::copy("/usr/bin/true", &raw_kernel).unwrap();
         }

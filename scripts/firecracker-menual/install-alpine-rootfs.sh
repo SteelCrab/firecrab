@@ -14,6 +14,7 @@ kernel_artifact_dir="${repo_dir}/images/kernel"
 kernel_image_name=''
 initrd_image_name=''
 extract_vmlinux="${script_dir}/extract-vmlinux"
+unwrap_arm64_image="${script_dir}/unwrap-arm64-image"
 build_dir="${repo_dir}/build/alpine-rootfs"
 rootfs_size='512M'
 rootfs_hostname='firecrab'
@@ -340,28 +341,10 @@ restore_output_ownership() {
   chown -h "${SUDO_UID}:${SUDO_GID}" "${artifact_dir}/alpine-rootfs.ext4" 2>/dev/null || true
 }
 
-# Alpine's linux-virt arm64 vmlinuz ships with the Linux/arm64 "Image" boot
-# header magic (ARM64_IMAGE_MAGIC, 4 bytes at offset 0x38) zeroed out, even
-# though its PE/EFI wrapper is otherwise intact and passes `file`'s PE32+
-# ARM64 detection. Firecracker's aarch64 kernel loader (rust-vmm
-# linux-loader) validates that field independently of the PE header and
-# refuses to boot with "invalid Image magic number" if it's missing, so
-# restore it before packaging.
-restore_arm64_image_magic() {
-  image_path=$1
-  source_path=$2
-  printf '\x41\x52\x4d\x64' | dd of="$image_path" bs=1 seek=56 count=4 conv=notrunc status=none 2>/dev/null
-  image_magic=$(od -An -tx1 -j56 -N4 "$image_path" | tr -d ' \n')
-  if [ "$image_magic" != '41524d64' ]; then
-    rm -f "$image_path"
-    fail "failed to restore ARM64 Image magic number in ${source_path}"
-  fi
-}
-
 # Prepares the raw vmlinuz-virt copied out to /kernel-out. Firecracker expects
-# uncompressed ELF on x86_64, but the distro's PE32+ ARM64 Image must be kept
-# intact (aside from the magic-number repair above) rather than passed
-# through extract-vmlinux.
+# uncompressed ELF on x86_64, and on aarch64 a bare Linux/arm64 "Image" — not
+# the EFI zboot wrapper Alpine ships vmlinuz-virt as, which only unpacks
+# itself when EFI firmware runs its PE entry point. See unwrap-arm64-image.
 extract_kernel() {
   raw_path="${kernel_artifact_dir}/vmlinuz-virt-raw"
   if [ ! -s "$raw_path" ]; then
@@ -371,13 +354,15 @@ extract_kernel() {
   kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
   kernel_image_tmp="${kernel_image_path}.tmp"
   if [ "$alpine_arch" = aarch64 ]; then
-    info "preserving ARM64 PE kernel Image from: ${raw_path}"
-    cp "$raw_path" "$kernel_image_tmp"
-    if ! file "$kernel_image_tmp" | grep -Eq 'PE32.*ARM64'; then
+    info "unwrapping bare ARM64 kernel Image from: ${raw_path}"
+    if ! "$unwrap_arm64_image" "$raw_path" >"$kernel_image_tmp"; then
       rm -f "$kernel_image_tmp"
-      fail "ARM64 kernel is not a PE32+ Image: ${raw_path}"
+      fail "could not unwrap a bootable ARM64 Image from ${raw_path}"
     fi
-    restore_arm64_image_magic "$kernel_image_tmp" "$raw_path"
+    if ! file "$kernel_image_tmp" | grep -q 'ARM64 boot executable Image'; then
+      rm -f "$kernel_image_tmp"
+      fail "unwrapped kernel is not an ARM64 boot Image: ${raw_path}"
+    fi
   else
     info "extracting ELF vmlinux from: ${raw_path}"
     if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
@@ -428,6 +413,14 @@ main() {
   require_command uname
   if [ ! -x "$extract_vmlinux" ]; then
     fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  fi
+  if [ "$alpine_arch" = aarch64 ]; then
+    if [ ! -x "$unwrap_arm64_image" ]; then
+      fail "unwrap-arm64-image helper not found or not executable: ${unwrap_arm64_image}"
+    fi
+    # Alpine's arm64 vmlinuz-virt is a gzip-compressed EFI zboot image; od
+    # reads that wrapper's headers, gzip (required above) unpacks it.
+    require_command od
   fi
 
   if [ "$(id -u)" -ne 0 ]; then

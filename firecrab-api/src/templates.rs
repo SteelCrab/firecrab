@@ -1241,7 +1241,7 @@ mod tests {
             .iter()
             .find(|spec| spec.alias == "rocky-9.8")
             .expect("rocky-9.8 is one of the default specs");
-        assert_eq!(rocky.version, "rocky-9.8-v2");
+        assert_eq!(rocky.version, "rocky-9.8-v3");
         if alpine_arch == "aarch64" {
             assert_eq!(
                 rocky.kernel,
@@ -1369,7 +1369,7 @@ mod tests {
         );
 
         let rocky = specs.iter().find(|spec| spec.alias == "rocky-9.8").unwrap();
-        assert_eq!(rocky.version, "rocky-9.8-v2");
+        assert_eq!(rocky.version, "rocky-9.8-v3");
         assert_eq!(
             rocky.kernel,
             PathBuf::from("kernel/Image-rocky-9.8-aarch64")
