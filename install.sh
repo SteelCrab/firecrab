@@ -442,10 +442,22 @@ ensure_image_build_deps() {
     ensure file file || failed=1
     ensure gzip gzip || failed=1
     ensure install coreutils || failed=1
+    ensure mkfs.ext4 e2fsprogs || failed=1
     ensure mount util-linux || failed=1
+    ensure curl curl || failed=1
     ensure sha256sum coreutils || failed=1
+    ensure tar tar || failed=1
     ensure truncate coreutils || failed=1
     ensure umount util-linux || failed=1
+    if [ "$WITH_UBUNTU_IMAGE" -eq 1 ]; then
+        ensure find findutils || failed=1
+        ensure sed sed || failed=1
+        ensure sort coreutils || failed=1
+        ensure tail coreutils || failed=1
+        ensure ln coreutils || failed=1
+        ensure chmod coreutils || failed=1
+        ensure chown coreutils || failed=1
+    fi
     if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
         ensure jq jq || failed=1
         ensure xz xz || failed=1

@@ -102,14 +102,14 @@ for alias in "${selected_aliases[@]}"; do
     [ -n "$command" ] && require_command "$command"
   done < <(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" requires "$alias")
 
+  builder_environment=()
   while IFS=$'\t' read -r key value; do
     [ -n "$key" ] || continue
-    printf -v "$key" '%s' "$value"
-    export "${key?}"
+    builder_environment+=("${key}=${value}")
   done < <(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" environment "$alias")
 
   info "building ${alias} (distribution ${version}, ${architecture})"
-  "${repo_dir}/${builder}"
+  env "${builder_environment[@]}" "${repo_dir}/${builder}"
 done
 
 if [ "$package_images" -eq 1 ]; then

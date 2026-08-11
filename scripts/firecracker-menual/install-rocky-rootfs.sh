@@ -560,7 +560,9 @@ extract_container_base() {
 }
 
 restore_output_ownership() {
-  [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ] || return
+  if [ -z "${SUDO_UID:-}" ] || [ -z "${SUDO_GID:-}" ]; then
+    return 0
+  fi
 
   chown "${SUDO_UID}:${SUDO_GID}" \
     "${artifact_dir}/${rootfs_image_name}" \
