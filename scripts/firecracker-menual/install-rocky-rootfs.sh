@@ -531,8 +531,9 @@ extract_container_base() {
   if [ -f "$archive_tree/index.json" ]; then
     manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' \
       "$archive_tree/index.json")
-    [ -n "$manifest_digest" ] && [ "$manifest_digest" != null ] \
-      || fail 'Could not read Container-Base manifest digest from index.json'
+    if [ -z "$manifest_digest" ] || [ "$manifest_digest" = null ]; then
+      fail 'Could not read Container-Base manifest digest from index.json'
+    fi
     mapfile -t layers < <(
       jq -r '.layers[].digest | sub("^sha256:"; "")' \
         "$archive_tree/blobs/sha256/${manifest_digest}"
