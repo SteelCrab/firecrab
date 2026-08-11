@@ -346,6 +346,26 @@ ensure_account() {
         step "adding $FIRECRAB_USER to the kvm group"
         $SUDO usermod --append --groups kvm "$FIRECRAB_USER"
     fi
+
+    # Group membership above is necessary but not always sufficient: some
+    # hosts' /dev/kvm doesn't actually land in the kvm group the standard
+    # udev rule (KERNEL=="kvm", GROUP="kvm") asks for — seen live on a
+    # Parallels ARM host where it came up group "sgx" instead, which made
+    # every VM start fail with "Kvm error: Permission denied (os error 13)"
+    # even though $FIRECRAB_USER was correctly in the kvm group. An ACL
+    # entry is a narrow, idempotent belt-and-suspenders fix: it grants the
+    # kvm group access without touching whatever else owns the device node,
+    # and re-running this is a no-op once the entry is already there.
+    if [ -e /dev/kvm ]; then
+        if have setfacl; then
+            if ! getfacl -p /dev/kvm 2>/dev/null | grep -qx 'group:kvm:rw-'; then
+                step "granting the kvm group ACL access to /dev/kvm"
+                $SUDO setfacl -m g:kvm:rw /dev/kvm
+            fi
+        else
+            warn "setfacl not found — skipping the /dev/kvm ACL fixup (install the 'acl' package if VMs fail with a KVM permission error)"
+        fi
+    fi
 }
 
 # Data, config and install directories with their intended owners.
