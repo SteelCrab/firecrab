@@ -93,11 +93,24 @@ REPOS
 # share /etc/resolv.conf the way the /proc,/sys,/dev bind mounts do, so
 # without this the extracted minirootfs's own (unusable) resolv.conf makes
 # every package lookup fail DNS resolution (found live: "DNS: transient
-# error", every package "no such package"). The final production value is
-# the same either way; only the timing moved.
-cat >"${staging}/etc/resolv.conf" <<'EOF'
-nameserver 172.30.0.1
-EOF
+# error", every package "no such package").
+#
+# Taken from the outer shell rather than written as a literal. This used to
+# pin "nameserver 172.30.0.1" — the gateway of the *default* MicroNetwork —
+# so a builder VM placed on any other MicroNetwork (172.33.0.0/24, say) sent
+# every lookup to an address nothing answers on and failed with exactly the
+# symptom above, while the outer shell, whose resolver udhcpc had just set
+# from the lease, was fetching from the same mirror successfully two steps
+# earlier. What the *finished image* ships is a separate concern, written
+# further down, the way bootstrap-rocky-in-guest.sh already separates them.
+if [ -s /etc/resolv.conf ]; then
+  cp /etc/resolv.conf "${staging}/etc/resolv.conf"
+else
+  build_resolver=$(ip route show default 2>/dev/null | awk '{ print $3; exit }')
+  [ -n "$build_resolver" ] \
+    || fail 'no resolver in the outer shell and no default gateway to derive one from'
+  printf 'nameserver %s\n' "$build_resolver" >"${staging}/etc/resolv.conf"
+fi
 
 mount -t proc proc "$staging/proc"
 mount --rbind /sys "$staging/sys"
@@ -115,6 +128,16 @@ EOF
 cat >"${staging}/etc/hosts" <<EOF
 127.0.0.1 localhost
 127.0.1.1 ${rootfs_hostname}
+EOF
+
+# The resolver the finished image ships with, replacing the builder VM's own
+# (whose MicroNetwork the image will usually not be on). Only ever read
+# before the first DHCP lease lands: dnsmasq hands the bridge out as the
+# guest's DNS server and dhcpcd rewrites this file from the lease on boot.
+# Same value and same reason as bootstrap-rocky-in-guest.sh's.
+rm -f "${staging}/etc/resolv.conf"
+cat >"${staging}/etc/resolv.conf" <<'EOF'
+nameserver 172.30.0.1
 EOF
 cat >"${staging}/etc/fstab" <<'EOF'
 /dev/vda / ext4 defaults 0 1
