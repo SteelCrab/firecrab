@@ -418,6 +418,13 @@ cp "$vmlinuz_path" /kernel-out/vmlinuz-rocky-raw
 cp "$initrd_path" "/kernel-out/${initrd_image_name}"
 chmod 0644 /kernel-out/vmlinuz-rocky-raw "/kernel-out/${initrd_image_name}"
 
+# Dropped from the rootfs now that it is in /kernel-out: the runtime boots
+# the initrd artifact this just produced, never one from inside the guest
+# filesystem, so keeping the 27.9 MB duplicate only inflates every package.
+# Same reasoning (and the same %ghost ownership) as
+# bootstrap-rocky-in-guest.sh's copy of this step.
+rm -f "$initrd_path"
+
 rootfs_image="/out/${rootfs_image_name}"
 rootfs_tmp="${rootfs_image}.tmp"
 rm -f "$rootfs_tmp"

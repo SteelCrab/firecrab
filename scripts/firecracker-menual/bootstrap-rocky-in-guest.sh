@@ -369,6 +369,16 @@ test -e "$staging/etc/systemd/system/firecrab-network-ready.service" || fail 'mi
 cp "$vmlinuz_path" "$out/vmlinuz-raw"
 cp "$initrd_path" "$out/initramfs"
 
+# Now that it is safely in $out, drop it from the tree that becomes the
+# rootfs. Firecracker loads the initrd the host hands it (the copy just
+# made), never one from inside the guest's own filesystem, so the in-rootfs
+# copy is 27.9 MB — 7.5% of this image, measured with debugfs on a built
+# one — that is written twice by the two mkfs.ext4 passes below, shipped in
+# every package, and never read. EL9 owns this path as %ghost precisely
+# because it is regenerated rather than shipped, so dracut inside a running
+# guest recreates it on the next kernel update exactly as it would have.
+rm -f "$initrd_path"
+
 info 'building rootfs.ext4'
 truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
 # -O ^orphan_file: see the identical flag in the alpine/ubuntu scripts —
