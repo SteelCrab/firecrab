@@ -54,9 +54,20 @@ const BOOTSTRAP_DONE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_DONE";
 
 /// How long the guest-side bootstrap script may run before this module
 /// gives up waiting — real network downloads (hundreds of MB) plus a real
-/// package install, so far more generous than
-/// a long guest-side install.
-const BOOTSTRAP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(1800);
+/// package install, so far more generous than a long guest-side install.
+///
+/// Measured end-to-end on an aarch64 host, one builder at a time, on the
+/// single vCPU this module used to give the builder: alpine-3.24 in 2m55s,
+/// rocky-9.8 in 9m44s, and ubuntu-26.04 was still going when the old
+/// 30-minute bound killed it — with the guest's vCPU pegged at ~98% for the
+/// entire run, so it was building, not hung. Ubuntu is the outlier by
+/// construction: ~1.2 GiB of packaged rootfs against rocky's ~430 MiB, an
+/// `apt-get install` that includes `linux-image-generic`, and then two full
+/// single-threaded `mkfs.ext4 -d` passes (the 2 GiB image, then the output
+/// directory onto `/dev/vda`). 90 minutes covers that with room for a
+/// loaded host; the session log's heartbeat is what distinguishes a slow
+/// run from a stuck one in the meantime, and a stuck one can be cancelled.
+const BOOTSTRAP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(5400);
 
 /// Marker the console-readiness probe asks the guest's shell to echo back,
 /// kept distinct from [`BOOTSTRAP_DONE_SENTINEL`] so a probe reply can never
@@ -68,9 +79,25 @@ const CONSOLE_PROBE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_SHELL_READY";
 /// cheaply while agetty is still coming up.
 const CONSOLE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Bounded so an unbootable console fails in ~30s with a clear message
-/// instead of hanging until [`BOOTSTRAP_SCRIPT_TIMEOUT`].
-const CONSOLE_PROBE_ATTEMPTS: usize = 10;
+/// Bounded so an unbootable console fails with a clear message instead of
+/// hanging until [`BOOTSTRAP_SCRIPT_TIMEOUT`] — but bounded as a "something
+/// is genuinely wrong" limit, the same way [`BUILDER_BOOT_TIMEOUT`] is, not
+/// as a latency budget.
+///
+/// It used to be 10 (~30s), which is *below* what a healthy builder needs.
+/// The probes start the moment the VM is `Running`, and for a MicroBoot
+/// builder that is immediate — `handlers::vms` skips the network-readiness
+/// wait for this alias, because Alpine's netboot initramfs has no init
+/// service to fire the sentinel. So this budget has to cover the guest's
+/// entire boot, and the builder's `ram: 8192` makes that boot slow: timed on
+/// an aarch64 host, the recovery shell answers at ~10s with 1024 MiB but
+/// ~15s with 8192 MiB, purely from setting up the larger memory map. Under
+/// host CPU load (a parallel `cargo build` was enough) the same guest took
+/// 25.3s, and a busier host pushes it past 30s — at which point the session
+/// fails with "console shell never became responsive" even though nothing is
+/// wrong with the VM at all. 40 leaves several times that headroom while
+/// still failing ~15x faster than the script timeout.
+const CONSOLE_PROBE_ATTEMPTS: usize = 40;
 
 /// How often the session log gets a "still running" line while the script
 /// executes. Frequent enough that the dashboard never looks frozen for long,
@@ -198,7 +225,21 @@ pub async fn start_bootstrap(
         // given distro actually touches. Rocky additionally sizes its tmpfs
         // work area off this number — see bootstrap-rocky-in-guest.sh.
         ram: 8192,
-        cpu: 1,
+        // The build is CPU-bound end to end: a bootstrap that ran to the
+        // old 30-minute limit had burned 29.8 minutes of CPU, so its single
+        // vCPU sat at ~98% for the entire run. Most of the work is serial
+        // by nature (dpkg/apk unpack one package at a time, `mkfs.ext4 -d`
+        // walks the tree once), so the second vCPU is not a second worker so
+        // much as somewhere for the guest kernel's own I/O completion and
+        // page-cache work to go instead of preempting the installer.
+        //
+        // 2 rather than the host's core count because the workload cannot
+        // use more: measured over a full 25-minute Ubuntu build at this
+        // setting, the builder averaged 148% CPU — it did not saturate even
+        // the two vCPUs it had. Unlike the packaging step above, which is
+        // genuinely parallel and now takes every core, this ceiling is a
+        // property of dpkg, not of what we allow it.
+        cpu: 2,
         // The target's own build headroom, but never below the floor the
         // source template itself needs to boot at all — a source rootfs
         // bigger than the target's build budget would otherwise fail

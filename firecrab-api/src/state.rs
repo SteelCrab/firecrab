@@ -32,6 +32,14 @@ pub struct RuntimeConfig {
     /// How long to wait for the guest's network-readiness sentinel on its
     /// serial console before failing the start (see
     /// `handlers::vms::wait_for_network_ready`).
+    ///
+    /// This is a hang detector, not a latency budget, so it is sized for the
+    /// slowest guest rather than the typical one. Every supported template's
+    /// readiness script reports *both* outcomes — `FIRECRAB_NETWORK_READY`
+    /// or `FIRECRAB_NETWORK_FAILED <reason>` — so a guest that boots and
+    /// simply has no working network still fails in its own good time and
+    /// never reaches this bound. Only a guest that never gets far enough to
+    /// run the script at all does.
     pub network_ready_timeout: Duration,
 }
 
@@ -43,7 +51,17 @@ impl RuntimeConfig {
             firecracker_binary: firecracker::default_firecracker_binary(),
             ready_timeout: Duration::from_secs(10),
             stop_grace: Duration::from_secs(5),
-            network_ready_timeout: Duration::from_secs(30),
+            // 30s used to live here, which no Rocky VM could ever meet:
+            // timed on an aarch64 host at 1 vCPU / 2048 MiB, its dracut
+            // initramfs alone runs past 21s, and the readiness verdict lands
+            // at 67.5s (52s of that before the script's own 15s
+            // wait-for-IPv4 loop). Every rocky-9.8 start failed with "timed
+            // out waiting for network readiness" while the guest was still
+            // booting perfectly normally. Alpine reaches its verdict in ~4s
+            // and Ubuntu in between, so this bound is set by the slowest
+            // template plus room for a loaded host — see the field's doc for
+            // why overshooting costs nothing in the ordinary failure case.
+            network_ready_timeout: Duration::from_secs(180),
         }
     }
 }
