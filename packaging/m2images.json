@@ -14,8 +14,8 @@
       "distribution": "alpine",
       "series": "3.24",
       "version": "3.24.1",
-      "revision": 4,
-      "templateVersion": "alpine-3.24.1-v4",
+      "revision": 5,
+      "templateVersion": "alpine-3.24.1-v5",
       "minDiskGb": 1,
       "builder": {
         "script": "scripts/firecracker-menual/install-alpine-rootfs.sh",
@@ -47,8 +47,8 @@
       "distribution": "ubuntu",
       "series": "26.04",
       "version": "26.04",
-      "revision": 3,
-      "templateVersion": "ubuntu-26.04-v3",
+      "revision": 5,
+      "templateVersion": "ubuntu-26.04-v5",
       "minDiskGb": 2,
       "builder": {
         "script": "scripts/firecracker-menual/install-ubuntu-roofs.sh",
@@ -80,8 +80,8 @@
       "distribution": "rocky",
       "series": "9.8",
       "version": "9.8",
-      "revision": 2,
-      "templateVersion": "rocky-9.8-v2",
+      "revision": 4,
+      "templateVersion": "rocky-9.8-v4",
       "minDiskGb": 2,
       "builder": {
         "script": "scripts/firecracker-menual/install-rocky-rootfs.sh",
