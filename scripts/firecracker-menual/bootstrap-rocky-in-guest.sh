@@ -52,7 +52,11 @@ container_url="${rocky_repository_base}/${rocky_release}/images/${rocky_arch}/${
 # actions invoke `dnf` on the serial console.
 rootfs_packages='kernel dracut systemd systemd-udev NetworkManager iproute iputils bind-utils curl ca-certificates procps-ng openssh-server kmod util-linux dhcp-client e2fsprogs dnf'
 
-info() { printf '[INFO] %s\n' "$*"; }
+# Seconds since the script started, on every line — see the same helper in
+# bootstrap-ubuntu-in-guest.sh for why the session log is useless for finding
+# where a slow build spent its time without it.
+script_started=$(date +%s)
+info() { printf '[INFO +%ss] %s\n' "$(( $(date +%s) - script_started ))" "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
 chroot_mounts=''

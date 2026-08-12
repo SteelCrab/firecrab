@@ -30,7 +30,13 @@ rootfs_hostname='firecrab'
 # `linux-virt` already makes.
 rootfs_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-virtual iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server'
 
-info() { printf '[INFO] %s\n' "$*"; }
+# Every line carries seconds since this script started. A MicroBoot build is
+# tens of minutes of mostly-silent work, and the session log is the only
+# record of it, so without this there is no way to tell afterwards which step
+# spent the time — download, dpkg, or either mkfs pass — and any attempt to
+# make it faster is guesswork.
+script_started=$(date +%s)
+info() { printf '[INFO +%ss] %s\n' "$(( $(date +%s) - script_started ))" "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
 cleanup_mounts() {

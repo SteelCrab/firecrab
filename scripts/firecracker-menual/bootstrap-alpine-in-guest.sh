@@ -21,7 +21,11 @@ rootfs_hostname='firecrab'
 # bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu).
 rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
 
-info() { printf '[INFO] %s\n' "$*"; }
+# Seconds since the script started, on every line — see the same helper in
+# bootstrap-ubuntu-in-guest.sh for why the session log is useless for finding
+# where a slow build spent its time without it.
+script_started=$(date +%s)
+info() { printf '[INFO +%ss] %s\n' "$(( $(date +%s) - script_started ))" "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
 cleanup_mounts() {
