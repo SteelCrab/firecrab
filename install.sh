@@ -559,7 +559,28 @@ start_units() {
             failed=1
         fi
     done
+    if [ "$failed" -eq 0 ]; then
+        wait_for_api || failed=1
+    fi
     return $failed
+}
+
+# `is-active` on a Type=simple unit is true as soon as the process forks —
+# not once it is actually serving. At startup firecrab-api hashes every
+# present template artifact before binding its listener (see
+# TemplateRegistry::from_specs in firecrab-api/src/templates.rs), and a
+# freshly built multi-gigabyte rootfs (--with-ubuntu-image, --with-rocky-image)
+# can take noticeably longer to hash than the process takes to fork. Poll the
+# real HTTP port so callers relying on start_units's return don't race it.
+wait_for_api() {
+    local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:3000}
+    local _attempt
+    for _attempt in $(seq 1 60); do
+        curl -fsS -o /dev/null "http://$bind/" && return 0
+        sleep 1
+    done
+    warn "firecrab-api did not answer http://$bind/ within 60s — journalctl -u firecrab-api -n 30"
+    return 1
 }
 
 # Report-only path: every gap, no changes, no root required.

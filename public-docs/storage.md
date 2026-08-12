@@ -5,6 +5,60 @@ The directory can be on a separate mounted device.
 
 firecrab does not partition, format, or mount disks.
 
+## Installed MicroVM state
+
+An `install.sh` deployment uses `/var/lib/firecrab` as its working directory by default.
+MicroVM control-plane records and VM filesystem artifacts have separate storage lifecycles.
+
+```text
+/var/lib/firecrab/
+  data/
+    firecrab.db
+    firecrab.db-wal              # present while WAL has live frames
+    firecrab.db-shm              # present while SQLite is open in WAL mode
+    vms/
+      <vm-id>/
+        d/<generation>.ext4
+        r/<runtime-id>/
+          fc.json
+          fc.sock
+          console.log
+  images/
+    .templates.json              # persisted runtime template registrations
+    .microboot/                  # Alpine netboot kernel, initramfs, and placeholder disk
+    .packages/                   # staged M2Image archives and origin markers
+    kernel/
+    rootfs/
+```
+
+`data/firecrab.db` is the SQLite database for VM identity, lifecycle state, image version and hashes, CPU, RAM, disk size, network, storage selection, disk generation, Shell pins, and port forwards.
+The guest filesystem is not stored in SQLite.
+It is the writable ext4 file under the selected storage root's `vms/<vm-id>/d/` directory.
+
+The `images/` directory contains immutable source templates used when preparing new VM disks.
+Replacing a source image does not modify a VM disk that was already prepared.
+Temporary download, package-build, and bootstrap scratch files can also appear under `.packages/` while a job is running or after an interrupted job.
+
+Other installed and runtime files live outside `/var/lib/firecrab`.
+
+| Path | Purpose |
+| --- | --- |
+| `/etc/firecrab/api.env` | Operator-owned API configuration |
+| `/etc/systemd/system/firecrab-*.service` | Installed systemd units |
+| `/usr/local/lib/firecrab/` | API, network helper, and `extract-vmlinux` |
+| `/usr/local/bin/firecrab-doctor` | Host diagnostic command |
+| `/usr/local/share/firecrab/dashboard/` | Installed dashboard assets |
+| `/run/firecrab/` | Ephemeral helper socket, dnsmasq configuration, PID, hosts, and leases |
+| systemd journal and Linux networking state | Service logs, bridges, TAPs, nftables, and live processes |
+
+Inspect the default installed state with these commands.
+
+```sh
+sudo sqlite3 /var/lib/firecrab/data/firecrab.db \
+  'SELECT id, name, state, storage_root, disk_generation FROM vms;'
+sudo find /var/lib/firecrab/data/vms -maxdepth 4 -type f
+```
+
 ## Storage sources
 
 `GET /api/storage` combines these sources.
@@ -78,6 +132,19 @@ firecrab does not copy an existing disk between pools.
 
 The disk generation survives stop and start.
 Each start gets a new runtime directory.
+The runtime directory contains one Firecracker configuration, API socket, and serial-console log for that start.
+
+The SQLite database remains under the firecrab data directory when a VM uses an environment root or MicroStorage.
+Only that VM's `d/` and `r/` artifact directories move to the selected storage root.
+
+## Upgrade, uninstall, and backup
+
+A normal `./install.sh` upgrade preserves the SQLite database, VM artifacts, installed images, and `api.env`.
+`./install.sh --uninstall` also preserves those files.
+`./install.sh --uninstall --purge` removes the configured data directory and therefore deletes the database and default-root VM disks.
+
+Stop `firecrab-api` before taking an offline backup.
+Back up `firecrab.db`, every configured storage root containing VM artifacts, and the image directory together so database references and files remain consistent.
 
 ## Delete
 
