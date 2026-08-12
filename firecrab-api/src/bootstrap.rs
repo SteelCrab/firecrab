@@ -46,6 +46,29 @@ impl BootstrapTracker {
             .cloned()
     }
 
+    /// The session that is still running, if there is one.
+    ///
+    /// Exists so a dashboard that has lost its in-memory handle on a
+    /// bootstrap can find it again: the session id is minted server-side by
+    /// [`try_begin`](Self::try_begin) and handed to whoever issued the
+    /// `POST`, so a browser reload or a walk to another page used to leave a
+    /// build running with no way left to address it — no session panel, no
+    /// console, until it finished. Only one bootstrap runs at a time (the
+    /// invariant `try_begin` enforces), so "the active one" is unambiguous
+    /// and needs no id to ask for.
+    ///
+    /// Terminal sessions are deliberately not returned: a finished build is
+    /// history, and resurrecting it on every page load would show a stale
+    /// result as if it were live.
+    pub fn active(&self) -> Option<BootstrapResponse> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+            .find(|session| is_active(session))
+            .cloned()
+    }
+
     /// Whether any tracked session hasn't reached a terminal status — a
     /// cheap pre-check for `handlers::bootstrap::start_bootstrap`, which
     /// still has to go through [`try_begin`](Self::try_begin) for the
@@ -330,6 +353,34 @@ mod tests {
 
         tracker.finish_ok(id);
         assert!(!tracker.any_active());
+    }
+
+    /// What lets a reloaded dashboard find the build it already started:
+    /// the id lives only in the browser's memory, so without this the
+    /// session becomes unaddressable the moment that page goes away.
+    #[test]
+    fn active_returns_the_running_session_and_forgets_it_once_finished() {
+        let tracker = BootstrapTracker::default();
+        assert!(tracker.active().is_none());
+
+        let vm_id = Uuid::new_v4();
+        let id = tracker
+            .try_begin("ubuntu-26.04", "alpine-3.24", vm_id)
+            .expect("no other session is active");
+
+        let found = tracker.active().expect("the running session");
+        assert_eq!(found.bootstrap_id, id);
+        assert_eq!(found.alias, "ubuntu-26.04");
+        // The console the caller reconnects to hangs off this id.
+        assert_eq!(found.vm_id, vm_id);
+
+        tracker.finish_ok(id);
+        assert!(
+            tracker.active().is_none(),
+            "a finished build is history, not something to resurrect on the next page load"
+        );
+        // Still reachable by id, for whoever is already watching it.
+        assert!(tracker.get(id).is_some());
     }
 
     /// The single-session gate the dashboard's double-click can otherwise

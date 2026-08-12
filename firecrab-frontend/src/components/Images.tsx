@@ -14,6 +14,7 @@ import {
   deleteImage,
   deleteStagedPackage,
   deleteVm,
+  getActiveBootstrap,
   getBootstrap,
   getImageInstall,
   getImagePackage,
@@ -592,6 +593,8 @@ export default function Images() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
   const packagePollingRef = useRef(new Set<string>());
+  /** Session id currently being polled, so only ever one loop runs. */
+  const bootstrapPollingRef = useRef<string | null>(null);
   const [install, setInstall] = useState<ImageInstallResponse | null>(null);
   const [installOrigin, setInstallOrigin] = useState<"microRegistry" | "microBoot" | null>(null);
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
@@ -757,28 +760,67 @@ export default function Images() {
   // 404는 취소로 삭제된 세션이라는 확정 신호(그만 폴링), 그 외 에러는
   // 일시적일 수 있으니 계속 폴링한다.
   const pollBootstrap = (bootstrapId: string) => {
+    // One loop per session: the resume effect below and an explicit start
+    // can both ask for the same id, and StrictMode runs that effect twice in
+    // development, so without this guard the timers stack up.
+    if (bootstrapPollingRef.current === bootstrapId) return;
+    bootstrapPollingRef.current = bootstrapId;
+    const stop = () => {
+      if (bootstrapPollingRef.current === bootstrapId) bootstrapPollingRef.current = null;
+    };
     const tick = async () => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current) return stop();
       try {
         const snapshot = await getBootstrap(bootstrapId);
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) return stop();
         setBootstrapSession(snapshot);
         if (snapshot.status === "succeeded") {
+          stop();
           await Promise.all([refreshList(), refreshRegistry()]);
         } else if (snapshot.status !== "failed") {
           setTimeout(() => void tick(), 1000);
+        } else {
+          // "failed" is a confirmed terminal state too — stop without retrying.
+          stop();
         }
-        // "failed" is a confirmed terminal state too — stop without retrying.
       } catch (err) {
         if (err instanceof ApiClientError && err.status === 404) {
+          stop();
           if (mountedRef.current) setBootstrapSession(null);
           return;
         }
         if (mountedRef.current) setTimeout(() => void tick(), 1000);
+        else stop();
       }
     };
     void tick();
   };
+
+  // Makes good on what the `mountedRef` comment above already promises —
+  // that a bootstrap "keeps running on the backend and this panel resumes
+  // polling it next time Images mounts". It could not, until now: the
+  // session id arrives only in the `startBootstrap` response and lives only
+  // in this component's state, so a reload or a walk to another tab left the
+  // build running with no panel and no console until it finished. Ask the
+  // server which bootstrap is live and pick that id back up.
+  useEffect(() => {
+    let cancelled = false;
+    getActiveBootstrap()
+      .then((session) => {
+        if (cancelled || !mountedRef.current || !session) return;
+        setBootstrapSession(session);
+        pollBootstrap(session.bootstrapId);
+      })
+      // Having nothing to resume is the ordinary case, and a failure here
+      // must not stop the image list itself from rendering.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // Once, on mount. `pollBootstrap` is rebuilt every render, but the ref
+    // guard inside it is what keeps duplicate loops out.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleStartBootstrap = async (alias: string) => {
     if (bootstrapStartingAlias !== null) return;

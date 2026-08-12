@@ -855,6 +855,20 @@ fn build_package_blocking(
     Ok(())
 }
 
+/// `GET /api/images/bootstrap` — the bootstrap that is still running, or
+/// `null` when none is.
+///
+/// The id-addressed sibling below can only be used by whoever holds the id
+/// the `POST` returned, which the dashboard keeps in component state; a
+/// reload or a walk to another page drops it, and the build then runs to
+/// completion invisibly. This is how that page finds its way back to a
+/// session it already started. `null` rather than `404` because "nothing is
+/// building" is the ordinary answer on almost every page load, not a
+/// failure to look something up.
+pub async fn get_active_bootstrap(State(state): State<AppState>) -> Json<Option<BootstrapResponse>> {
+    Json(state.bootstraps.active())
+}
+
 /// `GET /api/images/bootstrap/{bootstrapId}`.
 pub async fn get_bootstrap(
     State(state): State<AppState>,
