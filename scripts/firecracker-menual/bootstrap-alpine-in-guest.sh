@@ -6,17 +6,19 @@
 # Downloads the official Alpine minirootfs, chroots in and installs
 # packages/kernel via ITS OWN bundled apk (not the outer guest's), then
 # packs the result into an ext4 image via `mkfs.ext4 -d` (no loop mount).
-# Adapted from install-alpine-rootfs.sh's write_configure_script — same
-# package list/config files, minus the outer-docker-container wrapper.
+# Shares the host-native install-alpine-rootfs.sh package/configuration model,
+# adapted to publish through the temporary MicroBoot builder disk.
 set -eu
 
 work=/root/fc-bootstrap
 staging="$work/staging"
 out="$work/out"
 alpine_releases_base='https://dl-cdn.alpinelinux.org/alpine'
+alpine_series='@M2IMAGE_DISTRO_SERIES@'
+alpine_version='@M2IMAGE_DISTRO_VERSION@'
 rootfs_size='512M'
 rootfs_hostname='firecrab'
-# bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu/Rocky).
+# bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu).
 rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
 
 info() { printf '[INFO] %s\n' "$*"; }
@@ -28,7 +30,7 @@ cleanup_mounts() {
   # silently no-ops under `2>/dev/null || true`, leaving /proc mounted live
   # under $staging when `mkfs.ext4 -d` walks it next, which then fails
   # ("No such process") trying to copy /proc's ephemeral per-process files.
-  # Same lazy-umount fallback bootstrap-rocky-in-guest.sh's cleanup relies on
+  # Use the same lazy-unmount fallback as the other guest bootstrap script
   # (its own first attempt uses -R, so in practice it always lands here).
   umount "$staging/proc" 2>/dev/null || umount -l "$staging/proc" 2>/dev/null || true
   umount "$staging/sys" 2>/dev/null || umount -l "$staging/sys" 2>/dev/null || true
@@ -62,33 +64,17 @@ info 'installing e2fsprogs into the outer (MicroBoot) shell'
 # from Alpine's own official minirootfs archive, which already ships a
 # pre-initialized apk database. curl: busybox only provides wget, not curl,
 # and this script uses curl throughout (found live: "curl: not found").
-apk add --no-cache --initdb --repository "${alpine_releases_base}/v3.24/main" e2fsprogs curl \
+apk add --no-cache --initdb --repository "${alpine_releases_base}/v${alpine_series}/main" e2fsprogs curl \
   || fail 'could not install e2fsprogs/curl into the outer shell'
 
-info 'resolving latest Alpine 3.24 minirootfs release'
-releases_yaml="$work/latest-releases.yaml"
-curl -fsSL "${alpine_releases_base}/v3.24/releases/${arch}/latest-releases.yaml" -o "$releases_yaml" \
-  || fail 'could not download Alpine release metadata'
-
-# intentional word splitting: awk emits four space-separated fields to
-# become positional parameters.
-# shellcheck disable=SC2046
-set -- $(awk '
-  function emit() { if (flavor == "alpine-minirootfs") { printf "%s %s %s %s", branch, version, file, sha256; found = 1 } }
-  /^-[[:space:]]*$/ { emit(); if (found) exit; branch=""; version=""; file=""; sha256=""; flavor=""; next }
-  /^  branch:/ { branch = $2 }
-  /^  version:/ { version = $2 }
-  /^  flavor:/ { flavor = $2 }
-  /^  file:/ { file = $2 }
-  /^  sha256:/ { sha256 = $2 }
-  END { if (!found) emit() }
-' "$releases_yaml")
-branch=$1
-version=$2
-archive_file=$3
-archive_sha256=$4
-[ -n "$branch" ] && [ -n "$archive_file" ] || fail 'could not resolve the Alpine minirootfs release'
-info "Alpine branch ${branch}, minirootfs version ${version}"
+branch="v${alpine_series}"
+archive_file="alpine-minirootfs-${alpine_version}-${arch}.tar.gz"
+checksum_file="$work/${archive_file}.sha256"
+curl -fsSL "${alpine_releases_base}/${branch}/releases/${arch}/${archive_file}.sha256" \
+  -o "$checksum_file" || fail 'could not download Alpine minirootfs checksum'
+archive_sha256=$(awk -v file="$archive_file" '$2 == file || $2 == "*" file { print $1; exit }' "$checksum_file")
+[ -n "$archive_sha256" ] || fail 'could not parse Alpine minirootfs checksum'
+info "Alpine branch ${branch}, minirootfs version ${alpine_version}"
 
 archive_path="$work/${archive_file}"
 curl -fsSL "${alpine_releases_base}/${branch}/releases/${arch}/${archive_file}" -o "$archive_path" \
@@ -193,7 +179,7 @@ truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
 # those consumers on *every single VM start*, not just the guest's own boot:
 # `rootfs::prepare_rootfs` runs `e2fsck -f -y` before `resize2fs`, and
 # `specialize_guest` runs `e2fsck -p`. On a host still shipping e2fsprogs
-# 1.46.5 (Rocky 9, Ubuntu 22.04 — both supported by install.sh) every VM
+# e2fsprogs 1.46.5 hosts (for example Ubuntu 22.04) every VM
 # made from this template would fail to start. Building templates on the
 # host never hit this because host mkfs and host e2fsck matched; sourcing
 # the builder from MicroBoot is what split those two versions apart.

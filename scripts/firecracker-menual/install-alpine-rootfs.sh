@@ -4,8 +4,11 @@ set -euo pipefail
 
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
+script_path="${script_dir}/$(basename -- "$0")"
 
 alpine_releases_base='https://dl-cdn.alpinelinux.org/alpine'
+alpine_series=${M2IMAGE_DISTRO_SERIES:-3.24}
+alpine_version_setting=${M2IMAGE_DISTRO_VERSION:-3.24.1}
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
 kernel_image_name=''
@@ -15,20 +18,17 @@ build_dir="${repo_dir}/build/alpine-rootfs"
 rootfs_size='512M'
 rootfs_hostname='firecrab'
 
-# `apk --root` installs straight into a staging directory without a mount or
-# chroot, so building the image needs no host root — only a container able to
-# write root-owned files/devnodes into that staging dir and into the
-# root-owned images/rootfs/ (see install-ubuntu-roofs.sh's directory, created
-# by that script's sudo re-exec). Docker gives us both without sudo.
-docker_bin='docker'
-docker_image='alpine:latest'
+# Like the Ubuntu builder, this script expands the official base archive into
+# a staging directory, installs packages with the distribution's own package
+# manager in a temporary chroot, then creates ext4 directly with mkfs.ext4 -d.
+# No Docker daemon or OCI runtime is involved.
 # linux-virt: Alpine's own officially-maintained cloud/virt kernel package
 # (public-docs/images.md) — replaces the self-built vanilla kernel
 # every template used to share. Unlike Ubuntu's linux-image-generic,
 # virtio_blk/ext4 are modules here rather than builtin, so the initramfs-virt
 # Alpine builds alongside it (mkinitfs) has to ship as the VM's initrd too —
 # without it the kernel can never reach /dev/vda to mount the real root.
-# bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu/Rocky).
+# bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu).
 rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
 
 info() {
@@ -58,9 +58,12 @@ abs_dir() {
 }
 
 detect_alpine_arch() {
-  case "$(uname -m 2>/dev/null || printf 'unknown')" in
-    x86_64 | aarch64)
-      uname -m
+  case "${M2IMAGE_ARCH:-$(uname -m 2>/dev/null || printf 'unknown')}" in
+    x86_64 | amd64)
+      printf '%s\n' 'x86_64'
+      ;;
+    aarch64 | arm64)
+      printf '%s\n' 'aarch64'
       ;;
     *)
       fail 'Unsupported architecture. Alpine rootfs creation supports x86_64 and aarch64.'
@@ -68,19 +71,39 @@ detect_alpine_arch() {
   esac
 }
 
+verify_native_architecture() {
+  local host_arch=''
+
+  case "$(uname -m 2>/dev/null || printf unknown)" in
+    x86_64 | amd64) host_arch='x86_64' ;;
+    aarch64 | arm64) host_arch='aarch64' ;;
+    *) fail 'Unsupported build host architecture.' ;;
+  esac
+  [ "$host_arch" = "$alpine_arch" ] \
+    || fail "Host-native Alpine chroot requires a ${alpine_arch} host (current: ${host_arch})."
+}
+
 resolve_ssh_public_key() {
-  key_source=${FIRECRAB_SSH_PUBLIC_KEY:-}
+  local key_source=${FIRECRAB_SSH_PUBLIC_KEY:-}
+  local key_home=''
+
   if [ -n "$key_source" ]; then
     [ -s "$key_source" ] || fail "FIRECRAB_SSH_PUBLIC_KEY is not a readable public key: ${key_source}"
     printf '%s\n' "$key_source"
     return
   fi
 
-  if [ -n "${HOME:-}" ]; then
+  if [ -n "${SUDO_UID:-}" ] && has_command getent; then
+    key_home=$(getent passwd "$SUDO_UID" | cut -d: -f6 || true)
+  elif [ -n "${HOME:-}" ]; then
+    key_home=$HOME
+  fi
+
+  if [ -n "$key_home" ]; then
     for key_source in \
-      "$HOME/.ssh/id_ed25519.pub" \
-      "$HOME/.ssh/id_ecdsa.pub" \
-      "$HOME/.ssh/id_rsa.pub"; do
+      "$key_home/.ssh/id_ed25519.pub" \
+      "$key_home/.ssh/id_ecdsa.pub" \
+      "$key_home/.ssh/id_rsa.pub"; do
       if [ -s "$key_source" ]; then
         printf '%s\n' "$key_source"
         return
@@ -89,70 +112,94 @@ resolve_ssh_public_key() {
   fi
 
   # SSH is optional: every Firecrab guest has an autologin serial console.
-  # Keep an empty bind-mount source so Docker can run the same configure path
-  # without modifying the operator's ~/.ssh directory behind their back.
+  # Keep an empty source so the configure path stays deterministic without
+  # modifying the operator's ~/.ssh directory behind their back.
   key_source="${build_dir}/no-authorized-key.pub"
   : >"$key_source"
   info 'no host SSH public key found; building with serial-console access only' >&2
   printf '%s\n' "$key_source"
 }
 
-# Alpine's per-arch release feed lists every flavor (minirootfs, netboot,
-# uboot, ...); pick out the minirootfs record's branch/version/file/sha256.
+# Resolve the exact manifest-pinned minirootfs. A branch's
+# latest-releases.yaml changes whenever Alpine publishes a patch release, so
+# using it would make an alias such as alpine-3.24 silently change contents
+# while package paths and runtime specs still expect 3.24.1.
 resolve_alpine_minirootfs() {
-  releases_url="${alpine_releases_base}/latest-stable/releases/${alpine_arch}/latest-releases.yaml"
-  releases_yaml="${build_dir}/latest-releases.yaml"
+  local branch="v${alpine_series}"
+  local archive_name="alpine-minirootfs-${alpine_version_setting}-${alpine_arch}.tar.gz"
+  local checksum_url="${alpine_releases_base}/${branch}/releases/${alpine_arch}/${archive_name}.sha256"
+  local checksum_file="${build_dir}/${archive_name}.sha256"
+  local checksum=''
 
-  if ! curl -fsSL "$releases_url" -o "${releases_yaml}.tmp"; then
-    fail "Could not download Alpine release metadata: ${releases_url}"
+  if ! curl -fsSL "$checksum_url" -o "${checksum_file}.tmp"; then
+    fail "Could not download Alpine checksum: ${checksum_url}"
   fi
-  mv "${releases_yaml}.tmp" "$releases_yaml"
-
-  awk '
-    function emit() { if (flavor == "alpine-minirootfs") { printf "%s %s %s %s\n", branch, version, file, sha256; found = 1 } }
-    /^-[[:space:]]*$/ {
-      emit()
-      if (found) exit
-      branch = ""; version = ""; file = ""; sha256 = ""; flavor = ""
-      next
-    }
-    /^  branch:/ { branch = $2 }
-    /^  version:/ { version = $2 }
-    /^  flavor:/ { flavor = $2 }
-    /^  file:/ { file = $2 }
-    /^  sha256:/ { sha256 = $2 }
-    END { if (!found) emit() }
-  ' "$releases_yaml"
+  mv "${checksum_file}.tmp" "$checksum_file"
+  checksum=$(awk -v file="$archive_name" '$2 == file || $2 == "*" file { print $1; exit }' "$checksum_file")
+  [ -n "$checksum" ] || fail "Could not find ${archive_name} in ${checksum_url}"
+  printf '%s %s %s %s\n' "$branch" "$alpine_version_setting" "$archive_name" "$checksum"
 }
 
 write_configure_script() {
-  # Runs as root inside a throwaway Alpine container: extracts the verified
-  # minirootfs archive, installs extra packages with `apk --root` (no mount
-  # or chroot needed), configures a Firecracker serial-console boot, and
-  # packages the result into an ext4 image written straight into /out.
+  # Runs as root on the host: extracts the verified minirootfs archive, uses
+  # its own apk inside a temporary chroot, configures the guest, and writes a
+  # direct ext4 image. All paths are explicit and remain inside the repository.
   cat >"$1" <<'EOF'
 #!/bin/sh
 set -eu
 
-staging=/work/rootfs
-alpine_branch=$1
-alpine_version=$2
-alpine_arch=$3
-hostname=$4
-rootfs_size=$5
-rootfs_packages=$6
-initrd_image_name=$7
+staging=$1
+archive_path=$2
+ssh_public_key=$3
+kernel_out=$4
+out=$5
+alpine_branch=$6
+alpine_version=$7
+alpine_arch=$8
+hostname=$9
+rootfs_size=${10}
+rootfs_packages=${11}
+initrd_image_name=${12}
 
+chroot_mounts=''
+
+cleanup_chroot_mounts() {
+  target=''
+  for target in $chroot_mounts; do
+    umount -R "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || true
+  done
+  chroot_mounts=''
+}
+
+mount_chroot_fs() {
+  mount -t proc proc "$staging/proc"
+  chroot_mounts="$staging/proc $chroot_mounts"
+  mount --rbind /sys "$staging/sys"
+  mount --make-rslave "$staging/sys"
+  chroot_mounts="$staging/sys $chroot_mounts"
+  mount --rbind /dev "$staging/dev"
+  mount --make-rslave "$staging/dev"
+  chroot_mounts="$staging/dev $chroot_mounts"
+}
+
+trap cleanup_chroot_mounts EXIT
+
+rm -rf "$staging"
 mkdir -p "$staging"
-tar -xzf /input/archive.tar.gz -C "$staging"
+tar --numeric-owner -xzf "$archive_path" -C "$staging"
 
 cat >"${staging}/etc/apk/repositories" <<REPOS
 https://dl-cdn.alpinelinux.org/alpine/${alpine_branch}/main
 https://dl-cdn.alpinelinux.org/alpine/${alpine_branch}/community
 REPOS
 
+# Use the downloaded distribution's own apk rather than requiring apk on the
+# host. The temporary resolver is replaced with the guest resolver below.
+cp /etc/resolv.conf "${staging}/etc/resolv.conf"
+mount_chroot_fs
 # shellcheck disable=SC2086
-apk add --no-cache --root "$staging" --update-cache $rootfs_packages
+chroot "$staging" /sbin/apk add --no-cache --update-cache $rootfs_packages
+cleanup_chroot_mounts
 
 cat >"${staging}/etc/hostname" <<EOF_HOSTNAME
 ${hostname}
@@ -243,9 +290,9 @@ for svc in local dhcpcd sshd firecrab-network-ready; do
   ln -sf "/etc/init.d/${svc}" "${staging}/etc/runlevels/default/${svc}"
 done
 
-if [ -s /input/id_ed25519.pub ]; then
+if [ -s "$ssh_public_key" ]; then
   install -d -m 0700 "${staging}/root/.ssh"
-  install -m 0600 /input/id_ed25519.pub "${staging}/root/.ssh/authorized_keys"
+  install -m 0600 "$ssh_public_key" "${staging}/root/.ssh/authorized_keys"
 fi
 
 test -e "${staging}/etc/os-release" || { echo 'missing /etc/os-release' >&2; exit 1; }
@@ -263,22 +310,34 @@ test -L "${staging}/etc/runlevels/default/firecrab-network-ready" || { echo 'fir
 # needs an uncompressed ELF vmlinux; ARM64 must retain the PE32+ Image.
 test -e "${staging}/boot/vmlinuz-virt" || { echo 'missing boot/vmlinuz-virt (linux-virt)' >&2; exit 1; }
 test -e "${staging}/boot/initramfs-virt" || { echo 'missing boot/initramfs-virt (linux-virt)' >&2; exit 1; }
-cp "${staging}/boot/vmlinuz-virt" /kernel-out/vmlinuz-virt-raw
-cp "${staging}/boot/initramfs-virt" "/kernel-out/${initrd_image_name}"
-chown 1000:1000 /kernel-out/vmlinuz-virt-raw "/kernel-out/${initrd_image_name}" 2>/dev/null || true
+cp "${staging}/boot/vmlinuz-virt" "${kernel_out}/vmlinuz-virt-raw"
+cp "${staging}/boot/initramfs-virt" "${kernel_out}/${initrd_image_name}"
 
-apk add --no-cache e2fsprogs >/dev/null
-
-rootfs_image="/out/alpine-rootfs-${alpine_version}-${alpine_arch}.ext4"
+rootfs_image="${out}/alpine-rootfs-${alpine_version}-${alpine_arch}.ext4"
 tmp_image="${rootfs_image}.tmp"
 truncate -s "$rootfs_size" "$tmp_image"
-mkfs.ext4 -F -L rootfs -d "$staging" "$tmp_image" >/dev/null
+if grep -qw orphan_file /etc/mke2fs.conf 2>/dev/null; then
+  mkfs.ext4 -F -O '^orphan_file' -L rootfs -d "$staging" "$tmp_image" >/dev/null
+else
+  mkfs.ext4 -F -L rootfs -d "$staging" "$tmp_image" >/dev/null
+fi
 mv "$tmp_image" "$rootfs_image"
-ln -sfn "$(basename "$rootfs_image")" /out/alpine-rootfs.ext4
-chown 1000:1000 "$rootfs_image" 2>/dev/null || true
+ln -sfn "$(basename "$rootfs_image")" "${out}/alpine-rootfs.ext4"
 
 echo "ROOTFS_IMAGE=${rootfs_image}"
 EOF
+}
+
+restore_output_ownership() {
+  if [ -z "${SUDO_UID:-}" ] || [ -z "${SUDO_GID:-}" ]; then
+    return
+  fi
+
+  chown "${SUDO_UID}:${SUDO_GID}" \
+    "${artifact_dir}/alpine-rootfs-${alpine_version}-${alpine_arch}.ext4" \
+    "${kernel_artifact_dir}/${kernel_image_name}" \
+    "${kernel_artifact_dir}/${initrd_image_name}"
+  chown -h "${SUDO_UID}:${SUDO_GID}" "${artifact_dir}/alpine-rootfs.ext4" 2>/dev/null || true
 }
 
 # Prepares the raw vmlinuz-virt copied out to /kernel-out. Firecracker expects
@@ -332,19 +391,39 @@ main() {
   require_command cp
   require_command curl
   require_command file
+  require_command gzip
   require_command grep
+  require_command chroot
+  require_command id
+  require_command install
   require_command mkdir
+  require_command mkfs.ext4
+  require_command mount
   require_command mv
+  require_command rm
   require_command sha256sum
+  require_command tar
+  require_command truncate
+  require_command umount
   require_command uname
-  require_command "$docker_bin"
   if [ ! -x "$extract_vmlinux" ]; then
     fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  fi
+
+  if [ "$(id -u)" -ne 0 ]; then
+    require_command sudo
+    exec sudo env \
+      "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
+      "M2IMAGE_DISTRO_SERIES=${alpine_series}" \
+      "M2IMAGE_DISTRO_VERSION=${alpine_version_setting}" \
+      "FIRECRAB_SSH_PUBLIC_KEY=${FIRECRAB_SSH_PUBLIC_KEY:-}" \
+      "$script_path"
   fi
 
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
   alpine_arch=$(detect_alpine_arch)
+  verify_native_architecture
   if [ "$alpine_arch" = aarch64 ]; then
     kernel_image_name='Image-alpine-virt-aarch64'
   else
@@ -383,26 +462,19 @@ main() {
   configure_script="${build_dir}/configure.sh"
   write_configure_script "$configure_script"
 
-  # A prior run's staging tree is root-owned (apk --root writes real root:root
-  # ownership so the boot image is faithful), so clearing it needs the same
-  # container-root trick as creating it.
   mount_dir="${build_dir}/mnt"
+  rm -rf "$mount_dir"
   mkdir -p "$mount_dir"
-  "$docker_bin" run --rm -v "${mount_dir}:/work/rootfs" "$docker_image" sh -c 'rm -rf /work/rootfs/* /work/rootfs/.[!.]* 2>/dev/null || true'
-
   mkdir -p "$kernel_artifact_dir"
 
-  info 'building Alpine rootfs staging + ext4 image via Docker (apk --root, no host root required)'
-  "$docker_bin" run --rm \
-    -v "${archive_path}:/input/archive.tar.gz:ro" \
-    -v "${ssh_public_key}:/input/id_ed25519.pub:ro" \
-    -v "${configure_script}:/configure.sh:ro" \
-    -v "${mount_dir}:/work/rootfs" \
-    -v "${artifact_dir}:/out" \
-    -v "${kernel_artifact_dir}:/kernel-out" \
-    "$docker_image" sh /configure.sh "$alpine_branch" "$alpine_version" "$alpine_arch" "$rootfs_hostname" "$rootfs_size" "$rootfs_packages" "$initrd_image_name"
+  info 'building Alpine rootfs staging + ext4 image via host-native chroot'
+  sh "$configure_script" \
+    "$mount_dir" "$archive_path" "$ssh_public_key" "$kernel_artifact_dir" "$artifact_dir" \
+    "$alpine_branch" "$alpine_version" "$alpine_arch" "$rootfs_hostname" "$rootfs_size" \
+    "$rootfs_packages" "$initrd_image_name"
 
   extract_kernel
+  restore_output_ownership
 
   rootfs_image="${artifact_dir}/alpine-rootfs-${alpine_version}-${alpine_arch}.ext4"
   rootfs_link="${artifact_dir}/alpine-rootfs.ext4"

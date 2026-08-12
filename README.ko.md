@@ -5,8 +5,6 @@
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
 </p>
 
-<h1 align="center">firecrab</h1>
-
 ```text
 ███████ ██ ██████  ███████  ██████ ██████   █████  ██████
 ██      ██ ██   ██ ██      ██      ██   ██ ██   ██ ██   ██
@@ -102,7 +100,7 @@ cd firecrab
 ./install.sh --check                 # 필요 조건과 예정 변경 사항 확인
 ./install.sh --doctor                # KVM, 방화벽, 소켓, 호스트 설정 진단
 ./install.sh --with-ubuntu-image
-./install.sh --with-rocky-image
+./install.sh --with-rocky-image      # Rocky Linux 9.8 고정 버전 빌드
 ./install.sh --uninstall         # 기본적으로 데이터 유지
 ./install.sh --uninstall --purge # /var/lib/firecrab도 제거
 ```

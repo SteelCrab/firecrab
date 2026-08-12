@@ -14,7 +14,7 @@ work=/root/fc-bootstrap
 mount_dir="$work/staging"
 out="$work/out"
 ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
-series='26.04'
+series='@M2IMAGE_DISTRO_SERIES@'
 rootfs_size='2G'
 rootfs_hostname='firecrab'
 rootfs_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-generic iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server'
@@ -28,7 +28,7 @@ cleanup_mounts() {
   # silently no-ops under `2>/dev/null || true`, leaving /proc mounted live
   # under $mount_dir when `mkfs.ext4 -d` walks it next, which then fails
   # ("No such process") trying to copy /proc's ephemeral per-process files.
-  # Same lazy-umount fallback bootstrap-rocky-in-guest.sh's cleanup relies on
+  # Use the same lazy-unmount fallback as the Alpine bootstrap script
   # (its own first attempt uses -R, so in practice it always lands here).
   umount "$mount_dir/proc" 2>/dev/null || umount -l "$mount_dir/proc" 2>/dev/null || true
   umount "$mount_dir/sys" 2>/dev/null || umount -l "$mount_dir/sys" 2>/dev/null || true
@@ -235,7 +235,7 @@ test -e "${mount_dir}/usr/sbin/sshd" || fail 'missing sshd'
 
 info 'building rootfs.ext4'
 truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
-# -O ^orphan_file: same reasoning as the alpine/rocky scripts — the outer
+# -O ^orphan_file: same reasoning as the Alpine script — the outer
 # MicroBoot shell's mkfs.ext4 (Alpine 3.24, e2fsprogs 1.47.x) enables it by
 # default, but the host re-checks this image with its own e2fsck on every
 # VM start (`prepare_rootfs`'s `e2fsck -f -y`, `specialize_guest`'s

@@ -33,7 +33,7 @@ import { useI18n } from "../i18n";
 const KNOWN_TEMPLATES = [
   { alias: "alpine-3.24", label: "Alpine Linux", logoSrc: "https://www.alpinelinux.org/alpinelinux-logo.svg" },
   { alias: "ubuntu-26.04", label: "Ubuntu", logoSrc: "https://assets.ubuntu.com/v1/ff6a9a38-ubuntu-logo-2022.svg" },
-  { alias: "rocky-9", label: "Rocky Linux", logoSrc: "https://raw.githubusercontent.com/rocky-linux/branding/main/logo/src/icon-primary.svg" },
+  { alias: "rocky-9.8", label: "Rocky Linux 9.8", logoSrc: "https://raw.githubusercontent.com/rocky-linux/branding/main/logo/src/icon-primary.svg" },
 ] as const;
 
 /** Human size for the real rootfs artifact (not the ceiled min-disk floor). */

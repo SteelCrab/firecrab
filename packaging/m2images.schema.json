@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://firecrab.dev/schemas/m2images.schema.json",
+  "title": "Firecrab M2Image release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "registry", "architectures", "images"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["catalogKey"],
+      "properties": {
+        "catalogKey": { "$ref": "#/$defs/relativePath" }
+      }
+    },
+    "architectures": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["x86_64", "aarch64"] }
+    },
+    "images": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/image" }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kernel", "initrd", "rootfs", "bootArgs", "registryKey"],
+      "properties": {
+        "kernel": { "$ref": "#/$defs/relativePath" },
+        "initrd": {
+          "oneOf": [
+            { "$ref": "#/$defs/relativePath" },
+            { "type": "null" }
+          ]
+        },
+        "rootfs": { "$ref": "#/$defs/relativePath" },
+        "bootArgs": { "type": "string", "minLength": 1 },
+        "registryKey": { "$ref": "#/$defs/relativePath" }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "distribution", "series", "version", "revision", "templateVersion", "minDiskGb", "builder", "artifacts"],
+      "properties": {
+        "alias": { "type": "string", "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$" },
+        "distribution": { "type": "string", "pattern": "^[a-z0-9]+$" },
+        "series": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "revision": { "type": "integer", "minimum": 1 },
+        "templateVersion": { "type": "string", "pattern": "^[a-z0-9.-]+-v[1-9][0-9]*$" },
+        "minDiskGb": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "builder": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["script", "requires", "environment"],
+          "properties": {
+            "script": { "$ref": "#/$defs/relativePath" },
+            "requires": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[A-Za-z0-9_.+-]+$" }
+            },
+            "environment": {
+              "type": "object",
+              "propertyNames": { "pattern": "^[A-Z][A-Z0-9_]*$" },
+              "additionalProperties": { "type": "string" }
+            }
+          }
+        },
+        "artifacts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x86_64", "aarch64"],
+          "properties": {
+            "x86_64": { "$ref": "#/$defs/artifact" },
+            "aarch64": { "$ref": "#/$defs/artifact" }
+          }
+        }
+      }
+    }
+  }
+}

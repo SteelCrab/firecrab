@@ -7,7 +7,7 @@ repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 script_path="${script_dir}/$(basename -- "$0")"
 
 ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
-ubuntu_series_setting='latest'
+ubuntu_series_setting=${M2IMAGE_DISTRO_SERIES:-26.04}
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
 kernel_image_name=''
@@ -139,7 +139,7 @@ cleanup() {
 trap cleanup EXIT
 
 detect_ubuntu_arch() {
-  case "$(uname -m 2>/dev/null || printf 'unknown')" in
+  case "${M2IMAGE_ARCH:-${UBUNTU_ARCH:-$(uname -m 2>/dev/null || printf 'unknown')}}" in
     x86_64 | amd64)
       printf '%s\n' 'amd64'
       ;;
@@ -676,17 +676,21 @@ main() {
 
   if [ "$(id -u)" -ne 0 ]; then
     require_command sudo
-    exec sudo "$script_path"
+    exec sudo env \
+      "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
+      "M2IMAGE_DISTRO_SERIES=${ubuntu_series_setting}" \
+      "M2IMAGE_DISTRO_VERSION=${M2IMAGE_DISTRO_VERSION:-}" \
+      "$script_path"
   fi
 
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
   ubuntu_arch=$(detect_ubuntu_arch)
-  case "$ubuntu_arch" in
-    amd64) kernel_image_name='vmlinux-ubuntu-26.04-x86_64' ;;
-    arm64) kernel_image_name='Image-ubuntu-26.04-aarch64' ;;
-  esac
   ubuntu_series=$(resolve_ubuntu_series)
+  case "$ubuntu_arch" in
+    amd64) kernel_image_name="vmlinux-ubuntu-${ubuntu_series}-x86_64" ;;
+    arm64) kernel_image_name="Image-ubuntu-${ubuntu_series}-aarch64" ;;
+  esac
   if [ -z "$rootfs_image" ]; then
     rootfs_image="${artifact_dir}/ubuntu-rootfs-${ubuntu_series}-${ubuntu_arch}.ext4"
   else
@@ -733,7 +737,13 @@ main() {
   verify_rootfs_content
 
   info "creating Ubuntu rootfs image: ${rootfs_image}"
-  mkfs.ext4 -F -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  # Disable orphan_file when the host's e2fsprogs supports it so images built
+  # by 1.47 remain readable on hosts/guests that still ship e2fsprogs 1.46.
+  if grep -qw orphan_file /etc/mke2fs.conf 2>/dev/null; then
+    mkfs.ext4 -F -O '^orphan_file' -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  else
+    mkfs.ext4 -F -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  fi
   rootfs_link_target=$(update_symlink "$rootfs_image" "$rootfs_link")
   restore_output_ownership
 

@@ -596,6 +596,9 @@ rootfs/ubuntu-rootfs-26.04-arm64.ext4
 kernel/Image-alpine-virt-aarch64
 kernel/initramfs-alpine-virt-aarch64
 rootfs/alpine-rootfs-3.24.1-aarch64.ext4
+kernel/Image-rocky-9.8-aarch64
+kernel/initramfs-rocky-9.8-aarch64
+rootfs/rocky-rootfs-9.8-aarch64.ext4
 EOF
             ;;
         *)
@@ -605,9 +608,9 @@ rootfs/ubuntu-rootfs-26.04-amd64.ext4
 kernel/vmlinux-alpine-virt-x86_64
 kernel/initramfs-alpine-virt-x86_64
 rootfs/alpine-rootfs-3.24.1-x86_64.ext4
-kernel/vmlinux-rocky-9-x86_64
-kernel/initramfs-rocky-9-x86_64
-rootfs/rocky-rootfs-9-x86_64.ext4
+kernel/vmlinux-rocky-9.8-x86_64
+kernel/initramfs-rocky-9.8-x86_64
+rootfs/rocky-rootfs-9.8-x86_64.ext4
 EOF
             ;;
     esac

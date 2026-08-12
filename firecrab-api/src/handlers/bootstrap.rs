@@ -44,7 +44,7 @@ const BUILDER_BOOT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `TemplateRegistry::known_specs()` directly, so a future built-in
 /// addition doesn't silently become bootstrap-eligible without its own
 /// guest script (Task 6 covers exactly these 3, no more).
-const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24", "ubuntu-26.04", "rocky-9"];
+const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24", "ubuntu-26.04", "rocky-9.8"];
 
 /// Sentinel the pushed script prints once it's done, followed by `:` and
 /// its exit code — same shape as other console sentinels, kept as its
@@ -88,13 +88,32 @@ const UBUNTU_SCRIPT: &str =
 const ROCKY_SCRIPT: &str =
     include_str!("../../../scripts/firecracker-menual/bootstrap-rocky-in-guest.sh");
 
-fn script_for(alias: &str) -> &'static str {
-    match alias {
+fn script_for(alias: &str) -> String {
+    let script = match alias {
         "alpine-3.24" => ALPINE_SCRIPT,
         "ubuntu-26.04" => UBUNTU_SCRIPT,
-        "rocky-9" => ROCKY_SCRIPT,
+        "rocky-9.8" => ROCKY_SCRIPT,
         other => unreachable!("start_bootstrap already rejected unknown alias {other}"),
-    }
+    };
+    let image = crate::m2image_manifest::image(alias)
+        .unwrap_or_else(|| panic!("bootstrap alias is missing from M2Image manifest: {alias}"));
+    let rocky_repository_base = image
+        .builder
+        .environment
+        .get("ROCKY_REPOSITORY_BASE")
+        .map(String::as_str)
+        .unwrap_or("");
+    let rocky_container_build = image
+        .builder
+        .environment
+        .get("ROCKY_CONTAINER_BUILD")
+        .map(String::as_str)
+        .unwrap_or("");
+    script
+        .replace("@M2IMAGE_DISTRO_SERIES@", &image.series)
+        .replace("@M2IMAGE_DISTRO_VERSION@", &image.version)
+        .replace("@ROCKY_REPOSITORY_BASE@", rocky_repository_base)
+        .replace("@ROCKY_CONTAINER_BUILD@", rocky_container_build)
 }
 
 /// `POST /api/images/{alias}/bootstrap` — boots a builder VM off any
@@ -222,7 +241,7 @@ pub async fn start_bootstrap(
 fn bootstrap_disk_gb(target_alias: &str) -> u16 {
     match target_alias {
         "alpine-3.24" => 4,
-        _ => 8, // ubuntu-26.04, rocky-9 — 2G rootfs_size each, per default_specs()
+        _ => 8, // ubuntu-26.04, rocky-9.8 — 2G rootfs_size each, per default_specs()
     }
 }
 
@@ -837,6 +856,23 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     const TEST_ALPINE_KERNEL: &str = "kernel/vmlinux-alpine-virt-x86_64";
 
+    #[test]
+    fn bootstrap_scripts_receive_distribution_versions_from_the_manifest() {
+        for alias in BOOTSTRAPPABLE_ALIASES {
+            let script = script_for(alias);
+            assert!(
+                !script.contains("@M2IMAGE_"),
+                "unresolved marker in {alias}"
+            );
+            assert!(!script.contains("@ROCKY_"), "unresolved marker in {alias}");
+        }
+        assert!(script_for("alpine-3.24").contains("alpine_version='3.24.1'"));
+        assert!(script_for("ubuntu-26.04").contains("series='26.04'"));
+        assert!(script_for("rocky-9.8").contains("rocky_release='9.8'"));
+        assert!(script_for("rocky-9.8").contains("rocky_container_build='20260525.0'"));
+        assert!(script_for("rocky-9.8").contains("/pub/rocky"));
+    }
+
     /// Registers a fake console+process for `id`, the same way
     /// `handlers::console_sentinel`'s own tests do —
     /// `run_bootstrap_script` requires a live `VmProcess` to write the
@@ -1258,11 +1294,11 @@ mod tests {
         let state = test_state(directory.path()).await;
         crate::handlers::micro_networks::test_support::seed_internet_micro_network(&state);
         // test_state's one registered template, "ubuntu-rootfs-26.04", isn't
-        // any of the 3 bootstrap-target aliases and (before this task)
-        // wouldn't have satisfied rocky-9's old matching-source rule either
-        // — this fixture is deliberately unchanged from the test it
-        // replaces, to prove the same "no real target template installed"
-        // situation that used to 503 now succeeds. Register __microboot
+        // any of the 3 bootstrap-target aliases. This proves the same
+        // "no real target template installed" situation that used to 503
+        // now succeeds. Alpine keeps the test fixture below an 8 GiB free
+        // space requirement; Rocky-specific script mapping is tested above.
+        // Register __microboot
         // directly (mirroring Task 1's own registration test) rather than
         // exercising a real network download here.
         // Must be the version this build pins: `ensure_registered`'s fast
@@ -1283,13 +1319,13 @@ mod tests {
         let (status, Json(session)) = start_bootstrap(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            Path("rocky-9".to_owned()),
+            Path("alpine-3.24".to_owned()),
         )
         .await
         .unwrap();
 
         assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(session.alias, "rocky-9");
+        assert_eq!(session.alias, "alpine-3.24");
         assert_eq!(session.source_alias, crate::microboot::MICROBOOT_ALIAS);
 
         // The builder VM's own spec, not just the session's status. The RAM
