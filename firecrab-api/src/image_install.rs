@@ -957,7 +957,10 @@ mod tests {
             Some(PackageOrigin::MicroRegistry)
         );
         clear_staged_package_origin(directory.path(), "alpine-3.24.1").unwrap();
-        assert_eq!(staged_package_origin(directory.path(), "alpine-3.24.1"), None);
+        assert_eq!(
+            staged_package_origin(directory.path(), "alpine-3.24.1"),
+            None
+        );
     }
 
     #[test]

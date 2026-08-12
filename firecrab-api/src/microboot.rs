@@ -427,7 +427,10 @@ fn is_arm64_image(path: &Path) -> bool {
     let Ok(mut file) = std::fs::File::open(path) else {
         return false;
     };
-    if file.seek(SeekFrom::Start(ARM64_IMAGE_MAGIC_OFFSET)).is_err() {
+    if file
+        .seek(SeekFrom::Start(ARM64_IMAGE_MAGIC_OFFSET))
+        .is_err()
+    {
         return false;
     }
     let mut magic = [0_u8; 4];

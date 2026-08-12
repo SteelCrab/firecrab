@@ -865,7 +865,9 @@ fn build_package_blocking(
 /// session it already started. `null` rather than `404` because "nothing is
 /// building" is the ordinary answer on almost every page load, not a
 /// failure to look something up.
-pub async fn get_active_bootstrap(State(state): State<AppState>) -> Json<Option<BootstrapResponse>> {
+pub async fn get_active_bootstrap(
+    State(state): State<AppState>,
+) -> Json<Option<BootstrapResponse>> {
     Json(state.bootstraps.active())
 }
 
