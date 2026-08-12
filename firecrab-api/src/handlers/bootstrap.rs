@@ -44,7 +44,7 @@ const BUILDER_BOOT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `TemplateRegistry::known_specs()` directly, so a future built-in
 /// addition doesn't silently become bootstrap-eligible without its own
 /// guest script (Task 6 covers exactly these 3, no more).
-const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24", "ubuntu-26.04", "rocky-9.8"];
+const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24.1", "ubuntu-26.04", "rocky-9.8"];
 
 /// Sentinel the pushed script prints once it's done, followed by `:` and
 /// its exit code — same shape as other console sentinels, kept as its
@@ -54,9 +54,20 @@ const BOOTSTRAP_DONE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_DONE";
 
 /// How long the guest-side bootstrap script may run before this module
 /// gives up waiting — real network downloads (hundreds of MB) plus a real
-/// package install, so far more generous than
-/// a long guest-side install.
-const BOOTSTRAP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(1800);
+/// package install, so far more generous than a long guest-side install.
+///
+/// Measured end-to-end on an aarch64 host, one builder at a time, on the
+/// single vCPU this module used to give the builder: alpine-3.24.1 in 2m55s,
+/// rocky-9.8 in 9m44s, and ubuntu-26.04 was still going when the old
+/// 30-minute bound killed it — with the guest's vCPU pegged at ~98% for the
+/// entire run, so it was building, not hung. Ubuntu is the outlier by
+/// construction: ~1.2 GiB of packaged rootfs against rocky's ~430 MiB, an
+/// `apt-get install` that includes `linux-image-generic`, and then two full
+/// single-threaded `mkfs.ext4 -d` passes (the 2 GiB image, then the output
+/// directory onto `/dev/vda`). 90 minutes covers that with room for a
+/// loaded host; the session log's heartbeat is what distinguishes a slow
+/// run from a stuck one in the meantime, and a stuck one can be cancelled.
+const BOOTSTRAP_SCRIPT_TIMEOUT: Duration = Duration::from_secs(5400);
 
 /// Marker the console-readiness probe asks the guest's shell to echo back,
 /// kept distinct from [`BOOTSTRAP_DONE_SENTINEL`] so a probe reply can never
@@ -68,18 +79,59 @@ const CONSOLE_PROBE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_SHELL_READY";
 /// cheaply while agetty is still coming up.
 const CONSOLE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// Bounded so an unbootable console fails in ~30s with a clear message
-/// instead of hanging until [`BOOTSTRAP_SCRIPT_TIMEOUT`].
-const CONSOLE_PROBE_ATTEMPTS: usize = 10;
+/// Bounded so an unbootable console fails with a clear message instead of
+/// hanging until [`BOOTSTRAP_SCRIPT_TIMEOUT`] — but bounded as a "something
+/// is genuinely wrong" limit, the same way [`BUILDER_BOOT_TIMEOUT`] is, not
+/// as a latency budget.
+///
+/// It used to be 10 (~30s), which is *below* what a healthy builder needs.
+/// The probes start the moment the VM is `Running`, and for a MicroBoot
+/// builder that is immediate — `handlers::vms` skips the network-readiness
+/// wait for this alias, because Alpine's netboot initramfs has no init
+/// service to fire the sentinel. So this budget has to cover the guest's
+/// entire boot, and the builder's `ram: 8192` makes that boot slow: timed on
+/// an aarch64 host, the recovery shell answers at ~10s with 1024 MiB but
+/// ~15s with 8192 MiB, purely from setting up the larger memory map. Under
+/// host CPU load (a parallel `cargo build` was enough) the same guest took
+/// 25.3s, and a busier host pushes it past 30s — at which point the session
+/// fails with "console shell never became responsive" even though nothing is
+/// wrong with the VM at all. 40 leaves several times that headroom while
+/// still failing ~15x faster than the script timeout.
+const CONSOLE_PROBE_ATTEMPTS: usize = 40;
 
 /// How often the session log gets a "still running" line while the script
 /// executes. Frequent enough that the dashboard never looks frozen for long,
 /// rare enough not to bury the real output the script emits at the end.
 const BOOTSTRAP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Packaging runs beside customer VMs, so using zstd's `-T0` all-core mode
-/// can starve a booting guest long enough to trigger its network timeout.
-const PACKAGE_ZSTD_THREADS: &str = "-T2";
+/// Compression settings for the package this module produces. Deliberately
+/// *not* the ones `scripts/package-m2images.sh` publishes with (`-19 -T2`),
+/// because the two archives have opposite economics: a published package is
+/// compressed once and downloaded by everyone, so paying for the last few
+/// percent is right; a MicroBoot package never leaves the host that built it
+/// (`image_install::staged_package_path` — it is staged for that machine to
+/// install and nothing fetches it), so those percent buy nothing at all.
+///
+/// Measured on 512 MiB of a real Ubuntu rootfs on an aarch64 host:
+///
+/// ```text
+///   -19 -T2   46.4s   276.7 MiB   (what this used to be)
+///   -19 -T0   26.1s   276.7 MiB
+///   -12 -T0    1.6s   285.1 MiB
+/// ```
+///
+/// So the level, not the thread count, was the cost: `-19` bought 3.0% of
+/// size for 29x the time, and its block-level parallelism is poor enough
+/// that all six cores only made it 1.8x faster. On the 2.07 GiB Ubuntu
+/// package that is ~3m19s of every build spent shrinking a local file by
+/// 27 MiB.
+///
+/// `-T0` is safe here now in a way it was not before: it used to risk
+/// starving a *booting* guest long enough to trip its network-readiness
+/// wait, but that wait is no longer a 30-second budget (see
+/// `state::RuntimeConfig::network_ready_timeout`).
+const PACKAGE_ZSTD_THREADS: &str = "-T0";
+const PACKAGE_ZSTD_LEVEL: &str = "-12";
 
 const ALPINE_SCRIPT: &str =
     include_str!("../../../scripts/firecracker-menual/bootstrap-alpine-in-guest.sh");
@@ -90,7 +142,7 @@ const ROCKY_SCRIPT: &str =
 
 fn script_for(alias: &str) -> String {
     let script = match alias {
-        "alpine-3.24" => ALPINE_SCRIPT,
+        "alpine-3.24.1" => ALPINE_SCRIPT,
         "ubuntu-26.04" => UBUNTU_SCRIPT,
         "rocky-9.8" => ROCKY_SCRIPT,
         other => unreachable!("start_bootstrap already rejected unknown alias {other}"),
@@ -173,7 +225,21 @@ pub async fn start_bootstrap(
         // given distro actually touches. Rocky additionally sizes its tmpfs
         // work area off this number — see bootstrap-rocky-in-guest.sh.
         ram: 8192,
-        cpu: 1,
+        // The build is CPU-bound end to end: a bootstrap that ran to the
+        // old 30-minute limit had burned 29.8 minutes of CPU, so its single
+        // vCPU sat at ~98% for the entire run. Most of the work is serial
+        // by nature (dpkg/apk unpack one package at a time, `mkfs.ext4 -d`
+        // walks the tree once), so the second vCPU is not a second worker so
+        // much as somewhere for the guest kernel's own I/O completion and
+        // page-cache work to go instead of preempting the installer.
+        //
+        // 2 rather than the host's core count because the workload cannot
+        // use more: measured over a full 25-minute Ubuntu build at this
+        // setting, the builder averaged 148% CPU — it did not saturate even
+        // the two vCPUs it had. Unlike the packaging step above, which is
+        // genuinely parallel and now takes every core, this ceiling is a
+        // property of dpkg, not of what we allow it.
+        cpu: 2,
         // The target's own build headroom, but never below the floor the
         // source template itself needs to boot at all — a source rootfs
         // bigger than the target's build budget would otherwise fail
@@ -240,7 +306,7 @@ pub async fn start_bootstrap(
 /// target ends up.
 fn bootstrap_disk_gb(target_alias: &str) -> u16 {
     match target_alias {
-        "alpine-3.24" => 4,
+        "alpine-3.24.1" => 4,
         _ => 8, // ubuntu-26.04, rocky-9.8 — 2G rootfs_size each, per default_specs()
     }
 }
@@ -706,7 +772,7 @@ fn build_package_blocking(
     std::fs::create_dir_all(rootfs_dest.parent().unwrap()).ok();
     std::fs::rename(&raw_rootfs, &rootfs_dest).map_err(|e| format!("place rootfs: {e}"))?;
 
-    let raw_kernel_name = if alias == "alpine-3.24" {
+    let raw_kernel_name = if alias == "alpine-3.24.1" {
         "vmlinuz-virt-raw"
     } else {
         "vmlinuz-raw"
@@ -757,7 +823,7 @@ fn build_package_blocking(
         .map_err(|e| format!("spawn tar: {e}"))?;
     let tar_stdout = tar.stdout.take().ok_or("tar stdout missing")?;
     let zstd = std::process::Command::new("zstd")
-        .args([PACKAGE_ZSTD_THREADS, "-19", "-f", "-o"])
+        .args([PACKAGE_ZSTD_THREADS, PACKAGE_ZSTD_LEVEL, "-f", "-o"])
         .arg(&staging_temp)
         .stdin(tar_stdout)
         .status()
@@ -787,6 +853,22 @@ fn build_package_blocking(
     }
     let _ = std::fs::remove_dir_all(&scratch);
     Ok(())
+}
+
+/// `GET /api/images/bootstrap` — the bootstrap that is still running, or
+/// `null` when none is.
+///
+/// The id-addressed sibling below can only be used by whoever holds the id
+/// the `POST` returned, which the dashboard keeps in component state; a
+/// reload or a walk to another page drops it, and the build then runs to
+/// completion invisibly. This is how that page finds its way back to a
+/// session it already started. `null` rather than `404` because "nothing is
+/// building" is the ordinary answer on almost every page load, not a
+/// failure to look something up.
+pub async fn get_active_bootstrap(
+    State(state): State<AppState>,
+) -> Json<Option<BootstrapResponse>> {
+    Json(state.bootstraps.active())
 }
 
 /// `GET /api/images/bootstrap/{bootstrapId}`.
@@ -866,7 +948,7 @@ mod tests {
             );
             assert!(!script.contains("@ROCKY_"), "unresolved marker in {alias}");
         }
-        assert!(script_for("alpine-3.24").contains("alpine_version='3.24.1'"));
+        assert!(script_for("alpine-3.24.1").contains("alpine_version='3.24.1'"));
         assert!(script_for("ubuntu-26.04").contains("series='26.04'"));
         assert!(script_for("rocky-9.8").contains("rocky_release='9.8'"));
         assert!(script_for("rocky-9.8").contains("rocky_container_build='20260525.0'"));
@@ -925,9 +1007,27 @@ mod tests {
         0x2f, 0x00, 0x2e, 0x00,
     ];
 
+    /// A minimal raw Linux/arm64 `Image` boot header: "MZ" for the EFI stub
+    /// and `ARM64_IMAGE_MAGIC` ("ARMd") at offset 0x38, which is what
+    /// `extract-arm64-image` reads to recognize an already-unwrapped Image
+    /// and pass it straight through. A bare "MZ" prefix won't do — the real
+    /// script would then look for the EFI zboot payload or the UKI `.linux`
+    /// section that a distro vmlinuz carries and reject the fixture for
+    /// having neither, which is a different failure than the one these tests
+    /// are about.
     #[cfg(target_arch = "aarch64")]
     fn fake_kernel_header() -> &'static [u8] {
-        b"MZ\0\0fake ARM64 PE Image"
+        const HEADER: &[u8] = &{
+            let mut header = [0_u8; 64];
+            header[0] = b'M';
+            header[1] = b'Z';
+            header[0x38] = b'A';
+            header[0x39] = b'R';
+            header[0x3a] = b'M';
+            header[0x3b] = b'd';
+            header
+        };
+        HEADER
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1034,7 +1134,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Packaging,
         );
@@ -1130,7 +1230,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Packaging,
         );
@@ -1161,11 +1261,11 @@ mod tests {
     /// there's no explicit terminal `exit 1`). Without also checking for
     /// non-empty stdout, `build_package_blocking` would silently package a
     /// 0-byte kernel as a "successful" bootstrap. This seeds a raw kernel
-    /// `extract-vmlinux` genuinely cannot recognize (plain text, not an ELF
-    /// or any known compressed kernel format) and asserts packaging fails
-    /// loudly instead.
+    /// neither helper can recognize (plain text: not an ELF, not a known
+    /// compressed kernel format, not an ARM64 Image in any wrapper) and
+    /// asserts packaging fails loudly instead.
     #[tokio::test]
-    async fn package_bootstrap_fails_when_extract_vmlinux_cannot_recognize_the_raw_kernel() {
+    async fn package_bootstrap_fails_when_the_raw_kernel_cannot_be_prepared() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
         let vm = seed_builder_vm(&state, VmState::Running);
@@ -1184,7 +1284,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Packaging,
         );
@@ -1193,8 +1293,16 @@ mod tests {
 
         let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
         assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        // Which helper reports the failure is architecture-specific: x86_64
+        // extracts an ELF vmlinux, aarch64 unwraps a raw Image out of the
+        // distro's EFI zboot/UKI wrapper.
+        let expected_failure = if cfg!(target_arch = "aarch64") {
+            "extract-arm64-image failed"
+        } else {
+            "extract-vmlinux failed"
+        };
         assert!(
-            snapshot.log.contains("extract-vmlinux failed"),
+            snapshot.log.contains(expected_failure),
             "log: {}",
             snapshot.log
         );
@@ -1216,7 +1324,7 @@ mod tests {
 
     /// Covers the `if let Some(initrd_relative) = &spec.initrd` branch in
     /// `build_package_blocking` that the `ubuntu-26.04` test above never
-    /// exercises (Ubuntu's spec has `initrd: None`) — `alpine-3.24` does
+    /// exercises (Ubuntu's spec has `initrd: None`) — `alpine-3.24.1` does
     /// carry an initrd, and its raw-kernel dump filename
     /// (`vmlinuz-virt-raw`, per `bootstrap-alpine-in-guest.sh`) differs
     /// from every other alias's `vmlinuz-raw`, which `build_package_blocking`
@@ -1238,7 +1346,7 @@ mod tests {
 
         let bootstrap_id = seeded_session(
             &state,
-            "alpine-3.24",
+            "alpine-3.24.1",
             "ubuntu-26.04",
             vm.id,
             BootstrapStatus::Packaging,
@@ -1255,7 +1363,7 @@ mod tests {
         );
         let staged = crate::image_install::staged_package_path(
             state.templates.image_root_path(),
-            "alpine-3.24",
+            "alpine-3.24.1",
         );
         let listing = std::process::Command::new("tar")
             .arg("--use-compress-program=zstd")
@@ -1319,13 +1427,13 @@ mod tests {
         let (status, Json(session)) = start_bootstrap(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
         )
         .await
         .unwrap();
 
         assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(session.alias, "alpine-3.24");
+        assert_eq!(session.alias, "alpine-3.24.1");
         assert_eq!(session.source_alias, crate::microboot::MICROBOOT_ALIAS);
 
         // The builder VM's own spec, not just the session's status. The RAM
@@ -1354,7 +1462,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1418,7 +1526,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1467,7 +1575,7 @@ mod tests {
         let state = test_state(directory.path()).await;
         let id = state
             .bootstraps
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other bootstrap session is active");
 
         let Json(found) = get_bootstrap(
@@ -1508,7 +1616,7 @@ mod tests {
         let vm = seed_builder_vm(&state, VmState::Running);
         let id = state
             .bootstraps
-            .try_begin("ubuntu-26.04", "alpine-3.24", vm.id)
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", vm.id)
             .expect("no other bootstrap session is active");
 
         let status = cancel_bootstrap(
@@ -1537,7 +1645,7 @@ mod tests {
         let vm = seed_builder_vm(&state, VmState::Error);
         let bootstrap_id = state
             .bootstraps
-            .try_begin("ubuntu-26.04", "alpine-3.24", vm.id)
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", vm.id)
             .expect("no other bootstrap session is active");
 
         watch_bootstrap_boot(&state, bootstrap_id, vm.id).await;
@@ -1584,7 +1692,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1617,7 +1725,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1645,7 +1753,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1670,7 +1778,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1695,7 +1803,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "not-a-template",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Packaging,
         );

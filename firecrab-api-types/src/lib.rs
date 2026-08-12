@@ -946,7 +946,7 @@ pub struct BootstrapStepRun {
 #[serde(rename_all = "camelCase")]
 pub struct BootstrapResponse {
     pub bootstrap_id: Uuid,
-    /// The target being bootstrapped (`alpine-3.24`, `ubuntu-26.04`, or `rocky-9.8`).
+    /// The target being bootstrapped (`alpine-3.24.1`, `ubuntu-26.04`, or `rocky-9.8`).
     pub alias: String,
     /// Which template the disposable builder VM booted from — always the
     /// internal MicroBoot alias since `firecrab_api::microboot` replaced
@@ -1346,7 +1346,7 @@ mod tests {
     fn bootstrap_response_carries_an_empty_timeline_by_default() {
         let json = serde_json::json!({
             "bootstrapId": "00000000-0000-0000-0000-000000000000",
-            "alias": "alpine-3.24",
+            "alias": "alpine-3.24.1",
             "sourceAlias": "__microboot",
             "vmId": "00000000-0000-0000-0000-000000000000",
             "status": "booting",

@@ -213,6 +213,15 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/images/{alias}/bootstrap",
             post(handlers::bootstrap::start_bootstrap),
         )
+        // Before the id-addressed route below only so the two read in the
+        // order a reader meets them; axum matches the literal `bootstrap`
+        // segment ahead of `{alias}` regardless of registration order, so
+        // `GET /api/images/bootstrap` can never be taken for an alias named
+        // "bootstrap".
+        .route(
+            "/api/images/bootstrap",
+            get(handlers::bootstrap::get_active_bootstrap),
+        )
         .route(
             "/api/images/bootstrap/{bootstrapId}",
             get(handlers::bootstrap::get_bootstrap).delete(handlers::bootstrap::cancel_bootstrap),

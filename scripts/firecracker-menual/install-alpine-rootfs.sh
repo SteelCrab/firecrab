@@ -14,6 +14,7 @@ kernel_artifact_dir="${repo_dir}/images/kernel"
 kernel_image_name=''
 initrd_image_name=''
 extract_vmlinux="${script_dir}/extract-vmlinux"
+extract_arm64_image="${script_dir}/extract-arm64-image"
 build_dir="${repo_dir}/build/alpine-rootfs"
 rootfs_size='512M'
 rootfs_hostname='firecrab'
@@ -122,7 +123,7 @@ resolve_ssh_public_key() {
 
 # Resolve the exact manifest-pinned minirootfs. A branch's
 # latest-releases.yaml changes whenever Alpine publishes a patch release, so
-# using it would make an alias such as alpine-3.24 silently change contents
+# using it would make an alias such as alpine-3.24.1 silently change contents
 # while package paths and runtime specs still expect 3.24.1.
 resolve_alpine_minirootfs() {
   local branch="v${alpine_series}"
@@ -307,7 +308,8 @@ test -L "${staging}/etc/runlevels/default/firecrab-network-ready" || { echo 'fir
 # linux-virt's boot files land under the staging root, not this container's
 # own /boot — pulled out to /kernel-out (mounted from the host) so the host
 # side can prepare the architecture-specific Firecracker kernel. x86_64
-# needs an uncompressed ELF vmlinux; ARM64 must retain the PE32+ Image.
+# needs an uncompressed ELF vmlinux; ARM64 needs the raw Image unwrapped out
+# of the EFI zboot wrapper Alpine ships.
 test -e "${staging}/boot/vmlinuz-virt" || { echo 'missing boot/vmlinuz-virt (linux-virt)' >&2; exit 1; }
 test -e "${staging}/boot/initramfs-virt" || { echo 'missing boot/initramfs-virt (linux-virt)' >&2; exit 1; }
 cp "${staging}/boot/vmlinuz-virt" "${kernel_out}/vmlinuz-virt-raw"
@@ -340,9 +342,19 @@ restore_output_ownership() {
   chown -h "${SUDO_UID}:${SUDO_GID}" "${artifact_dir}/alpine-rootfs.ext4" 2>/dev/null || true
 }
 
+# True when the file is a raw Linux/arm64 Image: ARM64_IMAGE_MAGIC ("ARMd")
+# at offset 0x38, the field Firecracker's loader checks before it jumps into
+# the image. Read, never written — a wrapped kernel (a UKI or an EFI zboot
+# image) with the magic stamped on top passes the loader and then dies
+# silently in the guest instead of failing here.
+is_arm64_image() {
+  [ -s "$1" ] && [ "$(od -An -tx1 -j56 -N4 "$1" | tr -d ' \n')" = '41524d64' ]
+}
+
 # Prepares the raw vmlinuz-virt copied out to /kernel-out. Firecracker expects
-# uncompressed ELF on x86_64, but the distro's PE32+ ARM64 Image must be kept
-# intact rather than passed through extract-vmlinux.
+# an uncompressed ELF vmlinux on x86_64 and a raw Linux/arm64 Image on ARM64.
+# Alpine's linux-virt arm64 vmlinuz is neither: it is an EFI zboot image, a PE
+# wrapper around a gzip-compressed Image, so it has to be unwrapped.
 extract_kernel() {
   raw_path="${kernel_artifact_dir}/vmlinuz-virt-raw"
   if [ ! -s "$raw_path" ]; then
@@ -352,11 +364,11 @@ extract_kernel() {
   kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
   kernel_image_tmp="${kernel_image_path}.tmp"
   if [ "$alpine_arch" = aarch64 ]; then
-    info "preserving ARM64 PE kernel Image from: ${raw_path}"
-    cp "$raw_path" "$kernel_image_tmp"
-    if ! file "$kernel_image_tmp" | grep -Eq 'PE32.*ARM64'; then
+    info "extracting raw ARM64 Image from: ${raw_path}"
+    if ! "$extract_arm64_image" "$raw_path" >"$kernel_image_tmp" \
+      || ! is_arm64_image "$kernel_image_tmp"; then
       rm -f "$kernel_image_tmp"
-      fail "ARM64 kernel is not a PE32+ Image: ${raw_path}"
+      fail "extract-arm64-image could not extract a raw ARM64 Image from ${raw_path}"
     fi
   else
     info "extracting ELF vmlinux from: ${raw_path}"
@@ -400,6 +412,7 @@ main() {
   require_command mkfs.ext4
   require_command mount
   require_command mv
+  require_command od
   require_command rm
   require_command sha256sum
   require_command tar
@@ -408,6 +421,9 @@ main() {
   require_command uname
   if [ ! -x "$extract_vmlinux" ]; then
     fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  fi
+  if [ ! -x "$extract_arm64_image" ]; then
+    fail "extract-arm64-image helper not found or not executable: ${extract_arm64_image}"
   fi
 
   if [ "$(id -u)" -ne 0 ]; then

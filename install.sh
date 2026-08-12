@@ -346,6 +346,26 @@ ensure_account() {
         step "adding $FIRECRAB_USER to the kvm group"
         $SUDO usermod --append --groups kvm "$FIRECRAB_USER"
     fi
+
+    # Group membership above is necessary but not always sufficient: some
+    # hosts' /dev/kvm doesn't actually land in the kvm group the standard
+    # udev rule (KERNEL=="kvm", GROUP="kvm") asks for — seen live on a
+    # Parallels ARM host where it came up group "sgx" instead, which made
+    # every VM start fail with "Kvm error: Permission denied (os error 13)"
+    # even though $FIRECRAB_USER was correctly in the kvm group. An ACL
+    # entry is a narrow, idempotent belt-and-suspenders fix: it grants the
+    # kvm group access without touching whatever else owns the device node,
+    # and re-running this is a no-op once the entry is already there.
+    if [ -e /dev/kvm ]; then
+        if have setfacl; then
+            if ! getfacl -p /dev/kvm 2>/dev/null | grep -qx 'group:kvm:rw-'; then
+                step "granting the kvm group ACL access to /dev/kvm"
+                $SUDO setfacl -m g:kvm:rw /dev/kvm
+            fi
+        else
+            warn "setfacl not found — skipping the /dev/kvm ACL fixup (install the 'acl' package if VMs fail with a KVM permission error)"
+        fi
+    fi
 }
 
 # Data, config and install directories with their intended owners.
@@ -364,12 +384,15 @@ install_binaries() {
         [ -x "$target/$binary" ] || die "$target/$binary not found — the build did not produce it"
         $SUDO install -o root -g root -m 0755 "$target/$binary" "$LIBDIR/$binary"
     done
-    # extract-vmlinux is a shell script used at runtime by the API.
-    # Installing it next to the binary lets the API find it without needing
-    # access to the repo checkout (which may be in a user home the service
-    # account cannot reach).
-    $SUDO install -o root -g root -m 0755 \
-        "$REPO_ROOT/scripts/firecracker-menual/extract-vmlinux" "$LIBDIR/extract-vmlinux"
+    # extract-vmlinux and extract-arm64-image are shell scripts used at
+    # runtime by the API to turn a distro vmlinuz into the kernel format
+    # Firecracker boots on each architecture. Installing them next to the
+    # binary lets the API find them without needing access to the repo
+    # checkout (which may be in a user home the service account cannot reach).
+    for helper in extract-vmlinux extract-arm64-image; do
+        $SUDO install -o root -g root -m 0755 \
+            "$REPO_ROOT/scripts/firecracker-menual/$helper" "$LIBDIR/$helper"
+    done
     # Host doctor is a shell script — no build step. On PATH as firecrab-doctor.
     $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
     $SUDO install -o root -g root -m 0755 "$REPO_ROOT/scripts/firecrab-doctor.sh" \

@@ -366,6 +366,20 @@ export function getBootstrap(bootstrapId: string): Promise<BootstrapResponse> {
   return fetchJson(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`);
 }
 
+/**
+ * The bootstrap still running on this host, if any
+ * (`GET /api/images/bootstrap`).
+ *
+ * `startBootstrap` returns the session id, but only to the page that issued
+ * it — reload that page, or leave and come back, and the id is gone while
+ * the build keeps going. This asks the server for it instead, which is what
+ * lets the session panel and its console reappear. Resolves to `null` when
+ * nothing is building.
+ */
+export function getActiveBootstrap(): Promise<BootstrapResponse | null> {
+  return fetchJson(`/api/images/bootstrap`);
+}
+
 /** Cancel a bootstrap and delete its builder VM (`DELETE /api/images/bootstrap/{bootstrapId}`). */
 export async function cancelBootstrap(bootstrapId: string): Promise<void> {
   let response: Response;
