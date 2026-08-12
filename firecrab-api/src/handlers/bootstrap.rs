@@ -77,9 +77,34 @@ const CONSOLE_PROBE_ATTEMPTS: usize = 10;
 /// rare enough not to bury the real output the script emits at the end.
 const BOOTSTRAP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
-/// Packaging runs beside customer VMs, so using zstd's `-T0` all-core mode
-/// can starve a booting guest long enough to trigger its network timeout.
-const PACKAGE_ZSTD_THREADS: &str = "-T2";
+/// Compression settings for the package this module produces. Deliberately
+/// *not* the ones `scripts/package-m2images.sh` publishes with (`-19 -T2`),
+/// because the two archives have opposite economics: a published package is
+/// compressed once and downloaded by everyone, so paying for the last few
+/// percent is right; a MicroBoot package never leaves the host that built it
+/// (`image_install::staged_package_path` — it is staged for that machine to
+/// install and nothing fetches it), so those percent buy nothing at all.
+///
+/// Measured on 512 MiB of a real Ubuntu rootfs on an aarch64 host:
+///
+/// ```text
+///   -19 -T2   46.4s   276.7 MiB   (what this used to be)
+///   -19 -T0   26.1s   276.7 MiB
+///   -12 -T0    1.6s   285.1 MiB
+/// ```
+///
+/// So the level, not the thread count, was the cost: `-19` bought 3.0% of
+/// size for 29x the time, and its block-level parallelism is poor enough
+/// that all six cores only made it 1.8x faster. On the 2.07 GiB Ubuntu
+/// package that is ~3m19s of every build spent shrinking a local file by
+/// 27 MiB.
+///
+/// `-T0` is safe here now in a way it was not before: it used to risk
+/// starving a *booting* guest long enough to trip its network-readiness
+/// wait, but that wait is no longer a 30-second budget (see
+/// `state::RuntimeConfig::network_ready_timeout`).
+const PACKAGE_ZSTD_THREADS: &str = "-T0";
+const PACKAGE_ZSTD_LEVEL: &str = "-12";
 
 const ALPINE_SCRIPT: &str =
     include_str!("../../../scripts/firecracker-menual/bootstrap-alpine-in-guest.sh");
@@ -757,7 +782,7 @@ fn build_package_blocking(
         .map_err(|e| format!("spawn tar: {e}"))?;
     let tar_stdout = tar.stdout.take().ok_or("tar stdout missing")?;
     let zstd = std::process::Command::new("zstd")
-        .args([PACKAGE_ZSTD_THREADS, "-19", "-f", "-o"])
+        .args([PACKAGE_ZSTD_THREADS, PACKAGE_ZSTD_LEVEL, "-f", "-o"])
         .arg(&staging_temp)
         .stdin(tar_stdout)
         .status()
