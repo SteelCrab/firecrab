@@ -142,11 +142,15 @@ tar -xJf "$container_archive" -C "$oci_dir"
 info "extracting Rocky ${rocky_release} ${rocky_arch} Container-Base"
 if [ -f "$oci_dir/index.json" ]; then
   manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' "$oci_dir/index.json")
-  [ -n "$manifest_digest" ] && [ "$manifest_digest" != null ] \
-    || fail 'could not read Container-Base manifest digest from index.json'
+  # Negative form rather than `A && B || fail`, which reads as if-then-else
+  # without being one (SC2015) and older shellcheck releases reject.
+  if [ -z "$manifest_digest" ] || [ "$manifest_digest" = null ]; then
+    fail 'could not read Container-Base manifest digest from index.json'
+  fi
   layer_digest=$(jq -r '.layers[0].digest | sub("^sha256:"; "")' "$oci_dir/blobs/sha256/$manifest_digest")
-  [ -n "$layer_digest" ] && [ "$layer_digest" != null ] \
-    || fail 'could not read Container-Base layer digest from its manifest'
+  if [ -z "$layer_digest" ] || [ "$layer_digest" = null ]; then
+    fail 'could not read Container-Base layer digest from its manifest'
+  fi
   tar -xzf "$oci_dir/blobs/sha256/$layer_digest" -C "$container_root"
 elif [ -f "$oci_dir/manifest.json" ]; then
   jq -r '.[0].Layers[]' "$oci_dir/manifest.json" | while IFS= read -r layer; do

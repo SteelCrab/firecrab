@@ -73,8 +73,12 @@ fi
 if [ "$dry_run" -eq 0 ]; then require_command "$backend"; fi
 if [ "$backend" = wrangler ] && [ "$dry_run" -eq 0 ]; then
   wrangler_version=$(wrangler --version 2>/dev/null | sed -nE 's/.* ([0-9]+)\..*/\1/p' | head -n1)
-  [ -n "$wrangler_version" ] && [ "$wrangler_version" -ge 4 ] \
-    || fail 'Wrangler v4 or newer is required'
+  # Spelled as the negative rather than `A && B || fail`: that reads as
+  # if-then-else but is not one (SC2015), and older shellcheck releases fail
+  # the build over it.
+  if [ -z "$wrangler_version" ] || [ "$wrangler_version" -lt 4 ]; then
+    fail 'Wrangler v4 or newer is required'
+  fi
 fi
 
 mapfile -t aliases < <(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" aliases)
