@@ -17,7 +17,18 @@ ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
 series='@M2IMAGE_DISTRO_SERIES@'
 rootfs_size='2G'
 rootfs_hostname='firecrab'
-rootfs_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-generic iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server'
+# linux-image-virtual, not linux-image-generic: both resolve to the identical
+# linux-image-<abi>-generic binary, but generic also carries
+# "Depends: linux-firmware | linux-firmware-minimal", whose first alternative
+# apt always takes — a hard dependency --no-install-recommends cannot decline.
+# That pulled 656 MB of Qualcomm/Intel wireless, NVIDIA/AMD graphics and
+# Mellanox NIC firmware (measured in the built image: 5233 files, 53% of its
+# content) into a microVM with none of that hardware, and none of it is on
+# the boot path — this template has no initrd and mounts root=/dev/vda from
+# the kernel's built-in virtio/ext4. Same reasoning as
+# install-ubuntu-roofs.sh's copy of this list, and the same choice Alpine's
+# `linux-virt` already makes.
+rootfs_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-virtual iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server'
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
@@ -201,7 +212,7 @@ chroot "$mount_dir" apt-get clean
 rm -rf "${mount_dir}/var/lib/apt/lists/"*
 
 vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -n1)
-[ -n "$vmlinuz_path" ] || fail 'linux-image-generic did not install a vmlinuz'
+[ -n "$vmlinuz_path" ] || fail 'linux-image-virtual did not install a vmlinuz'
 cp "$vmlinuz_path" "$out/vmlinuz-raw"
 
 # Enable systemd-resolved only when the package actually shipped a unit.

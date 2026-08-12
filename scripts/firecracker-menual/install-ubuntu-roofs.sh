@@ -19,12 +19,29 @@ rootfs_link=''
 rootfs_size='2G'
 rootfs_hostname='firecrab'
 
-# linux-image-generic: Ubuntu's own officially-maintained cloud/generic
-# kernel package (public-docs/images.md) — replaces the
-# self-built vanilla kernel every template used to share, so security
-# patches and driver support follow Ubuntu's own release cadence instead
-# of this project having to track kernel.org itself.
-rootfs_boot_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-generic'
+# linux-image-virtual: Ubuntu's own officially-maintained kernel package
+# (public-docs/images.md) — replaces the self-built vanilla kernel every
+# template used to share, so security patches and driver support follow
+# Ubuntu's own release cadence instead of this project having to track
+# kernel.org itself.
+#
+# The *virtual* meta-package, not *generic*, though both resolve to the
+# identical binary (both Depend on linux-image-<abi>-generic, so the kernel,
+# its cadence and its module set are unchanged). The difference is one line
+# of packaging: linux-image-generic additionally carries
+# "Depends: linux-firmware | linux-firmware-minimal", and apt always takes
+# the first alternative — which is a hard dependency, so
+# --no-install-recommends cannot decline it. That dragged in every
+# linux-firmware-* subpackage: Qualcomm/Intel/Broadcom/Marvell/Realtek
+# wireless, NVIDIA/AMD/Intel graphics, Mellanox/Netronome/QLogic NICs.
+# Measured inside the built image with debugfs, that was 656 MB across 5233
+# files — 53% of the rootfs's 1.24 GiB of content — for hardware a
+# Firecracker microVM cannot have. None of it is reachable at boot either:
+# this template ships no initrd (`"initrd": null` in packaging/m2images.json)
+# and mounts root=/dev/vda straight from the kernel's built-in
+# CONFIG_VIRTIO_BLK/VIRTIO_MMIO/EXT4_FS, so firmware and modules play no part
+# in bringing the guest up.
+rootfs_boot_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-virtual'
 rootfs_packages="${rootfs_boot_packages} iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server"
 
 mount_dir=''
@@ -537,7 +554,7 @@ is_arm64_image() {
 extract_kernel() {
   vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -n 1)
   if [ -z "$vmlinuz_path" ]; then
-    fail "linux-image-generic did not install a vmlinuz under ${mount_dir}/boot"
+    fail "linux-image-virtual did not install a vmlinuz under ${mount_dir}/boot"
   fi
   mkdir -p "$kernel_artifact_dir"
   kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
