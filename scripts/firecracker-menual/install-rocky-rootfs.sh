@@ -26,6 +26,7 @@ rocky_container_build=${ROCKY_CONTAINER_BUILD:-20260525.0}
 rootfs_size='2G'
 rootfs_hostname='firecrab'
 extract_vmlinux="${script_dir}/extract-vmlinux"
+extract_arm64_image="${script_dir}/extract-arm64-image"
 container_mounts=()
 
 case "${M2IMAGE_ARCH:-$(uname -m 2>/dev/null || printf unknown)}" in
@@ -429,23 +430,13 @@ echo "ROOTFS_IMAGE=${rootfs_image}"
 EOF
 }
 
-# Rocky's official arm64 vmlinuz ships with the Linux/arm64 "Image" boot
-# header magic (ARM64_IMAGE_MAGIC, 4 bytes at offset 0x38) zeroed out, even
-# though its PE/EFI wrapper is otherwise intact and passes `file`'s PE32+
-# ARM64 detection. Firecracker's aarch64 kernel loader (rust-vmm
-# linux-loader) validates that field independently of the PE header and
-# refuses to boot with "invalid Image magic number" if it's missing, so
-# restore it before packaging.
-restore_arm64_image_magic() {
-  local image_path=$1
-  local source_path=$2
-  printf '\x41\x52\x4d\x64' | dd of="$image_path" bs=1 seek=56 count=4 conv=notrunc status=none 2>/dev/null
-  local image_magic
-  image_magic=$(od -An -tx1 -j56 -N4 "$image_path" | tr -d ' \n')
-  if [ "$image_magic" != '41524d64' ]; then
-    rm -f "$image_path"
-    fail "failed to restore ARM64 Image magic number in ${source_path}"
-  fi
+# True when the file is a raw Linux/arm64 Image: ARM64_IMAGE_MAGIC ("ARMd")
+# at offset 0x38, the field Firecracker's loader checks before it jumps into
+# the image. Read, never written — a wrapped kernel (a UKI or an EFI zboot
+# image) with the magic stamped on top passes the loader and then dies
+# silently in the guest instead of failing here.
+is_arm64_image() {
+  [ -s "$1" ] && [ "$(od -An -tx1 -j56 -N4 "$1" | tr -d ' \n')" = '41524d64' ]
 }
 
 prepare_kernel() {
@@ -455,13 +446,14 @@ prepare_kernel() {
 
   [ -s "$raw_path" ] || fail "Rocky kernel was not copied out to ${raw_path}"
   if [ "$rocky_arch" = aarch64 ]; then
-    info "preserving ARM64 PE kernel Image from: ${raw_path}"
-    cp "$raw_path" "$kernel_image_tmp"
-    if ! file "$kernel_image_tmp" | grep -Eq 'PE32\+.*(ARM64|Aarch64)'; then
+    # Rocky's arm64 vmlinuz is an EFI zboot image (a PE wrapper around a
+    # gzip-compressed Image), which Firecracker cannot boot — unwrap it.
+    info "extracting raw ARM64 Image from: ${raw_path}"
+    if ! "$extract_arm64_image" "$raw_path" >"$kernel_image_tmp" \
+      || ! is_arm64_image "$kernel_image_tmp"; then
       rm -f "$kernel_image_tmp"
-      fail "Rocky aarch64 kernel is not a PE32+ ARM64 Image: ${raw_path}"
+      fail "extract-arm64-image could not extract a raw ARM64 Image from ${raw_path}"
     fi
-    restore_arm64_image_magic "$kernel_image_tmp" "$raw_path"
   else
     info "extracting x86_64 ELF vmlinux from: ${raw_path}"
     if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
@@ -595,11 +587,13 @@ main() {
   [ "$#" -eq 0 ] || fail 'install-rocky-rootfs.sh does not accept arguments.'
 
   for command in awk chmod chown chroot cp curl file find grep head id install jq \
-    mkdir mount mv rm sed sha256sum sort tail tar truncate umount uname xz; do
+    mkdir mount mv od rm sed sha256sum sort tail tar truncate umount uname xz; do
     require_command "$command"
   done
   if [ "$rocky_arch" = x86_64 ]; then
     [ -x "$extract_vmlinux" ] || fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  else
+    [ -x "$extract_arm64_image" ] || fail "extract-arm64-image helper not found or not executable: ${extract_arm64_image}"
   fi
 
   if [ "$(id -u)" -ne 0 ]; then

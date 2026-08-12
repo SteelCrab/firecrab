@@ -384,12 +384,15 @@ install_binaries() {
         [ -x "$target/$binary" ] || die "$target/$binary not found — the build did not produce it"
         $SUDO install -o root -g root -m 0755 "$target/$binary" "$LIBDIR/$binary"
     done
-    # extract-vmlinux is a shell script used at runtime by the API.
-    # Installing it next to the binary lets the API find it without needing
-    # access to the repo checkout (which may be in a user home the service
-    # account cannot reach).
-    $SUDO install -o root -g root -m 0755 \
-        "$REPO_ROOT/scripts/firecracker-menual/extract-vmlinux" "$LIBDIR/extract-vmlinux"
+    # extract-vmlinux and extract-arm64-image are shell scripts used at
+    # runtime by the API to turn a distro vmlinuz into the kernel format
+    # Firecracker boots on each architecture. Installing them next to the
+    # binary lets the API find them without needing access to the repo
+    # checkout (which may be in a user home the service account cannot reach).
+    for helper in extract-vmlinux extract-arm64-image; do
+        $SUDO install -o root -g root -m 0755 \
+            "$REPO_ROOT/scripts/firecracker-menual/$helper" "$LIBDIR/$helper"
+    done
     # Host doctor is a shell script — no build step. On PATH as firecrab-doctor.
     $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
     $SUDO install -o root -g root -m 0755 "$REPO_ROOT/scripts/firecrab-doctor.sh" \

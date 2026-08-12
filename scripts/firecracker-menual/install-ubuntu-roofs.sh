@@ -12,6 +12,7 @@ artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
 kernel_image_name=''
 extract_vmlinux="${script_dir}/extract-vmlinux"
+extract_arm64_image="${script_dir}/extract-arm64-image"
 build_dir="${repo_dir}/build/ubuntu-rootfs"
 rootfs_image=''
 rootfs_link=''
@@ -519,28 +520,20 @@ install_rootfs_packages() {
   cleanup_chroot_mounts
 }
 
-# Ubuntu's official arm64 vmlinuz ships with the Linux/arm64 "Image" boot
-# header magic (ARM64_IMAGE_MAGIC, 4 bytes at offset 0x38) zeroed out, even
-# though its PE/EFI wrapper is otherwise intact and passes `file`'s PE32+
-# ARM64 detection. Firecracker's aarch64 kernel loader (rust-vmm
-# linux-loader) validates that field independently of the PE header and
-# refuses to boot with "invalid Image magic number" if it's missing, so
-# restore it before packaging.
-restore_arm64_image_magic() {
-  image_path=$1
-  source_path=$2
-  printf '\x41\x52\x4d\x64' | dd of="$image_path" bs=1 seek=56 count=4 conv=notrunc status=none 2>/dev/null
-  image_magic=$(od -An -tx1 -j56 -N4 "$image_path" | tr -d ' \n')
-  if [ "$image_magic" != '41524d64' ]; then
-    rm -f "$image_path"
-    fail "failed to restore ARM64 Image magic number in ${source_path}"
-  fi
+# True when the file is a raw Linux/arm64 Image: ARM64_IMAGE_MAGIC ("ARMd")
+# at offset 0x38, the field Firecracker's loader checks before it jumps into
+# the image. Read, never written — a wrapped kernel (a UKI or an EFI zboot
+# image) with the magic stamped on top passes the loader and then dies
+# silently in the guest instead of failing here.
+is_arm64_image() {
+  [ -s "$1" ] && [ "$(od -An -tx1 -j56 -N4 "$1" | tr -d ' \n')" = '41524d64' ]
 }
 
 # Pulls the distro kernel out of the rootfs. x86_64 is converted to the
-# uncompressed ELF vmlinux Firecracker expects. ARM64 keeps the packaged
-# PE32+ Image unchanged (aside from the magic-number repair above), which is
-# the only kernel format Firecracker accepts on that architecture.
+# uncompressed ELF vmlinux Firecracker expects. ARM64 is unwrapped to the raw
+# Linux/arm64 Image, the only format Firecracker boots on that architecture:
+# Ubuntu's arm64 vmlinuz is a UKI whose .linux section holds an EFI zboot
+# image, so neither the file itself nor its first payload is bootable.
 extract_kernel() {
   vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -n 1)
   if [ -z "$vmlinuz_path" ]; then
@@ -550,13 +543,12 @@ extract_kernel() {
   kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
   kernel_image_tmp="${kernel_image_path}.tmp"
   if [ "$ubuntu_arch" = arm64 ]; then
-    info "preserving ARM64 PE kernel Image from: ${vmlinuz_path}"
-    cp "$vmlinuz_path" "$kernel_image_tmp"
-    if ! file "$kernel_image_tmp" | grep -Eq 'PE32.*ARM64'; then
+    info "extracting raw ARM64 Image from: ${vmlinuz_path}"
+    if ! "$extract_arm64_image" "$vmlinuz_path" >"$kernel_image_tmp" \
+      || ! is_arm64_image "$kernel_image_tmp"; then
       rm -f "$kernel_image_tmp"
-      fail "ARM64 kernel is not a PE32+ Image: ${vmlinuz_path}"
+      fail "extract-arm64-image could not extract a raw ARM64 Image from ${vmlinuz_path}"
     fi
-    restore_arm64_image_magic "$kernel_image_tmp" "$vmlinuz_path"
   else
     info "extracting ELF vmlinux from: ${vmlinuz_path}"
     if ! "$extract_vmlinux" "$vmlinuz_path" >"$kernel_image_tmp"; then
@@ -654,8 +646,8 @@ verify_rootfs_content() {
         || fail "Extracted kernel image is not ELF: ${kernel_image_path}"
       ;;
     arm64)
-      file "$kernel_image_path" | grep -Eq 'PE32.*ARM64' \
-        || fail "ARM64 kernel is not a PE32+ Image: ${kernel_image_path}"
+      is_arm64_image "$kernel_image_path" \
+        || fail "ARM64 kernel is not a raw Image: ${kernel_image_path}"
       ;;
   esac
 }
@@ -689,8 +681,12 @@ main() {
   require_command truncate
   require_command uname
   require_command umount
+  require_command od
   if [ ! -x "$extract_vmlinux" ]; then
     fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  fi
+  if [ ! -x "$extract_arm64_image" ]; then
+    fail "extract-arm64-image helper not found or not executable: ${extract_arm64_image}"
   fi
 
   if [ "$(id -u)" -ne 0 ]; then

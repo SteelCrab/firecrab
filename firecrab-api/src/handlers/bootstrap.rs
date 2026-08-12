@@ -925,9 +925,27 @@ mod tests {
         0x2f, 0x00, 0x2e, 0x00,
     ];
 
+    /// A minimal raw Linux/arm64 `Image` boot header: "MZ" for the EFI stub
+    /// and `ARM64_IMAGE_MAGIC` ("ARMd") at offset 0x38, which is what
+    /// `extract-arm64-image` reads to recognize an already-unwrapped Image
+    /// and pass it straight through. A bare "MZ" prefix won't do — the real
+    /// script would then look for the EFI zboot payload or the UKI `.linux`
+    /// section that a distro vmlinuz carries and reject the fixture for
+    /// having neither, which is a different failure than the one these tests
+    /// are about.
     #[cfg(target_arch = "aarch64")]
     fn fake_kernel_header() -> &'static [u8] {
-        b"MZ\0\0fake ARM64 PE Image"
+        const HEADER: &[u8] = &{
+            let mut header = [0_u8; 64];
+            header[0] = b'M';
+            header[1] = b'Z';
+            header[0x38] = b'A';
+            header[0x39] = b'R';
+            header[0x3a] = b'M';
+            header[0x3b] = b'd';
+            header
+        };
+        HEADER
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -1161,11 +1179,11 @@ mod tests {
     /// there's no explicit terminal `exit 1`). Without also checking for
     /// non-empty stdout, `build_package_blocking` would silently package a
     /// 0-byte kernel as a "successful" bootstrap. This seeds a raw kernel
-    /// `extract-vmlinux` genuinely cannot recognize (plain text, not an ELF
-    /// or any known compressed kernel format) and asserts packaging fails
-    /// loudly instead.
+    /// neither helper can recognize (plain text: not an ELF, not a known
+    /// compressed kernel format, not an ARM64 Image in any wrapper) and
+    /// asserts packaging fails loudly instead.
     #[tokio::test]
-    async fn package_bootstrap_fails_when_extract_vmlinux_cannot_recognize_the_raw_kernel() {
+    async fn package_bootstrap_fails_when_the_raw_kernel_cannot_be_prepared() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
         let vm = seed_builder_vm(&state, VmState::Running);
@@ -1193,8 +1211,16 @@ mod tests {
 
         let snapshot = state.bootstraps.get(bootstrap_id).unwrap();
         assert_eq!(snapshot.status, BootstrapStatus::Failed);
+        // Which helper reports the failure is architecture-specific: x86_64
+        // extracts an ELF vmlinux, aarch64 unwraps a raw Image out of the
+        // distro's EFI zboot/UKI wrapper.
+        let expected_failure = if cfg!(target_arch = "aarch64") {
+            "extract-arm64-image failed"
+        } else {
+            "extract-vmlinux failed"
+        };
         assert!(
-            snapshot.log.contains("extract-vmlinux failed"),
+            snapshot.log.contains(expected_failure),
             "log: {}",
             snapshot.log
         );
