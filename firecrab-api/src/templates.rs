@@ -865,7 +865,7 @@ mod tests {
             "the image root is created so later builds land there"
         );
         assert!(
-            registry.resolve_alias("alpine-3.24").is_none(),
+            registry.resolve_alias("alpine-3.24.1").is_none(),
             "an unbuilt template must not resolve"
         );
 
@@ -873,7 +873,7 @@ mod tests {
         // other stays skipped rather than failing the whole registry.
         let alpine = default_specs()
             .into_iter()
-            .find(|spec| spec.alias == "alpine-3.24")
+            .find(|spec| spec.alias == "alpine-3.24.1")
             .expect("alpine is a default template");
         for relative in [&alpine.kernel, &alpine.rootfs]
             .into_iter()
@@ -885,7 +885,7 @@ mod tests {
         }
 
         let registry = TemplateRegistry::load_from(&root).expect("one built template");
-        assert!(registry.resolve_alias("alpine-3.24").is_some());
+        assert!(registry.resolve_alias("alpine-3.24.1").is_some());
         assert!(registry.resolve_alias("ubuntu-26.04").is_none());
         assert!(registry.resolve_alias("rocky-9.8").is_none());
     }
@@ -1213,8 +1213,8 @@ mod tests {
 
         let alpine = specs
             .iter()
-            .find(|spec| spec.alias == "alpine-3.24")
-            .expect("alpine-3.24 is one of the default specs");
+            .find(|spec| spec.alias == "alpine-3.24.1")
+            .expect("alpine-3.24.1 is one of the default specs");
         let expected_alpine_kernel = if alpine_arch == "aarch64" {
             "kernel/Image-alpine-virt-aarch64"
         } else {
@@ -1319,7 +1319,7 @@ mod tests {
         );
 
         let alpine = registry
-            .resolve_alias("alpine-3.24")
+            .resolve_alias("alpine-3.24.1")
             .expect("Alpine template resolves");
         assert!(!alpine.requires_pci_transport());
         assert!(alpine.runtime_boot_args().contains("pci=off"));
@@ -1333,7 +1333,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.alias.as_str())
                 .collect::<Vec<_>>(),
-            vec!["alpine-3.24", "ubuntu-26.04", "rocky-9.8"]
+            vec!["alpine-3.24.1", "ubuntu-26.04", "rocky-9.8"]
         );
 
         let ubuntu = specs
@@ -1353,7 +1353,7 @@ mod tests {
 
         let alpine = specs
             .iter()
-            .find(|spec| spec.alias == "alpine-3.24")
+            .find(|spec| spec.alias == "alpine-3.24.1")
             .unwrap();
         assert_eq!(
             alpine.kernel,

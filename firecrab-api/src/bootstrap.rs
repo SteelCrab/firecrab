@@ -326,13 +326,13 @@ mod tests {
     fn begin_then_snapshot_returns_a_booting_session() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other session is active");
 
         let snapshot = tracker.get(id).unwrap();
         assert_eq!(snapshot.status, BootstrapStatus::Booting);
         assert_eq!(snapshot.alias, "ubuntu-26.04");
-        assert_eq!(snapshot.source_alias, "alpine-3.24");
+        assert_eq!(snapshot.source_alias, "alpine-3.24.1");
     }
 
     #[test]
@@ -347,7 +347,7 @@ mod tests {
         assert!(!tracker.any_active());
 
         let id = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other session is active");
         assert!(tracker.any_active());
 
@@ -365,7 +365,7 @@ mod tests {
 
         let vm_id = Uuid::new_v4();
         let id = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", vm_id)
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", vm_id)
             .expect("no other session is active");
 
         let found = tracker.active().expect("the running session");
@@ -392,12 +392,12 @@ mod tests {
     fn try_begin_refuses_a_second_session_while_one_is_still_active() {
         let tracker = BootstrapTracker::default();
         let first = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("the first session claims the slot");
 
         assert!(
             tracker
-                .try_begin("rocky-9.8", "alpine-3.24", Uuid::new_v4())
+                .try_begin("rocky-9.8", "alpine-3.24.1", Uuid::new_v4())
                 .is_none()
         );
 
@@ -406,7 +406,7 @@ mod tests {
         tracker.finish_ok(first);
         assert!(
             tracker
-                .try_begin("rocky-9.8", "alpine-3.24", Uuid::new_v4())
+                .try_begin("rocky-9.8", "alpine-3.24.1", Uuid::new_v4())
                 .is_some()
         );
     }
@@ -415,7 +415,7 @@ mod tests {
     fn set_status_from_only_applies_while_the_session_is_in_the_expected_status() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other session is active");
 
         assert!(tracker.set_status_from(id, BootstrapStatus::Booting, BootstrapStatus::Running));
@@ -427,7 +427,7 @@ mod tests {
     fn finish_ok_records_succeeded_status_and_end_time() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other session is active");
 
         tracker.finish_ok(id);
@@ -441,7 +441,7 @@ mod tests {
     fn finish_err_records_failed_status_and_reason_in_the_log() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other session is active");
 
         tracker.finish_err(id, "download failed: connection reset");
@@ -455,7 +455,7 @@ mod tests {
     fn finish_err_from_only_fails_a_session_still_in_the_expected_status() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other session is active");
 
         tracker.set_status_from(id, BootstrapStatus::Booting, BootstrapStatus::Running);
@@ -470,7 +470,7 @@ mod tests {
     fn remove_evicts_a_tracked_session() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other session is active");
         tracker.remove(id);
         assert!(tracker.get(id).is_none());
@@ -480,7 +480,7 @@ mod tests {
     fn a_new_session_opens_on_the_builder_vm_step() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("alpine-3.24", "__microboot", Uuid::new_v4())
+            .try_begin("alpine-3.24.1", "__microboot", Uuid::new_v4())
             .expect("first session");
         let session = tracker.get(id).expect("session");
 
@@ -497,7 +497,7 @@ mod tests {
     fn set_step_closes_the_previous_step_as_succeeded() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("alpine-3.24", "__microboot", Uuid::new_v4())
+            .try_begin("alpine-3.24.1", "__microboot", Uuid::new_v4())
             .expect("first session");
 
         tracker.set_step(id, BootstrapStep::InstallingSystem);
@@ -520,7 +520,7 @@ mod tests {
     fn finishing_ok_closes_the_last_step_and_clears_the_current_one() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("alpine-3.24", "__microboot", Uuid::new_v4())
+            .try_begin("alpine-3.24.1", "__microboot", Uuid::new_v4())
             .expect("first session");
         tracker.set_step(id, BootstrapStep::Finalizing);
 
@@ -571,7 +571,7 @@ mod tests {
     fn a_compare_and_set_failure_that_does_not_apply_leaves_the_timeline_alone() {
         let tracker = BootstrapTracker::default();
         let id = tracker
-            .try_begin("alpine-3.24", "__microboot", Uuid::new_v4())
+            .try_begin("alpine-3.24.1", "__microboot", Uuid::new_v4())
             .expect("first session");
 
         // Session is in `Booting`; this expects `Packaging`, so it must no-op.

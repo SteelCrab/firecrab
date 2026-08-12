@@ -123,7 +123,7 @@ resolve_ssh_public_key() {
 
 # Resolve the exact manifest-pinned minirootfs. A branch's
 # latest-releases.yaml changes whenever Alpine publishes a patch release, so
-# using it would make an alias such as alpine-3.24 silently change contents
+# using it would make an alias such as alpine-3.24.1 silently change contents
 # while package paths and runtime specs still expect 3.24.1.
 resolve_alpine_minirootfs() {
   local branch="v${alpine_series}"

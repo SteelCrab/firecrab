@@ -874,9 +874,9 @@ mod tests {
             )
         );
         assert_eq!(
-            package_url("http://mirror.example/m2", "alpine-3.24"),
+            package_url("http://mirror.example/m2", "alpine-3.24.1"),
             format!(
-                "http://mirror.example/m2/alpine/3.24.1{architecture_segment}/alpine-3.24.tar.zst"
+                "http://mirror.example/m2/alpine/3.24.1{architecture_segment}/alpine-3.24.1.tar.zst"
             )
         );
         assert_eq!(
@@ -901,8 +901,8 @@ mod tests {
     #[test]
     fn packages_use_architecture_specific_registry_paths() {
         assert_eq!(
-            package_path_for_arch("alpine-3.24", "aarch64"),
-            "alpine/3.24.1/aarch64/alpine-3.24.tar.zst"
+            package_path_for_arch("alpine-3.24.1", "aarch64"),
+            "alpine/3.24.1/aarch64/alpine-3.24.1.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("ubuntu-26.04", "aarch64"),
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn package_name_uses_alias_tar_zst() {
-        assert_eq!(package_name("alpine-3.24"), "alpine-3.24.tar.zst");
+        assert_eq!(package_name("alpine-3.24.1"), "alpine-3.24.1.tar.zst");
         assert_eq!(package_name("ubuntu-26.04"), "ubuntu-26.04.tar.zst");
         assert_eq!(package_name("rocky-9.8"), "rocky-9.8.tar.zst");
     }
@@ -948,16 +948,16 @@ mod tests {
         let directory = tempdir().unwrap();
         write_staged_package_origin(
             directory.path(),
-            "alpine-3.24",
+            "alpine-3.24.1",
             PackageOrigin::MicroRegistry,
         )
         .unwrap();
         assert_eq!(
-            staged_package_origin(directory.path(), "alpine-3.24"),
+            staged_package_origin(directory.path(), "alpine-3.24.1"),
             Some(PackageOrigin::MicroRegistry)
         );
-        clear_staged_package_origin(directory.path(), "alpine-3.24").unwrap();
-        assert_eq!(staged_package_origin(directory.path(), "alpine-3.24"), None);
+        clear_staged_package_origin(directory.path(), "alpine-3.24.1").unwrap();
+        assert_eq!(staged_package_origin(directory.path(), "alpine-3.24.1"), None);
     }
 
     #[test]
@@ -994,7 +994,7 @@ mod tests {
 
     #[test]
     fn validation_accepts_a_complete_spec_and_rejects_an_empty_archive() {
-        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         let members = vec![
             "kernel/".to_owned(),
             alpine.kernel.to_string_lossy().into_owned(),
@@ -1017,7 +1017,7 @@ mod tests {
 
     #[test]
     fn ensure_spec_requires_all_artifacts() {
-        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         let members = vec![
             alpine.kernel.to_string_lossy().into_owned(),
             alpine.rootfs.to_string_lossy().into_owned(),
@@ -1123,7 +1123,7 @@ mod tests {
     async fn image_install_reports_failure_when_no_package_has_been_staged() {
         let directory = tempdir().unwrap();
         let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
-        let spec = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         let tracker = ImageInstallTracker::disabled();
         tracker.begin(&spec.alias).unwrap();
 
@@ -1149,7 +1149,7 @@ mod tests {
         });
 
         let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
-        let spec = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         let tracker = ImageInstallTracker::with_base_url(format!("http://{addr}"));
         tracker.begin(&spec.alias).unwrap();
 
@@ -1171,7 +1171,7 @@ mod tests {
     async fn install_once_from_local_http_registers() {
         let source = tempdir().unwrap();
         let dest = tempdir().unwrap();
-        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         write_file(&source.path().join(&alpine.kernel), b"fake-alpine-kernel");
         write_file(
             &source.path().join(alpine.initrd.as_ref().unwrap()),
@@ -1218,6 +1218,6 @@ mod tests {
             staged_package_origin(dest.path(), &alpine.alias),
             Some(PackageOrigin::MicroRegistry)
         );
-        assert!(templates.resolve_alias("alpine-3.24").is_some());
+        assert!(templates.resolve_alias("alpine-3.24.1").is_some());
     }
 }

@@ -79,7 +79,7 @@ mod tests {
                 .iter()
                 .map(|image| image.alias.as_str())
                 .collect::<Vec<_>>(),
-            ["alpine-3.24", "ubuntu-26.04", "rocky-9.8"]
+            ["alpine-3.24.1", "ubuntu-26.04", "rocky-9.8"]
         );
         assert!(manifest.images.iter().all(|image| {
             image.artifacts.contains_key("x86_64") && image.artifacts.contains_key("aarch64")

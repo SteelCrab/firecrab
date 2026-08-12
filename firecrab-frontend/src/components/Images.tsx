@@ -32,7 +32,7 @@ import InlineConsole from "./InlineConsole";
 import { useI18n } from "../i18n";
 
 const KNOWN_TEMPLATES = [
-  { alias: "alpine-3.24", label: "Alpine Linux", logoSrc: "https://www.alpinelinux.org/alpinelinux-logo.svg" },
+  { alias: "alpine-3.24.1", label: "Alpine Linux", logoSrc: "https://www.alpinelinux.org/alpinelinux-logo.svg" },
   { alias: "ubuntu-26.04", label: "Ubuntu", logoSrc: "https://assets.ubuntu.com/v1/ff6a9a38-ubuntu-logo-2022.svg" },
   { alias: "rocky-9.8", label: "Rocky Linux 9.8", logoSrc: "https://raw.githubusercontent.com/rocky-linux/branding/main/logo/src/icon-primary.svg" },
 ] as const;

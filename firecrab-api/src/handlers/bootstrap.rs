@@ -44,7 +44,7 @@ const BUILDER_BOOT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `TemplateRegistry::known_specs()` directly, so a future built-in
 /// addition doesn't silently become bootstrap-eligible without its own
 /// guest script (Task 6 covers exactly these 3, no more).
-const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24", "ubuntu-26.04", "rocky-9.8"];
+const BOOTSTRAPPABLE_ALIASES: [&str; 3] = ["alpine-3.24.1", "ubuntu-26.04", "rocky-9.8"];
 
 /// Sentinel the pushed script prints once it's done, followed by `:` and
 /// its exit code — same shape as other console sentinels, kept as its
@@ -57,7 +57,7 @@ const BOOTSTRAP_DONE_SENTINEL: &str = "FIRECRAB_BOOTSTRAP_DONE";
 /// package install, so far more generous than a long guest-side install.
 ///
 /// Measured end-to-end on an aarch64 host, one builder at a time, on the
-/// single vCPU this module used to give the builder: alpine-3.24 in 2m55s,
+/// single vCPU this module used to give the builder: alpine-3.24.1 in 2m55s,
 /// rocky-9.8 in 9m44s, and ubuntu-26.04 was still going when the old
 /// 30-minute bound killed it — with the guest's vCPU pegged at ~98% for the
 /// entire run, so it was building, not hung. Ubuntu is the outlier by
@@ -142,7 +142,7 @@ const ROCKY_SCRIPT: &str =
 
 fn script_for(alias: &str) -> String {
     let script = match alias {
-        "alpine-3.24" => ALPINE_SCRIPT,
+        "alpine-3.24.1" => ALPINE_SCRIPT,
         "ubuntu-26.04" => UBUNTU_SCRIPT,
         "rocky-9.8" => ROCKY_SCRIPT,
         other => unreachable!("start_bootstrap already rejected unknown alias {other}"),
@@ -306,7 +306,7 @@ pub async fn start_bootstrap(
 /// target ends up.
 fn bootstrap_disk_gb(target_alias: &str) -> u16 {
     match target_alias {
-        "alpine-3.24" => 4,
+        "alpine-3.24.1" => 4,
         _ => 8, // ubuntu-26.04, rocky-9.8 — 2G rootfs_size each, per default_specs()
     }
 }
@@ -772,7 +772,7 @@ fn build_package_blocking(
     std::fs::create_dir_all(rootfs_dest.parent().unwrap()).ok();
     std::fs::rename(&raw_rootfs, &rootfs_dest).map_err(|e| format!("place rootfs: {e}"))?;
 
-    let raw_kernel_name = if alias == "alpine-3.24" {
+    let raw_kernel_name = if alias == "alpine-3.24.1" {
         "vmlinuz-virt-raw"
     } else {
         "vmlinuz-raw"
@@ -946,7 +946,7 @@ mod tests {
             );
             assert!(!script.contains("@ROCKY_"), "unresolved marker in {alias}");
         }
-        assert!(script_for("alpine-3.24").contains("alpine_version='3.24.1'"));
+        assert!(script_for("alpine-3.24.1").contains("alpine_version='3.24.1'"));
         assert!(script_for("ubuntu-26.04").contains("series='26.04'"));
         assert!(script_for("rocky-9.8").contains("rocky_release='9.8'"));
         assert!(script_for("rocky-9.8").contains("rocky_container_build='20260525.0'"));
@@ -1132,7 +1132,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Packaging,
         );
@@ -1228,7 +1228,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Packaging,
         );
@@ -1282,7 +1282,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Packaging,
         );
@@ -1322,7 +1322,7 @@ mod tests {
 
     /// Covers the `if let Some(initrd_relative) = &spec.initrd` branch in
     /// `build_package_blocking` that the `ubuntu-26.04` test above never
-    /// exercises (Ubuntu's spec has `initrd: None`) — `alpine-3.24` does
+    /// exercises (Ubuntu's spec has `initrd: None`) — `alpine-3.24.1` does
     /// carry an initrd, and its raw-kernel dump filename
     /// (`vmlinuz-virt-raw`, per `bootstrap-alpine-in-guest.sh`) differs
     /// from every other alias's `vmlinuz-raw`, which `build_package_blocking`
@@ -1344,7 +1344,7 @@ mod tests {
 
         let bootstrap_id = seeded_session(
             &state,
-            "alpine-3.24",
+            "alpine-3.24.1",
             "ubuntu-26.04",
             vm.id,
             BootstrapStatus::Packaging,
@@ -1361,7 +1361,7 @@ mod tests {
         );
         let staged = crate::image_install::staged_package_path(
             state.templates.image_root_path(),
-            "alpine-3.24",
+            "alpine-3.24.1",
         );
         let listing = std::process::Command::new("tar")
             .arg("--use-compress-program=zstd")
@@ -1425,13 +1425,13 @@ mod tests {
         let (status, Json(session)) = start_bootstrap(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
         )
         .await
         .unwrap();
 
         assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(session.alias, "alpine-3.24");
+        assert_eq!(session.alias, "alpine-3.24.1");
         assert_eq!(session.source_alias, crate::microboot::MICROBOOT_ALIAS);
 
         // The builder VM's own spec, not just the session's status. The RAM
@@ -1460,7 +1460,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1524,7 +1524,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1573,7 +1573,7 @@ mod tests {
         let state = test_state(directory.path()).await;
         let id = state
             .bootstraps
-            .try_begin("ubuntu-26.04", "alpine-3.24", Uuid::new_v4())
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", Uuid::new_v4())
             .expect("no other bootstrap session is active");
 
         let Json(found) = get_bootstrap(
@@ -1614,7 +1614,7 @@ mod tests {
         let vm = seed_builder_vm(&state, VmState::Running);
         let id = state
             .bootstraps
-            .try_begin("ubuntu-26.04", "alpine-3.24", vm.id)
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", vm.id)
             .expect("no other bootstrap session is active");
 
         let status = cancel_bootstrap(
@@ -1643,7 +1643,7 @@ mod tests {
         let vm = seed_builder_vm(&state, VmState::Error);
         let bootstrap_id = state
             .bootstraps
-            .try_begin("ubuntu-26.04", "alpine-3.24", vm.id)
+            .try_begin("ubuntu-26.04", "alpine-3.24.1", vm.id)
             .expect("no other bootstrap session is active");
 
         watch_bootstrap_boot(&state, bootstrap_id, vm.id).await;
@@ -1690,7 +1690,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1723,7 +1723,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1751,7 +1751,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1776,7 +1776,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "ubuntu-26.04",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Running,
         );
@@ -1801,7 +1801,7 @@ mod tests {
         let bootstrap_id = seeded_session(
             &state,
             "not-a-template",
-            "alpine-3.24",
+            "alpine-3.24.1",
             vm.id,
             BootstrapStatus::Packaging,
         );

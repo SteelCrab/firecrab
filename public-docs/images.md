@@ -3,7 +3,7 @@
 An M2Image contains a kernel and root filesystem.
 It is the source template for new VM disks.
 
-Supported aliases are `alpine-3.24`, `ubuntu-26.04`, and `rocky-9.8`.
+Supported aliases are `alpine-3.24.1`, `ubuntu-26.04`, and `rocky-9.8`.
 All three support x86_64 and ARM64. Rocky is exposed only through the
 versioned `rocky-9.8` alias.
 ARM64 packages keep the distro PE32+ `Image`; x86_64 packages use an ELF
@@ -20,7 +20,7 @@ Build all images supported by the current Linux host architecture.
 Build one alias when needed.
 
 ```sh
-./scripts/build-m2images.sh --alias alpine-3.24
+./scripts/build-m2images.sh --alias alpine-3.24.1
 ./scripts/build-m2images.sh --alias rocky-9.8
 ```
 
@@ -48,12 +48,12 @@ chroots are rejected with an explicit error.
 dist/m2images/
   catalog.json
   x86_64/
-    alpine-3.24.tar.zst
+    alpine-3.24.1.tar.zst
     ubuntu-26.04.tar.zst
     rocky-9.8.tar.zst
     SHA256SUMS
   aarch64/
-    alpine-3.24.tar.zst
+    alpine-3.24.1.tar.zst
     ubuntu-26.04.tar.zst
     rocky-9.8.tar.zst
     SHA256SUMS
@@ -64,7 +64,7 @@ Verify packages after building them.
 ```sh
 cd dist/m2images/x86_64
 sha256sum -c SHA256SUMS
-tar --list --zstd --file alpine-3.24.tar.zst
+tar --list --zstd --file alpine-3.24.1.tar.zst
 ```
 
 ## Release manifest

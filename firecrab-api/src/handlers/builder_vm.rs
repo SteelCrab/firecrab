@@ -93,10 +93,10 @@ mod tests {
 
     #[test]
     fn builder_vm_name_is_recognizable_and_unique_per_call() {
-        let first = builder_vm_name("alpine-3.24");
-        let second = builder_vm_name("alpine-3.24");
+        let first = builder_vm_name("alpine-3.24.1");
+        let second = builder_vm_name("alpine-3.24.1");
 
-        assert!(first.starts_with("builder-alpine-3.24-"));
+        assert!(first.starts_with("builder-alpine-3.24.1-"));
         assert_ne!(first, second, "two builders must not collide on a name");
     }
 
