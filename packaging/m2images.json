@@ -31,14 +31,14 @@
           "initrd": "kernel/initramfs-alpine-virt-x86_64",
           "rootfs": "rootfs/alpine-rootfs-3.24.1-x86_64.ext4",
           "bootArgs": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw",
-          "registryKey": "alpine/3.24.1/x86_64/alpine-3.24.1.tar.zst"
+          "registryKey": "alpine/3.24.1/alpine-3.24.1-v5/r5/x86_64/alpine-3.24.1.tar.zst"
         },
         "aarch64": {
           "kernel": "kernel/Image-alpine-virt-aarch64",
           "initrd": "kernel/initramfs-alpine-virt-aarch64",
           "rootfs": "rootfs/alpine-rootfs-3.24.1-aarch64.ext4",
           "bootArgs": "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw",
-          "registryKey": "alpine/3.24.1/aarch64/alpine-3.24.1.tar.zst"
+          "registryKey": "alpine/3.24.1/alpine-3.24.1-v5/r5/aarch64/alpine-3.24.1.tar.zst"
         }
       }
     },
@@ -64,14 +64,14 @@
           "initrd": null,
           "rootfs": "rootfs/ubuntu-rootfs-26.04-amd64.ext4",
           "bootArgs": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw",
-          "registryKey": "ubuntu/26.04/x86_64/ubuntu-26.04.tar.zst"
+          "registryKey": "ubuntu/26.04/ubuntu-26.04-v5/r5/x86_64/ubuntu-26.04.tar.zst"
         },
         "aarch64": {
           "kernel": "kernel/Image-ubuntu-26.04-aarch64",
           "initrd": null,
           "rootfs": "rootfs/ubuntu-rootfs-26.04-arm64.ext4",
           "bootArgs": "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw",
-          "registryKey": "ubuntu/26.04/aarch64/ubuntu-26.04.tar.zst"
+          "registryKey": "ubuntu/26.04/ubuntu-26.04-v5/r5/aarch64/ubuntu-26.04.tar.zst"
         }
       }
     },
@@ -99,14 +99,14 @@
           "initrd": "kernel/initramfs-rocky-9.8-x86_64",
           "rootfs": "rootfs/rocky-rootfs-9.8-x86_64.ext4",
           "bootArgs": "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw",
-          "registryKey": "rocky/9.8/x86_64/rocky-9.8.tar.zst"
+          "registryKey": "rocky/9.8/rocky-9.8-v4/r4/x86_64/rocky-9.8.tar.zst"
         },
         "aarch64": {
           "kernel": "kernel/Image-rocky-9.8-aarch64",
           "initrd": "kernel/initramfs-rocky-9.8-aarch64",
           "rootfs": "rootfs/rocky-rootfs-9.8-aarch64.ext4",
           "bootArgs": "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw",
-          "registryKey": "rocky/9.8/aarch64/rocky-9.8.tar.zst"
+          "registryKey": "rocky/9.8/rocky-9.8-v4/r4/aarch64/rocky-9.8.tar.zst"
         }
       }
     }

@@ -142,8 +142,6 @@ tar -xJf "$container_archive" -C "$oci_dir"
 info "extracting Rocky ${rocky_release} ${rocky_arch} Container-Base"
 if [ -f "$oci_dir/index.json" ]; then
   manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' "$oci_dir/index.json")
-  # Negative form rather than `A && B || fail`, which reads as if-then-else
-  # without being one (SC2015) and older shellcheck releases reject.
   if [ -z "$manifest_digest" ] || [ "$manifest_digest" = null ]; then
     fail 'could not read Container-Base manifest digest from index.json'
   fi

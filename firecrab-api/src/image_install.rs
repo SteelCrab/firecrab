@@ -870,22 +870,24 @@ mod tests {
         assert_eq!(
             package_url("http://127.0.0.1:8765/", "ubuntu-26.04"),
             format!(
-                "http://127.0.0.1:8765/ubuntu/26.04{architecture_segment}/ubuntu-26.04.tar.zst"
+                "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04-v5/r5{architecture_segment}/ubuntu-26.04.tar.zst"
             )
         );
         assert_eq!(
             package_url("http://mirror.example/m2", "alpine-3.24.1"),
             format!(
-                "http://mirror.example/m2/alpine/3.24.1{architecture_segment}/alpine-3.24.1.tar.zst"
+                "http://mirror.example/m2/alpine/3.24.1/alpine-3.24.1-v5/r5{architecture_segment}/alpine-3.24.1.tar.zst"
             )
         );
         assert_eq!(
             package_url("http://mirror.example/m2", "rocky-9.8"),
-            format!("http://mirror.example/m2/rocky/9.8{architecture_segment}/rocky-9.8.tar.zst")
+            format!(
+                "http://mirror.example/m2/rocky/9.8/rocky-9.8-v4/r4{architecture_segment}/rocky-9.8.tar.zst"
+            )
         );
         let tracker = ImageInstallTracker::with_base_url("http://127.0.0.1:8765");
         let expected_ubuntu_url = format!(
-            "http://127.0.0.1:8765/ubuntu/26.04{architecture_segment}/ubuntu-26.04.tar.zst"
+            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04-v5/r5{architecture_segment}/ubuntu-26.04.tar.zst"
         );
         assert_eq!(
             tracker.package_url_for("ubuntu-26.04").as_deref(),
@@ -902,23 +904,23 @@ mod tests {
     fn packages_use_architecture_specific_registry_paths() {
         assert_eq!(
             package_path_for_arch("alpine-3.24.1", "aarch64"),
-            "alpine/3.24.1/aarch64/alpine-3.24.1.tar.zst"
+            "alpine/3.24.1/alpine-3.24.1-v5/r5/aarch64/alpine-3.24.1.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("ubuntu-26.04", "aarch64"),
-            "ubuntu/26.04/aarch64/ubuntu-26.04.tar.zst"
+            "ubuntu/26.04/ubuntu-26.04-v5/r5/aarch64/ubuntu-26.04.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("ubuntu-26.04", "x86_64"),
-            "ubuntu/26.04/x86_64/ubuntu-26.04.tar.zst"
+            "ubuntu/26.04/ubuntu-26.04-v5/r5/x86_64/ubuntu-26.04.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("rocky-9.8", "aarch64"),
-            "rocky/9.8/aarch64/rocky-9.8.tar.zst"
+            "rocky/9.8/rocky-9.8-v4/r4/aarch64/rocky-9.8.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("rocky-9.8", "x86_64"),
-            "rocky/9.8/x86_64/rocky-9.8.tar.zst"
+            "rocky/9.8/rocky-9.8-v4/r4/x86_64/rocky-9.8.tar.zst"
         );
     }
 

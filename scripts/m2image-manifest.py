@@ -129,6 +129,15 @@ def validate_manifest(data: Any) -> None:
                 fail(f"{artifact_location}.rootfs must be below rootfs/")
             if not registry_key.endswith(f"/{alias}.tar.zst"):
                 fail(f"{artifact_location}.registryKey must end with /{alias}.tar.zst")
+            immutable_suffix = (
+                f"/{image['templateVersion']}/r{image['revision']}/"
+                f"{architecture}/{alias}.tar.zst"
+            )
+            if not registry_key.endswith(immutable_suffix):
+                fail(
+                    f"{artifact_location}.registryKey must end with "
+                    f"{immutable_suffix}"
+                )
             if registry_key in seen_keys:
                 fail(f"duplicate registry key: {registry_key}")
             seen_keys.add(registry_key)
