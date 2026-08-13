@@ -4,16 +4,19 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
+use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Deserializer};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf};
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use uuid::Uuid;
 
 use crate::image_install::Architecture;
@@ -450,12 +453,37 @@ struct RawImageManifest {
     layers: Vec<RawDescriptor>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RawImageConfiguration {
+    rootfs: RawRootFilesystem,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawRootFilesystem {
+    #[serde(rename = "type")]
+    kind: String,
+    diff_ids: Vec<Sha256Digest>,
+}
+
 const OCI_INDEX_MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
 const DOCKER_INDEX_MEDIA_TYPE: &str = "application/vnd.docker.distribution.manifest.list.v2+json";
 const OCI_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
 const DOCKER_MANIFEST_MEDIA_TYPE: &str = "application/vnd.docker.distribution.manifest.v2+json";
 const OCI_CONFIG_MEDIA_TYPE: &str = "application/vnd.oci.image.config.v1+json";
 const DOCKER_CONFIG_MEDIA_TYPE: &str = "application/vnd.docker.container.image.v1+json";
+const OCI_LAYER_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar";
+const OCI_LAYER_GZIP_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+gzip";
+const OCI_LAYER_ZSTD_MEDIA_TYPE: &str = "application/vnd.oci.image.layer.v1.tar+zstd";
+const OCI_NONDISTRIBUTABLE_LAYER_MEDIA_TYPE: &str =
+    "application/vnd.oci.image.layer.nondistributable.v1.tar";
+const OCI_NONDISTRIBUTABLE_LAYER_GZIP_MEDIA_TYPE: &str =
+    "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip";
+const OCI_NONDISTRIBUTABLE_LAYER_ZSTD_MEDIA_TYPE: &str =
+    "application/vnd.oci.image.layer.nondistributable.v1.tar+zstd";
+const DOCKER_LAYER_MEDIA_TYPE: &str = "application/vnd.docker.image.rootfs.diff.tar";
+const DOCKER_LAYER_GZIP_MEDIA_TYPE: &str = "application/vnd.docker.image.rootfs.diff.tar.gzip";
+const DOCKER_FOREIGN_LAYER_GZIP_MEDIA_TYPE: &str =
+    "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip";
 
 /// Whether a descriptor points at an image manifest rather than an artifact.
 fn is_manifest_media_type(media_type: &str) -> bool {
@@ -470,21 +498,42 @@ fn is_config_media_type(media_type: &str) -> bool {
     matches!(media_type, OCI_CONFIG_MEDIA_TYPE | DOCKER_CONFIG_MEDIA_TYPE)
 }
 
-/// Layer encodings whose raw bytes Firecrab can safely cache. Decompression
-/// and application are deliberately left to the next import stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum LayerCompression {
+    Identity,
+    Gzip,
+    Zstd,
+}
+
+impl LayerCompression {
+    fn cache_name(self) -> &'static str {
+        match self {
+            Self::Identity => "identity",
+            Self::Gzip => "gzip",
+            Self::Zstd => "zstd",
+        }
+    }
+}
+
+fn layer_compression(media_type: &str) -> Option<LayerCompression> {
+    match media_type {
+        OCI_LAYER_MEDIA_TYPE | OCI_NONDISTRIBUTABLE_LAYER_MEDIA_TYPE | DOCKER_LAYER_MEDIA_TYPE => {
+            Some(LayerCompression::Identity)
+        }
+        OCI_LAYER_GZIP_MEDIA_TYPE
+        | OCI_NONDISTRIBUTABLE_LAYER_GZIP_MEDIA_TYPE
+        | DOCKER_LAYER_GZIP_MEDIA_TYPE
+        | DOCKER_FOREIGN_LAYER_GZIP_MEDIA_TYPE => Some(LayerCompression::Gzip),
+        OCI_LAYER_ZSTD_MEDIA_TYPE | OCI_NONDISTRIBUTABLE_LAYER_ZSTD_MEDIA_TYPE => {
+            Some(LayerCompression::Zstd)
+        }
+        _ => None,
+    }
+}
+
+/// Layer encodings whose raw bytes Firecrab can safely cache and unpack.
 fn is_layer_media_type(media_type: &str) -> bool {
-    matches!(
-        media_type,
-        "application/vnd.oci.image.layer.v1.tar"
-            | "application/vnd.oci.image.layer.v1.tar+gzip"
-            | "application/vnd.oci.image.layer.v1.tar+zstd"
-            | "application/vnd.oci.image.layer.nondistributable.v1.tar"
-            | "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip"
-            | "application/vnd.oci.image.layer.nondistributable.v1.tar+zstd"
-            | "application/vnd.docker.image.rootfs.diff.tar"
-            | "application/vnd.docker.image.rootfs.diff.tar.gzip"
-            | "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip"
-    )
+    layer_compression(media_type).is_some()
 }
 
 /// Media types a manifest request accepts. Both index forms are listed so a
@@ -505,6 +554,19 @@ const TOKEN_MAX_BYTES: usize = 64 * 1024;
 /// descriptor and streamed-body checks below.
 const DEFAULT_MAX_BLOB_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const MAX_BLOB_BYTES_ENV: &str = "FIRECRAB_OCI_MAX_BLOB_BYTES";
+/// Image configuration is metadata and is parsed in memory before unpacking.
+const CONFIG_MAX_BYTES: u64 = 4 * 1024 * 1024;
+/// A separate ceiling for decoder output prevents a small compressed layer
+/// from expanding until it fills the image volume.
+const DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const MAX_UNCOMPRESSED_LAYER_BYTES_ENV: &str = "FIRECRAB_OCI_MAX_UNCOMPRESSED_LAYER_BYTES";
+/// libzstd's normal maximum window is 128 MiB. Setting it explicitly keeps a
+/// hostile frame header from requesting an unexpectedly large decoder window.
+const ZSTD_MAX_WINDOW_LOG: u32 = 27;
+/// Decompression has a separate concurrency ceiling because each zstd decoder
+/// may retain a 128 MiB window. Keeping at most two active bounds those windows
+/// to 256 MiB instead of multiplying them by a many-core host's CPU count.
+const MAX_PARALLEL_DECOMPRESSIONS: usize = 2;
 
 /// What a reference resolved to on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -571,6 +633,54 @@ pub enum ResolveError {
         size: u64,
         /// Configured maximum size of one downloaded blob.
         limit: u64,
+    },
+    /// The verified image configuration could not be interpreted.
+    #[error("OCI image configuration is invalid: {0}")]
+    MalformedConfig(String),
+    /// OCI defines only the `layers` root filesystem model.
+    #[error("unsupported OCI rootfs type {0:?}; expected \"layers\"")]
+    UnsupportedRootfsType(String),
+    /// The config must name one uncompressed digest for every manifest layer.
+    #[error("OCI config has {actual} rootfs diff_ids but the manifest has {expected} layers")]
+    DiffIdCountMismatch {
+        /// Number of layer descriptors in the manifest.
+        expected: usize,
+        /// Number of uncompressed digests in the configuration.
+        actual: usize,
+    },
+    /// A compressed layer stream could not be decoded completely.
+    #[error("could not decompress OCI layer {digest} ({media_type}): {message}")]
+    Decompression {
+        /// Digest of the exact registry bytes being decoded.
+        digest: Sha256Digest,
+        /// Layer media type that selected the decoder.
+        media_type: String,
+        /// Codec or source-read failure.
+        message: String,
+    },
+    /// Decoder output did not match the config's uncompressed digest.
+    #[error(
+        "diff ID mismatch for OCI layer {compressed_digest}: expected {expected}, got {actual}"
+    )]
+    DiffIdMismatch {
+        /// Manifest digest of the compressed registry blob.
+        compressed_digest: Sha256Digest,
+        /// Uncompressed digest declared by the image configuration.
+        expected: Sha256Digest,
+        /// Digest calculated from the decoded tar stream.
+        actual: Sha256Digest,
+    },
+    /// Decoder output exceeded the operator's per-layer policy.
+    #[error(
+        "OCI layer {compressed_digest} decompressed to more than the {limit}-byte limit ({actual} bytes observed)"
+    )]
+    UncompressedLayerTooLarge {
+        /// Manifest digest of the compressed registry blob.
+        compressed_digest: Sha256Digest,
+        /// Configured maximum uncompressed size of one layer.
+        limit: u64,
+        /// Size observed from metadata or while streaming.
+        actual: u64,
     },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
@@ -1174,8 +1284,36 @@ pub struct BlobCache {
     max_blob_bytes: u64,
 }
 
-type DigestLockMap = HashMap<PathBuf, Weak<AsyncMutex<()>>>;
-static DIGEST_LOCKS: OnceLock<StdMutex<DigestLockMap>> = OnceLock::new();
+type CacheLockMap = HashMap<PathBuf, Weak<AsyncMutex<()>>>;
+static CACHE_LOCKS: OnceLock<StdMutex<CacheLockMap>> = OnceLock::new();
+static DECOMPRESSION_PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn shared_decompression_permits() -> Arc<Semaphore> {
+    Arc::clone(
+        DECOMPRESSION_PERMITS.get_or_init(|| Arc::new(Semaphore::new(MAX_PARALLEL_DECOMPRESSIONS))),
+    )
+}
+
+async fn cache_path_lock(
+    root: &Path,
+    relative_path: &Path,
+) -> Result<Arc<AsyncMutex<()>>, ResolveError> {
+    let canonical_root = tokio::fs::canonicalize(root)
+        .await
+        .map_err(|source| cache_io("canonicalize directory", root.to_owned(), source))?;
+    let key = canonical_root.join(relative_path);
+    let mut locks = CACHE_LOCKS
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(AsyncMutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    Ok(lock)
+}
 
 impl BlobCache {
     /// Creates a cache rooted at `<image-root>/.oci/blobs/sha256/`.
@@ -1203,21 +1341,7 @@ impl BlobCache {
         &self,
         digest: &Sha256Digest,
     ) -> Result<Arc<AsyncMutex<()>>, ResolveError> {
-        let canonical_root = tokio::fs::canonicalize(&self.root)
-            .await
-            .map_err(|source| cache_io("canonicalize directory", self.root.clone(), source))?;
-        let key = canonical_root.join(digest.encoded());
-        let mut locks = DIGEST_LOCKS
-            .get_or_init(|| StdMutex::new(HashMap::new()))
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-            return Ok(lock);
-        }
-        let lock = Arc::new(AsyncMutex::new(()));
-        locks.insert(key, Arc::downgrade(&lock));
-        Ok(lock)
+        cache_path_lock(&self.root, Path::new(digest.encoded())).await
     }
 
     async fn cache_descriptor(
@@ -1363,6 +1487,32 @@ fn configured_max_blob_bytes() -> u64 {
                 "non-Unicode OCI blob limit; using default"
             );
             DEFAULT_MAX_BLOB_BYTES
+        }
+    }
+}
+
+fn configured_max_uncompressed_layer_bytes() -> u64 {
+    match std::env::var(MAX_UNCOMPRESSED_LAYER_BYTES_ENV) {
+        Ok(value) => match value.trim().parse::<u64>() {
+            Ok(limit) if limit > 0 => limit,
+            _ => {
+                tracing::warn!(
+                    variable = MAX_UNCOMPRESSED_LAYER_BYTES_ENV,
+                    value,
+                    default = DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES,
+                    "invalid OCI uncompressed layer limit; using default"
+                );
+                DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES
+            }
+        },
+        Err(std::env::VarError::NotPresent) => DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            tracing::warn!(
+                variable = MAX_UNCOMPRESSED_LAYER_BYTES_ENV,
+                default = DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES,
+                "non-Unicode OCI uncompressed layer limit; using default"
+            );
+            DEFAULT_MAX_UNCOMPRESSED_LAYER_BYTES
         }
     }
 }
@@ -1529,6 +1679,495 @@ pub struct CachedImageBlobs {
     pub config: CachedBlob,
     /// Cached filesystem layers in manifest application order.
     pub layers: Vec<CachedBlob>,
+}
+
+/// Content-addressed storage for verified, uncompressed layer tar streams.
+///
+/// A cache filename records both identities involved in unpacking: the
+/// config's digest of the uncompressed tar and the manifest's digest of the
+/// exact registry blob. This prevents a cached tar from making a new, false
+/// compressed-digest-to-diff-ID relationship appear verified.
+#[derive(Debug, Clone)]
+pub struct LayerCache {
+    root: PathBuf,
+    max_uncompressed_layer_bytes: u64,
+    decompression_permits: Arc<Semaphore>,
+}
+
+struct CompressedReadState {
+    size: u64,
+    hasher: Sha256,
+}
+
+impl CompressedReadState {
+    fn finish(&self) -> (u64, Sha256Digest) {
+        (
+            self.size,
+            Sha256Digest(format!("sha256:{:x}", self.hasher.clone().finalize())),
+        )
+    }
+}
+
+struct VerifyingReader<R> {
+    inner: R,
+    state: Arc<StdMutex<CompressedReadState>>,
+}
+
+impl<R> VerifyingReader<R> {
+    fn new(inner: R) -> (Self, Arc<StdMutex<CompressedReadState>>) {
+        let state = Arc::new(StdMutex::new(CompressedReadState {
+            size: 0,
+            hasher: Sha256::new(),
+        }));
+        (
+            Self {
+                inner,
+                state: Arc::clone(&state),
+            },
+            state,
+        )
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for VerifyingReader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let filled_before = buffer.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(context, buffer);
+        if let Poll::Ready(Ok(())) = &result {
+            let bytes = &buffer.filled()[filled_before..];
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            let Some(size) = state.size.checked_add(bytes.len() as u64) else {
+                return Poll::Ready(Err(io::Error::other(
+                    "compressed layer byte count overflow",
+                )));
+            };
+            state.size = size;
+            state.hasher.update(bytes);
+        }
+        result
+    }
+}
+
+impl LayerCache {
+    /// Creates a cache rooted at `<image-root>/.oci/layers/sha256/`.
+    pub fn new(image_root: impl AsRef<Path>) -> Self {
+        Self::with_max_uncompressed_layer_bytes(
+            image_root,
+            configured_max_uncompressed_layer_bytes(),
+        )
+    }
+
+    /// Creates a layer cache with an explicit decoded-output ceiling.
+    pub fn with_max_uncompressed_layer_bytes(
+        image_root: impl AsRef<Path>,
+        max_uncompressed_layer_bytes: u64,
+    ) -> Self {
+        Self {
+            root: image_root.as_ref().join(".oci/layers/sha256"),
+            max_uncompressed_layer_bytes,
+            decompression_permits: shared_decompression_permits(),
+        }
+    }
+
+    /// Returns the verified tar path for one compressed descriptor/diff-ID pair.
+    pub fn path_for(
+        &self,
+        descriptor: &Descriptor,
+        diff_id: &Sha256Digest,
+    ) -> Result<PathBuf, ResolveError> {
+        let compression = layer_compression(&descriptor.media_type)
+            .ok_or_else(|| ResolveError::UnsupportedMediaType(descriptor.media_type.clone()))?;
+        Ok(self.root.join(layer_relative_path(
+            &descriptor.digest,
+            diff_id,
+            compression,
+        )))
+    }
+
+    async fn cache_layer(
+        &self,
+        source: &CachedBlob,
+        diff_id: &Sha256Digest,
+        compression: LayerCompression,
+    ) -> Result<(PathBuf, u64), ResolveError> {
+        let relative = layer_relative_path(&source.descriptor.digest, diff_id, compression);
+        let path = self.root.join(&relative);
+        let parent = path
+            .parent()
+            .expect("a layer cache path always has a digest directory");
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|source| cache_io("create directory", parent.to_owned(), source))?;
+        let lock = cache_path_lock(&self.root, &relative).await?;
+        let _guard = lock.lock().await;
+
+        match verify_uncompressed_layer_file(
+            &path,
+            source,
+            diff_id,
+            self.max_uncompressed_layer_bytes,
+        )
+        .await?
+        {
+            LayerFileState::Valid(size) => return Ok((path, size)),
+            LayerFileState::Missing => {}
+            LayerFileState::Corrupt => remove_cache_file(&path).await?,
+        }
+
+        let size = self
+            .decode_layer(source, diff_id, compression, &path)
+            .await?;
+        Ok((path, size))
+    }
+
+    async fn decode_layer(
+        &self,
+        source: &CachedBlob,
+        diff_id: &Sha256Digest,
+        compression: LayerCompression,
+        destination: &Path,
+    ) -> Result<u64, ResolveError> {
+        let _decompression_permit = self
+            .decompression_permits
+            .acquire()
+            .await
+            .expect("the shared decompression semaphore is never closed");
+        let input = tokio::fs::File::open(&source.path)
+            .await
+            .map_err(|error| cache_io("open compressed layer", source.path.clone(), error))?;
+        // Hash the exact opened file stream underneath the decoder. A separate
+        // preflight check would leave a path-replacement race between blob
+        // verification and decompression.
+        let (input, compressed_state) = VerifyingReader::new(input);
+        let input = BufReader::new(input);
+        let mut reader: Box<dyn AsyncRead + Send + Unpin> = match compression {
+            LayerCompression::Identity => Box::new(input),
+            LayerCompression::Gzip => {
+                let mut decoder = GzipDecoder::new(input);
+                decoder.multiple_members(true);
+                Box::new(decoder)
+            }
+            LayerCompression::Zstd => {
+                let mut decoder = ZstdDecoder::with_params(
+                    input,
+                    &[async_compression::zstd::DParameter::window_log_max(
+                        ZSTD_MAX_WINDOW_LOG,
+                    )],
+                );
+                decoder.multiple_members(true);
+                Box::new(decoder)
+            }
+        };
+
+        let parent = destination
+            .parent()
+            .expect("a layer cache path always has a digest directory");
+        let (temporary, mut output) =
+            create_partial_file(parent, &source.descriptor.digest).await?;
+        let mut cleanup = PartialCleanup::new(temporary.clone());
+        let mut hasher = Sha256::new();
+        let mut size = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read =
+                reader
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|error| ResolveError::Decompression {
+                        digest: source.descriptor.digest.clone(),
+                        media_type: source.descriptor.media_type.clone(),
+                        message: error.to_string(),
+                    })?;
+            if read == 0 {
+                break;
+            }
+            let next_size = size.checked_add(read as u64).ok_or_else(|| {
+                ResolveError::UncompressedLayerTooLarge {
+                    compressed_digest: source.descriptor.digest.clone(),
+                    limit: self.max_uncompressed_layer_bytes,
+                    actual: u64::MAX,
+                }
+            })?;
+            if next_size > self.max_uncompressed_layer_bytes {
+                return Err(ResolveError::UncompressedLayerTooLarge {
+                    compressed_digest: source.descriptor.digest.clone(),
+                    limit: self.max_uncompressed_layer_bytes,
+                    actual: next_size,
+                });
+            }
+            hasher.update(&buffer[..read]);
+            output
+                .write_all(&buffer[..read])
+                .await
+                .map_err(|error| cache_io("write", temporary.clone(), error))?;
+            size = next_size;
+            // Codec reads may remain immediately ready while input is
+            // buffered. Yield between chunks so a large layer cannot occupy a
+            // Tokio worker for the duration of its entire decompression.
+            tokio::task::yield_now().await;
+        }
+
+        let (compressed_size, compressed_digest) = compressed_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .finish();
+        if compressed_size != source.descriptor.size {
+            return Err(ResolveError::SizeMismatch {
+                subject: source.descriptor.digest.to_string(),
+                expected: source.descriptor.size,
+                actual: compressed_size,
+            });
+        }
+        if compressed_digest != source.descriptor.digest {
+            return Err(ResolveError::DigestMismatch {
+                subject: format!("compressed layer {}", source.descriptor.digest),
+                expected: source.descriptor.digest.clone(),
+                actual: compressed_digest,
+            });
+        }
+
+        let actual = Sha256Digest(format!("sha256:{:x}", hasher.finalize()));
+        if actual != *diff_id {
+            return Err(ResolveError::DiffIdMismatch {
+                compressed_digest: source.descriptor.digest.clone(),
+                expected: diff_id.clone(),
+                actual,
+            });
+        }
+        output
+            .flush()
+            .await
+            .map_err(|error| cache_io("flush", temporary.clone(), error))?;
+        output
+            .sync_all()
+            .await
+            .map_err(|error| cache_io("sync", temporary.clone(), error))?;
+        drop(output);
+        tokio::fs::rename(&temporary, destination)
+            .await
+            .map_err(|error| cache_io("publish", destination.to_owned(), error))?;
+        cleanup.published = true;
+        Ok(size)
+    }
+}
+
+fn layer_relative_path(
+    compressed_digest: &Sha256Digest,
+    diff_id: &Sha256Digest,
+    compression: LayerCompression,
+) -> PathBuf {
+    PathBuf::from(diff_id.encoded()).join(format!(
+        "{}.{}.tar",
+        compressed_digest.encoded(),
+        compression.cache_name()
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayerFileState {
+    Missing,
+    Valid(u64),
+    Corrupt,
+}
+
+async fn verify_uncompressed_layer_file(
+    path: &Path,
+    source: &CachedBlob,
+    diff_id: &Sha256Digest,
+    max_uncompressed_layer_bytes: u64,
+) -> Result<LayerFileState, ResolveError> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LayerFileState::Missing);
+        }
+        Err(error) => return Err(cache_io("inspect", path.to_owned(), error)),
+    };
+    if !metadata.file_type().is_file() {
+        return Ok(LayerFileState::Corrupt);
+    }
+    if metadata.len() > max_uncompressed_layer_bytes {
+        return Err(ResolveError::UncompressedLayerTooLarge {
+            compressed_digest: source.descriptor.digest.clone(),
+            limit: max_uncompressed_layer_bytes,
+            actual: metadata.len(),
+        });
+    }
+
+    let (size, actual) = match hash_file(path).await {
+        Ok(result) => result,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LayerFileState::Missing);
+        }
+        Err(error) => return Err(cache_io("verify", path.to_owned(), error)),
+    };
+    if actual != *diff_id {
+        return Ok(LayerFileState::Corrupt);
+    }
+    Ok(LayerFileState::Valid(size))
+}
+
+/// One verified uncompressed layer, retaining both OCI content identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecompressedLayer {
+    /// Original cached registry bytes and their manifest descriptor.
+    pub source: CachedBlob,
+    /// Digest of the uncompressed tar stream from config `rootfs.diff_ids`.
+    pub diff_id: Sha256Digest,
+    /// Verified uncompressed tar path below `.oci/layers/sha256/`.
+    pub path: PathBuf,
+    /// Number of bytes in the uncompressed tar stream.
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct LayerWorkKey {
+    compressed_digest: Sha256Digest,
+    diff_id: Sha256Digest,
+    compression: LayerCompression,
+}
+
+/// Decompresses and verifies every cached layer against config `diff_ids`.
+///
+/// Decoder work is bounded by the host's logical CPU count and the returned
+/// vector always retains manifest order. This stage produces tar streams only;
+/// member validation, extraction, whiteouts, and layer merging happen later.
+pub async fn decompress_cached_layers(
+    image: &CachedImageBlobs,
+    cache: &LayerCache,
+) -> Result<Vec<DecompressedLayer>, ResolveError> {
+    let available = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let parallelism = decompression_parallelism(available);
+    decompress_cached_layers_with_parallelism(image, cache, parallelism).await
+}
+
+fn decompression_parallelism(available: usize) -> usize {
+    available.clamp(1, MAX_PARALLEL_DECOMPRESSIONS)
+}
+
+async fn decompress_cached_layers_with_parallelism(
+    image: &CachedImageBlobs,
+    cache: &LayerCache,
+    parallelism: usize,
+) -> Result<Vec<DecompressedLayer>, ResolveError> {
+    let diff_ids = read_config_diff_ids(image).await?;
+    let layers = image
+        .layers
+        .iter()
+        .cloned()
+        .zip(diff_ids)
+        .map(|(source, diff_id)| {
+            let compression =
+                layer_compression(&source.descriptor.media_type).ok_or_else(|| {
+                    ResolveError::UnsupportedMediaType(source.descriptor.media_type.clone())
+                })?;
+            let key = LayerWorkKey {
+                compressed_digest: source.descriptor.digest.clone(),
+                diff_id,
+                compression,
+            };
+            Ok((key, source))
+        })
+        .collect::<Result<Vec<_>, ResolveError>>()?;
+
+    let mut seen = std::collections::HashSet::new();
+    let work: Vec<(LayerWorkKey, CachedBlob)> = layers
+        .iter()
+        .filter(|(key, _)| seen.insert(key.clone()))
+        .cloned()
+        .collect();
+    let completed: Vec<(LayerWorkKey, PathBuf, u64)> = stream::iter(work)
+        .map(|(key, source)| {
+            let cache = cache.clone();
+            async move {
+                let (path, size) = cache
+                    .cache_layer(&source, &key.diff_id, key.compression)
+                    .await?;
+                Ok::<_, ResolveError>((key, path, size))
+            }
+        })
+        .buffer_unordered(parallelism.max(1))
+        .try_collect()
+        .await?;
+    let completed: HashMap<LayerWorkKey, (PathBuf, u64)> = completed
+        .into_iter()
+        .map(|(key, path, size)| (key, (path, size)))
+        .collect();
+
+    Ok(layers
+        .into_iter()
+        .map(|(key, source)| {
+            let (path, size) = completed
+                .get(&key)
+                .expect("every unique layer relationship produces one cache path");
+            DecompressedLayer {
+                source,
+                diff_id: key.diff_id,
+                path: path.clone(),
+                size: *size,
+            }
+        })
+        .collect())
+}
+
+async fn read_config_diff_ids(image: &CachedImageBlobs) -> Result<Vec<Sha256Digest>, ResolveError> {
+    if image.config.descriptor.size > CONFIG_MAX_BYTES {
+        return Err(ResolveError::MalformedConfig(format!(
+            "configuration {} exceeds the {CONFIG_MAX_BYTES}-byte parse limit",
+            image.config.descriptor.digest
+        )));
+    }
+    let file = tokio::fs::File::open(&image.config.path)
+        .await
+        .map_err(|error| cache_io("open config", image.config.path.clone(), error))?;
+    let mut body = Vec::with_capacity(image.config.descriptor.size as usize);
+    file.take(CONFIG_MAX_BYTES + 1)
+        .read_to_end(&mut body)
+        .await
+        .map_err(|error| cache_io("read config", image.config.path.clone(), error))?;
+    if body.len() as u64 > CONFIG_MAX_BYTES {
+        return Err(ResolveError::MalformedConfig(format!(
+            "configuration {} exceeds the {CONFIG_MAX_BYTES}-byte parse limit",
+            image.config.descriptor.digest
+        )));
+    }
+    if body.len() as u64 != image.config.descriptor.size {
+        return Err(ResolveError::SizeMismatch {
+            subject: image.config.descriptor.digest.to_string(),
+            expected: image.config.descriptor.size,
+            actual: body.len() as u64,
+        });
+    }
+    let actual = Sha256Digest::of_bytes(&body);
+    if actual != image.config.descriptor.digest {
+        return Err(ResolveError::DigestMismatch {
+            subject: format!("config blob {}", image.config.descriptor.digest),
+            expected: image.config.descriptor.digest.clone(),
+            actual,
+        });
+    }
+
+    let config: RawImageConfiguration = serde_json::from_slice(&body)
+        .map_err(|error| ResolveError::MalformedConfig(error.to_string()))?;
+    if config.rootfs.kind != "layers" {
+        return Err(ResolveError::UnsupportedRootfsType(config.rootfs.kind));
+    }
+    if config.rootfs.diff_ids.len() != image.layers.len() {
+        return Err(ResolveError::DiffIdCountMismatch {
+            expected: image.layers.len(),
+            actual: config.rootfs.diff_ids.len(),
+        });
+    }
+    Ok(config.rootfs.diff_ids)
 }
 
 /// Resolves an image and fills a verified content-addressed config/layer cache.
