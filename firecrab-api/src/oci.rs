@@ -770,6 +770,17 @@ pub enum ResolveError {
         /// Merged tree that was left unprovisioned.
         path: PathBuf,
     },
+    /// A filesystem operation failed while sizing or writing the ext4 image.
+    #[error("OCI ext4 {operation} failed at {path}: {source}")]
+    Ext4Io {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Tree or image path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1764,6 +1775,11 @@ mod provision;
 
 #[cfg(test)]
 mod provision_tests;
+
+mod ext4;
+
+#[cfg(test)]
+mod ext4_tests;
 
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
