@@ -43,6 +43,7 @@ systemctl restart firecrab-api
 | `FIRECRAB_IMAGE_BASE_URL` | Public MicroRegistry | Image package base URL; `none` disables remote installs |
 | `FIRECRAB_OCI_MAX_BLOB_BYTES` | 16 GiB | Maximum compressed size of one downloaded OCI config or layer blob |
 | `FIRECRAB_OCI_MAX_UNCOMPRESSED_LAYER_BYTES` | 64 GiB | Maximum decoded size of one OCI layer tar stream |
+| `FIRECRAB_OCI_MAX_ROOTFS_BYTES` | 32 GiB | Maximum size of one OCI-imported ext4 image |
 | `FIRECRAB_STATIC_ROOT` | Installed dashboard | Static UI path |
 | `FIRECRAB_STORAGE_ROOTS` | `default=data` | Fixed storage roots |
 | `FIRECRAB_NET_HELPER_SOCK` | `/run/firecrab/net-helper.sock` | Helper socket |
