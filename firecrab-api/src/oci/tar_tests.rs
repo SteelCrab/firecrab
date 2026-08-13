@@ -480,6 +480,12 @@ async fn invalid_link_targets_are_rejected() {
             TarMemberViolation::MissingSymlinkTarget,
         ),
         (
+            "empty-pax-symlink",
+            pax_override_tar("linkpath", "", EntryType::Symlink, Some("safe")),
+            PathBuf::from("safe/member"),
+            TarMemberViolation::MissingSymlinkTarget,
+        ),
+        (
             "nul-symlink",
             pax_override_tar("linkpath", "safe\0suffix", EntryType::Symlink, Some("safe")),
             PathBuf::from("safe/member"),
