@@ -88,6 +88,9 @@ mod tests {
     use axum::extract::Query;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+    use sha2::{Digest, Sha256};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A reference the parser rejects must never reach the network: a typo
     /// should answer immediately, not after a registry timeout.
@@ -105,32 +108,103 @@ mod tests {
         assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
 
-    /// A registry on loopback is how a local development registry runs, and
-    /// it serves plain HTTP. Requiring TLS there makes it unusable.
+    /// Inspection resolves the host's manifest over plain HTTP on loopback,
+    /// but remains metadata-only: config and layer blobs are import work.
     #[tokio::test]
-    async fn a_loopback_registry_is_reached_over_plain_http() {
+    async fn a_loopback_registry_inspection_fetches_manifests_but_not_blobs() {
+        use axum::http::header::CONTENT_TYPE;
         use axum::routing::get;
 
-        let app = axum::Router::new().route(
-            "/v2/team/app/manifests/v1",
-            get(|| async {
-                axum::Json(serde_json::json!({
-                    "schemaVersion": 2,
-                    "manifests": [{
-                        "digest": "sha256:selected",
-                        "size": 12,
-                        "platform": {
-                            "architecture": if Architecture::HOST == Architecture::Aarch64 {
-                                "arm64"
-                            } else {
-                                "amd64"
-                            },
-                            "os": "linux"
+        let image_manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": format!("sha256:{}", "c".repeat(64)),
+                "size": 3
+            },
+            "layers": [{
+                "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                "digest": format!("sha256:{}", "1".repeat(64)),
+                "size": 5
+            }]
+        }))
+        .expect("serialize image manifest fixture");
+        let selected_digest = format!("sha256:{:x}", Sha256::digest(&image_manifest));
+        let image_manifest_size = image_manifest.len();
+        let image_manifest_route = format!("/v2/team/app/manifests/{selected_digest}");
+
+        let index = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [{
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "digest": selected_digest,
+                "size": image_manifest_size,
+                "platform": {
+                    "architecture": if Architecture::HOST == Architecture::Aarch64 {
+                        "arm64"
+                    } else {
+                        "amd64"
+                    },
+                    "os": "linux"
+                }
+            }]
+        }))
+        .expect("serialize image index fixture");
+
+        let tag_requests = Arc::new(AtomicUsize::new(0));
+        let selected_manifest_requests = Arc::new(AtomicUsize::new(0));
+        let blob_requests = Arc::new(AtomicUsize::new(0));
+
+        let app = axum::Router::new()
+            .route(
+                "/v2/team/app/manifests/v1",
+                get({
+                    let tag_requests = Arc::clone(&tag_requests);
+                    move || {
+                        let index = index.clone();
+                        let tag_requests = Arc::clone(&tag_requests);
+                        async move {
+                            tag_requests.fetch_add(1, Ordering::SeqCst);
+                            (
+                                [(CONTENT_TYPE, "application/vnd.oci.image.index.v1+json")],
+                                index,
+                            )
                         }
-                    }]
-                }))
-            }),
-        );
+                    }
+                }),
+            )
+            .route(
+                &image_manifest_route,
+                get({
+                    let selected_manifest_requests = Arc::clone(&selected_manifest_requests);
+                    move || {
+                        let image_manifest = image_manifest.clone();
+                        let selected_manifest_requests = Arc::clone(&selected_manifest_requests);
+                        async move {
+                            selected_manifest_requests.fetch_add(1, Ordering::SeqCst);
+                            (
+                                [(CONTENT_TYPE, "application/vnd.oci.image.manifest.v1+json")],
+                                image_manifest,
+                            )
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v2/team/app/blobs/{digest}",
+                get({
+                    let blob_requests = Arc::clone(&blob_requests);
+                    move || {
+                        let blob_requests = Arc::clone(&blob_requests);
+                        async move {
+                            blob_requests.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        }
+                    }
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -145,10 +219,13 @@ mod tests {
         .expect("a loopback registry must be reachable")
         .0;
 
-        assert_eq!(response.digest, "sha256:selected");
+        assert_eq!(response.digest, selected_digest);
         assert_eq!(response.repository, "team/app");
         assert_eq!(response.architecture, Architecture::HOST.as_str());
         assert!(!response.immutable);
         assert!(!response.single_platform);
+        assert_eq!(tag_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(selected_manifest_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(blob_requests.load(Ordering::SeqCst), 0);
     }
 }

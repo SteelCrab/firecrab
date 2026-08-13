@@ -1,7 +1,20 @@
 //! OCI registry access for image import (`public-docs/images.md`).
 
-use serde::Deserialize;
+use std::collections::HashMap;
+use std::fmt;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::time::Duration;
+
+use futures_util::{StreamExt, TryStreamExt, stream};
+use serde::{Deserialize, Deserializer};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex as AsyncMutex;
+use uuid::Uuid;
 
 use crate::image_install::Architecture;
 
@@ -21,6 +34,96 @@ const DOCKER_HUB_LIBRARY: &str = "library";
 const DOCKER_HUB_ALIAS: &str = "docker.io";
 /// Length of a `sha256:` digest's hex body.
 const SHA256_HEX_LENGTH: usize = 64;
+
+/// A validated OCI SHA-256 digest safe to use in registry URLs and cache paths.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Sha256Digest(String);
+
+impl Sha256Digest {
+    /// Parses `sha256:<64 hex characters>` and normalizes the hex to lowercase.
+    pub fn parse(value: &str) -> Result<Self, DigestError> {
+        let Some((algorithm, encoded)) = value.split_once(':') else {
+            return Err(DigestError::MissingAlgorithm(value.to_owned()));
+        };
+        if algorithm != "sha256" {
+            return Err(DigestError::UnsupportedAlgorithm(algorithm.to_owned()));
+        }
+        if encoded.len() != SHA256_HEX_LENGTH {
+            return Err(DigestError::InvalidLength {
+                value: value.to_owned(),
+                expected: SHA256_HEX_LENGTH,
+                actual: encoded.len(),
+            });
+        }
+        if !encoded.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(DigestError::InvalidEncoding(value.to_owned()));
+        }
+        Ok(Self(format!("sha256:{}", encoded.to_ascii_lowercase())))
+    }
+
+    /// Complete descriptor spelling (`sha256:<hex>`).
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Hash body alone, used as the filename under `blobs/sha256/`.
+    pub fn encoded(&self) -> &str {
+        &self.0["sha256:".len()..]
+    }
+
+    /// Computes the digest of an in-memory document.
+    fn of_bytes(bytes: &[u8]) -> Self {
+        Self(format!("sha256:{:x}", Sha256::digest(bytes)))
+    }
+}
+
+impl fmt::Display for Sha256Digest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Sha256Digest {
+    type Err = DigestError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for Sha256Digest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Why an OCI content digest is unsafe or unsupported.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum DigestError {
+    /// A descriptor did not contain the required `algorithm:encoded` separator.
+    #[error("digest is missing its algorithm: {0}")]
+    MissingAlgorithm(String),
+    /// The MVP accepts only SHA-256 content addresses.
+    #[error("unsupported digest algorithm {0:?}; only sha256 is supported")]
+    UnsupportedAlgorithm(String),
+    /// A SHA-256 digest had the wrong encoded length.
+    #[error("sha256 digest must have {expected} hex characters, got {actual}: {value}")]
+    InvalidLength {
+        /// Original digest text.
+        value: String,
+        /// Required SHA-256 hex length.
+        expected: usize,
+        /// Supplied hex length.
+        actual: usize,
+    },
+    /// The encoded digest used a character outside hexadecimal.
+    #[error("sha256 digest contains non-hex characters: {0}")]
+    InvalidEncoding(String),
+}
 
 /// Why an image reference could not be resolved to something pullable.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -51,7 +154,7 @@ pub enum ImageVersion {
     /// A mutable tag. The registry may repoint it at any time.
     Tag(String),
     /// A content digest, which always names the same bytes.
-    Digest(String),
+    Digest(Sha256Digest),
 }
 
 impl ImageVersion {
@@ -65,7 +168,7 @@ impl ImageVersion {
     pub fn as_str(&self) -> &str {
         match self {
             Self::Tag(tag) => tag,
-            Self::Digest(digest) => digest,
+            Self::Digest(digest) => digest.as_str(),
         }
     }
 }
@@ -110,13 +213,9 @@ fn split_version(reference: &str) -> Result<(&str, ImageVersion), ReferenceError
         if name.contains(':') && name.rfind(':') > name.rfind('/') {
             return Err(ReferenceError::TagAndDigest(reference.to_owned()));
         }
-        let hex = digest
-            .strip_prefix("sha256:")
-            .ok_or_else(|| ReferenceError::InvalidDigest(reference.to_owned()))?;
-        if hex.len() != SHA256_HEX_LENGTH || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(ReferenceError::InvalidDigest(reference.to_owned()));
-        }
-        return Ok((name, ImageVersion::Digest(digest.to_owned())));
+        let digest = Sha256Digest::parse(digest)
+            .map_err(|_| ReferenceError::InvalidDigest(reference.to_owned()))?;
+        return Ok((name, ImageVersion::Digest(digest)));
     }
 
     let last_slash = reference.rfind('/');
@@ -213,18 +312,24 @@ pub struct Platform {
     pub os: String,
 }
 
-/// One manifest inside an index.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ManifestDescriptor {
-    /// Content digest of the manifest this entry points at.
-    pub digest: String,
-    /// Size of that manifest in bytes.
-    #[serde(default)]
+/// OCI metadata common to manifests, configuration documents, and layers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Descriptor {
+    /// MIME type describing the referenced content.
+    pub media_type: String,
+    /// Cryptographic address of the exact registry bytes.
+    pub digest: Sha256Digest,
+    /// Exact byte length of the referenced content.
     pub size: u64,
+}
+
+/// One manifest inside an index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestDescriptor {
+    /// Content metadata for the selected image manifest.
+    pub descriptor: Descriptor,
     /// Absent on a single-platform entry, which cannot be selected by
     /// architecture and is therefore never a candidate.
-    #[serde(default)]
     pub platform: Option<Platform>,
 }
 
@@ -239,10 +344,13 @@ impl ManifestDescriptor {
 }
 
 /// A parsed OCI image index (or Docker manifest list — same shape).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ImageIndex {
+    /// OCI/Docker schema revision; only schema 2 is understood.
+    pub schema_version: u32,
+    /// Declared index media type. The HTTP content type is used when omitted.
+    pub media_type: String,
     /// The per-platform manifests this index offers.
-    #[serde(default)]
     pub manifests: Vec<ManifestDescriptor>,
 }
 
@@ -282,6 +390,103 @@ impl ImageIndex {
     }
 }
 
+/// A resolved single-platform OCI or Docker image manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageManifest {
+    /// OCI/Docker schema revision; only schema 2 is understood.
+    pub schema_version: u32,
+    /// Declared manifest media type. The HTTP content type is used when omitted.
+    pub media_type: String,
+    /// Runtime configuration document for the image.
+    pub config: Descriptor,
+    /// Filesystem changesets in the order they must later be applied.
+    pub layers: Vec<Descriptor>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawDescriptor {
+    media_type: String,
+    digest: String,
+    size: u64,
+}
+
+impl TryFrom<RawDescriptor> for Descriptor {
+    type Error = DigestError;
+
+    fn try_from(raw: RawDescriptor) -> Result<Self, Self::Error> {
+        Ok(Self {
+            media_type: raw.media_type,
+            digest: Sha256Digest::parse(&raw.digest)?,
+            size: raw.size,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawManifestDescriptor {
+    #[serde(flatten)]
+    descriptor: RawDescriptor,
+    #[serde(default)]
+    platform: Option<Platform>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawImageIndex {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    #[serde(default, rename = "mediaType")]
+    media_type: String,
+    manifests: Vec<RawManifestDescriptor>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawImageManifest {
+    schema_version: u32,
+    #[serde(default)]
+    media_type: String,
+    config: RawDescriptor,
+    layers: Vec<RawDescriptor>,
+}
+
+const OCI_INDEX_MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
+const DOCKER_INDEX_MEDIA_TYPE: &str = "application/vnd.docker.distribution.manifest.list.v2+json";
+const OCI_MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+json";
+const DOCKER_MANIFEST_MEDIA_TYPE: &str = "application/vnd.docker.distribution.manifest.v2+json";
+const OCI_CONFIG_MEDIA_TYPE: &str = "application/vnd.oci.image.config.v1+json";
+const DOCKER_CONFIG_MEDIA_TYPE: &str = "application/vnd.docker.container.image.v1+json";
+
+/// Whether a descriptor points at an image manifest rather than an artifact.
+fn is_manifest_media_type(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        OCI_MANIFEST_MEDIA_TYPE | DOCKER_MANIFEST_MEDIA_TYPE
+    )
+}
+
+/// Whether a config descriptor can be translated by a later import stage.
+fn is_config_media_type(media_type: &str) -> bool {
+    matches!(media_type, OCI_CONFIG_MEDIA_TYPE | DOCKER_CONFIG_MEDIA_TYPE)
+}
+
+/// Layer encodings whose raw bytes Firecrab can safely cache. Decompression
+/// and application are deliberately left to the next import stage.
+fn is_layer_media_type(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "application/vnd.oci.image.layer.v1.tar"
+            | "application/vnd.oci.image.layer.v1.tar+gzip"
+            | "application/vnd.oci.image.layer.v1.tar+zstd"
+            | "application/vnd.oci.image.layer.nondistributable.v1.tar"
+            | "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip"
+            | "application/vnd.oci.image.layer.nondistributable.v1.tar+zstd"
+            | "application/vnd.docker.image.rootfs.diff.tar"
+            | "application/vnd.docker.image.rootfs.diff.tar.gzip"
+            | "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip"
+    )
+}
+
 /// Media types a manifest request accepts. Both index forms are listed so a
 /// Docker-native registry answers with its manifest list rather than picking
 /// a platform for us.
@@ -291,6 +496,10 @@ const MANIFEST_ACCEPT: &str = "application/vnd.oci.image.index.v1+json, \
      application/vnd.docker.distribution.manifest.v2+json";
 /// Cap on a manifest document, which is metadata and never large.
 const MANIFEST_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Token documents should contain only a short bearer credential and optional
+/// metadata. Capping them prevents an authentication service from buffering an
+/// arbitrary response before JSON decoding.
+const TOKEN_MAX_BYTES: usize = 64 * 1024;
 
 /// What a reference resolved to on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,7 +509,8 @@ pub struct ResolvedImage {
     /// The architecture that manifest runs.
     pub architecture: Architecture,
     /// True when the registry answered with a manifest instead of an index,
-    /// so no platform selection happened and the digest is the reference's own.
+    /// so no platform selection happened. The digest is still calculated from
+    /// the response body when the original reference used a mutable tag.
     pub single_platform: bool,
 }
 
@@ -318,9 +528,59 @@ pub enum ResolveError {
         /// The reference being resolved, for the operator.
         reference: String,
     },
+    /// The registry's anonymous bearer-token exchange could not be completed.
+    #[error("registry authentication failed: {0}")]
+    Authentication(String),
     /// The manifest document did not parse.
     #[error("registry returned an unreadable manifest: {0}")]
     Malformed(String),
+    /// A document or descriptor used a kind this importer cannot consume.
+    #[error("unsupported OCI media type {0:?}")]
+    UnsupportedMediaType(String),
+    /// A descriptor or digest-pinned request named different content.
+    #[error("digest mismatch for {subject}: expected {expected}, got {actual}")]
+    DigestMismatch {
+        /// Registry object being verified.
+        subject: String,
+        /// Digest named by the request or descriptor.
+        expected: Sha256Digest,
+        /// Digest calculated from the response or cache file.
+        actual: Sha256Digest,
+    },
+    /// A registry object did not have the exact descriptor length.
+    #[error("size mismatch for {subject}: expected {expected} bytes, got {actual}")]
+    SizeMismatch {
+        /// Registry object being verified.
+        subject: String,
+        /// Descriptor length.
+        expected: u64,
+        /// Actual or HTTP-advertised length.
+        actual: u64,
+    },
+    /// One manifest contradicted itself about a shared content address.
+    #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
+    ConflictingDescriptorSize {
+        /// Reused digest.
+        digest: Sha256Digest,
+        /// First declared size.
+        first: u64,
+        /// Conflicting declared size.
+        second: u64,
+    },
+    /// A validated digest could not be read from or written to the local cache.
+    #[error("OCI cache {operation} failed at {path}: {source}")]
+    CacheIo {
+        /// Filesystem operation being performed.
+        operation: &'static str,
+        /// Cache or work path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// A registry supplied an unsafe or unsupported content digest.
+    #[error(transparent)]
+    Digest(#[from] DigestError),
     /// The index parsed but offers nothing this host can run.
     #[error(transparent)]
     Index(#[from] IndexError),
@@ -328,22 +588,45 @@ pub enum ResolveError {
 
 /// A `WWW-Authenticate: Bearer` challenge's token endpoint.
 fn token_request(challenge: &str, base: &str) -> Option<String> {
-    let parameters = challenge.strip_prefix("Bearer ")?;
+    let (scheme, parameters) = challenge.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
     let mut realm = None;
     let mut query = Vec::new();
     for parameter in parameters.split(',') {
         let (key, value) = parameter.trim().split_once('=')?;
         let value = value.trim_matches('"');
         match key {
-            // The challenge's own realm host is not trusted: a registry under
-            // test answers on a caller-chosen port, and a public one always
-            // names itself. Only the path is taken.
-            "realm" => realm = value.rsplit_once("/token").map(|_| format!("{base}/token")),
-            "service" | "scope" => query.push(format!("{key}={value}")),
+            "realm" => realm = reqwest::Url::parse(value).ok(),
+            "service" | "scope" => query.push((key, value)),
             _ => {}
         }
     }
-    Some(format!("{}?{}", realm?, query.join("&")))
+    let mut realm = realm?;
+    let base = reqwest::Url::parse(base).ok()?;
+    if !realm.username().is_empty() || realm.password().is_some() || realm.fragment().is_some() {
+        return None;
+    }
+    // Public registries commonly delegate anonymous tokens to a different
+    // HTTPS authority (Docker Hub uses auth.docker.io). Never follow a
+    // challenge that downgrades to plaintext. Plain HTTP remains restricted
+    // to the same loopback authority as the explicitly insecure registry.
+    match realm.scheme() {
+        "https" => {}
+        "http"
+            if base.scheme() == "http"
+                && realm.host_str() == base.host_str()
+                && realm.port_or_known_default() == base.port_or_known_default() => {}
+        _ => return None,
+    }
+    {
+        let mut pairs = realm.query_pairs_mut();
+        for (key, value) in query {
+            pairs.append_pair(key, value);
+        }
+    }
+    Some(realm.into())
 }
 
 /// Whether a registry host is on this machine's loopback interface.
@@ -357,106 +640,910 @@ pub fn is_loopback_registry(registry: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
 }
 
-/// Resolves a reference to the manifest digest this host should pull.
-///
-/// Performs the anonymous token dance every public registry uses: the first
-/// request is unauthenticated, a `401` carries the challenge, and the reissued
-/// request carries the bearer token.
-pub async fn resolve(
-    reference: &ImageReference,
-    architecture: Architecture,
-    insecure: bool,
-) -> Result<ResolvedImage, ResolveError> {
-    let scheme = if insecure { "http" } else { "https" };
-    let base = format!("{scheme}://{}", reference.registry);
-    let url = format!(
-        "{base}/v2/{}/manifests/{}",
-        reference.repository,
-        reference.version.as_str()
-    );
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|error| ResolveError::Transport(error.to_string()))?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentKind {
+    Index,
+    Manifest,
+}
 
-    let send = async |token: Option<&str>| {
-        let mut request = client.get(&url).header("accept", MANIFEST_ACCEPT);
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentProbe {
+    #[serde(default)]
+    media_type: String,
+}
+
+#[derive(Debug)]
+struct FetchedManifest {
+    body: Vec<u8>,
+    digest: Sha256Digest,
+    kind: DocumentKind,
+    media_type: String,
+}
+
+#[derive(Debug)]
+struct ResolvedManifest {
+    resolved: ResolvedImage,
+    manifest: ImageManifest,
+}
+
+/// One authenticated conversation with a registry. The bearer token is kept
+/// across the selected-manifest and blob requests and refreshed only once when
+/// concurrent requests all encounter the same initial challenge.
+#[derive(Debug, Clone)]
+struct RegistrySession {
+    client: reqwest::Client,
+    base: String,
+    token: Arc<AsyncMutex<Option<String>>>,
+}
+
+impl RegistrySession {
+    fn new(reference: &ImageReference, insecure: bool) -> Result<Self, ResolveError> {
+        let scheme = if insecure { "http" } else { "https" };
+        let client = reqwest::Client::builder()
+            // A registry response must not redirect an authenticated manifest
+            // or blob request from HTTPS to plaintext. Local registries opt in
+            // to HTTP explicitly through `insecure`.
+            .https_only(!insecure)
+            .connect_timeout(Duration::from_secs(5))
+            // Unlike a total request timeout, this resets whenever another
+            // chunk arrives, so a large healthy layer may take as long as it
+            // needs while a stalled registry still fails predictably.
+            .read_timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|error| ResolveError::Transport(error.to_string()))?;
+        Ok(Self {
+            client,
+            base: format!("{scheme}://{}", reference.registry),
+            token: Arc::new(AsyncMutex::new(None)),
+        })
+    }
+
+    async fn send_once(
+        &self,
+        url: &str,
+        accept: Option<&str>,
+        token: Option<&str>,
+        timeout: Option<Duration>,
+    ) -> Result<reqwest::Response, ResolveError> {
+        let mut request = self.client.get(url);
+        if let Some(accept) = accept {
+            request = request.header("accept", accept);
+        }
         if let Some(token) = token {
             request = request.bearer_auth(token);
         }
-        request.send().await
-    };
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        request
+            .send()
+            .await
+            .map_err(|error| ResolveError::Transport(format!("GET {url}: {error}")))
+    }
 
-    let mut response = send(None::<&str>)
-        .await
-        .map_err(|error| ResolveError::Transport(error.to_string()))?;
+    async fn get(
+        &self,
+        url: &str,
+        accept: Option<&str>,
+        timeout: Option<Duration>,
+    ) -> Result<reqwest::Response, ResolveError> {
+        let attempted = self.token.lock().await.clone();
+        let response = self
+            .send_once(url, accept, attempted.as_deref(), timeout)
+            .await?;
+        if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
 
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
         let challenge = response
             .headers()
             .get("www-authenticate")
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
             .to_owned();
-        let token_url = token_request(&challenge, &base).ok_or_else(|| {
-            ResolveError::Transport("registry sent an unusable auth challenge".to_owned())
-        })?;
-        // reqwest is built without its `json` feature here, so the token
-        // document is decoded from bytes like every other body in this file.
-        let issued = client
-            .get(&token_url)
-            .send()
-            .await
-            .map_err(|error| ResolveError::Transport(error.to_string()))?
-            .bytes()
-            .await
-            .map_err(|error| ResolveError::Transport(error.to_string()))?;
-        let token: TokenResponse = serde_json::from_slice(&issued)
-            .map_err(|error| ResolveError::Transport(error.to_string()))?;
-        response = send(Some(token.token.as_str()))
-            .await
-            .map_err(|error| ResolveError::Transport(error.to_string()))?;
+        let mut stored = self.token.lock().await;
+        let token = if stored.is_some() && *stored != attempted {
+            stored.clone().expect("token checked as present")
+        } else {
+            let token_url = token_request(&challenge, &self.base).ok_or_else(|| {
+                ResolveError::Authentication(
+                    "registry sent an unusable bearer challenge".to_owned(),
+                )
+            })?;
+            let response = self
+                .client
+                .get(&token_url)
+                .timeout(Duration::from_secs(20))
+                .send()
+                .await
+                .map_err(|error| ResolveError::Transport(format!("GET {token_url}: {error}")))?;
+            if !response.status().is_success() {
+                return Err(ResolveError::Authentication(format!(
+                    "token endpoint answered {}",
+                    response.status().as_u16()
+                )));
+            }
+            let issued = read_token_body(response).await?;
+            let issued: TokenResponse = serde_json::from_slice(&issued)
+                .map_err(|error| ResolveError::Authentication(error.to_string()))?;
+            if issued.token.is_empty() {
+                return Err(ResolveError::Authentication(
+                    "token endpoint returned an empty token".to_owned(),
+                ));
+            }
+            *stored = Some(issued.token.clone());
+            issued.token
+        };
+        drop(stored);
+
+        let response = self.send_once(url, accept, Some(&token), timeout).await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ResolveError::Authentication(
+                "registry rejected the issued bearer token".to_owned(),
+            ));
+        }
+        Ok(response)
     }
 
-    if !response.status().is_success() {
-        return Err(ResolveError::Status {
-            status: response.status().as_u16(),
-            reference: format!("{}:{}", reference.repository, reference.version.as_str()),
-        });
-    }
+    async fn fetch_manifest(
+        &self,
+        repository: &str,
+        selector: &str,
+        expected: Option<&Descriptor>,
+        pinned: Option<&Sha256Digest>,
+    ) -> Result<FetchedManifest, ResolveError> {
+        if let Some(descriptor) = expected
+            && descriptor.size > MANIFEST_MAX_BYTES as u64
+        {
+            return Err(ResolveError::Malformed(format!(
+                "manifest {} exceeds limit",
+                descriptor.digest
+            )));
+        }
+        let url = format!("{}/v2/{repository}/manifests/{selector}", self.base);
+        let response = self
+            .get(&url, Some(MANIFEST_ACCEPT), Some(Duration::from_secs(20)))
+            .await?;
+        if !response.status().is_success() {
+            return Err(ResolveError::Status {
+                status: response.status().as_u16(),
+                reference: format!("{repository}:{selector}"),
+            });
+        }
 
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| ResolveError::Transport(error.to_string()))?;
-    if body.len() > MANIFEST_MAX_BYTES {
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let header_digest = response_digest(response.headers())?;
+        if let Some(descriptor) = expected
+            && let Some(length) = response.content_length()
+            && length != descriptor.size
+        {
+            return Err(ResolveError::SizeMismatch {
+                subject: descriptor.digest.to_string(),
+                expected: descriptor.size,
+                actual: length,
+            });
+        }
+
+        let body = read_manifest_body(response).await?;
+        if let Some(descriptor) = expected
+            && body.len() as u64 != descriptor.size
+        {
+            return Err(ResolveError::SizeMismatch {
+                subject: descriptor.digest.to_string(),
+                expected: descriptor.size,
+                actual: body.len() as u64,
+            });
+        }
+        let digest = Sha256Digest::of_bytes(&body);
+        if let Some(expected) = expected.map(|descriptor| &descriptor.digest).or(pinned)
+            && &digest != expected
+        {
+            return Err(ResolveError::DigestMismatch {
+                subject: format!("manifest {selector}"),
+                expected: expected.clone(),
+                actual: digest,
+            });
+        }
+        if let Some(header_digest) = header_digest
+            && header_digest != digest
+        {
+            return Err(ResolveError::DigestMismatch {
+                subject: format!("Docker-Content-Digest for manifest {selector}"),
+                expected: header_digest,
+                actual: digest,
+            });
+        }
+
+        let (kind, media_type) = classify_document(content_type.as_deref(), &body)?;
+        Ok(FetchedManifest {
+            body,
+            digest,
+            kind,
+            media_type,
+        })
+    }
+}
+
+async fn read_token_body(response: reqwest::Response) -> Result<Vec<u8>, ResolveError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > TOKEN_MAX_BYTES as u64)
+    {
+        return Err(ResolveError::Authentication(
+            "token response exceeds limit".to_owned(),
+        ));
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk
+            .map_err(|error| ResolveError::Transport(format!("read token response: {error}")))?;
+        if body.len().saturating_add(chunk.len()) > TOKEN_MAX_BYTES {
+            return Err(ResolveError::Authentication(
+                "token response exceeds limit".to_owned(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+async fn read_manifest_body(response: reqwest::Response) -> Result<Vec<u8>, ResolveError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MANIFEST_MAX_BYTES as u64)
+    {
         return Err(ResolveError::Malformed("manifest exceeds limit".to_owned()));
     }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| ResolveError::Transport(error.to_string()))?;
+        if body.len().saturating_add(chunk.len()) > MANIFEST_MAX_BYTES {
+            return Err(ResolveError::Malformed("manifest exceeds limit".to_owned()));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
 
-    let index: ImageIndex = serde_json::from_slice(&body)
-        .map_err(|error| ResolveError::Malformed(error.to_string()))?;
-    // A single-platform repository answers with the manifest itself, which
-    // carries no `manifests` array. There is nothing to select there.
-    if index.manifests.is_empty() {
-        return Ok(ResolvedImage {
-            digest: reference.version.as_str().to_owned(),
-            architecture,
-            single_platform: true,
-        });
+fn response_digest(
+    headers: &reqwest::header::HeaderMap,
+) -> Result<Option<Sha256Digest>, ResolveError> {
+    let Some(value) = headers.get("docker-content-digest") else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| ResolveError::Malformed("non-UTF-8 Docker-Content-Digest".to_owned()))?;
+    Ok(Some(Sha256Digest::parse(value)?))
+}
+
+fn media_kind(media_type: &str) -> Option<DocumentKind> {
+    match media_type {
+        OCI_INDEX_MEDIA_TYPE | DOCKER_INDEX_MEDIA_TYPE => Some(DocumentKind::Index),
+        OCI_MANIFEST_MEDIA_TYPE | DOCKER_MANIFEST_MEDIA_TYPE => Some(DocumentKind::Manifest),
+        _ => None,
+    }
+}
+
+fn classify_document(
+    content_type: Option<&str>,
+    body: &[u8],
+) -> Result<(DocumentKind, String), ResolveError> {
+    let probe: DocumentProbe =
+        serde_json::from_slice(body).map_err(|error| ResolveError::Malformed(error.to_string()))?;
+    let body_type = (!probe.media_type.is_empty()).then(|| probe.media_type.to_ascii_lowercase());
+    let header_type = content_type.map(|value| {
+        value
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+    });
+
+    let body_kind = body_type.as_deref().and_then(media_kind);
+    if let Some(body_type) = body_type.as_deref()
+        && body_kind.is_none()
+    {
+        return Err(ResolveError::UnsupportedMediaType(body_type.to_owned()));
+    }
+    let header_kind = header_type.as_deref().and_then(media_kind);
+    if let Some(header_type) = header_type.as_deref()
+        && header_kind.is_none()
+    {
+        return Err(ResolveError::UnsupportedMediaType(header_type.to_owned()));
+    }
+    if let (Some(_), Some(_)) = (body_kind, header_kind)
+        && body_type != header_type
+    {
+        return Err(ResolveError::Malformed(format!(
+            "manifest media type disagrees with HTTP content type {}",
+            header_type.as_deref().unwrap_or_default()
+        )));
     }
 
-    let selected = index.select(architecture)?;
-    Ok(ResolvedImage {
-        digest: selected.digest.clone(),
-        architecture,
-        single_platform: false,
+    let kind = body_kind.or(header_kind).ok_or_else(|| {
+        ResolveError::UnsupportedMediaType(
+            body_type
+                .clone()
+                .or(header_type.clone())
+                .unwrap_or_else(|| "<missing>".to_owned()),
+        )
+    })?;
+    let media_type = body_type
+        .or_else(|| header_kind.and(header_type))
+        .expect("a classified document has a media type");
+    Ok((kind, media_type))
+}
+
+fn parse_index(document: &FetchedManifest) -> Result<ImageIndex, ResolveError> {
+    let raw: RawImageIndex = serde_json::from_slice(&document.body)
+        .map_err(|error| ResolveError::Malformed(error.to_string()))?;
+    let mut index = ImageIndex {
+        schema_version: raw.schema_version,
+        media_type: raw.media_type,
+        manifests: raw
+            .manifests
+            .into_iter()
+            .map(|descriptor| {
+                Ok(ManifestDescriptor {
+                    descriptor: descriptor.descriptor.try_into()?,
+                    platform: descriptor.platform,
+                })
+            })
+            .collect::<Result<_, DigestError>>()?,
+    };
+    if index.schema_version != 2 {
+        return Err(ResolveError::Malformed(format!(
+            "unsupported manifest schema version {}",
+            index.schema_version
+        )));
+    }
+    if index.media_type.is_empty() {
+        index.media_type.clone_from(&document.media_type);
+    }
+    Ok(index)
+}
+
+fn parse_image_manifest(document: &FetchedManifest) -> Result<ImageManifest, ResolveError> {
+    let raw: RawImageManifest = serde_json::from_slice(&document.body)
+        .map_err(|error| ResolveError::Malformed(error.to_string()))?;
+    let mut manifest = ImageManifest {
+        schema_version: raw.schema_version,
+        media_type: raw.media_type,
+        config: raw.config.try_into()?,
+        layers: raw
+            .layers
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<_, DigestError>>()?,
+    };
+    if manifest.schema_version != 2 {
+        return Err(ResolveError::Malformed(format!(
+            "unsupported manifest schema version {}",
+            manifest.schema_version
+        )));
+    }
+    if manifest.media_type.is_empty() {
+        manifest.media_type.clone_from(&document.media_type);
+    }
+    if !is_config_media_type(&manifest.config.media_type) {
+        return Err(ResolveError::UnsupportedMediaType(
+            manifest.config.media_type.clone(),
+        ));
+    }
+    if let Some(layer) = manifest
+        .layers
+        .iter()
+        .find(|layer| !is_layer_media_type(&layer.media_type))
+    {
+        return Err(ResolveError::UnsupportedMediaType(layer.media_type.clone()));
+    }
+    validate_descriptor_sizes(&manifest)?;
+    Ok(manifest)
+}
+
+fn validate_descriptor_sizes(manifest: &ImageManifest) -> Result<(), ResolveError> {
+    let mut sizes = HashMap::new();
+    for descriptor in std::iter::once(&manifest.config).chain(&manifest.layers) {
+        if let Some(first) = sizes.insert(descriptor.digest.clone(), descriptor.size)
+            && first != descriptor.size
+        {
+            return Err(ResolveError::ConflictingDescriptorSize {
+                digest: descriptor.digest.clone(),
+                first,
+                second: descriptor.size,
+            });
+        }
+    }
+    Ok(())
+}
+
+async fn resolve_manifest(
+    session: &RegistrySession,
+    reference: &ImageReference,
+    architecture: Architecture,
+) -> Result<ResolvedManifest, ResolveError> {
+    let pinned = match &reference.version {
+        ImageVersion::Digest(digest) => Some(digest),
+        ImageVersion::Tag(_) => None,
+    };
+    let first = session
+        .fetch_manifest(
+            &reference.repository,
+            reference.version.as_str(),
+            None,
+            pinned,
+        )
+        .await?;
+
+    match first.kind {
+        DocumentKind::Manifest => {
+            let manifest = parse_image_manifest(&first)?;
+            Ok(ResolvedManifest {
+                resolved: ResolvedImage {
+                    digest: first.digest.to_string(),
+                    architecture,
+                    single_platform: true,
+                },
+                manifest,
+            })
+        }
+        DocumentKind::Index => {
+            let index = parse_index(&first)?;
+            let selected = index.select(architecture)?;
+            if !is_manifest_media_type(&selected.descriptor.media_type) {
+                return Err(ResolveError::UnsupportedMediaType(
+                    selected.descriptor.media_type.clone(),
+                ));
+            }
+            let selected_document = session
+                .fetch_manifest(
+                    &reference.repository,
+                    selected.descriptor.digest.as_str(),
+                    Some(&selected.descriptor),
+                    None,
+                )
+                .await?;
+            if selected_document.kind != DocumentKind::Manifest {
+                return Err(ResolveError::Malformed(
+                    "selected index entry did not resolve to an image manifest".to_owned(),
+                ));
+            }
+            if selected_document.media_type != selected.descriptor.media_type {
+                return Err(ResolveError::Malformed(format!(
+                    "selected manifest media type is {}, descriptor declared {}",
+                    selected_document.media_type, selected.descriptor.media_type
+                )));
+            }
+            let manifest = parse_image_manifest(&selected_document)?;
+            Ok(ResolvedManifest {
+                resolved: ResolvedImage {
+                    digest: selected_document.digest.to_string(),
+                    architecture,
+                    single_platform: false,
+                },
+                manifest,
+            })
+        }
+    }
+}
+
+/// Resolves a reference to the verified image manifest this host should pull.
+///
+/// The anonymous bearer-token flow is shared across the initial document and
+/// a selected platform manifest. No config or layer blob is downloaded here,
+/// so `GET /api/oci/inspect` remains a metadata-only operation.
+pub async fn resolve(
+    reference: &ImageReference,
+    architecture: Architecture,
+    insecure: bool,
+) -> Result<ResolvedImage, ResolveError> {
+    let session = RegistrySession::new(reference, insecure)?;
+    Ok(resolve_manifest(&session, reference, architecture)
+        .await?
+        .resolved)
+}
+
+/// Content-addressed storage for verified OCI config and layer blobs.
+#[derive(Debug, Clone)]
+pub struct BlobCache {
+    root: PathBuf,
+}
+
+type DigestLockMap = HashMap<PathBuf, Weak<AsyncMutex<()>>>;
+static DIGEST_LOCKS: OnceLock<StdMutex<DigestLockMap>> = OnceLock::new();
+
+impl BlobCache {
+    /// Creates a cache rooted at `<image-root>/.oci/blobs/sha256/`.
+    pub fn new(image_root: impl AsRef<Path>) -> Self {
+        Self {
+            root: image_root.as_ref().join(".oci/blobs/sha256"),
+        }
+    }
+
+    /// Final path for a digest. The digest type prevents path traversal.
+    pub fn path_for(&self, digest: &Sha256Digest) -> PathBuf {
+        self.root.join(digest.encoded())
+    }
+
+    async fn digest_lock(
+        &self,
+        digest: &Sha256Digest,
+    ) -> Result<Arc<AsyncMutex<()>>, ResolveError> {
+        let canonical_root = tokio::fs::canonicalize(&self.root)
+            .await
+            .map_err(|source| cache_io("canonicalize directory", self.root.clone(), source))?;
+        let key = canonical_root.join(digest.encoded());
+        let mut locks = DIGEST_LOCKS
+            .get_or_init(|| StdMutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return Ok(lock);
+        }
+        let lock = Arc::new(AsyncMutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        Ok(lock)
+    }
+
+    async fn cache_descriptor(
+        &self,
+        session: &RegistrySession,
+        repository: &str,
+        descriptor: &Descriptor,
+    ) -> Result<PathBuf, ResolveError> {
+        tokio::fs::create_dir_all(&self.root)
+            .await
+            .map_err(|source| cache_io("create directory", self.root.clone(), source))?;
+        let lock = self.digest_lock(&descriptor.digest).await?;
+        let _guard = lock.lock().await;
+        let path = self.path_for(&descriptor.digest);
+
+        match verify_cache_file(&path, descriptor).await {
+            Ok(CacheFileState::Valid) => return Ok(path),
+            Ok(CacheFileState::Missing) => {}
+            Ok(CacheFileState::Corrupt) => remove_cache_file(&path).await?,
+            Err(error) => return Err(error),
+        }
+
+        self.download_blob(session, repository, descriptor, &path)
+            .await?;
+        Ok(path)
+    }
+
+    async fn download_blob(
+        &self,
+        session: &RegistrySession,
+        repository: &str,
+        descriptor: &Descriptor,
+        destination: &Path,
+    ) -> Result<(), ResolveError> {
+        let url = format!(
+            "{}/v2/{repository}/blobs/{}",
+            session.base, descriptor.digest
+        );
+        let response = session.get(&url, None, None).await?;
+        if !response.status().is_success() {
+            return Err(ResolveError::Status {
+                status: response.status().as_u16(),
+                reference: format!("{repository}@{}", descriptor.digest),
+            });
+        }
+        if let Some(header_digest) = response_digest(response.headers())?
+            && header_digest != descriptor.digest
+        {
+            return Err(ResolveError::DigestMismatch {
+                subject: format!("Docker-Content-Digest for blob {}", descriptor.digest),
+                expected: descriptor.digest.clone(),
+                actual: header_digest,
+            });
+        }
+        if let Some(length) = response.content_length()
+            && length != descriptor.size
+        {
+            return Err(ResolveError::SizeMismatch {
+                subject: descriptor.digest.to_string(),
+                expected: descriptor.size,
+                actual: length,
+            });
+        }
+
+        let (temporary, mut file) = create_partial_file(&self.root, &descriptor.digest).await?;
+        let mut cleanup = PartialCleanup::new(temporary.clone());
+        let mut hasher = Sha256::new();
+        let mut downloaded = 0_u64;
+        let mut body = response.bytes_stream();
+        while let Some(chunk) = body.next().await {
+            let chunk = chunk.map_err(|error| {
+                ResolveError::Transport(format!("read blob {}: {error}", descriptor.digest))
+            })?;
+            downloaded = downloaded.saturating_add(chunk.len() as u64);
+            if downloaded > descriptor.size {
+                return Err(ResolveError::SizeMismatch {
+                    subject: descriptor.digest.to_string(),
+                    expected: descriptor.size,
+                    actual: downloaded,
+                });
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk)
+                .await
+                .map_err(|source| cache_io("write", temporary.clone(), source))?;
+        }
+        if downloaded != descriptor.size {
+            return Err(ResolveError::SizeMismatch {
+                subject: descriptor.digest.to_string(),
+                expected: descriptor.size,
+                actual: downloaded,
+            });
+        }
+        let actual = Sha256Digest(format!("sha256:{:x}", hasher.finalize()));
+        if actual != descriptor.digest {
+            return Err(ResolveError::DigestMismatch {
+                subject: format!("blob {}", descriptor.digest),
+                expected: descriptor.digest.clone(),
+                actual,
+            });
+        }
+        file.flush()
+            .await
+            .map_err(|source| cache_io("flush", temporary.clone(), source))?;
+        file.sync_all()
+            .await
+            .map_err(|source| cache_io("sync", temporary.clone(), source))?;
+        drop(file);
+        tokio::fs::rename(&temporary, destination)
+            .await
+            .map_err(|source| cache_io("publish", destination.to_owned(), source))?;
+        cleanup.published = true;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CacheFileState {
+    Missing,
+    Valid,
+    Corrupt,
+}
+
+async fn verify_cache_file(
+    path: &Path,
+    descriptor: &Descriptor,
+) -> Result<CacheFileState, ResolveError> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(CacheFileState::Missing);
+        }
+        Err(source) => return Err(cache_io("inspect", path.to_owned(), source)),
+    };
+    if !metadata.file_type().is_file() {
+        return Ok(CacheFileState::Corrupt);
+    }
+
+    let (size, actual) = match hash_file(path).await {
+        Ok(result) => result,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(CacheFileState::Missing);
+        }
+        Err(source) => return Err(cache_io("verify", path.to_owned(), source)),
+    };
+    if actual != descriptor.digest {
+        return Ok(CacheFileState::Corrupt);
+    }
+    if size != descriptor.size {
+        return Err(ResolveError::SizeMismatch {
+            subject: descriptor.digest.to_string(),
+            expected: descriptor.size,
+            actual: size,
+        });
+    }
+    Ok(CacheFileState::Valid)
+}
+
+async fn hash_file(path: &Path) -> io::Result<(u64, Sha256Digest)> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        size = size.saturating_add(read as u64);
+        hasher.update(&buffer[..read]);
+    }
+    Ok((
+        size,
+        Sha256Digest(format!("sha256:{:x}", hasher.finalize())),
+    ))
+}
+
+async fn remove_cache_file(path: &Path) -> Result<(), ResolveError> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(cache_io("inspect corrupt entry", path.to_owned(), source)),
+    };
+    let result = if metadata.file_type().is_dir() {
+        // Never recursively remove an unexpected tree at a content-addressed
+        // filename. An empty directory is safe to replace; a non-empty one is
+        // surfaced as cache I/O damage for an operator to inspect.
+        tokio::fs::remove_dir(path).await
+    } else {
+        tokio::fs::remove_file(path).await
+    };
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(cache_io("remove corrupt entry", path.to_owned(), source)),
+    }
+}
+
+async fn create_partial_file(
+    root: &Path,
+    digest: &Sha256Digest,
+) -> Result<(PathBuf, tokio::fs::File), ResolveError> {
+    for _ in 0..8 {
+        let path = root.join(format!(".{}.{}.partial", digest.encoded(), Uuid::new_v4()));
+        match tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(source) => return Err(cache_io("create partial", path, source)),
+        }
+    }
+    Err(cache_io(
+        "create partial",
+        root.to_owned(),
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not allocate a unique work file",
+        ),
+    ))
+}
+
+struct PartialCleanup {
+    path: PathBuf,
+    published: bool,
+}
+
+impl PartialCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            published: false,
+        }
+    }
+}
+
+impl Drop for PartialCleanup {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn cache_io(operation: &'static str, path: PathBuf, source: io::Error) -> ResolveError {
+    ResolveError::CacheIo {
+        operation,
+        path,
+        source,
+    }
+}
+
+#[cfg(test)]
+mod cache_tests;
+
+/// One verified cache entry together with the descriptor that named it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedBlob {
+    /// Manifest metadata for the raw cached bytes.
+    pub descriptor: Descriptor,
+    /// Content-addressed path below `.oci/blobs/sha256/`.
+    pub path: PathBuf,
+}
+
+/// Verified config and ordered layer paths for a resolved image manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedImageBlobs {
+    /// Actual manifest digest and selected host architecture.
+    pub resolved: ResolvedImage,
+    /// Parsed, verified manifest that supplied the descriptors.
+    pub manifest: ImageManifest,
+    /// Cached image configuration document.
+    pub config: CachedBlob,
+    /// Cached filesystem layers in manifest application order.
+    pub layers: Vec<CachedBlob>,
+}
+
+/// Resolves an image and fills a verified content-addressed config/layer cache.
+///
+/// Work is bounded by the host's reported logical CPU count. Completion order
+/// never affects the returned layer order, and a failed later layer leaves any
+/// earlier verified blobs available for another image or retry.
+pub async fn cache_image_blobs(
+    reference: &ImageReference,
+    architecture: Architecture,
+    insecure: bool,
+    cache: &BlobCache,
+) -> Result<CachedImageBlobs, ResolveError> {
+    let parallelism = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    cache_image_blobs_with_parallelism(reference, architecture, insecure, cache, parallelism).await
+}
+
+async fn cache_image_blobs_with_parallelism(
+    reference: &ImageReference,
+    architecture: Architecture,
+    insecure: bool,
+    cache: &BlobCache,
+    parallelism: usize,
+) -> Result<CachedImageBlobs, ResolveError> {
+    let session = RegistrySession::new(reference, insecure)?;
+    let resolved = resolve_manifest(&session, reference, architecture).await?;
+    let mut seen = std::collections::HashSet::new();
+    let work: Vec<Descriptor> = std::iter::once(&resolved.manifest.config)
+        .chain(&resolved.manifest.layers)
+        .filter(|descriptor| seen.insert(descriptor.digest.clone()))
+        .cloned()
+        .collect();
+    let repository = reference.repository.clone();
+    let completed: Vec<(Sha256Digest, PathBuf)> = stream::iter(work)
+        .map(|descriptor| {
+            let cache = cache.clone();
+            let session = session.clone();
+            let repository = repository.clone();
+            async move {
+                let path = cache
+                    .cache_descriptor(&session, &repository, &descriptor)
+                    .await?;
+                Ok::<_, ResolveError>((descriptor.digest, path))
+            }
+        })
+        .buffer_unordered(parallelism.max(1))
+        .try_collect()
+        .await?;
+    let paths: HashMap<Sha256Digest, PathBuf> = completed.into_iter().collect();
+    let cached = |descriptor: &Descriptor| CachedBlob {
+        descriptor: descriptor.clone(),
+        path: paths
+            .get(&descriptor.digest)
+            .expect("every unique descriptor produces exactly one cache path")
+            .clone(),
+    };
+    let config = cached(&resolved.manifest.config);
+    let layers = resolved.manifest.layers.iter().map(cached).collect();
+
+    Ok(CachedImageBlobs {
+        resolved: resolved.resolved,
+        manifest: resolved.manifest,
+        config,
+        layers,
     })
 }
 
 /// A registry token endpoint's answer.
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
+    #[serde(alias = "access_token")]
     token: String,
 }
 
@@ -548,7 +1635,10 @@ mod tests {
         let parsed = parse(&format!("ghcr.io/owner/repo@{digest}"));
 
         assert_eq!(parsed.repository, "owner/repo");
-        assert_eq!(parsed.version, ImageVersion::Digest(digest.to_owned()));
+        assert_eq!(
+            parsed.version,
+            ImageVersion::Digest(Sha256Digest::parse(digest).unwrap())
+        );
     }
 
     /// A digest pin is the only form that survives a mutable tag being moved,
@@ -562,11 +1652,164 @@ mod tests {
     }
 
     fn index(manifests: serde_json::Value) -> ImageIndex {
-        serde_json::from_value(serde_json::json!({
+        let body = serde_json::to_vec(&serde_json::json!({
             "schemaVersion": 2,
+            "mediaType": OCI_INDEX_MEDIA_TYPE,
             "manifests": manifests
         }))
+        .expect("serialize index fixture");
+        parse_index(&FetchedManifest {
+            digest: Sha256Digest::of_bytes(&body),
+            kind: DocumentKind::Index,
+            media_type: OCI_INDEX_MEDIA_TYPE.to_owned(),
+            body,
+        })
         .expect("index fixture")
+    }
+
+    fn digest(character: char) -> Sha256Digest {
+        Sha256Digest::parse(&format!("sha256:{}", character.to_string().repeat(64))).unwrap()
+    }
+
+    fn document(body: serde_json::Value, kind: DocumentKind, media_type: &str) -> FetchedManifest {
+        let body = serde_json::to_vec(&body).unwrap();
+        FetchedManifest {
+            digest: Sha256Digest::of_bytes(&body),
+            kind,
+            media_type: media_type.to_owned(),
+            body,
+        }
+    }
+
+    #[test]
+    fn descriptor_digest_errors_remain_structured() {
+        let manifest = document(
+            serde_json::json!({
+                "schemaVersion": 2,
+                "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+                "config": {
+                    "mediaType": OCI_CONFIG_MEDIA_TYPE,
+                    "digest": format!("sha512:{}", "a".repeat(128)),
+                    "size": 1
+                },
+                "layers": []
+            }),
+            DocumentKind::Manifest,
+            OCI_MANIFEST_MEDIA_TYPE,
+        );
+
+        assert!(matches!(
+            parse_image_manifest(&manifest),
+            Err(ResolveError::Digest(DigestError::UnsupportedAlgorithm(algorithm)))
+                if algorithm == "sha512"
+        ));
+    }
+
+    #[test]
+    fn a_manifest_cannot_assign_two_sizes_to_one_digest() {
+        let shared = digest('a');
+        let manifest = document(
+            serde_json::json!({
+                "schemaVersion": 2,
+                "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+                "config": {
+                    "mediaType": OCI_CONFIG_MEDIA_TYPE,
+                    "digest": shared.as_str(),
+                    "size": 3
+                },
+                "layers": [{
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                    "digest": shared.as_str(),
+                    "size": 4
+                }]
+            }),
+            DocumentKind::Manifest,
+            OCI_MANIFEST_MEDIA_TYPE,
+        );
+
+        assert!(matches!(
+            parse_image_manifest(&manifest),
+            Err(ResolveError::ConflictingDescriptorSize {
+                first: 3,
+                second: 4,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn response_and_body_media_types_cannot_disagree() {
+        let body = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+            "config": {},
+            "layers": []
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            classify_document(Some(DOCKER_MANIFEST_MEDIA_TYPE), &body),
+            Err(ResolveError::Malformed(_))
+        ));
+        assert!(matches!(
+            classify_document(Some("application/json"), &body),
+            Err(ResolveError::UnsupportedMediaType(media_type))
+                if media_type == "application/json"
+        ));
+    }
+
+    #[test]
+    fn token_response_accepts_the_distribution_access_token_alias() {
+        let response: TokenResponse =
+            serde_json::from_slice(br#"{"access_token":"issued-token"}"#).unwrap();
+
+        assert_eq!(response.token, "issued-token");
+    }
+
+    #[tokio::test]
+    async fn a_secure_session_refuses_plain_http_requests() {
+        let reference = parse("registry.example.com/team/app:latest");
+        let session = RegistrySession::new(&reference, false).unwrap();
+
+        let error = session
+            .send_once("http://127.0.0.1:1/v2/", None, None, None)
+            .await
+            .expect_err("a secure registry session must reject HTTP before connecting");
+
+        assert!(matches!(error, ResolveError::Transport(_)));
+    }
+
+    #[test]
+    fn token_request_accepts_https_delegation_and_rejects_http_downgrade() {
+        let delegated = token_request(
+            "Bearer realm=\"https://auth.docker.io/token\",service=\"registry.docker.io\",\
+             scope=\"repository:library/nginx:pull\"",
+            "https://registry-1.docker.io",
+        )
+        .expect("Docker Hub token challenge");
+        let delegated = reqwest::Url::parse(&delegated).unwrap();
+        assert_eq!(delegated.host_str(), Some("auth.docker.io"));
+        assert_eq!(delegated.path(), "/token");
+        assert!(
+            delegated
+                .query_pairs()
+                .any(|(key, value)| key == "scope" && value == "repository:library/nginx:pull")
+        );
+
+        assert!(
+            token_request(
+                "Bearer realm=\"http://attacker.example/token\",service=\"registry\"",
+                "https://registry.example"
+            )
+            .is_none()
+        );
+        assert!(
+            token_request(
+                "Bearer realm=\"http://127.0.0.1:5001/token\",service=\"registry\"",
+                "http://127.0.0.1:5000"
+            )
+            .is_none()
+        );
     }
 
     fn entry(digest: &str, architecture: &str, os: &str) -> serde_json::Value {
@@ -584,17 +1827,27 @@ mod tests {
     #[test]
     fn select_picks_the_manifest_for_the_requested_architecture() {
         let index = index(serde_json::json!([
-            entry("sha256:aa", "amd64", "linux"),
-            entry("sha256:bb", "arm64", "linux"),
+            entry(digest('a').as_str(), "amd64", "linux"),
+            entry(digest('b').as_str(), "arm64", "linux"),
         ]));
 
         assert_eq!(
-            index.select(Architecture::X86_64).unwrap().digest,
-            "sha256:aa"
+            index
+                .select(Architecture::X86_64)
+                .unwrap()
+                .descriptor
+                .digest
+                .as_str(),
+            digest('a').as_str()
         );
         assert_eq!(
-            index.select(Architecture::Aarch64).unwrap().digest,
-            "sha256:bb"
+            index
+                .select(Architecture::Aarch64)
+                .unwrap()
+                .descriptor
+                .digest
+                .as_str(),
+            digest('b').as_str()
         );
     }
 
@@ -604,15 +1857,24 @@ mod tests {
     #[test]
     fn select_skips_attestation_and_non_linux_entries() {
         let index = index(serde_json::json!([
-            entry("sha256:att", "unknown", "unknown"),
-            entry("sha256:win", "amd64", "windows"),
-            serde_json::json!({ "digest": "sha256:bare", "size": 1 }),
-            entry("sha256:real", "amd64", "linux"),
+            entry(digest('a').as_str(), "unknown", "unknown"),
+            entry(digest('b').as_str(), "amd64", "windows"),
+            serde_json::json!({
+                "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+                "digest": digest('c').as_str(),
+                "size": 1
+            }),
+            entry(digest('d').as_str(), "amd64", "linux"),
         ]));
 
         assert_eq!(
-            index.select(Architecture::X86_64).unwrap().digest,
-            "sha256:real"
+            index
+                .select(Architecture::X86_64)
+                .unwrap()
+                .descriptor
+                .digest
+                .as_str(),
+            digest('d').as_str()
         );
     }
 
@@ -621,9 +1883,9 @@ mod tests {
     #[test]
     fn select_reports_the_architectures_the_image_does_offer() {
         let index = index(serde_json::json!([
-            entry("sha256:aa", "arm64", "linux"),
-            entry("sha256:bb", "riscv64", "linux"),
-            entry("sha256:att", "unknown", "unknown"),
+            entry(digest('a').as_str(), "arm64", "linux"),
+            entry(digest('b').as_str(), "riscv64", "linux"),
+            entry(digest('c').as_str(), "unknown", "unknown"),
         ]));
 
         let error = index.select(Architecture::X86_64).unwrap_err();
@@ -647,8 +1909,8 @@ mod tests {
     /// A registry that answers `401` with a `Bearer` challenge, hands out a
     /// token, and only then serves the index — the anonymous pull flow every
     /// public registry uses.
-    async fn token_guarded_registry(body: serde_json::Value) -> String {
-        use axum::http::{HeaderMap, StatusCode};
+    async fn token_guarded_registry(body: Vec<u8>, media_type: &'static str) -> String {
+        use axum::http::{HeaderMap, StatusCode, header::CONTENT_TYPE};
         use axum::response::IntoResponse;
         use axum::routing::get;
 
@@ -665,17 +1927,18 @@ mod tests {
                         if headers.get("authorization").map(|value| value.as_bytes())
                             != Some(b"Bearer issued-token".as_slice())
                         {
-                            return (
-                                StatusCode::UNAUTHORIZED,
-                                [(
-                                    "www-authenticate",
-                                    "Bearer realm=\"{base}/token\",service=\"registry\",\
-                                     scope=\"repository:library/nginx:pull\"",
-                                )],
-                            )
+                            let host = headers
+                                .get("host")
+                                .and_then(|value| value.to_str().ok())
+                                .expect("test request host");
+                            let challenge = format!(
+                                "Bearer realm=\"http://{host}/token\",service=\"registry\",\
+                                 scope=\"repository:library/nginx:pull\""
+                            );
+                            return (StatusCode::UNAUTHORIZED, [("www-authenticate", challenge)])
                                 .into_response();
                         }
-                        axum::Json(body).into_response()
+                        ([(CONTENT_TYPE, media_type)], body).into_response()
                     }
                 }),
             );
@@ -686,19 +1949,27 @@ mod tests {
         format!("127.0.0.1:{}", address.port())
     }
 
-    /// The whole point of the endpoint: say whether this host can run the
-    /// image before anything is downloaded.
+    /// The bearer token acquired for the first manifest request is accepted
+    /// without weakening content verification.
     #[tokio::test]
-    async fn resolve_authenticates_then_selects_the_hosts_manifest() {
-        let registry = token_guarded_registry(serde_json::json!({
+    async fn resolve_authenticates_and_returns_the_single_manifest_digest() {
+        let body = serde_json::to_vec(&serde_json::json!({
             "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.index.v1+json",
-            "manifests": [
-                entry("sha256:amd", "amd64", "linux"),
-                entry("sha256:arm", "arm64", "linux"),
-            ]
+            "mediaType": OCI_MANIFEST_MEDIA_TYPE,
+            "config": {
+                "mediaType": OCI_CONFIG_MEDIA_TYPE,
+                "digest": digest('c').as_str(),
+                "size": 7
+            },
+            "layers": [{
+                "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                "digest": digest('d').as_str(),
+                "size": 99
+            }]
         }))
-        .await;
+        .unwrap();
+        let expected = Sha256Digest::of_bytes(&body).to_string();
+        let registry = token_guarded_registry(body, OCI_MANIFEST_MEDIA_TYPE).await;
         let reference = ImageReference {
             registry,
             repository: "library/nginx".to_owned(),
@@ -709,30 +1980,36 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resolved.digest, "sha256:amd");
+        assert_eq!(resolved.digest, expected);
         assert_eq!(resolved.architecture, Architecture::X86_64);
+        assert!(resolved.single_platform);
     }
 
-    /// A single-platform repository answers with the manifest itself, not an
-    /// index. There is nothing to select, so the registry's own choice stands.
+    /// An explicitly empty index is still an index. Treating it as a manifest
+    /// would turn an unusable image into a false-positive inspection result.
     #[tokio::test]
-    async fn resolve_accepts_a_registry_that_answers_with_one_manifest() {
-        let registry = token_guarded_registry(serde_json::json!({
+    async fn resolve_rejects_an_empty_index_as_an_index() {
+        let body = serde_json::to_vec(&serde_json::json!({
             "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "config": { "digest": "sha256:cfg", "size": 7 },
-            "layers": [{ "digest": "sha256:layer", "size": 99 }]
+            "mediaType": OCI_INDEX_MEDIA_TYPE,
+            "manifests": []
         }))
-        .await;
+        .unwrap();
+        let registry = token_guarded_registry(body, OCI_INDEX_MEDIA_TYPE).await;
         let reference = ImageReference {
             registry,
             repository: "library/nginx".to_owned(),
             version: ImageVersion::Tag("1.27".to_owned()),
         };
 
-        let resolved = resolve(&reference, Architecture::HOST, true).await.unwrap();
+        let error = resolve(&reference, Architecture::HOST, true)
+            .await
+            .unwrap_err();
 
-        assert!(resolved.single_platform);
+        assert!(matches!(
+            error,
+            ResolveError::Index(IndexError::NoLinuxManifests { skipped: 0 })
+        ));
     }
 
     #[test]

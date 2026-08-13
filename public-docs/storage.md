@@ -26,6 +26,7 @@ MicroVM control-plane records and VM filesystem artifacts have separate storage 
   images/
     .templates.json              # persisted runtime template registrations
     .microboot/                  # Alpine netboot kernel, initramfs, and placeholder disk
+    .oci/blobs/sha256/<hex>       # verified raw OCI config and layer blobs
     .packages/                   # staged M2Image archives and origin markers
     kernel/
     rootfs/
@@ -35,9 +36,11 @@ MicroVM control-plane records and VM filesystem artifacts have separate storage 
 The guest filesystem is not stored in SQLite.
 It is the writable ext4 file under the selected storage root's `vms/<vm-id>/d/` directory.
 
-The `images/` directory contains immutable source templates used when preparing new VM disks.
+The `images/` directory is the default `FIRECRAB_IMAGE_ROOT` and contains immutable source templates used when preparing new VM disks.
 Replacing a source image does not modify a VM disk that was already prepared.
 Temporary download, package-build, and bootstrap scratch files can also appear under `.packages/` while a job is running or after an interrupted job.
+OCI config and layer blobs are stored as raw registry bytes under `.oci/blobs/sha256/`; every cache hit is re-verified against its expected size and SHA-256 digest.
+`GET /api/oci/inspect` reads metadata only and does not populate this cache.
 
 Other installed and runtime files live outside `/var/lib/firecrab`.
 
@@ -148,14 +151,10 @@ Back up `firecrab.db`, every configured storage root containing VM artifacts, an
 
 ## Disk creation
 
-A VM disk begins as a copy-on-write clone of its template, falling back to a
-byte copy if the host refuses; the disk is identical either way.
+A VM disk begins as a copy-on-write clone of its template, falling back to a byte copy if the host refuses; the disk is identical either way.
 
-Reflinks need XFS or Btrfs and cannot cross filesystems — that is the
-filesystem holding the `.ext4` files, not the one inside them, so keep the
-image root and every storage root on one.
-`firecrab-doctor` checks the default roots and `FIRECRAB_STORAGE_ROOTS` for a
-split layout; pools registered through the API are not inspected.
+Reflinks need XFS or Btrfs and cannot cross filesystems — that is the filesystem holding the `.ext4` files, not the one inside them, so keep the image root and every storage root on one.
+`firecrab-doctor` checks the default roots and `FIRECRAB_STORAGE_ROOTS` for a split layout; pools registered through the API are not inspected.
 
 ## Delete
 
