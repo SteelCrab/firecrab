@@ -5,6 +5,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -561,6 +562,61 @@ pub(crate) fn run_debugfs(
         })
 }
 
+/// Which mechanism produced a VM disk from its template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CopyMode {
+    /// The host filesystem shared the template's blocks copy-on-write.
+    Cloned,
+    /// The template's bytes were copied one by one.
+    Copied,
+}
+
+/// Asks the host filesystem to share `source`'s blocks with `destination`
+/// copy-on-write, replacing whatever `destination` held.
+///
+/// Only reflink-capable host filesystems (XFS, Btrfs, bcachefs) implement
+/// this, and both files must live on the *same* one — the filesystem the
+/// `.ext4` files sit on, which has nothing to do with the ext4 filesystem
+/// inside them. A template under `FIRECRAB_IMAGE_ROOT` and a disk under
+/// `data/vms` on separate mounts fail here with `EXDEV`.
+fn ficlone(source: &File, destination: &File) -> io::Result<()> {
+    // SAFETY: both descriptors stay open across the call, and FICLONE takes
+    // the source descriptor by value rather than writing through a pointer.
+    let result = unsafe { libc::ioctl(destination.as_raw_fd(), libc::FICLONE, source.as_raw_fd()) };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Fills `destination` with `source`'s contents, sharing blocks copy-on-write
+/// when the host filesystem supports it and copying the bytes when it does not.
+pub(crate) fn clone_or_copy(source: &mut File, destination: &mut File) -> io::Result<CopyMode> {
+    clone_or_copy_with(source, destination, ficlone)
+}
+
+/// The testable half of [`clone_or_copy`], with the clone attempt injected so
+/// the fallback can be exercised on a filesystem that does support reflinks.
+fn clone_or_copy_with<F>(
+    source: &mut File,
+    destination: &mut File,
+    clone: F,
+) -> io::Result<CopyMode>
+where
+    F: FnOnce(&File, &File) -> io::Result<()>,
+{
+    if clone(source, destination).is_ok() {
+        return Ok(CopyMode::Cloned);
+    }
+    // A refused FICLONE leaves the destination untouched, so every reason it
+    // can fail — an unsupported filesystem, a cross-device pair, a kernel
+    // without the ioctl — is answered the same way, with a plain byte copy.
+    // Probing the filesystem type up front would only duplicate this answer.
+    source.seek(SeekFrom::Start(0))?;
+    io::copy(source, destination)?;
+    Ok(CopyMode::Copied)
+}
+
 /// Copies `template` into `tmp` and atomically renames it to `rootfs`.
 fn publish(template: &mut File, tmp: &Path, rootfs: &Path) -> Result<(), RootfsError> {
     let copy_error = |source| RootfsError::Copy {
@@ -568,11 +624,10 @@ fn publish(template: &mut File, tmp: &Path, rootfs: &Path) -> Result<(), RootfsE
         source,
     };
 
-    // The registry's hash verification shares the descriptor offset, so the
-    // template handle arrives at EOF.
-    template.seek(SeekFrom::Start(0)).map_err(copy_error)?;
     let mut out = File::create(tmp).map_err(copy_error)?;
-    io::copy(template, &mut out).map_err(copy_error)?;
+    // The registry's hash verification shares the descriptor offset, so the
+    // template handle arrives at EOF; the byte-copy path rewinds it itself.
+    clone_or_copy(template, &mut out).map_err(copy_error)?;
     out.sync_all().map_err(copy_error)?;
 
     fs::rename(tmp, rootfs).map_err(|source| RootfsError::Publish {
@@ -689,6 +744,51 @@ mod tests {
         assert!(matches!(error, RootfsError::Copy { .. }));
         assert!(!paths.rootfs_tmp(generation).exists());
         assert!(!paths.rootfs(generation).exists());
+    }
+
+    #[test]
+    fn falls_back_to_a_byte_copy_when_the_filesystem_cannot_clone() {
+        let directory = tempdir().unwrap();
+        let mut source = template_file(directory.path(), b"template-bytes");
+        let destination_path = directory.path().join("destination.ext4");
+        let mut destination = File::create(&destination_path).unwrap();
+
+        let mode = clone_or_copy_with(&mut source, &mut destination, |_, _| {
+            Err(io::Error::from_raw_os_error(libc::EOPNOTSUPP))
+        })
+        .unwrap();
+
+        assert_eq!(mode, CopyMode::Copied);
+        assert_eq!(fs::read(&destination_path).unwrap(), b"template-bytes");
+    }
+
+    #[test]
+    fn skips_the_byte_copy_when_the_clone_succeeds() {
+        let directory = tempdir().unwrap();
+        let mut source = template_file(directory.path(), b"template-bytes");
+        let destination_path = directory.path().join("destination.ext4");
+        let mut destination = File::create(&destination_path).unwrap();
+
+        let mode = clone_or_copy_with(&mut source, &mut destination, |_, _| Ok(())).unwrap();
+
+        // A real FICLONE populates the destination itself. This stub does not,
+        // so an empty destination is what proves the byte copy was skipped.
+        assert_eq!(mode, CopyMode::Cloned);
+        assert_eq!(fs::read(&destination_path).unwrap(), b"");
+    }
+
+    #[test]
+    fn clone_or_copy_reproduces_the_source_on_the_hosts_own_filesystem() {
+        let directory = tempdir().unwrap();
+        let mut source = template_file(directory.path(), b"template-bytes");
+        let destination_path = directory.path().join("destination.ext4");
+        let mut destination = File::create(&destination_path).unwrap();
+
+        // Exercises the real ioctl: clones on XFS/Btrfs, falls back elsewhere.
+        // Either outcome must leave the same bytes behind.
+        clone_or_copy(&mut source, &mut destination).unwrap();
+
+        assert_eq!(fs::read(&destination_path).unwrap(), b"template-bytes");
     }
 
     #[test]
