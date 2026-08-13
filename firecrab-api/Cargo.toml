@@ -10,6 +10,7 @@ async-compression = { version = "0.4.43", features = ["gzip", "tokio", "zstd"] }
 axum = { version = "0.8.9", features = ["ws"] }
 firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
+filetime = "0.2.29"
 futures-util = "0.3"
 libc = "0.2.186"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }

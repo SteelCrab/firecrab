@@ -705,6 +705,29 @@ pub enum ResolveError {
         /// Safety rule rejected by the entry.
         reason: TarMemberViolation,
     },
+    /// A merge destination already exists and must not be replaced.
+    #[error("OCI layer merge destination already exists at {path}")]
+    MergeDestinationExists {
+        /// Caller-selected final staging tree path.
+        path: PathBuf,
+    },
+    /// A filesystem operation failed while constructing the merged tree.
+    #[error("OCI layer merge {operation} failed at {path}: {source}")]
+    MergeIo {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Staging or published path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The caller stopped waiting before the private tree could be published.
+    #[error("OCI layer merge was cancelled before publishing {path}")]
+    MergeCancelled {
+        /// Caller-selected final staging tree path.
+        path: PathBuf,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1685,6 +1708,11 @@ mod cache_tests;
 #[cfg(test)]
 mod tar_tests;
 
+mod merge;
+
+#[cfg(test)]
+mod merge_tests;
+
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedBlob {
@@ -2085,12 +2113,27 @@ impl ValidatedLayer {
     }
 }
 
+/// A fully merged OCI filesystem tree published after every layer succeeds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergedRootfs {
+    path: PathBuf,
+}
+
+impl MergedRootfs {
+    /// Path to the merged staging tree.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Why an otherwise valid layer tar entry is unsafe for later extraction.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum TarMemberViolation {
-    /// The member name is empty, absolute, or contains a parent/root/prefix
-    /// component.
-    #[error("member path must be a non-empty relative path beneath the extraction root")]
+    /// The member name is empty, absolute, contains a parent/root/prefix
+    /// component, or names the archive root with a non-directory entry.
+    #[error(
+        "member path must be relative beneath the extraction root; only a directory may name the root itself"
+    )]
     Path,
     /// Character and block devices are never imported from an OCI layer.
     #[error("device nodes are not permitted")]
@@ -2111,6 +2154,51 @@ pub enum TarMemberViolation {
     /// A symbolic link target cannot be represented by filesystem APIs.
     #[error("symbolic link target contains a NUL byte")]
     InvalidSymlinkTarget,
+    /// Two tar entries resolve to the same normalized path.
+    #[error("layer contains a duplicate normalized path")]
+    DuplicatePath,
+    /// A non-directory entry also has entries beneath it in the same layer.
+    #[error("non-directory entry conflicts with descendant {descendant:?}")]
+    ConflictingPath {
+        /// Descendant that makes the final tree ambiguous.
+        descendant: PathBuf,
+    },
+    /// A whiteout marker has no valid sibling basename to remove.
+    #[error("whiteout marker has an invalid target basename")]
+    InvalidWhiteoutTarget,
+    /// Whiteout markers must be regular files.
+    #[error("whiteout marker must be a regular file")]
+    InvalidWhiteoutType,
+    /// Whiteout markers must have an empty payload.
+    #[error("whiteout marker must be empty, but declares {size} bytes")]
+    NonEmptyWhiteout {
+        /// Marker payload length.
+        size: u64,
+    },
+    /// Applying the current layer would traverse a symlink from an older one.
+    #[error("operation would traverse symlink ancestor {ancestor:?}")]
+    SymlinkAncestor {
+        /// Relative path of the unsafe ancestor.
+        ancestor: PathBuf,
+    },
+    /// A path component required as a directory is another filesystem type.
+    #[error("path ancestor {ancestor:?} is not a directory")]
+    NonDirectoryAncestor {
+        /// Relative path of the conflicting ancestor.
+        ancestor: PathBuf,
+    },
+    /// A hard-link target was not produced by a lower or current layer.
+    #[error("hard link target {target:?} does not exist")]
+    MissingMergedHardlinkTarget {
+        /// Archive-root-relative target.
+        target: PathBuf,
+    },
+    /// Hard links to directories are unsupported and unsafe.
+    #[error("hard link target {target:?} is a directory")]
+    DirectoryHardlinkTarget {
+        /// Archive-root-relative directory target.
+        target: PathBuf,
+    },
     /// Tar hard-link names are archive-root-relative and cannot leave that
     /// root.
     #[error("hard link target {target:?} is outside the archive root")]
@@ -2246,6 +2334,21 @@ pub async fn validate_decompressed_layers(
         .collect())
 }
 
+/// Applies validated OCI layers in manifest order to a new filesystem tree.
+///
+/// Each layer's whiteouts are applied before that layer's ordinary members,
+/// regardless of marker order in the tar. Work happens in a private sibling
+/// directory and becomes visible at `destination` only after every layer and
+/// final directory attribute succeeds. The destination must not already
+/// exist. Verified blob and decompressed-layer caches are never removed when
+/// merging fails.
+pub async fn merge_validated_layers(
+    layers: &[ValidatedLayer],
+    destination: &Path,
+) -> Result<MergedRootfs, ResolveError> {
+    merge::merge_validated_layers(layers, destination).await
+}
+
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
     let path = layer.path.clone();
     let compressed_digest = layer.source.descriptor.digest.clone();
@@ -2262,8 +2365,16 @@ fn validate_layer_archive_blocking(
     path: &Path,
     compressed_digest: &Sha256Digest,
 ) -> Result<(), ResolveError> {
-    let file = std::fs::File::open(path)
+    let mut file = std::fs::File::open(path)
         .map_err(|error| cache_io("open layer tar", path.to_owned(), error))?;
+    validate_layer_archive_file(&mut file, path, compressed_digest)
+}
+
+fn validate_layer_archive_file(
+    file: &mut std::fs::File,
+    path: &Path,
+    compressed_digest: &Sha256Digest,
+) -> Result<(), ResolveError> {
     let file_len = file
         .metadata()
         .map_err(|error| cache_io("inspect layer tar", path.to_owned(), error))?
@@ -2274,13 +2385,15 @@ fn validate_layer_archive_blocking(
             format!("archive length {file_len} is not a multiple of the 512-byte tar block size"),
         ));
     }
-    let mut archive = tar::Archive::new(file);
-    let raw_last_end = validate_raw_tar_metadata(&mut archive, file_len, compressed_digest)?;
-    let mut file = archive.into_inner();
-    validate_tar_terminator(&mut file, raw_last_end, file_len, compressed_digest)?;
     file.seek(io::SeekFrom::Start(0))
         .map_err(|error| cache_io("rewind layer tar", path.to_owned(), error))?;
-    let mut archive = tar::Archive::new(file);
+    let mut archive = tar::Archive::new(&mut *file);
+    let raw_last_end = validate_raw_tar_metadata(&mut archive, file_len, compressed_digest)?;
+    let file = archive.into_inner();
+    validate_tar_terminator(file, raw_last_end, file_len, compressed_digest)?;
+    file.seek(io::SeekFrom::Start(0))
+        .map_err(|error| cache_io("rewind layer tar", path.to_owned(), error))?;
+    let mut archive = tar::Archive::new(&mut *file);
     let entries = archive
         .entries()
         .map_err(|error| malformed_layer_archive(compressed_digest, error))?;
@@ -2330,7 +2443,7 @@ fn validate_layer_archive_blocking(
                 )
             })?
             .into_owned();
-        if !is_safe_layer_member_path(&member_path) {
+        if !is_safe_layer_entry_path(&member_path, entry_type) {
             return Err(unsafe_tar_member(
                 compressed_digest,
                 member_path,
@@ -2471,12 +2584,15 @@ fn validate_layer_archive_blocking(
             ));
         }
     }
-    let mut file = archive.into_inner();
-    validate_tar_terminator(&mut file, semantic_last_end, file_len, compressed_digest)
+    let file = archive.into_inner();
+    validate_tar_terminator(file, semantic_last_end, file_len, compressed_digest)?;
+    file.seek(io::SeekFrom::Start(0))
+        .map_err(|error| cache_io("rewind layer tar", path.to_owned(), error))?;
+    Ok(())
 }
 
-fn validate_raw_tar_metadata(
-    archive: &mut tar::Archive<std::fs::File>,
+fn validate_raw_tar_metadata<R: io::Read + io::Seek>(
+    archive: &mut tar::Archive<R>,
     file_len: u64,
     compressed_digest: &Sha256Digest,
 ) -> Result<u64, ResolveError> {
@@ -2541,7 +2657,7 @@ fn validate_raw_tar_metadata(
                 )
             })?
             .into_owned();
-        if !is_safe_layer_member_path(&member_path) {
+        if !is_safe_layer_entry_path(&member_path, entry_type) {
             return Err(unsafe_tar_member(
                 compressed_digest,
                 member_path,
@@ -2647,7 +2763,7 @@ fn validate_pax_metadata<R: io::Read>(
                         },
                     ));
                 }
-                if !is_safe_layer_member_bytes(value) {
+                if !is_safe_layer_member_bytes(value) && !is_layer_root_bytes(value) {
                     return Err(unsafe_tar_member(
                         compressed_digest,
                         PathBuf::from(String::from_utf8_lossy(value).into_owned()),
@@ -2779,6 +2895,14 @@ fn is_safe_layer_member_bytes(path: &[u8]) -> bool {
     has_name
 }
 
+fn is_layer_root_bytes(path: &[u8]) -> bool {
+    if path.is_empty() || path[0] == b'/' || path.contains(&0) {
+        return false;
+    }
+    path.split(|byte| *byte == b'/')
+        .all(|component| matches!(component, b"" | b"."))
+}
+
 fn is_safe_layer_member_path(path: &Path) -> bool {
     if path.as_os_str().is_empty()
         || path.as_os_str().as_encoded_bytes().contains(&0)
@@ -2797,6 +2921,21 @@ fn is_safe_layer_member_path(path: &Path) -> bool {
         }
     }
     has_name
+}
+
+fn is_layer_root_path(path: &Path) -> bool {
+    if path.as_os_str().is_empty()
+        || path.as_os_str().as_encoded_bytes().contains(&0)
+        || path.is_absolute()
+    {
+        return false;
+    }
+    path.components()
+        .all(|component| component == std::path::Component::CurDir)
+}
+
+fn is_safe_layer_entry_path(path: &Path, entry_type: tar::EntryType) -> bool {
+    is_safe_layer_member_path(path) || (entry_type.is_dir() && is_layer_root_path(path))
 }
 
 fn malformed_layer_archive(

@@ -56,8 +56,9 @@ process-wide, and each zstd decoder has a 128 MiB window limit.
 ## Layer safety preflight
 
 Before extraction, the internal pipeline scans every decompressed tar using
-GNU long-name/link metadata and PAX overrides. Member names must be non-empty
-relative paths without parent components. Character and block devices are
+GNU long-name/link metadata and PAX overrides. Member names must be relative
+paths without parent components; only a directory may name the archive root
+as `.` or `./`. Character and block devices are
 rejected, as are unsupported special entries. Links must name a target;
 hard-link targets are archive-root-relative and cannot be absolute or contain
 parent components. Regular whiteout files remain valid for the later merge
@@ -71,10 +72,32 @@ boundaries or destinations. Each GNU or PAX metadata entry is limited to 1
 MiB. Rejection does not delete the already verified compressed blob or
 decompressed tar: both remain valid content-addressed cache entries.
 
-Extraction, whiteout handling, and layer merging remain separate import
-stages. Symbolic links are kept as metadata here; extraction must remain rooted
-without following one while creating later members. Inspect does not run
-decompression or validation, and does not fill either OCI cache.
+## Layer merge
+
+The internal merge stage consumes validated, uncompressed tar streams in
+manifest order. It reopens each stream without following a cache-path symlink,
+then rechecks its exact size, config `diff_id`, and archive safety before
+changing the filesystem tree.
+
+The host staging tree preserves ordinary and sticky permissions but remains
+owned by the unprivileged API service. It does not activate image-supplied
+set-ID bits or apply numeric ownership and extended attributes; those guest
+filesystem attributes belong to the later ext4 construction stage.
+
+For each layer, `.wh.<name>` removes the named sibling from lower layers and
+`.wh..wh..opq` removes lower-layer children from its directory. Whiteouts are
+applied before that layer's ordinary members regardless of archive order, so a
+same-layer replacement remains present and marker files never appear in the
+result.
+
+Merging builds a private sibling partial tree and atomically publishes it only
+after every layer succeeds; the destination must not already exist. Failures
+attempt to remove the partial tree and always retain verified blob and
+decompressed-layer cache entries.
+
+Registry inspection, raw blob caching, decompression, safety validation, and
+merge remain distinct import stages. `GET /api/oci/inspect` stops at metadata
+and fills no OCI cache; caching and decompression do not publish a merged tree.
 
 ## Related
 
