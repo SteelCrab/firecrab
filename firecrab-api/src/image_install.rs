@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::env;
+use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -29,15 +30,50 @@ use crate::templates::{TemplateRegistry, TemplateSpec};
 /// registry, or set `FIRECRAB_IMAGE_BASE_URL=none` to disable remote access.
 pub const DEFAULT_IMAGE_BASE_URL: &str = "https://registry.firecrab.dev";
 
-/// Architecture label used by MicroRegistry catalog entries and object keys.
-#[cfg(target_arch = "aarch64")]
-pub const HOST_ARCHITECTURE: &str = "aarch64";
-/// Architecture label used by MicroRegistry catalog entries and object keys.
-#[cfg(target_arch = "x86_64")]
-pub const HOST_ARCHITECTURE: &str = "x86_64";
+/// A CPU architecture Firecracker can boot a guest on.
+///
+/// Firecrab deals in two unrelated architecture vocabularies: this one, used
+/// by kernels, MicroRegistry object keys and catalog entries, and Debian's
+/// `amd64`/`arm64` labels that appear inside rootfs *filenames*. Keeping this
+/// one a type is what stops the two from being compared to each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Architecture {
+    /// 64-bit x86. Firecracker boots an ELF `vmlinux` here.
+    X86_64,
+    /// 64-bit ARM. Firecracker boots Linux's own `Image` container here.
+    Aarch64,
+}
+
+impl Architecture {
+    /// The architecture this build of the API runs on. Any target that is
+    /// neither is rejected by the `compile_error!` below, so the `else` arm
+    /// only ever resolves for x86_64.
+    pub const HOST: Self = if cfg!(target_arch = "aarch64") {
+        Self::Aarch64
+    } else {
+        Self::X86_64
+    };
+
+    /// The label MicroRegistry catalog entries and object keys use.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Aarch64 => "aarch64",
+        }
+    }
+}
+
+impl fmt::Display for Architecture {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 compile_error!("Firecrab supports only x86_64 and aarch64 hosts");
+
+/// Architecture label used by MicroRegistry catalog entries and object keys.
+pub const HOST_ARCHITECTURE: &str = Architecture::HOST.as_str();
 
 pub const fn host_architecture() -> &'static str {
     HOST_ARCHITECTURE
