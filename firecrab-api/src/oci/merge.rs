@@ -1,3 +1,11 @@
+//! Applies validated OCI layers to a private tree and publishes it atomically.
+//!
+//! Layers replay in manifest order, and each layer's whiteouts run before its
+//! own members regardless of where the markers sit in the tar. Directory modes
+//! and mtimes are stamped only after the last layer lands, so an earlier layer
+//! never wins over a later one. Nothing appears at the caller's destination
+//! until the finished tree is renamed into place.
+
 use super::*;
 
 use std::collections::{BTreeMap, HashSet};
@@ -7,22 +15,34 @@ use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::sync::atomic::{AtomicU8, Ordering};
 
+/// Basename prefix marking an OverlayFS whiteout entry.
 const WHITEOUT_PREFIX: &[u8] = b".wh.";
+/// Basename marking a directory whose lower-layer contents are hidden.
 const OPAQUE_WHITEOUT: &[u8] = b".wh..wh..opq";
-// The merge tree is host-visible and service-owned. Preserve ordinary and
-// sticky permissions, but never activate attacker-supplied set-ID bits on it.
+/// Permission bits the merged tree may keep from a layer.
+///
+/// The merge tree is host-visible and service-owned. Preserve ordinary and
+/// sticky permissions, but never activate attacker-supplied set-ID bits on it.
 const HOST_SAFE_MODE_MASK: u32 = 0o1777;
+/// The merge is running and may still be cancelled.
 const MERGE_ACTIVE: u8 = 0;
+/// The finished tree is being renamed into place and can no longer be cancelled.
 const MERGE_PUBLISHING: u8 = 1;
+/// The caller stopped waiting before publishing began.
 const MERGE_CANCELLED: u8 = 2;
+/// Publishing completed, so the state no longer changes.
 const MERGE_FINISHED: u8 = 3;
 
+/// Shared cancellation state consulted between merge steps.
 struct MergeControl {
+    /// Current merge phase, shared with the caller's cancellation guard.
     state: std::sync::Arc<AtomicU8>,
+    /// Destination reported by cancellation errors.
     destination: PathBuf,
 }
 
 impl MergeControl {
+    /// Fails once the caller stopped waiting, so long merges abandon early.
     fn check(&self) -> Result<(), ResolveError> {
         if self.state.load(Ordering::Acquire) == MERGE_ACTIVE {
             Ok(())
@@ -33,6 +53,7 @@ impl MergeControl {
         }
     }
 
+    /// Claims the right to publish, locking cancellation out from here on.
     fn begin_publish(&self) -> Result<(), ResolveError> {
         self.state
             .compare_exchange(
@@ -47,13 +68,17 @@ impl MergeControl {
             })
     }
 
+    /// Records that publishing finished and the tree is now the caller's.
     fn finish(&self) {
         self.state.store(MERGE_FINISHED, Ordering::Release);
     }
 }
 
+/// Marks an abandoned merge cancelled when the caller's future is dropped.
 struct CancelMergeOnDrop {
+    /// Shared merge phase, flipped to cancelled while still armed.
     state: std::sync::Arc<AtomicU8>,
+    /// Cleared once the blocking worker has returned.
     armed: bool,
 }
 
@@ -70,39 +95,61 @@ impl Drop for CancelMergeOnDrop {
     }
 }
 
+/// A deletion one layer records against the layers below it.
 #[derive(Debug)]
 enum Whiteout {
+    /// Remove this path and anything beneath it.
     Remove(PathBuf),
+    /// Hide every lower-layer child of this directory.
     Opaque(PathBuf),
 }
 
+/// Directory attributes stamped after every layer has been applied.
 #[derive(Debug, Clone)]
 struct DirectoryMetadata {
+    /// Tree-relative directory path.
     path: PathBuf,
+    /// Mode declared by the owning layer, masked before use.
     mode: u32,
+    /// Modification time declared by the owning layer.
     mtime: i64,
 }
 
+/// A hard link waiting for its target to appear in the merged tree.
 #[derive(Debug, Clone)]
 struct PlannedHardlink {
+    /// Tree-relative path of the link to create.
     path: PathBuf,
+    /// Archive-root-relative path the link points at.
     target: PathBuf,
 }
 
+/// What a planned path will become, used to reject ambiguous layers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlannedEntryKind {
+    /// A whiteout marker, which is never materialized in the tree.
     Whiteout,
+    /// A directory, the only kind of entry allowed to hold descendants.
     Directory,
+    /// Any other entry, which may not hold descendants.
     Other,
 }
 
+/// Everything one layer needs applied outside plain tar extraction order.
 #[derive(Debug)]
 struct LayerPlan {
+    /// Deletions to apply before the layer's own members.
     whiteouts: Vec<Whiteout>,
+    /// Directories to create, shallowest first.
     directories: Vec<DirectoryMetadata>,
+    /// Hard links to resolve once the layer's files exist.
     hardlinks: Vec<PlannedHardlink>,
 }
 
+/// Runs the blocking merge on the pool and cancels it if the caller leaves.
+///
+/// Dropping the returned future between layers stops the worker before it
+/// publishes, so an abandoned request never leaves a destination behind.
 pub(super) async fn merge_validated_layers(
     layers: &[ValidatedLayer],
     destination: &Path,
@@ -125,6 +172,10 @@ pub(super) async fn merge_validated_layers(
     result?
 }
 
+/// Builds the merged tree in a private sibling directory, then publishes it.
+///
+/// The staging directory is removed on every exit path except a successful
+/// rename, which hands the tree to the caller.
 fn merge_layers_blocking(
     layers: &[ValidatedLayer],
     destination: &Path,
@@ -206,6 +257,7 @@ fn merge_layers_blocking(
     result
 }
 
+/// Applies one layer: whiteouts first, then directories, members, and links.
 fn apply_layer(
     layer: &ValidatedLayer,
     root: &Path,
@@ -253,6 +305,10 @@ fn apply_layer(
     apply_hardlinks(root, &plan.hardlinks, digest, directory_metadata, control)
 }
 
+/// Reopens a validated layer and rechecks its size, diff ID, and tar shape.
+///
+/// Validation ran against the path rather than this handle, so a cache entry
+/// swapped in between would otherwise reach extraction unchecked.
 fn open_verified_layer(layer: &ValidatedLayer) -> Result<File, ResolveError> {
     let descriptor = &layer.layer.source.descriptor;
     let path = &layer.layer.path;
@@ -303,6 +359,7 @@ fn open_verified_layer(layer: &ValidatedLayer) -> Result<File, ResolveError> {
     Ok(file)
 }
 
+/// Hashes an open file from its start and rewinds it, returning size and digest.
 fn hash_open_file(file: &mut File, path: &Path) -> Result<(u64, Sha256Digest), ResolveError> {
     file.seek(io::SeekFrom::Start(0))
         .map_err(|error| merge_io("rewind validated layer", path.to_owned(), error))?;
@@ -333,6 +390,11 @@ fn hash_open_file(file: &mut File, path: &Path) -> Result<(u64, Sha256Digest), R
     ))
 }
 
+/// Scans a layer once for whiteouts, directories, and hard links.
+///
+/// Duplicate normalized paths and non-directory entries with descendants are
+/// rejected here, because either would make the merged tree depend on the
+/// order in which entries happen to be extracted.
 fn plan_layer(
     file: &mut File,
     layer_path: &Path,
@@ -464,6 +526,7 @@ fn plan_layer(
     })
 }
 
+/// Decodes one entry path and normalizes it, rejecting anything unsafe.
 fn normalized_entry_path<R: io::Read>(
     entry: &tar::Entry<'_, R>,
     digest: &Sha256Digest,
@@ -479,10 +542,14 @@ fn normalized_entry_path<R: io::Read>(
         .ok_or_else(|| unsafe_tar_member(digest, path.into_owned(), TarMemberViolation::Path))
 }
 
+/// Normalizes a path that is not allowed to name the archive root itself.
 fn normalize_safe_path(path: &Path) -> Option<PathBuf> {
     normalize_layer_path(path, false)
 }
 
+/// Drops `.` components, returning `None` when the path is unsafe.
+///
+/// `allow_root` admits the archive root, which only directory entries may name.
 fn normalize_layer_path(path: &Path, allow_root: bool) -> Option<PathBuf> {
     if !(is_safe_layer_member_path(path) || allow_root && is_layer_root_path(path)) {
         return None;
@@ -496,6 +563,7 @@ fn normalize_layer_path(path: &Path, allow_root: bool) -> Option<PathBuf> {
     (allow_root || !normalized.as_os_str().is_empty()).then_some(normalized)
 }
 
+/// Recognizes `.wh.` markers and resolves which path each one deletes.
 fn classify_whiteout<R: io::Read>(
     entry: &tar::Entry<'_, R>,
     path: &Path,
@@ -538,6 +606,7 @@ fn classify_whiteout<R: io::Read>(
     Ok(Some(Whiteout::Remove(target)))
 }
 
+/// Rereads the layer and unpacks every member the plan did not already handle.
 fn extract_non_directory_entries(
     file: &mut File,
     layer_path: &Path,
@@ -602,6 +671,7 @@ fn extract_non_directory_entries(
     Ok(())
 }
 
+/// Creates a directory, replacing a non-directory left there by a lower layer.
 fn prepare_directory(
     root: &Path,
     path: &Path,
@@ -624,6 +694,10 @@ fn prepare_directory(
     }
 }
 
+/// Creates missing ancestors, refusing to follow a symlink from a lower layer.
+///
+/// Without this an earlier layer could point a directory name at an absolute
+/// path and steer a later layer's writes outside the merged tree.
 fn ensure_parent_directories(
     root: &Path,
     path: &Path,
@@ -668,6 +742,7 @@ fn ensure_parent_directories(
     Ok(())
 }
 
+/// Reports whether all existing ancestors are directories, creating none of them.
 fn existing_parent_is_safe(
     root: &Path,
     path: &Path,
@@ -710,6 +785,7 @@ fn existing_parent_is_safe(
     Ok(true)
 }
 
+/// Deletes what the layers below left at a whiteout marker's target.
 fn remove_merged_path(root: &Path, path: &Path, digest: &Sha256Digest) -> Result<(), ResolveError> {
     if !lower_parent_is_directory(root, path, digest)? {
         return Ok(());
@@ -725,6 +801,7 @@ fn remove_merged_path(root: &Path, path: &Path, digest: &Sha256Digest) -> Result
     }
 }
 
+/// Reports whether a whiteout target's ancestors all exist as directories.
 fn lower_parent_is_directory(
     root: &Path,
     path: &Path,
@@ -759,6 +836,7 @@ fn lower_parent_is_directory(
     Ok(true)
 }
 
+/// Removes whatever a lower layer left at a path the current layer claims.
 fn remove_existing_target(
     root: &Path,
     path: &Path,
@@ -778,6 +856,7 @@ fn remove_existing_target(
     }
 }
 
+/// Empties a directory named by an opaque whiteout, keeping the directory itself.
 fn clear_merged_directory(
     root: &Path,
     path: &Path,
@@ -814,6 +893,10 @@ fn clear_merged_directory(
     Ok(())
 }
 
+/// Links each planned hard link once its target exists in the merged tree.
+///
+/// A target may be created by a later entry of the same layer, so the list is
+/// retried until one full pass links nothing new.
 fn apply_hardlinks(
     root: &Path,
     hardlinks: &[PlannedHardlink],
@@ -880,6 +963,10 @@ fn apply_hardlinks(
     Ok(())
 }
 
+/// Stamps directory modes and mtimes deepest first, after all layers landed.
+///
+/// Writing children before their parents keeps a restrictive parent mode from
+/// blocking the writes beneath it.
 fn apply_directory_metadata(
     root: &Path,
     metadata: &BTreeMap<PathBuf, DirectoryMetadata>,
@@ -921,6 +1008,7 @@ fn apply_directory_metadata(
     Ok(())
 }
 
+/// Drops recorded attributes for a subtree that no longer exists.
 fn forget_directory_metadata(
     metadata: &mut BTreeMap<PathBuf, DirectoryMetadata>,
     path: &Path,
@@ -931,6 +1019,7 @@ fn forget_directory_metadata(
     });
 }
 
+/// Creates one merged directory with a conservative mode until metadata lands.
 fn create_merged_directory(path: &Path) -> Result<(), ResolveError> {
     let mut builder = fs::DirBuilder::new();
     builder.mode(0o755);
@@ -939,10 +1028,12 @@ fn create_merged_directory(path: &Path) -> Result<(), ResolveError> {
         .map_err(|error| merge_io("create merged directory", path.to_owned(), error))
 }
 
+/// Counts path components, which orders directory work by depth.
 fn path_depth(path: &Path) -> usize {
     path.components().count()
 }
 
+/// Renames the finished tree into place without replacing an existing path.
 fn publish_tree(partial: &Path, destination: &Path) -> Result<(), ResolveError> {
     let source = CString::new(partial.as_os_str().as_bytes()).map_err(|error| {
         merge_io(
@@ -986,6 +1077,7 @@ fn publish_tree(partial: &Path, destination: &Path) -> Result<(), ResolveError> 
     ))
 }
 
+/// Wraps a filesystem failure with the merge operation that hit it.
 fn merge_io(operation: &'static str, path: PathBuf, source: io::Error) -> ResolveError {
     ResolveError::MergeIo {
         operation,
@@ -994,12 +1086,16 @@ fn merge_io(operation: &'static str, path: PathBuf, source: io::Error) -> Resolv
     }
 }
 
+/// Removes the private staging tree unless the merge published it.
 struct PartialTreeCleanup {
+    /// Staging tree root.
     path: PathBuf,
+    /// Set once the tree has been removed or handed to the caller.
     published: bool,
 }
 
 impl PartialTreeCleanup {
+    /// Arms cleanup for a freshly created staging tree.
     fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -1007,6 +1103,7 @@ impl PartialTreeCleanup {
         }
     }
 
+    /// Removes the staging tree now, reporting why it could not be removed.
     fn remove_now_if_needed(&mut self) -> Result<(), ResolveError> {
         if self.published {
             return Ok(());
@@ -1035,6 +1132,10 @@ impl Drop for PartialTreeCleanup {
     }
 }
 
+/// Restores owner access across the staging tree so cleanup can descend into it.
+///
+/// Layer modes may leave a directory unreadable even to its owner, which would
+/// otherwise strand the staging tree on disk.
 fn make_tree_owner_accessible(path: &Path) {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return;
