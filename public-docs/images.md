@@ -9,13 +9,13 @@ versioned `rocky-9.8` alias.
 ARM64 packages keep the distro PE32+ `Image`; x86_64 packages use an ELF
 `vmlinux`. Firecracker cannot boot an x86_64 kernel on an ARM64 host.
 
-Registration reads the kernel's own header and rejects a mismatch; a format
-firecrab cannot classify is registered without that check.
-A rootfs carrying no `/lib/modules` needs those drivers built into the kernel —
-`virtio_blk`, `virtio_net`, `virtio_mmio`, `ext4` — or the matching initrd.
-Firecracker has no PCI, so the virtio drivers must be the MMIO variants.
+Registration reads the kernel's own header and rejects a mismatch.
+A kernel in a format firecrab cannot classify is registered without that check.
 
-Container images are a separate source; see [OCI images](oci.md).
+A rootfs carrying no `/lib/modules` can only boot on a kernel with the boot
+path built in: `virtio_blk`, `virtio_net`, `virtio_mmio`, and `ext4`.
+Firecracker has no PCI, so the virtio drivers must be the MMIO variants.
+An image whose kernel keeps those as modules needs the matching initrd.
 
 ## Build
 
