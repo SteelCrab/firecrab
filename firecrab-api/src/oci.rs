@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::io;
+use std::io::{self, Read as _, Seek as _};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::str::FromStr;
@@ -567,6 +567,10 @@ const ZSTD_MAX_WINDOW_LOG: u32 = 27;
 /// may retain a 128 MiB window. Keeping at most two active bounds those windows
 /// to 256 MiB instead of multiplying them by a many-core host's CPU count.
 const MAX_PARALLEL_DECOMPRESSIONS: usize = 2;
+/// GNU long-name and PAX records are buffered by the tar parser. Real
+/// filesystem metadata is far smaller; this ceiling prevents a crafted layer
+/// from turning an otherwise streamed preflight into an unbounded allocation.
+const TAR_METADATA_MAX_BYTES: u64 = 1024 * 1024;
 
 /// What a reference resolved to on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -681,6 +685,25 @@ pub enum ResolveError {
         limit: u64,
         /// Size observed from metadata or while streaming.
         actual: u64,
+    },
+    /// A verified layer is not a structurally readable tar stream.
+    #[error("OCI layer {compressed_digest} is not a readable tar archive: {message}")]
+    MalformedLayerArchive {
+        /// Manifest digest of the compressed registry blob.
+        compressed_digest: Sha256Digest,
+        /// Tar parser or truncated-payload failure.
+        message: String,
+    },
+    /// A tar entry could write outside the future extraction root or create an
+    /// unsupported filesystem object.
+    #[error("unsafe tar member {path:?} in OCI layer {compressed_digest}: {reason}")]
+    UnsafeTarMember {
+        /// Manifest digest of the compressed registry blob.
+        compressed_digest: Sha256Digest,
+        /// Effective entry path after GNU and PAX metadata is applied.
+        path: PathBuf,
+        /// Safety rule rejected by the entry.
+        reason: TarMemberViolation,
     },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
@@ -1659,6 +1682,9 @@ fn cache_io(operation: &'static str, path: PathBuf, source: io::Error) -> Resolv
 #[cfg(test)]
 mod cache_tests;
 
+#[cfg(test)]
+mod tar_tests;
+
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedBlob {
@@ -2027,6 +2053,80 @@ pub struct DecompressedLayer {
     pub size: u64,
 }
 
+/// A decompressed layer whose complete tar metadata passed the import safety
+/// preflight.
+///
+/// The wrapper is deliberately distinct from [`DecompressedLayer`] so future
+/// extraction and merge stages can require proof that validation ran first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedLayer {
+    layer: DecompressedLayer,
+}
+
+impl ValidatedLayer {
+    /// Original cached registry bytes and their manifest descriptor.
+    pub fn source(&self) -> &CachedBlob {
+        &self.layer.source
+    }
+
+    /// Digest of the uncompressed tar stream from config `rootfs.diff_ids`.
+    pub fn diff_id(&self) -> &Sha256Digest {
+        &self.layer.diff_id
+    }
+
+    /// Path of the validated, uncompressed layer tar.
+    pub fn path(&self) -> &Path {
+        &self.layer.path
+    }
+
+    /// Number of bytes in the validated tar stream.
+    pub fn size(&self) -> u64 {
+        self.layer.size
+    }
+}
+
+/// Why an otherwise valid layer tar entry is unsafe for later extraction.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum TarMemberViolation {
+    /// The member name is empty, absolute, or contains a parent/root/prefix
+    /// component.
+    #[error("member path must be a non-empty relative path beneath the extraction root")]
+    Path,
+    /// Character and block devices are never imported from an OCI layer.
+    #[error("device nodes are not permitted")]
+    DeviceNode,
+    /// Only regular files, directories, symbolic links, and hard links are
+    /// supported by the MVP extraction contract.
+    #[error("tar entry type 0x{entry_type:02x} is not permitted")]
+    UnsupportedEntryType {
+        /// Raw tar typeflag byte.
+        entry_type: u8,
+    },
+    /// A hard link did not identify the archive member it aliases.
+    #[error("hard link target is missing")]
+    MissingHardlinkTarget,
+    /// A symbolic link did not identify the path stored in the link.
+    #[error("symbolic link target is missing")]
+    MissingSymlinkTarget,
+    /// A symbolic link target cannot be represented by filesystem APIs.
+    #[error("symbolic link target contains a NUL byte")]
+    InvalidSymlinkTarget,
+    /// Tar hard-link names are archive-root-relative and cannot leave that
+    /// root.
+    #[error("hard link target {target:?} is outside the archive root")]
+    HardlinkTarget {
+        /// Unsafe target recorded in the tar header or extension metadata.
+        target: PathBuf,
+    },
+    /// A PAX attribute is unsupported because different tar parsers can apply
+    /// it to a different path, link, or payload boundary.
+    #[error("unsupported PAX attribute {key:?}")]
+    UnsupportedPaxAttribute {
+        /// Attribute name supplied by the archive.
+        key: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct LayerWorkKey {
     compressed_digest: Sha256Digest,
@@ -2117,6 +2217,608 @@ async fn decompress_cached_layers_with_parallelism(
             }
         })
         .collect())
+}
+
+/// Validates every decompressed layer tar before any extraction may begin.
+///
+/// Validation reads the effective GNU/PAX member paths, rejects member names
+/// and hard-link targets that leave an archive root, and permits only regular
+/// files, directories, symbolic links, and archive-root-confined hard links.
+/// Symbolic links remain inert at this stage; the later extractor must not
+/// follow one while creating another member. The input content-addressed tar
+/// remains cached when validation fails: unsafe contents do not make a
+/// correctly hashed cache entry corrupt.
+///
+/// Repeated manifest entries that resolve to the same cache path are scanned
+/// once, while the returned wrappers retain manifest order and multiplicity.
+pub async fn validate_decompressed_layers(
+    layers: Vec<DecompressedLayer>,
+) -> Result<Vec<ValidatedLayer>, ResolveError> {
+    let mut validated_paths = std::collections::HashSet::new();
+    for layer in &layers {
+        if validated_paths.insert(layer.path.clone()) {
+            validate_layer_archive(layer).await?;
+        }
+    }
+    Ok(layers
+        .into_iter()
+        .map(|layer| ValidatedLayer { layer })
+        .collect())
+}
+
+async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
+    let path = layer.path.clone();
+    let compressed_digest = layer.source.descriptor.digest.clone();
+    let task_digest = compressed_digest.clone();
+    tokio::task::spawn_blocking(move || validate_layer_archive_blocking(&path, &task_digest))
+        .await
+        .map_err(|error| ResolveError::MalformedLayerArchive {
+            compressed_digest,
+            message: format!("validation task failed: {error}"),
+        })?
+}
+
+fn validate_layer_archive_blocking(
+    path: &Path,
+    compressed_digest: &Sha256Digest,
+) -> Result<(), ResolveError> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| cache_io("open layer tar", path.to_owned(), error))?;
+    let file_len = file
+        .metadata()
+        .map_err(|error| cache_io("inspect layer tar", path.to_owned(), error))?
+        .len();
+    if file_len % 512 != 0 {
+        return Err(malformed_layer_archive(
+            compressed_digest,
+            format!("archive length {file_len} is not a multiple of the 512-byte tar block size"),
+        ));
+    }
+    let mut archive = tar::Archive::new(file);
+    let raw_last_end = validate_raw_tar_metadata(&mut archive, file_len, compressed_digest)?;
+    let mut file = archive.into_inner();
+    validate_tar_terminator(&mut file, raw_last_end, file_len, compressed_digest)?;
+    file.seek(io::SeekFrom::Start(0))
+        .map_err(|error| cache_io("rewind layer tar", path.to_owned(), error))?;
+    let mut archive = tar::Archive::new(file);
+    let entries = archive
+        .entries()
+        .map_err(|error| malformed_layer_archive(compressed_digest, error))?;
+
+    let mut semantic_last_end = 0;
+    for (index, entry) in entries.enumerate() {
+        let mut entry = entry.map_err(|error| {
+            malformed_layer_archive(
+                compressed_digest,
+                format!("could not read member {}: {error}", index + 1),
+            )
+        })?;
+        let entry_type = entry.header().entry_type();
+        let mut pax_linkpaths = Vec::new();
+        if let Some(extensions) = entry.pax_extensions().map_err(|error| {
+            malformed_layer_archive(
+                compressed_digest,
+                format!("could not read member {} PAX metadata: {error}", index + 1),
+            )
+        })? {
+            for extension in extensions {
+                let extension = extension.map_err(|error| {
+                    malformed_layer_archive(
+                        compressed_digest,
+                        format!("member {} has malformed PAX metadata: {error}", index + 1),
+                    )
+                })?;
+                if extension.key_bytes() == b"linkpath" {
+                    pax_linkpaths.push(extension.value_bytes().to_vec());
+                }
+            }
+        }
+
+        semantic_last_end = tar_entry_end(&entry, file_len, compressed_digest, index + 1)?;
+        if entry_type.is_pax_global_extensions() {
+            // The raw pass already parsed and restricted the global records.
+            // tar-rs deliberately does not apply them; the remaining allowed
+            // attributes cannot affect path, link, size, or entry type.
+            continue;
+        }
+        let member_path = entry
+            .path()
+            .map_err(|error| {
+                malformed_layer_archive(
+                    compressed_digest,
+                    format!("could not decode member {} path: {error}", index + 1),
+                )
+            })?
+            .into_owned();
+        if !is_safe_layer_member_path(&member_path) {
+            return Err(unsafe_tar_member(
+                compressed_digest,
+                member_path,
+                TarMemberViolation::Path,
+            ));
+        }
+        if entry_type.is_character_special() || entry_type.is_block_special() {
+            return Err(unsafe_tar_member(
+                compressed_digest,
+                member_path,
+                TarMemberViolation::DeviceNode,
+            ));
+        }
+        if entry_type.is_hard_link() {
+            for target in pax_linkpaths {
+                if !is_safe_layer_member_bytes(&target) {
+                    return Err(unsafe_tar_member(
+                        compressed_digest,
+                        member_path,
+                        TarMemberViolation::HardlinkTarget {
+                            target: PathBuf::from(String::from_utf8_lossy(&target).into_owned()),
+                        },
+                    ));
+                }
+            }
+            let target = entry
+                .link_name()
+                .map_err(|error| {
+                    malformed_layer_archive(
+                        compressed_digest,
+                        format!(
+                            "could not decode hard link target for member {}: {error}",
+                            index + 1
+                        ),
+                    )
+                })?
+                .map(|target| target.into_owned())
+                .ok_or_else(|| {
+                    unsafe_tar_member(
+                        compressed_digest,
+                        member_path.clone(),
+                        TarMemberViolation::MissingHardlinkTarget,
+                    )
+                })?;
+            if target.as_os_str().is_empty() {
+                return Err(unsafe_tar_member(
+                    compressed_digest,
+                    member_path,
+                    TarMemberViolation::MissingHardlinkTarget,
+                ));
+            }
+            if !is_safe_layer_member_path(&target) {
+                return Err(unsafe_tar_member(
+                    compressed_digest,
+                    member_path,
+                    TarMemberViolation::HardlinkTarget { target },
+                ));
+            }
+        } else if entry_type.is_symlink() {
+            for target in pax_linkpaths {
+                if target.is_empty() {
+                    return Err(unsafe_tar_member(
+                        compressed_digest,
+                        member_path,
+                        TarMemberViolation::MissingSymlinkTarget,
+                    ));
+                }
+                if target.contains(&0) {
+                    return Err(unsafe_tar_member(
+                        compressed_digest,
+                        member_path,
+                        TarMemberViolation::InvalidSymlinkTarget,
+                    ));
+                }
+            }
+            let target = entry
+                .link_name()
+                .map_err(|error| {
+                    malformed_layer_archive(
+                        compressed_digest,
+                        format!(
+                            "could not decode symbolic link target for member {}: {error}",
+                            index + 1
+                        ),
+                    )
+                })?
+                .map(|target| target.into_owned())
+                .ok_or_else(|| {
+                    unsafe_tar_member(
+                        compressed_digest,
+                        member_path.clone(),
+                        TarMemberViolation::MissingSymlinkTarget,
+                    )
+                })?;
+            if target.as_os_str().is_empty() {
+                return Err(unsafe_tar_member(
+                    compressed_digest,
+                    member_path,
+                    TarMemberViolation::MissingSymlinkTarget,
+                ));
+            }
+            if target.as_os_str().as_encoded_bytes().contains(&0) {
+                return Err(unsafe_tar_member(
+                    compressed_digest,
+                    member_path,
+                    TarMemberViolation::InvalidSymlinkTarget,
+                ));
+            }
+            // Absolute and parent-relative symbolic links are ordinary inside
+            // container root filesystems. They are safe only while inert; the
+            // later extractor must never follow a link while creating another
+            // member beneath the staging root.
+            drop(target);
+        } else if !entry_type.is_file() && !entry_type.is_dir() && !entry_type.is_symlink() {
+            return Err(unsafe_tar_member(
+                compressed_digest,
+                member_path,
+                TarMemberViolation::UnsupportedEntryType {
+                    entry_type: entry_type.as_byte(),
+                },
+            ));
+        }
+
+        let expected = entry.size();
+        let actual = io::copy(&mut entry, &mut io::sink()).map_err(|error| {
+            malformed_layer_archive(
+                compressed_digest,
+                format!("could not read member {} payload: {error}", index + 1),
+            )
+        })?;
+        if actual != expected {
+            return Err(malformed_layer_archive(
+                compressed_digest,
+                format!(
+                    "member {} payload is truncated: expected {expected} bytes, got {actual}",
+                    index + 1
+                ),
+            ));
+        }
+    }
+    let mut file = archive.into_inner();
+    validate_tar_terminator(&mut file, semantic_last_end, file_len, compressed_digest)
+}
+
+fn validate_raw_tar_metadata(
+    archive: &mut tar::Archive<std::fs::File>,
+    file_len: u64,
+    compressed_digest: &Sha256Digest,
+) -> Result<u64, ResolveError> {
+    let entries = archive
+        .entries_with_seek()
+        .map_err(|error| malformed_layer_archive(compressed_digest, error))?
+        .raw(true);
+    let mut last_end = 0;
+    for (index, entry) in entries.enumerate() {
+        let mut entry = entry.map_err(|error| {
+            malformed_layer_archive(
+                compressed_digest,
+                format!("could not inspect raw member {}: {error}", index + 1),
+            )
+        })?;
+        let entry_type = entry.header().entry_type();
+        last_end = tar_entry_end(&entry, file_len, compressed_digest, index + 1)?;
+        if entry_type.is_gnu_sparse() {
+            let path = entry
+                .path()
+                .map(|path| path.into_owned())
+                .unwrap_or_else(|_| PathBuf::from("<GNU sparse member>"));
+            return Err(unsafe_tar_member(
+                compressed_digest,
+                path,
+                TarMemberViolation::UnsupportedEntryType { entry_type: b'S' },
+            ));
+        }
+        let buffers_metadata = entry_type.is_gnu_longname()
+            || entry_type.is_gnu_longlink()
+            || entry_type.is_pax_local_extensions()
+            || entry_type.is_pax_global_extensions();
+        if buffers_metadata && entry.size() > TAR_METADATA_MAX_BYTES {
+            return Err(malformed_layer_archive(
+                compressed_digest,
+                format!(
+                    "member {} declares {} bytes of tar metadata, exceeding the {}-byte limit",
+                    index + 1,
+                    entry.size(),
+                    TAR_METADATA_MAX_BYTES
+                ),
+            ));
+        }
+        if entry_type.is_pax_local_extensions() || entry_type.is_pax_global_extensions() {
+            validate_pax_metadata(
+                &mut entry,
+                entry_type.is_pax_global_extensions(),
+                compressed_digest,
+                index + 1,
+            )?;
+        }
+        if buffers_metadata {
+            continue;
+        }
+
+        let member_path = entry
+            .path()
+            .map_err(|error| {
+                malformed_layer_archive(
+                    compressed_digest,
+                    format!("could not decode raw member {} path: {error}", index + 1),
+                )
+            })?
+            .into_owned();
+        if !is_safe_layer_member_path(&member_path) {
+            return Err(unsafe_tar_member(
+                compressed_digest,
+                member_path,
+                TarMemberViolation::Path,
+            ));
+        }
+        if entry_type.is_character_special() || entry_type.is_block_special() {
+            return Err(unsafe_tar_member(
+                compressed_digest,
+                member_path,
+                TarMemberViolation::DeviceNode,
+            ));
+        }
+        if entry_type.is_hard_link() {
+            if let Some(target) = entry
+                .link_name()
+                .map_err(|error| {
+                    malformed_layer_archive(
+                        compressed_digest,
+                        format!(
+                            "could not decode raw hard link target for member {}: {error}",
+                            index + 1
+                        ),
+                    )
+                })?
+                .map(|target| target.into_owned())
+                && !is_safe_layer_member_path(&target)
+            {
+                return Err(unsafe_tar_member(
+                    compressed_digest,
+                    member_path,
+                    TarMemberViolation::HardlinkTarget { target },
+                ));
+            }
+        } else if !entry_type.is_file() && !entry_type.is_dir() && !entry_type.is_symlink() {
+            return Err(unsafe_tar_member(
+                compressed_digest,
+                member_path,
+                TarMemberViolation::UnsupportedEntryType {
+                    entry_type: entry_type.as_byte(),
+                },
+            ));
+        }
+    }
+    Ok(last_end)
+}
+
+fn validate_pax_metadata<R: io::Read>(
+    entry: &mut tar::Entry<'_, R>,
+    global: bool,
+    compressed_digest: &Sha256Digest,
+    index: usize,
+) -> Result<(), ResolveError> {
+    let metadata_path = entry
+        .path()
+        .map(|path| path.into_owned())
+        .unwrap_or_else(|_| PathBuf::from("<PAX metadata>"));
+    let extensions = entry
+        .pax_extensions()
+        .map_err(|error| {
+            malformed_layer_archive(
+                compressed_digest,
+                format!("could not read raw member {index} PAX metadata: {error}"),
+            )
+        })?
+        .expect("the caller passes only PAX extension entries");
+    let mut security_keys = std::collections::HashSet::new();
+    for extension in extensions {
+        let extension = extension.map_err(|error| {
+            malformed_layer_archive(
+                compressed_digest,
+                format!("raw member {index} has malformed PAX metadata: {error}"),
+            )
+        })?;
+        let key = extension.key_bytes();
+        let value = extension.value_bytes();
+        if key.starts_with(b"GNU.sparse.") {
+            return Err(unsafe_tar_member(
+                compressed_digest,
+                metadata_path,
+                TarMemberViolation::UnsupportedPaxAttribute {
+                    key: String::from_utf8_lossy(key).into_owned(),
+                },
+            ));
+        }
+        if matches!(key, b"path" | b"linkpath" | b"size") && !security_keys.insert(key.to_vec()) {
+            return Err(malformed_layer_archive(
+                compressed_digest,
+                format!(
+                    "raw member {index} repeats security-sensitive PAX key {:?}",
+                    String::from_utf8_lossy(key)
+                ),
+            ));
+        }
+        match key {
+            b"path" => {
+                if global {
+                    return Err(unsafe_tar_member(
+                        compressed_digest,
+                        metadata_path,
+                        TarMemberViolation::UnsupportedPaxAttribute {
+                            key: "path".to_owned(),
+                        },
+                    ));
+                }
+                if !is_safe_layer_member_bytes(value) {
+                    return Err(unsafe_tar_member(
+                        compressed_digest,
+                        PathBuf::from(String::from_utf8_lossy(value).into_owned()),
+                        TarMemberViolation::Path,
+                    ));
+                }
+            }
+            b"linkpath" => {
+                if global {
+                    return Err(unsafe_tar_member(
+                        compressed_digest,
+                        metadata_path,
+                        TarMemberViolation::UnsupportedPaxAttribute {
+                            key: "linkpath".to_owned(),
+                        },
+                    ));
+                }
+            }
+            b"size" => {
+                // The raw safety pass must know each payload boundary before
+                // the semantic parser allocates GNU/PAX buffers. tar-rs raw
+                // iteration intentionally ignores PAX size overrides, so
+                // accepting one would create a parser differential capable of
+                // hiding a following header inside file data.
+                return Err(unsafe_tar_member(
+                    compressed_digest,
+                    metadata_path,
+                    TarMemberViolation::UnsupportedPaxAttribute {
+                        key: "size".to_owned(),
+                    },
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn tar_entry_end<R: io::Read>(
+    entry: &tar::Entry<'_, R>,
+    file_len: u64,
+    compressed_digest: &Sha256Digest,
+    index: usize,
+) -> Result<u64, ResolveError> {
+    let padded_size = entry
+        .size()
+        .checked_add(511)
+        .map(|size| size / 512 * 512)
+        .ok_or_else(|| {
+            malformed_layer_archive(
+                compressed_digest,
+                format!("member {index} size overflows the tar block calculation"),
+            )
+        })?;
+    let end = entry
+        .raw_file_position()
+        .checked_add(padded_size)
+        .ok_or_else(|| {
+            malformed_layer_archive(
+                compressed_digest,
+                format!("member {index} end offset overflows"),
+            )
+        })?;
+    if end > file_len {
+        return Err(malformed_layer_archive(
+            compressed_digest,
+            format!(
+                "member {index} extends beyond the archive: padded end {end}, file length {file_len}"
+            ),
+        ));
+    }
+    Ok(end)
+}
+
+fn validate_tar_terminator(
+    file: &mut std::fs::File,
+    last_entry_end: u64,
+    file_len: u64,
+    compressed_digest: &Sha256Digest,
+) -> Result<(), ResolveError> {
+    let trailing = file_len.checked_sub(last_entry_end).ok_or_else(|| {
+        malformed_layer_archive(compressed_digest, "last member ends beyond the archive")
+    })?;
+    if trailing < 1024 {
+        return Err(malformed_layer_archive(
+            compressed_digest,
+            "archive is missing the two zero end-of-archive records",
+        ));
+    }
+    file.seek(io::SeekFrom::Start(last_entry_end))
+        .map_err(|error| malformed_layer_archive(compressed_digest, error))?;
+    let mut remaining = trailing;
+    let mut buffer = [0_u8; 64 * 1024];
+    while remaining > 0 {
+        let chunk_len = usize::try_from(remaining.min(buffer.len() as u64))
+            .expect("the read size is bounded by the fixed buffer");
+        let read = file
+            .read(&mut buffer[..chunk_len])
+            .map_err(|error| malformed_layer_archive(compressed_digest, error))?;
+        if read == 0 {
+            return Err(malformed_layer_archive(
+                compressed_digest,
+                "archive ended while reading end-of-archive records",
+            ));
+        }
+        if buffer[..read].iter().any(|byte| *byte != 0) {
+            return Err(malformed_layer_archive(
+                compressed_digest,
+                "non-zero data follows the final tar member",
+            ));
+        }
+        remaining -= read as u64;
+    }
+    Ok(())
+}
+
+fn is_safe_layer_member_bytes(path: &[u8]) -> bool {
+    if path.is_empty() || path[0] == b'/' || path.contains(&0) {
+        return false;
+    }
+    let mut has_name = false;
+    for component in path.split(|byte| *byte == b'/') {
+        match component {
+            b"" | b"." => {}
+            b".." => return false,
+            _ => has_name = true,
+        }
+    }
+    has_name
+}
+
+fn is_safe_layer_member_path(path: &Path) -> bool {
+    if path.as_os_str().is_empty()
+        || path.as_os_str().as_encoded_bytes().contains(&0)
+        || path.is_absolute()
+    {
+        return false;
+    }
+    let mut has_name = false;
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(_) => has_name = true,
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => return false,
+        }
+    }
+    has_name
+}
+
+fn malformed_layer_archive(
+    compressed_digest: &Sha256Digest,
+    message: impl fmt::Display,
+) -> ResolveError {
+    ResolveError::MalformedLayerArchive {
+        compressed_digest: compressed_digest.clone(),
+        message: message.to_string(),
+    }
+}
+
+fn unsafe_tar_member(
+    compressed_digest: &Sha256Digest,
+    path: PathBuf,
+    reason: TarMemberViolation,
+) -> ResolveError {
+    ResolveError::UnsafeTarMember {
+        compressed_digest: compressed_digest.clone(),
+        path,
+        reason,
+    }
 }
 
 async fn read_config_diff_ids(image: &CachedImageBlobs) -> Result<Vec<Sha256Digest>, ResolveError> {
