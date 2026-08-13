@@ -2394,6 +2394,21 @@ mod tests {
         state.store.load_all().unwrap().get(&id).map(|vm| vm.state)
     }
 
+    /// The exit monitor flips the in-memory record first and persists a
+    /// moment later, so waiting on [`wait_for_state`] and then reading the
+    /// store in the same breath can still see the pre-transition row —
+    /// observed failing once in a fully parallel suite run, passing on every
+    /// rerun. Poll the store for its own sake instead.
+    async fn wait_for_db_state(state: &AppState, id: Uuid, want: VmState) {
+        for _ in 0..100 {
+            if db_state(state, id) == Some(want) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(30)).await;
+        }
+        panic!("vm {id} never persisted {want:?}");
+    }
+
     async fn wait_for_state(state: &AppState, id: Uuid, want: VmState) {
         for _ in 0..100 {
             if memory_state(state, id) == Some(want) {
@@ -2833,6 +2848,12 @@ while True:
         assert!(state.processes.lock().unwrap().is_empty());
     }
 
+    /// x86_64 only: `requires_pci_transport_for_arch` returns false on
+    /// aarch64, whose kernels keep Firecracker's virtio-mmio transport (and
+    /// therefore `pci=off`), so there is no legacy mmio registration to
+    /// repair there and the fixture's `--enable-pci` requirement could never
+    /// be met.
+    #[cfg(target_arch = "x86_64")]
     #[tokio::test]
     async fn start_repairs_a_legacy_ubuntu_mmio_registration() {
         let directory = short_tempdir();
@@ -3498,7 +3519,7 @@ while True:
         .unwrap();
 
         wait_for_state(&state, vm.id, VmState::Stopped).await;
-        assert_eq!(db_state(&state, vm.id), Some(VmState::Stopped));
+        wait_for_db_state(&state, vm.id, VmState::Stopped).await;
         assert!(state.processes.lock().unwrap().is_empty());
     }
 

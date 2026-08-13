@@ -1,71 +1,41 @@
 #!/usr/bin/env bash
-# Pack known M2Image templates from a local image root into
-# `{alias}.tar.zst` archives for a distribution/version package registry.
-#
-# Layout inside each archive matches TemplateSpec relative paths:
-#   kernel/...  rootfs/...
-#
-# Usage:
-#   ./scripts/package-m2images.sh              # alpine + ubuntu + rocky
-#   ./scripts/package-m2images.sh --alias alpine-3.24 [--arch x86_64|aarch64]
-#   IMAGE_ROOT=/var/lib/firecrab/images OUT_DIR=dist/m2images ./scripts/package-m2images.sh
-#   ZSTD_THREADS=4 ./scripts/package-m2images.sh # override the safe 2-thread default
-#
+# Package manifest-defined M2Image artifacts as sparse tar.zst archives.
+
 set -euo pipefail
 
 unset CDPATH
 script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
 repo_dir=$(cd -- "${script_dir}/.." && pwd -P)
 
-IMAGE_ROOT=${IMAGE_ROOT:-${FIRECRAB_IMAGE_ROOT:-$repo_dir/images}}
-OUT_DIR=${OUT_DIR:-}
-ZSTD_LEVEL=${ZSTD_LEVEL:-19}
-ZSTD_THREADS=${ZSTD_THREADS:-2}
-ALIAS_FILTER=all
-M2IMAGE_ARCH=${M2IMAGE_ARCH:-}
-MOTD_FILE=${MOTD_FILE:-$repo_dir/assets/firecrab-motd}
+manifest=${M2IMAGE_MANIFEST:-${repo_dir}/packaging/m2images.json}
+image_root=${IMAGE_ROOT:-${FIRECRAB_IMAGE_ROOT:-${repo_dir}/images}}
+dist_dir=${DIST_DIR:-${repo_dir}/dist/m2images}
+out_dir=${OUT_DIR:-}
+architecture=${M2IMAGE_ARCH:-}
+alias_filter=all
+zstd_level=${ZSTD_LEVEL:-19}
+zstd_threads=${ZSTD_THREADS:-2}
+motd_file=${MOTD_FILE:-${repo_dir}/assets/firecrab-motd}
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/package-m2images.sh [--alias <alias>] [--arch x86_64|aarch64]
+Usage: ./scripts/package-m2images.sh [options]
 
-Packages host-native M2Image artifacts. The architecture defaults to uname -m.
-ARM64 packages default to dist/m2images/aarch64 so they cannot overwrite the
-x86_64 packages in dist/m2images.
+Options:
+  --alias <alias|all>         Package one manifest alias or all aliases
+  --arch <x86_64|aarch64>    Artifact architecture (default: uname -m)
+  --manifest <path>          Alternate release manifest
+  --dist-dir <path>          Package root (default: dist/m2images)
+  -h, --help                 Show this help
+
+Output is <dist-dir>/<arch>/{alias}.tar.zst plus SHA256SUMS. Set OUT_DIR to
+override only the architecture output directory.
 EOF
-  exit 0
 }
-
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -h|--help) usage ;;
-    --alias)
-      [ $# -ge 2 ] || { echo "missing value for --alias" >&2; exit 2; }
-      ALIAS_FILTER=$2
-      shift 2
-      ;;
-    --alias=*)
-      ALIAS_FILTER=${1#--alias=}
-      shift
-      ;;
-    --arch)
-      [ $# -ge 2 ] || { echo "missing value for --arch" >&2; exit 2; }
-      M2IMAGE_ARCH=$2
-      shift 2
-      ;;
-    --arch=*)
-      M2IMAGE_ARCH=${1#--arch=}
-      shift
-      ;;
-    *)
-      echo "unknown argument: $1" >&2
-      exit 2
-      ;;
-  esac
-done
 
 info() { printf '[INFO] %s\n' "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
+require_command() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required"; }
 
 normalize_architecture() {
   case "$1" in
@@ -75,95 +45,68 @@ normalize_architecture() {
   esac
 }
 
-M2IMAGE_ARCH=$(normalize_architecture "${M2IMAGE_ARCH:-$(uname -m)}")
-if [ -z "$OUT_DIR" ]; then
-  if [ "$M2IMAGE_ARCH" = aarch64 ]; then
-    OUT_DIR=$repo_dir/dist/m2images/aarch64
-  else
-    OUT_DIR=$repo_dir/dist/m2images
-  fi
-fi
-
-for command in tar zstd sha256sum debugfs; do
-  command -v "$command" >/dev/null 2>&1 || fail "$command is required"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --alias) [ "$#" -ge 2 ] || fail 'missing value for --alias'; alias_filter=$2; shift 2 ;;
+    --alias=*) alias_filter=${1#--alias=}; shift ;;
+    --arch) [ "$#" -ge 2 ] || fail 'missing value for --arch'; architecture=$2; shift 2 ;;
+    --arch=*) architecture=${1#--arch=}; shift ;;
+    --manifest) [ "$#" -ge 2 ] || fail 'missing value for --manifest'; manifest=$2; shift 2 ;;
+    --manifest=*) manifest=${1#--manifest=}; shift ;;
+    --dist-dir) [ "$#" -ge 2 ] || fail 'missing value for --dist-dir'; dist_dir=$2; shift 2 ;;
+    --dist-dir=*) dist_dir=${1#--dist-dir=}; shift ;;
+    *) fail "unknown argument: $1" ;;
+  esac
 done
 
-[ -d "$IMAGE_ROOT" ] || fail "image root not found: $IMAGE_ROOT"
-[ -f "$MOTD_FILE" ] || fail "MOTD file not found: $MOTD_FILE"
-case "$ZSTD_THREADS" in
-  ''|*[!0-9]*) fail "ZSTD_THREADS must be a non-negative integer" ;;
-esac
+for command in python3 tar zstd sha256sum debugfs cp; do require_command "$command"; done
+python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" validate >/dev/null
+architecture=$(normalize_architecture "${architecture:-$(uname -m)}")
+[ -n "$out_dir" ] || out_dir="${dist_dir}/${architecture}"
+[ -d "$image_root" ] || fail "image root not found: $image_root"
+[ -f "$motd_file" ] || fail "MOTD file not found: $motd_file"
+case "$zstd_threads" in ''|*[!0-9]*) fail 'ZSTD_THREADS must be a non-negative integer' ;; esac
+case "$zstd_level" in ''|*[!0-9]*) fail 'ZSTD_LEVEL must be a non-negative integer' ;; esac
 
-# Print relative artifact paths for a known alias (one per line).
-# Keep in sync with firecrab-api/src/templates.rs default_specs().
-artifacts_for() {
-  case "$1" in
-    alpine-3.24)
-      local alpine_kernel="kernel/vmlinux-alpine-virt-x86_64"
-      [ "$M2IMAGE_ARCH" = aarch64 ] && alpine_kernel="kernel/Image-alpine-virt-aarch64"
-      printf '%s\n' \
-        "$alpine_kernel" \
-        "kernel/initramfs-alpine-virt-${M2IMAGE_ARCH}" \
-        "rootfs/alpine-rootfs-3.24.1-${M2IMAGE_ARCH}.ext4"
-      ;;
-    ubuntu-26.04)
-      local ubuntu_rootfs_arch=amd64
-      local ubuntu_kernel="kernel/vmlinux-ubuntu-26.04-x86_64"
-      [ "$M2IMAGE_ARCH" = aarch64 ] && ubuntu_rootfs_arch=arm64
-      [ "$M2IMAGE_ARCH" = aarch64 ] && ubuntu_kernel="kernel/Image-ubuntu-26.04-aarch64"
-      printf '%s\n' \
-        "$ubuntu_kernel" \
-        "rootfs/ubuntu-rootfs-26.04-${ubuntu_rootfs_arch}.ext4"
-      ;;
-    rocky-9)
-      [ "$M2IMAGE_ARCH" = x86_64 ] || fail 'rocky-9 packaging currently supports x86_64 only'
-      printf '%s\n' \
-        kernel/vmlinux-rocky-9-x86_64 \
-        kernel/initramfs-rocky-9-x86_64 \
-        rootfs/rocky-rootfs-9-x86_64.ext4
-      ;;
-    *)
-      fail "unknown alias: $1 (want alpine-3.24, ubuntu-26.04, or rocky-9)"
-      ;;
-  esac
-}
+mapfile -t known_aliases < <(
+  python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" aliases
+)
+selected_aliases=()
+if [ "$alias_filter" = all ]; then
+  selected_aliases=("${known_aliases[@]}")
+else
+  for alias in "${known_aliases[@]}"; do
+    [ "$alias" = "$alias_filter" ] && selected_aliases=("$alias")
+  done
+  [ "${#selected_aliases[@]}" -eq 1 ] || fail "unknown --alias: $alias_filter"
+fi
 
-aliases_to_pack() {
-  case "$ALIAS_FILTER" in
-    all)
-      printf '%s\n' alpine-3.24 ubuntu-26.04
-      [ "$M2IMAGE_ARCH" = aarch64 ] || printf '%s\n' rocky-9
-      ;;
-    alpine-3.24|ubuntu-26.04) printf '%s\n' "$ALIAS_FILTER" ;;
-    rocky-9)
-      [ "$M2IMAGE_ARCH" = x86_64 ] || fail 'rocky-9 packaging currently supports x86_64 only'
-      printf '%s\n' "$ALIAS_FILTER"
-      ;;
-    *) fail "unknown --alias $ALIAS_FILTER" ;;
-  esac
-}
+mkdir -p "$out_dir"
+package_work_dir=$(mktemp -d "${out_dir}/.package.XXXXXX")
+trap 'rm -rf -- "$package_work_dir"' EXIT
 
 package_one() {
   local alias=$1
-  local out=$OUT_DIR/${alias}.tar.zst
-  local staging=$PACK_WORK_DIR/$alias
-  local -a files=()
+  local output="${out_dir}/${alias}.tar.zst"
+  local staging="${package_work_dir}/${alias}"
+  local rootfs_rel=''
   local rel
-  local rootfs_rel=
-
+  local -a files=()
   mkdir -p "$staging"
 
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
-    [ -f "$IMAGE_ROOT/$rel" ] || fail "missing $IMAGE_ROOT/$rel (build the template first)"
+    [ -f "${image_root}/${rel}" ] || fail "missing ${image_root}/${rel} (build ${alias} first)"
     files+=("$rel")
     case "$rel" in rootfs/*) rootfs_rel=$rel ;; esac
     mkdir -p "$staging/$(dirname -- "$rel")"
-    cp --reflink=auto --sparse=always -- "$IMAGE_ROOT/$rel" "$staging/$rel"
-  done < <(artifacts_for "$alias")
+    cp --reflink=auto --sparse=always -- "${image_root}/${rel}" "$staging/$rel"
+  done < <(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" \
+    artifacts "$alias" "$architecture")
 
-  [ -n "$rootfs_rel" ] || fail "no rootfs artifact configured for $alias"
-  cp -- "$MOTD_FILE" "$staging/.firecrab-motd"
+  [ -n "$rootfs_rel" ] || fail "no rootfs artifact configured for $alias/$architecture"
+  cp -- "$motd_file" "$staging/.firecrab-motd"
   (
     cd "$staging"
     debugfs -w -R 'rm /etc/motd' "$rootfs_rel" >/dev/null 2>&1 || true
@@ -175,37 +118,34 @@ package_one() {
   )
   rm -f -- "$staging/.firecrab-motd"
 
-  info "packing $alias → $out"
-  # --sparse keeps large ext4 images from ballooning when mostly free space.
-  # Keep compression from starving running VMs; 0 remains an explicit opt-in
-  # to zstd's all-core mode through ZSTD_THREADS=0.
+  info "packing $alias/$architecture -> $output"
   tar --sparse -C "$staging" -cf - "${files[@]}" \
-    | zstd -T"$ZSTD_THREADS" -"$ZSTD_LEVEL" -f -o "$out"
-
-  local bytes
-  bytes=$(wc -c <"$out" | tr -d ' ')
-  info "  $alias: $bytes bytes ($(numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || echo "$bytes B"))"
+    | zstd -T"$zstd_threads" -"$zstd_level" -f -o "$output"
+  bytes=$(wc -c <"$output" | tr -d ' ')
+  info "  $alias: $bytes bytes ($(numfmt --to=iec-i --suffix=B "$bytes" 2>/dev/null || printf '%s B' "$bytes"))"
 }
 
-mkdir -p "$OUT_DIR"
-PACK_WORK_DIR=$(mktemp -d "$OUT_DIR/.package.XXXXXX")
-trap 'rm -rf -- "$PACK_WORK_DIR"' EXIT
+for alias in "${selected_aliases[@]}"; do package_one "$alias"; done
 
-packed=0
-while IFS= read -r alias; do
-  package_one "$alias"
-  packed=$((packed + 1))
-done < <(aliases_to_pack)
-
-info "writing $OUT_DIR/SHA256SUMS"
+info "writing ${out_dir}/SHA256SUMS"
 (
-  cd "$OUT_DIR"
-  # All archives present (partial --alias runs must not drop other checksums).
+  cd "$out_dir"
   : >SHA256SUMS
-  shopt -s nullglob
-  for archive in *.tar.zst; do
-    sha256sum "$archive" >>SHA256SUMS
+  # Ignore stale archives from aliases removed from the current manifest.
+  # They may be useful for rollback, but must not become part of this release.
+  for alias in "${known_aliases[@]}"; do
+    [ ! -f "${alias}.tar.zst" ] || sha256sum "${alias}.tar.zst" >>SHA256SUMS
   done
 )
 
-info "done ($packed archive(s) in $OUT_DIR)"
+# A complete cross-architecture catalog is generated only when every manifest
+# package is present. The publisher performs the strict generation before R2
+# upload; this best-effort copy is useful while assembling artifacts locally.
+if python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" catalog \
+  --dist-dir "$dist_dir" --output "${dist_dir}/catalog.json" 2>/dev/null; then
+  info "updated ${dist_dir}/catalog.json"
+else
+  info 'catalog deferred until all x86_64 and aarch64 packages are present'
+fi
+
+info "done (${#selected_aliases[@]} archive(s) in $out_dir)"

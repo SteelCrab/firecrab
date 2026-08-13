@@ -131,7 +131,9 @@ namei -l /var/lib/firecrab/images
 Read the bootstrap job log first.
 
 Common causes are network failure, low memory, chroot DNS, and filesystem tool mismatch.
-Rocky bootstrap needs an installed Rocky builder image.
+Rocky 9.8 host builds and MicroBoot bootstraps download the pinned official
+Container-Base tarball, so verify that the configured Rocky repository and
+its checksum file are reachable.
 
 Only one bootstrap job can run at a time.
 

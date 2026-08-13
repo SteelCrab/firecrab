@@ -1,0 +1,114 @@
+{
+  "$schema": "./m2images.schema.json",
+  "schemaVersion": 1,
+  "registry": {
+    "catalogKey": "catalog.json"
+  },
+  "architectures": [
+    "x86_64",
+    "aarch64"
+  ],
+  "images": [
+    {
+      "alias": "alpine-3.24.1",
+      "distribution": "alpine",
+      "series": "3.24",
+      "version": "3.24.1",
+      "revision": 5,
+      "templateVersion": "alpine-3.24.1-v5",
+      "minDiskGb": 1,
+      "builder": {
+        "script": "scripts/firecracker-menual/install-alpine-rootfs.sh",
+        "requires": [],
+        "environment": {
+          "M2IMAGE_DISTRO_SERIES": "3.24",
+          "M2IMAGE_DISTRO_VERSION": "3.24.1"
+        }
+      },
+      "artifacts": {
+        "x86_64": {
+          "kernel": "kernel/vmlinux-alpine-virt-x86_64",
+          "initrd": "kernel/initramfs-alpine-virt-x86_64",
+          "rootfs": "rootfs/alpine-rootfs-3.24.1-x86_64.ext4",
+          "bootArgs": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw",
+          "registryKey": "alpine/3.24.1/alpine-3.24.1-v5/r5/x86_64/alpine-3.24.1.tar.zst"
+        },
+        "aarch64": {
+          "kernel": "kernel/Image-alpine-virt-aarch64",
+          "initrd": "kernel/initramfs-alpine-virt-aarch64",
+          "rootfs": "rootfs/alpine-rootfs-3.24.1-aarch64.ext4",
+          "bootArgs": "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw",
+          "registryKey": "alpine/3.24.1/alpine-3.24.1-v5/r5/aarch64/alpine-3.24.1.tar.zst"
+        }
+      }
+    },
+    {
+      "alias": "ubuntu-26.04",
+      "distribution": "ubuntu",
+      "series": "26.04",
+      "version": "26.04",
+      "revision": 5,
+      "templateVersion": "ubuntu-26.04-v5",
+      "minDiskGb": 2,
+      "builder": {
+        "script": "scripts/firecracker-menual/install-ubuntu-roofs.sh",
+        "requires": [],
+        "environment": {
+          "M2IMAGE_DISTRO_SERIES": "26.04",
+          "M2IMAGE_DISTRO_VERSION": "26.04"
+        }
+      },
+      "artifacts": {
+        "x86_64": {
+          "kernel": "kernel/vmlinux-ubuntu-26.04-x86_64",
+          "initrd": null,
+          "rootfs": "rootfs/ubuntu-rootfs-26.04-amd64.ext4",
+          "bootArgs": "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw",
+          "registryKey": "ubuntu/26.04/ubuntu-26.04-v5/r5/x86_64/ubuntu-26.04.tar.zst"
+        },
+        "aarch64": {
+          "kernel": "kernel/Image-ubuntu-26.04-aarch64",
+          "initrd": null,
+          "rootfs": "rootfs/ubuntu-rootfs-26.04-arm64.ext4",
+          "bootArgs": "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw",
+          "registryKey": "ubuntu/26.04/ubuntu-26.04-v5/r5/aarch64/ubuntu-26.04.tar.zst"
+        }
+      }
+    },
+    {
+      "alias": "rocky-9.8",
+      "distribution": "rocky",
+      "series": "9.8",
+      "version": "9.8",
+      "revision": 4,
+      "templateVersion": "rocky-9.8-v4",
+      "minDiskGb": 2,
+      "builder": {
+        "script": "scripts/firecracker-menual/install-rocky-rootfs.sh",
+        "requires": [],
+        "environment": {
+          "M2IMAGE_DISTRO_SERIES": "9.8",
+          "M2IMAGE_DISTRO_VERSION": "9.8",
+          "ROCKY_REPOSITORY_BASE": "https://download.rockylinux.org/pub/rocky",
+          "ROCKY_CONTAINER_BUILD": "20260525.0"
+        }
+      },
+      "artifacts": {
+        "x86_64": {
+          "kernel": "kernel/vmlinux-rocky-9.8-x86_64",
+          "initrd": "kernel/initramfs-rocky-9.8-x86_64",
+          "rootfs": "rootfs/rocky-rootfs-9.8-x86_64.ext4",
+          "bootArgs": "console=ttyS0 reboot=k panic=1 net.ifnames=0 root=/dev/vda rootfstype=ext4 rw",
+          "registryKey": "rocky/9.8/rocky-9.8-v4/r4/x86_64/rocky-9.8.tar.zst"
+        },
+        "aarch64": {
+          "kernel": "kernel/Image-rocky-9.8-aarch64",
+          "initrd": "kernel/initramfs-rocky-9.8-aarch64",
+          "rootfs": "rootfs/rocky-rootfs-9.8-aarch64.ext4",
+          "bootArgs": "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rootfstype=ext4 rw",
+          "registryKey": "rocky/9.8/rocky-9.8-v4/r4/aarch64/rocky-9.8.tar.zst"
+        }
+      }
+    }
+  ]
+}

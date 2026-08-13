@@ -51,7 +51,7 @@ curl -s -X POST http://127.0.0.1:3000/api/vms \
   -H 'Content-Type: application/json' \
   -d "{
     \"name\": \"demo\",
-    \"template\": \"alpine-3.24\",
+    \"template\": \"alpine-3.24.1\",
     \"cpu\": 1,
     \"ram\": 512,
     \"diskGb\": 2,

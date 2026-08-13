@@ -3,42 +3,19 @@
 An M2Image contains a kernel and root filesystem.
 It is the source template for new VM disks.
 
-Supported aliases are `alpine-3.24`, `ubuntu-26.04`, and `rocky-9`.
-Alpine and Ubuntu support x86_64 and ARM64.
-Rocky Linux 9 is currently x86_64-only.
+Supported aliases are `alpine-3.24.1`, `ubuntu-26.04`, and `rocky-9.8`.
+All three support x86_64 and ARM64. Rocky is exposed only through the
+versioned `rocky-9.8` alias.
 ARM64 packages keep the distro PE32+ `Image`; x86_64 packages use an ELF
 `vmlinux`. Firecracker cannot boot an x86_64 kernel on an ARM64 host.
 
-Registration reads the kernel's own header and rejects a mismatch.
-A kernel in a format firecrab cannot classify is registered without that check.
-
-A rootfs carrying no `/lib/modules` can only boot on a kernel with the boot
-path built in: `virtio_blk`, `virtio_net`, `virtio_mmio`, and `ext4`.
+Registration reads the kernel's own header and rejects a mismatch; a format
+firecrab cannot classify is registered without that check.
+A rootfs carrying no `/lib/modules` needs those drivers built into the kernel —
+`virtio_blk`, `virtio_net`, `virtio_mmio`, `ext4` — or the matching initrd.
 Firecracker has no PCI, so the virtio drivers must be the MMIO variants.
-An image whose kernel keeps those as modules needs the matching initrd.
 
-## Inspect an OCI image
-
-Ask whether a container image can run on this host before downloading it.
-
-```sh
-curl -s 'http://127.0.0.1:3000/api/oci/inspect?reference=nginx:1.27'
-```
-
-The reference is written as at `docker pull`.
-A bare name resolves to Docker Hub's `library` namespace at `latest`.
-
-The endpoint answers with the manifest digest this host would pull.
-An image with no manifest for this architecture is rejected, and the error
-names the architectures it does offer.
-
-OCI platforms use Go's names, so x86_64 appears as `amd64` and ARM64 as
-`arm64`. These are not the labels the MicroRegistry catalog uses.
-
-Registries are reached over HTTPS.
-A registry on `localhost` or `127.0.0.1` is reached over plain HTTP instead.
-
-This endpoint reads metadata only. It does not import anything yet.
+Container images are a separate source; see [OCI images](oci.md).
 
 ## Build
 
@@ -51,35 +28,92 @@ Build all images supported by the current Linux host architecture.
 Build one alias when needed.
 
 ```sh
-./scripts/build-m2images.sh --alias alpine-3.24
+./scripts/build-m2images.sh --alias alpine-3.24.1
+./scripts/build-m2images.sh --alias rocky-9.8
 ```
 
-Docker is used for Alpine and Rocky.
-Ubuntu also uses a temporary privileged chroot.
+Build each architecture on a native host of the same architecture.
 
-Rocky guests include `dnf` so dashboard package actions work.
-Rebuild `rocky-9` after pulling rootfs script fixes before testing dnf.
+```sh
+./scripts/build-m2images.sh --arch x86_64
+./scripts/build-m2images.sh --arch aarch64
+```
+
+All release builders create ext4 directly with `mkfs.ext4 -d`; Docker is not
+used. Alpine and Ubuntu unpack their official base tarballs. Rocky 9.8
+downloads the official Container-Base archive as a tarball and uses Rocky's
+own `dnf` in a temporary privileged chroot; no container runtime is involved.
+The exact Rocky Container-Base build is pinned by `ROCKY_CONTAINER_BUILD` in
+`packaging/m2images.json` alongside the distribution version.
+
+The host builder uses `sudo` for chroot mounts and ownership-preserving
+extraction. Build x86_64 on x86_64 and ARM64 on ARM64; foreign-architecture
+chroots are rejected with an explicit error.
 
 ## Output
 
 ```text
 dist/m2images/
-  alpine-3.24.tar.zst
-  ubuntu-26.04.tar.zst
-  rocky-9.tar.zst
-  SHA256SUMS
-  aarch64/
-    alpine-3.24.tar.zst
+  catalog.json
+  x86_64/
+    alpine-3.24.1.tar.zst
     ubuntu-26.04.tar.zst
+    rocky-9.8.tar.zst
+    SHA256SUMS
+  aarch64/
+    alpine-3.24.1.tar.zst
+    ubuntu-26.04.tar.zst
+    rocky-9.8.tar.zst
     SHA256SUMS
 ```
 
 Verify packages after building them.
 
 ```sh
-sha256sum -c dist/m2images/SHA256SUMS
-tar --list --zstd --file dist/m2images/alpine-3.24.tar.zst
+cd dist/m2images/x86_64
+sha256sum -c SHA256SUMS
+tar --list --zstd --file alpine-3.24.1.tar.zst
 ```
+
+## Release manifest
+
+`packaging/m2images.json` is the source of truth for distribution versions,
+release revisions, builders, artifact filenames, boot arguments, and R2
+object keys. `packaging/m2images.schema.json` documents its shape, and the
+same manifest is compiled into `firecrab-api` so runtime paths cannot drift
+from the build scripts.
+
+Validate it before a release.
+
+```sh
+python3 scripts/m2image-manifest.py validate
+./scripts/build-m2images.sh --list
+```
+
+To update a distribution, change its `series`, `version`, `revision`, builder
+environment, artifacts, and registry keys in the manifest. Use a new alias
+when compatibility changes (for example `rocky-9.8` to `rocky-9.9`); bump only
+`revision` when rebuilding the same pinned distribution release.
+
+## Publish to Cloudflare R2
+
+Configure an `rclone` S3 remote with provider `Cloudflare`, then publish the
+complete two-architecture release. A dry run validates every package and
+prints all destination object keys.
+
+```sh
+R2_BUCKET=firecrab-registry R2_REMOTE=r2 \
+  ./scripts/publish-m2images-r2.sh --dry-run
+
+R2_BUCKET=firecrab-registry R2_REMOTE=r2 \
+  ./scripts/publish-m2images-r2.sh
+```
+
+Packages are uploaded before `catalog.json`; the catalog is the publication
+commit point. The script requires every manifest alias for both architectures
+to prevent a partial release from replacing the public catalog. Wrangler v4
+is available as a fallback with `--backend wrangler`, but its 315 MB upload
+limit makes `rclone` the normal choice for compressed rootfs packages.
 
 ## Bootstrap
 
@@ -92,7 +126,8 @@ firecrab stops the builder before reading its disk.
 Only one bootstrap job can run at a time.
 The builder is removed after success, failure, or cancellation.
 
-Rocky bootstrap needs an installed Rocky builder image.
+Rocky bootstrap downloads the pinned official Container-Base archive into
+MicroBoot and does not require an already-installed Rocky template or Docker.
 
 ## Install
 
@@ -114,15 +149,14 @@ Restart the API after replacing files outside the API workflow.
 
 ## Add an alias
 
-Update these parts together:
+For a new distribution family, add its manifest entry and builder, then update:
 
-- Image build script
-- Package output
-- `default_specs()` in `firecrab-api/src/templates.rs`
+- Bootstrap guest script mapping
 - CI boot matrix in `.github/workflows/ci.yml`
 
 ## Related
 
+- [OCI images](oci.md)
 - [Installation](installation.md)
 - [API](api.md)
 - [Operations](operations.md)
