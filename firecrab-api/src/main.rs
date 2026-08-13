@@ -12,6 +12,7 @@ mod microboot;
 mod model;
 mod network;
 mod network_policy;
+mod oci;
 mod persistence;
 mod process_metrics;
 mod rootfs;

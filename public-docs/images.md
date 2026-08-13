@@ -17,6 +17,29 @@ path built in: `virtio_blk`, `virtio_net`, `virtio_mmio`, and `ext4`.
 Firecracker has no PCI, so the virtio drivers must be the MMIO variants.
 An image whose kernel keeps those as modules needs the matching initrd.
 
+## Inspect an OCI image
+
+Ask whether a container image can run on this host before downloading it.
+
+```sh
+curl -s 'http://127.0.0.1:3000/api/oci/inspect?reference=nginx:1.27'
+```
+
+The reference is written as at `docker pull`.
+A bare name resolves to Docker Hub's `library` namespace at `latest`.
+
+The endpoint answers with the manifest digest this host would pull.
+An image with no manifest for this architecture is rejected, and the error
+names the architectures it does offer.
+
+OCI platforms use Go's names, so x86_64 appears as `amd64` and ARM64 as
+`arm64`. These are not the labels the MicroRegistry catalog uses.
+
+Registries are reached over HTTPS.
+A registry on `localhost` or `127.0.0.1` is reached over plain HTTP instead.
+
+This endpoint reads metadata only. It does not import anything yet.
+
 ## Build
 
 Build all images supported by the current Linux host architecture.

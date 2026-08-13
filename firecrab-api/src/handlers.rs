@@ -7,6 +7,7 @@ pub mod micro_networks;
 pub mod micro_storages;
 pub mod microregistry;
 pub mod network;
+pub mod oci;
 pub mod shells;
 pub mod storage;
 pub mod vms;
