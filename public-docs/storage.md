@@ -79,6 +79,22 @@ firecrab does not copy an existing disk between pools.
 The disk generation survives stop and start.
 Each start gets a new runtime directory.
 
+## Disk creation
+
+A VM disk begins as a copy-on-write clone of its template.
+firecrab asks the host filesystem for a reflink so both share the same blocks.
+
+Reflinks need a reflink-capable host filesystem such as XFS or Btrfs.
+This is the filesystem holding the `.ext4` files, not the ext4 filesystem inside them.
+
+A reflink cannot cross filesystems.
+Keep the image root and the storage root on one filesystem.
+
+firecrab falls back to a full byte copy whenever the host refuses.
+The disk is identical either way; only creation speed and disk usage differ.
+
+Run `firecrab-doctor` to check for a split layout.
+
 ## Delete
 
 A pool cannot be deleted while a VM uses it.

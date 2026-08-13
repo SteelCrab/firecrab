@@ -769,6 +769,53 @@ check_image_install_tools() {
     pass
 }
 
+resolve_vms_root() {
+    local candidate
+    for candidate in "$DATADIR/vms" "$PWD/data/vms" "$DATADIR" "$PWD/data"; do
+        [ -d "$candidate" ] || continue
+        (cd -- "$candidate" && pwd)
+        return
+    done
+}
+
+# Reports only the one thing an operator can act on: a template and the VM
+# disks cloned from it sitting on two different filesystems.
+#
+# firecrab creates each VM disk with a FICLONE reflink and falls back to a full
+# byte copy when the host refuses (firecrab-api/src/rootfs.rs). A reflink cannot
+# cross filesystems, so a split layout silently costs a full template copy per
+# VM — the symptom is slow VM creation on a host chosen for Btrfs/XFS precisely
+# to avoid it. Whether a single filesystem supports reflinks at all is a host
+# choice rather than a misconfiguration, so that case stays quiet.
+#
+# Both probes are read-only; doctor must not write to the host, so support is
+# never confirmed by attempting a real clone.
+check_reflink() {
+    local roots image_root vms_root image_device vms_device image_type vms_type
+    mapfile -t roots < <(resolve_image_roots)
+    vms_root=$(resolve_vms_root)
+
+    if [ "${#roots[@]}" -eq 0 ] || [ -z "$vms_root" ] || ! have stat; then
+        pass
+        return
+    fi
+    image_root=${roots[0]}
+
+    image_device=$(stat -c %d -- "$image_root" 2>/dev/null || true)
+    vms_device=$(stat -c %d -- "$vms_root" 2>/dev/null || true)
+    if [ -z "$image_device" ] || [ -z "$vms_device" ] || [ "$image_device" = "$vms_device" ]; then
+        pass
+        return
+    fi
+
+    image_type=$(stat -f -c %T -- "$image_root" 2>/dev/null || printf unknown)
+    vms_type=$(stat -f -c %T -- "$vms_root" 2>/dev/null || printf unknown)
+    skip "reflink: templates and VM disks are on different filesystems" \
+        "$(printf 'templates: %s (%s)\nVM disks:  %s (%s)' \
+            "$image_root" "$image_type" "$vms_root" "$vms_type")" \
+        "put both on one XFS/Btrfs filesystem, or accept a full template copy per VM"
+}
+
 # --- run ---------------------------------------------------------------------
 
 check_kvm
@@ -781,6 +828,7 @@ check_ufw
 check_data_root
 check_images
 check_image_install_tools
+check_reflink
 
 if [ "$FAIL" -eq 0 ] && [ "$SKIP" -eq 0 ]; then
     printf 'doctor: all checks passed (%s ok)\n' "$OK"
