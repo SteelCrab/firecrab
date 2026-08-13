@@ -8,6 +8,7 @@ mod guest_agent;
 mod handlers;
 mod image_install;
 mod ipam;
+mod m2image_manifest;
 mod microboot;
 mod model;
 mod network;

@@ -1,40 +1,52 @@
 #!/usr/bin/env bash
-# Build a Firecracker-ready Rocky Linux 9 rootfs with Rocky's own EL9 kernel.
+# Build a Firecracker-ready version-pinned Rocky Linux rootfs with its EL9 kernel.
 #
 # The result deliberately stays a direct ext4 file rather than Rocky's cloud
 # QCOW2 image: firecrab resizes and customizes rootfs files with e2fsprogs.
-# Everything privileged happens in a throwaway official Rocky container, so
-# the host needs Docker but no root chroot or loop mounts.
+# The official Rocky Container-Base tarball is unpacked as a temporary chroot;
+# Docker and other OCI runtimes are not used.
 #
-# EL9 configures virtio-pci but deliberately leaves CONFIG_VIRTIO_MMIO off.
-# The Rocky template therefore asks the VMM for PCI transport at runtime;
-# its initramfs still carries virtio_blk/net and ext4 for the guest rootfs.
-# virtio_net is explicitly loaded because EL9 does not request it early
-# enough from Firecracker's minimal PCI topology on every boot.
+# EL9 x86_64 uses virtio-pci because its kernel leaves CONFIG_VIRTIO_MMIO off.
+# Rocky's aarch64 kernel supports Firecracker's normal virtio-mmio transport.
+# Both initramfs variants carry their architecture's transport plus
+# virtio_blk/net and ext4 for the guest rootfs.
 
 set -euo pipefail
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-repo_dir=$(CDPATH= cd -- "${script_dir}/../.." && pwd -P)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
+script_path="${script_dir}/$(basename -- "$0")"
 
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
 build_dir="${repo_dir}/build/rocky-rootfs"
-kernel_image_name='vmlinux-rocky-9-x86_64'
-initrd_image_name='initramfs-rocky-9-x86_64'
-rootfs_image_name='rocky-rootfs-9-x86_64.ext4'
+rocky_release=${M2IMAGE_DISTRO_VERSION:-9.8}
+rocky_repository_base=${ROCKY_REPOSITORY_BASE:-https://download.rockylinux.org/pub/rocky}
+rocky_container_build=${ROCKY_CONTAINER_BUILD:-20260525.0}
 rootfs_size='2G'
 rootfs_hostname='firecrab'
-docker_bin='docker'
-docker_image='rockylinux:9'
 extract_vmlinux="${script_dir}/extract-vmlinux"
+extract_arm64_image="${script_dir}/extract-arm64-image"
+container_mounts=()
 
-# Use Rocky's fixed public repositories rather than the container image's
-# mirrorlist. The minimal Docker image does not define the `rltype` variable
-# that its mirrorlist URL expands, which otherwise leaves a literal `$rltype`
-# in the request and returns 404.
-rocky_baseos_url='https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/'
-rocky_appstream_url='https://download.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/'
+case "${M2IMAGE_ARCH:-$(uname -m 2>/dev/null || printf unknown)}" in
+  x86_64|amd64)
+    rocky_arch='x86_64'
+    kernel_image_name="vmlinux-rocky-${rocky_release}-x86_64"
+    ;;
+  aarch64|arm64)
+    rocky_arch='aarch64'
+    kernel_image_name="Image-rocky-${rocky_release}-aarch64"
+    ;;
+  *)
+    printf '[FAIL] Unsupported architecture. Rocky Linux supports x86_64 and aarch64.\n' >&2
+    exit 1
+    ;;
+esac
+initrd_image_name="initramfs-rocky-${rocky_release}-${rocky_arch}"
+rootfs_image_name="rocky-rootfs-${rocky_release}-${rocky_arch}.ext4"
+container_name="Rocky-9-Container-Base-${rocky_release}-${rocky_container_build}.${rocky_arch}.oci.tar.xz"
+container_url="${rocky_repository_base}/${rocky_release}/images/${rocky_arch}/${container_name}"
 
 # `kernel` provides the matching kernel-core/modules pair. Rocky's generic
 # kernel has virtio/ext4 as modules, so dracut below produces a generic initrd
@@ -57,22 +69,47 @@ abs_dir() {
   cd "$1" && pwd -P
 }
 
+verify_native_architecture() {
+  local host_arch=''
+
+  case "$(uname -m 2>/dev/null || printf unknown)" in
+    x86_64|amd64) host_arch='x86_64' ;;
+    aarch64|arm64) host_arch='aarch64' ;;
+    *) fail 'Unsupported build host architecture.' ;;
+  esac
+  [ "$host_arch" = "$rocky_arch" ] \
+    || fail "Host-native Rocky chroot requires a ${rocky_arch} host (current: ${host_arch})."
+}
+
 resolve_ssh_public_key() {
-  local candidate=''
+  local candidate=${FIRECRAB_SSH_PUBLIC_KEY:-}
   local sudo_home=''
+
+  if [ -n "$candidate" ]; then
+    [ -s "$candidate" ] \
+      || fail "FIRECRAB_SSH_PUBLIC_KEY is not a readable public key: ${candidate}"
+    printf '%s\n' "$candidate"
+    return
+  fi
 
   if [ -n "${SUDO_UID:-}" ] && command -v getent >/dev/null 2>&1; then
     sudo_home=$(getent passwd "$SUDO_UID" | cut -d: -f6 || true)
-    if [ -n "$sudo_home" ]; then
-      candidate="${sudo_home}/.ssh/id_ed25519.pub"
-    fi
-  fi
-  if [ -z "$candidate" ]; then
-    candidate="${HOME:-}/.ssh/id_ed25519.pub"
+  elif [ -n "${HOME:-}" ]; then
+    sudo_home=$HOME
   fi
 
-  [ -n "$candidate" ] && [ -f "$candidate" ] || \
-    fail 'Host SSH public key not found: ~/.ssh/id_ed25519.pub'
+  if [ -n "$sudo_home" ]; then
+    for candidate in \
+      "$sudo_home/.ssh/id_ed25519.pub" \
+      "$sudo_home/.ssh/id_ecdsa.pub" \
+      "$sudo_home/.ssh/id_rsa.pub"; do
+      [ ! -s "$candidate" ] || { printf '%s\n' "$candidate"; return; }
+    done
+  fi
+
+  candidate="${build_dir}/no-authorized-key.pub"
+  : >"$candidate"
+  info 'no host SSH public key found; building with serial-console access only' >&2
   printf '%s\n' "$candidate"
 }
 
@@ -86,9 +123,13 @@ rootfs_size=$1
 rootfs_hostname=$2
 rootfs_packages=$3
 initrd_image_name=$4
+rocky_release=$5
+rocky_arch=$6
+rootfs_image_name=$7
+rocky_repository_base=$8
 
-baseos_url='https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/'
-appstream_url='https://download.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/'
+baseos_url="${rocky_repository_base}/${rocky_release}/BaseOS/${rocky_arch}/os/"
+appstream_url="${rocky_repository_base}/${rocky_release}/AppStream/${rocky_arch}/os/"
 
 info() { printf '[ROCKY] %s\n' "$*"; }
 fail() { printf '[ROCKY:FAIL] %s\n' "$*" >&2; exit 1; }
@@ -142,29 +183,29 @@ dnf_common=(
 info 'installing e2fsprogs in the throwaway builder container'
 dnf -q -y "${dnf_common[@]}" install e2fsprogs
 
-info 'installing Rocky Linux 9 guest packages into the staging root'
+info "installing Rocky Linux ${rocky_release} guest packages into the staging root"
 # EL9 kernel RPM post-processing invokes dracut under the install root. Give
 # that chroot the normal pseudo-filesystems before the transaction so its own
 # first initramfs pass succeeds; the explicit generic pass below then replaces
 # it with Firecracker's driver set.
 mount_chroot_fs
 # shellcheck disable=SC2086 -- package names are a deliberate whitespace list.
-dnf -q -y --installroot="$staging" --releasever=9 --setopt=reposdir=/etc/yum.repos.d \
+dnf -q -y --installroot="$staging" --releasever="$rocky_release" --setopt=reposdir=/etc/yum.repos.d \
   "${dnf_common[@]}" install $rootfs_packages
 
 # Stock rocky.repo mirrorlists expand $rltype, which this image never sets
 # (same Docker BaseOS 404 the build avoids). Pin public baseurls for guest dnf.
-cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<'EOF_REPOS'
+cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<EOF_REPOS
 [baseos]
-name=Rocky Linux $releasever - BaseOS (firecrab)
-baseurl=https://download.rockylinux.org/pub/rocky/$releasever/BaseOS/$basearch/os/
+name=Rocky Linux \$releasever - BaseOS (firecrab)
+baseurl=${rocky_repository_base}/\$releasever/BaseOS/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
 
 [appstream]
-name=Rocky Linux $releasever - AppStream (firecrab)
-baseurl=https://download.rockylinux.org/pub/rocky/$releasever/AppStream/$basearch/os/
+name=Rocky Linux \$releasever - AppStream (firecrab)
+baseurl=${rocky_repository_base}/\$releasever/AppStream/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
@@ -325,33 +366,47 @@ kernel_version=$(basename "$(dirname "$vmlinuz_path")")
 initrd_path="$staging/boot/initramfs-${kernel_version}.img"
 kernel_config="$staging/usr/lib/modules/${kernel_version}/config"
 
-# Firecracker normally presents virtio devices over MMIO. Rocky's official
-# EL9 kernel intentionally omits that driver, but supports PCI transport.
-# Guard the image contract here so an upstream kernel package change cannot
-# silently produce a template which the runtime selector cannot boot.
-if ! grep -Eq '^CONFIG_VIRTIO_PCI=(y|m)$' "$kernel_config"; then
-  fail "Rocky kernel lacks CONFIG_VIRTIO_PCI: ${kernel_config}"
-fi
-if grep -qx '# CONFIG_VIRTIO_MMIO is not set' "$kernel_config"; then
-  info 'Rocky kernel has no virtio-mmio; the Rocky template will use Firecracker PCI transport'
-fi
+# Guard each architecture's transport contract so a kernel package change
+# cannot silently produce a template the runtime cannot boot.
+virtio_drivers='virtio_blk virtio_net ext4'
+case "$rocky_arch" in
+  x86_64)
+    grep -Eq '^CONFIG_VIRTIO_PCI=(y|m)$' "$kernel_config" \
+      || fail "Rocky x86_64 kernel lacks CONFIG_VIRTIO_PCI: ${kernel_config}"
+    if grep -q '^CONFIG_VIRTIO_PCI=m$' "$kernel_config"; then
+      virtio_drivers="${virtio_drivers} virtio_pci"
+    fi
+    ;;
+  aarch64)
+    grep -Eq '^CONFIG_VIRTIO_MMIO=(y|m)$' "$kernel_config" \
+      || fail "Rocky aarch64 kernel lacks CONFIG_VIRTIO_MMIO: ${kernel_config}"
+    if grep -q '^CONFIG_VIRTIO_MMIO=m$' "$kernel_config"; then
+      virtio_drivers="${virtio_drivers} virtio_mmio"
+    fi
+    ;;
+esac
 
-# A generic initramfs is necessary: it must not inherit the Docker builder's
-# host hardware and must contain the virtio PCI/block/network/ext4 modules
-# needed before / is mounted. The temporary mounts are private to this privileged builder
+# A generic initramfs is necessary: it must not inherit the build host's
+# host hardware and must contain the architecture-appropriate virtio
+# transport plus block/network/ext4 modules needed before / is mounted. The
+# temporary mounts are private to this privileged builder
 # container; they let target-root dracut see normal /proc, /sys, /dev, and
 # /run while retaining the guest's own kernel modules and dracut files.
 info "building generic dracut initramfs for ${kernel_version}"
 chroot "$staging" /usr/bin/dracut --force --no-hostonly \
-  --add-drivers 'virtio_blk virtio_pci virtio_net ext4' \
+  --add-drivers "$virtio_drivers" \
   "/boot/initramfs-${kernel_version}.img" "$kernel_version"
 cleanup_chroot_mounts
 
 [ -s "$initrd_path" ] || fail "dracut did not create ${initrd_path}"
 test -e "$staging/etc/os-release" || fail 'missing /etc/os-release'
+grep -Eq "^VERSION_ID=\"?${rocky_release//./\\.}\"?$" "$staging/etc/os-release" \
+  || fail "Rocky rootfs is not pinned to VERSION_ID ${rocky_release}"
 test -e "$staging/sbin/init" || fail 'missing /sbin/init'
 test -x "$staging/usr/sbin/sshd" || fail 'missing sshd'
-test -s "$staging/root/.ssh/authorized_keys" || fail 'missing root authorized_keys'
+if [ -s /input/id_ed25519.pub ]; then
+  test -s "$staging/root/.ssh/authorized_keys" || fail 'missing root authorized_keys'
+fi
 network_profile="$staging/etc/NetworkManager/system-connections/firecrab-ethernet.nmconnection"
 test -e "$network_profile" || fail 'missing transport-independent DHCP profile'
 if grep -q '^interface-name=' "$network_profile"; then
@@ -363,7 +418,14 @@ cp "$vmlinuz_path" /kernel-out/vmlinuz-rocky-raw
 cp "$initrd_path" "/kernel-out/${initrd_image_name}"
 chmod 0644 /kernel-out/vmlinuz-rocky-raw "/kernel-out/${initrd_image_name}"
 
-rootfs_image="/out/rocky-rootfs-9-x86_64.ext4"
+# Dropped from the rootfs now that it is in /kernel-out: the runtime boots
+# the initrd artifact this just produced, never one from inside the guest
+# filesystem, so keeping the 27.9 MB duplicate only inflates every package.
+# Same reasoning (and the same %ghost ownership) as
+# bootstrap-rocky-in-guest.sh's copy of this step.
+rm -f "$initrd_path"
+
+rootfs_image="/out/${rootfs_image_name}"
 rootfs_tmp="${rootfs_image}.tmp"
 rm -f "$rootfs_tmp"
 truncate -s "$rootfs_size" "$rootfs_tmp"
@@ -375,20 +437,40 @@ echo "ROOTFS_IMAGE=${rootfs_image}"
 EOF
 }
 
-extract_kernel() {
+# True when the file is a raw Linux/arm64 Image: ARM64_IMAGE_MAGIC ("ARMd")
+# at offset 0x38, the field Firecracker's loader checks before it jumps into
+# the image. Read, never written — a wrapped kernel (a UKI or an EFI zboot
+# image) with the magic stamped on top passes the loader and then dies
+# silently in the guest instead of failing here.
+is_arm64_image() {
+  [ -s "$1" ] && [ "$(od -An -tx1 -j56 -N4 "$1" | tr -d ' \n')" = '41524d64' ]
+}
+
+prepare_kernel() {
   local raw_path="${kernel_artifact_dir}/vmlinuz-rocky-raw"
   local kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
   local kernel_image_tmp="${kernel_image_path}.tmp"
 
   [ -s "$raw_path" ] || fail "Rocky kernel was not copied out to ${raw_path}"
-  info "extracting ELF vmlinux from: ${raw_path}"
-  if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
-    rm -f "$kernel_image_tmp"
-    fail "extract-vmlinux could not extract an ELF vmlinux from ${raw_path}"
-  fi
-  if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
-    rm -f "$kernel_image_tmp"
-    fail "extracted kernel is not an ELF image: ${raw_path}"
+  if [ "$rocky_arch" = aarch64 ]; then
+    # Rocky's arm64 vmlinuz is an EFI zboot image (a PE wrapper around a
+    # gzip-compressed Image), which Firecracker cannot boot — unwrap it.
+    info "extracting raw ARM64 Image from: ${raw_path}"
+    if ! "$extract_arm64_image" "$raw_path" >"$kernel_image_tmp" \
+      || ! is_arm64_image "$kernel_image_tmp"; then
+      rm -f "$kernel_image_tmp"
+      fail "extract-arm64-image could not extract a raw ARM64 Image from ${raw_path}"
+    fi
+  else
+    info "extracting x86_64 ELF vmlinux from: ${raw_path}"
+    if ! "$extract_vmlinux" "$raw_path" >"$kernel_image_tmp"; then
+      rm -f "$kernel_image_tmp"
+      fail "extract-vmlinux could not extract an ELF vmlinux from ${raw_path}"
+    fi
+    if ! file "$kernel_image_tmp" | grep -q 'ELF'; then
+      rm -f "$kernel_image_tmp"
+      fail "extracted kernel is not an ELF image: ${raw_path}"
+    fi
   fi
   chmod 0644 "$kernel_image_tmp"
   mv "$kernel_image_tmp" "$kernel_image_path"
@@ -400,45 +482,190 @@ extract_kernel() {
   info "Rocky initramfs: ${kernel_artifact_dir}/${initrd_image_name}"
 }
 
+cleanup_container_mounts() {
+  local target
+
+  for target in "${container_mounts[@]}"; do
+    umount -R "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || true
+  done
+  container_mounts=()
+}
+
+mount_container_tree() {
+  local source=$1
+  local target=$2
+
+  mkdir -p "$target"
+  mount --rbind "$source" "$target"
+  mount --make-rslave "$target"
+  container_mounts=("$target" "${container_mounts[@]}")
+}
+
+download_container_base() {
+  local archive_path=$1
+  local checksum_path=$2
+  local checksum_tmp="${checksum_path}.tmp"
+  local expected_sha256=''
+
+  if [ ! -s "$archive_path" ]; then
+    info "downloading Rocky ${rocky_release} ${rocky_arch} Container-Base"
+    curl -fsSL "$container_url" -o "${archive_path}.tmp" \
+      || { rm -f "${archive_path}.tmp"; fail "Could not download ${container_url}"; }
+    mv "${archive_path}.tmp" "$archive_path"
+  else
+    info "reusing Rocky Container-Base archive: ${archive_path}"
+  fi
+
+  if curl -fsSL "${container_url}.CHECKSUM" -o "$checksum_tmp"; then
+    mv "$checksum_tmp" "$checksum_path"
+  else
+    rm -f "$checksum_tmp"
+    [ -s "$checksum_path" ] \
+      || fail "Could not download ${container_url}.CHECKSUM"
+    info "reusing Rocky Container-Base checksum: ${checksum_path}"
+  fi
+
+  expected_sha256=$(sed -n "s/^SHA256 (${container_name}) = //p" "$checksum_path" | head -n 1)
+  if [ -z "$expected_sha256" ]; then
+    expected_sha256=$(awk -v file="$container_name" '$2 == file || $2 == "*" file { print $1; exit }' "$checksum_path")
+  fi
+  [ -n "$expected_sha256" ] \
+    || fail "Could not parse the checksum for ${container_name}"
+  printf '%s  %s\n' "$expected_sha256" "$archive_path" | sha256sum -c - >/dev/null \
+    || fail 'Rocky Container-Base checksum verification failed'
+}
+
+extract_container_base() {
+  local archive_path=$1
+  local container_root=$2
+  local archive_tree=$3
+  local manifest_digest=''
+  local -a layers=()
+  local layer
+
+  rm -rf "$container_root" "$archive_tree"
+  mkdir -p "$container_root" "$archive_tree"
+  tar -xJf "$archive_path" -C "$archive_tree"
+
+  if [ -f "$archive_tree/index.json" ]; then
+    manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' \
+      "$archive_tree/index.json")
+    if [ -z "$manifest_digest" ] || [ "$manifest_digest" = null ]; then
+      fail 'Could not read Container-Base manifest digest from index.json'
+    fi
+    mapfile -t layers < <(
+      jq -r '.layers[].digest | sub("^sha256:"; "")' \
+        "$archive_tree/blobs/sha256/${manifest_digest}"
+    )
+    [ "${#layers[@]}" -gt 0 ] || fail 'Container-Base OCI manifest has no layers'
+    for layer in "${layers[@]}"; do
+      [ -f "$archive_tree/blobs/sha256/${layer}" ] \
+        || fail "Container-Base layer is missing: ${layer}"
+      tar -xf "$archive_tree/blobs/sha256/${layer}" -C "$container_root"
+    done
+  elif [ -f "$archive_tree/manifest.json" ]; then
+    mapfile -t layers < <(jq -r '.[0].Layers[]' "$archive_tree/manifest.json")
+    [ "${#layers[@]}" -gt 0 ] || fail 'Container-Base Docker manifest has no layers'
+    for layer in "${layers[@]}"; do
+      [ -f "$archive_tree/$layer" ] || fail "Container-Base layer is missing: ${layer}"
+      tar -xf "$archive_tree/$layer" -C "$container_root"
+    done
+  else
+    fail 'Container-Base is neither an OCI nor Docker archive'
+  fi
+
+  [ -x "$container_root/usr/bin/dnf" ] || fail 'Container-Base is missing usr/bin/dnf'
+  [ -x "$container_root/bin/bash" ] || fail 'Container-Base is missing bin/bash'
+}
+
+restore_output_ownership() {
+  if [ -z "${SUDO_UID:-}" ] || [ -z "${SUDO_GID:-}" ]; then
+    return 0
+  fi
+
+  chown "${SUDO_UID}:${SUDO_GID}" \
+    "${artifact_dir}/${rootfs_image_name}" \
+    "${kernel_artifact_dir}/${kernel_image_name}" \
+    "${kernel_artifact_dir}/${initrd_image_name}"
+  chmod u+rw,go+r \
+    "${artifact_dir}/${rootfs_image_name}" \
+    "${kernel_artifact_dir}/${kernel_image_name}" \
+    "${kernel_artifact_dir}/${initrd_image_name}"
+}
+
 main() {
   [ "$#" -eq 0 ] || fail 'install-rocky-rootfs.sh does not accept arguments.'
-  [ "$(uname -m)" = x86_64 ] || fail 'Rocky Linux 9 template builder currently supports x86_64 only.'
 
-  for command in docker file find grep mkdir mv rm sort tail uname; do
+  for command in awk chmod chown chroot cp curl file find grep head id install jq \
+    mkdir mount mv od rm sed sha256sum sort tail tar truncate umount uname xz; do
     require_command "$command"
   done
-  [ -x "$extract_vmlinux" ] || fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  if [ "$rocky_arch" = x86_64 ]; then
+    [ -x "$extract_vmlinux" ] || fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  else
+    [ -x "$extract_arm64_image" ] || fail "extract-arm64-image helper not found or not executable: ${extract_arm64_image}"
+  fi
+
+  if [ "$(id -u)" -ne 0 ]; then
+    require_command sudo
+    exec sudo env \
+      "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
+      "M2IMAGE_DISTRO_SERIES=${M2IMAGE_DISTRO_SERIES:-9.8}" \
+      "M2IMAGE_DISTRO_VERSION=${rocky_release}" \
+      "ROCKY_REPOSITORY_BASE=${rocky_repository_base}" \
+      "ROCKY_CONTAINER_BUILD=${rocky_container_build}" \
+      "FIRECRAB_SSH_PUBLIC_KEY=${FIRECRAB_SSH_PUBLIC_KEY:-}" \
+      "$script_path"
+  fi
 
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
   kernel_artifact_dir=$(abs_dir "$kernel_artifact_dir")
+  verify_native_architecture
+  trap cleanup_container_mounts EXIT
+
   local ssh_public_key
   ssh_public_key=$(resolve_ssh_public_key)
   local staging_dir="${build_dir}/mnt"
   local configure_script="${build_dir}/configure.sh"
-  mkdir -p "$staging_dir"
+  local download_dir="${build_dir}/downloads"
+  local archive_path="${download_dir}/${container_name}"
+  local checksum_path="${download_dir}/${container_name}.CHECKSUM"
+  local archive_tree="${build_dir}/container-archive"
+  local container_root="${build_dir}/container-root"
+
+  mkdir -p "$download_dir" "$staging_dir"
+  download_container_base "$archive_path" "$checksum_path"
+  info "extracting Rocky ${rocky_release} ${rocky_arch} Container-Base tarball"
+  extract_container_base "$archive_path" "$container_root" "$archive_tree"
+
   write_configure_script "$configure_script"
+  install -m 0755 "$configure_script" "$container_root/configure.sh"
+  install -d -m 0755 "$container_root/input"
+  install -m 0644 "$ssh_public_key" "$container_root/input/id_ed25519.pub"
+  rm -f "$container_root/etc/resolv.conf"
+  cp /etc/resolv.conf "$container_root/etc/resolv.conf"
 
-  info "building Rocky Linux 9 rootfs via official ${docker_image} + BaseOS/AppStream"
-  # dracut runs inside the newly-installed guest root and needs private bind
-  # mounts for /proc, /sys, /dev, and /run. Mount needs SYS_ADMIN plus the
-  # Docker profiles relaxed for that syscall; this remains narrower than a
-  # privileged container, and all mounts stay in the throwaway container's
-  # mount namespace.
-  "$docker_bin" run --rm \
-    --cap-add=SYS_ADMIN \
-    --security-opt apparmor=unconfined \
-    --security-opt seccomp=unconfined \
-    -v "${configure_script}:/configure.sh:ro" \
-    -v "${ssh_public_key}:/input/id_ed25519.pub:ro" \
-    -v "${staging_dir}:/work/rootfs" \
-    -v "${artifact_dir}:/out" \
-    -v "${kernel_artifact_dir}:/kernel-out" \
-    "$docker_image" bash /configure.sh "$rootfs_size" "$rootfs_hostname" "$rootfs_packages" "$initrd_image_name"
+  mkdir -p "$container_root/proc"
+  mount -t proc proc "$container_root/proc"
+  container_mounts=("$container_root/proc" "${container_mounts[@]}")
+  mount_container_tree /sys "$container_root/sys"
+  mount_container_tree /dev "$container_root/dev"
+  mount_container_tree /run "$container_root/run"
+  mount_container_tree "$staging_dir" "$container_root/work/rootfs"
+  mount_container_tree "$artifact_dir" "$container_root/out"
+  mount_container_tree "$kernel_artifact_dir" "$container_root/kernel-out"
 
-  extract_kernel
+  info "building Rocky Linux ${rocky_release} ${rocky_arch} via native chroot + direct ext4"
+  chroot "$container_root" /bin/bash /configure.sh \
+      "$rootfs_size" "$rootfs_hostname" "$rootfs_packages" \
+      "$initrd_image_name" "$rocky_release" "$rocky_arch" "$rootfs_image_name" \
+      "$rocky_repository_base"
+
+  prepare_kernel
   [ -s "${artifact_dir}/${rootfs_image_name}" ] || \
     fail "Rocky rootfs image was not created: ${artifact_dir}/${rootfs_image_name}"
+  restore_output_ownership
   info "Rocky rootfs image: ${artifact_dir}/${rootfs_image_name}"
 }
 

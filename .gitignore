@@ -41,3 +41,4 @@ id_ed25519*
 
 # Local design notes and project records are never published.
 /docs/
+.zed/

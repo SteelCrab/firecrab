@@ -7,23 +7,41 @@ repo_dir=$(CDPATH='' cd -- "${script_dir}/../.." && pwd -P)
 script_path="${script_dir}/$(basename -- "$0")"
 
 ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
-ubuntu_series_setting='latest'
+ubuntu_series_setting=${M2IMAGE_DISTRO_SERIES:-26.04}
 artifact_dir="${repo_dir}/images/rootfs"
 kernel_artifact_dir="${repo_dir}/images/kernel"
 kernel_image_name=''
 extract_vmlinux="${script_dir}/extract-vmlinux"
+extract_arm64_image="${script_dir}/extract-arm64-image"
 build_dir="${repo_dir}/build/ubuntu-rootfs"
 rootfs_image=''
 rootfs_link=''
 rootfs_size='2G'
 rootfs_hostname='firecrab'
 
-# linux-image-generic: Ubuntu's own officially-maintained cloud/generic
-# kernel package (public-docs/images.md) — replaces the
-# self-built vanilla kernel every template used to share, so security
-# patches and driver support follow Ubuntu's own release cadence instead
-# of this project having to track kernel.org itself.
-rootfs_boot_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-generic'
+# linux-image-virtual: Ubuntu's own officially-maintained kernel package
+# (public-docs/images.md) — replaces the self-built vanilla kernel every
+# template used to share, so security patches and driver support follow
+# Ubuntu's own release cadence instead of this project having to track
+# kernel.org itself.
+#
+# The *virtual* meta-package, not *generic*, though both resolve to the
+# identical binary (both Depend on linux-image-<abi>-generic, so the kernel,
+# its cadence and its module set are unchanged). The difference is one line
+# of packaging: linux-image-generic additionally carries
+# "Depends: linux-firmware | linux-firmware-minimal", and apt always takes
+# the first alternative — which is a hard dependency, so
+# --no-install-recommends cannot decline it. That dragged in every
+# linux-firmware-* subpackage: Qualcomm/Intel/Broadcom/Marvell/Realtek
+# wireless, NVIDIA/AMD/Intel graphics, Mellanox/Netronome/QLogic NICs.
+# Measured inside the built image with debugfs, that was 656 MB across 5233
+# files — 53% of the rootfs's 1.24 GiB of content — for hardware a
+# Firecracker microVM cannot have. None of it is reachable at boot either:
+# this template ships no initrd (`"initrd": null` in packaging/m2images.json)
+# and mounts root=/dev/vda straight from the kernel's built-in
+# CONFIG_VIRTIO_BLK/VIRTIO_MMIO/EXT4_FS, so firmware and modules play no part
+# in bringing the guest up.
+rootfs_boot_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-virtual'
 rootfs_packages="${rootfs_boot_packages} iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server"
 
 mount_dir=''
@@ -139,7 +157,7 @@ cleanup() {
 trap cleanup EXIT
 
 detect_ubuntu_arch() {
-  case "$(uname -m 2>/dev/null || printf 'unknown')" in
+  case "${M2IMAGE_ARCH:-${UBUNTU_ARCH:-$(uname -m 2>/dev/null || printf 'unknown')}}" in
     x86_64 | amd64)
       printf '%s\n' 'amd64'
       ;;
@@ -519,24 +537,34 @@ install_rootfs_packages() {
   cleanup_chroot_mounts
 }
 
+# True when the file is a raw Linux/arm64 Image: ARM64_IMAGE_MAGIC ("ARMd")
+# at offset 0x38, the field Firecracker's loader checks before it jumps into
+# the image. Read, never written — a wrapped kernel (a UKI or an EFI zboot
+# image) with the magic stamped on top passes the loader and then dies
+# silently in the guest instead of failing here.
+is_arm64_image() {
+  [ -s "$1" ] && [ "$(od -An -tx1 -j56 -N4 "$1" | tr -d ' \n')" = '41524d64' ]
+}
+
 # Pulls the distro kernel out of the rootfs. x86_64 is converted to the
-# uncompressed ELF vmlinux Firecracker expects. ARM64 keeps the packaged
-# PE32+ Image unchanged, which is the only kernel format Firecracker accepts
-# on that architecture.
+# uncompressed ELF vmlinux Firecracker expects. ARM64 is unwrapped to the raw
+# Linux/arm64 Image, the only format Firecracker boots on that architecture:
+# Ubuntu's arm64 vmlinuz is a UKI whose .linux section holds an EFI zboot
+# image, so neither the file itself nor its first payload is bootable.
 extract_kernel() {
   vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -n 1)
   if [ -z "$vmlinuz_path" ]; then
-    fail "linux-image-generic did not install a vmlinuz under ${mount_dir}/boot"
+    fail "linux-image-virtual did not install a vmlinuz under ${mount_dir}/boot"
   fi
   mkdir -p "$kernel_artifact_dir"
   kernel_image_path="${kernel_artifact_dir}/${kernel_image_name}"
   kernel_image_tmp="${kernel_image_path}.tmp"
   if [ "$ubuntu_arch" = arm64 ]; then
-    info "preserving ARM64 PE kernel Image from: ${vmlinuz_path}"
-    cp "$vmlinuz_path" "$kernel_image_tmp"
-    if ! file "$kernel_image_tmp" | grep -Eq 'PE32.*ARM64'; then
+    info "extracting raw ARM64 Image from: ${vmlinuz_path}"
+    if ! "$extract_arm64_image" "$vmlinuz_path" >"$kernel_image_tmp" \
+      || ! is_arm64_image "$kernel_image_tmp"; then
       rm -f "$kernel_image_tmp"
-      fail "ARM64 kernel is not a PE32+ Image: ${vmlinuz_path}"
+      fail "extract-arm64-image could not extract a raw ARM64 Image from ${vmlinuz_path}"
     fi
   else
     info "extracting ELF vmlinux from: ${vmlinuz_path}"
@@ -635,8 +663,8 @@ verify_rootfs_content() {
         || fail "Extracted kernel image is not ELF: ${kernel_image_path}"
       ;;
     arm64)
-      file "$kernel_image_path" | grep -Eq 'PE32.*ARM64' \
-        || fail "ARM64 kernel is not a PE32+ Image: ${kernel_image_path}"
+      is_arm64_image "$kernel_image_path" \
+        || fail "ARM64 kernel is not a raw Image: ${kernel_image_path}"
       ;;
   esac
 }
@@ -670,23 +698,31 @@ main() {
   require_command truncate
   require_command uname
   require_command umount
+  require_command od
   if [ ! -x "$extract_vmlinux" ]; then
     fail "extract-vmlinux helper not found or not executable: ${extract_vmlinux}"
+  fi
+  if [ ! -x "$extract_arm64_image" ]; then
+    fail "extract-arm64-image helper not found or not executable: ${extract_arm64_image}"
   fi
 
   if [ "$(id -u)" -ne 0 ]; then
     require_command sudo
-    exec sudo "$script_path"
+    exec sudo env \
+      "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
+      "M2IMAGE_DISTRO_SERIES=${ubuntu_series_setting}" \
+      "M2IMAGE_DISTRO_VERSION=${M2IMAGE_DISTRO_VERSION:-}" \
+      "$script_path"
   fi
 
   build_dir=$(abs_dir "$build_dir")
   artifact_dir=$(abs_dir "$artifact_dir")
   ubuntu_arch=$(detect_ubuntu_arch)
-  case "$ubuntu_arch" in
-    amd64) kernel_image_name='vmlinux-ubuntu-26.04-x86_64' ;;
-    arm64) kernel_image_name='Image-ubuntu-26.04-aarch64' ;;
-  esac
   ubuntu_series=$(resolve_ubuntu_series)
+  case "$ubuntu_arch" in
+    amd64) kernel_image_name="vmlinux-ubuntu-${ubuntu_series}-x86_64" ;;
+    arm64) kernel_image_name="Image-ubuntu-${ubuntu_series}-aarch64" ;;
+  esac
   if [ -z "$rootfs_image" ]; then
     rootfs_image="${artifact_dir}/ubuntu-rootfs-${ubuntu_series}-${ubuntu_arch}.ext4"
   else
@@ -733,7 +769,13 @@ main() {
   verify_rootfs_content
 
   info "creating Ubuntu rootfs image: ${rootfs_image}"
-  mkfs.ext4 -F -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  # Disable orphan_file when the host's e2fsprogs supports it so images built
+  # by 1.47 remain readable on hosts/guests that still ship e2fsprogs 1.46.
+  if grep -qw orphan_file /etc/mke2fs.conf 2>/dev/null; then
+    mkfs.ext4 -F -O '^orphan_file' -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  else
+    mkfs.ext4 -F -L rootfs -d "$mount_dir" "$rootfs_image" >/dev/null
+  fi
   rootfs_link_target=$(update_symlink "$rootfs_image" "$rootfs_link")
   restore_output_ownership
 

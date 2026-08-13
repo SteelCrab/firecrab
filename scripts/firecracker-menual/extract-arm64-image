@@ -1,0 +1,230 @@
+#!/bin/sh
+# ----------------------------------------------------------------------
+# extract-arm64-image - Extract a raw Linux/arm64 "Image" from a distro vmlinuz
+#
+# Firecracker's aarch64 loader (rust-vmm linux-loader) boots exactly one
+# kernel format: a raw Linux/arm64 Image. It checks ARM64_IMAGE_MAGIC
+# ("ARMd", 4 bytes at offset 0x38, per Documentation/arch/arm64/booting.rst)
+# and then hands the guest CPU the start of the file. A distro's
+# /boot/vmlinuz on arm64 is usually *not* that file. It comes in one of
+# three shapes:
+#
+#   raw Image   "ARMd" already at 0x38. Passed through untouched.
+#
+#   EFI zboot   "MZ" at 0x00 and "zimg" at 0x04 (CONFIG_EFI_ZBOOT, Linux
+#               6.1+). A PE application wrapping a *compressed* Image plus a
+#               decompressor stub that runs under EFI. Header layout, from
+#               drivers/firmware/efi/libstub/zboot-header.S: payload offset
+#               u32 @0x08, payload size u32 @0x0c, NUL-terminated compression
+#               name @0x18, and LINUX_PE_MAGIC (0x818223cd) — not "ARMd" —
+#               at 0x38. Shipped by Alpine (gzip) and Rocky (gzip).
+#
+#   UKI         A PE carrying the kernel in a ".linux" section, next to
+#               .dtbauto/.uname/.sbat (systemd-stub layout). Ubuntu 26.04
+#               ships its arm64 vmlinuz this way, and the .linux payload is
+#               itself an EFI zboot image (zstd), so it unwraps twice.
+#
+# Only the first shape boots under Firecracker. Writing "ARMd" over offset
+# 0x38 of either of the other two makes the loader *accept* the file and then
+# jump into an EFI stub that never receives EFI boot services: the guest dies
+# before it emits a single console byte, and the only symptom upstack is a
+# VM that boots to silence. So unwrap the real Image instead, and verify the
+# magic is genuinely present rather than stamping it on.
+#
+# Usage: extract-arm64-image <vmlinuz>   # raw Image on stdout
+# ----------------------------------------------------------------------
+
+set -u
+
+me=${0##*/}
+
+# ARM64_IMAGE_MAGIC ("ARMd") and the "zimg"/"MZ" tags, as hex, so that the
+# comparisons never carry NUL or non-printable bytes through a shell variable.
+arm64_image_magic=41524d64
+zboot_magic=7a696d67
+mz_magic=4d5a
+pe_magic=50450000
+
+arm64_image_magic_offset=56 # 0x38
+
+fail() {
+	echo "${me}: $1" >&2
+	exit 1
+}
+
+# Hex of $3 bytes at offset $2 of file $1, lowercase and unseparated. Reading
+# past the end of a file that is too short to hold the field yields an empty
+# string, which never equals a magic the callers look for.
+hex_at() {
+	od -An -tx1 -j "$2" -N "$3" "$1" 2>/dev/null | tr -d ' \n'
+}
+
+# Little-endian u16 at offset $2 of file $1, as a decimal. Assembled from
+# individual bytes so the result does not depend on the host's endianness.
+# A field that runs past the end of the file reads as 0, which every caller
+# already has to treat as a malformed header.
+u16_at() {
+	_f=$1
+	_o=$2
+	# shellcheck disable=SC2046 # word splitting is how the bytes arrive
+	set -- $(od -An -tu1 -j "$_o" -N 2 "$_f" 2>/dev/null)
+	if [ "$#" -lt 2 ]; then
+		echo 0
+		return
+	fi
+	echo $(( $2 * 256 + $1 ))
+}
+
+# Little-endian u32 at offset $2 of file $1, as a decimal.
+u32_at() {
+	_f=$1
+	_o=$2
+	# shellcheck disable=SC2046 # word splitting is how the bytes arrive
+	set -- $(od -An -tu1 -j "$_o" -N 4 "$_f" 2>/dev/null)
+	if [ "$#" -lt 4 ]; then
+		echo 0
+		return
+	fi
+	echo $(( $4 * 16777216 + $3 * 65536 + $2 * 256 + $1 ))
+}
+
+# Writes $3 bytes from offset $2 of file $1 to stdout.
+slice() {
+	tail -c "+$(( $2 + 1 ))" "$1" | head -c "$3"
+}
+
+is_arm64_image() {
+	[ -s "$1" ] && [ "$(hex_at "$1" "$arm64_image_magic_offset" 4)" = "$arm64_image_magic" ]
+}
+
+# Decompresses stdin using the named algorithm. The decompressor's own exit
+# status is deliberately ignored by the callers: EFI zboot's declared payload
+# size excludes gzip's 4-byte trailer (ZBOOT_SIZE_LEN), so gzip reports
+# "unexpected end of file" after having already written every byte of the
+# kernel. The extracted Image is validated on its own merits instead, the same
+# way extract-vmlinux validates its output rather than trusting exit codes.
+decompress_stream() {
+	case $1 in
+		gzip) gzip -dc 2>/dev/null ;;
+		lzma) xz -dc --format=lzma 2>/dev/null ;;
+		xz) xz -dc 2>/dev/null ;;
+		lz4) lz4 -dc 2>/dev/null ;;
+		lzo) lzop -dc 2>/dev/null ;;
+		zstd) zstd -dc 2>/dev/null ;;
+		*) return 1 ;;
+	esac
+}
+
+# EFI zboot: decompress the payload the header points at.
+unwrap_zboot() {
+	src=$1
+	dest=$2
+	payload_offset=$(u32_at "$src" 8)
+	compression=$(od -An -c -j 24 -N 8 "$src" | tr -d ' \n' | sed 's/\\0.*$//')
+	if [ -z "$payload_offset" ] || [ "$payload_offset" -le 0 ]; then
+		fail "EFI zboot header in ${source_image} declares no payload offset"
+	fi
+	case $compression in
+		gzip | lzma | xz | lz4 | lzo | zstd) ;;
+		*) fail "unsupported EFI zboot compression '${compression}' in ${source_image}" ;;
+	esac
+	echo "${me}: EFI zboot payload at offset ${payload_offset}, ${compression}-compressed" >&2
+	# Fed to the end of the file rather than the declared payload size: the
+	# decompressor stops at the end of its own stream, and the declared size
+	# is short by the trailer for some algorithms (see decompress_stream).
+	tail -c "+$(( payload_offset + 1 ))" "$src" | decompress_stream "$compression" >"$dest"
+}
+
+# UKI: lift out the ".linux" PE section holding the kernel.
+unwrap_uki() {
+	src=$1
+	dest=$2
+	pe_offset=$(u32_at "$src" 60) # 0x3c
+	if [ "$(hex_at "$src" "$pe_offset" 4)" != "$pe_magic" ]; then
+		fail "${source_image} is an MZ file with no PE header and no EFI zboot payload"
+	fi
+	section_count=$(u16_at "$src" $(( pe_offset + 6 )))
+	optional_header_size=$(u16_at "$src" $(( pe_offset + 20 )))
+	section_table=$(( pe_offset + 24 + optional_header_size ))
+	index=0
+	while [ "$index" -lt "$section_count" ]; do
+		entry=$(( section_table + index * 40 ))
+		index=$(( index + 1 ))
+		# ".linux", NUL-padded to the 8-byte PE section name field.
+		[ "$(hex_at "$src" "$entry" 8)" = 2e6c696e75780000 ] || continue
+		virtual_size=$(u32_at "$src" $(( entry + 8 )))
+		raw_size=$(u32_at "$src" $(( entry + 16 )))
+		raw_offset=$(u32_at "$src" $(( entry + 20 )))
+		# SizeOfRawData is padded up to the file alignment; VirtualSize is
+		# the payload's real length, but never trust it past the data that
+		# is actually in the file.
+		size=$raw_size
+		if [ "$virtual_size" -gt 0 ] && [ "$virtual_size" -lt "$raw_size" ]; then
+			size=$virtual_size
+		fi
+		if [ "$size" -le 0 ]; then
+			fail "${source_image} has an empty .linux section"
+		fi
+		echo "${me}: UKI .linux section at offset ${raw_offset}, ${size} bytes" >&2
+		slice "$src" "$raw_offset" "$size" >"$dest"
+		return 0
+	done
+	fail "${source_image} is a PE image with neither an EFI zboot payload nor a .linux section"
+}
+
+# A bare Image.gz and friends: no PE wrapper, just a compressed stream.
+unwrap_compressed_image() {
+	src=$1
+	dest=$2
+	for compression in gzip zstd xz lzma lz4 lzo; do
+		# A missing decompressor just yields no output, same as a stream that
+		# was not compressed that way — both mean "try the next one".
+		decompress_stream "$compression" <"$src" >"$dest"
+		if is_arm64_image "$dest"; then
+			echo "${me}: bare ${compression}-compressed Image" >&2
+			return 0
+		fi
+	done
+	fail "${source_image} is neither a raw ARM64 Image, an EFI zboot image, a UKI, nor a compressed Image"
+}
+
+if [ "$#" -ne 1 ] || [ ! -s "$1" ]; then
+	echo "Usage: ${me} <vmlinuz>" >&2
+	exit 2
+fi
+
+source_image=$1
+work_dir=$(mktemp -d "${TMPDIR:-/tmp}/extract-arm64-image-XXXXXX") || exit 1
+trap 'rm -rf "$work_dir"' 0 INT HUP TERM
+
+current=$source_image
+# Ubuntu needs two (UKI then zboot); the bound just stops a malformed image
+# from looping. No real kernel nests deeper than that.
+depth=0
+while [ "$depth" -lt 4 ]; do
+	# Every shape below carries a 64-byte header, so anything shorter cannot
+	# be a kernel in any of them — say so rather than reading past the end.
+	if [ "$(wc -c <"$current")" -lt 64 ]; then
+		fail "${source_image} is too small to hold an ARM64 kernel header"
+	fi
+	if is_arm64_image "$current"; then
+		cat "$current"
+		[ "$depth" -eq 0 ] && echo "${me}: already a raw ARM64 Image" >&2
+		exit 0
+	fi
+	next="${work_dir}/stage${depth}"
+	depth=$(( depth + 1 ))
+	if [ "$(hex_at "$current" 0 2)" = "$mz_magic" ]; then
+		if [ "$(hex_at "$current" 4 4)" = "$zboot_magic" ]; then
+			unwrap_zboot "$current" "$next"
+		else
+			unwrap_uki "$current" "$next"
+		fi
+	else
+		unwrap_compressed_image "$current" "$next"
+	fi
+	[ -s "$next" ] || fail "extracting the kernel from ${source_image} produced no data"
+	current=$next
+done
+
+fail "could not reach a raw ARM64 Image in ${source_image} after ${depth} unwrapping passes"

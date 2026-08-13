@@ -83,7 +83,7 @@ It creates a network, starts a VM, checks connectivity, and removes the VM.
 Run one image check locally after installation.
 
 ```sh
-scripts/ci-m2-guest-boot.sh alpine-3.24
+scripts/ci-m2-guest-boot.sh alpine-3.24.1
 ```
 
 ## Related

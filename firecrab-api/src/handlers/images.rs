@@ -481,12 +481,12 @@ mod tests {
         assert!(
             images
                 .iter()
-                .any(|image| image.alias == "alpine-3.24" && !image.installed)
+                .any(|image| image.alias == "alpine-3.24.1" && !image.installed)
         );
         assert!(
             images
                 .iter()
-                .any(|image| image.alias == "rocky-9" && !image.installed)
+                .any(|image| image.alias == "rocky-9.8" && !image.installed)
         );
     }
 
@@ -526,7 +526,7 @@ mod tests {
         state.image_packages = ImageInstallTracker::disabled();
         let result = start_image_package(
             State(state),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
@@ -547,9 +547,9 @@ mod tests {
             .unwrap();
         assert!(!ubuntu.installed);
         let expected_url = if std::env::consts::ARCH == "aarch64" {
-            "http://127.0.0.1:8765/ubuntu/26.04/aarch64/ubuntu-26.04.tar.zst"
+            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04-v5/r5/aarch64/ubuntu-26.04.tar.zst"
         } else {
-            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04.tar.zst"
+            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04-v5/r5/x86_64/ubuntu-26.04.tar.zst"
         };
         assert_eq!(ubuntu.package_url.as_deref(), Some(expected_url));
     }
@@ -630,7 +630,7 @@ mod tests {
     async fn package_then_image_install_registers_and_marks_installed() {
         let source = tempdir().unwrap();
         let dest = tempdir().unwrap();
-        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         write_file(&source.path().join(&alpine.kernel), b"fake-alpine-kernel");
         write_file(
             &source.path().join(alpine.initrd.as_ref().unwrap()),
@@ -665,7 +665,7 @@ mod tests {
 
         let accepted = start_image_package(
             State(state.clone()),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await
@@ -678,7 +678,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let Json(snap) = get_image_package(
                 State(state.clone()),
-                Path("alpine-3.24".to_owned()),
+                Path("alpine-3.24.1".to_owned()),
                 Extension(RequestId(uuid::Uuid::nil())),
             )
             .await
@@ -698,16 +698,16 @@ mod tests {
         assert!(ok, "package install did not succeed in time");
         assert!(crate::image_install::staged_package_exists(
             state.templates.image_root_path(),
-            "alpine-3.24"
+            "alpine-3.24.1"
         ));
         assert!(
-            state.templates.resolve_alias("alpine-3.24").is_none(),
+            state.templates.resolve_alias("alpine-3.24.1").is_none(),
             "package acquisition must not register an image"
         );
 
         let accepted = start_image_install(
             State(state.clone()),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await
@@ -719,7 +719,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let Json(snap) = get_image_install(
                 State(state.clone()),
-                Path("alpine-3.24".to_owned()),
+                Path("alpine-3.24.1".to_owned()),
                 Extension(RequestId(uuid::Uuid::nil())),
             )
             .await
@@ -734,18 +734,18 @@ mod tests {
             }
         }
         assert!(installed, "image install did not succeed in time");
-        assert!(state.templates.resolve_alias("alpine-3.24").is_some());
+        assert!(state.templates.resolve_alias("alpine-3.24.1").is_some());
 
         let Json(images) = list_images(State(state.clone())).await;
         let alpine_row = images
             .iter()
-            .find(|image| image.alias == "alpine-3.24")
+            .find(|image| image.alias == "alpine-3.24.1")
             .unwrap();
         assert!(alpine_row.installed);
 
         let deleted = delete_image(
             State(state.clone()),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await
@@ -754,14 +754,14 @@ mod tests {
         assert!(
             crate::image_install::staged_package_exists(
                 state.templates.image_root_path(),
-                "alpine-3.24"
+                "alpine-3.24.1"
             ),
             "image deletion must preserve the prepared package"
         );
 
         let accepted = start_image_install(
             State(state.clone()),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await
@@ -772,7 +772,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let Json(snap) = get_image_install(
                 State(state.clone()),
-                Path("alpine-3.24".to_owned()),
+                Path("alpine-3.24.1".to_owned()),
                 Extension(RequestId(uuid::Uuid::nil())),
             )
             .await
@@ -841,7 +841,7 @@ mod tests {
         let state = empty_state(directory.path()).await;
         let result = delete_image(
             State(state),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
@@ -871,12 +871,12 @@ mod tests {
         let state = empty_state(directory.path()).await;
         let Json(snap) = get_image_install(
             State(state),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await
         .unwrap();
-        assert_eq!(snap.alias, "alpine-3.24");
+        assert_eq!(snap.alias, "alpine-3.24.1");
         assert_eq!(snap.status, ImageInstallStatus::Idle);
     }
 
@@ -886,7 +886,7 @@ mod tests {
         let state = empty_state(directory.path()).await;
         let result = start_image_install(
             State(state),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
@@ -939,7 +939,7 @@ mod tests {
     async fn start_image_install_refuses_already_installed() {
         let directory = tempdir().unwrap();
         let root = directory.path();
-        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         write_file(&root.join(&alpine.kernel), b"k");
         write_file(&root.join(alpine.initrd.as_ref().unwrap()), b"i");
         write_file(&root.join(&alpine.rootfs), b"r");
@@ -950,7 +950,7 @@ mod tests {
         state.image_installs = ImageInstallTracker::with_base_url("http://127.0.0.1:9");
         let result = start_image_install(
             State(state),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
@@ -965,15 +965,15 @@ mod tests {
         write_file(
             &crate::image_install::staged_package_path(
                 state.templates.image_root_path(),
-                "alpine-3.24",
+                "alpine-3.24.1",
             ),
             b"already-prepared",
         );
         state.image_installs = ImageInstallTracker::with_base_url("http://127.0.0.1:9");
-        state.image_installs.begin("alpine-3.24").unwrap();
+        state.image_installs.begin("alpine-3.24.1").unwrap();
         let result = start_image_install(
             State(state),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
@@ -1095,7 +1095,7 @@ mod tests {
 
         let _ = start_image_package(
             State(state.clone()),
-            Path("alpine-3.24".to_owned()),
+            Path("alpine-3.24.1".to_owned()),
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await
@@ -1106,7 +1106,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             let Json(snap) = get_image_package(
                 State(state.clone()),
-                Path("alpine-3.24".to_owned()),
+                Path("alpine-3.24.1".to_owned()),
                 Extension(RequestId(uuid::Uuid::nil())),
             )
             .await
@@ -1121,11 +1121,11 @@ mod tests {
             failed,
             "package install should fail when artifacts are missing"
         );
-        assert!(state.templates.resolve_alias("alpine-3.24").is_none());
+        assert!(state.templates.resolve_alias("alpine-3.24.1").is_none());
         assert!(
             !crate::image_install::staged_package_exists(
                 state.templates.image_root_path(),
-                "alpine-3.24"
+                "alpine-3.24.1"
             ),
             "a failed download must not publish a ready package"
         );
