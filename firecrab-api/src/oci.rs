@@ -500,6 +500,11 @@ const MANIFEST_MAX_BYTES: usize = 4 * 1024 * 1024;
 /// metadata. Capping them prevents an authentication service from buffering an
 /// arbitrary response before JSON decoding.
 const TOKEN_MAX_BYTES: usize = 64 * 1024;
+/// Default per-blob download ceiling. Operators with unusually large layers
+/// can raise it through `FIRECRAB_OCI_MAX_BLOB_BYTES` without weakening the
+/// descriptor and streamed-body checks below.
+const DEFAULT_MAX_BLOB_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_BLOB_BYTES_ENV: &str = "FIRECRAB_OCI_MAX_BLOB_BYTES";
 
 /// What a reference resolved to on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -556,6 +561,16 @@ pub enum ResolveError {
         expected: u64,
         /// Actual or HTTP-advertised length.
         actual: u64,
+    },
+    /// A descriptor exceeds the operator's per-blob download policy.
+    #[error("OCI blob {digest} declares {size} bytes, exceeding the {limit}-byte limit")]
+    BlobTooLarge {
+        /// Content address of the rejected blob.
+        digest: Sha256Digest,
+        /// Size declared by the manifest descriptor.
+        size: u64,
+        /// Configured maximum size of one downloaded blob.
+        limit: u64,
     },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
@@ -1156,6 +1171,7 @@ pub async fn resolve(
 #[derive(Debug, Clone)]
 pub struct BlobCache {
     root: PathBuf,
+    max_blob_bytes: u64,
 }
 
 type DigestLockMap = HashMap<PathBuf, Weak<AsyncMutex<()>>>;
@@ -1164,8 +1180,17 @@ static DIGEST_LOCKS: OnceLock<StdMutex<DigestLockMap>> = OnceLock::new();
 impl BlobCache {
     /// Creates a cache rooted at `<image-root>/.oci/blobs/sha256/`.
     pub fn new(image_root: impl AsRef<Path>) -> Self {
+        Self::with_max_blob_bytes(image_root, configured_max_blob_bytes())
+    }
+
+    /// Creates a cache with an explicit per-blob download ceiling.
+    ///
+    /// This is useful for embedders and deterministic tests; normal service
+    /// startup reads `FIRECRAB_OCI_MAX_BLOB_BYTES` through [`Self::new`].
+    pub fn with_max_blob_bytes(image_root: impl AsRef<Path>, max_blob_bytes: u64) -> Self {
         Self {
             root: image_root.as_ref().join(".oci/blobs/sha256"),
+            max_blob_bytes,
         }
     }
 
@@ -1227,6 +1252,13 @@ impl BlobCache {
         descriptor: &Descriptor,
         destination: &Path,
     ) -> Result<(), ResolveError> {
+        if descriptor.size > self.max_blob_bytes {
+            return Err(ResolveError::BlobTooLarge {
+                digest: descriptor.digest.clone(),
+                size: descriptor.size,
+                limit: self.max_blob_bytes,
+            });
+        }
         let url = format!(
             "{}/v2/{repository}/blobs/{}",
             session.base, descriptor.digest
@@ -1306,6 +1338,32 @@ impl BlobCache {
             .map_err(|source| cache_io("publish", destination.to_owned(), source))?;
         cleanup.published = true;
         Ok(())
+    }
+}
+
+fn configured_max_blob_bytes() -> u64 {
+    match std::env::var(MAX_BLOB_BYTES_ENV) {
+        Ok(value) => match value.trim().parse::<u64>() {
+            Ok(limit) if limit > 0 => limit,
+            _ => {
+                tracing::warn!(
+                    variable = MAX_BLOB_BYTES_ENV,
+                    value,
+                    default = DEFAULT_MAX_BLOB_BYTES,
+                    "invalid OCI blob limit; using default"
+                );
+                DEFAULT_MAX_BLOB_BYTES
+            }
+        },
+        Err(std::env::VarError::NotPresent) => DEFAULT_MAX_BLOB_BYTES,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            tracing::warn!(
+                variable = MAX_BLOB_BYTES_ENV,
+                default = DEFAULT_MAX_BLOB_BYTES,
+                "non-Unicode OCI blob limit; using default"
+            );
+            DEFAULT_MAX_BLOB_BYTES
+        }
     }
 }
 

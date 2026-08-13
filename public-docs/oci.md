@@ -35,6 +35,8 @@ Every cache lookup streams the complete entry and verifies both its expected
 size and SHA-256 digest before reuse. A corrupt entry is discarded and fetched
 again, and a download becomes visible at its final path only after the same
 checks succeed.
+One config or layer download is limited to 16 GiB by default; operators can
+change this with `FIRECRAB_OCI_MAX_BLOB_BYTES`.
 
 ## Related
 

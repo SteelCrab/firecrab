@@ -652,6 +652,70 @@ async fn a_missing_blob_leaves_no_cache_artifact() {
 }
 
 #[tokio::test]
+async fn oversized_config_and_layer_descriptors_are_rejected_before_download() {
+    for media_type in [OCI_CONFIG_MEDIA_TYPE, LAYER_MEDIA_TYPE] {
+        let blob = FixtureBlob::new(media_type, b"large".to_vec());
+        let registry = TestRegistry::start(
+            Vec::new(),
+            [(blob.digest.clone(), BlobReply::for_descriptor(&blob))],
+        )
+        .await;
+        let directory = tempdir().expect("create image root");
+        let cache = BlobCache::with_max_blob_bytes(directory.path(), 4);
+        let reference = registry.reference();
+        let session = RegistrySession::new(&reference, true).expect("create registry session");
+        let descriptor = Descriptor {
+            media_type: media_type.to_owned(),
+            digest: blob.digest.clone(),
+            size: blob.bytes.len() as u64,
+        };
+
+        let error = cache
+            .cache_descriptor(&session, &reference.repository, &descriptor)
+            .await
+            .expect_err("an oversized descriptor must fail before download");
+
+        assert!(matches!(
+            error,
+            ResolveError::BlobTooLarge {
+                digest,
+                size: 5,
+                limit: 4,
+            } if digest == blob.digest
+        ));
+        assert_eq!(registry.total_blob_requests(), 0);
+        assert_no_cache_artifacts(&cache, &blob.digest).await;
+    }
+}
+
+#[tokio::test]
+async fn a_blob_exactly_at_the_configured_limit_is_downloaded() {
+    let config = FixtureBlob::new(OCI_CONFIG_MEDIA_TYPE, b"limit".to_vec());
+    let registry = TestRegistry::start(
+        Vec::new(),
+        [(config.digest.clone(), BlobReply::for_descriptor(&config))],
+    )
+    .await;
+    let directory = tempdir().expect("create image root");
+    let cache = BlobCache::with_max_blob_bytes(directory.path(), config.bytes.len() as u64);
+    let reference = registry.reference();
+    let session = RegistrySession::new(&reference, true).expect("create registry session");
+    let descriptor = Descriptor {
+        media_type: config.media_type.to_owned(),
+        digest: config.digest.clone(),
+        size: config.bytes.len() as u64,
+    };
+
+    let path = cache
+        .cache_descriptor(&session, &reference.repository, &descriptor)
+        .await
+        .expect("the configured limit is inclusive");
+
+    assert_eq!(registry.blob_requests(&config.digest), 1);
+    assert_eq!(tokio::fs::read(path).await.unwrap(), config.bytes);
+}
+
+#[tokio::test]
 async fn short_and_long_bodies_leave_no_final_or_partial_file() {
     let expected = FixtureBlob::new(OCI_CONFIG_MEDIA_TYPE, b"123456".to_vec());
     for actual in [b"12345".to_vec(), b"1234567".to_vec()] {
