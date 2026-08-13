@@ -146,6 +146,17 @@ A normal `./install.sh` upgrade preserves the SQLite database, VM artifacts, ins
 Stop `firecrab-api` before taking an offline backup.
 Back up `firecrab.db`, every configured storage root containing VM artifacts, and the image directory together so database references and files remain consistent.
 
+## Disk creation
+
+A VM disk begins as a copy-on-write clone of its template, falling back to a
+byte copy if the host refuses; the disk is identical either way.
+
+Reflinks need XFS or Btrfs and cannot cross filesystems — that is the
+filesystem holding the `.ext4` files, not the one inside them, so keep the
+image root and every storage root on one.
+`firecrab-doctor` checks the default roots and `FIRECRAB_STORAGE_ROOTS` for a
+split layout; pools registered through the API are not inspected.
+
 ## Delete
 
 A pool cannot be deleted while a VM uses it.

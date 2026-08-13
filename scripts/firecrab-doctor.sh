@@ -772,6 +772,95 @@ check_image_install_tools() {
     pass
 }
 
+# Every directory VM disks can land in, one per line.
+#
+# `FIRECRAB_STORAGE_ROOTS` is `id=path` pairs separated by `:`, matching
+# `StorageRegistry::parse`. Pools registered through the API live in SQLite and
+# are not read here — doctor stays dependency-free and never opens the database
+# (`public-docs/storage.md`).
+resolve_vms_roots() {
+    local seen="" entry path
+    local candidates=()
+
+    if [ -n "${FIRECRAB_STORAGE_ROOTS:-}" ]; then
+        local saved_ifs=$IFS
+        IFS=:
+        for entry in $FIRECRAB_STORAGE_ROOTS; do
+            case "$entry" in
+                *=*) candidates+=("${entry#*=}") ;;
+            esac
+        done
+        IFS=$saved_ifs
+    fi
+    candidates+=("$DATADIR" "$PWD/data")
+
+    for entry in "${candidates[@]}"; do
+        # A configured root holds its disks under `vms/`, which only exists
+        # once something has been created there.
+        for path in "$entry/vms" "$entry"; do
+            [ -d "$path" ] || continue
+            path=$(cd -- "$path" && pwd)
+            case " $seen " in
+                *" $path "*) continue ;;
+            esac
+            seen+=" $path"
+            printf '%s\n' "$path"
+            break
+        done
+    done
+}
+
+# Reports only the one thing an operator can act on: a template and the VM
+# disks cloned from it sitting on two different filesystems.
+#
+# firecrab creates each VM disk with a FICLONE reflink and falls back to a full
+# byte copy when the host refuses (firecrab-api/src/rootfs.rs). A reflink cannot
+# cross filesystems, so a split layout silently costs a full template copy per
+# VM — the symptom is slow VM creation on a host chosen for Btrfs/XFS precisely
+# to avoid it. Whether a single filesystem supports reflinks at all is a host
+# choice rather than a misconfiguration, so that case stays quiet.
+#
+# Both probes are read-only; doctor must not write to the host, so support is
+# never confirmed by attempting a real clone.
+check_reflink() {
+    local roots vms_roots image_root image_device image_type
+    local vms_root vms_device split=()
+    mapfile -t roots < <(resolve_image_roots)
+    mapfile -t vms_roots < <(resolve_vms_roots)
+
+    if [ "${#roots[@]}" -eq 0 ] || [ "${#vms_roots[@]}" -eq 0 ] || ! have stat; then
+        pass
+        return
+    fi
+    image_root=${roots[0]}
+    image_device=$(stat -c %d -- "$image_root" 2>/dev/null || true)
+    if [ -z "$image_device" ]; then
+        pass
+        return
+    fi
+
+    # Each storage pool is judged on its own: one pool sharing the template's
+    # filesystem does not make another pool's split any cheaper.
+    for vms_root in "${vms_roots[@]}"; do
+        vms_device=$(stat -c %d -- "$vms_root" 2>/dev/null || true)
+        [ -n "$vms_device" ] || continue
+        [ "$vms_device" = "$image_device" ] && continue
+        split+=("$(printf 'VM disks:  %s (%s)' \
+            "$vms_root" "$(stat -f -c %T -- "$vms_root" 2>/dev/null || printf unknown)")")
+    done
+
+    if [ "${#split[@]}" -eq 0 ]; then
+        pass
+        return
+    fi
+
+    image_type=$(stat -f -c %T -- "$image_root" 2>/dev/null || printf unknown)
+    skip "reflink: templates and VM disks are on different filesystems" \
+        "$(printf 'templates: %s (%s)\n' "$image_root" "$image_type"
+           printf '%s\n' "${split[@]}")" \
+        "put both on one XFS/Btrfs filesystem, or accept a full template copy per VM"
+}
+
 # --- run ---------------------------------------------------------------------
 
 check_kvm
@@ -784,6 +873,7 @@ check_ufw
 check_data_root
 check_images
 check_image_install_tools
+check_reflink
 
 if [ "$FAIL" -eq 0 ] && [ "$SKIP" -eq 0 ]; then
     printf 'doctor: all checks passed (%s ok)\n' "$OK"
