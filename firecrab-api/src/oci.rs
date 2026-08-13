@@ -745,6 +745,31 @@ pub enum ResolveError {
         /// Rule the program failed.
         reason: ToolboxViolation,
     },
+    /// A guest path could not be resolved safely inside the merged tree.
+    #[error("guest path {path} cannot be provisioned: {reason}")]
+    GuestPathUnusable {
+        /// Absolute guest path being provisioned.
+        path: String,
+        /// Rule the merged tree's shape broke.
+        reason: GuestPathViolation,
+    },
+    /// A filesystem operation failed while injecting the guest runtime.
+    #[error("OCI guest injection {operation} failed at {path}: {source}")]
+    GuestInjectionIo {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Tree or cache path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The caller stopped waiting before the guest runtime was complete.
+    #[error("OCI guest injection was cancelled before provisioning {path}")]
+    GuestInjectionCancelled {
+        /// Merged tree that was left unprovisioned.
+        path: PathBuf,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1735,6 +1760,11 @@ mod merge;
 #[cfg(test)]
 mod merge_tests;
 
+mod provision;
+
+#[cfg(test)]
+mod provision_tests;
+
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedBlob {
@@ -2148,6 +2178,32 @@ impl MergedRootfs {
     }
 }
 
+/// A merged tree that has been given a bootable Firecrab guest runtime.
+///
+/// Deliberately distinct from [`MergedRootfs`] so the later ext4 stage can
+/// require proof that a PID 1, a DHCP client, the readiness sentinel, and the
+/// metrics agent are present before it builds something meant to boot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvisionedRootfs {
+    path: PathBuf,
+    toolbox: Sha256Digest,
+}
+
+impl ProvisionedRootfs {
+    /// Path to the provisioned staging tree.
+    ///
+    /// Injection edits the merged tree in place, so this is the same path
+    /// [`MergedRootfs::path`] reported.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Digest of the toolbox program installed as the guest's PID 1.
+    pub fn toolbox_digest(&self) -> &Sha256Digest {
+        &self.toolbox
+    }
+}
+
 /// A verified static program cached on the host to become a guest's init.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolboxProgram {
@@ -2325,6 +2381,27 @@ pub enum ToolboxViolation {
     MalformedProgramHeaders,
 }
 
+/// Why a guest path in a merged tree cannot be written safely.
+///
+/// Ancestor symbolic links are followed rather than refused: usr-merged images
+/// ship `/sbin` as a link to `usr/sbin`, so refusing them would reject Ubuntu,
+/// Debian, and Fedora outright. Resolution is clamped to the tree instead.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum GuestPathViolation {
+    /// A path component required as a directory is another filesystem type.
+    #[error("ancestor {ancestor:?} is not a directory")]
+    NonDirectoryAncestor {
+        /// Tree-relative path of the conflicting ancestor.
+        ancestor: PathBuf,
+    },
+    /// Following the image's symbolic links never reached a real directory.
+    #[error("resolving it followed more than {limit} symbolic links")]
+    SymlinkLoop {
+        /// Traversal budget the tree exhausted.
+        limit: usize,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct LayerWorkKey {
     compressed_digest: Sha256Digest,
@@ -2469,6 +2546,20 @@ pub async fn provision_toolbox(
     options: &GuestRuntimeOptions<'_>,
 ) -> Result<ToolboxProgram, ResolveError> {
     busybox::ensure_toolbox(options).await
+}
+
+/// Installs a bootable Firecrab guest runtime into a merged OCI tree.
+///
+/// A container tree has no PID 1, no DHCP client, and nothing that reports
+/// readiness, so it cannot boot as a MicroVM. This stage adds an init, a
+/// DHCP client, the readiness sentinel, and the metrics agent, editing the
+/// merged tree in place. The merged handle is consumed because injection is
+/// not repeatable, and a failure restores exactly the paths it touched.
+pub async fn provision_merged_rootfs(
+    rootfs: MergedRootfs,
+    options: &GuestRuntimeOptions<'_>,
+) -> Result<ProvisionedRootfs, ResolveError> {
+    provision::provision_merged_rootfs(rootfs, options).await
 }
 
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {

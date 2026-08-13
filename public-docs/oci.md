@@ -113,6 +113,30 @@ when it no longer passes. Operators can name a mirror with
 `FIRECRAB_OCI_TOOLBOX_IMAGE` or an already-present program with
 `FIRECRAB_OCI_TOOLBOX_PATH`.
 
+## Guest activation
+
+Activation installs an init at `/sbin/init`, so the image boots on the same
+kernel command line every other template uses. It also installs a boot script
+that mounts `/proc`, `/sys`, `/dev` and `/run`, brings the interface up before
+asking for a lease, reports `FIRECRAB_NETWORK_READY` with the address it
+received or `FIRECRAB_NETWORK_FAILED` with a reason, and starts the metrics
+agent that reports guest CPU and memory. `/etc/firecrab/services.d` is created
+empty for the image's own entrypoint, which a later stage translates into an
+ordinary service under that init rather than PID 1.
+
+Images that place `/sbin` or `/etc` behind a symbolic link are activated
+through it, because most distribution images link `/sbin` at `/usr/sbin`.
+Resolution is clamped to the tree, so a link naming a host path is followed
+inside the tree and never out of it, and an entry already occupying a guest
+path is replaced without writing through it. A failed activation restores every
+path it touched and leaves the merged tree as it found it.
+
+Registry inspection, raw blob caching, decompression, safety validation, merge,
+and guest activation remain distinct import stages. `GET /api/oci/inspect` stops
+at metadata and fills no OCI cache; caching and decompression do not publish a
+merged tree; activation neither sizes nor writes an ext4 image, pairs no kernel,
+and registers nothing.
+
 ## Related
 
 - [Images](images.md)

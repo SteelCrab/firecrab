@@ -1,0 +1,617 @@
+use super::*;
+
+use std::collections::BTreeMap;
+use std::io::Cursor;
+use std::os::unix::fs::PermissionsExt as _;
+
+use tar::{Builder, EntryType, Header};
+use tempfile::{TempDir, tempdir};
+
+fn header(entry_type: EntryType, size: u64, mode: u32) -> Header {
+    let mut header = Header::new_gnu();
+    header.set_entry_type(entry_type);
+    header.set_mode(mode);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mtime(0);
+    header.set_size(size);
+    header
+}
+
+fn append_entry(
+    builder: &mut Builder<Vec<u8>>,
+    path: &str,
+    entry_type: EntryType,
+    target: Option<&str>,
+    data: &[u8],
+    mode: u32,
+) {
+    let mut header = header(entry_type, data.len() as u64, mode);
+    if let Some(target) = target {
+        header
+            .set_link_name_literal(target.as_bytes())
+            .expect("set fixture link target");
+    }
+    builder
+        .append_data(&mut header, path, Cursor::new(data))
+        .expect("append fixture tar entry");
+}
+
+fn finish(builder: Builder<Vec<u8>>) -> Vec<u8> {
+    builder.into_inner().expect("finish fixture tar")
+}
+
+fn layer(directory: &TempDir, name: &str, bytes: &[u8]) -> DecompressedLayer {
+    let compressed_bytes = format!("compressed provision fixture {name}").into_bytes();
+    let compressed_digest = Sha256Digest::of_bytes(&compressed_bytes);
+    let compressed_path = directory.path().join(format!("{name}.blob"));
+    std::fs::write(&compressed_path, &compressed_bytes).expect("write compressed fixture");
+    let path = directory.path().join(format!("{name}.tar"));
+    std::fs::write(&path, bytes).expect("write tar fixture");
+    DecompressedLayer {
+        source: CachedBlob {
+            descriptor: Descriptor {
+                media_type: OCI_LAYER_MEDIA_TYPE.to_owned(),
+                digest: compressed_digest,
+                size: compressed_bytes.len() as u64,
+            },
+            path: compressed_path,
+        },
+        diff_id: Sha256Digest::of_bytes(bytes),
+        path,
+        size: bytes.len() as u64,
+    }
+}
+
+/// Merges one fixture layer and returns the published tree.
+async fn merged(directory: &TempDir, name: &str, tar: &[u8]) -> MergedRootfs {
+    let layers = validate_decompressed_layers(vec![layer(directory, name, tar)])
+        .await
+        .expect("validate provision fixture");
+    let destination = directory.path().join(format!("{name}-rootfs"));
+    merge_validated_layers(&layers, &destination)
+        .await
+        .expect("merge provision fixture")
+}
+
+/// Builds a 64-bit little-endian ELF image with the given program headers.
+///
+/// Real busybox is 1 MiB of machine code; every rule this stage enforces lives
+/// in the header, so a hand-built one exercises the verifier exactly.
+fn elf(machine: u16, e_type: u16, program_headers: &[[u8; 56]], trailer: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0_u8; 64];
+    bytes[..4].copy_from_slice(b"\x7fELF");
+    bytes[4] = 2; // ELFCLASS64
+    bytes[5] = 1; // ELFDATA2LSB
+    bytes[6] = 1; // EI_VERSION
+    bytes[16..18].copy_from_slice(&e_type.to_le_bytes());
+    bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+    bytes[32..40].copy_from_slice(&64_u64.to_le_bytes()); // e_phoff
+    bytes[52..54].copy_from_slice(&64_u16.to_le_bytes()); // e_ehsize
+    bytes[54..56].copy_from_slice(&56_u16.to_le_bytes()); // e_phentsize
+    bytes[56..58].copy_from_slice(&(program_headers.len() as u16).to_le_bytes());
+    for entry in program_headers {
+        bytes.extend_from_slice(entry);
+    }
+    bytes.extend_from_slice(trailer);
+    bytes
+}
+
+/// One program header entry.
+fn program_header(p_type: u32, p_offset: u64, p_filesz: u64) -> [u8; 56] {
+    let mut entry = [0_u8; 56];
+    entry[..4].copy_from_slice(&p_type.to_le_bytes());
+    entry[8..16].copy_from_slice(&p_offset.to_le_bytes());
+    entry[32..40].copy_from_slice(&p_filesz.to_le_bytes());
+    entry
+}
+
+/// A static program for this host, carrying the applet names the guest calls.
+fn static_program() -> Vec<u8> {
+    let mut applets = vec![0_u8];
+    for applet in ["sh", "ip", "udhcpc", "awk", "mount", "sleep", "cut"] {
+        applets.extend_from_slice(applet.as_bytes());
+        applets.push(0);
+    }
+    let machine = match Architecture::HOST {
+        Architecture::X86_64 => 62,
+        Architecture::Aarch64 => 183,
+    };
+    elf(machine, 2, &[program_header(1, 0, 0)], &applets)
+}
+
+/// Writes a program to disk and verifies it the way the pull path would.
+async fn toolbox(directory: &TempDir, name: &str, bytes: &[u8]) -> ToolboxProgram {
+    let path = directory.path().join(name);
+    std::fs::write(&path, bytes).expect("write toolbox fixture");
+    busybox::inspect_toolbox(&path, Architecture::HOST)
+        .await
+        .expect("verify toolbox fixture")
+}
+
+/// Records every path in a tree with its type, mode, and contents.
+fn snapshot(root: &Path) -> BTreeMap<PathBuf, String> {
+    let mut entries = BTreeMap::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).expect("read snapshot directory") {
+            let entry = entry.expect("read snapshot entry");
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path).expect("stat snapshot entry");
+            let relative = path
+                .strip_prefix(root)
+                .expect("snapshot is rooted")
+                .to_owned();
+            let kind = if metadata.file_type().is_symlink() {
+                format!(
+                    "symlink:{}",
+                    std::fs::read_link(&path)
+                        .expect("read snapshot link")
+                        .display()
+                )
+            } else if metadata.is_dir() {
+                pending.push(path.clone());
+                format!("dir:{:o}", metadata.permissions().mode() & 0o7777)
+            } else {
+                format!(
+                    "file:{:o}:{}",
+                    metadata.permissions().mode() & 0o7777,
+                    Sha256Digest::of_bytes(&std::fs::read(&path).expect("read snapshot file"))
+                )
+            };
+            entries.insert(relative, kind);
+        }
+    }
+    entries
+}
+
+fn read_guest(tree: &Path, guest_path: &str) -> Vec<u8> {
+    std::fs::read(tree.join(guest_path.trim_start_matches('/')))
+        .unwrap_or_else(|error| panic!("read {guest_path}: {error}"))
+}
+
+fn guest_mode(tree: &Path, guest_path: &str) -> u32 {
+    std::fs::metadata(tree.join(guest_path.trim_start_matches('/')))
+        .unwrap_or_else(|error| panic!("stat {guest_path}: {error}"))
+        .permissions()
+        .mode()
+        & 0o7777
+}
+
+/// A minimal container tree: an application and nothing an init needs.
+fn application_layer() -> Vec<u8> {
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "app/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "app/server",
+        EntryType::Regular,
+        None,
+        b"binary",
+        0o755,
+    );
+    finish(builder)
+}
+
+#[tokio::test]
+async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds() {
+    let directory = tempdir().expect("create fixture directory");
+    let program = static_program();
+    let toolbox = toolbox(&directory, "busybox", &program).await;
+    let merged = merged(&directory, "plain", &application_layer()).await;
+    let tree = merged.path().to_owned();
+
+    let provisioned = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("inject a guest runtime");
+
+    assert_eq!(provisioned.path(), tree);
+    assert_eq!(provisioned.toolbox_digest(), toolbox.digest());
+    // The kernel execs /sbin/init when the command line carries no init=.
+    assert_eq!(
+        std::fs::read_link(tree.join("sbin/init")).expect("read /sbin/init"),
+        Path::new("firecrab-busybox")
+    );
+    assert_eq!(read_guest(&tree, "/sbin/firecrab-busybox"), program);
+    assert_eq!(guest_mode(&tree, "/sbin/firecrab-busybox"), 0o755);
+    assert_eq!(guest_mode(&tree, "/etc/firecrab/rc.boot"), 0o755);
+    assert_eq!(guest_mode(&tree, "/etc/inittab"), 0o644);
+
+    let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab is text");
+    assert!(inittab.contains("::sysinit:/sbin/firecrab-busybox sh /etc/firecrab/rc.boot"));
+
+    // The host fails the VM start unless one of these reaches the console.
+    let boot = String::from_utf8(read_guest(&tree, "/etc/firecrab/rc.boot")).expect("script");
+    assert!(boot.contains("FIRECRAB_NETWORK_READY $ipv4"));
+    assert!(boot.contains("FIRECRAB_NETWORK_FAILED no-ipv4-address"));
+    assert!(boot.contains("FIRECRAB_NETWORK_FAILED dns-unreachable"));
+
+    // One source of truth for the FIRECRAB_USAGE format the host parses.
+    assert_eq!(
+        read_guest(&tree, crate::guest_agent::BIN_PATH),
+        crate::guest_agent::AGENT_SCRIPT.as_bytes()
+    );
+
+    for mount_point in ["proc", "sys", "dev", "run", "tmp"] {
+        assert!(
+            tree.join(mount_point).is_dir(),
+            "{mount_point} is a directory"
+        );
+    }
+    assert_eq!(guest_mode(&tree, "/tmp"), 0o1777);
+    assert!(tree.join("etc/firecrab/services.d").is_dir());
+    // The image's own files are left exactly as they were.
+    assert_eq!(read_guest(&tree, "/app/server"), b"binary");
+}
+
+#[tokio::test]
+async fn the_boot_script_brings_the_link_up_before_running_the_dhcp_client() {
+    let directory = tempdir().expect("create fixture directory");
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "order", &application_layer()).await;
+    let tree = merged.path().to_owned();
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("inject a guest runtime");
+
+    let boot = String::from_utf8(read_guest(&tree, "/etc/firecrab/rc.boot")).expect("script");
+    let link_up = boot
+        .find("ip link set eth0 up")
+        .expect("link is brought up");
+    let dhcp = boot.find("udhcpc -i eth0").expect("dhcp client runs");
+    // A bare udhcpc on a down link sends zero packets and hangs forever.
+    assert!(link_up < dhcp, "the link must come up before udhcpc");
+}
+
+#[tokio::test]
+async fn inittab_commands_avoid_the_metacharacters_busybox_init_reroutes() {
+    let directory = tempdir().expect("create fixture directory");
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "inittab", &application_layer()).await;
+    let tree = merged.path().to_owned();
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("inject a guest runtime");
+
+    let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab is text");
+    for line in inittab.lines().filter(|line| !line.starts_with('#')) {
+        let command = line.splitn(4, ':').nth(3).unwrap_or_default();
+        // busybox init runs a command containing any of these through
+        // `/bin/sh -c`, which a distroless image does not ship.
+        assert!(
+            !command.contains([
+                '~', '`', '!', '$', '^', '&', '*', '(', ')', '=', '|', '\\', '{', '}', '[', ']',
+                ';', '"', '\'', '<', '>', '?'
+            ]),
+            "inittab command must not need a shell: {command:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn usr_merged_images_are_provisioned_through_their_symlinked_sbin() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "usr/sbin/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o755,
+    );
+    // Ubuntu, Debian 12+, and Fedora all ship this. Refusing it would reject
+    // the majority of real images outright.
+    append_entry(
+        &mut builder,
+        "sbin",
+        EntryType::Symlink,
+        Some("usr/sbin"),
+        &[],
+        0o777,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "usrmerge", &tar).await;
+    let tree = merged.path().to_owned();
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("a usr-merged image must be provisionable");
+
+    assert!(
+        std::fs::symlink_metadata(tree.join("sbin"))
+            .expect("stat sbin")
+            .file_type()
+            .is_symlink(),
+        "the image's own /sbin link is preserved"
+    );
+    assert!(tree.join("usr/sbin/firecrab-busybox").is_file());
+    assert_eq!(
+        std::fs::read_link(tree.join("usr/sbin/init")).expect("read init link"),
+        Path::new("firecrab-busybox")
+    );
+}
+
+#[tokio::test]
+async fn an_image_supplied_init_is_replaced_without_touching_its_target() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "lib/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "lib/systemd",
+        EntryType::Regular,
+        None,
+        b"systemd",
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "sbin/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "sbin/init",
+        EntryType::Symlink,
+        Some("/lib/systemd"),
+        &[],
+        0o777,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "systemd", &tar).await;
+    let tree = merged.path().to_owned();
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("inject over an image-supplied init");
+
+    assert_eq!(
+        std::fs::read_link(tree.join("sbin/init")).expect("read init link"),
+        Path::new("firecrab-busybox")
+    );
+    // The final component is never followed, so the link was replaced rather
+    // than written through onto systemd's own program.
+    assert_eq!(read_guest(&tree, "/lib/systemd"), b"systemd");
+}
+
+#[tokio::test]
+async fn a_symlinked_ancestor_pointing_outside_the_tree_is_clamped_to_it() {
+    let directory = tempdir().expect("create fixture directory");
+    let outside = directory.path().join("outside");
+    std::fs::create_dir(&outside).expect("create outside directory");
+    std::fs::write(outside.join("inittab"), b"untouched").expect("write outside sentinel");
+
+    let mut builder = Builder::new(Vec::new());
+    append_entry(
+        &mut builder,
+        "etc",
+        EntryType::Symlink,
+        Some(&outside.to_string_lossy()),
+        &[],
+        0o777,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "escape", &tar).await;
+    let tree = merged.path().to_owned();
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("an escaping ancestor is re-rooted, not refused");
+
+    // The absolute target was re-rooted at the tree, so the host file outside
+    // it never saw a write.
+    assert_eq!(
+        std::fs::read(outside.join("inittab")).unwrap(),
+        b"untouched"
+    );
+    let inside = tree.join(outside.strip_prefix("/").expect("absolute outside path"));
+    assert!(inside.join("inittab").is_file(), "the write landed in-tree");
+}
+
+#[tokio::test]
+async fn a_non_directory_ancestor_refuses_the_injection_and_restores_the_tree() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(
+        &mut builder,
+        "etc",
+        EntryType::Regular,
+        None,
+        b"not a directory",
+        0o644,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "blocked", &tar).await;
+    let tree = merged.path().to_owned();
+    let before = snapshot(&tree);
+
+    let error = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect_err("a file where /etc belongs must fail the injection");
+    assert!(matches!(
+        error,
+        ResolveError::GuestPathUnusable {
+            reason: GuestPathViolation::NonDirectoryAncestor { .. },
+            ..
+        }
+    ));
+    // A failed injection is not allowed to damage the caller's merged tree.
+    assert_eq!(snapshot(&tree), before);
+}
+
+#[tokio::test]
+async fn a_symlink_cycle_is_refused_before_any_guest_file_is_written() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(
+        &mut builder,
+        "etc",
+        EntryType::Symlink,
+        Some("etc2"),
+        &[],
+        0o777,
+    );
+    append_entry(
+        &mut builder,
+        "etc2",
+        EntryType::Symlink,
+        Some("etc"),
+        &[],
+        0o777,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "cycle", &tar).await;
+    let tree = merged.path().to_owned();
+    let before = snapshot(&tree);
+
+    let error = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect_err("a symlink cycle must fail the injection");
+    assert!(matches!(
+        error,
+        ResolveError::GuestPathUnusable {
+            reason: GuestPathViolation::SymlinkLoop { limit },
+            ..
+        } if limit == 40
+    ));
+    assert_eq!(snapshot(&tree), before);
+}
+
+#[tokio::test]
+async fn guest_injection_refusals_render_operator_readable_messages() {
+    let rendered = [
+        ResolveError::GuestPathUnusable {
+            path: "/sbin/init".to_owned(),
+            reason: GuestPathViolation::SymlinkLoop { limit: 40 },
+        },
+        ResolveError::GuestInjectionIo {
+            operation: "create guest file",
+            path: PathBuf::from("/trees/rootfs/etc/inittab"),
+            source: io::Error::other("disk is full"),
+        },
+        ResolveError::GuestInjectionCancelled {
+            path: PathBuf::from("/trees/rootfs"),
+        },
+    ]
+    .map(|error| error.to_string());
+
+    assert!(rendered[0].contains("40 symbolic links"));
+    assert!(rendered[1].contains("disk is full"));
+    assert!(rendered[2].contains("cancelled"));
+}
+
+#[tokio::test]
+async fn a_late_failure_restores_an_image_supplied_init() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(
+        &mut builder,
+        "sbin/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "sbin/init",
+        EntryType::Regular,
+        None,
+        b"the image's own init",
+        0o755,
+    );
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    // The metrics agent is installed last, so a blocked /usr/local fails the
+    // injection only after the init has already been displaced.
+    append_entry(
+        &mut builder,
+        "usr/local",
+        EntryType::Regular,
+        None,
+        b"not a directory",
+        0o644,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "late", &tar).await;
+    let tree = merged.path().to_owned();
+    let before = snapshot(&tree);
+
+    let error = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect_err("a blocked /usr/local must fail the injection");
+    assert!(matches!(
+        error,
+        ResolveError::GuestPathUnusable {
+            reason: GuestPathViolation::NonDirectoryAncestor { .. },
+            ..
+        }
+    ));
+    // Everything is put back, including the init that had been moved aside.
+    assert_eq!(snapshot(&tree), before);
+    assert_eq!(read_guest(&tree, "/sbin/init"), b"the image's own init");
+}
+
+#[tokio::test]
+async fn a_directory_occupying_a_guest_file_path_is_refused() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "etc/", EntryType::Directory, None, &[], 0o755);
+    // Deleting an image's directory tree to make room is not this stage's call.
+    append_entry(
+        &mut builder,
+        "etc/inittab/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o755,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "dirpath", &tar).await;
+    let tree = merged.path().to_owned();
+    let before = snapshot(&tree);
+
+    let error = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect_err("a directory where /etc/inittab belongs must fail");
+    assert!(matches!(
+        error,
+        ResolveError::GuestPathUnusable {
+            reason: GuestPathViolation::NonDirectoryAncestor { .. },
+            ..
+        }
+    ));
+    assert_eq!(snapshot(&tree), before);
+}
+
+#[tokio::test]
+async fn a_provisioned_tree_records_the_program_it_will_boot() {
+    let directory = tempdir().expect("create fixture directory");
+    let program = static_program();
+    let toolbox = toolbox(&directory, "busybox", &program).await;
+
+    let merged = merged(&directory, "recorded", &application_layer()).await;
+    let provisioned = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("inject a guest runtime");
+
+    assert_eq!(
+        provisioned.toolbox_digest(),
+        &Sha256Digest::of_bytes(&program)
+    );
+}

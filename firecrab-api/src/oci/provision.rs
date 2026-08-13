@@ -1,0 +1,641 @@
+//! Gives a merged container tree the guest runtime a MicroVM needs to boot.
+//!
+//! A container rootfs fails three ways at once: the kernel finds no `/sbin/init`
+//! and panics, nothing asks for a DHCP lease so the guest never gets an address,
+//! and nothing prints the readiness sentinel the host waits 180 seconds for.
+//! Firecrab's existing guest features cannot fill the gap — they install only
+//! when systemd or OpenRC is already present and no-op otherwise, which is
+//! exactly the container case.
+//!
+//! So this stage injects an init, a DHCP client, the readiness sentinel, and the
+//! metrics agent, all from one static program. The image's own userland is left
+//! alone: its entrypoint becomes an ordinary service under the injected init in
+//! a later stage, never PID 1.
+
+use super::*;
+
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// Guest path the kernel execs when the command line carries no `init=`.
+///
+/// Owning this path is what lets an imported image boot on the stock
+/// `root=/dev/vda rw` command line every template already uses.
+const GUEST_INIT: &str = "/sbin/init";
+/// Guest path of the injected toolbox program.
+const GUEST_TOOLBOX: &str = "/sbin/firecrab-busybox";
+/// busybox init reads its job table from here.
+const GUEST_INITTAB: &str = "/etc/inittab";
+/// Boot script run once, before anything else the guest does.
+const GUEST_BOOT_SCRIPT: &str = "/etc/firecrab/rc.boot";
+/// Lease hook busybox `udhcpc` calls to apply an address.
+const GUEST_DHCP_SCRIPT: &str = "/etc/firecrab/dhcp.script";
+/// Directory a later stage drops the image's translated entrypoint into.
+const GUEST_SERVICES: &str = "/etc/firecrab/services.d";
+/// Mount points a container tree may not carry.
+///
+/// `/dev` matters most: `CONFIG_DEVTMPFS_MOUNT=y` mounts it, but only onto a
+/// directory that exists. Without it there is no `/dev/console` and the guest
+/// boots dark, with no sentinel and no way to see why.
+const GUEST_MOUNT_POINTS: &[(&str, u32)] = &[
+    ("/proc", 0o755),
+    ("/sys", 0o755),
+    ("/dev", 0o755),
+    ("/run", 0o755),
+    ("/tmp", 0o1777),
+];
+
+/// Traversal budget when following an image's ancestor symbolic links.
+const SYMLINK_HOP_LIMIT: usize = 40;
+/// Injection is running and may still be cancelled.
+const INJECT_ACTIVE: u8 = 0;
+/// The caller stopped waiting before injection finished.
+const INJECT_CANCELLED: u8 = 1;
+/// Injection completed; the state no longer changes.
+const INJECT_FINISHED: u8 = 2;
+
+/// Shared cancellation state consulted between injection steps.
+struct InjectControl {
+    /// Current phase, shared with the caller's cancellation guard.
+    state: std::sync::Arc<AtomicU8>,
+    /// Tree reported by cancellation errors.
+    tree: PathBuf,
+}
+
+impl InjectControl {
+    /// Fails once the caller stopped waiting, so a long injection stops early.
+    fn check(&self) -> Result<(), ResolveError> {
+        if self.state.load(Ordering::Acquire) == INJECT_ACTIVE {
+            Ok(())
+        } else {
+            Err(ResolveError::GuestInjectionCancelled {
+                path: self.tree.clone(),
+            })
+        }
+    }
+
+    /// Records that injection finished and the tree is the caller's again.
+    fn finish(&self) {
+        self.state.store(INJECT_FINISHED, Ordering::Release);
+    }
+}
+
+/// Marks an abandoned injection cancelled when the caller's future is dropped.
+struct CancelInjectionOnDrop {
+    /// Shared phase, flipped to cancelled while still armed.
+    state: std::sync::Arc<AtomicU8>,
+    /// Cleared once the blocking worker has returned.
+    armed: bool,
+}
+
+impl Drop for CancelInjectionOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = self.state.compare_exchange(
+                INJECT_ACTIVE,
+                INJECT_CANCELLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+    }
+}
+
+/// Runs the blocking injection on the pool and cancels it if the caller leaves.
+pub(super) async fn provision_merged_rootfs(
+    rootfs: MergedRootfs,
+    options: &GuestRuntimeOptions<'_>,
+) -> Result<ProvisionedRootfs, ResolveError> {
+    let toolbox = busybox::ensure_toolbox(options).await?;
+    inject_with_toolbox(rootfs, &toolbox).await
+}
+
+/// Injects one already-verified toolbox program into a merged tree.
+///
+/// Split from acquisition so the injection rules can be tested without a
+/// registry, and so a caller that already holds a program never re-verifies it.
+pub(super) async fn inject_with_toolbox(
+    rootfs: MergedRootfs,
+    toolbox: &ToolboxProgram,
+) -> Result<ProvisionedRootfs, ResolveError> {
+    let tree = rootfs.path().to_owned();
+    let state = std::sync::Arc::new(AtomicU8::new(INJECT_ACTIVE));
+    let control = InjectControl {
+        state: state.clone(),
+        tree: tree.clone(),
+    };
+    let mut cancel_on_drop = CancelInjectionOnDrop { state, armed: true };
+    let worker_toolbox = toolbox.clone();
+    let result =
+        tokio::task::spawn_blocking(move || inject_blocking(&tree, &worker_toolbox, &control))
+            .await
+            .map_err(|error| {
+                injection_io(
+                    "join worker",
+                    rootfs.path().to_owned(),
+                    io::Error::other(error),
+                )
+            });
+    cancel_on_drop.armed = false;
+    result??;
+
+    Ok(ProvisionedRootfs {
+        path: rootfs.path().to_owned(),
+        toolbox: toolbox.digest().clone(),
+    })
+}
+
+/// Writes the guest runtime, unwinding exactly what it touched on failure.
+fn inject_blocking(
+    tree: &Path,
+    toolbox: &ToolboxProgram,
+    control: &InjectControl,
+) -> Result<(), ResolveError> {
+    let mut unwind = InjectedPaths::default();
+    let result = (|| {
+        control.check()?;
+        for (mount_point, mode) in GUEST_MOUNT_POINTS {
+            ensure_guest_directory(tree, mount_point, *mode, &mut unwind)?;
+        }
+        control.check()?;
+        ensure_guest_directory(tree, GUEST_SERVICES, 0o755, &mut unwind)?;
+
+        control.check()?;
+        install_program(tree, GUEST_TOOLBOX, toolbox.path(), &mut unwind)?;
+        install_symlink(tree, GUEST_INIT, "firecrab-busybox", &mut unwind)?;
+
+        control.check()?;
+        install_file(
+            tree,
+            GUEST_INITTAB,
+            inittab().as_bytes(),
+            0o644,
+            &mut unwind,
+        )?;
+        install_file(
+            tree,
+            GUEST_BOOT_SCRIPT,
+            boot_script().as_bytes(),
+            0o755,
+            &mut unwind,
+        )?;
+        install_file(
+            tree,
+            GUEST_DHCP_SCRIPT,
+            DHCP_SCRIPT.as_bytes(),
+            0o755,
+            &mut unwind,
+        )?;
+
+        control.check()?;
+        install_file(
+            tree,
+            crate::guest_agent::BIN_PATH,
+            crate::guest_agent::AGENT_SCRIPT.as_bytes(),
+            0o755,
+            &mut unwind,
+        )
+    })();
+
+    match result {
+        Ok(()) => {
+            control.finish();
+            unwind.keep();
+            Ok(())
+        }
+        Err(error) => {
+            unwind.restore();
+            Err(error)
+        }
+    }
+}
+
+/// Every path this stage created or replaced, so a failure can undo it.
+///
+/// The merged tree belongs to the caller and is expensive to rebuild, so a
+/// failed injection leaves it exactly as it was rather than deleting it. The
+/// path set is small and known, which keeps the unwind bounded.
+#[derive(Default)]
+struct InjectedPaths {
+    /// Host paths created by this stage, newest first when unwound.
+    created: Vec<PathBuf>,
+    /// Paths moved aside as `(backup, original)` so they can be moved back.
+    displaced: Vec<(PathBuf, PathBuf)>,
+    /// Set once injection succeeded and nothing should be undone.
+    kept: bool,
+}
+
+impl InjectedPaths {
+    /// Records a path this stage brought into existence.
+    fn created(&mut self, path: PathBuf) {
+        self.created.push(path);
+    }
+
+    /// Records an image path moved aside to make room.
+    fn displaced(&mut self, backup: PathBuf, original: PathBuf) {
+        self.displaced.push((backup, original));
+    }
+
+    /// Keeps everything: injection succeeded.
+    fn keep(&mut self) {
+        self.kept = true;
+    }
+
+    /// Removes what this stage added and puts back what it moved aside.
+    fn restore(&mut self) {
+        if self.kept {
+            return;
+        }
+        for path in self.created.drain(..).rev() {
+            let removed = match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_dir() => fs::remove_dir(&path),
+                Ok(_) => fs::remove_file(&path),
+                Err(_) => Ok(()),
+            };
+            if let Err(error) = removed
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                tracing::warn!(
+                    error = %error,
+                    path = %path.display(),
+                    "failed to unwind an injected guest path"
+                );
+            }
+        }
+        for (backup, original) in self.displaced.drain(..).rev() {
+            if let Err(error) = fs::rename(&backup, &original) {
+                tracing::warn!(
+                    error = %error,
+                    path = %original.display(),
+                    "failed to restore a displaced image path"
+                );
+            }
+        }
+    }
+}
+
+impl Drop for InjectedPaths {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
+/// Resolves a guest path's parent inside the tree, creating what is missing.
+///
+/// Ancestor symbolic links are **followed**, not refused: usr-merged images
+/// ship `/sbin` as a link to `usr/sbin`, so refusing them would reject Ubuntu,
+/// Debian, and Fedora outright. Following is made safe by clamping — an
+/// absolute target re-roots at the tree and `..` stops at the tree root — so
+/// resolution provably cannot leave the tree no matter what the image planted.
+///
+/// The final component is deliberately not resolved. Callers replace it without
+/// following it, so an image's `/sbin/init` pointing at systemd loses the link
+/// rather than overwriting systemd itself.
+fn resolve_guest_parent(
+    tree: &Path,
+    guest_path: &str,
+    unwind: &mut InjectedPaths,
+) -> Result<PathBuf, ResolveError> {
+    let relative = guest_path.trim_start_matches('/');
+    let (parent, _) = relative.rsplit_once('/').unwrap_or(("", relative));
+    let mut pending: Vec<String> = parent
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .map(str::to_owned)
+        .collect();
+    pending.reverse();
+
+    let mut resolved = PathBuf::new();
+    let mut hops = 0_usize;
+    while let Some(component) = pending.pop() {
+        if component == ".." {
+            resolved.pop();
+            continue;
+        }
+        let candidate = resolved.join(&component);
+        let absolute = tree.join(&candidate);
+        match fs::symlink_metadata(&absolute) {
+            Ok(metadata) if metadata.file_type().is_dir() => resolved = candidate,
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                hops += 1;
+                if hops > SYMLINK_HOP_LIMIT {
+                    return Err(guest_path_unusable(
+                        guest_path,
+                        GuestPathViolation::SymlinkLoop {
+                            limit: SYMLINK_HOP_LIMIT,
+                        },
+                    ));
+                }
+                let target = fs::read_link(&absolute).map_err(|source| {
+                    injection_io("read ancestor link", absolute.clone(), source)
+                })?;
+                if target.is_absolute() {
+                    resolved = PathBuf::new();
+                }
+                let mut spliced: Vec<String> = target
+                    .components()
+                    .filter_map(|component| match component {
+                        std::path::Component::Normal(part) => {
+                            Some(part.to_string_lossy().into_owned())
+                        }
+                        std::path::Component::ParentDir => Some("..".to_owned()),
+                        _ => None,
+                    })
+                    .collect();
+                spliced.reverse();
+                pending.extend(spliced);
+            }
+            Ok(_) => {
+                return Err(guest_path_unusable(
+                    guest_path,
+                    GuestPathViolation::NonDirectoryAncestor {
+                        ancestor: candidate,
+                    },
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                create_directory(&absolute, 0o755)?;
+                unwind.created(absolute);
+                resolved = candidate;
+            }
+            Err(source) => {
+                return Err(injection_io("inspect ancestor", absolute, source));
+            }
+        }
+    }
+    Ok(tree.join(resolved))
+}
+
+/// Creates one directory with an exact mode.
+///
+/// The mode is restated after creation because `DirBuilder` masks it with the
+/// service's umask, which would quietly drop `/tmp`'s sticky bit.
+fn create_directory(path: &Path, mode: u32) -> Result<(), ResolveError> {
+    let mut builder = fs::DirBuilder::new();
+    builder.mode(mode);
+    builder
+        .create(path)
+        .map_err(|source| injection_io("create guest directory", path.to_owned(), source))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .map_err(|source| injection_io("set guest directory mode", path.to_owned(), source))
+}
+
+/// Creates a guest directory, leaving an existing one alone.
+fn ensure_guest_directory(
+    tree: &Path,
+    guest_path: &str,
+    mode: u32,
+    unwind: &mut InjectedPaths,
+) -> Result<(), ResolveError> {
+    let parent = resolve_guest_parent(tree, guest_path, unwind)?;
+    let name = guest_path.rsplit('/').next().unwrap_or_default();
+    let destination = parent.join(name);
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(guest_path_unusable(
+            guest_path,
+            GuestPathViolation::NonDirectoryAncestor {
+                ancestor: PathBuf::from(guest_path.trim_start_matches('/')),
+            },
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_directory(&destination, mode)?;
+            unwind.created(destination);
+            Ok(())
+        }
+        Err(source) => Err(injection_io("inspect guest directory", destination, source)),
+    }
+}
+
+/// Clears whatever the image left at a final component, recording the move.
+///
+/// The existing entry is never followed. A regular file or symlink is moved
+/// aside so a failed injection can restore it; a directory is refused, because
+/// silently deleting an image's directory tree is not this stage's call.
+fn displace_existing(
+    destination: &Path,
+    guest_path: &str,
+    unwind: &mut InjectedPaths,
+) -> Result<(), ResolveError> {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_dir() => Err(guest_path_unusable(
+            guest_path,
+            GuestPathViolation::NonDirectoryAncestor {
+                ancestor: PathBuf::from(guest_path.trim_start_matches('/')),
+            },
+        )),
+        Ok(_) => {
+            let backup = destination.with_extension(format!("firecrab-{}", Uuid::new_v4()));
+            fs::rename(destination, &backup).map_err(|source| {
+                injection_io("displace image path", destination.to_owned(), source)
+            })?;
+            unwind.displaced(backup, destination.to_owned());
+            Ok(())
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(injection_io(
+            "inspect guest path",
+            destination.to_owned(),
+            source,
+        )),
+    }
+}
+
+/// Writes one guest file, replacing whatever the image left in its place.
+fn install_file(
+    tree: &Path,
+    guest_path: &str,
+    contents: &[u8],
+    mode: u32,
+    unwind: &mut InjectedPaths,
+) -> Result<(), ResolveError> {
+    let parent = resolve_guest_parent(tree, guest_path, unwind)?;
+    let name = guest_path.rsplit('/').next().unwrap_or_default();
+    let destination = parent.join(name);
+    displace_existing(&destination, guest_path, unwind)?;
+    // `create_new` with `O_NOFOLLOW` closes the window between the displace
+    // above and this create: a symlink planted in between cannot be followed.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(mode)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(&destination)
+        .map_err(|source| injection_io("create guest file", destination.clone(), source))?;
+    unwind.created(destination.clone());
+    file.write_all(contents)
+        .map_err(|source| injection_io("write guest file", destination.clone(), source))?;
+    // `OpenOptions::mode` is masked by the service's umask; restate it so an
+    // injected script is executable regardless of how the service was started.
+    fs::set_permissions(&destination, fs::Permissions::from_mode(mode))
+        .map_err(|source| injection_io("set guest file mode", destination, source))
+}
+
+/// Copies the toolbox program into the tree as an executable.
+fn install_program(
+    tree: &Path,
+    guest_path: &str,
+    source_path: &Path,
+    unwind: &mut InjectedPaths,
+) -> Result<(), ResolveError> {
+    let contents = fs::read(source_path)
+        .map_err(|source| injection_io("read toolbox program", source_path.to_owned(), source))?;
+    install_file(tree, guest_path, &contents, 0o755, unwind)
+}
+
+/// Links one guest path at another, replacing what the image left there.
+fn install_symlink(
+    tree: &Path,
+    guest_path: &str,
+    target: &str,
+    unwind: &mut InjectedPaths,
+) -> Result<(), ResolveError> {
+    let parent = resolve_guest_parent(tree, guest_path, unwind)?;
+    let name = guest_path.rsplit('/').next().unwrap_or_default();
+    let destination = parent.join(name);
+    displace_existing(&destination, guest_path, unwind)?;
+    std::os::unix::fs::symlink(target, &destination)
+        .map_err(|source| injection_io("create guest symlink", destination.clone(), source))?;
+    unwind.created(destination);
+    Ok(())
+}
+
+/// Wraps a filesystem failure with the injection step that hit it.
+fn injection_io(operation: &'static str, path: PathBuf, source: io::Error) -> ResolveError {
+    ResolveError::GuestInjectionIo {
+        operation,
+        path,
+        source,
+    }
+}
+
+/// Wraps a rejection reason with the guest path it applies to.
+fn guest_path_unusable(guest_path: &str, reason: GuestPathViolation) -> ResolveError {
+    ResolveError::GuestPathUnusable {
+        path: guest_path.to_owned(),
+        reason,
+    }
+}
+
+/// busybox init's job table.
+///
+/// Commands stay free of shell metacharacters on purpose: busybox init routes
+/// any command containing them through `/bin/sh -c`, which a distroless image
+/// does not have.
+fn inittab() -> String {
+    format!(
+        "# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).\n\
+         ::sysinit:{GUEST_TOOLBOX} sh {GUEST_BOOT_SCRIPT}\n\
+         ::respawn:-{GUEST_TOOLBOX} sh\n\
+         ::ctrlaltdel:{GUEST_TOOLBOX} poweroff -f\n\
+         ::shutdown:{GUEST_TOOLBOX} sync\n\
+         ::restart:{GUEST_INIT}\n"
+    )
+}
+
+/// Everything between the kernel handing off and the host seeing a sentinel.
+fn boot_script() -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
+# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).
+# Avoid `set -e`: one failed mount must not leave the host waiting out the full
+# readiness timeout for a sentinel that will now never be printed.
+BB={GUEST_TOOLBOX}
+
+$BB mount -t proc -o nosuid,nodev,noexec proc /proc 2>/dev/null
+$BB mount -t sysfs -o nosuid,nodev,noexec sysfs /sys 2>/dev/null
+$BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
+$BB mount -t tmpfs -o nosuid,nodev,mode=755 tmpfs /run 2>/dev/null
+
+# Metrics first, so the dashboard has samples even when the network fails.
+$BB setsid $BB sh {agent} >/dev/null 2>&1 &
+
+$BB ip link set lo up 2>/dev/null
+# A bare udhcpc on an administratively down link never sends a single packet and
+# hangs forever, so the link comes up first, always.
+if ! $BB ip link set eth0 up 2>/dev/null; then
+  echo "FIRECRAB_NETWORK_FAILED no-ipv4-address" >/dev/console
+  exit 0
+fi
+
+$BB udhcpc -i eth0 -n -q -t 8 -T 2 -s {dhcp} >/dev/console 2>&1
+
+ipv4=""
+tries=0
+while [ "$tries" -lt 15 ]; do
+  ipv4=$($BB ip -4 -o addr show eth0 2>/dev/null | $BB awk '{{print $4; exit}}' | $BB cut -d/ -f1)
+  [ -n "$ipv4" ] && break
+  tries=$((tries + 1))
+  $BB sleep 1
+done
+
+if [ -z "$ipv4" ]; then
+  echo "FIRECRAB_NETWORK_FAILED no-ipv4-address" >/dev/console
+  exit 0
+fi
+
+dns_ok=0
+tries=0
+while [ "$tries" -lt 15 ]; do
+  if $BB nslookup example.com >/dev/null 2>&1; then
+    dns_ok=1
+    break
+  fi
+  tries=$((tries + 1))
+  $BB sleep 1
+done
+
+if [ "$dns_ok" -ne 1 ]; then
+  echo "FIRECRAB_NETWORK_FAILED dns-unreachable" >/dev/console
+  exit 0
+fi
+
+echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
+
+# A later import stage translates the image entrypoint into a program here.
+for service in {services}/*; do
+  [ -x "$service" ] || continue
+  $BB setsid "$service" >/dev/console 2>&1 &
+done
+exit 0
+"#,
+        agent = crate::guest_agent::BIN_PATH,
+        dhcp = GUEST_DHCP_SCRIPT,
+        services = GUEST_SERVICES,
+    )
+}
+
+/// busybox `udhcpc` lease hook.
+///
+/// The lease arrives in the environment, not in arguments. `mask` is a prefix
+/// length in busybox, unlike the dotted `subnet` beside it.
+const DHCP_SCRIPT: &str = r#"#!/sbin/firecrab-busybox sh
+# Firecrab guest DHCP hook for an imported OCI image (public-docs/oci.md).
+BB=/sbin/firecrab-busybox
+
+case "$1" in
+  deconfig)
+    $BB ip addr flush dev "$interface" 2>/dev/null
+    $BB ip link set "$interface" up 2>/dev/null
+    ;;
+  bound|renew)
+    $BB ip addr flush dev "$interface" 2>/dev/null
+    $BB ip addr add "$ip/${mask:-24}" dev "$interface" 2>/dev/null
+    $BB ip link set "$interface" up 2>/dev/null
+    for gateway in $router; do
+      $BB ip route add default via "$gateway" dev "$interface" 2>/dev/null
+      break
+    done
+    # Some images symlink resolv.conf at a resolver stub they never ship, so
+    # the link target never appears. Replace the link with a real file.
+    [ -L /etc/resolv.conf ] && $BB rm -f /etc/resolv.conf
+    : >/etc/resolv.conf
+    for server in $dns; do
+      printf 'nameserver %s\n' "$server" >>/etc/resolv.conf
+    done
+    ;;
+esac
+exit 0
+"#;

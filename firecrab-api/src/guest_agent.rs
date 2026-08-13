@@ -28,7 +28,7 @@ pub(crate) const SERVICE_NAME: &str = "firecrab-guest-agent.service";
 
 /// Reports guest OS CPU % and memory used (MemTotal − MemAvailable) on the
 /// serial console every few seconds for the host to parse (`FIRECRAB_USAGE`).
-const AGENT_SCRIPT: &str = r#"#!/bin/sh
+pub(crate) const AGENT_SCRIPT: &str = r#"#!/bin/sh
 # Firecrab Metrics Agent (console transport v1).
 # Guest OS metrics only — not host Firecracker process RSS.
 # Avoid `set -e`: a single awk/test failure must not kill the reporter loop.
