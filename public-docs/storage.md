@@ -27,6 +27,7 @@ MicroVM control-plane records and VM filesystem artifacts have separate storage 
     .templates.json              # persisted runtime template registrations
     .microboot/                  # Alpine netboot kernel, initramfs, and placeholder disk
     .oci/blobs/sha256/<hex>       # verified raw OCI config and layer blobs
+    .oci/layers/sha256/<diff-id>/ # verified uncompressed layer tar streams
     .packages/                   # staged M2Image archives and origin markers
     kernel/
     rootfs/
@@ -39,7 +40,7 @@ It is the writable ext4 file under the selected storage root's `vms/<vm-id>/d/` 
 The `images/` directory is the default `FIRECRAB_IMAGE_ROOT` and contains immutable source templates used when preparing new VM disks.
 Replacing a source image does not modify a VM disk that was already prepared.
 Temporary download, package-build, and bootstrap scratch files can also appear under `.packages/` while a job is running or after an interrupted job.
-OCI config and layer blobs are stored as raw registry bytes under `.oci/blobs/sha256/`; every cache hit is re-verified against its expected size and SHA-256 digest.
+OCI config and layer blobs stay as raw registry bytes under `.oci/blobs/sha256/`; verified tar streams stay separately under `.oci/layers/sha256/`, retaining both the uncompressed config diff ID and compressed manifest digest. Both caches rehash entries before reuse.
 `GET /api/oci/inspect` reads metadata only and does not populate this cache.
 
 Other installed and runtime files live outside `/var/lib/firecrab`.

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_compression::tokio::bufread::{GzipEncoder, ZstdEncoder};
 use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{Response, StatusCode, header::CONTENT_TYPE};
@@ -40,6 +41,43 @@ impl FixtureBlob {
             self.bytes.len() as u64,
         )
     }
+}
+
+fn config_blob(diff_ids: &[Sha256Digest]) -> FixtureBlob {
+    FixtureBlob::new(
+        OCI_CONFIG_MEDIA_TYPE,
+        serde_json::to_vec(&serde_json::json!({
+            "architecture": "amd64",
+            "os": "linux",
+            "rootfs": {
+                "type": "layers",
+                "diff_ids": diff_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            },
+        }))
+        .expect("serialize image configuration"),
+    )
+}
+
+async fn gzip(bytes: &[u8]) -> Vec<u8> {
+    let input = tokio::io::BufReader::new(bytes);
+    let mut encoder = GzipEncoder::new(input);
+    let mut output = Vec::new();
+    encoder
+        .read_to_end(&mut output)
+        .await
+        .expect("gzip fixture bytes");
+    output
+}
+
+async fn zstd(bytes: &[u8]) -> Vec<u8> {
+    let input = tokio::io::BufReader::new(bytes);
+    let mut encoder = ZstdEncoder::new(input);
+    let mut output = Vec::new();
+    encoder
+        .read_to_end(&mut output)
+        .await
+        .expect("zstd fixture bytes");
+    output
 }
 
 fn descriptor(media_type: &str, digest: &str, size: u64) -> serde_json::Value {
@@ -302,6 +340,88 @@ async fn assert_no_cache_artifacts(cache: &BlobCache, digest: &Sha256Digest) {
         assert!(
             !name.ends_with(".partial"),
             "failed download left partial file {name}"
+        );
+    }
+}
+
+async fn local_cached_image(
+    image_root: &Path,
+    config: FixtureBlob,
+    layers: Vec<FixtureBlob>,
+) -> CachedImageBlobs {
+    let blob_cache = BlobCache::new(image_root);
+    tokio::fs::create_dir_all(&blob_cache.root)
+        .await
+        .expect("create raw blob cache");
+    for blob in std::iter::once(&config).chain(&layers) {
+        tokio::fs::write(blob_cache.path_for(&blob.digest), &blob.bytes)
+            .await
+            .expect("write cached fixture blob");
+    }
+    let manifest = ImageManifest {
+        schema_version: 2,
+        media_type: OCI_MANIFEST_MEDIA_TYPE.to_owned(),
+        config: Descriptor {
+            media_type: config.media_type.to_owned(),
+            digest: config.digest.clone(),
+            size: config.bytes.len() as u64,
+        },
+        layers: layers
+            .iter()
+            .map(|layer| Descriptor {
+                media_type: layer.media_type.to_owned(),
+                digest: layer.digest.clone(),
+                size: layer.bytes.len() as u64,
+            })
+            .collect(),
+    };
+    CachedImageBlobs {
+        resolved: ResolvedImage {
+            digest: Sha256Digest::of_bytes(b"manifest").to_string(),
+            architecture: Architecture::X86_64,
+            single_platform: true,
+        },
+        config: CachedBlob {
+            descriptor: manifest.config.clone(),
+            path: blob_cache.path_for(&config.digest),
+        },
+        layers: manifest
+            .layers
+            .iter()
+            .cloned()
+            .map(|descriptor| CachedBlob {
+                path: blob_cache.path_for(&descriptor.digest),
+                descriptor,
+            })
+            .collect(),
+        manifest,
+    }
+}
+
+async fn assert_no_layer_artifacts(
+    cache: &LayerCache,
+    descriptor: &Descriptor,
+    diff_id: &Sha256Digest,
+) {
+    let path = cache
+        .path_for(descriptor, diff_id)
+        .expect("supported fixture media type");
+    assert!(
+        tokio::fs::metadata(&path).await.is_err(),
+        "failed decompression unexpectedly has a final cache entry"
+    );
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let mut entries = match tokio::fs::read_dir(parent).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => panic!("read layer cache directory: {error}"),
+    };
+    while let Some(entry) = entries.next_entry().await.expect("read layer cache entry") {
+        assert!(
+            !entry.file_name().to_string_lossy().ends_with(".partial"),
+            "failed decompression left a partial file"
         );
     }
 }
@@ -841,4 +961,477 @@ async fn an_unsupported_descriptor_digest_is_a_digest_error() {
             if algorithm == "sha512"
     ));
     assert_eq!(registry.total_blob_requests(), 0);
+}
+
+#[tokio::test]
+async fn supported_layer_media_types_produce_verified_ordered_tar_streams() {
+    let media_types = [
+        OCI_LAYER_MEDIA_TYPE,
+        OCI_LAYER_GZIP_MEDIA_TYPE,
+        OCI_LAYER_ZSTD_MEDIA_TYPE,
+        OCI_NONDISTRIBUTABLE_LAYER_MEDIA_TYPE,
+        OCI_NONDISTRIBUTABLE_LAYER_GZIP_MEDIA_TYPE,
+        OCI_NONDISTRIBUTABLE_LAYER_ZSTD_MEDIA_TYPE,
+        DOCKER_LAYER_MEDIA_TYPE,
+        DOCKER_LAYER_GZIP_MEDIA_TYPE,
+        DOCKER_FOREIGN_LAYER_GZIP_MEDIA_TYPE,
+    ];
+    let mut layers = Vec::new();
+    let mut payloads = Vec::new();
+    let mut diff_ids = Vec::new();
+    for (index, media_type) in media_types.into_iter().enumerate() {
+        let payload = format!("layer-{index}-uncompressed-tar-bytes").into_bytes();
+        let bytes = match layer_compression(media_type).expect("supported fixture media type") {
+            LayerCompression::Identity => payload.clone(),
+            LayerCompression::Gzip => gzip(&payload).await,
+            LayerCompression::Zstd => zstd(&payload).await,
+        };
+        layers.push(FixtureBlob::new(media_type, bytes));
+        diff_ids.push(Sha256Digest::of_bytes(&payload));
+        payloads.push(payload);
+    }
+    let config = config_blob(&diff_ids);
+    let registry = TestRegistry::start(
+        ordinary_manifest(&config, &layers),
+        replies(
+            &std::iter::once(config.clone())
+                .chain(layers.iter().cloned())
+                .collect::<Vec<_>>(),
+        ),
+    )
+    .await;
+    let directory = tempdir().expect("create image root");
+    let blobs = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &BlobCache::new(directory.path()),
+    )
+    .await
+    .expect("cache compressed image blobs");
+    let layer_cache = LayerCache::new(directory.path());
+
+    let unpacked = decompress_cached_layers(&blobs, &layer_cache)
+        .await
+        .expect("decompress every supported layer encoding");
+
+    assert_eq!(unpacked.len(), layers.len());
+    for (index, layer) in unpacked.iter().enumerate() {
+        assert_eq!(layer.source.descriptor.digest, layers[index].digest);
+        assert_eq!(layer.diff_id, diff_ids[index]);
+        assert_eq!(layer.size, payloads[index].len() as u64);
+        assert_eq!(
+            layer.path,
+            layer_cache
+                .path_for(&layer.source.descriptor, &layer.diff_id)
+                .unwrap()
+        );
+        assert_eq!(tokio::fs::read(&layer.path).await.unwrap(), payloads[index]);
+        assert_eq!(
+            tokio::fs::read(&layer.source.path).await.unwrap(),
+            layers[index].bytes
+        );
+        if layer_compression(media_types[index]) == Some(LayerCompression::Identity) {
+            assert_eq!(layer.source.descriptor.digest, layer.diff_id);
+        } else {
+            assert_ne!(layer.source.descriptor.digest, layer.diff_id);
+        }
+    }
+}
+
+#[tokio::test]
+async fn concatenated_gzip_members_and_zstd_frames_are_consumed_completely() {
+    let first = b"first tar segment";
+    let second = b" and second tar segment";
+    let expected = [first.as_slice(), second.as_slice()].concat();
+    for (media_type, mut bytes) in [
+        (OCI_LAYER_GZIP_MEDIA_TYPE, gzip(first).await),
+        (OCI_LAYER_ZSTD_MEDIA_TYPE, zstd(first).await),
+    ] {
+        bytes.extend(match layer_compression(media_type).unwrap() {
+            LayerCompression::Gzip => gzip(second).await,
+            LayerCompression::Zstd => zstd(second).await,
+            LayerCompression::Identity => unreachable!(),
+        });
+        let layer = FixtureBlob::new(media_type, bytes);
+        let diff_id = Sha256Digest::of_bytes(&expected);
+        let config = config_blob(std::slice::from_ref(&diff_id));
+        let directory = tempdir().expect("create image root");
+        let image = local_cached_image(directory.path(), config, vec![layer]).await;
+
+        let unpacked = decompress_cached_layers(&image, &LayerCache::new(directory.path()))
+            .await
+            .expect("consume every gzip member or zstd frame");
+
+        assert_eq!(tokio::fs::read(&unpacked[0].path).await.unwrap(), expected);
+    }
+}
+
+#[tokio::test]
+async fn invalid_configs_fail_before_a_layer_cache_is_created() {
+    let payload = b"plain layer".to_vec();
+    let layer = FixtureBlob::new(OCI_LAYER_MEDIA_TYPE, payload.clone());
+    let diff_id = Sha256Digest::of_bytes(&payload);
+    let cases = [
+        ("malformed", b"{".to_vec()),
+        (
+            "rootfs type",
+            serde_json::to_vec(&serde_json::json!({
+                "rootfs": { "type": "unknown", "diff_ids": [diff_id.to_string()] }
+            }))
+            .unwrap(),
+        ),
+        (
+            "count",
+            serde_json::to_vec(&serde_json::json!({
+                "rootfs": { "type": "layers", "diff_ids": [] }
+            }))
+            .unwrap(),
+        ),
+        (
+            "digest",
+            serde_json::to_vec(&serde_json::json!({
+                "rootfs": { "type": "layers", "diff_ids": [format!("sha512:{}", "a".repeat(64))] }
+            }))
+            .unwrap(),
+        ),
+    ];
+
+    for (kind, bytes) in cases {
+        let directory = tempdir().expect("create image root");
+        let config = FixtureBlob::new(OCI_CONFIG_MEDIA_TYPE, bytes);
+        let image = local_cached_image(directory.path(), config, vec![layer.clone()]).await;
+        let cache = LayerCache::new(directory.path());
+
+        let error = decompress_cached_layers(&image, &cache)
+            .await
+            .expect_err("invalid config must fail before decompression");
+
+        match kind {
+            "rootfs type" => assert!(matches!(error, ResolveError::UnsupportedRootfsType(_))),
+            "count" => assert!(matches!(
+                error,
+                ResolveError::DiffIdCountMismatch {
+                    expected: 1,
+                    actual: 0
+                }
+            )),
+            _ => assert!(matches!(error, ResolveError::MalformedConfig(_))),
+        }
+        assert!(tokio::fs::metadata(&cache.root).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn an_unsupported_layer_media_type_fails_before_output() {
+    let payload = b"unknown encoding".to_vec();
+    let layer = FixtureBlob::new("application/vnd.example.layer+unknown", payload.clone());
+    let diff_id = Sha256Digest::of_bytes(&payload);
+    let config = config_blob(std::slice::from_ref(&diff_id));
+    let directory = tempdir().expect("create image root");
+    let image = local_cached_image(directory.path(), config, vec![layer]).await;
+    let cache = LayerCache::new(directory.path());
+
+    let error = decompress_cached_layers(&image, &cache)
+        .await
+        .expect_err("unknown layer encoding must be rejected");
+
+    assert!(matches!(error, ResolveError::UnsupportedMediaType(_)));
+    assert!(tokio::fs::metadata(&cache.root).await.is_err());
+}
+
+#[tokio::test]
+async fn a_diff_id_mismatch_preserves_the_compressed_blob_and_leaves_no_output() {
+    let payload = b"actual uncompressed bytes".to_vec();
+    let layer = FixtureBlob::new(OCI_LAYER_GZIP_MEDIA_TYPE, gzip(&payload).await);
+    let wrong_diff_id = Sha256Digest::of_bytes(b"different uncompressed bytes");
+    let config = config_blob(std::slice::from_ref(&wrong_diff_id));
+    let directory = tempdir().expect("create image root");
+    let image = local_cached_image(directory.path(), config, vec![layer.clone()]).await;
+    let cache = LayerCache::new(directory.path());
+
+    let error = decompress_cached_layers(&image, &cache)
+        .await
+        .expect_err("wrong config diff ID must fail");
+
+    assert!(matches!(
+        error,
+        ResolveError::DiffIdMismatch {
+            compressed_digest,
+            expected,
+            ..
+        } if compressed_digest == layer.digest && expected == wrong_diff_id
+    ));
+    assert_no_layer_artifacts(&cache, &image.layers[0].descriptor, &wrong_diff_id).await;
+    assert_eq!(
+        tokio::fs::read(&image.layers[0].path).await.unwrap(),
+        layer.bytes
+    );
+}
+
+#[tokio::test]
+async fn the_exact_compressed_stream_is_verified_while_it_is_decoded() {
+    let payload = b"unchanged decoder output".to_vec();
+    let layer = FixtureBlob::new(OCI_LAYER_GZIP_MEDIA_TYPE, gzip(&payload).await);
+    let diff_id = Sha256Digest::of_bytes(&payload);
+    let config = config_blob(std::slice::from_ref(&diff_id));
+    let directory = tempdir().expect("create image root");
+    let image = local_cached_image(directory.path(), config, vec![layer.clone()]).await;
+    let mut changed_header = layer.bytes.clone();
+    assert_eq!(&changed_header[..3], &[0x1f, 0x8b, 0x08]);
+    changed_header[4] ^= 1; // gzip mtime: metadata that does not affect decoder output
+    assert_ne!(Sha256Digest::of_bytes(&changed_header), layer.digest);
+    tokio::fs::write(&image.layers[0].path, &changed_header)
+        .await
+        .expect("replace cached blob after its earlier verification");
+    let cache = LayerCache::new(directory.path());
+
+    let error = decompress_cached_layers(&image, &cache)
+        .await
+        .expect_err("the decoder must verify its exact compressed input");
+
+    assert!(matches!(
+        error,
+        ResolveError::DigestMismatch {
+            expected,
+            actual,
+            ..
+        } if expected == layer.digest && actual == Sha256Digest::of_bytes(&changed_header)
+    ));
+    assert_no_layer_artifacts(&cache, &image.layers[0].descriptor, &diff_id).await;
+}
+
+#[tokio::test]
+async fn truncated_gzip_and_zstd_layers_leave_no_output_or_partial() {
+    let payload = b"payload whose codec checksum must be verified".to_vec();
+    for (media_type, mut bytes) in [
+        (OCI_LAYER_GZIP_MEDIA_TYPE, gzip(&payload).await),
+        (OCI_LAYER_ZSTD_MEDIA_TYPE, zstd(&payload).await),
+    ] {
+        bytes.truncate(bytes.len().saturating_sub(4));
+        let layer = FixtureBlob::new(media_type, bytes);
+        let diff_id = Sha256Digest::of_bytes(&payload);
+        let config = config_blob(std::slice::from_ref(&diff_id));
+        let directory = tempdir().expect("create image root");
+        let image = local_cached_image(directory.path(), config, vec![layer]).await;
+        let cache = LayerCache::new(directory.path());
+
+        let error = decompress_cached_layers(&image, &cache)
+            .await
+            .expect_err("truncated compressed stream must fail");
+
+        assert!(matches!(error, ResolveError::Decompression { .. }));
+        assert_no_layer_artifacts(&cache, &image.layers[0].descriptor, &diff_id).await;
+    }
+}
+
+#[tokio::test]
+async fn trailing_bytes_after_gzip_and_zstd_streams_are_rejected() {
+    let payload = b"complete payload".to_vec();
+    for (media_type, mut bytes) in [
+        (OCI_LAYER_GZIP_MEDIA_TYPE, gzip(&payload).await),
+        (OCI_LAYER_ZSTD_MEDIA_TYPE, zstd(&payload).await),
+    ] {
+        bytes.extend_from_slice(b"not another valid member");
+        let layer = FixtureBlob::new(media_type, bytes);
+        let diff_id = Sha256Digest::of_bytes(&payload);
+        let config = config_blob(std::slice::from_ref(&diff_id));
+        let directory = tempdir().expect("create image root");
+        let image = local_cached_image(directory.path(), config, vec![layer]).await;
+        let cache = LayerCache::new(directory.path());
+
+        let error = decompress_cached_layers(&image, &cache)
+            .await
+            .expect_err("trailing non-frame bytes must fail");
+
+        assert!(matches!(error, ResolveError::Decompression { .. }));
+        assert_no_layer_artifacts(&cache, &image.layers[0].descriptor, &diff_id).await;
+    }
+}
+
+#[tokio::test]
+async fn decoded_output_limit_is_inclusive_and_cleans_an_oversized_partial() {
+    let payload = b"ten bytes!".to_vec();
+    assert_eq!(payload.len(), 10);
+    let layer = FixtureBlob::new(OCI_LAYER_GZIP_MEDIA_TYPE, gzip(&payload).await);
+    let diff_id = Sha256Digest::of_bytes(&payload);
+    let config = config_blob(std::slice::from_ref(&diff_id));
+    let directory = tempdir().expect("create image root");
+    let image = local_cached_image(directory.path(), config, vec![layer]).await;
+    let too_small = LayerCache::with_max_uncompressed_layer_bytes(directory.path(), 9);
+
+    let error = decompress_cached_layers(&image, &too_small)
+        .await
+        .expect_err("decoded output over the limit must fail");
+
+    assert!(matches!(
+        error,
+        ResolveError::UncompressedLayerTooLarge {
+            limit: 9,
+            actual: 10,
+            ..
+        }
+    ));
+    assert_no_layer_artifacts(&too_small, &image.layers[0].descriptor, &diff_id).await;
+
+    let exact = LayerCache::with_max_uncompressed_layer_bytes(directory.path(), 10);
+    let unpacked = decompress_cached_layers(&image, &exact)
+        .await
+        .expect("the decoded output limit is inclusive");
+    assert_eq!(tokio::fs::read(&unpacked[0].path).await.unwrap(), payload);
+}
+
+#[tokio::test]
+async fn a_verified_layer_hit_survives_source_removal_and_corruption_is_rebuilt() {
+    let payload = b"cached uncompressed tar stream".to_vec();
+    let layer = FixtureBlob::new(OCI_LAYER_GZIP_MEDIA_TYPE, gzip(&payload).await);
+    let diff_id = Sha256Digest::of_bytes(&payload);
+    let config = config_blob(std::slice::from_ref(&diff_id));
+    let directory = tempdir().expect("create image root");
+    let image = local_cached_image(directory.path(), config, vec![layer.clone()]).await;
+    let cache = LayerCache::new(directory.path());
+
+    let first = decompress_cached_layers(&image, &cache)
+        .await
+        .expect("populate decoded layer cache");
+    tokio::fs::remove_file(&image.layers[0].path)
+        .await
+        .expect("remove compressed source");
+    let hit = decompress_cached_layers(&image, &cache)
+        .await
+        .expect("reuse a verified decoded cache entry");
+    assert_eq!(hit[0].path, first[0].path);
+
+    tokio::fs::write(&image.layers[0].path, &layer.bytes)
+        .await
+        .expect("restore compressed source");
+    tokio::fs::write(&first[0].path, vec![b'x'; payload.len()])
+        .await
+        .expect("corrupt decoded cache entry without changing its size");
+    let repaired = decompress_cached_layers(&image, &cache)
+        .await
+        .expect("rebuild a corrupt decoded cache entry");
+    assert_eq!(tokio::fs::read(&repaired[0].path).await.unwrap(), payload);
+}
+
+#[tokio::test]
+async fn identical_diff_ids_keep_distinct_compressed_relationships() {
+    let payload = b"one tar stream encoded two ways".to_vec();
+    let gzip_layer = FixtureBlob::new(OCI_LAYER_GZIP_MEDIA_TYPE, gzip(&payload).await);
+    let zstd_layer = FixtureBlob::new(OCI_LAYER_ZSTD_MEDIA_TYPE, zstd(&payload).await);
+    let diff_id = Sha256Digest::of_bytes(&payload);
+    let config = config_blob(&[diff_id.clone(), diff_id.clone(), diff_id.clone()]);
+    let directory = tempdir().expect("create image root");
+    let image = local_cached_image(
+        directory.path(),
+        config,
+        vec![gzip_layer.clone(), zstd_layer.clone(), gzip_layer],
+    )
+    .await;
+
+    let layers = decompress_cached_layers(&image, &LayerCache::new(directory.path()))
+        .await
+        .expect("verify both compressed relationships");
+
+    assert_eq!(
+        layers
+            .iter()
+            .map(|layer| &layer.diff_id)
+            .collect::<Vec<_>>(),
+        vec![&diff_id; 3]
+    );
+    assert_eq!(layers[0].path, layers[2].path);
+    assert_ne!(layers[0].path, layers[1].path);
+    assert_ne!(
+        layers[0].source.descriptor.digest,
+        layers[1].source.descriptor.digest
+    );
+    for layer in layers {
+        assert_eq!(tokio::fs::read(layer.path).await.unwrap(), payload);
+    }
+}
+
+#[tokio::test]
+async fn an_image_without_layers_accepts_an_empty_diff_id_list() {
+    let config = config_blob(&[]);
+    let directory = tempdir().expect("create image root");
+    let image = local_cached_image(directory.path(), config, Vec::new()).await;
+
+    let layers = decompress_cached_layers(&image, &LayerCache::new(directory.path()))
+        .await
+        .expect("empty images have no layer work");
+
+    assert!(layers.is_empty());
+}
+
+#[test]
+fn decompression_parallelism_has_a_separate_memory_bound() {
+    assert_eq!(decompression_parallelism(0), 1);
+    assert_eq!(decompression_parallelism(1), 1);
+    assert_eq!(decompression_parallelism(2), 2);
+    assert_eq!(decompression_parallelism(64), MAX_PARALLEL_DECOMPRESSIONS);
+}
+
+#[tokio::test]
+async fn concurrent_calls_share_the_process_wide_decompression_permits() {
+    let permits = shared_decompression_permits();
+    let held = Arc::clone(&permits)
+        .acquire_many_owned(MAX_PARALLEL_DECOMPRESSIONS as u32)
+        .await
+        .expect("the shared semaphore stays open");
+
+    let first_directory = tempdir().expect("create first image root");
+    let first_payload = b"first concurrent zstd layer".to_vec();
+    let first_diff_id = Sha256Digest::of_bytes(&first_payload);
+    let first_layer = FixtureBlob::new(OCI_LAYER_ZSTD_MEDIA_TYPE, zstd(&first_payload).await);
+    let first_image = local_cached_image(
+        first_directory.path(),
+        config_blob(std::slice::from_ref(&first_diff_id)),
+        vec![first_layer],
+    )
+    .await;
+    let first_cache = LayerCache::new(first_directory.path());
+
+    let second_directory = tempdir().expect("create second image root");
+    let second_payload = b"second concurrent zstd layer".to_vec();
+    let second_diff_id = Sha256Digest::of_bytes(&second_payload);
+    let second_layer = FixtureBlob::new(OCI_LAYER_ZSTD_MEDIA_TYPE, zstd(&second_payload).await);
+    let second_image = local_cached_image(
+        second_directory.path(),
+        config_blob(std::slice::from_ref(&second_diff_id)),
+        vec![second_layer],
+    )
+    .await;
+    let second_cache = LayerCache::new(second_directory.path());
+    assert!(Arc::ptr_eq(&first_cache.decompression_permits, &permits));
+    assert!(Arc::ptr_eq(&second_cache.decompression_permits, &permits));
+
+    let mut first = Box::pin(decompress_cached_layers(&first_image, &first_cache));
+    let mut second = Box::pin(decompress_cached_layers(&second_image, &second_cache));
+    let early_completion = tokio::time::timeout(Duration::from_millis(20), async {
+        tokio::select! {
+            result = &mut first => result,
+            result = &mut second => result,
+        }
+    })
+    .await;
+    assert!(
+        early_completion.is_err(),
+        "neither independent call may decode while all global permits are held"
+    );
+
+    drop(held);
+    let (first_result, second_result) = tokio::join!(first, second);
+    assert_eq!(
+        tokio::fs::read(&first_result.unwrap()[0].path)
+            .await
+            .unwrap(),
+        first_payload
+    );
+    assert_eq!(
+        tokio::fs::read(&second_result.unwrap()[0].path)
+            .await
+            .unwrap(),
+        second_payload
+    );
 }

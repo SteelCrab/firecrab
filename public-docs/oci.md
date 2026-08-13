@@ -28,8 +28,8 @@ populates the blob cache.
 
 Internal OCI pulls cache image configs and layers by their SHA-256 digest at
 `<FIRECRAB_IMAGE_ROOT>/.oci/blobs/sha256/<hex>`.
-Entries contain the raw bytes returned by the registry; they are not unpacked
-or merged into a root filesystem.
+Entries contain the raw bytes returned by the registry and are never replaced
+with decompressed data.
 
 Every cache lookup streams the complete entry and verifies both its expected
 size and SHA-256 digest before reuse. A corrupt entry is discarded and fetched
@@ -37,6 +37,25 @@ again, and a download becomes visible at its final path only after the same
 checks succeed.
 One config or layer download is limited to 16 GiB by default; operators can
 change this with `FIRECRAB_OCI_MAX_BLOB_BYTES`.
+
+## Layer decompression
+
+The internal import pipeline decompresses plain, gzip, and zstd layer streams
+into `.oci/layers/sha256/<diff-id>/<compressed-digest>.<codec>.tar`.
+Each result keeps the manifest descriptor, whose digest covers the registry
+bytes, separate from the matching config `rootfs.diff_ids` entry, whose digest
+covers the uncompressed tar stream.
+
+The decoder streams output while calculating that diff ID and publishes a tar
+only after it matches. Cache hits are rehashed, corrupt entries are rebuilt
+from the verified blob, and failed work leaves no partial tar. Decoder output
+is limited to 64 GiB per layer by default; change it with
+`FIRECRAB_OCI_MAX_UNCOMPRESSED_LAYER_BYTES`. At most two layer decoders run
+process-wide, and each zstd decoder has a 128 MiB window limit.
+
+Tar member validation, extraction, whiteout handling, and layer merging remain
+separate import stages. Inspect does not run decompression or fill either OCI
+cache.
 
 ## Related
 

@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+async-compression = { version = "0.4.43", features = ["gzip", "tokio", "zstd"] }
 axum = { version = "0.8.9", features = ["ws"] }
 firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
