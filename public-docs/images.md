@@ -156,6 +156,7 @@ For a new distribution family, add its manifest entry and builder, then update:
 
 ## Related
 
+- [OCI images](oci.md)
 - [Installation](installation.md)
 - [API](api.md)
 - [Operations](operations.md)
