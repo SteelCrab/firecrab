@@ -596,6 +596,9 @@ rootfs/ubuntu-rootfs-26.04-arm64.ext4
 kernel/Image-alpine-virt-aarch64
 kernel/initramfs-alpine-virt-aarch64
 rootfs/alpine-rootfs-3.24.1-aarch64.ext4
+kernel/Image-rocky-9.8-aarch64
+kernel/initramfs-rocky-9.8-aarch64
+rootfs/rocky-rootfs-9.8-aarch64.ext4
 EOF
             ;;
         *)
@@ -605,9 +608,9 @@ rootfs/ubuntu-rootfs-26.04-amd64.ext4
 kernel/vmlinux-alpine-virt-x86_64
 kernel/initramfs-alpine-virt-x86_64
 rootfs/alpine-rootfs-3.24.1-x86_64.ext4
-kernel/vmlinux-rocky-9-x86_64
-kernel/initramfs-rocky-9-x86_64
-rootfs/rocky-rootfs-9-x86_64.ext4
+kernel/vmlinux-rocky-9.8-x86_64
+kernel/initramfs-rocky-9.8-x86_64
+rootfs/rocky-rootfs-9.8-x86_64.ext4
 EOF
             ;;
     esac
@@ -769,12 +772,41 @@ check_image_install_tools() {
     pass
 }
 
-resolve_vms_root() {
-    local candidate
-    for candidate in "$DATADIR/vms" "$PWD/data/vms" "$DATADIR" "$PWD/data"; do
-        [ -d "$candidate" ] || continue
-        (cd -- "$candidate" && pwd)
-        return
+# Every directory VM disks can land in, one per line.
+#
+# `FIRECRAB_STORAGE_ROOTS` is `id=path` pairs separated by `:`, matching
+# `StorageRegistry::parse`. Pools registered through the API live in SQLite and
+# are not read here — doctor stays dependency-free and never opens the database
+# (`public-docs/storage.md`).
+resolve_vms_roots() {
+    local seen="" entry path
+    local candidates=()
+
+    if [ -n "${FIRECRAB_STORAGE_ROOTS:-}" ]; then
+        local saved_ifs=$IFS
+        IFS=:
+        for entry in $FIRECRAB_STORAGE_ROOTS; do
+            case "$entry" in
+                *=*) candidates+=("${entry#*=}") ;;
+            esac
+        done
+        IFS=$saved_ifs
+    fi
+    candidates+=("$DATADIR" "$PWD/data")
+
+    for entry in "${candidates[@]}"; do
+        # A configured root holds its disks under `vms/`, which only exists
+        # once something has been created there.
+        for path in "$entry/vms" "$entry"; do
+            [ -d "$path" ] || continue
+            path=$(cd -- "$path" && pwd)
+            case " $seen " in
+                *" $path "*) continue ;;
+            esac
+            seen+=" $path"
+            printf '%s\n' "$path"
+            break
+        done
     done
 }
 
@@ -791,28 +823,41 @@ resolve_vms_root() {
 # Both probes are read-only; doctor must not write to the host, so support is
 # never confirmed by attempting a real clone.
 check_reflink() {
-    local roots image_root vms_root image_device vms_device image_type vms_type
+    local roots vms_roots image_root image_device image_type
+    local vms_root vms_device split=()
     mapfile -t roots < <(resolve_image_roots)
-    vms_root=$(resolve_vms_root)
+    mapfile -t vms_roots < <(resolve_vms_roots)
 
-    if [ "${#roots[@]}" -eq 0 ] || [ -z "$vms_root" ] || ! have stat; then
+    if [ "${#roots[@]}" -eq 0 ] || [ "${#vms_roots[@]}" -eq 0 ] || ! have stat; then
         pass
         return
     fi
     image_root=${roots[0]}
-
     image_device=$(stat -c %d -- "$image_root" 2>/dev/null || true)
-    vms_device=$(stat -c %d -- "$vms_root" 2>/dev/null || true)
-    if [ -z "$image_device" ] || [ -z "$vms_device" ] || [ "$image_device" = "$vms_device" ]; then
+    if [ -z "$image_device" ]; then
+        pass
+        return
+    fi
+
+    # Each storage pool is judged on its own: one pool sharing the template's
+    # filesystem does not make another pool's split any cheaper.
+    for vms_root in "${vms_roots[@]}"; do
+        vms_device=$(stat -c %d -- "$vms_root" 2>/dev/null || true)
+        [ -n "$vms_device" ] || continue
+        [ "$vms_device" = "$image_device" ] && continue
+        split+=("$(printf 'VM disks:  %s (%s)' \
+            "$vms_root" "$(stat -f -c %T -- "$vms_root" 2>/dev/null || printf unknown)")")
+    done
+
+    if [ "${#split[@]}" -eq 0 ]; then
         pass
         return
     fi
 
     image_type=$(stat -f -c %T -- "$image_root" 2>/dev/null || printf unknown)
-    vms_type=$(stat -f -c %T -- "$vms_root" 2>/dev/null || printf unknown)
     skip "reflink: templates and VM disks are on different filesystems" \
-        "$(printf 'templates: %s (%s)\nVM disks:  %s (%s)' \
-            "$image_root" "$image_type" "$vms_root" "$vms_type")" \
+        "$(printf 'templates: %s (%s)\n' "$image_root" "$image_type"
+           printf '%s\n' "${split[@]}")" \
         "put both on one XFS/Btrfs filesystem, or accept a full template copy per VM"
 }
 

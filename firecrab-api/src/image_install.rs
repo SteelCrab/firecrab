@@ -23,6 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, PackageOrigin};
 use tokio::io::AsyncWriteExt;
 
+use crate::m2image_manifest;
 use crate::templates::{TemplateRegistry, TemplateSpec};
 
 /// Default public MicroRegistry. Operators may override it for a private
@@ -274,22 +275,10 @@ pub fn package_path(alias: &str) -> String {
 }
 
 /// Registry path for `alias` on an explicit Firecracker host architecture.
-/// x86_64 keeps the original layout; ARM64 uses a distinct subdirectory so
-/// publishing one architecture can never replace the other's package.
+/// Built-in aliases come from the release manifest; custom aliases retain
+/// the historic flat layout.
 pub fn package_path_for_arch(alias: &str, architecture: &str) -> String {
-    let directory = match alias {
-        "alpine-3.24" => Some("alpine/3.24"),
-        "ubuntu-26.04" => Some("ubuntu/26.04"),
-        "rocky-9" => Some("rocky/9"),
-        _ => None,
-    };
-    match directory {
-        Some(directory) if architecture == "aarch64" => {
-            format!("{directory}/aarch64/{}", package_name(alias))
-        }
-        Some(directory) => format!("{directory}/{}", package_name(alias)),
-        None => package_name(alias),
-    }
+    m2image_manifest::registry_key(alias, architecture).unwrap_or_else(|| package_name(alias))
 }
 
 /// Persistent local package cache. A package remains here after the image is
@@ -877,30 +866,28 @@ mod tests {
 
     #[test]
     fn package_url_uses_distribution_version_tree_for_known_aliases() {
-        let architecture_segment = if host_architecture() == "aarch64" {
-            "/aarch64"
-        } else {
-            ""
-        };
+        let architecture_segment = format!("/{}", host_architecture());
         assert_eq!(
             package_url("http://127.0.0.1:8765/", "ubuntu-26.04"),
             format!(
-                "http://127.0.0.1:8765/ubuntu/26.04{architecture_segment}/ubuntu-26.04.tar.zst"
+                "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04-v5/r5{architecture_segment}/ubuntu-26.04.tar.zst"
             )
         );
         assert_eq!(
-            package_url("http://mirror.example/m2", "alpine-3.24"),
+            package_url("http://mirror.example/m2", "alpine-3.24.1"),
             format!(
-                "http://mirror.example/m2/alpine/3.24{architecture_segment}/alpine-3.24.tar.zst"
+                "http://mirror.example/m2/alpine/3.24.1/alpine-3.24.1-v5/r5{architecture_segment}/alpine-3.24.1.tar.zst"
             )
         );
         assert_eq!(
-            package_url("http://mirror.example/m2", "rocky-9"),
-            format!("http://mirror.example/m2/rocky/9{architecture_segment}/rocky-9.tar.zst")
+            package_url("http://mirror.example/m2", "rocky-9.8"),
+            format!(
+                "http://mirror.example/m2/rocky/9.8/rocky-9.8-v4/r4{architecture_segment}/rocky-9.8.tar.zst"
+            )
         );
         let tracker = ImageInstallTracker::with_base_url("http://127.0.0.1:8765");
         let expected_ubuntu_url = format!(
-            "http://127.0.0.1:8765/ubuntu/26.04{architecture_segment}/ubuntu-26.04.tar.zst"
+            "http://127.0.0.1:8765/ubuntu/26.04/ubuntu-26.04-v5/r5{architecture_segment}/ubuntu-26.04.tar.zst"
         );
         assert_eq!(
             tracker.package_url_for("ubuntu-26.04").as_deref(),
@@ -914,18 +901,26 @@ mod tests {
     }
 
     #[test]
-    fn arm64_packages_use_architecture_specific_registry_paths() {
+    fn packages_use_architecture_specific_registry_paths() {
         assert_eq!(
-            package_path_for_arch("alpine-3.24", "aarch64"),
-            "alpine/3.24/aarch64/alpine-3.24.tar.zst"
+            package_path_for_arch("alpine-3.24.1", "aarch64"),
+            "alpine/3.24.1/alpine-3.24.1-v5/r5/aarch64/alpine-3.24.1.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("ubuntu-26.04", "aarch64"),
-            "ubuntu/26.04/aarch64/ubuntu-26.04.tar.zst"
+            "ubuntu/26.04/ubuntu-26.04-v5/r5/aarch64/ubuntu-26.04.tar.zst"
         );
         assert_eq!(
             package_path_for_arch("ubuntu-26.04", "x86_64"),
-            "ubuntu/26.04/ubuntu-26.04.tar.zst"
+            "ubuntu/26.04/ubuntu-26.04-v5/r5/x86_64/ubuntu-26.04.tar.zst"
+        );
+        assert_eq!(
+            package_path_for_arch("rocky-9.8", "aarch64"),
+            "rocky/9.8/rocky-9.8-v4/r4/aarch64/rocky-9.8.tar.zst"
+        );
+        assert_eq!(
+            package_path_for_arch("rocky-9.8", "x86_64"),
+            "rocky/9.8/rocky-9.8-v4/r4/x86_64/rocky-9.8.tar.zst"
         );
     }
 
@@ -945,9 +940,9 @@ mod tests {
 
     #[test]
     fn package_name_uses_alias_tar_zst() {
-        assert_eq!(package_name("alpine-3.24"), "alpine-3.24.tar.zst");
+        assert_eq!(package_name("alpine-3.24.1"), "alpine-3.24.1.tar.zst");
         assert_eq!(package_name("ubuntu-26.04"), "ubuntu-26.04.tar.zst");
-        assert_eq!(package_name("rocky-9"), "rocky-9.tar.zst");
+        assert_eq!(package_name("rocky-9.8"), "rocky-9.8.tar.zst");
     }
 
     #[test]
@@ -955,16 +950,19 @@ mod tests {
         let directory = tempdir().unwrap();
         write_staged_package_origin(
             directory.path(),
-            "alpine-3.24",
+            "alpine-3.24.1",
             PackageOrigin::MicroRegistry,
         )
         .unwrap();
         assert_eq!(
-            staged_package_origin(directory.path(), "alpine-3.24"),
+            staged_package_origin(directory.path(), "alpine-3.24.1"),
             Some(PackageOrigin::MicroRegistry)
         );
-        clear_staged_package_origin(directory.path(), "alpine-3.24").unwrap();
-        assert_eq!(staged_package_origin(directory.path(), "alpine-3.24"), None);
+        clear_staged_package_origin(directory.path(), "alpine-3.24.1").unwrap();
+        assert_eq!(
+            staged_package_origin(directory.path(), "alpine-3.24.1"),
+            None
+        );
     }
 
     #[test]
@@ -1001,7 +999,7 @@ mod tests {
 
     #[test]
     fn validation_accepts_a_complete_spec_and_rejects_an_empty_archive() {
-        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         let members = vec![
             "kernel/".to_owned(),
             alpine.kernel.to_string_lossy().into_owned(),
@@ -1024,7 +1022,7 @@ mod tests {
 
     #[test]
     fn ensure_spec_requires_all_artifacts() {
-        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         let members = vec![
             alpine.kernel.to_string_lossy().into_owned(),
             alpine.rootfs.to_string_lossy().into_owned(),
@@ -1130,7 +1128,7 @@ mod tests {
     async fn image_install_reports_failure_when_no_package_has_been_staged() {
         let directory = tempdir().unwrap();
         let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
-        let spec = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         let tracker = ImageInstallTracker::disabled();
         tracker.begin(&spec.alias).unwrap();
 
@@ -1156,7 +1154,7 @@ mod tests {
         });
 
         let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
-        let spec = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let spec = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         let tracker = ImageInstallTracker::with_base_url(format!("http://{addr}"));
         tracker.begin(&spec.alias).unwrap();
 
@@ -1178,7 +1176,7 @@ mod tests {
     async fn install_once_from_local_http_registers() {
         let source = tempdir().unwrap();
         let dest = tempdir().unwrap();
-        let alpine = TemplateRegistry::known_spec("alpine-3.24").unwrap();
+        let alpine = TemplateRegistry::known_spec("alpine-3.24.1").unwrap();
         write_file(&source.path().join(&alpine.kernel), b"fake-alpine-kernel");
         write_file(
             &source.path().join(alpine.initrd.as_ref().unwrap()),
@@ -1225,6 +1223,6 @@ mod tests {
             staged_package_origin(dest.path(), &alpine.alias),
             Some(PackageOrigin::MicroRegistry)
         );
-        assert!(templates.resolve_alias("alpine-3.24").is_some());
+        assert!(templates.resolve_alias("alpine-3.24.1").is_some());
     }
 }

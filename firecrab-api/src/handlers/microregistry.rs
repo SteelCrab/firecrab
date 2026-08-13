@@ -82,9 +82,9 @@ fn unavailable(request_id: RequestId, detail: impl std::fmt::Display) -> AppErro
     AppError::unavailable("MicroRegistry catalog is unavailable", request_id.0)
 }
 
-/// `GET /api/microregistry`: public published packages plus this host's local
-/// install/cache state. Catalog metadata is display-only; package download is
-/// still restricted to aliases Firecrab knows how to validate and install.
+/// `GET /api/microregistry`: supported published packages plus this host's
+/// local install/cache state. Entries outside the release manifest are hidden
+/// because this Firecrab build cannot validate or install them.
 pub async fn list_microregistry(
     State(state): State<AppState>,
     axum::Extension(request_id): axum::Extension<RequestId>,
@@ -139,13 +139,14 @@ pub async fn list_microregistry(
         .images
         .into_iter()
         .filter(|image| image.architecture.is_host())
+        .filter(|image| TemplateRegistry::known_spec(&image.alias).is_some())
         .map(|image| {
             let package_origin = image_install::staged_package_origin(&image_root, &image.alias);
             MicroRegistryImageResponse {
                 installed: templates.resolve_alias(&image.alias).is_some(),
                 package_staged: image_install::staged_package_exists(&image_root, &image.alias),
                 package_origin,
-                downloadable: TemplateRegistry::known_spec(&image.alias).is_some(),
+                downloadable: true,
                 alias: image.alias,
                 version: image.version,
                 package: image.package,
@@ -193,17 +194,20 @@ mod tests {
                         "alias": "ubuntu-26.04",
                         "architecture": image_install::host_architecture(),
                         "version": 3,
-                        "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
+                        "package": format!(
+                            "ubuntu/26.04/{}/ubuntu-26.04.tar.zst",
+                            image_install::host_architecture()
+                        ),
                         "sha256": "aabb",
                         "minDiskGb": 2,
                         "publishedAt": "2026-08-09T10:00:00Z"
                     }, {
-                        "alias": "example-1",
+                        "alias": "rocky-9",
                         "architecture": image_install::host_architecture(),
-                        "version": "1",
-                        "package": "example/1/example-1.tar.zst",
+                        "version": "2",
+                        "package": "rocky/9/rocky-9.tar.zst",
                         "sha256": "ccdd",
-                        "minDiskGb": 1,
+                        "minDiskGb": 2,
                         "publishedAt": "2026-08-09T10:00:00Z"
                     }, {
                         "alias": "wrong-architecture",
@@ -230,14 +234,12 @@ mod tests {
                 .unwrap();
 
         assert_eq!(response.source, format!("http://{address}/catalog.json"));
-        assert_eq!(response.images.len(), 2);
-        assert_eq!(response.images[0].alias, "example-1");
-        assert!(!response.images[0].downloadable);
-        assert_eq!(response.images[1].alias, "ubuntu-26.04");
-        assert_eq!(response.images[1].version, "3");
-        assert!(response.images[1].downloadable);
-        assert!(!response.images[1].installed);
-        assert!(!response.images[1].package_staged);
+        assert_eq!(response.images.len(), 1);
+        assert_eq!(response.images[0].alias, "ubuntu-26.04");
+        assert_eq!(response.images[0].version, "3");
+        assert!(response.images[0].downloadable);
+        assert!(!response.images[0].installed);
+        assert!(!response.images[0].package_staged);
     }
 
     #[test]
@@ -246,7 +248,7 @@ mod tests {
             "images": [{
                 "alias": "ubuntu-26.04",
                 "version": 1,
-                "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
+                "package": "ubuntu/26.04/x86_64/ubuntu-26.04.tar.zst",
                 "sha256": "aabb",
                 "minDiskGb": 2,
                 "publishedAt": "2026-08-09T10:00:00Z"

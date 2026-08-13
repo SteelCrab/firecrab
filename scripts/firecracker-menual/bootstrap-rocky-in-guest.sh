@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs entirely inside a firecrab MicroBoot builder VM (Alpine's own
 # recovery shell — see crate::microboot's doc comment), not inside an
-# installed rocky-9 template. Rocky's dnf/rpm are glibc binaries the
+# installed Rocky template. Rocky's dnf/rpm are glibc binaries the
 # musl-based outer shell can't run directly, so this script downloads
 # Rocky's own official Container-Base image and chroots into it first —
 # everything from that point on (dnf --installroot into $staging) is
@@ -29,13 +29,34 @@ staging="$work/staging"
 out="$work/out"
 rootfs_size='2G'
 rootfs_hostname='firecrab'
-baseos_url='https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/'
-appstream_url='https://download.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/'
+rocky_release='@M2IMAGE_DISTRO_VERSION@'
+rocky_repository_base='@ROCKY_REPOSITORY_BASE@'
+rocky_container_build='@ROCKY_CONTAINER_BUILD@'
+case "$(uname -m)" in
+  x86_64)
+    rocky_arch='x86_64'
+    ;;
+  aarch64)
+    rocky_arch='aarch64'
+    ;;
+  *)
+    printf '[FAIL] unsupported Rocky architecture: %s\n' "$(uname -m)" >&2
+    exit 1
+    ;;
+esac
+baseos_url="${rocky_repository_base}/${rocky_release}/BaseOS/${rocky_arch}/os/"
+appstream_url="${rocky_repository_base}/${rocky_release}/AppStream/${rocky_arch}/os/"
+container_name="Rocky-9-Container-Base-${rocky_release}-${rocky_container_build}.${rocky_arch}.oci.tar.xz"
+container_url="${rocky_repository_base}/${rocky_release}/images/${rocky_arch}/${container_name}"
 # dnf must be inside the guest (see install-rocky-rootfs.sh); dashboard package
 # actions invoke `dnf` on the serial console.
 rootfs_packages='kernel dracut systemd systemd-udev NetworkManager iproute iputils bind-utils curl ca-certificates procps-ng openssh-server kmod util-linux dhcp-client e2fsprogs dnf'
 
-info() { printf '[INFO] %s\n' "$*"; }
+# Seconds since the script started, on every line — see the same helper in
+# bootstrap-ubuntu-in-guest.sh for why the session log is useless for finding
+# where a slow build spent its time without it.
+script_started=$(date +%s)
+info() { printf '[INFO +%ss] %s\n' "$(( $(date +%s) - script_started ))" "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
 chroot_mounts=''
@@ -100,32 +121,49 @@ apk add --no-cache --initdb --repository 'https://dl-cdn.alpinelinux.org/alpine/
   e2fsprogs jq curl \
   || fail 'could not install e2fsprogs/jq/curl into the outer shell'
 
-info 'downloading Rocky 9 Container-Base'
-curl -fsSL 'https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-Container-Base.latest.x86_64.tar.xz' \
+info "downloading Rocky ${rocky_release} ${rocky_arch} Container-Base"
+curl -fsSL "$container_url" \
   -o "$container_archive" || fail 'could not download Rocky Container-Base'
+checksum_file="$work/${container_name}.CHECKSUM"
+curl -fsSL "${container_url}.CHECKSUM" -o "$checksum_file" \
+  || fail 'could not download Rocky Container-Base checksum'
+container_sha256=$(sed -n "s/^SHA256 (${container_name}) = //p" "$checksum_file")
+[ -n "$container_sha256" ] || fail 'could not parse Rocky Container-Base checksum'
+printf '%s  %s\n' "$container_sha256" "$container_archive" \
+  | sha256sum -c - >/dev/null \
+  || fail 'Rocky Container-Base checksum verification failed'
 
-# Container-Base is an OCI image layout (blobs/sha256/... + index.json),
-# not a flat rootfs tarball — verified live. It has exactly one manifest
-# and one layer; extract that one layer's tar+gzip blob directly rather
-# than pulling in full OCI tooling for a single-layer image.
+# Rocky has published both OCI and Docker archive layouts across releases.
+# Support both official layouts so a pinned distro version does not depend on
+# the current release's container packaging format.
 oci_dir="$work/container-oci"
 mkdir -p "$oci_dir"
 tar -xJf "$container_archive" -C "$oci_dir"
-manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' "$oci_dir/index.json")
-[ -n "$manifest_digest" ] && [ "$manifest_digest" != null ] \
-  || fail 'could not read Container-Base manifest digest from index.json'
-layer_digest=$(jq -r '.layers[0].digest | sub("^sha256:"; "")' "$oci_dir/blobs/sha256/$manifest_digest")
-[ -n "$layer_digest" ] && [ "$layer_digest" != null ] \
-  || fail 'could not read Container-Base layer digest from its manifest'
-
-info 'extracting Rocky 9 Container-Base'
-tar -xzf "$oci_dir/blobs/sha256/$layer_digest" -C "$container_root"
+info "extracting Rocky ${rocky_release} ${rocky_arch} Container-Base"
+if [ -f "$oci_dir/index.json" ]; then
+  manifest_digest=$(jq -r '.manifests[0].digest | sub("^sha256:"; "")' "$oci_dir/index.json")
+  if [ -z "$manifest_digest" ] || [ "$manifest_digest" = null ]; then
+    fail 'could not read Container-Base manifest digest from index.json'
+  fi
+  layer_digest=$(jq -r '.layers[0].digest | sub("^sha256:"; "")' "$oci_dir/blobs/sha256/$manifest_digest")
+  if [ -z "$layer_digest" ] || [ "$layer_digest" = null ]; then
+    fail 'could not read Container-Base layer digest from its manifest'
+  fi
+  tar -xzf "$oci_dir/blobs/sha256/$layer_digest" -C "$container_root"
+elif [ -f "$oci_dir/manifest.json" ]; then
+  jq -r '.[0].Layers[]' "$oci_dir/manifest.json" | while IFS= read -r layer; do
+    [ -f "$oci_dir/$layer" ] || fail "Container-Base layer is missing: $layer"
+    tar -xf "$oci_dir/$layer" -C "$container_root"
+  done
+else
+  fail 'Container-Base is neither an OCI nor Docker archive'
+fi
 test -x "$container_root/usr/bin/rpm" || fail 'Container-Base is missing usr/bin/rpm'
 test -e "$container_root/usr/bin/dnf" || fail 'Container-Base is missing usr/bin/dnf'
 
 # Rocky's own RPM signing keys, which the repo configs below reference as
 # gpgkey=file:///etc/pki/rpm-gpg/... inside $staging. Under an installed
-# rocky-9 builder template these came from the outer shell's own
+# Rocky builder template these came from the outer shell's own
 # /etc/pki/rpm-gpg, but MicroBoot's outer shell is Alpine and has no such
 # directory (found live: "cp: can't stat '/etc/pki/rpm-gpg'") — Rocky's
 # Container-Base ships the identical keys, so take them from there.
@@ -150,7 +188,7 @@ chroot_mounts="$container_root/proc $container_root/sys $container_root/dev $chr
 
 dnf_common="--disablerepo=* --enablerepo=baseos,appstream --setopt=baseos.mirrorlist= --setopt=baseos.baseurl=${baseos_url} --setopt=appstream.mirrorlist= --setopt=appstream.baseurl=${appstream_url} --setopt=install_weak_deps=False --setopt=keepcache=False"
 
-info 'installing Rocky Linux 9 guest packages into the staging root'
+info "installing Rocky Linux ${rocky_release} ${rocky_arch} guest packages into the staging root"
 mount_chroot_fs
 # Bind the in-progress target root and dnf's repo config into the
 # Container-Base chroot so `chroot "$container_root" dnf --installroot=...`
@@ -161,21 +199,21 @@ mount --make-rslave "$container_root$staging"
 chroot_mounts="$container_root$staging $chroot_mounts"
 # package/flag lists are deliberate whitespace lists.
 # shellcheck disable=SC2086
-chroot "$container_root" dnf -q -y --installroot="$staging" --releasever=9 \
+chroot "$container_root" dnf -q -y --installroot="$staging" --releasever="$rocky_release" \
   --setopt=reposdir=/etc/yum.repos.d $dnf_common install $rootfs_packages
 
-# Fixed public baseurls — stock mirrorlist needs $rltype, which this image lacks.
-cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<'EOF'
+# Fixed version-pinned baseurls — stock mirrorlist needs $rltype, which this image lacks.
+cat >"$staging/etc/yum.repos.d/rocky-firecrab.repo" <<EOF
 [baseos]
-name=Rocky Linux $releasever - BaseOS (firecrab)
-baseurl=https://download.rockylinux.org/pub/rocky/$releasever/BaseOS/$basearch/os/
+name=Rocky Linux \$releasever - BaseOS (firecrab)
+baseurl=${rocky_repository_base}/\$releasever/BaseOS/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
 
 [appstream]
-name=Rocky Linux $releasever - AppStream (firecrab)
-baseurl=https://download.rockylinux.org/pub/rocky/$releasever/AppStream/$basearch/os/
+name=Rocky Linux \$releasever - AppStream (firecrab)
+baseurl=${rocky_repository_base}/\$releasever/AppStream/\$basearch/os/
 gpgcheck=1
 enabled=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-9
@@ -296,16 +334,35 @@ kernel_version=$(basename "$(dirname "$vmlinuz_path")")
 initrd_path="$staging/boot/initramfs-${kernel_version}.img"
 kernel_config="$staging/usr/lib/modules/${kernel_version}/config"
 
-grep -Eq '^CONFIG_VIRTIO_PCI=(y|m)$' "$kernel_config" || fail "Rocky kernel lacks CONFIG_VIRTIO_PCI: ${kernel_config}"
+virtio_drivers='virtio_blk virtio_net ext4'
+case "$rocky_arch" in
+  x86_64)
+    grep -Eq '^CONFIG_VIRTIO_PCI=(y|m)$' "$kernel_config" \
+      || fail "Rocky x86_64 kernel lacks CONFIG_VIRTIO_PCI: ${kernel_config}"
+    if grep -q '^CONFIG_VIRTIO_PCI=m$' "$kernel_config"; then
+      virtio_drivers="${virtio_drivers} virtio_pci"
+    fi
+    ;;
+  aarch64)
+    grep -Eq '^CONFIG_VIRTIO_MMIO=(y|m)$' "$kernel_config" \
+      || fail "Rocky aarch64 kernel lacks CONFIG_VIRTIO_MMIO: ${kernel_config}"
+    if grep -q '^CONFIG_VIRTIO_MMIO=m$' "$kernel_config"; then
+      virtio_drivers="${virtio_drivers} virtio_mmio"
+    fi
+    ;;
+esac
 
 info "building generic dracut initramfs for ${kernel_version}"
 chroot "$staging" /usr/bin/dracut --force --no-hostonly \
-  --add-drivers 'virtio_blk virtio_pci virtio_net ext4' \
+  --add-drivers "$virtio_drivers" \
   "/boot/initramfs-${kernel_version}.img" "$kernel_version"
 cleanup_chroot_mounts
 
 [ -s "$initrd_path" ] || fail "dracut did not create ${initrd_path}"
 test -e "$staging/etc/os-release" || fail 'missing /etc/os-release'
+installed_release=$(sed -n 's/^VERSION_ID=//p' "$staging/etc/os-release" | tr -d '"')
+[ "$installed_release" = "$rocky_release" ] \
+  || fail "Rocky rootfs is not pinned to VERSION_ID ${rocky_release}"
 test -e "$staging/sbin/init" || fail 'missing /sbin/init'
 test -x "$staging/usr/sbin/sshd" || fail 'missing sshd'
 network_profile="$staging/etc/NetworkManager/system-connections/firecrab-ethernet.nmconnection"
@@ -317,6 +374,16 @@ test -e "$staging/etc/systemd/system/firecrab-network-ready.service" || fail 'mi
 
 cp "$vmlinuz_path" "$out/vmlinuz-raw"
 cp "$initrd_path" "$out/initramfs"
+
+# Now that it is safely in $out, drop it from the tree that becomes the
+# rootfs. Firecracker loads the initrd the host hands it (the copy just
+# made), never one from inside the guest's own filesystem, so the in-rootfs
+# copy is 27.9 MB — 7.5% of this image, measured with debugfs on a built
+# one — that is written twice by the two mkfs.ext4 passes below, shipped in
+# every package, and never read. EL9 owns this path as %ghost precisely
+# because it is regenerated rather than shipped, so dracut inside a running
+# guest recreates it on the next kernel update exactly as it would have.
+rm -f "$initrd_path"
 
 info 'building rootfs.ext4'
 truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
@@ -340,7 +407,7 @@ mv "$out/rootfs.ext4.tmp" "$out/rootfs.ext4"
 # debugfs-based dump (`rootfs::dump_from_image`) can read them back at
 # their root (e.g. /rootfs.ext4, not /root/fc-bootstrap/out/rootfs.ext4)
 # after this VM is stopped.
-info 'publishing $out onto /dev/vda'
+info "publishing ${out} onto /dev/vda"
 mkfs.ext4 -F -L fcbootout -d "$out" /dev/vda
 
 # Everything on /dev/vda is read back by the host

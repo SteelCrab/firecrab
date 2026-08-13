@@ -14,12 +14,29 @@ work=/root/fc-bootstrap
 mount_dir="$work/staging"
 out="$work/out"
 ubuntu_base_url='https://cdimage.ubuntu.com/ubuntu-base/releases'
-series='26.04'
+series='@M2IMAGE_DISTRO_SERIES@'
 rootfs_size='2G'
 rootfs_hostname='firecrab'
-rootfs_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-generic iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server'
+# linux-image-virtual, not linux-image-generic: both resolve to the identical
+# linux-image-<abi>-generic binary, but generic also carries
+# "Depends: linux-firmware | linux-firmware-minimal", whose first alternative
+# apt always takes — a hard dependency --no-install-recommends cannot decline.
+# That pulled 656 MB of Qualcomm/Intel wireless, NVIDIA/AMD graphics and
+# Mellanox NIC firmware (measured in the built image: 5233 files, 53% of its
+# content) into a microVM with none of that hardware, and none of it is on
+# the boot path — this template has no initrd and mounts root=/dev/vda from
+# the kernel's built-in virtio/ext4. Same reasoning as
+# install-ubuntu-roofs.sh's copy of this list, and the same choice Alpine's
+# `linux-virt` already makes.
+rootfs_packages='systemd systemd-sysv systemd-resolved udev kmod util-linux linux-image-virtual iproute2 iputils-ping net-tools dnsutils curl ca-certificates procps openssh-server'
 
-info() { printf '[INFO] %s\n' "$*"; }
+# Every line carries seconds since this script started. A MicroBoot build is
+# tens of minutes of mostly-silent work, and the session log is the only
+# record of it, so without this there is no way to tell afterwards which step
+# spent the time — download, dpkg, or either mkfs pass — and any attempt to
+# make it faster is guesswork.
+script_started=$(date +%s)
+info() { printf '[INFO +%ss] %s\n' "$(( $(date +%s) - script_started ))" "$*"; }
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 
 cleanup_mounts() {
@@ -28,7 +45,7 @@ cleanup_mounts() {
   # silently no-ops under `2>/dev/null || true`, leaving /proc mounted live
   # under $mount_dir when `mkfs.ext4 -d` walks it next, which then fails
   # ("No such process") trying to copy /proc's ephemeral per-process files.
-  # Same lazy-umount fallback bootstrap-rocky-in-guest.sh's cleanup relies on
+  # Use the same lazy-unmount fallback as the Alpine bootstrap script
   # (its own first attempt uses -R, so in practice it always lands here).
   umount "$mount_dir/proc" 2>/dev/null || umount -l "$mount_dir/proc" 2>/dev/null || true
   umount "$mount_dir/sys" 2>/dev/null || umount -l "$mount_dir/sys" 2>/dev/null || true
@@ -201,7 +218,7 @@ chroot "$mount_dir" apt-get clean
 rm -rf "${mount_dir}/var/lib/apt/lists/"*
 
 vmlinuz_path=$(find "${mount_dir}/boot" -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -n1)
-[ -n "$vmlinuz_path" ] || fail 'linux-image-generic did not install a vmlinuz'
+[ -n "$vmlinuz_path" ] || fail 'linux-image-virtual did not install a vmlinuz'
 cp "$vmlinuz_path" "$out/vmlinuz-raw"
 
 # Enable systemd-resolved only when the package actually shipped a unit.
@@ -235,7 +252,7 @@ test -e "${mount_dir}/usr/sbin/sshd" || fail 'missing sshd'
 
 info 'building rootfs.ext4'
 truncate -s "$rootfs_size" "$out/rootfs.ext4.tmp"
-# -O ^orphan_file: same reasoning as the alpine/rocky scripts — the outer
+# -O ^orphan_file: same reasoning as the Alpine script — the outer
 # MicroBoot shell's mkfs.ext4 (Alpine 3.24, e2fsprogs 1.47.x) enables it by
 # default, but the host re-checks this image with its own e2fsck on every
 # VM start (`prepare_rootfs`'s `e2fsck -f -y`, `specialize_guest`'s

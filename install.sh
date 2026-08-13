@@ -44,7 +44,7 @@ Usage: ./install.sh [OPTIONS]
   --no-deps           never install packages/toolchains, only report gaps
   --no-images         do not build a guest image
   --with-ubuntu-image also build the Ubuntu image (large, needs root chroot)
-  --with-rocky-image  also build the Rocky Linux 9 image (large, uses Docker)
+  --with-rocky-image  also build Rocky Linux 9.8 (large, needs root chroot)
   --no-frontend       do not build/install the dashboard
   --uninstall         stop and remove units, binaries and dashboard
   --purge             with --uninstall, also delete /var/lib/firecrab (VM data!)
@@ -130,6 +130,8 @@ pkg_name() {
         # openSUSE or Debian install has neither.
         *:findutils)  echo "findutils" ;;
         *:tar)        echo "tar" ;;
+        apt-get:xz)   echo "xz-utils" ;;
+        *:xz)         echo "xz" ;;
         # Dashboard M2Image install decompresses `{alias}.tar.zst` packages.
         *:zstd)       echo "zstd" ;;
         # cargo needs a linker; rustup only warns that one is missing and the
@@ -143,8 +145,6 @@ pkg_name() {
         # `ensure_build_tools` carries on without the dashboard.
         zypper:node)  echo "nodejs-default npm-default" ;;
         *:node)       echo "nodejs npm" ;;
-        apt-get:docker) echo "docker.io" ;;
-        *:docker)     echo "docker" ;;
         *) echo "$generic" ;;
     esac
 }
@@ -346,6 +346,26 @@ ensure_account() {
         step "adding $FIRECRAB_USER to the kvm group"
         $SUDO usermod --append --groups kvm "$FIRECRAB_USER"
     fi
+
+    # Group membership above is necessary but not always sufficient: some
+    # hosts' /dev/kvm doesn't actually land in the kvm group the standard
+    # udev rule (KERNEL=="kvm", GROUP="kvm") asks for — seen live on a
+    # Parallels ARM host where it came up group "sgx" instead, which made
+    # every VM start fail with "Kvm error: Permission denied (os error 13)"
+    # even though $FIRECRAB_USER was correctly in the kvm group. An ACL
+    # entry is a narrow, idempotent belt-and-suspenders fix: it grants the
+    # kvm group access without touching whatever else owns the device node,
+    # and re-running this is a no-op once the entry is already there.
+    if [ -e /dev/kvm ]; then
+        if have setfacl; then
+            if ! getfacl -p /dev/kvm 2>/dev/null | grep -qx 'group:kvm:rw-'; then
+                step "granting the kvm group ACL access to /dev/kvm"
+                $SUDO setfacl -m g:kvm:rw /dev/kvm
+            fi
+        else
+            warn "setfacl not found — skipping the /dev/kvm ACL fixup (install the 'acl' package if VMs fail with a KVM permission error)"
+        fi
+    fi
 }
 
 # Data, config and install directories with their intended owners.
@@ -364,12 +384,15 @@ install_binaries() {
         [ -x "$target/$binary" ] || die "$target/$binary not found — the build did not produce it"
         $SUDO install -o root -g root -m 0755 "$target/$binary" "$LIBDIR/$binary"
     done
-    # extract-vmlinux is a shell script used at runtime by the API.
-    # Installing it next to the binary lets the API find it without needing
-    # access to the repo checkout (which may be in a user home the service
-    # account cannot reach).
-    $SUDO install -o root -g root -m 0755 \
-        "$REPO_ROOT/scripts/firecracker-menual/extract-vmlinux" "$LIBDIR/extract-vmlinux"
+    # extract-vmlinux and extract-arm64-image are shell scripts used at
+    # runtime by the API to turn a distro vmlinuz into the kernel format
+    # Firecracker boots on each architecture. Installing them next to the
+    # binary lets the API find them without needing access to the repo
+    # checkout (which may be in a user home the service account cannot reach).
+    for helper in extract-vmlinux extract-arm64-image; do
+        $SUDO install -o root -g root -m 0755 \
+            "$REPO_ROOT/scripts/firecracker-menual/$helper" "$LIBDIR/$helper"
+    done
     # Host doctor is a shell script — no build step. On PATH as firecrab-doctor.
     $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
     $SUDO install -o root -g root -m 0755 "$REPO_ROOT/scripts/firecrab-doctor.sh" \
@@ -435,6 +458,36 @@ install_units() {
 
 # --- guest images ----------------------------------------------------------
 
+ensure_image_build_deps() {
+    local failed=0
+
+    ensure chroot coreutils || failed=1
+    ensure file file || failed=1
+    ensure gzip gzip || failed=1
+    ensure install coreutils || failed=1
+    ensure mkfs.ext4 e2fsprogs || failed=1
+    ensure mount util-linux || failed=1
+    ensure curl curl || failed=1
+    ensure sha256sum coreutils || failed=1
+    ensure tar tar || failed=1
+    ensure truncate coreutils || failed=1
+    ensure umount util-linux || failed=1
+    if [ "$WITH_UBUNTU_IMAGE" -eq 1 ]; then
+        ensure find findutils || failed=1
+        ensure sed sed || failed=1
+        ensure sort coreutils || failed=1
+        ensure tail coreutils || failed=1
+        ensure ln coreutils || failed=1
+        ensure chmod coreutils || failed=1
+        ensure chown coreutils || failed=1
+    fi
+    if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
+        ensure jq jq || failed=1
+        ensure xz xz || failed=1
+    fi
+    return $failed
+}
+
 # Whether a guest rootfs is already installed.
 images_present() {
     compgen -G "$DATADIR/images/rootfs/*.ext4" >/dev/null 2>&1
@@ -460,11 +513,8 @@ report_images() {
         log "images: already installed in $DATADIR/images"
         return 0
     fi
-    if have docker; then
-        warn "no guest image (would build the Alpine image with docker)"
-    else
-        warn "no guest image (would install docker, then build the Alpine image)"
-    fi
+    ensure_image_build_deps || true
+    warn "no guest image (would build Alpine with sudo + chroot + direct ext4)"
     return 1
 }
 
@@ -487,14 +537,10 @@ ensure_images() {
     fi
 
     # Nothing to copy: build one. Alpine only by default — it is ~10x smaller
-    # than Ubuntu's and builds in a container, needing no host chroot.
-    if ! ensure docker docker; then
-        warn "no docker — cannot build a guest image. Build it elsewhere and copy it into $DATADIR/images"
+    # than Ubuntu's and uses the same host-native chroot + direct ext4 model.
+    if ! ensure_image_build_deps; then
+        warn "missing host-native image build dependencies; build elsewhere and copy into $DATADIR/images"
         return 1
-    fi
-    if ! systemctl is-active --quiet docker 2>/dev/null; then
-        step "starting docker"
-        systemctl enable --now docker >/dev/null 2>&1 || warn "could not start docker"
     fi
 
     step "building the Alpine guest image (this takes a few minutes)"
@@ -510,9 +556,9 @@ ensure_images() {
     fi
 
     if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
-        step "building the Rocky Linux 9 guest image (large)"
+        step "building the Rocky Linux 9.8 guest image (large)"
         "$REPO_ROOT/scripts/firecracker-menual/install-rocky-rootfs.sh" \
-            || warn "Rocky Linux image build failed (the Alpine one is still usable)"
+            || warn "Rocky Linux 9.8 image build failed (the Alpine one is still usable)"
     fi
 
     $SUDO cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
@@ -536,7 +582,28 @@ start_units() {
             failed=1
         fi
     done
+    if [ "$failed" -eq 0 ]; then
+        wait_for_api || failed=1
+    fi
     return $failed
+}
+
+# `is-active` on a Type=simple unit is true as soon as the process forks —
+# not once it is actually serving. At startup firecrab-api hashes every
+# present template artifact before binding its listener (see
+# TemplateRegistry::from_specs in firecrab-api/src/templates.rs), and a
+# freshly built multi-gigabyte rootfs (--with-ubuntu-image, --with-rocky-image)
+# can take noticeably longer to hash than the process takes to fork. Poll the
+# real HTTP port so callers relying on start_units's return don't race it.
+wait_for_api() {
+    local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:3000}
+    local _attempt
+    for _attempt in $(seq 1 60); do
+        curl -fsS -o /dev/null "http://$bind/" && return 0
+        sleep 1
+    done
+    warn "firecrab-api did not answer http://$bind/ within 60s — journalctl -u firecrab-api -n 30"
+    return 1
 }
 
 # Report-only path: every gap, no changes, no root required.
@@ -582,6 +649,9 @@ do_deps() {
     detect_pkg || die "no known package manager (apt/dnf/zypper/pacman/apk)"
 
     ensure_runtime_deps || die "missing runtime dependencies (see above)"
+    if [ "$WITH_IMAGES" -eq 1 ]; then
+        ensure_image_build_deps || die "missing image build dependencies (see above)"
+    fi
     ensure_firecracker  || die "firecracker is required"
     ensure_build_tools  || die "build tools are required"
     check_kvm || warn "no KVM here; that only matters where VMs actually run"
