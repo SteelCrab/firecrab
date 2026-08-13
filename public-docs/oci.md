@@ -53,9 +53,28 @@ is limited to 64 GiB per layer by default; change it with
 `FIRECRAB_OCI_MAX_UNCOMPRESSED_LAYER_BYTES`. At most two layer decoders run
 process-wide, and each zstd decoder has a 128 MiB window limit.
 
-Tar member validation, extraction, whiteout handling, and layer merging remain
-separate import stages. Inspect does not run decompression or fill either OCI
-cache.
+## Layer safety preflight
+
+Before extraction, the internal pipeline scans every decompressed tar using
+GNU long-name/link metadata and PAX overrides. Member names must be non-empty
+relative paths without parent components. Character and block devices are
+rejected, as are unsupported special entries. Links must name a target;
+hard-link targets are archive-root-relative and cannot be absolute or contain
+parent components. Regular whiteout files remain valid for the later merge
+stage.
+
+Malformed headers, repeated PAX path/link records, sparse extensions,
+missing end records, and truncated member bodies stop the import before any
+filesystem tree is created. PAX `size` overrides and global PAX path/link/size
+overrides are rejected to avoid different tar parsers disagreeing about member
+boundaries or destinations. Each GNU or PAX metadata entry is limited to 1
+MiB. Rejection does not delete the already verified compressed blob or
+decompressed tar: both remain valid content-addressed cache entries.
+
+Extraction, whiteout handling, and layer merging remain separate import
+stages. Symbolic links are kept as metadata here; extraction must remain rooted
+without following one while creating later members. Inspect does not run
+decompression or validation, and does not fill either OCI cache.
 
 ## Related
 
