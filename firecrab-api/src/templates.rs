@@ -1119,13 +1119,6 @@ mod tests {
         }
     }
 
-    fn other_architecture() -> Architecture {
-        match Architecture::HOST {
-            Architecture::Aarch64 => Architecture::X86_64,
-            Architecture::X86_64 => Architecture::Aarch64,
-        }
-    }
-
     /// The three outcomes are deliberately distinct. `Unrecognized` has to
     /// stay permissive — templates registered before this check existed hold
     /// artifacts it cannot classify — while `Foreign` is a kernel it *can*
@@ -1183,7 +1176,11 @@ mod tests {
     fn registering_a_kernel_for_another_architecture_is_rejected() {
         let directory = tempdir().unwrap();
         let root = directory.path();
-        fs::write(root.join("kernel"), kernel_bytes_for(other_architecture())).unwrap();
+        fs::write(
+            root.join("kernel"),
+            kernel_bytes_for(Architecture::HOST.other()),
+        )
+        .unwrap();
         fs::write(root.join("rootfs"), b"rootfs").unwrap();
 
         let registry = TemplateRegistry::load_from(root).unwrap();
@@ -1200,7 +1197,7 @@ mod tests {
 
         assert!(
             matches!(error, TemplateError::KernelArchitectureMismatch { found, .. }
-                if found == other_architecture()),
+                if found == Architecture::HOST.other()),
             "{error:?}"
         );
         assert!(registry.resolve_alias("foreign").is_none());

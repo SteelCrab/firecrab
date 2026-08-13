@@ -14,7 +14,7 @@ use firecrab_api_types::{MicroRegistryImageResponse, MicroRegistryResponse};
 use serde::Deserialize;
 
 use crate::error::AppError;
-use crate::image_install;
+use crate::image_install::{self, Architecture};
 use crate::server::RequestId;
 use crate::state::AppState;
 use crate::templates::TemplateRegistry;
@@ -30,34 +30,13 @@ struct Catalog {
 #[serde(rename_all = "camelCase")]
 struct CatalogImage {
     alias: String,
-    architecture: CatalogArchitecture,
+    architecture: Architecture,
     #[serde(deserialize_with = "catalog_version")]
     version: String,
     package: String,
     sha256: String,
     min_disk_gb: u16,
     published_at: String,
-}
-
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-enum CatalogArchitecture {
-    #[serde(rename = "x86_64")]
-    X86_64,
-    #[serde(rename = "aarch64")]
-    Aarch64,
-}
-
-impl CatalogArchitecture {
-    fn is_host(&self) -> bool {
-        #[cfg(target_arch = "aarch64")]
-        {
-            *self == Self::Aarch64
-        }
-        #[cfg(target_arch = "x86_64")]
-        {
-            *self == Self::X86_64
-        }
-    }
 }
 
 /// Accept both the first publisher's numeric version and the current string
@@ -138,7 +117,7 @@ pub async fn list_microregistry(
     let mut images = catalog
         .images
         .into_iter()
-        .filter(|image| image.architecture.is_host())
+        .filter(|image| image.architecture == Architecture::HOST)
         .map(|image| {
             let package_origin = image_install::staged_package_origin(&image_root, &image.alias);
             MicroRegistryImageResponse {
@@ -171,11 +150,6 @@ mod tests {
     use tempfile::tempdir;
     use tokio::net::TcpListener;
 
-    #[cfg(target_arch = "aarch64")]
-    const OTHER_ARCHITECTURE: &str = "x86_64";
-    #[cfg(target_arch = "x86_64")]
-    const OTHER_ARCHITECTURE: &str = "aarch64";
-
     async fn empty_state(root: &std::path::Path) -> AppState {
         let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
         AppState::with_db_file(templates, root.join("state.db"))
@@ -207,7 +181,7 @@ mod tests {
                         "publishedAt": "2026-08-09T10:00:00Z"
                     }, {
                         "alias": "wrong-architecture",
-                        "architecture": OTHER_ARCHITECTURE,
+                        "architecture": Architecture::HOST.other().as_str(),
                         "version": "1",
                         "package": "wrong/package.tar.zst",
                         "sha256": "eeff",
@@ -255,5 +229,31 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("architecture"));
+    }
+
+    /// `arm64` and `amd64` are the vocabulary of rootfs *filenames*, not of
+    /// catalog entries. Accepting them here would let a package be published
+    /// under a label nothing else in firecrab resolves.
+    #[test]
+    fn catalog_entries_reject_a_debian_architecture_spelling() {
+        for spelling in ["arm64", "amd64"] {
+            let error = serde_json::from_value::<Catalog>(json!({
+                "images": [{
+                    "alias": "ubuntu-26.04",
+                    "version": 1,
+                    "architecture": spelling,
+                    "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
+                    "sha256": "aabb",
+                    "minDiskGb": 2,
+                    "publishedAt": "2026-08-09T10:00:00Z"
+                }]
+            }))
+            .unwrap_err();
+
+            let message = error.to_string();
+            assert!(message.contains(spelling), "{message}");
+            assert!(message.contains("x86_64"), "{message}");
+            assert!(message.contains("aarch64"), "{message}");
+        }
     }
 }

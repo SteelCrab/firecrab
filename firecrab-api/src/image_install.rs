@@ -36,11 +36,16 @@ pub const DEFAULT_IMAGE_BASE_URL: &str = "https://registry.firecrab.dev";
 /// by kernels, MicroRegistry object keys and catalog entries, and Debian's
 /// `amd64`/`arm64` labels that appear inside rootfs *filenames*. Keeping this
 /// one a type is what stops the two from being compared to each other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Deserializes only from the exact catalog labels, so a package published
+/// under a Debian spelling is rejected rather than silently mis-resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub enum Architecture {
     /// 64-bit x86. Firecracker boots an ELF `vmlinux` here.
+    #[serde(rename = "x86_64")]
     X86_64,
     /// 64-bit ARM. Firecracker boots Linux's own `Image` container here.
+    #[serde(rename = "aarch64")]
     Aarch64,
 }
 
@@ -59,6 +64,16 @@ impl Architecture {
         match self {
             Self::X86_64 => "x86_64",
             Self::Aarch64 => "aarch64",
+        }
+    }
+
+    /// The architecture this host is not. Tests use it to build artifacts and
+    /// catalog entries that must be rejected, on either supported host.
+    #[cfg(test)]
+    pub(crate) const fn other(self) -> Self {
+        match self {
+            Self::X86_64 => Self::Aarch64,
+            Self::Aarch64 => Self::X86_64,
         }
     }
 }
