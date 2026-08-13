@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::image_install::Architecture;
+
 /// Manifest of every template registered at runtime (image install or web
 /// build), relative to the image root. Rebuilt into the registry on the next
 /// startup so a template that was never part of [`default_specs`] — a web
@@ -53,6 +55,28 @@ pub enum TemplateError {
     /// Two [`TemplateSpec`]s declared the same alias.
     #[error("template registry contains a duplicate alias: {0}")]
     DuplicateAlias(String),
+    /// A kernel artifact declares a CPU architecture this host cannot boot.
+    #[error("kernel {path} is built for {found}, but this host is {host}")]
+    KernelArchitectureMismatch {
+        /// The offending kernel, relative to the image root.
+        path: PathBuf,
+        /// The architecture the kernel's own header declares.
+        found: Architecture,
+        /// The architecture this build of the API runs on.
+        host: Architecture,
+    },
+    /// A kernel artifact is a well-formed ELF for an architecture Firecracker
+    /// cannot boot on any host — distinct from one this check simply could
+    /// not classify, which is allowed through.
+    #[error(
+        "kernel {path} targets an architecture firecrab does not support (ELF machine {machine:#06x})"
+    )]
+    UnsupportedKernelArchitecture {
+        /// The offending kernel, relative to the image root.
+        path: PathBuf,
+        /// The ELF `e_machine` value that identified it.
+        machine: u16,
+    },
     /// A filesystem operation failed while building the registry.
     #[error("template registry I/O failed: {0}")]
     Io(#[from] io::Error),
@@ -469,6 +493,7 @@ impl TemplateRegistry {
             .as_ref()
             .map(|path| verify_artifact(&self.image_root, path))
             .transpose()?;
+        verify_kernel_architecture(&self.image_root, &spec.kernel)?;
         let version = Arc::new(TemplateVersion {
             name: spec.alias.clone(),
             version: spec.version.clone(),
@@ -857,6 +882,81 @@ fn open_beneath(root: &File, path: &Path) -> Result<File, TemplateError> {
     Ok(unsafe { File::from_raw_fd(fd as i32) })
 }
 
+/// What a kernel artifact's header says about it.
+///
+/// The split between [`Foreign`](KernelFormat::Foreign) and
+/// [`Unrecognized`](KernelFormat::Unrecognized) is the point of this type:
+/// only one of them may be treated leniently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KernelFormat {
+    /// A kernel for an architecture Firecracker supports.
+    Bootable(Architecture),
+    /// A well-formed ELF for an architecture Firecracker cannot boot at all,
+    /// carrying the `e_machine` value that identified it.
+    Foreign {
+        /// The ELF `e_machine` value, for the error message.
+        machine: u16,
+    },
+    /// Nothing this function can classify. Hosts that installed a template
+    /// before this check existed hold artifacts that land here, so it stays
+    /// permissive.
+    Unrecognized,
+}
+
+/// Classifies a kernel artifact from its own header.
+///
+/// x86_64 boots an ELF `vmlinux`; ARM64 boots Linux's `Image` container.
+fn kernel_architecture(header: &[u8]) -> KernelFormat {
+    if header.starts_with(b"\x7fELF") {
+        // e_machine, a little-endian u16 at offset 18. Both architectures
+        // Firecrab supports are little-endian, so the byte order is fixed.
+        // An ELF too short to hold the field is corrupt rather than foreign,
+        // and gets the same benefit of the doubt as an unknown format.
+        let (Some(low), Some(high)) = (header.get(18), header.get(19)) else {
+            return KernelFormat::Unrecognized;
+        };
+        let machine = u16::from_le_bytes([*low, *high]);
+        return match machine {
+            0x3e => KernelFormat::Bootable(Architecture::X86_64),
+            0xb7 => KernelFormat::Bootable(Architecture::Aarch64),
+            _ => KernelFormat::Foreign { machine },
+        };
+    }
+    // ARM64 `Image`: a 64-byte header with its magic at offset 56. The
+    // leading `MZ` only appears on EFI-bootable builds, so the magic — not
+    // the first two bytes — is what identifies the format.
+    if header.get(56..60) == Some(&0x644d_5241_u32.to_le_bytes()[..]) {
+        return KernelFormat::Bootable(Architecture::Aarch64);
+    }
+    KernelFormat::Unrecognized
+}
+
+/// Rejects a kernel this host cannot boot. Firecracker's own failure mode
+/// there is a silent hang with no console output, so the cost of letting one
+/// through is an unbootable VM with nothing to diagnose.
+fn verify_kernel_architecture(root: &File, path: &Path) -> Result<(), TemplateError> {
+    let mut file = open_beneath(root, path)?;
+    let mut header = Vec::new();
+    // A kernel shorter than one header is simply unclassifiable, so read
+    // what exists rather than requiring 64 bytes.
+    (&mut file).take(64).read_to_end(&mut header)?;
+
+    match kernel_architecture(&header) {
+        KernelFormat::Bootable(found) if found != Architecture::HOST => {
+            Err(TemplateError::KernelArchitectureMismatch {
+                path: path.to_owned(),
+                found,
+                host: Architecture::HOST,
+            })
+        }
+        KernelFormat::Foreign { machine } => Err(TemplateError::UnsupportedKernelArchitecture {
+            path: path.to_owned(),
+            machine,
+        }),
+        KernelFormat::Bootable(_) | KernelFormat::Unrecognized => Ok(()),
+    }
+}
+
 /// Opens `path` beneath `root` and pins its identity/hash into a
 /// [`VerifiedArtifact`].
 fn verify_artifact(root: &File, path: &Path) -> Result<VerifiedArtifact, TemplateError> {
@@ -987,6 +1087,202 @@ mod tests {
                 .resolve_version("my-nginx-base", "my-nginx-base-abc123")
                 .is_some()
         );
+    }
+
+    /// A 64-byte ELF64 header carrying `machine` in `e_machine`. That field
+    /// is the only part architecture detection reads.
+    fn elf_kernel(machine: u16) -> Vec<u8> {
+        let mut header = vec![0_u8; 64];
+        header[0..4].copy_from_slice(b"\x7fELF");
+        header[4] = 2; // ELFCLASS64
+        header[5] = 1; // ELFDATA2LSB
+        header[6] = 1; // EV_CURRENT
+        header[16..18].copy_from_slice(&2_u16.to_le_bytes()); // ET_EXEC
+        header[18..20].copy_from_slice(&machine.to_le_bytes());
+        header
+    }
+
+    /// A 64-byte ARM64 `Image` header. Linux puts its magic at offset 56;
+    /// the leading `MZ` only appears on EFI-bootable builds, so the magic is
+    /// what identifies the format.
+    fn arm64_image_kernel() -> Vec<u8> {
+        let mut header = vec![0_u8; 64];
+        header[0..2].copy_from_slice(b"MZ");
+        header[56..60].copy_from_slice(&0x644d_5241_u32.to_le_bytes());
+        header
+    }
+
+    fn kernel_bytes_for(architecture: Architecture) -> Vec<u8> {
+        match architecture {
+            Architecture::Aarch64 => arm64_image_kernel(),
+            Architecture::X86_64 => elf_kernel(0x3e),
+        }
+    }
+
+    fn other_architecture() -> Architecture {
+        match Architecture::HOST {
+            Architecture::Aarch64 => Architecture::X86_64,
+            Architecture::X86_64 => Architecture::Aarch64,
+        }
+    }
+
+    /// The three outcomes are deliberately distinct. `Unrecognized` has to
+    /// stay permissive — templates registered before this check existed hold
+    /// artifacts it cannot classify — while `Foreign` is a kernel it *can*
+    /// identify as unbootable, which must not inherit that leniency.
+    #[test]
+    fn kernel_architecture_classifies_a_header_by_its_format() {
+        let cases: [(&str, Vec<u8>, KernelFormat); 8] = [
+            (
+                "x86_64 ELF vmlinux",
+                elf_kernel(0x3e),
+                KernelFormat::Bootable(Architecture::X86_64),
+            ),
+            (
+                "aarch64 ELF vmlinux",
+                elf_kernel(0xb7),
+                KernelFormat::Bootable(Architecture::Aarch64),
+            ),
+            (
+                "aarch64 PE Image",
+                arm64_image_kernel(),
+                KernelFormat::Bootable(Architecture::Aarch64),
+            ),
+            (
+                "32-bit ARM ELF",
+                elf_kernel(0x28),
+                KernelFormat::Foreign { machine: 0x28 },
+            ),
+            (
+                "RISC-V ELF",
+                elf_kernel(0xf3),
+                KernelFormat::Foreign { machine: 0xf3 },
+            ),
+            (
+                "ELF truncated before e_machine",
+                b"\x7fELF\x02\x01\x01".to_vec(),
+                KernelFormat::Unrecognized,
+            ),
+            (
+                "pre-check placeholder",
+                b"kernel".to_vec(),
+                KernelFormat::Unrecognized,
+            ),
+            ("empty file", Vec::new(), KernelFormat::Unrecognized),
+        ];
+
+        for (name, header, expected) in cases {
+            assert_eq!(kernel_architecture(&header), expected, "{name}");
+        }
+    }
+
+    /// Firecracker cannot boot a kernel built for another architecture, and
+    /// the symptom is a silent hang rather than an error — so registration
+    /// is where it has to be caught.
+    #[test]
+    fn registering_a_kernel_for_another_architecture_is_rejected() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), kernel_bytes_for(other_architecture())).unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        let error = registry
+            .register_spec(TemplateSpec {
+                alias: "foreign".to_owned(),
+                version: "foreign-v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: String::new(),
+            })
+            .unwrap_err();
+
+        assert!(
+            matches!(error, TemplateError::KernelArchitectureMismatch { found, .. }
+                if found == other_architecture()),
+            "{error:?}"
+        );
+        assert!(registry.resolve_alias("foreign").is_none());
+    }
+
+    /// A RISC-V kernel is not a mismatch against this host so much as a
+    /// kernel Firecracker cannot boot anywhere. It is identifiable, so the
+    /// leniency granted to unclassifiable artifacts must not cover it.
+    #[test]
+    fn registering_a_kernel_for_an_unsupported_architecture_is_rejected() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), elf_kernel(0xf3)).unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        let error = registry
+            .register_spec(TemplateSpec {
+                alias: "riscv".to_owned(),
+                version: "riscv-v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: String::new(),
+            })
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                TemplateError::UnsupportedKernelArchitecture { machine: 0xf3, .. }
+            ),
+            "{error:?}"
+        );
+        assert!(registry.resolve_alias("riscv").is_none());
+    }
+
+    /// An artifact this check cannot classify has to keep registering, or
+    /// every host that installed a template before the check existed would
+    /// lose it on the next restart.
+    #[test]
+    fn registering_an_unclassifiable_kernel_is_still_allowed() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), b"kernel").unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        registry
+            .register_spec(TemplateSpec {
+                alias: "legacy".to_owned(),
+                version: "legacy-v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: String::new(),
+            })
+            .expect("an unclassifiable kernel must keep registering");
+
+        assert!(registry.resolve_alias("legacy").is_some());
+    }
+
+    #[test]
+    fn registering_a_kernel_for_this_host_is_accepted() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel"), kernel_bytes_for(Architecture::HOST)).unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        registry
+            .register_spec(TemplateSpec {
+                alias: "native".to_owned(),
+                version: "native-v1".to_owned(),
+                kernel: PathBuf::from("kernel"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: String::new(),
+            })
+            .expect("a kernel matching the host must register");
+
+        assert!(registry.resolve_alias("native").is_some());
     }
 
     /// Deleting a template must not leave it in the manifest, or every
