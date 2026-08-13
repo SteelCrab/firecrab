@@ -908,3 +908,285 @@ async fn only_directory_entries_may_name_the_archive_root() {
         } if path == Path::new(".")
     ));
 }
+
+#[tokio::test]
+async fn merge_destinations_must_name_a_directory_below_a_parent() {
+    let directory = tempdir().expect("create fixture directory");
+
+    let error = merge_validated_layers(&[], Path::new("/"))
+        .await
+        .expect_err("a destination without a parent must fail");
+    assert!(matches!(
+        error,
+        ResolveError::MergeIo { operation, path, .. }
+            if operation == "resolve destination parent" && path == Path::new("/")
+    ));
+
+    let unnamed = directory.path().join("..");
+    let error = merge_validated_layers(&[], &unnamed)
+        .await
+        .expect_err("a destination without a final component must fail");
+    assert!(matches!(
+        error,
+        ResolveError::MergeIo { operation, path, .. }
+            if operation == "resolve destination name" && path == unnamed
+    ));
+    assert_no_partial_trees(directory.path());
+}
+
+#[tokio::test]
+async fn hard_link_targets_must_resolve_inside_the_merged_tree() {
+    let directory = tempdir().expect("create fixture directory");
+    let outside = directory.path().join("hardlink-outside");
+    std::fs::create_dir(&outside).expect("create outside directory");
+    std::fs::write(outside.join("sentinel"), b"unchanged").expect("write outside sentinel");
+
+    let mut symlink_base = Builder::new(Vec::new());
+    append_entry(
+        &mut symlink_base,
+        "escape",
+        EntryType::Symlink,
+        Some(&outside.to_string_lossy()),
+        &[],
+        0o777,
+    );
+    let mut symlink_top = Builder::new(Vec::new());
+    append_entry(
+        &mut symlink_top,
+        "link",
+        EntryType::Link,
+        Some("escape/sentinel"),
+        &[],
+        0o644,
+    );
+
+    let mut file_base = Builder::new(Vec::new());
+    append_entry(
+        &mut file_base,
+        "blocker",
+        EntryType::Regular,
+        None,
+        b"file",
+        0o644,
+    );
+    let mut file_top = Builder::new(Vec::new());
+    append_entry(
+        &mut file_top,
+        "link",
+        EntryType::Link,
+        Some("blocker/inner"),
+        &[],
+        0o644,
+    );
+
+    let mut missing_parent = Builder::new(Vec::new());
+    append_entry(
+        &mut missing_parent,
+        "link",
+        EntryType::Link,
+        Some("absent/target"),
+        &[],
+        0o644,
+    );
+
+    let fixtures = [
+        (
+            "hardlink-symlink-ancestor",
+            Some(finish(symlink_base)),
+            finish(symlink_top),
+            TarMemberViolation::SymlinkAncestor {
+                ancestor: PathBuf::from("escape"),
+            },
+        ),
+        (
+            "hardlink-file-ancestor",
+            Some(finish(file_base)),
+            finish(file_top),
+            TarMemberViolation::NonDirectoryAncestor {
+                ancestor: PathBuf::from("blocker"),
+            },
+        ),
+        (
+            "hardlink-missing-parent",
+            None,
+            finish(missing_parent),
+            TarMemberViolation::MissingMergedHardlinkTarget {
+                target: PathBuf::from("absent/target"),
+            },
+        ),
+    ];
+
+    for (name, base, top, expected) in fixtures {
+        let mut decompressed = Vec::new();
+        if let Some(base) = &base {
+            decompressed.push(layer(&directory, &format!("{name}-base"), base));
+        }
+        decompressed.push(layer(&directory, &format!("{name}-top"), &top));
+        let layers = validate(decompressed).await;
+        let destination = directory.path().join(format!("{name}-rootfs"));
+        let error = merge_validated_layers(&layers, &destination)
+            .await
+            .expect_err("an unresolvable hard link target must fail");
+        assert!(matches!(
+            error,
+            ResolveError::UnsafeTarMember { reason, .. } if reason == expected
+        ));
+        assert!(!destination.exists());
+        assert_no_partial_trees(directory.path());
+    }
+
+    assert_eq!(
+        std::fs::read(outside.join("sentinel")).unwrap(),
+        b"unchanged"
+    );
+}
+
+#[tokio::test]
+async fn whiteouts_below_missing_directories_are_lexical_no_ops() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut base = Builder::new(Vec::new());
+    append_entry(
+        &mut base,
+        "present/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o755,
+    );
+    let base = finish(base);
+    let mut removals = Builder::new(Vec::new());
+    append_entry(
+        &mut removals,
+        "absent/gone/.wh.victim",
+        EntryType::Regular,
+        None,
+        &[],
+        0o000,
+    );
+    append_entry(
+        &mut removals,
+        "absent/hidden/.wh..wh..opq",
+        EntryType::Regular,
+        None,
+        &[],
+        0o000,
+    );
+    append_entry(
+        &mut removals,
+        "present/hidden/.wh..wh..opq",
+        EntryType::Regular,
+        None,
+        &[],
+        0o000,
+    );
+    let removals = finish(removals);
+
+    let layers = validate(vec![
+        layer(&directory, "whiteout-missing-base", &base),
+        layer(&directory, "whiteout-missing-top", &removals),
+    ])
+    .await;
+    let destination = directory.path().join("whiteout-missing-rootfs");
+    let merged = merge_validated_layers(&layers, &destination)
+        .await
+        .expect("whiteouts without a lower directory must not fail the merge");
+
+    assert_eq!(merged.path(), destination);
+    assert!(destination.join("present").is_dir());
+    assert!(!destination.join("absent").exists());
+    assert!(!destination.join("present/hidden").exists());
+    assert_no_partial_trees(directory.path());
+}
+
+#[tokio::test]
+async fn members_may_not_be_written_beneath_a_lower_layer_file() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut base = Builder::new(Vec::new());
+    append_entry(
+        &mut base,
+        "blocker",
+        EntryType::Regular,
+        None,
+        b"file",
+        0o644,
+    );
+    let base = finish(base);
+    let mut top = Builder::new(Vec::new());
+    append_entry(
+        &mut top,
+        "blocker/child",
+        EntryType::Regular,
+        None,
+        b"child",
+        0o644,
+    );
+    let top = finish(top);
+
+    let layers = validate(vec![
+        layer(&directory, "nondirectory-ancestor-base", &base),
+        layer(&directory, "nondirectory-ancestor-top", &top),
+    ])
+    .await;
+    let destination = directory.path().join("nondirectory-ancestor-rootfs");
+    let error = merge_validated_layers(&layers, &destination)
+        .await
+        .expect_err("a lower-layer file must not silently become a directory");
+
+    assert!(matches!(
+        error,
+        ResolveError::UnsafeTarMember {
+            reason: TarMemberViolation::NonDirectoryAncestor { ancestor },
+            ..
+        } if ancestor == Path::new("blocker")
+    ));
+    assert!(!destination.exists());
+    assert_no_partial_trees(directory.path());
+}
+
+#[tokio::test]
+async fn cache_entries_swapped_after_validation_are_rejected() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(
+        &mut builder,
+        "value",
+        EntryType::Regular,
+        None,
+        b"first",
+        0o644,
+    );
+    let bytes = finish(builder);
+
+    let decompressed = layer(&directory, "swapped-directory", &bytes);
+    let layer_path = decompressed.path.clone();
+    let layers = validate(vec![decompressed]).await;
+    std::fs::remove_file(&layer_path).expect("remove validated tar");
+    std::fs::create_dir(&layer_path).expect("replace validated tar with a directory");
+    let destination = directory.path().join("swapped-directory-rootfs");
+    let error = merge_validated_layers(&layers, &destination)
+        .await
+        .expect_err("a cache entry that is no longer a file must fail");
+    assert!(matches!(
+        error,
+        ResolveError::MergeIo { operation, .. } if operation == "inspect validated layer"
+    ));
+    assert!(!destination.exists());
+    assert_no_partial_trees(directory.path());
+
+    let decompressed = layer(&directory, "swapped-size", &bytes);
+    let layer_path = decompressed.path.clone();
+    let declared_size = decompressed.size;
+    let layers = validate(vec![decompressed]).await;
+    std::fs::write(&layer_path, &bytes[..bytes.len() - 512]).expect("shrink validated tar");
+    let destination = directory.path().join("swapped-size-rootfs");
+    let error = merge_validated_layers(&layers, &destination)
+        .await
+        .expect_err("a resized cache entry must fail");
+    assert!(matches!(
+        error,
+        ResolveError::SizeMismatch { expected, actual, .. }
+            if expected == declared_size && actual == declared_size - 512
+    ));
+    assert!(!destination.exists());
+    assert_no_partial_trees(directory.path());
+}
