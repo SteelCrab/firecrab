@@ -122,6 +122,10 @@ pub(crate) struct LocalCatalogEntry {
     pub version: String,
     /// RFC 3339 UTC timestamp recorded when the register job succeeded.
     pub published_at: String,
+    /// `{alias}.tar.zst`, filled by the register packer.
+    pub package: String,
+    /// SHA-256 of the compressed package archive.
+    pub sha256: String,
 }
 
 impl AppState {

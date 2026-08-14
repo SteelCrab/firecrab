@@ -151,7 +151,7 @@ Restart the API after replacing files outside the API workflow.
 ## Register
 
 A locally installed custom alias can join this host's catalog via `POST /api/microregistry/register`.
-Poll `GET /api/microregistry/register/{alias}`; a success appears on `GET /api/microregistry` without a remote package key.
+Success packs `{alias}.tar.zst` (`kernel/…`, `rootfs/…`, optional initrd, `kernel/.firecrab-template.json`) and lists it on `GET /api/microregistry`.
 
 ## Add an alias
 
