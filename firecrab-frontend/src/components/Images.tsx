@@ -768,16 +768,20 @@ function OciImportPanel({
   };
 
   const inspectMatchesInput = inspect !== null && inspectedReference === reference.trim();
+  const registered = job?.status === "succeeded"
+    ? images.find((image) => image.alias === job.alias) ?? null
+    : null;
+  // Succeeded only blocks Start Import while the alias is still installed.
+  // After the operator deletes that template the in-memory job stays
+  // `succeeded`, and the same reference must be importable again (E2E
+  // cleanup + a long-lived API process).
   const canStart =
     inspectMatchesInput &&
     Boolean(inspect?.alias) &&
     !inspecting &&
     !starting &&
     job?.status !== "running" &&
-    job?.status !== "succeeded";
-  const registered = job?.status === "succeeded"
-    ? images.find((image) => image.alias === job.alias) ?? null
-    : null;
+    registered === null;
 
   const jobStatusLabel = job
     ? job.status === "running"
