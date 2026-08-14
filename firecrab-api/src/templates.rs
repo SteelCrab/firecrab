@@ -396,6 +396,11 @@ impl TemplateRegistry {
         &self.image_root_path
     }
 
+    /// Pinned image-root directory fd for `openat2` checks.
+    pub(crate) fn image_root(&self) -> &File {
+        self.image_root.as_ref()
+    }
+
     /// Built-in template specs the project knows about (installed or not).
     pub fn known_specs() -> Vec<TemplateSpec> {
         default_specs()
@@ -898,7 +903,7 @@ pub(crate) fn kernel_architecture(header: &[u8]) -> KernelFormat {
 /// Rejects a kernel this host cannot boot. Firecracker's own failure mode
 /// there is a silent hang with no console output, so the cost of letting one
 /// through is an unbootable VM with nothing to diagnose.
-fn verify_kernel_architecture(root: &File, path: &Path) -> Result<(), TemplateError> {
+pub(crate) fn verify_kernel_architecture(root: &File, path: &Path) -> Result<(), TemplateError> {
     let mut file = open_beneath(root, path)?;
     let mut header = Vec::new();
     // A kernel shorter than one header is simply unclassifiable, so read

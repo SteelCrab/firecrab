@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::image_install::{
-    ImageInstallTracker, is_safe_archive_member, package_name, staged_package_path,
-    write_staged_package_origin,
+    ImageInstallTracker, clear_staged_package_origin, is_safe_archive_member, package_name,
+    staged_package_path, write_staged_package_origin,
 };
 use crate::templates::{TemplateRegistry, TemplateSpec, TemplateVersion};
 use firecrab_api_types::PackageOrigin;
@@ -36,6 +36,44 @@ pub fn building_package_path(image_root: &Path, alias: &str) -> PathBuf {
     image_root
         .join(".packages")
         .join(format!("{}.tar.zst.building", alias))
+}
+
+/// Delete a published `{alias}.tar.zst` and its `.origin` sidecar.
+///
+/// Used when pack has already published and a later catalog insert fails.
+pub(crate) fn discard_staged_package(image_root: &Path, alias: &str) {
+    let dest = staged_package_path(image_root, alias);
+    let _ = fs::remove_file(dest);
+    let _ = clear_staged_package_origin(image_root, alias);
+}
+
+/// Discards a published archive unless [`Self::keep`] is called after insert.
+pub(crate) struct StagedPackageGuard {
+    image_root: PathBuf,
+    alias: String,
+    keep: bool,
+}
+
+impl StagedPackageGuard {
+    pub(crate) fn after_publish(image_root: &Path, alias: &str) -> Self {
+        Self {
+            image_root: image_root.to_path_buf(),
+            alias: alias.to_owned(),
+            keep: false,
+        }
+    }
+
+    pub(crate) fn keep(mut self) {
+        self.keep = true;
+    }
+}
+
+impl Drop for StagedPackageGuard {
+    fn drop(&mut self) {
+        if !self.keep {
+            discard_staged_package(&self.image_root, &self.alias);
+        }
+    }
 }
 
 /// Pack the installed template for `alias` using the register request's version.

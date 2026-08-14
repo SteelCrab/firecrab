@@ -151,7 +151,7 @@ Restart the API after replacing files outside the API workflow.
 ## Register
 
 A locally installed custom alias can join this host's SQLite catalog via `POST /api/microregistry/register`.
-Success packs `{alias}.tar.zst` (`kernel/…`, `rootfs/…`, optional initrd, `kernel/.firecrab-template.json`).
+Success packs `{alias}.tar.zst` (`kernel/…`, `rootfs/…`, optional initrd, `kernel/.firecrab-template.json`). A foreign or unsupported kernel fails the job with no row or archive; an unclassifiable kernel is still accepted.
 Poll `GET /api/microregistry/register/{alias}`; a success survives restart. A catalog outage still lists local rows (`source` is the attempted URL, or empty if unset); with none, GET stays 503.
 
 ## Add an alias
