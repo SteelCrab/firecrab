@@ -37,6 +37,10 @@ pub(crate) const GUEST_TOOLBOX: &str = "/etc/firecrab/busybox";
 const GUEST_INITTAB: &str = "/etc/inittab";
 /// Boot script run once, before anything else the guest does.
 const GUEST_BOOT_SCRIPT: &str = "/etc/firecrab/rc.boot";
+/// Console wrapper: MOTD + fastfetch, then an interactive ash.
+const GUEST_CONSOLE_SCRIPT: &str = "/etc/firecrab/rc.console";
+/// Welcome banner shown on the injected console (same text as catalog VMs).
+const GUEST_MOTD: &str = "/etc/motd";
 /// Lease hook busybox `udhcpc` calls to apply an address.
 const GUEST_DHCP_SCRIPT: &str = "/etc/firecrab/dhcp.script";
 /// Directory a later stage drops the image's translated entrypoint into.
@@ -186,6 +190,20 @@ fn inject_blocking(
             GUEST_BOOT_SCRIPT,
             boot_script().as_bytes(),
             0o755,
+            &mut unwind,
+        )?;
+        install_file(
+            tree,
+            GUEST_CONSOLE_SCRIPT,
+            console_script().as_bytes(),
+            0o755,
+            &mut unwind,
+        )?;
+        install_file(
+            tree,
+            GUEST_MOTD,
+            crate::rootfs::FIRECRAB_MOTD.as_bytes(),
+            0o644,
             &mut unwind,
         )?;
         install_file(
@@ -596,7 +614,7 @@ fn inittab() -> String {
     format!(
         "# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).\n\
          ::sysinit:{GUEST_TOOLBOX} sh {GUEST_BOOT_SCRIPT}\n\
-         ::respawn:-{GUEST_TOOLBOX} sh\n\
+         ::respawn:-{GUEST_TOOLBOX} sh {GUEST_CONSOLE_SCRIPT}\n\
          ::ctrlaltdel:{GUEST_TOOLBOX} poweroff -f\n\
          ::shutdown:{GUEST_TOOLBOX} sync\n\
          ::restart:{GUEST_INIT}\n"
@@ -615,6 +633,8 @@ BB={GUEST_TOOLBOX}
 $BB mount -t proc -o nosuid,nodev,noexec proc /proc 2>/dev/null
 $BB mount -t sysfs -o nosuid,nodev,noexec sysfs /sys 2>/dev/null
 $BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
+$BB mkdir -p /dev/pts
+$BB mount -t devpts -o nosuid,noexec devpts /dev/pts 2>/dev/null
 $BB mount -t tmpfs -o nosuid,nodev,mode=755 tmpfs /run 2>/dev/null
 
 # specialize_guest writes /etc/hostname; systemd would apply it, busybox init does not.
@@ -665,6 +685,18 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
+# Best-effort: first console should have fastfetch. Failure must not block boot.
+if [ ! -x /usr/bin/fastfetch ]; then
+  if [ -x /usr/bin/apt-get ]; then
+    DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq fastfetch >/dev/null 2>&1
+  elif [ -x /usr/bin/dnf ]; then
+    /usr/bin/dnf install -y -q fastfetch >/dev/null 2>&1
+  elif [ -x /sbin/apk ]; then
+    /sbin/apk add --no-cache fastfetch >/dev/null 2>&1
+  fi
+fi
+
 # A later import stage translates the image entrypoint into a program here.
 for service in {services}/*; do
   [ -x "$service" ] || continue
@@ -675,6 +707,23 @@ exit 0
         agent = crate::guest_agent::BIN_PATH,
         dhcp = GUEST_DHCP_SCRIPT,
         services = GUEST_SERVICES,
+    )
+}
+
+/// Interactive console: MOTD, fastfetch when present, then ash.
+fn console_script() -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
+# Firecrab injected console (public-docs/oci.md).
+BB={GUEST_TOOLBOX}
+[ -s /etc/motd ] && $BB cat /etc/motd
+if [ -x /usr/bin/fastfetch ]; then
+  /usr/bin/fastfetch
+elif [ -x /usr/bin/neofetch ]; then
+  /usr/bin/neofetch
+fi
+exec $BB sh
+"#
     )
 }
 

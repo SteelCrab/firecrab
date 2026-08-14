@@ -215,11 +215,20 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     assert_eq!(read_guest(&tree, provision::GUEST_TOOLBOX), program);
     assert_eq!(guest_mode(&tree, provision::GUEST_TOOLBOX), 0o755);
     assert_eq!(guest_mode(&tree, "/etc/firecrab/rc.boot"), 0o755);
+    assert_eq!(guest_mode(&tree, "/etc/firecrab/rc.console"), 0o755);
     assert_eq!(guest_mode(&tree, "/etc/inittab"), 0o644);
+    assert_eq!(
+        read_guest(&tree, "/etc/motd"),
+        crate::rootfs::FIRECRAB_MOTD.as_bytes()
+    );
 
     let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab is text");
     assert!(inittab.contains(&format!(
         "::sysinit:{} sh /etc/firecrab/rc.boot",
+        provision::GUEST_TOOLBOX
+    )));
+    assert!(inittab.contains(&format!(
+        "::respawn:-{} sh /etc/firecrab/rc.console",
         provision::GUEST_TOOLBOX
     )));
 
@@ -231,6 +240,25 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     assert!(
         boot.contains("[ -s /etc/hostname ] && $BB hostname -F /etc/hostname"),
         "busybox init must apply specialize_guest's hostname: {boot}"
+    );
+    assert!(
+        boot.contains("apt-get install -y -qq fastfetch"),
+        "boot should try to install fastfetch after the network is ready: {boot}"
+    );
+
+    let console =
+        String::from_utf8(read_guest(&tree, "/etc/firecrab/rc.console")).expect("console");
+    assert!(
+        console.contains("$BB cat /etc/motd"),
+        "console must print MOTD: {console}"
+    );
+    assert!(
+        console.contains("/usr/bin/fastfetch"),
+        "console must run fastfetch when present: {console}"
+    );
+    assert!(
+        console.contains("exec $BB sh"),
+        "console must drop into ash: {console}"
     );
 
     // One source of truth for the FIRECRAB_USAGE format the host parses.

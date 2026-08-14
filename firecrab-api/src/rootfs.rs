@@ -261,7 +261,13 @@ const STRIP_PATHS: &[&str] = &[
     "/var/lib/dhcpcd/dhcpcd-eth0.lease",
 ];
 
-const FIRECRAB_MOTD: &str = include_str!("../../assets/firecrab-motd");
+pub(crate) const FIRECRAB_MOTD: &str = include_str!("../../assets/firecrab-motd");
+/// Interactive login hook for catalog guests (systemd/OpenRC getty).
+const FIRECRAB_WELCOME_PROFILE: &str = concat!(
+    "# Firecrab console welcome. Printed after /etc/motd on interactive login.\n",
+    "[ -x /usr/bin/fastfetch ] && /usr/bin/fastfetch\n",
+    "[ -x /usr/bin/neofetch ] && [ ! -x /usr/bin/fastfetch ] && /usr/bin/neofetch\n",
+);
 
 /// Per-VM guest specialization: writes this VM's deterministic hostname
 /// (see `firecrab_helper_protocol::network::guest_hostname`) into
@@ -277,6 +283,12 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     let hostname = firecrab_helper_protocol::network::guest_hostname(id);
     write_into_image(rootfs, "/etc/hostname", format!("{hostname}\n").as_bytes())?;
     write_into_image(rootfs, "/etc/motd", FIRECRAB_MOTD.as_bytes())?;
+    let _ = run_debugfs(rootfs, "mkdir /etc/profile.d");
+    let _ = write_into_image(
+        rootfs,
+        "/etc/profile.d/firecrab-welcome.sh",
+        FIRECRAB_WELCOME_PROFILE.as_bytes(),
+    );
     for path in STRIP_PATHS {
         remove_from_image(rootfs, path);
     }
