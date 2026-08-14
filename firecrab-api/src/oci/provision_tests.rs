@@ -392,6 +392,171 @@ async fn usr_merged_images_are_provisioned_through_their_symlinked_sbin() {
 }
 
 #[tokio::test]
+async fn a_read_only_usr_sbin_can_still_have_its_init_replaced() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "usr/sbin/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o555,
+    );
+    append_entry(
+        &mut builder,
+        "usr/lib/systemd/systemd",
+        EntryType::Regular,
+        None,
+        b"systemd",
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "usr/sbin/init",
+        EntryType::Symlink,
+        Some("../lib/systemd/systemd"),
+        &[],
+        0o777,
+    );
+    append_entry(
+        &mut builder,
+        "sbin",
+        EntryType::Symlink,
+        Some("usr/sbin"),
+        &[],
+        0o777,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "ol9-sbin", &tar).await;
+    let tree = merged.path().to_owned();
+    assert_eq!(guest_mode(&tree, "/usr/sbin"), 0o555);
+
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("Oracle Linux /usr/sbin 0555 must not block init replacement");
+
+    assert_eq!(
+        std::fs::read_link(tree.join("usr/sbin/init")).expect("read init link"),
+        Path::new(provision::GUEST_TOOLBOX)
+    );
+    assert!(
+        tree.join("usr/lib/systemd/systemd").is_file(),
+        "the image's systemd must not be followed and overwritten"
+    );
+    assert_eq!(
+        guest_mode(&tree, "/usr/sbin"),
+        0o555,
+        "injection must put the image's /usr/sbin mode back"
+    );
+}
+
+#[tokio::test]
+async fn a_read_only_usr_sbin_without_init_can_still_receive_the_toolbox_link() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "usr/sbin/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o555,
+    );
+    append_entry(
+        &mut builder,
+        "sbin",
+        EntryType::Symlink,
+        Some("usr/sbin"),
+        &[],
+        0o777,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "rl9-sbin", &tar).await;
+    let tree = merged.path().to_owned();
+    assert_eq!(guest_mode(&tree, "/usr/sbin"), 0o555);
+    assert!(!tree.join("usr/sbin/init").exists());
+
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("Rocky /usr/sbin 0555 must not block creating /sbin/init");
+
+    assert_eq!(
+        std::fs::read_link(tree.join("usr/sbin/init")).expect("created init link"),
+        Path::new(provision::GUEST_TOOLBOX)
+    );
+    assert_eq!(guest_mode(&tree, "/usr/sbin"), 0o555);
+}
+
+#[tokio::test]
+async fn a_late_failure_restores_a_read_only_usr_sbin_and_its_init() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "usr/sbin/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o555,
+    );
+    append_entry(
+        &mut builder,
+        "usr/sbin/init",
+        EntryType::Symlink,
+        Some("../lib/systemd/systemd"),
+        &[],
+        0o777,
+    );
+    append_entry(
+        &mut builder,
+        "sbin",
+        EntryType::Symlink,
+        Some("usr/sbin"),
+        &[],
+        0o777,
+    );
+    append_entry(
+        &mut builder,
+        "usr/local",
+        EntryType::Regular,
+        None,
+        b"not a directory",
+        0o644,
+    );
+    let tar = finish(builder);
+
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "ol9-late", &tar).await;
+    let tree = merged.path().to_owned();
+    let before = snapshot(&tree);
+
+    let error = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect_err("a blocked /usr/local must fail after unlocking /usr/sbin");
+    assert!(matches!(
+        error,
+        ResolveError::GuestPathUnusable {
+            reason: GuestPathViolation::NonDirectoryAncestor { .. },
+            ..
+        }
+    ));
+    assert_eq!(snapshot(&tree), before);
+    assert_eq!(guest_mode(&tree, "/usr/sbin"), 0o555);
+    assert_eq!(
+        std::fs::read_link(tree.join("usr/sbin/init")).expect("read restored init"),
+        Path::new("../lib/systemd/systemd")
+    );
+}
+
+#[tokio::test]
 async fn an_image_supplied_init_is_replaced_without_touching_its_target() {
     let directory = tempdir().expect("create fixture directory");
     let mut builder = Builder::new(Vec::new());

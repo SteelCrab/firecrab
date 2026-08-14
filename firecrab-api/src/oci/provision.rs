@@ -208,6 +208,7 @@ fn inject_blocking(
 
     match result {
         Ok(()) => {
+            unwind.restore_modes();
             control.finish();
             unwind.keep();
             Ok(())
@@ -230,6 +231,8 @@ struct InjectedPaths {
     created: Vec<PathBuf>,
     /// Paths moved aside as `(backup, original)` so they can be moved back.
     displaced: Vec<(PathBuf, PathBuf)>,
+    /// Directories unlocked for a replace, as `(path, original mode)`.
+    chmodded: Vec<(PathBuf, u32)>,
     /// Set once injection succeeded and nothing should be undone.
     kept: bool,
 }
@@ -243,6 +246,24 @@ impl InjectedPaths {
     /// Records an image path moved aside to make room.
     fn displaced(&mut self, backup: PathBuf, original: PathBuf) {
         self.displaced.push((backup, original));
+    }
+
+    /// Records a directory whose mode was raised so a replace could proceed.
+    fn chmodded(&mut self, path: PathBuf, mode: u32) {
+        self.chmodded.push((path, mode));
+    }
+
+    /// Puts image directory modes back. Runs on success and on failure.
+    fn restore_modes(&mut self) {
+        for (path, mode) in self.chmodded.drain(..).rev() {
+            if let Err(error) = fs::set_permissions(&path, fs::Permissions::from_mode(mode)) {
+                tracing::warn!(
+                    error = %error,
+                    path = %path.display(),
+                    "failed to restore a guest directory mode"
+                );
+            }
+        }
     }
 
     /// Keeps everything: injection succeeded.
@@ -280,6 +301,7 @@ impl InjectedPaths {
                 );
             }
         }
+        self.restore_modes();
     }
 }
 
@@ -375,6 +397,42 @@ fn resolve_guest_parent(
     Ok(tree.join(resolved))
 }
 
+/// Makes `destination`'s parent writable when the image left it 0555.
+///
+/// Oracle Linux ships `/usr/sbin` as `dr-xr-xr-x`. Replacing `/sbin/init`
+/// (resolved through the usr-merge link) then fails with `EACCES`. The
+/// original mode is recorded and restored after injection.
+fn ensure_parent_writable(
+    destination: &Path,
+    unwind: &mut InjectedPaths,
+) -> Result<(), ResolveError> {
+    let Some(parent) = destination.parent() else {
+        return Ok(());
+    };
+    let metadata = match fs::symlink_metadata(parent) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(injection_io(
+                "inspect guest parent",
+                parent.to_owned(),
+                source,
+            ));
+        }
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o200 != 0 {
+        return Ok(());
+    }
+    fs::set_permissions(parent, fs::Permissions::from_mode(mode | 0o200))
+        .map_err(|source| injection_io("unlock guest parent", parent.to_owned(), source))?;
+    unwind.chmodded(parent.to_owned(), mode);
+    Ok(())
+}
+
 /// Creates one directory with an exact mode.
 ///
 /// The mode is restated after creation because `DirBuilder` masks it with the
@@ -434,6 +492,7 @@ fn displace_existing(
             },
         )),
         Ok(_) => {
+            ensure_parent_writable(destination, unwind)?;
             let backup = destination.with_extension(format!("firecrab-{}", Uuid::new_v4()));
             fs::rename(destination, &backup).map_err(|source| {
                 injection_io("displace image path", destination.to_owned(), source)
@@ -461,6 +520,7 @@ fn install_file(
     let parent = resolve_guest_parent(tree, guest_path, unwind)?;
     let name = guest_path.rsplit('/').next().unwrap_or_default();
     let destination = parent.join(name);
+    ensure_parent_writable(&destination, unwind)?;
     displace_existing(&destination, guest_path, unwind)?;
     // `create_new` with `O_NOFOLLOW` closes the window between the displace
     // above and this create: a symlink planted in between cannot be followed.
@@ -502,6 +562,7 @@ fn install_symlink(
     let parent = resolve_guest_parent(tree, guest_path, unwind)?;
     let name = guest_path.rsplit('/').next().unwrap_or_default();
     let destination = parent.join(name);
+    ensure_parent_writable(&destination, unwind)?;
     displace_existing(&destination, guest_path, unwind)?;
     std::os::unix::fs::symlink(target, &destination)
         .map_err(|source| injection_io("create guest symlink", destination.clone(), source))?;
