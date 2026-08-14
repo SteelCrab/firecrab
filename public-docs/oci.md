@@ -2,8 +2,8 @@
 
 firecrab can read a container image from a registry and report whether this
 host can run it.
-Building the result into a registered `rootfs.ext4` is separate work and not
-available yet.
+The internal pipeline can size a provisioned tree into an ext4 image.
+Pairing a kernel and registering a template are still separate work.
 
 ## Inspect
 
@@ -131,11 +131,31 @@ inside the tree and never out of it, and an entry already occupying a guest
 path is replaced without writing through it. A failed activation restores every
 path it touched and leaves the merged tree as it found it.
 
+## Ext4 image
+
+The internal pipeline sizes the ext4 from the provisioned tree rather than
+from a fixed image length.
+Payload bytes count each regular inode once and include symlink targets;
+hard links are not added again.
+
+The image is the payload plus a quarter for ext4 metadata plus 32 MiB of
+headroom, rounded up to a whole mebibyte and never below 8 MiB.
+One image is limited to 32 GiB by default; operators can change this with
+`FIRECRAB_OCI_MAX_ROOTFS_BYTES`.
+
+The file is created sparse, formatted with `mkfs.ext4 -d`, and published
+only after `tune2fs` shows free space remains.
+A full image, a failed format, or a destination that already exists is an
+error, and a partial file is removed.
+The provisioned tree is left in place.
+This stage still pairs no kernel and registers nothing.
+
 Registry inspection, raw blob caching, decompression, safety validation, merge,
-and guest activation remain distinct import stages. `GET /api/oci/inspect` stops
-at metadata and fills no OCI cache; caching and decompression do not publish a
-merged tree; activation neither sizes nor writes an ext4 image, pairs no kernel,
-and registers nothing.
+guest activation, and ext4 sizing remain distinct import stages.
+`GET /api/oci/inspect` stops at metadata and fills no OCI cache;
+caching and decompression do not publish a merged tree;
+activation does not write an ext4 image;
+ext4 sizing pairs no kernel and registers nothing.
 
 ## Related
 

@@ -770,6 +770,63 @@ pub enum ResolveError {
         /// Merged tree that was left unprovisioned.
         path: PathBuf,
     },
+    /// A filesystem operation failed while sizing or writing the ext4 image.
+    #[error("OCI ext4 {operation} failed at {path}: {source}")]
+    Ext4Io {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Tree or image path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The ext4 destination already exists and must not be replaced.
+    #[error("OCI ext4 destination already exists at {path}")]
+    Ext4DestinationExists {
+        /// Caller-selected final image path.
+        path: PathBuf,
+    },
+    /// `mkfs.ext4` or `tune2fs` ran but did not produce a usable image.
+    #[error("OCI ext4 image at {path} could not be built: {detail}")]
+    Ext4Build {
+        /// Image path being built.
+        path: PathBuf,
+        /// Tool diagnostic.
+        detail: String,
+    },
+    /// The packed image has less free space than the required headroom.
+    #[error(
+        "OCI ext4 image at {path} is full after packing ({free_bytes} bytes free of {size_bytes}; {required_bytes} required)"
+    )]
+    Ext4Full {
+        /// Image path that was rejected.
+        path: PathBuf,
+        /// Planned image length.
+        size_bytes: u64,
+        /// Free space reported after packing.
+        free_bytes: u64,
+        /// Headroom the image must keep.
+        required_bytes: u64,
+    },
+    /// The planned image exceeds the operator ceiling.
+    #[error(
+        "OCI ext4 image at {path} would be {size_bytes} bytes, exceeding the {limit}-byte limit"
+    )]
+    Ext4TooLarge {
+        /// Image path that was not written.
+        path: PathBuf,
+        /// Planned image length.
+        size_bytes: u64,
+        /// Configured maximum size.
+        limit: u64,
+    },
+    /// The caller stopped waiting before the ext4 image was published.
+    #[error("OCI ext4 write was cancelled before publishing {path}")]
+    Ext4Cancelled {
+        /// Destination that was left unpublished.
+        path: PathBuf,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1765,6 +1822,11 @@ mod provision;
 #[cfg(test)]
 mod provision_tests;
 
+mod ext4;
+
+#[cfg(test)]
+mod ext4_tests;
+
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedBlob {
@@ -2204,6 +2266,43 @@ impl ProvisionedRootfs {
     }
 }
 
+/// A provisioned tree packed into a sized ext4 image that still has headroom.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OciExt4Image {
+    path: PathBuf,
+    size_bytes: u64,
+    payload_bytes: u64,
+    free_bytes: u64,
+    toolbox: Sha256Digest,
+}
+
+impl OciExt4Image {
+    /// Host path of the published ext4 image.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Length of the image file in bytes.
+    pub fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+
+    /// Measured payload of the provisioned tree packed into the image.
+    pub fn payload_bytes(&self) -> u64 {
+        self.payload_bytes
+    }
+
+    /// Free space remaining after packing, from `tune2fs`.
+    pub fn free_bytes(&self) -> u64 {
+        self.free_bytes
+    }
+
+    /// Digest of the toolbox program the provisioned tree will boot.
+    pub fn toolbox_digest(&self) -> &Sha256Digest {
+        &self.toolbox
+    }
+}
+
 /// A verified static program cached on the host to become a guest's init.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolboxProgram {
@@ -2560,6 +2659,20 @@ pub async fn provision_merged_rootfs(
     options: &GuestRuntimeOptions<'_>,
 ) -> Result<ProvisionedRootfs, ResolveError> {
     provision::provision_merged_rootfs(rootfs, options).await
+}
+
+/// Packs a provisioned tree into a new ext4 image sized from that tree.
+///
+/// The image is large enough for the payload plus headroom. A result that
+/// lands full is deleted and returned as an error rather than registered
+/// later as a bootable template. The destination must not already exist.
+/// The source tree is left in place. This stage does not pair a kernel or
+/// register a template.
+pub async fn write_provisioned_ext4(
+    rootfs: &ProvisionedRootfs,
+    destination: &Path,
+) -> Result<OciExt4Image, ResolveError> {
+    ext4::write_provisioned_ext4(rootfs, destination).await
 }
 
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
