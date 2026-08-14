@@ -30,9 +30,9 @@ pub(crate) const TAG: &str = "ready";
 
 /// Entrypoint that becomes `/etc/firecrab/services.d/app` after import.
 ///
-/// `/sbin/firecrab-busybox` is injected during provisioning, so this image
+/// `/etc/firecrab/busybox` is injected during provisioning, so this image
 /// does not ship a shell of its own and never pulls from Docker Hub.
-const ENTRYPOINT: &[&str] = &["/sbin/firecrab-busybox", "sh", "-c"];
+const ENTRYPOINT: &[&str] = &[provision::GUEST_TOOLBOX, "sh", "-c"];
 
 #[derive(Clone)]
 struct FixtureState {
@@ -224,7 +224,10 @@ async fn gzip_bytes(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn ready_command() -> String {
-    format!("while true; do echo {READY_SENTINEL}; /sbin/firecrab-busybox sleep 2; done")
+    format!(
+        "while true; do echo {READY_SENTINEL}; {} sleep 2; done",
+        provision::GUEST_TOOLBOX
+    )
 }
 
 async fn serve_api_version() -> Response<Body> {

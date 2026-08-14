@@ -35,12 +35,12 @@ from urllib.parse import unquote
 READY_SENTINEL = "FIRECRAB_OCI_E2E_READY"
 REPOSITORY = "firecrab/e2e"
 TAG = "ready"
-ENTRYPOINT = ["/sbin/firecrab-busybox", "sh", "-c"]
+ENTRYPOINT = ["/etc/firecrab/busybox", "sh", "-c"]
 MANIFEST_TYPE = "application/vnd.oci.image.manifest.v1+json"
 CONFIG_TYPE = "application/vnd.oci.image.config.v1+json"
 LAYER_TYPE = "application/vnd.oci.image.layer.v1.tar+gzip"
 READY_COMMAND = (
-    f"while true; do echo {READY_SENTINEL}; /sbin/firecrab-busybox sleep 2; done"
+    f"while true; do echo {READY_SENTINEL}; /etc/firecrab/busybox sleep 2; done"
 )
 
 
