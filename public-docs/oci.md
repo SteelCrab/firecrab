@@ -2,7 +2,8 @@
 
 firecrab can read a container image from a registry and report whether this
 host can run it.
-Importing one into a bootable rootfs is separate work and not available yet.
+Building the result into a registered `rootfs.ext4` is separate work and not
+available yet.
 
 ## Inspect
 
@@ -95,9 +96,46 @@ after every layer succeeds; the destination must not already exist. Failures
 attempt to remove the partial tree and always retain verified blob and
 decompressed-layer cache entries.
 
-Registry inspection, raw blob caching, decompression, safety validation, and
-merge remain distinct import stages. `GET /api/oci/inspect` stops at metadata
-and fills no OCI cache; caching and decompression do not publish a merged tree.
+## Guest toolbox
+
+A container image is an application, not an operating system: it has no PID 1,
+no DHCP client, and nothing that reports readiness. The internal pipeline
+supplies all three from one static program before a merged tree can become a
+bootable image.
+
+That program is taken from a digest-pinned busybox image, pulled through the
+same verified stages as the image being imported. It must be a 64-bit
+executable for this host with no dynamic loader recorded in it, because a
+merged container tree has no loader to satisfy. Only the first import on a host
+reaches the registry; the program is then cached at
+`<FIRECRAB_IMAGE_ROOT>/.oci/toolbox/`, re-verified on every reuse, and rebuilt
+when it no longer passes. Operators can name a mirror with
+`FIRECRAB_OCI_TOOLBOX_IMAGE` or an already-present program with
+`FIRECRAB_OCI_TOOLBOX_PATH`.
+
+## Guest activation
+
+Activation installs an init at `/sbin/init`, so the image boots on the same
+kernel command line every other template uses. It also installs a boot script
+that mounts `/proc`, `/sys`, `/dev` and `/run`, brings the interface up before
+asking for a lease, reports `FIRECRAB_NETWORK_READY` with the address it
+received or `FIRECRAB_NETWORK_FAILED` with a reason, and starts the metrics
+agent that reports guest CPU and memory. `/etc/firecrab/services.d` is created
+empty for the image's own entrypoint, which a later stage translates into an
+ordinary service under that init rather than PID 1.
+
+Images that place `/sbin` or `/etc` behind a symbolic link are activated
+through it, because most distribution images link `/sbin` at `/usr/sbin`.
+Resolution is clamped to the tree, so a link naming a host path is followed
+inside the tree and never out of it, and an entry already occupying a guest
+path is replaced without writing through it. A failed activation restores every
+path it touched and leaves the merged tree as it found it.
+
+Registry inspection, raw blob caching, decompression, safety validation, merge,
+and guest activation remain distinct import stages. `GET /api/oci/inspect` stops
+at metadata and fills no OCI cache; caching and decompression do not publish a
+merged tree; activation neither sizes nor writes an ext4 image, pairs no kernel,
+and registers nothing.
 
 ## Related
 

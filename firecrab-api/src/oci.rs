@@ -728,6 +728,48 @@ pub enum ResolveError {
         /// Caller-selected final staging tree path.
         path: PathBuf,
     },
+    /// The pinned guest toolbox image does not carry the program the guest
+    /// runtime is built from.
+    #[error("pinned guest toolbox {reference} has no {member} member")]
+    ToolboxMissing {
+        /// Reference the toolbox was pulled from.
+        reference: String,
+        /// Archive path expected to hold the program.
+        member: &'static str,
+    },
+    /// The lifted toolbox program cannot serve as a guest init.
+    #[error("guest toolbox program at {path} is unusable: {reason}")]
+    ToolboxUnusable {
+        /// Host path of the rejected program.
+        path: PathBuf,
+        /// Rule the program failed.
+        reason: ToolboxViolation,
+    },
+    /// A guest path could not be resolved safely inside the merged tree.
+    #[error("guest path {path} cannot be provisioned: {reason}")]
+    GuestPathUnusable {
+        /// Absolute guest path being provisioned.
+        path: String,
+        /// Rule the merged tree's shape broke.
+        reason: GuestPathViolation,
+    },
+    /// A filesystem operation failed while injecting the guest runtime.
+    #[error("OCI guest injection {operation} failed at {path}: {source}")]
+    GuestInjectionIo {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Tree or cache path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// The caller stopped waiting before the guest runtime was complete.
+    #[error("OCI guest injection was cancelled before provisioning {path}")]
+    GuestInjectionCancelled {
+        /// Merged tree that was left unprovisioned.
+        path: PathBuf,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1702,6 +1744,11 @@ fn cache_io(operation: &'static str, path: PathBuf, source: io::Error) -> Resolv
     }
 }
 
+mod busybox;
+
+#[cfg(test)]
+mod busybox_tests;
+
 #[cfg(test)]
 mod cache_tests;
 
@@ -1712,6 +1759,11 @@ mod merge;
 
 #[cfg(test)]
 mod merge_tests;
+
+mod provision;
+
+#[cfg(test)]
+mod provision_tests;
 
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2126,6 +2178,74 @@ impl MergedRootfs {
     }
 }
 
+/// A merged tree that has been given a bootable Firecrab guest runtime.
+///
+/// Deliberately distinct from [`MergedRootfs`] so the later ext4 stage can
+/// require proof that a PID 1, a DHCP client, the readiness sentinel, and the
+/// metrics agent are present before it builds something meant to boot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvisionedRootfs {
+    path: PathBuf,
+    toolbox: Sha256Digest,
+}
+
+impl ProvisionedRootfs {
+    /// Path to the provisioned staging tree.
+    ///
+    /// Injection edits the merged tree in place, so this is the same path
+    /// [`MergedRootfs::path`] reported.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Digest of the toolbox program installed as the guest's PID 1.
+    pub fn toolbox_digest(&self) -> &Sha256Digest {
+        &self.toolbox
+    }
+}
+
+/// A verified static program cached on the host to become a guest's init.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolboxProgram {
+    path: PathBuf,
+    digest: Sha256Digest,
+    size: u64,
+}
+
+impl ToolboxProgram {
+    /// Host path of the cached, verified program.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// SHA-256 of the program bytes, recorded as guest provenance.
+    pub fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
+
+    /// Program size in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+/// Host-side inputs the guest runtime stage cannot derive from a merged tree.
+///
+/// The toolbox program is pulled through the same verified pipeline as the
+/// image being imported, so it needs the same two caches. Grouping them means a
+/// later ext4 or registration stage adds a field instead of an argument.
+#[derive(Debug, Clone, Copy)]
+pub struct GuestRuntimeOptions<'a> {
+    /// Image root whose `.oci/` subtree backs every cache below.
+    pub image_root: &'a Path,
+    /// Verified raw blob cache the toolbox pull may fill.
+    pub blobs: &'a BlobCache,
+    /// Verified uncompressed-layer cache the toolbox pull may fill.
+    pub layers: &'a LayerCache,
+    /// Architecture the merged tree targets; the toolbox ELF must match it.
+    pub architecture: Architecture,
+}
+
 /// Why an otherwise valid layer tar entry is unsafe for later extraction.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum TarMemberViolation {
@@ -2212,6 +2332,73 @@ pub enum TarMemberViolation {
     UnsupportedPaxAttribute {
         /// Attribute name supplied by the archive.
         key: String,
+    },
+}
+
+/// Why a toolbox program cannot serve as an imported guest's init.
+///
+/// The host never runs the program to find out. Every rule below is decided
+/// from the bytes on disk, because executing an unverified registry payload to
+/// test it would be the exact thing this stage exists to avoid.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ToolboxViolation {
+    /// Only a plain file can be copied into a guest tree.
+    #[error("the member is not a regular file")]
+    NotRegularFile,
+    /// An empty file would leave the guest without a PID 1.
+    #[error("the program is empty")]
+    Empty,
+    /// A mirrored override must not copy an unbounded file into every rootfs.
+    #[error("the program is {size} bytes, over the {limit}-byte limit")]
+    TooLarge {
+        /// Observed program size.
+        size: u64,
+        /// Configured ceiling.
+        limit: u64,
+    },
+    /// Firecracker boots 64-bit little-endian guests only.
+    #[error("the program is not a 64-bit little-endian ELF image")]
+    NotElf,
+    /// A program built for another machine cannot be this guest's PID 1.
+    #[error("the program targets ELF machine {actual}, but this host needs {expected}")]
+    ForeignArchitecture {
+        /// ELF machine this host requires.
+        expected: u16,
+        /// ELF machine the program declares.
+        actual: u16,
+    },
+    /// Shared objects and relocatable files are not programs.
+    #[error("the ELF image is not an executable")]
+    NotExecutable,
+    /// A merged container tree has no dynamic loader to satisfy the request.
+    #[error("the program needs the dynamic loader {interpreter:?}; only a static program can boot")]
+    DynamicallyLinked {
+        /// Interpreter path recorded in the `PT_INTERP` segment.
+        interpreter: String,
+    },
+    /// The program header table did not fit inside the file it describes.
+    #[error("the ELF program header table is malformed")]
+    MalformedProgramHeaders,
+}
+
+/// Why a guest path in a merged tree cannot be written safely.
+///
+/// Ancestor symbolic links are followed rather than refused: usr-merged images
+/// ship `/sbin` as a link to `usr/sbin`, so refusing them would reject Ubuntu,
+/// Debian, and Fedora outright. Resolution is clamped to the tree instead.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum GuestPathViolation {
+    /// A path component required as a directory is another filesystem type.
+    #[error("ancestor {ancestor:?} is not a directory")]
+    NonDirectoryAncestor {
+        /// Tree-relative path of the conflicting ancestor.
+        ancestor: PathBuf,
+    },
+    /// Following the image's symbolic links never reached a real directory.
+    #[error("resolving it followed more than {limit} symbolic links")]
+    SymlinkLoop {
+        /// Traversal budget the tree exhausted.
+        limit: usize,
     },
 }
 
@@ -2347,6 +2534,32 @@ pub async fn merge_validated_layers(
     destination: &Path,
 ) -> Result<MergedRootfs, ResolveError> {
     merge::merge_validated_layers(layers, destination).await
+}
+
+/// Pulls (or reuses) the pinned toolbox image and returns its static program.
+///
+/// The program is fetched through the same verified pipeline as any other
+/// image and cached under the image root, so only the first import on a host
+/// contacts the registry. Operators can point
+/// `FIRECRAB_OCI_TOOLBOX_IMAGE` at a mirror.
+pub async fn provision_toolbox(
+    options: &GuestRuntimeOptions<'_>,
+) -> Result<ToolboxProgram, ResolveError> {
+    busybox::ensure_toolbox(options).await
+}
+
+/// Installs a bootable Firecrab guest runtime into a merged OCI tree.
+///
+/// A container tree has no PID 1, no DHCP client, and nothing that reports
+/// readiness, so it cannot boot as a MicroVM. This stage adds an init, a
+/// DHCP client, the readiness sentinel, and the metrics agent, editing the
+/// merged tree in place. The merged handle is consumed because injection is
+/// not repeatable, and a failure restores exactly the paths it touched.
+pub async fn provision_merged_rootfs(
+    rootfs: MergedRootfs,
+    options: &GuestRuntimeOptions<'_>,
+) -> Result<ProvisionedRootfs, ResolveError> {
+    provision::provision_merged_rootfs(rootfs, options).await
 }
 
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
