@@ -830,7 +830,7 @@ fn open_beneath(root: &File, path: &Path) -> Result<File, TemplateError> {
 /// [`Unrecognized`](KernelFormat::Unrecognized) is the point of this type:
 /// only one of them may be treated leniently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KernelFormat {
+pub(crate) enum KernelFormat {
     /// A kernel for an architecture Firecracker supports.
     Bootable(Architecture),
     /// A well-formed ELF for an architecture Firecracker cannot boot at all,
@@ -848,7 +848,7 @@ enum KernelFormat {
 /// Classifies a kernel artifact from its own header.
 ///
 /// x86_64 boots an ELF `vmlinux`; ARM64 boots Linux's `Image` container.
-fn kernel_architecture(header: &[u8]) -> KernelFormat {
+pub(crate) fn kernel_architecture(header: &[u8]) -> KernelFormat {
     if header.starts_with(b"\x7fELF") {
         // e_machine, a little-endian u16 at offset 18. Both architectures
         // Firecrab supports are little-endian, so the byte order is fixed.
