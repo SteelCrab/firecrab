@@ -130,6 +130,50 @@ fn a_failed_registration_removes_the_partial_rootfs() {
 }
 
 #[test]
+fn a_missing_source_ext4_is_a_copy_error_and_leaves_no_partial() {
+    let (_keep, templates) = empty_registry();
+    let named = named_image(templates.image_root_path(), "nginx-1.27", b"ext4-bytes");
+    std::fs::remove_file(named.image().rootfs().path()).expect("remove source");
+
+    let error = register_named_oci_image(named, &templates).expect_err("missing source");
+
+    match error {
+        ResolveError::RegisterIo { operation, .. } => assert_eq!(operation, "copy rootfs"),
+        other => panic!("expected RegisterIo, got {other}"),
+    }
+    assert!(
+        !templates
+            .image_root_path()
+            .join("rootfs/nginx-1.27.ext4")
+            .exists()
+    );
+    assert!(
+        !templates
+            .image_root_path()
+            .join("rootfs/nginx-1.27.ext4.partial")
+            .exists()
+    );
+    assert!(templates.resolve_alias("nginx-1.27").is_none());
+}
+
+#[test]
+fn a_file_blocking_the_rootfs_directory_is_an_io_error() {
+    let (_keep, templates) = empty_registry();
+    write_file(&templates.image_root_path().join("rootfs"), b"not-a-dir");
+    let named = named_image(templates.image_root_path(), "nginx-1.27", b"ext4-bytes");
+
+    let error = register_named_oci_image(named, &templates).expect_err("rootfs is a file");
+
+    match error {
+        ResolveError::RegisterIo { operation, .. } => {
+            assert_eq!(operation, "inspect destination");
+        }
+        other => panic!("expected RegisterIo, got {other}"),
+    }
+    assert!(templates.resolve_alias("nginx-1.27").is_none());
+}
+
+#[test]
 fn a_failed_registration_does_not_delete_the_source_ext4() {
     let (_keep, templates) = empty_registry();
     let named = named_image(templates.image_root_path(), "nginx-1.27", b"ext4-bytes");
