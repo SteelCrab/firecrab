@@ -719,8 +719,8 @@ mod tests {
         assert_eq!(local_aliases(&state), ["nginx-1.27"]);
         let row = local_row(&state, "nginx-1.27");
         assert_eq!(row.architecture, Architecture::HOST.as_str());
-        assert_eq!(row.package, "");
-        assert_eq!(row.sha256, "");
+        assert_eq!(row.package, "nginx-1.27.tar.zst");
+        assert_eq!(row.sha256.len(), 64);
         assert_eq!(row.min_disk_gb, 1);
         assert!(row.published_at.contains('T') && row.published_at.ends_with('Z'));
     }
