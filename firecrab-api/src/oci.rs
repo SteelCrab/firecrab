@@ -895,6 +895,31 @@ pub enum ResolveError {
         /// Original reference text, for the operator.
         reference: String,
     },
+    /// The published rootfs path already exists and must not be replaced.
+    #[error("OCI rootfs destination already exists at {path}")]
+    RegisterDestinationExists {
+        /// Intended published rootfs path.
+        path: PathBuf,
+    },
+    /// A filesystem operation failed while publishing the rootfs.
+    #[error("OCI registration {operation} failed at {path}: {source}")]
+    RegisterIo {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
+    /// Publishing succeeded but the template registry refused the spec.
+    #[error("OCI image {alias} could not be registered: {detail}")]
+    RegisterFailed {
+        /// Alias that was not registered.
+        alias: String,
+        /// Registry diagnostic.
+        detail: String,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1905,6 +1930,11 @@ mod name;
 #[cfg(test)]
 mod name_tests;
 
+mod register;
+
+#[cfg(test)]
+mod register_tests;
+
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedBlob {
@@ -2463,6 +2493,31 @@ impl NamedOciImage {
     }
 }
 
+/// A named OCI image that has been published and registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredOciImage {
+    alias: String,
+    version: String,
+    rootfs: PathBuf,
+}
+
+impl RegisteredOciImage {
+    /// Registered alias.
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+
+    /// Registered version.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// Rootfs path relative to the image root.
+    pub fn rootfs(&self) -> &Path {
+        &self.rootfs
+    }
+}
+
 /// A verified static program cached on the host to become a guest's init.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolboxProgram {
@@ -2860,6 +2915,17 @@ pub fn name_oci_image(
     templates: &crate::templates::TemplateRegistry,
 ) -> Result<NamedOciImage, ResolveError> {
     name::name_oci_image(image, reference, templates)
+}
+
+/// Publishes the packed ext4 under the image root and registers it.
+///
+/// A failed publish or registration removes the partial rootfs and leaves
+/// the source ext4 in place. The shared kernel is not copied.
+pub fn register_named_oci_image(
+    named: NamedOciImage,
+    templates: &crate::templates::TemplateRegistry,
+) -> Result<RegisteredOciImage, ResolveError> {
+    register::register_named_oci_image(named, templates)
 }
 
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
