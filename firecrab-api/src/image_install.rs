@@ -256,14 +256,17 @@ impl ImageInstallTracker {
     }
 
     pub fn finish_err(&self, alias: &str, detail: impl Into<String>) {
+        self.finish_err_with(alias, format!("install failed: {}", detail.into()));
+    }
+
+    /// Mark a job failed with a caller-owned terminal message.
+    /// OCI import reuses this tracker but must not claim an image *install*
+    /// failed when the pipeline never ran that phase.
+    pub fn finish_err_with(&self, alias: &str, message: impl Into<String>) {
         let mut jobs = self.jobs.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(job) = jobs.get_mut(alias) {
             let now = now_ms();
-            job.log.push(format!(
-                "[{}] install failed: {}",
-                clock(now),
-                detail.into()
-            ));
+            job.log.push(format!("[{}] {}", clock(now), message.into()));
             job.status = ImageInstallStatus::Failed;
             job.ended_at_ms = Some(now);
         }

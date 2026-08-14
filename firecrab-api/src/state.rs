@@ -104,6 +104,8 @@ pub struct AppState {
     pub(crate) image_packages: ImageInstallTracker,
     /// Async from-scratch distro bootstrap sessions (`POST /api/images/{alias}/bootstrap`).
     pub(crate) bootstraps: crate::bootstrap::BootstrapTracker,
+    /// Async OCI import jobs (`POST /api/oci/import`).
+    pub(crate) oci_imports: ImageInstallTracker,
     /// Previous `/proc` jiffy samples used to derive host-process CPU %.
     pub(crate) process_metrics: Arc<Mutex<ProcessMetricsTracker>>,
 }
@@ -147,6 +149,7 @@ impl AppState {
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
+            oci_imports: ImageInstallTracker::default(),
             process_metrics: Arc::new(Mutex::new(ProcessMetricsTracker::default())),
         })
     }

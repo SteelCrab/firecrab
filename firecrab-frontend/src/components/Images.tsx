@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type {
   BootstrapResponse,
   BootstrapStep,
@@ -6,6 +6,7 @@ import type {
   ImageInstallResponse,
   ImageResponse,
   MicroRegistryResponse,
+  OciInspectResponse,
   VmResponse,
 } from "../bindings";
 import {
@@ -19,14 +20,18 @@ import {
   getImageInstall,
   getImagePackage,
   getMicroRegistry,
+  getOciImport,
+  inspectOciImage,
   listImages,
   listVms,
   startBootstrap,
   startImageInstall,
   startImagePackage,
+  startOciImport,
   stopVm,
 } from "../api/client";
 import { logDownloadFilename } from "../lib/textExport";
+import Banner from "./Banner";
 import LogExportActions from "./LogExportActions";
 import InlineConsole from "./InlineConsole";
 import { useI18n } from "../i18n";
@@ -66,7 +71,13 @@ function formatTransferRate(bytesPerSecond: number | null): string {
 }
 
 /** Download-only progress. Terminal states use the normal status badge. */
-function PackageDownloadProgress({ job }: { job: ImageInstallResponse }) {
+function PackageDownloadProgress({
+  job,
+  label = "M2Image package download",
+}: {
+  job: ImageInstallResponse;
+  label?: string;
+}) {
   const measuredPercent = packageDownloadPercent(job);
   const barPercent = measuredPercent ?? 35;
   const sampleRef = useRef({
@@ -101,7 +112,7 @@ function PackageDownloadProgress({ job }: { job: ImageInstallResponse }) {
       <span
         className={`package-progress-track${measuredPercent === null ? " indeterminate" : ""}`}
         role="progressbar"
-        aria-label="M2Image package download"
+        aria-label={label}
         aria-valuenow={measuredPercent ?? undefined}
         aria-valuemin={0}
         aria-valuemax={100}
@@ -370,12 +381,14 @@ function ImageJobLog({
   kind,
 }: {
   job: ImageInstallResponse;
-  kind: "download" | "import";
+  kind: "download" | "import" | "oci";
 }) {
   const { t } = useI18n();
   const label = kind === "download"
     ? t("Package download log", "패키지 다운로드 로그")
-    : t("Image import log", "이미지 가져오기 로그");
+    : kind === "oci"
+      ? t("OCI import log", "OCI 가져오기 로그")
+      : t("Image import log", "이미지 가져오기 로그");
 
   return (
     <div className="subpanel">
@@ -578,10 +591,339 @@ function MicroBootPanel({
   );
 }
 
+function apiErrorText(error: unknown): string {
+  if (error instanceof ApiClientError) {
+    return error.fieldError("reference") ?? error.message;
+  }
+  return (error as Error).message;
+}
+
+function lastLogLine(log: string, fallback: string): string {
+  const line = log.trim().split("\n").filter(Boolean).at(-1);
+  return line || fallback;
+}
+
+function jobStatusClass(status: ImageInstallResponse["status"]): string {
+  if (status === "running") return " starting";
+  if (status === "succeeded") return " running";
+  if (status === "failed") return " error";
+  return "";
+}
+
 /**
- * M2Image inventory, MicroBoot builder, and MicroRegistry are intentionally
- * separate panels so local images, local builds, and remote packages do not
- * read as one mixed catalog.
+ * Inspect an OCI reference, then start/poll `POST/GET /api/oci/import`
+ * with the same job snapshot the M2Image install path already uses.
+ */
+function OciImportPanel({
+  images,
+  onImported,
+}: {
+  images: ImageResponse[];
+  onImported: (alias: string) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [reference, setReference] = useState("");
+  const [inspectedReference, setInspectedReference] = useState<string | null>(null);
+  const [inspect, setInspect] = useState<OciInspectResponse | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [job, setJob] = useState<ImageInstallResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const pollingAliasRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const pollImport = useCallback((alias: string) => {
+    if (pollingAliasRef.current === alias) return;
+    pollingAliasRef.current = alias;
+    const stop = () => {
+      if (pollingAliasRef.current === alias) pollingAliasRef.current = null;
+    };
+    const tick = async () => {
+      if (!mountedRef.current) return stop();
+      try {
+        const latest = await getOciImport(alias);
+        if (!mountedRef.current) return stop();
+        setJob((current) => keepNewestJobSnapshot(current, latest));
+        if (latest.status === "running") {
+          setTimeout(() => void tick(), 500);
+          return;
+        }
+        stop();
+        if (latest.status === "succeeded") {
+          setError(null);
+          setInfo(t(
+            `Imported as ${latest.alias}. It now appears in M2Image.`,
+            `${latest.alias}(으)로 가져왔습니다. M2Image 목록에 나타납니다.`,
+          ));
+          await onImported(latest.alias);
+        } else if (latest.status === "failed") {
+          setInfo(null);
+          setError(lastLogLine(latest.log, t("OCI import failed.", "OCI 가져오기에 실패했습니다.")));
+        }
+      } catch {
+        if (mountedRef.current) setTimeout(() => void tick(), 500);
+        else stop();
+      }
+    };
+    void tick();
+  }, [onImported, t]);
+
+  const resumeImport = useCallback(async (alias: string) => {
+    try {
+      const latest = await getOciImport(alias);
+      if (!mountedRef.current) return;
+      setJob((current) => keepNewestJobSnapshot(current, latest));
+      if (latest.status === "running") {
+        pollImport(alias);
+      } else if (latest.status === "succeeded") {
+        setInfo(t(
+          `Imported as ${latest.alias}. It now appears in M2Image.`,
+          `${latest.alias}(으)로 가져왔습니다. M2Image 목록에 나타납니다.`,
+        ));
+        await onImported(latest.alias);
+      } else if (latest.status === "failed") {
+        setError(lastLogLine(latest.log, t("OCI import failed.", "OCI 가져오기에 실패했습니다.")));
+      }
+    } catch {
+      // Idle or a missing job is the ordinary case after a fresh inspect.
+    }
+  }, [onImported, pollImport, t]);
+
+  const handleInspect = async (event: FormEvent) => {
+    event.preventDefault();
+    const trimmed = reference.trim();
+    if (!trimmed) {
+      setInspect(null);
+      setInspectedReference(null);
+      setInfo(null);
+      setError(t("Enter an image reference.", "이미지 참조를 입력하세요."));
+      return;
+    }
+    setInspecting(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const next = await inspectOciImage(trimmed);
+      if (!mountedRef.current) return;
+      setInspect(next);
+      setInspectedReference(trimmed);
+      if (next.alias) await resumeImport(next.alias);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setInspect(null);
+      setInspectedReference(null);
+      setError(apiErrorText(err));
+    } finally {
+      if (mountedRef.current) setInspecting(false);
+    }
+  };
+
+  const handleStartImport = async () => {
+    if (!inspect || starting || job?.status === "running") return;
+    const trimmed = reference.trim();
+    if (!trimmed || trimmed !== inspectedReference) return;
+    setStarting(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const started = await startOciImport({ reference: trimmed });
+      if (!mountedRef.current) return;
+      setJob((current) => keepNewestJobSnapshot(current, started));
+      pollImport(started.alias);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      const code = err instanceof ApiClientError ? err.apiError?.code : undefined;
+      if (code === "import_in_progress" && inspect.alias) {
+        await resumeImport(inspect.alias);
+        return;
+      }
+      setError(apiErrorText(err));
+    } finally {
+      if (mountedRef.current) setStarting(false);
+    }
+  };
+
+  const handleReferenceChange = (value: string) => {
+    setReference(value);
+    if (inspectedReference !== null && value.trim() !== inspectedReference) {
+      setInspect(null);
+      setInspectedReference(null);
+      setError(null);
+      setInfo(null);
+      if (job && job.status !== "running") setJob(null);
+    }
+  };
+
+  const inspectMatchesInput = inspect !== null && inspectedReference === reference.trim();
+  const canStart =
+    inspectMatchesInput &&
+    Boolean(inspect?.alias) &&
+    !inspecting &&
+    !starting &&
+    job?.status !== "running" &&
+    job?.status !== "succeeded";
+  const registered = job?.status === "succeeded"
+    ? images.find((image) => image.alias === job.alias) ?? null
+    : null;
+
+  const jobStatusLabel = job
+    ? job.status === "running"
+      ? t("Importing…", "가져오는 중…")
+      : job.status === "succeeded"
+        ? t("Imported", "가져옴")
+        : job.status === "failed"
+          ? t("Import failed", "가져오기 실패")
+          : t("Idle", "대기")
+    : null;
+
+  return (
+    <section className="panel">
+      <h2 className="panel-title">OCI</h2>
+      <p className="panel-intro">
+        {t(
+          "Inspect a container image, then import it as a bootable template on this host. The registered alias appears in M2Image.",
+          "컨테이너 이미지를 검사한 뒤 이 호스트의 부팅 가능한 템플릿으로 가져옵니다. 등록된 별칭은 M2Image에 나타납니다.",
+        )}
+      </p>
+      {(error || info) && (
+        <div style={{ marginBottom: "1rem" }}>
+          {error && <Banner kind="error" text={error} onDismiss={() => setError(null)} />}
+          {info && <Banner kind="info" text={info} onDismiss={() => setInfo(null)} />}
+        </div>
+      )}
+      <form className="create-grid" onSubmit={(event) => void handleInspect(event)}>
+        <div className="field" style={{ gridColumn: "1 / -1" }}>
+          <label htmlFor="oci-reference">{t("Reference", "참조")}</label>
+          <input
+            id="oci-reference"
+            name="reference"
+            placeholder="nginx:1.27"
+            value={reference}
+            onChange={(event) => handleReferenceChange(event.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            disabled={inspecting || starting || job?.status === "running"}
+          />
+          <span className="field-error" aria-hidden />
+        </div>
+        <div className="field">
+          <label htmlFor="oci-inspect">&nbsp;</label>
+          <button
+            id="oci-inspect"
+            className="btn"
+            type="submit"
+            disabled={inspecting || starting || job?.status === "running"}
+          >
+            {inspecting ? t("Inspecting…", "검사 중…") : t("Inspect", "검사")}
+          </button>
+          <span className="field-error" aria-hidden />
+        </div>
+        <div className="field">
+          <label htmlFor="oci-import">&nbsp;</label>
+          <button
+            id="oci-import"
+            className="btn primary"
+            type="button"
+            disabled={!canStart}
+            onClick={() => void handleStartImport()}
+          >
+            {starting || job?.status === "running"
+              ? t("Importing…", "가져오는 중…")
+              : t("Start Import", "가져오기 시작")}
+          </button>
+          <span className="field-error" aria-hidden />
+        </div>
+      </form>
+
+      {inspectMatchesInput && inspect && (
+        <div className="subpanel">
+          <dl className="detail-fields mono">
+            <dt>{t("Compatibility", "호환성")}</dt>
+            <dd>
+              {t(
+                "Compatible with this host.",
+                "이 호스트와 호환됩니다.",
+              )}
+              {" "}
+              {inspect.singlePlatform
+                ? t(
+                    `Single-platform image for ${inspect.architecture}.`,
+                    `${inspect.architecture} 단일 플랫폼 이미지입니다.`,
+                  )
+                : t(
+                    `This host selected the ${inspect.architecture} platform from a multi-arch index.`,
+                    `이 호스트가 다중 아키텍처 인덱스에서 ${inspect.architecture} 플랫폼을 선택했습니다.`,
+                  )}
+            </dd>
+            <dt>{t("Digest", "다이제스트")}</dt>
+            <dd>{inspect.digest}</dd>
+            <dt>{t("Architecture", "아키텍처")}</dt>
+            <dd>{inspect.architecture}</dd>
+            <dt>alias</dt>
+            <dd>{inspect.alias}</dd>
+            <dt>{t("Version", "버전")}</dt>
+            <dd>
+              {inspect.version}
+              {inspect.immutable
+                ? ` · ${t("Pinned digest", "고정된 다이제스트")}`
+                : ` · ${t("Tag may move", "태그가 바뀔 수 있음")}`}
+            </dd>
+            <dt>{t("Registry", "레지스트리")}</dt>
+            <dd>{inspect.registry}/{inspect.repository}</dd>
+          </dl>
+        </div>
+      )}
+
+      {job && job.status !== "idle" && (
+        <>
+          <div className="subpanel">
+            <dl className="detail-fields mono">
+              <dt>{t("Import status", "가져오기 상태")}</dt>
+              <dd>
+                <span className={`state-badge${jobStatusClass(job.status)}`}>{jobStatusLabel}</span>
+              </dd>
+              {job.status === "running" && (
+                <>
+                  <dt>{t("Progress", "진행")}</dt>
+                  <dd>
+                    <PackageDownloadProgress
+                      job={job}
+                      label={t("OCI import progress", "OCI 가져오기 진행")}
+                    />
+                  </dd>
+                </>
+              )}
+              {job.status === "succeeded" && (
+                <>
+                  <dt>{t("Registered image", "등록된 이미지")}</dt>
+                  <dd>
+                    {registered
+                      ? `${registered.alias} · ${t("Installed", "설치됨")}${registered.version ? ` · ${registered.version}` : ""}`
+                      : `${job.alias} · ${t("Installed", "설치됨")}`}
+                  </dd>
+                </>
+              )}
+            </dl>
+          </div>
+          <ImageJobLog job={job} kind="oci" />
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
+ * M2Image inventory, MicroBoot builder, MicroRegistry, and OCI import are
+ * intentionally separate panels so local images, local builds, remote
+ * packages, and container imports do not read as one mixed catalog.
  */
 export default function Images() {
   const { t } = useI18n();
@@ -621,6 +963,11 @@ export default function Images() {
       setListError((error as Error).message);
     }
   }, []);
+
+  const handleOciImported = useCallback(async (alias: string) => {
+    await refreshList();
+    setSelectedAlias(alias);
+  }, [refreshList]);
 
   const refreshRegistry = useCallback(async () => {
     try {
@@ -1225,6 +1572,10 @@ export default function Images() {
           />
         )}
       </section>
+      <OciImportPanel
+        images={images ?? []}
+        onImported={handleOciImported}
+      />
       {registryPanel}
       <MicroBootPanel
         images={images ?? []}

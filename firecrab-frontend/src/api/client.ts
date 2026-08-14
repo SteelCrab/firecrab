@@ -11,6 +11,8 @@ import type {
   HostStatusResponse,
   ImageInstallResponse,
   ImageResponse,
+  OciImportRequest,
+  OciInspectResponse,
   MicroRegistryResponse,
   MicroNetworkDetailResponse,
   MicroNetworkResponse,
@@ -168,6 +170,25 @@ export function startImageInstall(alias: string): Promise<ImageInstallResponse> 
 /** Poll image installation status + log (`GET /api/images/{alias}/install`). */
 export function getImageInstall(alias: string): Promise<ImageInstallResponse> {
   return fetchJson(`/api/images/${encodeURIComponent(alias)}/install`);
+}
+
+/** Resolve whether an OCI reference can run on this host (`GET /api/oci/inspect`). */
+export function inspectOciImage(reference: string): Promise<OciInspectResponse> {
+  return fetchJson(`/api/oci/inspect?${new URLSearchParams({ reference })}`);
+}
+
+/** Start an async OCI import (`POST /api/oci/import`). Returns 202 + ImageInstallResponse. */
+export function startOciImport(request: OciImportRequest): Promise<ImageInstallResponse> {
+  return fetchJson("/api/oci/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+/** Poll an OCI import job (`GET /api/oci/import/{alias}`). */
+export function getOciImport(alias: string): Promise<ImageInstallResponse> {
+  return fetchJson(`/api/oci/import/${encodeURIComponent(alias)}`);
 }
 
 /** Unregister template and delete orphan artifact files (`DELETE /api/images/{alias}`). */
