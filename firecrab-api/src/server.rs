@@ -194,6 +194,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/microregistry",
             get(handlers::microregistry::list_microregistry),
         )
+        .route(
+            "/api/microregistry/register",
+            post(handlers::microregistry::start_microregistry_register),
+        )
+        .route(
+            "/api/microregistry/register/{alias}",
+            get(handlers::microregistry::get_microregistry_register),
+        )
         .route("/api/oci/inspect", get(handlers::oci::inspect_oci_image))
         .route("/api/oci/import", post(handlers::oci::start_oci_import))
         .route(

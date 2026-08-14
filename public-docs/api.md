@@ -84,7 +84,27 @@ The response has status `201` and includes the VM UUID.
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}`; VM pin `PUT /api/vms/{id}/shells` (Alpine OpenRC + Ubuntu/Rocky systemd; prefer POSIX `/bin/sh`) |
 | Images | `/api/images`, `/package`, `/install`, `/bootstrap` |
 | OCI | `/api/oci/inspect`, `POST /api/oci/import`, `GET /api/oci/import/{alias}` |
+| MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}` |
 | Host | `/api/host` and `/api/network` |
+
+## MicroRegistry
+
+`GET /api/microregistry` lists published packages for this host plus locally registered custom aliases.
+
+Register an already-installed custom image.
+
+```sh
+curl -s -X POST http://127.0.0.1:3000/api/microregistry/register \
+  -H 'Content-Type: application/json' \
+  -d '{"alias":"nginx-1.27","version":"1"}'
+```
+
+Poll `GET /api/microregistry/register/{alias}` for the same `ImageInstallResponse` package install uses.
+An empty alias or version is `400 validation_failed`.
+An unknown, uninstalled, or internal alias is `404`.
+A catalog alias or a second register of the same local alias is `409 alias_collision`.
+A running job for that alias is `409 register_in_progress`.
+Local rows have an empty package key and are not downloadable.
 
 ## VM states
 

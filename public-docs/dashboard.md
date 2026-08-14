@@ -65,6 +65,7 @@ Disk size can grow but cannot shrink.
 
 The Images screen can inspect an OCI reference and start an import.
 Poll the job until the alias appears in the local catalog and can create a VM.
+A locally installed custom alias can also be registered into this host's MicroRegistry catalog.
 
 ## Production
 

@@ -148,6 +148,11 @@ Deleting an installed image does not delete its staged package.
 The API validates paths and artifacts before use.
 Restart the API after replacing files outside the API workflow.
 
+## Register
+
+A locally installed custom alias can join this host's catalog via `POST /api/microregistry/register`.
+Poll `GET /api/microregistry/register/{alias}`; a success appears on `GET /api/microregistry` without a remote package key.
+
 ## Add an alias
 
 For a new distribution family, add its manifest entry and builder, then update:
