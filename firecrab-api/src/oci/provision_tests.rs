@@ -283,6 +283,81 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     assert_eq!(read_guest(&tree, "/app/server"), b"binary");
 }
 
+/// Debian bookworm has a glibc loader but no fastfetch package. The host
+/// program must land at `/usr/bin/fastfetch` so the console does not wait
+/// for a guest `apt-get install` that will never succeed.
+#[tokio::test]
+async fn a_glibc_tree_receives_the_injected_fastfetch() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "app/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "app/server",
+        EntryType::Regular,
+        None,
+        b"binary",
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "lib64/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "lib64/ld-linux-x86-64.so.2",
+        EntryType::Regular,
+        None,
+        b"ldso",
+        0o755,
+    );
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "glibc", &finish(builder)).await;
+    let tree = merged.path().to_owned();
+    let program_path = directory.path().join("fastfetch");
+    let program_bytes = static_program();
+    std::fs::write(&program_path, &program_bytes).expect("write fastfetch fixture");
+    let program = fastfetch::inspect_fastfetch(&program_path, Architecture::HOST, None)
+        .await
+        .expect("fixture is a host ELF");
+
+    provision::inject_guest_runtime(merged, &toolbox, Some(&program))
+        .await
+        .expect("inject");
+
+    assert_eq!(
+        read_guest(&tree, fastfetch::GUEST_PATH),
+        program_bytes.as_slice()
+    );
+    assert_eq!(guest_mode(&tree, fastfetch::GUEST_PATH), 0o755);
+}
+
+#[tokio::test]
+async fn a_musl_tree_does_not_receive_glibc_fastfetch() {
+    let directory = tempdir().expect("create fixture directory");
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "musl", &application_layer()).await;
+    let tree = merged.path().to_owned();
+    let program_path = directory.path().join("fastfetch");
+    std::fs::write(&program_path, static_program()).expect("write fastfetch fixture");
+    let program = fastfetch::inspect_fastfetch(&program_path, Architecture::HOST, None)
+        .await
+        .expect("fixture is a host ELF");
+
+    provision::inject_guest_runtime(merged, &toolbox, Some(&program))
+        .await
+        .expect("inject");
+
+    assert!(
+        !tree.join("usr/bin/fastfetch").exists(),
+        "a musl tree must not get a glibc binary that would fail at exec"
+    );
+}
+
 #[tokio::test]
 async fn an_image_with_agetty_and_bash_uses_the_serial_getty() {
     let directory = tempdir().expect("create fixture directory");

@@ -122,7 +122,15 @@ with the address it received or `FIRECRAB_NETWORK_FAILED` with a reason, and
 starts the metrics agent that reports guest CPU and memory. When the image
 ships util-linux `agetty` and bash, the serial console is
 `ttyS0 → agetty → login → bash`; otherwise the injected wrapper prints MOTD
-and drops into ash. `/etc/firecrab/services.d` is created
+and drops into ash. When the image has a glibc dynamic loader, activation
+also copies a digest-pinned official fastfetch (polyfilled, GLIBC_2.17) to
+`/usr/bin/fastfetch`. Debian bookworm guests such as `nginx:1.27` have
+`apt-get` but no `fastfetch` package, so a guest install is a silent no-op.
+The program is cached at `<FIRECRAB_IMAGE_ROOT>/.oci/fastfetch/` after the
+first download. Operators can name a host binary with
+`FIRECRAB_OCI_FASTFETCH_PATH`. A missing program is not an import failure:
+the boot script still tries the guest package manager as a fallback.
+`/etc/firecrab/services.d` is created
 empty for the image's own entrypoint, which a later stage translates into an
 ordinary service under that init rather than PID 1.
 

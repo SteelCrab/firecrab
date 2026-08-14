@@ -305,6 +305,23 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     Ok(())
 }
 
+/// Copies a host fastfetch into a glibc guest. Missing loader or a failed
+/// `debugfs` write is ignored: the console still boots without a banner.
+pub(crate) fn install_guest_fastfetch(rootfs: &Path, program: &Path) {
+    if !crate::oci::fastfetch::GLIBC_LOADERS
+        .iter()
+        .any(|path| guest_path_exists(rootfs, path))
+    {
+        return;
+    }
+    let Ok(bytes) = fs::read(program) else {
+        return;
+    };
+    if write_into_image(rootfs, crate::oci::fastfetch::GUEST_PATH, &bytes).is_ok() {
+        set_guest_file_mode(rootfs, crate::oci::fastfetch::GUEST_PATH, "0100755");
+    }
+}
+
 /// Rewrites the injected busybox console on an OCI-imported disk.
 fn patch_oci_console(rootfs: &Path) {
     if !guest_path_exists(rootfs, "/etc/firecrab") {
@@ -1096,6 +1113,44 @@ mod tests {
         let console = debugfs_cat(&rootfs, "/etc/firecrab/rc.console");
         assert!(console.contains("cat /etc/motd"), "{console}");
         assert!(console.contains("fastfetch"), "{console}");
+    }
+
+    #[test]
+    fn install_guest_fastfetch_copies_the_program_into_a_glibc_disk() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /lib64").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/bin").unwrap();
+        write_into_image(&rootfs, "/lib64/ld-linux-x86-64.so.2", b"ldso").unwrap();
+        let program = directory.path().join("fastfetch");
+        std::fs::write(&program, b"fastfetch-bytes").unwrap();
+
+        install_guest_fastfetch(&rootfs, &program);
+
+        assert_eq!(
+            debugfs_cat(&rootfs, crate::oci::fastfetch::GUEST_PATH),
+            "fastfetch-bytes"
+        );
+    }
+
+    #[test]
+    fn install_guest_fastfetch_skips_a_disk_without_glibc() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/bin").unwrap();
+        let program = directory.path().join("fastfetch");
+        std::fs::write(&program, b"fastfetch-bytes").unwrap();
+
+        install_guest_fastfetch(&rootfs, &program);
+
+        assert!(!guest_path_exists(
+            &rootfs,
+            crate::oci::fastfetch::GUEST_PATH
+        ));
     }
 
     #[test]

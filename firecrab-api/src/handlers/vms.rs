@@ -1068,6 +1068,10 @@ async fn finish_run_start(
     let state_for_blocking = state.clone();
     let network = network.clone();
     let store_for_shells = state.store.clone();
+    // Debian bookworm (nginx-1.27) has no fastfetch package. Pre-warm the
+    // pinned host binary so specialize can copy it into glibc guests.
+    let guest_fastfetch =
+        crate::oci::ensure_guest_fastfetch(state.templates.image_root_path()).await;
     // One durable disk generation per VM; allocated on first prepare and
     // reused for every later start so guest data survives stop/start.
     let generation = record.disk_generation.unwrap_or_else(Uuid::new_v4);
@@ -1083,6 +1087,9 @@ async fn finish_run_start(
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
         rootfs::specialize_guest(&rootfs, record.id)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        if let Some(ref program) = guest_fastfetch {
+            rootfs::install_guest_fastfetch(&rootfs, program.path());
+        }
         let shell_scripts = store_for_shells
             .list_vm_shell_scripts(record.id)
             .map_err(|error| format!("shell pin load failed: {error}"))?;

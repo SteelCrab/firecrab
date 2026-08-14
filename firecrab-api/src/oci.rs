@@ -1917,6 +1917,11 @@ mod busybox;
 #[cfg(test)]
 mod busybox_tests;
 
+pub(crate) mod fastfetch;
+
+#[cfg(test)]
+mod fastfetch_tests;
+
 #[cfg(test)]
 mod cache_tests;
 
@@ -2616,6 +2621,38 @@ impl ToolboxProgram {
     }
 }
 
+/// A verified fastfetch program cached on the host for glibc guests.
+///
+/// Unlike the toolbox, this binary is dynamically linked: official polyfilled
+/// builds need only GLIBC_2.17, which Debian bookworm, Ubuntu, and Rocky all
+/// satisfy. It is never PID 1, so a missing copy must not fail an import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FastfetchProgram {
+    /// Host path of the cached, verified program.
+    path: PathBuf,
+    /// SHA-256 of the program bytes.
+    digest: Sha256Digest,
+    /// Program size in bytes.
+    size: u64,
+}
+
+impl FastfetchProgram {
+    /// Host path of the cached, verified program.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// SHA-256 of the program bytes.
+    pub fn digest(&self) -> &Sha256Digest {
+        &self.digest
+    }
+
+    /// Program size in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+}
+
 /// Host-side inputs the guest runtime stage cannot derive from a merged tree.
 ///
 /// The toolbox program is pulled through the same verified pipeline as the
@@ -2931,6 +2968,15 @@ pub async fn provision_toolbox(
     options: &GuestRuntimeOptions<'_>,
 ) -> Result<ToolboxProgram, ResolveError> {
     busybox::ensure_toolbox(options).await
+}
+
+/// Pulls (or reuses) the pinned fastfetch program for glibc guests.
+///
+/// A missing or unverifiable program is `None`: the console still boots, and
+/// the injected boot script may try the guest package manager as a fallback.
+/// Operators can name a host binary with `FIRECRAB_OCI_FASTFETCH_PATH`.
+pub async fn ensure_guest_fastfetch(image_root: &Path) -> Option<FastfetchProgram> {
+    fastfetch::ensure_fastfetch(image_root, Architecture::HOST).await
 }
 
 /// Installs a bootable Firecrab guest runtime into a merged OCI tree.

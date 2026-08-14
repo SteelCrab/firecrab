@@ -124,7 +124,8 @@ pub(super) async fn provision_merged_rootfs(
     options: &GuestRuntimeOptions<'_>,
 ) -> Result<ProvisionedRootfs, ResolveError> {
     let toolbox = busybox::ensure_toolbox(options).await?;
-    inject_with_toolbox(rootfs, &toolbox).await
+    let fastfetch = fastfetch::ensure_fastfetch(options.image_root, options.architecture).await;
+    inject_guest_runtime(rootfs, &toolbox, fastfetch.as_ref()).await
 }
 
 /// Injects one already-verified toolbox program into a merged tree.
@@ -135,6 +136,15 @@ pub(super) async fn inject_with_toolbox(
     rootfs: MergedRootfs,
     toolbox: &ToolboxProgram,
 ) -> Result<ProvisionedRootfs, ResolveError> {
+    inject_guest_runtime(rootfs, toolbox, None).await
+}
+
+/// Injects the toolbox and, when the tree can exec it, a host-supplied fastfetch.
+pub(super) async fn inject_guest_runtime(
+    rootfs: MergedRootfs,
+    toolbox: &ToolboxProgram,
+    fastfetch: Option<&FastfetchProgram>,
+) -> Result<ProvisionedRootfs, ResolveError> {
     let tree = rootfs.path().to_owned();
     let state = std::sync::Arc::new(AtomicU8::new(INJECT_ACTIVE));
     let control = InjectControl {
@@ -143,16 +153,23 @@ pub(super) async fn inject_with_toolbox(
     };
     let mut cancel_on_drop = CancelInjectionOnDrop { state, armed: true };
     let worker_toolbox = toolbox.clone();
-    let result =
-        tokio::task::spawn_blocking(move || inject_blocking(&tree, &worker_toolbox, &control))
-            .await
-            .map_err(|error| {
-                injection_io(
-                    "join worker",
-                    rootfs.path().to_owned(),
-                    io::Error::other(error),
-                )
-            });
+    let worker_fastfetch = fastfetch.map(|program| program.path().to_owned());
+    let result = tokio::task::spawn_blocking(move || {
+        inject_blocking(
+            &tree,
+            &worker_toolbox,
+            worker_fastfetch.as_deref(),
+            &control,
+        )
+    })
+    .await
+    .map_err(|error| {
+        injection_io(
+            "join worker",
+            rootfs.path().to_owned(),
+            io::Error::other(error),
+        )
+    });
     cancel_on_drop.armed = false;
     result??;
 
@@ -166,6 +183,7 @@ pub(super) async fn inject_with_toolbox(
 fn inject_blocking(
     tree: &Path,
     toolbox: &ToolboxProgram,
+    fastfetch: Option<&Path>,
     control: &InjectControl,
 ) -> Result<(), ResolveError> {
     let mut unwind = InjectedPaths::default();
@@ -180,6 +198,11 @@ fn inject_blocking(
         control.check()?;
         install_program(tree, GUEST_TOOLBOX, toolbox.path(), &mut unwind)?;
         install_symlink(tree, GUEST_INIT, GUEST_TOOLBOX, &mut unwind)?;
+        if let Some(path) = fastfetch
+            && first_existing(tree, fastfetch::GLIBC_LOADERS).is_some()
+        {
+            install_program(tree, fastfetch::GUEST_PATH, path, &mut unwind)?;
+        }
 
         control.check()?;
         if let Some(shell) = first_existing(tree, GUEST_BASH_CANDIDATES) {
@@ -786,7 +809,8 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
-# Best-effort: first console should have fastfetch. Failure must not block boot.
+# Fallback only: glibc guests already received a pinned /usr/bin/fastfetch at
+# import. Alpine and other musl trees still try the guest package manager.
 if [ ! -x /usr/bin/fastfetch ]; then
   if [ -x /usr/bin/apt-get ]; then
     DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq >/dev/null 2>&1
