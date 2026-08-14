@@ -35,7 +35,7 @@ Use `localhost` because the development origin is exact.
 | Terminal | Use the serial console |
 | Networks | Manage MicroNetworks |
 | Storage | Manage MicroStorage pools |
-| Images | Install and build M2Images |
+| Images | Install M2Images or import an OCI image |
 | Host | Show host health and capacity |
 
 ## VM workflow
@@ -61,6 +61,11 @@ the guest disk.
 Resource changes are allowed only while the VM is inactive.
 Disk size can grow but cannot shrink.
 
+## Images
+
+The Images screen can inspect an OCI reference and start an import.
+Poll the job until the alias appears in the local catalog and can create a VM.
+
 ## Production
 
 Build the dashboard and let the API serve it.
@@ -84,5 +89,6 @@ The host installer configures this mode.
 ## Related
 
 - [API](api.md)
+- [OCI images](oci.md)
 - [Networking](networking.md)
 - [Troubleshooting](troubleshooting.md)
