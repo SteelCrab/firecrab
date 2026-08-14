@@ -289,6 +289,10 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
         "/etc/profile.d/firecrab-welcome.sh",
         FIRECRAB_WELCOME_PROFILE.as_bytes(),
     );
+    // Already-imported OCI disks still have the old `respawn busybox sh`.
+    // Rewrite the console wrapper on every start so MOTD/fastfetch appear
+    // without requiring a re-import.
+    patch_oci_console(rootfs);
     for path in STRIP_PATHS {
         remove_from_image(rootfs, path);
     }
@@ -299,6 +303,31 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     // Metrics Agent: guest OS CPU/mem samples for the dashboard (own module).
     crate::guest_agent::install(rootfs)?;
     Ok(())
+}
+
+/// Rewrites the injected busybox console on an OCI-imported disk.
+fn patch_oci_console(rootfs: &Path) {
+    if !guest_path_exists(rootfs, "/etc/firecrab") {
+        return;
+    }
+    let _ = run_debugfs(rootfs, "mkdir /etc/firecrab");
+    let _ = write_into_image(
+        rootfs,
+        "/etc/inittab",
+        crate::oci::provision::inittab().as_bytes(),
+    );
+    let _ = write_into_image(
+        rootfs,
+        "/etc/firecrab/rc.boot",
+        crate::oci::provision::boot_script().as_bytes(),
+    );
+    let _ = write_into_image(
+        rootfs,
+        "/etc/firecrab/rc.console",
+        crate::oci::provision::console_script().as_bytes(),
+    );
+    set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
+    set_guest_file_mode(rootfs, "/etc/firecrab/rc.console", "0100755");
 }
 
 /// Guest path for the Ubuntu/Rocky network readiness oneshot.
@@ -1022,6 +1051,25 @@ mod tests {
         specialize_guest(&rootfs, Uuid::new_v4()).unwrap();
 
         assert_eq!(debugfs_cat(&rootfs, "/etc/motd"), FIRECRAB_MOTD);
+    }
+
+    #[test]
+    fn specialize_guest_rewrites_an_oci_console_wrapper() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4()).unwrap();
+
+        let inittab = debugfs_cat(&rootfs, "/etc/inittab");
+        assert!(
+            inittab.contains("rc.console"),
+            "existing OCI disks must respawn the welcome console: {inittab}"
+        );
+        let console = debugfs_cat(&rootfs, "/etc/firecrab/rc.console");
+        assert!(console.contains("cat /etc/motd"), "{console}");
+        assert!(console.contains("fastfetch"), "{console}");
     }
 
     /// A Firecracker process can be killed before the guest has cleanly

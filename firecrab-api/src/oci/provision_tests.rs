@@ -238,8 +238,12 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     assert!(boot.contains("FIRECRAB_NETWORK_FAILED no-ipv4-address"));
     assert!(boot.contains("FIRECRAB_NETWORK_FAILED dns-unreachable"));
     assert!(
-        boot.contains("[ -s /etc/hostname ] && $BB hostname -F /etc/hostname"),
+        boot.contains("$BB hostname -F /etc/hostname"),
         "busybox init must apply specialize_guest's hostname: {boot}"
+    );
+    assert!(
+        boot.contains("/proc/sys/kernel/hostname"),
+        "hostname must also be written through proc: {boot}"
     );
     assert!(
         boot.contains("apt-get install -y -qq fastfetch"),

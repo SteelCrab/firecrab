@@ -610,7 +610,7 @@ fn guest_path_unusable(guest_path: &str, reason: GuestPathViolation) -> ResolveE
 /// Commands stay free of shell metacharacters on purpose: busybox init routes
 /// any command containing them through `/bin/sh -c`, which a distroless image
 /// does not have.
-fn inittab() -> String {
+pub(crate) fn inittab() -> String {
     format!(
         "# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).\n\
          ::sysinit:{GUEST_TOOLBOX} sh {GUEST_BOOT_SCRIPT}\n\
@@ -622,7 +622,7 @@ fn inittab() -> String {
 }
 
 /// Everything between the kernel handing off and the host seeing a sentinel.
-fn boot_script() -> String {
+pub(crate) fn boot_script() -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab guest runtime for an imported OCI image (public-docs/oci.md).
@@ -638,7 +638,10 @@ $BB mount -t devpts -o nosuid,noexec devpts /dev/pts 2>/dev/null
 $BB mount -t tmpfs -o nosuid,nodev,mode=755 tmpfs /run 2>/dev/null
 
 # specialize_guest writes /etc/hostname; systemd would apply it, busybox init does not.
-[ -s /etc/hostname ] && $BB hostname -F /etc/hostname
+if [ -s /etc/hostname ]; then
+  $BB hostname -F /etc/hostname 2>/dev/null
+  $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null
+fi
 
 # Metrics first, so the dashboard has samples even when the network fails.
 $BB setsid $BB sh {agent} >/dev/null 2>&1 &
@@ -711,11 +714,15 @@ exit 0
 }
 
 /// Interactive console: MOTD, fastfetch when present, then ash.
-fn console_script() -> String {
+pub(crate) fn console_script() -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab injected console (public-docs/oci.md).
 BB={GUEST_TOOLBOX}
+if [ -s /etc/hostname ]; then
+  $BB hostname -F /etc/hostname 2>/dev/null
+  $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null
+fi
 [ -s /etc/motd ] && $BB cat /etc/motd
 if [ -x /usr/bin/fastfetch ]; then
   /usr/bin/fastfetch

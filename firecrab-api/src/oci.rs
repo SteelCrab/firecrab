@@ -1928,7 +1928,7 @@ mod merge;
 #[cfg(test)]
 mod merge_tests;
 
-mod provision;
+pub(crate) mod provision;
 
 #[cfg(test)]
 mod provision_tests;
