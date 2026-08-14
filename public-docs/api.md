@@ -83,6 +83,7 @@ The response has status `201` and includes the VM UUID.
 | MicroStorage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}`; VM pin `PUT /api/vms/{id}/shells` (Alpine OpenRC + Ubuntu/Rocky systemd; prefer POSIX `/bin/sh`) |
 | Images | `/api/images`, `/package`, `/install`, `/bootstrap` |
+| OCI | `/api/oci/inspect`, `POST /api/oci/import`, `GET /api/oci/import/{alias}` |
 | Host | `/api/host` and `/api/network` |
 
 ## VM states
@@ -117,4 +118,5 @@ Use `requestId` to find the matching server log.
 - [Networking](networking.md)
 - [Storage](storage.md)
 - [Images](images.md)
+- [OCI images](oci.md)
 - [Troubleshooting](troubleshooting.md)

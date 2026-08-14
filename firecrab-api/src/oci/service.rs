@@ -11,7 +11,7 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use super::*;
 
 const GUEST_SERVICE: &str = "etc/firecrab/services.d/app";
-const GUEST_TOOLBOX: &str = "/sbin/firecrab-busybox";
+const GUEST_TOOLBOX: &str = super::provision::GUEST_TOOLBOX;
 
 #[derive(Debug, Deserialize)]
 struct RawImageProcess {

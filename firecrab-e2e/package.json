@@ -1,0 +1,17 @@
+{
+  "name": "firecrab-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Isolated browser E2E for issue #90 (OCI inspect → import → boot). Playwright is test-only.",
+  "scripts": {
+    "test": "playwright test",
+    "test:import": "FIRECRAB_E2E_SKIP_GUEST_BOOT=1 playwright test",
+    "test:headed": "playwright test --headed",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^24.13.2"
+  }
+}

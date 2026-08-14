@@ -16,6 +16,8 @@ export * from "./HostStatusResponse";
 export * from "./ImageInstallResponse";
 export * from "./ImageInstallStatus";
 export * from "./ImageResponse";
+export * from "./OciImportRequest";
+export * from "./OciInspectResponse";
 export * from "./MicroRegistryImageResponse";
 export * from "./MicroRegistryRegisterRequest";
 export * from "./MicroRegistryRegisterResponse";

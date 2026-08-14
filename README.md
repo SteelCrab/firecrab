@@ -37,9 +37,9 @@ full cloud control plane. It is not a hosted service or a multi-host scheduler.
 - **Choose an isolated network:** create explicit **MicroNetworks**; each VM belongs
   to one network and receives a persistent IPv4, MAC, and hostname. Networks are
   isolated from one another, with per-VM internet or isolated egress.
-- **Manage images and disks:** install or remove templates, bootstrap supported
-  distributions in a temporary builder VM, and place VM disks on configured storage
-  roots or registered **MicroStorage** pools.
+- **Manage images and disks:** install M2Image templates, import an OCI image from a
+  registry, bootstrap supported distributions in a temporary builder VM, and place
+  VM disks on configured storage roots or registered **MicroStorage** pools.
 - **See what is happening:** inspect startup progress, console logs, and host status
   in the dashboard, available in English and Korean.
 - **Keep host privileges small:** the API runs unprivileged; the separate
@@ -166,14 +166,18 @@ member VM details.
 The **M2Image** list shows each image's size and state, such as `Package ready` or
 `Installed`. Select a row to inspect its alias, version, minimum disk, rootfs size,
 state, and the VMs that use it. The `…` menu offers state-appropriate package install,
-image import, bootstrap, or delete actions. Only installed images can be used to
-create VMs.
+bootstrap, or delete actions. Only installed images can be used to create VMs.
+
+The same screen can inspect an OCI reference (`nginx:1.27`) for this host's
+architecture and import it as a registered template. Import is a background job;
+the page shows progress, errors, and the registered alias when it finishes.
 
 ![M2Image list](assets/dashboard/images.png)
 
 For API request formats, lifecycle semantics, and error envelopes, see the
 [API guide](public-docs/api.md). For image packages and browser-driven bootstrap,
-see the [image guide](public-docs/images.md).
+see the [image guide](public-docs/images.md). For OCI inspect and import, see the
+[OCI image guide](public-docs/oci.md).
 
 ## Develop from source
 
@@ -211,6 +215,18 @@ Run the Rust test suite with:
 ```sh
 cargo test --workspace
 ```
+
+Browser E2E for OCI inspect → import (local registry fixture, no Docker Hub):
+
+```sh
+npm install --prefix firecrab-e2e
+npm run install-browsers --prefix firecrab-e2e
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
+```
+
+That command expects 1 passed and 1 skipped.
+The skipped test creates and boots a VM; run `npm test --prefix firecrab-e2e` without the flag on a KVM host with Firecracker and `./scripts/dev-net-helper.sh`.
+See [firecrab-e2e/README.md](firecrab-e2e/README.md).
 
 More development notes and browser workflow details are in the [web dashboard guide](public-docs/dashboard.md).
 

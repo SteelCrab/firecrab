@@ -19,7 +19,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, ReadBuf};
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use uuid::Uuid;
 
-use crate::image_install::Architecture;
+use crate::image_install::{Architecture, ImageInstallTracker};
+use crate::templates::TemplateRegistry;
 
 /// The OS every Firecrab guest runs. Windows and BSD entries in a multi-OS
 /// index are never candidates.
@@ -1147,13 +1148,13 @@ impl RegistrySession {
             let issued = read_token_body(response).await?;
             let issued: TokenResponse = serde_json::from_slice(&issued)
                 .map_err(|error| ResolveError::Authentication(error.to_string()))?;
-            if issued.token.is_empty() {
+            let Some(token) = issued.issued().map(str::to_owned) else {
                 return Err(ResolveError::Authentication(
                     "token endpoint returned an empty token".to_owned(),
                 ));
-            }
-            *stored = Some(issued.token.clone());
-            issued.token
+            };
+            *stored = Some(token.clone());
+            token
         };
         drop(stored);
 
@@ -1956,6 +1957,9 @@ mod service;
 
 #[cfg(test)]
 mod service_tests;
+
+#[cfg(test)]
+pub(crate) mod registry_fixture;
 
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3009,6 +3013,138 @@ pub fn install_oci_service(
     service::install_oci_service(rootfs, process)
 }
 
+/// Builds the candidate alias and version without consulting the registry.
+pub fn template_name_from_reference(
+    reference: &ImageReference,
+) -> Result<OciTemplateName, ResolveError> {
+    name::template_name_from_reference(reference)
+}
+
+/// Derives the name and refuses it when an installed or reserved alias exists.
+pub fn claim_template_name(
+    reference: &ImageReference,
+    templates: &TemplateRegistry,
+) -> Result<OciTemplateName, ResolveError> {
+    name::claim_template_name(reference, templates)
+}
+
+/// Runs the already-landed import stages as one background job.
+///
+/// Scratch lives at `{image_root}/.oci/import/{alias}/` and is removed when
+/// the job finishes, whether it succeeded or failed. Verified blob and
+/// decompressed-layer caches stay in place.
+pub async fn run_oci_import(
+    tracker: ImageInstallTracker,
+    templates: TemplateRegistry,
+    reference: ImageReference,
+    alias: String,
+) {
+    if let Err(error) = import_oci_image(&tracker, &templates, &reference, &alias).await {
+        tracker.finish_err_with(&alias, format!("import failed: {error}"));
+        return;
+    }
+    tracker.finish_ok_with(&alias, "import succeeded — template registered");
+}
+
+async fn import_oci_image(
+    tracker: &ImageInstallTracker,
+    templates: &TemplateRegistry,
+    reference: &ImageReference,
+    alias: &str,
+) -> Result<(), ResolveError> {
+    let image_root = templates.image_root_path();
+    let scratch = image_root.join(".oci/import").join(alias);
+    reset_import_scratch(&scratch).await?;
+
+    let result =
+        import_oci_image_in_scratch(tracker, templates, reference, alias, image_root, &scratch)
+            .await;
+    if let Err(error) = tokio::fs::remove_dir_all(&scratch).await
+        && error.kind() != io::ErrorKind::NotFound
+    {
+        tracing::warn!(
+            alias,
+            path = %scratch.display(),
+            error = %error,
+            "failed to remove OCI import scratch"
+        );
+    }
+    result
+}
+
+async fn reset_import_scratch(scratch: &Path) -> Result<(), ResolveError> {
+    match tokio::fs::remove_dir_all(scratch).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(cache_io("remove import scratch", scratch.to_owned(), error));
+        }
+    }
+    tokio::fs::create_dir_all(scratch)
+        .await
+        .map_err(|error| cache_io("create import scratch", scratch.to_owned(), error))
+}
+
+async fn import_oci_image_in_scratch(
+    tracker: &ImageInstallTracker,
+    templates: &TemplateRegistry,
+    reference: &ImageReference,
+    alias: &str,
+    image_root: &Path,
+    scratch: &Path,
+) -> Result<(), ResolveError> {
+    let insecure = is_loopback_registry(&reference.registry);
+    let blobs = BlobCache::new(image_root);
+    let layers = LayerCache::new(image_root);
+
+    tracker.append_log(alias, "caching image blobs");
+    let cached = cache_image_blobs(reference, Architecture::HOST, insecure, &blobs).await?;
+
+    tracker.append_log(alias, "reading image process config");
+    let process = read_cached_process_config(&cached).await?;
+
+    tracker.append_log(alias, "decompressing layers");
+    let decompressed = decompress_cached_layers(&cached, &layers).await?;
+
+    tracker.append_log(alias, "validating layer archives");
+    let validated = validate_decompressed_layers(decompressed).await?;
+
+    tracker.append_log(alias, "merging layers");
+    let merged = merge_validated_layers(&validated, &scratch.join("rootfs")).await?;
+
+    tracker.append_log(alias, "provisioning guest runtime");
+    let options = GuestRuntimeOptions {
+        image_root,
+        blobs: &blobs,
+        layers: &layers,
+        architecture: cached.resolved.architecture,
+    };
+    let provisioned = provision_merged_rootfs(merged, &options).await?;
+
+    tracker.append_log(alias, "installing image service");
+    install_oci_service(&provisioned, &process)?;
+
+    tracker.append_log(alias, "writing ext4 image");
+    let ext4 = write_provisioned_ext4(&provisioned, &scratch.join("rootfs.ext4")).await?;
+
+    tracker.append_log(alias, "pairing host kernel");
+    let bootable = pair_ext4_with_host_kernel(ext4, image_root)?;
+
+    tracker.append_log(alias, "naming and registering template");
+    let named = name_oci_image(bootable, reference, templates)?;
+    register_named_oci_image(named, templates)?;
+    Ok(())
+}
+
+async fn read_cached_process_config(
+    cached: &CachedImageBlobs,
+) -> Result<OciProcessConfig, ResolveError> {
+    let bytes = tokio::fs::read(&cached.config.path)
+        .await
+        .map_err(|error| cache_io("read config", cached.config.path.clone(), error))?;
+    OciProcessConfig::from_image_config(&bytes)
+}
+
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
     let path = layer.path.clone();
     let compressed_digest = layer.source.descriptor.digest.clone();
@@ -3739,10 +3875,28 @@ async fn cache_image_blobs_with_parallelism(
 }
 
 /// A registry token endpoint's answer.
+///
+/// The distribution spec allows `token` and `access_token`. Docker Hub
+/// sends both with the same value. A serde `alias` would treat that as a
+/// duplicate field and reject the body.
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
-    #[serde(alias = "access_token")]
-    token: String,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    access_token: Option<String>,
+}
+
+impl TokenResponse {
+    /// The bearer secret to send back to the registry.
+    fn issued(&self) -> Option<&str> {
+        let token = self.token.as_deref().filter(|value| !value.is_empty());
+        let access = self
+            .access_token
+            .as_deref()
+            .filter(|value| !value.is_empty());
+        token.or(access)
+    }
 }
 
 /// One path component, per the distribution spec: lowercase alphanumerics
@@ -3961,7 +4115,20 @@ mod tests {
         let response: TokenResponse =
             serde_json::from_slice(br#"{"access_token":"issued-token"}"#).unwrap();
 
-        assert_eq!(response.token, "issued-token");
+        assert_eq!(response.issued().unwrap(), "issued-token");
+    }
+
+    /// Docker Hub's auth.docker.io answers with both `token` and
+    /// `access_token`. Treating the latter as a serde alias for the former
+    /// rejects that body as a duplicate field.
+    #[test]
+    fn token_response_accepts_token_and_access_token_together() {
+        let response: TokenResponse = serde_json::from_slice(
+            br#"{"token":"issued-token","access_token":"issued-token","expires_in":300}"#,
+        )
+        .expect("Docker Hub sends both names");
+
+        assert_eq!(response.issued().unwrap(), "issued-token");
     }
 
     #[tokio::test]

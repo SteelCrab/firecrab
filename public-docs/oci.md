@@ -1,10 +1,8 @@
 # OCI images
 
-firecrab can read a container image from a registry and report whether this
-host can run it.
-The internal pipeline can size a provisioned tree into an ext4 image, pair
-it with an architecture-matched kernel, and derive an alias from the reference.
-Registering a template is still separate work.
+firecrab can inspect a container image and import it as a bootable template.
+The pipeline caches layers, merges them, injects a guest runtime, writes ext4,
+pairs a kernel, and registers an alias.
 
 ## Inspect
 
@@ -15,30 +13,35 @@ config or layers.
 curl -s 'http://127.0.0.1:3000/api/oci/inspect?reference=nginx:1.27'
 ```
 
-The reference is written as at `docker pull`, so a bare name resolves to Docker
-Hub's `library` namespace at `latest`.
-The answer is the manifest digest this host would pull; an image offering no
-manifest for this architecture is rejected, naming the ones it does offer.
-
-OCI platforms use Go's names, so x86_64 appears as `amd64` — not the label the
-MicroRegistry catalog uses.
+The reference is written as at `docker pull`, so a bare name resolves to Docker Hub's `library` namespace at `latest`.
+The answer is the manifest digest this host would pull; a missing architecture is rejected.
+OCI platforms use Go's names, so x86_64 appears as `amd64`.
 Registries are reached over HTTPS, except `localhost` and `127.0.0.1`.
-This endpoint reads registry metadata only. It neither imports the image nor
-populates the blob cache.
+This endpoint reads metadata only and includes the alias a later import will claim.
+
+## Import
+
+Import is a background job because REST requests time out at 10 seconds.
+
+```sh
+curl -s -X POST http://127.0.0.1:3000/api/oci/import \
+  -H 'Content-Type: application/json' \
+  -d '{"reference":"nginx:1.27"}'
+```
+
+Poll `GET /api/oci/import/{alias}` for the same `ImageInstallResponse` package install uses.
+A bad reference is `400 validation_failed`.
+A catalog or installed alias is `409 alias_collision`.
+A running job for that alias is `409 import_in_progress`.
+Success adds the alias to `GET /api/images`.
 
 ## Blob cache
 
 Internal OCI pulls cache image configs and layers by their SHA-256 digest at
 `<FIRECRAB_IMAGE_ROOT>/.oci/blobs/sha256/<hex>`.
-Entries contain the raw bytes returned by the registry and are never replaced
-with decompressed data.
-
-Every cache lookup streams the complete entry and verifies both its expected
-size and SHA-256 digest before reuse. A corrupt entry is discarded and fetched
-again, and a download becomes visible at its final path only after the same
-checks succeed.
-One config or layer download is limited to 16 GiB by default; operators can
-change this with `FIRECRAB_OCI_MAX_BLOB_BYTES`.
+Entries contain the raw bytes returned by the registry and are never replaced with decompressed data.
+Every cache lookup verifies size and SHA-256 before reuse; a corrupt entry is discarded and fetched again.
+One config or layer download is limited to 16 GiB by default (`FIRECRAB_OCI_MAX_BLOB_BYTES`).
 
 ## Layer decompression
 
@@ -48,31 +51,25 @@ Each result keeps the manifest descriptor, whose digest covers the registry
 bytes, separate from the matching config `rootfs.diff_ids` entry, whose digest
 covers the uncompressed tar stream.
 
-The decoder streams output while calculating that diff ID and publishes a tar
-only after it matches. Cache hits are rehashed, corrupt entries are rebuilt
-from the verified blob, and failed work leaves no partial tar. Decoder output
-is limited to 64 GiB per layer by default; change it with
-`FIRECRAB_OCI_MAX_UNCOMPRESSED_LAYER_BYTES`. At most two layer decoders run
-process-wide, and each zstd decoder has a 128 MiB window limit.
+The decoder publishes a tar only after the diff ID matches.
+Cache hits are rehashed and corrupt entries are rebuilt from the verified blob.
+Decoder output is limited to 64 GiB per layer (`FIRECRAB_OCI_MAX_UNCOMPRESSED_LAYER_BYTES`).
+At most two layer decoders run process-wide, and each zstd decoder has a 128 MiB window.
 
 ## Layer safety preflight
 
 Before extraction, the internal pipeline scans every decompressed tar using
 GNU long-name/link metadata and PAX overrides. Member names must be relative
 paths without parent components; only a directory may name the archive root
-as `.` or `./`. Character and block devices are rejected, as are unsupported
-special entries. Links must name a target;
-hard-link targets are archive-root-relative and cannot be absolute or contain
-parent components. Regular whiteout files remain valid for the later merge
-stage.
+as `.` or `./`. Character and block devices are rejected, as are unsupported special entries.
+Links must name a target; hard-link targets stay archive-root-relative.
+Regular whiteout files remain valid for the later merge stage.
 
 Malformed headers, repeated PAX path/link records, sparse extensions,
-missing end records, and truncated member bodies stop the import before any
-filesystem tree is created. PAX `size` overrides and global PAX path/link/size
-overrides are rejected to avoid different tar parsers disagreeing about member
-boundaries or destinations. Each GNU or PAX metadata entry is limited to 1
-MiB. Rejection does not delete the already verified compressed blob or
-decompressed tar: both remain valid content-addressed cache entries.
+missing end records, and truncated member bodies stop the import.
+PAX `size` overrides and global PAX path/link/size overrides are rejected.
+Each GNU or PAX metadata entry is limited to 1 MiB.
+Rejection keeps the verified blob and decompressed tar as cache entries.
 
 ## Layer merge
 
@@ -116,12 +113,13 @@ when it no longer passes. Operators can name a mirror with
 
 ## Guest activation
 
-Activation installs an init at `/sbin/init`, so the image boots on the same
-kernel command line every other template uses. It also installs a boot script
-that mounts `/proc`, `/sys`, `/dev` and `/run`, brings the interface up before
-asking for a lease, reports `FIRECRAB_NETWORK_READY` with the address it
-received or `FIRECRAB_NETWORK_FAILED` with a reason, and starts the metrics
-agent that reports guest CPU and memory. `/etc/firecrab/services.d` is created
+Activation installs an init at `/sbin/init` and the toolbox at
+`/etc/firecrab/busybox` (basename `busybox`, so the multiplexer runs), so the
+image boots on the same kernel command line every other template uses. It also
+installs a boot script that mounts `/proc`, `/sys`, `/dev` and `/run`, brings
+the interface up before asking for a lease, reports `FIRECRAB_NETWORK_READY`
+with the address it received or `FIRECRAB_NETWORK_FAILED` with a reason, and
+starts the metrics agent that reports guest CPU and memory. `/etc/firecrab/services.d` is created
 empty for the image's own entrypoint, which a later stage translates into an
 ordinary service under that init rather than PID 1.
 
@@ -153,8 +151,7 @@ This stage still pairs no kernel and registers nothing.
 
 The packed ext4 is paired with this host's no-initrd catalog kernel — Ubuntu.
 The alias is the repository and tag — `nginx:1.27` becomes `nginx-1.27`.
-A catalog or installed alias is refused.
-The ext4 is copied to `rootfs/<alias>.ext4` and registered; a failure deletes that file.
+A catalog or installed alias is refused; the ext4 is copied to `rootfs/<alias>.ext4`.
 
 ## Service
 
@@ -164,5 +161,6 @@ The injected init starts it after the sentinel. It is never PID 1.
 ## Related
 
 - [Images](images.md)
+- [Dashboard](dashboard.md)
 - [API](api.md)
 - [Storage](storage.md)

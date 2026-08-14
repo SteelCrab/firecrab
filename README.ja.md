@@ -37,9 +37,10 @@ firecrab は、管理下の Linux ホストで隔離された
 - **隔離ネットワークの選択:** 明示的な **MicroNetwork** を作成し、各 VM を一つに配置します。
   IPv4・MAC・hostname は保持され、ネットワーク同士は隔離されます。VM ごとにインターネット許可
   または隔離の egress を選べます。
-- **イメージとディスクの管理:** テンプレートのインストール・削除、暫定 builder VM での対応
-  ディストリビューションのブートストラップ、設定済みストレージルートまたは登録済み
-  **MicroStorage** プールへの VM ディスク配置をサポートします。
+- **イメージとディスクの管理:** M2Image テンプレートのインストール・削除、レジストリからの
+  OCI イメージ import、暫定 builder VM での対応ディストリビューションのブートストラップ、
+  設定済みストレージルートまたは登録済み **MicroStorage** プールへの VM ディスク配置を
+  サポートします。
 - **状態の確認:** 英語・韓国語対応のダッシュボードで起動進捗、コンソールログ、ホスト状態を確認できます。
 - **ホスト権限を最小化:** API は非特権で動作し、独立した `firecrab-net-helper` はホストネットワークに
   必要な capability だけを持ちます。
@@ -162,14 +163,17 @@ cd firecrab
 **M2Image** の一覧には、イメージごとのサイズと `パッケージ準備完了`・`インストール済み` などの
 状態が表示されます。行を選択すると、別名、バージョン、最小ディスク、rootfs サイズ、状態、その
 イメージを使う VM を確認できます。`…` メニューには状態に応じて、パッケージのインストール、
-イメージの取り込み、ブートストラップ、削除が表示されます。VM 作成に使えるのはインストール済みの
-イメージだけです。
+ブートストラップ、削除が表示されます。VM 作成に使えるのはインストール済みのイメージだけです。
+
+同じ画面で OCI 参照（`nginx:1.27`）がこのホストのアーキテクチャに合うかを検査し、
+テンプレートとして import できます。import はバックグラウンドジョブで、進捗・エラー・
+登録された別名をページに出します。
 
 ![M2Image の一覧](assets/dashboard/images.png)
 
 リクエスト形式、ライフサイクルの意味、エラー envelope は[API ガイド](public-docs/api.md)を、
-イメージパッケージとブラウザ主導のブートストラップは[イメージガイド](public-docs/images.md)
-を参照してください。
+イメージパッケージとブラウザ主導のブートストラップは[イメージガイド](public-docs/images.md)を、
+OCI の inspect と import は [OCI イメージガイド](public-docs/oci.md) を参照してください。
 
 ## ソースから開発
 
@@ -207,6 +211,19 @@ Rust のテストスイートは次で実行します。
 ```sh
 cargo test --workspace
 ```
+
+OCI inspect → import のブラウザ E2E（ローカルレジストリ fixture、Docker Hub なし）:
+
+```sh
+npm install --prefix firecrab-e2e
+npm run install-browsers --prefix firecrab-e2e
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
+```
+
+期待値は 1 passed、1 skipped です。
+skipped のテストは VM を作って起動します。フラグなしの `npm test --prefix firecrab-e2e` には
+KVM、Firecracker、`./scripts/dev-net-helper.sh` が必要です。
+詳細は [firecrab-e2e/README.md](firecrab-e2e/README.md) を見てください。
 
 開発時の注意点とブラウザのワークフローは[Web ダッシュボードガイド](public-docs/dashboard.md)にあります。
 

@@ -108,6 +108,19 @@ npm run lint --prefix firecrab-frontend
 npm run build --prefix firecrab-frontend
 ```
 
+### OCI import browser E2E
+
+Isolated Playwright suite in `firecrab-e2e/`. It is not part of `cargo test --workspace`.
+
+```sh
+npm ci --prefix firecrab-e2e
+npm run install-browsers --prefix firecrab-e2e
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
+```
+
+That covers inspect → import against a local registry fixture (no Docker Hub).
+The guest-boot half needs KVM, Firecracker, and `./scripts/dev-net-helper.sh`; see [firecrab-e2e/README.md](firecrab-e2e/README.md).
+
 ### Docs and installer scripts
 
 ```sh
@@ -137,6 +150,7 @@ Keep bodies short (see [#55](https://github.com/SteelCrab/firecrab/issues/55), [
 2. Prefer a **focused branch** and a **focused PR** — one concern per change when practical.
 3. Describe **what** changed and **why**. Link issues if any.
 4. Include tests for bug fixes and new API behavior when it is practical without nested KVM.
+   OCI import UI changes should keep `FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e` green.
 5. Keep the default security model in mind (see below).
 
 ### Commit messages

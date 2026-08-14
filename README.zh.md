@@ -34,8 +34,8 @@ firecrab 在你管理的 Linux 主机上运行和管理隔离的
   浏览器串口控制台。
 - **选择隔离网络：** 创建显式 **MicroNetwork**，每台 VM 都放入其中之一。IPv4、MAC 和
   hostname 会保留；网络彼此隔离，并可为每台 VM 选择互联网或隔离 egress。
-- **管理镜像与磁盘：** 安装或删除模板，在临时 builder VM 中引导支持的发行版，并将 VM 磁盘
-  放在配置的存储根目录或已注册的 **MicroStorage** 池中。
+- **管理镜像与磁盘：** 安装或删除 M2Image 模板，从仓库导入 OCI 镜像，在临时 builder VM
+  中引导支持的发行版，并将 VM 磁盘放在配置的存储根目录或已注册的 **MicroStorage** 池中。
 - **了解运行状态：** 在英文或韩文仪表盘中查看启动进度、控制台日志和主机状态。
 - **缩小主机权限：** API 以非特权方式运行；独立的 `firecrab-net-helper` 仅持有主机网络
   所需的 capability。
@@ -150,12 +150,16 @@ ID；可通过 **阻止互联网/启用互联网** 改变整个网络经 NAT 的
 
 **M2Image** 列表显示每个镜像的大小及 `软件包已就绪`、`已安装` 等状态。选择一行可查看其别名、
 版本、最小磁盘、rootfs 大小、状态以及正在使用该镜像的 VM。`…` 菜单会根据状态提供软件包安装、
-镜像导入、引导或删除操作。只有已安装的镜像可以用于创建 VM。
+引导或删除操作。只有已安装的镜像可以用于创建 VM。
+
+同一页面还可以检查 OCI 引用（`nginx:1.27`）是否匹配本机架构，并将其导入为模板。
+导入在后台进行，页面会显示进度、错误以及注册后的别名。
 
 ![M2Image 列表](assets/dashboard/images.png)
 
 请求格式、生命周期语义和错误 envelope 见 [API 指南](public-docs/api.md)。镜像包与浏览器引导
-流程见[镜像指南](public-docs/images.md)。
+流程见[镜像指南](public-docs/images.md)。OCI 检查与导入见
+[OCI 镜像指南](public-docs/oci.md)。
 
 ## 从源码开发
 
@@ -193,6 +197,19 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 ```sh
 cargo test --workspace
 ```
+
+OCI 检查 → 导入的浏览器 E2E（本地仓库 fixture，不访问 Docker Hub）：
+
+```sh
+npm install --prefix firecrab-e2e
+npm run install-browsers --prefix firecrab-e2e
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
+```
+
+预期为 1 passed、1 skipped。
+被跳过的测试会创建并启动 VM。去掉该标志运行 `npm test --prefix firecrab-e2e` 需要
+KVM、Firecracker 和 `./scripts/dev-net-helper.sh`。
+详见 [firecrab-e2e/README.md](firecrab-e2e/README.md)。
 
 更多开发说明和浏览器工作流见[网页仪表盘指南](public-docs/dashboard.md)。
 
