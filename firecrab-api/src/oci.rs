@@ -827,6 +827,60 @@ pub enum ResolveError {
         /// Destination that was left unpublished.
         path: PathBuf,
     },
+    /// The compiled-in catalog has no kernel that can boot a module-less
+    /// OCI rootfs on this architecture.
+    #[error("no architecture-matched kernel without an initrd is published for {architecture}")]
+    NoHostKernel {
+        /// Architecture a later TemplateSpec would have to boot.
+        architecture: Architecture,
+    },
+    /// The catalog kernel for this host is not installed under the image root.
+    #[error("no architecture-matched kernel at {path}; install {hint} for {architecture}")]
+    KernelMissing {
+        /// Catalog-relative kernel path that was required.
+        path: PathBuf,
+        /// Template alias that publishes that kernel.
+        hint: String,
+        /// Architecture the missing kernel must match.
+        architecture: Architecture,
+    },
+    /// The catalog kernel exists but is built for another architecture.
+    #[error("kernel {path} is built for {found}, but this host is {host}")]
+    KernelArchitectureMismatch {
+        /// Catalog-relative kernel path that was inspected.
+        path: PathBuf,
+        /// Architecture the kernel header declares.
+        found: Architecture,
+        /// Architecture this build of the API runs on.
+        host: Architecture,
+    },
+    /// The catalog kernel is a well-formed ELF Firecracker cannot boot.
+    #[error(
+        "kernel {path} targets an architecture firecrab does not support (ELF machine {machine:#06x})"
+    )]
+    UnsupportedKernelArchitecture {
+        /// Catalog-relative kernel path that was inspected.
+        path: PathBuf,
+        /// ELF `e_machine` value that identified it.
+        machine: u16,
+    },
+    /// The file at the catalog kernel path is not a classifiable kernel.
+    #[error("kernel {path} is not a classifiable Firecracker kernel")]
+    KernelUnrecognized {
+        /// Catalog-relative kernel path that was inspected.
+        path: PathBuf,
+    },
+    /// A filesystem operation failed while inspecting the paired kernel.
+    #[error("OCI kernel pairing {operation} failed at {path}: {source}")]
+    KernelIo {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Kernel path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1827,6 +1881,11 @@ mod ext4;
 #[cfg(test)]
 mod ext4_tests;
 
+mod boot;
+
+#[cfg(test)]
+mod boot_tests;
+
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedBlob {
@@ -2303,6 +2362,50 @@ impl OciExt4Image {
     }
 }
 
+/// An ext4 image paired with the kernel and boot args a TemplateSpec needs.
+///
+/// Deliberately distinct from [`OciExt4Image`] so registration can require
+/// proof that an architecture-matched kernel was chosen. An OCI image
+/// supplies neither field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OciBootableImage {
+    rootfs: OciExt4Image,
+    kernel: PathBuf,
+    initrd: Option<PathBuf>,
+    boot_args: String,
+    architecture: Architecture,
+}
+
+impl OciBootableImage {
+    /// Packed ext4 this pair will boot.
+    pub fn rootfs(&self) -> &OciExt4Image {
+        &self.rootfs
+    }
+
+    /// Kernel path relative to the image root.
+    pub fn kernel(&self) -> &Path {
+        &self.kernel
+    }
+
+    /// Initrd path relative to the image root, if the paired kernel needs one.
+    ///
+    /// The current catalog pair does not: a module-less OCI tree cannot use
+    /// a distro initrd without losing the injected guest init.
+    pub fn initrd(&self) -> Option<&Path> {
+        self.initrd.as_deref()
+    }
+
+    /// Firecracker kernel command line recorded from the paired kernel.
+    pub fn boot_args(&self) -> &str {
+        &self.boot_args
+    }
+
+    /// Architecture the paired kernel was classified as.
+    pub fn architecture(&self) -> Architecture {
+        self.architecture
+    }
+}
+
 /// A verified static program cached on the host to become a guest's init.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolboxProgram {
@@ -2673,6 +2776,20 @@ pub async fn write_provisioned_ext4(
     destination: &Path,
 ) -> Result<OciExt4Image, ResolveError> {
     ext4::write_provisioned_ext4(rootfs, destination).await
+}
+
+/// Pairs a packed ext4 with this host's architecture-matched kernel and
+/// boot args.
+///
+/// `TemplateSpec` requires both; an OCI image supplies neither. The kernel
+/// is the catalog artifact for this architecture that needs no initrd —
+/// currently Ubuntu — and must already be installed under `image_root`.
+/// The ext4 is left in place. This stage does not register a template.
+pub fn pair_ext4_with_host_kernel(
+    image: OciExt4Image,
+    image_root: &Path,
+) -> Result<OciBootableImage, ResolveError> {
+    boot::pair_ext4_with_host_kernel(image, image_root)
 }
 
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
