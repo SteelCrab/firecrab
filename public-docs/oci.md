@@ -160,5 +160,6 @@ The injected init starts it after the sentinel. It is never PID 1.
 ## Related
 
 - [Images](images.md)
+- [Dashboard](dashboard.md)
 - [API](api.md)
 - [Storage](storage.md)

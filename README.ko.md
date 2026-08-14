@@ -36,8 +36,9 @@ microVM 환경을 위한 도구입니다. 호스팅 서비스나 멀티 호스�
 - **격리 네트워크 선택:** 명시적 **MicroNetwork**를 만들고 VM을 하나에 배치합니다. IPv4,
   MAC, hostname은 유지되며 네트워크끼리는 격리됩니다. VM별 인터넷 허용 또는 격리 egress를
   선택할 수 있습니다.
-- **이미지·디스크 관리:** 템플릿 설치·삭제, 임시 builder VM에서 지원 배포판 부트스트랩,
-  설정된 저장소 루트 또는 **MicroStorage** 풀에 VM 디스크 배치를 지원합니다.
+- **이미지·디스크 관리:** M2Image 템플릿 설치·삭제, 레지스트리에서 OCI 이미지 import,
+  임시 builder VM에서 지원 배포판 부트스트랩, 설정된 저장소 루트 또는 **MicroStorage**
+  풀에 VM 디스크 배치를 지원합니다.
 - **상태 확인:** 대시보드에서 시작 진행 상황, 콘솔 로그, 호스트 상태를 확인합니다. 대시보드는
   영어와 한국어를 지원합니다.
 - **작은 권한 범위:** API는 비특권으로 실행하며, 별도 `firecrab-net-helper`가 호스트
@@ -158,13 +159,18 @@ VM을 생성합니다. 아래 목록은 상태, 이미지, 리소스, ID를 3초
 
 **M2Image** 목록은 이미지별 크기와 `패키지 준비됨`·`설치됨` 같은 상태를 표시합니다. 행을 선택하면
 별칭, 버전, 최소 디스크, rootfs 크기, 상태와 해당 이미지를 사용하는 VM을 확인할 수 있습니다.
-오른쪽 `…` 메뉴에서는 상태에 따라 패키지 설치, 이미지 가져오기, 부트스트랩 또는 삭제 작업을
-수행합니다. VM 생성에는 설치된 이미지만 사용할 수 있습니다.
+오른쪽 `…` 메뉴에서는 상태에 따라 패키지 설치, 부트스트랩 또는 삭제 작업을 수행합니다.
+VM 생성에는 설치된 이미지만 사용할 수 있습니다.
+
+같은 화면에서 OCI 레퍼런스(`nginx:1.27`)가 이 호스트 아키텍처와 맞는지 검사한 뒤
+템플릿으로 import할 수 있습니다. import는 백그라운드 작업이며, 진행 상황·오류·등록된
+별칭을 페이지에서 보여 줍니다.
 
 ![M2Image 목록 화면](assets/dashboard/images.png)
 
 요청 형식, 생명주기 의미, 오류 envelope는 [API 가이드](public-docs/api.md)를, 이미지 패키지와
-브라우저 부트스트랩은 [이미지 가이드](public-docs/images.md)를 참고하세요.
+브라우저 부트스트랩은 [이미지 가이드](public-docs/images.md)를, OCI inspect·import는
+[OCI 이미지 가이드](public-docs/oci.md)를 참고하세요.
 
 ## 소스에서 개발
 
@@ -202,6 +208,19 @@ Rust 테스트는 다음처럼 실행합니다.
 ```sh
 cargo test --workspace
 ```
+
+OCI inspect → import 브라우저 E2E(로컬 레지스트리 fixture, Docker Hub 없음):
+
+```sh
+npm install --prefix firecrab-e2e
+npm run install-browsers --prefix firecrab-e2e
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
+```
+
+기대 결과는 1 passed, 1 skipped입니다.
+skip된 테스트는 VM을 만들어 부팅합니다. 플래그 없이 `npm test --prefix firecrab-e2e`를
+쓰려면 KVM, Firecracker, `./scripts/dev-net-helper.sh`가 필요합니다.
+자세한 내용은 [firecrab-e2e/README.md](firecrab-e2e/README.md)를 보세요.
 
 더 많은 개발 노트와 브라우저 워크플로는 [웹 대시보드 가이드](public-docs/dashboard.md)에 있습니다.
 

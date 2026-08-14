@@ -2,6 +2,7 @@
 
 An M2Image contains a kernel and root filesystem.
 It is the source template for new VM disks.
+A container image from a registry is imported separately; see [OCI images](oci.md).
 
 Supported aliases are `alpine-3.24.1`, `ubuntu-26.04`, and `rocky-9.8`.
 All three support x86_64 and ARM64. Rocky is exposed only through the
