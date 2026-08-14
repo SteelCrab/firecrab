@@ -99,7 +99,7 @@ fn static_program() -> Vec<u8> {
 
 /// Writes a program to disk and verifies it the way the pull path would.
 async fn toolbox(directory: &TempDir, name: &str, bytes: &[u8]) -> ToolboxProgram {
-    let path = directory.path().join(name);
+    let path: PathBuf = directory.path().join(name);
     std::fs::write(&path, bytes).expect("write toolbox fixture");
     busybox::inspect_toolbox(&path, Architecture::HOST)
         .await
