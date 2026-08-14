@@ -17,6 +17,25 @@ interface NetworkRow {
   name: string;
 }
 
+interface CatalogImageRow {
+  alias: string;
+  version: string;
+}
+
+export interface CatalogEntry {
+  alias: string;
+  version: string;
+  downloadable: boolean;
+  installed: boolean;
+  packageStaged: boolean;
+}
+
+export interface RegisterSnapshot {
+  alias: string;
+  status: string;
+  log: string;
+}
+
 export class ApiCleanup {
   constructor(private readonly base = apiUrl()) {}
 
@@ -60,6 +79,89 @@ export class ApiCleanup {
     return json as NetworkRow[];
   }
 
+  async listMicroregistry(): Promise<CatalogImageRow[]> {
+    const { status, json } = await this.request("GET", "/api/microregistry");
+    if (status >= 400 || !json || typeof json !== "object") return [];
+    const images = (json as { images?: unknown }).images;
+    if (!Array.isArray(images)) return [];
+    const rows: CatalogImageRow[] = [];
+    for (const image of images) {
+      if (!image || typeof image !== "object") continue;
+      const row = image as { alias?: unknown; version?: unknown };
+      if (typeof row.alias !== "string" || typeof row.version !== "string") continue;
+      rows.push({ alias: row.alias, version: row.version });
+    }
+    return rows;
+  }
+
+  async catalogEntry(alias: string): Promise<CatalogEntry | null> {
+    const { status, json } = await this.request("GET", "/api/microregistry");
+    if (status >= 400 || !json || typeof json !== "object") return null;
+    const images = (json as { images?: unknown }).images;
+    if (!Array.isArray(images)) return null;
+    for (const image of images) {
+      if (!image || typeof image !== "object") continue;
+      const row = image as {
+        alias?: unknown;
+        version?: unknown;
+        downloadable?: unknown;
+        installed?: unknown;
+        packageStaged?: unknown;
+      };
+      if (row.alias !== alias || typeof row.version !== "string") continue;
+      return {
+        alias,
+        version: row.version,
+        downloadable: row.downloadable === true,
+        installed: row.installed === true,
+        packageStaged: row.packageStaged === true,
+      };
+    }
+    return null;
+  }
+
+  async startRegister(
+    alias: string,
+    version: string,
+  ): Promise<{ status: number; json: unknown }> {
+    return this.request("POST", "/api/microregistry/register", { alias, version });
+  }
+
+  async getRegister(alias: string): Promise<RegisterSnapshot | null> {
+    const { status, json } = await this.request(
+      "GET",
+      `/api/microregistry/register/${encodeURIComponent(alias)}`,
+    );
+    if (status >= 400 || !json || typeof json !== "object") return null;
+    const body = json as { alias?: unknown; status?: unknown; log?: unknown };
+    if (typeof body.alias !== "string" || typeof body.status !== "string") return null;
+    return {
+      alias: body.alias,
+      status: body.status,
+      log: typeof body.log === "string" ? body.log : "",
+    };
+  }
+
+  async deleteStagedPackage(alias: string): Promise<void> {
+    await this.request("DELETE", `/api/images/${encodeURIComponent(alias)}/package`);
+  }
+
+  /**
+   * Best-effort local catalog delete. L3 is insert-only today, so this
+   * 404s until that layer grows a DELETE.
+   */
+  async deleteLocalCatalogRow(alias: string): Promise<boolean> {
+    const encoded = encodeURIComponent(alias);
+    for (const pathname of [
+      `/api/microregistry/${encoded}`,
+      `/api/microregistry/local/${encoded}`,
+    ]) {
+      const { status } = await this.request("DELETE", pathname);
+      if (status === 200 || status === 204) return true;
+    }
+    return false;
+  }
+
   async stopVm(id: string): Promise<void> {
     await this.request("POST", `/api/vms/${id}/stop`);
   }
@@ -90,9 +192,9 @@ export class ApiCleanup {
   }
 
   /** Stop + delete every VM this suite owns (by name or imported template). */
-  async deleteOwnedVms(alias: string): Promise<void> {
+  async deleteOwnedVms(alias: string, vmName = VM_NAME): Promise<void> {
     const vms = await this.listVms();
-    const owned = vms.filter((vm) => vm.name === VM_NAME || vm.template === alias);
+    const owned = vms.filter((vm) => vm.name === vmName || vm.template === alias);
     for (const vm of owned) {
       if (vm.state === "running" || vm.state === "starting" || vm.state === "stopping") {
         await this.stopVm(vm.id);
@@ -109,11 +211,14 @@ export class ApiCleanup {
     await this.deleteImage(alias);
   }
 
-  async deleteOwnedNetwork(createdNetworkId: string | null): Promise<void> {
+  async deleteOwnedNetwork(
+    createdNetworkId: string | null,
+    networkName = NETWORK_NAME,
+  ): Promise<void> {
     if (!createdNetworkId) return;
     const networks = await this.listNetworks();
     const row = networks.find((network) => network.id === createdNetworkId);
-    if (!row || row.name !== NETWORK_NAME) return;
+    if (!row || row.name !== networkName) return;
     await this.deleteNetwork(createdNetworkId);
   }
 }

@@ -33,6 +33,30 @@ export const NETWORK_NAME = "oci-e2e";
 /** Isolated subnet so this suite does not share a developer's default net. */
 export const NETWORK_CIDR = "172.30.90.0/24";
 
+/** Loopback port for the #108 register spec's OCI fixture. Distinct from {@link REGISTRY_PORT}. */
+export const REGISTER_REGISTRY_PORT = Number.parseInt(
+  process.env.FIRECRAB_OCI_REGISTER_E2E_PORT ?? "15556",
+  10,
+);
+
+/** Deterministic reference when the register fixture binds {@link REGISTER_REGISTRY_PORT}. */
+export const REGISTER_FIXED_REFERENCE = `127.0.0.1:${REGISTER_REGISTRY_PORT}/firecrab/e2e:ready`;
+
+/** Alias `POST /api/oci/import` claims for {@link REGISTER_FIXED_REFERENCE}. */
+export const REGISTER_FIXED_ALIAS = `127.0.0.1-${REGISTER_REGISTRY_PORT}-firecrab-e2e-ready`;
+
+/** Catalog version typed into the MicroRegistry register form. */
+export const REGISTER_VERSION = "1";
+
+/** VM created by the guest-boot half of the register suite. */
+export const REGISTER_VM_NAME = "register-e2e-ready";
+
+/** Dedicated MicroNetwork for the register guest-boot half. */
+export const REGISTER_NETWORK_NAME = "register-e2e";
+
+/** Isolated subnet so the register spec does not share {@link NETWORK_CIDR}. */
+export const REGISTER_NETWORK_CIDR = "172.30.91.0/24";
+
 export const DEFAULT_API_URL = "http://127.0.0.1:3000";
 export const DEFAULT_BASE_URL = "http://localhost:8080";
 

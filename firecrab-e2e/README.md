@@ -1,6 +1,6 @@
-# OCI import browser E2E
+# Browser E2E
 
-Isolated Playwright suite for [issue #90](https://github.com/SteelCrab/firecrab/issues/90).
+Isolated Playwright suite for [issue #90](https://github.com/SteelCrab/firecrab/issues/90) (OCI import) and [issue #108](https://github.com/SteelCrab/firecrab/issues/108) (MicroRegistry register).
 It drives the dashboard against a **local** OCI registry fixture.
 Nothing is pulled from Docker Hub.
 
@@ -44,6 +44,15 @@ Full path (KVM, `firecracker` on `PATH`, and a live net helper):
 ./scripts/dev-net-helper.sh    # other terminal; socket /run/firecrab/net-helper.sock
 npm test --prefix firecrab-e2e
 ```
+
+MicroRegistry register ([#108](https://github.com/SteelCrab/firecrab/issues/108)), skip guest boot:
+
+```sh
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm run test:register --prefix firecrab-e2e
+```
+
+Expect **2 passed, 2 skipped** (import + register/409; failed-job and reinstall/boot are product-gated).
+A leftover `127.0.0.1-15556-firecrab-e2e-ready` catalog row fails `beforeAll` until L3 grows a DELETE.
 
 Playwright starts `firecrab-api` on `:3000` and Vite on `:8080` unless those
 ports already answer.
