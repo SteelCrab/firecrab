@@ -556,6 +556,9 @@ $BB mount -t sysfs -o nosuid,nodev,noexec sysfs /sys 2>/dev/null
 $BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
 $BB mount -t tmpfs -o nosuid,nodev,mode=755 tmpfs /run 2>/dev/null
 
+# specialize_guest writes /etc/hostname; systemd would apply it, busybox init does not.
+[ -s /etc/hostname ] && $BB hostname -F /etc/hostname
+
 # Metrics first, so the dashboard has samples even when the network fails.
 $BB setsid $BB sh {agent} >/dev/null 2>&1 &
 

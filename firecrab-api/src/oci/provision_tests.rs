@@ -228,6 +228,10 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     assert!(boot.contains("FIRECRAB_NETWORK_READY $ipv4"));
     assert!(boot.contains("FIRECRAB_NETWORK_FAILED no-ipv4-address"));
     assert!(boot.contains("FIRECRAB_NETWORK_FAILED dns-unreachable"));
+    assert!(
+        boot.contains("[ -s /etc/hostname ] && $BB hostname -F /etc/hostname"),
+        "busybox init must apply specialize_guest's hostname: {boot}"
+    );
 
     // One source of truth for the FIRECRAB_USAGE format the host parses.
     assert_eq!(
