@@ -311,10 +311,21 @@ fn patch_oci_console(rootfs: &Path) {
         return;
     }
     let _ = run_debugfs(rootfs, "mkdir /etc/firecrab");
+    let agetty = crate::oci::provision::first_present(
+        crate::oci::provision::GUEST_AGETTY_CANDIDATES,
+        |path| guest_path_exists(rootfs, path),
+    );
+    if let Some(shell) =
+        crate::oci::provision::first_present(crate::oci::provision::GUEST_BASH_CANDIDATES, |path| {
+            guest_path_exists(rootfs, path)
+        })
+    {
+        set_image_root_shell(rootfs, shell);
+    }
     let _ = write_into_image(
         rootfs,
         "/etc/inittab",
-        crate::oci::provision::inittab().as_bytes(),
+        crate::oci::provision::inittab(agetty).as_bytes(),
     );
     let _ = write_into_image(
         rootfs,
@@ -328,6 +339,21 @@ fn patch_oci_console(rootfs: &Path) {
     );
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.console", "0100755");
+}
+
+fn set_image_root_shell(rootfs: &Path, shell: &str) {
+    let staging = rootfs.with_extension("passwd.tmp");
+    let current = if dump_from_image(rootfs, "/etc/passwd", &staging).is_ok() {
+        fs::read_to_string(&staging).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let _ = fs::remove_file(&staging);
+    let _ = write_into_image(
+        rootfs,
+        "/etc/passwd",
+        crate::oci::provision::rewrite_root_shell(&current, shell).as_bytes(),
+    );
 }
 
 /// Guest path for the Ubuntu/Rocky network readiness oneshot.
@@ -1065,11 +1091,38 @@ mod tests {
         let inittab = debugfs_cat(&rootfs, "/etc/inittab");
         assert!(
             inittab.contains("rc.console"),
-            "existing OCI disks must respawn the welcome console: {inittab}"
+            "without agetty the disk keeps the ash wrapper: {inittab}"
         );
         let console = debugfs_cat(&rootfs, "/etc/firecrab/rc.console");
         assert!(console.contains("cat /etc/motd"), "{console}");
         assert!(console.contains("fastfetch"), "{console}");
+    }
+
+    #[test]
+    fn specialize_guest_points_serial_console_at_agetty() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /bin").unwrap();
+        write_into_image(&rootfs, "/usr/sbin/agetty", b"agetty").unwrap();
+        write_into_image(&rootfs, "/bin/bash", b"bash").unwrap();
+        write_into_image(&rootfs, "/etc/passwd", b"root:x:0:0:root:/root:/bin/sh\n").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4()).unwrap();
+
+        let inittab = debugfs_cat(&rootfs, "/etc/inittab");
+        assert!(
+            inittab.contains("ttyS0::respawn:/usr/sbin/agetty"),
+            "{inittab}"
+        );
+        let passwd = debugfs_cat(&rootfs, "/etc/passwd");
+        assert!(
+            passwd.contains("root:x:0:0:root:/root:/bin/bash"),
+            "{passwd}"
+        );
     }
 
     /// A Firecracker process can be killed before the guest has cleanly

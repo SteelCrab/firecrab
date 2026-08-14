@@ -119,7 +119,10 @@ image boots on the same kernel command line every other template uses. It also
 installs a boot script that mounts `/proc`, `/sys`, `/dev` and `/run`, brings
 the interface up before asking for a lease, reports `FIRECRAB_NETWORK_READY`
 with the address it received or `FIRECRAB_NETWORK_FAILED` with a reason, and
-starts the metrics agent that reports guest CPU and memory. `/etc/firecrab/services.d` is created
+starts the metrics agent that reports guest CPU and memory. When the image
+ships util-linux `agetty` and bash, the serial console is
+`ttyS0 → agetty → login → bash`; otherwise the injected wrapper prints MOTD
+and drops into ash. `/etc/firecrab/services.d` is created
 empty for the image's own entrypoint, which a later stage translates into an
 ordinary service under that init rather than PID 1.
 

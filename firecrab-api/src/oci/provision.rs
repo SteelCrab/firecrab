@@ -37,8 +37,12 @@ pub(crate) const GUEST_TOOLBOX: &str = "/etc/firecrab/busybox";
 const GUEST_INITTAB: &str = "/etc/inittab";
 /// Boot script run once, before anything else the guest does.
 const GUEST_BOOT_SCRIPT: &str = "/etc/firecrab/rc.boot";
-/// Console wrapper: MOTD + fastfetch, then an interactive ash.
+/// Console wrapper used when the image has no agetty (MOTD + ash).
 const GUEST_CONSOLE_SCRIPT: &str = "/etc/firecrab/rc.console";
+/// util-linux getty, in the usual usr-merge locations.
+pub(crate) const GUEST_AGETTY_CANDIDATES: &[&str] = &["/sbin/agetty", "/usr/sbin/agetty"];
+/// Login shell for the serial console.
+pub(crate) const GUEST_BASH_CANDIDATES: &[&str] = &["/bin/bash", "/usr/bin/bash"];
 /// Welcome banner shown on the injected console (same text as catalog VMs).
 const GUEST_MOTD: &str = "/etc/motd";
 /// Lease hook busybox `udhcpc` calls to apply an address.
@@ -178,10 +182,14 @@ fn inject_blocking(
         install_symlink(tree, GUEST_INIT, GUEST_TOOLBOX, &mut unwind)?;
 
         control.check()?;
+        if let Some(shell) = first_existing(tree, GUEST_BASH_CANDIDATES) {
+            set_root_shell(tree, &shell)?;
+        }
+        ensure_securetty(tree, &mut unwind)?;
         install_file(
             tree,
             GUEST_INITTAB,
-            inittab().as_bytes(),
+            inittab(first_existing(tree, GUEST_AGETTY_CANDIDATES).as_deref()).as_bytes(),
             0o644,
             &mut unwind,
         )?;
@@ -609,16 +617,106 @@ fn guest_path_unusable(guest_path: &str, reason: GuestPathViolation) -> ResolveE
 ///
 /// Commands stay free of shell metacharacters on purpose: busybox init routes
 /// any command containing them through `/bin/sh -c`, which a distroless image
-/// does not have.
-pub(crate) fn inittab() -> String {
+/// does not have. When the image ships util-linux `agetty`, the serial
+/// console is `ttyS0 → agetty → login → bash`. Otherwise the injected
+/// wrapper still prints MOTD and drops into ash.
+pub(crate) fn inittab(agetty: Option<&str>) -> String {
+    let console = match agetty {
+        Some(path) => format!(
+            "ttyS0::respawn:{path} --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
+        ),
+        None => format!("::respawn:-{GUEST_TOOLBOX} sh {GUEST_CONSOLE_SCRIPT}"),
+    };
     format!(
         "# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).\n\
          ::sysinit:{GUEST_TOOLBOX} sh {GUEST_BOOT_SCRIPT}\n\
-         ::respawn:-{GUEST_TOOLBOX} sh {GUEST_CONSOLE_SCRIPT}\n\
+         {console}\n\
          ::ctrlaltdel:{GUEST_TOOLBOX} poweroff -f\n\
          ::shutdown:{GUEST_TOOLBOX} sync\n\
          ::restart:{GUEST_INIT}\n"
     )
+}
+
+/// First path among `candidates` for which `exists` is true.
+pub(crate) fn first_present<'a>(
+    candidates: &[&'a str],
+    exists: impl Fn(&str) -> bool,
+) -> Option<&'a str> {
+    candidates.iter().copied().find(|path| exists(path))
+}
+
+/// First existing regular file or symlink among `candidates`, as a guest path.
+pub(crate) fn first_existing(tree: &Path, candidates: &[&str]) -> Option<String> {
+    for path in candidates {
+        let host = tree.join(path.trim_start_matches('/'));
+        if host.is_file() || host.is_symlink() {
+            return Some((*path).to_owned());
+        }
+    }
+    None
+}
+
+/// Points root's login shell at `shell` so agetty/login start bash.
+fn set_root_shell(tree: &Path, shell: &str) -> Result<(), ResolveError> {
+    let path = tree.join("etc/passwd");
+    let current = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            String::from("root:x:0:0:root:/root:/bin/sh\n")
+        }
+        Err(source) => return Err(injection_io("read guest passwd", path, source)),
+    };
+    let rewritten = rewrite_root_shell(&current, shell);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|source| injection_io("create guest etc", parent.to_owned(), source))?;
+    }
+    fs::write(&path, rewritten).map_err(|source| injection_io("write guest passwd", path, source))
+}
+
+/// Ensures `/etc/securetty` lists ttyS0 so root may log in on the serial console.
+fn ensure_securetty(tree: &Path, unwind: &mut InjectedPaths) -> Result<(), ResolveError> {
+    let path = tree.join("etc/securetty");
+    match fs::read_to_string(&path) {
+        Ok(text) if text.lines().any(|line| line.trim() == "ttyS0") => Ok(()),
+        Ok(text) => {
+            let mut next = text;
+            if !next.ends_with('\n') && !next.is_empty() {
+                next.push('\n');
+            }
+            next.push_str("ttyS0\n");
+            fs::write(&path, next).map_err(|source| injection_io("update securetty", path, source))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            install_file(tree, "/etc/securetty", b"ttyS0\n", 0o644, unwind)
+        }
+        Err(source) => Err(injection_io("read securetty", path, source)),
+    }
+}
+
+/// Replaces the shell field on the root line of an `/etc/passwd` body.
+pub(crate) fn rewrite_root_shell(passwd: &str, shell: &str) -> String {
+    let mut out = String::new();
+    let mut seen_root = false;
+    for line in passwd.lines() {
+        if !seen_root && line.starts_with("root:") {
+            seen_root = true;
+            let mut fields: Vec<&str> = line.split(':').collect();
+            if fields.len() >= 7 {
+                fields[6] = shell;
+                out.push_str(&fields.join(":"));
+            } else {
+                out.push_str(&format!("root:x:0:0:root:/root:{shell}"));
+            }
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    if !seen_root {
+        out.push_str(&format!("root:x:0:0:root:/root:{shell}\n"));
+    }
+    out
 }
 
 /// Everything between the kernel handing off and the host seeing a sentinel.

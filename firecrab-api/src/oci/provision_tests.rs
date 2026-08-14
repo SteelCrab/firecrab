@@ -284,6 +284,80 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
 }
 
 #[tokio::test]
+async fn an_image_with_agetty_and_bash_uses_the_serial_getty() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "usr/sbin/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "usr/sbin/agetty",
+        EntryType::Regular,
+        None,
+        b"agetty",
+        0o755,
+    );
+    append_entry(&mut builder, "bin/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "bin/bash",
+        EntryType::Regular,
+        None,
+        b"bash",
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "etc/passwd",
+        EntryType::Regular,
+        None,
+        b"root:x:0:0:root:/root:/bin/sh\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n",
+        0o644,
+    );
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "getty", &finish(builder)).await;
+    let tree = merged.path().to_owned();
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("inject");
+
+    let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab");
+    assert!(
+        inittab.contains(
+            "ttyS0::respawn:/usr/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
+        ),
+        "{inittab}"
+    );
+    assert!(
+        !inittab.contains("rc.console"),
+        "agetty replaces the ash wrapper: {inittab}"
+    );
+    let passwd = String::from_utf8(read_guest(&tree, "/etc/passwd")).expect("passwd");
+    assert!(
+        passwd
+            .lines()
+            .any(|line| line.starts_with("root:") && line.ends_with(":/bin/bash")),
+        "root shell must be bash: {passwd}"
+    );
+    assert!(
+        passwd.contains("daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin"),
+        "other passwd lines must stay: {passwd}"
+    );
+    let securetty = String::from_utf8(read_guest(&tree, "/etc/securetty")).expect("securetty");
+    assert!(
+        securetty.lines().any(|line| line.trim() == "ttyS0"),
+        "{securetty}"
+    );
+}
+
+#[tokio::test]
 async fn the_injected_toolbox_is_named_busybox_so_the_multiplexer_runs() {
     let directory = tempdir().expect("create fixture directory");
     let program = static_program();
