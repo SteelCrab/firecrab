@@ -1,7 +1,7 @@
 use super::*;
 
 use std::io::Cursor;
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
 
 use tar::{Builder, EntryType, Header};
 use tempfile::{TempDir, tempdir};
@@ -1189,4 +1189,64 @@ async fn cache_entries_swapped_after_validation_are_rejected() {
     ));
     assert!(!destination.exists());
     assert_no_partial_trees(directory.path());
+}
+
+#[tokio::test]
+async fn character_and_block_devices_are_not_extracted_into_the_merged_tree() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "dev/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "dev/console",
+        EntryType::Char,
+        None,
+        &[],
+        0o666,
+    );
+    append_entry(&mut builder, "dev/sda", EntryType::Block, None, &[], 0o660);
+    append_entry(
+        &mut builder,
+        "etc/os-release",
+        EntryType::Regular,
+        None,
+        b"ID=linux\n",
+        0o644,
+    );
+    let layers = validate(vec![layer(&directory, "skip-devices", &finish(builder))]).await;
+    let destination = directory.path().join("skip-devices-rootfs");
+
+    merge_validated_layers(&layers, &destination)
+        .await
+        .expect("merge a layer that contains device nodes");
+
+    assert!(
+        std::fs::symlink_metadata(destination.join("dev"))
+            .expect("stat merged /dev")
+            .file_type()
+            .is_dir()
+    );
+    assert!(!destination.join("dev/console").exists());
+    assert!(!destination.join("dev/sda").exists());
+    assert_eq!(
+        std::fs::read(destination.join("etc/os-release")).unwrap(),
+        b"ID=linux\n"
+    );
+
+    let mut stack = vec![destination.clone()];
+    while let Some(path) = stack.pop() {
+        let file_type = std::fs::symlink_metadata(&path)
+            .expect("stat merged path")
+            .file_type();
+        assert!(
+            !file_type.is_char_device() && !file_type.is_block_device(),
+            "merged tree must not contain a device node at {}",
+            path.display()
+        );
+        if file_type.is_dir() {
+            for entry in std::fs::read_dir(&path).expect("read merged directory") {
+                stack.push(entry.expect("read merged directory entry").path());
+            }
+        }
+    }
 }

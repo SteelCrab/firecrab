@@ -61,7 +61,7 @@ At most two layer decoders run process-wide, and each zstd decoder has a 128 MiB
 Before extraction, the internal pipeline scans every decompressed tar using
 GNU long-name/link metadata and PAX overrides. Member names must be relative
 paths without parent components; only a directory may name the archive root
-as `.` or `./`. Character and block devices are rejected, as are unsupported special entries.
+as `.` or `./`. Character and block devices are skipped; unsupported special entries are rejected.
 Links must name a target; hard-link targets stay archive-root-relative.
 Regular whiteout files remain valid for the later merge stage.
 

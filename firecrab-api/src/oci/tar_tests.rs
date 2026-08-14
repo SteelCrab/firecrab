@@ -411,8 +411,6 @@ async fn parser_differential_pax_overrides_are_explicitly_rejected() {
 async fn device_and_other_special_nodes_are_rejected() {
     let directory = tempdir().expect("create fixture directory");
     for (name, entry_type, expected_reason) in [
-        ("character", EntryType::Char, TarMemberViolation::DeviceNode),
-        ("block", EntryType::Block, TarMemberViolation::DeviceNode),
         (
             "fifo",
             EntryType::Fifo,
@@ -461,6 +459,38 @@ async fn device_and_other_special_nodes_are_rejected() {
             ..
         } if key == "GNU.sparse.name"
     ));
+}
+
+#[tokio::test]
+async fn character_and_block_devices_are_skipped_and_keep_later_members_aligned() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(
+        &mut builder,
+        "dev/console",
+        EntryType::Char,
+        None,
+        b"ignored-char-payload",
+    );
+    append_entry(
+        &mut builder,
+        "dev/sda",
+        EntryType::Block,
+        None,
+        b"ignored-block-payload",
+    );
+    append_entry(
+        &mut builder,
+        "etc/os-release",
+        EntryType::Regular,
+        None,
+        b"ID=linux\n",
+    );
+    let layer = fixture_layer(&directory, "skip-devices", &finish(builder));
+    let validated = validate_decompressed_layers(vec![layer])
+        .await
+        .expect("character and block devices must be skipped during preflight");
+    assert_eq!(validated.len(), 1);
 }
 
 #[tokio::test]

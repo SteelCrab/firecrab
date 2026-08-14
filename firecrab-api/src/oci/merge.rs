@@ -426,6 +426,10 @@ fn plan_layer(
             continue;
         }
         let path = normalized_entry_path(&entry, digest, index + 1)?;
+        if entry_type.is_character_special() || entry_type.is_block_special() {
+            // Distro /dev nodes are not whiteouts, extracts, or merge paths.
+            continue;
+        }
         if !seen.insert(path.clone()) {
             return Err(unsafe_tar_member(
                 digest,
@@ -638,6 +642,10 @@ fn extract_non_directory_entries(
             continue;
         }
         let path = normalized_entry_path(&entry, digest, index + 1)?;
+        if entry_type.is_character_special() || entry_type.is_block_special() {
+            // unpack_in would write a regular file at dest/dev/console.
+            continue;
+        }
         if classify_whiteout(&entry, &path, digest)?.is_some()
             || entry_type.is_dir()
             || entry_type.is_hard_link()

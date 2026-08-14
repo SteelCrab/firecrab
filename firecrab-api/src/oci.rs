@@ -2642,9 +2642,6 @@ pub enum TarMemberViolation {
         "member path must be relative beneath the extraction root; only a directory may name the root itself"
     )]
     Path,
-    /// Character and block devices are never imported from an OCI layer.
-    #[error("device nodes are not permitted")]
-    DeviceNode,
     /// Only regular files, directories, symbolic links, and hard links are
     /// supported by the MVP extraction contract.
     #[error("tar entry type 0x{entry_type:02x} is not permitted")]
@@ -2884,8 +2881,9 @@ async fn decompress_cached_layers_with_parallelism(
 /// Validates every decompressed layer tar before any extraction may begin.
 ///
 /// Validation reads the effective GNU/PAX member paths, rejects member names
-/// and hard-link targets that leave an archive root, and permits only regular
-/// files, directories, symbolic links, and archive-root-confined hard links.
+/// and hard-link targets that leave an archive root, skips character and
+/// block device members, and permits only regular files, directories,
+/// symbolic links, and archive-root-confined hard links.
 /// Symbolic links remain inert at this stage; the later extractor must not
 /// follow one while creating another member. The input content-addressed tar
 /// remains cached when validation fails: unsafe contents do not make a
@@ -3247,13 +3245,10 @@ fn validate_layer_archive_file(
             ));
         }
         if entry_type.is_character_special() || entry_type.is_block_special() {
-            return Err(unsafe_tar_member(
-                compressed_digest,
-                member_path,
-                TarMemberViolation::DeviceNode,
-            ));
-        }
-        if entry_type.is_hard_link() {
+            // Distro root layers ship /dev/console and similar nodes. Skip
+            // them; drain below so a truncated payload is still malformed
+            // and later members stay aligned. Merge must not unpack them.
+        } else if entry_type.is_hard_link() {
             for target in pax_linkpaths {
                 if !is_safe_layer_member_bytes(&target) {
                     return Err(unsafe_tar_member(
@@ -3461,11 +3456,7 @@ fn validate_raw_tar_metadata<R: io::Read + io::Seek>(
             ));
         }
         if entry_type.is_character_special() || entry_type.is_block_special() {
-            return Err(unsafe_tar_member(
-                compressed_digest,
-                member_path,
-                TarMemberViolation::DeviceNode,
-            ));
+            continue;
         }
         if entry_type.is_hard_link() {
             if let Some(target) = entry
