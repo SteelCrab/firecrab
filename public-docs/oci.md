@@ -2,8 +2,8 @@
 
 firecrab can read a container image from a registry and report whether this
 host can run it.
-The internal pipeline can size a provisioned tree into an ext4 image and pair
-it with an architecture-matched kernel.
+The internal pipeline can size a provisioned tree into an ext4 image, pair
+it with an architecture-matched kernel, and derive an alias from the reference.
 Registering a template is still separate work.
 
 ## Inspect
@@ -152,16 +152,16 @@ This stage still pairs no kernel and registers nothing.
 ## Kernel pairing
 
 `TemplateSpec` needs a kernel and boot args; an OCI image carries neither.
-The packed ext4 is paired with this host's catalog kernel that has the
-Firecracker boot path built in and needs no initrd — currently Ubuntu.
-Alpine and Rocky keep those drivers as modules; their initrd would take
-PID 1 from the injected guest init. The kernel must already be installed.
-Its header is classified the same way registration classifies any kernel.
-A foreign architecture, an unbootable ELF, an unclassifiable file, or a
-symbolic link at the catalog path is refused.
-Boot args are that artifact's own command line.
-The ext4 is left in place; this stage still registers nothing.
-Each import stage stops where the next begins: inspect fills no cache, and pairing registers nothing.
+The packed ext4 is paired with this host's no-initrd catalog kernel — Ubuntu.
+A foreign architecture, an unbootable ELF, or a symbolic link is refused.
+
+## Name
+
+The alias is the repository and tag, with Docker Hub's `library/` dropped
+and slashes or ports turned into dashes — `nginx:1.27` becomes `nginx-1.27`.
+A digest pin keeps twelve hex characters in the alias and the full digest as the version.
+An alias that matches an installed image or a catalog name is refused.
+This stage still registers nothing.
 
 ## Related
 

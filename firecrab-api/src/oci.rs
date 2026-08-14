@@ -881,6 +881,20 @@ pub enum ResolveError {
         #[source]
         source: io::Error,
     },
+    /// The derived alias is already an installed or catalog image.
+    #[error("OCI import alias {alias} collides with installed image {occupant}")]
+    AliasCollision {
+        /// Alias derived from the reference.
+        alias: String,
+        /// Alias already claimed by the registry or catalog.
+        occupant: String,
+    },
+    /// The reference cannot be turned into a safe template alias.
+    #[error("OCI reference {reference} cannot be turned into a template alias")]
+    AliasUnusable {
+        /// Original reference text, for the operator.
+        reference: String,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1886,6 +1900,11 @@ mod boot;
 #[cfg(test)]
 mod boot_tests;
 
+mod name;
+
+#[cfg(test)]
+mod name_tests;
+
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedBlob {
@@ -2406,6 +2425,44 @@ impl OciBootableImage {
     }
 }
 
+/// Alias and version later registration can copy into a [`crate::templates::TemplateSpec`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OciTemplateName {
+    /// User-facing alias derived from the reference.
+    pub alias: String,
+    /// Version tag or digest pin from the reference.
+    pub version: String,
+}
+
+/// A bootable OCI image that has a unique alias and version.
+///
+/// Deliberately distinct from [`OciBootableImage`] so registration can require
+/// proof that the name was derived and does not collide with an installed
+/// image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedOciImage {
+    image: OciBootableImage,
+    alias: String,
+    version: String,
+}
+
+impl NamedOciImage {
+    /// Kernel, boot args, and packed ext4 this name will register.
+    pub fn image(&self) -> &OciBootableImage {
+        &self.image
+    }
+
+    /// Unique alias derived from the image reference.
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+
+    /// Version derived from the image reference's tag or digest.
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+}
+
 /// A verified static program cached on the host to become a guest's init.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolboxProgram {
@@ -2790,6 +2847,19 @@ pub fn pair_ext4_with_host_kernel(
     image_root: &Path,
 ) -> Result<OciBootableImage, ResolveError> {
     boot::pair_ext4_with_host_kernel(image, image_root)
+}
+
+/// Derives a unique alias and version from the reference and attaches them
+/// to a paired image.
+///
+/// An installed alias or a catalog alias is a collision and is refused.
+/// This stage does not register a template.
+pub fn name_oci_image(
+    image: OciBootableImage,
+    reference: &ImageReference,
+    templates: &crate::templates::TemplateRegistry,
+) -> Result<NamedOciImage, ResolveError> {
+    name::name_oci_image(image, reference, templates)
 }
 
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
