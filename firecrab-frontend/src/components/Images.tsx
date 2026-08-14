@@ -5,6 +5,7 @@ import type {
   BootstrapStepRun,
   ImageInstallResponse,
   ImageResponse,
+  MicroRegistryRegisterResponse,
   MicroRegistryResponse,
   OciInspectResponse,
   VmResponse,
@@ -20,6 +21,7 @@ import {
   getImageInstall,
   getImagePackage,
   getMicroRegistry,
+  getMicroRegistryRegisterJob,
   getOciImport,
   inspectOciImage,
   listImages,
@@ -27,6 +29,7 @@ import {
   startBootstrap,
   startImageInstall,
   startImagePackage,
+  startMicroRegistryRegister,
   startOciImport,
   stopVm,
 } from "../api/client";
@@ -129,10 +132,10 @@ function PackageDownloadProgress({
  * Do not let that older `idle`/`running` response erase the state returned by
  * the POST (or a terminal state for the same job).
  */
-function keepNewestJobSnapshot(
-  current: ImageInstallResponse | null | undefined,
-  incoming: ImageInstallResponse,
-): ImageInstallResponse {
+function keepNewestJobSnapshot<T extends ImageInstallResponse>(
+  current: T | null | undefined,
+  incoming: T,
+): T {
   if (!current) return incoming;
   if (incoming.status === "idle" && current.status !== "idle") return current;
   const currentStarted = current.startedAtMs;
@@ -381,14 +384,16 @@ function ImageJobLog({
   kind,
 }: {
   job: ImageInstallResponse;
-  kind: "download" | "import" | "oci";
+  kind: "download" | "import" | "oci" | "register";
 }) {
   const { t } = useI18n();
   const label = kind === "download"
     ? t("Package download log", "패키지 다운로드 로그")
     : kind === "oci"
       ? t("OCI import log", "OCI 가져오기 로그")
-      : t("Image import log", "이미지 가져오기 로그");
+      : kind === "register"
+        ? t("Register log", "등록 로그")
+        : t("Image import log", "이미지 가져오기 로그");
 
   return (
     <div className="subpanel">
@@ -935,6 +940,12 @@ export default function Images() {
   const [listError, setListError] = useState<string | null>(null);
   const [registry, setRegistry] = useState<MicroRegistryResponse | null>(null);
   const [registryError, setRegistryError] = useState<string | null>(null);
+  const [registerAlias, setRegisterAlias] = useState("");
+  const [registerVersion, setRegisterVersion] = useState("");
+  const [registerJob, setRegisterJob] = useState<MicroRegistryRegisterResponse | null>(null);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [registerStarting, setRegisterStarting] = useState(false);
+  const registerPollingRef = useRef<string | null>(null);
   const [busyAlias, setBusyAlias] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
@@ -1108,6 +1119,37 @@ export default function Images() {
     void tick();
   };
 
+  const pollRegister = (jobId: string) => {
+    if (registerPollingRef.current === jobId) return;
+    registerPollingRef.current = jobId;
+    const stop = () => {
+      if (registerPollingRef.current === jobId) registerPollingRef.current = null;
+    };
+    const tick = async () => {
+      if (!mountedRef.current) return stop();
+      try {
+        const latest = await getMicroRegistryRegisterJob(jobId);
+        if (!mountedRef.current) return stop();
+        setRegisterJob((current) => keepNewestJobSnapshot(current, latest));
+        if (latest.status === "running") {
+          setTimeout(() => void tick(), 400);
+          return;
+        }
+        stop();
+        if (latest.status === "succeeded") {
+          setRegisterError(null);
+          await refreshRegistry();
+        } else if (latest.status === "failed") {
+          setRegisterError(lastLogLine(latest.log, t("Register failed.", "등록에 실패했습니다.")));
+        }
+      } catch {
+        if (mountedRef.current) setTimeout(() => void tick(), 400);
+        else stop();
+      }
+    };
+    void tick();
+  };
+
   // 404는 취소로 삭제된 세션이라는 확정 신호(그만 폴링), 그 외 에러는
   // 일시적일 수 있으니 계속 폴링한다.
   const pollBootstrap = (bootstrapId: string) => {
@@ -1241,6 +1283,29 @@ export default function Images() {
       setActionError((error as Error).message);
     } finally {
       setBusyAlias(null);
+    }
+  };
+
+  const handleRegister = async (event: FormEvent) => {
+    event.preventDefault();
+    const alias = registerAlias;
+    const version = registerVersion.trim();
+    if (!alias || !version || registerStarting || registerJob?.status === "running") return;
+    setRegisterStarting(true);
+    setRegisterError(null);
+    try {
+      const started = await startMicroRegistryRegister({ alias, version });
+      if (!mountedRef.current) return;
+      setRegisterJob((current) => keepNewestJobSnapshot(current, started));
+      if (started.status === "failed") {
+        setRegisterError(lastLogLine(started.log, t("Register failed.", "등록에 실패했습니다.")));
+      }
+      pollRegister(started.jobId);
+    } catch (error) {
+      if (!mountedRef.current) return;
+      setRegisterError(error instanceof ApiClientError ? error.message : (error as Error).message);
+    } finally {
+      if (mountedRef.current) setRegisterStarting(false);
     }
   };
 
@@ -1382,6 +1447,82 @@ export default function Images() {
             "공개된 M2Image 패키지입니다. 다운로드는 이 호스트에서 검증하고, 설치는 준비된 로컬 패키지를 등록합니다.",
           )}
         </p>
+        <form className="create-grid" onSubmit={(event) => void handleRegister(event)}>
+          <div className="field">
+            <label htmlFor="microregistry-register-alias">{t("Image", "이미지")}</label>
+            <select
+              id="microregistry-register-alias"
+              value={registerAlias}
+              onChange={(event) => setRegisterAlias(event.target.value)}
+              disabled={registerStarting || registerJob?.status === "running"}
+            >
+              <option value="">
+                {(images ?? []).some((image) => image.installed)
+                  ? t("Select an installed image", "설치된 이미지를 선택하세요")
+                  : t("No installed images", "설치된 이미지가 없습니다")}
+              </option>
+              {(images ?? []).filter((image) => image.installed).map((image) => (
+                <option key={image.alias} value={image.alias}>
+                  {image.alias}{image.version ? ` · ${image.version}` : ""}
+                </option>
+              ))}
+            </select>
+            <span className="field-error" aria-hidden />
+          </div>
+          <div className="field">
+            <label htmlFor="microregistry-register-version">{t("Version", "버전")}</label>
+            <input
+              id="microregistry-register-version"
+              name="version"
+              value={registerVersion}
+              onChange={(event) => setRegisterVersion(event.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              disabled={registerStarting || registerJob?.status === "running"}
+            />
+            <span className="field-error" aria-hidden />
+          </div>
+          <div className="field">
+            <label htmlFor="microregistry-register-submit">&nbsp;</label>
+            <button
+              id="microregistry-register-submit"
+              className="btn"
+              type="submit"
+              disabled={!registerAlias || !registerVersion.trim() || registerStarting || registerJob?.status === "running"}
+            >
+              {registerStarting || registerJob?.status === "running"
+                ? t("Registering…", "등록 중…")
+                : t("Register", "등록")}
+            </button>
+            <span className="field-error" aria-hidden />
+          </div>
+        </form>
+        {registerError && (
+          <div style={{ margin: "1rem 0" }}>
+            <Banner kind="error" text={registerError} onDismiss={() => setRegisterError(null)} />
+          </div>
+        )}
+        {registerJob && registerJob.status !== "idle" && (
+          <>
+            <div className="subpanel">
+              <dl className="detail-fields mono">
+                <dt>{t("Register status", "등록 상태")}</dt>
+                <dd>
+                  <span className={`state-badge${jobStatusClass(registerJob.status)}`}>
+                    {registerJob.status === "running"
+                      ? t("Registering…", "등록 중…")
+                      : registerJob.status === "succeeded"
+                        ? t("Registered", "등록됨")
+                        : registerJob.status === "failed"
+                          ? t("Register failed", "등록 실패")
+                          : t("Idle", "대기")}
+                  </span>
+                </dd>
+              </dl>
+            </div>
+            <ImageJobLog job={registerJob} kind="register" />
+          </>
+        )}
         {registryError && <div className="field-error">{registryError}</div>}
         {registry === null && !registryError && (
           <div className="empty microregistry-empty">{t("Loading MicroRegistry…", "MicroRegistry 불러오는 중…")}</div>

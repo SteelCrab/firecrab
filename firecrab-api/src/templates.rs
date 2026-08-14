@@ -564,7 +564,18 @@ impl TemplateRegistry {
                     .as_ref()
                     .map(|artifact| artifact.relative_path()),
             )
-            .filter(|relative| !still_referenced.contains(*relative))
+            .filter(|relative| {
+                if still_referenced.contains(*relative) {
+                    return false;
+                }
+                // Catalog artifacts belong to their known_spec alias. An OCI
+                // import borrows the Ubuntu kernel; deleting that import must
+                // not take the kernel with it or the next import cannot pair.
+                match catalog_owner_of(relative) {
+                    Some(owner) if owner != removed.name => false,
+                    _ => true,
+                }
+            })
             .map(|relative| self.image_root_path.join(relative))
             .collect()
     }
@@ -719,6 +730,17 @@ impl TemplateRegistry {
 /// Whether every file a spec needs is already on disk. A cheap existence
 /// check only — [`TemplateRegistry::from_specs`] still opens each one safely
 /// beneath the image root and hashes it.
+/// Alias whose compiled-in spec names this relative artifact, if any.
+fn catalog_owner_of(relative: &Path) -> Option<String> {
+    default_specs().into_iter().find_map(|spec| {
+        let owned = std::iter::once(spec.kernel.as_path())
+            .chain(std::iter::once(spec.rootfs.as_path()))
+            .chain(spec.initrd.as_deref())
+            .any(|path| path == relative);
+        owned.then_some(spec.alias)
+    })
+}
+
 fn artifacts_present(image_root: &Path, spec: &TemplateSpec) -> bool {
     std::iter::once(&spec.kernel)
         .chain(std::iter::once(&spec.rootfs))
@@ -1401,6 +1423,69 @@ mod tests {
                 .any(|path| path.file_name().and_then(|n| n.to_str()) == Some("rootfs-a"))
         );
         assert!(registry.resolve_alias("b").is_some());
+    }
+
+    #[test]
+    fn unregistering_an_oci_alias_does_not_delete_the_catalog_kernel_it_borrowed() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let ubuntu = TemplateRegistry::known_spec("ubuntu-26.04").expect("ubuntu catalog spec");
+        if let Some(parent) = ubuntu.kernel.parent() {
+            fs::create_dir_all(root.join(parent)).unwrap();
+        }
+        fs::create_dir_all(root.join("rootfs")).unwrap();
+        fs::write(root.join(&ubuntu.kernel), b"catalog-kernel").unwrap();
+        fs::write(root.join("rootfs/nginx-1.27.ext4"), b"oci-rootfs").unwrap();
+        let registry = TemplateRegistry::from_specs(
+            root,
+            [TemplateSpec {
+                alias: "nginx-1.27".to_owned(),
+                version: "1.27".to_owned(),
+                kernel: ubuntu.kernel.clone(),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs/nginx-1.27.ext4"),
+                boot_args: ubuntu.boot_args.clone(),
+            }],
+        )
+        .unwrap();
+
+        let (_version, orphans) = registry.unregister_alias("nginx-1.27").unwrap();
+        assert!(
+            !orphans.iter().any(|path| path.ends_with(&ubuntu.kernel)),
+            "catalog kernel must stay for the next OCI import: {orphans:?}"
+        );
+        assert!(
+            orphans
+                .iter()
+                .any(|path| path.ends_with("rootfs/nginx-1.27.ext4")),
+            "the imported rootfs is this alias's own file: {orphans:?}"
+        );
+    }
+
+    #[test]
+    fn unregistering_the_catalog_alias_still_deletes_its_own_kernel() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let ubuntu = TemplateRegistry::known_spec("ubuntu-26.04").expect("ubuntu catalog spec");
+        if let Some(parent) = ubuntu.kernel.parent() {
+            fs::create_dir_all(root.join(parent)).unwrap();
+        }
+        if let Some(parent) = ubuntu.rootfs.parent() {
+            fs::create_dir_all(root.join(parent)).unwrap();
+        }
+        fs::write(root.join(&ubuntu.kernel), b"catalog-kernel").unwrap();
+        fs::write(root.join(&ubuntu.rootfs), b"catalog-rootfs").unwrap();
+        let registry = TemplateRegistry::from_specs(root, [ubuntu.clone()]).unwrap();
+
+        let (_version, orphans) = registry.unregister_alias("ubuntu-26.04").unwrap();
+        assert!(
+            orphans.iter().any(|path| path.ends_with(&ubuntu.kernel)),
+            "the catalog alias still owns its kernel: {orphans:?}"
+        );
+        assert!(
+            orphans.iter().any(|path| path.ends_with(&ubuntu.rootfs)),
+            "the catalog alias still owns its rootfs: {orphans:?}"
+        );
     }
 
     #[test]

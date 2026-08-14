@@ -210,15 +210,18 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     // The kernel execs /sbin/init when the command line carries no init=.
     assert_eq!(
         std::fs::read_link(tree.join("sbin/init")).expect("read /sbin/init"),
-        Path::new("firecrab-busybox")
+        Path::new(provision::GUEST_TOOLBOX)
     );
-    assert_eq!(read_guest(&tree, "/sbin/firecrab-busybox"), program);
-    assert_eq!(guest_mode(&tree, "/sbin/firecrab-busybox"), 0o755);
+    assert_eq!(read_guest(&tree, provision::GUEST_TOOLBOX), program);
+    assert_eq!(guest_mode(&tree, provision::GUEST_TOOLBOX), 0o755);
     assert_eq!(guest_mode(&tree, "/etc/firecrab/rc.boot"), 0o755);
     assert_eq!(guest_mode(&tree, "/etc/inittab"), 0o644);
 
     let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab is text");
-    assert!(inittab.contains("::sysinit:/sbin/firecrab-busybox sh /etc/firecrab/rc.boot"));
+    assert!(inittab.contains(&format!(
+        "::sysinit:{} sh /etc/firecrab/rc.boot",
+        provision::GUEST_TOOLBOX
+    )));
 
     // The host fails the VM start unless one of these reaches the console.
     let boot = String::from_utf8(read_guest(&tree, "/etc/firecrab/rc.boot")).expect("script");
@@ -242,6 +245,56 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     assert!(tree.join("etc/firecrab/services.d").is_dir());
     // The image's own files are left exactly as they were.
     assert_eq!(read_guest(&tree, "/app/server"), b"binary");
+}
+
+#[tokio::test]
+async fn the_injected_toolbox_is_named_busybox_so_the_multiplexer_runs() {
+    let directory = tempdir().expect("create fixture directory");
+    let program = static_program();
+    let toolbox = toolbox(&directory, "busybox", &program).await;
+    let merged = merged(&directory, "mux", &application_layer()).await;
+    let tree = merged.path().to_owned();
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("inject a guest runtime");
+
+    // busybox treats argv[0]'s basename as the applet. A program named
+    // firecrab-busybox prints "applet not found" and never runs DHCP.
+    let init = std::fs::read_link(tree.join("sbin/init")).expect("read /sbin/init");
+    assert_eq!(
+        init.file_name().and_then(|name| name.to_str()),
+        Some("busybox")
+    );
+    let toolbox_guest = if init.is_absolute() {
+        init.to_string_lossy().into_owned()
+    } else {
+        format!("/sbin/{}", init.display())
+    };
+    assert_eq!(read_guest(&tree, &toolbox_guest), program);
+
+    let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab");
+    assert!(
+        inittab.contains(&format!(
+            "::sysinit:{toolbox_guest} sh /etc/firecrab/rc.boot"
+        )),
+        "inittab must invoke the multiplexer by path: {inittab}"
+    );
+
+    let boot = String::from_utf8(read_guest(&tree, "/etc/firecrab/rc.boot")).expect("boot");
+    assert!(
+        boot.starts_with(&format!("#!{toolbox_guest} sh\n")),
+        "boot shebang must name the multiplexer: {boot}"
+    );
+
+    let dhcp = String::from_utf8(read_guest(&tree, "/etc/firecrab/dhcp.script")).expect("dhcp");
+    assert!(
+        dhcp.starts_with(&format!("#!{toolbox_guest} sh\n")),
+        "dhcp shebang must name the multiplexer: {dhcp}"
+    );
+    assert!(
+        dhcp.contains(r#"$BB ip addr add "$ip/${mask:-24}" dev "$interface""#),
+        "dhcp script must keep busybox parameter expansion: {dhcp}"
+    );
 }
 
 #[tokio::test]
@@ -327,10 +380,10 @@ async fn usr_merged_images_are_provisioned_through_their_symlinked_sbin() {
             .is_symlink(),
         "the image's own /sbin link is preserved"
     );
-    assert!(tree.join("usr/sbin/firecrab-busybox").is_file());
+    assert!(tree.join("etc/firecrab/busybox").is_file());
     assert_eq!(
         std::fs::read_link(tree.join("usr/sbin/init")).expect("read init link"),
-        Path::new("firecrab-busybox")
+        Path::new(provision::GUEST_TOOLBOX)
     );
 }
 
@@ -374,7 +427,7 @@ async fn an_image_supplied_init_is_replaced_without_touching_its_target() {
 
     assert_eq!(
         std::fs::read_link(tree.join("sbin/init")).expect("read init link"),
-        Path::new("firecrab-busybox")
+        Path::new(provision::GUEST_TOOLBOX)
     );
     // The final component is never followed, so the link was replaced rather
     // than written through onto systemd's own program.

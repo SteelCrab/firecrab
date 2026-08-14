@@ -13,6 +13,8 @@ import type {
   ImageResponse,
   OciImportRequest,
   OciInspectResponse,
+  MicroRegistryRegisterRequest,
+  MicroRegistryRegisterResponse,
   MicroRegistryResponse,
   MicroNetworkDetailResponse,
   MicroNetworkResponse,
@@ -146,6 +148,22 @@ export function listImages(): Promise<ImageResponse[]> {
 /** Published M2Image packages and this host's matching cache/install state. */
 export function getMicroRegistry(): Promise<MicroRegistryResponse> {
   return fetchJson("/api/microregistry");
+}
+
+/** Start a MicroRegistry register job (`POST /api/microregistry/register`). Returns 202 + snapshot. */
+export function startMicroRegistryRegister(
+  request: MicroRegistryRegisterRequest,
+): Promise<MicroRegistryRegisterResponse> {
+  return fetchJson("/api/microregistry/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+/** Poll a MicroRegistry register job (`GET /api/microregistry/jobs/{jobId}`). */
+export function getMicroRegistryRegisterJob(jobId: string): Promise<MicroRegistryRegisterResponse> {
+  return fetchJson(`/api/microregistry/jobs/${encodeURIComponent(jobId)}`);
 }
 
 /** Start package download + verification (`POST /api/images/{alias}/package`). */

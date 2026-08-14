@@ -19,6 +19,8 @@ export * from "./ImageResponse";
 export * from "./OciImportRequest";
 export * from "./OciInspectResponse";
 export * from "./MicroRegistryImageResponse";
+export * from "./MicroRegistryRegisterRequest";
+export * from "./MicroRegistryRegisterResponse";
 export * from "./MicroRegistryResponse";
 export * from "./PackageOrigin";
 export * from "./MicroNetworkBridge";

@@ -113,12 +113,13 @@ when it no longer passes. Operators can name a mirror with
 
 ## Guest activation
 
-Activation installs an init at `/sbin/init`, so the image boots on the same
-kernel command line every other template uses. It also installs a boot script
-that mounts `/proc`, `/sys`, `/dev` and `/run`, brings the interface up before
-asking for a lease, reports `FIRECRAB_NETWORK_READY` with the address it
-received or `FIRECRAB_NETWORK_FAILED` with a reason, and starts the metrics
-agent that reports guest CPU and memory. `/etc/firecrab/services.d` is created
+Activation installs an init at `/sbin/init` and the toolbox at
+`/etc/firecrab/busybox` (basename `busybox`, so the multiplexer runs), so the
+image boots on the same kernel command line every other template uses. It also
+installs a boot script that mounts `/proc`, `/sys`, `/dev` and `/run`, brings
+the interface up before asking for a lease, reports `FIRECRAB_NETWORK_READY`
+with the address it received or `FIRECRAB_NETWORK_FAILED` with a reason, and
+starts the metrics agent that reports guest CPU and memory. `/etc/firecrab/services.d` is created
 empty for the image's own entrypoint, which a later stage translates into an
 ordinary service under that init rather than PID 1.
 

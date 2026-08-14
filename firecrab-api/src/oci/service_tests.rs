@@ -69,7 +69,7 @@ fn installing_a_service_writes_env_workdir_and_exec_under_services_d() {
 
     let script = std::fs::read_to_string(rootfs.path().join("etc/firecrab/services.d/app"))
         .expect("read service");
-    assert!(script.starts_with("#!/sbin/firecrab-busybox sh\n"));
+    assert!(script.starts_with(&format!("#!{} sh\n", provision::GUEST_TOOLBOX)));
     assert!(script.contains("cd '/opt/app'"));
     assert!(script.contains("export PATH='/usr/bin'"));
     assert!(script.contains("export APP_ENV='prod'"));

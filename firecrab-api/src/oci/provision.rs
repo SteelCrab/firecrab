@@ -25,7 +25,14 @@ use std::sync::atomic::{AtomicU8, Ordering};
 /// `root=/dev/vda rw` command line every template already uses.
 const GUEST_INIT: &str = "/sbin/init";
 /// Guest path of the injected toolbox program.
-const GUEST_TOOLBOX: &str = "/sbin/firecrab-busybox";
+///
+/// The last component **must** be `busybox`. busybox is a multi-call binary:
+/// `argv[0]`'s basename is the applet. A name such as `firecrab-busybox` is
+/// not an applet, so every inittab and shebang invocation prints
+/// `firecrab-busybox: applet not found` and DHCP never runs. The path lives
+/// under `/etc/firecrab/` so an image that already ships `/bin/busybox` or
+/// `/sbin/busybox` keeps its own copy.
+pub(crate) const GUEST_TOOLBOX: &str = "/etc/firecrab/busybox";
 /// busybox init reads its job table from here.
 const GUEST_INITTAB: &str = "/etc/inittab";
 /// Boot script run once, before anything else the guest does.
@@ -164,7 +171,7 @@ fn inject_blocking(
 
         control.check()?;
         install_program(tree, GUEST_TOOLBOX, toolbox.path(), &mut unwind)?;
-        install_symlink(tree, GUEST_INIT, "firecrab-busybox", &mut unwind)?;
+        install_symlink(tree, GUEST_INIT, GUEST_TOOLBOX, &mut unwind)?;
 
         control.check()?;
         install_file(
@@ -184,7 +191,7 @@ fn inject_blocking(
         install_file(
             tree,
             GUEST_DHCP_SCRIPT,
-            DHCP_SCRIPT.as_bytes(),
+            dhcp_script().as_bytes(),
             0o755,
             &mut unwind,
         )?;
@@ -611,9 +618,11 @@ exit 0
 ///
 /// The lease arrives in the environment, not in arguments. `mask` is a prefix
 /// length in busybox, unlike the dotted `subnet` beside it.
-const DHCP_SCRIPT: &str = r#"#!/sbin/firecrab-busybox sh
+fn dhcp_script() -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
 # Firecrab guest DHCP hook for an imported OCI image (public-docs/oci.md).
-BB=/sbin/firecrab-busybox
+BB={GUEST_TOOLBOX}
 
 case "$1" in
   deconfig)
@@ -622,7 +631,7 @@ case "$1" in
     ;;
   bound|renew)
     $BB ip addr flush dev "$interface" 2>/dev/null
-    $BB ip addr add "$ip/${mask:-24}" dev "$interface" 2>/dev/null
+    $BB ip addr add "$ip/${{mask:-24}}" dev "$interface" 2>/dev/null
     $BB ip link set "$interface" up 2>/dev/null
     for gateway in $router; do
       $BB ip route add default via "$gateway" dev "$interface" 2>/dev/null
@@ -638,4 +647,6 @@ case "$1" in
     ;;
 esac
 exit 0
-"#;
+"#
+    )
+}
