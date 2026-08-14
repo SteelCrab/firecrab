@@ -25,6 +25,7 @@ Every page covers one topic.
 | Bridges, DHCP, NAT, and policy | [Networking](networking.md) |
 | VM disk placement | [Storage](storage.md) |
 | Kernel and rootfs templates | [Images](images.md) |
+| Release upload to R2 | [Publish to Cloudflare R2](publish.md) |
 | OCI inspect and import | [OCI images](oci.md) |
 | Services and maintenance | [Operations](operations.md) |
 | Failure checks | [Troubleshooting](troubleshooting.md) |

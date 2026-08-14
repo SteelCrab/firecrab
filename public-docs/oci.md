@@ -152,6 +152,7 @@ This stage still pairs no kernel and registers nothing.
 The packed ext4 is paired with this host's no-initrd catalog kernel — Ubuntu.
 The alias is the repository and tag — `nginx:1.27` becomes `nginx-1.27`.
 A catalog or installed alias is refused; the ext4 is copied to `rootfs/<alias>.ext4`.
+That local template is not a MicroRegistry row; register it as in [Images](images.md) and [API](api.md).
 
 ## Service
 

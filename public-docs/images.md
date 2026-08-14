@@ -98,23 +98,7 @@ when compatibility changes (for example `rocky-9.8` to `rocky-9.9`); bump only
 
 ## Publish to Cloudflare R2
 
-Configure an `rclone` S3 remote with provider `Cloudflare`, then publish the
-complete two-architecture release. A dry run validates every package and
-prints all destination object keys.
-
-```sh
-R2_BUCKET=firecrab-registry R2_REMOTE=r2 \
-  ./scripts/publish-m2images-r2.sh --dry-run
-
-R2_BUCKET=firecrab-registry R2_REMOTE=r2 \
-  ./scripts/publish-m2images-r2.sh
-```
-
-Packages are uploaded before `catalog.json`; the catalog is the publication
-commit point. The script requires every manifest alias for both architectures
-to prevent a partial release from replacing the public catalog. Wrangler v4
-is available as a fallback with `--backend wrangler`, but its 315 MB upload
-limit makes `rclone` the normal choice for compressed rootfs packages.
+Release packages are uploaded with [rclone to Cloudflare R2](publish.md).
 
 ## Bootstrap
 
@@ -150,9 +134,15 @@ Restart the API after replacing files outside the API workflow.
 
 ## Register
 
-A locally installed custom alias can join this host's SQLite catalog via `POST /api/microregistry/register`.
-Success packs `{alias}.tar.zst` (`kernel/…`, `rootfs/…`, optional initrd, `kernel/.firecrab-template.json`). A foreign or unsupported kernel fails the job with no row or archive; an unclassifiable kernel is still accepted.
-Poll `GET /api/microregistry/register/{alias}`; a success survives restart. A catalog outage still lists local rows (`source` is the attempted URL, or empty if unset); with none, GET stays 503.
+Register when an installed custom alias should appear in this host's MicroRegistry list.
+`POST /api/microregistry/register` packs the template and writes a SQLite catalog row on this host.
+The row is not published to any remote registry, including `registry.firecrab.dev`.
+Success stages `{alias}.tar.zst` locally and the listing marks the row `downloadable`.
+Remote Download and Install still accept only release aliases, so they do not reinstall that custom row.
+A foreign or unsupported kernel fails the job with no row or archive.
+An unclassifiable kernel is still accepted.
+A success survives restart.
+A catalog outage still lists the local rows.
 
 ## Add an alias
 
@@ -164,6 +154,7 @@ For a new distribution family, add its manifest entry and builder, then update:
 ## Related
 
 - [OCI images](oci.md)
+- [Publish to Cloudflare R2](publish.md)
 - [Installation](installation.md)
 - [API](api.md)
 - [Operations](operations.md)

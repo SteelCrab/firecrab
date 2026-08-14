@@ -89,9 +89,11 @@ The response has status `201` and includes the VM UUID.
 
 ## MicroRegistry
 
-`GET /api/microregistry` lists published packages for this host plus locally registered custom aliases.
+`GET /api/microregistry` lists host-arch release packages plus locally registered custom aliases.
 A successful register is stored in SQLite and survives restart.
-If the public catalog is unreachable or consume is disabled, GET still returns those local rows. `source` is the attempted catalog URL, or empty when the URL is unset. With no local rows the response stays 503.
+If the public catalog is unreachable or consume is disabled, GET still returns those local rows.
+`source` is the attempted catalog URL, or empty when the URL is unset.
+With no local rows the response stays 503.
 
 Register an already-installed custom image.
 
@@ -101,13 +103,21 @@ curl -s -X POST http://127.0.0.1:3000/api/microregistry/register \
   -d '{"alias":"nginx-1.27","version":"1"}'
 ```
 
-Poll `GET /api/microregistry/register/{alias}` for the same `ImageInstallResponse` package install uses.
+The JSON body is `alias` (installed template) and `version` (operator catalog version).
+The response is `202` with `ImageInstallResponse`: `alias`, `status`, `log`, and optional `startedAtMs` / `endedAtMs`.
+Register jobs omit `downloadedBytes` and `totalBytes`.
+`status` starts as `running` and becomes `succeeded` or `failed`.
+Poll `GET /api/microregistry/register/{alias}` for the latest snapshot; an unknown alias is `idle`.
 An empty alias or version is `400 validation_failed`.
-An unknown, uninstalled, or internal alias is `404`.
-A catalog alias or a second register of the same local alias is `409 alias_collision`.
-A running job for that alias is `409 register_in_progress`.
-Local rows carry `{alias}.tar.zst` and its SHA-256 after a successful pack.
-A foreign-architecture or unsupported ELF kernel fails the job: no catalog row and no staged archive.
+An unknown, uninstalled, or `__microboot` alias is `404`.
+`409 alias_collision` means the alias is already in the public catalog for this host, or a local row already exists.
+When the public catalog is unreachable or consume is disabled, the built-in release aliases still collide.
+`409 register_in_progress` means a register job is already running for that alias.
+Success packs `{alias}.tar.zst` (`kernel/…`, `rootfs/…`, optional initrd, `kernel/.firecrab-template.json`) and records its SHA-256.
+The row is not published to any remote registry.
+`GET /api/microregistry` then sets `downloadable` on that row.
+`POST /api/images/{alias}/package` and `/install` still accept only release aliases, so Download does not reinstall a custom row.
+A foreign-architecture or unsupported kernel fails the job: no catalog row and no staged archive.
 An unclassifiable kernel is still accepted.
 
 ## VM states
