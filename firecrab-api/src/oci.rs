@@ -1148,13 +1148,13 @@ impl RegistrySession {
             let issued = read_token_body(response).await?;
             let issued: TokenResponse = serde_json::from_slice(&issued)
                 .map_err(|error| ResolveError::Authentication(error.to_string()))?;
-            if issued.token.is_empty() {
+            let Some(token) = issued.issued().map(str::to_owned) else {
                 return Err(ResolveError::Authentication(
                     "token endpoint returned an empty token".to_owned(),
                 ));
-            }
-            *stored = Some(issued.token.clone());
-            issued.token
+            };
+            *stored = Some(token.clone());
+            token
         };
         drop(stored);
 
@@ -1957,6 +1957,9 @@ mod service;
 
 #[cfg(test)]
 mod service_tests;
+
+#[cfg(test)]
+pub(crate) mod registry_fixture;
 
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3872,10 +3875,28 @@ async fn cache_image_blobs_with_parallelism(
 }
 
 /// A registry token endpoint's answer.
+///
+/// The distribution spec allows `token` and `access_token`. Docker Hub
+/// sends both with the same value. A serde `alias` would treat that as a
+/// duplicate field and reject the body.
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
-    #[serde(alias = "access_token")]
-    token: String,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    access_token: Option<String>,
+}
+
+impl TokenResponse {
+    /// The bearer secret to send back to the registry.
+    fn issued(&self) -> Option<&str> {
+        let token = self.token.as_deref().filter(|value| !value.is_empty());
+        let access = self
+            .access_token
+            .as_deref()
+            .filter(|value| !value.is_empty());
+        token.or(access)
+    }
 }
 
 /// One path component, per the distribution spec: lowercase alphanumerics
@@ -4094,7 +4115,20 @@ mod tests {
         let response: TokenResponse =
             serde_json::from_slice(br#"{"access_token":"issued-token"}"#).unwrap();
 
-        assert_eq!(response.token, "issued-token");
+        assert_eq!(response.issued().unwrap(), "issued-token");
+    }
+
+    /// Docker Hub's auth.docker.io answers with both `token` and
+    /// `access_token`. Treating the latter as a serde alias for the former
+    /// rejects that body as a duplicate field.
+    #[test]
+    fn token_response_accepts_token_and_access_token_together() {
+        let response: TokenResponse = serde_json::from_slice(
+            br#"{"token":"issued-token","access_token":"issued-token","expires_in":300}"#,
+        )
+        .expect("Docker Hub sends both names");
+
+        assert_eq!(response.issued().unwrap(), "issued-token");
     }
 
     #[tokio::test]
