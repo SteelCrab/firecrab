@@ -151,17 +151,17 @@ This stage still pairs no kernel and registers nothing.
 
 ## Kernel pairing
 
-`TemplateSpec` needs a kernel and boot args; an OCI image carries neither.
 The packed ext4 is paired with this host's no-initrd catalog kernel — Ubuntu.
 A foreign architecture, an unbootable ELF, or a symbolic link is refused.
 
 ## Name
 
-The alias is the repository and tag, with Docker Hub's `library/` dropped
-and slashes or ports turned into dashes — `nginx:1.27` becomes `nginx-1.27`.
-A digest pin keeps twelve hex characters in the alias and the full digest as the version.
+The alias is the repository and tag — `nginx:1.27` becomes `nginx-1.27`.
 An alias that matches an installed image or a catalog name is refused.
-This stage still registers nothing.
+
+## Register
+
+The packed ext4 is copied to `rootfs/<alias>.ext4` and registered; a failure deletes that file.
 
 ## Related
 
