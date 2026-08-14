@@ -870,6 +870,40 @@ pub struct ImageInstallResponse {
     pub total_bytes: Option<u64>,
 }
 
+/// What `GET /api/oci/inspect` resolved a reference to on this host.
+///
+/// Metadata only: the response names the manifest this host would pull and
+/// the alias `POST /api/oci/import` will claim. It does not start an import.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OciInspectResponse {
+    /// Registry host the reference resolved to.
+    pub registry: String,
+    /// Repository path, with Docker Hub's implicit `library/` filled in.
+    pub repository: String,
+    /// The tag or digest that was resolved.
+    pub version: String,
+    /// Whether that version can never be repointed at other content.
+    pub immutable: bool,
+    /// Digest of the manifest this host would pull.
+    pub digest: String,
+    /// The architecture that manifest runs, as a catalog label.
+    pub architecture: String,
+    /// True when the registry answered with a manifest rather than an index,
+    /// so no per-platform selection took place.
+    pub single_platform: bool,
+    /// Template alias `POST /api/oci/import` will claim for this reference.
+    pub alias: String,
+}
+
+/// Request body for `POST /api/oci/import`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OciImportRequest {
+    /// An image reference as typed at a `docker pull`, e.g. `nginx:1.27`.
+    pub reference: String,
+}
+
 /// Lifecycle of one from-scratch distro bootstrap session (`handlers::bootstrap`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1260,6 +1294,41 @@ mod tests {
             "http://127.0.0.1:8765/ubuntu-26.04.tar.zst"
         );
         assert!(json.get("initrdSha256").is_none());
+    }
+
+    #[test]
+    fn oci_inspect_response_serializes_camel_case() {
+        let response = OciInspectResponse {
+            registry: "registry-1.docker.io".to_owned(),
+            repository: "library/nginx".to_owned(),
+            version: "1.27".to_owned(),
+            immutable: false,
+            digest: format!("sha256:{}", "a".repeat(64)),
+            architecture: "x86_64".to_owned(),
+            single_platform: false,
+            alias: "nginx-1.27".to_owned(),
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["singlePlatform"], false);
+        assert_eq!(json["alias"], "nginx-1.27");
+        assert_eq!(json["immutable"], false);
+        assert_eq!(
+            serde_json::from_value::<OciInspectResponse>(json).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn oci_import_request_round_trips_camel_case() {
+        let request = OciImportRequest {
+            reference: "nginx:1.27".to_owned(),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(json, r#"{"reference":"nginx:1.27"}"#);
+        assert_eq!(
+            serde_json::from_str::<OciImportRequest>(&json).unwrap(),
+            request
+        );
     }
 
     #[test]
