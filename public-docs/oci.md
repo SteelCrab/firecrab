@@ -2,8 +2,9 @@
 
 firecrab can read a container image from a registry and report whether this
 host can run it.
-The internal pipeline can size a provisioned tree into an ext4 image.
-Pairing a kernel and registering a template are still separate work.
+The internal pipeline can size a provisioned tree into an ext4 image and pair
+it with an architecture-matched kernel.
+Registering a template is still separate work.
 
 ## Inspect
 
@@ -59,8 +60,8 @@ process-wide, and each zstd decoder has a 128 MiB window limit.
 Before extraction, the internal pipeline scans every decompressed tar using
 GNU long-name/link metadata and PAX overrides. Member names must be relative
 paths without parent components; only a directory may name the archive root
-as `.` or `./`. Character and block devices are
-rejected, as are unsupported special entries. Links must name a target;
+as `.` or `./`. Character and block devices are rejected, as are unsupported
+special entries. Links must name a target;
 hard-link targets are archive-root-relative and cannot be absolute or contain
 parent components. Regular whiteout files remain valid for the later merge
 stage.
@@ -125,11 +126,10 @@ empty for the image's own entrypoint, which a later stage translates into an
 ordinary service under that init rather than PID 1.
 
 Images that place `/sbin` or `/etc` behind a symbolic link are activated
-through it, because most distribution images link `/sbin` at `/usr/sbin`.
-Resolution is clamped to the tree, so a link naming a host path is followed
-inside the tree and never out of it, and an entry already occupying a guest
-path is replaced without writing through it. A failed activation restores every
-path it touched and leaves the merged tree as it found it.
+through it.
+Resolution is clamped to the tree, and an entry already occupying a guest
+path is replaced without writing through it.
+A failed activation restores every path it touched.
 
 ## Ext4 image
 
@@ -145,17 +145,23 @@ One image is limited to 32 GiB by default; operators can change this with
 
 The file is created sparse, formatted with `mkfs.ext4 -d`, and published
 only after `tune2fs` shows free space remains.
-A full image, a failed format, or a destination that already exists is an
-error, and a partial file is removed.
-The provisioned tree is left in place.
+A full image, a failed format, or an existing destination is an error;
+the partial file is removed and the provisioned tree is left in place.
 This stage still pairs no kernel and registers nothing.
 
-Registry inspection, raw blob caching, decompression, safety validation, merge,
-guest activation, and ext4 sizing remain distinct import stages.
-`GET /api/oci/inspect` stops at metadata and fills no OCI cache;
-caching and decompression do not publish a merged tree;
-activation does not write an ext4 image;
-ext4 sizing pairs no kernel and registers nothing.
+## Kernel pairing
+
+`TemplateSpec` needs a kernel and boot args; an OCI image carries neither.
+The packed ext4 is paired with this host's catalog kernel that has the
+Firecracker boot path built in and needs no initrd — currently Ubuntu.
+Alpine and Rocky keep those drivers as modules; their initrd would take
+PID 1 from the injected guest init. The kernel must already be installed.
+Its header is classified the same way registration classifies any kernel.
+A foreign architecture, an unbootable ELF, an unclassifiable file, or a
+symbolic link at the catalog path is refused.
+Boot args are that artifact's own command line.
+The ext4 is left in place; this stage still registers nothing.
+Each import stage stops where the next begins: inspect fills no cache, and pairing registers nothing.
 
 ## Related
 
