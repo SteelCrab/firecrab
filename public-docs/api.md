@@ -90,6 +90,8 @@ The response has status `201` and includes the VM UUID.
 ## MicroRegistry
 
 `GET /api/microregistry` lists published packages for this host plus locally registered custom aliases.
+A successful register is stored in SQLite and survives restart.
+If the public catalog is unreachable or consume is disabled, GET still returns those local rows. `source` is the attempted catalog URL, or empty when the URL is unset. With no local rows the response stays 503.
 
 Register an already-installed custom image.
 
@@ -104,7 +106,7 @@ An empty alias or version is `400 validation_failed`.
 An unknown, uninstalled, or internal alias is `404`.
 A catalog alias or a second register of the same local alias is `409 alias_collision`.
 A running job for that alias is `409 register_in_progress`.
-Local rows carry `{alias}.tar.zst` and its SHA-256, and are not downloadable.
+Local rows carry `{alias}.tar.zst` and its SHA-256 after a successful pack.
 
 ## VM states
 

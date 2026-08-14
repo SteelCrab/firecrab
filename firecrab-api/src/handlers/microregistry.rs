@@ -6,9 +6,9 @@
 //! on the existing `/api/images/{alias}/package` endpoint, which verifies the
 //! per-distribution checksum before an archive becomes installable.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
@@ -23,8 +23,9 @@ use serde::Deserialize;
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::image_install::{self, Architecture, ImageInstallTracker};
+use crate::persistence::{LocalCatalogEntry, Store};
 use crate::server::RequestId;
-use crate::state::{AppState, LocalCatalogEntry};
+use crate::state::AppState;
 use crate::templates::TemplateRegistry;
 
 const CATALOG_MAX_BYTES: usize = 256 * 1024;
@@ -62,11 +63,6 @@ where
             "version must be a non-empty string or unsigned integer",
         )),
     }
-}
-
-fn unavailable(request_id: RequestId, detail: impl std::fmt::Display) -> AppError {
-    tracing::warn!(request_id = %request_id.0, error = %detail, "MicroRegistry catalog request failed");
-    AppError::unavailable("MicroRegistry catalog is unavailable", request_id.0)
 }
 
 /// Smallest disk (GiB) that can hold `rootfs_bytes`, matching `images.rs`.
@@ -121,95 +117,44 @@ fn is_leap_year(year: u64) -> bool {
     year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
+fn catalog_source_url(base_url: &str) -> String {
+    format!("{}/catalog.json", base_url.trim_end_matches('/'))
+}
+
 fn local_catalog_image(
     templates: &TemplateRegistry,
     image_root: &Path,
     entry: &LocalCatalogEntry,
 ) -> MicroRegistryImageResponse {
-    let installed = templates.resolve_alias(&entry.alias);
-    let min_disk_gb = installed
-        .as_ref()
-        .map(|template| min_disk_gb_for(template.rootfs.length()))
-        .unwrap_or(0);
     MicroRegistryImageResponse {
-        installed: installed.is_some(),
+        installed: templates.resolve_alias(&entry.alias).is_some(),
         package_staged: image_install::staged_package_exists(image_root, &entry.alias),
         package_origin: image_install::staged_package_origin(image_root, &entry.alias),
-        downloadable: false,
+        downloadable: !entry.package.is_empty() && !entry.sha256.is_empty(),
         alias: entry.alias.clone(),
         version: entry.version.clone(),
         package: entry.package.clone(),
         sha256: entry.sha256.clone(),
-        min_disk_gb,
+        min_disk_gb: entry.min_disk_gb,
         published_at: entry.published_at.clone(),
     }
 }
 
-/// `GET /api/microregistry`: supported published packages plus this host's
-/// local install/cache state. Entries outside the release manifest are hidden
-/// because this Firecrab build cannot validate or install them. Locally
-/// registered custom aliases are appended after the public filters so a
-/// catalog refresh cannot drop them.
-pub async fn list_microregistry(
-    State(state): State<AppState>,
-    axum::Extension(request_id): axum::Extension<RequestId>,
-) -> Result<Json<MicroRegistryResponse>, AppError> {
-    let Some(base_url) = state.image_packages.base_url().map(str::to_owned) else {
-        return Err(AppError::unavailable(
-            "MicroRegistry is disabled by FIRECRAB_IMAGE_BASE_URL",
-            request_id.0,
-        ));
-    };
-    let source = format!("{}/catalog.json", base_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|error| unavailable(request_id, error))?;
-    let mut response = client
-        .get(&source)
-        .send()
-        .await
-        .map_err(|error| unavailable(request_id, error))?
-        .error_for_status()
-        .map_err(|error| unavailable(request_id, error))?;
-
-    if response
-        .content_length()
-        .is_some_and(|length| length > CATALOG_MAX_BYTES as u64)
-    {
-        return Err(unavailable(
-            request_id,
-            "catalog content-length exceeds limit",
-        ));
-    }
-
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| unavailable(request_id, error))?
-    {
-        if body.len().saturating_add(chunk.len()) > CATALOG_MAX_BYTES {
-            return Err(unavailable(request_id, "catalog body exceeds limit"));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    let catalog: Catalog =
-        serde_json::from_slice(&body).map_err(|error| unavailable(request_id, error))?;
-
-    let templates = state.templates.clone();
-    let image_root = templates.image_root_path().to_owned();
-    let mut images = catalog
+fn public_catalog_images(
+    catalog: Catalog,
+    templates: &TemplateRegistry,
+    image_root: &Path,
+) -> Vec<MicroRegistryImageResponse> {
+    catalog
         .images
         .into_iter()
         .filter(|image| image.architecture == Architecture::HOST)
         .filter(|image| TemplateRegistry::known_spec(&image.alias).is_some())
         .map(|image| {
-            let package_origin = image_install::staged_package_origin(&image_root, &image.alias);
+            let package_origin = image_install::staged_package_origin(image_root, &image.alias);
             MicroRegistryImageResponse {
                 installed: templates.resolve_alias(&image.alias).is_some(),
-                package_staged: image_install::staged_package_exists(&image_root, &image.alias),
+                package_staged: image_install::staged_package_exists(image_root, &image.alias),
                 package_origin,
                 downloadable: true,
                 alias: image.alias,
@@ -220,22 +165,124 @@ pub async fn list_microregistry(
                 published_at: image.published_at,
             }
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
 
-    let locals: Vec<LocalCatalogEntry> = state
-        .microregistry_local
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .values()
-        .cloned()
-        .collect();
+fn merge_catalog_images(
+    mut images: Vec<MicroRegistryImageResponse>,
+    locals: Vec<LocalCatalogEntry>,
+    templates: &TemplateRegistry,
+    image_root: &Path,
+) -> Vec<MicroRegistryImageResponse> {
     for entry in locals {
         if images.iter().any(|image| image.alias == entry.alias) {
             continue;
         }
-        images.push(local_catalog_image(&templates, &image_root, &entry));
+        images.push(local_catalog_image(templates, image_root, &entry));
     }
     images.sort_by(|left, right| left.alias.cmp(&right.alias));
+    images
+}
+
+fn load_host_local_rows(
+    store: &Store,
+    request_id: RequestId,
+) -> Result<Vec<LocalCatalogEntry>, AppError> {
+    store
+        .list_microregistry_local(Some(Architecture::HOST.as_str()))
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, %error, "failed to list local MicroRegistry rows");
+            AppError::internal(request_id.0)
+        })
+}
+
+async fn fetch_public_catalog(source: &str) -> Result<Catalog, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let mut response = client
+        .get(source)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?
+        .error_for_status()
+        .map_err(|error| error.to_string())?;
+
+    if response
+        .content_length()
+        .is_some_and(|length| length > CATALOG_MAX_BYTES as u64)
+    {
+        return Err("catalog content-length exceeds limit".to_owned());
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if body.len().saturating_add(chunk.len()) > CATALOG_MAX_BYTES {
+            return Err("catalog body exceeds limit".to_owned());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|error| error.to_string())
+}
+
+/// `GET /api/microregistry`: supported published packages plus this host's
+/// local install/cache state. Entries outside the release manifest are hidden
+/// because this Firecrab build cannot validate or install them. Locally
+/// registered custom aliases are appended after the public filters so a
+/// catalog refresh cannot drop them. If the public catalog is unreachable or
+/// consume is disabled, HOST local rows still return 200; with none, 503.
+pub async fn list_microregistry(
+    State(state): State<AppState>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
+) -> Result<Json<MicroRegistryResponse>, AppError> {
+    let base_url = state.image_packages.base_url().map(str::to_owned);
+    let source = base_url
+        .as_deref()
+        .map(catalog_source_url)
+        .unwrap_or_default();
+    let public = match base_url.as_deref() {
+        Some(_) => match fetch_public_catalog(&source).await {
+            Ok(catalog) => Some(catalog),
+            Err(detail) => {
+                tracing::warn!(
+                    request_id = %request_id.0,
+                    error = %detail,
+                    "MicroRegistry catalog request failed"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
+    let store = state.store.clone();
+    let locals = tokio::task::spawn_blocking(move || load_host_local_rows(&store, request_id))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))??;
+
+    let templates = state.templates.clone();
+    let image_root = templates.image_root_path().to_owned();
+    let images = match public {
+        Some(catalog) => merge_catalog_images(
+            public_catalog_images(catalog, &templates, &image_root),
+            locals,
+            &templates,
+            &image_root,
+        ),
+        None if locals.is_empty() => {
+            return Err(if base_url.is_none() {
+                AppError::unavailable(
+                    "MicroRegistry is disabled by FIRECRAB_IMAGE_BASE_URL",
+                    request_id.0,
+                )
+            } else {
+                AppError::unavailable("MicroRegistry catalog is unavailable", request_id.0)
+            });
+        }
+        None => merge_catalog_images(Vec::new(), locals, &templates, &image_root),
+    };
 
     Ok(Json(MicroRegistryResponse { source, images }))
 }
@@ -261,7 +308,7 @@ pub async fn start_microregistry_register(
         return Err(AppError::not_found(request_id.0));
     }
 
-    if TemplateRegistry::known_spec(&body.alias).is_some() {
+    if public_alias_collides(&state, &body.alias).await {
         return Err(AppError::conflict(
             "alias_collision",
             "alias is already published in the catalog",
@@ -269,18 +316,23 @@ pub async fn start_microregistry_register(
         ));
     }
 
-    {
-        let local = state
-            .microregistry_local
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if local.contains_key(&body.alias) {
-            return Err(AppError::conflict(
-                "alias_collision",
-                "alias is already published in the catalog",
-                request_id.0,
-            ));
-        }
+    let store = state.store.clone();
+    let alias = body.alias.clone();
+    let existing = tokio::task::spawn_blocking(move || {
+        store.microregistry_local(&alias, Architecture::HOST.as_str())
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?
+    .map_err(|error| {
+        tracing::error!(request_id = %request_id.0, %error, "failed to load local MicroRegistry row");
+        AppError::internal(request_id.0)
+    })?;
+    if existing.is_some() {
+        return Err(AppError::conflict(
+            "alias_collision",
+            "alias is already published in the catalog",
+            request_id.0,
+        ));
     }
 
     if state.templates.resolve_alias(&body.alias).is_none() {
@@ -304,14 +356,27 @@ pub async fn start_microregistry_register(
 
     let tracker = state.microregistry_registers.clone();
     let templates = state.templates.clone();
-    let catalog = Arc::clone(&state.microregistry_local);
+    let store = state.store.clone();
     let alias = body.alias.clone();
     let version = body.version.clone();
     tokio::spawn(async move {
-        run_microregistry_register(tracker, templates, catalog, alias, version).await;
+        run_microregistry_register(tracker, templates, store, alias, version).await;
     });
 
     Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+async fn public_alias_collides(state: &AppState, alias: &str) -> bool {
+    match state.image_packages.base_url() {
+        Some(base_url) => match fetch_public_catalog(&catalog_source_url(base_url)).await {
+            Ok(catalog) => catalog
+                .images
+                .iter()
+                .any(|image| image.alias == alias && image.architecture == Architecture::HOST),
+            Err(_) => TemplateRegistry::known_spec(alias).is_some(),
+        },
+        None => TemplateRegistry::known_spec(alias).is_some(),
+    }
 }
 
 /// `GET /api/microregistry/register/{alias}` — latest snapshot, including idle.
@@ -326,15 +391,15 @@ pub async fn get_microregistry_register(
 async fn run_microregistry_register(
     tracker: ImageInstallTracker,
     templates: Arc<TemplateRegistry>,
-    catalog: Arc<Mutex<HashMap<String, LocalCatalogEntry>>>,
+    store: Store,
     alias: String,
     version: String,
 ) {
     tracker.append_log(&alias, "checking installed template");
-    if templates.resolve_alias(&alias).is_none() {
+    let Some(template) = templates.resolve_alias(&alias) else {
         tracker.finish_err_with(&alias, "register failed: template is not installed");
         return;
-    }
+    };
     tracker.append_log(&alias, "packing archive");
     let packed = match crate::package::pack_registered_template(
         &tracker,
@@ -351,21 +416,18 @@ async fn run_microregistry_register(
         }
     };
     tracker.append_log(&alias, "updating catalog");
-    let published_at = rfc3339_utc_now();
-    {
-        let mut catalog = catalog
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        catalog.insert(
-            alias.clone(),
-            LocalCatalogEntry {
-                alias: alias.clone(),
-                version,
-                published_at,
-                package: packed.package,
-                sha256: packed.sha256,
-            },
-        );
+    let entry = LocalCatalogEntry {
+        alias: alias.clone(),
+        architecture: Architecture::HOST.as_str().to_owned(),
+        version,
+        package: packed.package,
+        sha256: packed.sha256,
+        min_disk_gb: min_disk_gb_for(template.rootfs.length()),
+        published_at: rfc3339_utc_now(),
+    };
+    if let Err(error) = store.insert_microregistry_local(&entry) {
+        tracker.finish_err_with(&alias, format!("register failed: {error}"));
+        return;
     }
     tracker.finish_ok_with(&alias, "register succeeded — catalog updated");
 }
@@ -377,6 +439,8 @@ mod tests {
     use crate::image_install::ImageInstallTracker;
     use crate::state::AppState;
     use crate::templates::TemplateSpec;
+    use std::sync::{Arc, Mutex};
+
     use axum::Json;
     use axum::extract::{Path, State};
     use axum::response::IntoResponse;
@@ -388,9 +452,11 @@ mod tests {
 
     async fn empty_state(root: &std::path::Path) -> AppState {
         let templates = TemplateRegistry::from_specs(root, std::iter::empty()).unwrap();
-        AppState::with_db_file(templates, root.join("state.db"))
+        let mut state = AppState::with_db_file(templates, root.join("state.db"))
             .await
-            .unwrap()
+            .unwrap();
+        state.image_packages = ImageInstallTracker::disabled();
+        state
     }
 
     fn install_custom(state: &AppState, alias: &str) {
@@ -460,13 +526,23 @@ mod tests {
     }
 
     fn local_aliases(state: &AppState) -> Vec<String> {
-        let local = state
-            .microregistry_local
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut aliases: Vec<String> = local.keys().cloned().collect();
+        let mut aliases: Vec<String> = state
+            .store
+            .list_microregistry_local(Some(Architecture::HOST.as_str()))
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.alias)
+            .collect();
         aliases.sort();
         aliases
+    }
+
+    fn local_row(state: &AppState, alias: &str) -> LocalCatalogEntry {
+        state
+            .store
+            .microregistry_local(alias, Architecture::HOST.as_str())
+            .unwrap()
+            .unwrap_or_else(|| panic!("local row {alias}"))
     }
 
     async fn state_with_catalog(
@@ -641,15 +717,12 @@ mod tests {
             finished.log
         );
         assert_eq!(local_aliases(&state), ["nginx-1.27"]);
-        let published_at = state
-            .microregistry_local
-            .lock()
-            .unwrap()
-            .get("nginx-1.27")
-            .expect("local row")
-            .published_at
-            .clone();
-        assert!(published_at.contains('T') && published_at.ends_with('Z'));
+        let row = local_row(&state, "nginx-1.27");
+        assert_eq!(row.architecture, Architecture::HOST.as_str());
+        assert_eq!(row.package, "");
+        assert_eq!(row.sha256, "");
+        assert_eq!(row.min_disk_gb, 1);
+        assert!(row.published_at.contains('T') && row.published_at.ends_with('Z'));
     }
 
     #[tokio::test]
@@ -740,6 +813,25 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(json["error"]["code"], "alias_collision");
         assert_eq!(local_aliases(&state), ["nginx-1.27"]);
+
+        let db_file = directory.path().join("state.db");
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
+        let mut reopened = AppState::with_db_file(templates, db_file).await.unwrap();
+        reopened.image_packages = ImageInstallTracker::disabled();
+        assert_eq!(local_aliases(&reopened), ["nginx-1.27"]);
+        let (status, json) = error_json(
+            start_microregistry_register(
+                State(reopened.clone()),
+                Extension(request_id()),
+                register_body("nginx-1.27", "1"),
+            )
+            .await
+            .unwrap_err(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(json["error"]["code"], "alias_collision");
+        assert_eq!(local_aliases(&reopened), ["nginx-1.27"]);
     }
 
     #[tokio::test]
@@ -882,7 +974,7 @@ mod tests {
             .iter()
             .find(|image| image.alias == "nginx-1.27")
             .unwrap();
-        assert!(!local.downloadable);
+        assert!(local.downloadable);
         assert_eq!(local.package, "nginx-1.27.tar.zst");
         assert_eq!(local.sha256.len(), 64);
         assert_eq!(local.version, "1");
@@ -897,7 +989,7 @@ mod tests {
             again
                 .images
                 .iter()
-                .any(|image| image.alias == "nginx-1.27" && !image.downloadable)
+                .any(|image| image.alias == "nginx-1.27" && image.downloadable)
         );
     }
 
@@ -915,7 +1007,7 @@ mod tests {
         run_microregistry_register(
             state.microregistry_registers.clone(),
             state.templates.clone(),
-            Arc::clone(&state.microregistry_local),
+            state.store.clone(),
             "nginx-1.27".to_owned(),
             "1".to_owned(),
         )
@@ -957,13 +1049,7 @@ mod tests {
         assert!(staged.is_file(), "register must stage {}", staged.display());
         assert!(!crate::package::building_package_path(image_root, "nginx-1.27").exists());
 
-        let entry = state
-            .microregistry_local
-            .lock()
-            .unwrap()
-            .get("nginx-1.27")
-            .cloned()
-            .expect("local row");
+        let entry = local_row(&state, "nginx-1.27");
         assert_eq!(entry.package, "nginx-1.27.tar.zst");
         assert_eq!(entry.sha256.len(), 64);
         assert_eq!(entry.sha256, file_sha256(&staged));
@@ -986,7 +1072,7 @@ mod tests {
         run_microregistry_register(
             state.microregistry_registers.clone(),
             state.templates.clone(),
-            Arc::clone(&state.microregistry_local),
+            state.store.clone(),
             "nginx-1.27".to_owned(),
             "1".to_owned(),
         )
@@ -1044,5 +1130,211 @@ mod tests {
         assert_eq!(snapshot.alias, "never-seen");
         assert_eq!(snapshot.status, ImageInstallStatus::Idle);
         assert!(snapshot.log.is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_microregistry_register_rejects_a_live_catalog_host_alias() {
+        let (state, _directory, _source) = state_with_catalog(json!([
+            {
+                "alias": "ubuntu-26.04",
+                "architecture": image_install::host_architecture(),
+                "version": 3,
+                "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
+                "sha256": "aabb",
+                "minDiskGb": 2,
+                "publishedAt": "2026-08-09T10:00:00Z"
+            },
+            {
+                "alias": "custom-remote",
+                "architecture": image_install::host_architecture(),
+                "version": "9",
+                "package": "custom/remote.tar.zst",
+                "sha256": "ffff",
+                "minDiskGb": 1,
+                "publishedAt": "2026-08-09T10:00:00Z"
+            }
+        ]))
+        .await;
+
+        for alias in ["ubuntu-26.04", "custom-remote"] {
+            let (status, json) = error_json(
+                start_microregistry_register(
+                    State(state.clone()),
+                    Extension(request_id()),
+                    register_body(alias, "1"),
+                )
+                .await
+                .unwrap_err(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::CONFLICT, "{alias}");
+            assert_eq!(json["error"]["code"], "alias_collision", "{alias}");
+            assert_eq!(
+                state.microregistry_registers.snapshot(alias).status,
+                ImageInstallStatus::Idle,
+                "{alias}"
+            );
+            assert!(
+                state
+                    .store
+                    .microregistry_local(alias, Architecture::HOST.as_str())
+                    .unwrap()
+                    .is_none(),
+                "{alias}"
+            );
+        }
+        assert!(local_aliases(&state).is_empty());
+    }
+
+    fn host_ubuntu_catalog() -> serde_json::Value {
+        json!([{
+            "alias": "ubuntu-26.04",
+            "architecture": image_install::host_architecture(),
+            "version": 3,
+            "package": format!(
+                "ubuntu/26.04/{}/ubuntu-26.04.tar.zst",
+                image_install::host_architecture()
+            ),
+            "sha256": "aabb",
+            "minDiskGb": 2,
+            "publishedAt": "2026-08-09T10:00:00Z"
+        }])
+    }
+
+    async fn state_with_mutable_catalog(
+        images: Arc<Mutex<serde_json::Value>>,
+    ) -> (AppState, tempfile::TempDir, String) {
+        let app = Router::new().route(
+            "/catalog.json",
+            get({
+                let images = Arc::clone(&images);
+                move || {
+                    let images = Arc::clone(&images);
+                    async move {
+                        let images = images.lock().unwrap().clone();
+                        Json(json!({ "images": images }))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let directory = tempdir().unwrap();
+        let mut state = empty_state(directory.path()).await;
+        state.image_packages = ImageInstallTracker::with_base_url(format!("http://{address}"));
+        (state, directory, format!("http://{address}/catalog.json"))
+    }
+
+    #[tokio::test]
+    async fn list_microregistry_keeps_local_rows_when_the_catalog_changes() {
+        let images = Arc::new(Mutex::new(host_ubuntu_catalog()));
+        let (state, _directory, source) = state_with_mutable_catalog(Arc::clone(&images)).await;
+        install_custom(&state, "nginx-1.27");
+        let _started = start_microregistry_register(
+            State(state.clone()),
+            Extension(request_id()),
+            register_body("nginx-1.27", "1"),
+        )
+        .await
+        .expect("local register");
+        let finished = wait_for_status(&state, "nginx-1.27", ImageInstallStatus::Succeeded).await;
+        assert_eq!(finished.status, ImageInstallStatus::Succeeded);
+
+        let Json(first) = list_microregistry(State(state.clone()), Extension(request_id()))
+            .await
+            .unwrap();
+        assert_eq!(first.source, source);
+        let first_aliases: Vec<&str> = first
+            .images
+            .iter()
+            .map(|image| image.alias.as_str())
+            .collect();
+        assert_eq!(first_aliases, ["nginx-1.27", "ubuntu-26.04"]);
+
+        *images.lock().unwrap() = json!([{
+            "alias": "ubuntu-26.04",
+            "architecture": image_install::host_architecture(),
+            "version": 4,
+            "package": "ubuntu/26.04/ubuntu-26.04.tar.zst",
+            "sha256": "updated",
+            "minDiskGb": 2,
+            "publishedAt": "2026-08-15T00:00:00Z"
+        }, {
+            "alias": "custom-remote",
+            "architecture": image_install::host_architecture(),
+            "version": "9",
+            "package": "custom/remote.tar.zst",
+            "sha256": "ffff",
+            "minDiskGb": 1,
+            "publishedAt": "2026-08-09T10:00:00Z"
+        }]);
+
+        let Json(second) = list_microregistry(State(state), Extension(request_id()))
+            .await
+            .unwrap();
+        let nginx = second
+            .images
+            .iter()
+            .find(|image| image.alias == "nginx-1.27")
+            .expect("local row survives a catalog refresh");
+        assert_eq!(nginx.version, "1");
+        assert!(nginx.downloadable);
+        assert_eq!(nginx.package, "nginx-1.27.tar.zst");
+        let ubuntu = second
+            .images
+            .iter()
+            .find(|image| image.alias == "ubuntu-26.04")
+            .unwrap();
+        assert_eq!(ubuntu.version, "4");
+        assert!(
+            !second
+                .images
+                .iter()
+                .any(|image| image.alias == "custom-remote")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_microregistry_returns_local_rows_when_the_catalog_is_unreachable() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        install_custom(&state, "nginx-1.27");
+        let _started = start_microregistry_register(
+            State(state.clone()),
+            Extension(request_id()),
+            register_body("nginx-1.27", "1"),
+        )
+        .await
+        .expect("local register");
+        wait_for_status(&state, "nginx-1.27", ImageInstallStatus::Succeeded).await;
+
+        let app = Router::new().route(
+            "/catalog.json",
+            get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut failing = state.clone();
+        failing.image_packages = ImageInstallTracker::with_base_url(format!("http://{address}"));
+        let Json(response) = list_microregistry(State(failing), Extension(request_id()))
+            .await
+            .expect("local rows must survive a catalog 5xx");
+        assert_eq!(response.source, format!("http://{address}/catalog.json"));
+        assert_eq!(response.images.len(), 1);
+        assert_eq!(response.images[0].alias, "nginx-1.27");
+        assert!(response.images[0].downloadable);
+
+        let mut disabled = state;
+        disabled.image_packages = ImageInstallTracker::disabled();
+        let Json(disabled_response) = list_microregistry(State(disabled), Extension(request_id()))
+            .await
+            .expect("local rows must survive a disabled consume URL");
+        assert_eq!(disabled_response.source, "");
+        assert_eq!(disabled_response.images.len(), 1);
+        assert_eq!(disabled_response.images[0].alias, "nginx-1.27");
     }
 }
