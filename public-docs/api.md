@@ -90,6 +90,8 @@ The response has status `201` and includes the VM UUID.
 ## MicroRegistry
 
 `GET /api/microregistry` lists published packages for this host plus locally registered custom aliases.
+A successful register is stored in SQLite and survives restart.
+If the public catalog is unreachable or consume is disabled, GET still returns those local rows. `source` is the attempted catalog URL, or empty when the URL is unset. With no local rows the response stays 503.
 
 Register an already-installed custom image.
 

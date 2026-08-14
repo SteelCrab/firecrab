@@ -108,20 +108,8 @@ pub struct AppState {
     pub(crate) oci_imports: ImageInstallTracker,
     /// Async MicroRegistry register jobs (`POST /api/microregistry/register`).
     pub(crate) microregistry_registers: ImageInstallTracker,
-    /// In-memory local catalog rows from successful register jobs (not persisted).
-    pub(crate) microregistry_local: Arc<Mutex<HashMap<String, LocalCatalogEntry>>>,
     /// Previous `/proc` jiffy samples used to derive host-process CPU %.
     pub(crate) process_metrics: Arc<Mutex<ProcessMetricsTracker>>,
-}
-
-/// One locally registered MicroRegistry row. Filled only by a successful
-/// register job; listing never invents these from `list_aliases()` or disk.
-#[derive(Debug, Clone)]
-pub(crate) struct LocalCatalogEntry {
-    pub alias: String,
-    pub version: String,
-    /// RFC 3339 UTC timestamp recorded when the register job succeeded.
-    pub published_at: String,
 }
 
 impl AppState {
@@ -165,7 +153,6 @@ impl AppState {
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
             oci_imports: ImageInstallTracker::default(),
             microregistry_registers: ImageInstallTracker::default(),
-            microregistry_local: Arc::new(Mutex::new(HashMap::new())),
             process_metrics: Arc::new(Mutex::new(ProcessMetricsTracker::default())),
         })
     }
