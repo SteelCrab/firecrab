@@ -149,19 +149,17 @@ A full image, a failed format, or an existing destination is an error;
 the partial file is removed and the provisioned tree is left in place.
 This stage still pairs no kernel and registers nothing.
 
-## Kernel pairing
+## Kernel, name, register
 
 The packed ext4 is paired with this host's no-initrd catalog kernel — Ubuntu.
-A foreign architecture, an unbootable ELF, or a symbolic link is refused.
-
-## Name
-
 The alias is the repository and tag — `nginx:1.27` becomes `nginx-1.27`.
-An alias that matches an installed image or a catalog name is refused.
+A catalog or installed alias is refused.
+The ext4 is copied to `rootfs/<alias>.ext4` and registered; a failure deletes that file.
 
-## Register
+## Service
 
-The packed ext4 is copied to `rootfs/<alias>.ext4` and registered; a failure deletes that file.
+Entrypoint, Cmd, Env, and WorkingDir become `/etc/firecrab/services.d/app`.
+The injected init starts it after the sentinel. It is never PID 1.
 
 ## Related
 

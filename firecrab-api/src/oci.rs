@@ -920,6 +920,23 @@ pub enum ResolveError {
         /// Registry diagnostic.
         detail: String,
     },
+    /// An image Env entry was not `KEY=value`.
+    #[error("OCI image Env entry {entry:?} is not KEY=value")]
+    ServiceEnvInvalid {
+        /// The rejected environment entry.
+        entry: String,
+    },
+    /// A filesystem operation failed while writing the image service.
+    #[error("OCI service {operation} failed at {path}: {source}")]
+    ServiceIo {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Guest or host path involved.
+        path: PathBuf,
+        /// Operating-system failure.
+        #[source]
+        source: io::Error,
+    },
     /// One manifest contradicted itself about a shared content address.
     #[error("manifest declares {digest} with conflicting sizes {first} and {second}")]
     ConflictingDescriptorSize {
@@ -1935,6 +1952,11 @@ mod register;
 #[cfg(test)]
 mod register_tests;
 
+mod service;
+
+#[cfg(test)]
+mod service_tests;
+
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedBlob {
@@ -2518,6 +2540,53 @@ impl RegisteredOciImage {
     }
 }
 
+/// Process fields from an OCI image configuration.
+///
+/// These become a service under the injected init, never PID 1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OciProcessConfig {
+    entrypoint: Vec<String>,
+    cmd: Vec<String>,
+    env: Vec<String>,
+    working_dir: String,
+}
+
+impl OciProcessConfig {
+    /// Reads Entrypoint, Cmd, Env, and WorkingDir from an image config blob.
+    pub fn from_image_config(bytes: &[u8]) -> Result<Self, ResolveError> {
+        service::process_config_from_image_config(bytes)
+    }
+
+    /// Config `Entrypoint`.
+    pub fn entrypoint(&self) -> &[String] {
+        &self.entrypoint
+    }
+
+    /// Config `Cmd`.
+    pub fn cmd(&self) -> &[String] {
+        &self.cmd
+    }
+
+    /// Config `Env` entries, each `KEY=value`.
+    pub fn env(&self) -> &[String] {
+        &self.env
+    }
+
+    /// Config `WorkingDir`, empty when the image did not set one.
+    pub fn working_dir(&self) -> &str {
+        &self.working_dir
+    }
+
+    /// The argv the service will exec: Entrypoint followed by Cmd.
+    pub fn argv(&self) -> Vec<&str> {
+        self.entrypoint
+            .iter()
+            .chain(self.cmd.iter())
+            .map(String::as_str)
+            .collect()
+    }
+}
+
 /// A verified static program cached on the host to become a guest's init.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolboxProgram {
@@ -2926,6 +2995,18 @@ pub fn register_named_oci_image(
     templates: &crate::templates::TemplateRegistry,
 ) -> Result<RegisteredOciImage, ResolveError> {
     register::register_named_oci_image(named, templates)
+}
+
+/// Translates the image process config into a service under the injected init.
+///
+/// The script lands in `/etc/firecrab/services.d` and is started after the
+/// readiness sentinel. It is never PID 1. An image with no command is a
+/// no-op.
+pub fn install_oci_service(
+    rootfs: &ProvisionedRootfs,
+    process: &OciProcessConfig,
+) -> Result<(), ResolveError> {
+    service::install_oci_service(rootfs, process)
 }
 
 async fn validate_layer_archive(layer: &DecompressedLayer) -> Result<(), ResolveError> {
