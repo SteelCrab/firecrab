@@ -904,6 +904,16 @@ pub struct OciImportRequest {
     pub reference: String,
 }
 
+/// Request body for `POST /api/microregistry/register`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MicroRegistryRegisterRequest {
+    /// Installed template alias to publish into this host's catalog.
+    pub alias: String,
+    /// Operator-supplied catalog version for this registration.
+    pub version: String,
+}
+
 /// Lifecycle of one from-scratch distro bootstrap session (`handlers::bootstrap`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1327,6 +1337,20 @@ mod tests {
         assert_eq!(json, r#"{"reference":"nginx:1.27"}"#);
         assert_eq!(
             serde_json::from_str::<OciImportRequest>(&json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn microregistry_register_request_round_trips_camel_case() {
+        let request = MicroRegistryRegisterRequest {
+            alias: "nginx-1.27".to_owned(),
+            version: "1".to_owned(),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(json, r#"{"alias":"nginx-1.27","version":"1"}"#);
+        assert_eq!(
+            serde_json::from_str::<MicroRegistryRegisterRequest>(&json).unwrap(),
             request
         );
     }
