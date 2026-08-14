@@ -1207,6 +1207,14 @@ async fn character_and_block_devices_are_not_extracted_into_the_merged_tree() {
     append_entry(&mut builder, "dev/sda", EntryType::Block, None, &[], 0o660);
     append_entry(
         &mut builder,
+        "dev/initctl",
+        EntryType::Fifo,
+        None,
+        &[],
+        0o600,
+    );
+    append_entry(
+        &mut builder,
         "etc/os-release",
         EntryType::Regular,
         None,
@@ -1228,6 +1236,7 @@ async fn character_and_block_devices_are_not_extracted_into_the_merged_tree() {
     );
     assert!(!destination.join("dev/console").exists());
     assert!(!destination.join("dev/sda").exists());
+    assert!(!destination.join("dev/initctl").exists());
     assert_eq!(
         std::fs::read(destination.join("etc/os-release")).unwrap(),
         b"ID=linux\n"
@@ -1239,8 +1248,8 @@ async fn character_and_block_devices_are_not_extracted_into_the_merged_tree() {
             .expect("stat merged path")
             .file_type();
         assert!(
-            !file_type.is_char_device() && !file_type.is_block_device(),
-            "merged tree must not contain a device node at {}",
+            !file_type.is_char_device() && !file_type.is_block_device() && !file_type.is_fifo(),
+            "merged tree must not contain a device node or FIFO at {}",
             path.display()
         );
         if file_type.is_dir() {

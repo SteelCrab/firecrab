@@ -426,7 +426,7 @@ fn plan_layer(
             continue;
         }
         let path = normalized_entry_path(&entry, digest, index + 1)?;
-        if entry_type.is_character_special() || entry_type.is_block_special() {
+        if super::is_skipped_special_layer_member(entry_type) {
             // Distro /dev nodes are not whiteouts, extracts, or merge paths.
             continue;
         }
@@ -642,7 +642,7 @@ fn extract_non_directory_entries(
             continue;
         }
         let path = normalized_entry_path(&entry, digest, index + 1)?;
-        if entry_type.is_character_special() || entry_type.is_block_special() {
+        if super::is_skipped_special_layer_member(entry_type) {
             // unpack_in would write a regular file at dest/dev/console.
             continue;
         }

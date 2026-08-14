@@ -2881,8 +2881,8 @@ async fn decompress_cached_layers_with_parallelism(
 /// Validates every decompressed layer tar before any extraction may begin.
 ///
 /// Validation reads the effective GNU/PAX member paths, rejects member names
-/// and hard-link targets that leave an archive root, skips character and
-/// block device members, and permits only regular files, directories,
+/// and hard-link targets that leave an archive root, skips character devices,
+/// block devices, and FIFOs, and permits only regular files, directories,
 /// symbolic links, and archive-root-confined hard links.
 /// Symbolic links remain inert at this stage; the later extractor must not
 /// follow one while creating another member. The input content-addressed tar
@@ -3244,8 +3244,8 @@ fn validate_layer_archive_file(
                 TarMemberViolation::Path,
             ));
         }
-        if entry_type.is_character_special() || entry_type.is_block_special() {
-            // Distro root layers ship /dev/console and similar nodes. Skip
+        if is_skipped_special_layer_member(entry_type) {
+            // Distro root layers ship /dev/console and /dev/initctl. Skip
             // them; drain below so a truncated payload is still malformed
             // and later members stay aligned. Merge must not unpack them.
         } else if entry_type.is_hard_link() {
@@ -3455,7 +3455,7 @@ fn validate_raw_tar_metadata<R: io::Read + io::Seek>(
                 TarMemberViolation::Path,
             ));
         }
-        if entry_type.is_character_special() || entry_type.is_block_special() {
+        if is_skipped_special_layer_member(entry_type) {
             continue;
         }
         if entry_type.is_hard_link() {
@@ -3723,6 +3723,12 @@ fn is_layer_root_path(path: &Path) -> bool {
 
 fn is_safe_layer_entry_path(path: &Path, entry_type: tar::EntryType) -> bool {
     is_safe_layer_member_path(path) || (entry_type.is_dir() && is_layer_root_path(path))
+}
+
+/// Distro `/dev` nodes the guest does not need and the unprivileged host
+/// must not create. Skip rather than fail-close so official images import.
+fn is_skipped_special_layer_member(entry_type: tar::EntryType) -> bool {
+    entry_type.is_character_special() || entry_type.is_block_special() || entry_type.is_fifo()
 }
 
 fn malformed_layer_archive(

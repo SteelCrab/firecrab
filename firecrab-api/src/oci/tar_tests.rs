@@ -410,18 +410,11 @@ async fn parser_differential_pax_overrides_are_explicitly_rejected() {
 #[tokio::test]
 async fn device_and_other_special_nodes_are_rejected() {
     let directory = tempdir().expect("create fixture directory");
-    for (name, entry_type, expected_reason) in [
-        (
-            "fifo",
-            EntryType::Fifo,
-            TarMemberViolation::UnsupportedEntryType { entry_type: b'6' },
-        ),
-        (
-            "unknown",
-            EntryType::new(b'9'),
-            TarMemberViolation::UnsupportedEntryType { entry_type: b'9' },
-        ),
-    ] {
+    for (name, entry_type, expected_reason) in [(
+        "unknown",
+        EntryType::new(b'9'),
+        TarMemberViolation::UnsupportedEntryType { entry_type: b'9' },
+    )] {
         let bytes = one_entry_tar("dev/unsafe", entry_type, None, &[]);
         let layer = fixture_layer(&directory, name, &bytes);
         let error = validate_decompressed_layers(vec![layer])
@@ -481,6 +474,13 @@ async fn character_and_block_devices_are_skipped_and_keep_later_members_aligned(
     );
     append_entry(
         &mut builder,
+        "dev/initctl",
+        EntryType::Fifo,
+        None,
+        b"ignored-fifo-payload",
+    );
+    append_entry(
+        &mut builder,
         "etc/os-release",
         EntryType::Regular,
         None,
@@ -489,7 +489,7 @@ async fn character_and_block_devices_are_skipped_and_keep_later_members_aligned(
     let layer = fixture_layer(&directory, "skip-devices", &finish(builder));
     let validated = validate_decompressed_layers(vec![layer])
         .await
-        .expect("character and block devices must be skipped during preflight");
+        .expect("character, block, and FIFO members must be skipped during preflight");
     assert_eq!(validated.len(), 1);
 }
 
