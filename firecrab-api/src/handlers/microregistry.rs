@@ -400,13 +400,38 @@ async fn run_microregistry_register(
         tracker.finish_err_with(&alias, "register failed: template is not installed");
         return;
     };
+    // Unrecognized stays Ok because pre-#89/#94 artifacts cannot be classified.
+    if let Err(error) = crate::templates::verify_kernel_architecture(
+        templates.image_root(),
+        template.kernel.relative_path(),
+    ) {
+        tracker.finish_err_with(&alias, format!("register failed: {error}"));
+        return;
+    }
+    tracker.append_log(&alias, "packing archive");
+    let packed = match crate::package::pack_registered_template(
+        &tracker,
+        templates.as_ref(),
+        &alias,
+        &version,
+    )
+    .await
+    {
+        Ok(packed) => packed,
+        Err(error) => {
+            tracker.finish_err_with(&alias, format!("register failed: {error}"));
+            return;
+        }
+    };
+    let published =
+        crate::package::StagedPackageGuard::after_publish(templates.image_root_path(), &alias);
     tracker.append_log(&alias, "updating catalog");
     let entry = LocalCatalogEntry {
         alias: alias.clone(),
         architecture: Architecture::HOST.as_str().to_owned(),
         version,
-        package: String::new(),
-        sha256: String::new(),
+        package: packed.package,
+        sha256: packed.sha256,
         min_disk_gb: min_disk_gb_for(template.rootfs.length()),
         published_at: rfc3339_utc_now(),
     };
@@ -414,6 +439,7 @@ async fn run_microregistry_register(
         tracker.finish_err_with(&alias, format!("register failed: {error}"));
         return;
     }
+    published.keep();
     tracker.finish_ok_with(&alias, "register succeeded — catalog updated");
 }
 
@@ -423,7 +449,7 @@ mod tests {
     use crate::extract::ValidatedJson;
     use crate::image_install::ImageInstallTracker;
     use crate::state::AppState;
-    use crate::templates::TemplateSpec;
+    use crate::templates::{TemplateError, TemplateSpec};
     use std::sync::{Arc, Mutex};
 
     use axum::Json;
@@ -445,10 +471,20 @@ mod tests {
     }
 
     fn install_custom(state: &AppState, alias: &str) {
+        install_custom_with_rootfs(state, alias, &format!("rootfs/{alias}.ext4"));
+    }
+
+    fn install_custom_with_rootfs(state: &AppState, alias: &str, rootfs: &str) {
         let root = state.templates.image_root_path();
         std::fs::create_dir_all(root.join("kernel")).unwrap();
+        if let Some(parent) = std::path::Path::new(rootfs).parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(root.join(parent)).unwrap();
+        }
+        // Unrecognized placeholder; register must keep accepting it.
         std::fs::write(root.join("kernel/vmlinux"), b"kernel").unwrap();
-        std::fs::write(root.join(format!("{alias}.ext4")), vec![0_u8; 64]).unwrap();
+        std::fs::write(root.join(rootfs), vec![0_u8; 64]).unwrap();
         state
             .templates
             .register_spec(TemplateSpec {
@@ -456,7 +492,7 @@ mod tests {
                 version: format!("{alias}-local"),
                 kernel: std::path::PathBuf::from("kernel/vmlinux"),
                 initrd: None,
-                rootfs: std::path::PathBuf::from(format!("{alias}.ext4")),
+                rootfs: std::path::PathBuf::from(rootfs),
                 boot_args: "console=ttyS0 root=/dev/vda rw".to_owned(),
             })
             .unwrap();
@@ -499,6 +535,50 @@ mod tests {
             snapshot = state.microregistry_registers.snapshot(alias);
         }
         snapshot
+    }
+
+    fn elf_machine_fixture(machine: u16) -> Vec<u8> {
+        let mut header = vec![0_u8; 64];
+        header[..4].copy_from_slice(b"\x7fELF");
+        header[18..20].copy_from_slice(&machine.to_le_bytes());
+        header
+    }
+
+    fn kernel_fixture_for(architecture: Architecture) -> Vec<u8> {
+        match architecture {
+            Architecture::X86_64 => elf_machine_fixture(0x3e),
+            Architecture::Aarch64 => {
+                let mut header = vec![0_u8; 64];
+                header[..2].copy_from_slice(b"MZ");
+                header[56..60].copy_from_slice(&0x644d_5241_u32.to_le_bytes());
+                header
+            }
+        }
+    }
+
+    fn overwrite_kernel(state: &AppState, bytes: &[u8]) {
+        std::fs::write(
+            state.templates.image_root_path().join("kernel/vmlinux"),
+            bytes,
+        )
+        .unwrap();
+    }
+
+    fn assert_register_left_no_artifacts(state: &AppState, alias: &str) {
+        assert!(
+            local_aliases(state).is_empty(),
+            "refusal must not write a catalog row"
+        );
+        let image_root = state.templates.image_root_path();
+        assert!(!image_install::staged_package_exists(image_root, alias));
+        assert!(!crate::package::building_package_path(image_root, alias).exists());
+        assert!(image_install::staged_package_origin(image_root, alias).is_none());
+        assert!(
+            !image_root
+                .join(".packages")
+                .join(format!("{alias}.tar.zst.origin"))
+                .exists()
+        );
     }
 
     fn local_aliases(state: &AppState) -> Vec<String> {
@@ -680,6 +760,7 @@ mod tests {
 
         let finished = wait_for_status(&state, "nginx-1.27", ImageInstallStatus::Succeeded).await;
         assert_eq!(finished.status, ImageInstallStatus::Succeeded);
+        // b"kernel" is Unrecognized; this happy path must stay Succeeded.
         assert!(
             finished
                 .log
@@ -687,11 +768,16 @@ mod tests {
             "succeeded job must record the catalog update: {}",
             finished.log
         );
+        assert!(
+            finished.log.contains("[packer:package] complete"),
+            "succeeded job must record packer progress: {}",
+            finished.log
+        );
         assert_eq!(local_aliases(&state), ["nginx-1.27"]);
         let row = local_row(&state, "nginx-1.27");
         assert_eq!(row.architecture, Architecture::HOST.as_str());
-        assert_eq!(row.package, "");
-        assert_eq!(row.sha256, "");
+        assert_eq!(row.package, "nginx-1.27.tar.zst");
+        assert_eq!(row.sha256.len(), 64);
         assert_eq!(row.min_disk_gb, 1);
         assert!(row.published_at.contains('T') && row.published_at.ends_with('Z'));
     }
@@ -945,11 +1031,12 @@ mod tests {
             .iter()
             .find(|image| image.alias == "nginx-1.27")
             .unwrap();
-        assert!(!local.downloadable);
-        assert_eq!(local.package, "");
-        assert_eq!(local.sha256, "");
+        assert!(local.downloadable);
+        assert_eq!(local.package, "nginx-1.27.tar.zst");
+        assert_eq!(local.sha256.len(), 64);
         assert_eq!(local.version, "1");
         assert!(local.installed);
+        assert!(local.package_staged);
         assert_eq!(local.min_disk_gb, 1);
 
         let Json(again) = list_microregistry(State(state), Extension(request_id()))
@@ -959,7 +1046,7 @@ mod tests {
             again
                 .images
                 .iter()
-                .any(|image| image.alias == "nginx-1.27" && !image.downloadable)
+                .any(|image| image.alias == "nginx-1.27" && image.downloadable)
         );
     }
 
@@ -996,6 +1083,229 @@ mod tests {
             "failed job must record why"
         );
         assert!(local_aliases(&state).is_empty());
+    }
+
+    #[tokio::test]
+    async fn register_job_fills_package_sha256_and_stages_the_file() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        install_custom(&state, "nginx-1.27");
+
+        let _started = start_microregistry_register(
+            State(state.clone()),
+            Extension(request_id()),
+            register_body("nginx-1.27", "1"),
+        )
+        .await
+        .expect("installed custom alias must be accepted");
+        let finished = wait_for_status(&state, "nginx-1.27", ImageInstallStatus::Succeeded).await;
+        assert_eq!(finished.status, ImageInstallStatus::Succeeded);
+
+        let image_root = state.templates.image_root_path();
+        let staged = crate::image_install::staged_package_path(image_root, "nginx-1.27");
+        assert!(staged.is_file(), "register must stage {}", staged.display());
+        assert!(!crate::package::building_package_path(image_root, "nginx-1.27").exists());
+
+        let entry = local_row(&state, "nginx-1.27");
+        assert_eq!(entry.package, "nginx-1.27.tar.zst");
+        assert_eq!(entry.sha256.len(), 64);
+        assert_eq!(entry.sha256, file_sha256(&staged));
+        assert_eq!(
+            crate::image_install::staged_package_origin(image_root, "nginx-1.27"),
+            Some(firecrab_api_types::PackageOrigin::MicroRegistry)
+        );
+    }
+
+    #[tokio::test]
+    async fn register_job_refuses_unsafe_rootfs_without_archive_or_row() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        install_custom_with_rootfs(&state, "nginx-1.27", "nginx-1.27.ext4");
+
+        state
+            .microregistry_registers
+            .begin_with("nginx-1.27", "register started")
+            .unwrap();
+        run_microregistry_register(
+            state.microregistry_registers.clone(),
+            state.templates.clone(),
+            state.store.clone(),
+            "nginx-1.27".to_owned(),
+            "1".to_owned(),
+        )
+        .await;
+
+        assert_eq!(
+            state.microregistry_registers.snapshot("nginx-1.27").status,
+            ImageInstallStatus::Failed
+        );
+        assert!(
+            state
+                .microregistry_registers
+                .snapshot("nginx-1.27")
+                .log
+                .contains("nginx-1.27.ext4"),
+            "failed job must name the unsafe rootfs: {}",
+            state.microregistry_registers.snapshot("nginx-1.27").log
+        );
+        assert!(local_aliases(&state).is_empty());
+        let image_root = state.templates.image_root_path();
+        assert!(!crate::image_install::staged_package_exists(
+            image_root,
+            "nginx-1.27"
+        ));
+        assert!(!crate::package::building_package_path(image_root, "nginx-1.27").exists());
+    }
+
+    #[tokio::test]
+    async fn register_job_refuses_a_foreign_architecture_kernel() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        install_custom(&state, "nginx-1.27");
+        overwrite_kernel(&state, &kernel_fixture_for(Architecture::HOST.other()));
+
+        let _started = start_microregistry_register(
+            State(state.clone()),
+            Extension(request_id()),
+            register_body("nginx-1.27", "1"),
+        )
+        .await
+        .expect("job starts");
+        let finished = wait_for_status(&state, "nginx-1.27", ImageInstallStatus::Failed).await;
+        assert_eq!(finished.status, ImageInstallStatus::Failed);
+        let expected = TemplateError::KernelArchitectureMismatch {
+            path: std::path::PathBuf::from("kernel/vmlinux"),
+            found: Architecture::HOST.other(),
+            host: Architecture::HOST,
+        }
+        .to_string();
+        assert!(
+            finished.log.contains(&expected),
+            "failed job must carry KernelArchitectureMismatch Display: {}",
+            finished.log
+        );
+        assert_register_left_no_artifacts(&state, "nginx-1.27");
+    }
+
+    #[tokio::test]
+    async fn register_job_refuses_an_unsupported_architecture_kernel() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        install_custom(&state, "nginx-1.27");
+        overwrite_kernel(&state, &elf_machine_fixture(0xf3));
+
+        let _started = start_microregistry_register(
+            State(state.clone()),
+            Extension(request_id()),
+            register_body("nginx-1.27", "1"),
+        )
+        .await
+        .expect("job starts");
+        let finished = wait_for_status(&state, "nginx-1.27", ImageInstallStatus::Failed).await;
+        assert_eq!(finished.status, ImageInstallStatus::Failed);
+        let expected = TemplateError::UnsupportedKernelArchitecture {
+            path: std::path::PathBuf::from("kernel/vmlinux"),
+            machine: 0xf3,
+        }
+        .to_string();
+        assert!(
+            finished.log.contains(&expected),
+            "failed job must carry UnsupportedKernelArchitecture Display: {}",
+            finished.log
+        );
+        assert_register_left_no_artifacts(&state, "nginx-1.27");
+    }
+
+    #[tokio::test]
+    async fn register_job_accepts_an_unrecognized_kernel() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        install_custom(&state, "nginx-1.27");
+
+        let _started = start_microregistry_register(
+            State(state.clone()),
+            Extension(request_id()),
+            register_body("nginx-1.27", "1"),
+        )
+        .await
+        .expect("unrecognized kernel must still start");
+        let finished = wait_for_status(&state, "nginx-1.27", ImageInstallStatus::Succeeded).await;
+        assert_eq!(finished.status, ImageInstallStatus::Succeeded);
+        assert_eq!(local_aliases(&state), ["nginx-1.27"]);
+        let image_root = state.templates.image_root_path();
+        assert!(image_install::staged_package_exists(
+            image_root,
+            "nginx-1.27"
+        ));
+        assert!(!crate::package::building_package_path(image_root, "nginx-1.27").exists());
+    }
+
+    #[tokio::test]
+    async fn register_job_discards_archive_when_catalog_insert_fails() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        install_custom(&state, "nginx-1.27");
+        state
+            .store
+            .insert_microregistry_local(&LocalCatalogEntry {
+                alias: "nginx-1.27".to_owned(),
+                architecture: Architecture::HOST.as_str().to_owned(),
+                version: "pre".to_owned(),
+                package: String::new(),
+                sha256: String::new(),
+                min_disk_gb: 1,
+                published_at: rfc3339_utc_now(),
+            })
+            .unwrap();
+
+        state
+            .microregistry_registers
+            .begin_with("nginx-1.27", "register started")
+            .unwrap();
+        run_microregistry_register(
+            state.microregistry_registers.clone(),
+            state.templates.clone(),
+            state.store.clone(),
+            "nginx-1.27".to_owned(),
+            "1".to_owned(),
+        )
+        .await;
+
+        assert_eq!(
+            state.microregistry_registers.snapshot("nginx-1.27").status,
+            ImageInstallStatus::Failed
+        );
+        assert_eq!(local_aliases(&state), ["nginx-1.27"]);
+        assert_eq!(local_row(&state, "nginx-1.27").version, "pre");
+        let image_root = state.templates.image_root_path();
+        assert!(!image_install::staged_package_exists(
+            image_root,
+            "nginx-1.27"
+        ));
+        assert!(!crate::package::building_package_path(image_root, "nginx-1.27").exists());
+        assert!(image_install::staged_package_origin(image_root, "nginx-1.27").is_none());
+        assert!(
+            !image_root
+                .join(".packages")
+                .join("nginx-1.27.tar.zst.origin")
+                .exists()
+        );
+    }
+
+    fn file_sha256(path: &std::path::Path) -> String {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let mut file = std::fs::File::open(path).unwrap();
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer).unwrap();
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        format!("{:x}", hasher.finalize())
     }
 
     #[tokio::test]
@@ -1162,8 +1472,8 @@ mod tests {
             .find(|image| image.alias == "nginx-1.27")
             .expect("local row survives a catalog refresh");
         assert_eq!(nginx.version, "1");
-        assert!(!nginx.downloadable);
-        assert_eq!(nginx.package, "");
+        assert!(nginx.downloadable);
+        assert_eq!(nginx.package, "nginx-1.27.tar.zst");
         let ubuntu = second
             .images
             .iter()
@@ -1208,7 +1518,7 @@ mod tests {
         assert_eq!(response.source, format!("http://{address}/catalog.json"));
         assert_eq!(response.images.len(), 1);
         assert_eq!(response.images[0].alias, "nginx-1.27");
-        assert!(!response.images[0].downloadable);
+        assert!(response.images[0].downloadable);
 
         let mut disabled = state;
         disabled.image_packages = ImageInstallTracker::disabled();

@@ -25,6 +25,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { workspace = true, features = ["v4"] }
+zstd = "0.13"
 
 [dev-dependencies]
 http-body-util = "0.1.3"

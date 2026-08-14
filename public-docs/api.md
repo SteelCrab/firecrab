@@ -106,7 +106,9 @@ An empty alias or version is `400 validation_failed`.
 An unknown, uninstalled, or internal alias is `404`.
 A catalog alias or a second register of the same local alias is `409 alias_collision`.
 A running job for that alias is `409 register_in_progress`.
-Local rows have an empty package key and are not downloadable.
+Local rows carry `{alias}.tar.zst` and its SHA-256 after a successful pack.
+A foreign-architecture or unsupported ELF kernel fails the job: no catalog row and no staged archive.
+An unclassifiable kernel is still accepted.
 
 ## VM states
 
