@@ -107,6 +107,34 @@ const CREATE_SHELLS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS shells (
     updated_at_ms INTEGER NOT NULL
 ) STRICT";
 
+/// Host-local MicroRegistry rows from a successful register job.
+/// Uniqueness is the composite PK so a concurrent double-register cannot
+/// insert two rows for the same alias and architecture.
+const CREATE_MICROREGISTRY_LOCAL_TABLE_SQL: &str =
+    "CREATE TABLE IF NOT EXISTS microregistry_local (
+    alias TEXT NOT NULL,
+    architecture TEXT NOT NULL,
+    version TEXT NOT NULL,
+    package TEXT NOT NULL DEFAULT '',
+    sha256 TEXT NOT NULL DEFAULT '',
+    min_disk_gb INTEGER NOT NULL,
+    published_at TEXT NOT NULL,
+    PRIMARY KEY (alias, architecture)
+) STRICT";
+
+const SELECT_MICROREGISTRY_LOCAL_ALL_SQL: &str = "SELECT alias, architecture, version, package, \
+    sha256, min_disk_gb, published_at FROM microregistry_local ORDER BY alias";
+
+const SELECT_MICROREGISTRY_LOCAL_BY_ARCH_SQL: &str = "SELECT alias, architecture, version, package, \
+    sha256, min_disk_gb, published_at FROM microregistry_local WHERE architecture = ?1 ORDER BY alias";
+
+const SELECT_MICROREGISTRY_LOCAL_ONE_SQL: &str = "SELECT alias, architecture, version, package, \
+    sha256, min_disk_gb, published_at FROM microregistry_local WHERE alias = ?1 AND architecture = ?2";
+
+const INSERT_MICROREGISTRY_LOCAL_SQL: &str = "INSERT INTO microregistry_local \
+    (alias, architecture, version, package, sha256, min_disk_gb, published_at) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+
 const CREATE_SHELL_REVISIONS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS shell_revisions (
     id TEXT PRIMARY KEY,
     shell_id TEXT NOT NULL,
@@ -379,6 +407,14 @@ pub enum PersistenceError {
         /// The conflicting path.
         path: String,
     },
+    /// A local MicroRegistry alias is already registered for this architecture.
+    #[error("MicroRegistry local alias {alias} is already registered for {architecture}")]
+    DuplicateMicroRegistryLocal {
+        /// Conflicting catalog alias.
+        alias: String,
+        /// Catalog architecture label (`x86_64` or `aarch64`).
+        architecture: String,
+    },
     /// A host port/protocol is already forwarded to another VM.
     #[error("host port {host_port}/{protocol} is already in use by another VM")]
     DuplicatePortForward {
@@ -432,6 +468,20 @@ pub fn default_db_file() -> PathBuf {
     PathBuf::from(DB_FILE)
 }
 
+/// One locally registered MicroRegistry row (`microregistry_local`).
+/// Written only by a successful register job; listing never invents these
+/// from installed aliases or disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocalCatalogEntry {
+    pub alias: String,
+    pub architecture: String,
+    pub version: String,
+    pub package: String,
+    pub sha256: String,
+    pub min_disk_gb: u16,
+    pub published_at: String,
+}
+
 /// Handle to the VM records SQLite database. Cheaply `Clone`able; all
 /// clones share one connection behind a mutex.
 #[derive(Debug, Clone)]
@@ -480,6 +530,7 @@ impl Store {
         migrate_internet_enabled_column(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
+        conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
@@ -715,6 +766,72 @@ impl Store {
             return Err(PersistenceError::MissingMicroStorage { id });
         }
         Ok(())
+    }
+
+    /// Local MicroRegistry rows, optionally filtered by catalog architecture.
+    pub fn list_microregistry_local(
+        &self,
+        architecture: Option<&str>,
+    ) -> Result<Vec<LocalCatalogEntry>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = match architecture {
+            Some(_) => conn.prepare(SELECT_MICROREGISTRY_LOCAL_BY_ARCH_SQL)?,
+            None => conn.prepare(SELECT_MICROREGISTRY_LOCAL_ALL_SQL)?,
+        };
+        let mut rows = match architecture {
+            Some(architecture) => statement.query(params![architecture])?,
+            None => statement.query([])?,
+        };
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(map_local_catalog_entry(row)?);
+        }
+        Ok(out)
+    }
+
+    /// One local MicroRegistry row by alias and architecture.
+    pub fn microregistry_local(
+        &self,
+        alias: &str,
+        architecture: &str,
+    ) -> Result<Option<LocalCatalogEntry>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(SELECT_MICROREGISTRY_LOCAL_ONE_SQL)?;
+        Ok(statement
+            .query_row(params![alias, architecture], map_local_catalog_entry)
+            .optional()?)
+    }
+
+    /// Inserts a local MicroRegistry row. A composite-PK clash is
+    /// [`PersistenceError::DuplicateMicroRegistryLocal`].
+    pub fn insert_microregistry_local(
+        &self,
+        entry: &LocalCatalogEntry,
+    ) -> Result<(), PersistenceError> {
+        let result = self.lock().execute(
+            INSERT_MICROREGISTRY_LOCAL_SQL,
+            params![
+                entry.alias,
+                entry.architecture,
+                entry.version,
+                entry.package,
+                entry.sha256,
+                i64::from(entry.min_disk_gb),
+                entry.published_at,
+            ],
+        );
+        match result {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Err(PersistenceError::DuplicateMicroRegistryLocal {
+                    alias: entry.alias.clone(),
+                    architecture: entry.architecture.clone(),
+                })
+            }
+            Err(error) => Err(PersistenceError::Database(error)),
+        }
     }
 
     /// How many VMs still point at `storage_root` (id string).
@@ -1382,6 +1499,18 @@ impl Store {
     }
 }
 
+fn map_local_catalog_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalCatalogEntry> {
+    Ok(LocalCatalogEntry {
+        alias: row.get(0)?,
+        architecture: row.get(1)?,
+        version: row.get(2)?,
+        package: row.get(3)?,
+        sha256: row.get(4)?,
+        min_disk_gb: row.get::<_, i64>(5)? as u16,
+        published_at: row.get(6)?,
+    })
+}
+
 /// Binds `vm`'s fields as parameters and executes `sql` (shared by insert,
 /// update, and legacy import, which differ only in which SQL they run).
 fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, rusqlite::Error> {
@@ -1989,6 +2118,101 @@ mod tests {
         };
         assert_eq!(unique_ip_count, 16, "duplicate IPs handed out: {ips:?}");
         assert_eq!(unique_mac_count, 16, "duplicate MACs handed out: {macs:?}");
+    }
+
+    fn local_catalog_entry(alias: &str, architecture: &str) -> LocalCatalogEntry {
+        LocalCatalogEntry {
+            alias: alias.to_owned(),
+            architecture: architecture.to_owned(),
+            version: "1".to_owned(),
+            package: String::new(),
+            sha256: String::new(),
+            min_disk_gb: 1,
+            published_at: "2026-08-15T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[test]
+    fn microregistry_local_round_trips_through_insert_list_and_get() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let entry = local_catalog_entry("nginx-1.27", "x86_64");
+
+        store.insert_microregistry_local(&entry).unwrap();
+        assert_eq!(
+            store
+                .microregistry_local("nginx-1.27", "x86_64")
+                .unwrap()
+                .as_ref(),
+            Some(&entry)
+        );
+        assert_eq!(
+            store.list_microregistry_local(Some("x86_64")).unwrap(),
+            std::slice::from_ref(&entry)
+        );
+        assert!(
+            store
+                .list_microregistry_local(Some("aarch64"))
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.list_microregistry_local(None).unwrap(), [entry]);
+    }
+
+    #[test]
+    fn microregistry_local_rejects_a_duplicate_alias_architecture_pair() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let entry = local_catalog_entry("nginx-1.27", "x86_64");
+        store.insert_microregistry_local(&entry).unwrap();
+
+        let result = store.insert_microregistry_local(&entry);
+        assert!(
+            matches!(
+                &result,
+                Err(PersistenceError::DuplicateMicroRegistryLocal { alias, architecture })
+                    if alias == "nginx-1.27" && architecture == "x86_64"
+            ),
+            "expected a typed constraint conflict, got {result:?}"
+        );
+
+        let other_arch = local_catalog_entry("nginx-1.27", "aarch64");
+        store.insert_microregistry_local(&other_arch).unwrap();
+        assert_eq!(store.list_microregistry_local(None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn opening_an_existing_database_creates_microregistry_local() {
+        let directory = tempdir().unwrap();
+        let db_file = directory.path().join("firecrab.db");
+        let store = Store::open(&db_file).unwrap();
+        store
+            .lock()
+            .execute("DROP TABLE microregistry_local", [])
+            .unwrap();
+        drop(store);
+
+        let reopened = Store::open(&db_file).unwrap();
+        let exists: bool = reopened
+            .lock()
+            .prepare(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'microregistry_local'",
+            )
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(exists, "upgrade must CREATE TABLE IF NOT EXISTS");
+        reopened
+            .insert_microregistry_local(&local_catalog_entry("nginx-1.27", "x86_64"))
+            .unwrap();
+        assert_eq!(
+            reopened
+                .microregistry_local("nginx-1.27", "x86_64")
+                .unwrap()
+                .unwrap()
+                .alias,
+            "nginx-1.27"
+        );
     }
 
     #[test]
