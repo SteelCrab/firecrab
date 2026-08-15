@@ -1338,7 +1338,7 @@ mod tests {
         seed_services_d_app(&rootfs, &sample_app_service());
 
         let env = BTreeMap::from([
-            ("LOG_LEVEL".to_owned(), "info".to_owned()),
+            ("APP_NAME".to_owned(), "web".to_owned()),
             ("FOO".to_owned(), "bar".to_owned()),
         ]);
         specialize_guest(&rootfs, Uuid::new_v4(), &env).unwrap();
@@ -1349,8 +1349,8 @@ mod tests {
         assert!(
             script.contains(
                 "# >>> firecrab vm env\n\
+                 export APP_NAME='web'\n\
                  export FOO='bar'\n\
-                 export LOG_LEVEL='info'\n\
                  # <<< firecrab vm env\n\
                  exec '/bin/app'\n"
             ),

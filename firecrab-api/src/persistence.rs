@@ -1871,7 +1871,7 @@ mod tests {
 
         vm.env.clear();
         vm.env
-            .insert("LOG_LEVEL".to_owned(), "info".to_owned());
+            .insert("APP_NAME".to_owned(), "web".to_owned());
         store.update(&vm).unwrap();
         assert_eq!(store.load_all().unwrap().get(&vm.id).unwrap().env, vm.env);
 
@@ -1926,7 +1926,7 @@ mod tests {
             .execute(
                 "UPDATE vms SET env = ?1 WHERE id = ?2",
                 params![
-                    format!(r#"{{"LOG_LEVEL":"{SECRET}","n":1}}"#),
+                    format!(r#"{{"APP_NAME":"{SECRET}","n":1}}"#),
                     vm.id.to_string()
                 ],
             )

@@ -566,7 +566,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                 <input
                   id={`vm-env-key-${idx}`}
                   type="text"
-                  placeholder="LOG_LEVEL"
+                  placeholder="APP_NAME"
                   value={row.key}
                   maxLength={256}
                   autoComplete="off"
@@ -581,7 +581,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                 <input
                   id={`vm-env-value-${idx}`}
                   type="text"
-                  placeholder="info"
+                  placeholder="web"
                   value={row.value}
                   maxLength={4096}
                   autoComplete="off"

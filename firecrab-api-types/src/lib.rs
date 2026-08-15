@@ -1216,16 +1216,16 @@ mod tests {
         );
 
         let update: UpdateVmResourcesRequest = serde_json::from_str(
-            r#"{"ram":512,"cpu":1,"diskGb":2,"env":{"LOG_LEVEL":"info"}}"#,
+            r#"{"ram":512,"cpu":1,"diskGb":2,"env":{"APP_NAME":"web"}}"#,
         )
         .unwrap();
         assert_eq!(
             update
                 .env
                 .as_ref()
-                .and_then(|env| env.get("LOG_LEVEL"))
+                .and_then(|env| env.get("APP_NAME"))
                 .map(String::as_str),
-            Some("info")
+            Some("web")
         );
     }
 
