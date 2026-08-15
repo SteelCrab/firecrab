@@ -3,6 +3,7 @@
 //! prepare, and grows it when capacity increases. Stop/start reuses the same
 //! active generation file (`public-docs/storage.md`).
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom};
 use std::os::unix::io::AsRawFd;
@@ -276,8 +277,15 @@ const FIRECRAB_WELCOME_PROFILE: &str = concat!(
 /// (no mount, no root needed). Before those offline writes, it runs `e2fsck
 /// -p` so an abruptly stopped guest's ext4 journal is recovered using only
 /// e2fsck's automatic safe repairs.
+///
+/// After the OCI console rewrite, [`apply_vm_env`] rewrites a delimited
+/// export block in `/etc/firecrab/services.d/app` when that path exists.
 /// Idempotent: safe to call again against an already-specialized disk.
-pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
+pub fn specialize_guest(
+    rootfs: &Path,
+    id: Uuid,
+    env: &BTreeMap<String, String>,
+) -> Result<(), RootfsError> {
     recover_before_specialization(rootfs)?;
 
     let hostname = firecrab_helper_protocol::network::guest_hostname(id);
@@ -293,6 +301,7 @@ pub fn specialize_guest(rootfs: &Path, id: Uuid) -> Result<(), RootfsError> {
     // Rewrite the console wrapper on every start so MOTD/fastfetch appear
     // without requiring a re-import.
     patch_oci_console(rootfs);
+    apply_vm_env(rootfs, env)?;
     for path in STRIP_PATHS {
         remove_from_image(rootfs, path);
     }
@@ -356,6 +365,32 @@ fn patch_oci_console(rootfs: &Path) {
     );
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.console", "0100755");
+}
+
+const GUEST_VM_SERVICE: &str = "/etc/firecrab/services.d/app";
+
+/// Rewrites the delimited Firecrab env block in `services.d/app`.
+///
+/// Missing path is a silent no-op. Image `export` lines stay; VM keys win
+/// because they are appended after those lines and before `exec`.
+fn apply_vm_env(rootfs: &Path, env: &BTreeMap<String, String>) -> Result<(), RootfsError> {
+    if !guest_path_exists(rootfs, GUEST_VM_SERVICE) {
+        return Ok(());
+    }
+    let staging = rootfs.with_extension("vm-env.tmp");
+    let _ = fs::remove_file(&staging);
+    let rewritten = (|| {
+        dump_from_image(rootfs, GUEST_VM_SERVICE, &staging)?;
+        let script = fs::read_to_string(&staging).map_err(|source| RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: format!("failed to read {GUEST_VM_SERVICE}: {source}"),
+        })?;
+        Ok(crate::oci::service::rewrite_vm_env_block(&script, env))
+    })();
+    let _ = fs::remove_file(&staging);
+    write_into_image(rootfs, GUEST_VM_SERVICE, rewritten?.as_bytes())?;
+    set_guest_file_mode(rootfs, GUEST_VM_SERVICE, "0100755");
+    Ok(())
 }
 
 fn set_image_root_shell(rootfs: &Path, shell: &str) {
@@ -1076,7 +1111,7 @@ mod tests {
         let rootfs = directory.path().join("rootfs.ext4");
         real_rootfs_with_guest_dirs(&rootfs);
 
-        specialize_guest(&rootfs, id).unwrap();
+        specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
 
         let hostname = firecrab_helper_protocol::network::guest_hostname(id);
         assert_eq!(
@@ -1091,7 +1126,7 @@ mod tests {
         let rootfs = directory.path().join("rootfs.ext4");
         real_rootfs_with_guest_dirs(&rootfs);
 
-        specialize_guest(&rootfs, Uuid::new_v4()).unwrap();
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
         assert_eq!(debugfs_cat(&rootfs, "/etc/motd"), FIRECRAB_MOTD);
     }
@@ -1103,7 +1138,7 @@ mod tests {
         real_rootfs_with_guest_dirs(&rootfs);
         run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
 
-        specialize_guest(&rootfs, Uuid::new_v4()).unwrap();
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
         let inittab = debugfs_cat(&rootfs, "/etc/inittab");
         assert!(
@@ -1166,7 +1201,7 @@ mod tests {
         write_into_image(&rootfs, "/bin/bash", b"bash").unwrap();
         write_into_image(&rootfs, "/etc/passwd", b"root:x:0:0:root:/root:/bin/sh\n").unwrap();
 
-        specialize_guest(&rootfs, Uuid::new_v4()).unwrap();
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
         let inittab = debugfs_cat(&rootfs, "/etc/inittab");
         assert!(
@@ -1198,7 +1233,7 @@ mod tests {
         );
         assert_eq!(filesystem_state(&rootfs), "not clean");
 
-        specialize_guest(&rootfs, id).unwrap();
+        specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
 
         let hostname = firecrab_helper_protocol::network::guest_hostname(id);
         assert_eq!(
@@ -1227,7 +1262,7 @@ mod tests {
             run_debugfs(&rootfs, &format!("write {} {path}", staging.display())).unwrap();
         }
 
-        specialize_guest(&rootfs, id).unwrap();
+        specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
 
         for path in ["/etc/ssh/ssh_host_rsa_key", "/var/lib/systemd/random-seed"] {
             // debugfs's "cat" prints nothing to stdout for a missing file
@@ -1248,11 +1283,11 @@ mod tests {
         let rootfs = directory.path().join("rootfs.ext4");
         real_rootfs_with_guest_dirs(&rootfs);
 
-        specialize_guest(&rootfs, id).unwrap();
+        specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
         // debugfs's `write` refuses to overwrite an existing file — this
         // must still succeed the second time (e.g. a VM restarted against
         // an already-specialized disk).
-        specialize_guest(&rootfs, id).unwrap();
+        specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
 
         let hostname = firecrab_helper_protocol::network::guest_hostname(id);
         assert_eq!(
@@ -1277,7 +1312,126 @@ mod tests {
         assert!(status.success());
         run_debugfs(&rootfs, "mkdir /etc").unwrap();
 
-        specialize_guest(&rootfs, id).unwrap();
+        specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
+    }
+
+    fn sample_app_service() -> String {
+        "#!/bin/sh\n\
+         # Firecrab service for the imported image entrypoint (public-docs/oci.md).\n\
+         export PATH='/usr/bin'\n\
+         export APP_ENV='prod'\n\
+         exec '/bin/app'\n"
+            .to_owned()
+    }
+
+    fn seed_services_d_app(rootfs: &Path, script: &str) {
+        run_debugfs(rootfs, "mkdir /etc/firecrab").unwrap();
+        run_debugfs(rootfs, "mkdir /etc/firecrab/services.d").unwrap();
+        write_into_image(rootfs, "/etc/firecrab/services.d/app", script.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn specialize_guest_writes_vm_env_when_services_d_app_exists() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        seed_services_d_app(&rootfs, &sample_app_service());
+
+        let env = BTreeMap::from([
+            ("APP_NAME".to_owned(), "web".to_owned()),
+            ("FOO".to_owned(), "bar".to_owned()),
+        ]);
+        specialize_guest(&rootfs, Uuid::new_v4(), &env).unwrap();
+
+        let script = debugfs_cat(&rootfs, "/etc/firecrab/services.d/app");
+        assert!(script.contains("export PATH='/usr/bin'"), "{script}");
+        assert!(script.contains("export APP_ENV='prod'"), "{script}");
+        assert!(
+            script.contains(
+                "# >>> firecrab vm env\n\
+                 export APP_NAME='web'\n\
+                 export FOO='bar'\n\
+                 # <<< firecrab vm env\n\
+                 exec '/bin/app'\n"
+            ),
+            "{script}"
+        );
+    }
+
+    #[test]
+    fn specialize_guest_is_a_noop_when_services_d_app_is_missing() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        let env = BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]);
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &env).unwrap();
+
+        assert!(!guest_path_exists(&rootfs, "/etc/firecrab/services.d/app"));
+    }
+
+    #[test]
+    fn specialize_guest_vm_env_apply_three_times_is_identical() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        seed_services_d_app(&rootfs, &sample_app_service());
+        let env = BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]);
+        let id = Uuid::new_v4();
+
+        specialize_guest(&rootfs, id, &env).unwrap();
+        let first = debugfs_cat(&rootfs, "/etc/firecrab/services.d/app");
+        specialize_guest(&rootfs, id, &env).unwrap();
+        let second = debugfs_cat(&rootfs, "/etc/firecrab/services.d/app");
+        specialize_guest(&rootfs, id, &env).unwrap();
+        let third = debugfs_cat(&rootfs, "/etc/firecrab/services.d/app");
+
+        assert_eq!(first, second);
+        assert_eq!(second, third);
+        assert!(first.contains("export FOO='bar'"), "{first}");
+        assert!(first.contains("exec '/bin/app'"), "{first}");
+    }
+
+    #[test]
+    fn specialize_guest_empty_env_keeps_image_exports_and_exec() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        seed_services_d_app(&rootfs, &sample_app_service());
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let script = debugfs_cat(&rootfs, "/etc/firecrab/services.d/app");
+        assert!(!script.contains("firecrab vm env"), "{script}");
+        assert!(script.contains("export PATH='/usr/bin'"), "{script}");
+        assert!(script.contains("exec '/bin/app'"), "{script}");
+    }
+
+    #[test]
+    fn specialize_guest_rejects_non_utf8_services_d_app() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/firecrab/services.d").unwrap();
+        write_into_image(
+            &rootfs,
+            "/etc/firecrab/services.d/app",
+            b"\xff\xfe not utf-8",
+        )
+        .unwrap();
+
+        let error = specialize_guest(
+            &rootfs,
+            Uuid::new_v4(),
+            &BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("failed to read /etc/firecrab/services.d/app"),
+            "{message}"
+        );
     }
 
     #[test]

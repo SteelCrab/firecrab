@@ -250,6 +250,7 @@ pub async fn start_bootstrap(
         storage_root: None,
         shell_ids: Vec::new(),
         port_forwards: Vec::new(),
+        env: std::collections::BTreeMap::new(),
     };
 
     let (_status, Json(created)) = create_vm(

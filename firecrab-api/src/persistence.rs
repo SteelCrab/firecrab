@@ -40,33 +40,34 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS vms (
     storage_root TEXT NOT NULL DEFAULT 'default',
     disk_generation TEXT,
     last_runtime_id TEXT,
-    purpose TEXT NOT NULL DEFAULT 'instance'
+    purpose TEXT NOT NULL DEFAULT 'instance',
+    env TEXT NOT NULL DEFAULT '{}'
 ) STRICT";
 
 /// Selects every column [`Store::load_all`] needs.
 const SELECT_ALL_SQL: &str = "SELECT id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose FROM vms";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env FROM vms";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_SQL: &str = "INSERT INTO vms (id, name, state, template, template_version, \
     template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, cpu, ram, disk_gb, \
-    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+    egress_policy, micro_network_id, storage_root, disk_generation, last_runtime_id, purpose, env) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
 
 /// Upserts a row, used only by the one-time legacy `vms.json` import.
 const IMPORT_SQL: &str = "INSERT OR REPLACE INTO vms (id, name, state, template, \
     template_version, template_kernel_sha256, template_rootfs_sha256, \
     template_boot_args_sha256, cpu, ram, disk_gb, egress_policy, micro_network_id, storage_root, \
-    disk_generation, last_runtime_id, purpose) \
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+    disk_generation, last_runtime_id, purpose, env) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)";
 
 /// Replaces an existing row's columns by id.
 const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     template_version = ?5, template_kernel_sha256 = ?6, template_rootfs_sha256 = ?7, \
     template_boot_args_sha256 = ?8, cpu = ?9, ram = ?10, disk_gb = ?11, egress_policy = ?12, \
     micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16, \
-    purpose = ?17 WHERE id = ?1";
+    purpose = ?17, env = ?18 WHERE id = ?1";
 
 /// Schema for the `micro_networks` table (`public-docs/networking.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
@@ -261,6 +262,20 @@ fn migrate_disk_generation_columns(conn: &Connection) -> Result<(), PersistenceE
         if !has_column {
             conn.execute(sql, [])?;
         }
+    }
+    Ok(())
+}
+
+const ADD_ENV_COLUMN_SQL: &str = "ALTER TABLE vms ADD COLUMN env TEXT NOT NULL DEFAULT '{}'";
+
+/// Adds `env` to a `vms` table created before per-VM environment existed.
+/// `'{}'` matches the empty map every VM had before this field existed.
+fn migrate_env_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let has_column: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name = 'env'")?
+        .exists([])?;
+    if !has_column {
+        conn.execute(ADD_ENV_COLUMN_SQL, [])?;
     }
     Ok(())
 }
@@ -519,6 +534,7 @@ impl Store {
         migrate_storage_root_column(&conn)?;
         migrate_disk_generation_columns(&conn)?;
         migrate_purpose_column(&conn)?;
+        migrate_env_column(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
             conn.execute(index_sql, [])?;
@@ -585,6 +601,7 @@ impl Store {
                     last_runtime_id: decode_optional_id(&id_text, row.get(15)?)?,
                     startup_step: None,
                     startup_timeline: Vec::new(),
+                    env: decode_env(&id_text, &row.get::<_, String>(17)?)?,
                 },
             );
         }
@@ -1534,8 +1551,25 @@ fn execute_record(conn: &Connection, sql: &str, vm: &VmRecord) -> Result<usize, 
             vm.disk_generation.map(|id| id.to_string()),
             vm.last_runtime_id.map(|id| id.to_string()),
             vm.purpose.id(),
+            encode_env(&vm.env),
         ],
     )
+}
+
+/// Serializes the per-VM env map the same way it crosses the API (JSON object).
+fn encode_env(env: &std::collections::BTreeMap<String, String>) -> String {
+    serde_json::to_string(env).unwrap_or_else(|_| "{}".to_owned())
+}
+
+/// Inverse of [`encode_env`]; fails on anything that isn't a string object.
+fn decode_env(
+    id: &str,
+    raw: &str,
+) -> Result<std::collections::BTreeMap<String, String>, PersistenceError> {
+    serde_json::from_str(raw).map_err(|_| PersistenceError::CorruptRecord {
+        id: id.to_owned(),
+        reason: "env is not a JSON object of strings".to_owned(),
+    })
 }
 
 /// Decodes a nullable id column, reporting a stored non-UUID as corruption.
@@ -1640,6 +1674,7 @@ mod tests {
             last_runtime_id: None,
             startup_step: None,
             startup_timeline: Vec::new(),
+            env: Default::default(),
         }
     }
 
@@ -1809,6 +1844,184 @@ mod tests {
                 .unwrap()
                 .egress_policy,
             crate::model::EgressPolicy::Isolated
+        );
+    }
+
+    #[test]
+    fn insert_update_and_load_all_round_trip_env() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("env.db")).unwrap();
+        let mut vm = record(Uuid::new_v4(), "with-env");
+        vm.env.insert("B".to_owned(), "2".to_owned());
+        vm.env.insert("A".to_owned(), "1".to_owned());
+        store.insert(&vm).unwrap();
+
+        let loaded = store.load_all().unwrap();
+        assert_eq!(loaded.get(&vm.id).unwrap().env, vm.env);
+        assert_eq!(
+            loaded
+                .get(&vm.id)
+                .unwrap()
+                .env
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["A".to_owned(), "B".to_owned()]
+        );
+
+        vm.env.clear();
+        vm.env.insert("APP_NAME".to_owned(), "web".to_owned());
+        store.update(&vm).unwrap();
+        assert_eq!(store.load_all().unwrap().get(&vm.id).unwrap().env, vm.env);
+
+        vm.env.clear();
+        store.update(&vm).unwrap();
+        assert!(
+            store
+                .load_all()
+                .unwrap()
+                .get(&vm.id)
+                .unwrap()
+                .env
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_corrupt_env_column_is_reported_as_a_corrupt_record() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("env-corrupt.db")).unwrap();
+        let vm = record(Uuid::new_v4(), "env-corrupt");
+        store.insert(&vm).unwrap();
+
+        for raw in ["not-json", "[1]", r#"{"K":1}"#] {
+            store
+                .lock()
+                .execute(
+                    "UPDATE vms SET env = ?1 WHERE id = ?2",
+                    params![raw, vm.id.to_string()],
+                )
+                .unwrap();
+            assert!(
+                matches!(
+                    store.load_all(),
+                    Err(PersistenceError::CorruptRecord { ref id, ref reason })
+                        if id == &vm.id.to_string() && reason.contains("env is not a JSON object")
+                ),
+                "{raw} should be reported as a corrupt env column"
+            );
+        }
+    }
+
+    #[test]
+    fn a_corrupt_env_column_error_does_not_include_persisted_contents() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("env-secret.db")).unwrap();
+        let vm = record(Uuid::new_v4(), "env-secret");
+        store.insert(&vm).unwrap();
+        const SECRET: &str = "sentinel-secret-do-not-leak";
+        store
+            .lock()
+            .execute(
+                "UPDATE vms SET env = ?1 WHERE id = ?2",
+                params![
+                    format!(r#"{{"APP_NAME":"{SECRET}","n":1}}"#),
+                    vm.id.to_string()
+                ],
+            )
+            .unwrap();
+
+        let error = store.load_all().unwrap_err();
+        let rendered = error.to_string();
+        assert!(
+            !rendered.contains(SECRET),
+            "CorruptRecord must not echo persisted env: {rendered}"
+        );
+        assert!(
+            matches!(
+                error,
+                PersistenceError::CorruptRecord { ref reason, .. }
+                    if reason == "env is not a JSON object of strings" && !reason.contains(SECRET)
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn migrate_env_column_defaults_an_existing_row_to_empty_map() {
+        let directory = tempdir().unwrap();
+        let db_file = directory.path().join("firecrab.db");
+        let id = Uuid::new_v4();
+
+        {
+            let conn = Connection::open(&db_file).unwrap();
+            conn.execute(
+                "CREATE TABLE vms (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    template TEXT NOT NULL,
+                    template_version TEXT NOT NULL,
+                    template_kernel_sha256 TEXT NOT NULL,
+                    template_rootfs_sha256 TEXT NOT NULL,
+                    template_boot_args_sha256 TEXT NOT NULL,
+                    cpu INTEGER NOT NULL,
+                    ram INTEGER NOT NULL,
+                    disk_gb INTEGER NOT NULL DEFAULT 2,
+                    egress_policy TEXT NOT NULL DEFAULT 'internet',
+                    micro_network_id TEXT,
+                    storage_root TEXT NOT NULL DEFAULT 'default',
+                    disk_generation TEXT,
+                    last_runtime_id TEXT,
+                    purpose TEXT NOT NULL DEFAULT 'instance'
+                ) STRICT",
+                [],
+            )
+            .unwrap();
+            let vm = record(id, "pre-env");
+            conn.execute(
+                "INSERT INTO vms (id, name, state, template, template_version, \
+                 template_kernel_sha256, template_rootfs_sha256, template_boot_args_sha256, \
+                 cpu, ram, disk_gb, egress_policy, micro_network_id, storage_root, \
+                 disk_generation, last_runtime_id, purpose) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                params![
+                    vm.id.to_string(),
+                    vm.name,
+                    encode_state(vm.state),
+                    vm.template,
+                    vm.template_version,
+                    vm.template_kernel_sha256,
+                    vm.template_rootfs_sha256,
+                    vm.template_boot_args_sha256,
+                    vm.cpu,
+                    vm.ram,
+                    vm.disk_gb,
+                    vm.egress_policy.id(),
+                    vm.micro_network_id.to_string(),
+                    vm.storage_root,
+                    Option::<String>::None,
+                    Option::<String>::None,
+                    vm.purpose.id(),
+                ],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&db_file).unwrap();
+        let migrated = store.load_all().unwrap();
+        let row = migrated.get(&id).expect("the pre-migration row survives");
+        assert!(
+            row.env.is_empty(),
+            "a column added by migration must default to {{}}"
+        );
+
+        let mut updated = row.clone();
+        updated.env.insert("K".to_owned(), "v".to_owned());
+        store.update(&updated).unwrap();
+        assert_eq!(
+            store.load_all().unwrap().get(&id).unwrap().env.get("K"),
+            Some(&"v".to_owned())
         );
     }
 

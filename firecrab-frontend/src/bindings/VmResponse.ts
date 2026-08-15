@@ -41,4 +41,6 @@ export type VmResponse = {
   shellRefs?: Array<ShellRef>;
   /** Inbound port forwarding rules (DNAT). */
   portForwards?: Array<PortForward>;
+  /** Per-VM environment. Empty is valid. Stored and applied in plaintext. */
+  env?: { [key: string]: string };
 };

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   EgressPolicy,
+  ImageResponse,
   MicroNetworkResponse,
   PortForward,
   PortProtocol,
@@ -15,6 +16,7 @@ import {
   assignVmStorage,
   getVm,
   getVmLog,
+  listImages,
   listMicroNetworks,
   listShells,
   listStorageRoots,
@@ -85,7 +87,9 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [editStorageRoot, setEditStorageRoot] = useState("default");
   const [editShellIds, setEditShellIds] = useState<string[]>([]);
   const [editPortForwards, setEditPortForwards] = useState<PortForward[]>([]);
+  const [editEnvRows, setEditEnvRows] = useState<{ key: string; value: string }[]>([]);
   const [catalogShells, setCatalogShells] = useState<ShellResponse[]>([]);
+  const [images, setImages] = useState<ImageResponse[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
@@ -97,6 +101,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     listMicroNetworks().then(setMicroNetworks).catch(() => setMicroNetworks([]));
     listStorageRoots().then(setStorageRoots).catch(() => setStorageRoots([]));
     listShells().then(setCatalogShells).catch(() => setCatalogShells([]));
+    listImages().then(setImages).catch(() => setImages([]));
   }, []);
 
   const addEditPortForward = () => {
@@ -115,6 +120,26 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     });
   };
 
+  const addEditEnvRow = () => {
+    setEditEnvRows((current) => [...current, { key: "", value: "" }]);
+  };
+
+  const removeEditEnvRow = (index: number) => {
+    setEditEnvRows((current) => current.filter((_, i) => i !== index));
+  };
+
+  const updateEditEnvRow = (
+    index: number,
+    field: "key" | "value",
+    value: string,
+  ) => {
+    setEditEnvRows((current) => {
+      const next = [...current];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
   const startEditing = () => {
     if (!vm) return;
     setEditCpu(String(vm.cpu));
@@ -124,6 +149,9 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     setEditStorageRoot(vm.storageRoot || "default");
     setEditShellIds((vm.shellRefs ?? []).map((ref) => ref.shellId));
     setEditPortForwards((vm.portForwards ?? []).map((pf) => ({ ...pf })));
+    setEditEnvRows(
+      Object.entries(vm.env ?? {}).map(([key, value]) => ({ key, value })),
+    );
     setSaveError(null);
     setEditing(true);
     // Refresh catalog so latest versions show on the checkboxes.
@@ -153,6 +181,33 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
       );
       return;
     }
+    const env: { [key: string]: string } = {};
+    for (const row of editEnvRows) {
+      const key = row.key.trim();
+      if (!key) {
+        setSaveError(
+          ApiClientError.api(400, {
+            code: "validation",
+            message: "Every environment variable needs a key.",
+            fields: { env: "key must not be empty" },
+            requestId: "",
+          }),
+        );
+        return;
+      }
+      if (key in env) {
+        setSaveError(
+          ApiClientError.api(400, {
+            code: "validation",
+            message: "Environment keys must be unique.",
+            fields: { env: "duplicate key" },
+            requestId: "",
+          }),
+        );
+        return;
+      }
+      env[key] = row.value;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -161,6 +216,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
         ram: parseInt(editRam, 10) || 0,
         diskGb: parseInt(editDisk, 10) || 0,
         egressPolicy: editEgressPolicy,
+        env,
       });
       // Storage reassignment is a separate endpoint: only when inactive and
       // no rootfs exists yet (server returns 409 otherwise).
@@ -260,6 +316,10 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const storageRootLabel = storageRootMeta
     ? `${storageRootMeta.name} (${storageRootMeta.path})`
     : (vm?.storageRoot ?? "default");
+
+  const vmImage = images.find((image) => image.alias === vm?.template);
+  const envIgnored = Boolean(vmImage && !vmImage.hasGuestService);
+  const envEntries = Object.entries(vm?.env ?? {});
 
   return (
     <div className="console-overlay">
@@ -446,6 +506,83 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   (vm.portForwards ?? [])
                     .map((pf) => `${pf.guestPort}:${pf.hostPort}/${pf.protocol}`)
                     .join(", ")
+                )}
+              </dd>
+              <dt>env</dt>
+              <dd>
+                {editing ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    {editEnvRows.map((row, idx) => (
+                      <div key={idx} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                        <input
+                          id={`vm-edit-env-key-${idx}`}
+                          className="detail-edit-input"
+                          type="text"
+                          placeholder="APP_NAME"
+                          value={row.key}
+                          maxLength={256}
+                          autoComplete="off"
+                          spellCheck={false}
+                          onChange={(event) => updateEditEnvRow(idx, "key", event.target.value)}
+                          style={{ width: "8rem" }}
+                        />
+                        <span style={{ color: "var(--shell)" }}>=</span>
+                        <input
+                          id={`vm-edit-env-value-${idx}`}
+                          className="detail-edit-input"
+                          type="text"
+                          placeholder="web"
+                          value={row.value}
+                          maxLength={4096}
+                          autoComplete="off"
+                          spellCheck={false}
+                          onChange={(event) => updateEditEnvRow(idx, "value", event.target.value)}
+                          style={{ width: "12rem" }}
+                        />
+                        <button
+                          type="button"
+                          className="btn small danger"
+                          onClick={() => removeEditEnvRow(idx)}
+                          style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem" }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      id="vm-edit-env-add"
+                      className="btn small secondary"
+                      onClick={addEditEnvRow}
+                      disabled={editEnvRows.length >= 64}
+                      style={{ width: "fit-content", marginTop: "0.2rem" }}
+                    >
+                      + {t("Add variable", "변수 추가")}
+                    </button>
+                    {saveError?.fieldError("env") && (
+                      <span className="field-error">{saveError.fieldError("env")}</span>
+                    )}
+                  </div>
+                ) : envEntries.length === 0 ? (
+                  "—"
+                ) : (
+                  envEntries.map(([key, value]) => `${key}=${value}`).join(", ")
+                )}
+                {envIgnored && (
+                  <div style={{ fontSize: "0.75rem", color: "var(--muted, #888)", marginTop: "0.35rem" }}>
+                    {t(
+                      "Runtime env is ignored: this image has no guest service.",
+                      "게스트 서비스가 없는 이미지라 런타임 환경 변수는 적용되지 않습니다.",
+                    )}
+                  </div>
+                )}
+                {vm && !isEditableState(vm.state) && (
+                  <div style={{ fontSize: "0.75rem", color: "var(--muted, #888)", marginTop: "0.35rem" }}>
+                    {t(
+                      "Stop the VM to edit environment variables.",
+                      "환경 변수를 수정하려면 VM을 중지하세요.",
+                    )}
+                  </div>
                 )}
               </dd>
               <dt>ip</dt>

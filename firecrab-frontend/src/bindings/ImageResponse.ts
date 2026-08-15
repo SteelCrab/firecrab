@@ -28,4 +28,9 @@ export type ImageResponse = {
   /** Producer of the staged package, when known. */
   packageOrigin?: PackageOrigin;
   description: string;
+  /**
+   * True when the installed rootfs has `/etc/firecrab/services.d/app`.
+   * Uninstalled and catalog-only rows are false.
+   */
+  hasGuestService?: boolean;
 };

@@ -6,8 +6,7 @@ pairs a kernel, and registers an alias.
 
 ## Inspect
 
-Ask whether a container image can run on this host without downloading its
-config or layers.
+Ask whether a container image can run on this host without downloading its config or layers.
 
 ```sh
 curl -s 'http://127.0.0.1:3000/api/oci/inspect?reference=nginx:1.27'
@@ -37,19 +36,15 @@ Success adds the alias to `GET /api/images`.
 
 ## Blob cache
 
-Internal OCI pulls cache image configs and layers by their SHA-256 digest at
-`<FIRECRAB_IMAGE_ROOT>/.oci/blobs/sha256/<hex>`.
+Internal OCI pulls cache image configs and layers by their SHA-256 digest at `<FIRECRAB_IMAGE_ROOT>/.oci/blobs/sha256/<hex>`.
 Entries contain the raw bytes returned by the registry and are never replaced with decompressed data.
 Every cache lookup verifies size and SHA-256 before reuse; a corrupt entry is discarded and fetched again.
 One config or layer download is limited to 16 GiB by default (`FIRECRAB_OCI_MAX_BLOB_BYTES`).
 
 ## Layer decompression
 
-The internal import pipeline decompresses plain, gzip, and zstd layer streams
-into `.oci/layers/sha256/<diff-id>/<compressed-digest>.<codec>.tar`.
-Each result keeps the manifest descriptor, whose digest covers the registry
-bytes, separate from the matching config `rootfs.diff_ids` entry, whose digest
-covers the uncompressed tar stream.
+The internal import pipeline decompresses plain, gzip, and zstd layer streams into `.oci/layers/sha256/<diff-id>/<compressed-digest>.<codec>.tar`.
+Each result keeps the manifest descriptor, whose digest covers the registry bytes, separate from the matching config `rootfs.diff_ids` entry, whose digest covers the uncompressed tar stream.
 
 The decoder publishes a tar only after the diff ID matches.
 Cache hits are rehashed and corrupt entries are rebuilt from the verified blob.
@@ -58,10 +53,9 @@ At most two layer decoders run process-wide, and each zstd decoder has a 128 MiB
 
 ## Layer safety preflight
 
-Before extraction, the internal pipeline scans every decompressed tar using
-GNU long-name/link metadata and PAX overrides. Member names must be relative
-paths without parent components; only a directory may name the archive root
-as `.` or `./`. Character devices, block devices, and FIFOs are skipped; unsupported special entries are rejected.
+Before extraction, the internal pipeline scans every decompressed tar using GNU long-name/link metadata and PAX overrides.
+Member names must be relative paths without parent components; only a directory may name the archive root as `.` or `./`.
+Character devices, block devices, and FIFOs are skipped; unsupported special entries are rejected.
 Links must name a target; hard-link targets stay archive-root-relative.
 Regular whiteout files remain valid for the later merge stage.
 
@@ -130,9 +124,7 @@ The program is cached at `<FIRECRAB_IMAGE_ROOT>/.oci/fastfetch/` after the
 first download. Operators can name a host binary with
 `FIRECRAB_OCI_FASTFETCH_PATH`. A missing program is not an import failure:
 the boot script still tries the guest package manager as a fallback.
-`/etc/firecrab/services.d` is created
-empty for the image's own entrypoint, which a later stage translates into an
-ordinary service under that init rather than PID 1.
+`/etc/firecrab/services.d` is created empty for the image's own entrypoint, which a later stage translates into an ordinary service under that init rather than PID 1.
 
 Images that place `/sbin` or `/etc` behind a symbolic link are activated
 through it.
@@ -142,8 +134,7 @@ A failed activation restores every path it touched.
 
 ## Ext4 image
 
-The internal pipeline sizes the ext4 from the provisioned tree rather than
-from a fixed image length.
+The internal pipeline sizes the ext4 from the provisioned tree rather than from a fixed image length.
 Payload bytes count each regular inode once and include symlink targets;
 hard links are not added again.
 
@@ -169,6 +160,7 @@ That local template is not a MicroRegistry row; register it as in [Images](image
 
 Entrypoint, Cmd, Env, and WorkingDir become `/etc/firecrab/services.d/app`.
 The injected init starts it after the sentinel. It is never PID 1.
+On start, one `# >>> firecrab vm env` block is rewritten so per-VM `env` overrides image Env (image `export` lines stay; empty map removes the block; missing `services.d/app` is a no-op; plaintext in the guest).
 
 ## Related
 

@@ -34,7 +34,10 @@ const FIELDS_WITH_OWN_ERROR = [
   "storageRoot",
   "shellIds",
   "portForwards",
+  "env",
 ] as const;
+
+type EnvRow = { key: string; value: string };
 
 /** Empty select value until the user picks a MicroNetwork (required). */
 const NO_NETWORK = "";
@@ -84,11 +87,13 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [shells, setShells] = useState<ShellResponse[]>([]);
   const [shellIds, setShellIds] = useState<string[]>([]);
   const [portForwards, setPortForwards] = useState<PortForward[]>([]);
+  const [envRows, setEnvRows] = useState<EnvRow[]>([]);
   /** Bumped after a successful create so Shell checkboxes remount cleared. */
   const [formEpoch, setFormEpoch] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
   const [portForwardsError, setPortForwardsError] = useState<string | null>(null);
+  const [envError, setEnvError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,6 +198,22 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     });
   };
 
+  const addEnvRow = () => {
+    setEnvRows((current) => [...current, { key: "", value: "" }]);
+  };
+
+  const removeEnvRow = (index: number) => {
+    setEnvRows((current) => current.filter((_, i) => i !== index));
+  };
+
+  const updateEnvRow = (index: number, field: keyof EnvRow, value: string) => {
+    setEnvRows((current) => {
+      const next = [...current];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!canSubmit) return;
@@ -215,6 +236,25 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     }
     setPortForwardsError(null);
 
+    const env: { [key: string]: string } = {};
+    for (const row of envRows) {
+      const key = row.key.trim();
+      if (!key) {
+        setEnvError(
+          t("Every environment variable needs a key.", "모든 환경 변수에는 키가 필요합니다."),
+        );
+        return;
+      }
+      if (key in env) {
+        setEnvError(
+          t("Environment keys must be unique.", "환경 변수 키는 중복될 수 없습니다."),
+        );
+        return;
+      }
+      env[key] = row.value;
+    }
+    setEnvError(null);
+
     const request: CreateVmRequest = {
       name: name.trim(),
       template,
@@ -226,6 +266,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       storageRoot: storageRoot || null,
       shellIds: shellIds.length > 0 ? shellIds : undefined,
       portForwards: portForwards.length > 0 ? portForwards : undefined,
+      env,
     };
 
     setSubmitting(true);
@@ -237,6 +278,8 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       setShellIds([]);
       setPortForwards([]);
       setPortForwardsError(null);
+      setEnvRows([]);
+      setEnvError(null);
       setFieldErrors(null);
       setFormEpoch((epoch) => epoch + 1);
       listShells()
@@ -302,6 +345,14 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         {fieldError("template")}
         {(imagesError || noTemplates) && !fieldErrors?.fieldError("template") && (
           <span className="field-error">{imagesError ?? t("Install an image before creating a VM.", "생성하려면 먼저 이미지를 설치하세요")}</span>
+        )}
+        {selectedImage && !selectedImage.hasGuestService && (
+          <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)" }}>
+            {t(
+              "Runtime env is ignored: this image has no guest service.",
+              "게스트 서비스가 없는 이미지라 런타임 환경 변수는 적용되지 않습니다.",
+            )}
+          </span>
         )}
       </div>
       <div className="field">
@@ -491,6 +542,76 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         </div>
         {portForwardsError && <span className="field-error">{portForwardsError}</span>}
         {fieldError("portForwards")}
+      </div>
+      <div className="field" style={{ gridColumn: "1 / -1" }}>
+        <label>{t("Environment", "환경 변수")}</label>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+          {envRows.map((row, idx) => (
+            <div
+              key={idx}
+              style={{
+                display: "flex",
+                gap: "0.75rem",
+                alignItems: "flex-end",
+                background: "var(--bg-subtle, rgba(255, 255, 255, 0.03))",
+                padding: "0.6rem 0.8rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border-color, rgba(255, 255, 255, 0.1))",
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", flex: 1 }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                  {t("Key", "키")}
+                </span>
+                <input
+                  id={`vm-env-key-${idx}`}
+                  type="text"
+                  placeholder="APP_NAME"
+                  value={row.key}
+                  maxLength={256}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => updateEnvRow(idx, "key", event.target.value)}
+                />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", flex: 2 }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                  {t("Value", "값")}
+                </span>
+                <input
+                  id={`vm-env-value-${idx}`}
+                  type="text"
+                  placeholder="web"
+                  value={row.value}
+                  maxLength={4096}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => updateEnvRow(idx, "value", event.target.value)}
+                />
+              </div>
+              <button
+                type="button"
+                className="btn small danger"
+                onClick={() => removeEnvRow(idx)}
+                style={{ padding: "0.4rem 0.75rem" }}
+              >
+                {t("Remove", "삭제")}
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            id="vm-env-add"
+            className="btn small secondary"
+            onClick={addEnvRow}
+            disabled={envRows.length >= 64}
+            style={{ width: "fit-content", marginTop: "0.2rem" }}
+          >
+            + {t("Add variable", "변수 추가")}
+          </button>
+        </div>
+        {envError && <span className="field-error">{envError}</span>}
+        {fieldError("env")}
       </div>
       <div className="field field-submit">
         <label htmlFor="vm-create-submit">&nbsp;</label>
