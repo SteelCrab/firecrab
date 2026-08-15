@@ -669,6 +669,7 @@ mod tests {
             // DHCP is served on the network's own bridge either way — the
             // internet toggle only governs what leaves it.
             internet_enabled: true,
+            uplink: None,
         }
     }
 

@@ -6,6 +6,9 @@
 //! `render_apply_ruleset` still splices this module's output into the same
 //! single atomic `nft -f -` transaction as before.
 
+use std::path::Path;
+
+use firecrab_helper_protocol::MAX_INTERFACE_NAME_LEN;
 use futures_util::TryStreamExt;
 use rtnetlink::Handle;
 use rtnetlink::packet_route::link::LinkAttribute;
@@ -15,26 +18,37 @@ use rtnetlink::packet_route::{AddressFamily, route::RouteMessage};
 use crate::firewall::FirewallError;
 
 /// Whether `name` is safe to embed unescaped in an nftables ruleset string.
+/// `1..=15` bytes, charset `[A-Za-z0-9._:-]` only (no `/`, `;`, `"`, `\`).
+/// Rejects empty, loopback, and Firecrab-owned TAP/bridge prefixes.
 pub(crate) fn validate_uplink(name: &str) -> Result<(), FirewallError> {
-    let is_valid = !name.is_empty()
-        && name.len() < 16 // IFNAMSIZ
-        && name.chars().all(|c| c.is_ascii_graphic() && c != '"' && c != '\\' && c != ';');
-    if is_valid {
+    let bytes = name.as_bytes();
+    let charset_ok = (1..=MAX_INTERFACE_NAME_LEN).contains(&bytes.len())
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'));
+    if charset_ok && name != "lo" && !name.starts_with("fct") && !name.starts_with("mnb") {
         Ok(())
     } else {
         Err(FirewallError::InvalidUplinkName(name.to_owned()))
     }
 }
 
+/// Whether `/sys/class/net/<name>` is a host interface. Callers must run
+/// [`validate_uplink`] first so this is not a path-join of untrusted text.
+pub(crate) fn uplink_exists(name: &str) -> bool {
+    Path::new("/sys/class/net").join(name).is_dir()
+}
+
 /// Renders the NAT postrouting chain fragment that `firewall.rs`'s
 /// `render_apply_ruleset` splices into its single `table inet firecrab`
-/// declaration. One dispatch rule per Firecrab subnet that is allowed out
-/// (the default network's plus every internet-enabled MicroNetwork's), all
-/// jumping to the same masquerade chain — every such network egresses
-/// through the host's single uplink. A network with the internet switched
-/// off contributes no rule here, so its addresses are never translated (the
-/// forward-path drop in `firewall.rs` is what actually stops the traffic;
-/// this keeps the NAT table from claiming otherwise).
+/// declaration. `egress` is one `(subnet_cidr, oifname)` pair per
+/// internet-enabled MicroNetwork — each jumps to the same shared
+/// `firecrab_postrouting { masquerade }` chain, but the dispatch `oifname`
+/// is that network's own uplink (or the host default-route iface when the
+/// spec omitted one). A network with the internet switched off contributes
+/// no pair, so its addresses are never translated (the forward-path drop in
+/// `firewall.rs` is what actually stops the traffic; this keeps the NAT
+/// table from claiming otherwise).
 ///
 /// Also masquerades a 127.0.0.0/8-sourced packet destined to one of
 /// `vm_subnets`: a host-local port-forward DNAT (`curl
@@ -48,14 +62,13 @@ pub(crate) fn validate_uplink(name: &str) -> Result<(), FirewallError> {
 /// systemd-resolved's 127.0.0.53 stub resolver), and broke host DNS
 /// resolution.
 pub(crate) fn render_postrouting_chain(
-    uplink: &str,
     vm_subnets: &[String],
-    egress_subnets: &[String],
+    egress: &[(String, String)],
 ) -> String {
-    let dispatch: String = egress_subnets
+    let dispatch: String = egress
         .iter()
-        .map(|subnet| {
-            format!("\t\tip saddr {subnet} oifname \"{uplink}\" jump firecrab_postrouting\n")
+        .map(|(subnet, oif)| {
+            format!("\t\tip saddr {subnet} oifname \"{oif}\" jump firecrab_postrouting\n")
         })
         .collect();
     let loopback_hairpin = if vm_subnets.is_empty() {
@@ -131,5 +144,84 @@ mod tests {
         // route (true in the dev/CI sandbox this was written against).
         let uplink = detect_uplink(&handle).await.unwrap();
         assert!(!uplink.is_empty());
+    }
+
+    #[test]
+    fn validate_uplink_rejects_empty_unsafe_and_owned_names() {
+        for bad in [
+            "",
+            "eth0/foo",
+            "eth0;id",
+            "eth0\"x",
+            "eth0\\x",
+            "eth0 x",
+            "lo",
+            "fct0",
+            "fct0123456789a",
+            "mnb0",
+            "mnb0123456789a",
+            "way-too-long-interface-name",
+            "1234567890123456",
+        ] {
+            assert!(
+                matches!(
+                    validate_uplink(bad),
+                    Err(FirewallError::InvalidUplinkName(_))
+                ),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_uplink_accepts_host_style_names() {
+        for good in ["eth0", "enp0s3", "wlan0", "eth0.100", "eth0:1", "br-ex"] {
+            assert!(validate_uplink(good).is_ok(), "{good}");
+        }
+    }
+
+    #[test]
+    fn uplink_exists_is_false_for_a_missing_interface() {
+        assert!(validate_uplink("nosuchiface0").is_ok());
+        assert!(!uplink_exists("nosuchiface0"));
+    }
+
+    #[test]
+    fn uplink_exists_is_true_for_a_real_sysfs_interface() {
+        let name = std::fs::read_dir("/sys/class/net")
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .find(|name| validate_uplink(name).is_ok())
+            .expect("test host has a usable interface");
+        assert!(uplink_exists(&name), "{name}");
+    }
+
+    #[test]
+    fn postrouting_emits_one_oifname_per_egress_pair() {
+        let ruleset = render_postrouting_chain(
+            &["172.31.0.0/24".to_owned(), "172.32.0.0/24".to_owned()],
+            &[
+                ("172.31.0.0/24".to_owned(), "eth0".to_owned()),
+                ("172.32.0.0/24".to_owned(), "eth1".to_owned()),
+            ],
+        );
+        assert!(
+            ruleset.contains("ip saddr 172.31.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
+        );
+        assert!(
+            ruleset.contains("ip saddr 172.32.0.0/24 oifname \"eth1\" jump firecrab_postrouting")
+        );
+        // Shared masquerade chain, plus the loopback-hairpin rule.
+        assert_eq!(ruleset.matches("masquerade").count(), 2);
+        assert_eq!(ruleset.matches("chain firecrab_postrouting").count(), 1);
+    }
+
+    #[test]
+    fn postrouting_omits_dispatch_when_no_network_is_allowed_out() {
+        let ruleset = render_postrouting_chain(&["172.31.0.0/24".to_owned()], &[]);
+        assert!(!ruleset.contains("oifname"));
+        assert!(ruleset.contains("chain firecrab_postrouting"));
+        assert!(ruleset.contains("ip saddr 127.0.0.0/8 ip daddr { 172.31.0.0/24 } masquerade"));
     }
 }

@@ -363,7 +363,11 @@ jobs:
           elif command -v pacman >/dev/null; then
             retry pacman -Sy --noconfirm --needed bash ca-certificates curl git
           elif command -v zypper >/dev/null; then
-            retry zypper -n install bash ca-certificates curl git
+            # Tumbleweed's oss snapshot is replaced while the container
+            # still has the previous repomd. A stale appdata-icons.tar.gz
+            # hash then makes `zypper install git` fail even after retries
+            # unless metadata is discarded first.
+            retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends bash ca-certificates curl git'
           fi
         shell: sh -e {0}
 

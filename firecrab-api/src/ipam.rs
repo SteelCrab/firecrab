@@ -121,15 +121,17 @@ impl SubnetSpec {
         })
     }
 
-    /// The privileged helper's view of this subnet. `internet_enabled` is
-    /// the network's own stored posture rather than anything derivable from
-    /// the CIDR, so it is passed in.
-    pub fn helper_spec(&self, internet_enabled: bool) -> MicroNetworkSpec {
+    /// The privileged helper's view of this subnet. `internet_enabled` and
+    /// `uplink` are the network's stored posture rather than anything
+    /// derivable from the CIDR, so they are passed in. `uplink` of `None`
+    /// means the helper should use the host default-route iface.
+    pub fn helper_spec(&self, internet_enabled: bool, uplink: Option<String>) -> MicroNetworkSpec {
         MicroNetworkSpec {
             micro_network_id: self.micro_network_id,
             gateway: self.gateway(),
             prefix: self.prefix,
             internet_enabled,
+            uplink,
         }
     }
 
@@ -446,6 +448,20 @@ mod tests {
     fn begin(conn: &mut Connection) -> Transaction<'_> {
         conn.transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap()
+    }
+
+    #[test]
+    fn helper_spec_threads_internet_and_uplink() {
+        let subnet = SubnetSpec::legacy_default_subnet(Uuid::from_u128(1));
+        let auto = subnet.helper_spec(true, None);
+        assert!(auto.internet_enabled);
+        assert_eq!(auto.uplink, None);
+        assert_eq!(auto.gateway, subnet.gateway());
+        assert_eq!(auto.prefix, 24);
+
+        let chosen = subnet.helper_spec(false, Some("eth1".to_owned()));
+        assert!(!chosen.internet_enabled);
+        assert_eq!(chosen.uplink.as_deref(), Some("eth1"));
     }
 
     #[test]

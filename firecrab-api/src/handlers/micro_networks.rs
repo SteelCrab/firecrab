@@ -124,11 +124,15 @@ pub async fn get_micro_network(
             attached_taps,
         },
         nat: MicroNetworkNat {
-            // Masquerading out of the host's single uplink is what having the
-            // internet switched on means for a network; off withholds both
+            // Masquerading out of the chosen (or default-route) uplink is
+            // what having the internet switched on means; off withholds both
             // the NAT rule and the forward permission.
             enabled: network.internet_enabled,
-            uplink: crate::handlers::network::read_uplink().unwrap_or_default(),
+            uplink: network
+                .uplink
+                .clone()
+                .or_else(crate::handlers::network::read_uplink)
+                .unwrap_or_default(),
             source_cidr: network.subnet_cidr,
         },
         firewall: MicroNetworkFirewall {
@@ -172,6 +176,7 @@ pub async fn create_micro_network(
         subnet_cidr: req.subnet_cidr,
         gateway: gateway.to_string(),
         internet_enabled: req.internet_enabled,
+        uplink: req.uplink,
     };
 
     let store = state.store.clone();
@@ -209,8 +214,7 @@ pub async fn create_micro_network(
 }
 
 /// `PATCH /api/micro-networks/{id}`: switches this network's internet access
-/// on or off — firecrab's equivalent of attaching or detaching an AWS
-/// internet gateway. The network, its bridge, its addresses and its DHCP
+/// and/or stored uplink. The network, its bridge, its addresses and its DHCP
 /// keep working either way; only what may leave it changes.
 pub async fn update_micro_network(
     State(state): State<AppState>,
@@ -230,33 +234,47 @@ pub async fn update_micro_network(
         })?;
     let mut network = network.ok_or_else(|| AppError::not_found(request_id.0))?;
 
-    let previous = network.internet_enabled;
-    if previous == req.internet_enabled {
+    let fields = validate_update_micro_network(&req);
+    if !fields.is_empty() {
+        return Err(AppError::validation(fields, request_id.0));
+    }
+
+    let previous_internet = network.internet_enabled;
+    let previous_uplink = network.uplink.clone();
+    let next_uplink = match req.uplink.as_deref() {
+        None => previous_uplink.clone(),
+        Some("") => None,
+        Some(name) => Some(name.to_owned()),
+    };
+    if previous_internet == req.internet_enabled && next_uplink == previous_uplink {
         return Ok(Json(network));
     }
 
     let store = state.store.clone();
-    tokio::task::spawn_blocking(move || store.set_micro_network_internet(id, req.internet_enabled))
-        .await
-        .map_err(|_| AppError::internal(request_id.0))?
-        .map_err(|error| match error {
-            PersistenceError::MissingMicroNetwork { .. } => AppError::not_found(request_id.0),
-            error => {
-                tracing::error!(request_id = %request_id.0, %error, "failed to update micro network");
-                AppError::internal(request_id.0)
-            }
-        })?;
+    let persist_uplink = next_uplink.clone();
+    tokio::task::spawn_blocking(move || {
+        store.set_micro_network_internet(id, req.internet_enabled)?;
+        store.set_micro_network_uplink(id, persist_uplink)?;
+        Ok::<_, PersistenceError>(())
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?
+    .map_err(|error| persist_update_error(error, request_id.0))?;
     network.internet_enabled = req.internet_enabled;
+    network.uplink = next_uplink;
 
     // Unlike create/delete, this one is not best-effort: the whole point of
     // the request is the ruleset, so a stored posture the host isn't
     // enforcing would be a wrong answer rather than a degraded one. Rolled
     // back to what it was, which is still what the host has installed.
     if let Err(error) = ensure_all_networks(&state).await {
-        tracing::error!(request_id = %request_id.0, micro_network_id = %id, error, "failed to apply micro network internet toggle");
+        tracing::error!(request_id = %request_id.0, micro_network_id = %id, error, "failed to apply micro network update");
         let store = state.store.clone();
-        let _ = tokio::task::spawn_blocking(move || store.set_micro_network_internet(id, previous))
-            .await;
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = store.set_micro_network_internet(id, previous_internet);
+            let _ = store.set_micro_network_uplink(id, previous_uplink);
+        })
+        .await;
         return Err(AppError::internal(request_id.0));
     }
 
@@ -416,7 +434,57 @@ fn validate_create(req: &CreateMicroNetworkRequest) -> BTreeMap<String, String> 
             );
         }
     }
+    if let Some(uplink) = &req.uplink
+        && let Some(message) = uplink_field_error(uplink)
+    {
+        fields.insert("uplink".to_owned(), message);
+    }
     fields
+}
+
+fn persist_update_error(error: PersistenceError, request_id: Uuid) -> AppError {
+    match error {
+        PersistenceError::MissingMicroNetwork { .. } => AppError::not_found(request_id),
+        error => {
+            tracing::error!(request_id = %request_id, %error, "failed to update micro network");
+            AppError::internal(request_id)
+        }
+    }
+}
+
+fn validate_update_micro_network(req: &UpdateMicroNetworkRequest) -> BTreeMap<String, String> {
+    let mut fields = BTreeMap::new();
+    if let Some(uplink) = req.uplink.as_deref()
+        && !uplink.is_empty()
+        && let Some(message) = uplink_field_error(uplink)
+    {
+        fields.insert("uplink".to_owned(), message);
+    }
+    fields
+}
+
+fn uplink_field_error(name: &str) -> Option<String> {
+    if name.is_empty() {
+        return Some("must be a host interface name, or omitted for auto".to_owned());
+    }
+    if !valid_uplink_name(name) {
+        return Some("must be 1-15 ASCII letters, numbers, '.', '_', ':' or '-'".to_owned());
+    }
+    if name == "lo" || name.starts_with("fct") || name.starts_with("mnb") {
+        return Some("cannot be loopback or a Firecrab-owned interface".to_owned());
+    }
+    if !crate::handlers::network::host_interface_exists(name) {
+        return Some(format!("{name} is not a host interface"));
+    }
+    None
+}
+
+fn valid_uplink_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    (1..=15).contains(&bytes.len())
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
 }
 
 fn valid_name(name: &str) -> bool {
@@ -452,6 +520,7 @@ pub(crate) mod test_support {
             subnet_cidr: cidr.to_owned(),
             gateway: subnet.gateway().to_string(),
             internet_enabled: true,
+            uplink: None,
         };
         state
             .store
@@ -499,6 +568,7 @@ mod tests {
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await
@@ -507,6 +577,7 @@ mod tests {
         assert_eq!(created.name, "prod");
         assert_eq!(created.subnet_cidr, "172.31.0.0/24");
         assert_eq!(created.gateway, "172.31.0.1");
+        assert_eq!(created.uplink, None);
 
         let Json(listed) = list_micro_networks(State(state.clone()), extension())
             .await
@@ -540,6 +611,7 @@ mod tests {
                 name: String::new(),
                 subnet_cidr: "not-a-cidr".to_owned(),
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await
@@ -560,6 +632,7 @@ mod tests {
                 name: name.to_owned(),
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await
@@ -583,6 +656,7 @@ mod tests {
                     name: "clash".to_owned(),
                     subnet_cidr: cidr.to_owned(),
                     internet_enabled: true,
+                    uplink: None,
                 }),
             )
             .await
@@ -602,6 +676,7 @@ mod tests {
                 name: "other".to_owned(),
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await
@@ -811,6 +886,7 @@ mod tests {
             Path(created.id.to_string()),
             ValidatedJson(UpdateMicroNetworkRequest {
                 internet_enabled: false,
+                uplink: None,
             }),
         )
         .await
@@ -842,6 +918,7 @@ mod tests {
             Path(created.id.to_string()),
             ValidatedJson(UpdateMicroNetworkRequest {
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await
@@ -870,6 +947,7 @@ mod tests {
             Path(created.id.to_string()),
             ValidatedJson(UpdateMicroNetworkRequest {
                 internet_enabled: false,
+                uplink: None,
             }),
         )
         .await
@@ -901,6 +979,7 @@ mod tests {
             Path(Uuid::new_v4().to_string()),
             ValidatedJson(UpdateMicroNetworkRequest {
                 internet_enabled: false,
+                uplink: None,
             }),
         )
         .await
@@ -985,6 +1064,7 @@ mod tests {
                 name: "doomed".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await;
@@ -1014,6 +1094,7 @@ mod tests {
             name: String::new(),
             subnet_cidr: "not-a-cidr".to_owned(),
             internet_enabled: true,
+            uplink: None,
         });
         assert!(fields.contains_key("name"));
         assert!(fields.contains_key("subnetCidr"));
@@ -1026,6 +1107,7 @@ mod tests {
                 name: "prod".to_owned(),
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
+                uplink: None,
             });
             assert!(
                 fields.contains_key("subnetCidr"),
@@ -1037,6 +1119,7 @@ mod tests {
                 name: "prod".to_owned(),
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
+                uplink: None,
             });
             assert!(
                 !fields.contains_key("subnetCidr"),
@@ -1049,5 +1132,267 @@ mod tests {
     fn a_created_network_reports_the_gateway_derived_from_its_cidr() {
         let subnet = SubnetSpec::parse(Uuid::nil(), "172.31.0.0/24").unwrap();
         assert_eq!(subnet.gateway().to_string(), "172.31.0.1");
+    }
+
+    fn existing_uplink() -> String {
+        crate::handlers::network::read_host_interfaces()
+            .into_iter()
+            .next()
+            .expect("test host has a picker interface")
+    }
+
+    async fn validation_fields(error: AppError) -> BTreeMap<String, String> {
+        let response = error.into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        serde_json::from_value(json["error"]["fields"].clone()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_stores_a_valid_uplink_and_list_returns_the_stored_value() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let uplink = existing_uplink();
+
+        let (_, Json(created)) = create_micro_network(
+            State(state.clone()),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: "prod".to_owned(),
+                subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
+                uplink: Some(uplink.clone()),
+            }),
+        )
+        .await
+        .expect("create with uplink");
+        assert_eq!(created.uplink.as_deref(), Some(uplink.as_str()));
+
+        let Json(listed) = list_micro_networks(State(state.clone()), extension())
+            .await
+            .unwrap();
+        assert_eq!(listed[0].uplink.as_deref(), Some(uplink.as_str()));
+
+        let Json(detail) =
+            get_micro_network(State(state), extension(), Path(created.id.to_string()))
+                .await
+                .unwrap();
+        assert_eq!(detail.nat.uplink, uplink);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_empty_malformed_and_missing_uplinks_without_a_row() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        for (uplink, reason) in [
+            (Some(String::new()), "empty"),
+            (Some("eth0/foo".to_owned()), "malformed"),
+            (Some("lo".to_owned()), "loopback"),
+            (Some("nosuchiface0".to_owned()), "missing"),
+        ] {
+            let error = create_micro_network(
+                State(state.clone()),
+                extension(),
+                ValidatedJson(CreateMicroNetworkRequest {
+                    name: "prod".to_owned(),
+                    subnet_cidr: "172.31.0.0/24".to_owned(),
+                    internet_enabled: true,
+                    uplink,
+                }),
+            )
+            .await
+            .unwrap_err();
+            let fields = validation_fields(error).await;
+            assert!(
+                fields.contains_key("uplink"),
+                "{reason} should be a field error: {fields:?}"
+            );
+        }
+
+        let Json(listed) = list_micro_networks(State(state), extension())
+            .await
+            .unwrap();
+        assert!(listed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn patch_sets_a_valid_uplink_and_omitted_leaves_the_stored_value() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let created = create_network(&state, "prod", "172.31.0.0/24").await;
+        assert_eq!(created.uplink, None);
+        let uplink = existing_uplink();
+
+        let Json(updated) = update_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(created.id.to_string()),
+            ValidatedJson(UpdateMicroNetworkRequest {
+                internet_enabled: true,
+                uplink: Some(uplink.clone()),
+            }),
+        )
+        .await
+        .expect("patch uplink");
+        assert_eq!(updated.uplink.as_deref(), Some(uplink.as_str()));
+
+        let Json(toggled) = update_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(created.id.to_string()),
+            ValidatedJson(UpdateMicroNetworkRequest {
+                internet_enabled: false,
+                uplink: None,
+            }),
+        )
+        .await
+        .expect("patch internet only");
+        assert!(!toggled.internet_enabled);
+        assert_eq!(toggled.uplink.as_deref(), Some(uplink.as_str()));
+
+        let Json(listed) = list_micro_networks(State(state.clone()), extension())
+            .await
+            .unwrap();
+        assert_eq!(listed[0].uplink.as_deref(), Some(uplink.as_str()));
+
+        let Json(reset) = update_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(created.id.to_string()),
+            ValidatedJson(UpdateMicroNetworkRequest {
+                internet_enabled: false,
+                uplink: Some(String::new()),
+            }),
+        )
+        .await
+        .expect("empty uplink resets to auto");
+        assert_eq!(reset.uplink, None);
+        assert!(!reset.internet_enabled);
+    }
+
+    #[tokio::test]
+    async fn patch_rejects_a_bad_uplink_without_changing_the_row() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let created = create_network(&state, "prod", "172.31.0.0/24").await;
+
+        for uplink in ["eth0/foo".to_owned(), "nosuchiface0".to_owned()] {
+            let error = update_micro_network(
+                State(state.clone()),
+                extension(),
+                Path(created.id.to_string()),
+                ValidatedJson(UpdateMicroNetworkRequest {
+                    internet_enabled: true,
+                    uplink: Some(uplink),
+                }),
+            )
+            .await
+            .unwrap_err();
+            let fields = validation_fields(error).await;
+            assert!(fields.contains_key("uplink"), "{fields:?}");
+        }
+
+        let Json(listed) = list_micro_networks(State(state), extension())
+            .await
+            .unwrap();
+        assert_eq!(listed[0].uplink, None);
+        assert!(listed[0].internet_enabled);
+    }
+
+    #[tokio::test]
+    async fn a_failed_apply_rolls_back_internet_and_uplink() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .expect("empty template spec list should always verify");
+        let state = AppState::with_db_file(templates, directory.path().join("state.db"))
+            .await
+            .expect("fresh temp db should open cleanly");
+        let socket_path = directory.path().join("net-helper.sock");
+        crate::network::test_support::spawn_recording_helper(&socket_path, Some("ensure_firewall"));
+        let state =
+            state.with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+        let created = create_network(&state, "prod", "172.31.0.0/24").await;
+        let uplink = existing_uplink();
+
+        let error = update_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(created.id.to_string()),
+            ValidatedJson(UpdateMicroNetworkRequest {
+                internet_enabled: false,
+                uplink: Some(uplink),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+
+        let Json(listed) = list_micro_networks(State(state), extension())
+            .await
+            .unwrap();
+        assert!(listed[0].internet_enabled);
+        assert_eq!(listed[0].uplink, None);
+    }
+
+    #[test]
+    fn validate_create_and_update_reject_a_bad_uplink() {
+        let fields = validate_create(&CreateMicroNetworkRequest {
+            name: "prod".to_owned(),
+            subnet_cidr: "172.31.0.0/24".to_owned(),
+            internet_enabled: true,
+            uplink: Some(String::new()),
+        });
+        assert!(fields.contains_key("uplink"));
+
+        let fields = validate_update_micro_network(&UpdateMicroNetworkRequest {
+            internet_enabled: true,
+            uplink: Some("eth0/foo".to_owned()),
+        });
+        assert!(fields.contains_key("uplink"));
+
+        let fields = validate_update_micro_network(&UpdateMicroNetworkRequest {
+            internet_enabled: true,
+            uplink: None,
+        });
+        assert!(fields.is_empty());
+
+        let fields = validate_update_micro_network(&UpdateMicroNetworkRequest {
+            internet_enabled: true,
+            uplink: Some(String::new()),
+        });
+        assert!(
+            fields.is_empty(),
+            "empty PATCH uplink resets to auto, it is not a field error"
+        );
+    }
+
+    #[test]
+    fn persist_update_error_maps_missing_network_to_not_found() {
+        let error = persist_update_error(
+            PersistenceError::MissingMicroNetwork { id: Uuid::nil() },
+            Uuid::nil(),
+        );
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn persist_update_error_maps_other_failures_to_internal() {
+        let error = persist_update_error(
+            PersistenceError::CorruptRecord {
+                id: "mn".to_owned(),
+                reason: "env is not a JSON object of strings".to_owned(),
+            },
+            Uuid::nil(),
+        );
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

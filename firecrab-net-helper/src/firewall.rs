@@ -120,6 +120,9 @@ struct FirewallState {
     /// match, so an uplink change with an otherwise-identical `VmPolicy`
     /// still needs a real reapply, not a no-op.
     applied_vms: std::collections::HashMap<Uuid, (String, VmPolicy)>,
+    /// Last `EnsureFirewall` network set, so `ApplyVmPolicy` can resolve
+    /// the same per-network uplink without a protocol change.
+    networks: Vec<MicroNetworkSpec>,
 }
 
 impl FirewallActor {
@@ -150,14 +153,18 @@ pub async fn ensure_firewall(
 ) -> Result<(), FirewallError> {
     let (connection, handle, _) = new_connection().map_err(FirewallError::Connection)?;
     tokio::spawn(connection);
-    let uplink = nat::detect_uplink(&handle).await?;
+    let default_uplink = nat::detect_uplink(&handle).await?;
 
     let mut state = actor.state.lock().await;
-    let base_ruleset = render_apply_ruleset(&uplink, micro_networks)?;
+    state.networks = micro_networks.to_vec();
+    let base_ruleset = render_apply_ruleset(&default_uplink, micro_networks)?;
     let desired_vms: std::collections::HashMap<Uuid, (String, VmPolicy)> = vm_policies
         .iter()
         .cloned()
-        .map(|policy| (policy.vm_id, (uplink.clone(), policy)))
+        .map(|policy| {
+            let uplink = resolved_uplink(&default_uplink, micro_networks, policy.ipv4);
+            (policy.vm_id, (uplink, policy))
+        })
         .collect();
     if state.applied_ruleset.as_deref() == Some(base_ruleset.as_str())
         && state.applied_vms == desired_vms
@@ -165,13 +172,17 @@ pub async fn ensure_firewall(
         return Ok(());
     }
 
-    let ruleset = render_reconciled_ruleset(base_ruleset.as_str(), &uplink, vm_policies);
+    let ruleset = render_reconciled_ruleset(
+        base_ruleset.as_str(),
+        &default_uplink,
+        micro_networks,
+        vm_policies,
+    );
     run_nft(&ruleset).await?;
     // Best-effort iptables compat: coexist with Docker's FORWARD DROP policy.
     ensure_iptables_compat(
         &bridge_names(micro_networks),
-        &egress_subnet_cidrs(micro_networks),
-        &uplink,
+        &egress_pairs(&default_uplink, micro_networks),
     )
     .await;
     state.applied_vms = desired_vms;
@@ -183,12 +194,19 @@ pub async fn ensure_firewall(
 /// The base begins by flushing the two Firecrab-owned tables, so any old
 /// policy not present in this output is removed in the same nft transaction
 /// that restores policies which are still desired.
-fn render_reconciled_ruleset(base_ruleset: &str, uplink: &str, vm_policies: &[VmPolicy]) -> String {
+fn render_reconciled_ruleset(
+    base_ruleset: &str,
+    default_uplink: &str,
+    micro_networks: &[MicroNetworkSpec],
+    vm_policies: &[VmPolicy],
+) -> String {
     let mut ruleset = base_ruleset.to_owned();
     let mut sorted_policies = vm_policies.iter().collect::<Vec<_>>();
     sorted_policies.sort_by_key(|policy| policy.vm_id);
     for policy in sorted_policies {
-        ruleset.push_str(&render_vm_policy(uplink, policy));
+        let uplink = resolved_uplink(default_uplink, micro_networks, policy.ipv4);
+        let internet = network_internet_enabled(micro_networks, policy.ipv4);
+        ruleset.push_str(&render_vm_policy_for_network(&uplink, policy, internet));
         ruleset.push('\n');
     }
     ruleset
@@ -200,9 +218,11 @@ fn render_reconciled_ruleset(base_ruleset: &str, uplink: &str, vm_policies: &[Vm
 pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<(), FirewallError> {
     let (connection, handle, _) = new_connection().map_err(FirewallError::Connection)?;
     tokio::spawn(connection);
-    let uplink = nat::detect_uplink(&handle).await?;
+    let default_uplink = nat::detect_uplink(&handle).await?;
 
     let mut state = actor.state.lock().await;
+    let uplink = resolved_uplink(&default_uplink, &state.networks, policy.ipv4);
+    let internet = network_internet_enabled(&state.networks, policy.ipv4);
     let previous = state.applied_vms.get(&policy.vm_id).cloned();
 
     // `ensure_all_networks` now includes active policies in its atomic
@@ -219,8 +239,8 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
     // objects and build the new ones in one nft transaction so other VMs are
     // never affected and there is no unprotected intermediate state.
     let ruleset = match previous {
-        Some((_, previous)) => render_vm_policy_replacement(&uplink, &previous, &policy),
-        None => render_vm_policy(&uplink, &policy),
+        Some((_, previous)) => render_vm_policy_replacement(&uplink, &previous, &policy, internet),
+        None => render_vm_policy_for_network(&uplink, &policy, internet),
     };
     run_nft(&ruleset).await?;
     state.applied_vms.insert(policy.vm_id, (uplink, policy));
@@ -249,6 +269,7 @@ pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError>
     run_nft(&render_remove_ruleset()).await?;
     state.applied_vms.clear();
     state.applied_ruleset = None;
+    state.networks.clear();
     Ok(())
 }
 
@@ -269,18 +290,61 @@ fn subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
         .collect()
 }
 
-/// The subnets allowed out of the host — MicroNetworks with internet on
-/// (`public-docs/networking.md`).
-fn egress_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
+/// Internet-enabled networks as `(subnet_cidr, oifname)` pairs. A missing
+/// spec uplink uses `default_uplink` (`detect_uplink()` at apply time).
+fn egress_pairs(
+    default_uplink: &str,
+    micro_networks: &[MicroNetworkSpec],
+) -> Vec<(String, String)> {
     micro_networks
         .iter()
         .filter(|network| network.internet_enabled)
-        .map(MicroNetworkSpec::subnet_cidr)
+        .map(|network| {
+            (
+                network.subnet_cidr(),
+                network
+                    .uplink
+                    .as_deref()
+                    .unwrap_or(default_uplink)
+                    .to_owned(),
+            )
+        })
         .collect()
 }
 
+/// The NIC a VM's port-forward DNAT should match: the uplink of the
+/// MicroNetwork that owns its lease, or `default_uplink` when the spec
+/// omitted one / the lease is not in any known subnet.
+fn resolved_uplink(
+    default_uplink: &str,
+    micro_networks: &[MicroNetworkSpec],
+    ipv4: Ipv4Addr,
+) -> String {
+    micro_networks
+        .iter()
+        .find(|network| network.contains(ipv4))
+        .map(|network| {
+            network
+                .uplink
+                .as_deref()
+                .unwrap_or(default_uplink)
+                .to_owned()
+        })
+        .unwrap_or_else(|| default_uplink.to_owned())
+}
+
+/// Whether the MicroNetwork that owns `ipv4` may accept inbound port
+/// forwards. A missing lease keeps today's render (treat as online).
+fn network_internet_enabled(micro_networks: &[MicroNetworkSpec], ipv4: Ipv4Addr) -> bool {
+    micro_networks
+        .iter()
+        .find(|network| network.contains(ipv4))
+        .map(|network| network.internet_enabled)
+        .unwrap_or(true)
+}
+
 /// The subnets whose internet is switched off — the complement of
-/// [`egress_subnet_cidrs`] among the MicroNetworks.
+/// [`egress_pairs`] among the MicroNetworks.
 fn offline_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
     micro_networks
         .iter()
@@ -301,14 +365,17 @@ fn offline_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
 /// The complete desired VM snapshot is appended to this recreation in the
 /// same transaction by [`render_reconciled_ruleset`].
 fn render_apply_ruleset(
-    uplink: &str,
+    default_uplink: &str,
     micro_networks: &[MicroNetworkSpec],
 ) -> Result<String, FirewallError> {
-    nat::validate_uplink(uplink)?;
+    nat::validate_uplink(default_uplink)?;
+    let egress = egress_pairs(default_uplink, micro_networks);
+    for (_, oif) in &egress {
+        nat::validate_uplink(oif)?;
+    }
     let bridges = bridge_names(micro_networks);
     let subnets = subnet_cidrs(micro_networks);
-    let postrouting =
-        nat::render_postrouting_chain(uplink, &subnets, &egress_subnet_cidrs(micro_networks));
+    let postrouting = nat::render_postrouting_chain(&subnets, &egress);
 
     // One dispatch pair per bridge: the per-VM verdict maps below are keyed
     // by leased IP (globally unique across networks, since their subnets
@@ -399,6 +466,10 @@ fn render_apply_ruleset(
 /// rendered through [`render_vm_policy_replacement`] so it cannot disturb
 /// any other VM's chains or map elements.
 fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
+    render_vm_policy_for_network(uplink, policy, true)
+}
+
+fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enabled: bool) -> String {
     let tap = tap_name(policy.vm_id);
     let tag = policy.vm_id.simple();
     let ip = policy.ipv4;
@@ -424,7 +495,7 @@ fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
     let mut dnat_prerouting_rules = String::new();
     let mut dnat_output_rules = String::new();
     let mut dnat_forward_accept_rules = String::new();
-    for pf in &policy.port_forwards {
+    for pf in policy.port_forwards.iter().filter(|_| internet_enabled) {
         let proto = if pf.protocol.eq_ignore_ascii_case("udp") {
             "udp"
         } else {
@@ -489,12 +560,17 @@ fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
 /// transaction. The old map elements must be deleted before their chains;
 /// then the new chain and map entries can be installed without conflicting
 /// with the old names or (when the lease changed) its old IPv4 map keys.
-fn render_vm_policy_replacement(uplink: &str, previous: &VmPolicy, policy: &VmPolicy) -> String {
+fn render_vm_policy_replacement(
+    uplink: &str,
+    previous: &VmPolicy,
+    policy: &VmPolicy,
+    internet_enabled: bool,
+) -> String {
     debug_assert_eq!(previous.vm_id, policy.vm_id);
     format!(
         "{}{}",
         render_vm_policy_removal(previous.vm_id, previous.ipv4),
-        render_vm_policy(uplink, policy)
+        render_vm_policy_for_network(uplink, policy, internet_enabled)
     )
 }
 
@@ -536,7 +612,7 @@ fn render_remove_ruleset() -> String {
 /// FORWARD ACCEPT rules are checked with `-C` first (idempotent) and appended
 /// only if absent. All failures are silently ignored — the nftables path is
 /// canonical; this is purely a compatibility shim for iptables-managed hosts.
-async fn ensure_iptables_compat(bridges: &[String], egress_subnets: &[String], uplink: &str) {
+async fn ensure_iptables_compat(bridges: &[String], egress: &[(String, String)]) {
     for bridge in bridges {
         for dir in ["-i", "-o"] {
             let already = Command::new("iptables")
@@ -557,7 +633,7 @@ async fn ensure_iptables_compat(bridges: &[String], egress_subnets: &[String], u
             }
         }
     }
-    for subnet in egress_subnets {
+    for (subnet, oif) in egress {
         let already = Command::new("iptables")
             .args([
                 "-t",
@@ -567,7 +643,7 @@ async fn ensure_iptables_compat(bridges: &[String], egress_subnets: &[String], u
                 "-s",
                 subnet,
                 "-o",
-                uplink,
+                oif,
                 "-j",
                 "MASQUERADE",
             ])
@@ -587,7 +663,7 @@ async fn ensure_iptables_compat(bridges: &[String], egress_subnets: &[String], u
                     "-s",
                     subnet,
                     "-o",
-                    uplink,
+                    oif,
                     "-j",
                     "MASQUERADE",
                 ])
@@ -655,6 +731,7 @@ mod tests {
             gateway: gateway.parse().unwrap(),
             prefix,
             internet_enabled: true,
+            uplink: None,
         }
     }
 
@@ -713,16 +790,58 @@ mod tests {
     }
 
     #[test]
+    fn two_internet_networks_render_distinct_oifname_rules() {
+        let eth0_net = MicroNetworkSpec {
+            uplink: Some("eth0".to_owned()),
+            ..sample_network(0x1234, "172.31.0.1", 24)
+        };
+        let eth1_net = MicroNetworkSpec {
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x5678, "172.32.0.1", 24)
+        };
+        let ruleset = render_apply_ruleset("wlan0", &[eth0_net, eth1_net]).unwrap();
+        assert!(
+            ruleset.contains("ip saddr 172.31.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
+        );
+        assert!(
+            ruleset.contains("ip saddr 172.32.0.0/24 oifname \"eth1\" jump firecrab_postrouting")
+        );
+        assert!(!ruleset.contains("oifname \"wlan0\" jump firecrab_postrouting"));
+        // Shared masquerade chain plus the loopback-hairpin rule.
+        assert_eq!(ruleset.matches("masquerade").count(), 2);
+        assert_eq!(ruleset.matches("chain firecrab_postrouting").count(), 1);
+    }
+
+    #[test]
+    fn omitted_uplink_uses_the_default_detect_uplink_value() {
+        let auto = sample_network(0x1234, "172.31.0.1", 24);
+        let chosen = MicroNetworkSpec {
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x5678, "172.32.0.1", 24)
+        };
+        let ruleset = render_apply_ruleset("wlan0", &[auto, chosen]).unwrap();
+        assert!(
+            ruleset.contains("ip saddr 172.31.0.0/24 oifname \"wlan0\" jump firecrab_postrouting")
+        );
+        assert!(
+            ruleset.contains("ip saddr 172.32.0.0/24 oifname \"eth1\" jump firecrab_postrouting")
+        );
+    }
+
+    #[test]
     fn a_network_with_the_internet_off_is_neither_masqueraded_nor_forwarded() {
         let offline = MicroNetworkSpec {
             internet_enabled: false,
+            uplink: Some("eth1".to_owned()),
             ..sample_network(0x1234, "172.31.0.1", 24)
         };
         let online = sample_network(0x5678, "172.32.0.1", 24);
-        let ruleset = render_apply_ruleset("eth0", &[offline, online]).unwrap();
+        let ruleset = render_apply_ruleset("eth0", &[offline.clone(), online]).unwrap();
 
-        // No NAT for it: its addresses are never translated.
+        // No NAT for it: its addresses are never translated, even if a
+        // per-network uplink was stored.
         assert!(!ruleset.contains("ip saddr 172.31.0.0/24 oifname"));
+        assert!(!ruleset.contains("oifname \"eth1\" jump firecrab_postrouting"));
         // And nothing new leaves it at L3 regardless of per-VM egress policy.
         assert!(ruleset.contains("ip saddr { 172.31.0.0/24 } drop"));
         // The drop lands after the established/related accept, so a VM that
@@ -749,7 +868,7 @@ mod tests {
         let online = sample_network(0x1234, "172.31.0.1", 24);
         let offline = MicroNetworkSpec {
             internet_enabled: false,
-            ..online
+            ..online.clone()
         };
         assert_ne!(
             render_apply_ruleset("eth0", &[online]).unwrap(),
@@ -769,7 +888,7 @@ mod tests {
     #[test]
     fn global_ruleset_dispatches_bridge_traffic_from_accept_policy_base_chains() {
         let network = sample_network(0x1234, "172.31.0.1", 24);
-        let ruleset = render_apply_ruleset("eth0", &[network]).unwrap();
+        let ruleset = render_apply_ruleset("eth0", &[network.clone()]).unwrap();
         assert!(ruleset.contains("policy accept"));
         let bridge = network.bridge_name();
         assert!(ruleset.contains(&format!("iifname \"{bridge}\" jump firecrab_egress")));
@@ -813,12 +932,28 @@ mod tests {
 
     #[test]
     fn malformed_uplink_names_are_rejected_before_touching_nft() {
-        for bad in ["", "eth0\"; flush ruleset #", "way-too-long-interface-name"] {
+        for bad in [
+            "",
+            "eth0\"; flush ruleset #",
+            "way-too-long-interface-name",
+            "eth0/foo",
+            "lo",
+            "fct0",
+            "mnb0",
+        ] {
             assert!(matches!(
                 render_apply_ruleset(bad, &[]),
                 Err(FirewallError::InvalidUplinkName(_))
             ));
         }
+        let bad_spec = MicroNetworkSpec {
+            uplink: Some("eth0;id".to_owned()),
+            ..sample_network(0x1234, "172.31.0.1", 24)
+        };
+        assert!(matches!(
+            render_apply_ruleset("eth0", &[bad_spec]),
+            Err(FirewallError::InvalidUplinkName(_))
+        ));
     }
 
     #[test]
@@ -958,6 +1093,59 @@ mod tests {
     }
 
     #[test]
+    fn port_forward_dnat_follows_the_vms_network_uplink() {
+        let network = MicroNetworkSpec {
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x1234, "172.31.0.1", 24)
+        };
+        let mut policy = sample_policy(EgressPolicy::Internet, false);
+        policy.ipv4 = Ipv4Addr::new(172, 31, 0, 42);
+        policy.port_forwards = vec![firecrab_helper_protocol::network::PortForwardSpec {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: "tcp".to_owned(),
+        }];
+        let base = render_apply_ruleset("eth0", std::slice::from_ref(&network)).unwrap();
+        let ruleset = render_reconciled_ruleset(
+            &base,
+            "eth0",
+            std::slice::from_ref(&network),
+            std::slice::from_ref(&policy),
+        );
+        assert!(ruleset.contains("iifname \"eth1\" tcp dport 8080"));
+        assert!(!ruleset.contains("iifname \"eth0\" tcp dport 8080"));
+    }
+
+    #[test]
+    fn port_forwards_are_omitted_when_the_network_internet_is_off() {
+        let offline = MicroNetworkSpec {
+            internet_enabled: false,
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x1234, "172.31.0.1", 24)
+        };
+        let mut policy = sample_policy(EgressPolicy::Internet, false);
+        policy.ipv4 = Ipv4Addr::new(172, 31, 0, 42);
+        policy.port_forwards = vec![firecrab_helper_protocol::network::PortForwardSpec {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: "tcp".to_owned(),
+        }];
+        let base = render_apply_ruleset("eth0", std::slice::from_ref(&offline)).unwrap();
+        let ruleset = render_reconciled_ruleset(
+            &base,
+            "eth0",
+            std::slice::from_ref(&offline),
+            std::slice::from_ref(&policy),
+        );
+        assert!(!ruleset.contains("dnat ip to 172.31.0.42:80"), "{ruleset}");
+        assert!(!ruleset.contains("ct status dnat accept"), "{ruleset}");
+        assert!(
+            ruleset.contains("ip saddr { 172.31.0.0/24 } drop"),
+            "{ruleset}"
+        );
+    }
+
+    #[test]
     fn port_forward_prerouting_dnat_is_scoped_to_the_uplink() {
         let mut policy = sample_policy(EgressPolicy::Internet, false);
         policy.port_forwards = vec![firecrab_helper_protocol::network::PortForwardSpec {
@@ -996,7 +1184,7 @@ mod tests {
             ..desired.clone()
         };
         let base = render_apply_ruleset("eth0", &[]).unwrap();
-        let ruleset = render_reconciled_ruleset(&base, "eth0", std::slice::from_ref(&desired));
+        let ruleset = render_reconciled_ruleset(&base, "eth0", &[], std::slice::from_ref(&desired));
 
         assert!(ruleset.contains("delete table inet firecrab"));
         assert!(ruleset.contains(&format!("vm_{}", desired.vm_id.simple())));
@@ -1014,7 +1202,7 @@ mod tests {
             allow_host_ssh: true,
             ..previous.clone()
         };
-        let ruleset = render_vm_policy_replacement("eth0", &previous, &replacement);
+        let ruleset = render_vm_policy_replacement("eth0", &previous, &replacement, true);
 
         let old_element = ruleset
             .find("delete element inet firecrab vm_egress { 172.30.0.42 }")
@@ -1070,6 +1258,66 @@ mod tests {
         );
         assert_eq!(EgressPolicy::from_id("0.0.0.0/0"), None);
         assert_eq!(EgressPolicy::from_id("wide-open"), None);
+    }
+
+    #[test]
+    fn resolved_uplink_uses_the_matching_network_or_falls_back() {
+        let auto = sample_network(0x1234, "172.31.0.1", 24);
+        let pinned = MicroNetworkSpec {
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x5678, "172.32.0.1", 24)
+        };
+        let networks = [auto, pinned];
+        assert_eq!(
+            resolved_uplink("wlan0", &networks, Ipv4Addr::new(172, 31, 0, 42)),
+            "wlan0"
+        );
+        assert_eq!(
+            resolved_uplink("wlan0", &networks, Ipv4Addr::new(172, 32, 0, 9)),
+            "eth1"
+        );
+        assert_eq!(
+            resolved_uplink("wlan0", &networks, Ipv4Addr::new(10, 0, 0, 1)),
+            "wlan0"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_firewall_renders_per_vm_uplink_before_nft() {
+        let network = MicroNetworkSpec {
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x1234, "172.30.0.1", 24)
+        };
+        let policy = sample_policy(EgressPolicy::Internet, false);
+        let actor = FirewallActor::new();
+        let _ = ensure_firewall(&actor, std::slice::from_ref(&network), &[policy]).await;
+        assert_eq!(
+            actor.state.lock().await.networks[0].uplink.as_deref(),
+            Some("eth1")
+        );
+    }
+
+    #[tokio::test]
+    async fn iptables_compat_walks_each_egress_oif() {
+        // Best-effort shim: exercise the per-oif loop even when iptables
+        // is missing or the process cannot change the host tables.
+        ensure_iptables_compat(
+            &["mnbtst0".to_owned()],
+            &[
+                ("172.31.0.0/24".to_owned(), "eth0".to_owned()),
+                ("172.32.0.0/24".to_owned(), "eth1".to_owned()),
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remove_firewall_clears_cached_networks() {
+        let actor = FirewallActor::new();
+        actor.state.lock().await.networks = vec![sample_network(0x1234, "172.31.0.1", 24)];
+        if remove_firewall(&actor).await.is_ok() {
+            assert!(actor.state.lock().await.networks.is_empty());
+        }
     }
 
     #[tokio::test]

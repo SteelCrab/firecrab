@@ -38,6 +38,21 @@ curl -s -X PATCH http://127.0.0.1:3000/api/micro-networks/<id> \
   -d '{"internetEnabled":false}'
 ```
 
+Optional `uplink` chooses the host NIC used for that NAT.
+Omit it, or send `null`, to use the host default-route interface.
+An empty string on PATCH resets the stored name back to that auto default.
+
+```sh
+curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"edge","subnetCidr":"172.32.0.0/24","uplink":"eth1"}'
+```
+
+`GET /api/network` lists host interfaces for the picker.
+Two internet-enabled networks can masquerade out different NICs.
+The helper matches `oifname` on the existing postrouting chain.
+It does not install a VRF or extra route tables.
+
 The VM field `egressPolicy` controls one VM.
 Its values are `internet` and `isolated`.
 

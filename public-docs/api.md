@@ -144,6 +144,27 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 | MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}` |
 | Host | `/api/host` and `/api/network` |
 
+## MicroNetwork
+
+`POST /api/micro-networks` accepts `name`, `subnetCidr`, optional `internetEnabled` (default `true`), and optional `uplink`.
+`uplink` is a host NIC name.
+Omit it or send `null` to use the host default-route interface.
+An empty string on create is `400` with field `uplink`.
+
+`GET /api/micro-networks` and `GET /api/micro-networks/{id}` return the stored `uplink`.
+`null` means auto.
+Detail `nat.uplink` is the effective interface after that default is applied.
+
+`PATCH /api/micro-networks/{id}` requires `internetEnabled`.
+Omit `uplink` to leave the stored name unchanged.
+A name pins NAT to that NIC.
+`""` resets the stored name to auto.
+
+`GET /api/network` still reports the default-route iface as `uplink`.
+It also returns `interfaces` for the dashboard picker.
+That list comes from `/sys/class/net` and omits `lo`, `fct*`, and `mnb*`.
+A bad or missing name is `400` `validation_failed` on field `uplink`.
+
 ## MicroRegistry
 
 `GET /api/microregistry` lists host-arch release packages and local custom aliases.
