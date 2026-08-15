@@ -247,6 +247,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use std::collections::BTreeMap;
+
     use crate::rootfs::{run_debugfs, specialize_guest, write_into_image};
 
     fn debugfs_cat(path: &Path, guest_path: &str) -> String {
@@ -290,7 +292,7 @@ mod tests {
         )
         .unwrap();
 
-        specialize_guest(&rootfs, id).unwrap();
+        specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
 
         let agent = debugfs_cat(&rootfs, BIN_PATH);
         assert!(
@@ -338,7 +340,7 @@ mod tests {
             run_debugfs(&rootfs, &format!("mkdir {dir}")).unwrap();
         }
 
-        specialize_guest(&rootfs, id).unwrap();
+        specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
 
         assert!(guest_path_exists(&rootfs, BIN_PATH));
         assert!(guest_path_exists(&rootfs, UNIT_PATH));

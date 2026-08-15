@@ -60,6 +60,8 @@ the guest disk.
 
 Resource changes are allowed only while the VM is inactive.
 Disk size can grow but cannot shrink.
+Per-VM `env` is the same: edit only while stopped, applied on the next start, stored in plaintext.
+An image without `/etc/firecrab/services.d/app` ignores runtime env (`hasGuestService` on `GET /api/images`).
 
 ## Images
 

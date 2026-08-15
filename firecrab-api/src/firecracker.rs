@@ -764,6 +764,7 @@ mod tests {
             last_runtime_id: None,
             startup_step: None,
             startup_timeline: Vec::new(),
+            env: Default::default(),
         }
     }
 

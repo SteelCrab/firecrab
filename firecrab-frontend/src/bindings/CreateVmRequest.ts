@@ -15,4 +15,6 @@ export type CreateVmRequest = {
   shellIds?: Array<string>;
   /** Inbound port forwarding rules (DNAT). */
   portForwards?: Array<PortForward>;
+  /** Per-VM environment applied on the next start. Omitted = {}. */
+  env?: { [key: string]: string };
 };

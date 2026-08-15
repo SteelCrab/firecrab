@@ -5,6 +5,7 @@
 //! sentinel. The guest boot script already runs every executable in
 //! `/etc/firecrab/services.d`, so this stage drops one script there.
 
+use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
@@ -122,7 +123,11 @@ fn is_valid_env(entry: &str) -> bool {
     }
 }
 
-fn posix_quote(value: &str) -> String {
+const VM_ENV_BEGIN: &str = "# >>> firecrab vm env";
+const VM_ENV_END: &str = "# <<< firecrab vm env";
+
+/// Single-quote a value for `export KEY=...` so `$`, quotes, and newlines stay literal.
+pub(crate) fn posix_quote(value: &str) -> String {
     let mut out = String::from("'");
     for ch in value.chars() {
         if ch == '\'' {
@@ -133,6 +138,106 @@ fn posix_quote(value: &str) -> String {
     }
     out.push('\'');
     out
+}
+
+/// Rewrites the delimited Firecrab env block in `services.d/app`.
+///
+/// Image `export` lines stay. A present block is replaced wholesale.
+/// Absent + non-empty env inserts after the last image `export ` line and
+/// before `exec`. An empty map deletes the block and markers. `BTreeMap`
+/// key order plus [`posix_quote`] make repeated applies byte-identical.
+pub(crate) fn rewrite_vm_env_block(script: &str, env: &BTreeMap<String, String>) -> String {
+    let without = strip_vm_env_block(script);
+    if env.is_empty() {
+        return without;
+    }
+    insert_vm_env_block(&without, &render_vm_env_block(env))
+}
+
+fn render_vm_env_block(env: &BTreeMap<String, String>) -> String {
+    let mut block = String::from(VM_ENV_BEGIN);
+    block.push('\n');
+    for (key, value) in env {
+        block.push_str("export ");
+        block.push_str(key);
+        block.push('=');
+        block.push_str(&posix_quote(value));
+        block.push('\n');
+    }
+    block.push_str(VM_ENV_END);
+    block.push('\n');
+    block
+}
+
+fn strip_vm_env_block(script: &str) -> String {
+    let Some(begin) = find_line_index(script, VM_ENV_BEGIN) else {
+        return script.to_owned();
+    };
+    let after_begin = begin + VM_ENV_BEGIN.len();
+    let Some(end_rel) = find_line_index(&script[after_begin..], VM_ENV_END) else {
+        return script.to_owned();
+    };
+    let end = after_begin + end_rel;
+    let mut after_end = end + VM_ENV_END.len();
+    if script[after_end..].starts_with('\n') {
+        after_end += 1;
+    }
+    let mut out = String::with_capacity(script.len());
+    out.push_str(&script[..begin]);
+    out.push_str(&script[after_end..]);
+    out
+}
+
+fn insert_vm_env_block(script: &str, block: &str) -> String {
+    let insert_at = vm_env_insertion_index(script);
+    let mut out = String::with_capacity(script.len() + block.len());
+    out.push_str(&script[..insert_at]);
+    out.push_str(block);
+    out.push_str(&script[insert_at..]);
+    out
+}
+
+fn vm_env_insertion_index(script: &str) -> usize {
+    let mut last_export_end = None;
+    let mut exec_start = None;
+    let mut pos = 0;
+    for line in script.split_inclusive('\n') {
+        let content = line.trim_end_matches('\n');
+        if content.starts_with("export ") {
+            last_export_end = Some(pos + line.len());
+        }
+        if exec_start.is_none() && (content == "exec" || content.starts_with("exec ")) {
+            exec_start = Some(pos);
+        }
+        pos += line.len();
+    }
+    if let Some(after_export) = last_export_end {
+        if exec_start.is_none_or(|exec| after_export <= exec) {
+            return after_export;
+        }
+    }
+    exec_start.unwrap_or(script.len())
+}
+
+fn find_line_index(script: &str, marker: &str) -> Option<usize> {
+    if line_at(script, 0, marker) {
+        return Some(0);
+    }
+    let mut offset = 0;
+    while let Some(rel) = script[offset..].find('\n') {
+        let start = offset + rel + 1;
+        if line_at(script, start, marker) {
+            return Some(start);
+        }
+        offset = start;
+    }
+    None
+}
+
+fn line_at(script: &str, start: usize, marker: &str) -> bool {
+    let rest = &script[start..];
+    rest.starts_with(marker)
+        && (rest.len() == marker.len() || rest.as_bytes().get(marker.len()) == Some(&b'\n'))
 }
 
 fn service_io(operation: &'static str, path: &Path, source: io::Error) -> ResolveError {

@@ -1958,7 +1958,7 @@ mod register;
 #[cfg(test)]
 mod register_tests;
 
-mod service;
+pub(crate) mod service;
 
 #[cfg(test)]
 mod service_tests;

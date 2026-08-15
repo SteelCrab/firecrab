@@ -135,6 +135,10 @@ pub struct CreateVmRequest {
     /// Inbound port forwarding rules (DNAT) from host ports to guest ports.
     #[serde(default)]
     pub port_forwards: Vec<PortForward>,
+    /// Per-VM environment applied on the next start. Omitted = `{}`.
+    /// Values are stored and written into the guest in plaintext.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 /// Network protocol for a port forward rule.
@@ -297,6 +301,11 @@ pub struct UpdateVmResourcesRequest {
     /// New outbound network posture; defaults to `Internet`.
     #[serde(default)]
     pub egress_policy: EgressPolicy,
+    /// Replacement environment map. Omitted = `{}` (clears).
+    /// The dashboard always sends the current map so a resource-only edit
+    /// does not wipe env.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 /// A named phase of `start_vm`'s pipeline, exposed only while `state ==
@@ -415,6 +424,9 @@ pub struct VmResponse {
     /// Inbound port forwarding rules (DNAT) from host ports to guest ports.
     #[serde(default)]
     pub port_forwards: Vec<PortForward>,
+    /// Per-VM environment. Empty is valid. Stored and applied in plaintext.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 /// One guest-agent usage sample for dashboard graphs.
@@ -779,6 +791,10 @@ pub struct ImageResponse {
     pub package_origin: Option<PackageOrigin>,
     /// Short operator-facing note (may be empty).
     pub description: String,
+    /// Whether the installed rootfs has `/etc/firecrab/services.d/app`.
+    /// Uninstalled and catalog-only rows are `false`.
+    #[serde(default)]
+    pub has_guest_service: bool,
 }
 
 /// Producer of a package in the host's local `.packages` cache.
@@ -1101,6 +1117,7 @@ mod tests {
         let request: CreateVmRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.egress_policy, EgressPolicy::Internet);
         assert!(request.shell_ids.is_empty());
+        assert!(request.env.is_empty());
     }
 
     #[test]
@@ -1173,7 +1190,39 @@ mod tests {
                 cpu: 2,
                 disk_gb: 8,
                 egress_policy: EgressPolicy::Internet,
+                env: BTreeMap::new(),
             }
+        );
+    }
+
+    #[test]
+    fn update_vm_resources_request_omitted_env_deserializes_to_empty_map() {
+        let json = r#"{"ram":1024,"cpu":2,"diskGb":8}"#;
+        let request: UpdateVmResourcesRequest = serde_json::from_str(json).unwrap();
+        assert!(request.env.is_empty());
+    }
+
+    #[test]
+    fn create_and_update_env_deserialize_camel_case_object() {
+        let create: CreateVmRequest = serde_json::from_str(
+            r#"{"name":"vm","template":"ubuntu-26.04","ram":512,"cpu":1,"diskGb":2,"microNetworkId":"00000000-0000-0000-0000-000000000001","env":{"B":"2","A":"1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            create.env.into_iter().collect::<Vec<_>>(),
+            vec![
+                ("A".to_owned(), "1".to_owned()),
+                ("B".to_owned(), "2".to_owned())
+            ]
+        );
+
+        let update: UpdateVmResourcesRequest = serde_json::from_str(
+            r#"{"ram":512,"cpu":1,"diskGb":2,"env":{"POSTGRES_PASSWORD":"s"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            update.env.get("POSTGRES_PASSWORD").map(String::as_str),
+            Some("s")
         );
     }
 
@@ -1217,10 +1266,12 @@ mod tests {
             }],
             shell_refs: Vec::new(),
             port_forwards: Vec::new(),
+            env: BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
         assert_eq!(serde_json::from_str::<VmResponse>(&json).unwrap(), response);
+        assert!(json.contains("\"env\":{\"FOO\":\"bar\"}"));
         assert!(json.contains("\"cpuUsagePercent\":12.5"));
         assert!(json.contains("\"memoryUsedMib\":180"));
         assert!(json.contains("\"memoryTotalMib\":512"));
@@ -1265,8 +1316,10 @@ mod tests {
             usage_history: Vec::new(),
             shell_refs: Vec::new(),
             port_forwards: Vec::new(),
+            env: BTreeMap::new(),
         };
         let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"env\":{}"));
         assert!(json.contains("\"startupStep\":\"preparingDisk\""));
         assert!(json.contains("\"cpuUsagePercent\":null"));
         assert!(json.contains("\"memoryUsedMib\":null"));
@@ -1290,9 +1343,11 @@ mod tests {
             package_staged: true,
             package_origin: Some(PackageOrigin::MicroRegistry),
             description: String::new(),
+            has_guest_service: true,
         };
         let json = serde_json::to_value(&image).unwrap();
         assert_eq!(json["alias"], "ubuntu-26.04");
+        assert_eq!(json["hasGuestService"], true);
         assert_eq!(json["packageStaged"], true);
         assert_eq!(json["packageOrigin"], "microRegistry");
         assert_eq!(json["minDiskGb"], 2);
@@ -1304,6 +1359,17 @@ mod tests {
             "http://127.0.0.1:8765/ubuntu-26.04.tar.zst"
         );
         assert!(json.get("initrdSha256").is_none());
+        let omitted = serde_json::from_value::<ImageResponse>(serde_json::json!({
+            "alias": "ubuntu-26.04",
+            "version": "v1",
+            "kernelSha256": "k",
+            "rootfsSha256": "r",
+            "minDiskGb": 2,
+            "installed": false,
+            "description": ""
+        }))
+        .unwrap();
+        assert!(!omitted.has_guest_service);
     }
 
     #[test]

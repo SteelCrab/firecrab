@@ -2,6 +2,7 @@
 //! `firecrab-frontend` from `firecrab-api-types` alongside server-only
 //! fields (e.g. template artifact hashes) that never cross the API boundary.
 
+use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
@@ -117,6 +118,10 @@ pub struct VmRecord {
     /// start, so there is no half-finished timeline worth persisting.
     #[serde(skip)]
     pub startup_timeline: Vec<StartupStepRun>,
+    /// Per-VM environment applied on the next start into
+    /// `/etc/firecrab/services.d/app`. Empty is valid. JSON on the row.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 /// Matches the fixed rootfs template size that applied before disk capacity

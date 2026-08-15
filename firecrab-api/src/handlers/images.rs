@@ -19,6 +19,7 @@ fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
 }
 
 fn installed_response(
+    templates: &TemplateRegistry,
     template: &TemplateVersion,
     package_url: Option<String>,
     package_staged: bool,
@@ -41,6 +42,10 @@ fn installed_response(
         package_staged,
         package_origin,
         description: String::new(),
+        has_guest_service: crate::rootfs::guest_path_exists(
+            &templates.artifact_path(&template.rootfs),
+            "/etc/firecrab/services.d/app",
+        ),
     }
 }
 
@@ -64,6 +69,7 @@ fn not_installed_response(
         package_staged,
         package_origin,
         description: String::new(),
+        has_guest_service: false,
     }
 }
 
@@ -96,7 +102,9 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
                 let staged = staged_for(&spec.alias);
                 let origin = origin_for(&spec.alias);
                 match templates.resolve_alias(&spec.alias) {
-                    Some(template) => installed_response(template.as_ref(), url, staged, origin),
+                    Some(template) => {
+                        installed_response(&templates, template.as_ref(), url, staged, origin)
+                    }
                     None => not_installed_response(&spec.alias, &spec.version, url, staged, origin),
                 }
             })
@@ -112,6 +120,7 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
             }
             if !images.iter().any(|image| image.alias == template.name) {
                 images.push(installed_response(
+                    &templates,
                     template.as_ref(),
                     package_for(&template.name),
                     staged_for(&template.name),
@@ -477,6 +486,10 @@ mod tests {
             images
                 .iter()
                 .any(|image| image.alias == "ubuntu-26.04" && !image.installed)
+        );
+        assert!(
+            images.iter().all(|image| !image.has_guest_service),
+            "catalog / uninstalled images must not report a guest service: {images:?}"
         );
         assert!(
             images
