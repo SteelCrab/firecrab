@@ -1210,6 +1210,66 @@ mod tests {
         assert_eq!(EgressPolicy::from_id("wide-open"), None);
     }
 
+    #[test]
+    fn resolved_uplink_uses_the_matching_network_or_falls_back() {
+        let auto = sample_network(0x1234, "172.31.0.1", 24);
+        let pinned = MicroNetworkSpec {
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x5678, "172.32.0.1", 24)
+        };
+        let networks = [auto, pinned];
+        assert_eq!(
+            resolved_uplink("wlan0", &networks, Ipv4Addr::new(172, 31, 0, 42)),
+            "wlan0"
+        );
+        assert_eq!(
+            resolved_uplink("wlan0", &networks, Ipv4Addr::new(172, 32, 0, 9)),
+            "eth1"
+        );
+        assert_eq!(
+            resolved_uplink("wlan0", &networks, Ipv4Addr::new(10, 0, 0, 1)),
+            "wlan0"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_firewall_renders_per_vm_uplink_before_nft() {
+        let network = MicroNetworkSpec {
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x1234, "172.30.0.1", 24)
+        };
+        let policy = sample_policy(EgressPolicy::Internet, false);
+        let actor = FirewallActor::new();
+        let _ = ensure_firewall(&actor, std::slice::from_ref(&network), &[policy]).await;
+        assert_eq!(
+            actor.state.lock().await.networks[0].uplink.as_deref(),
+            Some("eth1")
+        );
+    }
+
+    #[tokio::test]
+    async fn iptables_compat_walks_each_egress_oif() {
+        // Best-effort shim: exercise the per-oif loop even when iptables
+        // is missing or the process cannot change the host tables.
+        ensure_iptables_compat(
+            &["mnbtst0".to_owned()],
+            &[
+                ("172.31.0.0/24".to_owned(), "eth0".to_owned()),
+                ("172.32.0.0/24".to_owned(), "eth1".to_owned()),
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn remove_firewall_clears_cached_networks() {
+        let actor = FirewallActor::new();
+        actor.state.lock().await.networks = vec![sample_network(0x1234, "172.31.0.1", 24)];
+        if remove_firewall(&actor).await.is_ok() {
+            assert!(actor.state.lock().await.networks.is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn ensure_firewall_skips_nft_entirely_when_the_uplink_is_unchanged() {
         let (connection, handle, _) = new_connection().unwrap();

@@ -259,13 +259,7 @@ pub async fn update_micro_network(
     })
     .await
     .map_err(|_| AppError::internal(request_id.0))?
-    .map_err(|error| match error {
-        PersistenceError::MissingMicroNetwork { .. } => AppError::not_found(request_id.0),
-        error => {
-            tracing::error!(request_id = %request_id.0, %error, "failed to update micro network");
-            AppError::internal(request_id.0)
-        }
-    })?;
+    .map_err(|error| persist_update_error(error, request_id.0))?;
     network.internet_enabled = req.internet_enabled;
     network.uplink = next_uplink;
 
@@ -446,6 +440,16 @@ fn validate_create(req: &CreateMicroNetworkRequest) -> BTreeMap<String, String> 
         fields.insert("uplink".to_owned(), message);
     }
     fields
+}
+
+fn persist_update_error(error: PersistenceError, request_id: Uuid) -> AppError {
+    match error {
+        PersistenceError::MissingMicroNetwork { .. } => AppError::not_found(request_id),
+        error => {
+            tracing::error!(request_id = %request_id, %error, "failed to update micro network");
+            AppError::internal(request_id)
+        }
+    }
 }
 
 fn validate_update_micro_network(req: &UpdateMicroNetworkRequest) -> BTreeMap<String, String> {
@@ -1365,6 +1369,30 @@ mod tests {
         assert!(
             fields.is_empty(),
             "empty PATCH uplink resets to auto, it is not a field error"
+        );
+    }
+
+    #[test]
+    fn persist_update_error_maps_missing_network_to_not_found() {
+        let error = persist_update_error(
+            PersistenceError::MissingMicroNetwork { id: Uuid::nil() },
+            Uuid::nil(),
+        );
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn persist_update_error_maps_other_failures_to_internal() {
+        let error = persist_update_error(
+            PersistenceError::CorruptRecord {
+                id: "mn".to_owned(),
+                reason: "env is not a JSON object of strings".to_owned(),
+            },
+            Uuid::nil(),
+        );
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
         );
     }
 }

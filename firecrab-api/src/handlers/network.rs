@@ -68,8 +68,12 @@ pub(crate) fn read_uplink() -> Option<String> {
 /// Host NIC names from `/sys/class/net`, excluding loopback and Firecrab-owned
 /// TAP/bridge prefixes. Picker-only; the helper still re-checks existence.
 pub(crate) fn read_host_interfaces() -> Vec<String> {
+    read_host_interfaces_from(Path::new("/sys/class/net"))
+}
+
+fn read_host_interfaces_from(sysfs: &Path) -> Vec<String> {
     let mut names = Vec::new();
-    let Ok(entries) = fs::read_dir("/sys/class/net") else {
+    let Ok(entries) = fs::read_dir(sysfs) else {
         return names;
     };
     for entry in entries.flatten() {
@@ -80,7 +84,7 @@ pub(crate) fn read_host_interfaces() -> Vec<String> {
         if name == "lo" || name.starts_with("fct") || name.starts_with("mnb") {
             continue;
         }
-        if Path::new("/sys/class/net").join(name).is_dir() {
+        if sysfs.join(name).is_dir() {
             names.push(name.to_owned());
         }
     }
@@ -225,6 +229,35 @@ mod tests {
         // Unprivileged read; requires this host to have an IPv4 default
         // route (true in the dev/CI sandbox this was written against).
         assert!(!read_uplink().unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_host_interfaces_from_a_missing_dir_is_empty() {
+        assert!(read_host_interfaces_from(Path::new("/no/such/sysfs/net")).is_empty());
+    }
+
+    #[test]
+    fn read_host_interfaces_from_skips_owned_prefixes_files_and_non_utf8() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let directory = tempdir().unwrap();
+        let sysfs = directory.path();
+        for name in ["lo", "fct0", "mnb66d3df7f8547", "eth1", "wlan0"] {
+            std::fs::create_dir(sysfs.join(name)).unwrap();
+        }
+        std::fs::write(sysfs.join("notadir"), b"").unwrap();
+        std::fs::create_dir(sysfs.join(std::ffi::OsString::from_vec(vec![0xff]))).unwrap();
+
+        assert_eq!(
+            read_host_interfaces_from(sysfs),
+            vec!["eth1".to_owned(), "wlan0".to_owned()]
+        );
+    }
+
+    #[test]
+    fn host_interface_exists_is_true_only_for_a_sysfs_directory() {
+        assert!(host_interface_exists("lo"));
+        assert!(!host_interface_exists("nosuchiface0"));
     }
 
     #[test]

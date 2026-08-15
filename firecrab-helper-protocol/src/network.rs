@@ -518,10 +518,18 @@ mod tests {
         assert!(!spec.contains("172.32.5.42".parse().unwrap()));
 
         // A /16 masks off the third octet too.
-        let wide = MicroNetworkSpec { prefix: 16, ..spec };
+        let wide = MicroNetworkSpec {
+            prefix: 16,
+            ..spec.clone()
+        };
         assert_eq!(wide.subnet_cidr(), "172.31.0.0/16");
         assert!(wide.contains("172.31.99.1".parse().unwrap()));
         assert!(!wide.contains("172.32.0.1".parse().unwrap()));
+
+        // A /0 mask is 0, so every address is in the subnet.
+        let everywhere = MicroNetworkSpec { prefix: 0, ..spec };
+        assert!(everywhere.contains("0.0.0.0".parse().unwrap()));
+        assert!(everywhere.contains("255.255.255.255".parse().unwrap()));
     }
 
     #[test]
