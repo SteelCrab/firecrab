@@ -74,7 +74,7 @@ The response has status `201` and includes the VM UUID.
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional storage ID |
 | `shellIds` | Optional Shell repository ids (latest revision pinned) |
-| `env` | Optional string map. Create omit = `{}`. PUT omit = `{}` (clears). POSIX keys, 64 entries, 256-byte keys, 4096-byte values, no NUL. Plaintext in the guest. |
+| `env` | Optional string map. Create omit = `{}`. PUT omit = keep stored; `{}` clears. POSIX keys, 64 entries, 256-byte keys, 4096-byte values, no NUL. Plaintext in the guest. |
 
 ## Other endpoints
 

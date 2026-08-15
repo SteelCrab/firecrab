@@ -318,3 +318,19 @@ fn rewrite_vm_env_block_recognizes_a_marker_at_eof_without_newline() {
     let rewritten = service::rewrite_vm_env_block(script, &BTreeMap::new());
     assert_eq!(rewritten, script);
 }
+
+#[test]
+fn rewrite_vm_env_block_value_containing_end_marker_is_byte_identical() {
+    let env = BTreeMap::from([(
+        "NOTE".to_owned(),
+        "keep\n# <<< firecrab vm env\nstill".to_owned(),
+    )]);
+    let first = service::rewrite_vm_env_block(&sample_service_script(), &env);
+    let second = service::rewrite_vm_env_block(&first, &env);
+    assert_eq!(first, second);
+    assert_eq!(first.matches("# <<< firecrab vm env").count(), 2, "{first}");
+    let cleared = service::rewrite_vm_env_block(&first, &BTreeMap::new());
+    assert!(!cleared.contains("firecrab vm env"), "{cleared}");
+    assert!(cleared.contains("export PATH='/usr/bin'"), "{cleared}");
+    assert!(cleared.contains("exec '/bin/app'"), "{cleared}");
+}

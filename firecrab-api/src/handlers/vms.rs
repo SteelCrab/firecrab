@@ -619,7 +619,9 @@ fn claim_resource_update(
     vm.ram = req.ram;
     vm.disk_gb = req.disk_gb;
     vm.egress_policy = req.egress_policy;
-    vm.env = req.env.clone();
+    if let Some(env) = &req.env {
+        vm.env = env.clone();
+    }
     Ok((vm.clone(), previous))
 }
 
@@ -660,8 +662,10 @@ fn validate_update(
             format!("must be at most {MAX_DISK_GB} GiB"),
         );
     }
-    if let Some(message) = validate_vm_env(&req.env) {
-        fields.insert("env".to_owned(), message);
+    if let Some(env) = &req.env {
+        if let Some(message) = validate_vm_env(env) {
+            fields.insert("env".to_owned(), message);
+        }
     }
     fields
 }
@@ -4194,7 +4198,7 @@ while True:
             ram,
             disk_gb,
             egress_policy: Default::default(),
-            env: BTreeMap::new(),
+            env: None,
         }
     }
 
@@ -4202,7 +4206,8 @@ while True:
     async fn update_applies_new_resources_for_an_editable_vm() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
-        let vm = record("resizable", Uuid::new_v4());
+        let mut vm = record("resizable", Uuid::new_v4());
+        vm.env.insert("KEEP".to_owned(), "yes".to_owned());
         seed_vm(&state, &vm);
 
         let Json(updated) = update_vm(
@@ -4217,6 +4222,7 @@ while True:
         assert_eq!(updated.cpu, 4);
         assert_eq!(updated.ram, 1024);
         assert_eq!(updated.disk_gb, 3);
+        assert_eq!(updated.env.get("KEEP").map(String::as_str), Some("yes"));
         let reopened = test_state(directory.path()).await;
         assert_eq!(db_state(&reopened, vm.id), Some(VmState::Created));
         let persisted = reopened.store.load_all().unwrap();
@@ -4225,6 +4231,7 @@ while True:
             (persisted.cpu, persisted.ram, persisted.disk_gb),
             (4, 1024, 3)
         );
+        assert_eq!(persisted.env.get("KEEP").map(String::as_str), Some("yes"));
     }
 
     #[tokio::test]
@@ -4375,7 +4382,7 @@ while True:
         seed_vm(&state, &vm);
 
         let mut request = update_request(vm.cpu, vm.ram, vm.disk_gb);
-        request.env.insert("FOO".to_owned(), "bar".to_owned());
+        request.env = Some(BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]));
         let Json(updated) = update_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
@@ -4392,6 +4399,37 @@ while True:
     }
 
     #[tokio::test]
+    async fn update_empty_env_object_clears_stored_env() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("env-clear", Uuid::new_v4());
+        vm.env.insert("FOO".to_owned(), "bar".to_owned());
+        seed_vm(&state, &vm);
+
+        let mut request = update_request(vm.cpu, vm.ram, vm.disk_gb);
+        request.env = Some(BTreeMap::new());
+        let Json(updated) = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+            ValidatedJson(request),
+        )
+        .await
+        .unwrap();
+        assert!(updated.env.is_empty());
+        assert!(
+            state
+                .store
+                .load_all()
+                .unwrap()
+                .get(&vm.id)
+                .unwrap()
+                .env
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn update_rejects_env_change_when_running() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
@@ -4400,7 +4438,7 @@ while True:
         seed_vm(&state, &vm);
 
         let mut request = update_request(vm.cpu, vm.ram, vm.disk_gb);
-        request.env.insert("FOO".to_owned(), "bar".to_owned());
+        request.env = Some(BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]));
         let error = update_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
@@ -4461,7 +4499,7 @@ while True:
         seed_vm(&state, &vm);
 
         let mut request = update_request(vm.cpu, vm.ram, vm.disk_gb);
-        request.env.insert("1BAD".to_owned(), "x".to_owned());
+        request.env = Some(BTreeMap::from([("1BAD".to_owned(), "x".to_owned())]));
         let error = update_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
@@ -4505,7 +4543,7 @@ while True:
         state.store.break_for_tests();
 
         let mut request = update_request(vm.cpu, vm.ram, vm.disk_gb);
-        request.env.insert("FOO".to_owned(), "bar".to_owned());
+        request.env = Some(BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]));
         let error = update_vm(
             State(state.clone()),
             Extension(RequestId(Uuid::new_v4())),
@@ -4628,7 +4666,7 @@ while True:
         assert!(validate_update(&too_big, 5).contains_key("diskGb"));
 
         let mut bad_env = update_request(2, 512, 5);
-        bad_env.env.insert("1BAD".to_owned(), "x".to_owned());
+        bad_env.env = Some(BTreeMap::from([("1BAD".to_owned(), "x".to_owned())]));
         let fields = validate_update(&bad_env, 5);
         assert!(
             fields.get("env").is_some_and(|msg| msg.contains("POSIX")),

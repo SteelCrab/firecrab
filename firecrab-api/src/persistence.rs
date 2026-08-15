@@ -1568,7 +1568,7 @@ fn decode_env(
 ) -> Result<std::collections::BTreeMap<String, String>, PersistenceError> {
     serde_json::from_str(raw).map_err(|_| PersistenceError::CorruptRecord {
         id: id.to_owned(),
-        reason: format!("env is not a JSON object of strings: {raw:?}"),
+        reason: "env is not a JSON object of strings".to_owned(),
     })
 }
 
@@ -1912,6 +1912,40 @@ mod tests {
                 "{raw} should be reported as a corrupt env column"
             );
         }
+    }
+
+    #[test]
+    fn a_corrupt_env_column_error_does_not_include_persisted_contents() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("env-secret.db")).unwrap();
+        let vm = record(Uuid::new_v4(), "env-secret");
+        store.insert(&vm).unwrap();
+        const SECRET: &str = "sentinel-secret-do-not-leak";
+        store
+            .lock()
+            .execute(
+                "UPDATE vms SET env = ?1 WHERE id = ?2",
+                params![
+                    format!(r#"{{"POSTGRES_PASSWORD":"{SECRET}","n":1}}"#),
+                    vm.id.to_string()
+                ],
+            )
+            .unwrap();
+
+        let error = store.load_all().unwrap_err();
+        let rendered = error.to_string();
+        assert!(
+            !rendered.contains(SECRET),
+            "CorruptRecord must not echo persisted env: {rendered}"
+        );
+        assert!(
+            matches!(
+                error,
+                PersistenceError::CorruptRecord { ref reason, .. }
+                    if reason == "env is not a JSON object of strings" && !reason.contains(SECRET)
+            ),
+            "{error}"
+        );
     }
 
     #[test]

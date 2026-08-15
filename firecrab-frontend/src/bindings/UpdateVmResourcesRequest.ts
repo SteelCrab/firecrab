@@ -6,6 +6,6 @@ export type UpdateVmResourcesRequest = {
   cpu: number,
   diskGb: number,
   egressPolicy: EgressPolicy,
-  /** Replacement environment map. Omitted = {} (clears). */
+  /** Replacement environment map. Omitted keeps the stored map; {} clears. */
   env?: { [key: string]: string },
 };

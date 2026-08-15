@@ -301,11 +301,10 @@ pub struct UpdateVmResourcesRequest {
     /// New outbound network posture; defaults to `Internet`.
     #[serde(default)]
     pub egress_policy: EgressPolicy,
-    /// Replacement environment map. Omitted = `{}` (clears).
-    /// The dashboard always sends the current map so a resource-only edit
-    /// does not wipe env.
+    /// Replacement environment map. Omitted (`None`) keeps the stored map;
+    /// `Some({})` clears it.
     #[serde(default)]
-    pub env: BTreeMap<String, String>,
+    pub env: Option<BTreeMap<String, String>>,
 }
 
 /// A named phase of `start_vm`'s pipeline, exposed only while `state ==
@@ -1190,16 +1189,16 @@ mod tests {
                 cpu: 2,
                 disk_gb: 8,
                 egress_policy: EgressPolicy::Internet,
-                env: BTreeMap::new(),
+                env: None,
             }
         );
     }
 
     #[test]
-    fn update_vm_resources_request_omitted_env_deserializes_to_empty_map() {
+    fn update_vm_resources_request_omitted_env_deserializes_to_none() {
         let json = r#"{"ram":1024,"cpu":2,"diskGb":8}"#;
         let request: UpdateVmResourcesRequest = serde_json::from_str(json).unwrap();
-        assert!(request.env.is_empty());
+        assert_eq!(request.env, None);
     }
 
     #[test]
@@ -1221,7 +1220,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            update.env.get("POSTGRES_PASSWORD").map(String::as_str),
+            update
+                .env
+                .as_ref()
+                .and_then(|env| env.get("POSTGRES_PASSWORD"))
+                .map(String::as_str),
             Some("s")
         );
     }

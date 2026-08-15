@@ -174,7 +174,7 @@ fn strip_vm_env_block(script: &str) -> String {
         return script.to_owned();
     };
     let after_begin = begin + VM_ENV_BEGIN.len();
-    let Some(end_rel) = find_line_index(&script[after_begin..], VM_ENV_END) else {
+    let Some(end_rel) = find_unquoted_line_index(&script[after_begin..], VM_ENV_END) else {
         return script.to_owned();
     };
     let end = after_begin + end_rel;
@@ -230,6 +230,32 @@ fn find_line_index(script: &str, marker: &str) -> Option<usize> {
             return Some(start);
         }
         offset = start;
+    }
+    None
+}
+
+/// Like [`find_line_index`], but ignores lines that sit inside a POSIX
+/// single-quoted value (`export KEY='...`, including `'\''` and newlines).
+fn find_unquoted_line_index(script: &str, marker: &str) -> Option<usize> {
+    let mut in_single = false;
+    let mut i = 0;
+    while i < script.len() {
+        if !in_single && (i == 0 || script.as_bytes()[i - 1] == b'\n') && line_at(script, i, marker)
+        {
+            return Some(i);
+        }
+        let rest = &script[i..];
+        if !in_single && rest.starts_with("\\'") {
+            i += 2;
+            continue;
+        }
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        if ch == '\'' {
+            in_single = !in_single;
+        }
+        i += ch.len_utf8();
     }
     None
 }
