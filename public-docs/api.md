@@ -116,16 +116,24 @@ CPU, RAM, disk, and egress still require a stopped VM.
 Inspect from the guest console:
 
 ```sh
+ps -p 1 -o pid,comm,args
+readlink -f /proc/1/exe
+tr '\0' ' ' < /proc/1/cmdline; echo
 ls -la /etc/firecrab /etc/firecrab/services.d
 cat /etc/firecrab/vm.env
 grep -A2 'firecrab vm env' /etc/firecrab/services.d/app
 ```
 
+`/proc/1/exe` is the running init. On an imported image that is
+`/etc/firecrab/busybox`. `ps` may show `init` because that is the applet
+name. Do not trust `ls -l /sbin/init`: usr-merged images (Ubuntu, Debian)
+may still show the original `systemd` symlink.
+
 Related guest paths that are not under `/etc/firecrab`:
 
 | Guest path | Role |
 | --- | --- |
-| `/sbin/init` | Symlink to `/etc/firecrab/busybox`. |
+| `/sbin/init` | Intended symlink to `/etc/firecrab/busybox`. Image links (e.g. systemd) may remain; use `/proc/1/exe`. |
 | `/bin/ping`, `/bin/wget`, … | Toolbox applets when the image did not ship them. |
 | `/etc/inittab` | busybox init job table. |
 | `/etc/hostname`, `/etc/motd` | Written per VM on start. |

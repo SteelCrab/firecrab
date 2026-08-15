@@ -95,14 +95,15 @@ sudo ss -lunp | grep ':67'
 Read the helper log for dnsmasq errors.
 Read the guest log for `FIRECRAB_NETWORK_FAILED`.
 
-The host firewall (UFW, firewalld, iptables, nftables) can block DHCP,
-DNS, or forwarding on `mnb*` bridges. The helper punches those holes on
-each reconcile. Restart `firecrab-net-helper` after an upgrade so a new
-binary can apply them. The host doctor still reports leftover UFW conflicts.
+The host firewall can block DHCP on `mnb*` bridges. Restart
+`firecrab-net-helper` after an upgrade. An imported image has no `ping`;
+use `/etc/firecrab/busybox ping 1.1.1.1` or restart for PATH tools.
 
-An imported container has no `ping` package. Use
-`/etc/firecrab/busybox ping 1.1.1.1` now; after a restart `ping` is on PATH
-and first boot runs `apt-get update` (or dnf/apk/zypper) for a small set.
+## Guest PID 1
+
+`readlink -f /proc/1/exe` is the running init (`/etc/firecrab/busybox`
+on an import; `ps` may say `init`). `ls -l /sbin/init` can still show
+systemd. Catalog Ubuntu/Rocky use systemd. See [API](api.md).
 
 ## Internet access fails
 
