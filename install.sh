@@ -216,18 +216,19 @@ check_systemd() {
     return 1
 }
 
-# UFW is still reported here; the helper punches DHCP/DNS on each bridge.
+# UFW is still reported here; the helper punches DHCP/DNS on each bridge
+# for UFW, firewalld, iptables, and nftables.
 report_ufw() {
     have ufw || return 0
     local status
     if status=$(ufw status 2>/dev/null); then
         case "$status" in
             *"Status: active"*)
-                warn "UFW is active — allow DHCP/DNS on each MicroNetwork bridge (public-docs/troubleshooting.md)" ;;
+                log "UFW is active — net-helper opens DHCP/DNS on each MicroNetwork bridge" ;;
             *) log "UFW installed but inactive" ;;
         esac
     else
-        warn "UFW installed; re-run as root to see whether it is active (it blocks new bridges' DHCP)"
+        warn "UFW installed; re-run as root to see whether it is active"
     fi
 }
 

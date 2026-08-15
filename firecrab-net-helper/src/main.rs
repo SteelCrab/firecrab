@@ -19,6 +19,8 @@ mod bridge;
 mod dhcp;
 /// Per-VM and global nftables firewall rules.
 mod firewall;
+/// Distro host firewall holes (UFW, firewalld, iptables, nft).
+mod host_acl;
 /// NAT/uplink detection, split out of `firewall`.
 mod nat;
 /// Per-VM TAP device lifecycle.

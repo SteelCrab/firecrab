@@ -95,8 +95,14 @@ sudo ss -lunp | grep ':67'
 Read the helper log for dnsmasq errors.
 Read the guest log for `FIRECRAB_NETWORK_FAILED`.
 
-UFW can block DHCP, DNS, or forwarding on `mnb*` bridges.
-The host doctor reports common UFW conflicts.
+The host firewall (UFW, firewalld, iptables, nftables) can block DHCP,
+DNS, or forwarding on `mnb*` bridges. The helper punches those holes on
+each reconcile. Restart `firecrab-net-helper` after an upgrade so a new
+binary can apply them. The host doctor still reports leftover UFW conflicts.
+
+An imported container has no `ping` package. Use
+`/etc/firecrab/busybox ping 1.1.1.1` now; after a restart `ping` is on PATH
+and first boot runs `apt-get update` (or dnf/apk/zypper) for a small set.
 
 ## Internet access fails
 

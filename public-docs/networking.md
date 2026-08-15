@@ -52,7 +52,12 @@ curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
 Two internet-enabled networks can masquerade out different NICs.
 The helper matches `oifname` on the existing postrouting chain.
 It does not install a VRF or extra route tables.
-When UFW is enabled, the helper also allows DHCP (67/udp) and DNS (53) on each new bridge, plus a route out the uplink.
+The helper opens DHCP (67/udp), DNS (53), and forward on each new bridge.
+It talks to the host firewall that is actually enforcing policy: UFW
+(Debian/Ubuntu), firewalld `trusted` zone (Fedora/RHEL/openSUSE, no
+`--reload`), iptables/ip6tables, or nftables (`inet filter`, `ip filter`,
+NixOS `nixos-fw`). Firecrab's own nft table does not hook INPUT, so a later
+drop in that backend still wins unless the helper inserts there.
 
 The VM field `egressPolicy` controls one VM.
 Its values are `internet` and `isolated`.

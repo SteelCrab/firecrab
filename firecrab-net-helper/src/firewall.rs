@@ -2,7 +2,6 @@
 //! and L2 anti-spoofing (`bridge firecrab_l2`), both idempotently rendered
 //! and applied as single atomic `nft -f -` transactions.
 
-use std::fs;
 use std::net::Ipv4Addr;
 use std::process::Stdio;
 
@@ -167,6 +166,12 @@ pub async fn ensure_firewall(
             (policy.vm_id, (uplink, policy))
         })
         .collect();
+    // Host INPUT/FORWARD DROP (UFW, firewalld, nftables.service, iptables)
+    // swallows DHCP/DNS on a newly created bridge. The owned nft table only
+    // hooks forward/postrouting, so each backend is punched here — even when
+    // the Firecrab ruleset is unchanged, so a UFW reload or firewalld
+    // restart is repaired on the next reconcile.
+    crate::host_acl::ensure_all(&default_uplink, micro_networks).await;
     if state.applied_ruleset.as_deref() == Some(base_ruleset.as_str())
         && state.applied_vms == desired_vms
     {
@@ -186,10 +191,6 @@ pub async fn ensure_firewall(
         &egress_pairs(&default_uplink, micro_networks),
     )
     .await;
-    // UFW/iptables INPUT DROP swallows DHCP/DNS on a newly created bridge.
-    // The owned nft table only hooks forward/postrouting, so this is the
-    // helper's job — not the operator's per-network `ufw allow`.
-    ensure_host_acl(&default_uplink, micro_networks).await;
     state.applied_vms = desired_vms;
     state.applied_ruleset = Some(base_ruleset);
     Ok(())
@@ -682,86 +683,7 @@ async fn ensure_iptables_compat(bridges: &[String], egress: &[(String, String)])
 
 /// Removes iptables FORWARD ACCEPT rules for a bridge that is being torn down.
 /// Best-effort; silently ignores errors (rule already absent, iptables not
-/// available).
-/// Opens host INPUT (and UFW, when active) so guests can reach dnsmasq on
-/// each MicroNetwork bridge. Idempotent. Failures are ignored: the nft
-/// snapshot already applied, and doctor still reports a missing hole.
-async fn ensure_host_acl(default_uplink: &str, micro_networks: &[MicroNetworkSpec]) {
-    let ufw_on = ufw_is_enabled();
-    for network in micro_networks {
-        let bridge = network.bridge_name();
-        let uplink = network.uplink.as_deref().unwrap_or(default_uplink);
-        ensure_iptables_input(&bridge).await;
-        if ufw_on {
-            apply_ufw_bridge(&bridge, uplink).await;
-        }
-    }
-}
-
-/// Whether `/etc/ufw/ufw.conf` has `ENABLED=yes`. Locale-independent —
-/// `ufw status` prints "Status: active" or "상태: 활성".
-fn ufw_is_enabled() -> bool {
-    ufw_conf_is_enabled(&fs::read_to_string("/etc/ufw/ufw.conf").unwrap_or_default())
-}
-
-fn ufw_conf_is_enabled(text: &str) -> bool {
-    text.lines().any(|line| line.trim() == "ENABLED=yes")
-}
-
-async fn apply_ufw_bridge(bridge: &str, uplink: &str) {
-    let _ = run_ufw(&[
-        "allow", "in", "on", bridge, "to", "any", "port", "67", "proto", "udp",
-    ])
-    .await;
-    let _ = run_ufw(&["allow", "in", "on", bridge, "to", "any", "port", "53"]).await;
-    if !uplink.is_empty() {
-        let _ = run_ufw(&["route", "allow", "in", "on", bridge, "out", "on", uplink]).await;
-    }
-}
-
-async fn run_ufw(args: &[&str]) -> bool {
-    Command::new("ufw")
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .map(|status| status.success())
-        .unwrap_or(false)
-}
-
-async fn ensure_iptables_input(bridge: &str) {
-    for args in [
-        vec!["-i", bridge, "-p", "udp", "--dport", "67", "-j", "ACCEPT"],
-        vec!["-i", bridge, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
-        vec!["-i", bridge, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
-    ] {
-        let already = Command::new("iptables")
-            .arg("-C")
-            .arg("INPUT")
-            .args(&args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if !already {
-            let _ = Command::new("iptables")
-                .arg("-I")
-                .arg("INPUT")
-                .args(&args)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
-        }
-    }
-}
-
-/// Removes iptables FORWARD ACCEPT rules for a bridge that is being torn down.
-/// Best-effort; silently ignores errors (rule already absent, iptables not
-/// available).
+/// available). Also drops host INPUT holes for that bridge.
 pub async fn remove_iptables_forward_for_bridge(bridge: &str) {
     for dir in ["-i", "-o"] {
         let _ = Command::new("iptables")
@@ -771,31 +693,7 @@ pub async fn remove_iptables_forward_for_bridge(bridge: &str) {
             .status()
             .await;
     }
-    for args in [
-        ["-i", bridge, "-p", "udp", "--dport", "67", "-j", "ACCEPT"],
-        ["-i", bridge, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
-        ["-i", bridge, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
-    ] {
-        let _ = Command::new("iptables")
-            .arg("-D")
-            .arg("INPUT")
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-    }
-    if ufw_is_enabled() {
-        let _ = run_ufw(&[
-            "--force", "delete", "allow", "in", "on", bridge, "to", "any", "port", "67", "proto",
-            "udp",
-        ])
-        .await;
-        let _ = run_ufw(&[
-            "--force", "delete", "allow", "in", "on", bridge, "to", "any", "port", "53",
-        ])
-        .await;
-    }
+    crate::host_acl::remove_bridge(bridge).await;
 }
 
 /// Applies `ruleset` as a single atomic transaction: `nft -f -` accepts the
@@ -833,13 +731,6 @@ async fn run_nft(ruleset: &str) -> Result<(), FirewallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn ufw_conf_is_enabled_reads_the_enabled_line() {
-        assert!(ufw_conf_is_enabled("# comment\nENABLED=yes\n"));
-        assert!(!ufw_conf_is_enabled("ENABLED=no\n"));
-        assert!(!ufw_conf_is_enabled(""));
-    }
 
     fn sample_network(id: u128, gateway: &str, prefix: u8) -> MicroNetworkSpec {
         MicroNetworkSpec {
