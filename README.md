@@ -69,20 +69,82 @@ full cloud control plane. It is not a hosted service or a multi-host scheduler.
 
 ## Architecture
 
-```text
-Browser dashboard / REST clients
-              │ HTTP + WebSocket
-              ▼
-  firecrab-api (Rust, SQLite, Firecracker process manager)
-       │                         │
-       │ Unix socket             └── Firecracker → one microVM per process
-       ▼
-firecrab-net-helper (privileged, capability-bounded)
-       └── bridges · TAPs · nftables · dnsmasq
+One Linux host. One unprivileged API. One capability-bounded helper.
+One Firecracker process per running guest. No multi-host scheduler.
+
+```mermaid
+flowchart TB
+    Browser["Browser dashboard"]
+    REST["REST clients"]
+    UI["firecrab-frontend"]
+    API["firecrab-api<br/>Rust · unprivileged"]
+    DB[("SQLite")]
+    Images["M2Image and OCI artifacts<br/>kernel + ext4 rootfs"]
+    Disks["MicroStorage<br/>vms/id/d/*.ext4"]
+    Helper["firecrab-net-helper<br/>Unix socket · bounded caps"]
+    Bridge["mnb* bridge"]
+    TAP["fct* TAP"]
+    NFT["nftables NAT / firewall"]
+    DHCP["dnsmasq DHCP / DNS"]
+    FC["Firecracker"]
+    Guest["Linux guest"]
+
+    Browser --> UI
+    REST --> API
+    UI -->|"HTTP + WebSocket"| API
+    API <--> DB
+    API --> Images
+    API --> Disks
+    API -->|"typed helper protocol"| Helper
+    Helper --> Bridge
+    Helper --> TAP
+    Helper --> NFT
+    Helper --> DHCP
+    API --> FC
+    Images --> FC
+    Disks --> FC
+    TAP --- FC
+    Bridge --- TAP
+    NFT --- Bridge
+    DHCP --- Bridge
+    FC --- Guest
+    Guest -->|"serial console"| API
 ```
 
-The API verifies template artifacts before using them and serves the built dashboard
-itself in an installed deployment. See the detailed [architecture](public-docs/architecture.md).
+A MicroNetwork is one IPv4 subnet on its own bridge.
+Same-network guests talk on that bridge.
+Different networks are blocked.
+Internet NAT needs both the network `internetEnabled` switch and the VM
+`egressPolicy`.
+
+```mermaid
+flowchart LR
+    Net["Internet"]
+    NIC["host NIC / uplink"]
+    NAT["nftables masquerade"]
+    BR["mnb* MicroNetwork bridge"]
+    T1["fct* TAP"]
+    T2["fct* TAP"]
+    V1["microVM"]
+    V2["microVM"]
+    Net --- NIC --- NAT --- BR
+    BR --- T1 --- V1
+    BR --- T2 --- V2
+```
+
+| Piece | Job |
+| --- | --- |
+| `firecrab-frontend` | VM, network, image, storage, and console UI |
+| `firecrab-api` | REST, WebSocket, lifecycle, SQLite, artifact checks |
+| `firecrab-net-helper` | Bridge, TAP, DHCP, DNS, NAT, firewall, port forwards |
+| Firecracker | One process per running guest |
+| SQLite | Durable VMs, networks, leases, port forwards |
+| M2Image / OCI | Verified kernel + rootfs; OCI imports get a busybox PID 1 |
+| MicroStorage | Host directory for VM disks |
+
+The installed API serves the built dashboard.
+Development uses Vite and proxies `/api` and `/ws` to the API.
+See the detailed [architecture](public-docs/architecture.md).
 
 ## Install on a Linux host
 

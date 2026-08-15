@@ -68,20 +68,81 @@ microVM 환경을 위한 도구입니다. 호스팅 서비스나 멀티 호스�
 
 ## 구조
 
-```text
-브라우저 대시보드 / REST 클라이언트
-              │ HTTP + WebSocket
-              ▼
-  firecrab-api (Rust, SQLite, Firecracker 프로세스 관리자)
-       │                         │
-       │ Unix socket             └── Firecracker → VM마다 하나의 프로세스
-       ▼
-firecrab-net-helper (특권, capability 제한)
-       └── bridge · TAP · nftables · dnsmasq
+호스트는 하나, API는 비특권, helper만 네트워크 capability.
+실행 중인 게스트마다 Firecracker 프로세스 하나. 멀티 호스트 스케줄러는 없습니다.
+
+```mermaid
+flowchart TB
+    Browser["브라우저 대시보드"]
+    REST["REST 클라이언트"]
+    UI["firecrab-frontend"]
+    API["firecrab-api<br/>Rust · 비특권"]
+    DB[("SQLite")]
+    Images["M2Image / OCI<br/>커널 + ext4 rootfs"]
+    Disks["MicroStorage<br/>vms/id/d/*.ext4"]
+    Helper["firecrab-net-helper<br/>Unix 소켓 · capability 제한"]
+    Bridge["mnb* 브리지"]
+    TAP["fct* TAP"]
+    NFT["nftables NAT / 방화벽"]
+    DHCP["dnsmasq DHCP / DNS"]
+    FC["Firecracker"]
+    Guest["Linux 게스트"]
+
+    Browser --> UI
+    REST --> API
+    UI -->|"HTTP + WebSocket"| API
+    API <--> DB
+    API --> Images
+    API --> Disks
+    API -->|"typed helper protocol"| Helper
+    Helper --> Bridge
+    Helper --> TAP
+    Helper --> NFT
+    Helper --> DHCP
+    API --> FC
+    Images --> FC
+    Disks --> FC
+    TAP --- FC
+    Bridge --- TAP
+    NFT --- Bridge
+    DHCP --- Bridge
+    FC --- Guest
+    Guest -->|"시리얼 콘솔"| API
 ```
 
-API는 템플릿 아티팩트를 검증한 뒤 사용하며, 설치 환경에서는 빌드된 대시보드도 직접
-서빙합니다. 자세한 내용은 [아키텍처](public-docs/architecture.md)를 참고하세요.
+MicroNetwork는 브리지 하나와 IPv4 서브넷 하나입니다.
+같은 네트워크의 VM은 그 브리지에서 통신합니다.
+다른 네트워크끼리는 막습니다.
+인터넷 NAT는 네트워크 `internetEnabled`와 VM `egressPolicy`가 둘 다 허용해야 합니다.
+
+```mermaid
+flowchart LR
+    Net["인터넷"]
+    NIC["호스트 NIC / uplink"]
+    NAT["nftables masquerade"]
+    BR["mnb* MicroNetwork 브리지"]
+    T1["fct* TAP"]
+    T2["fct* TAP"]
+    V1["microVM"]
+    V2["microVM"]
+    Net --- NIC --- NAT --- BR
+    BR --- T1 --- V1
+    BR --- T2 --- V2
+```
+
+| 구성 | 역할 |
+| --- | --- |
+| `firecrab-frontend` | VM, 네트워크, 이미지, 스토리지, 콘솔 UI |
+| `firecrab-api` | REST, WebSocket, 수명주기, SQLite, 아티팩트 검증 |
+| `firecrab-net-helper` | 브리지, TAP, DHCP, DNS, NAT, 방화벽, 포트 포워드 |
+| Firecracker | 실행 중 게스트마다 프로세스 하나 |
+| SQLite | VM, 네트워크, 리스, 포트 포워드 |
+| M2Image / OCI | 검증된 커널+rootfs. OCI import의 PID 1은 busybox |
+| MicroStorage | VM 디스크가 놓이는 호스트 디렉터리 |
+
+설치본 API는 빌드된 대시보드를 직접 서빙합니다.
+개발 시에는 Vite가 `/api`와 `/ws`를 API로 프록시합니다.
+자세한 내용은 [아키텍처](public-docs/architecture.md)를 참고하세요.
 
 ## Linux 호스트에 설치
 
