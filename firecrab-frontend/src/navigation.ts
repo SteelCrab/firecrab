@@ -92,6 +92,13 @@ export function viewHash(view: ViewId = DEFAULT_VIEW): string {
   return `#/${view}`;
 }
 
+/** Dedicated New MicroVM page. Not a `VIEWS` id — `#/vms` stays the list. */
+const NEW_VM_PATH = "vms/new";
+
+export function newVmHash(): string {
+  return `#/${NEW_VM_PATH}`;
+}
+
 /**
  * Shell views live under `#/vms` etc.; the terminal is a separate full-page
  * route (`#/console/<id>`) so it never shares the modal overlay layout that
@@ -99,7 +106,8 @@ export function viewHash(view: ViewId = DEFAULT_VIEW): string {
  */
 export type AppRoute =
   | { kind: "shell"; view: ViewId }
-  | { kind: "console"; vmId: string };
+  | { kind: "console"; vmId: string }
+  | { kind: "vm-new" };
 
 export function parseAppRoute(hash: string = window.location.hash): AppRoute {
   const path = stripHash(hash);
@@ -111,6 +119,7 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
       return { kind: "console", vmId: consoleMatch[1] };
     }
   }
+  if (path === NEW_VM_PATH) return { kind: "vm-new" };
   return { kind: "shell", view: parseViewId(path) ?? DEFAULT_VIEW };
 }
 
@@ -139,6 +148,8 @@ export function useAppRoute(): {
   useEffect(() => {
     if (route.kind !== "shell") return;
     const path = stripHash(window.location.hash);
+    // `#/vms/new` is not a ViewId; do not rewrite it to the list.
+    if (path === NEW_VM_PATH) return;
     if (parseViewId(path) === null && parseConsoleVmId(window.location.hash) === null) {
       const next = viewHash(DEFAULT_VIEW);
       if (window.location.hash !== next) {
@@ -166,6 +177,7 @@ export function useAppRoute(): {
 /** @deprecated Prefer `useAppRoute` — kept name for older call sites if any. */
 export function useHashView(): [ViewId, (view: ViewId) => void] {
   const { route, selectView } = useAppRoute();
+  // Console and `#/vms/new` still highlight MicroVM; `selectView("vms")` is the list.
   const view = route.kind === "shell" ? route.view : DEFAULT_VIEW;
   return [view, selectView];
 }

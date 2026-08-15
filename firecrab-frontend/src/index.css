@@ -404,6 +404,13 @@ form.shell-create-grid .field-span-2 {
   align-items: baseline;
   gap: 1rem;
 }
+.panel-title a {
+  color: var(--ember);
+  text-decoration: none;
+  letter-spacing: 0.08em;
+}
+.panel-title a:hover { text-decoration: underline; }
+.panel-title #vm-list-add { margin-right: 0.75rem; }
 
 .microregistry-title-actions {
   display: inline-flex;
