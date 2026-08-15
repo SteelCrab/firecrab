@@ -266,9 +266,22 @@ pub(crate) const FIRECRAB_MOTD: &str = include_str!("../../assets/firecrab-motd"
 /// Interactive login hook for catalog guests (systemd/OpenRC getty).
 const FIRECRAB_WELCOME_PROFILE: &str = concat!(
     "# Firecrab console welcome. Printed after /etc/motd on interactive login.\n",
+    "PATH=\"/usr/local/bin:/usr/local/sbin:$PATH\"\n",
+    "export PATH\n",
     "[ -x /usr/bin/fastfetch ] && /usr/bin/fastfetch\n",
     "[ -x /usr/bin/neofetch ] && [ ! -x /usr/bin/fastfetch ] && /usr/bin/neofetch\n",
 );
+
+/// UTF-8 so Hangul/Kana/Han typed in the serial console are not stripped.
+const FIRECRAB_LOCALE_PROFILE: &str = concat!(
+    "# Firecrab: UTF-8 for multilingual console input.\n",
+    "if [ -z \"${LANG:-}\" ] || [ \"$LANG\" = C ] || [ \"$LANG\" = POSIX ]; then\n",
+    "  LANG=C.UTF-8\n",
+    "fi\n",
+    "export LANG\n",
+    "export LC_ALL=\"$LANG\" LC_CTYPE=\"$LANG\"\n",
+);
+const FIRECRAB_LOCALE_CONF: &[u8] = b"LANG=C.UTF-8\nLC_ALL=C.UTF-8\n";
 
 /// Per-VM guest specialization: writes this VM's deterministic hostname
 /// (see `firecrab_helper_protocol::network::guest_hostname`) into
@@ -292,15 +305,25 @@ pub fn specialize_guest(
     write_into_image(rootfs, "/etc/hostname", format!("{hostname}\n").as_bytes())?;
     write_into_image(rootfs, "/etc/motd", FIRECRAB_MOTD.as_bytes())?;
     let _ = run_debugfs(rootfs, "mkdir /etc/profile.d");
+    let _ = run_debugfs(rootfs, "mkdir /etc/default");
     let _ = write_into_image(
         rootfs,
         "/etc/profile.d/firecrab-welcome.sh",
         FIRECRAB_WELCOME_PROFILE.as_bytes(),
     );
+    let _ = write_into_image(
+        rootfs,
+        "/etc/profile.d/firecrab-locale.sh",
+        FIRECRAB_LOCALE_PROFILE.as_bytes(),
+    );
+    let _ = write_into_image(rootfs, "/etc/default/locale", FIRECRAB_LOCALE_CONF);
+    let _ = write_into_image(rootfs, "/etc/locale.conf", FIRECRAB_LOCALE_CONF);
     // Already-imported OCI disks still have the old `respawn busybox sh`.
     // Rewrite the console wrapper on every start so MOTD/fastfetch appear
     // without requiring a re-import.
     patch_oci_console(rootfs);
+    install_guest_toolbox_commands(rootfs);
+    install_guest_systemctl(rootfs);
     apply_vm_env(rootfs, env)?;
     for path in STRIP_PATHS {
         remove_from_image(rootfs, path);
@@ -365,6 +388,56 @@ fn patch_oci_console(rootfs: &Path) {
     );
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.console", "0100755");
+}
+
+/// Puts missing `ping`/`wget`/`vi` on PATH for an already-imported OCI disk.
+fn install_guest_toolbox_commands(rootfs: &Path) {
+    if !guest_path_exists(rootfs, crate::oci::provision::GUEST_TOOLBOX) {
+        return;
+    }
+    let usr_bin = guest_path_exists(rootfs, "/usr/bin");
+    if !usr_bin {
+        let _ = run_debugfs(rootfs, "mkdir /bin");
+    }
+    let exists = |path: &str| guest_path_exists(rootfs, path);
+    for applet in crate::oci::provision::PATH_APPLETS {
+        if crate::oci::provision::applet_on_path(exists, applet) {
+            continue;
+        }
+        let dest = crate::oci::provision::applet_link_path(usr_bin, applet);
+        let _ = run_debugfs(
+            rootfs,
+            &format!("symlink {dest} {}", crate::oci::provision::GUEST_TOOLBOX),
+        );
+    }
+}
+
+/// Writes the systemctl wrapper on every guest, including catalog disks.
+fn install_guest_systemctl(rootfs: &Path) {
+    let _ = run_debugfs(rootfs, "mkdir /usr");
+    let _ = run_debugfs(rootfs, "mkdir /usr/local");
+    let _ = run_debugfs(rootfs, "mkdir /usr/local/bin");
+    if write_into_image(
+        rootfs,
+        crate::oci::provision::GUEST_SYSTEMCTL,
+        crate::oci::provision::SYSTEMCTL_SCRIPT.as_bytes(),
+    )
+    .is_ok()
+    {
+        set_guest_file_mode(rootfs, crate::oci::provision::GUEST_SYSTEMCTL, "0100755");
+    }
+    let has_real = guest_path_exists(rootfs, "/usr/bin/systemctl")
+        || guest_path_exists(rootfs, "/sbin/systemctl");
+    if !has_real {
+        let _ = run_debugfs(rootfs, "mkdir /bin");
+        let _ = run_debugfs(
+            rootfs,
+            &format!(
+                "symlink /bin/systemctl {}",
+                crate::oci::provision::GUEST_SYSTEMCTL
+            ),
+        );
+    }
 }
 
 const GUEST_VM_SERVICE: &str = "/etc/firecrab/services.d/app";
@@ -1155,6 +1228,26 @@ mod tests {
         let console = debugfs_cat(&rootfs, "/etc/firecrab/rc.console");
         assert!(console.contains("cat /etc/motd"), "{console}");
         assert!(console.contains("fastfetch"), "{console}");
+    }
+
+    #[test]
+    fn specialize_guest_puts_busybox_applets_on_path() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        write_into_image(&rootfs, "/etc/firecrab/busybox", b"busybox").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        assert!(guest_path_exists(&rootfs, "/bin/ping"));
+        assert!(!guest_path_exists(&rootfs, "/bin/sudo"));
+        assert!(
+            debugfs_cat(&rootfs, crate::oci::provision::GUEST_SYSTEMCTL)
+                .contains("Firecrab systemctl")
+        );
+        assert!(debugfs_cat(&rootfs, "/etc/profile.d/firecrab-locale.sh").contains("C.UTF-8"));
+        assert!(debugfs_cat(&rootfs, "/etc/default/locale").contains("C.UTF-8"));
     }
 
     #[test]

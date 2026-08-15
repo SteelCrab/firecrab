@@ -198,6 +198,8 @@ fn inject_blocking(
         control.check()?;
         install_program(tree, GUEST_TOOLBOX, toolbox.path(), &mut unwind)?;
         install_symlink(tree, GUEST_INIT, GUEST_TOOLBOX, &mut unwind)?;
+        install_toolbox_commands(tree, &mut unwind)?;
+        install_systemctl(tree, &mut unwind)?;
         if let Some(path) = fastfetch
             && first_existing(tree, fastfetch::GLIBC_LOADERS).is_some()
         {
@@ -601,6 +603,450 @@ fn install_program(
     install_file(tree, guest_path, &contents, 0o755, unwind)
 }
 
+/// Busybox applets exposed on PATH when the image did not ship them.
+pub(crate) const PATH_APPLETS: &[&str] = &[
+    "ping",
+    "ping6",
+    "traceroute",
+    "wget",
+    "nc",
+    "nslookup",
+    "vi",
+    "sh",
+];
+
+/// Wrapper that shadows a missing or unused `systemctl` on login PATH.
+pub(crate) const GUEST_SYSTEMCTL: &str = "/usr/local/bin/systemctl";
+
+/// Directories a login shell searches, in the usual Unix order.
+pub(crate) const PATH_LOOKUP_DIRS: &[&str] = &[
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
+];
+
+/// True when `applet` is already a file or symlink on a typical PATH.
+pub(crate) fn applet_on_path(exists: impl Fn(&str) -> bool, applet: &str) -> bool {
+    PATH_LOOKUP_DIRS
+        .iter()
+        .any(|dir| exists(&format!("{dir}/{applet}")))
+}
+
+/// Guest path for a new applet. Prefer `/usr/bin` on usr-merged trees.
+pub(crate) fn applet_link_path(usr_bin_exists: bool, applet: &str) -> String {
+    if usr_bin_exists {
+        format!("/usr/bin/{applet}")
+    } else {
+        format!("/bin/{applet}")
+    }
+}
+
+/// Links missing PATH tools at the toolbox. Does not invent `sudo`.
+fn install_toolbox_commands(tree: &Path, unwind: &mut InjectedPaths) -> Result<(), ResolveError> {
+    let usr_bin = tree.join("usr/bin").is_dir() || tree.join("usr/bin").is_symlink();
+    let exists = |guest: &str| {
+        let host = tree.join(guest.trim_start_matches('/'));
+        host.is_file() || host.is_symlink()
+    };
+    for applet in PATH_APPLETS {
+        if applet_on_path(exists, applet) {
+            continue;
+        }
+        let dest = applet_link_path(usr_bin, applet);
+        install_symlink(tree, &dest, GUEST_TOOLBOX, unwind)?;
+    }
+    Ok(())
+}
+
+/// Dispatches `systemctl` to the init that is actually PID 1.
+///
+/// systemd (Debian/Ubuntu/Fedora/RHEL/openSUSE) when `/run/systemd/system`
+/// exists; OpenRC (Alpine) for `/etc/init.d` units; otherwise Firecrab
+/// `services.d` (OCI busybox init). A container image that ships a
+/// `systemctl` binary still has no bus — the wrapper must win on PATH.
+pub(crate) const SYSTEMCTL_SCRIPT: &str = r#"#!/bin/sh
+# Firecrab systemctl (public-docs/oci.md). Not systemd.
+SELF=$0
+
+strip_unit() {
+  u=$1
+  u=${u%.service}
+  u=${u%.target}
+  u=${u%.socket}
+  printf '%s\n' "$u"
+}
+
+find_real_systemctl() {
+  for c in /usr/bin/systemctl /bin/systemctl /usr/sbin/systemctl; do
+    [ -x "$c" ] || continue
+    if [ "$c" -ef "$SELF" ] 2>/dev/null; then
+      continue
+    fi
+    if grep -q "Firecrab systemctl" "$c" 2>/dev/null; then
+      continue
+    fi
+    printf '%s\n' "$c"
+    return 0
+  done
+  return 1
+}
+
+if [ -d /run/systemd/system ]; then
+  real=$(find_real_systemctl) || real=
+  if [ -n "$real" ]; then
+    exec "$real" "$@"
+  fi
+fi
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    --no-pager|--quiet|-q|--system|--full|-l|--all|-a|--failed|--no-legend|--no-ask-password)
+      shift
+      ;;
+    --output=*|--type=*|--state=*|--property=*)
+      shift
+      ;;
+    --property|--type|--output|--state|-p)
+      [ $# -gt 1 ] && shift
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+CMD=${1:-list-units}
+[ $# -gt 0 ] && shift
+UNIT=$(strip_unit "${1:-}")
+
+rc_bin() {
+  if [ -x /sbin/rc-service ]; then
+    printf '%s\n' /sbin/rc-service
+  elif [ -x /usr/sbin/rc-service ]; then
+    printf '%s\n' /usr/sbin/rc-service
+  else
+    return 1
+  fi
+}
+
+rc_update_bin() {
+  if [ -x /sbin/rc-update ]; then
+    printf '%s\n' /sbin/rc-update
+  elif [ -x /usr/sbin/rc-update ]; then
+    printf '%s\n' /usr/sbin/rc-update
+  else
+    return 1
+  fi
+}
+
+has_openrc_unit() {
+  n=$1
+  [ -n "$n" ] || return 1
+  [ -x "/etc/init.d/$n" ] || [ -x "/etc/init.d/$n.sh" ]
+}
+
+match_fc() {
+  n=$1
+  [ -n "$n" ] || return 1
+  if [ -x "/etc/firecrab/services.d/$n" ]; then
+    printf '%s\n' "$n"
+    return 0
+  fi
+  if [ -x /etc/firecrab/services.d/app ]; then
+    case $n in
+      app) printf 'app\n'; return 0 ;;
+    esac
+    if grep -F "$n" /etc/firecrab/services.d/app >/dev/null 2>&1; then
+      printf 'app\n'
+      return 0
+    fi
+  fi
+  return 1
+}
+
+pidfile() {
+  n=$1
+  if [ "$n" = app ] && [ -f /run/firecrab-app.pid ]; then
+    printf '%s\n' /run/firecrab-app.pid
+    return
+  fi
+  printf '%s\n' /run/firecrab/$n.pid
+}
+
+is_running() {
+  n=$1
+  f=$(pidfile "$n")
+  [ -f "$f" ] || return 1
+  pid=$(cat "$f" 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null
+}
+
+fc_start() {
+  n=$1
+  script=/etc/firecrab/services.d/$n
+  if [ ! -x "$script" ]; then
+    echo "Failed to start $n.service: Unit $n.service not found." >&2
+    return 5
+  fi
+  if is_running "$n"; then
+    return 0
+  fi
+  mkdir -p /run/firecrab
+  if [ -x /etc/firecrab/busybox ]; then
+    /etc/firecrab/busybox setsid "$script" >/dev/console 2>&1 &
+  elif command -v setsid >/dev/null 2>&1; then
+    setsid "$script" >/dev/console 2>&1 &
+  else
+    "$script" >/dev/console 2>&1 &
+  fi
+  echo $! > /run/firecrab/$n.pid
+  [ "$n" = app ] && echo $! > /run/firecrab-app.pid
+}
+
+fc_stop() {
+  n=$1
+  f=$(pidfile "$n")
+  [ -f "$f" ] || return 0
+  pid=$(cat "$f" 2>/dev/null)
+  if [ -n "$pid" ]; then
+    kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  fi
+  rm -f "$f"
+  [ "$n" = app ] && rm -f /run/firecrab-app.pid
+}
+
+fc_status() {
+  n=$1
+  echo "$n.service - Firecrab guest service"
+  if is_running "$n"; then
+    pid=$(cat "$(pidfile "$n")")
+    echo "     Active: active (running) since pid $pid"
+    return 0
+  fi
+  echo "     Active: inactive (dead)"
+  return 3
+}
+
+do_power() {
+  action=$1
+  if [ -x /etc/firecrab/busybox ]; then
+    exec /etc/firecrab/busybox "$action" -f
+  fi
+  if command -v "$action" >/dev/null 2>&1; then
+    exec "$action"
+  fi
+  echo "Failed to $action: no poweroff helper" >&2
+  return 1
+}
+
+list_fc() {
+  echo "UNIT                 LOAD   ACTIVE     SUB     DESCRIPTION"
+  [ -d /etc/firecrab/services.d ] || return 0
+  for s in /etc/firecrab/services.d/*; do
+    [ -e "$s" ] || continue
+    name=${s##*/}
+    if [ -x "$s" ] && is_running "$name"; then
+      printf '%-20s loaded active     running %s\n' "$name.service" "$name"
+    elif [ -x "$s" ]; then
+      printf '%-20s loaded inactive   dead    %s\n' "$name.service" "$name"
+    else
+      printf '%-20s loaded inactive   dead    %s (disabled)\n' "$name.service" "$name"
+    fi
+  done
+}
+
+if [ -n "$UNIT" ] && has_openrc_unit "$UNIT" && rc=$(rc_bin); then
+  case $CMD in
+    start|stop|restart|status|reload)
+      exec "$rc" "$UNIT" "$CMD"
+      ;;
+    try-restart|force-reload)
+      exec "$rc" "$UNIT" restart
+      ;;
+    enable)
+      ru=$(rc_update_bin) || exit 1
+      exec "$ru" add "$UNIT" default
+      ;;
+    disable)
+      ru=$(rc_update_bin) || exit 1
+      exec "$ru" del "$UNIT" default
+      ;;
+    is-active)
+      "$rc" "$UNIT" status >/dev/null 2>&1
+      exit $?
+      ;;
+    is-enabled)
+      ru=$(rc_update_bin) || exit 1
+      "$ru" show default 2>/dev/null | grep -qw "$UNIT"
+      exit $?
+      ;;
+    cat|show)
+      exec cat "/etc/init.d/$UNIT"
+      ;;
+  esac
+fi
+
+fc=$(match_fc "$UNIT") || fc=
+if [ -d /etc/firecrab/services.d ]; then
+  case $CMD in
+    start)
+      [ -n "$fc" ] || { echo "Unit ${UNIT:-}.service not found." >&2; exit 4; }
+      fc_start "$fc"
+      exit $?
+      ;;
+    stop)
+      [ -n "$fc" ] || { echo "Unit ${UNIT:-}.service not found." >&2; exit 4; }
+      fc_stop "$fc"
+      exit $?
+      ;;
+    restart|try-restart|force-reload)
+      [ -n "$fc" ] || { echo "Unit ${UNIT:-}.service not found." >&2; exit 4; }
+      fc_stop "$fc"
+      fc_start "$fc"
+      exit $?
+      ;;
+    reload)
+      [ -n "$fc" ] || { echo "Unit ${UNIT:-}.service not found." >&2; exit 4; }
+      if is_running "$fc"; then
+        pid=$(cat "$(pidfile "$fc")")
+        kill -HUP "$pid" 2>/dev/null || { fc_stop "$fc"; fc_start "$fc"; }
+      else
+        fc_start "$fc"
+      fi
+      exit $?
+      ;;
+    status)
+      if [ -z "$UNIT" ]; then
+        list_fc
+        exit 0
+      fi
+      [ -n "$fc" ] || { echo "Unit $UNIT.service could not be found." >&2; exit 4; }
+      fc_status "$fc"
+      exit $?
+      ;;
+    is-active)
+      [ -n "$fc" ] || exit 4
+      if is_running "$fc"; then
+        echo active
+        exit 0
+      fi
+      echo inactive
+      exit 3
+      ;;
+    is-enabled)
+      [ -n "$fc" ] || exit 4
+      if [ -x "/etc/firecrab/services.d/$fc" ]; then
+        echo enabled
+        exit 0
+      fi
+      echo disabled
+      exit 1
+      ;;
+    enable)
+      [ -n "$fc" ] || exit 4
+      chmod +x "/etc/firecrab/services.d/$fc"
+      exit $?
+      ;;
+    disable)
+      [ -n "$fc" ] || exit 4
+      chmod -x "/etc/firecrab/services.d/$fc"
+      exit $?
+      ;;
+    cat|show)
+      [ -n "$fc" ] || exit 4
+      exec cat "/etc/firecrab/services.d/$fc"
+      ;;
+    list-units|list-unit-files)
+      list_fc
+      if rc=$(rc_bin); then
+        rc-status 2>/dev/null || true
+      fi
+      exit 0
+      ;;
+    daemon-reload)
+      exit 0
+      ;;
+    reboot)
+      do_power reboot
+      exit $?
+      ;;
+    poweroff|halt)
+      do_power poweroff
+      exit $?
+      ;;
+    *)
+      echo "Unknown operation $CMD." >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if rc=$(rc_bin); then
+  case $CMD in
+    list-units|list-unit-files|status)
+      if [ -z "$UNIT" ]; then
+        rc-status 2>/dev/null || true
+        exit 0
+      fi
+      ;;
+    daemon-reload)
+      exit 0
+      ;;
+    reboot)
+      do_power reboot
+      exit $?
+      ;;
+    poweroff|halt)
+      do_power poweroff
+      exit $?
+      ;;
+  esac
+  if [ -n "$UNIT" ]; then
+    echo "Unit $UNIT.service could not be found." >&2
+    exit 4
+  fi
+fi
+
+echo "System has not been booted with systemd as init system (PID 1). Can't operate." >&2
+exit 1
+"#;
+
+/// Installs the distro-dispatch `systemctl` wrapper.
+///
+/// Always written to [`GUEST_SYSTEMCTL`] so a login PATH hits it first.
+/// Copied to `/bin/systemctl` only when the image did not ship a real one,
+/// so busybox ash (no `/usr/local/bin` on PATH) still finds it.
+fn install_systemctl(tree: &Path, unwind: &mut InjectedPaths) -> Result<(), ResolveError> {
+    ensure_guest_directory(tree, "/usr/local/bin", 0o755, unwind)?;
+    install_file(
+        tree,
+        GUEST_SYSTEMCTL,
+        SYSTEMCTL_SCRIPT.as_bytes(),
+        0o755,
+        unwind,
+    )?;
+    let exists = |guest: &str| {
+        let host = tree.join(guest.trim_start_matches('/'));
+        host.is_file() || host.is_symlink()
+    };
+    if !exists("/usr/bin/systemctl") && !exists("/sbin/systemctl") {
+        install_symlink(tree, "/bin/systemctl", GUEST_SYSTEMCTL, unwind)?;
+    }
+    Ok(())
+}
+
 /// Links one guest path at another, replacing what the image left there.
 fn install_symlink(
     tree: &Path,
@@ -770,6 +1216,11 @@ if [ -s /etc/hostname ]; then
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null
 fi
 
+# UTF-8 so CJK typed on the serial console is not treated as POSIX C.
+export LANG="${{LANG:-C.UTF-8}}"
+export LC_ALL="$LANG" LC_CTYPE="$LANG"
+$BB stty iutf8 2>/dev/null
+
 # Metrics first, so the dashboard has samples even when the network fails.
 $BB setsid $BB sh {agent} >/dev/null 2>&1 &
 
@@ -815,6 +1266,8 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
+{base_packages}
+
 # Fallback only: glibc guests already received a pinned /usr/bin/fastfetch at
 # import. Alpine and other musl trees still try the guest package manager.
 if [ ! -x /usr/bin/fastfetch ]; then
@@ -829,18 +1282,57 @@ if [ ! -x /usr/bin/fastfetch ]; then
 fi
 
 # A later import stage translates the image entrypoint into a program here.
+$BB mkdir -p /run/firecrab
 for service in {services}/*; do
   [ -x "$service" ] || continue
+  name=${{service##*/}}
   $BB setsid "$service" >/dev/console 2>&1 &
-  echo $! > /run/firecrab-app.pid
+  echo $! > /run/firecrab/$name.pid
+  [ "$name" = app ] && echo $! > /run/firecrab-app.pid
 done
 exit 0
 "#,
         agent = crate::guest_agent::BIN_PATH,
         dhcp = GUEST_DHCP_SCRIPT,
         services = GUEST_SERVICES,
+        base_packages = BASE_PACKAGE_INSTALL,
     )
 }
+
+/// First-boot install of a small operator set. Slim OCI images ship a
+/// package manager and empty lists, so `apt-get install ping` fails until
+/// `update` has run. A failed attempt leaves no stamp and retries next boot.
+/// Distroless trees have no manager; the busybox applets are enough.
+pub(crate) const BASE_PACKAGE_INSTALL: &str = r#"
+# First boot only. Container images rarely ship ping/curl.
+if [ ! -f /etc/firecrab/base-packages.ok ]; then
+  ok=0
+  if [ -x /usr/bin/apt-get ]; then
+    if DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq \
+      && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq \
+        iputils-ping iproute2 ca-certificates curl procps; then
+      ok=1
+    fi
+  elif [ -x /usr/bin/dnf ]; then
+    /usr/bin/dnf install -y -q iputils iproute ca-certificates curl procps-ng && ok=1
+  elif [ -x /usr/bin/microdnf ]; then
+    /usr/bin/microdnf -y install iputils iproute ca-certificates curl procps-ng && ok=1
+  elif [ -x /usr/bin/yum ]; then
+    /usr/bin/yum install -y -q iputils iproute ca-certificates curl procps-ng && ok=1
+  elif [ -x /sbin/apk ]; then
+    /sbin/apk add --no-cache iputils iproute2 ca-certificates curl procps && ok=1
+  elif [ -x /usr/bin/apk ]; then
+    /usr/bin/apk add --no-cache iputils iproute2 ca-certificates curl procps && ok=1
+  elif [ -x /usr/bin/zypper ]; then
+    /usr/bin/zypper --non-interactive install -y iputils iproute2 ca-certificates curl procps && ok=1
+  elif [ -x /usr/bin/pacman ]; then
+    /usr/bin/pacman -Sy --noconfirm --needed iputils iproute2 ca-certificates curl procps-ng && ok=1
+  else
+    ok=1
+  fi
+  [ "$ok" -eq 1 ] && $BB touch /etc/firecrab/base-packages.ok
+fi
+"#;
 
 /// Interactive console: MOTD, fastfetch when present, then ash.
 pub(crate) fn console_script() -> String {
@@ -848,6 +1340,11 @@ pub(crate) fn console_script() -> String {
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab injected console (public-docs/oci.md).
 BB={GUEST_TOOLBOX}
+PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+export PATH
+export LANG="${{LANG:-C.UTF-8}}"
+export LC_ALL="$LANG" LC_CTYPE="$LANG"
+$BB stty iutf8 2>/dev/null
 if [ -s /etc/hostname ]; then
   $BB hostname -F /etc/hostname 2>/dev/null
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null

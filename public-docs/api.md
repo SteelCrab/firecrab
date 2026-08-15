@@ -91,6 +91,7 @@ Catalog templates (Alpine, Ubuntu, Rocky) do not use this tree.
 | `/etc/firecrab/services.d/` | Directory of guest services. `rc.boot` starts every executable after the sentinel. |
 | `/etc/firecrab/services.d/app` | Image Entrypoint, Cmd, Env, and WorkingDir. Never PID 1. |
 | `/etc/firecrab/vm.env` | Per-VM `env` sidecar. `services.d/app` sources it. Plaintext. |
+| `/etc/firecrab/base-packages.ok` | Stamp after the first-boot package install. |
 
 `inittab` runs `rc.boot` once, then respawns the serial console.
 `rc.boot` mounts `/proc`, `/sys`, `/dev` (with `/dev/fd`), and `/run`, sets the hostname from `/etc/hostname`, starts the metrics agent, brings `eth0` up, runs DHCP, prints `FIRECRAB_NETWORK_READY`, and starts each executable in `services.d`.
@@ -125,6 +126,8 @@ Related guest paths that are not under `/etc/firecrab`:
 | Guest path | Role |
 | --- | --- |
 | `/sbin/init` | Symlink to `/etc/firecrab/busybox`. |
+| `/bin/ping`, `/bin/wget`, … | Toolbox applets when the image did not ship them. |
+| `/usr/local/bin/systemctl` | Wrapper: systemd, OpenRC, or `services.d`. |
 | `/etc/inittab` | busybox init job table. |
 | `/etc/hostname`, `/etc/motd` | Written per VM on start. |
 | `/usr/local/sbin/firecrab-guest-agent` | CPU and memory samples for the dashboard. |

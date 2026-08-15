@@ -113,17 +113,17 @@ image boots on the same kernel command line every other template uses. It also
 installs a boot script that mounts `/proc`, `/sys`, `/dev` (with `/dev/fd`) and `/run`, brings
 the interface up before asking for a lease, reports `FIRECRAB_NETWORK_READY`
 with the address it received or `FIRECRAB_NETWORK_FAILED` with a reason, and
-starts the metrics agent that reports guest CPU and memory. When the image
-ships util-linux `agetty` and bash, the serial console is
-`ttyS0 → agetty → login → bash`; otherwise the injected wrapper prints MOTD
-and drops into ash. When the image has a glibc dynamic loader, activation
-also copies a digest-pinned official fastfetch (polyfilled, GLIBC_2.17) to
-`/usr/bin/fastfetch`. Debian bookworm guests such as `nginx:1.27` have
-`apt-get` but no `fastfetch` package, so a guest install is a silent no-op.
-The program is cached at `<FIRECRAB_IMAGE_ROOT>/.oci/fastfetch/` after the
-first download. Operators can name a host binary with
-`FIRECRAB_OCI_FASTFETCH_PATH`. A missing program is not an import failure:
-the boot script still tries the guest package manager as a fallback.
+starts the metrics agent that reports guest CPU and memory. Missing PATH
+tools (`ping`, `wget`, `vi`, `nc`) become busybox symlinks. `systemctl`
+talks to systemd if it is PID 1, else OpenRC, else `services.d`. After DHCP, the
+first boot installs a small set through apt/dnf/apk/zypper/pacman and stamps
+`/etc/firecrab/base-packages.ok`. When the image ships util-linux `agetty`
+and bash, the serial console is `ttyS0 → agetty → login → bash`; otherwise
+the injected wrapper prints MOTD and drops into ash. When the image has a
+glibc dynamic loader, activation also copies a digest-pinned official
+fastfetch (polyfilled, GLIBC_2.17) to `/usr/bin/fastfetch`, cached at
+`<FIRECRAB_IMAGE_ROOT>/.oci/fastfetch/`. Operators can name a host binary
+with `FIRECRAB_OCI_FASTFETCH_PATH`. A missing program is not an import failure.
 `/etc/firecrab/services.d` is created empty for the image's own entrypoint, which a later stage translates into an ordinary service under that init rather than PID 1.
 
 Images that place `/sbin` or `/etc` behind a symbolic link are activated
