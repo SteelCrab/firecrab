@@ -308,6 +308,7 @@ pub async fn create_vm(
         tracing::warn!(request_id = %request_id.0, vm_id = %vm.id, error, "dhcp sync failed after create");
     }
 
+    let env_len = vm.env.len();
     tracing::info!(
         request_id = %request_id.0,
         vm_id = %vm.id,
@@ -315,7 +316,7 @@ pub async fn create_vm(
         template = vm.template,
         cpu = vm.cpu,
         ram = vm.ram,
-        env_len = vm.env.len(),
+        env_len,
         "vm created"
     );
     let response = vm_response(&state, &vm, Some(&lease));
@@ -577,13 +578,14 @@ pub async fn update_vm(
         restore_resources(&state, id, previous);
         return Err(error);
     }
+    let env_len = updated.env.len();
     tracing::info!(
         request_id = %request_id.0,
         vm_id = %id,
         cpu = updated.cpu,
         ram = updated.ram,
         disk_gb = updated.disk_gb,
-        env_len = updated.env.len(),
+        env_len,
         "vm resources updated"
     );
     let lease = lease_for(&state, id).await;
@@ -2374,6 +2376,11 @@ mod tests {
         assert_eq!(validate_vm_env(&BTreeMap::new()), None);
         let ok = BTreeMap::from([("POSTGRES_PASSWORD".to_owned(), "s".to_owned())]);
         assert_eq!(validate_vm_env(&ok), None);
+        assert!(is_posix_env_key("_UNDERSCORE"));
+        assert!(is_posix_env_key("A1"));
+        assert!(!is_posix_env_key(""));
+        assert!(!is_posix_env_key("1BAD"));
+        assert!(!is_posix_env_key("FOO-BAR"));
     }
 
     #[test]
@@ -2393,6 +2400,12 @@ mod tests {
         let nul_value = BTreeMap::from([("FOO".to_owned(), "a\0b".to_owned())]);
         assert_eq!(
             validate_vm_env(&nul_value).as_deref(),
+            Some("must not contain a NUL byte")
+        );
+
+        let nul_key = BTreeMap::from([("FOO\0BAR".to_owned(), "x".to_owned())]);
+        assert_eq!(
+            validate_vm_env(&nul_key).as_deref(),
             Some("must not contain a NUL byte")
         );
 
@@ -4440,6 +4453,85 @@ while True:
         assert!(state.store.load_all().unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn update_rejects_invalid_env_with_fields_env() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("bad-env-update", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let mut request = update_request(vm.cpu, vm.ram, vm.disk_gb);
+        request.env.insert("1BAD".to_owned(), "x".to_owned());
+        let error = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+            ValidatedJson(request),
+        )
+        .await
+        .unwrap_err();
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let fields = &json["error"]["fields"];
+        assert!(
+            fields["env"]
+                .as_str()
+                .is_some_and(|msg| msg.contains("POSIX")),
+            "{fields:?}"
+        );
+        assert!(
+            state
+                .vms
+                .lock()
+                .unwrap()
+                .get(&vm.id)
+                .unwrap()
+                .env
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_restores_env_when_persist_fails() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("env-rollback", Uuid::new_v4());
+        vm.env.insert("KEEP".to_owned(), "original".to_owned());
+        seed_vm(&state, &vm);
+        state.store.break_for_tests();
+
+        let mut request = update_request(vm.cpu, vm.ram, vm.disk_gb);
+        request.env.insert("FOO".to_owned(), "bar".to_owned());
+        let error = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+            ValidatedJson(request),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
+            state
+                .vms
+                .lock()
+                .unwrap()
+                .get(&vm.id)
+                .unwrap()
+                .env
+                .get("KEEP")
+                .map(String::as_str),
+            Some("original")
+        );
+    }
+
     #[test]
     fn find_network_sentinel_recognizes_ready_and_failed_lines() {
         assert_eq!(
@@ -4534,5 +4626,13 @@ while True:
 
         let too_big = update_request(2, 512, MAX_DISK_GB + 1);
         assert!(validate_update(&too_big, 5).contains_key("diskGb"));
+
+        let mut bad_env = update_request(2, 512, 5);
+        bad_env.env.insert("1BAD".to_owned(), "x".to_owned());
+        let fields = validate_update(&bad_env, 5);
+        assert!(
+            fields.get("env").is_some_and(|msg| msg.contains("POSIX")),
+            "{fields:?}"
+        );
     }
 }

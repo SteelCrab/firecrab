@@ -266,6 +266,8 @@ fn migrate_disk_generation_columns(conn: &Connection) -> Result<(), PersistenceE
     Ok(())
 }
 
+const ADD_ENV_COLUMN_SQL: &str = "ALTER TABLE vms ADD COLUMN env TEXT NOT NULL DEFAULT '{}'";
+
 /// Adds `env` to a `vms` table created before per-VM environment existed.
 /// `'{}'` matches the empty map every VM had before this field existed.
 fn migrate_env_column(conn: &Connection) -> Result<(), PersistenceError> {
@@ -273,10 +275,7 @@ fn migrate_env_column(conn: &Connection) -> Result<(), PersistenceError> {
         .prepare("SELECT 1 FROM pragma_table_info('vms') WHERE name = 'env'")?
         .exists([])?;
     if !has_column {
-        conn.execute(
-            "ALTER TABLE vms ADD COLUMN env TEXT NOT NULL DEFAULT '{}'",
-            [],
-        )?;
+        conn.execute(ADD_ENV_COLUMN_SQL, [])?;
     }
     Ok(())
 }
@@ -1887,6 +1886,32 @@ mod tests {
                 .env
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn a_corrupt_env_column_is_reported_as_a_corrupt_record() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("env-corrupt.db")).unwrap();
+        let vm = record(Uuid::new_v4(), "env-corrupt");
+        store.insert(&vm).unwrap();
+
+        for raw in ["not-json", "[1]", r#"{"K":1}"#] {
+            store
+                .lock()
+                .execute(
+                    "UPDATE vms SET env = ?1 WHERE id = ?2",
+                    params![raw, vm.id.to_string()],
+                )
+                .unwrap();
+            assert!(
+                matches!(
+                    store.load_all(),
+                    Err(PersistenceError::CorruptRecord { ref id, ref reason })
+                        if id == &vm.id.to_string() && reason.contains("env is not a JSON object")
+                ),
+                "{raw} should be reported as a corrupt env column"
+            );
+        }
     }
 
     #[test]

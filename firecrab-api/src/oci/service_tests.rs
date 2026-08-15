@@ -232,3 +232,89 @@ fn rewrite_vm_env_block_vm_key_wins_after_image_export() {
     let vm = rewritten.find("export PATH='/vm/bin'").expect("vm PATH");
     assert!(image < vm, "{rewritten}");
 }
+
+#[test]
+fn rewrite_vm_env_block_unclosed_begin_is_left_in_place() {
+    let script = "# >>> firecrab vm env\nexport STALE='x'\nexec '/bin/app'\n";
+    let rewritten = service::rewrite_vm_env_block(
+        script,
+        &BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+    );
+    assert!(
+        rewritten.contains("# >>> firecrab vm env\nexport STALE='x'\n"),
+        "{rewritten}"
+    );
+    assert!(
+        rewritten.contains("export FOO='bar'\n# <<< firecrab vm env\n"),
+        "{rewritten}"
+    );
+    assert!(rewritten.contains("exec '/bin/app'"), "{rewritten}");
+}
+
+#[test]
+fn rewrite_vm_env_block_strips_a_block_that_starts_the_script() {
+    let script =
+        "# >>> firecrab vm env\nexport FOO='bar'\n# <<< firecrab vm env\nexec '/bin/app'\n";
+    let cleared = service::rewrite_vm_env_block(script, &BTreeMap::new());
+    assert_eq!(cleared, "exec '/bin/app'\n");
+}
+
+#[test]
+fn rewrite_vm_env_block_inserts_before_exec_when_image_has_no_export() {
+    let script = "#!/bin/sh\nexec '/bin/app'\n";
+    let rewritten = service::rewrite_vm_env_block(
+        script,
+        &BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+    );
+    assert!(
+        rewritten.contains(
+            "# >>> firecrab vm env\n\
+             export FOO='bar'\n\
+             # <<< firecrab vm env\n\
+             exec '/bin/app'\n"
+        ),
+        "{rewritten}"
+    );
+}
+
+#[test]
+fn rewrite_vm_env_block_appends_when_script_has_neither_export_nor_exec() {
+    let script = "#!/bin/sh\n";
+    let rewritten = service::rewrite_vm_env_block(
+        script,
+        &BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+    );
+    assert_eq!(
+        rewritten,
+        "#!/bin/sh\n\
+         # >>> firecrab vm env\n\
+         export FOO='bar'\n\
+         # <<< firecrab vm env\n"
+    );
+}
+
+#[test]
+fn rewrite_vm_env_block_ignores_export_after_exec() {
+    let script = "exec '/bin/app'\nexport LATE='x'\n";
+    let rewritten = service::rewrite_vm_env_block(
+        script,
+        &BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+    );
+    assert!(
+        rewritten.starts_with(
+            "# >>> firecrab vm env\n\
+             export FOO='bar'\n\
+             # <<< firecrab vm env\n\
+             exec '/bin/app'\n"
+        ),
+        "{rewritten}"
+    );
+    assert!(rewritten.contains("export LATE='x'"), "{rewritten}");
+}
+
+#[test]
+fn rewrite_vm_env_block_recognizes_a_marker_at_eof_without_newline() {
+    let script = "# >>> firecrab vm env";
+    let rewritten = service::rewrite_vm_env_block(script, &BTreeMap::new());
+    assert_eq!(rewritten, script);
+}

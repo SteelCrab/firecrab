@@ -1408,6 +1408,33 @@ mod tests {
     }
 
     #[test]
+    fn specialize_guest_rejects_non_utf8_services_d_app() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/firecrab/services.d").unwrap();
+        write_into_image(
+            &rootfs,
+            "/etc/firecrab/services.d/app",
+            b"\xff\xfe not utf-8",
+        )
+        .unwrap();
+
+        let error = specialize_guest(
+            &rootfs,
+            Uuid::new_v4(),
+            &BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("failed to read /etc/firecrab/services.d/app"),
+            "{message}"
+        );
+    }
+
+    #[test]
     fn dump_from_image_extracts_a_file_written_earlier() {
         let directory = tempdir().unwrap();
         let rootfs = directory.path().join("rootfs.ext4");
