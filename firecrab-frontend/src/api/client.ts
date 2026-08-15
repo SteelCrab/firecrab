@@ -307,8 +307,8 @@ export function createMicroNetwork(request: CreateMicroNetworkRequest): Promise<
   });
 }
 
-/** Switches one network's internet access on or off — everything else about
- *  a MicroNetwork is fixed once created. */
+/** PATCH internet access and/or stored uplink. Omit `uplink` to leave it;
+ *  send `""` to reset to the host default-route iface. */
 export function updateMicroNetwork(
   id: string,
   request: UpdateMicroNetworkRequest,

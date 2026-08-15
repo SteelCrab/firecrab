@@ -6,6 +6,7 @@ import {
   createMicroNetwork,
   deleteMicroNetwork,
   getMicroNetwork,
+  getNetworkInfo,
   listMicroNetworks,
   updateMicroNetwork,
 } from "../api/client";
@@ -23,6 +24,9 @@ export default function MicroNetworks() {
   const [name, setName] = useState("");
   const [subnetCidr, setSubnetCidr] = useState("");
   const [internetEnabled, setInternetEnabled] = useState(true);
+  const [uplink, setUplink] = useState("");
+  const [interfaces, setInterfaces] = useState<string[]>([]);
+  const [defaultUplink, setDefaultUplink] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<ApiClientError | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -57,6 +61,14 @@ export default function MicroNetworks() {
 
   useEffect(() => {
     refresh();
+    getNetworkInfo()
+      .then((info) => {
+        setInterfaces(info.interfaces ?? []);
+        setDefaultUplink(info.uplink);
+      })
+      .catch(() => {
+        setInterfaces([]);
+      });
   }, []);
 
   const handleSubmit = async (event: FormEvent) => {
@@ -70,10 +82,12 @@ export default function MicroNetworks() {
         name: name.trim(),
         subnetCidr: subnetCidr.trim(),
         internetEnabled,
+        ...(uplink ? { uplink } : {}),
       });
       setName("");
       setSubnetCidr("");
       setInternetEnabled(true);
+      setUplink("");
       await refresh();
     } catch (error) {
       setFieldErrors(error as ApiClientError);
@@ -157,6 +171,26 @@ export default function MicroNetworks() {
           <span className="field-error"></span>
         </div>
         <div className="field">
+          <label htmlFor="mn-uplink">{t("Uplink", "업링크")}</label>
+          <select
+            id="mn-uplink"
+            value={uplink}
+            onChange={(event) => setUplink(event.target.value)}
+          >
+            <option value="">
+              {defaultUplink
+                ? t(`Auto (default route: ${defaultUplink})`, `자동 (기본 경로: ${defaultUplink})`)
+                : t("Auto (default route)", "자동 (기본 경로)")}
+            </option>
+            {interfaces.map((iface) => (
+              <option key={iface} value={iface}>
+                {iface}
+              </option>
+            ))}
+          </select>
+          {fieldError("uplink")}
+        </div>
+        <div className="field">
           <label>&nbsp;</label>
           <button className="btn primary" type="submit" disabled={submitting}>
             {submitting ? t("Creating…", "생성 중…") : t("Create", "생성")}
@@ -180,6 +214,7 @@ export default function MicroNetworks() {
                 <th>subnet CIDR</th>
                 <th>gateway</th>
                 <th>{t("Internet", "인터넷")}</th>
+                <th>{t("Uplink", "업링크")}</th>
                 <th>id</th>
                 <th className="actions">{t("Actions", "작업")}</th>
               </tr>
@@ -195,6 +230,7 @@ export default function MicroNetworks() {
                   <td className="mono">{network.subnetCidr}</td>
                   <td className="mono">{network.gateway}</td>
                   <td>{network.internetEnabled ? t("Enabled", "연결") : t("Blocked", "차단")}</td>
+                  <td className="mono">{network.uplink ?? t("Auto", "자동")}</td>
                   <td className="mono" title={network.id}>
                     {network.id.split("-")[0]}
                   </td>
@@ -232,7 +268,32 @@ export default function MicroNetworks() {
         </div>
       )}
 
-      {selectedId && <MicroNetworkDetail detail={detail} error={detailError} />}
+      {selectedId && (
+        <MicroNetworkDetail
+          detail={detail}
+          error={detailError}
+          storedUplink={networks?.find((network) => network.id === selectedId)?.uplink ?? null}
+          interfaces={interfaces}
+          defaultUplink={defaultUplink}
+          busy={busyId === selectedId}
+          onSaveUplink={async (next) => {
+            if (!selectedId || !detail || busyId) return;
+            setBusyId(selectedId);
+            try {
+              await updateMicroNetwork(selectedId, {
+                internetEnabled: detail.nat.enabled,
+                uplink: next,
+              });
+              await refresh();
+              setDetail(await getMicroNetwork(selectedId));
+            } catch (error) {
+              setListError((error as Error).message);
+            } finally {
+              setBusyId(null);
+            }
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -242,15 +303,29 @@ export default function MicroNetworks() {
 function MicroNetworkDetail({
   detail,
   error,
+  storedUplink,
+  interfaces,
+  defaultUplink,
+  busy,
+  onSaveUplink,
 }: {
   detail: MicroNetworkDetailResponse | null;
   error: string | null;
+  storedUplink: string | null;
+  interfaces: string[];
+  defaultUplink: string;
+  busy: boolean;
+  onSaveUplink: (uplink: string) => Promise<void>;
 }) {
   const { t } = useI18n();
   if (error) return <div className="field-error">{error}</div>;
   if (!detail) return <div className="empty">{t("Loading details…", "상세 불러오는 중…")}</div>;
 
   const { subnet, bridge, nat, firewall } = detail;
+  const pickerInterfaces =
+    storedUplink && !interfaces.includes(storedUplink)
+      ? [storedUplink, ...interfaces]
+      : interfaces;
   return (
     <div className="subpanel">
       <dl className="detail-fields mono">
@@ -274,6 +349,28 @@ function MicroNetworkDetail({
           {nat.enabled
             ? `${nat.sourceCidr} → ${nat.uplink || t("(no uplink)", "(uplink 없음)")}`
             : t("Internet blocked — no masquerading; outbound traffic is dropped", "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop")}
+          <div className="field">
+            <label htmlFor="mn-detail-uplink">{t("Uplink", "업링크")}</label>
+            <select
+              id="mn-detail-uplink"
+              value={storedUplink ?? ""}
+              disabled={busy}
+              onChange={(event) => {
+                void onSaveUplink(event.target.value);
+              }}
+            >
+              <option value="">
+                {defaultUplink
+                  ? t(`Auto (default route: ${defaultUplink})`, `자동 (기본 경로: ${defaultUplink})`)
+                  : t("Auto (default route)", "자동 (기본 경로)")}
+              </option>
+              {pickerInterfaces.map((iface) => (
+                <option key={iface} value={iface}>
+                  {iface}
+                </option>
+              ))}
+            </select>
+          </div>
         </dd>
 
         <dt>{t("Firewall", "방화벽")}</dt>

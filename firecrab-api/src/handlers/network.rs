@@ -26,12 +26,14 @@ pub async fn get_network_info(State(state): State<AppState>) -> Json<NetworkInfo
         .and_then(Result::ok)
         .unwrap_or_default();
 
+    let interfaces = read_host_interfaces();
     let Some(network) = networks.into_iter().next() else {
         return Json(NetworkInfoResponse {
             bridge_name: String::new(),
             subnet_cidr: String::new(),
             gateway: String::new(),
             uplink,
+            interfaces,
         });
     };
 
@@ -44,6 +46,7 @@ pub async fn get_network_info(State(state): State<AppState>) -> Json<NetworkInfo
         subnet_cidr: network.subnet_cidr,
         gateway,
         uplink,
+        interfaces,
     })
 }
 
@@ -60,6 +63,35 @@ pub(crate) fn read_uplink() -> Option<String> {
         let destination = fields.next()?;
         (destination == "00000000").then(|| iface.to_owned())
     })
+}
+
+/// Host NIC names from `/sys/class/net`, excluding loopback and Firecrab-owned
+/// TAP/bridge prefixes. Picker-only; the helper still re-checks existence.
+pub(crate) fn read_host_interfaces() -> Vec<String> {
+    let mut names = Vec::new();
+    let Ok(entries) = fs::read_dir("/sys/class/net") else {
+        return names;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name == "lo" || name.starts_with("fct") || name.starts_with("mnb") {
+            continue;
+        }
+        if Path::new("/sys/class/net").join(name).is_dir() {
+            names.push(name.to_owned());
+        }
+    }
+    names.sort();
+    names
+}
+
+/// Whether `/sys/class/net/<name>` is a directory. Callers must charset-check
+/// `name` first so this is not a path-join of user text.
+pub(crate) fn host_interface_exists(name: &str) -> bool {
+    Path::new("/sys/class/net").join(name).is_dir()
 }
 
 /// `GET /api/host`: a point-in-time snapshot of host resource usage.
@@ -176,6 +208,7 @@ mod tests {
                 name: "panel-net".to_owned(),
                 subnet_cidr: "172.29.0.0/24".to_owned(),
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await
@@ -192,6 +225,50 @@ mod tests {
         // Unprivileged read; requires this host to have an IPv4 default
         // route (true in the dev/CI sandbox this was written against).
         assert!(!read_uplink().unwrap().is_empty());
+    }
+
+    #[test]
+    fn read_host_interfaces_lists_sysfs_and_skips_owned_prefixes() {
+        let ifaces = read_host_interfaces();
+        assert!(
+            ifaces
+                .iter()
+                .any(|name| Path::new("/sys/class/net").join(name).is_dir()),
+            "{ifaces:?}"
+        );
+        assert!(
+            !ifaces
+                .iter()
+                .any(|name| name == "lo" || name.starts_with("fct") || name.starts_with("mnb")),
+            "{ifaces:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn network_info_includes_host_interfaces() {
+        let directory = tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty())
+            .expect("empty template spec list should always verify");
+        let state = AppState::with_db_file(templates, directory.path().join("state.db"))
+            .await
+            .expect("fresh temp db should open cleanly");
+
+        let Json(info) = get_network_info(State(state)).await;
+        assert!(
+            info.interfaces
+                .iter()
+                .any(|name| Path::new("/sys/class/net").join(name).is_dir()),
+            "{:?}",
+            info.interfaces
+        );
+        assert!(
+            !info
+                .interfaces
+                .iter()
+                .any(|name| name == "lo" || name.starts_with("fct") || name.starts_with("mnb")),
+            "{:?}",
+            info.interfaces
+        );
     }
 
     #[test]

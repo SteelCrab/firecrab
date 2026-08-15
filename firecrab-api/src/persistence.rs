@@ -76,16 +76,17 @@ const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     subnet_cidr TEXT NOT NULL,
-    internet_enabled INTEGER NOT NULL DEFAULT 1
+    internet_enabled INTEGER NOT NULL DEFAULT 1,
+    uplink TEXT
 ) STRICT";
 
 /// Selects every column [`Store::list_micro_networks`] needs.
 const SELECT_ALL_MICRO_NETWORKS_SQL: &str =
-    "SELECT id, name, subnet_cidr, internet_enabled FROM micro_networks";
+    "SELECT id, name, subnet_cidr, internet_enabled, uplink FROM micro_networks";
 
 /// Inserts a new row; fails on a duplicate id.
-const INSERT_MICRO_NETWORK_SQL: &str =
-    "INSERT INTO micro_networks (id, name, subnet_cidr, internet_enabled) VALUES (?1, ?2, ?3, ?4)";
+const INSERT_MICRO_NETWORK_SQL: &str = "INSERT INTO micro_networks \
+    (id, name, subnet_cidr, internet_enabled, uplink) VALUES (?1, ?2, ?3, ?4, ?5)";
 
 /// MicroStorage pools (`public-docs/storage.md`).
 const CREATE_MICRO_STORAGES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_storages (
@@ -314,6 +315,18 @@ fn migrate_internet_enabled_column(conn: &Connection) -> Result<(), PersistenceE
     Ok(())
 }
 
+/// Adds `uplink` to a `micro_networks` table created before per-network
+/// egress NIC selection existed. `NULL` keeps the host default-route iface.
+fn migrate_uplink_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let has_column: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('micro_networks') WHERE name = 'uplink'")?
+        .exists([])?;
+    if !has_column {
+        conn.execute("ALTER TABLE micro_networks ADD COLUMN uplink TEXT", [])?;
+    }
+    Ok(())
+}
+
 /// One-shot upgrade: VMs/leases created when the default network was
 /// implicit (`micro_network_id` NULL) get an explicit MicroNetwork row
 /// (`name=default`, `172.30.0.0/24`) and are reattached to it.
@@ -347,7 +360,7 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
     );
     conn.execute(
         INSERT_MICRO_NETWORK_SQL,
-        params![id.to_string(), "default", cidr, 1],
+        params![id.to_string(), "default", cidr, 1, Option::<String>::None],
     )?;
     conn.execute(
         "UPDATE vms SET micro_network_id = ?1 \
@@ -544,6 +557,7 @@ impl Store {
         // one alters is the one just created, and `CREATE TABLE IF NOT EXISTS`
         // leaves an older table's columns as they were.
         migrate_internet_enabled_column(&conn)?;
+        migrate_uplink_column(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
@@ -644,14 +658,15 @@ impl Store {
                 network.id.to_string(),
                 network.name,
                 network.subnet_cidr,
-                network.internet_enabled
+                network.internet_enabled,
+                network.uplink,
             ],
         )?;
         Ok(())
     }
 
-    /// Flips one MicroNetwork's internet access. The only mutable field a
-    /// network has — its CIDR is what its VMs' addresses came out of.
+    /// Flips one MicroNetwork's internet access. CIDR stays immutable —
+    /// its VMs' addresses came out of it.
     pub fn set_micro_network_internet(
         &self,
         id: Uuid,
@@ -660,6 +675,23 @@ impl Store {
         let changed = self.lock().execute(
             "UPDATE micro_networks SET internet_enabled = ?2 WHERE id = ?1",
             params![id.to_string(), internet_enabled],
+        )?;
+        if changed == 0 {
+            return Err(PersistenceError::MissingMicroNetwork { id });
+        }
+        Ok(())
+    }
+
+    /// Sets one MicroNetwork's stored uplink. `None` means auto (the host
+    /// default-route iface).
+    pub fn set_micro_network_uplink(
+        &self,
+        id: Uuid,
+        uplink: Option<String>,
+    ) -> Result<(), PersistenceError> {
+        let changed = self.lock().execute(
+            "UPDATE micro_networks SET uplink = ?2 WHERE id = ?1",
+            params![id.to_string(), uplink],
         )?;
         if changed == 0 {
             return Err(PersistenceError::MissingMicroNetwork { id });
@@ -695,6 +727,7 @@ impl Store {
                 subnet_cidr,
                 gateway,
                 internet_enabled: row.get(3)?,
+                uplink: row.get(4)?,
             });
         }
         Ok(networks)
@@ -2060,6 +2093,79 @@ mod tests {
         // And it is writable from here on.
         store.set_micro_network_internet(id, false).unwrap();
         assert!(!store.micro_network(id).unwrap().unwrap().internet_enabled);
+    }
+
+    #[test]
+    fn migrate_uplink_column_leaves_existing_rows_null() {
+        let directory = tempdir().unwrap();
+        let db_file = directory.path().join("firecrab.db");
+        let id = Uuid::new_v4();
+
+        {
+            let conn = Connection::open(&db_file).unwrap();
+            conn.execute(
+                "CREATE TABLE micro_networks (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    subnet_cidr TEXT NOT NULL,
+                    internet_enabled INTEGER NOT NULL DEFAULT 1
+                ) STRICT",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO micro_networks (id, name, subnet_cidr, internet_enabled) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![id.to_string(), "pre-uplink", "172.31.0.0/24", 1],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&db_file).unwrap();
+        let network = store.micro_network(id).unwrap().expect("row survives");
+        assert_eq!(
+            network.uplink, None,
+            "NULL uplink keeps the host default-route iface"
+        );
+    }
+
+    #[test]
+    fn set_micro_network_uplink_round_trips() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let id = Uuid::new_v4();
+        store
+            .insert_micro_network(&MicroNetworkResponse {
+                id,
+                name: "prod".to_owned(),
+                subnet_cidr: "172.31.0.0/24".to_owned(),
+                gateway: "172.31.0.1".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+            })
+            .unwrap();
+
+        store
+            .set_micro_network_uplink(id, Some("eth1".to_owned()))
+            .unwrap();
+        assert_eq!(
+            store.micro_network(id).unwrap().unwrap().uplink.as_deref(),
+            Some("eth1")
+        );
+
+        store.set_micro_network_uplink(id, None).unwrap();
+        assert_eq!(store.micro_network(id).unwrap().unwrap().uplink, None);
+    }
+
+    #[test]
+    fn setting_the_uplink_on_a_missing_network_is_an_error() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let id = Uuid::new_v4();
+        assert!(matches!(
+            store.set_micro_network_uplink(id, Some("eth0".to_owned())).unwrap_err(),
+            PersistenceError::MissingMicroNetwork { id: missing } if missing == id
+        ));
     }
 
     #[test]

@@ -575,18 +575,26 @@ pub struct CreateMicroNetworkRequest {
     /// network it expects.
     #[serde(default = "internet_enabled_default")]
     pub internet_enabled: bool,
+    /// Host NIC this network should masquerade out of. Omitted or `null`
+    /// means the host default-route iface. An empty string is rejected by
+    /// the API (400), not stored as auto.
+    #[serde(default)]
+    pub uplink: Option<String>,
 }
 
 /// Body for `PATCH /api/micro-networks/{id}`: flips one network's internet
-/// access, the equivalent of attaching or detaching an AWS internet gateway.
-/// Nothing else about a network is editable — its CIDR is what its VMs'
-/// addresses were handed out of.
+/// access and optionally its host uplink. CIDR stays immutable — its VMs'
+/// addresses were handed out of it.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateMicroNetworkRequest {
     /// The new posture: `false` withholds NAT and drops anything this
     /// network's VMs try to send outside it.
     pub internet_enabled: bool,
+    /// Omitted leaves the stored uplink unchanged. A name sets it. An
+    /// empty string resets to auto (the host default-route iface).
+    #[serde(default)]
+    pub uplink: Option<String>,
 }
 
 /// Serde default for the `internet_enabled` fields: connected, which is what
@@ -614,6 +622,8 @@ pub struct MicroNetworkResponse {
     /// closed network: no NAT, and nothing routed out of it
     /// (`public-docs/networking.md`).
     pub internet_enabled: bool,
+    /// Stored host NIC for NAT, or `null` to use the host default route.
+    pub uplink: Option<String>,
 }
 
 /// Response for `GET /api/network`: the host network firecrab has set up,
@@ -630,6 +640,9 @@ pub struct NetworkInfoResponse {
     pub gateway: String,
     /// The host's outbound interface, resolved from its IPv4 default route.
     pub uplink: String,
+    /// Host interfaces the create/detail picker can offer (`lo`, `fct*`,
+    /// and `mnb*` are omitted). `uplink` remains the default-route iface.
+    pub interfaces: Vec<String>,
 }
 
 /// Response for `GET /api/micro-networks/{id}`: one network broken out into
@@ -1473,11 +1486,12 @@ mod tests {
             subnet_cidr: "172.30.0.0/24".to_owned(),
             gateway: "172.30.0.1".to_owned(),
             uplink: "eth0".to_owned(),
+            interfaces: vec!["eth0".to_owned(), "eth1".to_owned()],
         };
         let json = serde_json::to_string(&response).unwrap();
         assert_eq!(
             json,
-            "{\"bridgeName\":\"fcbr0\",\"subnetCidr\":\"172.30.0.0/24\",\"gateway\":\"172.30.0.1\",\"uplink\":\"eth0\"}"
+            "{\"bridgeName\":\"fcbr0\",\"subnetCidr\":\"172.30.0.0/24\",\"gateway\":\"172.30.0.1\",\"uplink\":\"eth0\",\"interfaces\":[\"eth0\",\"eth1\"]}"
         );
     }
 
@@ -1487,6 +1501,29 @@ mod tests {
         let request: CreateMicroNetworkRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.name, "prod");
         assert_eq!(request.subnet_cidr, "172.31.0.0/24");
+        assert_eq!(request.uplink, None);
+    }
+
+    #[test]
+    fn create_micro_network_request_deserializes_an_uplink() {
+        let json = r#"{"name":"prod","subnetCidr":"172.31.0.0/24","uplink":"eth1"}"#;
+        let request: CreateMicroNetworkRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.uplink.as_deref(), Some("eth1"));
+    }
+
+    #[test]
+    fn update_micro_network_request_omitted_uplink_is_unchanged() {
+        let request: UpdateMicroNetworkRequest =
+            serde_json::from_str(r#"{"internetEnabled":false}"#).unwrap();
+        assert!(!request.internet_enabled);
+        assert_eq!(request.uplink, None);
+    }
+
+    #[test]
+    fn update_micro_network_request_empty_uplink_is_reset_auto() {
+        let request: UpdateMicroNetworkRequest =
+            serde_json::from_str(r#"{"internetEnabled":true,"uplink":""}"#).unwrap();
+        assert_eq!(request.uplink.as_deref(), Some(""));
     }
 
     #[test]
@@ -1497,11 +1534,13 @@ mod tests {
             subnet_cidr: "172.31.0.0/24".to_owned(),
             gateway: "172.31.0.1".to_owned(),
             internet_enabled: true,
+            uplink: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         let decoded: MicroNetworkResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, response);
         assert!(json.contains("\"subnetCidr\":\"172.31.0.0/24\""));
+        assert!(json.contains("\"uplink\":null"));
     }
 
     #[test]

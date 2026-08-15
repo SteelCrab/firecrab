@@ -1676,7 +1676,7 @@ pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNet
         .into_iter()
         .map(|network| {
             SubnetSpec::parse(network.id, &network.subnet_cidr)
-                .map(|subnet| subnet.helper_spec(network.internet_enabled))
+                .map(|subnet| subnet.helper_spec(network.internet_enabled, network.uplink))
                 .ok_or_else(|| {
                     format!(
                         "micro network {} has an unparseable subnet {:?}",
@@ -3807,6 +3807,7 @@ while True:
                 name: "test-net".to_owned(),
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await
@@ -4116,6 +4117,7 @@ while True:
                 name: "prod".to_owned(),
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
+                uplink: None,
             }),
         )
         .await

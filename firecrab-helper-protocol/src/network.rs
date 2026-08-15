@@ -202,12 +202,13 @@ pub enum NetworkRequest {
     },
 }
 
-/// One MicroNetwork's host-facing parameters. Deliberately carries no
-/// interface name or CIDR text: the helper derives the bridge name from
-/// `micro_network_id` (see [`micro_network_bridge_name`]) and the subnet from
-/// `gateway`/`prefix`, so nothing the API sends is ever spliced into an
-/// `ip link` or nftables argument as-is.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// One MicroNetwork's host-facing parameters. The helper derives the bridge
+/// name from `micro_network_id` (see [`micro_network_bridge_name`]) and the
+/// subnet from `gateway`/`prefix`, so those never arrive as spliceable text.
+/// Optional [`Self::uplink`] is the one host interface name the API may send;
+/// the helper re-validates it before any nftables use. Omitted means the
+/// host's default-route iface (today's single-uplink behavior).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MicroNetworkSpec {
     /// The MicroNetwork this describes.
     pub micro_network_id: Uuid,
@@ -224,6 +225,11 @@ pub struct MicroNetworkSpec {
     /// behavior every network had before this field existed.
     #[serde(default = "internet_enabled_default")]
     pub internet_enabled: bool,
+    /// Host NIC this network should egress through. `None` (absent on the
+    /// wire, or explicit null) keeps auto-detect. Not a CIDR and never a
+    /// Firecrab-owned `fct*`/`mnb*` name; the helper is the trust boundary.
+    #[serde(default)]
+    pub uplink: Option<String>,
 }
 
 /// Serde default for [`MicroNetworkSpec::internet_enabled`].
@@ -251,6 +257,18 @@ impl MicroNetworkSpec {
     /// The deterministic name of this MicroNetwork's bridge interface.
     pub fn bridge_name(&self) -> String {
         micro_network_bridge_name(self.micro_network_id)
+    }
+
+    /// Whether `ip` sits in this network's subnet. Used to pick the NAT
+    /// uplink (and DNAT `iifname`) for a VM from its leased address.
+    pub fn contains(&self, ip: Ipv4Addr) -> bool {
+        let prefix = self.prefix.min(32);
+        let mask = if prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - u32::from(prefix))
+        };
+        (u32::from(ip) & mask) == u32::from(self.network_address())
     }
 }
 
@@ -466,6 +484,7 @@ mod tests {
                 gateway: "172.31.0.1".parse().unwrap(),
                 prefix: 24,
                 internet_enabled: true,
+                uplink: None,
             }],
         };
         let json = serde_json::to_value(&request).unwrap();
@@ -484,6 +503,7 @@ mod tests {
             gateway: "172.31.5.1".parse().unwrap(),
             prefix: 24,
             internet_enabled: true,
+            uplink: None,
         };
         assert_eq!(
             spec.network_address(),
@@ -494,10 +514,14 @@ mod tests {
             spec.bridge_name(),
             micro_network_bridge_name(spec.micro_network_id)
         );
+        assert!(spec.contains("172.31.5.42".parse().unwrap()));
+        assert!(!spec.contains("172.32.5.42".parse().unwrap()));
 
         // A /16 masks off the third octet too.
         let wide = MicroNetworkSpec { prefix: 16, ..spec };
         assert_eq!(wide.subnet_cidr(), "172.31.0.0/16");
+        assert!(wide.contains("172.31.99.1".parse().unwrap()));
+        assert!(!wide.contains("172.32.0.1".parse().unwrap()));
     }
 
     #[test]
@@ -511,6 +535,19 @@ mod tests {
         }))
         .expect("a spec without the field must still deserialize");
         assert!(spec.internet_enabled);
+    }
+
+    #[test]
+    fn a_spec_without_uplink_stays_on_auto() {
+        // An older API has no per-network uplink and must keep today's
+        // single detect_uplink() default. Do not bump PROTOCOL_VERSION.
+        let spec: MicroNetworkSpec = serde_json::from_value(serde_json::json!({
+            "micro_network_id": Uuid::nil(),
+            "gateway": "172.31.0.1",
+            "prefix": 24,
+        }))
+        .expect("a spec without uplink must still deserialize");
+        assert_eq!(spec.uplink, None);
     }
 
     #[test]

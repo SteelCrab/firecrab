@@ -335,6 +335,28 @@ fn validate_micro_networks(micro_networks: &[MicroNetworkSpec]) -> Result<(), He
         .try_for_each(|network| validate_prefix(network.prefix))
 }
 
+/// Re-validates every supplied per-network uplink before nft is touched.
+/// Omitted means auto (the host default-route iface); a present name must
+/// pass [`nat::validate_uplink`] and exist under `/sys/class/net`. Missing
+/// is a client error, not an internal one — the helper is the trust
+/// boundary. The API's sysfs check is UX only.
+fn validate_uplinks(micro_networks: &[MicroNetworkSpec]) -> Result<(), HelperFailure> {
+    for network in micro_networks {
+        let Some(name) = network.uplink.as_deref() else {
+            continue;
+        };
+        nat::validate_uplink(name).map_err(|error| HelperFailure::InvalidRequest {
+            detail: error.to_string(),
+        })?;
+        if !nat::uplink_exists(name) {
+            return Err(HelperFailure::InvalidRequest {
+                detail: format!("uplink {name:?} is not a host interface"),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Re-validates port forwards against the same rules the API already
 /// enforces — the helper is the trust boundary (same reasoning as
 /// `validate_micro_networks` and the `egress_policy` allowlist lookup) and
@@ -466,6 +488,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
             vm_policies,
         } => {
             validate_micro_networks(&micro_networks)?;
+            validate_uplinks(&micro_networks)?;
             let vm_policies = validate_vm_policies(vm_policies)?;
             firewall::ensure_firewall(&config.firewall, &micro_networks, &vm_policies)
                 .await
@@ -695,6 +718,63 @@ mod tests {
             validate_vm_policies(vec![first, second]),
             Err(HelperFailure::InvalidRequest { detail }) if detail.contains("duplicate VM policy IPv4")
         ));
+    }
+
+    fn sample_spec(uplink: Option<&str>) -> MicroNetworkSpec {
+        MicroNetworkSpec {
+            micro_network_id: Uuid::nil(),
+            gateway: "172.31.0.1".parse().unwrap(),
+            prefix: 24,
+            internet_enabled: true,
+            uplink: uplink.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn validate_uplinks_accepts_omitted_and_existing_ifaces() {
+        assert_eq!(validate_uplinks(&[sample_spec(None)]), Ok(()));
+        let name = std::fs::read_dir("/sys/class/net")
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .find(|name| nat::validate_uplink(name).is_ok() && nat::uplink_exists(name))
+            .expect("test host has a usable interface");
+        assert_eq!(validate_uplinks(&[sample_spec(Some(&name))]), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn ensure_firewall_rejects_an_unknown_uplink_as_invalid_request() {
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
+        let request = NetworkRequest::EnsureFirewall {
+            micro_networks: vec![sample_spec(Some("nosuchiface0"))],
+            vm_policies: Vec::new(),
+        };
+        assert!(matches!(
+            dispatch(request, &config).await,
+            Err(HelperFailure::InvalidRequest { detail }) if detail.contains("nosuchiface0")
+        ));
+    }
+
+    #[tokio::test]
+    async fn ensure_firewall_rejects_unsafe_uplink_names_as_invalid_request() {
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
+        for name in [
+            "", "eth0/foo", "eth0;id", "lo", "fct0", "mnb0", "eth0\"x", "eth0\\x",
+        ] {
+            let request = NetworkRequest::EnsureFirewall {
+                micro_networks: vec![sample_spec(Some(name))],
+                vm_policies: Vec::new(),
+            };
+            assert!(
+                matches!(
+                    dispatch(request, &config).await,
+                    Err(HelperFailure::InvalidRequest { .. })
+                ),
+                "{name:?} should be rejected before nft"
+            );
+        }
     }
 
     #[tokio::test]
