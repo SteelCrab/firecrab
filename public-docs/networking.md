@@ -52,6 +52,7 @@ curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
 Two internet-enabled networks can masquerade out different NICs.
 The helper matches `oifname` on the existing postrouting chain.
 It does not install a VRF or extra route tables.
+When UFW is enabled, the helper also allows DHCP (67/udp) and DNS (53) on each new bridge, plus a route out the uplink.
 
 The VM field `egressPolicy` controls one VM.
 Its values are `internet` and `isolated`.

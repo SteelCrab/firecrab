@@ -216,7 +216,7 @@ check_systemd() {
     return 1
 }
 
-# UFW is not ours to change, so its DHCP block is reported, not fixed.
+# UFW is still reported here; the helper punches DHCP/DNS on each bridge.
 report_ufw() {
     have ufw || return 0
     local status
