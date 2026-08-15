@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { defaultInteractiveTerminalOptions } from "../lib/terminal";
 
 type Status = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -85,22 +86,21 @@ export default function InlineConsole({ vmId }: { vmId: string }) {
     intentionalCloseRef.current = false;
     reconnectAttemptRef.current = 0;
 
-    const term = new Terminal({
-      convertEol: true,
-      fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
-      fontSize: 12,
-      theme: {
-        background: "#171b22",
-        foreground: "#e8ecf1",
-        cursor: "#c43e12",
-        selectionBackground: "rgba(196, 62, 18, 0.35)",
-      },
-      scrollback: 5000,
-      disableStdin: true,
-      cursorBlink: false,
-      cols: 80,
-      rows: 16,
-    });
+    const term = new Terminal(
+      defaultInteractiveTerminalOptions({
+        fontSize: 12,
+        theme: {
+          background: "#171b22",
+          foreground: "#e8ecf1",
+          cursor: "#c43e12",
+          selectionBackground: "rgba(196, 62, 18, 0.35)",
+        },
+        disableStdin: true,
+        cursorBlink: false,
+        cols: 80,
+        rows: 16,
+      }),
+    );
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);

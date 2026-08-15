@@ -15,7 +15,7 @@
 
   --font-display: "Space Mono", ui-monospace, monospace;
   --font-body: "IBM Plex Sans", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --font-mono: "IBM Plex Mono", "Noto Sans KR", "Noto Sans JP", "Noto Sans SC", "D2Coding", "Malgun Gothic", "Apple SD Gothic Neo", ui-monospace, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -410,6 +410,12 @@ form.shell-create-grid .field-span-2 {
   letter-spacing: 0.08em;
 }
 .panel-title a:hover { text-decoration: underline; }
+.panel-title a.btn {
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.panel-title a.btn:hover { text-decoration: none; }
+.panel-title a.btn.primary { color: var(--on-ember); }
 .panel-title #vm-list-add { margin-right: 0.75rem; }
 
 .microregistry-title-actions {
@@ -1308,6 +1314,17 @@ table.image-table .image-package-url a:hover {
 }
 .console-surface .xterm-screen {
   height: 100%;
+}
+/* IME candidate windows follow the helper textarea. Keep it above the
+   canvas and let xterm position it on the cursor (do not pin left:-9999). */
+.console-surface .xterm .xterm-helper-textarea {
+  z-index: 10 !important;
+}
+.console-surface .xterm .composition-view {
+  background: #171b22;
+  color: #e8ecf1;
+  font-family: var(--font-mono);
+  z-index: 11;
 }
 
 /* Bottom VM metadata — field groups; Resource usage spans full width when running. */

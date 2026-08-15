@@ -198,6 +198,7 @@ fn inject_blocking(
         control.check()?;
         install_program(tree, GUEST_TOOLBOX, toolbox.path(), &mut unwind)?;
         install_symlink(tree, GUEST_INIT, GUEST_TOOLBOX, &mut unwind)?;
+        install_toolbox_commands(tree, &mut unwind)?;
         if let Some(path) = fastfetch
             && first_existing(tree, fastfetch::GLIBC_LOADERS).is_some()
         {
@@ -601,6 +602,61 @@ fn install_program(
     install_file(tree, guest_path, &contents, 0o755, unwind)
 }
 
+/// Busybox applets exposed on PATH when the image did not ship them.
+pub(crate) const PATH_APPLETS: &[&str] = &[
+    "ping",
+    "ping6",
+    "traceroute",
+    "wget",
+    "nc",
+    "nslookup",
+    "vi",
+    "sh",
+];
+
+/// Directories a login shell searches, in the usual Unix order.
+pub(crate) const PATH_LOOKUP_DIRS: &[&str] = &[
+    "/usr/local/sbin",
+    "/usr/local/bin",
+    "/usr/sbin",
+    "/usr/bin",
+    "/sbin",
+    "/bin",
+];
+
+/// True when `applet` is already a file or symlink on a typical PATH.
+pub(crate) fn applet_on_path(exists: impl Fn(&str) -> bool, applet: &str) -> bool {
+    PATH_LOOKUP_DIRS
+        .iter()
+        .any(|dir| exists(&format!("{dir}/{applet}")))
+}
+
+/// Guest path for a new applet. Prefer `/usr/bin` on usr-merged trees.
+pub(crate) fn applet_link_path(usr_bin_exists: bool, applet: &str) -> String {
+    if usr_bin_exists {
+        format!("/usr/bin/{applet}")
+    } else {
+        format!("/bin/{applet}")
+    }
+}
+
+/// Links missing PATH tools at the toolbox. Does not invent `sudo`.
+fn install_toolbox_commands(tree: &Path, unwind: &mut InjectedPaths) -> Result<(), ResolveError> {
+    let usr_bin = tree.join("usr/bin").is_dir() || tree.join("usr/bin").is_symlink();
+    let exists = |guest: &str| {
+        let host = tree.join(guest.trim_start_matches('/'));
+        host.is_file() || host.is_symlink()
+    };
+    for applet in PATH_APPLETS {
+        if applet_on_path(exists, applet) {
+            continue;
+        }
+        let dest = applet_link_path(usr_bin, applet);
+        install_symlink(tree, &dest, GUEST_TOOLBOX, unwind)?;
+    }
+    Ok(())
+}
+
 /// Links one guest path at another, replacing what the image left there.
 fn install_symlink(
     tree: &Path,
@@ -770,6 +826,11 @@ if [ -s /etc/hostname ]; then
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null
 fi
 
+# UTF-8 so CJK typed on the serial console is not treated as POSIX C.
+export LANG="${{LANG:-C.UTF-8}}"
+export LC_ALL="$LANG" LC_CTYPE="$LANG"
+$BB stty iutf8 2>/dev/null
+
 # Metrics first, so the dashboard has samples even when the network fails.
 $BB setsid $BB sh {agent} >/dev/null 2>&1 &
 
@@ -815,6 +876,8 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
+{base_packages}
+
 # Fallback only: glibc guests already received a pinned /usr/bin/fastfetch at
 # import. Alpine and other musl trees still try the guest package manager.
 if [ ! -x /usr/bin/fastfetch ]; then
@@ -829,18 +892,57 @@ if [ ! -x /usr/bin/fastfetch ]; then
 fi
 
 # A later import stage translates the image entrypoint into a program here.
+$BB mkdir -p /run/firecrab
 for service in {services}/*; do
   [ -x "$service" ] || continue
+  name=${{service##*/}}
   $BB setsid "$service" >/dev/console 2>&1 &
-  echo $! > /run/firecrab-app.pid
+  echo $! > /run/firecrab/$name.pid
+  [ "$name" = app ] && echo $! > /run/firecrab-app.pid
 done
 exit 0
 "#,
         agent = crate::guest_agent::BIN_PATH,
         dhcp = GUEST_DHCP_SCRIPT,
         services = GUEST_SERVICES,
+        base_packages = BASE_PACKAGE_INSTALL,
     )
 }
+
+/// First-boot install of a small operator set. Slim OCI images ship a
+/// package manager and empty lists, so `apt-get install ping` fails until
+/// `update` has run. A failed attempt leaves no stamp and retries next boot.
+/// Distroless trees have no manager; the busybox applets are enough.
+pub(crate) const BASE_PACKAGE_INSTALL: &str = r#"
+# First boot only. Container images rarely ship ping/curl.
+if [ ! -f /etc/firecrab/base-packages.ok ]; then
+  ok=0
+  if [ -x /usr/bin/apt-get ]; then
+    if DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq \
+      && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq \
+        iputils-ping iproute2 ca-certificates curl procps; then
+      ok=1
+    fi
+  elif [ -x /usr/bin/dnf ]; then
+    /usr/bin/dnf install -y -q iputils iproute ca-certificates curl procps-ng && ok=1
+  elif [ -x /usr/bin/microdnf ]; then
+    /usr/bin/microdnf -y install iputils iproute ca-certificates curl procps-ng && ok=1
+  elif [ -x /usr/bin/yum ]; then
+    /usr/bin/yum install -y -q iputils iproute ca-certificates curl procps-ng && ok=1
+  elif [ -x /sbin/apk ]; then
+    /sbin/apk add --no-cache iputils iproute2 ca-certificates curl procps && ok=1
+  elif [ -x /usr/bin/apk ]; then
+    /usr/bin/apk add --no-cache iputils iproute2 ca-certificates curl procps && ok=1
+  elif [ -x /usr/bin/zypper ]; then
+    /usr/bin/zypper --non-interactive install -y iputils iproute2 ca-certificates curl procps && ok=1
+  elif [ -x /usr/bin/pacman ]; then
+    /usr/bin/pacman -Sy --noconfirm --needed iputils iproute2 ca-certificates curl procps-ng && ok=1
+  else
+    ok=1
+  fi
+  [ "$ok" -eq 1 ] && $BB touch /etc/firecrab/base-packages.ok
+fi
+"#;
 
 /// Interactive console: MOTD, fastfetch when present, then ash.
 pub(crate) fn console_script() -> String {
@@ -848,6 +950,11 @@ pub(crate) fn console_script() -> String {
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab injected console (public-docs/oci.md).
 BB={GUEST_TOOLBOX}
+PATH="/usr/local/bin:/usr/local/sbin:$PATH"
+export PATH
+export LANG="${{LANG:-C.UTF-8}}"
+export LC_ALL="$LANG" LC_CTYPE="$LANG"
+$BB stty iutf8 2>/dev/null
 if [ -s /etc/hostname ]; then
   $BB hostname -F /etc/hostname 2>/dev/null
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null

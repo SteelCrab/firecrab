@@ -249,6 +249,25 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
         boot.contains("apt-get install -y -qq fastfetch"),
         "boot should try to install fastfetch after the network is ready: {boot}"
     );
+    assert!(
+        boot.contains("iputils-ping") && boot.contains("base-packages.ok"),
+        "first boot should install a small package set: {boot}"
+    );
+    assert!(
+        boot.contains("/run/firecrab/$name.pid"),
+        "each services.d entry must get its own pid file: {boot}"
+    );
+    assert!(
+        boot.contains("C.UTF-8") && boot.contains("stty iutf8"),
+        "boot must enable UTF-8 on the serial tty: {boot}"
+    );
+    assert_eq!(
+        std::fs::read_link(tree.join("bin/ping")).expect("busybox ping on PATH"),
+        Path::new(provision::GUEST_TOOLBOX)
+    );
+    assert!(!tree.join("bin/sudo").exists());
+    assert!(!tree.join("usr/local/bin/systemctl").exists());
+    assert!(!tree.join("bin/systemctl").exists());
 
     let console =
         String::from_utf8(read_guest(&tree, "/etc/firecrab/rc.console")).expect("console");
@@ -281,6 +300,51 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     assert!(tree.join("etc/firecrab/services.d").is_dir());
     // The image's own files are left exactly as they were.
     assert_eq!(read_guest(&tree, "/app/server"), b"binary");
+}
+
+#[tokio::test]
+async fn an_image_that_already_ships_ping_keeps_its_own_binary() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "usr/bin/",
+        EntryType::Directory,
+        None,
+        &[],
+        0o755,
+    );
+    append_entry(
+        &mut builder,
+        "usr/bin/ping",
+        EntryType::Regular,
+        None,
+        b"real-ping",
+        0o755,
+    );
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "has-ping", &finish(builder)).await;
+    let tree = merged.path().to_owned();
+
+    provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect("inject");
+
+    assert_eq!(read_guest(&tree, "/usr/bin/ping"), b"real-ping");
+    assert!(
+        tree.join("usr/bin/ping").is_file(),
+        "the image ping must stay a regular file"
+    );
+}
+
+#[test]
+fn applet_on_path_checks_usual_directories() {
+    let present = |path: &str| path == "/usr/bin/ping";
+    assert!(provision::applet_on_path(present, "ping"));
+    assert!(!provision::applet_on_path(present, "wget"));
+    assert_eq!(provision::applet_link_path(true, "ping"), "/usr/bin/ping");
+    assert_eq!(provision::applet_link_path(false, "ping"), "/bin/ping");
 }
 
 /// Debian bookworm has a glibc loader but no fastfetch package. The host

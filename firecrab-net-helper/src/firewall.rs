@@ -166,6 +166,12 @@ pub async fn ensure_firewall(
             (policy.vm_id, (uplink, policy))
         })
         .collect();
+    // Host INPUT/FORWARD DROP (UFW, firewalld, nftables.service, iptables)
+    // swallows DHCP/DNS on a newly created bridge. The owned nft table only
+    // hooks forward/postrouting, so each backend is punched here — even when
+    // the Firecrab ruleset is unchanged, so a UFW reload or firewalld
+    // restart is repaired on the next reconcile.
+    crate::host_acl::ensure_all(&default_uplink, micro_networks).await;
     if state.applied_ruleset.as_deref() == Some(base_ruleset.as_str())
         && state.applied_vms == desired_vms
     {
@@ -677,7 +683,7 @@ async fn ensure_iptables_compat(bridges: &[String], egress: &[(String, String)])
 
 /// Removes iptables FORWARD ACCEPT rules for a bridge that is being torn down.
 /// Best-effort; silently ignores errors (rule already absent, iptables not
-/// available).
+/// available). Also drops host INPUT holes for that bridge.
 pub async fn remove_iptables_forward_for_bridge(bridge: &str) {
     for dir in ["-i", "-o"] {
         let _ = Command::new("iptables")
@@ -687,6 +693,7 @@ pub async fn remove_iptables_forward_for_bridge(bridge: &str) {
             .status()
             .await;
     }
+    crate::host_acl::remove_bridge(bridge).await;
 }
 
 /// Applies `ruleset` as a single atomic transaction: `nft -f -` accepts the

@@ -9,6 +9,11 @@ import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import UsageCharts from "./UsageCharts";
 import { useI18n } from "../i18n";
+import {
+  defaultInteractiveTerminalOptions,
+  enableTerminalIme,
+  isImeComposing,
+} from "../lib/terminal";
 
 type Status = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed";
 
@@ -20,7 +25,7 @@ const STATUS_CLASS: Record<Status, string> = {
   failed: "error",
 };
 
-/** Named color schemes — font family stays IBM Plex Mono to match the shell. */
+/** Named color schemes. Font stack is shared in `lib/terminal.ts` (CJK fallbacks). */
 const THEMES: Record<string, { label: string; theme: ITheme }> = {
   ember: {
     label: "Ember",
@@ -212,20 +217,19 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     reconnectAttemptRef.current = 0;
 
     const initial = initialPrefsRef.current;
-    const term = new Terminal({
-      convertEol: true,
-      fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
-      fontSize: initial.fontSize,
-      theme: THEMES[initial.themeId].theme,
-      scrollback: 5000,
-      cursorBlink: true,
-      // Avoid 0×0 first paint — FitAddon replaces these once the box is ready.
-      cols: 80,
-      rows: 24,
-    });
+    const term = new Terminal(
+      defaultInteractiveTerminalOptions({
+        fontSize: initial.fontSize,
+        theme: THEMES[initial.themeId].theme,
+        // Avoid 0×0 first paint — FitAddon replaces these once the box is ready.
+        cols: 80,
+        rows: 24,
+      }),
+    );
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+    enableTerminalIme(term, container);
     termRef.current = term;
     fitRef.current = fitAddon;
     scheduleFit();
@@ -254,6 +258,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     window.addEventListener("resize", onWinResize);
 
     const onKey = (event: KeyboardEvent) => {
+      if (isImeComposing(event)) return;
       if (event.key !== "Escape" || event.ctrlKey || event.metaKey || event.altKey) return;
       if (!terminalOnlyRef.current) return;
       event.preventDefault();

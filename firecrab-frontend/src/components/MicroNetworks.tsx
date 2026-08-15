@@ -217,6 +217,7 @@ export default function MicroNetworks() {
                 <th>gateway</th>
                 <th>{t("Internet", "인터넷")}</th>
                 <th>{t("Uplink", "업링크")}</th>
+                <th>NAT</th>
                 <th>id</th>
                 <th className="actions">{t("Actions", "작업")}</th>
               </tr>
@@ -233,6 +234,11 @@ export default function MicroNetworks() {
                   <td className="mono">{network.gateway}</td>
                   <td>{network.internetEnabled ? t("Enabled", "연결") : t("Blocked", "차단")}</td>
                   <td className="mono">{network.uplink ?? t("Auto", "자동")}</td>
+                  <td className="mono">
+                    {network.internetEnabled
+                      ? `${network.subnetCidr} → ${network.uplink ?? (defaultUplink || t("Auto", "자동"))}`
+                      : t("Off", "꺼짐")}
+                  </td>
                   <td className="mono" title={network.id}>
                     {network.id.split("-")[0]}
                   </td>
@@ -353,8 +359,12 @@ function MicroNetworkDetail({
         <dt>NAT</dt>
         <dd>
           {nat.enabled
-            ? `${nat.sourceCidr} → ${nat.uplink || t("(no uplink)", "(uplink 없음)")}`
+            ? t("Enabled", "연결")
             : t("Internet blocked — no masquerading; outbound traffic is dropped", "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop")}
+          <br />
+          {t("source", "출발")} {nat.sourceCidr}
+          <br />
+          {t("uplink", "업링크")} {nat.uplink || t("(no uplink)", "(uplink 없음)")}
           <div className="field">
             <label htmlFor="mn-detail-uplink">{t("Uplink", "업링크")}</label>
             <select
