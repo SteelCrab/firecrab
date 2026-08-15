@@ -158,7 +158,7 @@ fn rewrite_vm_env_block_inserts_after_image_exports_before_exec() {
         rewritten.contains(
             "export APP_ENV='prod'\n\
              # >>> firecrab vm env\n\
-             export FOO='bar'\n\
+             . /etc/firecrab/vm.env\n\
              # <<< firecrab vm env\n\
              exec '/bin/app' '--port' '8080'\n"
         ),
@@ -177,8 +177,8 @@ fn rewrite_vm_env_block_replaces_an_existing_block_in_place() {
         &first,
         &BTreeMap::from([("FOO".to_owned(), "new".to_owned())]),
     );
-    assert!(second.contains("export FOO='new'"), "{second}");
-    assert!(!second.contains("export FOO='old'"), "{second}");
+    assert!(second.contains(". /etc/firecrab/vm.env"), "{second}");
+    assert!(!second.contains("export FOO="), "{second}");
     assert_eq!(
         second.matches("# >>> firecrab vm env").count(),
         1,
@@ -208,9 +208,11 @@ fn rewrite_vm_env_block_second_apply_is_byte_identical() {
     let first = service::rewrite_vm_env_block(&sample_service_script(), &env);
     let second = service::rewrite_vm_env_block(&first, &env);
     assert_eq!(first, second);
-    let alpha = first.find("export ALPHA=").expect("ALPHA");
-    let zed = first.find("export ZED=").expect("ZED");
-    assert!(alpha < zed, "{first}");
+    assert!(first.contains(". /etc/firecrab/vm.env"), "{first}");
+    let file = service::render_vm_env_file(&env);
+    let alpha = file.find("export ALPHA=").expect("ALPHA");
+    let zed = file.find("export ZED=").expect("ZED");
+    assert!(alpha < zed, "{file}");
 }
 
 #[test]
@@ -229,8 +231,12 @@ fn rewrite_vm_env_block_vm_key_wins_after_image_export() {
     let image = rewritten
         .find("export PATH='/usr/bin'")
         .expect("image PATH");
-    let vm = rewritten.find("export PATH='/vm/bin'").expect("vm PATH");
-    assert!(image < vm, "{rewritten}");
+    let sourced = rewritten.find(". /etc/firecrab/vm.env").expect("vm env");
+    assert!(image < sourced, "{rewritten}");
+    assert!(
+        service::render_vm_env_file(&BTreeMap::from([("PATH".to_owned(), "/vm/bin".to_owned())]))
+            .contains("export PATH='/vm/bin'"),
+    );
 }
 
 #[test]
@@ -245,7 +251,7 @@ fn rewrite_vm_env_block_unclosed_begin_is_left_in_place() {
         "{rewritten}"
     );
     assert!(
-        rewritten.contains("export FOO='bar'\n# <<< firecrab vm env\n"),
+        rewritten.contains(". /etc/firecrab/vm.env\n# <<< firecrab vm env\n"),
         "{rewritten}"
     );
     assert!(rewritten.contains("exec '/bin/app'"), "{rewritten}");
@@ -269,7 +275,7 @@ fn rewrite_vm_env_block_inserts_before_exec_when_image_has_no_export() {
     assert!(
         rewritten.contains(
             "# >>> firecrab vm env\n\
-             export FOO='bar'\n\
+             . /etc/firecrab/vm.env\n\
              # <<< firecrab vm env\n\
              exec '/bin/app'\n"
         ),
@@ -288,7 +294,7 @@ fn rewrite_vm_env_block_appends_when_script_has_neither_export_nor_exec() {
         rewritten,
         "#!/bin/sh\n\
          # >>> firecrab vm env\n\
-         export FOO='bar'\n\
+         . /etc/firecrab/vm.env\n\
          # <<< firecrab vm env\n"
     );
 }
@@ -303,7 +309,7 @@ fn rewrite_vm_env_block_ignores_export_after_exec() {
     assert!(
         rewritten.starts_with(
             "# >>> firecrab vm env\n\
-             export FOO='bar'\n\
+             . /etc/firecrab/vm.env\n\
              # <<< firecrab vm env\n\
              exec '/bin/app'\n"
         ),
@@ -328,7 +334,9 @@ fn rewrite_vm_env_block_value_containing_end_marker_is_byte_identical() {
     let first = service::rewrite_vm_env_block(&sample_service_script(), &env);
     let second = service::rewrite_vm_env_block(&first, &env);
     assert_eq!(first, second);
-    assert_eq!(first.matches("# <<< firecrab vm env").count(), 2, "{first}");
+    assert_eq!(first.matches("# <<< firecrab vm env").count(), 1, "{first}");
+    let file = service::render_vm_env_file(&env);
+    assert!(file.contains("# <<< firecrab vm env"), "{file}");
     let cleared = service::rewrite_vm_env_block(&first, &BTreeMap::new());
     assert!(!cleared.contains("firecrab vm env"), "{cleared}");
     assert!(cleared.contains("export PATH='/usr/bin'"), "{cleared}");

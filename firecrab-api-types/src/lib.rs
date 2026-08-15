@@ -100,6 +100,14 @@ impl VmState {
     pub fn can_edit_resources(self) -> bool {
         matches!(self, Self::Created | Self::Stopped | Self::Error)
     }
+
+    /// Env may be replaced while `Running`; the guest service is restarted.
+    pub fn can_edit_env(self) -> bool {
+        matches!(
+            self,
+            Self::Created | Self::Stopped | Self::Error | Self::Running
+        )
+    }
 }
 
 /// Body for `POST /api/vms`.
@@ -1234,6 +1242,15 @@ mod tests {
             let expected = matches!(state, Created | Stopped | Error);
             assert_eq!(state.can_edit_resources(), expected, "{state:?}");
         }
+    }
+
+    #[test]
+    fn running_may_edit_env_but_not_cpu_ram_or_disk() {
+        use VmState::*;
+        assert!(Running.can_edit_env());
+        assert!(!Running.can_edit_resources());
+        assert!(!Starting.can_edit_env());
+        assert!(!Stopping.can_edit_env());
     }
 
     #[test]

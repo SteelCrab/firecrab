@@ -140,33 +140,43 @@ pub(crate) fn posix_quote(value: &str) -> String {
     out
 }
 
+/// Guest sidecar sourced by `services.d/app` so a running VM can replace
+/// env without rewriting the image entrypoint script.
+pub(crate) const GUEST_VM_ENV_FILE: &str = "/etc/firecrab/vm.env";
+
+/// `export KEY='…'` lines for [`GUEST_VM_ENV_FILE`]. Empty map is a no-op file
+/// that `.` will still accept.
+pub(crate) fn render_vm_env_file(env: &BTreeMap<String, String>) -> String {
+    if env.is_empty() {
+        return "# firecrab vm env\n".to_owned();
+    }
+    let mut file = String::from("# firecrab vm env\n");
+    for (key, value) in env {
+        file.push_str("export ");
+        file.push_str(key);
+        file.push('=');
+        file.push_str(&posix_quote(value));
+        file.push('\n');
+    }
+    file
+}
+
 /// Rewrites the delimited Firecrab env block in `services.d/app`.
 ///
 /// Image `export` lines stay. A present block is replaced wholesale.
-/// Absent + non-empty env inserts after the last image `export ` line and
-/// before `exec`. An empty map deletes the block and markers. `BTreeMap`
-/// key order plus [`posix_quote`] make repeated applies byte-identical.
+/// Absent + non-empty env inserts a `. /etc/firecrab/vm.env` source after
+/// the last image `export ` line and before `exec`. An empty map deletes
+/// the block. Repeated applies stay byte-identical.
 pub(crate) fn rewrite_vm_env_block(script: &str, env: &BTreeMap<String, String>) -> String {
     let without = strip_vm_env_block(script);
     if env.is_empty() {
         return without;
     }
-    insert_vm_env_block(&without, &render_vm_env_block(env))
+    insert_vm_env_block(&without, &render_vm_env_source_block())
 }
 
-fn render_vm_env_block(env: &BTreeMap<String, String>) -> String {
-    let mut block = String::from(VM_ENV_BEGIN);
-    block.push('\n');
-    for (key, value) in env {
-        block.push_str("export ");
-        block.push_str(key);
-        block.push('=');
-        block.push_str(&posix_quote(value));
-        block.push('\n');
-    }
-    block.push_str(VM_ENV_END);
-    block.push('\n');
-    block
+fn render_vm_env_source_block() -> String {
+    format!("{VM_ENV_BEGIN}\n. {GUEST_VM_ENV_FILE}\n{VM_ENV_END}\n")
 }
 
 fn strip_vm_env_block(script: &str) -> String {
