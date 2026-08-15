@@ -42,3 +42,8 @@ export function availableActions(state: VmState): VmAction[] {
 export function isEditableState(state: VmState): boolean {
   return state === "created" || state === "stopped" || state === "error";
 }
+
+/** Env can be replaced while running; the guest service is restarted. */
+export function isEnvEditableState(state: VmState): boolean {
+  return isEditableState(state) || state === "running";
+}

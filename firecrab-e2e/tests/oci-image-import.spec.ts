@@ -131,6 +131,8 @@ test("creates a VM from the imported image and asserts the guest service started
   }
 
   await openEnglish(page, "/#/vms");
+  await page.locator("#vm-list-add").click();
+  await expect(page).toHaveURL(/#\/vms\/new$/);
   await expect(page.locator("#vm-image")).toBeEnabled({ timeout: 15_000 });
   await expect(page.locator(`#vm-image option[value="${alias()}"]`)).toHaveCount(1, {
     timeout: 15_000,
@@ -139,6 +141,7 @@ test("creates a VM from the imported image and asserts the guest service started
   await page.locator("#vm-image").selectOption(alias());
   await expect(page.locator("#vm-micro-network")).not.toHaveValue("");
   await page.locator("#vm-create-submit").click();
+  await expect(page).toHaveURL(/#\/vms$/);
   await expect(page.getByText(`Created: ${VM_NAME}`)).toBeVisible({ timeout: 30_000 });
 
   const row = page.locator("table.vm-table tbody tr", { hasText: VM_NAME });

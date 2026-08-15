@@ -16,7 +16,7 @@ interface VmTableProps {
 export default function VmTable({ vms, busy, onAction, onOpenDetail }: VmTableProps) {
   const { t } = useI18n();
   if (vms.length === 0) {
-    return <div className="empty">{t("No VMs yet — create one above.", "VM이 없습니다 — 위에서 생성하세요")}</div>;
+    return <div className="empty">{t("No VMs yet — click Add.", "VM이 없습니다 — 추가를 누르세요")}</div>;
   }
 
   // The table has more columns than a narrow shell can show; it scrolls

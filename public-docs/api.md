@@ -74,7 +74,63 @@ The response has status `201` and includes the VM UUID.
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional storage ID |
 | `shellIds` | Optional Shell repository ids (latest revision pinned) |
-| `env` | Optional string map. Create omit = `{}`. PUT omit = keep stored; `{}` clears. POSIX keys, 64 entries, 256-byte keys, 4096-byte values, no NUL. Plaintext in the guest. |
+| `env` | Optional string map. Create omit = `{}`. PUT omit = keep stored; `{}` clears. Allowed while `running` (guest service restarts). POSIX keys, 64 entries, 256-byte keys, 4096-byte values, no NUL. Plaintext in the guest. |
+
+## Guest `/etc/firecrab`
+
+The host file `/etc/firecrab/api.env` is operator API settings; see [Installation](installation.md).
+The guest directory `/etc/firecrab` is injected when an OCI image is imported.
+Catalog templates (Alpine, Ubuntu, Rocky) do not use this tree.
+
+| Guest path | Role |
+| --- | --- |
+| `/etc/firecrab/busybox` | Static multi-call toolbox. `/sbin/init` points here so the image boots as PID 1. |
+| `/etc/firecrab/rc.boot` | One-shot sysinit: mounts, `/dev/fd`, hostname, metrics, DHCP, readiness sentinel, then `services.d`. |
+| `/etc/firecrab/rc.console` | Fallback console (MOTD + ash) when the image has no `agetty`. |
+| `/etc/firecrab/dhcp.script` | `udhcpc` hook. Applies address, default route, and `/etc/resolv.conf`. |
+| `/etc/firecrab/services.d/` | Directory of guest services. `rc.boot` starts every executable after the sentinel. |
+| `/etc/firecrab/services.d/app` | Image Entrypoint, Cmd, Env, and WorkingDir. Never PID 1. |
+| `/etc/firecrab/vm.env` | Per-VM `env` sidecar. `services.d/app` sources it. Plaintext. |
+
+`inittab` runs `rc.boot` once, then respawns the serial console.
+`rc.boot` mounts `/proc`, `/sys`, `/dev` (with `/dev/fd`), and `/run`, sets the hostname from `/etc/hostname`, starts the metrics agent, brings `eth0` up, runs DHCP, prints `FIRECRAB_NETWORK_READY`, and starts each executable in `services.d`.
+When the image ships `agetty` and bash, the console is `ttyS0 → agetty → login → bash`.
+Otherwise it is `rc.console`.
+
+Create and start write `env` into `/etc/firecrab/vm.env` and insert one delimited source block in `services.d/app`:
+
+```sh
+# >>> firecrab vm env
+. /etc/firecrab/vm.env
+# <<< firecrab vm env
+```
+
+Image `export` lines stay.
+VM keys win because the source sits after those lines and before `exec`.
+An empty `env` map removes the block.
+A missing `services.d/app` is a no-op (`hasGuestService` on `GET /api/images`).
+`PUT /api/vms/{id}` with `env` while `running` rewrites `vm.env` and restarts `services.d/app`.
+CPU, RAM, disk, and egress still require a stopped VM.
+
+Inspect from the guest console:
+
+```sh
+ls -la /etc/firecrab /etc/firecrab/services.d
+cat /etc/firecrab/vm.env
+grep -A2 'firecrab vm env' /etc/firecrab/services.d/app
+```
+
+Related guest paths that are not under `/etc/firecrab`:
+
+| Guest path | Role |
+| --- | --- |
+| `/sbin/init` | Symlink to `/etc/firecrab/busybox`. |
+| `/etc/inittab` | busybox init job table. |
+| `/etc/hostname`, `/etc/motd` | Written per VM on start. |
+| `/usr/local/sbin/firecrab-guest-agent` | CPU and memory samples for the dashboard. |
+| `/run/firecrab-app.pid` | PID of the running `services.d/app`. |
+
+Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `/var/lib/firecrab/shells`.
 
 ## Other endpoints
 
@@ -90,11 +146,10 @@ The response has status `201` and includes the VM UUID.
 
 ## MicroRegistry
 
-`GET /api/microregistry` lists host-arch release packages plus locally registered custom aliases.
-A successful register is stored in SQLite and survives restart.
-If the public catalog is unreachable or consume is disabled, GET still returns those local rows.
-`source` is the attempted catalog URL, or empty when the URL is unset.
-With no local rows the response stays 503.
+`GET /api/microregistry` lists host-arch release packages and local custom aliases.
+Local rows stay in SQLite across restart.
+They are still returned when the public catalog is down or consume is disabled.
+With no local rows and no catalog, GET is 503.
 
 Register an already-installed custom image.
 
@@ -104,22 +159,24 @@ curl -s -X POST http://127.0.0.1:3000/api/microregistry/register \
   -d '{"alias":"nginx-1.27","version":"1"}'
 ```
 
-The JSON body is `alias` (installed template) and `version` (operator catalog version).
-The response is `202` with `ImageInstallResponse`: `alias`, `status`, `log`, and optional `startedAtMs` / `endedAtMs`.
-Register jobs omit `downloadedBytes` and `totalBytes`.
-`status` starts as `running` and becomes `succeeded` or `failed`.
-Poll `GET /api/microregistry/register/{alias}` for the latest snapshot; an unknown alias is `idle`.
-An empty alias or version is `400 validation_failed`.
-An unknown, uninstalled, or `__microboot` alias is `404`.
-`409 alias_collision` means the alias is already in the public catalog for this host, or a local row already exists.
-When the public catalog is unreachable or consume is disabled, the built-in release aliases still collide.
-`409 register_in_progress` means a register job is already running for that alias.
-Success packs `{alias}.tar.zst` (`kernel/…`, `rootfs/…`, optional initrd, `kernel/.firecrab-template.json`) and records its SHA-256.
-The row is not published to any remote registry.
-`GET /api/microregistry` then sets `downloadable` on that row.
-`POST /api/images/{alias}/package` and `/install` still accept only release aliases, so Download does not reinstall a custom row.
-A foreign-architecture or unsupported kernel fails the job: no catalog row and no staged archive.
-An unclassifiable kernel is still accepted.
+The body is `alias` (installed template) and `version`.
+The reply is `202` with a job: `alias`, `status`, `log`, and timestamps.
+Poll `GET /api/microregistry/register/{alias}`.
+`status` is `running`, then `succeeded` or `failed`.
+An unknown alias is `idle`.
+
+Empty `alias` or `version` is `400`.
+Unknown, uninstalled, or `__microboot` is `404`.
+A public-catalog or existing local name is `409 alias_collision`.
+A job already running for that alias is `409 register_in_progress`.
+
+Success writes a local `{alias}.tar.zst` and its SHA-256.
+Nothing is published remotely.
+GET then marks the row `downloadable`.
+`/package` and `/install` still accept only release aliases.
+
+A foreign or unsupported kernel fails the job with no row and no archive.
+An unclassifiable kernel is accepted.
 
 ## VM states
 

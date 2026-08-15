@@ -128,7 +128,7 @@ python3 scripts/check-doc-links.py
 shellcheck install.sh scripts/firecrab-doctor.sh
 ```
 
-`check-doc-links.py` enforces published docs rules: English only, max **170 lines** per `public-docs/**/*.md` file, valid relative links, and no stale `docs/` paths in tracked sources.
+`check-doc-links.py` enforces published docs rules: English only, max **170 lines** per `public-docs/**/*.md` file except `api.md`, valid relative links, and no stale `docs/` paths in tracked sources.
 
 ## Issues
 
@@ -185,7 +185,7 @@ If your change affects VM boot, say so in the PR so maintainers can trigger the 
 
 | Kind | Where | Rules |
 | --- | --- | --- |
-| Published operator/developer English docs | `public-docs/` | Short pages, English, ≤170 lines, Related footers; use symlink aliases for alternate names |
+| Published operator/developer English docs | `public-docs/` | Short pages, English, ≤170 lines except `api.md`, Related footers; use symlink aliases for alternate names |
 | READMEs | `README.md`, `README.ko.md`, … | Keep install and develop paths accurate |
 | Private project notes | local `docs/` | **Gitignored** — not for PRs or the remote |
 

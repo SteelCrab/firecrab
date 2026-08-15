@@ -264,6 +264,8 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
   }
 
   await openEnglish(page, "/#/vms");
+  await page.locator("#vm-list-add").click();
+  await expect(page).toHaveURL(/#\/vms\/new$/);
   await expect(page.locator("#vm-image")).toBeEnabled({ timeout: 15_000 });
   await expect(page.locator(`#vm-image option[value="${alias()}"]`)).toHaveCount(1, {
     timeout: 15_000,
@@ -272,6 +274,7 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
   await page.locator("#vm-image").selectOption(alias());
   await expect(page.locator("#vm-micro-network")).not.toHaveValue("");
   await page.locator("#vm-create-submit").click();
+  await expect(page).toHaveURL(/#\/vms$/);
   await expect(page.getByText(`Created: ${REGISTER_VM_NAME}`)).toBeVisible({ timeout: 30_000 });
 
   const row = page.locator("table.vm-table tbody tr", { hasText: REGISTER_VM_NAME });

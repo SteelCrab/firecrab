@@ -31,7 +31,7 @@ Use `localhost` because the development origin is exact.
 
 | Screen | Job |
 | --- | --- |
-| MicroVM | Create and manage VMs |
+| MicroVM | List VMs at `#/vms`. Add opens `#/vms/new`. |
 | Terminal | Use the serial console |
 | Networks | Manage MicroNetworks |
 | Storage | Manage MicroStorage pools |
@@ -42,10 +42,11 @@ Use `localhost` because the development origin is exact.
 
 1. Create a MicroNetwork.
 2. Choose an installed image.
-3. Set CPU, RAM, disk, storage, and egress.
-4. Create the VM.
-5. Start it.
-6. Open Terminal after it reaches `running`.
+3. Open Add (`#/vms/new`).
+4. Set CPU, RAM, disk, storage, and egress.
+5. Create the VM. The dashboard returns to `#/vms`.
+6. Start it.
+7. Open Terminal after it reaches `running`.
 
 The list refreshes every three seconds.
 The detail view shows start progress and logs.
@@ -60,7 +61,7 @@ the guest disk.
 
 Resource changes are allowed only while the VM is inactive.
 Disk size can grow but cannot shrink.
-Per-VM `env` is the same: edit only while stopped, applied on the next start, stored in plaintext.
+Per-VM `env` can be edited while `running`; save restarts the guest service. Stored in plaintext.
 An image without `/etc/firecrab/services.d/app` ignores runtime env (`hasGuestService` on `GET /api/images`).
 
 ## Images

@@ -578,6 +578,9 @@ pub async fn update_vm(
         restore_resources(&state, id, previous);
         return Err(error);
     }
+    if updated.state == VmState::Running && req.env.is_some() {
+        apply_env_to_running_guest(&state, id, &updated.env).await;
+    }
     let env_len = updated.env.len();
     tracing::info!(
         request_id = %request_id.0,
@@ -590,6 +593,33 @@ pub async fn update_vm(
     );
     let lease = lease_for(&state, id).await;
     Ok(Json(vm_response(&state, &updated, lease.as_ref())))
+}
+
+/// Replaces `/etc/firecrab/vm.env` in a live guest and restarts `services.d/app`.
+/// Best-effort: persist already succeeded. No console means the next start applies.
+async fn apply_env_to_running_guest(state: &AppState, id: Uuid, env: &BTreeMap<String, String>) {
+    let Some(process) = state
+        .processes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&id)
+        .cloned()
+    else {
+        return;
+    };
+    let file = crate::oci::service::render_vm_env_file(env);
+    let script = format!(
+        "\ncat > /etc/firecrab/vm.env <<'FIRECRAB_VM_ENV_EOF'\n{file}FIRECRAB_VM_ENV_EOF\n\
+         if [ -x /etc/firecrab/services.d/app ]; then\n\
+           if [ -f /run/firecrab-app.pid ]; then\n\
+             pid=$(cat /run/firecrab-app.pid)\n\
+             kill -TERM -\"$pid\" 2>/dev/null || kill -TERM \"$pid\" 2>/dev/null || true\n\
+           fi\n\
+           /etc/firecrab/busybox setsid /etc/firecrab/services.d/app >/dev/console 2>&1 &\n\
+           echo $! > /run/firecrab-app.pid\n\
+         fi\n"
+    );
+    process.console.write_input(script.as_bytes()).await;
 }
 
 type PreviousResources = (u8, u32, u16, EgressPolicy, BTreeMap<String, String>);
@@ -608,7 +638,16 @@ fn claim_resource_update(
         .get_mut(&id)
         .ok_or_else(|| AppError::not_found(request_id))?;
     if !vm.state.can_edit_resources() {
-        return Err(AppError::invalid_state(vm.state, request_id));
+        if !vm.state.can_edit_env() || req.env.is_none() {
+            return Err(AppError::invalid_state(vm.state, request_id));
+        }
+        if req.cpu != vm.cpu
+            || req.ram != vm.ram
+            || req.disk_gb != vm.disk_gb
+            || req.egress_policy != vm.egress_policy
+        {
+            return Err(AppError::invalid_state(vm.state, request_id));
+        }
     }
     let fields = validate_update(req, vm.disk_gb);
     if !fields.is_empty() {
@@ -4425,7 +4464,7 @@ while True:
     }
 
     #[tokio::test]
-    async fn update_rejects_env_change_when_running() {
+    async fn update_persists_env_when_running() {
         let directory = tempdir().unwrap();
         let state = test_state(directory.path()).await;
         let mut vm = record("env-running", Uuid::new_v4());
@@ -4433,6 +4472,31 @@ while True:
         seed_vm(&state, &vm);
 
         let mut request = update_request(vm.cpu, vm.ram, vm.disk_gb);
+        request.env = Some(BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]));
+        let Json(updated) = update_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+            ValidatedJson(request),
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.env.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(
+            state.store.load_all().unwrap().get(&vm.id).unwrap().env,
+            updated.env
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rejects_cpu_change_when_running_even_with_env() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("env-cpu-running", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+
+        let mut request = update_request(vm.cpu + 1, vm.ram, vm.disk_gb);
         request.env = Some(BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]));
         let error = update_vm(
             State(state.clone()),

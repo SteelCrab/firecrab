@@ -501,6 +501,22 @@ async fn the_boot_script_brings_the_link_up_before_running_the_dhcp_client() {
     assert!(link_up < dhcp, "the link must come up before udhcpc");
 }
 
+#[test]
+fn the_boot_script_exposes_dev_fd_for_process_substitution() {
+    let boot = provision::boot_script();
+    assert!(
+        boot.contains("ln -sf /proc/self/fd /dev/fd"),
+        "official image entrypoints open /dev/fd/N: {boot}"
+    );
+    let proc_mount = boot.find("mount -t proc").expect("proc is mounted");
+    let fd = boot.find("/dev/fd").expect("fd links");
+    let services = boot.find("services").expect("services start");
+    assert!(
+        proc_mount < fd && fd < services,
+        "/proc must exist before /dev/fd, and services must start after"
+    );
+}
+
 #[tokio::test]
 async fn inittab_commands_avoid_the_metacharacters_busybox_init_reroutes() {
     let directory = tempdir().expect("create fixture directory");

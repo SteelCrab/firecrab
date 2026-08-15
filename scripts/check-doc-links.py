@@ -8,6 +8,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 PUBLIC_DOCS = REPO / "public-docs"
 MAX_LINES = 170
+# API is the contract page and may list guest paths in full.
+LINE_LIMIT_EXEMPT = frozenset({"api.md"})
 
 LINK_RE = re.compile(r"\]\(\s*<?([^)>\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 PUBLIC_PATH_RE = re.compile(r"public-docs/[\w./-]+\.(?:md|py|sh)")
@@ -54,7 +56,7 @@ def check_public_docs() -> list[str]:
         text = doc.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        if len(lines) > MAX_LINES:
+        if doc.name not in LINE_LIMIT_EXEMPT and len(lines) > MAX_LINES:
             problems.append(f"{relative}: {len(lines)} lines exceeds {MAX_LINES}")
 
         for line_number, line in enumerate(lines, start=1):
@@ -117,7 +119,10 @@ def main() -> int:
             print(f"  {problem}")
         return 1
 
-    print("Public documentation is English, linked, and at most 170 lines per file.")
+    print(
+        "Public documentation is English, linked, and at most "
+        f"{MAX_LINES} lines per file (except {', '.join(sorted(LINE_LIMIT_EXEMPT))})."
+    )
     return 0
 
 

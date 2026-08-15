@@ -757,6 +757,12 @@ $BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
 $BB mkdir -p /dev/pts
 $BB mount -t devpts -o nosuid,noexec devpts /dev/pts 2>/dev/null
 $BB mount -t tmpfs -o nosuid,nodev,mode=755 tmpfs /run 2>/dev/null
+# Official images expect the Linux fd nodes Docker always provides.
+# Bash process substitution (initdb, entrypoints) opens /dev/fd/N.
+[ -e /dev/fd ] || $BB ln -sf /proc/self/fd /dev/fd
+[ -e /dev/stdin ] || $BB ln -sf /proc/self/fd/0 /dev/stdin
+[ -e /dev/stdout ] || $BB ln -sf /proc/self/fd/1 /dev/stdout
+[ -e /dev/stderr ] || $BB ln -sf /proc/self/fd/2 /dev/stderr
 
 # specialize_guest writes /etc/hostname; systemd would apply it, busybox init does not.
 if [ -s /etc/hostname ]; then
@@ -826,6 +832,7 @@ fi
 for service in {services}/*; do
   [ -x "$service" ] || continue
   $BB setsid "$service" >/dev/console 2>&1 &
+  echo $! > /run/firecrab-app.pid
 done
 exit 0
 "#,

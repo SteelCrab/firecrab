@@ -13,7 +13,7 @@ import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import Shell from "./components/Shell";
 import Shells from "./components/Shells";
-import { useAppRoute } from "./navigation";
+import { newVmHash, useAppRoute, viewHash } from "./navigation";
 import { useI18n } from "./i18n";
 
 const POLL_MILLIS = 3_000;
@@ -169,7 +169,10 @@ export default function App() {
   );
 
   const onCreated = useCallback(
-    (vm: VmResponse) => dispatch({ type: "created", vm, message: t(`Created: ${vm.name} (${vm.id})`, `생성됨: ${vm.name} (${vm.id})`) }),
+    (vm: VmResponse) => {
+      dispatch({ type: "created", vm, message: t(`Created: ${vm.name} (${vm.id})`, `생성됨: ${vm.name} (${vm.id})`) });
+      window.location.hash = viewHash("vms");
+    },
     [t],
   );
   const onError = useCallback((message: string) => dispatch({ type: "error", message }), []);
@@ -187,35 +190,43 @@ export default function App() {
     return <Console vmId={route.vmId} onClose={closeConsole} />;
   }
 
-  const view = route.view;
+  const view = route.kind === "vm-new" ? "vms" : route.view;
 
   return (
     <Shell view={view} onSelectView={selectView}>
       <div className="stack">
         {state.banner && <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} />}
-        {view === "vms" && (
-          <>
-            <section className="panel">
-              <h2 className="panel-title">{t("New MicroVM", "새 MicroVM")}</h2>
-              <CreateVm onCreated={onCreated} onError={onError} />
-            </section>
-            <section className="panel">
-              <h2 className="panel-title">
-                <span>{t(`MicroVMs (${state.vms.length})`, `MicroVM 목록 (${state.vms.length})`)}</span>
+        {route.kind === "vm-new" && (
+          <section className="panel">
+            <h2 className="panel-title">
+              <span>{t("New MicroVM", "새 MicroVM")}</span>
+              <a href={viewHash("vms")}>{t("Back", "뒤로")}</a>
+            </h2>
+            <CreateVm onCreated={onCreated} onError={onError} />
+          </section>
+        )}
+        {route.kind === "shell" && route.view === "vms" && (
+          <section className="panel">
+            <h2 className="panel-title">
+              <span>{t(`MicroVMs (${state.vms.length})`, `MicroVM 목록 (${state.vms.length})`)}</span>
+              <span>
+                <a id="vm-list-add" href={newVmHash()}>
+                  {t("Add", "추가")}
+                </a>
                 <span className="poll-note">{pollNote}</span>
-              </h2>
-              {state.loaded ? (
-                <VmTable
-                  vms={state.vms}
-                  busy={state.busy}
-                  onAction={onAction}
-                  onOpenDetail={onOpenDetail}
-                />
-              ) : (
-                <div className="empty">{t("Loading…", "불러오는 중…")}</div>
-              )}
-            </section>
-          </>
+              </span>
+            </h2>
+            {state.loaded ? (
+              <VmTable
+                vms={state.vms}
+                busy={state.busy}
+                onAction={onAction}
+                onOpenDetail={onOpenDetail}
+              />
+            ) : (
+              <div className="empty">{t("Loading…", "불러오는 중…")}</div>
+            )}
+          </section>
         )}
         {/* Each page mounts only while selected, so its own polling stops
             the moment you navigate away. */}

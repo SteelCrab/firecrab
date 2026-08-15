@@ -49,7 +49,7 @@ These symbolic links keep short names stable.
 
 - Write in clear English only.
 - Put one sentence on each source line.
-- Keep each real file at 170 lines or fewer.
+- Keep each real file at 170 lines or fewer, except [API](api.md).
 - Keep section order consistent: title, body, Related.
 - Use short paragraphs and relative Markdown links.
 - Prefer symbolic links for aliases instead of copy files.

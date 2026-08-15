@@ -377,6 +377,13 @@ fn apply_vm_env(rootfs: &Path, env: &BTreeMap<String, String>) -> Result<(), Roo
     if !guest_path_exists(rootfs, GUEST_VM_SERVICE) {
         return Ok(());
     }
+    let file = crate::oci::service::render_vm_env_file(env);
+    write_into_image(
+        rootfs,
+        crate::oci::service::GUEST_VM_ENV_FILE,
+        file.as_bytes(),
+    )?;
+    set_guest_file_mode(rootfs, crate::oci::service::GUEST_VM_ENV_FILE, "0100644");
     let staging = rootfs.with_extension("vm-env.tmp");
     let _ = fs::remove_file(&staging);
     let rewritten = (|| {
@@ -1349,13 +1356,15 @@ mod tests {
         assert!(
             script.contains(
                 "# >>> firecrab vm env\n\
-                 export APP_NAME='web'\n\
-                 export FOO='bar'\n\
+                 . /etc/firecrab/vm.env\n\
                  # <<< firecrab vm env\n\
                  exec '/bin/app'\n"
             ),
             "{script}"
         );
+        let sidecar = debugfs_cat(&rootfs, "/etc/firecrab/vm.env");
+        assert!(sidecar.contains("export APP_NAME='web'"), "{sidecar}");
+        assert!(sidecar.contains("export FOO='bar'"), "{sidecar}");
     }
 
     #[test]
@@ -1388,8 +1397,12 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(second, third);
-        assert!(first.contains("export FOO='bar'"), "{first}");
+        assert!(first.contains(". /etc/firecrab/vm.env"), "{first}");
         assert!(first.contains("exec '/bin/app'"), "{first}");
+        assert_eq!(
+            debugfs_cat(&rootfs, "/etc/firecrab/vm.env"),
+            crate::oci::service::render_vm_env_file(&env)
+        );
     }
 
     #[test]
