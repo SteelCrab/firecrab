@@ -130,6 +130,42 @@ flowchart LR
     BR --- T2 --- V2
 ```
 
+OCI 이미지는 부팅 가능한 OS가 아닙니다. 내부 파이프라인이 레지스트리
+트리를 Firecracker rootfs로 만들고, MicroVM 시작 때 busybox가 PID 1,
+이미지 엔트리포인트는 서비스로 돕니다.
+
+```mermaid
+flowchart TB
+    subgraph oci["내부 OCI import"]
+        Reg["레지스트리 · nginx:1.27"]
+        Inspect["플랫폼·다이제스트 검사"]
+        Layers["blob 캐시 · 압축 해제 · 병합"]
+        Inject["/etc/firecrab/busybox 주입"]
+        App["Entrypoint → services.d/app"]
+        Ext4["mkfs.ext4 rootfs"]
+        Kernel["카탈로그 커널 페어"]
+        Alias["별칭 등록"]
+        Reg --> Inspect --> Layers --> Inject --> App --> Ext4 --> Kernel --> Alias
+    end
+
+    subgraph vm["MicroVM"]
+        Copy["generation ext4 복사"]
+        Spec["hostname · env 특수화"]
+        Tap["mnb* 위 fct* TAP"]
+        Fc["Firecracker"]
+        Init["PID 1 · busybox init"]
+        Boot["rc.boot · DHCP · sentinel"]
+        Svc["services.d/app"]
+        Alias --> Copy --> Spec --> Fc
+        Tap --> Fc
+        Fc --> Init --> Boot --> Svc
+    end
+```
+
+`/proc/1/exe`는 `/etc/firecrab/busybox`입니다. 엔트리포인트는 PID 1이 아닙니다.
+`ls -l /sbin/init`은 이미지의 `systemd` 링크로 남을 수 있습니다.
+[OCI 이미지](public-docs/oci.md), [API](public-docs/api.md)를 보세요.
+
 | 구성 | 역할 |
 | --- | --- |
 | `firecrab-frontend` | VM, 네트워크, 이미지, 스토리지, 콘솔 UI |

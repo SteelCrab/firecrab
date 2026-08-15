@@ -132,6 +132,42 @@ flowchart LR
     BR --- T2 --- V2
 ```
 
+An imported OCI image is not a bootable OS. The internal pipeline
+turns a registry tree into a Firecracker rootfs, then a MicroVM start
+boots busybox as PID 1 and runs the image entrypoint as a service.
+
+```mermaid
+flowchart TB
+    subgraph oci["Internal OCI import"]
+        Reg["Registry · nginx:1.27"]
+        Inspect["inspect platform and digest"]
+        Layers["cache blobs · decompress · merge"]
+        Inject["inject /etc/firecrab/busybox"]
+        App["Entrypoint → services.d/app"]
+        Ext4["mkfs.ext4 rootfs"]
+        Kernel["pair catalog kernel"]
+        Alias["register alias"]
+        Reg --> Inspect --> Layers --> Inject --> App --> Ext4 --> Kernel --> Alias
+    end
+
+    subgraph vm["MicroVM"]
+        Copy["copy generation ext4"]
+        Spec["specialize hostname and env"]
+        Tap["fct* TAP on mnb* bridge"]
+        Fc["Firecracker"]
+        Init["PID 1 · busybox init"]
+        Boot["rc.boot · DHCP · sentinel"]
+        Svc["services.d/app"]
+        Alias --> Copy --> Spec --> Fc
+        Tap --> Fc
+        Fc --> Init --> Boot --> Svc
+    end
+```
+
+`/proc/1/exe` is `/etc/firecrab/busybox`. The image entrypoint is never PID 1.
+`ls -l /sbin/init` may still show the image `systemd` symlink.
+See [OCI images](public-docs/oci.md) and [API](public-docs/api.md).
+
 | Piece | Job |
 | --- | --- |
 | `firecrab-frontend` | VM, network, image, storage, and console UI |
