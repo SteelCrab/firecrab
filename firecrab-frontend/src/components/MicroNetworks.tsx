@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { MicroNetworkDetailResponse, MicroNetworkResponse } from "../bindings";
 import {
@@ -32,6 +32,8 @@ export default function MicroNetworks() {
   const [listError, setListError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   const [detail, setDetail] = useState<MicroNetworkDetailResponse | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
@@ -278,14 +280,18 @@ export default function MicroNetworks() {
           busy={busyId === selectedId}
           onSaveUplink={async (next) => {
             if (!selectedId || !detail || busyId) return;
-            setBusyId(selectedId);
+            const id = selectedId;
+            const internetEnabled = detail.nat.enabled;
+            setBusyId(id);
             try {
-              await updateMicroNetwork(selectedId, {
-                internetEnabled: detail.nat.enabled,
+              await updateMicroNetwork(id, {
+                internetEnabled,
                 uplink: next,
               });
               await refresh();
-              setDetail(await getMicroNetwork(selectedId));
+              if (selectedIdRef.current !== id) return;
+              const nextDetail = await getMicroNetwork(id);
+              if (selectedIdRef.current === id) setDetail(nextDetail);
             } catch (error) {
               setListError((error as Error).message);
             } finally {
