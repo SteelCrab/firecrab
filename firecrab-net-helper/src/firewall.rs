@@ -205,7 +205,8 @@ fn render_reconciled_ruleset(
     sorted_policies.sort_by_key(|policy| policy.vm_id);
     for policy in sorted_policies {
         let uplink = resolved_uplink(default_uplink, micro_networks, policy.ipv4);
-        ruleset.push_str(&render_vm_policy(&uplink, policy));
+        let internet = network_internet_enabled(micro_networks, policy.ipv4);
+        ruleset.push_str(&render_vm_policy_for_network(&uplink, policy, internet));
         ruleset.push('\n');
     }
     ruleset
@@ -221,6 +222,7 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
 
     let mut state = actor.state.lock().await;
     let uplink = resolved_uplink(&default_uplink, &state.networks, policy.ipv4);
+    let internet = network_internet_enabled(&state.networks, policy.ipv4);
     let previous = state.applied_vms.get(&policy.vm_id).cloned();
 
     // `ensure_all_networks` now includes active policies in its atomic
@@ -237,8 +239,8 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
     // objects and build the new ones in one nft transaction so other VMs are
     // never affected and there is no unprotected intermediate state.
     let ruleset = match previous {
-        Some((_, previous)) => render_vm_policy_replacement(&uplink, &previous, &policy),
-        None => render_vm_policy(&uplink, &policy),
+        Some((_, previous)) => render_vm_policy_replacement(&uplink, &previous, &policy, internet),
+        None => render_vm_policy_for_network(&uplink, &policy, internet),
     };
     run_nft(&ruleset).await?;
     state.applied_vms.insert(policy.vm_id, (uplink, policy));
@@ -329,6 +331,16 @@ fn resolved_uplink(
                 .to_owned()
         })
         .unwrap_or_else(|| default_uplink.to_owned())
+}
+
+/// Whether the MicroNetwork that owns `ipv4` may accept inbound port
+/// forwards. A missing lease keeps today's render (treat as online).
+fn network_internet_enabled(micro_networks: &[MicroNetworkSpec], ipv4: Ipv4Addr) -> bool {
+    micro_networks
+        .iter()
+        .find(|network| network.contains(ipv4))
+        .map(|network| network.internet_enabled)
+        .unwrap_or(true)
 }
 
 /// The subnets whose internet is switched off — the complement of
@@ -454,6 +466,10 @@ fn render_apply_ruleset(
 /// rendered through [`render_vm_policy_replacement`] so it cannot disturb
 /// any other VM's chains or map elements.
 fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
+    render_vm_policy_for_network(uplink, policy, true)
+}
+
+fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enabled: bool) -> String {
     let tap = tap_name(policy.vm_id);
     let tag = policy.vm_id.simple();
     let ip = policy.ipv4;
@@ -479,7 +495,7 @@ fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
     let mut dnat_prerouting_rules = String::new();
     let mut dnat_output_rules = String::new();
     let mut dnat_forward_accept_rules = String::new();
-    for pf in &policy.port_forwards {
+    for pf in policy.port_forwards.iter().filter(|_| internet_enabled) {
         let proto = if pf.protocol.eq_ignore_ascii_case("udp") {
             "udp"
         } else {
@@ -544,12 +560,17 @@ fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
 /// transaction. The old map elements must be deleted before their chains;
 /// then the new chain and map entries can be installed without conflicting
 /// with the old names or (when the lease changed) its old IPv4 map keys.
-fn render_vm_policy_replacement(uplink: &str, previous: &VmPolicy, policy: &VmPolicy) -> String {
+fn render_vm_policy_replacement(
+    uplink: &str,
+    previous: &VmPolicy,
+    policy: &VmPolicy,
+    internet_enabled: bool,
+) -> String {
     debug_assert_eq!(previous.vm_id, policy.vm_id);
     format!(
         "{}{}",
         render_vm_policy_removal(previous.vm_id, previous.ipv4),
-        render_vm_policy(uplink, policy)
+        render_vm_policy_for_network(uplink, policy, internet_enabled)
     )
 }
 
@@ -1096,6 +1117,35 @@ mod tests {
     }
 
     #[test]
+    fn port_forwards_are_omitted_when_the_network_internet_is_off() {
+        let offline = MicroNetworkSpec {
+            internet_enabled: false,
+            uplink: Some("eth1".to_owned()),
+            ..sample_network(0x1234, "172.31.0.1", 24)
+        };
+        let mut policy = sample_policy(EgressPolicy::Internet, false);
+        policy.ipv4 = Ipv4Addr::new(172, 31, 0, 42);
+        policy.port_forwards = vec![firecrab_helper_protocol::network::PortForwardSpec {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: "tcp".to_owned(),
+        }];
+        let base = render_apply_ruleset("eth0", std::slice::from_ref(&offline)).unwrap();
+        let ruleset = render_reconciled_ruleset(
+            &base,
+            "eth0",
+            std::slice::from_ref(&offline),
+            std::slice::from_ref(&policy),
+        );
+        assert!(!ruleset.contains("dnat ip to 172.31.0.42:80"), "{ruleset}");
+        assert!(!ruleset.contains("ct status dnat accept"), "{ruleset}");
+        assert!(
+            ruleset.contains("ip saddr { 172.31.0.0/24 } drop"),
+            "{ruleset}"
+        );
+    }
+
+    #[test]
     fn port_forward_prerouting_dnat_is_scoped_to_the_uplink() {
         let mut policy = sample_policy(EgressPolicy::Internet, false);
         policy.port_forwards = vec![firecrab_helper_protocol::network::PortForwardSpec {
@@ -1152,7 +1202,7 @@ mod tests {
             allow_host_ssh: true,
             ..previous.clone()
         };
-        let ruleset = render_vm_policy_replacement("eth0", &previous, &replacement);
+        let ruleset = render_vm_policy_replacement("eth0", &previous, &replacement, true);
 
         let old_element = ruleset
             .find("delete element inet firecrab vm_egress { 172.30.0.42 }")
