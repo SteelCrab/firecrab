@@ -4335,9 +4335,7 @@ while True:
         let state = test_state(directory.path()).await;
         let net = seed_network(&state).await;
         let mut request = create_request_on("env-vm", net);
-        request
-            .env
-            .insert("APP_NAME".to_owned(), "web".to_owned());
+        request.env.insert("APP_NAME".to_owned(), "web".to_owned());
         request.env.insert("A".to_owned(), "1".to_owned());
 
         let (status, Json(created)) = create_vm(
@@ -4348,10 +4346,7 @@ while True:
         .await
         .unwrap();
         assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(
-            created.env.get("APP_NAME").map(String::as_str),
-            Some("web")
-        );
+        assert_eq!(created.env.get("APP_NAME").map(String::as_str), Some("web"));
         assert_eq!(created.env.get("A").map(String::as_str), Some("1"));
 
         let Json(fetched) = get_vm(

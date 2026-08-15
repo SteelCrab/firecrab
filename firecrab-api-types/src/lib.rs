@@ -1215,10 +1215,9 @@ mod tests {
             ]
         );
 
-        let update: UpdateVmResourcesRequest = serde_json::from_str(
-            r#"{"ram":512,"cpu":1,"diskGb":2,"env":{"APP_NAME":"web"}}"#,
-        )
-        .unwrap();
+        let update: UpdateVmResourcesRequest =
+            serde_json::from_str(r#"{"ram":512,"cpu":1,"diskGb":2,"env":{"APP_NAME":"web"}}"#)
+                .unwrap();
         assert_eq!(
             update
                 .env

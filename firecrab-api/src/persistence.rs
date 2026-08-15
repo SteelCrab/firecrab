@@ -1870,8 +1870,7 @@ mod tests {
         );
 
         vm.env.clear();
-        vm.env
-            .insert("APP_NAME".to_owned(), "web".to_owned());
+        vm.env.insert("APP_NAME".to_owned(), "web".to_owned());
         store.update(&vm).unwrap();
         assert_eq!(store.load_all().unwrap().get(&vm.id).unwrap().env, vm.env);
 
