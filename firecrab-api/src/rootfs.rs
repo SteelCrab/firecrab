@@ -1338,7 +1338,7 @@ mod tests {
         seed_services_d_app(&rootfs, &sample_app_service());
 
         let env = BTreeMap::from([
-            ("POSTGRES_PASSWORD".to_owned(), "secret".to_owned()),
+            ("LOG_LEVEL".to_owned(), "info".to_owned()),
             ("FOO".to_owned(), "bar".to_owned()),
         ]);
         specialize_guest(&rootfs, Uuid::new_v4(), &env).unwrap();
@@ -1350,7 +1350,7 @@ mod tests {
             script.contains(
                 "# >>> firecrab vm env\n\
                  export FOO='bar'\n\
-                 export POSTGRES_PASSWORD='secret'\n\
+                 export LOG_LEVEL='info'\n\
                  # <<< firecrab vm env\n\
                  exec '/bin/app'\n"
             ),

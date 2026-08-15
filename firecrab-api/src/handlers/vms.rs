@@ -2378,7 +2378,7 @@ mod tests {
     #[test]
     fn validate_vm_env_accepts_empty_and_posix_keys() {
         assert_eq!(validate_vm_env(&BTreeMap::new()), None);
-        let ok = BTreeMap::from([("POSTGRES_PASSWORD".to_owned(), "s".to_owned())]);
+        let ok = BTreeMap::from([("LOG_LEVEL".to_owned(), "info".to_owned())]);
         assert_eq!(validate_vm_env(&ok), None);
         assert!(is_posix_env_key("_UNDERSCORE"));
         assert!(is_posix_env_key("A1"));
@@ -4337,7 +4337,7 @@ while True:
         let mut request = create_request_on("env-vm", net);
         request
             .env
-            .insert("POSTGRES_PASSWORD".to_owned(), "s".to_owned());
+            .insert("LOG_LEVEL".to_owned(), "info".to_owned());
         request.env.insert("A".to_owned(), "1".to_owned());
 
         let (status, Json(created)) = create_vm(
@@ -4349,8 +4349,8 @@ while True:
         .unwrap();
         assert_eq!(status, StatusCode::CREATED);
         assert_eq!(
-            created.env.get("POSTGRES_PASSWORD").map(String::as_str),
-            Some("s")
+            created.env.get("LOG_LEVEL").map(String::as_str),
+            Some("info")
         );
         assert_eq!(created.env.get("A").map(String::as_str), Some("1"));
 

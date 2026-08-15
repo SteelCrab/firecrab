@@ -1871,7 +1871,7 @@ mod tests {
 
         vm.env.clear();
         vm.env
-            .insert("POSTGRES_PASSWORD".to_owned(), "s".to_owned());
+            .insert("LOG_LEVEL".to_owned(), "info".to_owned());
         store.update(&vm).unwrap();
         assert_eq!(store.load_all().unwrap().get(&vm.id).unwrap().env, vm.env);
 
@@ -1926,7 +1926,7 @@ mod tests {
             .execute(
                 "UPDATE vms SET env = ?1 WHERE id = ?2",
                 params![
-                    format!(r#"{{"POSTGRES_PASSWORD":"{SECRET}","n":1}}"#),
+                    format!(r#"{{"LOG_LEVEL":"{SECRET}","n":1}}"#),
                     vm.id.to_string()
                 ],
             )

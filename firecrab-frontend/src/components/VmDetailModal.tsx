@@ -518,7 +518,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                           id={`vm-edit-env-key-${idx}`}
                           className="detail-edit-input"
                           type="text"
-                          placeholder="KEY"
+                          placeholder="LOG_LEVEL"
                           value={row.key}
                           maxLength={256}
                           autoComplete="off"
@@ -531,7 +531,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                           id={`vm-edit-env-value-${idx}`}
                           className="detail-edit-input"
                           type="text"
-                          placeholder="value"
+                          placeholder="info"
                           value={row.value}
                           maxLength={4096}
                           autoComplete="off"
