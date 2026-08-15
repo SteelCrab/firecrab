@@ -47,3 +47,8 @@ export function isEditableState(state: VmState): boolean {
 export function isEnvEditableState(state: VmState): boolean {
   return isEditableState(state) || state === "running";
 }
+
+/** Port forwards apply live via nft, including on a running VM. */
+export function isPortEditableState(state: VmState): boolean {
+  return isEditableState(state) || state === "running";
+}

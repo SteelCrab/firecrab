@@ -24,7 +24,7 @@ import {
   updateVmResources,
   updateVmShells,
 } from "../api/client";
-import { isEditableState, isEnvEditableState } from "../model";
+import { isEditableState, isEnvEditableState, isPortEditableState } from "../model";
 import { isValidPort } from "../lib/portForward";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
@@ -219,12 +219,15 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
         env,
       });
       // Shells and storage cannot change while Firecracker is live.
-      // Port forwards can; env-only saves on a running VM must not call them.
       if (isEditableState(vm.state)) {
         if (editStorageRoot && editStorageRoot !== vm.storageRoot) {
           updated = await assignVmStorage(vm.id, { storageRoot: editStorageRoot });
         }
         updated = await updateVmShells(vm.id, { shellIds: editShellIds });
+      }
+      // Port forwards re-apply nft while running; do not fold this into the
+      // stopped-only block above or a live add is persisted nowhere.
+      if (isPortEditableState(vm.state)) {
         updated = await updateVmPortForwards(vm.id, { portForwards: editPortForwards });
       }
 
@@ -496,6 +499,14 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     </button>
                     {saveError?.fieldError("portForwards") && (
                       <span className="field-error">{saveError.fieldError("portForwards")}</span>
+                    )}
+                    {vm.state === "running" && (
+                      <div style={{ fontSize: "0.75rem", color: "var(--muted, #888)", marginTop: "0.2rem" }}>
+                        {t(
+                          "Saving applies host NAT immediately.",
+                          "저장하면 호스트 NAT가 바로 적용됩니다.",
+                        )}
+                      </div>
                     )}
                   </div>
                 ) : (vm.portForwards ?? []).length === 0 ? (
