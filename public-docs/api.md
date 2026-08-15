@@ -127,7 +127,6 @@ Related guest paths that are not under `/etc/firecrab`:
 | --- | --- |
 | `/sbin/init` | Symlink to `/etc/firecrab/busybox`. |
 | `/bin/ping`, `/bin/wget`, … | Toolbox applets when the image did not ship them. |
-| `/usr/local/bin/systemctl` | Wrapper: systemd, OpenRC, or `services.d`. |
 | `/etc/inittab` | busybox init job table. |
 | `/etc/hostname`, `/etc/motd` | Written per VM on start. |
 | `/usr/local/sbin/firecrab-guest-agent` | CPU and memory samples for the dashboard. |

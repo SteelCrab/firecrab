@@ -323,7 +323,7 @@ pub fn specialize_guest(
     // without requiring a re-import.
     patch_oci_console(rootfs);
     install_guest_toolbox_commands(rootfs);
-    install_guest_systemctl(rootfs);
+    remove_injected_systemctl(rootfs);
     apply_vm_env(rootfs, env)?;
     for path in STRIP_PATHS {
         remove_from_image(rootfs, path);
@@ -412,32 +412,28 @@ fn install_guest_toolbox_commands(rootfs: &Path) {
     }
 }
 
-/// Writes the systemctl wrapper on every guest, including catalog disks.
-fn install_guest_systemctl(rootfs: &Path) {
-    let _ = run_debugfs(rootfs, "mkdir /usr");
-    let _ = run_debugfs(rootfs, "mkdir /usr/local");
-    let _ = run_debugfs(rootfs, "mkdir /usr/local/bin");
-    if write_into_image(
-        rootfs,
-        crate::oci::provision::GUEST_SYSTEMCTL,
-        crate::oci::provision::SYSTEMCTL_SCRIPT.as_bytes(),
-    )
-    .is_ok()
-    {
-        set_guest_file_mode(rootfs, crate::oci::provision::GUEST_SYSTEMCTL, "0100755");
+/// Drops the Firecrab `systemctl` shim from disks that already have it.
+/// Leaves a real systemd binary alone.
+fn remove_injected_systemctl(rootfs: &Path) {
+    remove_from_image(rootfs, "/usr/local/bin/systemctl");
+    for path in ["/bin/systemctl", "/usr/bin/systemctl"] {
+        if guest_file_contains(rootfs, path, "Firecrab systemctl") {
+            remove_from_image(rootfs, path);
+        }
     }
-    let has_real = guest_path_exists(rootfs, "/usr/bin/systemctl")
-        || guest_path_exists(rootfs, "/sbin/systemctl");
-    if !has_real {
-        let _ = run_debugfs(rootfs, "mkdir /bin");
-        let _ = run_debugfs(
-            rootfs,
-            &format!(
-                "symlink /bin/systemctl {}",
-                crate::oci::provision::GUEST_SYSTEMCTL
-            ),
-        );
+}
+
+fn guest_file_contains(rootfs: &Path, guest_path: &str, needle: &str) -> bool {
+    if !guest_path_exists(rootfs, guest_path) {
+        return false;
     }
+    let staging = rootfs.with_extension("systemctl.tmp");
+    let found = dump_from_image(rootfs, guest_path, &staging)
+        .ok()
+        .and_then(|_| fs::read_to_string(&staging).ok())
+        .is_some_and(|text| text.contains(needle));
+    let _ = fs::remove_file(&staging);
+    found
 }
 
 const GUEST_VM_SERVICE: &str = "/etc/firecrab/services.d/app";
@@ -1242,12 +1238,29 @@ mod tests {
 
         assert!(guest_path_exists(&rootfs, "/bin/ping"));
         assert!(!guest_path_exists(&rootfs, "/bin/sudo"));
-        assert!(
-            debugfs_cat(&rootfs, crate::oci::provision::GUEST_SYSTEMCTL)
-                .contains("Firecrab systemctl")
-        );
+        assert!(!guest_path_exists(&rootfs, "/usr/local/bin/systemctl"));
         assert!(debugfs_cat(&rootfs, "/etc/profile.d/firecrab-locale.sh").contains("C.UTF-8"));
         assert!(debugfs_cat(&rootfs, "/etc/default/locale").contains("C.UTF-8"));
+    }
+
+    #[test]
+    fn specialize_guest_removes_an_injected_systemctl_shim() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/bin").unwrap();
+        write_into_image(
+            &rootfs,
+            "/usr/local/bin/systemctl",
+            b"#!/bin/sh\n# Firecrab systemctl (public-docs/oci.md). Not systemd.\n",
+        )
+        .unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        assert!(!guest_path_exists(&rootfs, "/usr/local/bin/systemctl"));
     }
 
     #[test]

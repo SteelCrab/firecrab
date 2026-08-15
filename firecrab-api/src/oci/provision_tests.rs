@@ -266,16 +266,8 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
         Path::new(provision::GUEST_TOOLBOX)
     );
     assert!(!tree.join("bin/sudo").exists());
-    assert!(
-        String::from_utf8(read_guest(&tree, provision::GUEST_SYSTEMCTL))
-            .expect("systemctl wrapper")
-            .contains("/run/systemd/system"),
-        "systemctl must dispatch to systemd when it is PID 1"
-    );
-    assert_eq!(
-        std::fs::read_link(tree.join("bin/systemctl")).expect("systemctl on PATH"),
-        Path::new(provision::GUEST_SYSTEMCTL)
-    );
+    assert!(!tree.join("usr/local/bin/systemctl").exists());
+    assert!(!tree.join("bin/systemctl").exists());
 
     let console =
         String::from_utf8(read_guest(&tree, "/etc/firecrab/rc.console")).expect("console");
@@ -353,59 +345,6 @@ fn applet_on_path_checks_usual_directories() {
     assert!(!provision::applet_on_path(present, "wget"));
     assert_eq!(provision::applet_link_path(true, "ping"), "/usr/bin/ping");
     assert_eq!(provision::applet_link_path(false, "ping"), "/bin/ping");
-}
-
-#[test]
-fn systemctl_script_is_posix_and_covers_each_init() {
-    let script = provision::SYSTEMCTL_SCRIPT;
-    assert!(script.contains("/run/systemd/system"));
-    assert!(script.contains("rc-service"));
-    assert!(script.contains("/etc/firecrab/services.d"));
-    assert!(script.contains("Firecrab systemctl"));
-    let status = std::process::Command::new("sh")
-        .arg("-n")
-        .arg("-c")
-        .arg(script)
-        .status()
-        .expect("sh");
-    assert!(status.success(), "systemctl wrapper must be valid POSIX sh");
-}
-
-#[tokio::test]
-async fn an_image_that_ships_systemctl_keeps_the_distro_binary() {
-    let directory = tempdir().expect("create fixture directory");
-    let mut builder = Builder::new(Vec::new());
-    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
-    append_entry(
-        &mut builder,
-        "usr/bin/",
-        EntryType::Directory,
-        None,
-        &[],
-        0o755,
-    );
-    append_entry(
-        &mut builder,
-        "usr/bin/systemctl",
-        EntryType::Regular,
-        None,
-        b"real-systemctl",
-        0o755,
-    );
-    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
-    let merged = merged(&directory, "has-systemctl", &finish(builder)).await;
-    let tree = merged.path().to_owned();
-
-    provision::inject_with_toolbox(merged, &toolbox)
-        .await
-        .expect("inject");
-
-    assert_eq!(read_guest(&tree, "/usr/bin/systemctl"), b"real-systemctl");
-    assert!(
-        String::from_utf8(read_guest(&tree, provision::GUEST_SYSTEMCTL))
-            .unwrap()
-            .contains("Firecrab systemctl")
-    );
 }
 
 /// Debian bookworm has a glibc loader but no fastfetch package. The host

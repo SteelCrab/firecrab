@@ -114,8 +114,7 @@ installs a boot script that mounts `/proc`, `/sys`, `/dev` (with `/dev/fd`) and 
 the interface up before asking for a lease, reports `FIRECRAB_NETWORK_READY`
 with the address it received or `FIRECRAB_NETWORK_FAILED` with a reason, and
 starts the metrics agent that reports guest CPU and memory. Missing PATH
-tools (`ping`, `wget`, `vi`, `nc`) become busybox symlinks. `systemctl`
-talks to systemd if it is PID 1, else OpenRC, else `services.d`. After DHCP, the
+tools (`ping`, `wget`, `vi`, `nc`) become busybox symlinks. After DHCP, the
 first boot installs a small set through apt/dnf/apk/zypper/pacman and stamps
 `/etc/firecrab/base-packages.ok`. When the image ships util-linux `agetty`
 and bash, the serial console is `ttyS0 → agetty → login → bash`; otherwise
