@@ -236,7 +236,7 @@ export default function MicroNetworks() {
                   <td className="mono">{network.uplink ?? t("Auto", "자동")}</td>
                   <td className="mono">
                     {network.internetEnabled
-                      ? `${network.subnetCidr} → ${network.uplink ?? defaultUplink || t("Auto", "자동")}`
+                      ? `${network.subnetCidr} → ${network.uplink ?? (defaultUplink || t("Auto", "자동"))}`
                       : t("Off", "꺼짐")}
                   </td>
                   <td className="mono" title={network.id}>
