@@ -210,8 +210,8 @@ export default function App() {
             <h2 className="panel-title">
               <span>{t(`MicroVMs (${state.vms.length})`, `MicroVM 목록 (${state.vms.length})`)}</span>
               <span>
-                <a id="vm-list-add" href={newVmHash()}>
-                  {t("Add", "추가")}
+                <a id="vm-list-add" className="btn primary" href={newVmHash()}>
+                  {t("Create", "생성")}
                 </a>
                 <span className="poll-note">{pollNote}</span>
               </span>

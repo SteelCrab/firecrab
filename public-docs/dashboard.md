@@ -31,7 +31,7 @@ Use `localhost` because the development origin is exact.
 
 | Screen | Job |
 | --- | --- |
-| MicroVM | List VMs at `#/vms`. Add opens `#/vms/new`. |
+| MicroVM | List VMs at `#/vms`. Create opens `#/vms/new`. |
 | Terminal | Use the serial console |
 | Networks | Manage MicroNetworks |
 | Storage | Manage MicroStorage pools |
@@ -42,7 +42,7 @@ Use `localhost` because the development origin is exact.
 
 1. Create a MicroNetwork.
 2. Choose an installed image.
-3. Open Add (`#/vms/new`).
+3. Open Create (`#/vms/new`).
 4. Set CPU, RAM, disk, storage, and egress.
 5. Create the VM. The dashboard returns to `#/vms`.
 6. Start it.
