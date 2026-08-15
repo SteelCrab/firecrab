@@ -110,7 +110,7 @@ when it no longer passes. Operators can name a mirror with
 Activation installs an init at `/sbin/init` and the toolbox at
 `/etc/firecrab/busybox` (basename `busybox`, so the multiplexer runs), so the
 image boots on the same kernel command line every other template uses. It also
-installs a boot script that mounts `/proc`, `/sys`, `/dev` and `/run`, brings
+installs a boot script that mounts `/proc`, `/sys`, `/dev` (with `/dev/fd`) and `/run`, brings
 the interface up before asking for a lease, reports `FIRECRAB_NETWORK_READY`
 with the address it received or `FIRECRAB_NETWORK_FAILED` with a reason, and
 starts the metrics agent that reports guest CPU and memory. When the image
@@ -160,7 +160,7 @@ That local template is not a MicroRegistry row; register it as in [Images](image
 
 Entrypoint, Cmd, Env, and WorkingDir become `/etc/firecrab/services.d/app`.
 The injected init starts it after the sentinel. It is never PID 1.
-On start, one `# >>> firecrab vm env` block is rewritten so per-VM `env` overrides image Env (image `export` lines stay; empty map removes the block; missing `services.d/app` is a no-op; plaintext in the guest).
+On start, a `# >>> firecrab vm env` block sources `/etc/firecrab/vm.env`; guest paths are in [API](api.md).
 
 ## Related
 
