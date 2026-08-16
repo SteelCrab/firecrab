@@ -45,6 +45,8 @@ network helper.
 
 ### Changed
 
+- GitHub Releases publish only host bundles and `install.sh`. Release notes
+  have no Binaries section and no API-only tarballs.
 - `install.sh` downloads musl release binaries instead of building with
   rustup and npm on the host.
 - Workspace version is `0.1.0` across the Rust crates.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build GitHub Release notes: install URL, binaries, changelog, contributor icons."""
+"""Build GitHub Release notes: install URL, changelog, contributor icons."""
 
 from __future__ import annotations
 
@@ -9,20 +9,6 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-
-HOST_BUNDLES = (
-    ("firecrab-host-x86_64-gnu.tar.gz", "Linux x86_64, glibc (Debian, Fedora, Arch, openSUSE, Ubuntu)"),
-    ("firecrab-host-x86_64-musl.tar.gz", "Linux x86_64, musl (Alpine; static)"),
-    ("firecrab-host-aarch64-gnu.tar.gz", "Linux aarch64 / arm64, glibc"),
-    ("firecrab-host-aarch64-musl.tar.gz", "Linux aarch64 / arm64, musl (static)"),
-)
-
-RAW_TARBALLS = (
-    ("firecrab-x86_64-unknown-linux-gnu.tar.gz", "x86_64 glibc API + helper only"),
-    ("firecrab-x86_64-unknown-linux-musl.tar.gz", "x86_64 static musl API + helper only"),
-    ("firecrab-aarch64-unknown-linux-gnu.tar.gz", "aarch64 glibc API + helper only"),
-    ("firecrab-aarch64-unknown-linux-musl.tar.gz", "aarch64 static musl API + helper only"),
-)
 
 
 def _load_changelog():
@@ -84,7 +70,6 @@ def build_notes(
     pinned_install = (
         f"https://github.com/{repo}/releases/download/{pinned}/install.sh"
     )
-    asset = f"https://github.com/{repo}/releases/download/{pinned}"
 
     changelog = _load_changelog()
     changelog_block = changelog.extract_notes(changelog_text, pinned)
@@ -120,41 +105,13 @@ def build_notes(
         "./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist",
         "```",
         "",
-        "## Binaries",
+        "## Changelog",
         "",
-        "Host bundles include `firecrab-api`, `firecrab-net-helper`, the dashboard,",
-        "systemd units, and `firecrab-doctor`. `install.sh` downloads one of these.",
+        changelog_block.rstrip(),
         "",
-        "| File | Installs on |",
-        "| --- | --- |",
+        "## Contributors",
+        "",
     ]
-    for name, who in HOST_BUNDLES:
-        lines.append(f"| [`{name}`]({asset}/{name}) | {who} |")
-    lines.extend(
-        [
-            "",
-            "API + helper only (no dashboard or units):",
-            "",
-            "| File | Contents |",
-            "| --- | --- |",
-        ]
-    )
-    for name, who in RAW_TARBALLS:
-        lines.append(f"| [`{name}`]({asset}/{name}) | {who} |")
-    lines.extend(
-        [
-            "",
-            f"Checksums: [`SHA256SUMS`]({asset}/SHA256SUMS).",
-            f"Standalone installer: [`install.sh`]({pinned_install}).",
-            "",
-            "## Changelog",
-            "",
-            changelog_block.rstrip(),
-            "",
-            "## Contributors",
-            "",
-        ]
-    )
     people = filter_contributors(contributors)
     if people:
         lines.append('<p align="left">')

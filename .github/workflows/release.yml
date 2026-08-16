@@ -292,8 +292,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find artifacts -type f \( -name '*.tar.gz' -o -name 'index.html' \) -print
-          find artifacts -type f -name '*.tar.gz' -exec cp -t dist {} +
+          find artifacts -type f -name 'firecrab-host-*.tar.gz' -print
+          find artifacts -type f -name 'firecrab-host-*.tar.gz' -exec cp -t dist {} +
           ./scripts/bake-install-sh.sh "${GITHUB_REF_NAME}" dist/install.sh
           (cd dist && sha256sum ./* > SHA256SUMS)
           ls -l dist

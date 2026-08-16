@@ -55,7 +55,7 @@ CHANGELOG = dedent(
 
 
 class WriteReleaseNotesTests(unittest.TestCase):
-    def test_body_has_install_url_all_binaries_contributors_and_changelog(self) -> None:
+    def test_body_has_install_url_contributors_and_changelog(self) -> None:
         body = notes.build_notes(
             tag="v0.1.0",
             changelog_text=CHANGELOG,
@@ -70,17 +70,16 @@ class WriteReleaseNotesTests(unittest.TestCase):
             "https://github.com/SteelCrab/firecrab/releases/download/v0.1.0/install.sh",
             body,
         )
+        self.assertNotIn("## Binaries", body)
+        self.assertNotIn("API + helper only", body)
         for asset in (
             "firecrab-host-x86_64-gnu.tar.gz",
-            "firecrab-host-x86_64-musl.tar.gz",
-            "firecrab-host-aarch64-gnu.tar.gz",
-            "firecrab-host-aarch64-musl.tar.gz",
             "firecrab-x86_64-unknown-linux-gnu.tar.gz",
             "firecrab-x86_64-unknown-linux-musl.tar.gz",
             "firecrab-aarch64-unknown-linux-gnu.tar.gz",
             "firecrab-aarch64-unknown-linux-musl.tar.gz",
         ):
-            self.assertIn(asset, body)
+            self.assertNotIn(asset, body)
         self.assertIn("./install.sh --libc gnu", body)
         self.assertIn("./install.sh --libc musl", body)
         self.assertIn("SteelCrab", body)
