@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use crate::m2image_manifest;
 
@@ -201,8 +202,9 @@ fn pairing_does_not_follow_a_kernel_symlink() {
 
     let error = pair_ext4_with_host_kernel(image, image_root).expect_err("symlink");
 
-    assert!(
-        matches!(error, ResolveError::KernelIo { .. }),
+    assert_matches!(
+        error,
+        ResolveError::KernelIo { .. },
         "expected KernelIo for a kernel path that is a symlink, got {error}"
     );
 }

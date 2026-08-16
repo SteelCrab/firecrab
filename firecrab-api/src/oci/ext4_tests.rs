@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use std::os::unix::fs::MetadataExt as _;
 use tempfile::tempdir;
@@ -117,7 +118,7 @@ async fn packing_refuses_to_overwrite_an_existing_destination() {
     let error = ext4::write_provisioned_ext4(&provisioned(tree), &destination)
         .await
         .expect_err("existing destination must fail");
-    assert!(matches!(error, ResolveError::Ext4DestinationExists { .. }));
+    assert_matches!(error, ResolveError::Ext4DestinationExists { .. });
     assert_eq!(std::fs::read(&destination).unwrap(), b"already here");
 }
 
@@ -132,11 +133,9 @@ async fn an_undersized_image_fails_and_leaves_no_destination() {
             .await
             .expect_err("a 3 MiB image cannot hold 2 MiB plus headroom");
 
-    assert!(
-        matches!(
-            error,
-            ResolveError::Ext4Full { .. } | ResolveError::Ext4Build { .. }
-        ),
+    assert_matches!(
+        error,
+        ResolveError::Ext4Full { .. } | ResolveError::Ext4Build { .. },
         "undersize must fail loudly, got {error}"
     );
     assert!(
@@ -167,13 +166,8 @@ async fn a_planned_image_over_the_operator_ceiling_fails_before_mkfs() {
         ext4::write_provisioned_ext4_with_limit(&provisioned(tree), &destination, 1024 * 1024)
             .await
             .expect_err("1 MiB ceiling cannot fit the planned image");
-    assert!(
-        matches!(
-            error,
-            ResolveError::Ext4TooLarge { limit, .. } if limit == 1024 * 1024
-        ),
-        "expected Ext4TooLarge with 1 MiB limit, got {error}"
-    );
+    assert_matches!(error,
+            ResolveError::Ext4TooLarge { limit, .. } if limit == 1024 * 1024, "expected Ext4TooLarge with 1 MiB limit, got {error}");
     assert!(!destination.exists());
 }
 

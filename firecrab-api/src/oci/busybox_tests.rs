@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -132,21 +133,17 @@ async fn a_dynamically_linked_toolbox_program_is_refused() {
     );
 
     // A merged container tree has no loader, so this would exec into a panic.
-    assert!(matches!(
-        refuse_toolbox(&directory, "dynamic", &program).await,
+    assert_matches!(refuse_toolbox(&directory, "dynamic", &program).await,
         ToolboxViolation::DynamicallyLinked { interpreter }
-            if interpreter == "/lib64/ld-linux-x86-64.so.2"
-    ));
+            if interpreter == "/lib64/ld-linux-x86-64.so.2");
 }
 
 #[tokio::test]
 async fn a_toolbox_program_for_another_machine_is_refused() {
     let directory = tempdir().expect("create fixture directory");
     let program = elf(FOREIGN_MACHINE, 2, &[program_header(1, 0, 0)], &[]);
-    assert!(matches!(
-        refuse_toolbox(&directory, "foreign", &program).await,
-        ToolboxViolation::ForeignArchitecture { actual, .. } if actual == FOREIGN_MACHINE
-    ));
+    assert_matches!(refuse_toolbox(&directory, "foreign", &program).await,
+        ToolboxViolation::ForeignArchitecture { actual, .. } if actual == FOREIGN_MACHINE);
 }
 
 #[tokio::test]
@@ -157,31 +154,31 @@ async fn programs_that_are_not_static_executables_are_refused() {
         Architecture::Aarch64 => 183,
     };
 
-    assert!(matches!(
+    assert_matches!(
         refuse_toolbox(&directory, "text", b"#!/bin/sh\necho hello\n").await,
         ToolboxViolation::NotElf
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         refuse_toolbox(&directory, "empty", b"").await,
         ToolboxViolation::Empty
-    ));
+    );
     // ET_REL: an object file, not something the kernel can exec.
-    assert!(matches!(
+    assert_matches!(
         refuse_toolbox(&directory, "relocatable", &elf(machine, 1, &[], &[])).await,
         ToolboxViolation::NotExecutable
-    ));
+    );
     // A header table that claims more entries than the file can hold.
     let mut truncated = elf(machine, 2, &[program_header(1, 0, 0)], &[]);
     truncated[56..58].copy_from_slice(&64_u16.to_le_bytes());
-    assert!(matches!(
+    assert_matches!(
         refuse_toolbox(&directory, "truncated", &truncated).await,
         ToolboxViolation::MalformedProgramHeaders
-    ));
+    );
     // No program headers at all leaves nothing to prove staticness with.
-    assert!(matches!(
+    assert_matches!(
         refuse_toolbox(&directory, "headerless", &elf(machine, 2, &[], &[])).await,
         ToolboxViolation::MalformedProgramHeaders
-    ));
+    );
 }
 
 #[tokio::test]
@@ -189,10 +186,8 @@ async fn an_oversized_toolbox_program_is_refused_before_it_is_copied() {
     let directory = tempdir().expect("create fixture directory");
     let mut program = static_program();
     program.resize(33 * 1024 * 1024, 0);
-    assert!(matches!(
-        refuse_toolbox(&directory, "huge", &program).await,
-        ToolboxViolation::TooLarge { limit, .. } if limit == 32 * 1024 * 1024
-    ));
+    assert_matches!(refuse_toolbox(&directory, "huge", &program).await,
+        ToolboxViolation::TooLarge { limit, .. } if limit == 32 * 1024 * 1024);
 }
 
 #[tokio::test]
@@ -200,13 +195,13 @@ async fn a_toolbox_directory_is_refused_rather_than_copied() {
     let directory = tempdir().expect("create fixture directory");
     let path = directory.path().join("a-directory");
     std::fs::create_dir(&path).expect("create fixture directory entry");
-    assert!(matches!(
+    assert_matches!(
         busybox::inspect_toolbox(&path, Architecture::HOST).await,
         Err(ResolveError::ToolboxUnusable {
             reason: ToolboxViolation::NotRegularFile,
             ..
         })
-    ));
+    );
 }
 
 #[tokio::test]
@@ -472,10 +467,8 @@ async fn a_toolbox_image_without_the_program_member_is_refused() {
     let error = busybox::ensure_toolbox_from(&options, &registry.reference())
         .await
         .expect_err("an image without bin/busybox cannot supply an init");
-    assert!(matches!(
-        error,
-        ResolveError::ToolboxMissing { member, .. } if member == "bin/busybox"
-    ));
+    assert_matches!(error,
+        ResolveError::ToolboxMissing { member, .. } if member == "bin/busybox");
     assert!(!scratch_trees_remain(&image_root.join(".oci/toolbox")));
 }
 
@@ -547,13 +540,13 @@ async fn a_toolbox_member_that_is_not_a_regular_file_is_refused() {
     let error = busybox::ensure_toolbox_from(&options, &registry.reference())
         .await
         .expect_err("a symlinked member must not be copied");
-    assert!(matches!(
+    assert_matches!(
         error,
         ResolveError::ToolboxUnusable {
             reason: ToolboxViolation::NotRegularFile,
             ..
         }
-    ));
+    );
 }
 
 #[tokio::test]

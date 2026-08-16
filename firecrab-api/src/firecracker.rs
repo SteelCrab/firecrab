@@ -742,6 +742,7 @@ mod tests {
 
     use super::*;
     use crate::model::VmState;
+    use core::assert_matches;
 
     fn record(cpu: u8, ram: u32) -> VmRecord {
         VmRecord {
@@ -991,7 +992,7 @@ mod tests {
         .await
         .unwrap_err();
 
-        assert!(matches!(error, FirecrackerError::NotReady { .. }));
+        assert_matches!(error, FirecrackerError::NotReady { .. });
         assert!(!process_alive(fake_pid(&runtime)));
     }
 

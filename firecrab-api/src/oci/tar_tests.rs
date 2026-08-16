@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use std::io::Cursor;
 
@@ -341,14 +342,12 @@ async fn traversal_absolute_and_pax_overridden_paths_are_rejected() {
         let error = validate_decompressed_layers(vec![layer])
             .await
             .expect_err("unsafe member path must fail preflight");
-        assert!(matches!(
-            error,
+        assert_matches!(error,
             ResolveError::UnsafeTarMember {
                 compressed_digest,
                 path,
                 reason: TarMemberViolation::Path,
-            } if compressed_digest == expected_digest && path == expected_path
-        ));
+            } if compressed_digest == expected_digest && path == expected_path);
     }
 
     let safe = fixture_layer(
@@ -365,11 +364,9 @@ async fn traversal_absolute_and_pax_overridden_paths_are_rejected() {
     let error = validate_decompressed_layers(vec![safe, unsafe_layer])
         .await
         .expect_err("a later unsafe layer must fail the complete image preflight");
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::UnsafeTarMember { compressed_digest, path, .. }
-            if compressed_digest == expected_digest && path == Path::new("../../second-layer-escape")
-    ));
+            if compressed_digest == expected_digest && path == Path::new("../../second-layer-escape"));
 }
 
 #[tokio::test]
@@ -397,13 +394,11 @@ async fn parser_differential_pax_overrides_are_explicitly_rejected() {
         let error = validate_decompressed_layers(vec![layer])
             .await
             .expect_err("ambiguous PAX parser override must fail preflight");
-        assert!(matches!(
-            error,
+        assert_matches!(error,
             ResolveError::UnsafeTarMember {
                 reason: TarMemberViolation::UnsupportedPaxAttribute { key },
                 ..
-            } if key == expected_key
-        ));
+            } if key == expected_key);
     }
 }
 
@@ -420,38 +415,32 @@ async fn device_and_other_special_nodes_are_rejected() {
         let error = validate_decompressed_layers(vec![layer])
             .await
             .expect_err("special filesystem node must fail preflight");
-        assert!(matches!(
-            error,
+        assert_matches!(error,
             ResolveError::UnsafeTarMember { path, reason, .. }
-                if path == Path::new("dev/unsafe") && reason == expected_reason
-        ));
+                if path == Path::new("dev/unsafe") && reason == expected_reason);
     }
 
     let sparse = fixture_layer(&directory, "sparse", &extended_sparse_tar());
     let error = validate_decompressed_layers(vec![sparse])
         .await
         .expect_err("GNU sparse parsing must be rejected in the raw preflight");
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::UnsafeTarMember {
             path,
             reason: TarMemberViolation::UnsupportedEntryType { entry_type: b'S' },
             ..
-        } if path == Path::new("var/sparse")
-    ));
+        } if path == Path::new("var/sparse"));
 
     let sparse_pax = pax_override_tar("GNU.sparse.name", "../../outside", EntryType::Regular, None);
     let sparse_pax = fixture_layer(&directory, "sparse-pax", &sparse_pax);
     let error = validate_decompressed_layers(vec![sparse_pax])
         .await
         .expect_err("GNU sparse PAX metadata must be rejected");
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::UnsafeTarMember {
             reason: TarMemberViolation::UnsupportedPaxAttribute { key },
             ..
-        } if key == "GNU.sparse.name"
-    ));
+        } if key == "GNU.sparse.name");
 }
 
 #[tokio::test]
@@ -630,22 +619,18 @@ async fn malformed_pax_checksum_and_truncated_payload_are_rejected() {
         let error = validate_decompressed_layers(vec![layer])
             .await
             .expect_err("malformed tar must fail preflight");
-        assert!(matches!(
-            error,
+        assert_matches!(error,
             ResolveError::MalformedLayerArchive { compressed_digest, .. }
-                if compressed_digest == expected_digest
-        ));
+                if compressed_digest == expected_digest);
     }
 
     let oversized = fixture_layer(&directory, "oversized-metadata", &oversized_metadata_tar());
     let error = validate_decompressed_layers(vec![oversized])
         .await
         .expect_err("oversized metadata must fail before the parser buffers it");
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::MalformedLayerArchive { message, .. }
-            if message.contains("exceeding")
-    ));
+            if message.contains("exceeding"));
 }
 
 #[tokio::test]

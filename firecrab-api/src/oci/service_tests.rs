@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
@@ -118,7 +119,7 @@ fn malformed_env_is_refused() {
         "Env": ["PATH=/usr/bin", "NOTAPAIR"]
     })))
     .expect_err("malformed env");
-    assert!(matches!(error, ResolveError::ServiceEnvInvalid { .. }));
+    assert_matches!(error, ResolveError::ServiceEnvInvalid { .. });
 }
 
 #[test]

@@ -839,6 +839,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use core::assert_matches;
 
     fn template_file(directory: &Path, content: &[u8]) -> File {
         let path = directory.join("template.ext4");
@@ -878,10 +879,7 @@ mod tests {
         let mut template = template_file(directory.path(), b"template-bytes");
 
         let error = prepare_rootfs(&paths, Uuid::new_v4(), &mut template, 16).unwrap_err();
-        assert!(
-            matches!(error, RootfsError::CreateDirectory { ref path, .. } if *path == paths.dir),
-            "{error}"
-        );
+        assert_matches!(error, RootfsError::CreateDirectory { ref path, .. } if *path == paths.dir, "{error}");
     }
 
     /// A brand-new copy that can't be grown is discarded entirely — no
@@ -895,7 +893,7 @@ mod tests {
         let generation = Uuid::new_v4();
 
         let error = prepare_rootfs(&paths, generation, &mut template, 8 * 1024 * 1024).unwrap_err();
-        assert!(matches!(error, RootfsError::ResizeFailed { .. }), "{error}");
+        assert_matches!(error, RootfsError::ResizeFailed { .. }, "{error}");
         assert!(!paths.rootfs(generation).exists());
         assert!(!paths.rootfs_tmp(generation).exists());
     }
@@ -936,7 +934,7 @@ mod tests {
 
         let error = prepare_rootfs(&paths, generation, &mut unreadable, 0).unwrap_err();
 
-        assert!(matches!(error, RootfsError::Copy { .. }));
+        assert_matches!(error, RootfsError::Copy { .. });
         assert!(!paths.rootfs_tmp(generation).exists());
         assert!(!paths.rootfs(generation).exists());
     }
@@ -1118,10 +1116,7 @@ mod tests {
         let original_len = fs::metadata(&rootfs).unwrap().len();
 
         let error = grow(&rootfs, original_len + 8 * 1024 * 1024).unwrap_err();
-        assert!(matches!(
-            error,
-            RootfsError::ResizeFailed { tool: "e2fsck", .. }
-        ));
+        assert_matches!(error, RootfsError::ResizeFailed { tool: "e2fsck", .. });
         assert_eq!(
             fs::metadata(&rootfs).unwrap().len(),
             original_len,

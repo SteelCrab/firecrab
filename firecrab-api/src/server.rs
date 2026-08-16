@@ -430,6 +430,7 @@ pub fn request_id(request: &Request) -> Uuid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     #[test]
     fn defaults_are_loopback_only() {
@@ -441,10 +442,8 @@ mod tests {
 
     #[test]
     fn rejects_insecure_non_loopback_bind() {
-        assert!(matches!(
-            HttpConfig::from_values("0.0.0.0:3000", "", false, false),
-            Err(ConfigError::InsecureNonLoopbackBind)
-        ));
+        let result = HttpConfig::from_values("0.0.0.0:3000", "", false, false);
+        assert_matches!(result, Err(ConfigError::InsecureNonLoopbackBind));
     }
 
     #[test]

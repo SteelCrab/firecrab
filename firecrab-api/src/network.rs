@@ -387,6 +387,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     use std::path::Path;
 
@@ -461,10 +462,7 @@ mod tests {
             error.to_string(),
             "network helper rejected the request: operation is not implemented yet"
         );
-        assert!(matches!(
-            error,
-            NetworkError::Helper(HelperFailure::UnsupportedOperation)
-        ));
+        assert_matches!(error, NetworkError::Helper(_));
     }
 
     #[tokio::test]
@@ -481,7 +479,7 @@ mod tests {
         let result = client(&path, HELPER_TIMEOUT)
             .call(NetworkRequest::EnsureBridge)
             .await;
-        assert!(matches!(result, Err(NetworkError::MismatchedResponse)));
+        assert_matches!(result, Err(NetworkError::MismatchedResponse));
     }
 
     #[tokio::test]
@@ -492,7 +490,7 @@ mod tests {
         let result = client(&path, HELPER_TIMEOUT)
             .call(NetworkRequest::EnsureBridge)
             .await;
-        assert!(matches!(result, Err(NetworkError::Unavailable { .. })));
+        assert_matches!(result, Err(NetworkError::Unavailable { .. }));
     }
 
     #[tokio::test]
@@ -510,6 +508,6 @@ mod tests {
         let result = client(&path, Duration::from_millis(100))
             .call(NetworkRequest::EnsureBridge)
             .await;
-        assert!(matches!(result, Err(NetworkError::Timeout)));
+        assert_matches!(result, Err(NetworkError::Timeout));
     }
 }

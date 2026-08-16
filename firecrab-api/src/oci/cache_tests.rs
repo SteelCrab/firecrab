@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -436,23 +437,21 @@ fn sha256_digests_are_canonical_and_path_safe() {
     );
     assert_eq!(parsed.encoded(), "a".repeat(SHA256_HEX_LENGTH));
 
-    assert!(matches!(
-        Sha256Digest::parse(&format!("sha512:{}", "a".repeat(SHA256_HEX_LENGTH))),
-        Err(DigestError::UnsupportedAlgorithm(algorithm)) if algorithm == "sha512"
-    ));
-    assert!(matches!(
+    assert_matches!(Sha256Digest::parse(&format!("sha512:{}", "a".repeat(SHA256_HEX_LENGTH))),
+        Err(DigestError::UnsupportedAlgorithm(algorithm)) if algorithm == "sha512");
+    assert_matches!(
         Sha256Digest::parse("sha256:abcd"),
         Err(DigestError::InvalidLength { .. })
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         Sha256Digest::parse(&format!("sha256:{}g", "a".repeat(SHA256_HEX_LENGTH - 1))),
         Err(DigestError::InvalidEncoding(_))
-    ));
+    );
     let path_characters = format!("sha256:{}/.", "a".repeat(SHA256_HEX_LENGTH - 2));
-    assert!(matches!(
+    assert_matches!(
         Sha256Digest::parse(&path_characters),
         Err(DigestError::InvalidEncoding(_))
-    ));
+    );
 }
 
 #[tokio::test]
@@ -721,7 +720,7 @@ async fn a_digest_mismatch_leaves_no_final_or_partial_file() {
         .await
         .expect_err("wrong blob bytes must fail verification");
 
-    assert!(matches!(error, ResolveError::DigestMismatch { .. }));
+    assert_matches!(error, ResolveError::DigestMismatch { .. });
     assert_no_cache_artifacts(&cache, &expected.digest).await;
 }
 
@@ -743,14 +742,12 @@ async fn a_blob_digest_header_mismatch_leaves_no_cache_artifact() {
         .await
         .expect_err("a contradictory blob digest header must fail");
 
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::DigestMismatch {
             expected,
             actual,
             ..
-        } if expected == config.digest && actual == wrong_header
-    ));
+        } if expected == config.digest && actual == wrong_header);
     assert_eq!(registry.blob_requests(&config.digest), 1);
     assert_no_cache_artifacts(&cache, &config.digest).await;
 }
@@ -766,7 +763,7 @@ async fn a_missing_blob_leaves_no_cache_artifact() {
         .await
         .expect_err("a missing blob must fail");
 
-    assert!(matches!(error, ResolveError::Status { status: 404, .. }));
+    assert_matches!(error, ResolveError::Status { status: 404, .. });
     assert_eq!(registry.blob_requests(&config.digest), 1);
     assert_no_cache_artifacts(&cache, &config.digest).await;
 }
@@ -795,14 +792,12 @@ async fn oversized_config_and_layer_descriptors_are_rejected_before_download() {
             .await
             .expect_err("an oversized descriptor must fail before download");
 
-        assert!(matches!(
-            error,
+        assert_matches!(error,
             ResolveError::BlobTooLarge {
                 digest,
                 size: 5,
                 limit: 4,
-            } if digest == blob.digest
-        ));
+            } if digest == blob.digest);
         assert_eq!(registry.total_blob_requests(), 0);
         assert_no_cache_artifacts(&cache, &blob.digest).await;
     }
@@ -854,14 +849,12 @@ async fn short_and_long_bodies_leave_no_final_or_partial_file() {
             .await
             .expect_err("wrong blob length must fail verification");
 
-        assert!(matches!(
-            error,
+        assert_matches!(error,
             ResolveError::SizeMismatch {
                 expected: 6,
                 actual: received,
                 ..
-            } if received == actual.len() as u64
-        ));
+            } if received == actual.len() as u64);
         assert_no_cache_artifacts(&cache, &expected.digest).await;
     }
 }
@@ -889,16 +882,14 @@ async fn conflicting_sizes_are_rejected_before_any_blob_request() {
         .await
         .expect_err("conflicting descriptor sizes must fail");
 
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::ConflictingDescriptorSize {
             digest,
             first,
             second,
         } if digest == shared.digest
             && first == shared.bytes.len() as u64
-            && second == shared.bytes.len() as u64 + 1
-    ));
+            && second == shared.bytes.len() as u64 + 1);
     assert_eq!(registry.total_blob_requests(), 0);
 }
 
@@ -927,10 +918,8 @@ async fn conflicting_sizes_preserve_a_preexisting_valid_cache_entry() {
         .await
         .expect_err("conflicting descriptor sizes must fail before cache validation");
 
-    assert!(matches!(
-        error,
-        ResolveError::ConflictingDescriptorSize { digest, .. } if digest == shared.digest
-    ));
+    assert_matches!(error,
+        ResolveError::ConflictingDescriptorSize { digest, .. } if digest == shared.digest);
     assert_eq!(registry.total_blob_requests(), 0);
     assert_eq!(
         tokio::fs::read(cache.path_for(&shared.digest))
@@ -955,11 +944,9 @@ async fn an_unsupported_descriptor_digest_is_a_digest_error() {
         .await
         .expect_err("sha512 descriptors are unsupported");
 
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::Digest(DigestError::UnsupportedAlgorithm(algorithm))
-            if algorithm == "sha512"
-    ));
+            if algorithm == "sha512");
     assert_eq!(registry.total_blob_requests(), 0);
 }
 
@@ -1108,15 +1095,15 @@ async fn invalid_configs_fail_before_a_layer_cache_is_created() {
             .expect_err("invalid config must fail before decompression");
 
         match kind {
-            "rootfs type" => assert!(matches!(error, ResolveError::UnsupportedRootfsType(_))),
-            "count" => assert!(matches!(
+            "rootfs type" => assert_matches!(error, ResolveError::UnsupportedRootfsType(_)),
+            "count" => assert_matches!(
                 error,
                 ResolveError::DiffIdCountMismatch {
                     expected: 1,
                     actual: 0
                 }
-            )),
-            _ => assert!(matches!(error, ResolveError::MalformedConfig(_))),
+            ),
+            _ => assert_matches!(error, ResolveError::MalformedConfig(_)),
         }
         assert!(tokio::fs::metadata(&cache.root).await.is_err());
     }
@@ -1136,7 +1123,7 @@ async fn an_unsupported_layer_media_type_fails_before_output() {
         .await
         .expect_err("unknown layer encoding must be rejected");
 
-    assert!(matches!(error, ResolveError::UnsupportedMediaType(_)));
+    assert_matches!(error, ResolveError::UnsupportedMediaType(_));
     assert!(tokio::fs::metadata(&cache.root).await.is_err());
 }
 
@@ -1154,14 +1141,12 @@ async fn a_diff_id_mismatch_preserves_the_compressed_blob_and_leaves_no_output()
         .await
         .expect_err("wrong config diff ID must fail");
 
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::DiffIdMismatch {
             compressed_digest,
             expected,
             ..
-        } if compressed_digest == layer.digest && expected == wrong_diff_id
-    ));
+        } if compressed_digest == layer.digest && expected == wrong_diff_id);
     assert_no_layer_artifacts(&cache, &image.layers[0].descriptor, &wrong_diff_id).await;
     assert_eq!(
         tokio::fs::read(&image.layers[0].path).await.unwrap(),
@@ -1190,14 +1175,12 @@ async fn the_exact_compressed_stream_is_verified_while_it_is_decoded() {
         .await
         .expect_err("the decoder must verify its exact compressed input");
 
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::DigestMismatch {
             expected,
             actual,
             ..
-        } if expected == layer.digest && actual == Sha256Digest::of_bytes(&changed_header)
-    ));
+        } if expected == layer.digest && actual == Sha256Digest::of_bytes(&changed_header));
     assert_no_layer_artifacts(&cache, &image.layers[0].descriptor, &diff_id).await;
 }
 
@@ -1220,7 +1203,7 @@ async fn truncated_gzip_and_zstd_layers_leave_no_output_or_partial() {
             .await
             .expect_err("truncated compressed stream must fail");
 
-        assert!(matches!(error, ResolveError::Decompression { .. }));
+        assert_matches!(error, ResolveError::Decompression { .. });
         assert_no_layer_artifacts(&cache, &image.layers[0].descriptor, &diff_id).await;
     }
 }
@@ -1244,7 +1227,7 @@ async fn trailing_bytes_after_gzip_and_zstd_streams_are_rejected() {
             .await
             .expect_err("trailing non-frame bytes must fail");
 
-        assert!(matches!(error, ResolveError::Decompression { .. }));
+        assert_matches!(error, ResolveError::Decompression { .. });
         assert_no_layer_artifacts(&cache, &image.layers[0].descriptor, &diff_id).await;
     }
 }
@@ -1264,14 +1247,14 @@ async fn decoded_output_limit_is_inclusive_and_cleans_an_oversized_partial() {
         .await
         .expect_err("decoded output over the limit must fail");
 
-    assert!(matches!(
+    assert_matches!(
         error,
         ResolveError::UncompressedLayerTooLarge {
             limit: 9,
             actual: 10,
             ..
         }
-    ));
+    );
     assert_no_layer_artifacts(&too_small, &image.layers[0].descriptor, &diff_id).await;
 
     let exact = LayerCache::with_max_uncompressed_layer_bytes(directory.path(), 10);

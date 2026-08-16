@@ -64,6 +64,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     #[tokio::test]
     async fn frames_round_trip() {
@@ -84,7 +85,7 @@ mod tests {
         frame.extend_from_slice(b"ignored");
 
         let result = read_frame::<_, String>(&mut frame.as_slice()).await;
-        assert!(matches!(result, Err(FrameError::TooLarge { len }) if len == MAX_FRAME_BYTES + 1));
+        assert_matches!(result, Err(FrameError::TooLarge { len }) if len == MAX_FRAME_BYTES + 1);
     }
 
     #[tokio::test]
@@ -93,7 +94,7 @@ mod tests {
         frame.extend_from_slice(b"{{{");
 
         let result = read_frame::<_, String>(&mut frame.as_slice()).await;
-        assert!(matches!(result, Err(FrameError::Malformed(_))));
+        assert_matches!(result, Err(FrameError::Malformed(_)));
     }
 
     #[tokio::test]
@@ -101,6 +102,6 @@ mod tests {
         let frame = 0_u32.to_be_bytes().to_vec();
 
         let result = read_frame::<_, String>(&mut frame.as_slice()).await;
-        assert!(matches!(result, Err(FrameError::Malformed(_))));
+        assert_matches!(result, Err(FrameError::Malformed(_)));
     }
 }

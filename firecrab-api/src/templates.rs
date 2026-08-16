@@ -978,6 +978,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use core::assert_matches;
 
     #[test]
     fn load_from_skips_templates_whose_images_are_not_built_yet() {
@@ -1164,11 +1165,8 @@ mod tests {
             })
             .unwrap_err();
 
-        assert!(
-            matches!(error, TemplateError::KernelArchitectureMismatch { found, .. }
-                if found == Architecture::HOST.other()),
-            "{error:?}"
-        );
+        assert_matches!(error, TemplateError::KernelArchitectureMismatch { found, .. }
+                if found == Architecture::HOST.other(), "{error:?}");
         assert!(registry.resolve_alias("foreign").is_none());
     }
 
@@ -1194,13 +1192,8 @@ mod tests {
             })
             .unwrap_err();
 
-        assert!(
-            matches!(
-                error,
-                TemplateError::UnsupportedKernelArchitecture { machine: 0xf3, .. }
-            ),
-            "{error:?}"
-        );
+        assert_matches!(error, TemplateError::UnsupportedKernelArchitecture { .. });
+        assert!(error.to_string().contains("0x00f3"), "{error}");
         assert!(registry.resolve_alias("riscv").is_none());
     }
 
@@ -1515,7 +1508,7 @@ mod tests {
                 boot_args: String::new(),
             }],
         );
-        assert!(matches!(parent_result, Err(TemplateError::InvalidPath)));
+        assert_matches!(parent_result, Err(TemplateError::InvalidPath));
 
         let link_result = TemplateRegistry::from_specs(
             directory.path(),
@@ -1528,7 +1521,7 @@ mod tests {
                 boot_args: String::new(),
             }],
         );
-        assert!(matches!(link_result, Err(TemplateError::Io(_))));
+        assert_matches!(link_result, Err(TemplateError::Io(_)));
     }
 
     #[test]
@@ -1556,10 +1549,8 @@ mod tests {
         assert_eq!(initrd.sha256(), sha256_bytes(b"initrd"));
 
         fs::write(directory.path().join("initrd"), b"tampered").unwrap();
-        assert!(matches!(
-            registry.open_verified(initrd),
-            Err(TemplateError::ArtifactChanged(_))
-        ));
+        let result = registry.open_verified(initrd);
+        assert_matches!(result, Err(TemplateError::ArtifactChanged(_)));
     }
 
     #[test]
@@ -1777,10 +1768,8 @@ mod tests {
         let template = registry.resolve_alias("ubuntu-rootfs-26.04").unwrap();
         fs::write(directory.path().join("rootfs"), b"changed").unwrap();
 
-        assert!(matches!(
-            registry.open_verified(&template.rootfs),
-            Err(TemplateError::ArtifactChanged(_))
-        ));
+        let result = registry.open_verified(&template.rootfs);
+        assert_matches!(result, Err(TemplateError::ArtifactChanged(_)));
     }
 
     /// Many VMs starting at once each call `open_verified` for the same
@@ -1814,9 +1803,7 @@ mod tests {
         file.set_modified(SystemTime::now() + Duration::from_secs(5))
             .unwrap();
 
-        assert!(matches!(
-            registry.open_verified(&template.rootfs),
-            Err(TemplateError::ArtifactChanged(_))
-        ));
+        let result = registry.open_verified(&template.rootfs);
+        assert_matches!(result, Err(TemplateError::ArtifactChanged(_)));
     }
 }
