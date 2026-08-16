@@ -184,13 +184,11 @@ flowchart TB
 ## Linux 호스트에 설치
 
 `/dev/kvm`, 네트워크, `sudo` 권한이 있는 일반 사용자 계정이 필요합니다. 설치기는 **`sudo`를
-앞에 붙이지 않고** 일반 사용자로 실행하세요. 소스 빌드와 사용자 도구는 호출한 사용자의 소유로
-유지하고, 패키지·systemd·호스트 설정처럼 필요한 개별 단계에서만 내부적으로 `sudo`를 사용합니다.
+앞에 붙이지 않고** 일반 사용자로 실행하세요. 릴리스 바이너리를 받고, 패키지·systemd·호스트
+설정처럼 필요한 개별 단계에서만 내부적으로 `sudo`를 사용합니다.
 
 ```sh
-git clone https://github.com/SteelCrab/firecrab.git
-cd firecrab
-./install.sh
+curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
 자주 쓰는 설치기 옵션:
@@ -198,15 +196,16 @@ cd firecrab
 ```sh
 ./install.sh --check                 # 필요 조건과 예정 변경 사항 확인
 ./install.sh --doctor                # KVM, 방화벽, 소켓, 호스트 설정 진단
+./install.sh --bin-dir target/release
 ./install.sh --with-ubuntu-image
 ./install.sh --with-rocky-image      # Rocky Linux 9.8 고정 버전 빌드
 ./install.sh --uninstall         # 기본적으로 데이터 유지
 ./install.sh --uninstall --purge # /var/lib/firecrab도 제거
 ```
 
-기본 설치는 대시보드와 Alpine 게스트 이미지를 빌드합니다. `/dev/kvm`이 없다면 스크립트가
-대신 활성화할 수 없으므로 하드웨어 가상화(또는 중첩 가상화)를 먼저 켜야 합니다. 모든 옵션,
-설치 경로, 업그레이드, 문제 해결은 [설치 가이드](public-docs/installation.md)에 있습니다.
+기본 설치는 musl 호스트 묶음을 받고 Alpine 게스트 이미지를 만듭니다. `/dev/kvm`이 없다면
+스크립트가 대신 활성화할 수 없으므로 하드웨어 가상화(또는 중첩 가상화)를 먼저 켜야 합니다.
+모든 옵션, 설치 경로, 업그레이드, 문제 해결은 [설치 가이드](public-docs/installation.md)에 있습니다.
 
 ## 빠른 시작
 

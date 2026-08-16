@@ -1,7 +1,10 @@
 # Installation
 
 `install.sh` installs firecrab on one Linux host.
-It builds the services and dashboard and installs systemd units.
+It downloads the host bundle for this architecture (`x86_64` or `aarch64`) and libc (`gnu` / glibc, or `musl`).
+glibc hosts (Debian, Fedora, Arch, openSUSE, Ubuntu) get the gnu bundle.
+musl hosts (Alpine) get the musl bundle.
+Pass `--libc gnu` or `--libc musl` to override.
 
 ## Requirements
 
@@ -27,9 +30,18 @@ It checks tools, KVM, systemd, images, and firewall state.
 ## Install
 
 ```sh
+curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
+```
+
+Pin a version by replacing `latest` with the tag, for example `v0.1.0`.
+
+To patch an installed host with binaries you built yourself:
+
+```sh
 git clone https://github.com/SteelCrab/firecrab.git
 cd firecrab
-./install.sh
+cargo build --release -p firecrab-api -p firecrab-net-helper
+./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist
 ```
 
 Open the dashboard after the services start.
@@ -51,6 +63,10 @@ The default install builds the Alpine image.
 | `--with-ubuntu-image` | Also build Ubuntu 26.04 |
 | `--with-rocky-image` | Also build Rocky Linux 9.8 without Docker |
 | `--no-frontend` | Skip the dashboard |
+| `--version VER` | Use that GitHub Release tag |
+| `--libc gnu` or `--libc musl` | Force glibc or musl instead of auto-detect |
+| `--bin-dir DIR` | Install local binaries instead of the release |
+| `--dashboard-dir DIR` | Install this built dashboard |
 | `--uninstall` | Remove services but keep data |
 | `--uninstall --purge` | Also delete VM data |
 
@@ -87,7 +103,8 @@ Create one before creating a VM.
 
 ## Upgrade
 
-Pull new source and run `./install.sh` again.
+Run the installer again.
+It replaces binaries from the latest release, or from `--bin-dir` when you pass one.
 The installer keeps the database, VM disks, and `api.env`.
 
 ## Related

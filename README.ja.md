@@ -89,13 +89,11 @@ API はテンプレートアーティファクトを検証してから使用し�
 
 `/dev/kvm`、ネットワーク接続、`sudo` を実行できる一般ユーザーがいる Linux ホストが必要です。
 インストーラはその一般ユーザーとして実行し、スクリプトの前に **`sudo` を付けないで**ください。
-ソースビルドとユーザー向けツールは起動ユーザーの所有のままにし、パッケージ、systemd、ホスト設定
-など権限が必要な個別操作だけで内部的に `sudo` を使います。
+リリースのバイナリを取得し、パッケージ、systemd、ホスト設定など権限が必要な個別操作だけで
+内部的に `sudo` を使います。
 
 ```sh
-git clone https://github.com/SteelCrab/firecrab.git
-cd firecrab
-./install.sh
+curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
 よく使うインストーラのオプション:
@@ -103,14 +101,15 @@ cd firecrab
 ```sh
 ./install.sh --check                 # 前提条件と予定変更を確認
 ./install.sh --doctor                # KVM、ファイアウォール、socket、ホスト設定を診断
+./install.sh --bin-dir target/release
 ./install.sh --with-ubuntu-image
 ./install.sh --with-rocky-image      # Rocky Linux 9.8 をビルド
 ./install.sh --uninstall         # デフォルトではデータを保持
 ./install.sh --uninstall --purge # /var/lib/firecrab も削除
 ```
 
-標準のインストールはダッシュボードと Alpine ゲストイメージをビルドします。スクリプトは KVM を
-有効化できません。`/dev/kvm` がない場合は、先にハードウェア仮想化（またはネステッド仮想化）を
+標準のインストールは musl ホストバンドルを取得し、Alpine ゲストイメージを作ります。スクリプトは
+KVM を有効化できません。`/dev/kvm` がない場合は、先にハードウェア仮想化（またはネステッド仮想化）を
 有効にしてください。すべてのオプション、配置先、アップグレード、トラブルシューティングは
 [インストールガイド](public-docs/installation.md)にあります。
 

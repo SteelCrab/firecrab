@@ -126,12 +126,14 @@ The guest-boot half needs KVM, Firecracker, and `./scripts/dev-net-helper.sh`; s
 ```sh
 python3 scripts/check-doc-links.py
 python3 scripts/check-changelog.py
-shellcheck install.sh scripts/firecrab-doctor.sh
+shellcheck install.sh scripts/firecrab-doctor.sh scripts/firecrab-release.sh
+bash scripts/test-firecrab-release.sh
+bash scripts/test-install-cli.sh
 ```
 
 `check-doc-links.py` enforces published docs rules: English only, max **170 lines** per `public-docs/**/*.md` file except `api.md`, valid relative links, and no stale `docs/` paths in tracked sources.
 
-`check-changelog.py` requires root [`CHANGELOG.md`](CHANGELOG.md) to document the workspace version with **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**. A `v*` tag uses that section as the GitHub Release body.
+`check-changelog.py` requires root [`CHANGELOG.md`](CHANGELOG.md) to document the workspace version with **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**. A `v*` tag builds the GitHub Release body with `scripts/write-release-notes.py` (install URL, every host binary, contributors, then that changelog section).
 
 ## Issues
 

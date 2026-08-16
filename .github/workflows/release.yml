@@ -38,36 +38,57 @@ jobs:
   build-release:
     name: Build (${{ matrix.target }})
     needs: release-test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        target:
-          # Firecracker itself only ships for x86_64 and aarch64 (see
-          # https://github.com/firecracker-microvm/firecracker/releases) —
-          # firecrab-api/firecrab-net-helper have no reason to target
-          # architectures Firecracker can't run on, so the matrix is
-          # intentionally narrower than a generic Rust release template.
-          - x86_64-unknown-linux-gnu
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-gnu
-          - aarch64-unknown-linux-musl
+        # Native runner per architecture so we do not need `cross`.
+        # musl + crt-static (.cargo/config.toml) is what install.sh
+        # downloads: one binary per arch, every supported distro.
+        include:
+          - target: x86_64-unknown-linux-musl
+            arch: x86_64
+            runner: ubuntu-24.04
+            musl: true
+          - target: x86_64-unknown-linux-gnu
+            arch: x86_64
+            runner: ubuntu-24.04
+            musl: false
+          - target: aarch64-unknown-linux-musl
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            musl: true
+          - target: aarch64-unknown-linux-gnu
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+            musl: false
       fail-fast: false
 
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install pinned toolchain
+        run: rustup show
 
-      - name: Install cross
-        run: cargo install cross --locked
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
 
-      - name: Build firecrab-api and firecrab-net-helper
+      - name: Install musl linker
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: cargo build --release
         run: |
-          cross build --release --target ${{ matrix.target }} \
+          cargo build --release --locked --target ${{ matrix.target }} \
             -p firecrab-api -p firecrab-net-helper
+
+      - name: Verify release binaries
+        run: |
+          libc=gnu
+          if [ "${{ matrix.musl }}" = true ]; then libc=musl; fi
+          ./scripts/verify-release-binary.sh \
+            "target/${{ matrix.target }}/release/firecrab-api" "${{ matrix.arch }}" "$libc"
+          ./scripts/verify-release-binary.sh \
+            "target/${{ matrix.target }}/release/firecrab-net-helper" "${{ matrix.arch }}" "$libc"
 
       - name: Package binaries
         run: |
@@ -81,9 +102,176 @@ jobs:
           name: firecrab-${{ matrix.target }}
           path: firecrab-${{ matrix.target }}.tar.gz
 
+  build-dashboard:
+    name: Build dashboard
+    needs: release-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: firecrab-frontend/package-lock.json
+
+      - name: npm ci && npm run build
+        run: |
+          npm ci
+          npm run build
+        working-directory: firecrab-frontend
+
+      - name: Upload dashboard
+        uses: actions/upload-artifact@v7
+        with:
+          name: firecrab-dashboard
+          path: firecrab-frontend/dist
+
+  package-host:
+    name: Host bundle (${{ matrix.arch }} ${{ matrix.libc }})
+    needs: [build-release, build-dashboard]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            libc: musl
+            target: x86_64-unknown-linux-musl
+          - arch: x86_64
+            libc: gnu
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            libc: musl
+            target: aarch64-unknown-linux-musl
+          - arch: aarch64
+            libc: gnu
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: firecrab-${{ matrix.target }}
+          path: bins-tar
+
+      - name: Download dashboard
+        uses: actions/download-artifact@v8
+        with:
+          name: firecrab-dashboard
+          path: dashboard
+
+      - name: Pack firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz
+        run: |
+          mkdir -p bins
+          tar -xzf bins-tar/firecrab-${{ matrix.target }}.tar.gz -C bins
+          ./scripts/package-host-release.sh \
+            "${{ matrix.arch }}" bins dashboard \
+            "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz"
+
+      - name: Upload host bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}
+          path: firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz
+
+  smoke-host-x86_64-gnu:
+    name: Smoke x86_64 gnu on ${{ matrix.image }}
+    needs: package-host
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - debian:12
+          - fedora:latest
+          - archlinux:latest
+          - opensuse/tumbleweed
+    steps:
+      - name: Unpack tools
+        run: |
+          if command -v apt-get >/dev/null; then
+            apt-get update -qq && apt-get install -y -qq tar gzip
+          elif command -v dnf >/dev/null; then
+            dnf install -y -q tar gzip
+          elif command -v pacman >/dev/null; then
+            pacman -Sy --noconfirm --needed tar gzip
+          elif command -v zypper >/dev/null; then
+            zypper --non-interactive install --no-recommends tar gzip
+          fi
+        shell: sh -e {0}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: firecrab-host-x86_64-gnu
+          path: bundle
+
+      - name: glibc binary execs
+        run: |
+          tar -xzf bundle/firecrab-host-x86_64-gnu.tar.gz
+          set +e
+          ./firecrab-api
+          rc=$?
+          set -e
+          printf 'firecrab-api rc=%s\n' "$rc"
+          test "$rc" -ne 126
+          test "$rc" -ne 127
+
+  smoke-host-aarch64:
+    name: Smoke aarch64 ${{ matrix.libc }}
+    needs: package-host
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        libc: [gnu, musl]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: firecrab-host-aarch64-${{ matrix.libc }}
+          path: bundle
+
+      - name: Binary execs
+        run: |
+          tar -xzf bundle/firecrab-host-aarch64-${{ matrix.libc }}.tar.gz
+          set +e
+          ./firecrab-api
+          rc=$?
+          set -e
+          printf 'firecrab-api rc=%s\n' "$rc"
+          test "$rc" -ne 126
+          test "$rc" -ne 127
+
+  smoke-host-alpine:
+    name: Smoke x86_64 musl on alpine
+    needs: package-host
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: firecrab-host-x86_64-musl
+          path: bundle
+
+      - name: musl binary execs inside Alpine
+        run: |
+          tar -xzf bundle/firecrab-host-x86_64-musl.tar.gz
+          set +e
+          docker run --rm -v "$PWD:/b:ro" alpine:3.21 /b/firecrab-api
+          rc=$?
+          set -e
+          printf 'firecrab-api rc=%s\n' "$rc"
+          test "$rc" -ne 126
+          test "$rc" -ne 127
+
   create-release:
     name: Publish GitHub Release
-    needs: build-release
+    needs:
+      - build-release
+      - package-host
+      - smoke-host-x86_64-gnu
+      - smoke-host-aarch64
+      - smoke-host-alpine
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -96,12 +284,34 @@ jobs:
         with:
           path: artifacts
 
-      - name: Release notes from CHANGELOG
-        run: python3 scripts/check-changelog.py --extract "${GITHUB_REF_NAME}" > release-notes.md
+      - name: Stage release files
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -type f \( -name '*.tar.gz' -o -name 'index.html' \) -print
+          find artifacts -type f -name '*.tar.gz' -exec cp -t dist {} +
+          ./scripts/bake-install-sh.sh "${GITHUB_REF_NAME}" dist/install.sh
+          (cd dist && sha256sum ./* > SHA256SUMS)
+          ls -l dist
+          cat dist/SHA256SUMS
+
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/contributors" --paginate \
+            --jq '.[].login' > /tmp/contributors.txt
+          python3 scripts/write-release-notes.py \
+            --tag "${GITHUB_REF_NAME}" \
+            --repo "${{ github.repository }}" \
+            --contributors-file /tmp/contributors.txt \
+            --out release-notes.md
+          cat release-notes.md
 
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/**/*.tar.gz
+          files: dist/*
           body_path: release-notes.md
           generate_release_notes: false

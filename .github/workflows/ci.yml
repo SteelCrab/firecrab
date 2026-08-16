@@ -83,6 +83,7 @@ jobs:
         # release.yml when a v* tag publishes GitHub Release notes.
         run: |
           python3 -m unittest scripts/test_check_changelog.py
+          python3 -m unittest scripts/test_write_release_notes.py
           python3 scripts/check-changelog.py
 
       - name: Cache cargo
@@ -165,6 +166,9 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck install.sh scripts/firecrab-doctor.sh \
+            scripts/firecrab-release.sh scripts/package-host-release.sh \
+            scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
+            scripts/verify-release-binary.sh \
             scripts/build-m2images.sh scripts/package-m2images.sh \
             scripts/publish-m2images-r2.sh \
             scripts/firecracker-menual/install-alpine-rootfs.sh \
@@ -186,6 +190,8 @@ jobs:
         run: |
           bash -n install.sh
           bash -n scripts/firecrab-doctor.sh
+          bash scripts/test-firecrab-release.sh
+          bash scripts/test-install-cli.sh
           ./install.sh --help
           ./install.sh --check
           test ! -e /var/lib/firecrab || { echo "--check created the data directory"; exit 1; }
@@ -202,14 +208,23 @@ jobs:
           AFTER=$(ls -la /var/lib/firecrab 2>&1 || true)
           test "$BEFORE" = "$AFTER" || { echo "--doctor mutated host state"; exit 1; }
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: firecrab-frontend/package-lock.json
+
+      - name: Build install payload
+        # CI installs from local binaries, not GitHub Releases (PRs have none).
+        run: ./scripts/ci-prepare-install-payload.sh
+
       - name: Install
         # --no-images: building a guest rootfs needs sudo/chroot and ~10 minutes.
         # Everything else — deps, account, directories, units, dashboard — is real.
-        #
-        # PATH is carried into sudo on purpose: rustup lives in the runner
-        # user's home, and without it the installer would decide cargo is
-        # missing and fetch a second toolchain for root, ignoring the cache.
-        run: sudo -E env "PATH=$PATH" ./install.sh --no-images
+        run: |
+          sudo -E env "PATH=$PATH" ./install.sh --no-images \
+            --bin-dir target/release \
+            --dashboard-dir firecrab-frontend/dist
 
       - name: Both daemons are up
         run: |
@@ -303,7 +318,9 @@ jobs:
 
       - name: Re-running is safe
         run: |
-          sudo -E env "PATH=$PATH" ./install.sh --no-images
+          sudo -E env "PATH=$PATH" ./install.sh --no-images \
+            --bin-dir target/release \
+            --dashboard-dir firecrab-frontend/dist
           systemctl is-active --quiet firecrab-api
           # The MicroNetwork created above has to survive a re-install.
           curl -fsS http://127.0.0.1:3000/api/micro-networks | grep -q '"ci"'
@@ -330,8 +347,8 @@ jobs:
     name: Installer deps (${{ matrix.image }})
     # GitHub only hosts Ubuntu for Linux, so other distributions are covered in
     # containers. No systemd there, hence --deps-only: what actually differs per
-    # distribution is package naming and the toolchain, and that is what this
-    # exercises. Full install with units stays on the runner VM above.
+    # distribution is package naming, and that is what this exercises.
+    # Full install with units stays on the runner VM above.
     runs-on: ubuntu-latest
     container: ${{ matrix.image }}
     strategy:
@@ -384,17 +401,15 @@ jobs:
         run: ./install.sh --check
 
       - name: --deps-only installs them for real
-        # Containers run as root, so no sudo. A distro whose node packaging we
-        # cannot name drops the dashboard with a warning instead of failing —
-        # that path is exercised here too (Fedora ships only versioned streams).
+        # Containers run as root, so no sudo. The installer no longer pulls
+        # rustc or Node — those belong to --bin-dir / the release bundle.
         run: ./install.sh --deps-only
 
       - name: Everything the daemons need is present
         run: |
-          for command in ip nft dnsmasq mkfs.ext4 firecracker cc; do
+          for command in ip nft dnsmasq mkfs.ext4 firecracker sha256sum; do
             command -v "$command" >/dev/null || { echo "missing: $command"; exit 1; }
           done
-          "$HOME/.cargo/bin/cargo" --version || cargo --version
 
   # M2 guest boot matrix: every supported guest template × every GitHub-hosted
   # Linux runner that exposes nested KVM (Ubuntu LTS family). Other host distros
@@ -441,11 +456,22 @@ jobs:
           ls -l /dev/kvm
           uname -a
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: firecrab-frontend/package-lock.json
+
+      - name: Build install payload
+        run: ./scripts/ci-prepare-install-payload.sh
+
       - name: Install firecrab with guest image(s)
         # Alpine is the default image build; Ubuntu and Rocky 9.8 are opt-in.
         run: |
           set -euo pipefail
-          INSTALL=(sudo -E env "PATH=$PATH" ./install.sh)
+          INSTALL=(sudo -E env "PATH=$PATH" ./install.sh
+            --bin-dir target/release
+            --dashboard-dir firecrab-frontend/dist)
           case "${{ matrix.template }}" in
             ubuntu-*) INSTALL+=(--with-ubuntu-image) ;;
             rocky-*) INSTALL+=(--with-rocky-image) ;;
@@ -533,10 +559,24 @@ jobs:
           test -e /dev/kvm || { echo "no /dev/kvm on self-hosted ${{ matrix.host }}"; exit 1; }
           sudo chmod 666 /dev/kvm 2>/dev/null || chmod 666 /dev/kvm 2>/dev/null || true
 
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: firecrab-frontend/package-lock.json
+
+      - name: Build install payload
+        run: ./scripts/ci-prepare-install-payload.sh
+
       - name: Install firecrab with guest image(s)
         run: |
           set -euo pipefail
-          INSTALL=(sudo -E env "PATH=$PATH" ./install.sh)
+          INSTALL=(sudo -E env "PATH=$PATH" ./install.sh
+            --bin-dir target/release
+            --dashboard-dir firecrab-frontend/dist)
           case "${{ matrix.template }}" in
             ubuntu-*) INSTALL+=(--with-ubuntu-image) ;;
             rocky-*) INSTALL+=(--with-rocky-image) ;;

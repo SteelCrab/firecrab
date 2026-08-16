@@ -33,11 +33,20 @@ network helper.
   service wrapper on the next start.
 - Host and guest port forwards on the API and dashboard.
 - `install.sh` host installer and `firecrab-doctor` health checks.
+- Host install from a GitHub Release:
+  `curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash`
+- Host bundles for Linux `x86_64` and `aarch64` in both `gnu` (glibc) and
+  `musl`: `firecrab-host-<arch>-<gnu|musl>.tar.gz`. `install.sh` detects
+  the host libc (`--libc gnu|musl` to override).
+- `install.sh --bin-dir` replaces installed binaries from a local directory
+  without compiling on the host.
 - Release-profile and cross-target GitHub Actions builds for
-  `x86_64`/`aarch64` GNU and musl.
+  `x86_64`/`aarch64` GNU and musl, plus `firecrab-host-*.tar.gz` bundles.
 
 ### Changed
 
+- `install.sh` downloads musl release binaries instead of building with
+  rustup and npm on the host.
 - Workspace version is `0.1.0` across the Rust crates.
 - Dashboard package version is `0.1.0`.
 - The pinned Rust toolchain is 1.96.0 (`rust-toolchain.toml`, workspace
