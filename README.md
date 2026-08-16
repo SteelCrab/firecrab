@@ -207,7 +207,7 @@ Useful installer modes:
 ```
 
 The default install downloads the host bundle for this architecture and libc
-(`gnu` / glibc, or `musl`) and builds an Alpine guest image.
+(`gnu` / glibc, or `musl`) and does not install a guest image.
 Pass `--libc gnu` or `--libc musl` to pick one.
 KVM cannot be enabled by the script: if `/dev/kvm` is absent, enable hardware
 virtualization (or nested virtualization) first. For every option, install path,

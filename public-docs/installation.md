@@ -52,7 +52,8 @@ Open the dashboard after the services start.
 http://127.0.0.1:3000/
 ```
 
-The default install installs the Alpine image for this host architecture from MicroRegistry.
+The default install does not install a guest image.
+Install images later from the dashboard Images page.
 
 ## Common options
 
@@ -61,7 +62,8 @@ The default install installs the Alpine image for this host architecture from Mi
 | `--check` | Report readiness without changes |
 | `--doctor` | Run runtime diagnostics |
 | `--no-deps` | Do not install missing tools |
-| `--no-images` | Skip guest image install |
+| `--no-images` | Skip guest images (default) |
+| `--with-images` | Also install Alpine from MicroRegistry |
 | `--with-ubuntu-image` | Also install Ubuntu 26.04 |
 | `--with-rocky-image` | Also install Rocky Linux 9.8 |
 | `--no-frontend` | Skip the dashboard |

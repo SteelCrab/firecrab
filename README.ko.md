@@ -203,7 +203,7 @@ curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/instal
 ./install.sh --uninstall --purge # /var/lib/firecrab도 제거
 ```
 
-기본 설치는 musl 호스트 묶음을 받고 Alpine 게스트 이미지를 만듭니다. `/dev/kvm`이 없다면
+기본 설치는 이 아키텍처와 libc에 맞는 호스트 묶음을 받으며 게스트 이미지는 설치하지 않습니다. `/dev/kvm`이 없다면
 스크립트가 대신 활성화할 수 없으므로 하드웨어 가상화(또는 중첩 가상화)를 먼저 켜야 합니다.
 모든 옵션, 설치 경로, 업그레이드, 문제 해결은 [설치 가이드](public-docs/installation.md)에 있습니다.
 

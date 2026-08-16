@@ -41,7 +41,7 @@ FIRECRAB_RELEASE_TAG="@FIRECRAB_RELEASE_TAG@"
 
 MODE=install
 INSTALL_DEPS=1
-WITH_IMAGES=1
+WITH_IMAGES=0
 WITH_UBUNTU_IMAGE=0
 WITH_ROCKY_IMAGE=0
 WITH_FRONTEND=1
@@ -83,7 +83,8 @@ Usage: ./install.sh [OPTIONS]
   --doctor            run host diagnostics (UFW, socket, KVM, nft, …); no root required
   --deps-only         install the dependencies, then stop (no host changes)
   --no-deps           never install packages, only report gaps
-  --no-images         do not install a guest image
+  --no-images         skip guest images (default)
+  --with-images       also install Alpine from MicroRegistry
   --with-ubuntu-image also install Ubuntu 26.04 (large)
   --with-rocky-image  also install Rocky Linux 9.8 (large)
   --no-frontend       do not install the dashboard
@@ -143,6 +144,7 @@ while [ $# -gt 0 ]; do
         --deps-only) MODE=deps ;;
         --no-deps) INSTALL_DEPS=0 ;;
         --no-images) WITH_IMAGES=0 ;;
+        --with-images) WITH_IMAGES=1 ;;
         --with-ubuntu-image) WITH_UBUNTU_IMAGE=1 ;;
         --with-rocky-image) WITH_ROCKY_IMAGE=1 ;;
         --no-frontend) WITH_FRONTEND=0 ;;
@@ -699,11 +701,15 @@ repo_images_present() {
     compgen -G "$REPO_ROOT/images/rootfs/*.ext4" >/dev/null 2>&1
 }
 
+want_guest_images() {
+    [ "$WITH_IMAGES" -eq 1 ] || [ "$WITH_UBUNTU_IMAGE" -eq 1 ] || [ "$WITH_ROCKY_IMAGE" -eq 1 ]
+}
+
 # Report-only counterpart of `ensure_images`, so --check cannot copy, chown or
 # build anything (it is run unprivileged, and a check that mutates is a trap).
 report_images() {
-    if [ "$WITH_IMAGES" -eq 0 ]; then
-        log "images: skipped (--no-images)"
+    if ! want_guest_images; then
+        log "images: skipped (install from the dashboard)"
         return 0
     fi
     if repo_images_present; then
@@ -723,11 +729,12 @@ report_images() {
     return 1
 }
 
-# Gets a guest image into place: copy from the repo, otherwise build one
-# when the checkout scripts exist. A piped release install pulls Alpine
-# from MicroRegistry after the API starts (see install_release_images).
+# Optional checkout-only image build. Default host install does not do this.
 ensure_images() {
-    [ "$WITH_IMAGES" -eq 1 ] || { log "skipping images (--no-images)"; return 0; }
+    if ! want_guest_images; then
+        log "skipping images"
+        return 0
+    fi
 
     # Prefer images already built in the repo: copying beats rebuilding.
     if repo_images_present; then
@@ -743,23 +750,21 @@ ensure_images() {
         return 0
     fi
 
-    local alpine
-    if ! alpine=$(guest_builder install-alpine-rootfs.sh); then
-        log "no local image builder; will install Alpine from MicroRegistry after the API starts"
-        return 0
-    fi
-
-    # Nothing to copy: build one. Alpine only by default — it is ~10x smaller
-    # than Ubuntu's and uses the same host-native chroot + direct ext4 model.
-    if ! ensure_image_build_deps; then
-        warn "missing host-native image build dependencies; build elsewhere and copy into $DATADIR/images"
-        return 1
-    fi
-
-    step "building the Alpine guest image (this takes a few minutes)"
-    if ! "$alpine"; then
-        warn "image build failed — firecrab will start with no templates; build one later and copy it in"
-        return 1
+    if [ "$WITH_IMAGES" -eq 1 ]; then
+        local alpine
+        if ! alpine=$(guest_builder install-alpine-rootfs.sh); then
+            log "no local Alpine builder; will install alpine-3.24.1 from MicroRegistry after the API starts"
+        else
+            if ! ensure_image_build_deps; then
+                warn "missing host-native image build dependencies; build elsewhere and copy into $DATADIR/images"
+                return 1
+            fi
+            step "building the Alpine guest image (this takes a few minutes)"
+            if ! "$alpine"; then
+                warn "image build failed — firecrab will start with no templates; install one from the dashboard"
+                return 1
+            fi
+        fi
     fi
 
     local ubuntu rocky
@@ -849,12 +854,11 @@ install_catalog_alias() {
     poll_image_job "/api/images/$alias/install"
 }
 
-# After the API is up, install missing catalog images for this host arch.
-# Works on every supported distro without a git checkout or host chroot.
+# After the API is up, install catalog images that were explicitly requested.
 install_release_images() {
-    [ "$WITH_IMAGES" -eq 1 ] || return 0
+    want_guest_images || return 0
     local failed=0
-    if ! image_alias_present alpine; then
+    if [ "$WITH_IMAGES" -eq 1 ] && ! image_alias_present alpine; then
         step "installing alpine-3.24.1 from MicroRegistry ($(uname -m))"
         install_catalog_alias alpine-3.24.1 || failed=1
     fi
@@ -963,7 +967,7 @@ do_deps() {
     detect_pkg || die "no known package manager (apt/dnf/zypper/pacman/apk)"
 
     ensure_runtime_deps || die "missing runtime dependencies (see above)"
-    if [ "$WITH_IMAGES" -eq 1 ]; then
+    if want_guest_images; then
         ensure_image_build_deps || die "missing image build dependencies (see above)"
     fi
     ensure_firecracker  || die "firecracker is required"
@@ -1012,17 +1016,20 @@ do_install() {
     install_binaries
     install_config
     install_units
-    # Deliberately non-fatal: the API starts with no templates. A checkout
-    # can build one; a piped release install pulls Alpine from MicroRegistry.
-    ensure_images || warn "no local guest image yet — will try MicroRegistry after the API starts"
+    # Guest images are not part of the host install. The dashboard Images
+    # page (or --with-images / --with-ubuntu-image / --with-rocky-image)
+    # installs templates afterwards.
+    ensure_images || warn "optional local image build failed"
     start_units || die "installed, but a unit did not come up"
-    install_release_images || warn "no guest image yet — the dashboard works; install Alpine from the Images page"
+    if want_guest_images; then
+        install_release_images || warn "requested catalog image did not install; use the dashboard Images page"
+    fi
     report_ufw
 
     local bind=127.0.0.1:3000
     log "done — dashboard at http://$bind/"
     if ! images_present; then
-        warn "no template image installed; open the dashboard Images page or POST /api/images/alpine-3.24.1/package"
+        step "guest images: install from the dashboard Images page"
     fi
 }
 
