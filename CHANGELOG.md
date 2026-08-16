@@ -64,6 +64,8 @@ network helper.
   no git checkout.
 - Piped `install.sh` asks for the sudo password on `/dev/tty` instead of
   telling the operator to run `sudo -v` first.
+- Piped `install.sh` installs Alpine from MicroRegistry instead of
+  looking for a checkout image builder, on x86_64 and aarch64.
 - DHCP and DNS are allowed on each MicroNetwork bridge and through the
   common guest firewall profiles so guests can obtain a lease.
 - Saving a running VM applies port-forward edits instead of dropping them.

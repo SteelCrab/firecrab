@@ -107,6 +107,22 @@ else
     fail "baked install.sh pins the tag (got '$got')"
 fi
 
+# A published installer has no checkout. --check must not promise a local
+# chroot build of Alpine; it should pull the arch-matching package instead.
+piped_check=$(cd /tmp && bash -s -- --check --no-deps <"$pub/install.sh" 2>&1 || true)
+if printf '%s\n' "$piped_check" | grep -q 'BASH_SOURCE'; then
+    fail "baked --check via stdin must not crash on BASH_SOURCE"
+elif printf '%s\n' "$piped_check" | grep -q 'MicroRegistry'; then
+    pass "baked --check via stdin installs Alpine from MicroRegistry"
+else
+    fail "baked --check via stdin should mention MicroRegistry (got: $(printf '%s' "$piped_check" | tr '\n' ' ' | tail -c 240))"
+fi
+if printf '%s\n' "$piped_check" | grep -q 'firecracker-menual/install-alpine-rootfs.sh'; then
+    fail "baked --check via stdin must not require the checkout Alpine builder"
+else
+    pass "baked --check via stdin does not require the checkout Alpine builder"
+fi
+
 # The advertised one-liner is `curl … | bash`. That leaves BASH_SOURCE unset.
 # A production change that re-reads ${BASH_SOURCE[0]} under `set -u` must fail.
 piped_out=$(mktemp)

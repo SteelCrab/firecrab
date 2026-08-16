@@ -83,9 +83,9 @@ Usage: ./install.sh [OPTIONS]
   --doctor            run host diagnostics (UFW, socket, KVM, nft, …); no root required
   --deps-only         install the dependencies, then stop (no host changes)
   --no-deps           never install packages, only report gaps
-  --no-images         do not build a guest image
-  --with-ubuntu-image also build the Ubuntu image (large, needs root chroot)
-  --with-rocky-image  also build Rocky Linux 9.8 (large, needs root chroot)
+  --no-images         do not install a guest image
+  --with-ubuntu-image also install Ubuntu 26.04 (large)
+  --with-rocky-image  also install Rocky Linux 9.8 (large)
   --no-frontend       do not install the dashboard
   --version VER       GitHub Release tag (default: latest, or the baked-in tag)
   --libc gnu|musl     host libc (default: detect; gnu = glibc)
@@ -258,8 +258,21 @@ pkg_refresh() {
 }
 
 # Installs the named packages with whichever manager was detected.
+# One retry: Fedora metalink/mirror writes fail transiently.
 pkg_install() {
     pkg_refresh
+    local attempt
+    for attempt in 1 2; do
+        if pkg_install_once "$@"; then
+            return 0
+        fi
+        [ "$attempt" -eq 1 ] || return 1
+        warn "package install failed; retrying once"
+        sleep 2
+    done
+}
+
+pkg_install_once() {
     case "$PKG" in
         apt-get) DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq "$@" ;;
         dnf) $SUDO dnf install -y -q "$@" ;;
@@ -339,8 +352,16 @@ ensure_runtime_deps() {
     ensure nft nftables  || failed=1
     ensure dnsmasq dnsmasq || failed=1
     # dhcp_release releases DHCP leases on VM stop; VMs can still run without
-    # it but leases accumulate until they expire (default 1 h).
-    ensure dhcp_release dnsmasq-utils || warn "dhcp_release not found; install dnsmasq-utils to release leases on VM stop"
+    # it but leases accumulate until they expire (default 1 h). Fedora/RHEL
+    # ship dnsmasq without that binary — do not reinstall dnsmasq for it.
+    if ! have dhcp_release; then
+        if [ "$PKG" = dnf ]; then
+            warn "dhcp_release is not available on this distribution; leases expire on their own"
+        else
+            ensure dhcp_release dnsmasq-utils \
+                || warn "dhcp_release not found; install dnsmasq-utils to release leases on VM stop"
+        fi
+    fi
     ensure mkfs.ext4 e2fsprogs || failed=1
     ensure curl curl     || failed=1
     ensure find findutils || failed=1
@@ -656,6 +677,23 @@ images_present() {
     compgen -G "$DATADIR/images/rootfs/*.ext4" >/dev/null 2>&1
 }
 
+image_alias_present() {
+    case "$1" in
+        alpine*) compgen -G "$DATADIR/images/rootfs/alpine*.ext4" >/dev/null 2>&1 ;;
+        ubuntu*) compgen -G "$DATADIR/images/rootfs/ubuntu*.ext4" >/dev/null 2>&1 ;;
+        rocky*)  compgen -G "$DATADIR/images/rootfs/rocky*.ext4" >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Checkout-only builder. A piped release installer has no such script.
+guest_builder() {
+    local name=$1
+    local script=$REPO_ROOT/scripts/firecracker-menual/$name
+    [ -f "$script" ] || return 1
+    printf '%s\n' "$script"
+}
+
 # Whether the repo has images that can be copied instead of built.
 repo_images_present() {
     compgen -G "$REPO_ROOT/images/rootfs/*.ext4" >/dev/null 2>&1
@@ -676,12 +714,18 @@ report_images() {
         log "images: already installed in $DATADIR/images"
         return 0
     fi
-    ensure_image_build_deps || true
-    warn "no guest image (would build Alpine with sudo + chroot + direct ext4)"
+    if guest_builder install-alpine-rootfs.sh >/dev/null; then
+        ensure_image_build_deps || true
+        warn "no guest image (would build Alpine with sudo + chroot + direct ext4)"
+        return 1
+    fi
+    warn "no guest image (would install Alpine from MicroRegistry for $(uname -m))"
     return 1
 }
 
-# Gets a guest image into place: copy from the repo, otherwise build one.
+# Gets a guest image into place: copy from the repo, otherwise build one
+# when the checkout scripts exist. A piped release install pulls Alpine
+# from MicroRegistry after the API starts (see install_release_images).
 ensure_images() {
     [ "$WITH_IMAGES" -eq 1 ] || { log "skipping images (--no-images)"; return 0; }
 
@@ -699,6 +743,12 @@ ensure_images() {
         return 0
     fi
 
+    local alpine
+    if ! alpine=$(guest_builder install-alpine-rootfs.sh); then
+        log "no local image builder; will install Alpine from MicroRegistry after the API starts"
+        return 0
+    fi
+
     # Nothing to copy: build one. Alpine only by default — it is ~10x smaller
     # than Ubuntu's and uses the same host-native chroot + direct ext4 model.
     if ! ensure_image_build_deps; then
@@ -707,26 +757,120 @@ ensure_images() {
     fi
 
     step "building the Alpine guest image (this takes a few minutes)"
-    if ! "$REPO_ROOT/scripts/firecracker-menual/install-alpine-rootfs.sh"; then
+    if ! "$alpine"; then
         warn "image build failed — firecrab will start with no templates; build one later and copy it in"
         return 1
     fi
 
+    local ubuntu rocky
     if [ "$WITH_UBUNTU_IMAGE" -eq 1 ]; then
         step "building the Ubuntu guest image (large)"
-        "$REPO_ROOT/scripts/firecracker-menual/install-ubuntu-roofs.sh" \
-            || warn "Ubuntu image build failed (the Alpine one is still usable)"
+        if ubuntu=$(guest_builder install-ubuntu-roofs.sh); then
+            "$ubuntu" || warn "Ubuntu image build failed (the Alpine one is still usable)"
+        else
+            warn "Ubuntu builder missing; will try MicroRegistry after the API starts"
+        fi
     fi
 
     if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
         step "building the Rocky Linux 9.8 guest image (large)"
-        "$REPO_ROOT/scripts/firecracker-menual/install-rocky-rootfs.sh" \
-            || warn "Rocky Linux 9.8 image build failed (the Alpine one is still usable)"
+        if rocky=$(guest_builder install-rocky-rootfs.sh); then
+            "$rocky" || warn "Rocky Linux 9.8 image build failed (the Alpine one is still usable)"
+        else
+            warn "Rocky builder missing; will try MicroRegistry after the API starts"
+        fi
     fi
 
     $SUDO cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
     $SUDO chown -R "$FIRECRAB_USER:$FIRECRAB_GROUP" "$DATADIR/images"
     log "images ready in $DATADIR/images"
+}
+
+api_url() {
+    printf 'http://%s' "${FIRECRAB_BIND_ADDR:-127.0.0.1:3000}"
+}
+
+json_status() {
+    printf '%s' "$1" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+}
+
+# Poll GET /api/images/{alias}/{package|install} until succeeded or failed.
+poll_image_job() {
+    local path=$1
+    local _i body status
+    for _i in $(seq 1 180); do
+        body=$(curl -fsS "$(api_url)$path") || return 1
+        status=$(json_status "$body")
+        case "$status" in
+            succeeded) return 0 ;;
+            failed)
+                warn "$path failed: $body"
+                return 1
+                ;;
+            *) sleep 2 ;;
+        esac
+    done
+    warn "$path did not finish in time"
+    return 1
+}
+
+# Download + extract one catalog alias via the running API (host arch).
+install_catalog_alias() {
+    local alias=$1
+    local body code
+    body=$(mktemp)
+    code=$(curl -sS -o "$body" -w '%{http_code}' -X POST "$(api_url)/api/images/$alias/package")
+    case "$code" in
+        200|202|409) ;;
+        *)
+            warn "package $alias HTTP $code $(tr '\n' ' ' <"$body")"
+            rm -f "$body"
+            return 1
+            ;;
+    esac
+    if ! poll_image_job "/api/images/$alias/package"; then
+        rm -f "$body"
+        return 1
+    fi
+    code=$(curl -sS -o "$body" -w '%{http_code}' -X POST "$(api_url)/api/images/$alias/install")
+    case "$code" in
+        200|202) ;;
+        409)
+            rm -f "$body"
+            return 0
+            ;;
+        *)
+            warn "install $alias HTTP $code $(tr '\n' ' ' <"$body")"
+            rm -f "$body"
+            return 1
+            ;;
+    esac
+    rm -f "$body"
+    poll_image_job "/api/images/$alias/install"
+}
+
+# After the API is up, install missing catalog images for this host arch.
+# Works on every supported distro without a git checkout or host chroot.
+install_release_images() {
+    [ "$WITH_IMAGES" -eq 1 ] || return 0
+    local failed=0
+    if ! image_alias_present alpine; then
+        step "installing alpine-3.24.1 from MicroRegistry ($(uname -m))"
+        install_catalog_alias alpine-3.24.1 || failed=1
+    fi
+    if [ "$WITH_UBUNTU_IMAGE" -eq 1 ] && ! image_alias_present ubuntu; then
+        step "installing ubuntu-26.04 from MicroRegistry ($(uname -m))"
+        install_catalog_alias ubuntu-26.04 || failed=1
+    fi
+    if [ "$WITH_ROCKY_IMAGE" -eq 1 ] && ! image_alias_present rocky; then
+        step "installing rocky-9.8 from MicroRegistry ($(uname -m))"
+        install_catalog_alias rocky-9.8 || failed=1
+    fi
+    if [ "$failed" -eq 0 ] && images_present; then
+        log "images ready in $DATADIR/images"
+        return 0
+    fi
+    return 1
 }
 
 # --- run -------------------------------------------------------------------
@@ -868,16 +1012,17 @@ do_install() {
     install_binaries
     install_config
     install_units
-    # Deliberately non-fatal: the API now starts with no templates, and an
-    # image can be built or copied in afterwards.
-    ensure_images || warn "no guest image yet — the dashboard works, VM creation needs one"
+    # Deliberately non-fatal: the API starts with no templates. A checkout
+    # can build one; a piped release install pulls Alpine from MicroRegistry.
+    ensure_images || warn "no local guest image yet — will try MicroRegistry after the API starts"
     start_units || die "installed, but a unit did not come up"
+    install_release_images || warn "no guest image yet — the dashboard works; install Alpine from the Images page"
     report_ufw
 
     local bind=127.0.0.1:3000
     log "done — dashboard at http://$bind/"
     if ! images_present; then
-        warn "no template image installed; build one with scripts/firecracker-menual/install-alpine-rootfs.sh and copy it to $DATADIR/images"
+        warn "no template image installed; open the dashboard Images page or POST /api/images/alpine-3.24.1/package"
     fi
 }
 

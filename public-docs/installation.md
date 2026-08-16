@@ -52,7 +52,7 @@ Open the dashboard after the services start.
 http://127.0.0.1:3000/
 ```
 
-The default install builds the Alpine image.
+The default install installs the Alpine image for this host architecture from MicroRegistry.
 
 ## Common options
 
@@ -61,9 +61,9 @@ The default install builds the Alpine image.
 | `--check` | Report readiness without changes |
 | `--doctor` | Run runtime diagnostics |
 | `--no-deps` | Do not install missing tools |
-| `--no-images` | Skip guest image creation |
-| `--with-ubuntu-image` | Also build Ubuntu 26.04 |
-| `--with-rocky-image` | Also build Rocky Linux 9.8 without Docker |
+| `--no-images` | Skip guest image install |
+| `--with-ubuntu-image` | Also install Ubuntu 26.04 |
+| `--with-rocky-image` | Also install Rocky Linux 9.8 |
 | `--no-frontend` | Skip the dashboard |
 | `--version VER` | Use that GitHub Release tag |
 | `--libc gnu` or `--libc musl` | Force glibc or musl instead of auto-detect |
