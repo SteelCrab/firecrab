@@ -125,10 +125,13 @@ The guest-boot half needs KVM, Firecracker, and `./scripts/dev-net-helper.sh`; s
 
 ```sh
 python3 scripts/check-doc-links.py
+python3 scripts/check-changelog.py
 shellcheck install.sh scripts/firecrab-doctor.sh
 ```
 
 `check-doc-links.py` enforces published docs rules: English only, max **170 lines** per `public-docs/**/*.md` file except `api.md`, valid relative links, and no stale `docs/` paths in tracked sources.
+
+`check-changelog.py` requires root [`CHANGELOG.md`](CHANGELOG.md) to document the workspace version with **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**. A `v*` tag uses that section as the GitHub Release body.
 
 ## Issues
 
@@ -173,7 +176,7 @@ One logical change per commit is nice; a tidy PR history is more important than 
 | Job | On every PR | Notes |
 | --- | --- | --- |
 | Rust fmt, clippy, test + coverage | yes | Workspace-wide |
-| rustdoc + `check-doc-links.py` | yes | Doc links and public-docs shape |
+| rustdoc + `check-doc-links.py` + `check-changelog.py` | yes | Doc links, public-docs shape, and changelog sections |
 | Installer shellcheck + install/uninstall smoke | yes | Guest boot skipped (`--no-images`) |
 | Frontend lint + build | yes | Node 22 |
 | Multi-distro installer deps | yes | Debian, Fedora, Arch, openSUSE containers |
