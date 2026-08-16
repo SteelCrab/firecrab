@@ -118,6 +118,16 @@ die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# True when SELinux is loaded, enforcing or not. Permissive counts: the labels
+# still have to be right, or turning enforcement back on breaks the install.
+selinux_active() {
+    have getenforce || return 1
+    case "$(getenforce 2>/dev/null || printf Disabled)" in
+        Enforcing|Permissive) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Privilege escalation: empty when already root, "sudo" otherwise.
 # Individual commands that need root use $SUDO; the whole script runs as the
 # invoking user so that $HOME, SSH keys, and cargo are the user's, not root's.
@@ -244,6 +254,11 @@ pkg_name() {
         *:xz)         echo "xz" ;;
         # Dashboard M2Image install decompresses `{alias}.tar.zst` packages.
         *:zstd)       echo "zstd" ;;
+        # semanage lives in a python tooling package on the SELinux distros.
+        dnf:selinux-tools)     echo "policycoreutils-python-utils" ;;
+        apt-get:selinux-tools) echo "policycoreutils-python-utils" ;;
+        zypper:selinux-tools)  echo "policycoreutils-python-utils" ;;
+        *:selinux-tools)       echo "policycoreutils" ;;
         *) echo "$generic" ;;
     esac
 }
@@ -363,6 +378,14 @@ ensure_runtime_deps() {
             ensure dhcp_release dnsmasq-utils \
                 || warn "dhcp_release not found; install dnsmasq-utils to release leases on VM stop"
         fi
+    fi
+    # semanage records the bin_t file context for the installed binaries. Without
+    # it the services stay in SELinux's init_t domain, where they cannot reach a
+    # registry or exec nft — an install that looks successful and works for
+    # nothing. Fedora does not ship it in a minimal install.
+    if selinux_active && ! have semanage; then
+        ensure semanage selinux-tools \
+            || warn "SELinux is on but semanage is missing; the services will be confined to init_t"
     fi
     ensure mkfs.ext4 e2fsprogs || failed=1
     ensure curl curl     || failed=1
@@ -606,27 +629,26 @@ install_binaries() {
 label_selinux_binaries() {
     local pattern="${LIBDIR}(/.*)?"
 
-    have getenforce || return 0
-    case "$(getenforce 2>/dev/null || printf Disabled)" in
-        Enforcing|Permissive) ;;
-        *) return 0 ;;
-    esac
+    selinux_active || return 0
 
-    if have semanage; then
-        # -a fails when the rule already exists, which a re-run always hits.
-        $SUDO semanage fcontext -a -t bin_t "$pattern" 2>/dev/null \
-            || $SUDO semanage fcontext -m -t bin_t "$pattern" 2>/dev/null \
-            || warn "could not record an SELinux file context for $LIBDIR"
-    else
-        warn "semanage not installed; the bin_t label will not survive a relabel" \
-            "(dnf install policycoreutils-python-utils)"
+    # restorecon alone cannot help: it applies the policy's default context,
+    # which for this path is lib_t. The rule has to be recorded first.
+    if ! have semanage; then
+        warn "semanage missing; cannot label $LIBDIR bin_t — the services will"
+        warn "stay in init_t and every registry read will fail (see --doctor)"
+        return 0
     fi
+
+    # -a fails when the rule already exists, which a re-run always hits.
+    $SUDO semanage fcontext -a -t bin_t "$pattern" 2>/dev/null \
+        || $SUDO semanage fcontext -m -t bin_t "$pattern" 2>/dev/null \
+        || { warn "could not record an SELinux file context for $LIBDIR"; return 0; }
 
     if have restorecon; then
         $SUDO restorecon -R "$LIBDIR" >/dev/null 2>&1 \
             || warn "restorecon failed for $LIBDIR"
-        log "SELinux: $LIBDIR labelled bin_t"
     fi
+    log "SELinux: $LIBDIR labelled bin_t"
 }
 
 # Seeds api.env once so an operator's edits survive a re-run.
