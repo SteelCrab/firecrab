@@ -25,17 +25,13 @@ Check the API directly.
 curl -i http://127.0.0.1:3000/api/vms
 ```
 
-Use `http://localhost:8080` for Vite development.
-`127.0.0.1:8080` is a different browser origin.
-
-Check for old processes on ports `3000` and `8080`.
+Use `http://localhost:8080` for Vite development — `127.0.0.1:8080` is a
+different browser origin. Check for old processes on ports `3000` and `8080`.
 
 ## Data appears empty
 
-Run the development API from the repository root.
-Default data paths use the current working directory.
-
-The host doctor reports multiple database locations.
+Run the development API from the repository root; default data paths use the
+current working directory. The host doctor reports multiple database locations.
 
 ## VM start fails immediately
 
@@ -81,9 +77,7 @@ ip -br link show type bridge
 sudo ss -lunp | grep ':67'
 ```
 
-Read the helper log for dnsmasq errors.
-Read the guest log for `FIRECRAB_NETWORK_FAILED`.
-
+Read the helper log for dnsmasq errors and the guest log for `FIRECRAB_NETWORK_FAILED`.
 The host firewall can block DHCP on `mnb*` bridges. Restart
 `firecrab-net-helper` after an upgrade. An imported image has no `ping`;
 use `/etc/firecrab/busybox ping 1.1.1.1` or restart for PATH tools.
@@ -110,15 +104,31 @@ sudo nft list table inet firecrab
 ## OCI pull fails
 
 `401` is a bad login; `429` is the spent anonymous quota — save a token, see [OCI](oci.md).
-`Permission denied (os error 13)` is this host refusing `connect(2)`, not the network:
-SELinux, the unit sandbox, or a firewall rule on the API account.
-A shell that reaches the registry while the service cannot means exactly that.
+`Permission denied (os error 13)` is this host refusing `connect(2)`, not the network.
+`sudo firecrab-doctor` tests egress as the API account and names the layer; usually SELinux, below.
+
+## SELinux confines the services to `init_t`
+
+`init_t` is systemd's own domain; the services must transition out of it.
+While confined there, `nft list table inet firecrab` is also empty.
 
 ```sh
-sudo firecrab-doctor                                # tests egress as the API account
-sudo ausearch -m avc -ts recent | grep -i firecrab  # SELinux denials
-systemctl show firecrab-api -p IPAddressDeny -p RestrictAddressFamilies
+ps -eZ | grep -E 'firecrab-(api|net-he)'          # want unconfined_service_t
+sudo ausearch -m avc -ts recent | audit2allow -a
 ```
+
+`$PREFIX/lib/firecrab` is labelled `lib_t`, and the transition rule only fires
+for `bin_t`. Installing with `install.sh` relabels it; on an older install:
+
+```sh
+sudo semanage fcontext -a -t bin_t '/usr/local/lib/firecrab(/.*)?'
+sudo restorecon -R /usr/local/lib/firecrab
+sudo systemctl restart firecrab-net-helper firecrab-api
+```
+
+`sudo setenforce 0` confirms the diagnosis in one command; put it back to `1`.
+A unit sandbox (`systemctl show firecrab-api -p IPAddressDeny`) or a firewall
+rule on the API account produces the same `EACCES` when SELinux is not the cause.
 
 ## Image download returns `503`
 
@@ -150,13 +160,8 @@ Check the browser network panel and API log.
 
 ## Delete returns `409`
 
-The resource is active or still in use.
-
-- Stop a VM before deleting it.
-- Remove VMs before deleting their network.
-- Move or remove VMs before deleting their storage pool.
-- Remove VMs before deleting their image.
-
+The resource is active or still in use: stop a VM before deleting it, and remove
+VMs before deleting their network, storage pool, or image.
 Use the response `requestId` to find the server log.
 
 ## Related
