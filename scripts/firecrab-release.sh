@@ -136,6 +136,19 @@ firecrab_install_curl_url() {
     printf 'curl -fsSL %s | bash\n' "$(firecrab_release_asset_url "$version" install.sh)"
 }
 
+# Raw GitHub file for a tag. `latest` maps to main. Used when curl|bash
+# has no checkout to run scripts/install-firecracker.sh from.
+firecrab_repo_raw_url() {
+    local version=$1 path=$2
+    local tag repo
+    repo=$(firecrab_release_repo)
+    tag=$(firecrab_normalize_tag "$version")
+    if [ "$tag" = latest ]; then
+        tag=main
+    fi
+    printf 'https://raw.githubusercontent.com/%s/%s/%s\n' "$repo" "$tag" "$path"
+}
+
 firecrab_payload_mode() {
     if [ -n "${1:-}" ]; then
         printf 'dir\n'

@@ -21,7 +21,18 @@ DATADIR=${DATADIR:-/var/lib/firecrab}
 CONFDIR=${CONFDIR:-/etc/firecrab}
 UNITDIR=${UNITDIR:-/etc/systemd/system}
 
-REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# stdin (`curl | bash`) leaves BASH_SOURCE unset under `set -u`.
+# `bash <(curl …)` sets it to a /dev/fd path that is not the checkout.
+_src=${BASH_SOURCE[0]:-${0:-}}
+case "$_src" in
+    ""|-|bash|sh|main|/dev/fd/*|/proc/self/fd/*)
+        REPO_ROOT=$(pwd)
+        ;;
+    *)
+        REPO_ROOT=$(cd -- "$(dirname -- "$_src")" && pwd)
+        ;;
+esac
+unset _src
 UNITS=(firecrab-net-helper.service firecrab-api.service)
 
 # Placeholder @FIRECRAB_RELEASE_TAG@ is replaced by the tag on a published
@@ -340,18 +351,37 @@ ensure_runtime_deps() {
 }
 
 # Comes from its own upstream script rather than a distro package.
+# A piped release installer has no checkout, so fetch the same script.
 ensure_firecracker() {
     have firecracker && { log "firecracker present"; return 0; }
 
     if [ "$MODE" = check ]; then
-        warn "missing: firecracker (would install via scripts/install-firecracker.sh)"
+        warn "missing: firecracker (would install the upstream Firecracker binary)"
         return 1
     fi
-    [ "$INSTALL_DEPS" -eq 1 ] || { warn "missing: firecracker (--no-deps; run scripts/install-firecracker.sh)"; return 1; }
+    [ "$INSTALL_DEPS" -eq 1 ] || { warn "missing: firecracker (--no-deps; install it or re-run without --no-deps)"; return 1; }
 
     step "installing firecracker"
-    $SUDO "$REPO_ROOT/scripts/install-firecracker.sh" || { warn "firecracker install failed"; return 1; }
-    have firecracker
+    local script fetched=
+    script=$REPO_ROOT/scripts/install-firecracker.sh
+    if [ ! -f "$script" ]; then
+        fetched=$(mktemp)
+        script=$fetched
+        if ! curl --proto '=https' --tlsv1.2 -fsSL \
+            "$(firecrab_repo_raw_url "${RELEASE_VERSION:-latest}" scripts/install-firecracker.sh)" \
+            -o "$fetched"; then
+            rm -f "$fetched"
+            warn "firecracker install failed (could not download the installer)"
+            return 1
+        fi
+    fi
+    if $SUDO bash "$script"; then
+        rm -f "$fetched"
+        have firecracker && return 0
+    fi
+    rm -f "$fetched"
+    warn "firecracker install failed"
+    return 1
 }
 
 # Whether this script is running from a firecrab git checkout.
@@ -785,6 +815,7 @@ do_doctor() {
 # or services. This is the part that differs per distribution, so it is what a
 # container without systemd (and CI's distro matrix) can usefully exercise.
 do_deps() {
+    require_sudo_ticket
     detect_pkg || die "no known package manager (apt/dnf/zypper/pacman/apk)"
 
     ensure_runtime_deps || die "missing runtime dependencies (see above)"
@@ -807,8 +838,21 @@ do_print_release_url() {
     firecrab_release_asset_url "$RELEASE_VERSION" "$tarball"
 }
 
+# `curl | bash` occupies stdin, so sudo cannot read a password from it.
+# Ask once on the real terminal; later $SUDO calls reuse the ticket.
+require_sudo_ticket() {
+    [ -n "$SUDO" ] || return 0
+    sudo -n true >/dev/null 2>&1 && return 0
+    [ -e /dev/tty ] || die "sudo needs a password and this session has no terminal"
+    step "sudo password required"
+    # Redirects attach sudo's prompt to the controlling tty, not stdin.
+    # shellcheck disable=SC2024
+    sudo -v </dev/tty >/dev/tty 2>/dev/tty || die "sudo authentication failed"
+}
+
 # The default path: fill the gaps, fetch binaries, lay out, start.
 do_install() {
+    require_sudo_ticket
     # Checked before anything is installed: refusing after pulling in five
     # packages would be a waste of the operator's time.
     check_systemd || die "this installer manages systemd units"
@@ -839,6 +883,7 @@ do_install() {
 
 # Removes what this script installed; data only with --purge.
 do_uninstall() {
+    require_sudo_ticket
     for unit in "${UNITS[@]}"; do
         $SUDO systemctl disable --now "$unit" 2>/dev/null || true
         $SUDO rm -f "$UNITDIR/$unit"

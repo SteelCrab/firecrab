@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build GitHub Release notes: install URL, every binary, contributors, changelog."""
+"""Build GitHub Release notes: install URL, binaries, changelog, contributor icons."""
 
 from __future__ import annotations
 
@@ -147,17 +147,29 @@ def build_notes(
             f"Checksums: [`SHA256SUMS`]({asset}/SHA256SUMS).",
             f"Standalone installer: [`install.sh`]({pinned_install}).",
             "",
+            "## Changelog",
+            "",
+            changelog_block.rstrip(),
+            "",
             "## Contributors",
             "",
         ]
     )
     people = filter_contributors(contributors)
     if people:
+        lines.append('<p align="left">')
         for name in people:
-            lines.append(f"- {name}")
+            lines.append(
+                f'  <a href="https://github.com/{name}">'
+                f'<img src="https://github.com/{name}.png?size=96" '
+                f'width="48" height="48" alt="{name}"/></a>'
+            )
+        lines.append("</p>")
     else:
-        lines.append("- See the GitHub contributors graph.")
-    lines.extend(["", "## Changelog", "", changelog_block.rstrip(), ""])
+        lines.append(
+            f"See the [GitHub contributors graph](https://github.com/{repo}/graphs/contributors)."
+        )
+    lines.append("")
     return "\n".join(lines)
 
 

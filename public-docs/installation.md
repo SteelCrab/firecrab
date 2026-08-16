@@ -33,6 +33,8 @@ It checks tools, KVM, systemd, images, and firewall state.
 curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
+The installer prompts for your sudo password on the terminal.
+
 Pin a version by replacing `latest` with the tag, for example `v0.1.0`.
 
 To patch an installed host with binaries you built yourself:

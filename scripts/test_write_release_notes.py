@@ -88,6 +88,14 @@ class WriteReleaseNotesTests(unittest.TestCase):
         self.assertIn("## Changelog", body)
         self.assertIn("### Added", body)
         self.assertIn("First public release.", body)
+        self.assertIn('<p align="left">', body)
+        self.assertNotIn('align="center"', body)
+        self.assertIn('src="https://github.com/SteelCrab.png?size=96"', body)
+        self.assertIn('src="https://github.com/kudala-bharani.png?size=96"', body)
+        self.assertIn('href="https://github.com/SteelCrab"', body)
+        self.assertNotIn("- SteelCrab", body)
+        self.assertGreater(body.rfind("## Contributors"), body.rfind("## Changelog"))
+        self.assertTrue(body.rstrip().endswith("</p>"))
 
     def test_skips_bot_contributors(self) -> None:
         names = notes.filter_contributors(["SteelCrab", "dependabot[bot]", "github-actions[bot]"])

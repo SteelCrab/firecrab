@@ -107,6 +107,85 @@ else
     fail "baked install.sh pins the tag (got '$got')"
 fi
 
+# The advertised one-liner is `curl … | bash`. That leaves BASH_SOURCE unset.
+# A production change that re-reads ${BASH_SOURCE[0]} under `set -u` must fail.
+piped_out=$(mktemp)
+piped_err=$(mktemp)
+if (cd /tmp && bash -s -- --print-install-url <"$pub/install.sh" >"$piped_out" 2>"$piped_err"); then
+    got=$(cat "$piped_out")
+    if [ "$got" = "$want" ]; then
+        pass "baked install.sh works when piped to bash (curl | bash)"
+    else
+        fail "baked install.sh piped (got '$got')"
+    fi
+else
+    fail "baked install.sh piped (exit $?, stderr: $(tr '\n' ' ' <"$piped_err"))"
+fi
+
+# `bash <(curl …)` sets BASH_SOURCE to /dev/fd/N — not a checkout.
+if got=$(cd /tmp && bash <(cat "$pub/install.sh") --print-install-url); then
+    if [ "$got" = "$want" ]; then
+        pass "baked install.sh works under process substitution"
+    else
+        fail "baked install.sh process substitution (got '$got')"
+    fi
+else
+    fail "baked install.sh process substitution (exit $?)"
+fi
+
+# The unbaked repo copy still needs scripts/ next to it. The failure must
+# be that message, not an unbound BASH_SOURCE crash.
+if (cd /tmp && bash -s -- --print-install-url <"$ROOT/install.sh" >"$piped_out" 2>"$piped_err"); then
+    fail "repo install.sh piped from /tmp should not succeed"
+elif grep -q 'BASH_SOURCE' "$piped_err"; then
+    fail "repo install.sh piped from /tmp still crashes on BASH_SOURCE"
+elif grep -q 'release helpers missing' "$piped_err"; then
+    pass "repo install.sh piped outside a checkout explains missing helpers"
+else
+    fail "repo install.sh piped from /tmp (stderr: $(tr '\n' ' ' <"$piped_err"))"
+fi
+
+# curl | bash has no stdin tty. The installer must prompt on /dev/tty,
+# not tell the operator to run `sudo -v` themselves.
+if [ "$(id -u)" -ne 0 ] && command -v script >/dev/null 2>&1; then
+    fake=$(mktemp -d)
+    cat >"$fake/sudo" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"${SUDO_LOG:?}"
+if [ "$1" = "-n" ]; then
+    exit 1
+fi
+if [ "$1" = "-v" ]; then
+    if [ -t 0 ]; then
+        printf 'tty\n' >>"$SUDO_LOG"
+        exit 0
+    fi
+    printf 'notty\n' >>"$SUDO_LOG"
+    exit 1
+fi
+exit 0
+EOF
+    chmod +x "$fake/sudo"
+    : >"$fake/log"
+    if SUDO_LOG="$fake/log" PATH="$fake:$PATH" \
+        script -q -e -c "bash -s -- --uninstall <'$pub/install.sh'" /dev/null \
+        >"$piped_out" 2>"$piped_err"; then
+        if grep -q 'Run:  sudo -v' "$piped_out" "$piped_err"; then
+            fail "piped install.sh must not tell the operator to run sudo -v"
+        elif grep -qx tty "$fake/log"; then
+            pass "piped install.sh asks sudo on /dev/tty"
+        else
+            fail "piped install.sh did not prompt sudo on a tty (log: $(tr '\n' ' ' <"$fake/log"))"
+        fi
+    else
+        fail "piped --uninstall via /dev/tty (out: $(tr '\n' ' ' <"$piped_out") err: $(tr '\n' ' ' <"$piped_err"))"
+    fi
+    rm -rf "$fake"
+else
+    pass "piped sudo tty prompt skipped (root or no script(1))"
+fi
+rm -f "$piped_out" "$piped_err"
+
 # --- host tarball layout ----------------------------------------------------
 
 write_elf64() {

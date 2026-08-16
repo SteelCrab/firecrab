@@ -96,6 +96,21 @@ expect_eq \
     "curl -fsSL https://github.com/SteelCrab/firecrab/releases/download/v0.1.0/install.sh | bash" \
     "pinned curl install line"
 
+expect_eq \
+    "$(firecrab_repo_raw_url v0.1.0 scripts/install-firecracker.sh)" \
+    "https://raw.githubusercontent.com/SteelCrab/firecrab/v0.1.0/scripts/install-firecracker.sh" \
+    "raw installer URL for a tag"
+
+expect_eq \
+    "$(firecrab_repo_raw_url latest scripts/install-firecracker.sh)" \
+    "https://raw.githubusercontent.com/SteelCrab/firecrab/main/scripts/install-firecracker.sh" \
+    "raw installer URL latest maps to main"
+
+expect_eq \
+    "$(FIRECRAB_RELEASE_REPO=example/fork firecrab_repo_raw_url v0.1.0 scripts/install-firecracker.sh)" \
+    "https://raw.githubusercontent.com/example/fork/v0.1.0/scripts/install-firecracker.sh" \
+    "raw installer URL respects FIRECRAB_RELEASE_REPO"
+
 # --- payload mode -----------------------------------------------------------
 
 expect_eq "$(firecrab_payload_mode "")" release "empty bin-dir is release"

@@ -59,6 +59,11 @@ network helper.
 
 ### Fixed
 
+- Piped `install.sh` (`curl | bash`) no longer crashes on unset
+  `BASH_SOURCE`, and downloads the Firecracker installer when there is
+  no git checkout.
+- Piped `install.sh` asks for the sudo password on `/dev/tty` instead of
+  telling the operator to run `sudo -v` first.
 - DHCP and DNS are allowed on each MicroNetwork bridge and through the
   common guest firewall profiles so guests can obtain a lease.
 - Saving a running VM applies port-forward edits instead of dropping them.
