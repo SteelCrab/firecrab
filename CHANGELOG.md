@@ -5,6 +5,53 @@ All notable changes to firecrab are documented in this file.
 The format uses the sections **Added**, **Changed**, **Deprecated**, **Fixed**,
 and **Improved**. Version headings match the Cargo workspace version.
 
+## [0.1.1] - 2026-08-17
+
+Makes a single `./install.sh` leave a working host on SELinux distributions,
+and unblocks every image download.
+
+### Added
+
+- `firecrab-doctor` fails when a firecrab service is confined to SELinux's
+  `init_t` domain, and prints the relabel command for this host.
+- `firecrab-doctor` tests registry egress as the API service account, so a
+  connection the operator's own shell can make is never mistaken for one the
+  service can.
+- `semanage` is installed as a dependency on SELinux hosts, where the file
+  context the installer records cannot be applied without it.
+
+### Changed
+
+- `install.sh` labels the installed binaries `bin_t` and relabels
+  `$PREFIX/lib/firecrab`; uninstall removes the file-context rule again.
+- A package download resolves its object key from the published catalog and
+  falls back to the compiled manifest, instead of trusting the compiled key
+  alone.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- Image downloads no longer answer `404`: the compiled object keys had drifted
+  from the published layout, which also blocked OCI import, since pairing needs
+  an installed catalog kernel.
+- Both services stay out of `init_t`, where an outbound connect is denied and
+  the network helper cannot exec `nft` — every registry read failed with
+  `Permission denied (os error 13)` while a shell reached the same registry.
+- `--doctor` no longer aborts with an internal error on a normal install: a
+  data directory private to the service account is reported, not entered.
+- A registry connect refused by local policy says so, and names SELinux, the
+  unit sandbox, and firewall rules, rather than only "error sending request".
+
+### Improved
+
+- Troubleshooting documents the SELinux failure end to end: `ps -eZ`,
+  `audit2allow`, the relabel, and `setenforce 0` as a one-command confirmation.
+- Transport errors carry their whole source chain, so DNS, TLS, and policy
+  failures are distinguishable in one line.
+
 ## [0.1.0] - 2026-08-16
 
 First public release of firecrab: a single-host Firecracker microVM manager
