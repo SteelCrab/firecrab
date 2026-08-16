@@ -33,7 +33,7 @@ jobs:
             cargo-${{ runner.os }}-
 
       - name: Install pinned toolchain
-        # rust-toolchain.toml pins channel 1.94.1 + clippy/rustfmt/llvm-tools
+        # rust-toolchain.toml pins channel 1.96.0 + clippy/rustfmt/llvm-tools
         run: rustup show
 
       - name: Install dnsmasq
