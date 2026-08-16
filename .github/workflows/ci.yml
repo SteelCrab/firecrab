@@ -78,6 +78,13 @@ jobs:
         # pipeline notices when a file moves out from under them.
         run: python3 scripts/check-doc-links.py
 
+      - name: Changelog
+        # First public release notes and the section contract used by
+        # release.yml when a v* tag publishes GitHub Release notes.
+        run: |
+          python3 -m unittest scripts/test_check_changelog.py
+          python3 scripts/check-changelog.py
+
       - name: Cache cargo
         uses: actions/cache@v6
         with:

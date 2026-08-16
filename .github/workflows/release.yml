@@ -89,13 +89,19 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
           path: artifacts
 
+      - name: Release notes from CHANGELOG
+        run: python3 scripts/check-changelog.py --extract "${GITHUB_REF_NAME}" > release-notes.md
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
           files: artifacts/**/*.tar.gz
-          generate_release_notes: true
+          body_path: release-notes.md
+          generate_release_notes: false
