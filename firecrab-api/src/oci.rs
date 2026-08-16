@@ -871,6 +871,30 @@ pub enum ResolveError {
         /// Catalog-relative kernel path that was inspected.
         path: PathBuf,
     },
+    /// No source could supply the kernel an imported tree boots under.
+    #[error("no OCI kernel is available for {architecture}: {reason}")]
+    KernelUnavailable {
+        /// Architecture a later TemplateSpec would have to boot.
+        architecture: Architecture,
+        /// What every configured source had to say.
+        reason: String,
+    },
+    /// The published kernel package could not be downloaded.
+    #[error("OCI kernel download from {url} failed: {message}")]
+    KernelDownloadFailed {
+        /// Object URL that was requested.
+        url: String,
+        /// Transport or filesystem diagnostic.
+        message: String,
+    },
+    /// The verified package does not carry the kernel it is pinned for.
+    #[error("OCI kernel package {package} has no member {member}")]
+    KernelPackageMemberMissing {
+        /// Registry object key of the package.
+        package: String,
+        /// Archive member the pin named.
+        member: String,
+    },
     /// A filesystem operation failed while inspecting the paired kernel.
     #[error("OCI kernel pairing {operation} failed at {path}: {source}")]
     KernelIo {
@@ -2065,6 +2089,11 @@ mod boot;
 #[cfg(test)]
 mod boot_tests;
 
+mod kernel;
+
+#[cfg(test)]
+mod kernel_tests;
+
 mod name;
 
 #[cfg(test)]
@@ -3131,15 +3160,17 @@ pub async fn write_provisioned_ext4(
 /// Pairs a packed ext4 with this host's architecture-matched kernel and
 /// boot args.
 ///
-/// `TemplateSpec` requires both; an OCI image supplies neither. The kernel
-/// is the catalog artifact for this architecture that needs no initrd —
-/// currently Ubuntu — and must already be installed under `image_root`.
-/// The ext4 is left in place. This stage does not register a template.
-pub fn pair_ext4_with_host_kernel(
+/// `TemplateSpec` requires both; an OCI image supplies neither. The kernel is
+/// the digest-pinned artifact Firecrab publishes for this architecture,
+/// fetched once and cached under `image_root`; a host that cannot reach the
+/// registry falls back to an installed catalog kernel. The ext4 is left in
+/// place. This stage does not register a template.
+pub async fn pair_ext4_with_host_kernel(
     image: OciExt4Image,
     image_root: &Path,
 ) -> Result<OciBootableImage, ResolveError> {
-    boot::pair_ext4_with_host_kernel(image, image_root)
+    let pair = boot::host_kernel_pair(image_root).await?;
+    boot::pair_ext4_with_kernel(image, image_root, &pair)
 }
 
 /// Derives a unique alias and version from the reference and attaches them
@@ -3313,7 +3344,7 @@ async fn import_oci_image_in_scratch(
     let ext4 = write_provisioned_ext4(&provisioned, &scratch.join("rootfs.ext4")).await?;
 
     tracker.append_log(alias, "pairing host kernel");
-    let bootable = pair_ext4_with_host_kernel(ext4, image_root)?;
+    let bootable = pair_ext4_with_host_kernel(ext4, image_root).await?;
 
     tracker.append_log(alias, "naming and registering template");
     let named = name_oci_image(bootable, reference, templates)?;
