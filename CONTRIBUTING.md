@@ -47,7 +47,7 @@ Keep host privileges small: the API stays unprivileged; only `firecrab-net-helpe
 ## Prerequisites
 
 - **Linux** with `/dev/kvm` (needed to boot guests; unit tests mostly do not need it)
-- **Rust** matching [`rust-toolchain.toml`](rust-toolchain.toml) (currently 1.94.1 with `clippy`, `rustfmt`, `llvm-tools`)
+- **Rust** matching [`rust-toolchain.toml`](rust-toolchain.toml) (currently 1.96.0 with `clippy`, `rustfmt`, `llvm-tools`)
 - **Node.js 22+** and npm (dashboard)
 - Common host tools for full local runs: `ip`, `nft`, `dnsmasq`, `mkfs.ext4`, Firecracker (or use `./install.sh`)
 
