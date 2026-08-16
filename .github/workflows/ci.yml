@@ -169,6 +169,7 @@ jobs:
             scripts/firecrab-release.sh scripts/package-host-release.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/verify-release-binary.sh \
+            scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \
             scripts/build-m2images.sh scripts/package-m2images.sh \
             scripts/publish-m2images-r2.sh \
             scripts/firecracker-menual/install-alpine-rootfs.sh \
@@ -192,6 +193,7 @@ jobs:
           bash -n scripts/firecrab-doctor.sh
           bash scripts/test-firecrab-release.sh
           bash scripts/test-install-cli.sh
+          bash scripts/test-smoke-release-exec.sh
           ./install.sh --help
           ./install.sh --check
           test ! -e /var/lib/firecrab || { echo "--check created the data directory"; exit 1; }

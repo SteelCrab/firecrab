@@ -179,6 +179,7 @@ jobs:
     name: Smoke x86_64 gnu on ${{ matrix.image }}
     needs: package-host
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     container: ${{ matrix.image }}
     strategy:
       fail-fast: false
@@ -190,17 +191,22 @@ jobs:
           - opensuse/tumbleweed
     steps:
       - name: Unpack tools
+        # git: actions/checkout in the container. timeout(1): smoke-release-exec.sh.
         run: |
           if command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq tar gzip
+            apt-get update -qq && apt-get install -y -qq tar gzip git ca-certificates coreutils
           elif command -v dnf >/dev/null; then
-            dnf install -y -q tar gzip
+            dnf install -y -q tar gzip git ca-certificates
           elif command -v pacman >/dev/null; then
-            pacman -Sy --noconfirm --needed tar gzip
+            pacman -Sy --noconfirm --needed tar gzip git ca-certificates
           elif command -v zypper >/dev/null; then
-            zypper --non-interactive install --no-recommends tar gzip
+            zypper --non-interactive install --no-recommends tar gzip git ca-certificates
           fi
         shell: sh -e {0}
+
+      - uses: actions/checkout@v7
+        with:
+          path: src
 
       - uses: actions/download-artifact@v8
         with:
@@ -208,25 +214,27 @@ jobs:
           path: bundle
 
       - name: glibc binary execs
+        # Do not wait for firecrab-api to exit — it is a server. The v0.1.0
+        # retag sat here for 6h on fedora/arch/tumbleweed and never published.
         run: |
-          tar -xzf bundle/firecrab-host-x86_64-gnu.tar.gz
-          set +e
-          ./firecrab-api
-          rc=$?
-          set -e
-          printf 'firecrab-api rc=%s\n' "$rc"
-          test "$rc" -ne 126
-          test "$rc" -ne 127
+          mkdir -p unpacked
+          tar -xzf bundle/firecrab-host-x86_64-gnu.tar.gz -C unpacked
+          src/scripts/smoke-release-exec.sh -- unpacked/firecrab-api
 
   smoke-host-aarch64:
     name: Smoke aarch64 ${{ matrix.libc }}
     needs: package-host
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         libc: [gnu, musl]
     steps:
+      - uses: actions/checkout@v7
+        with:
+          path: src
+
       - uses: actions/download-artifact@v8
         with:
           name: firecrab-host-aarch64-${{ matrix.libc }}
@@ -234,20 +242,20 @@ jobs:
 
       - name: Binary execs
         run: |
-          tar -xzf bundle/firecrab-host-aarch64-${{ matrix.libc }}.tar.gz
-          set +e
-          ./firecrab-api
-          rc=$?
-          set -e
-          printf 'firecrab-api rc=%s\n' "$rc"
-          test "$rc" -ne 126
-          test "$rc" -ne 127
+          mkdir -p unpacked
+          tar -xzf bundle/firecrab-host-aarch64-${{ matrix.libc }}.tar.gz -C unpacked
+          src/scripts/smoke-release-exec.sh -- unpacked/firecrab-api
 
   smoke-host-alpine:
     name: Smoke x86_64 musl on alpine
     needs: package-host
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v7
+        with:
+          path: src
+
       - uses: actions/download-artifact@v8
         with:
           name: firecrab-host-x86_64-musl
@@ -255,14 +263,10 @@ jobs:
 
       - name: musl binary execs inside Alpine
         run: |
-          tar -xzf bundle/firecrab-host-x86_64-musl.tar.gz
-          set +e
-          docker run --rm -v "$PWD:/b:ro" alpine:3.21 /b/firecrab-api
-          rc=$?
-          set -e
-          printf 'firecrab-api rc=%s\n' "$rc"
-          test "$rc" -ne 126
-          test "$rc" -ne 127
+          mkdir -p unpacked
+          tar -xzf bundle/firecrab-host-x86_64-musl.tar.gz -C unpacked
+          src/scripts/smoke-release-exec.sh -- \
+            docker run --rm -v "$PWD/unpacked:/b:ro" alpine:3.21 /b/firecrab-api
 
   create-release:
     name: Publish GitHub Release
