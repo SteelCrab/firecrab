@@ -254,6 +254,26 @@ else
 fi
 rm -rf "$pub" "$fake" "$wrong"
 
+# An installed host keeps DATADIR 0750 root:firecrab, so an operator running
+# doctor as themselves cannot enter it. That is the normal case, and doctor has
+# to degrade to SKIP rather than abort with "internal error".
+# Root can always traverse, so the case only exists for a non-root run.
+if [ "$(id -u)" -ne 0 ]; then
+    blocked=$(mktemp -d)
+    mkdir -p "$blocked/data" "$blocked/images"
+    chmod 000 "$blocked"
+    # FIRECRAB_IMAGE_BASE_URL=none keeps the run offline and quick.
+    doctor_out=$(DATADIR="$blocked" FIRECRAB_IMAGE_BASE_URL=none \
+        bash "$ROOT/scripts/firecrab-doctor.sh" 2>&1 || true)
+    chmod 755 "$blocked"
+    rm -rf "$blocked"
+    if printf '%s\n' "$doctor_out" | grep -q 'internal error'; then
+        fail "doctor survives a DATADIR it cannot enter"
+    else
+        pass "doctor survives a DATADIR it cannot enter"
+    fi
+fi
+
 if [ "$failed" -ne 0 ]; then
     printf 'FAILED\n' >&2
     exit 1

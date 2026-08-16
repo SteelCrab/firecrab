@@ -76,6 +76,19 @@ done
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Absolute path when the directory can be entered, the given path otherwise.
+#
+# A directory can exist and still refuse `cd`: the installer makes
+# /var/lib/firecrab 0750 root:firecrab on purpose, so an unprivileged doctor
+# run cannot traverse it. That is a healthy install, not a fault — but a bare
+# `$(cd -- "$dir" && pwd)` fails there, and under `set -Eeuo pipefail` it takes
+# the whole run down with an "internal error" that looks like a doctor bug.
+abs_dir() {
+    local path=$1 resolved
+    resolved=$(cd -- "$path" 2>/dev/null && pwd) || resolved=""
+    printf '%s\n' "${resolved:-$path}"
+}
+
 pass() {
     OK=$((OK + 1))
 }
@@ -530,13 +543,13 @@ find_databases() {
     candidates+=("$DATADIR/firecrab.db")
     if [ -n "${FIRECRAB_IMAGE_ROOT:-}" ]; then
         # Image root is usually $DATADIR/images; DB lives next to images' parent.
-        candidates+=("$(cd -- "$(dirname -- "$FIRECRAB_IMAGE_ROOT")" 2>/dev/null && pwd)/data/firecrab.db")
+        candidates+=("$(abs_dir "$(dirname -- "$FIRECRAB_IMAGE_ROOT")")/data/firecrab.db")
     fi
 
     local seen="" path
     for c in "${candidates[@]}"; do
         [ -f "$c" ] || continue
-        path=$(cd -- "$(dirname -- "$c")" && pwd)/$(basename -- "$c")
+        path=$(abs_dir "$(dirname -- "$c")")/$(basename -- "$c")
         case " $seen " in
             *" $path "*) continue ;;
         esac
@@ -630,7 +643,7 @@ resolve_image_roots() {
     local seen="" path
     for r in "${roots[@]}"; do
         [ -d "$r" ] || continue
-        path=$(cd -- "$r" && pwd)
+        path=$(abs_dir "$r")
         case " $seen " in
             *" $path "*) continue ;;
         esac
@@ -802,7 +815,7 @@ resolve_vms_roots() {
         # once something has been created there.
         for path in "$entry/vms" "$entry"; do
             [ -d "$path" ] || continue
-            path=$(cd -- "$path" && pwd)
+            path=$(abs_dir "$path")
             case " $seen " in
                 *" $path "*) continue ;;
             esac
