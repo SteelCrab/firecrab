@@ -639,9 +639,11 @@ label_selinux_binaries() {
         return 0
     fi
 
-    # -a fails when the rule already exists, which a re-run always hits.
-    $SUDO semanage fcontext -a -t bin_t "$pattern" 2>/dev/null \
-        || $SUDO semanage fcontext -m -t bin_t "$pattern" 2>/dev/null \
+    # -a fails when the rule already exists, which a re-run always hits. Both
+    # spellings narrate on stdout ("already defined, modifying instead"); the
+    # log line below is the one an operator needs.
+    $SUDO semanage fcontext -a -t bin_t "$pattern" >/dev/null 2>&1 \
+        || $SUDO semanage fcontext -m -t bin_t "$pattern" >/dev/null 2>&1 \
         || { warn "could not record an SELinux file context for $LIBDIR"; return 0; }
 
     if have restorecon; then
