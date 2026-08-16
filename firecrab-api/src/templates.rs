@@ -1192,11 +1192,8 @@ mod tests {
             })
             .unwrap_err();
 
-        assert_matches!(
-            error,
-            TemplateError::UnsupportedKernelArchitecture { machine: 0xf3, .. },
-            "{error:?}"
-        );
+        assert_matches!(error, TemplateError::UnsupportedKernelArchitecture { .. });
+        assert!(error.to_string().contains("0x00f3"), "{error}");
         assert!(registry.resolve_alias("riscv").is_none());
     }
 
@@ -1552,10 +1549,8 @@ mod tests {
         assert_eq!(initrd.sha256(), sha256_bytes(b"initrd"));
 
         fs::write(directory.path().join("initrd"), b"tampered").unwrap();
-        assert_matches!(
-            registry.open_verified(initrd),
-            Err(TemplateError::ArtifactChanged(_))
-        );
+        let result = registry.open_verified(initrd);
+        assert_matches!(result, Err(TemplateError::ArtifactChanged(_)));
     }
 
     #[test]
@@ -1773,10 +1768,8 @@ mod tests {
         let template = registry.resolve_alias("ubuntu-rootfs-26.04").unwrap();
         fs::write(directory.path().join("rootfs"), b"changed").unwrap();
 
-        assert_matches!(
-            registry.open_verified(&template.rootfs),
-            Err(TemplateError::ArtifactChanged(_))
-        );
+        let result = registry.open_verified(&template.rootfs);
+        assert_matches!(result, Err(TemplateError::ArtifactChanged(_)));
     }
 
     /// Many VMs starting at once each call `open_verified` for the same
@@ -1810,9 +1803,7 @@ mod tests {
         file.set_modified(SystemTime::now() + Duration::from_secs(5))
             .unwrap();
 
-        assert_matches!(
-            registry.open_verified(&template.rootfs),
-            Err(TemplateError::ArtifactChanged(_))
-        );
+        let result = registry.open_verified(&template.rootfs);
+        assert_matches!(result, Err(TemplateError::ArtifactChanged(_)));
     }
 }

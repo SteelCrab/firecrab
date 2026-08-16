@@ -1737,10 +1737,8 @@ mod tests {
 
         assert_matches!(store.delete(first.id),
             Err(PersistenceError::MissingVm { id }) if id == first.id);
-        assert_matches!(
-            store.update(&record(Uuid::new_v4(), "ghost")),
-            Err(PersistenceError::MissingVm { .. })
-        );
+        let result = store.update(&record(Uuid::new_v4(), "ghost"));
+        assert_matches!(result, Err(PersistenceError::MissingVm { .. }));
     }
 
     #[test]
@@ -1765,10 +1763,8 @@ mod tests {
         store.insert(&vm).unwrap();
         store.set_vm_shells(vm.id, &pins).unwrap();
         assert_eq!(store.list_vm_shell_scripts(vm.id).unwrap().len(), 1);
-        assert_matches!(
-            store.delete_shell(shell_id),
-            Err(PersistenceError::ShellInUse { count: 1, .. })
-        );
+        let result = store.delete_shell(shell_id);
+        assert_matches!(result, Err(PersistenceError::ShellInUse { count: 1, .. }));
 
         store.clear_vm_shells(vm.id).unwrap();
         store.delete_shell(shell_id).unwrap();
@@ -2278,11 +2274,9 @@ mod tests {
                     params![value, id],
                 )
                 .unwrap();
-            assert_matches!(
-                store.load_all(),
-                Err(PersistenceError::CorruptRecord { .. }),
-                "{column} = {value:?} should be reported as corrupt"
-            );
+            let loaded = store.load_all();
+            assert!(loaded.is_err(), "{column}={value:?} should be corrupt");
+            assert_matches!(loaded, Err(PersistenceError::CorruptRecord { .. }));
         }
     }
 
@@ -2298,10 +2292,8 @@ mod tests {
             )
             .unwrap();
 
-        assert_matches!(
-            store.list_micro_storages(),
-            Err(PersistenceError::CorruptRecord { .. })
-        );
+        let result = store.list_micro_storages();
+        assert_matches!(result, Err(PersistenceError::CorruptRecord { .. }));
     }
 
     /// Only a UNIQUE violation means "already registered" — every other
@@ -2316,10 +2308,8 @@ mod tests {
             .execute("DROP TABLE micro_storages", [])
             .unwrap();
 
-        assert_matches!(
-            store.insert_micro_storage(Uuid::new_v4(), "p", "/mnt/p"),
-            Err(PersistenceError::Database(_))
-        );
+        let result = store.insert_micro_storage(Uuid::new_v4(), "p", "/mnt/p");
+        assert_matches!(result, Err(PersistenceError::Database(_)));
     }
 
     #[test]
@@ -2327,10 +2317,8 @@ mod tests {
         let directory = tempdir().unwrap();
         fs::write(directory.path().join("vms.json"), b"{invalid").unwrap();
 
-        assert_matches!(
-            Store::open(&directory.path().join("firecrab.db")),
-            Err(PersistenceError::LegacyDeserialize { .. })
-        );
+        let result = Store::open(&directory.path().join("firecrab.db"));
+        assert_matches!(result, Err(PersistenceError::LegacyDeserialize { .. }));
     }
 
     #[test]

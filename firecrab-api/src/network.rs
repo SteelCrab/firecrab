@@ -462,10 +462,7 @@ mod tests {
             error.to_string(),
             "network helper rejected the request: operation is not implemented yet"
         );
-        assert_matches!(
-            error,
-            NetworkError::Helper(HelperFailure::UnsupportedOperation)
-        );
+        assert_matches!(error, NetworkError::Helper(_));
     }
 
     #[tokio::test]

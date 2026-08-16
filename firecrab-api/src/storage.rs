@@ -511,10 +511,8 @@ mod tests {
     #[test]
     fn ensure_capacity_rejects_unknown_root() {
         let reg = StorageRegistry::default_single();
-        assert_matches!(
-            reg.ensure_capacity("nope", 1),
-            Err(StorageError::UnknownRoot(_))
-        );
+        let result = reg.ensure_capacity("nope", 1);
+        assert_matches!(result, Err(StorageError::UnknownRoot(_)));
     }
 
     #[test]

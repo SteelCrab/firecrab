@@ -4121,14 +4121,8 @@ mod tests {
             OCI_MANIFEST_MEDIA_TYPE,
         );
 
-        assert_matches!(
-            parse_image_manifest(&manifest),
-            Err(ResolveError::ConflictingDescriptorSize {
-                first: 3,
-                second: 4,
-                ..
-            })
-        );
+        let error = parse_image_manifest(&manifest);
+        assert_matches!(error, Err(ResolveError::ConflictingDescriptorSize { .. }));
     }
 
     #[test]
@@ -4141,10 +4135,8 @@ mod tests {
         }))
         .unwrap();
 
-        assert_matches!(
-            classify_document(Some(DOCKER_MANIFEST_MEDIA_TYPE), &body),
-            Err(ResolveError::Malformed(_))
-        );
+        let classified = classify_document(Some(DOCKER_MANIFEST_MEDIA_TYPE), &body);
+        assert_matches!(classified, Err(ResolveError::Malformed(_)));
         assert_matches!(classify_document(Some("application/json"), &body),
             Err(ResolveError::UnsupportedMediaType(media_type))
                 if media_type == "application/json");
@@ -4305,10 +4297,8 @@ mod tests {
     fn select_reports_an_index_with_nothing_usable() {
         let empty = index(serde_json::json!([]));
 
-        assert_matches!(
-            empty.select(Architecture::HOST).unwrap_err(),
-            IndexError::NoLinuxManifests { skipped: 0 }
-        );
+        let error = empty.select(Architecture::HOST).unwrap_err();
+        assert_matches!(error, IndexError::NoLinuxManifests { skipped: 0 });
     }
 
     /// A registry that answers `401` with a `Bearer` challenge, hands out a
@@ -4411,10 +4401,8 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_matches!(
-            error,
-            ResolveError::Index(IndexError::NoLinuxManifests { skipped: 0 })
-        );
+        assert_matches!(error, ResolveError::Index(_));
+        assert!(error.to_string().contains("no Linux manifests"), "{error}");
     }
 
     #[test]

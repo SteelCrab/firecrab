@@ -442,10 +442,8 @@ mod tests {
 
     #[test]
     fn rejects_insecure_non_loopback_bind() {
-        assert_matches!(
-            HttpConfig::from_values("0.0.0.0:3000", "", false, false),
-            Err(ConfigError::InsecureNonLoopbackBind)
-        );
+        let result = HttpConfig::from_values("0.0.0.0:3000", "", false, false);
+        assert_matches!(result, Err(ConfigError::InsecureNonLoopbackBind));
     }
 
     #[test]

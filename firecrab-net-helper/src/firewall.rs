@@ -949,19 +949,15 @@ mod tests {
             "fct0",
             "mnb0",
         ] {
-            assert_matches!(
-                render_apply_ruleset(bad, &[]),
-                Err(FirewallError::InvalidUplinkName(_))
-            );
+            let result = render_apply_ruleset(bad, &[]);
+            assert_matches!(result, Err(FirewallError::InvalidUplinkName(_)));
         }
         let bad_spec = MicroNetworkSpec {
             uplink: Some("eth0;id".to_owned()),
             ..sample_network(0x1234, "172.31.0.1", 24)
         };
-        assert_matches!(
-            render_apply_ruleset("eth0", &[bad_spec]),
-            Err(FirewallError::InvalidUplinkName(_))
-        );
+        let result = render_apply_ruleset("eth0", &[bad_spec]);
+        assert_matches!(result, Err(FirewallError::InvalidUplinkName(_)));
     }
 
     #[test]

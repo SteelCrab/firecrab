@@ -627,10 +627,9 @@ mod tests {
 
     #[test]
     fn non_numeric_allowed_uid_is_rejected() {
-        assert_matches!(
-            HelperConfig::from_values("/tmp/x.sock", Some("wheel"), bridge::DEFAULT_BRIDGE_MTU),
-            Err(StartupError::InvalidAllowedUid(_))
-        );
+        let result =
+            HelperConfig::from_values("/tmp/x.sock", Some("wheel"), bridge::DEFAULT_BRIDGE_MTU);
+        assert_matches!(result, Err(StartupError::InvalidAllowedUid(_)));
     }
 
     #[tokio::test]
@@ -658,10 +657,8 @@ mod tests {
             allow_host_ssh: false,
             port_forwards: Vec::new(),
         };
-        assert_matches!(
-            dispatch(request, &config).await,
-            Err(HelperFailure::InvalidRequest { .. })
-        );
+        let result = dispatch(request, &config).await;
+        assert_matches!(result, Err(HelperFailure::InvalidRequest { .. }));
     }
 
     #[tokio::test]
@@ -694,10 +691,8 @@ mod tests {
             }],
         ];
         for port_forwards in cases {
-            assert_matches!(
-                dispatch(base(port_forwards), &config).await,
-                Err(HelperFailure::InvalidRequest { .. })
-            );
+            let result = dispatch(base(port_forwards), &config).await;
+            assert_matches!(result, Err(HelperFailure::InvalidRequest { .. }));
         }
     }
 
@@ -766,11 +761,8 @@ mod tests {
                 micro_networks: vec![sample_spec(Some(name))],
                 vm_policies: Vec::new(),
             };
-            assert_matches!(
-                dispatch(request, &config).await,
-                Err(HelperFailure::InvalidRequest { .. }),
-                "{name:?} should be rejected before nft"
-            );
+            let result = dispatch(request, &config).await;
+            assert_matches!(result, Err(HelperFailure::InvalidRequest { .. }));
         }
     }
 
@@ -784,11 +776,8 @@ mod tests {
                 gateway: "172.31.0.1".parse().unwrap(),
                 prefix,
             };
-            assert_matches!(
-                dispatch(request, &config).await,
-                Err(HelperFailure::InvalidRequest { .. }),
-                "prefix {prefix} should have been rejected"
-            );
+            let result = dispatch(request, &config).await;
+            assert_matches!(result, Err(HelperFailure::InvalidRequest { .. }));
         }
     }
 

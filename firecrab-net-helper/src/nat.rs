@@ -164,11 +164,8 @@ mod tests {
             "way-too-long-interface-name",
             "1234567890123456",
         ] {
-            assert_matches!(
-                validate_uplink(bad),
-                Err(FirewallError::InvalidUplinkName(_)),
-                "{bad:?} should be rejected"
-            );
+            let result = validate_uplink(bad);
+            assert_matches!(result, Err(FirewallError::InvalidUplinkName(_)), "{bad:?}");
         }
     }
 
