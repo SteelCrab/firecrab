@@ -133,6 +133,31 @@ const SELECT_MICROREGISTRY_LOCAL_BY_ARCH_SQL: &str = "SELECT alias, architecture
 const SELECT_MICROREGISTRY_LOCAL_ONE_SQL: &str = "SELECT alias, architecture, version, package, \
     sha256, min_disk_gb, published_at FROM microregistry_local WHERE alias = ?1 AND architecture = ?2";
 
+const CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL: &str =
+    "CREATE TABLE IF NOT EXISTS docker_hub_credential (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    username TEXT NOT NULL,
+    secret TEXT NOT NULL
+) STRICT";
+
+const SELECT_DOCKER_HUB_CREDENTIAL_SQL: &str =
+    "SELECT username, secret FROM docker_hub_credential WHERE id = 1";
+
+const UPSERT_DOCKER_HUB_CREDENTIAL_SQL: &str =
+    "INSERT INTO docker_hub_credential (id, username, secret) VALUES (1, ?1, ?2)
+     ON CONFLICT(id) DO UPDATE SET username = excluded.username, secret = excluded.secret";
+
+const DELETE_DOCKER_HUB_CREDENTIAL_SQL: &str = "DELETE FROM docker_hub_credential WHERE id = 1";
+
+/// Username and access token for authenticated Docker Hub pulls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DockerHubCredential {
+    /// Docker Hub account name.
+    pub username: String,
+    /// Password or personal access token. Never returned on the wire.
+    pub secret: String,
+}
+
 const INSERT_MICROREGISTRY_LOCAL_SQL: &str = "INSERT INTO microregistry_local \
     (alias, architecture, version, package, sha256, min_disk_gb, published_at) \
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
@@ -518,6 +543,23 @@ pub struct Store {
     conn: Arc<Mutex<Connection>>,
 }
 
+/// Restricts the database file to its owner.
+///
+/// A failure is logged rather than returned: a host whose filesystem cannot
+/// carry the mode still has a working store, and the operator can see the
+/// warning and decide.
+fn restrict_to_owner(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        tracing::warn!(
+            path = %path.display(),
+            %error,
+            "could not restrict the database file to its owner"
+        );
+    }
+}
+
 impl Store {
     /// Opens (creating if needed) the database at `path`: sets WAL mode,
     /// creates/migrates the schema, and imports any legacy `vms.json` found
@@ -537,6 +579,10 @@ impl Store {
             path: path.to_owned(),
             source,
         })?;
+        // The database holds the operator's registry token, so it is
+        // owner-only regardless of the service umask. Doing it before the
+        // first write gives the `-wal` and `-shm` files the same mode.
+        restrict_to_owner(path);
         let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(Duration::from_secs(5))?;
@@ -561,6 +607,7 @@ impl Store {
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
+        conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
@@ -815,6 +862,38 @@ impl Store {
         if changed == 0 {
             return Err(PersistenceError::MissingMicroStorage { id });
         }
+        Ok(())
+    }
+
+    /// Docker Hub login used by OCI inspect/import, if the operator saved one.
+    pub fn docker_hub_credential(&self) -> Result<Option<DockerHubCredential>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(SELECT_DOCKER_HUB_CREDENTIAL_SQL)?;
+        statement
+            .query_row([], |row| {
+                Ok(DockerHubCredential {
+                    username: row.get(0)?,
+                    secret: row.get(1)?,
+                })
+            })
+            .optional()
+            .map_err(PersistenceError::from)
+    }
+
+    /// Replaces the stored Docker Hub login. The secret is write-only.
+    pub fn put_docker_hub_credential(
+        &self,
+        username: &str,
+        secret: &str,
+    ) -> Result<(), PersistenceError> {
+        self.lock()
+            .execute(UPSERT_DOCKER_HUB_CREDENTIAL_SQL, params![username, secret])?;
+        Ok(())
+    }
+
+    /// Forgets the stored Docker Hub login.
+    pub fn delete_docker_hub_credential(&self) -> Result<(), PersistenceError> {
+        self.lock().execute(DELETE_DOCKER_HUB_CREDENTIAL_SQL, [])?;
         Ok(())
     }
 
@@ -2457,6 +2536,59 @@ mod tests {
         let other_arch = local_catalog_entry("nginx-1.27", "aarch64");
         store.insert_microregistry_local(&other_arch).unwrap();
         assert_eq!(store.list_microregistry_local(None).unwrap().len(), 2);
+    }
+
+    /// The store now holds a registry token, so the file must not be readable
+    /// by every local account no matter what umask the service runs under.
+    #[test]
+    fn the_database_file_is_readable_only_by_its_owner() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("firecrab.db");
+        let store = Store::open(&path).unwrap();
+        store
+            .put_docker_hub_credential("pista", "dckr_pat_secret")
+            .unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "database mode is {:o}", mode & 0o777);
+        for sidecar in ["firecrab.db-wal", "firecrab.db-shm"] {
+            let sidecar = directory.path().join(sidecar);
+            if let Ok(metadata) = std::fs::metadata(&sidecar) {
+                let mode = metadata.permissions().mode();
+                assert_eq!(
+                    mode & 0o077,
+                    0,
+                    "{} mode is {:o}",
+                    sidecar.display(),
+                    mode & 0o777
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn docker_hub_credential_round_trips_and_can_be_deleted() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        assert_eq!(store.docker_hub_credential().unwrap(), None);
+
+        store
+            .put_docker_hub_credential("pista", "dckr_pat_secret")
+            .unwrap();
+        let stored = store.docker_hub_credential().unwrap().unwrap();
+        assert_eq!(stored.username, "pista");
+        assert_eq!(stored.secret, "dckr_pat_secret");
+
+        store.put_docker_hub_credential("pista", "rotated").unwrap();
+        assert_eq!(
+            store.docker_hub_credential().unwrap().unwrap().secret,
+            "rotated"
+        );
+
+        store.delete_docker_hub_credential().unwrap();
+        assert_eq!(store.docker_hub_credential().unwrap(), None);
     }
 
     #[test]

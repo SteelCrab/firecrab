@@ -467,9 +467,15 @@ async fn a_single_platform_manifest_caches_config_and_ordered_layers() {
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
 
-    let cached = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect("cache a single-platform image");
+    let cached = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect("cache a single-platform image");
 
     assert!(cached.resolved.single_platform);
     assert_eq!(cached.resolved.architecture, Architecture::X86_64);
@@ -520,10 +526,10 @@ async fn a_verified_cache_hit_avoids_another_blob_get() {
     let cache = BlobCache::new(directory.path());
     let reference = registry.reference();
 
-    cache_image_blobs(&reference, Architecture::X86_64, true, &cache)
+    cache_image_blobs(&reference, Architecture::X86_64, true, &cache, None)
         .await
         .expect("populate cache");
-    cache_image_blobs(&reference, Architecture::X86_64, true, &cache)
+    cache_image_blobs(&reference, Architecture::X86_64, true, &cache, None)
         .await
         .expect("reuse verified cache");
 
@@ -543,13 +549,13 @@ async fn a_corrupt_cache_entry_is_removed_and_refetched() {
     let cache = BlobCache::new(directory.path());
     let reference = registry.reference();
 
-    cache_image_blobs(&reference, Architecture::X86_64, true, &cache)
+    cache_image_blobs(&reference, Architecture::X86_64, true, &cache, None)
         .await
         .expect("populate cache");
     tokio::fs::write(cache.path_for(&config.digest), b"corrupt config")
         .await
         .expect("corrupt cached config");
-    cache_image_blobs(&reference, Architecture::X86_64, true, &cache)
+    cache_image_blobs(&reference, Architecture::X86_64, true, &cache, None)
         .await
         .expect("repair corrupt cache");
 
@@ -576,9 +582,15 @@ async fn an_empty_directory_at_a_digest_path_is_replaced() {
         .await
         .expect("seed abnormal cache directory");
 
-    cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect("replace abnormal cache entry");
+    cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect("replace abnormal cache entry");
 
     assert_eq!(registry.blob_requests(&config.digest), 1);
     assert_eq!(
@@ -601,9 +613,15 @@ async fn duplicate_descriptors_download_the_digest_once() {
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
 
-    let cached = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect("cache duplicate descriptors");
+    let cached = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect("cache duplicate descriptors");
 
     assert_eq!(cached.layers.len(), 2);
     assert_eq!(cached.layers[0].path, cached.layers[1].path);
@@ -646,6 +664,7 @@ async fn parallel_downloads_are_bounded_and_return_manifest_order() {
         Architecture::X86_64,
         true,
         &cache,
+        None,
         2,
     )
     .await
@@ -690,8 +709,8 @@ async fn concurrent_pulls_share_the_per_digest_lock() {
     let reference = registry.reference();
 
     let (first, second) = tokio::join!(
-        cache_image_blobs(&reference, Architecture::X86_64, true, &first_cache),
-        cache_image_blobs(&reference, Architecture::X86_64, true, &second_cache),
+        cache_image_blobs(&reference, Architecture::X86_64, true, &first_cache, None),
+        cache_image_blobs(&reference, Architecture::X86_64, true, &second_cache, None),
     );
     first.expect("first concurrent pull");
     second.expect("second concurrent pull");
@@ -716,9 +735,15 @@ async fn a_digest_mismatch_leaves_no_final_or_partial_file() {
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
 
-    let error = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect_err("wrong blob bytes must fail verification");
+    let error = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect_err("wrong blob bytes must fail verification");
 
     assert_matches!(error, ResolveError::DigestMismatch { .. });
     assert_no_cache_artifacts(&cache, &expected.digest).await;
@@ -738,9 +763,15 @@ async fn a_blob_digest_header_mismatch_leaves_no_cache_artifact() {
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
 
-    let error = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect_err("a contradictory blob digest header must fail");
+    let error = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect_err("a contradictory blob digest header must fail");
 
     assert_matches!(error,
         ResolveError::DigestMismatch {
@@ -759,9 +790,15 @@ async fn a_missing_blob_leaves_no_cache_artifact() {
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
 
-    let error = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect_err("a missing blob must fail");
+    let error = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect_err("a missing blob must fail");
 
     assert_matches!(error, ResolveError::Status { status: 404, .. });
     assert_eq!(registry.blob_requests(&config.digest), 1);
@@ -780,7 +817,8 @@ async fn oversized_config_and_layer_descriptors_are_rejected_before_download() {
         let directory = tempdir().expect("create image root");
         let cache = BlobCache::with_max_blob_bytes(directory.path(), 4);
         let reference = registry.reference();
-        let session = RegistrySession::new(&reference, true).expect("create registry session");
+        let session =
+            RegistrySession::new(&reference, true, None).expect("create registry session");
         let descriptor = Descriptor {
             media_type: media_type.to_owned(),
             digest: blob.digest.clone(),
@@ -814,7 +852,7 @@ async fn a_blob_exactly_at_the_configured_limit_is_downloaded() {
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::with_max_blob_bytes(directory.path(), config.bytes.len() as u64);
     let reference = registry.reference();
-    let session = RegistrySession::new(&reference, true).expect("create registry session");
+    let session = RegistrySession::new(&reference, true, None).expect("create registry session");
     let descriptor = Descriptor {
         media_type: config.media_type.to_owned(),
         digest: config.digest.clone(),
@@ -845,9 +883,15 @@ async fn short_and_long_bodies_leave_no_final_or_partial_file() {
         let directory = tempdir().expect("create image root");
         let cache = BlobCache::new(directory.path());
 
-        let error = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-            .await
-            .expect_err("wrong blob length must fail verification");
+        let error = cache_image_blobs(
+            &registry.reference(),
+            Architecture::X86_64,
+            true,
+            &cache,
+            None,
+        )
+        .await
+        .expect_err("wrong blob length must fail verification");
 
         assert_matches!(error,
             ResolveError::SizeMismatch {
@@ -878,9 +922,15 @@ async fn conflicting_sizes_are_rejected_before_any_blob_request() {
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
 
-    let error = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect_err("conflicting descriptor sizes must fail");
+    let error = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect_err("conflicting descriptor sizes must fail");
 
     assert_matches!(error,
         ResolveError::ConflictingDescriptorSize {
@@ -914,9 +964,15 @@ async fn conflicting_sizes_preserve_a_preexisting_valid_cache_entry() {
         .await
         .expect("seed valid shared cache entry");
 
-    let error = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect_err("conflicting descriptor sizes must fail before cache validation");
+    let error = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect_err("conflicting descriptor sizes must fail before cache validation");
 
     assert_matches!(error,
         ResolveError::ConflictingDescriptorSize { digest, .. } if digest == shared.digest);
@@ -940,9 +996,15 @@ async fn an_unsupported_descriptor_digest_is_a_digest_error() {
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
 
-    let error = cache_image_blobs(&registry.reference(), Architecture::X86_64, true, &cache)
-        .await
-        .expect_err("sha512 descriptors are unsupported");
+    let error = cache_image_blobs(
+        &registry.reference(),
+        Architecture::X86_64,
+        true,
+        &cache,
+        None,
+    )
+    .await
+    .expect_err("sha512 descriptors are unsupported");
 
     assert_matches!(error,
         ResolveError::Digest(DigestError::UnsupportedAlgorithm(algorithm))
@@ -993,6 +1055,7 @@ async fn supported_layer_media_types_produce_verified_ordered_tar_streams() {
         Architecture::X86_64,
         true,
         &BlobCache::new(directory.path()),
+        None,
     )
     .await
     .expect("cache compressed image blobs");

@@ -395,6 +395,7 @@ fn options<'a>(
         blobs,
         layers,
         architecture: Architecture::HOST,
+        credential: None,
     }
 }
 

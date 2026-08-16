@@ -202,6 +202,12 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/microregistry/register/{alias}",
             get(handlers::microregistry::get_microregistry_register),
         )
+        .route(
+            "/api/microregistry/docker-hub",
+            get(handlers::microregistry::get_docker_hub_credential)
+                .put(handlers::microregistry::put_docker_hub_credential)
+                .delete(handlers::microregistry::delete_docker_hub_credential),
+        )
         .route("/api/oci/inspect", get(handlers::oci::inspect_oci_image))
         .route("/api/oci/import", post(handlers::oci::start_oci_import))
         .route(

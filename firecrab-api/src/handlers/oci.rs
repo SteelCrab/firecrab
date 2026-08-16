@@ -16,8 +16,8 @@ use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::image_install::Architecture;
 use crate::oci::{
-    ImageReference, ResolveError, claim_template_name, is_loopback_registry, resolve,
-    run_oci_import, template_name_from_reference,
+    ImageReference, RegistryCredential, ResolveError, claim_template_name, is_loopback_registry,
+    resolve, run_oci_import, template_name_from_reference,
 };
 use crate::server::RequestId;
 use crate::state::AppState;
@@ -31,6 +31,7 @@ pub struct InspectQuery {
 
 /// `GET /api/oci/inspect?reference=nginx:1.27`.
 pub async fn inspect_oci_image(
+    State(state): State<AppState>,
     axum::Extension(request_id): axum::Extension<RequestId>,
     Query(query): Query<InspectQuery>,
 ) -> Result<Json<OciInspectResponse>, AppError> {
@@ -40,7 +41,8 @@ pub async fn inspect_oci_image(
         .alias;
 
     let insecure = is_loopback_registry(&reference.registry);
-    let resolved = resolve(&reference, Architecture::HOST, insecure)
+    let credential = stored_credential(&state, request_id).await;
+    let resolved = resolve(&reference, Architecture::HOST, insecure, credential)
         .await
         .map_err(|error| {
             tracing::warn!(
@@ -95,14 +97,36 @@ pub async fn start_oci_import(
         Err(_) => return Err(AppError::internal(request_id.0)),
     };
 
+    let credential = stored_credential(&state, request_id).await;
     let tracker = state.oci_imports.clone();
     let templates = (*state.templates).clone();
     let alias = named.alias.clone();
     tokio::spawn(async move {
-        run_oci_import(tracker, templates, reference, alias).await;
+        run_oci_import(tracker, templates, reference, alias, credential).await;
     });
 
     Ok((StatusCode::ACCEPTED, Json(response)))
+}
+
+/// The host's saved Docker Hub login, if the operator stored one.
+///
+/// A read failure is logged and answered as "no login": an anonymous pull is
+/// still worth attempting, so a broken credential row never makes every
+/// public image unreachable.
+async fn stored_credential(state: &AppState, request_id: RequestId) -> Option<RegistryCredential> {
+    let store = state.store.clone();
+    match tokio::task::spawn_blocking(move || store.docker_hub_credential()).await {
+        Ok(Ok(stored)) => stored.map(RegistryCredential::from),
+        Ok(Err(error)) => {
+            tracing::warn!(
+                request_id = %request_id.0,
+                %error,
+                "failed to read the stored Docker Hub credential; continuing anonymously"
+            );
+            None
+        }
+        Err(_) => None,
+    }
 }
 
 /// `GET /api/oci/import/{alias}` — latest import snapshot, including idle.
@@ -150,7 +174,10 @@ mod tests {
     /// should answer immediately, not after a registry timeout.
     #[tokio::test]
     async fn an_unparsable_reference_fails_before_any_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
         let error = inspect_oci_image(
+            State(state),
             axum::Extension(RequestId(uuid::Uuid::new_v4())),
             Query(InspectQuery {
                 reference: "NGINX".to_owned(),
@@ -263,7 +290,10 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
+        let directory = tempfile::tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
         let response = inspect_oci_image(
+            State(state),
             axum::Extension(RequestId(uuid::Uuid::new_v4())),
             Query(InspectQuery {
                 reference: format!("127.0.0.1:{port}/team/app:v1"),

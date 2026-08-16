@@ -151,7 +151,7 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}`; VM pin `PUT /api/vms/{id}/shells` (Alpine OpenRC + Ubuntu/Rocky systemd; prefer POSIX `/bin/sh`) |
 | Images | `/api/images`, `/package`, `/install`, `/bootstrap` |
 | OCI | `/api/oci/inspect`, `POST /api/oci/import`, `GET /api/oci/import/{alias}` |
-| MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}` |
+| MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}`, `GET`/`PUT`/`DELETE /docker-hub` (Docker Hub login; secret write-only) |
 | Host | `/api/host` and `/api/network` |
 
 ## MicroNetwork
@@ -208,6 +208,34 @@ GET then marks the row `downloadable`.
 
 A foreign or unsupported kernel fails the job with no row and no archive.
 An unclassifiable kernel is accepted.
+
+## Docker Hub login
+
+Anonymous Docker Hub pulls are rate limited per source address.
+One shared egress IP spends that quota, and OCI inspect or import then answers `429`.
+Save one account so pulls count against it instead.
+
+```sh
+curl -s -X PUT http://127.0.0.1:3000/api/microregistry/docker-hub \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"pista","secret":"dckr_pat_..."}'
+```
+
+Use a personal access token, not the account password.
+The body is `username` and `secret`; blank either is `400 validation_failed`.
+Surrounding whitespace is trimmed, so a pasted token keeps working.
+A second `PUT` rotates the stored login.
+
+`GET /api/microregistry/docker-hub` answers `configured` and `username`.
+The secret is write-only and never appears in a response.
+`DELETE` forgets it and answers `204`, also when nothing was stored.
+
+One login is kept per host, in SQLite, next to the rest of the state.
+That database file is owner-only (`0600`), because it now holds a registry secret.
+It is sent as HTTP Basic on the registry token exchange only, never on a manifest or blob request.
+It is offered to Docker Hub alone — `docker.io` and `registry-1.docker.io` are the same account.
+Any other registry, including a private mirror or a `FIRECRAB_OCI_TOOLBOX_IMAGE` override, is pulled anonymously.
+Import uses it for the image and for the busybox toolbox pull; see [OCI](oci.md).
 
 ## VM states
 

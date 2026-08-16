@@ -160,7 +160,14 @@ async fn pull_toolbox(
     destination: &Path,
 ) -> Result<(), ResolveError> {
     let insecure = is_loopback_registry(&reference.registry);
-    let blobs = cache_image_blobs(reference, options.architecture, insecure, options.blobs).await?;
+    let blobs = cache_image_blobs(
+        reference,
+        options.architecture,
+        insecure,
+        options.blobs,
+        options.credential.cloned(),
+    )
+    .await?;
     let layers = decompress_cached_layers(&blobs, options.layers).await?;
     let layers = validate_decompressed_layers(layers).await?;
 

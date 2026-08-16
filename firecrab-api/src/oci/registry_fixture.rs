@@ -284,14 +284,14 @@ async fn the_fixture_serves_a_host_architecture_linux_image() {
     let blobs = BlobCache::new(directory.path());
     let layers = LayerCache::new(directory.path());
 
-    let resolved = resolve(&reference, Architecture::HOST, true)
+    let resolved = resolve(&reference, Architecture::HOST, true, None)
         .await
         .expect("inspect the fixture over loopback HTTP");
     assert_eq!(resolved.architecture, Architecture::HOST);
     assert!(resolved.single_platform);
     assert_eq!(registry.architecture(), oci_platform(Architecture::HOST));
 
-    let cached = cache_image_blobs(&reference, Architecture::HOST, true, &blobs)
+    let cached = cache_image_blobs(&reference, Architecture::HOST, true, &blobs, None)
         .await
         .expect("pull fixture config and layer");
     let process = OciProcessConfig::from_image_config(

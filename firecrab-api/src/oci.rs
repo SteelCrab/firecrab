@@ -1048,6 +1048,74 @@ struct ResolvedManifest {
     manifest: ImageManifest,
 }
 
+/// reqwest's Display is only "error sending request for url (…)". The
+/// useful cause (DNS, TLS, timeout) is in the source chain.
+fn format_error_chain(error: &dyn std::error::Error) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(err) = source {
+        let text = err.to_string();
+        if parts.iter().all(|part| !part.contains(&text)) {
+            parts.push(text);
+        }
+        source = err.source();
+    }
+    parts.join(": ")
+}
+
+/// Username and token sent as HTTP Basic on the registry token endpoint.
+///
+/// The registry belongs to the credential rather than to the call site: a
+/// session attaches a login only while talking to the registry it was saved
+/// for, so a Docker Hub token cannot follow a reference to another host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegistryCredential {
+    /// Registry host this login belongs to.
+    pub registry: String,
+    /// Registry account name.
+    pub username: String,
+    /// Password or personal access token.
+    pub secret: String,
+}
+
+impl RegistryCredential {
+    /// A Docker Hub login. `docker.io` and `registry-1.docker.io` name the
+    /// same account, so the API host is stored.
+    pub fn docker_hub(username: impl Into<String>, secret: impl Into<String>) -> Self {
+        Self {
+            registry: DOCKER_HUB_REGISTRY.to_owned(),
+            username: username.into(),
+            secret: secret.into(),
+        }
+    }
+
+    /// Whether this login may be sent while fetching from `registry`.
+    fn covers(&self, registry: &str) -> bool {
+        canonical_registry(&self.registry) == canonical_registry(registry)
+    }
+}
+
+impl From<crate::persistence::DockerHubCredential> for RegistryCredential {
+    fn from(stored: crate::persistence::DockerHubCredential) -> Self {
+        Self::docker_hub(stored.username, stored.secret)
+    }
+}
+
+/// The one spelling of a registry host used when comparing two of them.
+fn canonical_registry(registry: &str) -> String {
+    let registry = registry.to_ascii_lowercase();
+    if is_docker_hub_registry(&registry) {
+        return DOCKER_HUB_REGISTRY.to_owned();
+    }
+    registry
+}
+
+/// Docker Hub's registry host and the name operators type.
+pub fn is_docker_hub_registry(registry: &str) -> bool {
+    let host = registry.rsplit_once(':').map_or(registry, |(host, _)| host);
+    matches!(host, DOCKER_HUB_REGISTRY | DOCKER_HUB_ALIAS)
+}
+
 /// One authenticated conversation with a registry. The bearer token is kept
 /// across the selected-manifest and blob requests and refreshed only once when
 /// concurrent requests all encounter the same initial challenge.
@@ -1056,17 +1124,29 @@ struct RegistrySession {
     client: reqwest::Client,
     base: String,
     token: Arc<AsyncMutex<Option<String>>>,
+    basic: Option<RegistryCredential>,
 }
 
 impl RegistrySession {
-    fn new(reference: &ImageReference, insecure: bool) -> Result<Self, ResolveError> {
+    fn new(
+        reference: &ImageReference,
+        insecure: bool,
+        credential: Option<RegistryCredential>,
+    ) -> Result<Self, ResolveError> {
+        // A stored login is sent only to the registry it was saved for. Any
+        // other reference — a private mirror, a toolbox override — is fetched
+        // anonymously rather than leaking the secret to that host.
+        let basic = credential.filter(|credential| credential.covers(&reference.registry));
         let scheme = if insecure { "http" } else { "https" };
         let client = reqwest::Client::builder()
             // A registry response must not redirect an authenticated manifest
             // or blob request from HTTPS to plaintext. Local registries opt in
             // to HTTP explicitly through `insecure`.
             .https_only(!insecure)
-            .connect_timeout(Duration::from_secs(5))
+            // rustls HTTP/2 to some registry fronts fails at send() with no
+            // HTTP status. Docker Hub and GHCR answer HTTP/1.1 fine.
+            .http1_only()
+            .connect_timeout(Duration::from_secs(15))
             // Unlike a total request timeout, this resets whenever another
             // chunk arrives, so a large healthy layer may take as long as it
             // needs while a stalled registry still fails predictably.
@@ -1077,6 +1157,7 @@ impl RegistrySession {
             client,
             base: format!("{scheme}://{}", reference.registry),
             token: Arc::new(AsyncMutex::new(None)),
+            basic,
         })
     }
 
@@ -1097,10 +1178,9 @@ impl RegistrySession {
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        request
-            .send()
-            .await
-            .map_err(|error| ResolveError::Transport(format!("GET {url}: {error}")))
+        request.send().await.map_err(|error| {
+            ResolveError::Transport(format!("GET {url}: {}", format_error_chain(&error)))
+        })
     }
 
     async fn get(
@@ -1132,13 +1212,13 @@ impl RegistrySession {
                     "registry sent an unusable bearer challenge".to_owned(),
                 )
             })?;
-            let response = self
-                .client
-                .get(&token_url)
-                .timeout(Duration::from_secs(20))
-                .send()
-                .await
-                .map_err(|error| ResolveError::Transport(format!("GET {token_url}: {error}")))?;
+            let mut token_request = self.client.get(&token_url).timeout(Duration::from_secs(20));
+            if let Some(basic) = &self.basic {
+                token_request = token_request.basic_auth(&basic.username, Some(&basic.secret));
+            }
+            let response = token_request.send().await.map_err(|error| {
+                ResolveError::Transport(format!("GET {token_url}: {}", format_error_chain(&error)))
+            })?;
             if !response.status().is_success() {
                 return Err(ResolveError::Authentication(format!(
                     "token endpoint answered {}",
@@ -1526,8 +1606,9 @@ pub async fn resolve(
     reference: &ImageReference,
     architecture: Architecture,
     insecure: bool,
+    credential: Option<RegistryCredential>,
 ) -> Result<ResolvedImage, ResolveError> {
-    let session = RegistrySession::new(reference, insecure)?;
+    let session = RegistrySession::new(reference, insecure, credential)?;
     Ok(resolve_manifest(&session, reference, architecture)
         .await?
         .resolved)
@@ -2668,6 +2749,10 @@ pub struct GuestRuntimeOptions<'a> {
     pub layers: &'a LayerCache,
     /// Architecture the merged tree targets; the toolbox ELF must match it.
     pub architecture: Architecture,
+    /// Stored login for the toolbox pull. The toolbox is a Docker Hub image
+    /// by default, so an operator whose anonymous quota is exhausted must be
+    /// able to authenticate this pull too, not only the image being imported.
+    pub credential: Option<&'a RegistryCredential>,
 }
 
 /// Why an otherwise valid layer tar entry is unsafe for later extraction.
@@ -3082,8 +3167,17 @@ pub async fn run_oci_import(
     templates: TemplateRegistry,
     reference: ImageReference,
     alias: String,
+    credential: Option<RegistryCredential>,
 ) {
-    if let Err(error) = import_oci_image(&tracker, &templates, &reference, &alias).await {
+    if let Err(error) = import_oci_image(
+        &tracker,
+        &templates,
+        &reference,
+        &alias,
+        credential.as_ref(),
+    )
+    .await
+    {
         tracker.finish_err_with(&alias, format!("import failed: {error}"));
         return;
     }
@@ -3095,14 +3189,16 @@ async fn import_oci_image(
     templates: &TemplateRegistry,
     reference: &ImageReference,
     alias: &str,
+    credential: Option<&RegistryCredential>,
 ) -> Result<(), ResolveError> {
     let image_root = templates.image_root_path();
     let scratch = image_root.join(".oci/import").join(alias);
     reset_import_scratch(&scratch).await?;
 
-    let result =
-        import_oci_image_in_scratch(tracker, templates, reference, alias, image_root, &scratch)
-            .await;
+    let result = import_oci_image_in_scratch(
+        tracker, templates, reference, alias, image_root, &scratch, credential,
+    )
+    .await;
     if let Err(error) = tokio::fs::remove_dir_all(&scratch).await
         && error.kind() != io::ErrorKind::NotFound
     {
@@ -3136,13 +3232,21 @@ async fn import_oci_image_in_scratch(
     alias: &str,
     image_root: &Path,
     scratch: &Path,
+    credential: Option<&RegistryCredential>,
 ) -> Result<(), ResolveError> {
     let insecure = is_loopback_registry(&reference.registry);
     let blobs = BlobCache::new(image_root);
     let layers = LayerCache::new(image_root);
 
     tracker.append_log(alias, "caching image blobs");
-    let cached = cache_image_blobs(reference, Architecture::HOST, insecure, &blobs).await?;
+    let cached = cache_image_blobs(
+        reference,
+        Architecture::HOST,
+        insecure,
+        &blobs,
+        credential.cloned(),
+    )
+    .await?;
 
     tracker.append_log(alias, "reading image process config");
     let process = read_cached_process_config(&cached).await?;
@@ -3162,6 +3266,7 @@ async fn import_oci_image_in_scratch(
         blobs: &blobs,
         layers: &layers,
         architecture: cached.resolved.architecture,
+        credential,
     };
     let provisioned = provision_merged_rootfs(merged, &options).await?;
 
@@ -3860,11 +3965,20 @@ pub async fn cache_image_blobs(
     architecture: Architecture,
     insecure: bool,
     cache: &BlobCache,
+    credential: Option<RegistryCredential>,
 ) -> Result<CachedImageBlobs, ResolveError> {
     let parallelism = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
-    cache_image_blobs_with_parallelism(reference, architecture, insecure, cache, parallelism).await
+    cache_image_blobs_with_parallelism(
+        reference,
+        architecture,
+        insecure,
+        cache,
+        credential,
+        parallelism,
+    )
+    .await
 }
 
 async fn cache_image_blobs_with_parallelism(
@@ -3872,9 +3986,10 @@ async fn cache_image_blobs_with_parallelism(
     architecture: Architecture,
     insecure: bool,
     cache: &BlobCache,
+    credential: Option<RegistryCredential>,
     parallelism: usize,
 ) -> Result<CachedImageBlobs, ResolveError> {
-    let session = RegistrySession::new(reference, insecure)?;
+    let session = RegistrySession::new(reference, insecure, credential)?;
     let resolved = resolve_manifest(&session, reference, architecture).await?;
     let mut seen = std::collections::HashSet::new();
     let work: Vec<Descriptor> = std::iter::once(&resolved.manifest.config)
@@ -4163,10 +4278,40 @@ mod tests {
         assert_eq!(response.issued().unwrap(), "issued-token");
     }
 
+    #[test]
+    fn format_error_chain_includes_source_causes() {
+        #[derive(Debug)]
+        struct Leaf;
+        impl std::fmt::Display for Leaf {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("name or service not known")
+            }
+        }
+        impl std::error::Error for Leaf {}
+
+        #[derive(Debug)]
+        struct Wrapper(Leaf);
+        impl std::fmt::Display for Wrapper {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("error sending request")
+            }
+        }
+        impl std::error::Error for Wrapper {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        assert_eq!(
+            format_error_chain(&Wrapper(Leaf)),
+            "error sending request: name or service not known"
+        );
+    }
+
     #[tokio::test]
     async fn a_secure_session_refuses_plain_http_requests() {
         let reference = parse("registry.example.com/team/app:latest");
-        let session = RegistrySession::new(&reference, false).unwrap();
+        let session = RegistrySession::new(&reference, false, None).unwrap();
 
         let error = session
             .send_once("http://127.0.0.1:1/v2/", None, None, None)
@@ -4305,14 +4450,37 @@ mod tests {
     /// token, and only then serves the index — the anonymous pull flow every
     /// public registry uses.
     async fn token_guarded_registry(body: Vec<u8>, media_type: &'static str) -> String {
+        token_guarded_registry_recording(body, media_type).await.0
+    }
+
+    /// The same registry, plus whatever the token endpoint was handed in
+    /// `Authorization`. That header is the entire difference between an
+    /// anonymous pull and an authenticated one.
+    async fn token_guarded_registry_recording(
+        body: Vec<u8>,
+        media_type: &'static str,
+    ) -> (String, Arc<StdMutex<Option<String>>>) {
         use axum::http::{HeaderMap, StatusCode, header::CONTENT_TYPE};
         use axum::response::IntoResponse;
         use axum::routing::get;
 
+        let seen: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
         let app = axum::Router::new()
             .route(
                 "/token",
-                get(|| async { axum::Json(serde_json::json!({ "token": "issued-token" })) }),
+                get({
+                    let seen = Arc::clone(&seen);
+                    move |headers: HeaderMap| {
+                        let seen = Arc::clone(&seen);
+                        async move {
+                            *seen.lock().unwrap() = headers
+                                .get("authorization")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned);
+                            axum::Json(serde_json::json!({ "token": "issued-token" }))
+                        }
+                    }
+                }),
             )
             .route(
                 "/v2/library/nginx/manifests/1.27",
@@ -4341,14 +4509,11 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        format!("127.0.0.1:{}", address.port())
+        (format!("127.0.0.1:{}", address.port()), seen)
     }
 
-    /// The bearer token acquired for the first manifest request is accepted
-    /// without weakening content verification.
-    #[tokio::test]
-    async fn resolve_authenticates_and_returns_the_single_manifest_digest() {
-        let body = serde_json::to_vec(&serde_json::json!({
+    fn single_platform_manifest_body() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
             "schemaVersion": 2,
             "mediaType": OCI_MANIFEST_MEDIA_TYPE,
             "config": {
@@ -4362,7 +4527,14 @@ mod tests {
                 "size": 99
             }]
         }))
-        .unwrap();
+        .unwrap()
+    }
+
+    /// The bearer token acquired for the first manifest request is accepted
+    /// without weakening content verification.
+    #[tokio::test]
+    async fn resolve_authenticates_and_returns_the_single_manifest_digest() {
+        let body = single_platform_manifest_body();
         let expected = Sha256Digest::of_bytes(&body).to_string();
         let registry = token_guarded_registry(body, OCI_MANIFEST_MEDIA_TYPE).await;
         let reference = ImageReference {
@@ -4371,13 +4543,86 @@ mod tests {
             version: ImageVersion::Tag("1.27".to_owned()),
         };
 
-        let resolved = resolve(&reference, Architecture::X86_64, true)
+        let resolved = resolve(&reference, Architecture::X86_64, true, None)
             .await
             .unwrap();
 
         assert_eq!(resolved.digest, expected);
         assert_eq!(resolved.architecture, Architecture::X86_64);
         assert!(resolved.single_platform);
+    }
+
+    /// The saved login only helps if the registry sees it: the token endpoint
+    /// is where a pull stops being anonymous and starts counting against the
+    /// operator's account instead of this host's address.
+    #[tokio::test]
+    async fn a_stored_login_authenticates_the_token_exchange() {
+        let (registry, seen) = token_guarded_registry_recording(
+            single_platform_manifest_body(),
+            OCI_MANIFEST_MEDIA_TYPE,
+        )
+        .await;
+        let reference = ImageReference {
+            registry: registry.clone(),
+            repository: "library/nginx".to_owned(),
+            version: ImageVersion::Tag("1.27".to_owned()),
+        };
+        let credential = RegistryCredential {
+            registry,
+            username: "pista".to_owned(),
+            secret: "dckr_pat_example".to_owned(),
+        };
+
+        resolve(&reference, Architecture::X86_64, true, Some(credential))
+            .await
+            .expect("an authenticated resolve must succeed");
+
+        assert_eq!(
+            seen.lock().unwrap().as_deref(),
+            Some("Basic cGlzdGE6ZGNrcl9wYXRfZXhhbXBsZQ==")
+        );
+    }
+
+    /// A Docker Hub token must not follow a reference to whatever host it
+    /// names. A private mirror, a toolbox override, or a typo would otherwise
+    /// collect the operator's secret, so the pull goes out anonymously.
+    #[tokio::test]
+    async fn a_stored_login_is_never_sent_to_another_registry() {
+        let (registry, seen) = token_guarded_registry_recording(
+            single_platform_manifest_body(),
+            OCI_MANIFEST_MEDIA_TYPE,
+        )
+        .await;
+        let reference = ImageReference {
+            registry,
+            repository: "library/nginx".to_owned(),
+            version: ImageVersion::Tag("1.27".to_owned()),
+        };
+
+        resolve(
+            &reference,
+            Architecture::X86_64,
+            true,
+            Some(RegistryCredential::docker_hub("pista", "dckr_pat_example")),
+        )
+        .await
+        .expect("an anonymous resolve must still succeed");
+
+        assert_eq!(seen.lock().unwrap().as_deref(), None);
+    }
+
+    /// `docker.io` is what an operator types and `registry-1.docker.io` is
+    /// what serves the API. A login saved for one is the same account.
+    #[test]
+    fn a_docker_hub_login_covers_both_spellings_of_the_host() {
+        let credential = RegistryCredential::docker_hub("pista", "dckr_pat_example");
+
+        assert!(credential.covers(DOCKER_HUB_REGISTRY));
+        assert!(credential.covers(DOCKER_HUB_ALIAS));
+        assert!(credential.covers("DOCKER.IO"));
+        assert!(!credential.covers("ghcr.io"));
+        assert!(!credential.covers("registry-1.docker.io.evil.example"));
+        assert!(!credential.covers("127.0.0.1:5000"));
     }
 
     /// An explicitly empty index is still an index. Treating it as a manifest
@@ -4397,7 +4642,7 @@ mod tests {
             version: ImageVersion::Tag("1.27".to_owned()),
         };
 
-        let error = resolve(&reference, Architecture::HOST, true)
+        let error = resolve(&reference, Architecture::HOST, true, None)
             .await
             .unwrap_err();
 

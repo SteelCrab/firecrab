@@ -15,8 +15,8 @@ use axum::Json;
 use axum::extract::{Path as AliasPath, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{
-    ImageInstallResponse, MicroRegistryImageResponse, MicroRegistryRegisterRequest,
-    MicroRegistryResponse,
+    DockerHubCredentialRequest, DockerHubCredentialResponse, ImageInstallResponse,
+    MicroRegistryImageResponse, MicroRegistryRegisterRequest, MicroRegistryResponse,
 };
 use serde::Deserialize;
 
@@ -285,6 +285,92 @@ pub async fn list_microregistry(
     };
 
     Ok(Json(MicroRegistryResponse { source, images }))
+}
+
+/// `GET /api/microregistry/docker-hub` — whether a login is stored, and whose.
+///
+/// The secret is never read back. The dashboard only needs to know that a
+/// login exists and which account it belongs to.
+pub async fn get_docker_hub_credential(
+    State(state): State<AppState>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
+) -> Result<Json<DockerHubCredentialResponse>, AppError> {
+    let store = state.store.clone();
+    let stored = tokio::task::spawn_blocking(move || store.docker_hub_credential())
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, %error, "failed to read the Docker Hub credential");
+            AppError::internal(request_id.0)
+        })?;
+
+    Ok(Json(DockerHubCredentialResponse {
+        configured: stored.is_some(),
+        username: stored.map(|credential| credential.username),
+    }))
+}
+
+/// `PUT /api/microregistry/docker-hub` — save or rotate the login.
+///
+/// Docker Hub's anonymous pull quota is per source address and small enough
+/// that one busy host exhausts it. An authenticated pull is counted per
+/// account instead, which is what makes `docker.io` imports work at all on a
+/// shared egress IP. A personal access token is preferred over a password.
+pub async fn put_docker_hub_credential(
+    State(state): State<AppState>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
+    ValidatedJson(body): ValidatedJson<DockerHubCredentialRequest>,
+) -> Result<Json<DockerHubCredentialResponse>, AppError> {
+    let username = body.username.trim().to_owned();
+    // A token pasted from a terminal often carries a trailing newline, which
+    // the registry would reject as a wrong password.
+    let secret = body.secret.trim().to_owned();
+
+    let mut fields = BTreeMap::new();
+    if username.is_empty() {
+        fields.insert("username".to_owned(), "must not be empty".to_owned());
+    }
+    if secret.is_empty() {
+        fields.insert("secret".to_owned(), "must not be empty".to_owned());
+    }
+    if !fields.is_empty() {
+        return Err(AppError::validation(fields, request_id.0));
+    }
+
+    let store = state.store.clone();
+    let saved = username.clone();
+    tokio::task::spawn_blocking(move || store.put_docker_hub_credential(&saved, &secret))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, %error, "failed to save the Docker Hub credential");
+            AppError::internal(request_id.0)
+        })?;
+
+    Ok(Json(DockerHubCredentialResponse {
+        configured: true,
+        username: Some(username),
+    }))
+}
+
+/// `DELETE /api/microregistry/docker-hub` — forget the login.
+///
+/// Deleting a login nothing was stored under is not an error: the caller's
+/// intent is "this host holds no Docker Hub secret", which is then true.
+pub async fn delete_docker_hub_credential(
+    State(state): State<AppState>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
+) -> Result<StatusCode, AppError> {
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.delete_docker_hub_credential())
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, %error, "failed to delete the Docker Hub credential");
+            AppError::internal(request_id.0)
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `POST /api/microregistry/register` — claim the alias and start the job.
@@ -1306,6 +1392,120 @@ mod tests {
             hasher.update(&buffer[..read]);
         }
         format!("{:x}", hasher.finalize())
+    }
+
+    fn credential_body(username: &str, secret: &str) -> ValidatedJson<DockerHubCredentialRequest> {
+        ValidatedJson(DockerHubCredentialRequest {
+            username: username.to_owned(),
+            secret: secret.to_owned(),
+        })
+    }
+
+    #[tokio::test]
+    async fn docker_hub_credential_is_saved_read_back_without_the_secret_and_deleted() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+
+        let Json(empty) = get_docker_hub_credential(State(state.clone()), Extension(request_id()))
+            .await
+            .unwrap();
+        assert!(!empty.configured);
+        assert_eq!(empty.username, None);
+
+        let Json(saved) = put_docker_hub_credential(
+            State(state.clone()),
+            Extension(request_id()),
+            credential_body("pista", "dckr_pat_example"),
+        )
+        .await
+        .expect("a login must be storable");
+        assert!(saved.configured);
+        assert_eq!(saved.username.as_deref(), Some("pista"));
+        assert!(
+            !serde_json::to_string(&saved).unwrap().contains("dckr_pat"),
+            "the response must never carry the secret"
+        );
+
+        let Json(read) = get_docker_hub_credential(State(state.clone()), Extension(request_id()))
+            .await
+            .unwrap();
+        assert!(read.configured);
+        assert_eq!(read.username.as_deref(), Some("pista"));
+
+        // Only the import path may read the secret, and it reads it from the store.
+        let stored = state.store.docker_hub_credential().unwrap().unwrap();
+        assert_eq!(stored.username, "pista");
+        assert_eq!(stored.secret, "dckr_pat_example");
+
+        let status = delete_docker_hub_credential(State(state.clone()), Extension(request_id()))
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let Json(forgotten) =
+            get_docker_hub_credential(State(state.clone()), Extension(request_id()))
+                .await
+                .unwrap();
+        assert!(!forgotten.configured);
+        assert_eq!(state.store.docker_hub_credential().unwrap(), None);
+
+        // Deleting again is the same request: this host holds no secret.
+        let status = delete_docker_hub_credential(State(state), Extension(request_id()))
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+
+    /// A token pasted from a terminal carries a trailing newline. Storing it
+    /// verbatim turns every later pull into an unexplained `401`.
+    #[tokio::test]
+    async fn put_docker_hub_credential_trims_a_pasted_token() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+
+        let Json(saved) = put_docker_hub_credential(
+            State(state.clone()),
+            Extension(request_id()),
+            credential_body(" pista\n", "dckr_pat_example\n"),
+        )
+        .await
+        .expect("a pasted login must be accepted");
+
+        assert_eq!(saved.username.as_deref(), Some("pista"));
+        let stored = state.store.docker_hub_credential().unwrap().unwrap();
+        assert_eq!(stored.username, "pista");
+        assert_eq!(stored.secret, "dckr_pat_example");
+    }
+
+    #[tokio::test]
+    async fn put_docker_hub_credential_rejects_blank_fields_without_storing() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+
+        for (username, secret, field) in [
+            ("", "dckr_pat_example", "username"),
+            ("   ", "dckr_pat_example", "username"),
+            ("pista", "", "secret"),
+            ("pista", "  \n", "secret"),
+        ] {
+            let (status, json) = error_json(
+                put_docker_hub_credential(
+                    State(state.clone()),
+                    Extension(request_id()),
+                    credential_body(username, secret),
+                )
+                .await
+                .unwrap_err(),
+            )
+            .await;
+
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{username:?} {secret:?}");
+            assert_eq!(json["error"]["code"], "validation_failed");
+            assert!(
+                json["error"]["fields"][field].is_string(),
+                "expected field {field}: {json}"
+            );
+            assert_eq!(state.store.docker_hub_credential().unwrap(), None);
+        }
     }
 
     #[tokio::test]

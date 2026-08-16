@@ -29,6 +29,11 @@ network helper.
   a bootable ext4 rootfs.
 - MicroRegistry register of an already-installed local image into the
   in-memory catalog.
+- Docker Hub login for OCI pulls (`GET`/`PUT`/`DELETE
+  /api/microregistry/docker-hub`): one stored account per host, used by
+  inspect, import, and the guest toolbox pull, so a shared egress IP no
+  longer runs into the anonymous rate limit. The secret is write-only and
+  is offered to Docker Hub alone.
 - Runtime environment variables on stopped VMs, written into the guest
   service wrapper on the next start.
 - Host and guest port forwards on the API and dashboard.

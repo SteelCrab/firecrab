@@ -940,6 +940,28 @@ pub struct OciImportRequest {
     pub reference: String,
 }
 
+/// Stored Docker Hub login used by OCI inspect/import. The secret is never
+/// included in a response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerHubCredentialResponse {
+    /// A username and access token are stored on this host.
+    pub configured: bool,
+    /// Docker Hub username. Omitted when nothing is stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+}
+
+/// Body for `PUT /api/microregistry/docker-hub`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerHubCredentialRequest {
+    /// Docker Hub username.
+    pub username: String,
+    /// Account password or personal access token. Write-only.
+    pub secret: String,
+}
+
 /// Request body for `POST /api/microregistry/register`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1435,6 +1457,41 @@ mod tests {
         assert_eq!(json, r#"{"reference":"nginx:1.27"}"#);
         assert_eq!(
             serde_json::from_str::<OciImportRequest>(&json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn docker_hub_credential_response_never_serializes_the_secret() {
+        let configured = DockerHubCredentialResponse {
+            configured: true,
+            username: Some("pista".to_owned()),
+        };
+        let json = serde_json::to_value(&configured).unwrap();
+        assert_eq!(json["configured"], true);
+        assert_eq!(json["username"], "pista");
+        assert!(json.get("secret").is_none());
+
+        let empty = DockerHubCredentialResponse {
+            configured: false,
+            username: None,
+        };
+        let json = serde_json::to_value(&empty).unwrap();
+        assert_eq!(json["configured"], false);
+        assert!(json.get("username").is_none());
+        assert!(json.get("secret").is_none());
+    }
+
+    #[test]
+    fn docker_hub_credential_request_round_trips_camel_case() {
+        let request = DockerHubCredentialRequest {
+            username: "pista".to_owned(),
+            secret: "dckr_pat_example".to_owned(),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(json, r#"{"username":"pista","secret":"dckr_pat_example"}"#);
+        assert_eq!(
+            serde_json::from_str::<DockerHubCredentialRequest>(&json).unwrap(),
             request
         );
     }

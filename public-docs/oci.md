@@ -13,10 +13,12 @@ curl -s 'http://127.0.0.1:3000/api/oci/inspect?reference=nginx:1.27'
 ```
 
 The reference is written as at `docker pull`, so a bare name resolves to Docker Hub's `library` namespace at `latest`.
-The answer is the manifest digest this host would pull; a missing architecture is rejected.
-OCI platforms use Go's names, so x86_64 appears as `amd64`.
+The answer is the manifest digest this host would pull; a missing architecture is rejected (OCI uses Go's names, so x86_64 is `amd64`).
 Registries are reached over HTTPS, except `localhost` and `127.0.0.1`.
 This endpoint reads metadata only and includes the alias a later import will claim.
+
+Docker Hub's anonymous pull quota is per source address, so a shared egress IP answers `429`.
+Save an account with `PUT /api/microregistry/docker-hub` — see [API](api.md) — and inspect, import, and the toolbox pull all use it.
 
 ## Import
 
@@ -29,9 +31,7 @@ curl -s -X POST http://127.0.0.1:3000/api/oci/import \
 ```
 
 Poll `GET /api/oci/import/{alias}` for the same `ImageInstallResponse` package install uses.
-A bad reference is `400 validation_failed`.
-A catalog or installed alias is `409 alias_collision`.
-A running job for that alias is `409 import_in_progress`.
+A bad reference is `400 validation_failed`; a catalog or installed alias `409 alias_collision`; a running job `409 import_in_progress`.
 Success adds the alias to `GET /api/images`.
 
 ## Blob cache

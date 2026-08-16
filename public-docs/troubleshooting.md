@@ -5,7 +5,6 @@ Start with the read-only host doctor.
 ```sh
 ./install.sh --doctor
 ```
-
 Use `firecrab-doctor` on an installed host.
 
 ## Basic status
@@ -118,12 +117,16 @@ Check both policy levels.
 sudo nft list table inet firecrab
 ```
 
+## OCI pull fails
+
+`error sending request` is DNS/TLS/firewall, not a missing Docker Hub login.
+`401` is a bad login; `429` is the spent anonymous quota — save a token, see [OCI](oci.md).
+Check as the API user: `sudo -u firecrab curl -sI https://registry-1.docker.io/v2/` (`401` is expected).
+
 ## Image download returns `503`
 
-The API uses the public MicroRegistry when `FIRECRAB_IMAGE_BASE_URL` is
-unset. If the variable is empty or set to `none`/`-`, set it to a package
-base URL (or unset it) and restart the API.
-The package URL must be `<base>/<alias>.tar.zst`.
+Unset or set `FIRECRAB_IMAGE_BASE_URL` to a package base (not `none`/`-`).
+The package URL is `<base>/<alias>.tar.zst`. Restart the API after changing it.
 
 ## Image install has a permission error
 
@@ -137,11 +140,8 @@ namei -l /var/lib/firecrab/images
 
 Read the bootstrap job log first.
 
-Common causes are network failure, low memory, chroot DNS, and filesystem tool mismatch.
-Rocky 9.8 host builds and MicroBoot bootstraps download the pinned official
-Container-Base tarball, so verify that the configured Rocky repository and
-its checksum file are reachable.
-
+Common causes are network failure, low memory, chroot DNS, and tool mismatch.
+Rocky 9.8 downloads a pinned Container-Base tarball; that URL must be reachable.
 Only one bootstrap job can run at a time.
 
 ## Terminal disconnects
