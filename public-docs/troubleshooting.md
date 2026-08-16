@@ -51,16 +51,8 @@ A new group membership needs a new login session.
 
 ## Network helper is unavailable
 
-The API and helper must use the same socket.
-The default is `/run/firecrab/net-helper.sock`.
-
-Start the development helper first.
-
-```sh
-./scripts/dev-net-helper.sh
-```
-
-Check the installed socket and service.
+The API and helper must use the same socket, by default `/run/firecrab/net-helper.sock`.
+Start the development helper with `./scripts/dev-net-helper.sh`, or check the installed one.
 
 ```sh
 systemctl status firecrab-net-helper
@@ -69,10 +61,8 @@ ls -l /run/firecrab/net-helper.sock
 
 ## VM stays in `starting`
 
-Open the VM details and read the active start step.
-Check the API log and console log.
-
-Check disk space and latency during disk preparation.
+Open the VM details and read the active start step; check the API and console logs.
+Then check disk space and latency during disk preparation.
 
 ```sh
 df -h
@@ -119,9 +109,16 @@ sudo nft list table inet firecrab
 
 ## OCI pull fails
 
-`error sending request` is DNS/TLS/firewall, not a missing Docker Hub login.
 `401` is a bad login; `429` is the spent anonymous quota — save a token, see [OCI](oci.md).
-Check as the API user: `sudo -u firecrab curl -sI https://registry-1.docker.io/v2/` (`401` is expected).
+`Permission denied (os error 13)` is this host refusing `connect(2)`, not the network:
+SELinux, the unit sandbox, or a firewall rule on the API account.
+A shell that reaches the registry while the service cannot means exactly that.
+
+```sh
+sudo firecrab-doctor                                # tests egress as the API account
+sudo ausearch -m avc -ts recent | grep -i firecrab  # SELinux denials
+systemctl show firecrab-api -p IPAddressDeny -p RestrictAddressFamilies
+```
 
 ## Image download returns `503`
 

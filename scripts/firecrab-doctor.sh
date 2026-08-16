@@ -861,6 +861,82 @@ check_reflink() {
         "put both on one XFS/Btrfs filesystem, or accept a full template copy per VM"
 }
 
+# Can the API account actually open a connection to the registries the API
+# reads? A shell on the same host may reach them while the service cannot:
+# SELinux, a unit sandbox, or a firewall rule on the service uid all refuse
+# connect(2) with EACCES, and the API can then only report "error sending
+# request" for every image operation.
+check_registry_egress() {
+    local user probe host status output rc
+    local -a endpoints=()
+
+    have curl || { skip "registry egress: curl is not installed" \
+        "cannot test whether the API account reaches a registry" \
+        "install curl, or ignore this on a host that never downloads images"; return; }
+
+    case "${FIRECRAB_IMAGE_BASE_URL-unset}" in
+        ''|none|-) skip "registry egress: remote images disabled (FIRECRAB_IMAGE_BASE_URL)" \
+            "only OCI import would still need egress" \
+            "unset FIRECRAB_IMAGE_BASE_URL to use the public MicroRegistry"; return ;;
+        unset) endpoints+=("https://registry.firecrab.dev/catalog.json") ;;
+        *) endpoints+=("${FIRECRAB_IMAGE_BASE_URL%/}/catalog.json") ;;
+    esac
+    # 401 is the expected anonymous answer here, so any HTTP status proves the
+    # socket opened — which is all this check is about.
+    endpoints+=("https://registry-1.docker.io/v2/")
+
+    if [ -z "$API_USER" ] && have systemctl; then
+        API_USER=$(systemctl show -p User --value firecrab-api.service 2>/dev/null || true)
+    fi
+    API_USER=${API_USER:-$(id -un)}
+    user=$API_USER
+
+    for probe in "${endpoints[@]}"; do
+        host=${probe#https://}
+        host=${host%%/*}
+        if [ "$user" = "$(id -un)" ]; then
+            output=$(curl -sS -o /dev/null -m 12 -w '%{http_code}' "$probe" 2>&1) && rc=0 || rc=$?
+        elif [ "$(id -u)" = 0 ]; then
+            output=$(sudo -u "$user" curl -sS -o /dev/null -m 12 -w '%{http_code}' "$probe" 2>&1) && rc=0 || rc=$?
+        else
+            skip "registry egress: cannot test as $user" \
+                "this doctor runs as $(id -un) and does not become another account" \
+                "sudo firecrab-doctor   # tests as the API service account"
+            return
+        fi
+
+        if [ "$rc" -eq 0 ]; then
+            continue
+        fi
+
+        status=$(printf '%s' "$output" | tr -d '\n')
+        case "$status" in
+            *"Permission denied"*|*"Operation not permitted"*)
+                fail "registry egress: $host is refused by this host, not by the network" \
+                    "$(printf 'as %s: %s\n' "$user" "$status"
+                       printf 'connect(2) returned EACCES, so no request ever left the machine.\n'
+                       printf 'selinux: %s\n' "$(have getenforce && getenforce 2>/dev/null || printf 'not installed')"
+                       if have systemctl; then
+                           printf 'unit IPAddressDeny: %s\n' \
+                               "$(systemctl show -p IPAddressDeny --value firecrab-api.service 2>/dev/null || printf '?')"
+                       fi)" \
+                    "sudo ausearch -m avc -ts recent | grep -i firecrab   # then audit2allow, or fix the unit/firewall rule"
+                return ;;
+            *"Could not resolve host"*)
+                fail "registry egress: $host does not resolve for $user" \
+                    "$status" \
+                    "check /etc/resolv.conf and any split-DNS or sandbox that hides it from the service" ;;
+            *)
+                fail "registry egress: $user cannot reach $host" \
+                    "$status" \
+                    "check the default route, proxy variables in ${CONFDIR:-/etc/firecrab}/api.env, and any egress firewall" ;;
+        esac
+        return
+    done
+
+    pass
+}
+
 # --- run ---------------------------------------------------------------------
 
 check_kvm
@@ -873,6 +949,7 @@ check_ufw
 check_data_root
 check_images
 check_image_install_tools
+check_registry_egress
 check_reflink
 
 if [ "$FAIL" -eq 0 ] && [ "$SKIP" -eq 0 ]; then

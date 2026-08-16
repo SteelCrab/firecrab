@@ -19,6 +19,7 @@ This endpoint reads metadata only and includes the alias a later import will cla
 
 Docker Hub's anonymous pull quota is per source address, so a shared egress IP answers `429`.
 Save an account with `PUT /api/microregistry/docker-hub` — see [API](api.md) — and inspect, import, and the toolbox pull all use it.
+A login cannot help when the failure is `Permission denied (os error 13)`: that is this host refusing the socket, covered in [Troubleshooting](troubleshooting.md).
 
 ## Import
 

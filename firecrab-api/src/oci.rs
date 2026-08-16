@@ -1048,9 +1048,41 @@ struct ResolvedManifest {
     manifest: ImageManifest,
 }
 
+/// What to say when the kernel, not the network, refused the socket.
+///
+/// The three places named here are the ones that produce `EACCES` on a host
+/// where an ordinary shell on the same account reaches the registry fine.
+const LOCAL_POLICY_HINT: &str = "; this host refused the connection before it \
+     left the machine (EACCES) — check SELinux (ausearch -m avc), the service \
+     sandbox (systemctl show firecrab-api -p IPAddressDeny \
+     -p RestrictAddressFamilies), and firewall rules matching the API user, \
+     or run firecrab-doctor";
+
+/// Whether a transport failure was a local policy refusal rather than a
+/// network one.
+///
+/// reqwest wraps hyper wraps the `io::Error` that `connect(2)` returned, so
+/// the kind is only visible by walking to the bottom of the chain.
+fn refused_by_local_policy(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if let Some(io) = error.downcast_ref::<io::Error>()
+            && io.kind() == io::ErrorKind::PermissionDenied
+        {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
 /// reqwest's Display is only "error sending request for url (…)". The
 /// useful cause (DNS, TLS, timeout) is in the source chain.
-fn format_error_chain(error: &dyn std::error::Error) -> String {
+///
+/// A permission denial gets a hint appended: it is the one transport failure
+/// whose cause is on this host rather than at the other end, and the bare
+/// message sends operators looking for a proxy or a missing login instead.
+fn format_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
     let mut parts = vec![error.to_string()];
     let mut source = error.source();
     while let Some(err) = source {
@@ -1060,7 +1092,11 @@ fn format_error_chain(error: &dyn std::error::Error) -> String {
         }
         source = err.source();
     }
-    parts.join(": ")
+    let mut message = parts.join(": ");
+    if refused_by_local_policy(error) {
+        message.push_str(LOCAL_POLICY_HINT);
+    }
+    message
 }
 
 /// Username and token sent as HTTP Basic on the registry token endpoint.
@@ -4306,6 +4342,54 @@ mod tests {
             format_error_chain(&Wrapper(Leaf)),
             "error sending request: name or service not known"
         );
+    }
+
+    /// A wrapper whose whole purpose is to carry an `io::Error` the way
+    /// reqwest carries hyper's connect failure.
+    #[derive(Debug)]
+    struct TransportChain(io::Error);
+
+    impl fmt::Display for TransportChain {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("error sending request")
+        }
+    }
+
+    impl std::error::Error for TransportChain {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    /// `EACCES` on connect is the host refusing the socket — SELinux, a unit
+    /// sandbox, or a firewall rule on the service uid. The operator reads
+    /// "error sending request" and goes hunting for DNS or a proxy, so the
+    /// message has to name where the refusal actually came from.
+    #[test]
+    fn a_connect_refused_by_local_policy_says_so() {
+        let denied = TransportChain(io::Error::from(io::ErrorKind::PermissionDenied));
+
+        let message = format_error_chain(&denied);
+
+        assert!(message.starts_with("error sending request"), "{message}");
+        assert!(message.contains("this host"), "{message}");
+        assert!(message.contains("SELinux"), "{message}");
+        assert!(message.contains("firecrab-doctor"), "{message}");
+    }
+
+    /// Every other transport failure keeps its old wording. A refused or
+    /// unreachable registry is a network fact, and pointing at SELinux there
+    /// would send the operator to the wrong host.
+    #[test]
+    fn other_transport_failures_keep_their_wording() {
+        for kind in [
+            io::ErrorKind::ConnectionRefused,
+            io::ErrorKind::TimedOut,
+            io::ErrorKind::NotFound,
+        ] {
+            let message = format_error_chain(&TransportChain(io::Error::from(kind)));
+            assert!(!message.contains("SELinux"), "{kind:?}: {message}");
+        }
     }
 
     #[tokio::test]
