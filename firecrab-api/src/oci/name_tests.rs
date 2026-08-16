@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use crate::templates::{TemplateRegistry, TemplateSpec};
 
@@ -68,7 +69,7 @@ fn an_unusable_reference_is_refused_instead_of_minting_an_empty_alias() {
         version: ImageVersion::Tag(String::new()),
     };
     let error = name::template_name_from_reference(&reference).expect_err("empty name");
-    assert!(matches!(error, ResolveError::AliasUnusable { .. }));
+    assert_matches!(error, ResolveError::AliasUnusable { .. });
 }
 
 #[test]

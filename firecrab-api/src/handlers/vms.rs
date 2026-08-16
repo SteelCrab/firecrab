@@ -2404,6 +2404,7 @@ mod tests {
         SERVE_LOOP, SERVE_ONCE_THEN_EXIT, fake_firecracker, process_alive, short_tempdir,
     };
     use crate::templates::TemplateSpec;
+    use core::assert_matches;
 
     #[test]
     fn validates_vm_names() {
@@ -4637,10 +4638,8 @@ while True:
             find_network_sentinel(b"boot log\nFIRECRAB_NETWORK_READY 172.30.0.5\nmore\n"),
             Some(Ok(()))
         );
-        assert!(matches!(
-            find_network_sentinel(b"FIRECRAB_NETWORK_FAILED dns unreachable\n"),
-            Some(Err(reason)) if reason.contains("dns unreachable")
-        ));
+        assert_matches!(find_network_sentinel(b"FIRECRAB_NETWORK_FAILED dns unreachable\n"),
+            Some(Err(reason)) if reason.contains("dns unreachable"));
         assert_eq!(find_network_sentinel(b"just a normal boot line\n"), None);
     }
 

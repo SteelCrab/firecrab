@@ -581,6 +581,7 @@ fn error_chain(error: &dyn std::error::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     use tokio::io::AsyncWriteExt;
     use tokio::sync::oneshot;
@@ -626,10 +627,10 @@ mod tests {
 
     #[test]
     fn non_numeric_allowed_uid_is_rejected() {
-        assert!(matches!(
+        assert_matches!(
             HelperConfig::from_values("/tmp/x.sock", Some("wheel"), bridge::DEFAULT_BRIDGE_MTU),
             Err(StartupError::InvalidAllowedUid(_))
-        ));
+        );
     }
 
     #[tokio::test]
@@ -657,10 +658,10 @@ mod tests {
             allow_host_ssh: false,
             port_forwards: Vec::new(),
         };
-        assert!(matches!(
+        assert_matches!(
             dispatch(request, &config).await,
             Err(HelperFailure::InvalidRequest { .. })
-        ));
+        );
     }
 
     #[tokio::test]
@@ -693,10 +694,10 @@ mod tests {
             }],
         ];
         for port_forwards in cases {
-            assert!(matches!(
+            assert_matches!(
                 dispatch(base(port_forwards), &config).await,
                 Err(HelperFailure::InvalidRequest { .. })
-            ));
+            );
         }
     }
 
@@ -716,10 +717,8 @@ mod tests {
             ..first.clone()
         };
 
-        assert!(matches!(
-            validate_vm_policies(vec![first, second]),
-            Err(HelperFailure::InvalidRequest { detail }) if detail.contains("duplicate VM policy IPv4")
-        ));
+        assert_matches!(validate_vm_policies(vec![first, second]),
+            Err(HelperFailure::InvalidRequest { detail }) if detail.contains("duplicate VM policy IPv4"));
     }
 
     fn sample_spec(uplink: Option<&str>) -> MicroNetworkSpec {
@@ -752,10 +751,8 @@ mod tests {
             micro_networks: vec![sample_spec(Some("nosuchiface0"))],
             vm_policies: Vec::new(),
         };
-        assert!(matches!(
-            dispatch(request, &config).await,
-            Err(HelperFailure::InvalidRequest { detail }) if detail.contains("nosuchiface0")
-        ));
+        assert_matches!(dispatch(request, &config).await,
+            Err(HelperFailure::InvalidRequest { detail }) if detail.contains("nosuchiface0"));
     }
 
     #[tokio::test]
@@ -769,11 +766,9 @@ mod tests {
                 micro_networks: vec![sample_spec(Some(name))],
                 vm_policies: Vec::new(),
             };
-            assert!(
-                matches!(
-                    dispatch(request, &config).await,
-                    Err(HelperFailure::InvalidRequest { .. })
-                ),
+            assert_matches!(
+                dispatch(request, &config).await,
+                Err(HelperFailure::InvalidRequest { .. }),
                 "{name:?} should be rejected before nft"
             );
         }
@@ -789,11 +784,9 @@ mod tests {
                 gateway: "172.31.0.1".parse().unwrap(),
                 prefix,
             };
-            assert!(
-                matches!(
-                    dispatch(request, &config).await,
-                    Err(HelperFailure::InvalidRequest { .. })
-                ),
+            assert_matches!(
+                dispatch(request, &config).await,
+                Err(HelperFailure::InvalidRequest { .. }),
                 "prefix {prefix} should have been rejected"
             );
         }

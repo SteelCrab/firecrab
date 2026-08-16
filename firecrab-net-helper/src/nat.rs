@@ -134,6 +134,7 @@ mod tests {
     use rtnetlink::new_connection;
 
     use super::*;
+    use core::assert_matches;
 
     #[tokio::test]
     async fn detect_uplink_resolves_the_hosts_default_route_interface() {
@@ -163,11 +164,9 @@ mod tests {
             "way-too-long-interface-name",
             "1234567890123456",
         ] {
-            assert!(
-                matches!(
-                    validate_uplink(bad),
-                    Err(FirewallError::InvalidUplinkName(_))
-                ),
+            assert_matches!(
+                validate_uplink(bad),
+                Err(FirewallError::InvalidUplinkName(_)),
                 "{bad:?} should be rejected"
             );
         }

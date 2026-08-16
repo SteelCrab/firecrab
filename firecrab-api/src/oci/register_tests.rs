@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use crate::templates::TemplateRegistry;
 
@@ -93,10 +94,7 @@ fn registering_refuses_to_overwrite_an_existing_rootfs() {
 
     let error = register_named_oci_image(named, &templates).expect_err("existing dest");
 
-    assert!(matches!(
-        error,
-        ResolveError::RegisterDestinationExists { .. }
-    ));
+    assert_matches!(error, ResolveError::RegisterDestinationExists { .. });
     assert_eq!(
         std::fs::read(&dest).expect("existing dest"),
         b"already-there"
@@ -113,7 +111,7 @@ fn a_failed_registration_removes_the_partial_rootfs() {
 
     let error = register_named_oci_image(named, &templates).expect_err("missing kernel");
 
-    assert!(matches!(error, ResolveError::RegisterFailed { .. }));
+    assert_matches!(error, ResolveError::RegisterFailed { .. });
     assert!(
         !templates
             .image_root_path()

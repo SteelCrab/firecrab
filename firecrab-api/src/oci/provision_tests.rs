@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -802,13 +803,13 @@ async fn a_late_failure_restores_a_read_only_usr_sbin_and_its_init() {
     let error = provision::inject_with_toolbox(merged, &toolbox)
         .await
         .expect_err("a blocked /usr/local must fail after unlocking /usr/sbin");
-    assert!(matches!(
+    assert_matches!(
         error,
         ResolveError::GuestPathUnusable {
             reason: GuestPathViolation::NonDirectoryAncestor { .. },
             ..
         }
-    ));
+    );
     assert_eq!(snapshot(&tree), before);
     assert_eq!(guest_mode(&tree, "/usr/sbin"), 0o555);
     assert_eq!(
@@ -921,13 +922,13 @@ async fn a_non_directory_ancestor_refuses_the_injection_and_restores_the_tree() 
     let error = provision::inject_with_toolbox(merged, &toolbox)
         .await
         .expect_err("a file where /etc belongs must fail the injection");
-    assert!(matches!(
+    assert_matches!(
         error,
         ResolveError::GuestPathUnusable {
             reason: GuestPathViolation::NonDirectoryAncestor { .. },
             ..
         }
-    ));
+    );
     // A failed injection is not allowed to damage the caller's merged tree.
     assert_eq!(snapshot(&tree), before);
 }
@@ -962,13 +963,11 @@ async fn a_symlink_cycle_is_refused_before_any_guest_file_is_written() {
     let error = provision::inject_with_toolbox(merged, &toolbox)
         .await
         .expect_err("a symlink cycle must fail the injection");
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::GuestPathUnusable {
             reason: GuestPathViolation::SymlinkLoop { limit },
             ..
-        } if limit == 40
-    ));
+        } if limit == 40);
     assert_eq!(snapshot(&tree), before);
 }
 
@@ -1036,13 +1035,13 @@ async fn a_late_failure_restores_an_image_supplied_init() {
     let error = provision::inject_with_toolbox(merged, &toolbox)
         .await
         .expect_err("a blocked /usr/local must fail the injection");
-    assert!(matches!(
+    assert_matches!(
         error,
         ResolveError::GuestPathUnusable {
             reason: GuestPathViolation::NonDirectoryAncestor { .. },
             ..
         }
-    ));
+    );
     // Everything is put back, including the init that had been moved aside.
     assert_eq!(snapshot(&tree), before);
     assert_eq!(read_guest(&tree, "/sbin/init"), b"the image's own init");
@@ -1072,13 +1071,13 @@ async fn a_directory_occupying_a_guest_file_path_is_refused() {
     let error = provision::inject_with_toolbox(merged, &toolbox)
         .await
         .expect_err("a directory where /etc/inittab belongs must fail");
-    assert!(matches!(
+    assert_matches!(
         error,
         ResolveError::GuestPathUnusable {
             reason: GuestPathViolation::NonDirectoryAncestor { .. },
             ..
         }
-    ));
+    );
     assert_eq!(snapshot(&tree), before);
 }
 

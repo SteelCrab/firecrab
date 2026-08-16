@@ -435,6 +435,7 @@ mod tests {
     use rusqlite::{Connection, TransactionBehavior};
 
     use super::*;
+    use core::assert_matches;
 
     fn open() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -576,10 +577,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             active_lease(&conn, vm_id),
             Err(IpamError::CorruptLease { .. })
-        ));
+        );
     }
 
     #[test]
@@ -597,14 +598,14 @@ mod tests {
         }
 
         let tx = begin(&mut conn);
-        assert!(matches!(
+        assert_matches!(
             allocate(
                 &tx,
                 Uuid::new_v4(),
                 SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))
             ),
             Err(IpamError::PoolExhausted { .. })
-        ));
+        );
     }
 
     #[test]
@@ -621,10 +622,8 @@ mod tests {
         tx.commit().unwrap();
 
         let tx = begin(&mut conn);
-        assert!(matches!(
-            allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))),
-            Err(IpamError::AlreadyLeased { vm_id: leased }) if leased == vm_id
-        ));
+        assert_matches!(allocate(&tx, vm_id, SubnetSpec::legacy_default_subnet(Uuid::from_u128(1))),
+            Err(IpamError::AlreadyLeased { vm_id: leased }) if leased == vm_id);
     }
 
     #[test]
@@ -715,10 +714,10 @@ mod tests {
             .map(|last_octet| Ipv4Addr::new(172, 30, 0, last_octet))
             .collect();
         let tx = begin(&mut conn);
-        assert!(matches!(
+        assert_matches!(
             rotate(&tx, vm_id, subnet, &unavailable),
             Err(IpamError::PoolExhausted { .. })
-        ));
+        );
         drop(tx); // no commit: release_active must roll back too.
 
         assert_eq!(active_lease(&conn, vm_id).unwrap(), Some(original));
@@ -729,10 +728,10 @@ mod tests {
     fn releasing_a_vm_without_a_lease_fails() {
         let mut conn = open();
         let tx = begin(&mut conn);
-        assert!(matches!(
+        assert_matches!(
             release(&tx, Uuid::new_v4()),
             Err(IpamError::NotLeased { .. })
-        ));
+        );
     }
 
     #[test]
@@ -795,7 +794,7 @@ mod tests {
             vm_id,
             SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
         );
-        assert!(matches!(result, Err(IpamError::MacPoolExhausted)));
+        assert_matches!(result, Err(IpamError::MacPoolExhausted));
         drop(tx); // no commit: rolls back
 
         let leaked: u32 = conn

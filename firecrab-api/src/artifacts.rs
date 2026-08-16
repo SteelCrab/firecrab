@@ -155,6 +155,7 @@ pub fn remove_vm_artifacts(paths: &VmArtifactPaths) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
     use std::os::unix::fs::MetadataExt;
 
     #[test]
@@ -254,10 +255,7 @@ mod tests {
 
         let paths = VmArtifactPaths::for_vm(&blocker, Uuid::new_v4());
         let error = paths.ensure_directories().unwrap_err();
-        assert!(
-            matches!(error, ArtifactError::CreateDirectory { ref path, .. } if *path == paths.dir),
-            "{error}"
-        );
+        assert_matches!(error, ArtifactError::CreateDirectory { ref path, .. } if *path == paths.dir, "{error}");
     }
 
     /// A symlinked VM directory is refused rather than followed: the tree is
@@ -275,10 +273,7 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, &paths.dir).unwrap();
 
         let error = paths.ensure_directories().unwrap_err();
-        assert!(
-            matches!(error, ArtifactError::UnsafeDirectory(ref path) if *path == paths.dir),
-            "{error}"
-        );
+        assert_matches!(error, ArtifactError::UnsafeDirectory(ref path) if *path == paths.dir, "{error}");
     }
 
     #[test]
@@ -290,10 +285,7 @@ mod tests {
 
         let error = paths.create_runtime(runtime_id).unwrap_err();
         let expected = paths.runtime(runtime_id).dir;
-        assert!(
-            matches!(error, ArtifactError::CreateDirectory { ref path, .. } if *path == expected),
-            "{error}"
-        );
+        assert_matches!(error, ArtifactError::CreateDirectory { ref path, .. } if *path == expected, "{error}");
     }
 
     #[test]

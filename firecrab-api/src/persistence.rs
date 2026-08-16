@@ -1685,6 +1685,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use core::assert_matches;
 
     fn record(id: Uuid, name: &str) -> VmRecord {
         VmRecord {
@@ -1734,14 +1735,12 @@ mod tests {
         assert_eq!(remaining.len(), 1);
         assert!(remaining.contains_key(&second.id));
 
-        assert!(matches!(
-            store.delete(first.id),
-            Err(PersistenceError::MissingVm { id }) if id == first.id
-        ));
-        assert!(matches!(
+        assert_matches!(store.delete(first.id),
+            Err(PersistenceError::MissingVm { id }) if id == first.id);
+        assert_matches!(
             store.update(&record(Uuid::new_v4(), "ghost")),
             Err(PersistenceError::MissingVm { .. })
-        ));
+        );
     }
 
     #[test]
@@ -1766,10 +1765,10 @@ mod tests {
         store.insert(&vm).unwrap();
         store.set_vm_shells(vm.id, &pins).unwrap();
         assert_eq!(store.list_vm_shell_scripts(vm.id).unwrap().len(), 1);
-        assert!(matches!(
+        assert_matches!(
             store.delete_shell(shell_id),
             Err(PersistenceError::ShellInUse { count: 1, .. })
-        ));
+        );
 
         store.clear_vm_shells(vm.id).unwrap();
         store.delete_shell(shell_id).unwrap();
@@ -1935,14 +1934,9 @@ mod tests {
                     params![raw, vm.id.to_string()],
                 )
                 .unwrap();
-            assert!(
-                matches!(
-                    store.load_all(),
+            assert_matches!(store.load_all(),
                     Err(PersistenceError::CorruptRecord { ref id, ref reason })
-                        if id == &vm.id.to_string() && reason.contains("env is not a JSON object")
-                ),
-                "{raw} should be reported as a corrupt env column"
-            );
+                        if id == &vm.id.to_string() && reason.contains("env is not a JSON object"), "{raw} should be reported as a corrupt env column");
         }
     }
 
@@ -1970,14 +1964,9 @@ mod tests {
             !rendered.contains(SECRET),
             "CorruptRecord must not echo persisted env: {rendered}"
         );
-        assert!(
-            matches!(
-                error,
+        assert_matches!(error,
                 PersistenceError::CorruptRecord { ref reason, .. }
-                    if reason == "env is not a JSON object of strings" && !reason.contains(SECRET)
-            ),
-            "{error}"
-        );
+                    if reason == "env is not a JSON object of strings" && !reason.contains(SECRET), "{error}");
     }
 
     #[test]
@@ -2162,10 +2151,8 @@ mod tests {
         let directory = tempdir().unwrap();
         let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
         let id = Uuid::new_v4();
-        assert!(matches!(
-            store.set_micro_network_uplink(id, Some("eth0".to_owned())).unwrap_err(),
-            PersistenceError::MissingMicroNetwork { id: missing } if missing == id
-        ));
+        assert_matches!(store.set_micro_network_uplink(id, Some("eth0".to_owned())).unwrap_err(),
+            PersistenceError::MissingMicroNetwork { id: missing } if missing == id);
     }
 
     #[test]
@@ -2173,10 +2160,8 @@ mod tests {
         let directory = tempdir().unwrap();
         let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
         let id = Uuid::new_v4();
-        assert!(matches!(
-            store.set_micro_network_internet(id, false).unwrap_err(),
-            PersistenceError::MissingMicroNetwork { id: missing } if missing == id
-        ));
+        assert_matches!(store.set_micro_network_internet(id, false).unwrap_err(),
+            PersistenceError::MissingMicroNetwork { id: missing } if missing == id);
     }
 
     #[test]
@@ -2194,11 +2179,9 @@ mod tests {
     #[test]
     fn decode_egress_policy_rejects_an_unknown_value_as_corrupt() {
         let error = decode_egress_policy("some-id", "wide-open").unwrap_err();
-        assert!(matches!(
-            error,
+        assert_matches!(error,
             PersistenceError::CorruptRecord { id, reason }
-                if id == "some-id" && reason.contains("wide-open")
-        ));
+                if id == "some-id" && reason.contains("wide-open"));
     }
 
     #[test]
@@ -2295,11 +2278,9 @@ mod tests {
                     params![value, id],
                 )
                 .unwrap();
-            assert!(
-                matches!(
-                    store.load_all(),
-                    Err(PersistenceError::CorruptRecord { .. })
-                ),
+            assert_matches!(
+                store.load_all(),
+                Err(PersistenceError::CorruptRecord { .. }),
                 "{column} = {value:?} should be reported as corrupt"
             );
         }
@@ -2317,10 +2298,10 @@ mod tests {
             )
             .unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             store.list_micro_storages(),
             Err(PersistenceError::CorruptRecord { .. })
-        ));
+        );
     }
 
     /// Only a UNIQUE violation means "already registered" — every other
@@ -2335,10 +2316,10 @@ mod tests {
             .execute("DROP TABLE micro_storages", [])
             .unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             store.insert_micro_storage(Uuid::new_v4(), "p", "/mnt/p"),
             Err(PersistenceError::Database(_))
-        ));
+        );
     }
 
     #[test]
@@ -2346,10 +2327,10 @@ mod tests {
         let directory = tempdir().unwrap();
         fs::write(directory.path().join("vms.json"), b"{invalid").unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             Store::open(&directory.path().join("firecrab.db")),
             Err(PersistenceError::LegacyDeserialize { .. })
-        ));
+        );
     }
 
     #[test]
@@ -2374,14 +2355,9 @@ mod tests {
         // handler already does) is what must reject this — this is exactly
         // the case a check-then-insert race could otherwise let through.
         let result = store.set_vm_port_forwards(vm_b.id, &[claimed]);
-        assert!(
-            matches!(
-                &result,
+        assert_matches!(&result,
                 Err(PersistenceError::DuplicatePortForward { host_port: 8080, protocol })
-                    if protocol == "tcp"
-            ),
-            "expected a typed conflict, got {result:?}"
-        );
+                    if protocol == "tcp", "expected a typed conflict, got {result:?}");
         // The whole write must have rolled back, not left a partial row.
         assert!(store.list_vm_port_forwards(vm_b.id).unwrap().is_empty());
     }
@@ -2486,14 +2462,9 @@ mod tests {
         store.insert_microregistry_local(&entry).unwrap();
 
         let result = store.insert_microregistry_local(&entry);
-        assert!(
-            matches!(
-                &result,
+        assert_matches!(&result,
                 Err(PersistenceError::DuplicateMicroRegistryLocal { alias, architecture })
-                    if alias == "nginx-1.27" && architecture == "x86_64"
-            ),
-            "expected a typed constraint conflict, got {result:?}"
-        );
+                    if alias == "nginx-1.27" && architecture == "x86_64", "expected a typed constraint conflict, got {result:?}");
 
         let other_arch = local_catalog_entry("nginx-1.27", "aarch64");
         store.insert_microregistry_local(&other_arch).unwrap();

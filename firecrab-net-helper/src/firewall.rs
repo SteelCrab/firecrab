@@ -731,6 +731,7 @@ async fn run_nft(ruleset: &str) -> Result<(), FirewallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     fn sample_network(id: u128, gateway: &str, prefix: u8) -> MicroNetworkSpec {
         MicroNetworkSpec {
@@ -948,19 +949,19 @@ mod tests {
             "fct0",
             "mnb0",
         ] {
-            assert!(matches!(
+            assert_matches!(
                 render_apply_ruleset(bad, &[]),
                 Err(FirewallError::InvalidUplinkName(_))
-            ));
+            );
         }
         let bad_spec = MicroNetworkSpec {
             uplink: Some("eth0;id".to_owned()),
             ..sample_network(0x1234, "172.31.0.1", 24)
         };
-        assert!(matches!(
+        assert_matches!(
             render_apply_ruleset("eth0", &[bad_spec]),
             Err(FirewallError::InvalidUplinkName(_))
-        ));
+        );
     }
 
     #[test]

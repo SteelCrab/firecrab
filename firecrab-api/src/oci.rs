@@ -3958,6 +3958,7 @@ fn is_valid_component(component: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     fn parse(reference: &str) -> ImageReference {
         ImageReference::parse(reference).expect(reference)
@@ -4093,11 +4094,9 @@ mod tests {
             OCI_MANIFEST_MEDIA_TYPE,
         );
 
-        assert!(matches!(
-            parse_image_manifest(&manifest),
+        assert_matches!(parse_image_manifest(&manifest),
             Err(ResolveError::Digest(DigestError::UnsupportedAlgorithm(algorithm)))
-                if algorithm == "sha512"
-        ));
+                if algorithm == "sha512");
     }
 
     #[test]
@@ -4122,14 +4121,14 @@ mod tests {
             OCI_MANIFEST_MEDIA_TYPE,
         );
 
-        assert!(matches!(
+        assert_matches!(
             parse_image_manifest(&manifest),
             Err(ResolveError::ConflictingDescriptorSize {
                 first: 3,
                 second: 4,
                 ..
             })
-        ));
+        );
     }
 
     #[test]
@@ -4142,15 +4141,13 @@ mod tests {
         }))
         .unwrap();
 
-        assert!(matches!(
+        assert_matches!(
             classify_document(Some(DOCKER_MANIFEST_MEDIA_TYPE), &body),
             Err(ResolveError::Malformed(_))
-        ));
-        assert!(matches!(
-            classify_document(Some("application/json"), &body),
+        );
+        assert_matches!(classify_document(Some("application/json"), &body),
             Err(ResolveError::UnsupportedMediaType(media_type))
-                if media_type == "application/json"
-        ));
+                if media_type == "application/json");
     }
 
     #[test]
@@ -4184,7 +4181,7 @@ mod tests {
             .await
             .expect_err("a secure registry session must reject HTTP before connecting");
 
-        assert!(matches!(error, ResolveError::Transport(_)));
+        assert_matches!(error, ResolveError::Transport(_));
     }
 
     #[test]
@@ -4308,10 +4305,10 @@ mod tests {
     fn select_reports_an_index_with_nothing_usable() {
         let empty = index(serde_json::json!([]));
 
-        assert!(matches!(
+        assert_matches!(
             empty.select(Architecture::HOST).unwrap_err(),
             IndexError::NoLinuxManifests { skipped: 0 }
-        ));
+        );
     }
 
     /// A registry that answers `401` with a `Bearer` challenge, hands out a
@@ -4414,10 +4411,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(
+        assert_matches!(
             error,
             ResolveError::Index(IndexError::NoLinuxManifests { skipped: 0 })
-        ));
+        );
     }
 
     #[test]

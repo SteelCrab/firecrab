@@ -429,6 +429,7 @@ fn statvfs_bytes(path: &Path) -> Result<(u64, u64), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::assert_matches;
 
     #[test]
     fn parse_accepts_id_path_pairs() {
@@ -510,10 +511,10 @@ mod tests {
     #[test]
     fn ensure_capacity_rejects_unknown_root() {
         let reg = StorageRegistry::default_single();
-        assert!(matches!(
+        assert_matches!(
             reg.ensure_capacity("nope", 1),
             Err(StorageError::UnknownRoot(_))
-        ));
+        );
     }
 
     #[test]
@@ -557,6 +558,6 @@ mod tests {
     fn ensure_capacity_rejects_absurd_size() {
         let reg = StorageRegistry::single("r", PathBuf::from("/"));
         let err = reg.ensure_capacity("r", u64::MAX / 2).unwrap_err();
-        assert!(matches!(err, StorageError::FreeSpace { .. }));
+        assert_matches!(err, StorageError::FreeSpace { .. });
     }
 }

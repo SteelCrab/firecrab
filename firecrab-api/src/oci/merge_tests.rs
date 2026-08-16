@@ -1,4 +1,5 @@
 use super::*;
+use core::assert_matches;
 
 use std::io::Cursor;
 use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
@@ -738,10 +739,8 @@ async fn invalid_whiteouts_and_ambiguous_paths_fail_without_publishing() {
         let error = merge_validated_layers(&layers, &destination)
             .await
             .expect_err("invalid merge layer must fail");
-        assert!(matches!(
-            error,
-            ResolveError::UnsafeTarMember { reason, .. } if reason == expected
-        ));
+        assert_matches!(error,
+            ResolveError::UnsafeTarMember { reason, .. } if reason == expected);
         assert!(!destination.exists());
         assert_no_partial_trees(directory.path());
     }
@@ -815,13 +814,11 @@ async fn lower_symlink_ancestors_cannot_write_or_whiteout_outside_the_tree() {
             );
         } else {
             let error = result.expect_err("ordinary writes must not traverse a lower symlink");
-            assert!(matches!(
-                error,
+            assert_matches!(error,
                 ResolveError::UnsafeTarMember {
                     reason: TarMemberViolation::SymlinkAncestor { ancestor },
                     ..
-                } if ancestor == Path::new("escape")
-            ));
+                } if ancestor == Path::new("escape"));
             assert!(!destination.exists());
         }
         assert_eq!(
@@ -865,7 +862,7 @@ async fn stale_validated_bytes_and_preexisting_destinations_are_not_published_ov
     let error = merge_validated_layers(&layers, &destination)
         .await
         .expect_err("changed validated bytes must be rehashed");
-    assert!(matches!(error, ResolveError::DiffIdMismatch { .. }));
+    assert_matches!(error, ResolveError::DiffIdMismatch { .. });
     assert!(!destination.exists());
     assert_no_partial_trees(directory.path());
 
@@ -875,7 +872,7 @@ async fn stale_validated_bytes_and_preexisting_destinations_are_not_published_ov
     let error = merge_validated_layers(&[], &existing)
         .await
         .expect_err("existing destination must not be replaced");
-    assert!(matches!(error, ResolveError::MergeDestinationExists { path } if path == existing));
+    assert_matches!(error, ResolveError::MergeDestinationExists { path } if path == existing);
     assert_eq!(
         std::fs::read(existing.join("sentinel")).unwrap(),
         b"unchanged"
@@ -899,14 +896,12 @@ async fn only_directory_entries_may_name_the_archive_root() {
         .await
         .expect_err("an archive-root regular file must fail preflight");
 
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::UnsafeTarMember {
             path,
             reason: TarMemberViolation::Path,
             ..
-        } if path == Path::new(".")
-    ));
+        } if path == Path::new("."));
 }
 
 #[tokio::test]
@@ -916,21 +911,17 @@ async fn merge_destinations_must_name_a_directory_below_a_parent() {
     let error = merge_validated_layers(&[], Path::new("/"))
         .await
         .expect_err("a destination without a parent must fail");
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::MergeIo { operation, path, .. }
-            if operation == "resolve destination parent" && path == Path::new("/")
-    ));
+            if operation == "resolve destination parent" && path == Path::new("/"));
 
     let unnamed = directory.path().join("..");
     let error = merge_validated_layers(&[], &unnamed)
         .await
         .expect_err("a destination without a final component must fail");
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::MergeIo { operation, path, .. }
-            if operation == "resolve destination name" && path == unnamed
-    ));
+            if operation == "resolve destination name" && path == unnamed);
     assert_no_partial_trees(directory.path());
 }
 
@@ -1027,10 +1018,8 @@ async fn hard_link_targets_must_resolve_inside_the_merged_tree() {
         let error = merge_validated_layers(&layers, &destination)
             .await
             .expect_err("an unresolvable hard link target must fail");
-        assert!(matches!(
-            error,
-            ResolveError::UnsafeTarMember { reason, .. } if reason == expected
-        ));
+        assert_matches!(error,
+            ResolveError::UnsafeTarMember { reason, .. } if reason == expected);
         assert!(!destination.exists());
         assert_no_partial_trees(directory.path());
     }
@@ -1132,13 +1121,11 @@ async fn members_may_not_be_written_beneath_a_lower_layer_file() {
         .await
         .expect_err("a lower-layer file must not silently become a directory");
 
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::UnsafeTarMember {
             reason: TarMemberViolation::NonDirectoryAncestor { ancestor },
             ..
-        } if ancestor == Path::new("blocker")
-    ));
+        } if ancestor == Path::new("blocker"));
     assert!(!destination.exists());
     assert_no_partial_trees(directory.path());
 }
@@ -1166,10 +1153,8 @@ async fn cache_entries_swapped_after_validation_are_rejected() {
     let error = merge_validated_layers(&layers, &destination)
         .await
         .expect_err("a cache entry that is no longer a file must fail");
-    assert!(matches!(
-        error,
-        ResolveError::MergeIo { operation, .. } if operation == "inspect validated layer"
-    ));
+    assert_matches!(error,
+        ResolveError::MergeIo { operation, .. } if operation == "inspect validated layer");
     assert!(!destination.exists());
     assert_no_partial_trees(directory.path());
 
@@ -1182,11 +1167,9 @@ async fn cache_entries_swapped_after_validation_are_rejected() {
     let error = merge_validated_layers(&layers, &destination)
         .await
         .expect_err("a resized cache entry must fail");
-    assert!(matches!(
-        error,
+    assert_matches!(error,
         ResolveError::SizeMismatch { expected, actual, .. }
-            if expected == declared_size && actual == declared_size - 512
-    ));
+            if expected == declared_size && actual == declared_size - 512);
     assert!(!destination.exists());
     assert_no_partial_trees(directory.path());
 }
