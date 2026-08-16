@@ -25,17 +25,13 @@ Check the API directly.
 curl -i http://127.0.0.1:3000/api/vms
 ```
 
-Use `http://localhost:8080` for Vite development.
-`127.0.0.1:8080` is a different browser origin.
-
-Check for old processes on ports `3000` and `8080`.
+Use `http://localhost:8080` for Vite development — `127.0.0.1:8080` is a
+different browser origin. Check for old processes on ports `3000` and `8080`.
 
 ## Data appears empty
 
-Run the development API from the repository root.
-Default data paths use the current working directory.
-
-The host doctor reports multiple database locations.
+Run the development API from the repository root; default data paths use the
+current working directory. The host doctor reports multiple database locations.
 
 ## VM start fails immediately
 
@@ -51,16 +47,8 @@ A new group membership needs a new login session.
 
 ## Network helper is unavailable
 
-The API and helper must use the same socket.
-The default is `/run/firecrab/net-helper.sock`.
-
-Start the development helper first.
-
-```sh
-./scripts/dev-net-helper.sh
-```
-
-Check the installed socket and service.
+The API and helper must use the same socket, by default `/run/firecrab/net-helper.sock`.
+Start the development helper with `./scripts/dev-net-helper.sh`, or check the installed one.
 
 ```sh
 systemctl status firecrab-net-helper
@@ -69,10 +57,8 @@ ls -l /run/firecrab/net-helper.sock
 
 ## VM stays in `starting`
 
-Open the VM details and read the active start step.
-Check the API log and console log.
-
-Check disk space and latency during disk preparation.
+Open the VM details and read the active start step; check the API and console logs.
+Then check disk space and latency during disk preparation.
 
 ```sh
 df -h
@@ -91,9 +77,7 @@ ip -br link show type bridge
 sudo ss -lunp | grep ':67'
 ```
 
-Read the helper log for dnsmasq errors.
-Read the guest log for `FIRECRAB_NETWORK_FAILED`.
-
+Read the helper log for dnsmasq errors and the guest log for `FIRECRAB_NETWORK_FAILED`.
 The host firewall can block DHCP on `mnb*` bridges. Restart
 `firecrab-net-helper` after an upgrade. An imported image has no `ping`;
 use `/etc/firecrab/busybox ping 1.1.1.1` or restart for PATH tools.
@@ -119,9 +103,30 @@ sudo nft list table inet firecrab
 
 ## OCI pull fails
 
-`error sending request` is DNS/TLS/firewall, not a missing Docker Hub login.
 `401` is a bad login; `429` is the spent anonymous quota — save a token, see [OCI](oci.md).
-Check as the API user: `sudo -u firecrab curl -sI https://registry-1.docker.io/v2/` (`401` is expected).
+`Permission denied (os error 13)` is SELinux, not the network: see below.
+
+## SELinux confines the services to `init_t`
+
+Every registry read fails with `Permission denied (os error 13)` while a shell on
+the same account reaches the registry, and `nft list table inet firecrab` is empty.
+`init_t` is systemd's own domain; the services must transition out of it.
+
+```sh
+ps -eZ | grep -E 'firecrab-(api|net-he)'          # want unconfined_service_t
+sudo ausearch -m avc -ts recent | audit2allow -a
+```
+
+`$PREFIX/lib/firecrab` is labelled `lib_t`, and the transition rule only fires
+for `bin_t`. Installing with `install.sh` relabels it; on an older install:
+
+```sh
+sudo semanage fcontext -a -t bin_t '/usr/local/lib/firecrab(/.*)?'
+sudo restorecon -R /usr/local/lib/firecrab
+sudo systemctl restart firecrab-net-helper firecrab-api
+```
+
+`sudo setenforce 0` confirms the diagnosis in one command; put it back to `1`.
 
 ## Image download returns `503`
 
@@ -153,13 +158,8 @@ Check the browser network panel and API log.
 
 ## Delete returns `409`
 
-The resource is active or still in use.
-
-- Stop a VM before deleting it.
-- Remove VMs before deleting their network.
-- Move or remove VMs before deleting their storage pool.
-- Remove VMs before deleting their image.
-
+The resource is active or still in use: stop a VM before deleting it, and remove
+VMs before deleting their network, storage pool, or image.
 Use the response `requestId` to find the server log.
 
 ## Related

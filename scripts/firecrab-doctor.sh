@@ -18,6 +18,9 @@ API_USER=${FIRECRAB_API_USER:-${FIRECRAB_USER:-}}
 HELPER_SOCK=${FIRECRAB_NET_HELPER_SOCK:-/run/firecrab/net-helper.sock}
 DNSMASQ_CONF=${FIRECRAB_DNSMASQ_CONF:-/run/firecrab/dnsmasq.conf}
 DNSMASQ_PID=${FIRECRAB_DNSMASQ_PID:-/run/firecrab/dnsmasq.pid}
+# Where install.sh puts the service binaries; only used to print the SELinux
+# relabel command with the path this host actually uses.
+SELINUX_LIBDIR=${FIRECRAB_LIBDIR:-/usr/local/lib/firecrab}
 
 OK=0
 FAIL=0
@@ -861,6 +864,41 @@ check_reflink() {
         "put both on one XFS/Btrfs filesystem, or accept a full template copy per VM"
 }
 
+# A service left in systemd's own SELinux domain looks healthy to every other
+# check while being unable to open an outbound connection or exec nft. The
+# symptom is EACCES from code that has no idea SELinux exists, so name the
+# domain here instead.
+check_selinux_domain() {
+    local mode line domain processes confined=()
+
+    have getenforce || { pass; return; }
+    mode=$(getenforce 2>/dev/null || printf Disabled)
+    [ "$mode" = "Enforcing" ] || { pass; return; }
+    have ps || { pass; return; }
+
+    # pgrep cannot print an SELinux context, which is the whole point here.
+    # shellcheck disable=SC2009
+    processes=$(ps -eZ 2>/dev/null | grep -E 'firecrab-(api|net-he)' || true)
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        domain=${line%% *}
+        case "$domain" in
+            *:init_t:*) confined+=("$line") ;;
+        esac
+    done <<<"$processes"
+
+    if [ "${#confined[@]}" -eq 0 ]; then
+        pass
+        return
+    fi
+
+    fail "selinux: a firecrab service runs in systemd's own domain (init_t)" \
+        "$(printf '%s\n' "${confined[@]}"
+           printf 'init_t cannot connect to https ports, so every registry read fails\n'
+           printf 'with EACCES, and the helper cannot exec nft.\n')" \
+        "sudo semanage fcontext -a -t bin_t '${SELINUX_LIBDIR}(/.*)?' && sudo restorecon -R ${SELINUX_LIBDIR} && sudo systemctl restart firecrab-net-helper firecrab-api"
+}
+
 # --- run ---------------------------------------------------------------------
 
 check_kvm
@@ -873,6 +911,7 @@ check_ufw
 check_data_root
 check_images
 check_image_install_tools
+check_selinux_domain
 check_reflink
 
 if [ "$FAIL" -eq 0 ] && [ "$SKIP" -eq 0 ]; then

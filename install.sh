@@ -595,6 +595,40 @@ install_binaries() {
     fi
 }
 
+# On an enforcing SELinux host the services must not keep systemd's own
+# domain.
+#
+# $PREFIX/lib/firecrab is labelled lib_t, and the policy rule that moves a
+# service out of init_t into unconfined_service_t only fires for bin_t
+# executables. Without this the API stays in init_t, where an outbound HTTPS
+# connect is denied — every registry read fails with EACCES while a shell on
+# the same account reaches the registry fine (public-docs/troubleshooting.md).
+label_selinux_binaries() {
+    local pattern="${LIBDIR}(/.*)?"
+
+    have getenforce || return 0
+    case "$(getenforce 2>/dev/null || printf Disabled)" in
+        Enforcing|Permissive) ;;
+        *) return 0 ;;
+    esac
+
+    if have semanage; then
+        # -a fails when the rule already exists, which a re-run always hits.
+        $SUDO semanage fcontext -a -t bin_t "$pattern" 2>/dev/null \
+            || $SUDO semanage fcontext -m -t bin_t "$pattern" 2>/dev/null \
+            || warn "could not record an SELinux file context for $LIBDIR"
+    else
+        warn "semanage not installed; the bin_t label will not survive a relabel" \
+            "(dnf install policycoreutils-python-utils)"
+    fi
+
+    if have restorecon; then
+        $SUDO restorecon -R "$LIBDIR" >/dev/null 2>&1 \
+            || warn "restorecon failed for $LIBDIR"
+        log "SELinux: $LIBDIR labelled bin_t"
+    fi
+}
+
 # Seeds api.env once so an operator's edits survive a re-run.
 install_config() {
     if [ -f "$CONFDIR/api.env" ]; then
@@ -1014,6 +1048,7 @@ do_install() {
     ensure_account
     ensure_directories
     install_binaries
+    label_selinux_binaries
     install_config
     install_units
     # Guest images are not part of the host install. The dashboard Images
@@ -1047,6 +1082,11 @@ do_uninstall() {
     $SUDO rm -f "$PREFIX/bin/firecrab-doctor"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true
+    # The file-context rule outlives the directory, so leaving it behind would
+    # silently relabel whatever is installed there next.
+    if have semanage; then
+        $SUDO semanage fcontext -d "${LIBDIR}(/.*)?" 2>/dev/null || true
+    fi
     log "binaries and dashboard removed"
 
     # Left alone on purpose: the account, the config and the data directory.
