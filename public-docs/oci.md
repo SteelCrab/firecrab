@@ -86,15 +86,13 @@ result.
 
 Merging builds a private sibling partial tree and atomically publishes it only
 after every layer succeeds; the destination must not already exist. Failures
-attempt to remove the partial tree and always retain verified blob and
-decompressed-layer cache entries.
+attempt to remove the partial tree and always retain verified blob and decompressed-layer cache entries.
 
 ## Guest toolbox
 
 A container image is an application, not an operating system: it has no PID 1,
 no DHCP client, and nothing that reports readiness. The internal pipeline
-supplies all three from one static program before a merged tree can become a
-bootable image.
+supplies all three from one static program before a merged tree can become a bootable image.
 
 That program is taken from a digest-pinned busybox image, pulled through the
 same verified stages as the image being imported. It must be a 64-bit
@@ -126,10 +124,8 @@ fastfetch (polyfilled, GLIBC_2.17) to `/usr/bin/fastfetch`, cached at
 with `FIRECRAB_OCI_FASTFETCH_PATH`. A missing program is not an import failure.
 `/etc/firecrab/services.d` is created empty for the image's own entrypoint, which a later stage translates into an ordinary service under that init rather than PID 1.
 
-Images that place `/sbin` or `/etc` behind a symbolic link are activated
-through it.
-Resolution is clamped to the tree, and an entry already occupying a guest
-path is replaced without writing through it.
+Images that place `/sbin` or `/etc` behind a symbolic link are activated through it.
+Resolution is clamped to the tree, and an entry already occupying a guest path is replaced without writing through it.
 A failed activation restores every path it touched.
 
 ## Ext4 image
@@ -151,7 +147,10 @@ This stage still pairs no kernel and registers nothing.
 
 ## Kernel, name, register
 
-The packed ext4 is paired with this host's no-initrd catalog kernel — Ubuntu.
+The packed ext4 is paired with the kernel Firecrab publishes for this architecture — `virtio_blk`, `virtio_net`, `virtio_mmio`, and `ext4` built in, no initrd — so no catalog image has to be installed first.
+It is pinned by digest, fetched once from `FIRECRAB_IMAGE_BASE_URL`, cached at `<FIRECRAB_IMAGE_ROOT>/.oci/kernel/<arch>/`, and re-verified on every reuse.
+`FIRECRAB_OCI_KERNEL_PATH` names a host copy, which must match the same digest.
+A host that cannot reach the registry falls back to an installed catalog kernel.
 The alias is the repository and tag — `nginx:1.27` becomes `nginx-1.27`.
 A catalog or installed alias is refused; the ext4 is copied to `rootfs/<alias>.ext4`.
 That local template is not a MicroRegistry row; register it as in [Images](images.md) and [API](api.md).
