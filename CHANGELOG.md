@@ -65,6 +65,8 @@ network helper.
 - NAT uplink fallback in the dashboard is parenthesized so Vite accepts it.
 - Image catalog architecture must be stated explicitly, including on
   arm64 installer doctor paths.
+- Release smoke no longer waits for `firecrab-api` to exit, so a binary
+  that actually starts cannot stall Publish GitHub Release for six hours.
 
 ### Improved
 
