@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # firecrab host installer (public-docs/installation.md).
 #
-# One command on a machine that only has network access: works out what is
-# missing, installs it, builds firecrab, and leaves two systemd daemons
-# running with the dashboard served on http://127.0.0.1:3000/.
+# Downloads a host bundle from a GitHub Release (or installs local binaries
+# via --bin-dir), then lays out systemd units so the dashboard is served on
+# http://127.0.0.1:3000/.
+#
+# Bundles are Linux x86_64/aarch64 × gnu (glibc) / musl. glibc hosts get the
+# gnu bundle; musl hosts (Alpine) get musl. Override with --libc.
 #
 # Every step checks before it changes anything, so re-running is safe and
 # doubles as a repair for a half-broken install.
@@ -21,6 +24,10 @@ UNITDIR=${UNITDIR:-/etc/systemd/system}
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 UNITS=(firecrab-net-helper.service firecrab-api.service)
 
+# Placeholder @FIRECRAB_RELEASE_TAG@ is replaced by the tag on a published
+# install.sh (v0.1.0). The repo copy keeps the placeholder and means "latest".
+FIRECRAB_RELEASE_TAG="@FIRECRAB_RELEASE_TAG@"
+
 MODE=install
 INSTALL_DEPS=1
 WITH_IMAGES=1
@@ -28,6 +35,29 @@ WITH_UBUNTU_IMAGE=0
 WITH_ROCKY_IMAGE=0
 WITH_FRONTEND=1
 PURGE=0
+BIN_DIR=
+DASHBOARD_DIR=
+RELEASE_VERSION=
+LIBC=
+PAYLOAD_TMP=
+PAYLOAD_ROOT=
+PAYLOAD_BIN=
+PAYLOAD_UNITS=
+PAYLOAD_EXTRACT=
+PAYLOAD_DOCTOR=
+PAYLOAD_DASHBOARD=
+
+# BEGIN RELEASE_HELPERS
+if [ -f "$REPO_ROOT/scripts/firecrab-release.sh" ]; then
+    # Optional checkout helper; the published installer inlines this block.
+    # shellcheck disable=SC1091
+    . "$REPO_ROOT/scripts/firecrab-release.sh"
+fi
+if ! type firecrab_host_arch >/dev/null 2>&1; then
+    printf 'xx  release helpers missing — run from a firecrab checkout or use the install.sh from a GitHub Release\n' >&2
+    exit 1
+fi
+# END RELEASE_HELPERS
 
 PKG=''          # detected package manager
 PKG_UPDATED=0   # index refreshed at most once
@@ -37,20 +67,35 @@ usage() {
     cat <<'USAGE'
 Usage: ./install.sh [OPTIONS]
 
-  (no options)        install everything that is missing, then start firecrab
+  (no options)        download the latest release binaries and start firecrab
   --check             report what is missing and what would be installed
   --doctor            run host diagnostics (UFW, socket, KVM, nft, …); no root required
   --deps-only         install the dependencies, then stop (no host changes)
-  --no-deps           never install packages/toolchains, only report gaps
+  --no-deps           never install packages, only report gaps
   --no-images         do not build a guest image
   --with-ubuntu-image also build the Ubuntu image (large, needs root chroot)
   --with-rocky-image  also build Rocky Linux 9.8 (large, needs root chroot)
-  --no-frontend       do not build/install the dashboard
+  --no-frontend       do not install the dashboard
+  --version VER       GitHub Release tag (default: latest, or the baked-in tag)
+  --libc gnu|musl     host libc (default: detect; gnu = glibc)
+  --bin-dir DIR       install these local binaries instead of the release
+  --dashboard-dir DIR install this built dashboard (with --bin-dir)
+  --print-install-url print the curl install command and exit
+  --print-release-url print the host-bundle URL and exit
   --uninstall         stop and remove units, binaries and dashboard
   --purge             with --uninstall, also delete /var/lib/firecrab (VM data!)
   -h, --help          this text
 
+  curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
+
+  Host bundles (install.sh picks arch + libc):
+    firecrab-host-x86_64-gnu.tar.gz    Linux x86_64, glibc
+    firecrab-host-x86_64-musl.tar.gz   Linux x86_64, musl (static)
+    firecrab-host-aarch64-gnu.tar.gz   Linux aarch64, glibc
+    firecrab-host-aarch64-musl.tar.gz  Linux aarch64, musl (static)
+
 Environment: FIRECRAB_USER, FIRECRAB_GROUP, PREFIX, DATADIR, CONFDIR, UNITDIR
+             FIRECRAB_RELEASE_REPO, FIRECRAB_DEFAULT_VERSION
 USAGE
 }
 
@@ -90,6 +135,31 @@ while [ $# -gt 0 ]; do
         --with-ubuntu-image) WITH_UBUNTU_IMAGE=1 ;;
         --with-rocky-image) WITH_ROCKY_IMAGE=1 ;;
         --no-frontend) WITH_FRONTEND=0 ;;
+        --version)
+            [ $# -ge 2 ] || die "--version needs a tag (for example v0.1.0)"
+            RELEASE_VERSION=$2
+            shift
+            ;;
+        --libc)
+            [ $# -ge 2 ] || die "--libc needs gnu or musl"
+            LIBC=$2
+            firecrab_normalize_libc "$LIBC" >/dev/null \
+                || die "--libc must be gnu, glibc, or musl"
+            LIBC=$(firecrab_normalize_libc "$LIBC")
+            shift
+            ;;
+        --bin-dir)
+            [ $# -ge 2 ] || die "--bin-dir needs a directory"
+            BIN_DIR=$2
+            shift
+            ;;
+        --dashboard-dir)
+            [ $# -ge 2 ] || die "--dashboard-dir needs a directory"
+            DASHBOARD_DIR=$2
+            shift
+            ;;
+        --print-install-url) MODE=print-install-url ;;
+        --print-release-url) MODE=print-release-url ;;
         --uninstall) MODE=uninstall ;;
         --purge) PURGE=1 ;;
         -h|--help) usage; exit 0 ;;
@@ -97,6 +167,33 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+if [ -z "$RELEASE_VERSION" ]; then
+    RELEASE_VERSION=${FIRECRAB_DEFAULT_VERSION:-}
+fi
+# A published installer substitutes the placeholder with the tag. The repo
+# copy keeps @FIRECRAB_RELEASE_TAG@, which means "latest".
+case "$FIRECRAB_RELEASE_TAG" in
+    ""|@*) ;;
+    *)
+        if [ -z "$RELEASE_VERSION" ]; then
+            RELEASE_VERSION=$FIRECRAB_RELEASE_TAG
+        fi
+        ;;
+esac
+
+if [ -z "$LIBC" ]; then
+    LIBC=$(firecrab_host_libc)
+else
+    LIBC=$(firecrab_normalize_libc "$LIBC") || die "--libc must be gnu, glibc, or musl"
+fi
+
+cleanup_payload() {
+    if [ -n "${PAYLOAD_TMP:-}" ] && [ -d "$PAYLOAD_TMP" ]; then
+        rm -rf "$PAYLOAD_TMP"
+    fi
+}
+trap cleanup_payload EXIT
 
 # --- package manager -------------------------------------------------------
 
@@ -134,17 +231,6 @@ pkg_name() {
         *:xz)         echo "xz" ;;
         # Dashboard M2Image install decompresses `{alias}.tar.zst` packages.
         *:zstd)       echo "zstd" ;;
-        # cargo needs a linker; rustup only warns that one is missing and the
-        # build then fails at link time with a much less obvious error.
-        apt-get:cc)   echo "build-essential" ;;
-        apk:cc)       echo "build-base" ;;
-        *:cc)         echo "gcc" ;;
-        # Node is the one dependency nobody names the same way. openSUSE has
-        # meta packages; Fedora ships only versioned streams (nodejs22-npm-bin
-        # and friends), so the unversioned guess below simply fails there and
-        # `ensure_build_tools` carries on without the dashboard.
-        zypper:node)  echo "nodejs-default npm-default" ;;
-        *:node)       echo "nodejs npm" ;;
         *) echo "$generic" ;;
     esac
 }
@@ -249,6 +335,7 @@ ensure_runtime_deps() {
     ensure find findutils || failed=1
     ensure tar tar       || failed=1
     ensure zstd zstd     || failed=1
+    ensure sha256sum coreutils || failed=1
     return $failed
 }
 
@@ -267,60 +354,95 @@ ensure_firecracker() {
     have firecracker
 }
 
-# cargo, plus npm when the dashboard is being built.
-ensure_build_tools() {
-    local failed=0
-
-    if have cargo; then
-        log "cargo present"
-    elif [ "$MODE" = check ]; then
-        warn "missing: cargo (would install via rustup)"
-        failed=1
-    elif [ "$INSTALL_DEPS" -eq 1 ]; then
-        step "installing the Rust toolchain (rustup)"
-        # Downloaded whole, then run - piping curl into sh executes whatever
-        # arrived if the transfer is cut off partway.
-        local installer
-        installer=$(mktemp)
-        # shellcheck disable=SC2064 # expand the path now, not at trap time
-        trap "rm -f '$installer'" RETURN
-        if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$installer"; then
-            sh "$installer" -y --no-modify-path || { warn "rustup install failed"; failed=1; }
-        else
-            warn "could not download the rustup installer"
-            failed=1
-        fi
-        # rustup lands in $HOME/.cargo for whoever runs this (root under sudo).
-        export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-        have cargo || { warn "cargo still not on PATH"; failed=1; }
-    else
-        warn "missing: cargo (--no-deps; install rustup yourself)"
-        failed=1
-    fi
-
-    ensure cc cc || failed=1
-
-    if [ "$WITH_FRONTEND" -eq 1 ] && ! ensure npm node; then
-        # Degraded, not fatal: the API and MicroNetworks work without the
-        # dashboard, and node package names vary too much between distributions
-        # to fail an install over. Build it later and re-run.
-        warn "no npm — installing without the dashboard (re-run after installing Node)"
-        WITH_FRONTEND=0
-    fi
-    return $failed
+# Whether this script is running from a firecrab git checkout.
+is_checkout() {
+    [ -f "$REPO_ROOT/Cargo.toml" ] && [ -f "$REPO_ROOT/packaging/systemd/firecrab-api.service" ]
 }
 
-# --- build -----------------------------------------------------------------
-
-# Release binaries, and the dashboard bundle unless it was skipped.
-build_all() {
-    step "building the workspace (release)"
-    ( cd "$REPO_ROOT" && cargo build --release --workspace )
-
-    if [ "$WITH_FRONTEND" -eq 1 ]; then
-        step "building the dashboard"
-        ( cd "$REPO_ROOT/firecrab-frontend" && npm ci && npm run build )
+# Downloads the host bundle for this arch + libc.
+download_host_bundle() {
+    local arch tarball url sums_url
+    arch=$(firecrab_host_arch) || die "unsupported architecture: $(uname -m) (need x86_64 or aarch64)"
+    tarball=$(firecrab_host_tarball "$arch" "$LIBC")
+    PAYLOAD_TMP=$(mktemp -d)
+    url=$(firecrab_release_asset_url "$RELEASE_VERSION" "$tarball")
+    sums_url=$(firecrab_release_asset_url "$RELEASE_VERSION" SHA256SUMS)
+    step "downloading $tarball"
+    if ! curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$PAYLOAD_TMP/$tarball"; then
+        die "failed to download $url
+Tag a GitHub Release, or install local binaries:
+  cargo build --release -p firecrab-api -p firecrab-net-helper
+  ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist"
     fi
+    if ! curl --proto '=https' --tlsv1.2 -fsSL "$sums_url" -o "$PAYLOAD_TMP/SHA256SUMS"; then
+        die "failed to download $sums_url"
+    fi
+    firecrab_verify_sha256 "$PAYLOAD_TMP/SHA256SUMS" "$PAYLOAD_TMP/$tarball" \
+        || die "checksum mismatch for $tarball"
+    mkdir -p "$PAYLOAD_TMP/root"
+    tar -xzf "$PAYLOAD_TMP/$tarball" -C "$PAYLOAD_TMP/root"
+    PAYLOAD_ROOT=$PAYLOAD_TMP/root
+    local name
+    for name in firecrab-api firecrab-net-helper; do
+        [ -x "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing $name"
+        firecrab_assert_binary_arch "$PAYLOAD_ROOT/$name" "$arch" \
+            || die "$tarball: $name is not a $arch binary"
+    done
+    log "host bundle $arch/$LIBC"
+}
+
+# Sets PAYLOAD_* to either --bin-dir + this checkout, or a downloaded release.
+resolve_payload() {
+    if [ "$(firecrab_payload_mode "$BIN_DIR")" = dir ]; then
+        [ -d "$BIN_DIR" ] || die "--bin-dir is not a directory: $BIN_DIR"
+        is_checkout || die "--bin-dir needs a firecrab checkout for units and helper scripts"
+        PAYLOAD_BIN=$BIN_DIR
+        PAYLOAD_UNITS=$REPO_ROOT/packaging/systemd
+        PAYLOAD_EXTRACT=$REPO_ROOT/scripts/firecracker-menual
+        PAYLOAD_DOCTOR=$REPO_ROOT/scripts/firecrab-doctor.sh
+        if [ -n "$DASHBOARD_DIR" ]; then
+            PAYLOAD_DASHBOARD=$DASHBOARD_DIR
+        elif [ -f "$REPO_ROOT/firecrab-frontend/dist/index.html" ]; then
+            PAYLOAD_DASHBOARD=$REPO_ROOT/firecrab-frontend/dist
+        else
+            PAYLOAD_DASHBOARD=
+        fi
+        return 0
+    fi
+
+    download_host_bundle
+    PAYLOAD_BIN=$PAYLOAD_ROOT
+    PAYLOAD_UNITS=$PAYLOAD_ROOT/systemd
+    PAYLOAD_EXTRACT=$PAYLOAD_ROOT
+    PAYLOAD_DOCTOR=$PAYLOAD_ROOT/firecrab-doctor.sh
+    PAYLOAD_DASHBOARD=$PAYLOAD_ROOT/dashboard
+}
+
+report_payload() {
+    local tarball
+    if [ "$(firecrab_payload_mode "$BIN_DIR")" = dir ]; then
+        log "binaries: would install from $BIN_DIR"
+        if [ ! -d "$BIN_DIR" ]; then
+            warn "not a directory: $BIN_DIR"
+            return 1
+        fi
+        local name gaps=0
+        for name in firecrab-api firecrab-net-helper; do
+            if [ -x "$BIN_DIR/$name" ]; then
+                log "  $name"
+            else
+                warn "  missing $name (ok if already installed under $LIBDIR)"
+                gaps=1
+            fi
+        done
+        return 0
+    fi
+    if ! tarball=$(firecrab_host_tarball "" "$LIBC"); then
+        warn "unsupported architecture: $(uname -m) (need x86_64 or aarch64)"
+        return 1
+    fi
+    log "binaries: would download $(firecrab_release_asset_url "$RELEASE_VERSION" "$tarball") ($LIBC)"
+    return 0
 }
 
 # --- host layout -----------------------------------------------------------
@@ -378,12 +500,17 @@ ensure_directories() {
     log "directories ready under $DATADIR, $CONFDIR"
 }
 
-# Puts the built binaries, and the dashboard, where the units expect them.
+# Puts the payload binaries, and the dashboard, where the units expect them.
 install_binaries() {
-    local target="$REPO_ROOT/target/release"
-    for binary in firecrab-api firecrab-net-helper; do
-        [ -x "$target/$binary" ] || die "$target/$binary not found — the build did not produce it"
-        $SUDO install -o root -g root -m 0755 "$target/$binary" "$LIBDIR/$binary"
+    local name src
+    for name in firecrab-api firecrab-net-helper; do
+        src=$(firecrab_resolve_binary "$name" "$PAYLOAD_BIN" "$LIBDIR") \
+            || die "no $name in ${PAYLOAD_BIN:-<release>} or $LIBDIR — pass it via --bin-dir or install a release"
+        if [ "$src" -ef "$LIBDIR/$name" ]; then
+            log "keeping existing $LIBDIR/$name"
+        else
+            $SUDO install -o root -g root -m 0755 "$src" "$LIBDIR/$name"
+        fi
     done
     # extract-vmlinux and extract-arm64-image are shell scripts used at
     # runtime by the API to turn a distro vmlinuz into the kernel format
@@ -391,23 +518,28 @@ install_binaries() {
     # binary lets the API find them without needing access to the repo
     # checkout (which may be in a user home the service account cannot reach).
     for helper in extract-vmlinux extract-arm64-image; do
+        [ -f "$PAYLOAD_EXTRACT/$helper" ] || die "missing $PAYLOAD_EXTRACT/$helper"
         $SUDO install -o root -g root -m 0755 \
-            "$REPO_ROOT/scripts/firecracker-menual/$helper" "$LIBDIR/$helper"
+            "$PAYLOAD_EXTRACT/$helper" "$LIBDIR/$helper"
     done
-    # Host doctor is a shell script — no build step. On PATH as firecrab-doctor.
+    [ -f "$PAYLOAD_DOCTOR" ] || die "missing $PAYLOAD_DOCTOR"
     $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
-    $SUDO install -o root -g root -m 0755 "$REPO_ROOT/scripts/firecrab-doctor.sh" \
+    $SUDO install -o root -g root -m 0755 "$PAYLOAD_DOCTOR" \
         "$PREFIX/bin/firecrab-doctor"
     log "binaries installed to $LIBDIR (doctor → $PREFIX/bin/firecrab-doctor)"
 
     [ "$WITH_FRONTEND" -eq 1 ] || return 0
-    local dist="$REPO_ROOT/firecrab-frontend/dist"
-    [ -f "$dist/index.html" ] || die "$dist/index.html not found — the dashboard build did not produce it"
-    $SUDO rm -rf "$SHAREDIR/dashboard"
-    $SUDO install -d -o root -g root -m 0755 "$SHAREDIR/dashboard"
-    $SUDO cp -r "$dist/." "$SHAREDIR/dashboard/"
-    $SUDO chown -R root:root "$SHAREDIR/dashboard"
-    log "dashboard installed to $SHAREDIR/dashboard"
+    if [ -n "$PAYLOAD_DASHBOARD" ] && [ -f "$PAYLOAD_DASHBOARD/index.html" ]; then
+        $SUDO rm -rf "$SHAREDIR/dashboard"
+        $SUDO install -d -o root -g root -m 0755 "$SHAREDIR/dashboard"
+        $SUDO cp -r "$PAYLOAD_DASHBOARD/." "$SHAREDIR/dashboard/"
+        $SUDO chown -R root:root "$SHAREDIR/dashboard"
+        log "dashboard installed to $SHAREDIR/dashboard"
+    elif [ -f "$SHAREDIR/dashboard/index.html" ]; then
+        log "keeping existing $SHAREDIR/dashboard"
+    else
+        die "dashboard not found — pass --dashboard-dir, or omit --no-frontend only when using a release bundle"
+    fi
 }
 
 # Seeds api.env once so an operator's edits survive a re-run.
@@ -450,7 +582,7 @@ install_units() {
             -e "s|@FIRECRAB_USER@|$FIRECRAB_USER|g" \
             -e "s|@FIRECRAB_GROUP@|$FIRECRAB_GROUP|g" \
             -e "s|@FIRECRAB_UID@|$uid|g" \
-            "$REPO_ROOT/packaging/systemd/$unit" | $SUDO tee "$UNITDIR/$unit" > /dev/null
+            "$PAYLOAD_UNITS/$unit" | $SUDO tee "$UNITDIR/$unit" > /dev/null
         $SUDO chmod 0644 "$UNITDIR/$unit"
     done
     $SUDO systemctl daemon-reload
@@ -619,7 +751,7 @@ do_check() {
     fi
     ensure_runtime_deps || gaps=1
     ensure_firecracker || gaps=1
-    ensure_build_tools || gaps=1
+    report_payload || gaps=1
     check_kvm || gaps=1
     check_systemd || gaps=1
     report_images || gaps=1
@@ -636,8 +768,14 @@ do_check() {
 
 # Runtime host diagnostics — delegates to scripts/firecrab-doctor.sh (no root).
 do_doctor() {
-    local doctor="$REPO_ROOT/scripts/firecrab-doctor.sh"
-    [ -x "$doctor" ] || die "missing $doctor"
+    local doctor
+    if [ -x "$REPO_ROOT/scripts/firecrab-doctor.sh" ]; then
+        doctor=$REPO_ROOT/scripts/firecrab-doctor.sh
+    elif have firecrab-doctor; then
+        doctor=$(command -v firecrab-doctor)
+    else
+        die "missing firecrab-doctor (run from a checkout, or install first)"
+    fi
     # Pass DATADIR through so the doctor matches this install layout.
     DATADIR="$DATADIR" FIRECRAB_API_USER="$FIRECRAB_USER" \
         exec "$doctor" "${DOCTOR_ARGS[@]}"
@@ -654,13 +792,22 @@ do_deps() {
         ensure_image_build_deps || die "missing image build dependencies (see above)"
     fi
     ensure_firecracker  || die "firecracker is required"
-    ensure_build_tools  || die "build tools are required"
     check_kvm || warn "no KVM here; that only matters where VMs actually run"
     report_ufw
     log "dependencies ready — run without --deps-only to install firecrab"
 }
 
-# The default path: fill the gaps, build, lay out, start.
+do_print_install_url() {
+    firecrab_install_curl_url "${RELEASE_VERSION:-latest}"
+}
+
+do_print_release_url() {
+    local tarball
+    tarball=$(firecrab_host_tarball "" "$LIBC") || die "unsupported architecture: $(uname -m) (need x86_64 or aarch64)"
+    firecrab_release_asset_url "$RELEASE_VERSION" "$tarball"
+}
+
+# The default path: fill the gaps, fetch binaries, lay out, start.
 do_install() {
     # Checked before anything is installed: refusing after pulling in five
     # packages would be a waste of the operator's time.
@@ -669,10 +816,9 @@ do_install() {
 
     ensure_runtime_deps || die "missing runtime dependencies (see above)"
     ensure_firecracker  || die "firecracker is required"
-    ensure_build_tools  || die "build tools are required"
     check_kvm || warn "continuing, but VMs will not start until KVM is available"
 
-    build_all
+    resolve_payload
     ensure_account
     ensure_directories
     install_binaries
@@ -721,6 +867,8 @@ case "$MODE" in
     check) do_check ;;
     doctor) do_doctor ;;
     deps) do_deps ;;
+    print-install-url) do_print_install_url ;;
+    print-release-url) do_print_release_url ;;
     install) do_install ;;
     uninstall) do_uninstall ;;
 esac

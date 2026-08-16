@@ -187,14 +187,11 @@ See the detailed [architecture](public-docs/architecture.md).
 
 Requirements are a Linux host with `/dev/kvm`, network access, and a user allowed to
 run `sudo`. Run the installer as that regular user — do **not** prefix the script with
-`sudo`. It keeps source builds and user-level tools owned by the invoking user, and
-uses `sudo` only for the individual package, systemd, and host-setup operations that
-need it.
+`sudo`. It downloads release binaries and uses `sudo` only for the individual package,
+systemd, and host-setup operations that need it.
 
 ```sh
-git clone https://github.com/SteelCrab/firecrab.git
-cd firecrab
-./install.sh
+curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
 Useful installer modes:
@@ -202,16 +199,19 @@ Useful installer modes:
 ```sh
 ./install.sh --check                 # report prerequisites and planned changes
 ./install.sh --doctor                # diagnose KVM, firewall, socket, and host setup
+./install.sh --bin-dir target/release
 ./install.sh --with-ubuntu-image
 ./install.sh --with-rocky-image      # build pinned Rocky Linux 9.8
 ./install.sh --uninstall         # retain data by default
 ./install.sh --uninstall --purge # also remove /var/lib/firecrab
 ```
 
-The default install builds the dashboard and an Alpine guest image. KVM cannot be
-enabled by the script: if `/dev/kvm` is absent, enable hardware virtualization (or
-nested virtualization) first. For every option, install path, upgrade detail, and
-troubleshooting step, read the [installation guide](public-docs/installation.md).
+The default install downloads the host bundle for this architecture and libc
+(`gnu` / glibc, or `musl`) and builds an Alpine guest image.
+Pass `--libc gnu` or `--libc musl` to pick one.
+KVM cannot be enabled by the script: if `/dev/kvm` is absent, enable hardware
+virtualization (or nested virtualization) first. For every option, install path,
+upgrade detail, and troubleshooting step, read the [installation guide](public-docs/installation.md).
 
 ## Quick start
 

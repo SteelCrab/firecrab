@@ -74,7 +74,8 @@ The image directory contains source templates.
 
 ## Upgrade
 
-Pull the new source and run `./install.sh` again.
+Run `install.sh` again to replace binaries from the latest GitHub Release.
+Use `--bin-dir` to drop in locally built binaries instead.
 The installer preserves VM data and `api.env`.
 
 Check both services and run the doctor after an upgrade.

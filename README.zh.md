@@ -83,13 +83,11 @@ API 会在使用前验证模板工件；已安装的部署中，API 也会直接
 ## 在 Linux 主机上安装
 
 需要一台具有 `/dev/kvm`、网络访问和可使用 `sudo` 的普通用户的 Linux 主机。请以该普通用户
-运行安装程序，**不要**在脚本前加 `sudo`。它会让源码构建和用户工具归调用用户所有，只对软件包、
-systemd 与主机设置等需要权限的单独操作在内部使用 `sudo`。
+运行安装程序，**不要**在脚本前加 `sudo`。它会下载发行版二进制文件，只对软件包、systemd
+与主机设置等需要权限的单独操作在内部使用 `sudo`。
 
 ```sh
-git clone https://github.com/SteelCrab/firecrab.git
-cd firecrab
-./install.sh
+curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
 常用安装选项：
@@ -97,14 +95,15 @@ cd firecrab
 ```sh
 ./install.sh --check                 # 报告前置条件和计划变更
 ./install.sh --doctor                # 诊断 KVM、防火墙、socket 和主机设置
+./install.sh --bin-dir target/release
 ./install.sh --with-ubuntu-image
 ./install.sh --with-rocky-image      # 构建固定版本 Rocky Linux 9.8
 ./install.sh --uninstall         # 默认保留数据
 ./install.sh --uninstall --purge # 同时删除 /var/lib/firecrab
 ```
 
-默认安装会构建仪表盘和 Alpine 客户机镜像。脚本不能启用 KVM：若没有 `/dev/kvm`，请先启用硬件
-虚拟化（或嵌套虚拟化）。所有选项、安装路径、升级和排错请参阅[安装指南](public-docs/installation.md)。
+默认安装会下载 musl 主机包并构建 Alpine 客户机镜像。脚本不能启用 KVM：若没有 `/dev/kvm`，请先
+启用硬件虚拟化（或嵌套虚拟化）。所有选项、安装路径、升级和排错请参阅[安装指南](public-docs/installation.md)。
 
 ## 快速开始
 
