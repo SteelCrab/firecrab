@@ -127,8 +127,8 @@ sudo systemctl restart firecrab-net-helper firecrab-api
 ```
 
 `sudo setenforce 0` confirms the diagnosis in one command; put it back to `1`.
-A unit sandbox (`systemctl show firecrab-api -p IPAddressDeny`) or a firewall
-rule on the API account produces the same `EACCES` when SELinux is not the cause.
+A unit sandbox (`systemctl show firecrab-api -p IPAddressDeny`) or a firewall rule
+on the API account gives the same `EACCES` when SELinux is not the cause.
 
 ## Image download returns `503`
 
@@ -145,18 +145,15 @@ namei -l /var/lib/firecrab/images
 
 ## Bootstrap fails
 
-Read the bootstrap job log first.
-
-Common causes are network failure, low memory, chroot DNS, and tool mismatch.
+Read the bootstrap job log first. Common causes are network failure, low memory,
+chroot DNS, and tool mismatch.
 Rocky 9.8 downloads a pinned Container-Base tarball; that URL must be reachable.
 Only one bootstrap job can run at a time.
 
 ## Terminal disconnects
 
-The VM must have an active Firecracker process.
-The proxy must forward WebSocket upgrades for `/ws`.
-
-Check the browser network panel and API log.
+The VM must have an active Firecracker process, and the proxy must forward
+WebSocket upgrades for `/ws`. Check the browser network panel and API log.
 
 ## Delete returns `409`
 
