@@ -227,6 +227,30 @@ async fn fetch_public_catalog(source: &str) -> Result<Catalog, String> {
     serde_json::from_slice(&body).map_err(|error| error.to_string())
 }
 
+/// The object key the catalog publishes for one alias on one architecture.
+///
+/// Kept next to the catalog types so the wire shape has a single reader. A
+/// catalog that cannot be fetched or parsed answers `None`; the caller then
+/// keeps whatever it would have used before.
+pub(crate) async fn catalog_package_for(
+    source: &str,
+    alias: &str,
+    architecture: Architecture,
+) -> Option<String> {
+    let catalog = fetch_public_catalog(source)
+        .await
+        .inspect_err(|error| {
+            tracing::warn!(source, %error, "catalog lookup failed; using the compiled package path");
+        })
+        .ok()?;
+    catalog
+        .images
+        .into_iter()
+        .find(|image| image.alias == alias && image.architecture == architecture)
+        .map(|image| image.package)
+        .filter(|package| !package.is_empty())
+}
+
 /// `GET /api/microregistry`: supported published packages plus this host's
 /// local install/cache state. Entries outside the release manifest are hidden
 /// because this Firecrab build cannot validate or install them. Locally

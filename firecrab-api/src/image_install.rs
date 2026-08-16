@@ -157,6 +157,10 @@ impl ImageInstallTracker {
     }
 
     /// Package URL for `alias` when a base is configured.
+    ///
+    /// This is the compiled-manifest layout only. A download resolves the key
+    /// from the catalog first (see [`remote_package_path`]), so this is the
+    /// fallback spelling rather than what a job necessarily fetches.
     pub fn package_url_for(&self, alias: &str) -> Option<String> {
         self.base_url
             .as_deref()
@@ -335,6 +339,36 @@ pub fn package_path_for_arch(alias: &str, architecture: &str) -> String {
     m2image_manifest::registry_key(alias, architecture).unwrap_or_else(|| package_name(alias))
 }
 
+/// The object key to download for `alias` on this host.
+///
+/// The catalog is published together with the objects, so it describes the
+/// layout that actually exists in the bucket; the compiled manifest only
+/// records what the layout looked like when this binary was built. When the
+/// two disagree the catalog wins, because the other choice is a 404.
+///
+/// The entry must match this host's architecture. A foreign package cannot
+/// boot here, so an alias published only for the other architecture falls
+/// back rather than downloading something unusable.
+async fn remote_package_path(base_url: &str, alias: &str) -> String {
+    let compiled = package_path(alias);
+    let source = format!("{}/catalog.json", base_url.trim().trim_end_matches('/'));
+    let Some(published) =
+        crate::handlers::microregistry::catalog_package_for(&source, alias, Architecture::HOST)
+            .await
+    else {
+        return compiled;
+    };
+    if published != compiled {
+        tracing::info!(
+            alias,
+            catalog = %published,
+            compiled = %compiled,
+            "using the catalog's package path"
+        );
+    }
+    published
+}
+
 /// Persistent local package cache. A package remains here after the image is
 /// installed or removed so the two dashboard actions stay independent:
 /// download/verify once, then install the image from that verified package.
@@ -460,8 +494,12 @@ async fn download_package_once(
 ) -> Result<(), String> {
     let root = templates.image_root_path().to_path_buf();
     let package = package_name(&spec.alias);
-    let remote_package = package_path(&spec.alias);
-    let url = package_url(base_url, &spec.alias);
+    let remote_package = remote_package_path(base_url, &spec.alias).await;
+    let url = format!(
+        "{}/{}",
+        base_url.trim().trim_end_matches('/'),
+        remote_package
+    );
     let archive = staged_package_path(&root, &spec.alias);
 
     // Emit a real stage event before checking host prerequisites.  Otherwise
@@ -1191,6 +1229,142 @@ mod tests {
         let snapshot = tracker.snapshot(&spec.alias);
         assert_eq!(snapshot.status, ImageInstallStatus::Failed);
         assert!(snapshot.log.contains("package is not ready"));
+    }
+
+    /// Serves a catalog at `/catalog.json` and nothing else, so a test can see
+    /// exactly which object key the installer went on to request.
+    async fn catalog_only_registry(images: serde_json::Value) -> (String, Arc<Mutex<Vec<String>>>) {
+        use axum::extract::Request;
+
+        let requested: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let body = serde_json::json!({ "images": images });
+        let app = axum::Router::new()
+            .route(
+                "/catalog.json",
+                axum::routing::get(move || {
+                    let body = body.clone();
+                    async move { axum::Json(body) }
+                }),
+            )
+            .fallback({
+                let requested = Arc::clone(&requested);
+                move |request: Request| {
+                    let requested = Arc::clone(&requested);
+                    async move {
+                        requested
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .push(request.uri().path().trim_start_matches('/').to_owned());
+                        axum::http::StatusCode::NOT_FOUND
+                    }
+                }
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        (format!("http://{addr}"), requested)
+    }
+
+    fn catalog_entry(alias: &str, architecture: &str, package: &str) -> serde_json::Value {
+        serde_json::json!({
+            "alias": alias,
+            "architecture": architecture,
+            "version": "1",
+            "package": package,
+            "sha256": "aa",
+            "minDiskGb": 1,
+            "publishedAt": "2026-08-17T00:00:00Z"
+        })
+    }
+
+    async fn attempted_package_key(images: serde_json::Value) -> String {
+        let directory = tempdir().unwrap();
+        let (base_url, requested) = catalog_only_registry(images).await;
+        let templates = TemplateRegistry::from_specs(directory.path(), std::iter::empty()).unwrap();
+        let spec = TemplateRegistry::known_spec("ubuntu-26.04").unwrap();
+        let tracker = ImageInstallTracker::with_base_url(base_url.clone());
+        tracker.begin(&spec.alias).unwrap();
+
+        run_package_install(tracker, templates, base_url, spec).await;
+
+        let requested = requested
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        requested.first().cloned().unwrap_or_default()
+    }
+
+    /// The catalog ships with the objects, so it knows the layout that exists.
+    /// The compiled manifest is only this build's guess, and a publisher that
+    /// changes the layout turns every download into a 404.
+    #[tokio::test]
+    async fn the_catalog_decides_the_object_key() {
+        let key = attempted_package_key(serde_json::json!([catalog_entry(
+            "ubuntu-26.04",
+            host_architecture(),
+            "ubuntu/26.04/host/ubuntu-26.04.tar.zst"
+        ),]))
+        .await;
+
+        assert_eq!(key, "ubuntu/26.04/host/ubuntu-26.04.tar.zst");
+    }
+
+    /// A package for the other architecture cannot boot here. Reaching for it
+    /// would replace a clear 404 with a rootfs this host cannot run.
+    #[tokio::test]
+    async fn a_foreign_architecture_entry_is_never_downloaded() {
+        let foreign = format!(
+            "ubuntu/26.04/{}/ubuntu-26.04.tar.zst",
+            Architecture::HOST.other().as_str()
+        );
+        let key = attempted_package_key(serde_json::json!([catalog_entry(
+            "ubuntu-26.04",
+            Architecture::HOST.other().as_str(),
+            &foreign
+        ),]))
+        .await;
+
+        assert_ne!(key, foreign);
+        assert_eq!(key, package_path("ubuntu-26.04"));
+    }
+
+    /// Both architectures publish the same alias; the host must take its own
+    /// row even when the foreign one is listed first.
+    #[tokio::test]
+    async fn the_host_row_is_taken_from_a_two_architecture_catalog() {
+        let key = attempted_package_key(serde_json::json!([
+            catalog_entry(
+                "ubuntu-26.04",
+                Architecture::HOST.other().as_str(),
+                "ubuntu/26.04/foreign/ubuntu-26.04.tar.zst"
+            ),
+            catalog_entry(
+                "ubuntu-26.04",
+                host_architecture(),
+                "ubuntu/26.04/mine/ubuntu-26.04.tar.zst"
+            ),
+        ]))
+        .await;
+
+        assert_eq!(key, "ubuntu/26.04/mine/ubuntu-26.04.tar.zst");
+    }
+
+    /// An unreachable catalog must not become a second way to fail: the
+    /// compiled key is still the best guess available.
+    #[tokio::test]
+    async fn an_unusable_catalog_falls_back_to_the_compiled_key() {
+        for images in [
+            serde_json::json!([]),
+            serde_json::json!([catalog_entry(
+                "rocky-9.8",
+                host_architecture(),
+                "rocky/9.8/x86_64/rocky-9.8.tar.zst"
+            )]),
+        ] {
+            let key = attempted_package_key(images).await;
+            assert_eq!(key, package_path("ubuntu-26.04"));
+        }
     }
 
     #[tokio::test]
