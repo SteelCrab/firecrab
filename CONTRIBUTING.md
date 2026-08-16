@@ -126,7 +126,7 @@ The guest-boot half needs KVM, Firecracker, and `./scripts/dev-net-helper.sh`; s
 ```sh
 python3 scripts/check-doc-links.py
 python3 scripts/check-changelog.py
-shellcheck install.sh scripts/firecrab-doctor.sh scripts/firecrab-release.sh
+shellcheck install.sh scripts/firecrab-doctor.sh scripts/firecrab.sh scripts/firecrab-release.sh
 bash scripts/test-firecrab-release.sh
 bash scripts/test-install-cli.sh
 ```

@@ -123,7 +123,7 @@ def build_notes(
         "## Binaries",
         "",
         "Host bundles include `firecrab-api`, `firecrab-net-helper`, the dashboard,",
-        "systemd units, and `firecrab-doctor`. `install.sh` downloads one of these.",
+        "systemd units, `firecrab-doctor`, and `firecrab`. `install.sh` downloads one of these.",
         "",
         "| File | Installs on |",
         "| --- | --- |",

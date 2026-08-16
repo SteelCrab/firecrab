@@ -43,11 +43,12 @@ install -m 0755 "$bin_dir/firecrab-net-helper" "$stage/firecrab-net-helper"
 install -m 0755 "$root/scripts/firecracker-menual/extract-vmlinux" "$stage/extract-vmlinux"
 install -m 0755 "$root/scripts/firecracker-menual/extract-arm64-image" "$stage/extract-arm64-image"
 install -m 0755 "$root/scripts/firecrab-doctor.sh" "$stage/firecrab-doctor.sh"
+install -m 0755 "$root/scripts/firecrab.sh" "$stage/firecrab.sh"
 cp "$root/packaging/systemd/"*.service "$stage/systemd/"
 cp -a "$dashboard_dir/." "$stage/dashboard/"
 
 mkdir -p "$(dirname -- "$output")"
 tar -C "$stage" -czf "$output" \
     firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image \
-    firecrab-doctor.sh systemd dashboard
+    firecrab-doctor.sh firecrab.sh systemd dashboard
 printf '%s\n' "$output"

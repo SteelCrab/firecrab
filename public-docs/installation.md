@@ -93,6 +93,7 @@ DATADIR=/srv/firecrab PREFIX=/opt ./install.sh
 
 ```sh
 systemctl status firecrab-net-helper firecrab-api
+firecrab doctor
 firecrab-doctor
 curl -s http://127.0.0.1:3000/api/vms
 curl -s http://127.0.0.1:3000/api/micro-networks

@@ -7,6 +7,7 @@
 #
 # Usage: ./scripts/firecrab-doctor.sh [--digest] [-h|--help]
 #        ./install.sh --doctor
+#        firecrab doctor   (after install)
 #        firecrab-doctor   (after install)
 #
 # See public-docs/troubleshooting.md

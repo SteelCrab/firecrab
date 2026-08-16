@@ -166,7 +166,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck install.sh scripts/firecrab-doctor.sh \
-            scripts/firecrab-release.sh scripts/package-host-release.sh \
+            scripts/firecrab.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/verify-release-binary.sh \
             scripts/build-m2images.sh scripts/package-m2images.sh \
@@ -190,11 +190,13 @@ jobs:
         run: |
           bash -n install.sh
           bash -n scripts/firecrab-doctor.sh
+          bash -n scripts/firecrab.sh
           bash scripts/test-firecrab-release.sh
           bash scripts/test-install-cli.sh
           ./install.sh --help
           ./install.sh --check
           test ! -e /var/lib/firecrab || { echo "--check created the data directory"; exit 1; }
+          ./scripts/firecrab.sh --help
           ./scripts/firecrab-doctor.sh --help
           # Bare runner will typically FAIL helper socket / images; doctor must
           # still exit 0 or 1 (not crash) and leave the host untouched.
@@ -237,6 +239,7 @@ jobs:
           sudo stat -c '%U %G %a' /run/firecrab/net-helper.sock | tee /dev/stderr | grep -qx 'root firecrab 660'
           id -nG firecrab | tr ' ' '\n' | grep -qx kvm
           test -x /usr/local/bin/firecrab-doctor
+          test -x /usr/local/bin/firecrab
 
       - name: Doctor after install
         # Runtime host path must be clean. Run from the unit WorkingDirectory
@@ -331,6 +334,7 @@ jobs:
           ! systemctl is-active --quiet firecrab-api
           test ! -e /etc/systemd/system/firecrab-api.service
           test ! -e /usr/local/bin/firecrab-doctor
+          test ! -e /usr/local/bin/firecrab
           test -d /var/lib/firecrab
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab

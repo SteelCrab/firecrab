@@ -133,7 +133,7 @@ printf '<html></html>\n' >"$fake/dist/index.html"
 "$ROOT/scripts/package-host-release.sh" x86_64 "$fake" "$fake/dist" "$fake/firecrab-host-x86_64.tar.gz" >/dev/null
 members=$(tar -tzf "$fake/firecrab-host-x86_64.tar.gz")
 for need in firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image \
-            firecrab-doctor.sh dashboard/index.html systemd/firecrab-api.service \
+            firecrab-doctor.sh firecrab.sh dashboard/index.html systemd/firecrab-api.service \
             systemd/firecrab-net-helper.service; do
     if printf '%s\n' "$members" | grep -qx -- "$need"; then
         pass "host tarball contains $need"
@@ -152,6 +152,38 @@ else
     pass "host tarball rejects aarch64 bins packed as x86_64"
 fi
 rm -rf "$pub" "$fake" "$wrong"
+
+# --- firecrab dispatcher (unprivileged) ------------------------------------
+
+cli_help=$("./scripts/firecrab.sh" --help)
+if printf '%s\n' "$cli_help" | grep -q doctor; then
+    pass "firecrab --help mentions doctor"
+else
+    fail "firecrab --help mentions doctor"
+fi
+
+rc=0
+./scripts/firecrab.sh >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then
+    pass "firecrab with no args exits 2"
+else
+    fail "firecrab with no args exits 2 (got $rc)"
+fi
+
+rc=0
+./scripts/firecrab.sh nope >/dev/null 2>&1 || rc=$?
+if [ "$rc" -eq 2 ]; then
+    pass "firecrab unknown command exits 2"
+else
+    fail "firecrab unknown command exits 2 (got $rc)"
+fi
+
+doctor_help=$("./scripts/firecrab.sh" doctor --help)
+if printf '%s\n' "$doctor_help" | grep -q 'Usage: firecrab-doctor'; then
+    pass "firecrab doctor --help prints Usage: firecrab-doctor"
+else
+    fail "firecrab doctor --help prints Usage: firecrab-doctor"
+fi
 
 if [ "$failed" -ne 0 ]; then
     printf 'FAILED\n' >&2

@@ -50,7 +50,7 @@ Other installed and runtime files live outside `/var/lib/firecrab`.
 | `/etc/firecrab/api.env` | Operator-owned API configuration |
 | `/etc/systemd/system/firecrab-*.service` | Installed systemd units |
 | `/usr/local/lib/firecrab/` | API, network helper, and `extract-vmlinux` |
-| `/usr/local/bin/firecrab-doctor` | Host diagnostic command |
+| `/usr/local/bin/firecrab`, `firecrab-doctor` | Host diagnostic commands |
 | `/usr/local/share/firecrab/dashboard/` | Installed dashboard assets |
 | `/run/firecrab/` | Ephemeral helper socket, dnsmasq configuration, PID, hosts, and leases |
 | systemd journal and Linux networking state | Service logs, bridges, TAPs, nftables, and live processes |

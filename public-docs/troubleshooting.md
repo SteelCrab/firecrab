@@ -6,7 +6,7 @@ Start with the read-only host doctor.
 ./install.sh --doctor
 ```
 
-Use `firecrab-doctor` on an installed host.
+Use `firecrab doctor` on an installed host.
 
 ## Basic status
 

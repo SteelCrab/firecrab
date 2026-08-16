@@ -20,10 +20,10 @@ journalctl -u firecrab-api -f
 journalctl -u firecrab-net-helper -f
 ```
 
-Run the host doctor after a failure.
+Run `firecrab doctor` (or `firecrab-doctor`) after a failure.
 
 ```sh
-firecrab-doctor
+firecrab doctor
 ```
 
 ## API configuration

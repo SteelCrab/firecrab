@@ -45,6 +45,7 @@ PAYLOAD_BIN=
 PAYLOAD_UNITS=
 PAYLOAD_EXTRACT=
 PAYLOAD_DOCTOR=
+PAYLOAD_CLI=
 PAYLOAD_DASHBOARD=
 
 # BEGIN RELEASE_HELPERS
@@ -400,6 +401,7 @@ resolve_payload() {
         PAYLOAD_UNITS=$REPO_ROOT/packaging/systemd
         PAYLOAD_EXTRACT=$REPO_ROOT/scripts/firecracker-menual
         PAYLOAD_DOCTOR=$REPO_ROOT/scripts/firecrab-doctor.sh
+        PAYLOAD_CLI=$REPO_ROOT/scripts/firecrab.sh
         if [ -n "$DASHBOARD_DIR" ]; then
             PAYLOAD_DASHBOARD=$DASHBOARD_DIR
         elif [ -f "$REPO_ROOT/firecrab-frontend/dist/index.html" ]; then
@@ -415,6 +417,7 @@ resolve_payload() {
     PAYLOAD_UNITS=$PAYLOAD_ROOT/systemd
     PAYLOAD_EXTRACT=$PAYLOAD_ROOT
     PAYLOAD_DOCTOR=$PAYLOAD_ROOT/firecrab-doctor.sh
+    PAYLOAD_CLI=$PAYLOAD_ROOT/firecrab.sh
     PAYLOAD_DASHBOARD=$PAYLOAD_ROOT/dashboard
 }
 
@@ -523,10 +526,13 @@ install_binaries() {
             "$PAYLOAD_EXTRACT/$helper" "$LIBDIR/$helper"
     done
     [ -f "$PAYLOAD_DOCTOR" ] || die "missing $PAYLOAD_DOCTOR"
+    [ -f "$PAYLOAD_CLI" ] || die "missing $PAYLOAD_CLI"
     $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
     $SUDO install -o root -g root -m 0755 "$PAYLOAD_DOCTOR" \
         "$PREFIX/bin/firecrab-doctor"
-    log "binaries installed to $LIBDIR (doctor → $PREFIX/bin/firecrab-doctor)"
+    $SUDO install -o root -g root -m 0755 "$PAYLOAD_CLI" \
+        "$PREFIX/bin/firecrab"
+    log "binaries installed to $LIBDIR (cli → $PREFIX/bin/firecrab, doctor → $PREFIX/bin/firecrab-doctor)"
 
     [ "$WITH_FRONTEND" -eq 1 ] || return 0
     if [ -n "$PAYLOAD_DASHBOARD" ] && [ -f "$PAYLOAD_DASHBOARD/index.html" ]; then
@@ -847,7 +853,7 @@ do_uninstall() {
     log "units removed"
 
     $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
-    $SUDO rm -f "$PREFIX/bin/firecrab-doctor"
+    $SUDO rm -f "$PREFIX/bin/firecrab-doctor" "$PREFIX/bin/firecrab"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true
     log "binaries and dashboard removed"
