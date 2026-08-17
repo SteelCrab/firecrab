@@ -7,6 +7,7 @@ The pipeline caches layers, merges them, injects a guest runtime, writes ext4, p
 
 | Section | Content |
 | --- | --- |
+| [Architecture](#architecture) | The stages an import runs through |
 | [Inspect](#inspect) | Ask whether an image can run here |
 | [Import](#import) | Start and poll the background job |
 | [Blob cache](#blob-cache) | Verified registry bytes on disk |
@@ -20,6 +21,53 @@ The pipeline caches layers, merges them, injects a guest runtime, writes ext4, p
 | [Name and register](#name-and-register) | Alias rules and the local template |
 | [Service](#service) | The image entrypoint as a service |
 | [Related](#related) | Other documents |
+
+## Architecture
+
+An import is a chain of stages. Each one verifies its input, publishes its output atomically, and hands a typed value to the next; nothing is registered until the last one succeeds.
+
+```mermaid
+flowchart TB
+    Ref["Reference (nginx:1.27)"]
+    Registry["Container registry"]
+    Blobs[("Blob cache<br/>.oci/blobs")]
+    Layers[("Layer cache<br/>.oci/layers")]
+    Merge["Merged tree"]
+    Toolbox[("Toolbox cache<br/>.oci/toolbox")]
+    Provision["Guest activation"]
+    Ext4["ext4 image"]
+    Kernel[("Kernel cache<br/>.oci/kernel")]
+    MicroRegistry["MicroRegistry"]
+    Template["Registered template"]
+    Ref -->|resolve, select platform| Registry
+    Registry -->|verified bytes| Blobs
+    Blobs -->|decompress, check diff ID| Layers
+    Layers -->|safety preflight, whiteouts| Merge
+    Registry -->|digest-pinned busybox| Toolbox
+    Toolbox --> Provision
+    Merge --> Provision
+    Provision -->|mkfs.ext4 -d| Ext4
+    MicroRegistry -->|digest-pinned kernel| Kernel
+    Ext4 --> Template
+    Kernel --> Template
+```
+
+| Stage | Input | Output | Cached at |
+| --- | --- | --- | --- |
+| Resolve | Reference | Manifest digest, architecture | — |
+| Blob cache | Manifest | Verified config and layer bytes | `.oci/blobs/sha256/` |
+| Decompress | Layer blob | Verified uncompressed tar | `.oci/layers/sha256/` |
+| Preflight | Tar | The same tar, proven safe | — |
+| Merge | Tars in manifest order | Staging tree | — |
+| Toolbox | busybox image | Static program | `.oci/toolbox/` |
+| Activate | Staging tree | Bootable tree with init | — |
+| Ext4 | Bootable tree | Packed image | — |
+| Kernel | MicroRegistry package | Kernel image | `.oci/kernel/<arch>/` |
+| Register | ext4 + kernel | `TemplateSpec` under an alias | `rootfs/<alias>.ext4` |
+
+- Caches are content-addressed and re-verified on reuse, so a repeated import contacts the network only for what it does not already hold.
+- Every cache lives under `<FIRECRAB_IMAGE_ROOT>/.oci/`; a partial write never lands at a final path.
+- The kernel is the only stage that reads the MicroRegistry rather than the container registry.
 
 ## Inspect
 
