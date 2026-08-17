@@ -426,6 +426,72 @@ async fn an_operator_supplied_kernel_must_still_match_the_pinned_digest() {
     );
 }
 
+/// Accepts a connection and answers nothing, holding it until dropped.
+///
+/// A registry that stops mid-transfer looks exactly like this to the client:
+/// the socket stays open and no byte ever arrives.
+struct StalledRegistry {
+    base_url: String,
+    task: JoinHandle<()>,
+}
+
+impl Drop for StalledRegistry {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl StalledRegistry {
+    async fn start() -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind stalled registry");
+        let base_url = format!(
+            "http://{}",
+            listener.local_addr().expect("stalled registry address")
+        );
+        let task = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        Self { base_url, task }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_registry_that_answers_nothing_fails_instead_of_hanging() {
+    let directory = tempdir().expect("create fixture directory");
+    let image_root = directory.path();
+    let published = PublishedKernel::publish(
+        Architecture::HOST,
+        kernel_bytes_for(Architecture::HOST),
+        None,
+    )
+    .await;
+    let stalled = StalledRegistry::start().await;
+
+    let attempt = tokio::time::timeout(
+        std::time::Duration::from_secs(600),
+        kernel::ensure_pinned_kernel(
+            image_root,
+            Architecture::HOST,
+            &published.pinned(),
+            None,
+            Some(&stalled.base_url),
+        ),
+    )
+    .await
+    .expect("an import must not wait on a stalled registry forever");
+
+    assert_matches!(
+        attempt.expect_err("a stalled registry cannot supply a kernel"),
+        ResolveError::KernelDownloadFailed { .. },
+        "expected KernelDownloadFailed once the read timeout elapses"
+    );
+}
+
 #[tokio::test]
 async fn an_operator_path_that_is_not_a_regular_file_is_refused() {
     let directory = tempdir().expect("create fixture directory");

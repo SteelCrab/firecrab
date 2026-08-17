@@ -29,6 +29,10 @@ const PACKAGE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const KERNEL_MAX_BYTES: u64 = 256 * 1024 * 1024;
 /// Archive directory the packaged kernel lives in.
 const PACKAGE_KERNEL_DIRECTORY: &str = "kernel";
+/// Ceiling on reaching the registry, matching the OCI registry session.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Ceiling on the gap between two body chunks, not on the whole download.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Firecracker command line an imported rootfs boots with on x86_64.
 const X86_64_BOOT_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
@@ -254,6 +258,11 @@ async fn download_package(
     }
     let client = reqwest::Client::builder()
         .user_agent(concat!("firecrab-api/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(CONNECT_TIMEOUT)
+        // Unlike a total request timeout, this resets whenever another chunk
+        // arrives, so a slow link may take as long as the package needs while
+        // a registry that stops answering still fails an import predictably.
+        .read_timeout(READ_TIMEOUT)
         .build()
         .map_err(|error| download_failed(url, error.to_string()))?;
     let response = client
