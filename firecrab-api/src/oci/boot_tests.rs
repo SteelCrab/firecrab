@@ -12,8 +12,8 @@ fn ubuntu_artifact(architecture: Architecture) -> crate::m2image_manifest::Relea
 }
 
 #[test]
-fn kernel_pair_for_x86_64_is_the_ubuntu_vmlinux_without_an_initrd() {
-    let pair = boot::kernel_pair_for(Architecture::X86_64).expect("ubuntu publishes x86_64");
+fn catalog_pair_for_x86_64_is_the_ubuntu_vmlinux_without_an_initrd() {
+    let pair = boot::catalog_kernel_pair(Architecture::X86_64).expect("ubuntu publishes x86_64");
     let ubuntu = ubuntu_artifact(Architecture::X86_64);
 
     assert_eq!(pair.architecture, Architecture::X86_64);
@@ -30,8 +30,8 @@ fn kernel_pair_for_x86_64_is_the_ubuntu_vmlinux_without_an_initrd() {
 }
 
 #[test]
-fn kernel_pair_for_aarch64_is_the_ubuntu_image_without_an_initrd() {
-    let pair = boot::kernel_pair_for(Architecture::Aarch64).expect("ubuntu publishes aarch64");
+fn catalog_pair_for_aarch64_is_the_ubuntu_image_without_an_initrd() {
+    let pair = boot::catalog_kernel_pair(Architecture::Aarch64).expect("ubuntu publishes aarch64");
     let ubuntu = ubuntu_artifact(Architecture::Aarch64);
 
     assert_eq!(pair.architecture, Architecture::Aarch64);
@@ -42,13 +42,6 @@ fn kernel_pair_for_aarch64_is_the_ubuntu_image_without_an_initrd() {
     assert!(pair.boot_args.contains("keep_bootcon"));
     assert!(pair.boot_args.contains("console=ttyS0"));
     assert!(pair.boot_args.contains("root=/dev/vda"));
-}
-
-#[test]
-fn host_kernel_pair_is_the_pair_for_this_build() {
-    let host = boot::host_kernel_pair().expect("a no-initrd host kernel exists");
-    let expected = boot::kernel_pair_for(Architecture::HOST).expect("host pair exists");
-    assert_eq!(host, expected);
 }
 
 fn elf_kernel(machine: u16) -> Vec<u8> {
@@ -94,23 +87,34 @@ fn packed_ext4(path: std::path::PathBuf) -> OciExt4Image {
     }
 }
 
+fn host_catalog_pair() -> boot::KernelBootPair {
+    boot::catalog_kernel_pair(Architecture::HOST).expect("host catalog pair")
+}
+
 fn install_kernel(image_root: &std::path::Path, bytes: &[u8]) -> std::path::PathBuf {
-    let pair = boot::host_kernel_pair().expect("host kernel pair");
+    let pair = host_catalog_pair();
     let path = image_root.join(&pair.kernel);
     write_file(&path, bytes);
     pair.kernel
 }
 
+fn pair_with_catalog_kernel(
+    image: OciExt4Image,
+    image_root: &std::path::Path,
+) -> Result<OciBootableImage, ResolveError> {
+    boot::pair_ext4_with_kernel(image, image_root, &host_catalog_pair())
+}
+
 #[test]
-fn pairing_records_the_host_kernel_and_its_boot_args() {
+fn pairing_records_the_resolved_kernel_and_its_boot_args() {
     let directory = tempfile::tempdir().expect("create fixture directory");
     let image_root = directory.path();
     let expected_kernel = install_kernel(image_root, &kernel_bytes_for(Architecture::HOST));
     let ext4_path = image_root.join("rootfs/oci.ext4");
     let image = packed_ext4(ext4_path.clone());
-    let expected = boot::host_kernel_pair().expect("host kernel pair");
+    let expected = host_catalog_pair();
 
-    let paired = pair_ext4_with_host_kernel(image, image_root).expect("pair kernel");
+    let paired = pair_with_catalog_kernel(image, image_root).expect("pair kernel");
 
     assert_eq!(paired.architecture(), Architecture::HOST);
     assert_eq!(paired.kernel(), expected_kernel.as_path());
@@ -130,9 +134,9 @@ fn pairing_rejects_a_missing_host_kernel() {
     let image_root = directory.path();
     let ext4_path = image_root.join("rootfs/oci.ext4");
     let image = packed_ext4(ext4_path.clone());
-    let expected = boot::host_kernel_pair().expect("host kernel pair");
+    let expected = host_catalog_pair();
 
-    let error = pair_ext4_with_host_kernel(image, image_root).expect_err("missing kernel");
+    let error = pair_with_catalog_kernel(image, image_root).expect_err("missing kernel");
 
     match error {
         ResolveError::KernelMissing {
@@ -160,7 +164,7 @@ fn pairing_rejects_a_kernel_built_for_another_architecture() {
     let ext4_path = image_root.join("rootfs/oci.ext4");
     let image = packed_ext4(ext4_path);
 
-    let error = pair_ext4_with_host_kernel(image, image_root).expect_err("foreign arch");
+    let error = pair_with_catalog_kernel(image, image_root).expect_err("foreign arch");
 
     match error {
         ResolveError::KernelArchitectureMismatch { found, host, .. } => {
@@ -178,7 +182,7 @@ fn pairing_rejects_an_elf_firecracker_cannot_boot() {
     install_kernel(image_root, &elf_kernel(0xf3));
     let image = packed_ext4(image_root.join("rootfs/oci.ext4"));
 
-    let error = pair_ext4_with_host_kernel(image, image_root).expect_err("riscv");
+    let error = pair_with_catalog_kernel(image, image_root).expect_err("riscv");
 
     match error {
         ResolveError::UnsupportedKernelArchitecture { machine, .. } => {
@@ -192,7 +196,7 @@ fn pairing_rejects_an_elf_firecracker_cannot_boot() {
 fn pairing_does_not_follow_a_kernel_symlink() {
     let directory = tempfile::tempdir().expect("create fixture directory");
     let image_root = directory.path();
-    let pair = boot::host_kernel_pair().expect("host kernel pair");
+    let pair = host_catalog_pair();
     let target = directory.path().join("elsewhere");
     write_file(&target, &kernel_bytes_for(Architecture::HOST));
     let kernel_path = image_root.join(&pair.kernel);
@@ -200,7 +204,7 @@ fn pairing_does_not_follow_a_kernel_symlink() {
     std::os::unix::fs::symlink(&target, &kernel_path).expect("symlink kernel");
     let image = packed_ext4(image_root.join("rootfs/oci.ext4"));
 
-    let error = pair_ext4_with_host_kernel(image, image_root).expect_err("symlink");
+    let error = pair_with_catalog_kernel(image, image_root).expect_err("symlink");
 
     assert_matches!(
         error,
@@ -216,20 +220,20 @@ fn pairing_rejects_an_unclassifiable_kernel() {
     install_kernel(image_root, b"not-a-kernel");
     let image = packed_ext4(image_root.join("rootfs/oci.ext4"));
 
-    let error = pair_ext4_with_host_kernel(image, image_root).expect_err("garbage");
+    let error = pair_with_catalog_kernel(image, image_root).expect_err("garbage");
 
     match error {
         ResolveError::KernelUnrecognized { path } => {
-            assert_eq!(path, boot::host_kernel_pair().expect("host pair").kernel);
+            assert_eq!(path, host_catalog_pair().kernel);
         }
         other => panic!("expected KernelUnrecognized, got {other}"),
     }
 }
 
 #[test]
-fn kernel_pair_skips_kernels_that_need_an_initrd() {
+fn catalog_pair_skips_kernels_that_need_an_initrd() {
     for architecture in [Architecture::X86_64, Architecture::Aarch64] {
-        let pair = boot::kernel_pair_for(architecture).expect("a no-initrd kernel exists");
+        let pair = boot::catalog_kernel_pair(architecture).expect("a no-initrd kernel exists");
         for alias in ["alpine-3.24.1", "rocky-9.8"] {
             let artifact = m2image_manifest::image(alias)
                 .expect("release image")
@@ -244,4 +248,52 @@ fn kernel_pair_skips_kernels_that_need_an_initrd() {
             assert_ne!(pair.source_alias, alias);
         }
     }
+}
+
+/// A base URL nothing listens on, so the fetch fails without a fixture server.
+const UNREACHABLE_BASE_URL: &str = "http://127.0.0.1:1";
+/// The architecture this build pins a kernel for, on either host.
+const PINNED_ARCHITECTURE: Architecture = Architecture::X86_64;
+
+#[tokio::test]
+async fn resolution_falls_back_to_an_installed_catalog_kernel_when_the_registry_is_unreachable() {
+    let directory = tempfile::tempdir().expect("create fixture directory");
+    let image_root = directory.path();
+    let catalog = boot::catalog_kernel_pair(PINNED_ARCHITECTURE).expect("catalog pair");
+    write_file(
+        &image_root.join(&catalog.kernel),
+        &kernel_bytes_for(PINNED_ARCHITECTURE),
+    );
+
+    let pair = boot::resolve_kernel_pair(
+        image_root,
+        PINNED_ARCHITECTURE,
+        None,
+        Some(UNREACHABLE_BASE_URL),
+    )
+    .await
+    .expect("an installed catalog kernel keeps this host importing");
+
+    assert_eq!(pair, catalog);
+}
+
+#[tokio::test]
+async fn resolution_reports_the_registry_failure_when_no_catalog_kernel_is_installed() {
+    let directory = tempfile::tempdir().expect("create fixture directory");
+    let image_root = directory.path();
+
+    let error = boot::resolve_kernel_pair(
+        image_root,
+        PINNED_ARCHITECTURE,
+        None,
+        Some(UNREACHABLE_BASE_URL),
+    )
+    .await
+    .expect_err("nothing can supply a kernel");
+
+    assert_matches!(
+        error,
+        ResolveError::KernelDownloadFailed { .. },
+        "the registry failure is more actionable than a missing catalog kernel, got {error}"
+    );
 }

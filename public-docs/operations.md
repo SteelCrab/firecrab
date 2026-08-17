@@ -45,6 +45,7 @@ systemctl restart firecrab-api
 | `FIRECRAB_OCI_MAX_UNCOMPRESSED_LAYER_BYTES` | 64 GiB | Maximum decoded size of one OCI layer tar stream |
 | `FIRECRAB_OCI_MAX_ROOTFS_BYTES` | 32 GiB | Maximum size of one OCI-imported ext4 image |
 | `FIRECRAB_OCI_FASTFETCH_PATH` | (unset) | Host path of a fastfetch binary to copy into glibc guests |
+| `FIRECRAB_OCI_KERNEL_PATH` | (unset) | Host path of the pinned OCI import kernel, for mirrors and air-gapped hosts |
 | `FIRECRAB_STATIC_ROOT` | Installed dashboard | Static UI path |
 | `FIRECRAB_STORAGE_ROOTS` | `default=data` | Fixed storage roots |
 | `FIRECRAB_NET_HELPER_SOCK` | `/run/firecrab/net-helper.sock` | Helper socket |

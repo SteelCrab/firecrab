@@ -131,7 +131,7 @@ bash scripts/test-firecrab-release.sh
 bash scripts/test-install-cli.sh
 ```
 
-`check-doc-links.py` enforces published docs rules: English only, max **170 lines** per `public-docs/**/*.md` file except `api.md`, valid relative links, and no stale `docs/` paths in tracked sources.
+`check-doc-links.py` enforces published docs rules: English only, max **300 lines** per `public-docs/**/*.md` file except `api.md`, valid relative links, and no stale `docs/` paths in tracked sources.
 
 `check-changelog.py` requires root [`CHANGELOG.md`](CHANGELOG.md) to document the workspace version with **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**. A `v*` tag builds the GitHub Release body with `scripts/write-release-notes.py` (install URL, that changelog section, then contributor icons).
 
@@ -190,7 +190,7 @@ If your change affects VM boot, say so in the PR so maintainers can trigger the 
 
 | Kind | Where | Rules |
 | --- | --- | --- |
-| Published operator/developer English docs | `public-docs/` | Short pages, English, ≤170 lines except `api.md`, Related footers; use symlink aliases for alternate names |
+| Published operator/developer English docs | `public-docs/` | Contents table, English, ≤300 lines except `api.md`, Related footers; use symlink aliases for alternate names |
 | READMEs | `README.md`, `README.ko.md`, … | Keep install and develop paths accurate |
 | Private project notes | local `docs/` | **Gitignored** — not for PRs or the remote |
 

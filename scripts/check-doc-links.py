@@ -7,7 +7,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 PUBLIC_DOCS = REPO / "public-docs"
-MAX_LINES = 170
+# A page is capped so it stays readable in one sitting, not to make authors
+# compress sentences: a contents table, one-fact lines, and a diagram all cost
+# lines that a reader gets back.
+MAX_LINES = 300
 # API is the contract page and may list guest paths in full.
 LINE_LIMIT_EXEMPT = frozenset({"api.md"})
 
