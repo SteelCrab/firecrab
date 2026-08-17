@@ -1,32 +1,49 @@
 # Changelog
 
 All notable changes to firecrab are documented in this file.
+Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**; version headings match the Cargo workspace version.
 
-The format uses the sections **Added**, **Changed**, **Deprecated**, **Fixed**,
-and **Improved**. Version headings match the Cargo workspace version.
+## Releases
 
-## [0.1.1] - 2026-08-17
+| Version | Date | Work |
+| --- | --- | --- |
+| [Unreleased](#unreleased) | — | [#145] |
+| [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
+| [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
 
-Makes a single `./install.sh` leave a working host on SELinux distributions,
-and unblocks every image download.
+## [Unreleased]
+
+Entries land here as work merges, and move under the next version heading when that release is cut.
 
 ### Added
 
-- `firecrab-doctor` fails when a firecrab service is confined to SELinux's
-  `init_t` domain, and prints the relabel command for this host.
-- `firecrab-doctor` tests registry egress as the API service account, so a
-  connection the operator's own shell can make is never mistaken for one the
-  service can.
-- `semanage` is installed as a dependency on SELinux hosts, where the file
-  context the installer records cannot be applied without it.
+- OCI import pairs a digest-pinned MicroRegistry kernel, cached at `.oci/kernel/<arch>/` ([#145]).
+- `FIRECRAB_OCI_KERNEL_PATH` names a host copy of that kernel ([#145]).
+- [`public-docs/oci.md`](public-docs/oci.md) gains a contents table and an import architecture diagram ([#145]).
 
 ### Changed
 
-- `install.sh` labels the installed binaries `bin_t` and relabels
-  `$PREFIX/lib/firecrab`; uninstall removes the file-context rule again.
-- A package download resolves its object key from the published catalog and
-  falls back to the compiled manifest, instead of trusting the compiled key
-  alone.
+- An unreachable MicroRegistry falls back to an installed catalog kernel ([#145]).
+- Published pages may run to 300 lines, up from 170 ([#145]).
+
+### Fixed
+
+- A kernel download from a registry that stops answering times out ([#145]).
+
+## [0.1.1] - 2026-08-17
+
+One `./install.sh` leaves a working host on SELinux, and image downloads work again.
+
+### Added
+
+- `firecrab-doctor` fails on a service confined to `init_t`, and prints the relabel command ([#142]).
+- `firecrab-doctor` tests registry egress as the API service account ([#141]).
+- `semanage` is installed on SELinux hosts, so the recorded file context applies ([2493c7d]).
+
+### Changed
+
+- `install.sh` labels binaries `bin_t` and relabels `$PREFIX/lib/firecrab`; uninstall removes the rule ([#142]).
+- A package download takes its object key from the published catalog ([#143]).
 
 ### Deprecated
 
@@ -34,23 +51,15 @@ and unblocks every image download.
 
 ### Fixed
 
-- Image downloads no longer answer `404`: the compiled object keys had drifted
-  from the published layout, which also blocked OCI import, since pairing needs
-  an installed catalog kernel.
-- Both services stay out of `init_t`, where an outbound connect is denied and
-  the network helper cannot exec `nft` — every registry read failed with
-  `Permission denied (os error 13)` while a shell reached the same registry.
-- `--doctor` no longer aborts with an internal error on a normal install: a
-  data directory private to the service account is reported, not entered.
-- A registry connect refused by local policy says so, and names SELinux, the
-  unit sandbox, and firewall rules, rather than only "error sending request".
+- Image downloads no longer answer `404` ([#143]).
+- Both services stay out of `init_t`, where connect is denied and `nft` cannot exec ([#142]).
+- `--doctor` survives a data directory private to the service account ([7eb6740]).
+- A connect refused by local policy names SELinux, the unit sandbox, and firewall rules ([#141]).
 
 ### Improved
 
-- Troubleshooting documents the SELinux failure end to end: `ps -eZ`,
-  `audit2allow`, the relabel, and `setenforce 0` as a one-command confirmation.
-- Transport errors carry their whole source chain, so DNS, TLS, and policy
-  failures are distinguishable in one line.
+- Troubleshooting covers the SELinux failure end to end ([#142]).
+- Transport errors carry their whole source chain ([#141]).
 
 ## [0.1.0] - 2026-08-16
 
@@ -141,4 +150,12 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.1.1...main
+[0.1.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.0
+[#141]: https://github.com/SteelCrab/firecrab/issues/141
+[#142]: https://github.com/SteelCrab/firecrab/issues/142
+[#143]: https://github.com/SteelCrab/firecrab/issues/143
+[#145]: https://github.com/SteelCrab/firecrab/pull/145
+[2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
+[7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
