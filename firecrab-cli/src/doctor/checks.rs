@@ -1062,6 +1062,55 @@ mod tests {
         assert_eq!(results[0].status, Status::Pass);
     }
 
+    /// Common fixture for the per-bridge matching tests below: ufw
+    /// installed and enabled via the ufw.conf `ENABLED=yes` fast path (so
+    /// `ufw_is_enabled` never falls through to the `ufw status` text
+    /// check), one bridge `mnb0`, and uplink `eth0`.
+    fn fake_ufw_active_with_status(status_verbose: &str) -> FakeCommandRunner {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("ufw", &["--version"], 0, "ufw 0.36.2\n", "");
+        fake.set("cat", &["/etc/ufw/ufw.conf"], 0, "ENABLED=yes\n", "");
+        fake.set("ufw", &["status", "verbose"], 0, status_verbose, "");
+        fake.set("ip", &["-br", "link", "show", "type", "bridge"], 0, "mnb0             DOWN\n", "");
+        fake.set(
+            "ip",
+            &["-4", "route", "get", "8.8.8.8"],
+            0,
+            "8.8.8.8 via 10.0.2.2 dev eth0 src 10.0.2.15 uid 1000\n",
+            "",
+        );
+        fake
+    }
+
+    #[test]
+    fn ufw_fails_bridge_missing_all_allows() {
+        let fake = fake_ufw_active_with_status(
+            "Status: active\n\nTo                         Action      From\n--                         ------      ----\n",
+        );
+        let results = check_ufw(&fake);
+        // dhcp + dns + route allow all missing on mnb0, uplink was detected
+        // so there is no "could not detect uplink" skip on top.
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|r| r.status == Status::Fail));
+        assert!(results.iter().any(|r| r.title.contains("DHCP")));
+        assert!(results.iter().any(|r| r.title.contains("DNS")));
+        assert!(results.iter().any(|r| r.title.contains("route allow")));
+    }
+
+    #[test]
+    fn ufw_passes_when_all_bridge_allows_present() {
+        let status = "Status: active\n\n\
+             To                         Action      From\n\
+             --                         ------      ----\n\
+             67/udp on mnb0             ALLOW IN    Anywhere\n\
+             53 on mnb0                 ALLOW IN    Anywhere\n\
+             Anywhere on mnb0           ALLOW FWD   Anywhere on eth0 \n";
+        let fake = fake_ufw_active_with_status(status);
+        let results = check_ufw(&fake);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
     #[test]
     fn selinux_domain_pass_when_getenforce_missing() {
         let fake = FakeCommandRunner::new();
@@ -1090,6 +1139,33 @@ mod tests {
     }
 
     #[test]
+    fn helper_socket_pass_when_owner_and_mode_are_correct() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempdir().unwrap();
+        let sock_path = dir.path().join("net-helper.sock");
+        // A real bound Unix socket file, not a regular file, so
+        // `file_type().is_socket()` sees what the production code expects.
+        let _listener = UnixListener::bind(&sock_path).unwrap();
+        fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o660)).unwrap();
+        let owner_uid = fs::symlink_metadata(&sock_path).unwrap().uid();
+
+        let env = DoctorEnv {
+            helper_sock: sock_path.display().to_string(),
+            // Fixed name instead of relying on $USER/systemctl in the test
+            // environment — only its resolved uid (faked below) matters.
+            api_user: Some("fake-api-user".to_owned()),
+            ..DoctorEnv::default()
+        };
+        let mut fake = FakeCommandRunner::new();
+        fake.set("id", &["-u", "fake-api-user"], 0, &format!("{owner_uid}\n"), "");
+
+        let results = check_helper_socket(&env, &fake);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
+    }
+
+    #[test]
     fn images_fail_when_no_root_found() {
         let dir = tempdir().unwrap();
         let env = DoctorEnv {
@@ -1099,6 +1175,31 @@ mod tests {
         // cwd (crate 소스 트리) has no ./images either.
         let results = check_images(&env, false);
         assert_eq!(results[0].status, Status::Fail);
+    }
+
+    /// Regression test for the deleted bash `test-install-cli.sh` case: a
+    /// DATADIR that exists but the current user can't enter (0000) must
+    /// degrade to `Skip`, never `Fail` or a panic — see [`datadir_private`].
+    #[test]
+    fn images_skip_when_datadir_exists_but_is_unreadable() {
+        let dir = tempdir().unwrap();
+        let datadir = dir.path().join("private-datadir");
+        fs::create_dir(&datadir).unwrap();
+        fs::set_permissions(&datadir, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let env = DoctorEnv {
+            datadir: datadir.display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_images(&env, false);
+
+        // Restore permissions before the tempdir's Drop tries to remove it,
+        // mirroring the deleted bash test's `chmod 755` cleanup.
+        fs::set_permissions(&datadir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Skip);
+        assert!(results[0].title.contains("private to the service account"), "{results:?}");
     }
 
     #[test]
