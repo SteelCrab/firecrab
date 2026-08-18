@@ -1080,7 +1080,7 @@ const LOCAL_POLICY_HINT: &str = "; this host refused the connection before it \
      left the machine (EACCES) — check SELinux (ausearch -m avc), the service \
      sandbox (systemctl show firecrab-api -p IPAddressDeny \
      -p RestrictAddressFamilies), and firewall rules matching the API user, \
-     or run firecrab-doctor";
+     or run firecrab doctor";
 
 /// Whether a transport failure was a local policy refusal rather than a
 /// network one.
@@ -4405,7 +4405,7 @@ mod tests {
         assert!(message.starts_with("error sending request"), "{message}");
         assert!(message.contains("this host"), "{message}");
         assert!(message.contains("SELinux"), "{message}");
-        assert!(message.contains("firecrab-doctor"), "{message}");
+        assert!(message.contains("firecrab doctor"), "{message}");
     }
 
     /// Every other transport failure keeps its old wording. A refused or
