@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod doctor;
 mod shell;
 
 #[derive(Parser)]
