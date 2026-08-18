@@ -6,7 +6,7 @@ It gives VMs a bridge, DHCP, NAT, and firewall policy.
 ## Create
 
 ```sh
-curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
+curl -s -X POST http://127.0.0.1:5523/api/micro-networks \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "lab",
@@ -33,7 +33,7 @@ Its TAP interface is attached to the network bridge.
 The network field `internetEnabled` controls NAT for the subnet.
 
 ```sh
-curl -s -X PATCH http://127.0.0.1:3000/api/micro-networks/<id> \
+curl -s -X PATCH http://127.0.0.1:5523/api/micro-networks/<id> \
   -H 'Content-Type: application/json' \
   -d '{"internetEnabled":false}'
 ```
@@ -43,7 +43,7 @@ Omit it, or send `null`, to use the host default-route interface.
 An empty string on PATCH resets the stored name back to that auto default.
 
 ```sh
-curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
+curl -s -X POST http://127.0.0.1:5523/api/micro-networks \
   -H 'Content-Type: application/json' \
   -d '{"name":"edge","subnetCidr":"172.32.0.0/24","uplink":"eth1"}'
 ```
@@ -88,8 +88,8 @@ Traffic between different MicroNetworks is blocked.
 ## Inspect
 
 ```sh
-curl -s http://127.0.0.1:3000/api/micro-networks
-curl -s http://127.0.0.1:3000/api/micro-networks/<id>
+curl -s http://127.0.0.1:5523/api/micro-networks
+curl -s http://127.0.0.1:5523/api/micro-networks/<id>
 ```
 
 The detail response shows address use, bridge state, NAT, policy, and member VMs.
@@ -97,7 +97,7 @@ The detail response shows address use, bridge state, NAT, policy, and member VMs
 ## Delete
 
 ```sh
-curl -i -X DELETE http://127.0.0.1:3000/api/micro-networks/<id>
+curl -i -X DELETE http://127.0.0.1:5523/api/micro-networks/<id>
 ```
 
 Deletion returns `409` while a VM belongs to the network.

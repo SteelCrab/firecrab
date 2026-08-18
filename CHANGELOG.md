@@ -25,7 +25,8 @@ Entries land here as work merges, and move under the next version heading when t
 
 - An unreachable MicroRegistry falls back to an installed catalog kernel ([#145]).
 - Published pages may run to 300 lines, up from 170 ([#145]).
-- README (all locales) and `CONTRIBUTING.md` point at port `5523`, not `3000` ([#147]).
+- README (all locales) and `CONTRIBUTING.md` point at port `5523`, not `3000` ([#149]).
+- `public-docs/` API examples and check lists reference port `5523`, not `3000` ([#147]).
 
 ### Fixed
 

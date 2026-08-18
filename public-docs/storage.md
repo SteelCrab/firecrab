@@ -83,7 +83,7 @@ FIRECRAB_STORAGE_ROOTS='local=data:fast=/mnt/fast' \
 ## Find mounts
 
 ```sh
-curl -s http://127.0.0.1:3000/api/storage/devices
+curl -s http://127.0.0.1:5523/api/storage/devices
 ```
 
 This endpoint lists mounted filesystems and free space.
@@ -92,7 +92,7 @@ It does not change the host.
 ## Register
 
 ```sh
-curl -s -X POST http://127.0.0.1:3000/api/micro-storages \
+curl -s -X POST http://127.0.0.1:5523/api/micro-storages \
   -H 'Content-Type: application/json' \
   -d '{"name":"fast","path":"/mnt/fast"}'
 ```
@@ -113,7 +113,7 @@ A VM request cannot contain an arbitrary host path.
 Storage can change before the VM disk exists.
 
 ```sh
-curl -s -X PUT http://127.0.0.1:3000/api/vms/<vm-id>/storage \
+curl -s -X PUT http://127.0.0.1:5523/api/vms/<vm-id>/storage \
   -H 'Content-Type: application/json' \
   -d '{"storageRoot":"<storage-id>"}'
 ```
