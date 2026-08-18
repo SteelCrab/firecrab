@@ -25,9 +25,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 - An unreachable MicroRegistry falls back to an installed catalog kernel ([#145]).
 - Published pages may run to 300 lines, up from 170 ([#145]).
-- Default `FIRECRAB_BIND_ADDR` moves from `127.0.0.1:3000` to `127.0.0.1:5523` ([#150).
-- README (all locales) and `CONTRIBUTING.md` point at port `5523`, not `3000` ([#149]).
-- `public-docs/` API examples and check lists reference port `5523`, not `3000` ([#147]).
+- [#147-comment]
+  - Default `FIRECRAB_BIND_ADDR` moves from `127.0.0.1:3000` to `127.0.0.1:5523` ([[#147]).
+  - README (all locales) and `CONTRIBUTING.md` point at port `5523`, not `3000` ([#147]).
+  - `public-docs/` API examples and check lists reference port `5523`, not `3000` ([#147]).
 
 ### Fixed
 
@@ -161,5 +162,6 @@ network helper.
 [#143]: https://github.com/SteelCrab/firecrab/issues/143
 [#145]: https://github.com/SteelCrab/firecrab/pull/145
 [#147]: https://github.com/SteelCrab/firecrab/issues/147
+[#147-comment]: https://github.com/SteelCrab/firecrab/issues/147#issuecomment-5327667852
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
