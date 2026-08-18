@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 
+mod api_client;
 mod doctor;
 mod info;
 mod shell;
@@ -53,10 +54,7 @@ fn main() {
             std::process::exit(report.exit_code());
         }
         Command::Info { json, api } => {
-            let api_base = api
-                .clone()
-                .or_else(|| std::env::var("FIRECRAB_API").ok().filter(|s| !s.is_empty()))
-                .unwrap_or_else(|| "http://127.0.0.1:5523".to_owned());
+            let api_base = api_client::resolve_api_base(api.as_deref());
             let report = info::collect(&api_base);
             if json {
                 info::print_json(&report);
