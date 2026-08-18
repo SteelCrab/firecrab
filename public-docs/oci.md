@@ -78,7 +78,7 @@ flowchart TB
 - HTTPS only, except `localhost` and `127.0.0.1`.
 
 ```sh
-curl -s 'http://127.0.0.1:3000/api/oci/inspect?reference=nginx:1.27'
+curl -s 'http://127.0.0.1:5523/api/oci/inspect?reference=nginx:1.27'
 ```
 
 - Docker Hub's anonymous quota is per source address, so a shared egress IP answers `429`.
@@ -92,7 +92,7 @@ curl -s 'http://127.0.0.1:3000/api/oci/inspect?reference=nginx:1.27'
 - Success adds the alias to `GET /api/images`.
 
 ```sh
-curl -s -X POST http://127.0.0.1:3000/api/oci/import \
+curl -s -X POST http://127.0.0.1:5523/api/oci/import \
   -H 'Content-Type: application/json' \
   -d '{"reference":"nginx:1.27"}'
 ```
