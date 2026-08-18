@@ -51,7 +51,7 @@ pub struct HttpConfig {
 
 impl HttpConfig {
     pub fn load() -> Result<Self, ConfigError> {
-        let bind = env::var("FIRECRAB_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:5523".to_owned());
+        let bind = bind_addr_or_default(env::var("FIRECRAB_BIND_ADDR").ok());
         let authentication_enabled = env_flag("FIRECRAB_AUTHENTICATION_ENABLED");
         let tls_enabled = env_flag("FIRECRAB_TLS_ENABLED");
         let production = env::var("FIRECRAB_ENV").is_ok_and(|value| value == "production");
@@ -114,6 +114,10 @@ fn resolve_static_root(configured: Option<String>) -> Option<PathBuf> {
         "FIRECRAB_STATIC_ROOT has no index.html; serving the API only"
     );
     None
+}
+
+fn bind_addr_or_default(configured: Option<String>) -> String {
+    configured.unwrap_or_else(|| "127.0.0.1:5523".to_owned())
 }
 
 fn env_flag(name: &str) -> bool {
@@ -450,6 +454,19 @@ mod tests {
     fn rejects_insecure_non_loopback_bind() {
         let result = HttpConfig::from_values("0.0.0.0:3000", "", false, false);
         assert_matches!(result, Err(ConfigError::InsecureNonLoopbackBind));
+    }
+
+    #[test]
+    fn bind_addr_defaults_when_unset() {
+        assert_eq!(bind_addr_or_default(None), "127.0.0.1:5523");
+    }
+
+    #[test]
+    fn bind_addr_honors_override() {
+        assert_eq!(
+            bind_addr_or_default(Some("0.0.0.0:9999".to_owned())),
+            "0.0.0.0:9999"
+        );
     }
 
     #[test]

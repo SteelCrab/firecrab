@@ -5,7 +5,7 @@
 
 set -u
 
-API="${FIRECRAB_API:-http://127.0.0.1:3000}"
+API="${FIRECRAB_API:-http://127.0.0.1:5523}"
 ORIGIN="${FIRECRAB_ORIGIN:-http://localhost:8080}"
 STATE_FILE="${FIRECRAB_BATCH_STATE:-/tmp/firecrab-vm-batch.ids}"
 

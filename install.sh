@@ -3,7 +3,7 @@
 #
 # Downloads a host bundle from a GitHub Release (or installs local binaries
 # via --bin-dir), then lays out systemd units so the dashboard is served on
-# http://127.0.0.1:3000/.
+# http://127.0.0.1:5523/.
 #
 # Bundles are Linux x86_64/aarch64 × gnu (glibc) / musl. glibc hosts get the
 # gnu bundle; musl hosts (Alpine) get musl. Override with --libc.
@@ -663,7 +663,7 @@ install_config() {
 # firecrab API settings. The unit already sets the image root, the dashboard
 # assets and the working directory; uncomment only what you want to change.
 #
-# FIRECRAB_BIND_ADDR=127.0.0.1:3000
+# FIRECRAB_BIND_ADDR=127.0.0.1:5523
 # A non-loopback address requires authentication AND TLS to be enabled.
 # FIRECRAB_ALLOWED_ORIGINS=
 # Empty is correct while the dashboard is served from this same origin.
@@ -850,7 +850,7 @@ ensure_images() {
 }
 
 api_url() {
-    printf 'http://%s' "${FIRECRAB_BIND_ADDR:-127.0.0.1:3000}"
+    printf 'http://%s' "${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}"
 }
 
 json_status() {
@@ -965,7 +965,7 @@ start_units() {
 # can take noticeably longer to hash than the process takes to fork. Poll the
 # real HTTP port so callers relying on start_units's return don't race it.
 wait_for_api() {
-    local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:3000}
+    local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}
     local _attempt
     for _attempt in $(seq 1 60); do
         curl -fsS -o /dev/null "http://$bind/" && return 0
@@ -1085,7 +1085,7 @@ do_install() {
     fi
     report_ufw
 
-    local bind=127.0.0.1:3000
+    local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}
     log "done — dashboard at http://$bind/"
     if ! images_present; then
         step "guest images: install from the dashboard Images page"

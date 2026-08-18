@@ -5,12 +5,12 @@
 # Usage: scripts/ci-m2-guest-boot.sh <template-alias>
 #   e.g. scripts/ci-m2-guest-boot.sh alpine-3.24.1
 #
-# Prerequisites: firecrab-api listening on :3000, a registered template,
+# Prerequisites: firecrab-api listening on :5523, a registered template,
 # KVM available, micro_network create works (explicit networks only).
 set -euo pipefail
 
 TEMPLATE=${1:?template alias required (e.g. alpine-3.24.1)}
-API=${FIRECRAB_API:-http://127.0.0.1:3000}
+API=${FIRECRAB_API:-http://127.0.0.1:5523}
 # Unique /24 per template hash so parallel matrix jobs on one host would not
 # collide if ever co-located (each CI job is its own runner today).
 SUBNET_THIRD=$(printf '%s' "$TEMPLATE" | cksum | awk '{print ($1 % 200) + 20}')
