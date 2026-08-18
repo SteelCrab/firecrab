@@ -110,6 +110,7 @@ The installer keeps the database, VM disks, and `api.env`.
 ## Related
 
 - [Operations](operations.md)
+- [firecrab CLI](firecrab-cli.md)
 - [Networking](networking.md)
 - [Images](images.md)
 - [Troubleshooting](troubleshooting.md)

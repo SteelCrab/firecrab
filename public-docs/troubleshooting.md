@@ -164,6 +164,7 @@ Use the response `requestId` to find the server log.
 ## Related
 
 - [API](api.md)
+- [firecrab CLI](firecrab-cli.md)
 - [Networking](networking.md)
 - [Storage](storage.md)
 - [Images](images.md)

@@ -167,4 +167,5 @@ Deleting a pool does not unmount or format the host filesystem.
 - [Core concepts](concepts.md)
 - [API](api.md)
 - [Installation](installation.md)
+- [firecrab CLI](firecrab-cli.md)
 - [Troubleshooting](troubleshooting.md)

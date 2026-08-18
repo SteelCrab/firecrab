@@ -21,6 +21,7 @@ Entries land here as work merges, and move under the next version heading when t
 - `FIRECRAB_OCI_KERNEL_PATH` names a host copy of that kernel ([#145]).
 - [`public-docs/oci.md`](public-docs/oci.md) gains a contents table and an import architecture diagram ([#145]).
 - `firecrab-cli` workspace crate ships `firecrab doctor`/`info`/`status` ([#152]).
+- [`public-docs/firecrab-cli.md`](public-docs/firecrab-cli.md) documents the CLI's architecture and all three subcommands ([#152]).
 
 ### Changed
 

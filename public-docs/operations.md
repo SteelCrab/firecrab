@@ -96,5 +96,6 @@ scripts/ci-m2-guest-boot.sh alpine-3.24.1
 
 - [Architecture](architecture.md)
 - [Installation](installation.md)
+- [firecrab CLI](firecrab-cli.md)
 - [Networking](networking.md)
 - [Troubleshooting](troubleshooting.md)
