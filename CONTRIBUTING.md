@@ -73,7 +73,7 @@ npm install --prefix firecrab-frontend
 npm run dev --prefix firecrab-frontend
 ```
 
-Production-like (API serves the built SPA on `http://127.0.0.1:3000/`):
+Production-like (API serves the built SPA on `http://127.0.0.1:5523/`):
 
 ```sh
 npm run build --prefix firecrab-frontend
@@ -200,7 +200,7 @@ When you move or rename a public guide, update references in code comments, scri
 
 ## Security and scope notes
 
-- **Default bind is loopback** (`127.0.0.1:3000`). The control plane is meant for a trusted host or a carefully reverse-proxied deployment. Do not assume auth or multi-tenant isolation is present.
+- **Default bind is loopback** (`127.0.0.1:5523`). The control plane is meant for a trusted host or a carefully reverse-proxied deployment. Do not assume auth or multi-tenant isolation is present.
 - **No implicit “open to the LAN”** in contributions. If you expose the API, document the risk.
 - Prefer extending the **helper protocol** over giving the API new host privileges.
 - Avoid expanding into multi-host scheduling, full cloud IAM, or Jailer/VRF unless the change is explicitly agreed — those sit outside the current single-host MVP focus.

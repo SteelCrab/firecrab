@@ -22,11 +22,11 @@ df -h
 Check the API directly.
 
 ```sh
-curl -i http://127.0.0.1:3000/api/vms
+curl -i http://127.0.0.1:5523/api/vms
 ```
 
 Use `http://localhost:8080` for Vite development — `127.0.0.1:8080` is a
-different browser origin. Check for old processes on ports `3000` and `8080`.
+different browser origin. Check for old processes on ports `5523` and `8080`.
 
 ## Data appears empty
 
@@ -72,7 +72,7 @@ Use separate MicroStorage pools when one disk is saturated.
 Inspect the network and host bridge.
 
 ```sh
-curl -s http://127.0.0.1:3000/api/micro-networks/<id>
+curl -s http://127.0.0.1:5523/api/micro-networks/<id>
 ip -br link show type bridge
 sudo ss -lunp | grep ':67'
 ```

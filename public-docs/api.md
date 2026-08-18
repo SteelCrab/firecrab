@@ -1,7 +1,7 @@
 # API
 
 `firecrab-api` provides REST endpoints and one console WebSocket.
-It listens on `127.0.0.1:3000` by default.
+It listens on `127.0.0.1:5523` by default.
 
 ## Run
 
@@ -38,7 +38,7 @@ Use `RUST_LOG=firecrab_api=debug` for detailed logs.
 Create a MicroNetwork first.
 
 ```sh
-NETWORK_ID=$(curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
+NETWORK_ID=$(curl -s -X POST http://127.0.0.1:5523/api/micro-networks \
   -H 'Content-Type: application/json' \
   -d '{"name":"lab","subnetCidr":"172.30.0.0/24"}' \
   | jq -r '.id')
@@ -47,7 +47,7 @@ NETWORK_ID=$(curl -s -X POST http://127.0.0.1:3000/api/micro-networks \
 Create the VM with the returned network ID.
 
 ```sh
-curl -s -X POST http://127.0.0.1:3000/api/vms \
+curl -s -X POST http://127.0.0.1:5523/api/vms \
   -H 'Content-Type: application/json' \
   -d "{
     \"name\": \"demo\",
@@ -185,7 +185,7 @@ With no local rows and no catalog, GET is 503.
 Register an already-installed custom image.
 
 ```sh
-curl -s -X POST http://127.0.0.1:3000/api/microregistry/register \
+curl -s -X POST http://127.0.0.1:5523/api/microregistry/register \
   -H 'Content-Type: application/json' \
   -d '{"alias":"nginx-1.27","version":"1"}'
 ```
@@ -216,7 +216,7 @@ One shared egress IP spends that quota, and OCI inspect or import then answers `
 Save one account so pulls count against it instead.
 
 ```sh
-curl -s -X PUT http://127.0.0.1:3000/api/microregistry/docker-hub \
+curl -s -X PUT http://127.0.0.1:5523/api/microregistry/docker-hub \
   -H 'Content-Type: application/json' \
   -d '{"username":"pista","secret":"dckr_pat_..."}'
 ```
