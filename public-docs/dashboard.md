@@ -80,12 +80,12 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" \
   cargo run -p firecrab-api
 ```
 
-Open `http://127.0.0.1:3000/`.
+Open `http://127.0.0.1:5523/`.
 The host installer configures this mode.
 
 ## Check
 
-- Confirm that ports `3000` and `8080` are not used by old processes.
+- Confirm that ports `5523` and `8080` are not used by old processes.
 - Run the API from the repository root.
 - Start the helper before starting a VM.
 - Forward WebSocket upgrades for `/ws` through a reverse proxy.

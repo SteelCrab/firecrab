@@ -49,7 +49,7 @@ cargo build --release -p firecrab-api -p firecrab-net-helper
 Open the dashboard after the services start.
 
 ```text
-http://127.0.0.1:3000/
+http://127.0.0.1:5523/
 ```
 
 The default install does not install a guest image.
@@ -98,8 +98,8 @@ DATADIR=/srv/firecrab PREFIX=/opt ./install.sh
 ```sh
 systemctl status firecrab-net-helper firecrab-api
 firecrab-doctor
-curl -s http://127.0.0.1:3000/api/vms
-curl -s http://127.0.0.1:3000/api/micro-networks
+curl -s http://127.0.0.1:5523/api/vms
+curl -s http://127.0.0.1:5523/api/micro-networks
 ```
 
 A new host has no MicroNetwork.
