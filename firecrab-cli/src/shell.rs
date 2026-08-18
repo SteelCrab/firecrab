@@ -5,6 +5,9 @@ use std::process::Output;
 /// Abstracts spawning an external command so doctor checks can be unit
 /// tested against canned output instead of the real host.
 pub trait CommandRunner {
+    /// Same contract as `std::process::Command::output`: `Err` means the
+    /// command could not even be spawned (e.g. not on `$PATH`), a
+    /// nonzero exit is still `Ok`.
     fn run(&self, cmd: &str, args: &[&str]) -> io::Result<Output>;
 }
 

@@ -7,9 +7,13 @@ use firecrab_api_types::HostStatusResponse;
 /// FIRECRAB_BIND_ADDR overrides it.
 pub const DEFAULT_API_BASE: &str = "http://127.0.0.1:5523";
 
+/// Distinguishes "never got an HTTP response" from "got one, and it was an
+/// error" — callers (e.g. `status::collect`) report these differently.
 #[derive(Debug)]
 pub enum ApiError {
+    /// Connection, TLS, timeout, or a response body that didn't parse.
     Unreachable(String),
+    /// A well-formed but non-2xx response.
     Http { status: u16, body: String },
 }
 
@@ -36,12 +40,17 @@ pub fn resolve_api_base(flag: Option<&str>) -> String {
     DEFAULT_API_BASE.to_owned()
 }
 
+/// Thin blocking HTTP client for firecrab-api, used by `status`/other
+/// subcommands that need live host data.
 pub struct ApiClient {
     base: String,
     client: reqwest::blocking::Client,
 }
 
 impl ApiClient {
+    /// `base` is used as-is (no re-validation) — pass it through
+    /// [`resolve_api_base`] first. A 3s request timeout keeps `status`
+    /// responsive when the API is down rather than hanging.
     pub fn new(base: String) -> Self {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(3))

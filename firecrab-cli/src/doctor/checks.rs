@@ -21,6 +21,8 @@ pub(crate) fn abs_dir(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// `/dev/kvm` present, a char device, and read/write for the current user —
+/// the minimum for Firecracker to start any VM at all.
 pub fn check_kvm() -> Vec<CheckResult> {
     let path = Path::new("/dev/kvm");
     let meta = match fs::symlink_metadata(path) {
@@ -49,6 +51,9 @@ pub fn check_kvm() -> Vec<CheckResult> {
     )]
 }
 
+/// `net.ipv4.ip_forward` must be `1`, or guest outbound NAT never works —
+/// `firecrab-net-helper` also sets this at startup, so a `Fail` here usually
+/// means the helper hasn't run yet, not a broken host.
 pub fn check_ip_forward() -> Vec<CheckResult> {
     let raw = match fs::read_to_string("/proc/sys/net/ipv4/ip_forward") {
         Ok(s) => s,
@@ -102,6 +107,10 @@ fn find_databases(env: &DoctorEnv) -> Vec<PathBuf> {
     found
 }
 
+/// Fails on more than one `firecrab.db` candidate, not zero — the API
+/// resolves its database path relative to cwd, so two candidates mean two
+/// processes could silently see different state depending on where they
+/// were started from.
 pub fn check_data_root(env: &DoctorEnv) -> Vec<CheckResult> {
     let dbs = find_databases(env);
     if dbs.len() > 1 {
@@ -130,6 +139,9 @@ pub fn check_data_root(env: &DoctorEnv) -> Vec<CheckResult> {
     )]
 }
 
+/// Resolves the binary from `env.firecracker_bin` if set, else `$PATH`, and
+/// distinguishes "not found" from "found but not executable" so the fix
+/// text can point at the right remedy.
 pub fn check_firecracker(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
     let bin = env.firecracker_bin.clone().unwrap_or_else(|| "firecracker".to_owned());
     match runner.run(&bin, &["--version"]) {
@@ -179,6 +191,10 @@ fn socket_exists(path: &str) -> bool {
     fs::symlink_metadata(path).map(|m| m.file_type().is_socket()).unwrap_or(false)
 }
 
+/// Looks for the `inet firecrab` and `bridge firecrab_l2` tables. Missing
+/// tables are only a `Fail` once the helper socket is up with a bridge
+/// already attached — before that, zero MicroNetworks is a normal, empty
+/// state, not a fault.
 pub fn check_nft(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
     let out = match runner.run("nft", &["list", "tables"]) {
         Ok(o) => o,
@@ -242,6 +258,9 @@ pub fn check_nft(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult
     )]
 }
 
+/// Liveness comes from the pid file first, falling back to `pgrep` — and
+/// once alive, the running conf's `interface=` lines must cover every
+/// firecrab bridge, or that bridge's guests get no DHCP/DNS.
 pub fn check_dnsmasq(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
     let mut alive = false;
     if let Ok(pid_raw) = fs::read_to_string(&env.dnsmasq_pid) {
@@ -366,6 +385,10 @@ fn detect_uplink(runner: &dyn CommandRunner) -> Option<String> {
     tokens.iter().position(|&t| t == "dev").and_then(|i| tokens.get(i + 1)).map(|s| s.to_string())
 }
 
+/// A no-op (`Pass`) when ufw is absent or disabled — only an *active* ufw
+/// can block firecrab traffic. When active, every firecrab bridge needs its
+/// own DHCP/DNS/route allow rules, so this can emit more than one
+/// `CheckResult`, one per missing rule per bridge.
 pub fn check_ufw(runner: &dyn CommandRunner) -> Vec<CheckResult> {
     let ufw_installed = runner.run("ufw", &["--version"]).is_ok();
     let conf_exists = runner
@@ -441,6 +464,10 @@ pub fn check_ufw(runner: &dyn CommandRunner) -> Vec<CheckResult> {
     results
 }
 
+/// Only meaningful under SELinux `Enforcing`: a firecrab service left in
+/// systemd's default `init_t` domain (instead of its own policy) can't open
+/// https sockets or exec `nft`, which looks like a network fault but is a
+/// labeling one.
 pub fn check_selinux_domain(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
     let Ok(mode_out) = runner.run("getenforce", &[]) else {
         return vec![CheckResult::pass("selinux_domain")];
@@ -488,6 +515,10 @@ fn resolve_api_user(env: &DoctorEnv, runner: &dyn CommandRunner) -> String {
     current_username()
 }
 
+/// Beyond existence, checks that the resolved API account can actually
+/// open the socket: owner match uses the owner bits, group match the group
+/// bits, everyone else the other bits — plus a floor check that mode isn't
+/// tighter than the 0660 the helper is expected to create.
 pub fn check_helper_socket(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
     let sock = &env.helper_sock;
     let meta = match fs::symlink_metadata(sock) {
@@ -623,6 +654,11 @@ fn datadir_private(datadir: &str) -> bool {
     path.exists() && fs::read_dir(path).is_err()
 }
 
+/// Finds an image root holding the default template set and reports which
+/// artifacts are missing. A root that exists but can't be traversed (e.g. a
+/// service-account-owned `DATADIR`) degrades to `Skip`, not `Fail` — see
+/// [`datadir_private`]. `digest` additionally prints a short sha256 per
+/// artifact to stderr, for confirming exactly which build is installed.
 pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
     let roots = resolve_image_roots(env);
     let artifacts = template_artifacts();
@@ -717,6 +753,9 @@ pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
     vec![CheckResult::pass("images")]
 }
 
+/// `tar`/`zstd` are only needed for the dashboard's on-demand template
+/// install, not for running existing VMs — so their absence, and a
+/// disabled `FIRECRAB_IMAGE_BASE_URL`, are both `Skip`, never `Fail`.
 pub fn check_image_install_tools(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
     let mut missing = Vec::new();
     if runner.run("tar", &["--version"]).is_err() {
@@ -773,6 +812,10 @@ fn resolve_vms_roots(env: &DoctorEnv) -> Vec<PathBuf> {
     roots
 }
 
+/// Compares `st_dev` of the image root and each VM storage root: different
+/// filesystems mean template-to-disk copies can't reflink and fall back to
+/// a full byte copy per VM. Advisory only (`Skip`, never `Fail`) since a
+/// full copy still works, just slower and using more space.
 pub fn check_reflink(env: &DoctorEnv) -> Vec<CheckResult> {
     let image_roots = resolve_image_roots(env);
     let vms_roots = resolve_vms_roots(env);
@@ -804,6 +847,11 @@ pub fn check_reflink(env: &DoctorEnv) -> Vec<CheckResult> {
     )]
 }
 
+/// Probes the configured image registry (or Docker Hub as a second data
+/// point) with `curl` run as the API account, to catch host-level egress
+/// blocks (SELinux, systemd sandboxing, firewall) that a plain shell on the
+/// same box wouldn't hit. Only runs as another account via `sudo` when
+/// already root; otherwise degrades to `Skip` rather than guessing.
 pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
     if runner.run("curl", &["--version"]).is_err() {
         return vec![CheckResult::skip(

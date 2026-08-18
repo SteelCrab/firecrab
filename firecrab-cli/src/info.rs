@@ -5,14 +5,22 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InfoReport {
+    /// `CARGO_PKG_VERSION` of this binary, not a running service's version.
     pub version: String,
+    /// From `$PREFIX`, or install.sh's default.
     pub prefix: String,
+    /// From `$DATADIR`, or install.sh's default.
     pub datadir: String,
+    /// From `$CONFDIR`, or install.sh's default.
     pub confdir: String,
+    /// From `$UNITDIR`, or install.sh's default.
     pub unitdir: String,
+    /// Resolved by [`crate::api_client::resolve_api_base`]; not re-derived here.
     pub api_base: String,
 }
 
+/// Reads `PREFIX`/`DATADIR`/`CONFDIR`/`UNITDIR` from the environment,
+/// falling back to install.sh's own defaults when unset.
 pub fn collect(api_base: &str) -> InfoReport {
     InfoReport {
         version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -24,6 +32,7 @@ pub fn collect(api_base: &str) -> InfoReport {
     }
 }
 
+/// Plain-text rendering for a terminal (the default output mode).
 pub fn print_human(report: &InfoReport) {
     println!("firecrab {}", report.version);
     println!("  prefix:  {}", report.prefix);
@@ -33,6 +42,7 @@ pub fn print_human(report: &InfoReport) {
     println!("  api:     {}", report.api_base);
 }
 
+/// `--json` output mode, for scripting.
 pub fn print_json(report: &InfoReport) {
     println!("{}", serde_json::to_string_pretty(report).unwrap());
 }

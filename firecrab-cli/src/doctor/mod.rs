@@ -2,11 +2,19 @@ pub mod checks;
 
 use serde::Serialize;
 
+/// Outcome of one check. Mirrors the bash script's three-way PASS/FAIL/SKIP
+/// (there is no "warn" — an inconclusive check reports `Skip`, not a status
+/// of its own).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
+    /// Check succeeded; silent in `print_human` (only failures/skips print).
     Pass,
+    /// Check found a real problem; drives [`Report::exit_code`] nonzero.
     Fail,
+    /// Check could not run to a conclusion on this host (e.g. permission
+    /// denied reading a path) — not the same as `Fail`, and does not affect
+    /// `exit_code`.
     Skip,
 }
 
@@ -16,17 +24,23 @@ pub enum Status {
 /// reports one failure per firecrab bridge).
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckResult {
+    /// Short, one-line description of the check and its outcome.
     pub title: String,
     pub status: Status,
+    /// Extra context explaining the failure/skip; `None` for `Pass`.
     pub detail: Option<String>,
+    /// Suggested remediation command or doc pointer; `None` for `Pass`.
     pub fix: Option<String>,
 }
 
 impl CheckResult {
+    /// A passing check never carries detail/fix text — nothing to explain.
     pub fn pass(title: impl Into<String>) -> CheckResult {
         CheckResult { title: title.into(), status: Status::Pass, detail: None, fix: None }
     }
 
+    /// A failing check — `detail`/`fix` are independently optional since
+    /// not every failure has a known remedy to suggest.
     pub fn fail(title: impl Into<String>, detail: Option<&str>, fix: Option<&str>) -> CheckResult {
         CheckResult {
             title: title.into(),
@@ -36,6 +50,8 @@ impl CheckResult {
         }
     }
 
+    /// Like [`Self::fail`] but for a check that could not reach a
+    /// conclusion, not one that found a problem.
     pub fn skip(title: impl Into<String>, detail: Option<&str>, fix: Option<&str>) -> CheckResult {
         CheckResult {
             title: title.into(),
@@ -53,19 +69,26 @@ impl CheckResult {
 /// under `cargo test`'s parallel test runner).
 pub struct DoctorEnv {
     pub datadir: String,
+    /// `FIRECRAB_API_USER`, falling back to the older `FIRECRAB_USER` name.
     pub api_user: Option<String>,
     pub helper_sock: String,
     pub dnsmasq_conf: String,
     pub dnsmasq_pid: String,
     pub libdir: String,
+    /// Unset means checks that need it (e.g. image tooling) should `Skip`,
+    /// not assume a default path.
     pub image_root: Option<String>,
     pub image_base_url: Option<String>,
     pub storage_roots: Option<String>,
+    /// Unset means "resolve `firecracker` from `$PATH`" — not an error by
+    /// itself.
     pub firecracker_bin: Option<String>,
     pub confdir: String,
 }
 
 impl DoctorEnv {
+    /// Snapshots the process environment once, at startup — see the type's
+    /// own doc comment for why checks don't read `std::env` directly.
     pub fn from_process_env() -> Self {
         Self {
             datadir: env_or("DATADIR", "/var/lib/firecrab"),
@@ -84,6 +107,8 @@ impl DoctorEnv {
 }
 
 impl Default for DoctorEnv {
+    /// install.sh's defaults, with every optional var unset — used by tests
+    /// that don't care about a specific path.
     fn default() -> Self {
         Self {
             datadir: "/var/lib/firecrab".to_owned(),
@@ -107,18 +132,23 @@ fn env_or(var: &str, default: &str) -> String {
 
 use crate::shell::CommandRunner;
 
+/// Full output of a `doctor` run — every [`CheckResult`] from every check,
+/// in the fixed order [`run_all`] runs them.
 #[derive(Debug, Serialize)]
 pub struct Report {
     pub results: Vec<CheckResult>,
 }
 
 impl Report {
+    /// Count of [`Status::Pass`] results.
     pub fn ok_count(&self) -> usize {
         self.results.iter().filter(|r| r.status == Status::Pass).count()
     }
+    /// Count of [`Status::Fail`] results.
     pub fn fail_count(&self) -> usize {
         self.results.iter().filter(|r| r.status == Status::Fail).count()
     }
+    /// Count of [`Status::Skip`] results.
     pub fn skip_count(&self) -> usize {
         self.results.iter().filter(|r| r.status == Status::Skip).count()
     }

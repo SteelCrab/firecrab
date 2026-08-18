@@ -7,12 +7,18 @@ use firecrab_api_types::HostStatusResponse;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusReport {
+    /// `systemctl is-active` output for `firecrab-api.service` — "active",
+    /// "inactive", "failed", or "unknown" if `systemctl` itself is missing.
     pub api_service: String,
+    /// Same as `api_service`, for `firecrab-net-helper.service`.
     pub net_helper_service: String,
+    /// `Some` only when the API answered; `host_error` explains a `None`.
     pub host: Option<HostStatusResponse>,
     pub host_error: Option<String>,
 }
 
+/// Wraps `systemctl is-active`; any runner error (missing binary, non-UTF8
+/// output) collapses to `"unknown"` rather than failing the whole report.
 fn systemd_is_active(runner: &dyn CommandRunner, unit: &str) -> String {
     match runner.run("systemctl", &["is-active", unit]) {
         Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_owned(),
@@ -34,6 +40,7 @@ pub fn collect(runner: &dyn CommandRunner, client: &ApiClient) -> StatusReport {
     StatusReport { api_service, net_helper_service, host, host_error }
 }
 
+/// Plain-text rendering for a terminal (the default output mode).
 pub fn print_human(report: &StatusReport) {
     println!("firecrab-api.service:        {}", report.api_service);
     println!("firecrab-net-helper.service: {}", report.net_helper_service);
@@ -51,6 +58,7 @@ pub fn print_human(report: &StatusReport) {
     }
 }
 
+/// `--json` output mode, for scripting.
 pub fn print_json(report: &StatusReport) {
     println!("{}", serde_json::to_string_pretty(report).unwrap());
 }

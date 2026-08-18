@@ -6,6 +6,7 @@ mod info;
 mod shell;
 mod status;
 
+/// `clap`-derived top-level CLI, replacing `scripts/firecrab-doctor.sh`.
 #[derive(Parser)]
 #[command(name = "firecrab", version, about = "firecrab host CLI")]
 struct Cli {
@@ -20,11 +21,13 @@ enum Command {
         /// Also print sha256 (first 12 hex chars) of template images.
         #[arg(long)]
         digest: bool,
+        /// Emit the [`doctor::Report`] as JSON instead of the human format.
         #[arg(long)]
         json: bool,
     },
     /// Show version and resolved host configuration paths.
     Info {
+        /// Emit the [`info::InfoReport`] as JSON instead of the human format.
         #[arg(long)]
         json: bool,
         /// Override the API base URL (else FIRECRAB_API, else http://127.0.0.1:5523).
@@ -33,8 +36,10 @@ enum Command {
     },
     /// Show systemd unit status and the API host status.
     Status {
+        /// Emit the [`status::StatusReport`] as JSON instead of the human format.
         #[arg(long)]
         json: bool,
+        /// Override the API base URL (else FIRECRAB_API, else http://127.0.0.1:5523).
         #[arg(long)]
         api: Option<String>,
     },
