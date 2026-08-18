@@ -555,6 +555,337 @@ pub fn check_helper_socket(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<C
     vec![CheckResult::pass("helper_socket")]
 }
 
+fn resolve_image_roots(env: &DoctorEnv) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut candidates = Vec::new();
+    if let Some(root) = &env.image_root {
+        candidates.push(PathBuf::from(root));
+    }
+    candidates.push(cwd.join("images"));
+    candidates.push(Path::new(&env.datadir).join("images"));
+
+    let mut seen = std::collections::HashSet::new();
+    let mut roots = Vec::new();
+    for c in candidates {
+        if !c.is_dir() {
+            continue;
+        }
+        let abs = abs_dir(&c);
+        if seen.insert(abs.clone()) {
+            roots.push(abs);
+        }
+    }
+    roots
+}
+
+/// Template artifact paths (relative to an image root), matching
+/// `firecrab-api/src/templates.rs`'s `default_specs()` per architecture.
+pub(crate) fn template_artifacts() -> Vec<&'static str> {
+    if std::env::consts::ARCH == "aarch64" {
+        vec![
+            "kernel/Image-ubuntu-26.04-aarch64",
+            "rootfs/ubuntu-rootfs-26.04-arm64.ext4",
+            "kernel/Image-alpine-virt-aarch64",
+            "kernel/initramfs-alpine-virt-aarch64",
+            "rootfs/alpine-rootfs-3.24.1-aarch64.ext4",
+            "kernel/Image-rocky-9.8-aarch64",
+            "kernel/initramfs-rocky-9.8-aarch64",
+            "rootfs/rocky-rootfs-9.8-aarch64.ext4",
+        ]
+    } else {
+        vec![
+            "kernel/vmlinux-ubuntu-26.04-x86_64",
+            "rootfs/ubuntu-rootfs-26.04-amd64.ext4",
+            "kernel/vmlinux-alpine-virt-x86_64",
+            "kernel/initramfs-alpine-virt-x86_64",
+            "rootfs/alpine-rootfs-3.24.1-x86_64.ext4",
+            "kernel/vmlinux-rocky-9.8-x86_64",
+            "kernel/initramfs-rocky-9.8-x86_64",
+            "rootfs/rocky-rootfs-9.8-x86_64.ext4",
+        ]
+    }
+}
+
+fn short_digest(file: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let Ok(bytes) = fs::read(file) else {
+        return "unavailable".to_owned();
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    hasher.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect()
+}
+
+/// True when `DATADIR` exists but the current (unprivileged) user cannot
+/// traverse it — the healthy-but-private state bash detects with `[ ! -x ]`.
+fn datadir_private(datadir: &str) -> bool {
+    let path = Path::new(datadir);
+    path.exists() && fs::read_dir(path).is_err()
+}
+
+pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
+    let roots = resolve_image_roots(env);
+    let artifacts = template_artifacts();
+
+    if roots.is_empty() {
+        if datadir_private(&env.datadir) {
+            return vec![CheckResult::skip(
+                format!("images: {} is private to the service account", env.datadir),
+                Some(&format!("the current user cannot inspect {}/images", env.datadir)),
+                Some("sudo firecrab doctor   # inspect installed image contents"),
+            )];
+        }
+        return vec![CheckResult::fail(
+            "images: no image root found",
+            Some(&format!("looked at FIRECRAB_IMAGE_ROOT, ./images, {}/images", env.datadir)),
+            Some("./install.sh   # or build with scripts/firecracker-menual/install-alpine-rootfs.sh"),
+        )];
+    }
+
+    let mut root: Option<PathBuf> = None;
+    'outer: for candidate in &roots {
+        for art in &artifacts {
+            if candidate.join(art).is_file() {
+                root = Some(candidate.clone());
+                break 'outer;
+            }
+        }
+    }
+
+    let root = match root {
+        Some(r) => r,
+        None => {
+            let any_ext4_root = roots.iter().find(|c| {
+                fs::read_dir(c.join("rootfs"))
+                    .map(|it| it.filter_map(Result::ok).any(|e| e.path().extension().is_some_and(|x| x == "ext4")))
+                    .unwrap_or(false)
+            });
+            match any_ext4_root {
+                Some(r) => r.clone(),
+                None => {
+                    if datadir_private(&env.datadir) {
+                        return vec![CheckResult::skip(
+                            format!("images: {} is private to the service account", env.datadir),
+                            Some(&format!(
+                                "the current user cannot inspect {}/images; accessible roots had no images",
+                                env.datadir
+                            )),
+                            Some("sudo firecrab doctor   # inspect installed image contents"),
+                        )];
+                    }
+                    let roots_str = roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" ");
+                    return vec![CheckResult::fail(
+                        format!("images: no guest rootfs found under {roots_str}"),
+                        None,
+                        Some(&format!("./install.sh  or copy images into {}/images", env.datadir)),
+                    )];
+                }
+            }
+        }
+    };
+
+    let mut missing = Vec::new();
+    let mut present = 0u32;
+    for art in &artifacts {
+        if root.join(art).is_file() {
+            present += 1;
+        } else {
+            missing.push(*art);
+        }
+    }
+
+    if present == 0 {
+        return vec![CheckResult::fail(
+            format!("images: image root {} has none of the default template artifacts", root.display()),
+            None,
+            Some(&format!("build or copy templates into {}", root.display())),
+        )];
+    }
+
+    if !missing.is_empty() {
+        return vec![CheckResult::skip(
+            format!("images: some default templates missing under {}", root.display()),
+            Some(&format!("missing: {}", missing.join(" "))),
+            Some(&format!("build the missing image(s), copy into {}, restart firecrab-api", root.display())),
+        )];
+    }
+
+    if digest {
+        let digests: Vec<String> = artifacts.iter().map(|art| format!("{art}={}", short_digest(&root.join(art)))).collect();
+        eprintln!("images: {}", digests.join(" "));
+    }
+    vec![CheckResult::pass("images")]
+}
+
+pub fn check_image_install_tools(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
+    let mut missing = Vec::new();
+    if runner.run("tar", &["--version"]).is_err() {
+        missing.push("tar");
+    }
+    if runner.run("zstd", &["--version"]).is_err() {
+        missing.push("zstd");
+    }
+    if !missing.is_empty() {
+        return vec![CheckResult::skip(
+            format!("image-install tools: missing {}", missing.join(" ")),
+            Some("dashboard template install needs tar + zstd to unpack {alias}.tar.zst"),
+            Some("install packages: tar zstd  (then retry dashboard image install)"),
+        )];
+    }
+    if let Some(base_url) = &env.image_base_url {
+        if matches!(base_url.as_str(), "none" | "NONE" | "-") {
+            return vec![CheckResult::skip(
+                format!("image-install: remote disabled (FIRECRAB_IMAGE_BASE_URL={base_url})"),
+                Some("dashboard will not download packages; seed images/ on the host"),
+                Some("see public-docs/installation.md (M2Image)"),
+            )];
+        }
+    }
+    vec![CheckResult::pass("image_install_tools")]
+}
+
+fn resolve_vms_roots(env: &DoctorEnv) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let mut candidates = Vec::new();
+    if let Some(roots_env) = &env.storage_roots {
+        for entry in roots_env.split(':') {
+            if let Some((_, path)) = entry.split_once('=') {
+                candidates.push(PathBuf::from(path));
+            }
+        }
+    }
+    candidates.push(PathBuf::from(&env.datadir));
+    candidates.push(cwd.join("data"));
+
+    let mut seen = std::collections::HashSet::new();
+    let mut roots = Vec::new();
+    for entry in candidates {
+        for sub in [entry.join("vms"), entry.clone()] {
+            if sub.is_dir() {
+                let abs = abs_dir(&sub);
+                if seen.insert(abs.clone()) {
+                    roots.push(abs);
+                }
+                break;
+            }
+        }
+    }
+    roots
+}
+
+pub fn check_reflink(env: &DoctorEnv) -> Vec<CheckResult> {
+    let image_roots = resolve_image_roots(env);
+    let vms_roots = resolve_vms_roots(env);
+    if image_roots.is_empty() || vms_roots.is_empty() {
+        return vec![CheckResult::pass("reflink")];
+    }
+    let image_root = &image_roots[0];
+    let Ok(image_meta) = fs::metadata(image_root) else {
+        return vec![CheckResult::pass("reflink")];
+    };
+    let image_dev = image_meta.dev();
+
+    let mut split = Vec::new();
+    for vms_root in &vms_roots {
+        let Ok(vms_meta) = fs::metadata(vms_root) else { continue };
+        if vms_meta.dev() == image_dev {
+            continue;
+        }
+        split.push(format!("VM disks:  {}", vms_root.display()));
+    }
+    if split.is_empty() {
+        return vec![CheckResult::pass("reflink")];
+    }
+    let detail = format!("templates: {}\n{}", image_root.display(), split.join("\n"));
+    vec![CheckResult::skip(
+        "reflink: templates and VM disks are on different filesystems",
+        Some(&detail),
+        Some("put both on one XFS/Btrfs filesystem, or accept a full template copy per VM"),
+    )]
+}
+
+pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
+    if runner.run("curl", &["--version"]).is_err() {
+        return vec![CheckResult::skip(
+            "registry egress: curl is not installed",
+            Some("cannot test whether the API account reaches a registry"),
+            Some("install curl, or ignore this on a host that never downloads images"),
+        )];
+    }
+    let endpoint = match env.image_base_url.as_deref() {
+        Some("") | Some("none") | Some("-") => {
+            return vec![CheckResult::skip(
+                "registry egress: remote images disabled (FIRECRAB_IMAGE_BASE_URL)",
+                Some("only OCI import would still need egress"),
+                Some("unset FIRECRAB_IMAGE_BASE_URL to use the public MicroRegistry"),
+            )];
+        }
+        Some(u) => format!("{}/catalog.json", u.trim_end_matches('/')),
+        None => "https://registry.firecrab.dev/catalog.json".to_owned(),
+    };
+    let endpoints = [endpoint, "https://registry-1.docker.io/v2/".to_owned()];
+
+    let user = resolve_api_user(env, runner);
+    let current = current_username();
+    let is_root = current == "root";
+
+    for probe in &endpoints {
+        let host = probe.trim_start_matches("https://").split('/').next().unwrap_or("");
+        let output = if user == current {
+            runner.run("curl", &["-sS", "-o", "/dev/null", "-m", "12", "-w", "%{http_code}", probe])
+        } else if is_root {
+            runner.run("sudo", &["-u", &user, "curl", "-sS", "-o", "/dev/null", "-m", "12", "-w", "%{http_code}", probe])
+        } else {
+            return vec![CheckResult::skip(
+                format!("registry egress: cannot test as {user}"),
+                Some(&format!("this doctor runs as {current} and does not become another account")),
+                Some("sudo firecrab doctor   # tests as the API service account"),
+            )];
+        };
+
+        let Ok(out) = output else { continue };
+        if out.status.success() {
+            continue;
+        }
+        let status_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if status_text.contains("Permission denied") || status_text.contains("Operation not permitted") {
+            let selinux = runner
+                .run("getenforce", &[])
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .unwrap_or_else(|_| "not installed".to_owned());
+            let ip_deny = runner
+                .run("systemctl", &["show", "-p", "IPAddressDeny", "--value", "firecrab-api.service"])
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+                .unwrap_or_else(|_| "?".to_owned());
+            let detail = format!(
+                "as {user}: {status_text}\nconnect(2) returned EACCES, so no request ever left the machine.\nselinux: {selinux}\nunit IPAddressDeny: {ip_deny}"
+            );
+            return vec![CheckResult::fail(
+                format!("registry egress: {host} is refused by this host, not by the network"),
+                Some(&detail),
+                Some("sudo ausearch -m avc -ts recent | grep -i firecrab   # then audit2allow, or fix the unit/firewall rule"),
+            )];
+        }
+        if status_text.contains("Could not resolve host") {
+            return vec![CheckResult::fail(
+                format!("registry egress: {host} does not resolve for {user}"),
+                Some(&status_text),
+                Some("check /etc/resolv.conf and any split-DNS or sandbox that hides it from the service"),
+            )];
+        }
+        return vec![CheckResult::fail(
+            format!("registry egress: {user} cannot reach {host}"),
+            Some(&status_text),
+            Some(&format!("check the default route, proxy variables in {}/api.env, and any egress firewall", env.confdir)),
+        )];
+    }
+    vec![CheckResult::pass("registry_egress")]
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -699,5 +1030,97 @@ mod tests {
         let results = check_helper_socket(&env, &fake);
         assert_eq!(results[0].status, Status::Fail);
         assert!(results[0].title.contains("does not exist"));
+    }
+
+    #[test]
+    fn images_fail_when_no_root_found() {
+        let dir = tempdir().unwrap();
+        let env = DoctorEnv {
+            datadir: dir.path().join("nonexistent-datadir").display().to_string(),
+            ..DoctorEnv::default()
+        };
+        // cwd (crate 소스 트리) has no ./images either.
+        let results = check_images(&env, false);
+        assert_eq!(results[0].status, Status::Fail);
+    }
+
+    #[test]
+    fn images_pass_when_all_artifacts_present() {
+        let dir = tempdir().unwrap();
+        let images = dir.path().join("images");
+        for art in template_artifacts() {
+            let p = images.join(art);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, b"x").unwrap();
+        }
+        let env = DoctorEnv {
+            image_root: Some(images.display().to_string()),
+            ..DoctorEnv::default()
+        };
+        let results = check_images(&env, false);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn images_skip_when_some_artifacts_missing() {
+        let dir = tempdir().unwrap();
+        let images = dir.path().join("images");
+        let artifacts = template_artifacts();
+        for art in artifacts.iter().take(artifacts.len() - 1) {
+            let p = images.join(art);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, b"x").unwrap();
+        }
+        let env = DoctorEnv {
+            image_root: Some(images.display().to_string()),
+            ..DoctorEnv::default()
+        };
+        let results = check_images(&env, false);
+        assert_eq!(results[0].status, Status::Skip);
+    }
+
+    #[test]
+    fn image_install_tools_skip_when_missing_binaries() {
+        let fake = FakeCommandRunner::new();
+        let results = check_image_install_tools(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Skip);
+        assert!(results[0].title.contains("tar"));
+    }
+
+    #[test]
+    fn image_install_tools_pass_when_present_and_default_registry() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("tar", &["--version"], 0, "tar (GNU tar)\n", "");
+        fake.set("zstd", &["--version"], 0, "zstd\n", "");
+        let results = check_image_install_tools(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn reflink_pass_when_roots_missing() {
+        let env = DoctorEnv::default();
+        let results = check_reflink(&env);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn registry_egress_skip_when_curl_missing() {
+        let fake = FakeCommandRunner::new();
+        let results = check_registry_egress(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Skip);
+        assert!(results[0].title.contains("curl"));
+    }
+
+    #[test]
+    fn registry_egress_skip_when_remote_disabled() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("curl", &["--version"], 0, "curl 8.0\n", "");
+        let env = DoctorEnv {
+            image_base_url: Some("none".to_owned()),
+            ..DoctorEnv::default()
+        };
+        let results = check_registry_egress(&env, &fake);
+        assert_eq!(results[0].status, Status::Skip);
+        assert!(results[0].title.contains("remote images disabled"));
     }
 }
