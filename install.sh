@@ -435,7 +435,7 @@ download_host_bundle() {
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$PAYLOAD_TMP/$tarball"; then
         die "failed to download $url
 Tag a GitHub Release, or install local binaries:
-  cargo build --release -p firecrab-api -p firecrab-net-helper
+  cargo build --release -p firecrab-api -p firecrab-net-helper -p firecrab-cli
   ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist"
     fi
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$sums_url" -o "$PAYLOAD_TMP/SHA256SUMS"; then
