@@ -215,12 +215,13 @@ PY
 fake=$(mktemp -d)
 write_elf64 "$fake/firecrab-api" 62
 write_elf64 "$fake/firecrab-net-helper" 62
+write_elf64 "$fake/firecrab" 62
 mkdir -p "$fake/dist"
 printf '<html></html>\n' >"$fake/dist/index.html"
 "$ROOT/scripts/package-host-release.sh" x86_64 "$fake" "$fake/dist" "$fake/firecrab-host-x86_64.tar.gz" >/dev/null
 members=$(tar -tzf "$fake/firecrab-host-x86_64.tar.gz")
 for need in firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image \
-            firecrab-doctor.sh dashboard/index.html systemd/firecrab-api.service \
+            firecrab dashboard/index.html systemd/firecrab-api.service \
             systemd/firecrab-net-helper.service; do
     if printf '%s\n' "$members" | grep -qx -- "$need"; then
         pass "host tarball contains $need"
@@ -231,6 +232,7 @@ done
 wrong=$(mktemp -d)
 write_elf64 "$wrong/firecrab-api" 183
 write_elf64 "$wrong/firecrab-net-helper" 183
+write_elf64 "$wrong/firecrab" 183
 mkdir -p "$wrong/dist"
 printf '<html></html>\n' >"$wrong/dist/index.html"
 if "$ROOT/scripts/package-host-release.sh" x86_64 "$wrong" "$wrong/dist" "$wrong/out.tar.gz" >/dev/null 2>&1; then
@@ -239,26 +241,6 @@ else
     pass "host tarball rejects aarch64 bins packed as x86_64"
 fi
 rm -rf "$pub" "$fake" "$wrong"
-
-# An installed host keeps DATADIR 0750 root:firecrab, so an operator running
-# doctor as themselves cannot enter it. That is the normal case, and doctor has
-# to degrade to SKIP rather than abort with "internal error".
-# Root can always traverse, so the case only exists for a non-root run.
-if [ "$(id -u)" -ne 0 ]; then
-    blocked=$(mktemp -d)
-    mkdir -p "$blocked/data" "$blocked/images"
-    chmod 000 "$blocked"
-    # FIRECRAB_IMAGE_BASE_URL=none keeps the run offline and quick.
-    doctor_out=$(DATADIR="$blocked" FIRECRAB_IMAGE_BASE_URL=none \
-        bash "$ROOT/scripts/firecrab-doctor.sh" 2>&1 || true)
-    chmod 755 "$blocked"
-    rm -rf "$blocked"
-    if printf '%s\n' "$doctor_out" | grep -q 'internal error'; then
-        fail "doctor survives a DATADIR it cannot enter"
-    else
-        pass "doctor survives a DATADIR it cannot enter"
-    fi
-fi
 
 if [ "$failed" -ne 0 ]; then
     printf 'FAILED\n' >&2

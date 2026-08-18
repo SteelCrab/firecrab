@@ -53,6 +53,9 @@ jobs:
         # Denying warnings here would fail CI on legitimate WIP, not bugs.
         run: cargo clippy --workspace --all-targets
 
+      - name: cargo test -p firecrab-cli
+        run: cargo test -p firecrab-cli --locked
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
@@ -166,8 +169,7 @@ jobs:
 
       - name: shellcheck
         run: |
-          shellcheck install.sh scripts/firecrab-doctor.sh \
-            scripts/firecrab-release.sh scripts/package-host-release.sh \
+          shellcheck install.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/verify-release-binary.sh \
             scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \
@@ -191,14 +193,14 @@ jobs:
         # check that quietly mutates is worse than no check.
         run: |
           bash -n install.sh
-          bash -n scripts/firecrab-doctor.sh
           bash scripts/test-firecrab-release.sh
           bash scripts/test-install-cli.sh
           bash scripts/test-smoke-release-exec.sh
           ./install.sh --help
           ./install.sh --check
           test ! -e /var/lib/firecrab || { echo "--check created the data directory"; exit 1; }
-          ./scripts/firecrab-doctor.sh --help
+          cargo build -p firecrab-cli
+          ./target/debug/firecrab doctor --help
           # Bare runner will typically FAIL helper socket / images; doctor must
           # still exit 0 or 1 (not crash) and leave the host untouched.
           BEFORE=$(ls -la /var/lib/firecrab 2>&1 || true)
@@ -239,7 +241,7 @@ jobs:
           # runner user cannot even traverse it - which is the point.
           sudo stat -c '%U %G %a' /run/firecrab/net-helper.sock | tee /dev/stderr | grep -qx 'root firecrab 660'
           id -nG firecrab | tr ' ' '\n' | grep -qx kvm
-          test -x /usr/local/bin/firecrab-doctor
+          test -x /usr/local/bin/firecrab
 
       - name: Doctor after install
         # Runtime host path must be clean. Run from the unit WorkingDirectory
@@ -250,7 +252,7 @@ jobs:
         run: |
           set +e
           out=$(sudo env DATADIR=/var/lib/firecrab \
-                bash -c 'cd /var/lib/firecrab && firecrab-doctor' 2>&1)
+                bash -c 'cd /var/lib/firecrab && firecrab doctor' 2>&1)
           code=$?
           set -e
           printf '%s\n' "$out"
@@ -335,7 +337,7 @@ jobs:
           sudo ./install.sh --uninstall
           ! systemctl is-active --quiet firecrab-api
           test ! -e /etc/systemd/system/firecrab-api.service
-          test ! -e /usr/local/bin/firecrab-doctor
+          test ! -e /usr/local/bin/firecrab
           test -d /var/lib/firecrab
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab
@@ -346,7 +348,7 @@ jobs:
           sudo journalctl -u firecrab-net-helper --no-pager -n 60 || true
           sudo journalctl -u firecrab-api --no-pager -n 60 || true
           systemctl status firecrab-net-helper firecrab-api --no-pager || true
-          sudo firecrab-doctor 2>&1 || true
+          sudo firecrab doctor 2>&1 || true
 
   install-distro:
     name: Installer deps (${{ matrix.image }})
