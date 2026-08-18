@@ -51,7 +51,7 @@ pub struct HttpConfig {
 
 impl HttpConfig {
     pub fn load() -> Result<Self, ConfigError> {
-        let bind = env::var("FIRECRAB_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_owned());
+        let bind = env::var("FIRECRAB_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:5523".to_owned());
         let authentication_enabled = env_flag("FIRECRAB_AUTHENTICATION_ENABLED");
         let tls_enabled = env_flag("FIRECRAB_TLS_ENABLED");
         let production = env::var("FIRECRAB_ENV").is_ok_and(|value| value == "production");

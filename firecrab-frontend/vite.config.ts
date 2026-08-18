@@ -22,14 +22,14 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:3000',
+        target: 'http://127.0.0.1:5523',
         changeOrigin: true,
       },
       // Kept as its own path prefix (not nested under /api) because Vite's
       // proxy, like trunk's, is HTTP-or-WebSocket per prefix rather than
       // per-request — see the matching comment in firecrab-api/src/server.rs.
       '/ws': {
-        target: 'ws://127.0.0.1:3000',
+        target: 'ws://127.0.0.1:5523',
         ws: true,
       },
     },
