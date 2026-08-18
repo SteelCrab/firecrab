@@ -25,17 +25,17 @@ Entries land here as work merges, and move under the next version heading when t
 
 - An unreachable MicroRegistry falls back to an installed catalog kernel ([#145]).
 - Published pages may run to 300 lines, up from 170 ([#145]).
-- [#147-comment]
-  - Default `FIRECRAB_BIND_ADDR` moves from `127.0.0.1:3000` to `127.0.0.1:5523` ([#147]).
-  - README (all locales) and `CONTRIBUTING.md` point at port `5523`, not `3000` ([#147]).
-  - `public-docs/` API examples and check lists reference port `5523`, not `3000` ([#147]).
-- [#151-comment]
-  - `install.sh` no longer preinstalls a guest image — `--no-images`, `--with-images`,
-    `--with-ubuntu-image`, and `--with-rocky-image` are removed along with everything only
-    reachable through them; a guest image now comes from OCI import or the dashboard
-    Images page ([#151]).
-  - CI's `vm-boot`/`vm-boot-self-hosted` import Ubuntu/Rocky via OCI import instead of the
-    removed `install.sh` flags ([#151]).
+- Default `FIRECRAB_BIND_ADDR` moves from `127.0.0.1:3000` to `127.0.0.1:5523` — a dedicated
+  4-digit port instead of a common dev port ([#147], [#147-comment]).
+- README (all locales) and `CONTRIBUTING.md` point at port `5523`, not `3000` ([#147]).
+- `public-docs/` API examples and check lists reference port `5523`, not `3000` ([#147]).
+- `install.sh` no longer preinstalls a guest image — `--no-images`, `--with-images`,
+  `--with-ubuntu-image`, and `--with-rocky-image` are removed along with everything only
+  reachable through them; a guest image now comes from OCI import or the dashboard Images
+  page, and guest-image handling moves to a future `firecrab` CLI instead of `install.sh`
+  ([#151], [#151-comment]).
+- CI's `vm-boot`/`vm-boot-self-hosted` import Ubuntu/Rocky via OCI import instead of the
+  removed `install.sh` flags ([#151]).
 
 ### Fixed
 
