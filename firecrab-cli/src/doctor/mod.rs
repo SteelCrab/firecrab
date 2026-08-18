@@ -104,3 +104,134 @@ impl Default for DoctorEnv {
 fn env_or(var: &str, default: &str) -> String {
     std::env::var(var).unwrap_or_else(|_| default.to_owned())
 }
+
+use crate::shell::CommandRunner;
+
+#[derive(Debug, Serialize)]
+pub struct Report {
+    pub results: Vec<CheckResult>,
+}
+
+impl Report {
+    pub fn ok_count(&self) -> usize {
+        self.results.iter().filter(|r| r.status == Status::Pass).count()
+    }
+    pub fn fail_count(&self) -> usize {
+        self.results.iter().filter(|r| r.status == Status::Fail).count()
+    }
+    pub fn skip_count(&self) -> usize {
+        self.results.iter().filter(|r| r.status == Status::Skip).count()
+    }
+    /// Same contract as the bash script: non-zero if any check FAILed,
+    /// zero if the rest is PASS/SKIP only. CI depends on this.
+    pub fn exit_code(&self) -> i32 {
+        if self.fail_count() > 0 {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+/// Runs one check and, if it panics, turns that into a synthesized FAIL
+/// instead of aborting the whole report — mirrors bash's `on_unexpected_error`
+/// ERR trap ("partial results even for a crash the checks never anticipated").
+fn run_checked<F: FnOnce() -> Vec<CheckResult>>(name: &str, f: F) -> Vec<CheckResult> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(_) => vec![CheckResult::fail(
+            format!("{name}: internal error (this is a bug in firecrab doctor itself, not a host problem)"),
+            None,
+            None,
+        )],
+    }
+}
+
+/// Runs all 13 checks in the same order as the bash script's `run` section
+/// (kvm, firecracker, ip_forward, nft, dnsmasq, helper_socket, ufw,
+/// data_root, images, image_install_tools, selinux_domain, registry_egress,
+/// reflink).
+pub fn run_all(env: &DoctorEnv, runner: &dyn CommandRunner, digest: bool) -> Report {
+    let mut results = Vec::new();
+    results.extend(run_checked("kvm", checks::check_kvm));
+    results.extend(run_checked("firecracker", || checks::check_firecracker(env, runner)));
+    results.extend(run_checked("ip_forward", checks::check_ip_forward));
+    results.extend(run_checked("nft", || checks::check_nft(env, runner)));
+    results.extend(run_checked("dnsmasq", || checks::check_dnsmasq(env, runner)));
+    results.extend(run_checked("helper_socket", || checks::check_helper_socket(env, runner)));
+    results.extend(run_checked("ufw", || checks::check_ufw(runner)));
+    results.extend(run_checked("data_root", || checks::check_data_root(env)));
+    results.extend(run_checked("images", || checks::check_images(env, digest)));
+    results.extend(run_checked("image_install_tools", || checks::check_image_install_tools(env, runner)));
+    results.extend(run_checked("selinux_domain", || checks::check_selinux_domain(env, runner)));
+    results.extend(run_checked("registry_egress", || checks::check_registry_egress(env, runner)));
+    results.extend(run_checked("reflink", || checks::check_reflink(env)));
+    Report { results }
+}
+
+/// Human-readable output matching the bash script's style: one summary
+/// line, then `[FAIL]`/`[SKIP]` blocks with indented detail/fix lines.
+/// PASS results are silent (bash never prints them either).
+pub fn print_human(report: &Report) {
+    let ok = report.ok_count();
+    let fail = report.fail_count();
+    let skip = report.skip_count();
+
+    if fail == 0 && skip == 0 {
+        println!("doctor: all checks passed ({ok} ok)");
+    } else if fail == 0 {
+        println!("doctor: {ok} ok, {skip} skipped (no failures)");
+    } else {
+        println!("doctor: {fail} failed, {skip} skipped, {ok} ok");
+    }
+
+    for r in &report.results {
+        let tag = match r.status {
+            Status::Pass => continue,
+            Status::Fail => "[FAIL]",
+            Status::Skip => "[SKIP]",
+        };
+        println!("{tag} {}", r.title);
+        if let Some(detail) = &r.detail {
+            for line in detail.lines() {
+                println!("  {line}");
+            }
+        }
+        if let Some(fix) = &r.fix {
+            println!("  → {fix}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::shell::FakeCommandRunner;
+
+    use super::*;
+
+    #[test]
+    fn exit_code_zero_when_no_failures() {
+        let report = Report {
+            results: vec![CheckResult::pass("x"), CheckResult::skip("y", None, None)],
+        };
+        assert_eq!(report.exit_code(), 0);
+    }
+
+    #[test]
+    fn exit_code_nonzero_when_any_failure() {
+        let report = Report {
+            results: vec![CheckResult::pass("x"), CheckResult::fail("y", None, None)],
+        };
+        assert_eq!(report.exit_code(), 1);
+    }
+
+    #[test]
+    fn run_all_produces_thirteen_or_more_results() {
+        // 13 named checks; `ufw` alone can emit >1 CheckResult, so the
+        // total is always >= 13, never fewer.
+        let env = DoctorEnv::default();
+        let fake = FakeCommandRunner::new();
+        let report = run_all(&env, &fake, false);
+        assert!(report.results.len() >= 13);
+    }
+}

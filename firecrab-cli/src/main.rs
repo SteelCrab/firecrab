@@ -40,8 +40,16 @@ enum Command {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Command::Doctor { .. } => {
-            println!("doctor: not yet implemented");
+        Command::Doctor { digest, json } => {
+            let env = doctor::DoctorEnv::from_process_env();
+            let runner = shell::RealCommandRunner;
+            let report = doctor::run_all(&env, &runner, digest);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            } else {
+                doctor::print_human(&report);
+            }
+            std::process::exit(report.exit_code());
         }
         Command::Info { .. } => {
             println!("info: not yet implemented");
