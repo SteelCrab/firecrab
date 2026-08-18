@@ -41,9 +41,6 @@ FIRECRAB_RELEASE_TAG="@FIRECRAB_RELEASE_TAG@"
 
 MODE=install
 INSTALL_DEPS=1
-WITH_IMAGES=0
-WITH_UBUNTU_IMAGE=0
-WITH_ROCKY_IMAGE=0
 WITH_FRONTEND=1
 PURGE=0
 BIN_DIR=
@@ -83,10 +80,6 @@ Usage: ./install.sh [OPTIONS]
   --doctor            run host diagnostics (UFW, socket, KVM, nft, …); no root required
   --deps-only         install the dependencies, then stop (no host changes)
   --no-deps           never install packages, only report gaps
-  --no-images         skip guest images (default)
-  --with-images       also install Alpine from MicroRegistry
-  --with-ubuntu-image also install Ubuntu 26.04 (large)
-  --with-rocky-image  also install Rocky Linux 9.8 (large)
   --no-frontend       do not install the dashboard
   --version VER       GitHub Release tag (default: latest, or the baked-in tag)
   --libc gnu|musl     host libc (default: detect; gnu = glibc)
@@ -153,10 +146,6 @@ while [ $# -gt 0 ]; do
             ;;
         --deps-only) MODE=deps ;;
         --no-deps) INSTALL_DEPS=0 ;;
-        --no-images) WITH_IMAGES=0 ;;
-        --with-images) WITH_IMAGES=1 ;;
-        --with-ubuntu-image) WITH_UBUNTU_IMAGE=1 ;;
-        --with-rocky-image) WITH_ROCKY_IMAGE=1 ;;
         --no-frontend) WITH_FRONTEND=0 ;;
         --version)
             [ $# -ge 2 ] || die "--version needs a tag (for example v0.1.0)"
@@ -702,237 +691,9 @@ install_units() {
 
 # --- guest images ----------------------------------------------------------
 
-ensure_image_build_deps() {
-    local failed=0
-
-    ensure chroot coreutils || failed=1
-    ensure file file || failed=1
-    ensure gzip gzip || failed=1
-    ensure install coreutils || failed=1
-    ensure mkfs.ext4 e2fsprogs || failed=1
-    ensure mount util-linux || failed=1
-    ensure curl curl || failed=1
-    ensure sha256sum coreutils || failed=1
-    ensure tar tar || failed=1
-    ensure truncate coreutils || failed=1
-    ensure umount util-linux || failed=1
-    if [ "$WITH_UBUNTU_IMAGE" -eq 1 ]; then
-        ensure find findutils || failed=1
-        ensure sed sed || failed=1
-        ensure sort coreutils || failed=1
-        ensure tail coreutils || failed=1
-        ensure ln coreutils || failed=1
-        ensure chmod coreutils || failed=1
-        ensure chown coreutils || failed=1
-    fi
-    if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
-        ensure jq jq || failed=1
-        ensure xz xz || failed=1
-    fi
-    return $failed
-}
-
 # Whether a guest rootfs is already installed.
 images_present() {
     compgen -G "$DATADIR/images/rootfs/*.ext4" >/dev/null 2>&1
-}
-
-image_alias_present() {
-    case "$1" in
-        alpine*) compgen -G "$DATADIR/images/rootfs/alpine*.ext4" >/dev/null 2>&1 ;;
-        ubuntu*) compgen -G "$DATADIR/images/rootfs/ubuntu*.ext4" >/dev/null 2>&1 ;;
-        rocky*)  compgen -G "$DATADIR/images/rootfs/rocky*.ext4" >/dev/null 2>&1 ;;
-        *) return 1 ;;
-    esac
-}
-
-# Checkout-only builder. A piped release installer has no such script.
-guest_builder() {
-    local name=$1
-    local script=$REPO_ROOT/scripts/firecracker-menual/$name
-    [ -f "$script" ] || return 1
-    printf '%s\n' "$script"
-}
-
-# Whether the repo has images that can be copied instead of built.
-repo_images_present() {
-    compgen -G "$REPO_ROOT/images/rootfs/*.ext4" >/dev/null 2>&1
-}
-
-want_guest_images() {
-    [ "$WITH_IMAGES" -eq 1 ] || [ "$WITH_UBUNTU_IMAGE" -eq 1 ] || [ "$WITH_ROCKY_IMAGE" -eq 1 ]
-}
-
-# Report-only counterpart of `ensure_images`, so --check cannot copy, chown or
-# build anything (it is run unprivileged, and a check that mutates is a trap).
-report_images() {
-    if ! want_guest_images; then
-        log "images: skipped (install from the dashboard)"
-        return 0
-    fi
-    if repo_images_present; then
-        log "images: present in the repo, would be copied to $DATADIR/images"
-        return 0
-    fi
-    if images_present; then
-        log "images: already installed in $DATADIR/images"
-        return 0
-    fi
-    if guest_builder install-alpine-rootfs.sh >/dev/null; then
-        ensure_image_build_deps || true
-        warn "no guest image (would build Alpine with sudo + chroot + direct ext4)"
-        return 1
-    fi
-    warn "no guest image (would install Alpine from MicroRegistry for $(uname -m))"
-    return 1
-}
-
-# Optional checkout-only image build. Default host install does not do this.
-ensure_images() {
-    if ! want_guest_images; then
-        log "skipping images"
-        return 0
-    fi
-
-    # Prefer images already built in the repo: copying beats rebuilding.
-    if repo_images_present; then
-        step "copying images from the repo (existing ones are kept)"
-        $SUDO cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
-        $SUDO chown -R "$FIRECRAB_USER:$FIRECRAB_GROUP" "$DATADIR/images"
-        log "images ready in $DATADIR/images"
-        return 0
-    fi
-
-    if images_present; then
-        log "images already installed in $DATADIR/images"
-        return 0
-    fi
-
-    if [ "$WITH_IMAGES" -eq 1 ]; then
-        local alpine
-        if ! alpine=$(guest_builder install-alpine-rootfs.sh); then
-            log "no local Alpine builder; will install alpine-3.24.1 from MicroRegistry after the API starts"
-        else
-            if ! ensure_image_build_deps; then
-                warn "missing host-native image build dependencies; build elsewhere and copy into $DATADIR/images"
-                return 1
-            fi
-            step "building the Alpine guest image (this takes a few minutes)"
-            if ! "$alpine"; then
-                warn "image build failed — firecrab will start with no templates; install one from the dashboard"
-                return 1
-            fi
-        fi
-    fi
-
-    local ubuntu rocky
-    if [ "$WITH_UBUNTU_IMAGE" -eq 1 ]; then
-        step "building the Ubuntu guest image (large)"
-        if ubuntu=$(guest_builder install-ubuntu-roofs.sh); then
-            "$ubuntu" || warn "Ubuntu image build failed (the Alpine one is still usable)"
-        else
-            warn "Ubuntu builder missing; will try MicroRegistry after the API starts"
-        fi
-    fi
-
-    if [ "$WITH_ROCKY_IMAGE" -eq 1 ]; then
-        step "building the Rocky Linux 9.8 guest image (large)"
-        if rocky=$(guest_builder install-rocky-rootfs.sh); then
-            "$rocky" || warn "Rocky Linux 9.8 image build failed (the Alpine one is still usable)"
-        else
-            warn "Rocky builder missing; will try MicroRegistry after the API starts"
-        fi
-    fi
-
-    $SUDO cp -rn "$REPO_ROOT/images/." "$DATADIR/images/" 2>/dev/null || true
-    $SUDO chown -R "$FIRECRAB_USER:$FIRECRAB_GROUP" "$DATADIR/images"
-    log "images ready in $DATADIR/images"
-}
-
-api_url() {
-    printf 'http://%s' "${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}"
-}
-
-json_status() {
-    printf '%s' "$1" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
-}
-
-# Poll GET /api/images/{alias}/{package|install} until succeeded or failed.
-poll_image_job() {
-    local path=$1
-    local _i body status
-    for _i in $(seq 1 180); do
-        body=$(curl -fsS "$(api_url)$path") || return 1
-        status=$(json_status "$body")
-        case "$status" in
-            succeeded) return 0 ;;
-            failed)
-                warn "$path failed: $body"
-                return 1
-                ;;
-            *) sleep 2 ;;
-        esac
-    done
-    warn "$path did not finish in time"
-    return 1
-}
-
-# Download + extract one catalog alias via the running API (host arch).
-install_catalog_alias() {
-    local alias=$1
-    local body code
-    body=$(mktemp)
-    code=$(curl -sS -o "$body" -w '%{http_code}' -X POST "$(api_url)/api/images/$alias/package")
-    case "$code" in
-        200|202|409) ;;
-        *)
-            warn "package $alias HTTP $code $(tr '\n' ' ' <"$body")"
-            rm -f "$body"
-            return 1
-            ;;
-    esac
-    if ! poll_image_job "/api/images/$alias/package"; then
-        rm -f "$body"
-        return 1
-    fi
-    code=$(curl -sS -o "$body" -w '%{http_code}' -X POST "$(api_url)/api/images/$alias/install")
-    case "$code" in
-        200|202) ;;
-        409)
-            rm -f "$body"
-            return 0
-            ;;
-        *)
-            warn "install $alias HTTP $code $(tr '\n' ' ' <"$body")"
-            rm -f "$body"
-            return 1
-            ;;
-    esac
-    rm -f "$body"
-    poll_image_job "/api/images/$alias/install"
-}
-
-# After the API is up, install catalog images that were explicitly requested.
-install_release_images() {
-    want_guest_images || return 0
-    local failed=0
-    if [ "$WITH_IMAGES" -eq 1 ] && ! image_alias_present alpine; then
-        step "installing alpine-3.24.1 from MicroRegistry ($(uname -m))"
-        install_catalog_alias alpine-3.24.1 || failed=1
-    fi
-    if [ "$WITH_UBUNTU_IMAGE" -eq 1 ] && ! image_alias_present ubuntu; then
-        step "installing ubuntu-26.04 from MicroRegistry ($(uname -m))"
-        install_catalog_alias ubuntu-26.04 || failed=1
-    fi
-    if [ "$WITH_ROCKY_IMAGE" -eq 1 ] && ! image_alias_present rocky; then
-        step "installing rocky-9.8 from MicroRegistry ($(uname -m))"
-        install_catalog_alias rocky-9.8 || failed=1
-    fi
-    if [ "$failed" -eq 0 ] && images_present; then
-        log "images ready in $DATADIR/images"
-        return 0
-    fi
-    return 1
 }
 
 # --- run -------------------------------------------------------------------
@@ -961,9 +722,9 @@ start_units() {
 # not once it is actually serving. At startup firecrab-api hashes every
 # present template artifact before binding its listener (see
 # TemplateRegistry::from_specs in firecrab-api/src/templates.rs), and a
-# freshly built multi-gigabyte rootfs (--with-ubuntu-image, --with-rocky-image)
-# can take noticeably longer to hash than the process takes to fork. Poll the
-# real HTTP port so callers relying on start_units's return don't race it.
+# large rootfs from a previous OCI import can take noticeably longer to hash
+# than the process takes to fork. Poll the real HTTP port so callers relying
+# on start_units's return don't race it.
 wait_for_api() {
     local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}
     local _attempt
@@ -990,7 +751,6 @@ do_check() {
     report_payload || gaps=1
     check_kvm || gaps=1
     check_systemd || gaps=1
-    report_images || gaps=1
     report_ufw
 
     if [ "$gaps" -eq 0 ]; then
@@ -1025,9 +785,6 @@ do_deps() {
     detect_pkg || die "no known package manager (apt/dnf/zypper/pacman/apk)"
 
     ensure_runtime_deps || die "missing runtime dependencies (see above)"
-    if want_guest_images; then
-        ensure_image_build_deps || die "missing image build dependencies (see above)"
-    fi
     ensure_firecracker  || die "firecracker is required"
     check_kvm || warn "no KVM here; that only matters where VMs actually run"
     report_ufw
@@ -1075,14 +832,9 @@ do_install() {
     label_selinux_binaries
     install_config
     install_units
-    # Guest images are not part of the host install. The dashboard Images
-    # page (or --with-images / --with-ubuntu-image / --with-rocky-image)
-    # installs templates afterwards.
-    ensure_images || warn "optional local image build failed"
+    # Guest images are not part of the host install — import one afterwards
+    # with POST /api/oci/import or the dashboard Images page.
     start_units || die "installed, but a unit did not come up"
-    if want_guest_images; then
-        install_release_images || warn "requested catalog image did not install; use the dashboard Images page"
-    fi
     report_ufw
 
     local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}

@@ -197,8 +197,6 @@ curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/instal
 ./install.sh --check                 # 필요 조건과 예정 변경 사항 확인
 ./install.sh --doctor                # KVM, 방화벽, 소켓, 호스트 설정 진단
 ./install.sh --bin-dir target/release
-./install.sh --with-ubuntu-image
-./install.sh --with-rocky-image      # Rocky Linux 9.8 고정 버전 빌드
 ./install.sh --uninstall         # 기본적으로 데이터 유지
 ./install.sh --uninstall --purge # /var/lib/firecrab도 제거
 ```

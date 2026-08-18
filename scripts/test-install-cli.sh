@@ -107,26 +107,12 @@ else
     fail "baked install.sh pins the tag (got '$got')"
 fi
 
-# Host install prepares the host only. Guest images are a dashboard job.
+# Host install prepares the host only; guest images come from OCI import.
 piped_check=$(cd /tmp && bash -s -- --check --no-deps <"$pub/install.sh" 2>&1 || true)
 if printf '%s\n' "$piped_check" | grep -q 'BASH_SOURCE'; then
     fail "baked --check via stdin must not crash on BASH_SOURCE"
-elif printf '%s\n' "$piped_check" | grep -Eq 'images: skipped|skipping images'; then
-    pass "baked --check via stdin skips guest images by default"
 else
-    fail "baked --check via stdin should skip images (got: $(printf '%s' "$piped_check" | tr '\n' ' ' | tail -c 240))"
-fi
-if printf '%s\n' "$piped_check" | grep -q 'would install Alpine from MicroRegistry'; then
-    fail "baked --check via stdin must not fetch a guest image by default"
-else
-    pass "baked --check via stdin does not fetch a guest image by default"
-fi
-
-help=$("$pub/install.sh" --help)
-if printf '%s\n' "$help" | grep -q -- '--with-images'; then
-    pass "--help mentions --with-images"
-else
-    fail "--help mentions --with-images"
+    pass "baked --check via stdin does not crash on BASH_SOURCE"
 fi
 
 # The advertised one-liner is `curl … | bash`. That leaves BASH_SOURCE unset.

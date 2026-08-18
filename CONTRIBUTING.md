@@ -179,7 +179,7 @@ One logical change per commit is nice; a tidy PR history is more important than 
 | --- | --- | --- |
 | Rust fmt, clippy, test + coverage | yes | Workspace-wide |
 | rustdoc + `check-doc-links.py` + `check-changelog.py` | yes | Doc links, public-docs shape, and changelog sections |
-| Installer shellcheck + install/uninstall smoke | yes | Guest boot skipped (`--no-images`) |
+| Installer shellcheck + install/uninstall smoke | yes | Guest boot skipped (`install.sh` never installs an image) |
 | Frontend lint + build | yes | Node 22 |
 | Multi-distro installer deps | yes | Debian, Fedora, Arch, openSUSE containers |
 | M2 guest boot matrix | no | Nightly / `workflow_dispatch` only (KVM + images) |

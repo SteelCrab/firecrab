@@ -96,8 +96,6 @@ curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/instal
 ./install.sh --check                 # 报告前置条件和计划变更
 ./install.sh --doctor                # 诊断 KVM、防火墙、socket 和主机设置
 ./install.sh --bin-dir target/release
-./install.sh --with-ubuntu-image
-./install.sh --with-rocky-image      # 构建固定版本 Rocky Linux 9.8
 ./install.sh --uninstall         # 默认保留数据
 ./install.sh --uninstall --purge # 同时删除 /var/lib/firecrab
 ```
