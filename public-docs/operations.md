@@ -23,7 +23,7 @@ journalctl -u firecrab-net-helper -f
 Run the host doctor after a failure.
 
 ```sh
-firecrab-doctor
+firecrab doctor
 ```
 
 ## API configuration

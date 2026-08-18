@@ -50,7 +50,7 @@ Other installed and runtime files live outside `/var/lib/firecrab`.
 | `/etc/firecrab/api.env` | Operator-owned API configuration |
 | `/etc/systemd/system/firecrab-*.service` | Installed systemd units |
 | `/usr/local/lib/firecrab/` | API, network helper, and `extract-vmlinux` |
-| `/usr/local/bin/firecrab-doctor` | Host diagnostic command |
+| `/usr/local/bin/firecrab` | Host CLI (`doctor`/`info`/`status`) |
 | `/usr/local/share/firecrab/dashboard/` | Installed dashboard assets |
 | `/run/firecrab/` | Ephemeral helper socket, dnsmasq configuration, PID, hosts, and leases |
 | systemd journal and Linux networking state | Service logs, bridges, TAPs, nftables, and live processes |
@@ -155,7 +155,7 @@ Back up `firecrab.db`, every configured storage root containing VM artifacts, an
 A VM disk begins as a copy-on-write clone of its template, falling back to a byte copy if the host refuses; the disk is identical either way.
 
 Reflinks need XFS or Btrfs and cannot cross filesystems — that is the filesystem holding the `.ext4` files, not the one inside them, so keep the image root and every storage root on one.
-`firecrab-doctor` checks the default roots and `FIRECRAB_STORAGE_ROOTS` for a split layout; pools registered through the API are not inspected.
+`firecrab doctor` checks the default roots and `FIRECRAB_STORAGE_ROOTS` for a split layout; pools registered through the API are not inspected.
 
 ## Delete
 
