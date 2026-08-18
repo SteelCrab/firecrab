@@ -829,6 +829,7 @@ pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec
     let current = current_username();
     let is_root = current == "root";
 
+    let mut any_probe_ran = false;
     for probe in &endpoints {
         let host = probe.trim_start_matches("https://").split('/').next().unwrap_or("");
         let output = if user == current {
@@ -844,6 +845,7 @@ pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec
         };
 
         let Ok(out) = output else { continue };
+        any_probe_ran = true;
         if out.status.success() {
             continue;
         }
@@ -881,6 +883,13 @@ pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec
             format!("registry egress: {user} cannot reach {host}"),
             Some(&status_text),
             Some(&format!("check the default route, proxy variables in {}/api.env, and any egress firewall", env.confdir)),
+        )];
+    }
+    if !any_probe_ran {
+        return vec![CheckResult::skip(
+            "registry egress: could not run curl for any endpoint",
+            Some("every probe attempt failed to spawn (e.g. missing sudo, or curl itself unusable)"),
+            Some("check that curl (and sudo, if not running as the API account) are installed and on PATH"),
         )];
     }
     vec![CheckResult::pass("registry_egress")]
@@ -1122,5 +1131,18 @@ mod tests {
         let results = check_registry_egress(&env, &fake);
         assert_eq!(results[0].status, Status::Skip);
         assert!(results[0].title.contains("remote images disabled"));
+    }
+
+    #[test]
+    fn registry_egress_skip_when_every_probe_fails_to_spawn() {
+        // curl --version succeeds (so we get past the "curl missing" check),
+        // but no response is registered for the actual probe invocations, so
+        // every `runner.run("curl", &[...])` call in the loop errors with
+        // NotFound. The check must not fall through to Pass in that case.
+        let mut fake = FakeCommandRunner::new();
+        fake.set("curl", &["--version"], 0, "curl 8.0\n", "");
+        let results = check_registry_egress(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Skip);
+        assert!(results[0].title.contains("could not run curl"));
     }
 }
