@@ -5,12 +5,14 @@ use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 
-use firecrab_helper_protocol::network::micro_network_bridge_name;
+use firecrab_helper_protocol::network::{
+    MICRO_NETWORK_BRIDGE_PREFIX, TAP_PREFIX, micro_network_bridge_name,
+};
 use futures_util::TryStreamExt;
 use rtnetlink::packet_route::{
     AddressFamily,
     address::AddressAttribute,
-    link::LinkMessage,
+    link::{LinkAttribute, LinkMessage},
     route::{RouteAddress, RouteAttribute, RouteMessage},
 };
 use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
@@ -196,6 +198,56 @@ pub async fn delete_micro_network_bridge(
     }
     crate::firewall::remove_iptables_forward_for_bridge(&name).await;
     Ok(())
+}
+
+/// Deletes every Firecrab-owned network interface still on the host: the
+/// default bridge, every MicroNetwork bridge, and every VM TAP device.
+/// Matched by name prefix rather than by id — this runs from `--teardown`
+/// ahead of `install.sh --uninstall` removing the binaries, with no
+/// `firecrab-api` database to read ids from. A plain `systemctl stop`
+/// leaves all of these in place; only a host reboot clears them otherwise.
+pub async fn teardown_all(actor: &BridgeActor) -> Result<(), BridgeError> {
+    let _guard = actor.lock.lock().await;
+    let (connection, handle, _) = new_connection().map_err(BridgeError::Connection)?;
+    tokio::spawn(connection);
+
+    let mut links = handle.link().get().execute();
+    let mut owned = Vec::new();
+    while let Some(link) = links.try_next().await.map_err(BridgeError::Netlink)? {
+        let name = link
+            .attributes
+            .iter()
+            .find_map(|attribute| match attribute {
+                LinkAttribute::IfName(name) => Some(name.clone()),
+                _ => None,
+            });
+        if let Some(name) = name
+            && is_owned_interface(&name)
+        {
+            owned.push((link.header.index, name));
+        }
+    }
+
+    for (index, name) in owned {
+        match handle.link().del(index).execute().await {
+            Ok(()) => {}
+            Err(rtnetlink::Error::NetlinkError(message)) if message.raw_code() == -libc::ENODEV => {
+            }
+            Err(error) => return Err(BridgeError::Netlink(error)),
+        }
+        if name == BRIDGE_NAME || name.starts_with(MICRO_NETWORK_BRIDGE_PREFIX) {
+            crate::firewall::remove_iptables_forward_for_bridge(&name).await;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `name` is an interface this crate creates: the default bridge, a
+/// MicroNetwork bridge, or a VM TAP device.
+fn is_owned_interface(name: &str) -> bool {
+    name == BRIDGE_NAME
+        || name.starts_with(MICRO_NETWORK_BRIDGE_PREFIX)
+        || name.starts_with(TAP_PREFIX)
 }
 
 async fn ensure_bridge_for(
@@ -569,5 +621,25 @@ mod tests {
     #[test]
     fn a_route_on_the_owned_bridge_interface_is_excluded() {
         assert!(route_belongs_to_own_bridge(Some(7), Some(7)));
+    }
+
+    #[test]
+    fn owned_interface_names_are_recognized_by_prefix() {
+        assert!(is_owned_interface(BRIDGE_NAME));
+        assert!(is_owned_interface("mnb1a2b3c4d5e6f7"));
+        assert!(is_owned_interface("fct1a2b3c4d5e6f7"));
+        assert!(!is_owned_interface("eth0"));
+        assert!(!is_owned_interface("lo"));
+        assert!(!is_owned_interface("docker0"));
+    }
+
+    #[tokio::test]
+    async fn teardown_all_is_a_no_op_when_nothing_firecrab_owns_is_present() {
+        // Read-only rtnetlink listing needs no special privilege; on a host
+        // with no fcbr0/mnb*/fct* interfaces, nothing is ever deleted, so
+        // this never reaches the point of needing CAP_NET_ADMIN (same
+        // reasoning as tap.rs's deleting_a_tap_that_was_never_created_is_a_no_op).
+        let actor = BridgeActor::new();
+        assert!(teardown_all(&actor).await.is_ok());
     }
 }

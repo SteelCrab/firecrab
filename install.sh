@@ -854,6 +854,14 @@ do_uninstall() {
     $SUDO systemctl daemon-reload
     log "units removed"
 
+    # SIGTERM (above) only stops the helper's socket loop — it never deletes
+    # the bridges, TAP devices or nftables tables it created, only a reboot
+    # would. Run its own teardown while the binary is still on disk.
+    if [ -x "$LIBDIR/firecrab-net-helper" ]; then
+        $SUDO "$LIBDIR/firecrab-net-helper" --teardown \
+            || warn "network teardown failed — bridges/nftables tables may remain until reboot"
+    fi
+
     $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
     $SUDO rm -f "$PREFIX/bin/firecrab-doctor"
     $SUDO rm -rf "$SHAREDIR/dashboard"
@@ -866,8 +874,6 @@ do_uninstall() {
     log "binaries and dashboard removed"
 
     # Left alone on purpose: the account, the config and the data directory.
-    # Bridges and nftables tables belong to the helper, which is now stopped;
-    # they disappear on the next reboot.
     if [ "$PURGE" -eq 1 ]; then
         warn "purging $DATADIR and $CONFDIR (all VM disks and the database)"
         $SUDO rm -rf "$DATADIR" "$CONFDIR"

@@ -79,6 +79,18 @@ enum StartupError {
     IpForward(#[source] io::Error),
 }
 
+/// Failures tearing down every Firecrab-owned interface and nftables table
+/// (`--teardown` mode).
+#[derive(Debug, Error)]
+enum TeardownError {
+    /// Removing the owned nftables tables failed.
+    #[error("failed to remove firewall")]
+    Firewall(#[from] firewall::FirewallError),
+    /// Removing an owned bridge or TAP device failed.
+    #[error("failed to remove network interfaces")]
+    Bridge(#[from] bridge::BridgeError),
+}
+
 /// Resolved startup configuration plus the shared actors every connection
 /// dispatches into.
 #[derive(Debug)]
@@ -154,15 +166,25 @@ fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-/// Entry point: runs the server and prints any startup error's full cause
-/// chain before exiting non-zero.
+/// Entry point: `--teardown` removes every Firecrab-owned interface and
+/// nftables table and exits instead of serving; otherwise runs the server.
+/// Either way, prints any error's full cause chain before exiting non-zero.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
-    match run().await {
+    let result = if env::args().nth(1).as_deref() == Some("--teardown") {
+        teardown()
+            .await
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+    } else {
+        run()
+            .await
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("[ERROR] {error}");
-            let mut source = std::error::Error::source(&error);
+            let mut source = error.source();
             while let Some(cause) = source {
                 eprintln!("[ERROR] caused by: {cause}");
                 source = cause.source();
@@ -170,6 +192,18 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Removes every Firecrab-owned nftables table and network interface: the
+/// default bridge, every MicroNetwork bridge, every VM TAP device. Run by
+/// `install.sh --uninstall` right after stopping the service and before its
+/// binary is deleted — a plain `systemctl stop` sends SIGTERM, which only
+/// stops accepting connections (`shutdown_signal`) and leaves all of this in
+/// place; only a host reboot would otherwise clear it.
+async fn teardown() -> Result<(), TeardownError> {
+    firewall::remove_firewall(&firewall::FirewallActor::new()).await?;
+    bridge::teardown_all(&bridge::BridgeActor::new()).await?;
+    Ok(())
 }
 
 /// Loads config, binds the socket, and serves until shutdown.
