@@ -107,7 +107,7 @@ curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/instal
 
 ## 快速开始
 
-安装后打开 `http://127.0.0.1:3000/`，然后：
+安装后打开 `http://127.0.0.1:5523/`，然后：
 
 1. 创建 **MicroNetwork**。
 2. 选择已安装的镜像，并在该网络中创建 VM。
@@ -189,7 +189,7 @@ npm run dev --prefix firecrab-frontend
 ```sh
 npm run build --prefix firecrab-frontend
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
-# http://127.0.0.1:3000/
+# http://127.0.0.1:5523/
 ```
 
 运行 Rust 测试套件：

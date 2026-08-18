@@ -7,7 +7,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 | Version | Date | Work |
 | --- | --- | --- |
-| [Unreleased](#unreleased) | — | [#145] |
+| [Unreleased](#unreleased) | — | [#145], [#147] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
 
@@ -25,6 +25,7 @@ Entries land here as work merges, and move under the next version heading when t
 
 - An unreachable MicroRegistry falls back to an installed catalog kernel ([#145]).
 - Published pages may run to 300 lines, up from 170 ([#145]).
+- README (all locales) and `CONTRIBUTING.md` point at port `5523`, not `3000` ([#147]).
 
 ### Fixed
 
@@ -157,5 +158,6 @@ network helper.
 [#142]: https://github.com/SteelCrab/firecrab/issues/142
 [#143]: https://github.com/SteelCrab/firecrab/issues/143
 [#145]: https://github.com/SteelCrab/firecrab/pull/145
+[#147]: https://github.com/SteelCrab/firecrab/issues/147
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740

@@ -215,7 +215,7 @@ upgrade detail, and troubleshooting step, read the [installation guide](public-d
 
 ## Quick start
 
-Open `http://127.0.0.1:3000/` after installation, then:
+Open `http://127.0.0.1:5523/` after installation, then:
 
 1. Create a **MicroNetwork**.
 2. Choose an installed image and create a VM in that network.
@@ -306,7 +306,7 @@ For a production-like local run, build the dashboard and let the API serve it:
 ```sh
 npm run build --prefix firecrab-frontend
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
-# http://127.0.0.1:3000/
+# http://127.0.0.1:5523/
 ```
 
 Run the Rust test suite with:

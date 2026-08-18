@@ -115,7 +115,7 @@ KVM を有効化できません。`/dev/kvm` がない場合は、先にハー�
 
 ## クイックスタート
 
-インストール後に `http://127.0.0.1:3000/` を開き、次の順に進めます。
+インストール後に `http://127.0.0.1:5523/` を開き、次の順に進めます。
 
 1. **MicroNetwork** を作成します。
 2. インストール済みイメージを選び、そのネットワークに VM を作成します。
@@ -203,7 +203,7 @@ npm run dev --prefix firecrab-frontend
 ```sh
 npm run build --prefix firecrab-frontend
 FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
-# http://127.0.0.1:3000/
+# http://127.0.0.1:5523/
 ```
 
 Rust のテストスイートは次で実行します。
