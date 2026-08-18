@@ -729,7 +729,7 @@ wait_for_api() {
     local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}
     local _attempt
     for _attempt in $(seq 1 60); do
-        curl -fsS -o /dev/null "http://$bind/" && return 0
+        curl -fs -o /dev/null "http://$bind/" 2>/dev/null && return 0
         sleep 1
     done
     warn "firecrab-api did not answer http://$bind/ within 60s — journalctl -u firecrab-api -n 30"
