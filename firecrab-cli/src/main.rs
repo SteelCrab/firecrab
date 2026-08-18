@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
 
+mod shell;
+
 #[derive(Parser)]
 #[command(name = "firecrab", version, about = "firecrab host CLI")]
 struct Cli {
