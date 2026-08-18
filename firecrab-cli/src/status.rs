@@ -37,7 +37,12 @@ pub fn collect(runner: &dyn CommandRunner, client: &ApiClient) -> StatusReport {
         Err(ApiError::Unreachable(msg)) => (None, Some(format!("unreachable: {msg}"))),
         Err(ApiError::Http { status, body }) => (None, Some(format!("HTTP {status}: {body}"))),
     };
-    StatusReport { api_service, net_helper_service, host, host_error }
+    StatusReport {
+        api_service,
+        net_helper_service,
+        host,
+        host_error,
+    }
 }
 
 /// Plain-text rendering for a terminal (the default output mode).
@@ -48,12 +53,21 @@ pub fn print_human(report: &StatusReport) {
         Some(h) => {
             println!("host:");
             println!("  load average (1m): {:.2}", h.load_average_1m);
-            println!("  memory: {} / {} MiB available", h.memory_available_mib, h.memory_total_mib);
-            println!("  disk:   {} / {} GiB available", h.disk_available_gib, h.disk_total_gib);
+            println!(
+                "  memory: {} / {} MiB available",
+                h.memory_available_mib, h.memory_total_mib
+            );
+            println!(
+                "  disk:   {} / {} GiB available",
+                h.disk_available_gib, h.disk_total_gib
+            );
             println!("  uptime: {}s", h.uptime_seconds);
         }
         None => {
-            println!("host: {}", report.host_error.as_deref().unwrap_or("unreachable"));
+            println!(
+                "host: {}",
+                report.host_error.as_deref().unwrap_or("unreachable")
+            );
         }
     }
 }
@@ -73,8 +87,20 @@ mod tests {
     #[test]
     fn collect_reads_systemd_state_via_runner() {
         let mut fake = FakeCommandRunner::new();
-        fake.set("systemctl", &["is-active", "firecrab-api.service"], 0, "active\n", "");
-        fake.set("systemctl", &["is-active", "firecrab-net-helper.service"], 3, "inactive\n", "");
+        fake.set(
+            "systemctl",
+            &["is-active", "firecrab-api.service"],
+            0,
+            "active\n",
+            "",
+        );
+        fake.set(
+            "systemctl",
+            &["is-active", "firecrab-net-helper.service"],
+            3,
+            "inactive\n",
+            "",
+        );
         // Port 1 never listens — exercises the "API unreachable" branch so
         // this test does not depend on a live firecrab-api.
         let client = ApiClient::new("http://127.0.0.1:1".to_owned());

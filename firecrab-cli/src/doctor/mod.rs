@@ -36,7 +36,12 @@ pub struct CheckResult {
 impl CheckResult {
     /// A passing check never carries detail/fix text — nothing to explain.
     pub fn pass(title: impl Into<String>) -> CheckResult {
-        CheckResult { title: title.into(), status: Status::Pass, detail: None, fix: None }
+        CheckResult {
+            title: title.into(),
+            status: Status::Pass,
+            detail: None,
+            fix: None,
+        }
     }
 
     /// A failing check — `detail`/`fix` are independently optional since
@@ -92,7 +97,9 @@ impl DoctorEnv {
     pub fn from_process_env() -> Self {
         Self {
             datadir: env_or("DATADIR", "/var/lib/firecrab"),
-            api_user: std::env::var("FIRECRAB_API_USER").ok().or_else(|| std::env::var("FIRECRAB_USER").ok()),
+            api_user: std::env::var("FIRECRAB_API_USER")
+                .ok()
+                .or_else(|| std::env::var("FIRECRAB_USER").ok()),
             helper_sock: env_or("FIRECRAB_NET_HELPER_SOCK", "/run/firecrab/net-helper.sock"),
             dnsmasq_conf: env_or("FIRECRAB_DNSMASQ_CONF", "/run/firecrab/dnsmasq.conf"),
             dnsmasq_pid: env_or("FIRECRAB_DNSMASQ_PID", "/run/firecrab/dnsmasq.pid"),
@@ -142,24 +149,29 @@ pub struct Report {
 impl Report {
     /// Count of [`Status::Pass`] results.
     pub fn ok_count(&self) -> usize {
-        self.results.iter().filter(|r| r.status == Status::Pass).count()
+        self.results
+            .iter()
+            .filter(|r| r.status == Status::Pass)
+            .count()
     }
     /// Count of [`Status::Fail`] results.
     pub fn fail_count(&self) -> usize {
-        self.results.iter().filter(|r| r.status == Status::Fail).count()
+        self.results
+            .iter()
+            .filter(|r| r.status == Status::Fail)
+            .count()
     }
     /// Count of [`Status::Skip`] results.
     pub fn skip_count(&self) -> usize {
-        self.results.iter().filter(|r| r.status == Status::Skip).count()
+        self.results
+            .iter()
+            .filter(|r| r.status == Status::Skip)
+            .count()
     }
     /// Same contract as the bash script: non-zero if any check FAILed,
     /// zero if the rest is PASS/SKIP only. CI depends on this.
     pub fn exit_code(&self) -> i32 {
-        if self.fail_count() > 0 {
-            1
-        } else {
-            0
-        }
+        if self.fail_count() > 0 { 1 } else { 0 }
     }
 }
 
@@ -170,7 +182,9 @@ fn run_checked<F: FnOnce() -> Vec<CheckResult>>(name: &str, f: F) -> Vec<CheckRe
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(r) => r,
         Err(_) => vec![CheckResult::fail(
-            format!("{name}: internal error (this is a bug in firecrab doctor itself, not a host problem)"),
+            format!(
+                "{name}: internal error (this is a bug in firecrab doctor itself, not a host problem)"
+            ),
             None,
             None,
         )],
@@ -184,17 +198,29 @@ fn run_checked<F: FnOnce() -> Vec<CheckResult>>(name: &str, f: F) -> Vec<CheckRe
 pub fn run_all(env: &DoctorEnv, runner: &dyn CommandRunner, digest: bool) -> Report {
     let mut results = Vec::new();
     results.extend(run_checked("kvm", checks::check_kvm));
-    results.extend(run_checked("firecracker", || checks::check_firecracker(env, runner)));
+    results.extend(run_checked("firecracker", || {
+        checks::check_firecracker(env, runner)
+    }));
     results.extend(run_checked("ip_forward", checks::check_ip_forward));
     results.extend(run_checked("nft", || checks::check_nft(env, runner)));
-    results.extend(run_checked("dnsmasq", || checks::check_dnsmasq(env, runner)));
-    results.extend(run_checked("helper_socket", || checks::check_helper_socket(env, runner)));
+    results.extend(run_checked("dnsmasq", || {
+        checks::check_dnsmasq(env, runner)
+    }));
+    results.extend(run_checked("helper_socket", || {
+        checks::check_helper_socket(env, runner)
+    }));
     results.extend(run_checked("ufw", || checks::check_ufw(runner)));
     results.extend(run_checked("data_root", || checks::check_data_root(env)));
     results.extend(run_checked("images", || checks::check_images(env, digest)));
-    results.extend(run_checked("image_install_tools", || checks::check_image_install_tools(env, runner)));
-    results.extend(run_checked("selinux_domain", || checks::check_selinux_domain(env, runner)));
-    results.extend(run_checked("registry_egress", || checks::check_registry_egress(env, runner)));
+    results.extend(run_checked("image_install_tools", || {
+        checks::check_image_install_tools(env, runner)
+    }));
+    results.extend(run_checked("selinux_domain", || {
+        checks::check_selinux_domain(env, runner)
+    }));
+    results.extend(run_checked("registry_egress", || {
+        checks::check_registry_egress(env, runner)
+    }));
     results.extend(run_checked("reflink", || checks::check_reflink(env)));
     Report { results }
 }

@@ -62,11 +62,18 @@ impl ApiClient {
     /// `GET {base}/api/host`, deserialized as `HostStatusResponse`.
     pub fn get_host_status(&self) -> Result<HostStatusResponse, ApiError> {
         let url = format!("{}/api/host", self.base);
-        let resp = self.client.get(&url).send().map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().unwrap_or_default();
-            return Err(ApiError::Http { status: status.as_u16(), body });
+            return Err(ApiError::Http {
+                status: status.as_u16(),
+                body,
+            });
         }
         resp.json::<HostStatusResponse>()
             .map_err(|e| ApiError::Unreachable(format!("bad response body: {e}")))
@@ -79,7 +86,10 @@ mod tests {
 
     #[test]
     fn resolve_api_base_prefers_flag() {
-        assert_eq!(resolve_api_base(Some("http://example.test:9000/")), "http://example.test:9000");
+        assert_eq!(
+            resolve_api_base(Some("http://example.test:9000/")),
+            "http://example.test:9000"
+        );
     }
 
     #[test]

@@ -36,7 +36,11 @@ pub fn check_kvm() -> Vec<CheckResult> {
         }
     };
     if !meta.file_type().is_char_device() {
-        return vec![CheckResult::fail("kvm: /dev/kvm is not a character device", None, None)];
+        return vec![CheckResult::fail(
+            "kvm: /dev/kvm is not a character device",
+            None,
+            None,
+        )];
     }
     let readable = fs::OpenOptions::new().read(true).open(path).is_ok();
     let writable = fs::OpenOptions::new().write(true).open(path).is_ok();
@@ -47,7 +51,9 @@ pub fn check_kvm() -> Vec<CheckResult> {
     vec![CheckResult::fail(
         "kvm: current user cannot read/write /dev/kvm",
         Some(&format!("user={user}")),
-        Some(&format!("sudo usermod -aG kvm \"{user}\"; then log out and back in")),
+        Some(&format!(
+            "sudo usermod -aG kvm \"{user}\"; then log out and back in"
+        )),
     )]
 }
 
@@ -97,7 +103,10 @@ fn find_databases(env: &DoctorEnv) -> Vec<PathBuf> {
         if !c.is_file() {
             continue;
         }
-        let dir = c.parent().map(abs_dir).unwrap_or_else(|| PathBuf::from("."));
+        let dir = c
+            .parent()
+            .map(abs_dir)
+            .unwrap_or_else(|| PathBuf::from("."));
         let name = c.file_name().unwrap_or_default().to_owned();
         let path = dir.join(&name);
         if seen.insert(path.clone()) {
@@ -114,7 +123,11 @@ fn find_databases(env: &DoctorEnv) -> Vec<PathBuf> {
 pub fn check_data_root(env: &DoctorEnv) -> Vec<CheckResult> {
     let dbs = find_databases(env);
     if dbs.len() > 1 {
-        let listing = dbs.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n");
+        let listing = dbs
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         return vec![CheckResult::fail(
             "data: multiple firecrab.db files found",
             Some(&listing),
@@ -134,7 +147,11 @@ pub fn check_data_root(env: &DoctorEnv) -> Vec<CheckResult> {
     }
     vec![CheckResult::skip(
         "data: no firecrab.db and no data directory yet",
-        Some(&format!("looked at {}/data and {}", cwd.display(), env.datadir)),
+        Some(&format!(
+            "looked at {}/data and {}",
+            cwd.display(),
+            env.datadir
+        )),
         Some("./install.sh   # or mkdir -p data when developing from the repo root"),
     )]
 }
@@ -143,7 +160,10 @@ pub fn check_data_root(env: &DoctorEnv) -> Vec<CheckResult> {
 /// distinguishes "not found" from "found but not executable" so the fix
 /// text can point at the right remedy.
 pub fn check_firecracker(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
-    let bin = env.firecracker_bin.clone().unwrap_or_else(|| "firecracker".to_owned());
+    let bin = env
+        .firecracker_bin
+        .clone()
+        .unwrap_or_else(|| "firecracker".to_owned());
     match runner.run(&bin, &["--version"]) {
         Ok(out) => {
             let combined = format!(
@@ -153,7 +173,11 @@ pub fn check_firecracker(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<Che
             );
             let ver = combined.lines().next().unwrap_or("").trim();
             if ver.is_empty() {
-                vec![CheckResult::fail(format!("firecracker: could not read version from {bin}"), None, None)]
+                vec![CheckResult::fail(
+                    format!("firecracker: could not read version from {bin}"),
+                    None,
+                    None,
+                )]
             } else {
                 vec![CheckResult::pass("firecracker")]
             }
@@ -188,7 +212,9 @@ fn list_firecrab_bridges(runner: &dyn CommandRunner) -> Vec<String> {
 }
 
 fn socket_exists(path: &str) -> bool {
-    fs::symlink_metadata(path).map(|m| m.file_type().is_socket()).unwrap_or(false)
+    fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_socket())
+        .unwrap_or(false)
 }
 
 /// Looks for the `inet firecrab` and `bridge firecrab_l2` tables. Missing
@@ -205,7 +231,13 @@ pub fn check_nft(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult
                 Some("install nftables (apt/dnf/… package: nftables)"),
             )];
         }
-        Err(_) => return vec![CheckResult::fail("nft: list tables failed", None, Some("sudo nft list tables"))],
+        Err(_) => {
+            return vec![CheckResult::fail(
+                "nft: list tables failed",
+                None,
+                Some("sudo nft list tables"),
+            )];
+        }
     };
     let combined = format!(
         "{}{}",
@@ -213,18 +245,29 @@ pub fn check_nft(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult
         String::from_utf8_lossy(&out.stderr)
     );
     if !out.status.success() {
-        if combined.contains("Operation not permitted") || combined.contains("Permission denied") || combined.contains("must be root") {
+        if combined.contains("Operation not permitted")
+            || combined.contains("Permission denied")
+            || combined.contains("must be root")
+        {
             return vec![CheckResult::skip(
                 "nft: cannot list tables (permission denied)",
                 Some("cannot confirm inet firecrab / bridge firecrab_l2"),
                 Some("re-run as root: sudo nft list tables"),
             )];
         }
-        return vec![CheckResult::fail("nft: list tables failed", Some(&combined), Some("sudo nft list tables"))];
+        return vec![CheckResult::fail(
+            "nft: list tables failed",
+            Some(&combined),
+            Some("sudo nft list tables"),
+        )];
     }
 
-    let has_inet = combined.lines().any(|l| l.trim().starts_with("table inet firecrab"));
-    let has_bridge = combined.lines().any(|l| l.trim().starts_with("table bridge firecrab_l2"));
+    let has_inet = combined
+        .lines()
+        .any(|l| l.trim().starts_with("table inet firecrab"));
+    let has_bridge = combined
+        .lines()
+        .any(|l| l.trim().starts_with("table bridge firecrab_l2"));
     let mut missing = Vec::new();
     if !has_inet {
         missing.push("inet firecrab");
@@ -267,7 +310,10 @@ pub fn check_dnsmasq(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckRe
         let pid = pid_raw.trim();
         if !pid.is_empty() && Path::new(&format!("/proc/{pid}")).is_dir() {
             if let Ok(cmdline) = fs::read(format!("/proc/{pid}/cmdline")) {
-                if String::from_utf8_lossy(&cmdline).replace('\0', " ").contains("dnsmasq") {
+                if String::from_utf8_lossy(&cmdline)
+                    .replace('\0', " ")
+                    .contains("dnsmasq")
+                {
                     alive = true;
                 }
             }
@@ -280,7 +326,12 @@ pub fn check_dnsmasq(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckRe
     }
 
     let conf_ifaces: Vec<String> = fs::read_to_string(&env.dnsmasq_conf)
-        .map(|s| s.lines().filter_map(|l| l.strip_prefix("interface=")).map(str::to_owned).collect())
+        .map(|s| {
+            s.lines()
+                .filter_map(|l| l.strip_prefix("interface="))
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default();
     let interfaces = list_firecrab_bridges(runner);
 
@@ -300,17 +351,35 @@ pub fn check_dnsmasq(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckRe
                 Some("systemctl restart firecrab-net-helper  (or create a MicroNetwork)"),
             )];
         }
-        return vec![CheckResult::skip("dnsmasq: not running (helper also down)", None, Some("start firecrab-net-helper"))];
+        return vec![CheckResult::skip(
+            "dnsmasq: not running (helper also down)",
+            None,
+            Some("start firecrab-net-helper"),
+        )];
     }
 
     if !interfaces.is_empty() && !conf_ifaces.is_empty() {
-        let missing_if: Vec<&String> = interfaces.iter().filter(|br| !conf_ifaces.contains(br)).collect();
+        let missing_if: Vec<&String> = interfaces
+            .iter()
+            .filter(|br| !conf_ifaces.contains(br))
+            .collect();
         if !missing_if.is_empty() {
-            let missing_str = missing_if.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+            let missing_str = missing_if
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
             return vec![CheckResult::fail(
                 format!("dnsmasq: conf missing interface(s): {missing_str}"),
-                Some(&format!("serving: {}  bridges: {}", conf_ifaces.join(" "), interfaces.join(" "))),
-                Some(&format!("systemctl restart firecrab-net-helper  (rewrites {})", env.dnsmasq_conf)),
+                Some(&format!(
+                    "serving: {}  bridges: {}",
+                    conf_ifaces.join(" "),
+                    interfaces.join(" ")
+                )),
+                Some(&format!(
+                    "systemctl restart firecrab-net-helper  (rewrites {})",
+                    env.dnsmasq_conf
+                )),
             )];
         }
     }
@@ -356,22 +425,37 @@ fn ufw_is_enabled(runner: &dyn CommandRunner) -> bool {
 fn ufw_line_matches(status: &str, prefixes: &[String]) -> bool {
     status.lines().any(|line| {
         let lower = line.to_lowercase();
-        prefixes.iter().any(|p| lower.starts_with(&p.to_lowercase())) && lower.contains("allow in")
+        prefixes
+            .iter()
+            .any(|p| lower.starts_with(&p.to_lowercase()))
+            && lower.contains("allow in")
     })
 }
 
 fn ufw_has_dhcp_allow(br: &str, status: &str) -> bool {
-    ufw_line_matches(status, &[format!("67/udp on {br} "), format!("67 on {br} ")])
+    ufw_line_matches(
+        status,
+        &[format!("67/udp on {br} "), format!("67 on {br} ")],
+    )
 }
 
 fn ufw_has_dns_allow(br: &str, status: &str) -> bool {
-    ufw_line_matches(status, &[format!("53/udp on {br} "), format!("53/tcp on {br} "), format!("53 on {br} ")])
+    ufw_line_matches(
+        status,
+        &[
+            format!("53/udp on {br} "),
+            format!("53/tcp on {br} "),
+            format!("53 on {br} "),
+        ],
+    )
 }
 
 fn ufw_has_route_allow(br: &str, uplink: &str, status: &str) -> bool {
     status.lines().any(|line| {
         let lower = line.to_lowercase();
-        lower.contains(&format!("on {} ", uplink.to_lowercase())) && lower.contains("allow fwd") && lower.contains(&format!("on {}", br.to_lowercase()))
+        lower.contains(&format!("on {} ", uplink.to_lowercase()))
+            && lower.contains("allow fwd")
+            && lower.contains(&format!("on {}", br.to_lowercase()))
     })
 }
 
@@ -382,7 +466,11 @@ fn detect_uplink(runner: &dyn CommandRunner) -> Option<String> {
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let tokens: Vec<&str> = text.split_whitespace().collect();
-    tokens.iter().position(|&t| t == "dev").and_then(|i| tokens.get(i + 1)).map(|s| s.to_string())
+    tokens
+        .iter()
+        .position(|&t| t == "dev")
+        .and_then(|i| tokens.get(i + 1))
+        .map(|s| s.to_string())
 }
 
 /// A no-op (`Pass`) when ufw is absent or disabled — only an *active* ufw
@@ -409,7 +497,9 @@ pub fn check_ufw(runner: &dyn CommandRunner) -> Vec<CheckResult> {
         return vec![CheckResult::skip(
             "ufw: active but status is not readable without root",
             Some("UFW commonly blocks DHCP on new bridges and VM outbound forwards"),
-            Some("sudo ufw status verbose   # then allow 67/udp+53 on each fcbr0/mnb* bridge and: sudo ufw route allow in on <bridge> out on <uplink>"),
+            Some(
+                "sudo ufw status verbose   # then allow 67/udp+53 on each fcbr0/mnb* bridge and: sudo ufw route allow in on <bridge> out on <uplink>",
+            ),
         )];
     }
     let bridges = list_firecrab_bridges(runner);
@@ -429,7 +519,9 @@ pub fn check_ufw(runner: &dyn CommandRunner) -> Vec<CheckResult> {
             results.push(CheckResult::fail(
                 format!("ufw: bridge {br} missing allow 67/udp (DHCP)"),
                 Some("guest will fail with no-ipv4-address"),
-                Some(&format!("sudo ufw allow in on {br} to any port 67 proto udp")),
+                Some(&format!(
+                    "sudo ufw allow in on {br} to any port 67 proto udp"
+                )),
             ));
         }
         if !ufw_has_dns_allow(br, &status) {
@@ -455,7 +547,9 @@ pub fn check_ufw(runner: &dyn CommandRunner) -> Vec<CheckResult> {
         results.push(CheckResult::skip(
             "ufw: could not detect uplink interface",
             Some("cannot verify route allow rules"),
-            Some("ip route get 8.8.8.8  # then: sudo ufw route allow in on <bridge> out on <uplink>"),
+            Some(
+                "ip route get 8.8.8.8  # then: sudo ufw route allow in on <bridge> out on <uplink>",
+            ),
         ));
     }
     if !any_fail {
@@ -483,7 +577,12 @@ pub fn check_selinux_domain(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<
     let confined: Vec<&str> = text
         .lines()
         .filter(|l| l.contains("firecrab-api") || l.contains("firecrab-net-he"))
-        .filter(|l| l.split_whitespace().next().unwrap_or("").contains(":init_t:"))
+        .filter(|l| {
+            l.split_whitespace()
+                .next()
+                .unwrap_or("")
+                .contains(":init_t:")
+        })
         .collect();
     if confined.is_empty() {
         return vec![CheckResult::pass("selinux_domain")];
@@ -506,7 +605,10 @@ fn resolve_api_user(env: &DoctorEnv, runner: &dyn CommandRunner) -> String {
     if let Some(u) = &env.api_user {
         return u.clone();
     }
-    if let Ok(out) = runner.run("systemctl", &["show", "-p", "User", "--value", "firecrab-api.service"]) {
+    if let Ok(out) = runner.run(
+        "systemctl",
+        &["show", "-p", "User", "--value", "firecrab-api.service"],
+    ) {
         let val = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !val.is_empty() {
             return val;
@@ -532,7 +634,11 @@ pub fn check_helper_socket(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<C
         }
     };
     if !meta.file_type().is_socket() {
-        return vec![CheckResult::fail(format!("helper socket: {sock} exists but is not a socket"), None, None)];
+        return vec![CheckResult::fail(
+            format!("helper socket: {sock} exists but is not a socket"),
+            None,
+            None,
+        )];
     }
 
     let mode = meta.permissions().mode() & 0o777;
@@ -548,7 +654,9 @@ pub fn check_helper_socket(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<C
     let Some(api_uid) = api_uid else {
         return vec![CheckResult::fail(
             format!("helper socket: API account {api_user} does not exist"),
-            Some(&format!("path={sock} mode={mode:o} owner={owner_uid}:{group_gid}")),
+            Some(&format!(
+                "path={sock} mode={mode:o} owner={owner_uid}:{group_gid}"
+            )),
             Some("re-run ./install.sh to create the service account"),
         )];
     };
@@ -556,7 +664,12 @@ pub fn check_helper_socket(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<C
     let api_gids: Vec<u32> = runner
         .run("id", &["-G", &api_user])
         .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().filter_map(|s| s.parse().ok()).collect())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .filter_map(|s| s.parse().ok())
+                .collect()
+        })
         .unwrap_or_default();
 
     let permission = if api_uid == 0 {
@@ -572,7 +685,9 @@ pub fn check_helper_socket(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<C
     if permission & 0o6 != 0o6 {
         return vec![CheckResult::fail(
             format!("helper socket: not accessible by API account {api_user}"),
-            Some(&format!("path={sock} mode={mode:o} owner={owner_uid}:{group_gid}")),
+            Some(&format!(
+                "path={sock} mode={mode:o} owner={owner_uid}:{group_gid}"
+            )),
             Some("unit Group= must match the API account group (socket is 0660)"),
         )];
     }
@@ -644,7 +759,12 @@ fn short_digest(file: &Path) -> String {
     };
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
-    hasher.finalize().iter().take(6).map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// True when `DATADIR` exists but the current (unprivileged) user cannot
@@ -667,14 +787,22 @@ pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
         if datadir_private(&env.datadir) {
             return vec![CheckResult::skip(
                 format!("images: {} is private to the service account", env.datadir),
-                Some(&format!("the current user cannot inspect {}/images", env.datadir)),
+                Some(&format!(
+                    "the current user cannot inspect {}/images",
+                    env.datadir
+                )),
                 Some("sudo firecrab doctor   # inspect installed image contents"),
             )];
         }
         return vec![CheckResult::fail(
             "images: no image root found",
-            Some(&format!("looked at FIRECRAB_IMAGE_ROOT, ./images, {}/images", env.datadir)),
-            Some("./install.sh   # or build with scripts/firecracker-menual/install-alpine-rootfs.sh"),
+            Some(&format!(
+                "looked at FIRECRAB_IMAGE_ROOT, ./images, {}/images",
+                env.datadir
+            )),
+            Some(
+                "./install.sh   # or build with scripts/firecracker-menual/install-alpine-rootfs.sh",
+            ),
         )];
     }
 
@@ -693,7 +821,10 @@ pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
         None => {
             let any_ext4_root = roots.iter().find(|c| {
                 fs::read_dir(c.join("rootfs"))
-                    .map(|it| it.filter_map(Result::ok).any(|e| e.path().extension().is_some_and(|x| x == "ext4")))
+                    .map(|it| {
+                        it.filter_map(Result::ok)
+                            .any(|e| e.path().extension().is_some_and(|x| x == "ext4"))
+                    })
                     .unwrap_or(false)
             });
             match any_ext4_root {
@@ -709,11 +840,18 @@ pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
                             Some("sudo firecrab doctor   # inspect installed image contents"),
                         )];
                     }
-                    let roots_str = roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(" ");
+                    let roots_str = roots
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ");
                     return vec![CheckResult::fail(
                         format!("images: no guest rootfs found under {roots_str}"),
                         None,
-                        Some(&format!("./install.sh  or copy images into {}/images", env.datadir)),
+                        Some(&format!(
+                            "./install.sh  or copy images into {}/images",
+                            env.datadir
+                        )),
                     )];
                 }
             }
@@ -732,7 +870,10 @@ pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
 
     if present == 0 {
         return vec![CheckResult::fail(
-            format!("images: image root {} has none of the default template artifacts", root.display()),
+            format!(
+                "images: image root {} has none of the default template artifacts",
+                root.display()
+            ),
             None,
             Some(&format!("build or copy templates into {}", root.display())),
         )];
@@ -740,14 +881,23 @@ pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
 
     if !missing.is_empty() {
         return vec![CheckResult::skip(
-            format!("images: some default templates missing under {}", root.display()),
+            format!(
+                "images: some default templates missing under {}",
+                root.display()
+            ),
             Some(&format!("missing: {}", missing.join(" "))),
-            Some(&format!("build the missing image(s), copy into {}, restart firecrab-api", root.display())),
+            Some(&format!(
+                "build the missing image(s), copy into {}, restart firecrab-api",
+                root.display()
+            )),
         )];
     }
 
     if digest {
-        let digests: Vec<String> = artifacts.iter().map(|art| format!("{art}={}", short_digest(&root.join(art)))).collect();
+        let digests: Vec<String> = artifacts
+            .iter()
+            .map(|art| format!("{art}={}", short_digest(&root.join(art))))
+            .collect();
         eprintln!("images: {}", digests.join(" "));
     }
     vec![CheckResult::pass("images")]
@@ -830,7 +980,9 @@ pub fn check_reflink(env: &DoctorEnv) -> Vec<CheckResult> {
 
     let mut split = Vec::new();
     for vms_root in &vms_roots {
-        let Ok(vms_meta) = fs::metadata(vms_root) else { continue };
+        let Ok(vms_meta) = fs::metadata(vms_root) else {
+            continue;
+        };
         if vms_meta.dev() == image_dev {
             continue;
         }
@@ -879,15 +1031,48 @@ pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec
 
     let mut any_probe_ran = false;
     for probe in &endpoints {
-        let host = probe.trim_start_matches("https://").split('/').next().unwrap_or("");
+        let host = probe
+            .trim_start_matches("https://")
+            .split('/')
+            .next()
+            .unwrap_or("");
         let output = if user == current {
-            runner.run("curl", &["-sS", "-o", "/dev/null", "-m", "12", "-w", "%{http_code}", probe])
+            runner.run(
+                "curl",
+                &[
+                    "-sS",
+                    "-o",
+                    "/dev/null",
+                    "-m",
+                    "12",
+                    "-w",
+                    "%{http_code}",
+                    probe,
+                ],
+            )
         } else if is_root {
-            runner.run("sudo", &["-u", &user, "curl", "-sS", "-o", "/dev/null", "-m", "12", "-w", "%{http_code}", probe])
+            runner.run(
+                "sudo",
+                &[
+                    "-u",
+                    &user,
+                    "curl",
+                    "-sS",
+                    "-o",
+                    "/dev/null",
+                    "-m",
+                    "12",
+                    "-w",
+                    "%{http_code}",
+                    probe,
+                ],
+            )
         } else {
             return vec![CheckResult::skip(
                 format!("registry egress: cannot test as {user}"),
-                Some(&format!("this doctor runs as {current} and does not become another account")),
+                Some(&format!(
+                    "this doctor runs as {current} and does not become another account"
+                )),
                 Some("sudo firecrab doctor   # tests as the API service account"),
             )];
         };
@@ -902,13 +1087,24 @@ pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        if status_text.contains("Permission denied") || status_text.contains("Operation not permitted") {
+        if status_text.contains("Permission denied")
+            || status_text.contains("Operation not permitted")
+        {
             let selinux = runner
                 .run("getenforce", &[])
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
                 .unwrap_or_else(|_| "not installed".to_owned());
             let ip_deny = runner
-                .run("systemctl", &["show", "-p", "IPAddressDeny", "--value", "firecrab-api.service"])
+                .run(
+                    "systemctl",
+                    &[
+                        "show",
+                        "-p",
+                        "IPAddressDeny",
+                        "--value",
+                        "firecrab-api.service",
+                    ],
+                )
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
                 .unwrap_or_else(|_| "?".to_owned());
             let detail = format!(
@@ -917,27 +1113,38 @@ pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec
             return vec![CheckResult::fail(
                 format!("registry egress: {host} is refused by this host, not by the network"),
                 Some(&detail),
-                Some("sudo ausearch -m avc -ts recent | grep -i firecrab   # then audit2allow, or fix the unit/firewall rule"),
+                Some(
+                    "sudo ausearch -m avc -ts recent | grep -i firecrab   # then audit2allow, or fix the unit/firewall rule",
+                ),
             )];
         }
         if status_text.contains("Could not resolve host") {
             return vec![CheckResult::fail(
                 format!("registry egress: {host} does not resolve for {user}"),
                 Some(&status_text),
-                Some("check /etc/resolv.conf and any split-DNS or sandbox that hides it from the service"),
+                Some(
+                    "check /etc/resolv.conf and any split-DNS or sandbox that hides it from the service",
+                ),
             )];
         }
         return vec![CheckResult::fail(
             format!("registry egress: {user} cannot reach {host}"),
             Some(&status_text),
-            Some(&format!("check the default route, proxy variables in {}/api.env, and any egress firewall", env.confdir)),
+            Some(&format!(
+                "check the default route, proxy variables in {}/api.env, and any egress firewall",
+                env.confdir
+            )),
         )];
     }
     if !any_probe_ran {
         return vec![CheckResult::skip(
             "registry egress: could not run curl for any endpoint",
-            Some("every probe attempt failed to spawn (e.g. missing sudo, or curl itself unusable)"),
-            Some("check that curl (and sudo, if not running as the API account) are installed and on PATH"),
+            Some(
+                "every probe attempt failed to spawn (e.g. missing sudo, or curl itself unusable)",
+            ),
+            Some(
+                "check that curl (and sudo, if not running as the API account) are installed and on PATH",
+            ),
         )];
     }
     vec![CheckResult::pass("registry_egress")]
@@ -1001,7 +1208,13 @@ mod tests {
         };
         let results = check_data_root(&env);
         assert_eq!(results[0].status, Status::Fail);
-        assert!(results[0].detail.as_deref().unwrap().contains("firecrab.db"));
+        assert!(
+            results[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("firecrab.db")
+        );
     }
 
     #[test]
@@ -1037,7 +1250,13 @@ mod tests {
     #[test]
     fn nft_skip_on_permission_denied() {
         let mut fake = FakeCommandRunner::new();
-        fake.set("nft", &["list", "tables"], 1, "", "Operation not permitted\n");
+        fake.set(
+            "nft",
+            &["list", "tables"],
+            1,
+            "",
+            "Operation not permitted\n",
+        );
         let results = check_nft(&DoctorEnv::default(), &fake);
         assert_eq!(results[0].status, Status::Skip);
     }
@@ -1071,7 +1290,13 @@ mod tests {
         fake.set("ufw", &["--version"], 0, "ufw 0.36.2\n", "");
         fake.set("cat", &["/etc/ufw/ufw.conf"], 0, "ENABLED=yes\n", "");
         fake.set("ufw", &["status", "verbose"], 0, status_verbose, "");
-        fake.set("ip", &["-br", "link", "show", "type", "bridge"], 0, "mnb0             DOWN\n", "");
+        fake.set(
+            "ip",
+            &["-br", "link", "show", "type", "bridge"],
+            0,
+            "mnb0             DOWN\n",
+            "",
+        );
         fake.set(
             "ip",
             &["-4", "route", "get", "8.8.8.8"],
@@ -1158,7 +1383,13 @@ mod tests {
             ..DoctorEnv::default()
         };
         let mut fake = FakeCommandRunner::new();
-        fake.set("id", &["-u", "fake-api-user"], 0, &format!("{owner_uid}\n"), "");
+        fake.set(
+            "id",
+            &["-u", "fake-api-user"],
+            0,
+            &format!("{owner_uid}\n"),
+            "",
+        );
 
         let results = check_helper_socket(&env, &fake);
         assert_eq!(results.len(), 1);
@@ -1199,7 +1430,10 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].status, Status::Skip);
-        assert!(results[0].title.contains("private to the service account"), "{results:?}");
+        assert!(
+            results[0].title.contains("private to the service account"),
+            "{results:?}"
+        );
     }
 
     #[test]

@@ -45,9 +45,18 @@ impl FakeCommandRunner {
     /// Registers the output `run(cmd, args)` should return. Unregistered
     /// invocations return an `ErrorKind::NotFound` error, matching what a
     /// missing binary on `$PATH` looks like to `std::process::Command`.
-    pub(crate) fn set(&mut self, cmd: &str, args: &[&str], exit_code: i32, stdout: &str, stderr: &str) {
-        self.responses
-            .insert(Self::key(cmd, args), (exit_code, stdout.to_owned(), stderr.to_owned()));
+    pub(crate) fn set(
+        &mut self,
+        cmd: &str,
+        args: &[&str],
+        exit_code: i32,
+        stdout: &str,
+        stderr: &str,
+    ) {
+        self.responses.insert(
+            Self::key(cmd, args),
+            (exit_code, stdout.to_owned(), stderr.to_owned()),
+        );
     }
 }
 
@@ -62,7 +71,10 @@ impl CommandRunner for FakeCommandRunner {
                 stdout: stdout.clone().into_bytes(),
                 stderr: stderr.clone().into_bytes(),
             }),
-            None => Err(io::Error::new(io::ErrorKind::NotFound, format!("no fake response for: {key}"))),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no fake response for: {key}"),
+            )),
         }
     }
 }
@@ -77,7 +89,10 @@ mod tests {
         fake.set("nft", &["list", "tables"], 0, "table inet firecrab\n", "");
         let out = fake.run("nft", &["list", "tables"]).unwrap();
         assert!(out.status.success());
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "table inet firecrab\n");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "table inet firecrab\n"
+        );
     }
 
     #[test]
