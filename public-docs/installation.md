@@ -25,7 +25,7 @@ Run the read-only check first.
 ./install.sh --check
 ```
 
-It checks tools, KVM, systemd, images, and firewall state.
+It checks tools, KVM, systemd, and firewall state.
 
 ## Install
 
@@ -52,8 +52,8 @@ Open the dashboard after the services start.
 http://127.0.0.1:5523/
 ```
 
-The default install does not install a guest image.
-Install images later from the dashboard Images page.
+The install never installs a guest image.
+Import one afterwards with [OCI import](oci.md) or the dashboard Images page.
 
 ## Common options
 
@@ -62,10 +62,6 @@ Install images later from the dashboard Images page.
 | `--check` | Report readiness without changes |
 | `--doctor` | Run runtime diagnostics |
 | `--no-deps` | Do not install missing tools |
-| `--no-images` | Skip guest images (default) |
-| `--with-images` | Also install Alpine from MicroRegistry |
-| `--with-ubuntu-image` | Also install Ubuntu 26.04 |
-| `--with-rocky-image` | Also install Rocky Linux 9.8 |
 | `--no-frontend` | Skip the dashboard |
 | `--version VER` | Use that GitHub Release tag |
 | `--libc gnu` or `--libc musl` | Force glibc or musl instead of auto-detect |
