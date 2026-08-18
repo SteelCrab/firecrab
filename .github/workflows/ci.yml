@@ -272,39 +272,39 @@ jobs:
         # and leave a real MicroNetwork for the capability checks below.
         run: |
           set -o pipefail
-          curl -fsS -o /dev/null -w 'dashboard %{http_code} %{content_type}\n' http://127.0.0.1:3000/
-          test "$(curl -fsS http://127.0.0.1:3000/api/vms)" = '[]'
+          curl -fsS -o /dev/null -w 'dashboard %{http_code} %{content_type}\n' http://127.0.0.1:5523/
+          test "$(curl -fsS http://127.0.0.1:5523/api/vms)" = '[]'
 
           # Fresh install has zero MicroNetworks (no implicit fcbr0).
-          NET=$(curl -fsS -X POST http://127.0.0.1:3000/api/micro-networks \
-                 -H 'Origin: http://127.0.0.1:3000' -H 'content-type: application/json' \
+          NET=$(curl -fsS -X POST http://127.0.0.1:5523/api/micro-networks \
+                 -H 'Origin: http://127.0.0.1:5523' -H 'content-type: application/json' \
                  -d '{"name":"ci","subnetCidr":"172.31.0.0/24","internetEnabled":true}' \
                | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
           echo "NET=$NET"
-          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/micro-networks \
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:5523/api/micro-networks \
                -H 'Origin: http://evil.example' -H 'content-type: application/json' \
                -d '{"name":"nope","subnetCidr":"172.32.0.0/24","internetEnabled":true}')" = 403
 
           # microNetworkId is required (serde) — omit it → 400.
-          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/vms \
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:5523/api/vms \
                -H 'content-type: application/json' \
                -d '{"name":"no-net","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2}')" = 400
 
           # Unknown MicroNetwork → 400 field error, no VM row left behind.
-          code=$(curl -s -o /tmp/create-bad-net.json -w '%{http_code}' -X POST http://127.0.0.1:3000/api/vms \
+          code=$(curl -s -o /tmp/create-bad-net.json -w '%{http_code}' -X POST http://127.0.0.1:5523/api/vms \
                -H 'content-type: application/json' \
                -d '{"name":"bad-net","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2,"microNetworkId":"00000000-0000-0000-0000-000000000099"}')
           test "$code" = 400
           grep -q microNetworkId /tmp/create-bad-net.json
-          test "$(curl -fsS http://127.0.0.1:3000/api/vms)" = '[]'
+          test "$(curl -fsS http://127.0.0.1:5523/api/vms)" = '[]'
 
           # Valid network but no guest image (--no-images) → template rejected.
-          code=$(curl -s -o /tmp/create-no-image.json -w '%{http_code}' -X POST http://127.0.0.1:3000/api/vms \
+          code=$(curl -s -o /tmp/create-no-image.json -w '%{http_code}' -X POST http://127.0.0.1:5523/api/vms \
                -H 'content-type: application/json' \
                -d "{\"name\":\"need-image\",\"template\":\"alpine-3.24\",\"cpu\":1,\"ram\":512,\"diskGb\":2,\"microNetworkId\":\"$NET\"}")
           test "$code" = 400
           grep -q template /tmp/create-no-image.json
-          test "$(curl -fsS http://127.0.0.1:3000/api/vms)" = '[]'
+          test "$(curl -fsS http://127.0.0.1:5523/api/vms)" = '[]'
 
       - name: Capability set is sufficient at runtime
         # After at least one MicroNetwork exists, the helper has exercised
@@ -325,7 +325,7 @@ jobs:
             --dashboard-dir firecrab-frontend/dist
           systemctl is-active --quiet firecrab-api
           # The MicroNetwork created above has to survive a re-install.
-          curl -fsS http://127.0.0.1:3000/api/micro-networks | grep -q '"ci"'
+          curl -fsS http://127.0.0.1:5523/api/micro-networks | grep -q '"ci"'
 
       - name: Uninstall keeps data, purge removes it
         run: |
@@ -483,7 +483,7 @@ jobs:
       - name: Images on disk
         run: |
           sudo ls -l /var/lib/firecrab/images/rootfs/ || true
-          curl -fsS http://127.0.0.1:3000/api/vms
+          curl -fsS http://127.0.0.1:5523/api/vms
 
       - name: Boot M2 guest (create → start → ping → stop)
         run: |

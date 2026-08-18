@@ -54,7 +54,7 @@ FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm run test:register --prefix firecrab-e2e
 Expect **2 passed, 2 skipped** (import + register/409; failed-job and reinstall/boot are product-gated).
 A leftover `127.0.0.1-15556-firecrab-e2e-ready` catalog row fails `beforeAll` until L3 grows a DELETE.
 
-Playwright starts `firecrab-api` on `:3000` and Vite on `:8080` unless those
+Playwright starts `firecrab-api` on `:5523` and Vite on `:8080` unless those
 ports already answer.
 Open the dashboard as `http://localhost:8080`.
 `127.0.0.1:8080` is a different CORS origin and will fail.
@@ -85,7 +85,7 @@ imported template, or MicroNetwork this suite created.
 | `FIRECRAB_E2E_SKIP_GUEST_BOOT` | unset | Skip VM create/start when `1` / `true` / `yes` |
 | `FIRECRAB_OCI_E2E_PORT` | `15555` | Loopback registry port |
 | `FIRECRAB_E2E_BASE_URL` | `http://localhost:8080` | Dashboard origin |
-| `FIRECRAB_E2E_API_URL` | `http://127.0.0.1:3000` | API used for cleanup |
+| `FIRECRAB_E2E_API_URL` | `http://127.0.0.1:5523` | API used for cleanup |
 
 The suite does not infer `/dev/kvm`.
 Unset the skip flag only on a host that can actually boot a guest.

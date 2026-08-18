@@ -26,7 +26,7 @@ const baseURL = (process.env.FIRECRAB_E2E_BASE_URL ?? "http://localhost:8080").r
  *   # FIRECRAB_OCI_E2E_READY on the console:
  *   npm test --prefix firecrab-e2e
  *
- * Playwright starts firecrab-api (unless :3000 already answers) and Vite
+ * Playwright starts firecrab-api (unless :5523 already answers) and Vite
  * (unless :8080 already answers). Guest boot also needs KVM, firecracker on
  * PATH, and a *responsive* `./scripts/dev-net-helper.sh` (Unix socket
  * /run/firecrab/net-helper.sock). Skip guest boot only via
@@ -60,7 +60,7 @@ export default defineConfig({
     {
       command: "node firecrab-e2e/scripts/ensure-api.mjs",
       cwd: repoRoot,
-      url: "http://127.0.0.1:3000/api/host",
+      url: "http://127.0.0.1:5523/api/host",
       reuseExistingServer: !process.env.CI,
       timeout: 180_000,
     },

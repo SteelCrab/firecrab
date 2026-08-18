@@ -57,7 +57,7 @@ export const REGISTER_NETWORK_NAME = "register-e2e";
 /** Isolated subnet so the register spec does not share {@link NETWORK_CIDR}. */
 export const REGISTER_NETWORK_CIDR = "172.30.91.0/24";
 
-export const DEFAULT_API_URL = "http://127.0.0.1:3000";
+export const DEFAULT_API_URL = "http://127.0.0.1:5523";
 export const DEFAULT_BASE_URL = "http://localhost:8080";
 
 export function envFlag(name: string): boolean {
