@@ -45,31 +45,52 @@ pub fn collect(runner: &dyn CommandRunner, client: &ApiClient) -> StatusReport {
     }
 }
 
-/// Plain-text rendering for a terminal (the default output mode).
-pub fn print_human(report: &StatusReport) {
-    println!("firecrab-api.service:        {}", report.api_service);
-    println!("firecrab-net-helper.service: {}", report.net_helper_service);
+/// Builds the plain-text rendering as a `String` — split out from
+/// [`print_human`] so tests can assert on the formatted content (both the
+/// `Some(host)` and `None` branches) without capturing real stdout.
+fn format_human(report: &StatusReport) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    writeln!(out, "firecrab-api.service:        {}", report.api_service).unwrap();
+    writeln!(
+        out,
+        "firecrab-net-helper.service: {}",
+        report.net_helper_service
+    )
+    .unwrap();
     match &report.host {
         Some(h) => {
-            println!("host:");
-            println!("  load average (1m): {:.2}", h.load_average_1m);
-            println!(
+            writeln!(out, "host:").unwrap();
+            writeln!(out, "  load average (1m): {:.2}", h.load_average_1m).unwrap();
+            writeln!(
+                out,
                 "  memory: {} / {} MiB available",
                 h.memory_available_mib, h.memory_total_mib
-            );
-            println!(
+            )
+            .unwrap();
+            writeln!(
+                out,
                 "  disk:   {} / {} GiB available",
                 h.disk_available_gib, h.disk_total_gib
-            );
-            println!("  uptime: {}s", h.uptime_seconds);
+            )
+            .unwrap();
+            writeln!(out, "  uptime: {}s", h.uptime_seconds).unwrap();
         }
         None => {
-            println!(
+            writeln!(
+                out,
                 "host: {}",
                 report.host_error.as_deref().unwrap_or("unreachable")
-            );
+            )
+            .unwrap();
         }
     }
+    out
+}
+
+/// Plain-text rendering for a terminal (the default output mode).
+pub fn print_human(report: &StatusReport) {
+    print!("{}", format_human(report));
 }
 
 /// `--json` output mode, for scripting.
@@ -117,5 +138,66 @@ mod tests {
         let client = ApiClient::new("http://127.0.0.1:1".to_owned());
         let report = collect(&fake, &client);
         assert_eq!(report.api_service, "unknown");
+    }
+
+    #[test]
+    fn format_human_none_host_shows_host_error() {
+        let report = StatusReport {
+            api_service: "active".to_owned(),
+            net_helper_service: "inactive".to_owned(),
+            host: None,
+            host_error: Some("unreachable: connection refused".to_owned()),
+        };
+        let text = format_human(&report);
+        assert!(text.contains("firecrab-api.service:        active"));
+        assert!(text.contains("firecrab-net-helper.service: inactive"));
+        assert!(text.contains("host: unreachable: connection refused"));
+    }
+
+    #[test]
+    fn format_human_none_host_falls_back_to_unreachable_when_no_error_text() {
+        let report = StatusReport {
+            api_service: "unknown".to_owned(),
+            net_helper_service: "unknown".to_owned(),
+            host: None,
+            host_error: None,
+        };
+        let text = format_human(&report);
+        assert!(text.contains("host: unreachable"));
+    }
+
+    #[test]
+    fn format_human_some_host_prints_host_metrics() {
+        let report = StatusReport {
+            api_service: "active".to_owned(),
+            net_helper_service: "active".to_owned(),
+            host: Some(HostStatusResponse {
+                load_average_1m: 0.42,
+                memory_available_mib: 512,
+                memory_total_mib: 2048,
+                disk_available_gib: 10,
+                disk_total_gib: 40,
+                uptime_seconds: 3600,
+            }),
+            host_error: None,
+        };
+        let text = format_human(&report);
+        assert!(text.contains("host:"));
+        assert!(text.contains("load average (1m): 0.42"));
+        assert!(text.contains("memory: 512 / 2048 MiB available"));
+        assert!(text.contains("disk:   10 / 40 GiB available"));
+        assert!(text.contains("uptime: 3600s"));
+    }
+
+    #[test]
+    fn print_human_and_print_json_do_not_panic() {
+        let report = StatusReport {
+            api_service: "active".to_owned(),
+            net_helper_service: "active".to_owned(),
+            host: None,
+            host_error: Some("unreachable: test".to_owned()),
+        };
+        print_human(&report);
+        print_json(&report);
     }
 }

@@ -225,20 +225,26 @@ pub fn run_all(env: &DoctorEnv, runner: &dyn CommandRunner, digest: bool) -> Rep
     Report { results }
 }
 
-/// Human-readable output matching the bash script's style: one summary
-/// line, then `[FAIL]`/`[SKIP]` blocks with indented detail/fix lines.
-/// PASS results are silent (bash never prints them either).
-pub fn print_human(report: &Report) {
+/// Builds the human-readable output as a `String` — split out from
+/// [`print_human`] so tests can assert on the formatted content (the
+/// all-pass / some-skip / has-fail summary branches, and the per-result
+/// FAIL/SKIP formatting) without capturing real stdout. Matches the bash
+/// script's style: one summary line, then `[FAIL]`/`[SKIP]` blocks with
+/// indented detail/fix lines. PASS results are silent (bash never prints
+/// them either).
+fn format_human(report: &Report) -> String {
+    use std::fmt::Write;
     let ok = report.ok_count();
     let fail = report.fail_count();
     let skip = report.skip_count();
 
+    let mut out = String::new();
     if fail == 0 && skip == 0 {
-        println!("doctor: all checks passed ({ok} ok)");
+        writeln!(out, "doctor: all checks passed ({ok} ok)").unwrap();
     } else if fail == 0 {
-        println!("doctor: {ok} ok, {skip} skipped (no failures)");
+        writeln!(out, "doctor: {ok} ok, {skip} skipped (no failures)").unwrap();
     } else {
-        println!("doctor: {fail} failed, {skip} skipped, {ok} ok");
+        writeln!(out, "doctor: {fail} failed, {skip} skipped, {ok} ok").unwrap();
     }
 
     for r in &report.results {
@@ -247,16 +253,23 @@ pub fn print_human(report: &Report) {
             Status::Fail => "[FAIL]",
             Status::Skip => "[SKIP]",
         };
-        println!("{tag} {}", r.title);
+        writeln!(out, "{tag} {}", r.title).unwrap();
         if let Some(detail) = &r.detail {
             for line in detail.lines() {
-                println!("  {line}");
+                writeln!(out, "  {line}").unwrap();
             }
         }
         if let Some(fix) = &r.fix {
-            println!("  → {fix}");
+            writeln!(out, "  → {fix}").unwrap();
         }
     }
+    out
+}
+
+/// Human-readable output matching the bash script's style — see
+/// [`format_human`] for the formatting rules.
+pub fn print_human(report: &Report) {
+    print!("{}", format_human(report));
 }
 
 #[cfg(test)]
@@ -289,5 +302,69 @@ mod tests {
         let fake = FakeCommandRunner::new();
         let report = run_all(&env, &fake, false);
         assert!(report.results.len() >= 13);
+    }
+
+    #[test]
+    fn run_checked_synthesizes_fail_on_panic() {
+        let results = run_checked("boom", || panic!("simulated check bug"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("boom: internal error"));
+    }
+
+    #[test]
+    fn run_checked_passes_through_normal_results() {
+        let results = run_checked("ok", || vec![CheckResult::pass("ok")]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn format_human_all_pass() {
+        let report = Report {
+            results: vec![CheckResult::pass("a"), CheckResult::pass("b")],
+        };
+        let text = format_human(&report);
+        assert_eq!(text, "doctor: all checks passed (2 ok)\n");
+    }
+
+    #[test]
+    fn format_human_no_failures_but_some_skipped() {
+        let report = Report {
+            results: vec![
+                CheckResult::pass("a"),
+                CheckResult::skip("b", Some("detail line"), Some("do the fix")),
+            ],
+        };
+        let text = format_human(&report);
+        assert!(text.starts_with("doctor: 1 ok, 1 skipped (no failures)\n"));
+        assert!(text.contains("[SKIP] b\n"));
+        assert!(text.contains("  detail line\n"));
+        assert!(text.contains("  → do the fix\n"));
+        // Pass results never print their own line.
+        assert!(!text.contains("[PASS]"));
+    }
+
+    #[test]
+    fn format_human_has_failures() {
+        let report = Report {
+            results: vec![
+                CheckResult::pass("a"),
+                CheckResult::fail("b", Some("multi\nline detail"), None),
+            ],
+        };
+        let text = format_human(&report);
+        assert!(text.starts_with("doctor: 1 failed, 0 skipped, 1 ok\n"));
+        assert!(text.contains("[FAIL] b\n"));
+        assert!(text.contains("  multi\n"));
+        assert!(text.contains("  line detail\n"));
+    }
+
+    #[test]
+    fn print_human_does_not_panic() {
+        let report = Report {
+            results: vec![CheckResult::fail("x", None, None)],
+        };
+        print_human(&report);
     }
 }
