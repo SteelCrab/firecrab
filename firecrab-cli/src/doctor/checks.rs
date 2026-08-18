@@ -1153,12 +1153,22 @@ pub fn check_registry_egress(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::os::unix::net::UnixListener;
 
     use tempfile::tempdir;
 
     use super::*;
     use crate::doctor::{DoctorEnv, Status};
     use crate::shell::FakeCommandRunner;
+
+    /// Binds a real Unix socket at `path` so `check_helper_socket`/`check_nft`/
+    /// `check_dnsmasq`'s `socket_exists` sees a real socket file, not a
+    /// regular one — mirrors the inline setup already used by
+    /// `helper_socket_pass_when_owner_and_mode_are_correct`. The caller must
+    /// keep the returned listener alive for the socket file to persist.
+    fn bind_socket(path: &Path) -> UnixListener {
+        UnixListener::bind(path).unwrap()
+    }
 
     #[test]
     fn ip_forward_pass_when_one() {
@@ -1365,13 +1375,11 @@ mod tests {
 
     #[test]
     fn helper_socket_pass_when_owner_and_mode_are_correct() {
-        use std::os::unix::net::UnixListener;
-
         let dir = tempdir().unwrap();
         let sock_path = dir.path().join("net-helper.sock");
         // A real bound Unix socket file, not a regular file, so
         // `file_type().is_socket()` sees what the production code expects.
-        let _listener = UnixListener::bind(&sock_path).unwrap();
+        let _listener = bind_socket(&sock_path);
         fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o660)).unwrap();
         let owner_uid = fs::symlink_metadata(&sock_path).unwrap().uid();
 
@@ -1527,5 +1535,591 @@ mod tests {
         let results = check_registry_egress(&DoctorEnv::default(), &fake);
         assert_eq!(results[0].status, Status::Skip);
         assert!(results[0].title.contains("could not run curl"));
+    }
+
+    #[test]
+    fn registry_egress_pass_when_all_probes_succeed_with_custom_base_url() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("curl", &["--version"], 0, "curl 8.0\n", "");
+        fake.set(
+            "curl",
+            &[
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-m",
+                "12",
+                "-w",
+                "%{http_code}",
+                "https://example.test/registry/catalog.json",
+            ],
+            0,
+            "200",
+            "",
+        );
+        fake.set(
+            "curl",
+            &[
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-m",
+                "12",
+                "-w",
+                "%{http_code}",
+                "https://registry-1.docker.io/v2/",
+            ],
+            0,
+            "401",
+            "",
+        );
+        let env = DoctorEnv {
+            image_base_url: Some("https://example.test/registry".to_owned()),
+            ..DoctorEnv::default()
+        };
+        let results = check_registry_egress(&env, &fake);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
+    }
+
+    #[test]
+    fn registry_egress_fail_when_permission_denied() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("curl", &["--version"], 0, "curl 8.0\n", "");
+        fake.set(
+            "curl",
+            &[
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-m",
+                "12",
+                "-w",
+                "%{http_code}",
+                "https://registry.firecrab.dev/catalog.json",
+            ],
+            1,
+            "",
+            "curl: (7) Permission denied\n",
+        );
+        let results = check_registry_egress(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("refused by this host"));
+    }
+
+    #[test]
+    fn registry_egress_fail_when_host_unresolvable() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("curl", &["--version"], 0, "curl 8.0\n", "");
+        fake.set(
+            "curl",
+            &[
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-m",
+                "12",
+                "-w",
+                "%{http_code}",
+                "https://registry.firecrab.dev/catalog.json",
+            ],
+            1,
+            "",
+            "curl: (6) Could not resolve host: registry.firecrab.dev\n",
+        );
+        let results = check_registry_egress(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("does not resolve"));
+    }
+
+    #[test]
+    fn registry_egress_fail_generic_when_cannot_reach() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("curl", &["--version"], 0, "curl 8.0\n", "");
+        fake.set(
+            "curl",
+            &[
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-m",
+                "12",
+                "-w",
+                "%{http_code}",
+                "https://registry.firecrab.dev/catalog.json",
+            ],
+            1,
+            "",
+            "curl: (28) Connection timed out after 12000 milliseconds\n",
+        );
+        let results = check_registry_egress(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("cannot reach"));
+    }
+
+    #[test]
+    fn data_root_pass_when_datadir_exists_but_no_db() {
+        let dir = tempdir().unwrap();
+        let env = DoctorEnv {
+            datadir: dir.path().display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_data_root(&env);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn data_root_finds_db_via_image_root_parent_candidate() {
+        let dir = tempdir().unwrap();
+        let image_parent = dir.path().join("install");
+        fs::create_dir_all(image_parent.join("data")).unwrap();
+        fs::write(image_parent.join("data/firecrab.db"), b"").unwrap();
+        let env = DoctorEnv {
+            datadir: dir.path().join("does-not-exist").display().to_string(),
+            image_root: Some(image_parent.join("images").display().to_string()),
+            ..DoctorEnv::default()
+        };
+        let results = check_data_root(&env);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
+    }
+
+    #[test]
+    fn firecracker_fail_when_version_output_empty() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("firecracker", &["--version"], 0, "", "");
+        let results = check_firecracker(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("could not read version"));
+    }
+
+    #[test]
+    fn nft_fail_generic_when_command_errors_without_permission_text() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("nft", &["list", "tables"], 1, "", "something else broke\n");
+        let results = check_nft(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("list tables failed"));
+    }
+
+    #[test]
+    fn nft_skip_when_tables_missing_and_helper_socket_down() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("nft", &["list", "tables"], 0, "table ip other\n", "");
+        let env = DoctorEnv {
+            helper_sock: "/definitely/not/a/real/path.sock".to_owned(),
+            ..DoctorEnv::default()
+        };
+        let results = check_nft(&env, &fake);
+        assert_eq!(results[0].status, Status::Skip);
+        assert!(
+            results[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("expected after")
+        );
+    }
+
+    #[test]
+    fn nft_skip_when_tables_missing_helper_up_but_no_bridges() {
+        let dir = tempdir().unwrap();
+        let sock_path = dir.path().join("net-helper.sock");
+        let _listener = bind_socket(&sock_path);
+        let mut fake = FakeCommandRunner::new();
+        fake.set("nft", &["list", "tables"], 0, "table ip other\n", "");
+        fake.set("ip", &["-br", "link", "show", "type", "bridge"], 0, "", "");
+        let env = DoctorEnv {
+            helper_sock: sock_path.display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_nft(&env, &fake);
+        assert_eq!(results[0].status, Status::Skip);
+        assert!(
+            results[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("zero MicroNetworks")
+        );
+    }
+
+    #[test]
+    fn nft_fail_when_tables_missing_helper_up_and_bridges_present() {
+        let dir = tempdir().unwrap();
+        let sock_path = dir.path().join("net-helper.sock");
+        let _listener = bind_socket(&sock_path);
+        let mut fake = FakeCommandRunner::new();
+        fake.set("nft", &["list", "tables"], 0, "table ip other\n", "");
+        fake.set(
+            "ip",
+            &["-br", "link", "show", "type", "bridge"],
+            0,
+            "mnb0             DOWN\n",
+            "",
+        );
+        let env = DoctorEnv {
+            helper_sock: sock_path.display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_nft(&env, &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("missing firecrab tables"));
+    }
+
+    #[test]
+    fn dnsmasq_pid_file_points_to_real_process_without_dnsmasq_in_cmdline() {
+        let dir = tempdir().unwrap();
+        let pid_file = dir.path().join("dnsmasq.pid");
+        // Our own test process is a real, currently-alive process — its
+        // /proc/<pid>/cmdline is readable but (being the test harness
+        // binary) never contains "dnsmasq", so this exercises the pid-file
+        // liveness path's read/parse without asserting alive=true.
+        fs::write(&pid_file, format!("{}\n", std::process::id())).unwrap();
+        let env = DoctorEnv {
+            dnsmasq_pid: pid_file.display().to_string(),
+            helper_sock: "/definitely/not/a/real/path.sock".to_owned(),
+            ..DoctorEnv::default()
+        };
+        let fake = FakeCommandRunner::new();
+        let results = check_dnsmasq(&env, &fake);
+        assert_eq!(results[0].status, Status::Skip);
+    }
+
+    #[test]
+    fn dnsmasq_alive_via_pgrep_and_no_bridges_pass() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set(
+            "pgrep",
+            &["-af", "dnsmasq.*firecrab"],
+            0,
+            "1234 dnsmasq --conf-file=/run/firecrab/dnsmasq.conf\n",
+            "",
+        );
+        fake.set("ip", &["-br", "link", "show", "type", "bridge"], 0, "", "");
+        let env = DoctorEnv {
+            dnsmasq_pid: "/definitely/not/a/real/pid".to_owned(),
+            dnsmasq_conf: "/definitely/not/a/real/conf".to_owned(),
+            ..DoctorEnv::default()
+        };
+        let results = check_dnsmasq(&env, &fake);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
+    }
+
+    #[test]
+    fn dnsmasq_alive_with_missing_interface_conf_fails() {
+        let dir = tempdir().unwrap();
+        let conf_path = dir.path().join("dnsmasq.conf");
+        fs::write(&conf_path, "interface=mnb1\n").unwrap();
+        let mut fake = FakeCommandRunner::new();
+        fake.set(
+            "pgrep",
+            &["-af", "dnsmasq.*firecrab"],
+            0,
+            "1234 dnsmasq\n",
+            "",
+        );
+        fake.set(
+            "ip",
+            &["-br", "link", "show", "type", "bridge"],
+            0,
+            "mnb0             DOWN\n",
+            "",
+        );
+        let env = DoctorEnv {
+            dnsmasq_pid: "/definitely/not/a/real/pid".to_owned(),
+            dnsmasq_conf: conf_path.display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_dnsmasq(&env, &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("conf missing interface"));
+    }
+
+    #[test]
+    fn ufw_pass_when_conf_disabled() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("ufw", &["--version"], 0, "ufw 0.36.2\n", "");
+        fake.set("cat", &["/etc/ufw/ufw.conf"], 0, "ENABLED=no\n", "");
+        let results = check_ufw(&fake);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn ufw_pass_when_status_fallback_reports_inactive() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("ufw", &["--version"], 0, "ufw 0.36.2\n", "");
+        // No ENABLED=yes/no line in the conf, and the conf read itself
+        // fails — forces ufw_is_enabled to fall through to `ufw status`.
+        fake.set("cat", &["/etc/ufw/ufw.conf"], 1, "", "");
+        fake.set("ufw", &["status"], 0, "Status: inactive\n", "");
+        let results = check_ufw(&fake);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn ufw_skip_uplink_when_route_lookup_fails() {
+        let status = "Status: active\n\n\
+             To                         Action      From\n\
+             --                         ------      ----\n\
+             67/udp on mnb0             ALLOW IN    Anywhere\n\
+             53 on mnb0                 ALLOW IN    Anywhere\n";
+        let mut fake = fake_ufw_active_with_status(status);
+        fake.set(
+            "ip",
+            &["-4", "route", "get", "8.8.8.8"],
+            1,
+            "",
+            "Network unreachable\n",
+        );
+        let results = check_ufw(&fake);
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!(
+            results
+                .iter()
+                .any(|r| r.status == Status::Skip && r.title.contains("could not detect uplink"))
+        );
+        assert!(results.iter().any(|r| r.status == Status::Pass));
+    }
+
+    #[test]
+    fn selinux_enforcing_pass_when_ps_missing() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("getenforce", &[], 0, "Enforcing\n", "");
+        let results = check_selinux_domain(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn selinux_enforcing_pass_when_no_confined_processes() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("getenforce", &[], 0, "Enforcing\n", "");
+        fake.set(
+            "ps",
+            &["-eZ"],
+            0,
+            "system_u:system_r:unconfined_service_t:s0 100 ? firecrab-api\n",
+            "",
+        );
+        let results = check_selinux_domain(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn selinux_enforcing_fail_when_confined_service_found() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("getenforce", &[], 0, "Enforcing\n", "");
+        fake.set(
+            "ps",
+            &["-eZ"],
+            0,
+            "system_u:system_r:init_t:s0  1234 ?        00:00:00 firecrab-api\n",
+            "",
+        );
+        let results = check_selinux_domain(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(
+            results[0]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("firecrab-api")
+        );
+    }
+
+    #[test]
+    fn helper_socket_resolves_api_user_via_systemctl_when_env_unset() {
+        let dir = tempdir().unwrap();
+        let sock_path = dir.path().join("net-helper.sock");
+        let _listener = bind_socket(&sock_path);
+        fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o660)).unwrap();
+        let owner_uid = fs::symlink_metadata(&sock_path).unwrap().uid();
+
+        let env = DoctorEnv {
+            helper_sock: sock_path.display().to_string(),
+            api_user: None,
+            ..DoctorEnv::default()
+        };
+        let mut fake = FakeCommandRunner::new();
+        fake.set(
+            "systemctl",
+            &["show", "-p", "User", "--value", "firecrab-api.service"],
+            0,
+            "svc-user\n",
+            "",
+        );
+        fake.set("id", &["-u", "svc-user"], 0, &format!("{owner_uid}\n"), "");
+
+        let results = check_helper_socket(&env, &fake);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
+    }
+
+    #[test]
+    fn helper_socket_fail_when_not_a_socket() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("not-a-socket");
+        fs::write(&path, b"hello").unwrap();
+        let env = DoctorEnv {
+            helper_sock: path.display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let fake = FakeCommandRunner::new();
+        let results = check_helper_socket(&env, &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("is not a socket"));
+    }
+
+    #[test]
+    fn helper_socket_fail_when_api_account_missing() {
+        let dir = tempdir().unwrap();
+        let sock_path = dir.path().join("net-helper.sock");
+        let _listener = bind_socket(&sock_path);
+        fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o660)).unwrap();
+        let env = DoctorEnv {
+            helper_sock: sock_path.display().to_string(),
+            api_user: Some("ghost-user".to_owned()),
+            ..DoctorEnv::default()
+        };
+        let mut fake = FakeCommandRunner::new();
+        fake.set("id", &["-u", "ghost-user"], 1, "", "no such user\n");
+        let results = check_helper_socket(&env, &fake);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("does not exist"));
+    }
+
+    #[test]
+    fn helper_socket_fail_when_not_accessible() {
+        let dir = tempdir().unwrap();
+        let sock_path = dir.path().join("net-helper.sock");
+        let _listener = bind_socket(&sock_path);
+        fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o640)).unwrap();
+        let owner_uid = fs::symlink_metadata(&sock_path).unwrap().uid();
+        let env = DoctorEnv {
+            helper_sock: sock_path.display().to_string(),
+            api_user: Some("other-user".to_owned()),
+            ..DoctorEnv::default()
+        };
+        let mut fake = FakeCommandRunner::new();
+        // A uid that's neither the owner nor (with no "id -G" fake, so an
+        // empty group list) the owning group.
+        fake.set(
+            "id",
+            &["-u", "other-user"],
+            0,
+            &format!("{}\n", owner_uid + 12345),
+            "",
+        );
+        let results = check_helper_socket(&env, &fake);
+        assert_eq!(results[0].status, Status::Fail, "{results:?}");
+        assert!(results[0].title.contains("not accessible"));
+    }
+
+    #[test]
+    fn helper_socket_fail_when_mode_too_tight() {
+        let dir = tempdir().unwrap();
+        let sock_path = dir.path().join("net-helper.sock");
+        let _listener = bind_socket(&sock_path);
+        fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let owner_uid = fs::symlink_metadata(&sock_path).unwrap().uid();
+        let env = DoctorEnv {
+            helper_sock: sock_path.display().to_string(),
+            api_user: Some("fake-api-user".to_owned()),
+            ..DoctorEnv::default()
+        };
+        let mut fake = FakeCommandRunner::new();
+        fake.set(
+            "id",
+            &["-u", "fake-api-user"],
+            0,
+            &format!("{owner_uid}\n"),
+            "",
+        );
+        let results = check_helper_socket(&env, &fake);
+        assert_eq!(results[0].status, Status::Fail, "{results:?}");
+        assert!(results[0].title.contains("too tight"));
+    }
+
+    #[test]
+    fn images_fail_via_any_ext4_fallback_when_none_of_default_artifacts_present() {
+        let dir = tempdir().unwrap();
+        let images = dir.path().join("images");
+        fs::create_dir_all(images.join("rootfs")).unwrap();
+        fs::write(images.join("rootfs/custom.ext4"), b"x").unwrap();
+        let env = DoctorEnv {
+            image_root: Some(images.display().to_string()),
+            ..DoctorEnv::default()
+        };
+        let results = check_images(&env, false);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(
+            results[0]
+                .title
+                .contains("none of the default template artifacts")
+        );
+    }
+
+    #[test]
+    fn images_fail_when_no_ext4_and_root_has_unrelated_files() {
+        let dir = tempdir().unwrap();
+        let images = dir.path().join("images");
+        fs::create_dir_all(images.join("rootfs")).unwrap();
+        fs::write(images.join("rootfs/readme.txt"), b"x").unwrap();
+        let env = DoctorEnv {
+            image_root: Some(images.display().to_string()),
+            datadir: dir.path().join("nonexistent-datadir").display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_images(&env, false);
+        assert_eq!(results[0].status, Status::Fail);
+        assert!(results[0].title.contains("no guest rootfs found"));
+    }
+
+    #[test]
+    fn images_digest_true_computes_digests_when_all_present() {
+        let dir = tempdir().unwrap();
+        let images = dir.path().join("images");
+        for art in template_artifacts() {
+            let p = images.join(art);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, b"x").unwrap();
+        }
+        let env = DoctorEnv {
+            image_root: Some(images.display().to_string()),
+            ..DoctorEnv::default()
+        };
+        let results = check_images(&env, true);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn image_install_tools_skip_when_remote_disabled() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set("tar", &["--version"], 0, "tar (GNU tar)\n", "");
+        fake.set("zstd", &["--version"], 0, "zstd\n", "");
+        let env = DoctorEnv {
+            image_base_url: Some("none".to_owned()),
+            ..DoctorEnv::default()
+        };
+        let results = check_image_install_tools(&env, &fake);
+        assert_eq!(results[0].status, Status::Skip);
+        assert!(results[0].title.contains("remote disabled"));
+    }
+
+    #[test]
+    fn reflink_pass_when_image_and_vms_on_same_filesystem() {
+        let dir = tempdir().unwrap();
+        let images = dir.path().join("images");
+        fs::create_dir_all(&images).unwrap();
+        let vms = dir.path().join("vms");
+        fs::create_dir_all(&vms).unwrap();
+        let env = DoctorEnv {
+            image_root: Some(images.display().to_string()),
+            storage_roots: Some(format!("data={}", vms.display())),
+            datadir: dir.path().join("unused-datadir").display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_reflink(&env);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
     }
 }

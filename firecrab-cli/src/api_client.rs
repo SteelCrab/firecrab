@@ -82,7 +82,15 @@ impl ApiClient {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    /// Serializes the two tests below that read/write the real
+    /// `FIRECRAB_API` process env var — `std::env::set_var` is process-wide,
+    /// so without this lock they'd race under `cargo test`'s parallel
+    /// runner (one could observe the other's value mid-test).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn resolve_api_base_prefers_flag() {
@@ -94,8 +102,21 @@ mod tests {
 
     #[test]
     fn resolve_api_base_falls_back_to_default() {
-        // No --api flag and (in this process) no FIRECRAB_API set.
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK against the other test in this
+        // file that touches FIRECRAB_API; no other test reads it.
+        unsafe { std::env::remove_var("FIRECRAB_API") };
         assert_eq!(resolve_api_base(None), DEFAULT_API_BASE);
+    }
+
+    #[test]
+    fn resolve_api_base_reads_env_var_when_no_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — see the note above.
+        unsafe { std::env::set_var("FIRECRAB_API", "http://env-example.test:1234/") };
+        let result = resolve_api_base(None);
+        unsafe { std::env::remove_var("FIRECRAB_API") };
+        assert_eq!(result, "http://env-example.test:1234");
     }
 
     #[test]
@@ -105,5 +126,20 @@ mod tests {
         let client = ApiClient::new("http://127.0.0.1:1".to_owned());
         let err = client.get_host_status().unwrap_err();
         assert!(matches!(err, ApiError::Unreachable(_)));
+    }
+
+    #[test]
+    fn api_error_display_unreachable() {
+        let err = ApiError::Unreachable("connection refused".to_owned());
+        assert_eq!(err.to_string(), "unreachable: connection refused");
+    }
+
+    #[test]
+    fn api_error_display_http() {
+        let err = ApiError::Http {
+            status: 500,
+            body: "boom".to_owned(),
+        };
+        assert_eq!(err.to_string(), "HTTP 500: boom");
     }
 }
