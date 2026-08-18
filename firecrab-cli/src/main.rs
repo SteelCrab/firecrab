@@ -4,6 +4,7 @@ mod api_client;
 mod doctor;
 mod info;
 mod shell;
+mod status;
 
 #[derive(Parser)]
 #[command(name = "firecrab", version, about = "firecrab host CLI")]
@@ -62,8 +63,16 @@ fn main() {
                 info::print_human(&report);
             }
         }
-        Command::Status { .. } => {
-            println!("status: not yet implemented");
+        Command::Status { json, api } => {
+            let runner = shell::RealCommandRunner;
+            let api_base = api_client::resolve_api_base(api.as_deref());
+            let client = api_client::ApiClient::new(api_base);
+            let report = status::collect(&runner, &client);
+            if json {
+                status::print_json(&report);
+            } else {
+                status::print_human(&report);
+            }
         }
     }
 }
