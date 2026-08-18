@@ -79,7 +79,7 @@ jobs:
       - name: cargo build --release
         run: |
           cargo build --release --locked --target ${{ matrix.target }} \
-            -p firecrab-api -p firecrab-net-helper
+            -p firecrab-api -p firecrab-net-helper -p firecrab-cli
 
       - name: Verify release binaries
         run: |
@@ -89,12 +89,14 @@ jobs:
             "target/${{ matrix.target }}/release/firecrab-api" "${{ matrix.arch }}" "$libc"
           ./scripts/verify-release-binary.sh \
             "target/${{ matrix.target }}/release/firecrab-net-helper" "${{ matrix.arch }}" "$libc"
+          ./scripts/verify-release-binary.sh \
+            "target/${{ matrix.target }}/release/firecrab" "${{ matrix.arch }}" "$libc"
 
       - name: Package binaries
         run: |
           cd target/${{ matrix.target }}/release
           tar -czvf ../../../firecrab-${{ matrix.target }}.tar.gz \
-            firecrab-api firecrab-net-helper
+            firecrab-api firecrab-net-helper firecrab
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
