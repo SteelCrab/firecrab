@@ -7,7 +7,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 | Version | Date | Work |
 | --- | --- | --- |
-| [Unreleased](#unreleased) | — | [#145], [#147] |
+| [Unreleased](#unreleased) | — | [#145], [#147], [#151] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
 
@@ -26,9 +26,16 @@ Entries land here as work merges, and move under the next version heading when t
 - An unreachable MicroRegistry falls back to an installed catalog kernel ([#145]).
 - Published pages may run to 300 lines, up from 170 ([#145]).
 - [#147-comment]
-  - Default `FIRECRAB_BIND_ADDR` moves from `127.0.0.1:3000` to `127.0.0.1:5523` ([[#147]).
+  - Default `FIRECRAB_BIND_ADDR` moves from `127.0.0.1:3000` to `127.0.0.1:5523` ([#147]).
   - README (all locales) and `CONTRIBUTING.md` point at port `5523`, not `3000` ([#147]).
   - `public-docs/` API examples and check lists reference port `5523`, not `3000` ([#147]).
+- [#151-comment]
+  - `install.sh` no longer preinstalls a guest image — `--no-images`, `--with-images`,
+    `--with-ubuntu-image`, and `--with-rocky-image` are removed along with everything only
+    reachable through them; a guest image now comes from OCI import or the dashboard
+    Images page ([#151]).
+  - CI's `vm-boot`/`vm-boot-self-hosted` import Ubuntu/Rocky via OCI import instead of the
+    removed `install.sh` flags ([#151]).
 
 ### Fixed
 
@@ -163,5 +170,7 @@ network helper.
 [#145]: https://github.com/SteelCrab/firecrab/pull/145
 [#147]: https://github.com/SteelCrab/firecrab/issues/147
 [#147-comment]: https://github.com/SteelCrab/firecrab/issues/147#issuecomment-5327667852
+[#151]: https://github.com/SteelCrab/firecrab/pull/153
+[#151-comment]: https://github.com/SteelCrab/firecrab/issues/151#issuecomment-5327863284
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
