@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod doctor;
+mod info;
 mod shell;
 
 #[derive(Parser)]
@@ -51,8 +52,17 @@ fn main() {
             }
             std::process::exit(report.exit_code());
         }
-        Command::Info { .. } => {
-            println!("info: not yet implemented");
+        Command::Info { json, api } => {
+            let api_base = api
+                .clone()
+                .or_else(|| std::env::var("FIRECRAB_API").ok().filter(|s| !s.is_empty()))
+                .unwrap_or_else(|| "http://127.0.0.1:5523".to_owned());
+            let report = info::collect(&api_base);
+            if json {
+                info::print_json(&report);
+            } else {
+                info::print_human(&report);
+            }
         }
         Command::Status { .. } => {
             println!("status: not yet implemented");
