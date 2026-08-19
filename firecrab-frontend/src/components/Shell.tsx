@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { VIEWS, viewLabel } from "../navigation";
 import type { ViewId } from "../navigation";
+import NavIcon, { type NavIconId } from "./NavIcons";
 import { useI18n } from "../i18n";
 
 interface ShellProps {
@@ -65,9 +66,7 @@ export default function Shell({ view, onSelectView, children }: ShellProps) {
                       aria-hidden="true"
                     />
                   ) : (
-                    <span className="shell-nav-glyph" aria-hidden="true">
-                      {item.glyph}
-                    </span>
+                    <NavIcon id={item.id as NavIconId} className="shell-nav-icon" />
                   )}
                   <span className="shell-nav-label">{label}</span>
                 </button>

@@ -395,6 +395,12 @@ function ImageJobLog({
         ? t("Register log", "등록 로그")
         : t("Image import log", "이미지 가져오기 로그");
 
+  const logRef = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    const el = logRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [job.log]);
+
   return (
     <div className="subpanel">
       <div className="log-export-bar">
@@ -406,7 +412,7 @@ function ImageJobLog({
           disabled={!job.log}
         />
       </div>
-      <pre className="detail-log image-install-log">{job.log}</pre>
+      <pre className="detail-log image-install-log" ref={logRef}>{job.log}</pre>
     </div>
   );
 }
@@ -436,6 +442,11 @@ function MicroBootPanel({
   const sessionActive =
     session !== null && session.status !== "succeeded" && session.status !== "failed";
   const bootstrapBusy = startingAlias !== null || sessionActive;
+  const sessionLogRef = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    const el = sessionLogRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [session?.log]);
 
   return (
     <section className="panel microboot-panel">
@@ -586,7 +597,7 @@ function MicroBootPanel({
               )}
             </p>
           )}
-          <pre className="detail-log">{session.log}</pre>
+          <pre className="detail-log" ref={sessionLogRef}>{session.log}</pre>
         </div>
       )}
       {install && install.status !== "idle" && (

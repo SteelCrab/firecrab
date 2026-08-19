@@ -122,7 +122,6 @@ body {
   background: rgba(196, 62, 18, 0.08);
   color: var(--ember);
 }
-.shell-nav-glyph { font-size: 0.9rem; line-height: 1; }
 .shell-nav-icon {
   width: 1.15rem;
   height: 1.15rem;
@@ -1027,7 +1026,6 @@ table.image-table .state-cell {
 .pipeline-step.pending .step-bar { opacity: 0.45; }
 
 .image-install-log {
-  max-height: 28vh;
   min-height: 8rem;
 }
 
