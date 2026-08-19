@@ -1,5 +1,6 @@
 use std::fmt;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -200,6 +201,20 @@ pub enum NetworkRequest {
         /// each one's bridge. Empty means no Firecrab DHCP interfaces.
         micro_networks: Vec<MicroNetworkSpec>,
     },
+    /// Install an already-downloaded host bundle over this host's binaries and
+    /// restart both services (`firecrab update --apply`). The caller has already
+    /// verified `sha256` against the release's `SHA256SUMS`; the helper re-verifies
+    /// it from its own open file descriptor rather than trusting the caller — the
+    /// helper is the trust boundary (same reasoning as `validate_prefix` and the
+    /// `egress_policy` allowlist lookup).
+    ApplySelfUpdate {
+        /// Absolute path to the downloaded `firecrab-host-<arch>-<libc>.tar.gz`.
+        tarball_path: PathBuf,
+        /// Lowercase hex SHA-256 the caller read out of the release's `SHA256SUMS`.
+        sha256: String,
+        /// Where this host's install put its binaries and assets.
+        layout: InstallLayout,
+    },
 }
 
 /// One MicroNetwork's host-facing parameters. The helper derives the bridge
@@ -317,6 +332,21 @@ pub struct DhcpLeaseEntry {
     pub mac: MacAddr,
 }
 
+/// The install layout a self-update writes into: `install.sh`'s `$PREFIX/bin`,
+/// `$LIBDIR` (`$PREFIX/lib/firecrab`) and `$SHAREDIR` (`$PREFIX/share/firecrab`).
+/// The helper does not read install-time layout itself, so the (unprivileged)
+/// CLI resolves it exactly the way `firecrab info` does and sends it here; the
+/// helper re-validates every path before writing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstallLayout {
+    /// Receives the `firecrab` CLI (`$PREFIX/bin`).
+    pub bindir: PathBuf,
+    /// Receives `firecrab-api` and `firecrab-net-helper` (`$LIBDIR`).
+    pub libdir: PathBuf,
+    /// Receives the dashboard assets under `dashboard/` (`$SHAREDIR`).
+    pub sharedir: PathBuf,
+}
+
 /// A [`NetworkRequest`] tagged with protocol version and a correlation id.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkRequestEnvelope {
@@ -363,6 +393,24 @@ pub enum HelperFailure {
     Internal {
         /// Human-readable failure detail.
         detail: String,
+    },
+    /// The bundle on disk didn't match the checksum the request carried, so
+    /// nothing was extracted and no binary was replaced.
+    #[error("update bundle checksum mismatch: expected {expected}, got {actual}")]
+    UpdateChecksumMismatch {
+        /// SHA-256 the request carried.
+        expected: String,
+        /// SHA-256 the helper computed from the file it opened.
+        actual: String,
+    },
+    /// Extraction or the binary swap failed after validation passed.
+    #[error("update apply failed: {detail}")]
+    UpdateApplyFailed {
+        /// Flattened error chain (same shape as `Internal`'s `detail`).
+        detail: String,
+        /// Whether every replaced binary was restored to its pre-update copy.
+        /// `false` means the install is in a mixed state and needs `install.sh`.
+        restored: bool,
     },
 }
 
@@ -587,5 +635,79 @@ mod tests {
             serde_json::from_str::<NetworkResponseEnvelope>(&json).expect("deserialize"),
             failure
         );
+    }
+
+    #[test]
+    fn apply_self_update_serializes_with_its_operation_tag() {
+        let request = NetworkRequest::ApplySelfUpdate {
+            tarball_path: PathBuf::from("/var/lib/firecrab/updates/abc/firecrab-host-x86_64-gnu.tar.gz"),
+            sha256: "a".repeat(64),
+            layout: InstallLayout {
+                bindir: PathBuf::from("/usr/local/bin"),
+                libdir: PathBuf::from("/usr/local/lib/firecrab"),
+                sharedir: PathBuf::from("/usr/local/share/firecrab"),
+            },
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["operation"], "apply_self_update");
+        assert_eq!(json["layout"]["libdir"], "/usr/local/lib/firecrab");
+        assert_eq!(
+            serde_json::from_value::<NetworkRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn install_layout_round_trips() {
+        let layout = InstallLayout {
+            bindir: PathBuf::from("/opt/fc/bin"),
+            libdir: PathBuf::from("/opt/fc/lib/firecrab"),
+            sharedir: PathBuf::from("/opt/fc/share/firecrab"),
+        };
+        let json = serde_json::to_string(&layout).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<InstallLayout>(&json).expect("deserialize"),
+            layout
+        );
+    }
+
+    #[test]
+    fn update_failures_round_trip() {
+        for failure in [
+            HelperFailure::UpdateChecksumMismatch {
+                expected: "b".repeat(64),
+                actual: "c".repeat(64),
+            },
+            HelperFailure::UpdateApplyFailed {
+                detail: "failed to apply the bundle: No space left on device".to_owned(),
+                restored: true,
+            },
+        ] {
+            let envelope = NetworkResponseEnvelope {
+                version: PROTOCOL_VERSION,
+                request_id: Uuid::nil(),
+                result: Err(failure.clone()),
+            };
+            let json = serde_json::to_value(&envelope).expect("serialize");
+            let code = json["result"]["Err"]["code"].as_str().expect("a code tag");
+            assert!(
+                code == "update_checksum_mismatch" || code == "update_apply_failed",
+                "unexpected wire code {code}"
+            );
+            assert_eq!(
+                serde_json::from_value::<NetworkResponseEnvelope>(json).expect("deserialize"),
+                envelope
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_version_is_unchanged_by_the_self_update_request() {
+        // Adding a request variant is additive: existing fields are
+        // untouched, so an older peer keeps parsing every request it already
+        // knew. Bumping this would make a freshly swapped API talk to a
+        // not-yet-restarted helper and get UnsupportedVersion for the few
+        // seconds between the swap and the restart. Do not bump.
+        assert_eq!(PROTOCOL_VERSION, 2);
     }
 }
