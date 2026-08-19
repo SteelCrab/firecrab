@@ -44,9 +44,16 @@ NoNewPrivileges=yes
 # Deliberately mild: this process shells out to nft/ip and supervises dnsmasq,
 # which inherit the namespace. ProtectSystem=strict would take /var with it and
 # break dnsmasq's lease file.
+#
+# ProtectSystem=full makes all of /usr read-only, which is exactly where a
+# self-update has to write. The four extra paths below are the install layout
+# `firecrab update --apply` replaces, plus $DATADIR so the staged bundle can be
+# read and its directory cleaned up afterwards. CapabilityBoundingSet is left
+# alone on purpose: those targets are root:root 0755 and this unit is uid 0, so
+# owner permissions already suffice and CAP_DAC_OVERRIDE stays dropped.
 ProtectHome=yes
 ProtectSystem=full
-ReadWritePaths=/run/firecrab
+ReadWritePaths=/run/firecrab @LIBDIR@ @SHAREDIR@ @PREFIX@/bin @DATADIR@
 
 [Install]
 WantedBy=multi-user.target

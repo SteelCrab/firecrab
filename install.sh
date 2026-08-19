@@ -557,7 +557,7 @@ ensure_account() {
 ensure_directories() {
     $SUDO install -d -o root -g root -m 0755 "$LIBDIR" "$SHAREDIR"
     $SUDO install -d -o "$FIRECRAB_USER" -g "$FIRECRAB_GROUP" -m 0750 \
-            "$DATADIR" "$DATADIR/data" "$DATADIR/images"
+            "$DATADIR" "$DATADIR/data" "$DATADIR/images" "$DATADIR/updates"
     $SUDO install -d -o root -g "$FIRECRAB_GROUP" -m 0750 "$CONFDIR"
     log "directories ready under $DATADIR, $CONFDIR"
 }
@@ -681,6 +681,7 @@ install_units() {
             -e "s|@SHAREDIR@|$SHAREDIR|g" \
             -e "s|@DATADIR@|$DATADIR|g" \
             -e "s|@CONFDIR@|$CONFDIR|g" \
+            -e "s|@PREFIX@|$PREFIX|g" \
             -e "s|@FIRECRAB_USER@|$FIRECRAB_USER|g" \
             -e "s|@FIRECRAB_GROUP@|$FIRECRAB_GROUP|g" \
             -e "s|@FIRECRAB_UID@|$uid|g" \

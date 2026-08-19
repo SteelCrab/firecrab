@@ -14,6 +14,10 @@ Group=@FIRECRAB_GROUP@
 WorkingDirectory=@DATADIR@
 Environment=FIRECRAB_IMAGE_ROOT=@DATADIR@/images
 Environment=FIRECRAB_STATIC_ROOT=@SHAREDIR@/dashboard
+# So `firecrab update`, spawned as a child of this service, resolves the same
+# install layout `firecrab info` reports instead of falling back to defaults.
+Environment=PREFIX=@PREFIX@
+Environment=DATADIR=@DATADIR@
 EnvironmentFile=-@CONFDIR@/api.env
 ExecStart=@LIBDIR@/firecrab-api
 Restart=on-failure
