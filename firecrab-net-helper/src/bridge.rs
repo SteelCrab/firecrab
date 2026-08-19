@@ -5,12 +5,14 @@ use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
 
-use firecrab_helper_protocol::network::micro_network_bridge_name;
+use firecrab_helper_protocol::network::{
+    MICRO_NETWORK_BRIDGE_PREFIX, TAP_PREFIX, micro_network_bridge_name,
+};
 use futures_util::TryStreamExt;
 use rtnetlink::packet_route::{
     AddressFamily,
     address::AddressAttribute,
-    link::LinkMessage,
+    link::{LinkAttribute, LinkMessage},
     route::{RouteAddress, RouteAttribute, RouteMessage},
 };
 use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
@@ -196,6 +198,71 @@ pub async fn delete_micro_network_bridge(
     }
     crate::firewall::remove_iptables_forward_for_bridge(&name).await;
     Ok(())
+}
+
+/// Deletes every Firecrab-owned network interface still on the host: the
+/// default bridge, every MicroNetwork bridge, and every VM TAP device.
+/// Matched by name prefix rather than by id — this runs from `--teardown`
+/// ahead of `install.sh --uninstall` removing the binaries, with no
+/// `firecrab-api` database to read ids from. A plain `systemctl stop`
+/// leaves all of these in place; only a host reboot clears them otherwise.
+pub async fn teardown_all(actor: &BridgeActor) -> Result<(), BridgeError> {
+    let _guard = actor.lock.lock().await;
+    let (connection, handle, _) = new_connection().map_err(BridgeError::Connection)?;
+    tokio::spawn(connection);
+
+    let mut links = handle.link().get().execute();
+    let mut seen = Vec::new();
+    while let Some(link) = links.try_next().await.map_err(BridgeError::Netlink)? {
+        seen.push((link.header.index, link.attributes));
+    }
+
+    for (index, name) in owned_links(&seen) {
+        match handle.link().del(index).execute().await {
+            Ok(()) => {}
+            Err(error) if is_enodev(&error) => {}
+            Err(error) => return Err(BridgeError::Netlink(error)),
+        }
+        if name == BRIDGE_NAME || name.starts_with(MICRO_NETWORK_BRIDGE_PREFIX) {
+            crate::firewall::remove_iptables_forward_for_bridge(&name).await;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `name` is an interface this crate creates: the default bridge, a
+/// MicroNetwork bridge, or a VM TAP device.
+fn is_owned_interface(name: &str) -> bool {
+    name == BRIDGE_NAME
+        || name.starts_with(MICRO_NETWORK_BRIDGE_PREFIX)
+        || name.starts_with(TAP_PREFIX)
+}
+
+/// A link's `IfName` attribute, if it has one.
+fn link_name(attributes: &[LinkAttribute]) -> Option<String> {
+    attributes.iter().find_map(|attribute| match attribute {
+        LinkAttribute::IfName(name) => Some(name.clone()),
+        _ => None,
+    })
+}
+
+/// Pairs each named, Firecrab-owned link with its rtnetlink index; unnamed
+/// or not-ours links are dropped. Pure so [`teardown_all`]'s host-facing
+/// listing stays a thin wrapper around this and [`link_name`].
+fn owned_links(links: &[(u32, Vec<LinkAttribute>)]) -> Vec<(u32, String)> {
+    links
+        .iter()
+        .filter_map(|(index, attributes)| {
+            let name = link_name(attributes)?;
+            is_owned_interface(&name).then_some((*index, name))
+        })
+        .collect()
+}
+
+/// Whether a link deletion failed because the link was already gone —
+/// [`teardown_all`] treats that as success rather than a race to report.
+fn is_enodev(error: &rtnetlink::Error) -> bool {
+    matches!(error, rtnetlink::Error::NetlinkError(message) if message.raw_code() == -libc::ENODEV)
 }
 
 async fn ensure_bridge_for(
@@ -569,5 +636,71 @@ mod tests {
     #[test]
     fn a_route_on_the_owned_bridge_interface_is_excluded() {
         assert!(route_belongs_to_own_bridge(Some(7), Some(7)));
+    }
+
+    #[test]
+    fn owned_interface_names_are_recognized_by_prefix() {
+        assert!(is_owned_interface(BRIDGE_NAME));
+        assert!(is_owned_interface("mnb1a2b3c4d5e6f7"));
+        assert!(is_owned_interface("fct1a2b3c4d5e6f7"));
+        assert!(!is_owned_interface("eth0"));
+        assert!(!is_owned_interface("lo"));
+        assert!(!is_owned_interface("docker0"));
+    }
+
+    #[test]
+    fn link_name_finds_ifname_among_other_attributes() {
+        assert_eq!(
+            link_name(&[
+                LinkAttribute::Mtu(1500),
+                LinkAttribute::IfName("fcbr0".to_owned()),
+            ]),
+            Some("fcbr0".to_owned())
+        );
+        assert_eq!(link_name(&[LinkAttribute::Mtu(1500)]), None);
+    }
+
+    #[test]
+    fn owned_links_pairs_indices_with_owned_names_and_drops_the_rest() {
+        let seen = vec![
+            (1, vec![LinkAttribute::IfName("eth0".to_owned())]),
+            (2, vec![LinkAttribute::IfName(BRIDGE_NAME.to_owned())]),
+            (3, vec![LinkAttribute::IfName("mnbdead".to_owned())]),
+            (4, vec![LinkAttribute::Mtu(1500)]),
+            (5, vec![LinkAttribute::IfName("fctcafe".to_owned())]),
+        ];
+        assert_eq!(
+            owned_links(&seen),
+            vec![
+                (2, BRIDGE_NAME.to_owned()),
+                (3, "mnbdead".to_owned()),
+                (5, "fctcafe".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn enodev_is_recognized_and_other_netlink_errors_are_not() {
+        // ErrorMessage is #[non_exhaustive]: build via Default, then set the
+        // one field this test cares about — its fields are still public.
+        let netlink_error = |code: i32| {
+            let mut message = rtnetlink::packet_core::ErrorMessage::default();
+            message.code = std::num::NonZeroI32::new(code);
+            rtnetlink::Error::NetlinkError(message)
+        };
+
+        assert!(is_enodev(&netlink_error(-libc::ENODEV)));
+        assert!(!is_enodev(&netlink_error(-libc::EPERM)));
+        assert!(!is_enodev(&rtnetlink::Error::RequestFailed));
+    }
+
+    #[tokio::test]
+    async fn teardown_all_is_a_no_op_when_nothing_firecrab_owns_is_present() {
+        // Read-only rtnetlink listing needs no special privilege; on a host
+        // with no fcbr0/mnb*/fct* interfaces, nothing is ever deleted, so
+        // this never reaches the point of needing CAP_NET_ADMIN (same
+        // reasoning as tap.rs's deleting_a_tap_that_was_never_created_is_a_no_op).
+        let actor = BridgeActor::new();
+        assert!(teardown_all(&actor).await.is_ok());
     }
 }
