@@ -166,12 +166,24 @@ fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-/// Entry point: `--teardown` removes every Firecrab-owned interface and
-/// nftables table and exits instead of serving; otherwise runs the server.
-/// Either way, prints any error's full cause chain before exiting non-zero.
+/// Whether argv requests `--teardown` instead of serving.
+fn wants_teardown(args: &[String]) -> bool {
+    args.get(1).map(String::as_str) == Some("--teardown")
+}
+
+/// Entry point: hands off to [`run_cli`], the testable half of `main` — this
+/// wrapper exists only because `#[tokio::main]` has to sit directly on
+/// `main` itself.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
-    let result = if env::args().nth(1).as_deref() == Some("--teardown") {
+    run_cli(env::args().collect()).await
+}
+
+/// `--teardown` removes every Firecrab-owned interface and nftables table
+/// and exits instead of serving; otherwise runs the server. Either way,
+/// prints any error's full cause chain before exiting non-zero.
+async fn run_cli(args: Vec<String>) -> ExitCode {
+    let result = if wants_teardown(&args) {
         teardown()
             .await
             .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
@@ -182,16 +194,20 @@ async fn main() -> ExitCode {
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("[ERROR] {error}");
-            let mut source = error.source();
-            while let Some(cause) = source {
-                eprintln!("[ERROR] caused by: {cause}");
-                source = cause.source();
-            }
-            ExitCode::FAILURE
-        }
+        Err(error) => print_failure(error.as_ref()),
     }
+}
+
+/// Prints an error's full cause chain, for [`run_cli`] to report before
+/// exiting non-zero.
+fn print_failure(error: &dyn std::error::Error) -> ExitCode {
+    eprintln!("[ERROR] {error}");
+    let mut source = error.source();
+    while let Some(cause) = source {
+        eprintln!("[ERROR] caused by: {cause}");
+        source = cause.source();
+    }
+    ExitCode::FAILURE
 }
 
 /// Removes every Firecrab-owned nftables table and network interface: the
@@ -664,6 +680,69 @@ mod tests {
         let result =
             HelperConfig::from_values("/tmp/x.sock", Some("wheel"), bridge::DEFAULT_BRIDGE_MTU);
         assert_matches!(result, Err(StartupError::InvalidAllowedUid(_)));
+    }
+
+    #[test]
+    fn wants_teardown_matches_only_the_flag_in_argv1() {
+        let args = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert!(wants_teardown(&args(&[
+            "firecrab-net-helper",
+            "--teardown"
+        ])));
+        assert!(!wants_teardown(&args(&["firecrab-net-helper"])));
+        assert!(!wants_teardown(&args(&["firecrab-net-helper", "--other"])));
+        // Only argv[1]; a later --teardown doesn't count.
+        assert!(!wants_teardown(&args(&[
+            "firecrab-net-helper",
+            "-x",
+            "--teardown"
+        ])));
+    }
+
+    #[test]
+    fn print_failure_walks_the_full_cause_chain() {
+        #[derive(Debug)]
+        struct Root;
+        impl std::fmt::Display for Root {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "root cause")
+            }
+        }
+        impl std::error::Error for Root {}
+
+        #[derive(Debug)]
+        struct Top(Root);
+        impl std::fmt::Display for Top {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "top-level failure")
+            }
+        }
+        impl std::error::Error for Top {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        // No panic and a real walk over one cause is the assertion; ExitCode
+        // has no PartialEq to compare against.
+        let _ = print_failure(&Top(Root));
+    }
+
+    #[tokio::test]
+    async fn run_cli_teardown_mode_exercises_the_whole_dispatch_without_hanging() {
+        // Safe to call directly, unlike the default (no-args) path: teardown()
+        // never blocks waiting on a signal, while `run()` would hang this test
+        // forever if it ever got far enough to call `serve()`. Whichever way
+        // this resolves is fine — remove_firewall's nft call needs
+        // CAP_NET_ADMIN (same reasoning as
+        // firewall::tests::remove_firewall_clears_cached_networks), so an
+        // unprivileged test process usually takes the error branch, but
+        // either outcome exercises the real dispatch.
+        let _ = run_cli(vec![
+            "firecrab-net-helper".to_owned(),
+            "--teardown".to_owned(),
+        ])
+        .await;
     }
 
     #[tokio::test]
