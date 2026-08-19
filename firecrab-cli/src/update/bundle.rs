@@ -157,16 +157,9 @@ pub fn file_sha256(path: &Path) -> Result<String, UpdateError> {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::sync::Mutex;
 
+    use super::super::ENV_LOCK;
     use super::*;
-
-    /// Serializes the tests below that read/write `FIRECRAB_LIBC`,
-    /// `FIRECRAB_RELEASE_REPO` and `FIRECRAB_RELEASE_BASE` — `std::env::set_var`
-    /// is process-wide, and `release_base`'s default reads `release_repo`'s
-    /// env var too, so without this lock these tests would race under `cargo
-    /// test`'s parallel runner (same pattern as `api_client.rs`'s `ENV_LOCK`).
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Exactly what `.github/workflows/release.yml:300`'s
     /// `(cd dist && sha256sum ./* > SHA256SUMS)` produces: every name carries

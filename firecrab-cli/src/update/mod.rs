@@ -9,6 +9,16 @@
 /// arch/libc detection, asset naming, download and SHA-256 verification.
 pub mod bundle;
 
+/// GitHub Releases lookup and version comparison.
+pub mod check;
+
+/// Serializes the tests across this module tree that read or write the real
+/// process environment (`FIRECRAB_RELEASE_API`, `FIRECRAB_RELEASE_BASE`,
+/// `PREFIX`, `FIRECRAB_LIBDIR`, `DATADIR`) — `set_var` is process-wide, so
+/// without one shared lock they race under `cargo test`'s parallel runner.
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Everything `firecrab update` can fail at, so `run_update` renders one
 /// actionable line per cause instead of a bare `Box<dyn Error>`.
 #[derive(Debug, thiserror::Error)]
