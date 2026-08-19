@@ -20,7 +20,7 @@ Entries land here as work merges, and move under the next version heading when t
 - OCI import pairs a digest-pinned MicroRegistry kernel, cached at `.oci/kernel/<arch>/` ([#145]).
 - `FIRECRAB_OCI_KERNEL_PATH` names a host copy of that kernel ([#145]).
 - [`public-docs/oci.md`](public-docs/oci.md) gains a contents table and an import architecture diagram ([#145]).
-- `firecrab-cli` workspace crate ships `firecrab doctor`/`info`/`status` ([#152]).
+- `firecrab-cli` workspace crate ships `firecrab doctor`/`info`/`status` ([#152], [#152-comment]).
 - [`public-docs/firecrab-cli.md`](public-docs/firecrab-cli.md) documents the CLI's architecture and all three subcommands ([#152]).
 
 ### Changed
@@ -176,5 +176,6 @@ network helper.
 [#151]: https://github.com/SteelCrab/firecrab/pull/153
 [#151-comment]: https://github.com/SteelCrab/firecrab/issues/151#issuecomment-5327863284
 [#152]: https://github.com/SteelCrab/firecrab/issues/152
+[#152-comment]: https://github.com/SteelCrab/firecrab/issues/152#issuecomment-5328210931
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740

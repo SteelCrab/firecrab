@@ -11,6 +11,7 @@ It diagnoses host readiness, prints resolved configuration, and reports live sta
 | [doctor](#doctor) | The 13 host-readiness checks |
 | [info](#info) | Version and resolved paths |
 | [status](#status) | Live systemd and API state |
+| [Develop](#develop) | Running the CLI from a checkout, no install |
 | [Related](#related) | Other documents |
 
 ## Architecture
@@ -101,6 +102,28 @@ firecrab status --api http://127.0.0.1:5523
 - `firecrab-api.service` / `firecrab-net-helper.service`: `systemctl is-active`, or `unknown` if `systemctl` itself cannot run.
 - `host`: `GET /api/host` — load average, memory, disk, and uptime — or `null` with `hostError` set if the API is unreachable or answers an error.
 - Base URL resolution is the same as `info`: `--api`, then `FIRECRAB_API`, then `http://127.0.0.1:5523`.
+
+## Develop
+
+No install needed — run the built binary straight from the workspace target directory.
+
+```sh
+# Terminal 1 — build once, or after every change
+cargo build -p firecrab-cli
+
+# Terminal 2 — doctor/info read this host directly, no API needed
+./target/debug/firecrab doctor
+./target/debug/firecrab info
+
+# status needs a running API — point it at a dev instance
+# (see "Develop from source" in CONTRIBUTING.md for Terminals 1-3 of firecrab-api itself)
+./target/debug/firecrab status --api http://127.0.0.1:5523
+```
+
+- `cargo run -p firecrab-cli -- doctor` works too; `cargo build` first is only for repeat runs without a rebuild each time.
+- Unit tests (`FakeCommandRunner`, no real host state touched): `cargo test -p firecrab-cli`.
+- `doctor`'s checks always read the real host it runs on — there is no way to point them at another machine or a fixture host.
+- More on running `firecrab-api`/`firecrab-net-helper`/the dashboard together: [CONTRIBUTING.md](../CONTRIBUTING.md#develop-from-source).
 
 ## Related
 
