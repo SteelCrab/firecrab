@@ -7,7 +7,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 | Version | Date | Work |
 | --- | --- | --- |
-| [Unreleased](#unreleased) | — | [#145], [#147], [#151], [#152] |
+| [Unreleased](#unreleased) | — | [#145], [#147], [#151], [#152], [#158] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
 
@@ -43,6 +43,9 @@ Entries land here as work merges, and move under the next version heading when t
 ### Fixed
 
 - A kernel download from a registry that stops answering times out ([#145]).
+- `install.sh`'s API-readiness poll no longer prints a `curl: (7) Failed to
+  connect` line on every retry before `firecrab-api` finishes binding its
+  listener ([#158]).
 
 ## [0.1.1] - 2026-08-17
 
@@ -177,5 +180,6 @@ network helper.
 [#151-comment]: https://github.com/SteelCrab/firecrab/issues/151#issuecomment-5327863284
 [#152]: https://github.com/SteelCrab/firecrab/issues/152
 [#152-comment]: https://github.com/SteelCrab/firecrab/issues/152#issuecomment-5328210931
+[#158]: https://github.com/SteelCrab/firecrab/issues/158
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
