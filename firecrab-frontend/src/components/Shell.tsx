@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { VIEWS, viewLabel } from "../navigation";
 import type { ViewId } from "../navigation";
 import NavIcon, { type NavIconId } from "./NavIcons";
+import UpdateIndicator from "./UpdateIndicator";
 import { useI18n } from "../i18n";
 
 interface ShellProps {
@@ -74,6 +75,7 @@ export default function Shell({ view, onSelectView, children }: ShellProps) {
               );
             })}
           </ul>
+          <UpdateIndicator />
         </nav>
         <main className="shell-content">{children}</main>
       </div>

@@ -26,7 +26,9 @@ import type {
   ShellRevisionResponse,
   StorageDeviceResponse,
   StorageRootResponse,
+  UpdateCheckResponse,
   UpdateMicroNetworkRequest,
+  UpdateStartResponse,
   UpdateVmShellsRequest,
   UpdateVmPortForwardsRequest,
   UpdateVmResourcesRequest,
@@ -138,6 +140,16 @@ export function getNetworkInfo(): Promise<NetworkInfoResponse> {
 
 export function getHostStatus(): Promise<HostStatusResponse> {
   return fetchJson("/api/host");
+}
+
+/** Newest release vs. this build (`GET /api/update`), cached 30 minutes by the API. */
+export function getUpdateCheck(): Promise<UpdateCheckResponse> {
+  return fetchJson("/api/update");
+}
+
+/** Launch the detached updater (`POST /api/update`); answers 202 immediately. */
+export function startUpdate(): Promise<UpdateStartResponse> {
+  return fetchJson("/api/update", { method: "POST" });
 }
 
 /** Template registry aliases available for create (`GET /api/images`). */
