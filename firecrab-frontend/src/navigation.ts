@@ -2,24 +2,20 @@ import { useCallback, useEffect, useState } from "react";
 import type { Locale } from "./i18n";
 
 /**
- * Dashboard destinations. `glyph` is the text rail mark; optional `icon`
- * is a small image (e.g. Shell repository bash cube) shown instead.
+ * Dashboard destinations. Rendered as a `NavIcon` (see `NavIcons.tsx`) in the
+ * rail, except `shells`, whose `icon` is a small image (the Shell repository
+ * bash cube) shown instead.
  *
  * Kept out of `components/Shell.tsx` so that file exports only its component
  * — mixing constants and hooks in there breaks Vite's fast refresh.
  */
 export const VIEWS = [
-  { id: "vms", labels: { en: "MicroVM", ko: "MicroVM" }, glyph: "▣" },
-  { id: "networks", labels: { en: "Networks", ko: "네트워크" }, glyph: "◇" },
-  { id: "storages", labels: { en: "Storage", ko: "스토리지" }, glyph: "▤" },
-  { id: "images", labels: { en: "Images", ko: "이미지" }, glyph: "◈" },
-  {
-    id: "shells",
-    labels: { en: "Shells", ko: "Shell" },
-    glyph: "$",
-    icon: "/bash.png",
-  },
-  { id: "host", labels: { en: "Host", ko: "호스트" }, glyph: "◉" },
+  { id: "vms", labels: { en: "MicroVM", ko: "MicroVM" } },
+  { id: "networks", labels: { en: "Networks", ko: "네트워크" } },
+  { id: "storages", labels: { en: "Storage", ko: "스토리지" } },
+  { id: "images", labels: { en: "Images", ko: "이미지" } },
+  { id: "shells", labels: { en: "Shells", ko: "Shell" }, icon: "/bash.png" },
+  { id: "host", labels: { en: "Host", ko: "호스트" } },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];

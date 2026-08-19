@@ -122,7 +122,6 @@ body {
   background: rgba(196, 62, 18, 0.08);
   color: var(--ember);
 }
-.shell-nav-glyph { font-size: 0.9rem; line-height: 1; }
 .shell-nav-icon {
   width: 1.15rem;
   height: 1.15rem;
