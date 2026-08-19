@@ -156,7 +156,17 @@ pub fn file_sha256(path: &Path) -> Result<String, UpdateError> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::sync::Mutex;
+
     use super::*;
+
+    /// Serializes the tests below that read/write `FIRECRAB_LIBC`,
+    /// `FIRECRAB_RELEASE_REPO` and `FIRECRAB_RELEASE_BASE` — `std::env::set_var`
+    /// is process-wide, and `release_base`'s default reads `release_repo`'s
+    /// env var too, so without this lock these tests would race under `cargo
+    /// test`'s parallel runner (same pattern as `api_client.rs`'s `ENV_LOCK`).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Exactly what `.github/workflows/release.yml:300`'s
     /// `(cd dist && sha256sum ./* > SHA256SUMS)` produces: every name carries
@@ -176,6 +186,48 @@ d6a32738d876fc3bd42d42560afaacb6e1e2674434a5f514f89a491eed292c6b  ./install.sh
     }
 
     #[test]
+    fn release_repo_defaults_to_steelcrab_firecrab() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — see the note on its declaration.
+        unsafe { std::env::remove_var("FIRECRAB_RELEASE_REPO") };
+        assert_eq!(release_repo(), DEFAULT_RELEASE_REPO);
+    }
+
+    #[test]
+    fn release_repo_reads_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — see the note on its declaration.
+        unsafe { std::env::set_var("FIRECRAB_RELEASE_REPO", "acme/fork") };
+        let result = release_repo();
+        unsafe { std::env::remove_var("FIRECRAB_RELEASE_REPO") };
+        assert_eq!(result, "acme/fork");
+    }
+
+    #[test]
+    fn release_base_defaults_to_github_releases_for_release_repo() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — see the note on its declaration.
+        // Both vars matter here: an unrelated FIRECRAB_RELEASE_REPO left set
+        // would change the default this derives.
+        unsafe { std::env::remove_var("FIRECRAB_RELEASE_BASE") };
+        unsafe { std::env::remove_var("FIRECRAB_RELEASE_REPO") };
+        assert_eq!(
+            release_base(),
+            "https://github.com/SteelCrab/firecrab/releases"
+        );
+    }
+
+    #[test]
+    fn release_base_reads_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — see the note on its declaration.
+        unsafe { std::env::set_var("FIRECRAB_RELEASE_BASE", "https://example.test/releases") };
+        let result = release_base();
+        unsafe { std::env::remove_var("FIRECRAB_RELEASE_BASE") };
+        assert_eq!(result, "https://example.test/releases");
+    }
+
+    #[test]
     fn normalize_libc_rejects_unknown_values() {
         assert_eq!(normalize_libc("gnu").unwrap(), "gnu");
         assert_eq!(normalize_libc("glibc").unwrap(), "gnu");
@@ -186,6 +238,39 @@ d6a32738d876fc3bd42d42560afaacb6e1e2674434a5f514f89a491eed292c6b  ./install.sh
                 "{bad} should not be accepted"
             );
         }
+    }
+
+    #[test]
+    fn host_libc_override_wins_regardless_of_env() {
+        // The override branch returns before ever reading FIRECRAB_LIBC, so
+        // this needs no ENV_LOCK: it can't race with the env-touching tests
+        // below no matter what value they leave behind.
+        assert_eq!(host_libc(Some("musl")).unwrap(), "musl");
+        // normalize_libc's aliasing applies here too.
+        assert_eq!(host_libc(Some("glibc")).unwrap(), "gnu");
+    }
+
+    #[test]
+    fn host_libc_reads_env_var_when_no_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — see the note on its declaration.
+        unsafe { std::env::set_var("FIRECRAB_LIBC", "musl") };
+        let result = host_libc(None);
+        unsafe { std::env::remove_var("FIRECRAB_LIBC") };
+        assert_eq!(result.unwrap(), "musl");
+    }
+
+    #[test]
+    fn host_libc_falls_back_to_compile_target_when_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: serialized by ENV_LOCK — see the note on its declaration.
+        unsafe { std::env::remove_var("FIRECRAB_LIBC") };
+        let expected = if cfg!(target_env = "musl") {
+            "musl"
+        } else {
+            "gnu"
+        };
+        assert_eq!(host_libc(None).unwrap(), expected);
     }
 
     #[test]
@@ -270,5 +355,44 @@ d6a32738d876fc3bd42d42560afaacb6e1e2674434a5f514f89a491eed292c6b  ./install.sh
             !dest.exists(),
             "a failed download must not leave a partial file"
         );
+    }
+
+    /// Minimal one-shot HTTP/1.1 listener: accepts a single connection,
+    /// discards whatever it read, then writes a fixed 200 response carrying
+    /// `body`. `firecrab-cli` has no async runtime (`download_to` is
+    /// `reqwest::blocking`-only), so this uses plain `std::net` rather than
+    /// pulling in axum/tokio just for one test — reqwest only needs a peer
+    /// that speaks HTTP, not a real server.
+    fn serve_once(body: &'static [u8]) -> (String, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept test connection");
+            // Drain the request so the client isn't left waiting on us to
+            // read before we respond; the request itself is never parsed.
+            let mut buf = [0_u8; 1024];
+            let _ = stream.read(&mut buf);
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            stream
+                .write_all(header.as_bytes())
+                .expect("write response header");
+            stream.write_all(body).expect("write response body");
+            stream.flush().expect("flush response");
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[test]
+    fn download_to_writes_the_response_body_to_dest() {
+        let body: &[u8] = b"firecrab-bundle-bytes";
+        let (base, handle) = serve_once(body);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("bundle.tar.gz");
+        download_to(&format!("{base}/bundle.tar.gz"), &dest).expect("download succeeds");
+        assert_eq!(std::fs::read(&dest).expect("read downloaded file"), body);
+        handle.join().expect("server thread panicked");
     }
 }
