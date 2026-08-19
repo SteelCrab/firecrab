@@ -93,7 +93,7 @@ DATADIR=/srv/firecrab PREFIX=/opt ./install.sh
 
 ```sh
 systemctl status firecrab-net-helper firecrab-api
-firecrab-doctor
+firecrab doctor
 curl -s http://127.0.0.1:5523/api/vms
 curl -s http://127.0.0.1:5523/api/micro-networks
 ```
@@ -110,6 +110,7 @@ The installer keeps the database, VM disks, and `api.env`.
 ## Related
 
 - [Operations](operations.md)
+- [firecrab CLI](firecrab-cli.md)
 - [Networking](networking.md)
 - [Images](images.md)
 - [Troubleshooting](troubleshooting.md)

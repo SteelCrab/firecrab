@@ -52,7 +52,6 @@ PAYLOAD_ROOT=
 PAYLOAD_BIN=
 PAYLOAD_UNITS=
 PAYLOAD_EXTRACT=
-PAYLOAD_DOCTOR=
 PAYLOAD_DASHBOARD=
 
 # BEGIN RELEASE_HELPERS
@@ -131,7 +130,7 @@ else
     SUDO="sudo"
 fi
 
-# Extra args after --doctor are forwarded to scripts/firecrab-doctor.sh.
+# Extra args after --doctor are forwarded to `firecrab doctor`.
 DOCTOR_ARGS=()
 
 while [ $# -gt 0 ]; do
@@ -436,7 +435,7 @@ download_host_bundle() {
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$PAYLOAD_TMP/$tarball"; then
         die "failed to download $url
 Tag a GitHub Release, or install local binaries:
-  cargo build --release -p firecrab-api -p firecrab-net-helper
+  cargo build --release -p firecrab-api -p firecrab-net-helper -p firecrab-cli
   ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist"
     fi
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$sums_url" -o "$PAYLOAD_TMP/SHA256SUMS"; then
@@ -448,7 +447,7 @@ Tag a GitHub Release, or install local binaries:
     tar -xzf "$PAYLOAD_TMP/$tarball" -C "$PAYLOAD_TMP/root"
     PAYLOAD_ROOT=$PAYLOAD_TMP/root
     local name
-    for name in firecrab-api firecrab-net-helper; do
+    for name in firecrab-api firecrab-net-helper firecrab; do
         [ -x "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing $name"
         firecrab_assert_binary_arch "$PAYLOAD_ROOT/$name" "$arch" \
             || die "$tarball: $name is not a $arch binary"
@@ -464,7 +463,6 @@ resolve_payload() {
         PAYLOAD_BIN=$BIN_DIR
         PAYLOAD_UNITS=$REPO_ROOT/packaging/systemd
         PAYLOAD_EXTRACT=$REPO_ROOT/scripts/firecracker-menual
-        PAYLOAD_DOCTOR=$REPO_ROOT/scripts/firecrab-doctor.sh
         if [ -n "$DASHBOARD_DIR" ]; then
             PAYLOAD_DASHBOARD=$DASHBOARD_DIR
         elif [ -f "$REPO_ROOT/firecrab-frontend/dist/index.html" ]; then
@@ -479,7 +477,6 @@ resolve_payload() {
     PAYLOAD_BIN=$PAYLOAD_ROOT
     PAYLOAD_UNITS=$PAYLOAD_ROOT/systemd
     PAYLOAD_EXTRACT=$PAYLOAD_ROOT
-    PAYLOAD_DOCTOR=$PAYLOAD_ROOT/firecrab-doctor.sh
     PAYLOAD_DASHBOARD=$PAYLOAD_ROOT/dashboard
 }
 
@@ -492,7 +489,7 @@ report_payload() {
             return 1
         fi
         local name gaps=0
-        for name in firecrab-api firecrab-net-helper; do
+        for name in firecrab-api firecrab-net-helper firecrab; do
             if [ -x "$BIN_DIR/$name" ]; then
                 log "  $name"
             else
@@ -587,11 +584,16 @@ install_binaries() {
         $SUDO install -o root -g root -m 0755 \
             "$PAYLOAD_EXTRACT/$helper" "$LIBDIR/$helper"
     done
-    [ -f "$PAYLOAD_DOCTOR" ] || die "missing $PAYLOAD_DOCTOR"
-    $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
-    $SUDO install -o root -g root -m 0755 "$PAYLOAD_DOCTOR" \
-        "$PREFIX/bin/firecrab-doctor"
-    log "binaries installed to $LIBDIR (doctor → $PREFIX/bin/firecrab-doctor)"
+    local cli_src
+    cli_src=$(firecrab_resolve_binary "firecrab" "$PAYLOAD_BIN" "$PREFIX/bin") \
+        || die "no firecrab (CLI) in ${PAYLOAD_BIN:-<release>} or $PREFIX/bin — pass it via --bin-dir or install a release"
+    if [ "$cli_src" -ef "$PREFIX/bin/firecrab" ]; then
+        log "keeping existing $PREFIX/bin/firecrab"
+    else
+        $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
+        $SUDO install -o root -g root -m 0755 "$cli_src" "$PREFIX/bin/firecrab"
+    fi
+    log "binaries installed to $LIBDIR (cli → $PREFIX/bin/firecrab)"
 
     [ "$WITH_FRONTEND" -eq 1 ] || return 0
     if [ -n "$PAYLOAD_DASHBOARD" ] && [ -f "$PAYLOAD_DASHBOARD/index.html" ]; then
@@ -762,19 +764,21 @@ do_check() {
     return 0
 }
 
-# Runtime host diagnostics — delegates to scripts/firecrab-doctor.sh (no root).
+# Runtime host diagnostics — delegates to `firecrab doctor` (no root).
 do_doctor() {
-    local doctor
-    if [ -x "$REPO_ROOT/scripts/firecrab-doctor.sh" ]; then
-        doctor=$REPO_ROOT/scripts/firecrab-doctor.sh
-    elif have firecrab-doctor; then
-        doctor=$(command -v firecrab-doctor)
+    local cli
+    if have firecrab; then
+        cli=firecrab
+    elif [ -x "$REPO_ROOT/target/release/firecrab" ]; then
+        cli=$REPO_ROOT/target/release/firecrab
+    elif [ -x "$REPO_ROOT/target/debug/firecrab" ]; then
+        cli=$REPO_ROOT/target/debug/firecrab
     else
-        die "missing firecrab-doctor (run from a checkout, or install first)"
+        die "missing firecrab CLI (run 'cargo build -p firecrab-cli', or install first)"
     fi
     # Pass DATADIR through so the doctor matches this install layout.
     DATADIR="$DATADIR" FIRECRAB_API_USER="$FIRECRAB_USER" \
-        exec "$doctor" "${DOCTOR_ARGS[@]}"
+        exec "$cli" doctor "${DOCTOR_ARGS[@]}"
 }
 
 # Installs what firecrab needs and stops there — no account, directories, units
@@ -855,7 +859,7 @@ do_uninstall() {
     log "units removed"
 
     $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
-    $SUDO rm -f "$PREFIX/bin/firecrab-doctor"
+    $SUDO rm -f "$PREFIX/bin/firecrab"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true
     # The file-context rule outlives the directory, so leaving it behind would

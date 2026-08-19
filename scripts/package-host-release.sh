@@ -24,12 +24,17 @@ esac
 
 [ -x "$bin_dir/firecrab-api" ] || { printf 'missing %s\n' "$bin_dir/firecrab-api" >&2; exit 1; }
 [ -x "$bin_dir/firecrab-net-helper" ] || { printf 'missing %s\n' "$bin_dir/firecrab-net-helper" >&2; exit 1; }
+[ -x "$bin_dir/firecrab" ] || { printf 'missing %s\n' "$bin_dir/firecrab" >&2; exit 1; }
 if ! firecrab_assert_binary_arch "$bin_dir/firecrab-api" "$arch"; then
     printf '%s is not a %s ELF (wrong architecture)\n' "$bin_dir/firecrab-api" "$arch" >&2
     exit 1
 fi
 if ! firecrab_assert_binary_arch "$bin_dir/firecrab-net-helper" "$arch"; then
     printf '%s is not a %s ELF (wrong architecture)\n' "$bin_dir/firecrab-net-helper" "$arch" >&2
+    exit 1
+fi
+if ! firecrab_assert_binary_arch "$bin_dir/firecrab" "$arch"; then
+    printf '%s is not a %s ELF (wrong architecture)\n' "$bin_dir/firecrab" "$arch" >&2
     exit 1
 fi
 [ -f "$dashboard_dir/index.html" ] || { printf 'missing %s/index.html\n' "$dashboard_dir" >&2; exit 1; }
@@ -40,14 +45,14 @@ mkdir -p "$stage/systemd" "$stage/dashboard"
 
 install -m 0755 "$bin_dir/firecrab-api" "$stage/firecrab-api"
 install -m 0755 "$bin_dir/firecrab-net-helper" "$stage/firecrab-net-helper"
+install -m 0755 "$bin_dir/firecrab" "$stage/firecrab"
 install -m 0755 "$root/scripts/firecracker-menual/extract-vmlinux" "$stage/extract-vmlinux"
 install -m 0755 "$root/scripts/firecracker-menual/extract-arm64-image" "$stage/extract-arm64-image"
-install -m 0755 "$root/scripts/firecrab-doctor.sh" "$stage/firecrab-doctor.sh"
 cp "$root/packaging/systemd/"*.service "$stage/systemd/"
 cp -a "$dashboard_dir/." "$stage/dashboard/"
 
 mkdir -p "$(dirname -- "$output")"
 tar -C "$stage" -czf "$output" \
     firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image \
-    firecrab-doctor.sh systemd dashboard
+    firecrab systemd dashboard
 printf '%s\n' "$output"

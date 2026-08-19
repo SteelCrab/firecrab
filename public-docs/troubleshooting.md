@@ -5,7 +5,7 @@ Start with the read-only host doctor.
 ```sh
 ./install.sh --doctor
 ```
-Use `firecrab-doctor` on an installed host.
+Use `firecrab doctor` on an installed host.
 
 ## Basic status
 
@@ -105,7 +105,7 @@ sudo nft list table inet firecrab
 
 `401` is a bad login; `429` is the spent anonymous quota — save a token, see [OCI](oci.md).
 `Permission denied (os error 13)` is this host refusing `connect(2)`, not the network.
-`sudo firecrab-doctor` tests egress as the API account and names the layer; usually SELinux, below.
+`sudo firecrab doctor` tests egress as the API account and names the layer; usually SELinux, below.
 
 ## SELinux confines the services to `init_t`
 
@@ -164,6 +164,7 @@ Use the response `requestId` to find the server log.
 ## Related
 
 - [API](api.md)
+- [firecrab CLI](firecrab-cli.md)
 - [Networking](networking.md)
 - [Storage](storage.md)
 - [Images](images.md)

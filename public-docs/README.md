@@ -20,6 +20,7 @@ Every page covers one topic.
 | Components and data flow | [Architecture](architecture.md) |
 | Terms and resource model | [Core concepts](concepts.md) |
 | Host setup | [Installation](installation.md) |
+| Headless host CLI | [firecrab CLI](firecrab-cli.md) |
 | Browser UI | [Dashboard](dashboard.md) |
 | REST and WebSocket endpoints | [API](api.md) |
 | Bridges, DHCP, NAT, and policy | [Networking](networking.md) |

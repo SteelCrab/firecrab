@@ -7,7 +7,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 | Version | Date | Work |
 | --- | --- | --- |
-| [Unreleased](#unreleased) | — | [#145], [#147], [#151] |
+| [Unreleased](#unreleased) | — | [#145], [#147], [#151], [#152] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
 
@@ -20,6 +20,8 @@ Entries land here as work merges, and move under the next version heading when t
 - OCI import pairs a digest-pinned MicroRegistry kernel, cached at `.oci/kernel/<arch>/` ([#145]).
 - `FIRECRAB_OCI_KERNEL_PATH` names a host copy of that kernel ([#145]).
 - [`public-docs/oci.md`](public-docs/oci.md) gains a contents table and an import architecture diagram ([#145]).
+- `firecrab-cli` workspace crate ships `firecrab doctor`/`info`/`status` ([#152]).
+- [`public-docs/firecrab-cli.md`](public-docs/firecrab-cli.md) documents the CLI's architecture and all three subcommands ([#152]).
 
 ### Changed
 
@@ -36,6 +38,7 @@ Entries land here as work merges, and move under the next version heading when t
   ([#151], [#151-comment]).
 - CI's `vm-boot`/`vm-boot-self-hosted` import Ubuntu/Rocky via OCI import instead of the
   removed `install.sh` flags ([#151]).
+- `scripts/firecrab-doctor.sh` and the `firecrab-doctor` binary alias are removed; use `firecrab doctor` ([#152]).
 
 ### Fixed
 
@@ -172,5 +175,6 @@ network helper.
 [#147-comment]: https://github.com/SteelCrab/firecrab/issues/147#issuecomment-5327667852
 [#151]: https://github.com/SteelCrab/firecrab/pull/153
 [#151-comment]: https://github.com/SteelCrab/firecrab/issues/151#issuecomment-5327863284
+[#152]: https://github.com/SteelCrab/firecrab/issues/152
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
