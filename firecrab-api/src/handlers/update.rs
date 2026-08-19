@@ -36,9 +36,9 @@ const CACHE_TTL: Duration = Duration::from_secs(30 * 60);
 /// Upper bound on the child check, so a wedged CLI cannot hold the handler.
 const CHECK_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// `FIRECRAB_CLI_BIN`, then `PATH`, then `{PREFIX}/bin/firecrab` — the same
-/// fallback chain `install.sh`'s `do_doctor()` walks. systemd's default `PATH`
-/// includes `/usr/local/bin`, so the middle step normally wins.
+/// `FIRECRAB_CLI_BIN` for an explicit override, then a `$PATH` search
+/// (systemd's default `PATH` includes `/usr/local/bin`, so this normally wins
+/// on an installed host), then `{PREFIX}/bin/firecrab` as a last resort.
 fn resolve_cli_binary() -> PathBuf {
     resolve_cli_binary_from(
         std::env::var_os("FIRECRAB_CLI_BIN"),
@@ -94,14 +94,24 @@ fn fallback_report(error: String) -> UpdateCheckResponse {
 ///
 /// Never fails: an unusable child becomes a report with `error` filled in, so
 /// one side widget on the dashboard can never turn into a 500.
-async fn run_check_command(cli: &Path) -> UpdateCheckResponse {
+///
+/// `kill_on_drop(true)` matters here: on the timeout branch below, the
+/// in-flight `output()` future — and the `Child` it owns — is dropped without
+/// ever being awaited to completion. Tokio's `Child` does not kill its
+/// process on drop unless this is set, so without it a `firecrab` that stalls
+/// past `timeout` (e.g. GitHub not answering) would keep running as an
+/// orphan; because a failed check is deliberately never cached
+/// ([`cached_check`]), every subsequent poll during an outage would leak
+/// another one.
+async fn run_check_command(cli: &Path, timeout: Duration) -> UpdateCheckResponse {
     let child = Command::new(cli)
         .args(["update", "--check", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .output();
-    let output = match tokio::time::timeout(CHECK_TIMEOUT, child).await {
+    let output = match tokio::time::timeout(timeout, child).await {
         Err(_) => return fallback_report(format!("{} did not answer in time", cli.display())),
         Ok(Err(error)) => return fallback_report(format!("cannot run {}: {error}", cli.display())),
         Ok(Ok(output)) => output,
@@ -122,7 +132,7 @@ async fn cached_check(state: &AppState, cli: &Path) -> UpdateCheckResponse {
     {
         return report.clone();
     }
-    let report = run_check_command(cli).await;
+    let report = run_check_command(cli, CHECK_TIMEOUT).await;
     if report.error.is_none() {
         *slot = Some((Instant::now(), report.clone()));
     }
@@ -296,6 +306,65 @@ mod tests {
             report.error.is_some(),
             "unparsable stdout must surface as an error field"
         );
+    }
+
+    /// Waits (bounded) for `pidfile` to contain a pid, so the test only
+    /// starts asserting the child is dead once it has proof the child ever
+    /// actually started — otherwise a too-early check would pass vacuously.
+    async fn wait_for_pid(pidfile: &std::path::Path) -> u32 {
+        for _ in 0..100 {
+            if let Ok(text) = fs::read_to_string(pidfile)
+                && let Ok(pid) = text.trim().parse()
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("stub never wrote its pid to {}", pidfile.display());
+    }
+
+    /// Whether `pid` is still running (as opposed to gone or a zombie
+    /// awaiting reap) per `/proc/<pid>/stat`'s state field. Zombie counts as
+    /// "not running": `kill_on_drop` only promises the signal was sent, not
+    /// that tokio's background reaper won on this exact tick.
+    fn process_is_running(pid: u32) -> bool {
+        match fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .is_some_and(|state| state != "Z"),
+            Err(_) => false,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_check_kills_the_child_instead_of_leaving_an_orphan() {
+        let dir = tempdir().unwrap();
+        let pidfile = dir.path().join("pid");
+        let path = dir.path().join("hanger");
+        // `exec`s into `sleep` so the recorded pid is the long-running
+        // process itself, not a shell that later forks it.
+        fs::write(
+            &path,
+            format!("#!/bin/sh\necho $$ > {}\nexec sleep 5\n", pidfile.display()),
+        )
+        .expect("write stub");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+
+        let report = run_check_command(&path, Duration::from_millis(100)).await;
+        assert!(
+            report.error.is_some(),
+            "a stalled child must surface as an error rather than hang the handler"
+        );
+
+        let pid = wait_for_pid(&pidfile).await;
+        for _ in 0..100 {
+            if !process_is_running(pid) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("child pid {pid} is still running 2s after the timeout; kill_on_drop did not fire");
     }
 
     #[tokio::test]
