@@ -34,7 +34,12 @@ use firecrab_helper_protocol::network::{
     HelperFailure, MicroNetworkSpec, NetworkRequest, NetworkRequestEnvelope,
     NetworkResponseEnvelope, VmPolicySpec,
 };
+// Only referenced by the ApplySelfUpdate dispatch tests below (dispatch
+// itself just destructures and forwards the field, never naming the type).
+#[cfg(test)]
+use firecrab_helper_protocol::network::InstallLayout;
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -316,6 +321,17 @@ async fn serve(
     }
 }
 
+/// What the connection loop must do *after* the response frame is flushed.
+/// Returned by [`dispatch`] rather than performed inside it, so a request that
+/// restarts this very process cannot run before its answer is on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterResponse {
+    /// Normal: keep serving requests on this connection.
+    Continue,
+    /// A self-update was applied; restart both units as the last action.
+    RestartUnits,
+}
+
 /// Serves requests on one accepted connection until it errors, times out, or
 /// a version-mismatch response is sent.
 async fn handle_connection(stream: UnixStream, config: Arc<HelperConfig>) {
@@ -335,22 +351,34 @@ async fn handle_connection(stream: UnixStream, config: Arc<HelperConfig>) {
                 Ok(Err(_)) | Err(_) => return,
             };
 
-        let response = respond_to(envelope, &config).await;
+        let (response, after) = respond_to(envelope, &config).await;
         let version_rejected = matches!(
             response.result,
             Err(HelperFailure::UnsupportedVersion { .. })
         );
-        if write_frame(&mut writer, &response).await.is_err() || version_rejected {
+        let wrote = write_frame(&mut writer, &response).await.is_ok();
+        if after == AfterResponse::RestartUnits {
+            // Best-effort clean FIN so the CLI sees the frame end before we go
+            // away. The restart runs even when `wrote` is false: the binaries
+            // are already swapped, and skipping it would leave the old process
+            // running on top of the new files.
+            let _ = writer.shutdown().await;
+            self_update::restart_units().await;
+            return;
+        }
+        if !wrote || version_rejected {
             return;
         }
     }
 }
 
-/// Validates the envelope's protocol version, then dispatches its request.
+/// Validates the envelope's protocol version, then dispatches its request,
+/// returning both the answer and whatever the loop must do once that answer is
+/// on the wire.
 async fn respond_to(
     envelope: NetworkRequestEnvelope,
     config: &HelperConfig,
-) -> NetworkResponseEnvelope {
+) -> (NetworkResponseEnvelope, AfterResponse) {
     let result = if envelope.version == PROTOCOL_VERSION {
         dispatch(envelope.request, config).await
     } else {
@@ -358,11 +386,18 @@ async fn respond_to(
             supported: PROTOCOL_VERSION,
         })
     };
-    NetworkResponseEnvelope {
-        version: PROTOCOL_VERSION,
-        request_id: envelope.request_id,
-        result,
-    }
+    let after = match &result {
+        Ok(after) => *after,
+        Err(_) => AfterResponse::Continue,
+    };
+    (
+        NetworkResponseEnvelope {
+            version: PROTOCOL_VERSION,
+            request_id: envelope.request_id,
+            result: result.map(|_| ()),
+        },
+        after,
+    )
 }
 
 /// Sanity bound on a prefix length that ultimately comes from user input (a
@@ -497,11 +532,16 @@ fn validate_vm_policies(
     Ok(policies)
 }
 
-/// Routes a validated request to the matching bridge/firewall operation.
-async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), HelperFailure> {
+/// Routes a validated request to the matching bridge/firewall operation, and
+/// reports what the connection loop must do once the answer is written.
+async fn dispatch(
+    request: NetworkRequest,
+    config: &HelperConfig,
+) -> Result<AfterResponse, HelperFailure> {
     match request {
         NetworkRequest::EnsureBridge => bridge::ensure_bridge(&config.bridge, config.bridge_mtu)
             .await
+            .map(|()| AfterResponse::Continue)
             .map_err(|error| HelperFailure::Internal {
                 detail: error_chain(&error),
             }),
@@ -526,6 +566,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                 config.bridge_mtu,
             )
             .await
+            .map(|()| AfterResponse::Continue)
             .map_err(|error| HelperFailure::Internal {
                 detail: error_chain(&error),
             })
@@ -533,6 +574,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
         NetworkRequest::RemoveMicroNetworkBridge { micro_network_id } => {
             bridge::delete_micro_network_bridge(&config.bridge, micro_network_id)
                 .await
+                .map(|()| AfterResponse::Continue)
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),
                 })
@@ -546,6 +588,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
             let vm_policies = validate_vm_policies(vm_policies)?;
             firewall::ensure_firewall(&config.firewall, &micro_networks, &vm_policies)
                 .await
+                .map(|()| AfterResponse::Continue)
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),
                 })
@@ -576,6 +619,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
             };
             firewall::apply_vm_policy(&config.firewall, policy)
                 .await
+                .map(|()| AfterResponse::Continue)
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),
                 })
@@ -583,6 +627,7 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
         NetworkRequest::RemoveVmPolicy { vm_id } => {
             firewall::remove_vm_policy(&config.firewall, vm_id)
                 .await
+                .map(|()| AfterResponse::Continue)
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),
                 })
@@ -592,16 +637,16 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
             micro_network_id,
         } => tap::create_tap(vm_id, micro_network_id)
             .await
+            .map(|()| AfterResponse::Continue)
             .map_err(|error| HelperFailure::Internal {
                 detail: error_chain(&error),
             }),
-        NetworkRequest::DeleteTap { vm_id } => {
-            tap::delete_tap(vm_id)
-                .await
-                .map_err(|error| HelperFailure::Internal {
-                    detail: error_chain(&error),
-                })
-        }
+        NetworkRequest::DeleteTap { vm_id } => tap::delete_tap(vm_id)
+            .await
+            .map(|()| AfterResponse::Continue)
+            .map_err(|error| HelperFailure::Internal {
+                detail: error_chain(&error),
+            }),
         NetworkRequest::SyncDhcpLeases {
             revision,
             leases,
@@ -610,13 +655,35 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
             validate_micro_networks(&micro_networks)?;
             dhcp::sync_dhcp_leases(&config.dhcp, revision, &leases, &micro_networks)
                 .await
+                .map(|()| AfterResponse::Continue)
                 .map_err(|error| HelperFailure::Internal {
                     detail: error_chain(&error),
                 })
         }
-        // Wired up in a follow-on task: `self_update::apply_bundle` exists
-        // and is fully unit-tested, but nothing here calls it yet.
-        NetworkRequest::ApplySelfUpdate { .. } => Err(HelperFailure::UnsupportedOperation),
+        NetworkRequest::ApplySelfUpdate {
+            tarball_path,
+            sha256,
+            layout,
+        } => self_update::apply_bundle(&layout, &tarball_path, &sha256)
+            .await
+            .map(|()| AfterResponse::RestartUnits)
+            .map_err(|error| {
+                let chain = error_chain(&error);
+                match error {
+                    self_update::SelfUpdateError::Invalid(detail) => {
+                        HelperFailure::InvalidRequest { detail }
+                    }
+                    self_update::SelfUpdateError::Checksum { expected, actual } => {
+                        HelperFailure::UpdateChecksumMismatch { expected, actual }
+                    }
+                    self_update::SelfUpdateError::Apply { restored, .. } => {
+                        HelperFailure::UpdateApplyFailed {
+                            detail: chain,
+                            restored,
+                        }
+                    }
+                }
+            }),
     }
 }
 
@@ -760,7 +827,10 @@ mod tests {
         let request = NetworkRequest::DeleteTap {
             vm_id: Uuid::new_v4(),
         };
-        assert_eq!(dispatch(request, &config).await, Ok(()));
+        assert_eq!(
+            dispatch(request, &config).await,
+            Ok(AfterResponse::Continue)
+        );
     }
 
     #[tokio::test]
@@ -978,5 +1048,141 @@ mod tests {
                 .is_err(),
             "helper must drop the connection instead of answering"
         );
+    }
+
+    /// A tempdir layout plus a real bundle, for the two ApplySelfUpdate
+    /// dispatch tests below. Mirrors `self_update`'s own fixture, kept local
+    /// so this module's tests never depend on another module's test helpers.
+    fn self_update_fixture(dir: &tempfile::TempDir) -> (PathBuf, String, InstallLayout) {
+        use std::io::Write as _;
+
+        let root = dir.path();
+        let layout = InstallLayout {
+            bindir: root.join("bin"),
+            libdir: root.join("lib"),
+            sharedir: root.join("share"),
+        };
+        for path in [&layout.bindir, &layout.libdir, &layout.sharedir] {
+            std::fs::create_dir_all(path).expect("create layout dir");
+        }
+        let updates = root.join("updates/job");
+        std::fs::create_dir_all(&updates).expect("create download dir");
+        let tarball = updates.join("firecrab-host-x86_64-gnu.tar.gz");
+        {
+            let encoder = flate2::write::GzEncoder::new(
+                std::fs::File::create(&tarball).expect("create tarball"),
+                flate2::Compression::fast(),
+            );
+            let mut builder = tar::Builder::new(encoder);
+            for (name, bytes) in [
+                ("firecrab-api", b"api" as &[u8]),
+                ("firecrab-net-helper", b"helper"),
+                ("firecrab", b"cli"),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(bytes.len() as u64);
+                header.set_mode(0o755);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, name, bytes)
+                    .expect("append");
+            }
+            let mut file = builder
+                .into_inner()
+                .expect("finish tar")
+                .finish()
+                .expect("finish gzip");
+            file.flush().expect("flush");
+        }
+        let digest = {
+            use sha2::{Digest, Sha256};
+            let bytes = std::fs::read(&tarball).expect("read tarball");
+            format!("{:x}", Sha256::digest(&bytes))
+        };
+        (tarball, digest, layout)
+    }
+
+    #[tokio::test]
+    async fn apply_self_update_rejects_a_relative_tarball_path() {
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
+        let dir = short_tempdir();
+        let (_, digest, layout) = self_update_fixture(&dir);
+        let request = NetworkRequest::ApplySelfUpdate {
+            tarball_path: PathBuf::from("bundle.tar.gz"),
+            sha256: digest,
+            layout,
+        };
+        assert_matches!(
+            dispatch(request, &config).await,
+            Err(HelperFailure::InvalidRequest { .. })
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_self_update_asks_the_loop_to_restart_after_responding() {
+        // dispatch must only *report* that a restart is due — it must never
+        // run systemctl itself, which is exactly why this test can call it.
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
+        let dir = short_tempdir();
+        let (tarball, digest, layout) = self_update_fixture(&dir);
+        let request = NetworkRequest::ApplySelfUpdate {
+            tarball_path: tarball,
+            sha256: digest,
+            layout,
+        };
+        assert_eq!(
+            dispatch(request, &config).await,
+            Ok(AfterResponse::RestartUnits)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_self_update_response_is_written_before_the_connection_closes() {
+        // A checksum mismatch fails *after* full validation and before any
+        // restart, so this exercises the real response path without ever
+        // reaching AfterResponse::RestartUnits.
+        let dir = short_tempdir();
+        let (path, stop, handle) = start_helper(&dir);
+        let fixture_dir = short_tempdir();
+        let (tarball, _, layout) = self_update_fixture(&fixture_dir);
+
+        let mut stream = UnixStream::connect(&path).await.expect("connect");
+        let envelope = NetworkRequestEnvelope::new(
+            Uuid::new_v4(),
+            NetworkRequest::ApplySelfUpdate {
+                tarball_path: tarball,
+                sha256: "0".repeat(64),
+                layout,
+            },
+        );
+        write_frame(&mut stream, &envelope)
+            .await
+            .expect("send request");
+        let response: NetworkResponseEnvelope =
+            read_frame(&mut stream).await.expect("receive response");
+        assert_eq!(response.request_id, envelope.request_id);
+        assert_matches!(
+            response.result,
+            Err(HelperFailure::UpdateChecksumMismatch { .. })
+        );
+
+        // The connection is still usable: a failed apply is not a restart.
+        let next = NetworkRequestEnvelope::new(
+            Uuid::new_v4(),
+            NetworkRequest::DeleteTap {
+                vm_id: Uuid::new_v4(),
+            },
+        );
+        write_frame(&mut stream, &next)
+            .await
+            .expect("send follow-up");
+        let response: NetworkResponseEnvelope =
+            read_frame(&mut stream).await.expect("receive follow-up");
+        assert_eq!(response.result, Ok(()));
+
+        drop(stop);
+        handle.await.expect("helper task");
     }
 }
