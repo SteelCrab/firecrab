@@ -640,7 +640,9 @@ mod tests {
     #[test]
     fn apply_self_update_serializes_with_its_operation_tag() {
         let request = NetworkRequest::ApplySelfUpdate {
-            tarball_path: PathBuf::from("/var/lib/firecrab/updates/abc/firecrab-host-x86_64-gnu.tar.gz"),
+            tarball_path: PathBuf::from(
+                "/var/lib/firecrab/updates/abc/firecrab-host-x86_64-gnu.tar.gz",
+            ),
             sha256: "a".repeat(64),
             layout: InstallLayout {
                 bindir: PathBuf::from("/usr/local/bin"),
