@@ -1027,7 +1027,6 @@ table.image-table .state-cell {
 .pipeline-step.pending .step-bar { opacity: 0.45; }
 
 .image-install-log {
-  max-height: 28vh;
   min-height: 8rem;
 }
 
