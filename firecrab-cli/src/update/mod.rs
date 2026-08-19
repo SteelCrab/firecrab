@@ -13,9 +13,10 @@ pub mod bundle;
 pub mod check;
 
 /// Serializes the tests across this module tree that read or write the real
-/// process environment (`FIRECRAB_RELEASE_API`, `FIRECRAB_RELEASE_BASE`,
-/// `PREFIX`, `FIRECRAB_LIBDIR`, `DATADIR`) — `set_var` is process-wide, so
-/// without one shared lock they race under `cargo test`'s parallel runner.
+/// process environment (`FIRECRAB_LIBC`, `FIRECRAB_RELEASE_REPO`,
+/// `FIRECRAB_RELEASE_API`, `FIRECRAB_RELEASE_BASE`, `PREFIX`,
+/// `FIRECRAB_LIBDIR`, `DATADIR`) — `set_var` is process-wide, so without one
+/// shared lock they race under `cargo test`'s parallel runner.
 #[cfg(test)]
 pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
