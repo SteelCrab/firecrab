@@ -194,6 +194,13 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        // GET and POST share one path, matching this router's existing shape
+        // for "read this resource / start work on it" pairs such as
+        // `/api/images/{alias}/install`.
+        .route(
+            "/api/update",
+            get(handlers::update::get_update_check).post(handlers::update::start_update),
+        )
         .route(
             "/api/microregistry",
             get(handlers::microregistry::list_microregistry),

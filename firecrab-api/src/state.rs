@@ -1,6 +1,7 @@
 //! Shared application state: the in-memory VM record cache, live process
 //! table, and runtime configuration every handler operates against.
 
+use firecrab_api_types::UpdateCheckResponse;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -110,6 +111,10 @@ pub struct AppState {
     pub(crate) microregistry_registers: ImageInstallTracker,
     /// Previous `/proc` jiffy samples used to derive host-process CPU %.
     pub(crate) process_metrics: Arc<Mutex<ProcessMetricsTracker>>,
+    /// Last successful `GET /api/update` result and when it was taken; GitHub's
+    /// unauthenticated rate limit is 60/hour per IP, so the dashboard's poll
+    /// must not reach GitHub on every tick.
+    pub(crate) update_check: Arc<AsyncMutex<Option<(std::time::Instant, UpdateCheckResponse)>>>,
 }
 
 impl AppState {
@@ -154,6 +159,7 @@ impl AppState {
             oci_imports: ImageInstallTracker::default(),
             microregistry_registers: ImageInstallTracker::default(),
             process_metrics: Arc::new(Mutex::new(ProcessMetricsTracker::default())),
+            update_check: Arc::new(AsyncMutex::new(None)),
         })
     }
 
