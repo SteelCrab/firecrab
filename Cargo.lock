@@ -461,10 +461,12 @@ name = "firecrab-net-helper"
 version = "0.1.1"
 dependencies = [
  "firecrab-helper-protocol",
+ "flate2",
  "futures-util",
  "libc",
  "rtnetlink",
  "sha2",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

@@ -23,6 +23,8 @@ mod firewall;
 mod host_acl;
 /// NAT/uplink detection, split out of `firewall`.
 mod nat;
+/// Applying a downloaded host bundle (`ApplySelfUpdate`).
+mod self_update;
 /// Per-VM TAP device lifecycle.
 mod tap;
 
@@ -612,6 +614,9 @@ async fn dispatch(request: NetworkRequest, config: &HelperConfig) -> Result<(), 
                     detail: error_chain(&error),
                 })
         }
+        // Wired up in a follow-on task: `self_update::apply_bundle` exists
+        // and is fully unit-tested, but nothing here calls it yet.
+        NetworkRequest::ApplySelfUpdate { .. } => Err(HelperFailure::UnsupportedOperation),
     }
 }
 
