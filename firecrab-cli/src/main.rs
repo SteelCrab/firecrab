@@ -5,6 +5,10 @@ mod doctor;
 mod info;
 mod shell;
 mod status;
+// `Command::Update` and `run_update` arrive in the CLI wiring commit; until
+// then nothing calls into this module.
+#[allow(dead_code)]
+mod update;
 
 /// `clap`-derived top-level CLI, replacing `scripts/firecrab-doctor.sh`.
 #[derive(Parser)]
