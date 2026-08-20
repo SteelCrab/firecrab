@@ -1,25 +1,25 @@
 //! Applying a downloaded host bundle over this host's install, for
 //! `NetworkRequest::ApplySelfUpdate`.
 //!
-//! Split deliberately into two functions: [`apply_bundle`] does pure
-//! filesystem work and is therefore fully unit-testable against a `tempdir`
-//! layout, while [`restart_units`] does nothing but shell out to `systemctl`
-//! and is never called from `dispatch`. That separation is what lets the
-//! connection loop write its response frame *before* this process restarts
-//! itself (see `AfterResponse` in `main.rs`).
+//! Split deliberately into two functions: [`crate::self_update::apply_bundle`]
+//! does pure filesystem work and is therefore fully unit-testable against a
+//! `tempdir` layout, while [`crate::self_update::restart_units`] does nothing
+//! but shell out to `systemctl` and is never called from `dispatch`. That
+//! separation is what lets the connection loop write its response frame
+//! *before* this process restarts itself (see `AfterResponse` in `main.rs`).
 //!
 //! Three properties in here are load-bearing and easy to "simplify" away:
 //!
 //! * the request's `layout` is a **cross-check, never an instruction** — the
 //!   helper re-derives the install layout from its own environment and refuses
-//!   anything that disagrees (see [`host_layout`]);
+//!   anything that disagrees (see [`crate::self_update::host_layout`]);
 //! * nothing but a regular file or a directory is ever extracted, so no later
 //!   `chown`/`chmod`/`rename` can be redirected through a symlink the bundle
-//!   planted (see [`extract_and_check`]);
+//!   planted (see `extract_and_check`);
 //! * every replacement is materialized inside the **target's own directory**
 //!   before the final `rename(2)`, because each install path is a separate bind
 //!   mount and `rename(2)` refuses to cross a mount boundary (see
-//!   [`materialize_beside`]).
+//!   `materialize_beside`).
 
 use std::fs::{self, File, Metadata};
 use std::io::{Read, Seek};
