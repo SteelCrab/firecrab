@@ -10,6 +10,9 @@ interface BenchmarkTrendChartProps {
   unit: string;
   color: string;
   fill: string;
+  description: string;
+  latestLabel: string;
+  recentLabel: string;
   yMaxHint?: number;
   emptyLabel: string;
 }
@@ -28,6 +31,9 @@ export default function BenchmarkTrendChart({
   unit,
   color,
   fill,
+  description,
+  latestLabel,
+  recentLabel,
   yMaxHint = 0,
   emptyLabel,
 }: BenchmarkTrendChartProps) {
@@ -37,8 +43,8 @@ export default function BenchmarkTrendChart({
     return (
       <article className="benchmark-chart is-empty">
         <div className="benchmark-chart-head">
-          <h4>{title}</h4>
-          <strong>—</strong>
+          <div><h4>{title}</h4><p>{description}</p></div>
+          <div className="benchmark-chart-latest"><span>{latestLabel}</span><strong>—</strong></div>
         </div>
         <p>{emptyLabel}</p>
       </article>
@@ -61,8 +67,11 @@ export default function BenchmarkTrendChart({
   return (
     <article className="benchmark-chart">
       <div className="benchmark-chart-head">
-        <h4>{title}</h4>
-        <strong className="mono">{formatValue(latest.value, unit)}</strong>
+        <div><h4>{title}</h4><p>{description}</p></div>
+        <div className="benchmark-chart-latest">
+          <span>{latestLabel}</span>
+          <strong className="mono">{formatValue(latest.value, unit)}</strong>
+        </div>
       </div>
       <svg
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -76,7 +85,7 @@ export default function BenchmarkTrendChart({
             <g key={index}>
               <line className="benchmark-chart-guide" x1={LEFT} x2={WIDTH - RIGHT} y1={y} y2={y} />
               <text className="benchmark-chart-axis" x={LEFT - 5} y={y + 3} textAnchor="end">
-                {compactNumber(tick)}
+                {formatAxisValue(tick, unit)}
               </text>
             </g>
           );
@@ -95,12 +104,29 @@ export default function BenchmarkTrendChart({
           {latest.label}
         </text>
       </svg>
+      <div className="benchmark-chart-history">
+        <span>{recentLabel}</span>
+        <ol>
+          {[...points].slice(-3).reverse().map((point, index) => (
+            <li key={`${point.label}-${index}`}>
+              <span>{point.label}</span>
+              <strong className="mono">{formatValue(point.value, unit)}</strong>
+            </li>
+          ))}
+        </ol>
+      </div>
     </article>
   );
 }
 
 function formatValue(value: number, unit: string): string {
+  if (unit.trim() === "ms" && value >= 1000) return `${compactNumber(value / 1000)} s`;
   return `${compactNumber(value)}${unit}`;
+}
+
+function formatAxisValue(value: number, unit: string): string {
+  if (unit.trim() === "ms") return value >= 1000 ? `${compactNumber(value / 1000)}s` : `${compactNumber(value)}ms`;
+  return `${compactNumber(value)}${unit.trim()}`;
 }
 
 function compactNumber(value: number): string {

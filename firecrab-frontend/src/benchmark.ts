@@ -2,6 +2,7 @@ export interface BenchmarkRunMetadata {
   run_id: string;
   commit_sha: string;
   branch: string;
+  dirty?: boolean;
   timestamp: string;
   host: string;
   firecrab_version: string;
@@ -27,6 +28,7 @@ export interface BenchmarkResult {
   failed_count: number;
   failure_rate: number;
   latency?: BenchmarkLatency;
+  failures?: string[];
   metrics?: Record<string, number>;
   host_resources: {
     cpu_percent: number | null;
