@@ -1,8 +1,15 @@
-//! Shared benchmark result types and latency calculations.
+//! Firecrab benchmark clients, runners, and normalized result types.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde::Serialize;
+
+mod client;
+mod runner;
+
+pub use client::{ApiError, HttpVmApi, VmApi, VmSpec};
+pub use runner::{BenchmarkError, run_boot, run_concurrent_creation, run_density, run_lifecycle};
 
 /// Aggregated latency values in milliseconds.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -60,6 +67,8 @@ pub struct BenchmarkResult {
     pub test: String,
     /// Number of requested benchmark operations.
     pub requested_count: u32,
+    /// Number of operations actually attempted before an early stop.
+    pub attempted_count: u32,
     /// Number of successful benchmark operations.
     pub successful_count: u32,
     /// Number of failed benchmark operations.
@@ -72,6 +81,9 @@ pub struct BenchmarkResult {
     /// Per-operation failure messages; omitted when every operation succeeds.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub failures: Vec<String>,
+    /// Benchmark-specific numeric values such as VM/s or maximum density.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub metrics: BTreeMap<String, f64>,
 }
 
 impl BenchmarkResult {
@@ -84,17 +96,26 @@ impl BenchmarkResult {
     ) -> Self {
         let successful_count = samples.len() as u32;
         let failed_count = failures.len() as u32;
+        let attempted_count = successful_count + failed_count;
         Self {
             schema_version: 1,
             commit: std::env::var("GITHUB_SHA").unwrap_or_else(|_| "unknown".to_owned()),
             test: test.to_owned(),
             requested_count,
+            attempted_count,
             successful_count,
             failed_count,
-            failure_rate: f64::from(failed_count) * 100.0 / f64::from(requested_count.max(1)),
+            failure_rate: f64::from(failed_count) * 100.0 / f64::from(attempted_count.max(1)),
             latency: LatencySummary::from_samples(samples),
             failures,
+            metrics: BTreeMap::new(),
         }
+    }
+
+    /// Adds one command-specific metric to the serialized result.
+    pub fn with_metric(mut self, name: &str, value: f64) -> Self {
+        self.metrics.insert(name.to_owned(), value);
+        self
     }
 }
 
@@ -133,6 +154,14 @@ mod tests {
         );
         assert_eq!(result.successful_count, 2);
         assert_eq!(result.failed_count, 2);
+        assert_eq!(result.attempted_count, 4);
         assert_eq!(result.failure_rate, 50.0);
+    }
+
+    #[test]
+    fn result_accepts_command_specific_metrics() {
+        let result = BenchmarkResult::new("vm_density", 10, &[], Vec::new())
+            .with_metric("max_stable_microvms", 8.0);
+        assert_eq!(result.metrics["max_stable_microvms"], 8.0);
     }
 }

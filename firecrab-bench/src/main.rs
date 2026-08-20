@@ -1,17 +1,12 @@
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use clap::{Parser, Subcommand};
-use firecrab_api_types::{VmResponse, VmState};
-use firecrab_bench::BenchmarkResult;
-use reqwest::blocking::{Client, Response};
-use serde::Serialize;
-use thiserror::Error;
+use clap::{Args, Parser, Subcommand};
+use firecrab_bench::{
+    HttpVmApi, VmSpec, run_boot, run_concurrent_creation, run_density, run_lifecycle,
+};
 use uuid::Uuid;
 
 const DEFAULT_API_BASE: &str = "http://127.0.0.1:5523";
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
-const BOOT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Firecrab MicroVM benchmark runner.
 #[derive(Debug, Parser)]
@@ -26,15 +21,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Measure create-request through running-state boot latency.
+    /// Measure sequential create-request through running-state latency.
     Boot(BootArgs),
+    /// Measure a concurrent group of VM creations and boots.
+    Create(CreateArgs),
+    /// Find the maximum VM count that remains in running state.
+    Density(DensityArgs),
+    /// Repeat create/start/stop/start/stop/delete lifecycles.
+    Lifecycle(LifecycleArgs),
 }
 
-#[derive(Debug, clap::Args)]
-struct BootArgs {
-    /// Number of sequential VM boots to measure.
-    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
-    count: u32,
+#[derive(Debug, Args)]
+struct VmArgs {
     /// Registered template alias used for every VM.
     #[arg(long)]
     template: String,
@@ -52,40 +50,74 @@ struct BootArgs {
     disk_gb: u16,
 }
 
-/// API request body for an unmodified benchmark VM.
-///
-/// `CreateVmRequest` is intentionally deserialize-only because the API owns
-/// its wire validation. The benchmark client needs the same JSON contract in
-/// the opposite direction, so it keeps this narrow private representation.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateVmBody {
-    name: String,
-    template: String,
-    ram: u32,
-    cpu: u8,
-    disk_gb: u16,
-    egress_policy: &'static str,
-    micro_network_id: Uuid,
+impl From<VmArgs> for VmSpec {
+    fn from(args: VmArgs) -> Self {
+        Self {
+            template: args.template,
+            micro_network_id: args.micro_network_id,
+            ram: args.ram,
+            cpu: args.cpu,
+            disk_gb: args.disk_gb,
+        }
+    }
 }
 
-#[derive(Debug, Error)]
-enum BenchmarkError {
-    #[error("request failed: {0}")]
-    Request(#[from] reqwest::Error),
-    #[error("API returned HTTP {status}: {body}")]
-    Http { status: u16, body: String },
-    #[error("VM {0} did not reach running state within the boot timeout")]
-    Timeout(Uuid),
-    #[error("VM {0} entered error state during boot")]
-    FailedBoot(Uuid),
+#[derive(Debug, Args)]
+struct BootArgs {
+    /// Number of sequential VM boots to measure.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    count: u32,
+    #[command(flatten)]
+    vm: VmArgs,
+}
+
+#[derive(Debug, Args)]
+struct CreateArgs {
+    /// Number of VMs created and booted at the same time.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    concurrency: u32,
+    #[command(flatten)]
+    vm: VmArgs,
+}
+
+#[derive(Debug, Args)]
+struct DensityArgs {
+    /// Upper bound for running VMs on this host.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    max_vms: u32,
+    /// Number of VMs added during each density step.
+    #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..))]
+    step: u32,
+    /// Stability observation time after each step.
+    #[arg(long, default_value_t = 5)]
+    settle_seconds: u64,
+    #[command(flatten)]
+    vm: VmArgs,
+}
+
+#[derive(Debug, Args)]
+struct LifecycleArgs {
+    /// Number of complete lifecycle repetitions.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    iterations: u32,
+    #[command(flatten)]
+    vm: VmArgs,
 }
 
 fn main() {
     let cli = Cli::parse();
-    let base = resolve_api_base(cli.api.as_deref());
+    let api = HttpVmApi::new(resolve_api_base(cli.api.as_deref()));
     let result = match cli.command {
-        Command::Boot(args) => run_boot(&base, args),
+        Command::Boot(args) => run_boot(&api, &args.vm.into(), args.count),
+        Command::Create(args) => run_concurrent_creation(&api, &args.vm.into(), args.concurrency),
+        Command::Density(args) => run_density(
+            &api,
+            &args.vm.into(),
+            args.max_vms,
+            args.step,
+            Duration::from_secs(args.settle_seconds),
+        ),
+        Command::Lifecycle(args) => run_lifecycle(&api, &args.vm.into(), args.iterations),
     };
     println!(
         "{}",
@@ -93,95 +125,6 @@ fn main() {
     );
     if result.failed_count > 0 {
         std::process::exit(1);
-    }
-}
-
-fn run_boot(base: &str, args: BootArgs) -> BenchmarkResult {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .expect("HTTP client construction");
-    let mut samples = Vec::new();
-    let mut failures = Vec::new();
-    for sequence in 1..=args.count {
-        match boot_once(&client, base, &args, sequence) {
-            Ok(elapsed) => samples.push(elapsed),
-            Err(error) => failures.push(format!("iteration {sequence}: {error}")),
-        }
-    }
-    BenchmarkResult::new("vm_boot", args.count, &samples, failures)
-}
-
-fn boot_once(
-    client: &Client,
-    base: &str,
-    args: &BootArgs,
-    sequence: u32,
-) -> Result<Duration, BenchmarkError> {
-    let started = Instant::now();
-    let request = CreateVmBody {
-        name: format!("bench-boot-{sequence}-{}", Uuid::new_v4().simple()),
-        template: args.template.clone(),
-        ram: args.ram,
-        cpu: args.cpu,
-        disk_gb: args.disk_gb,
-        egress_policy: "internet",
-        micro_network_id: args.micro_network_id,
-    };
-    let vm = checked(
-        client
-            .post(format!("{base}/api/vms"))
-            .json(&request)
-            .send()?,
-    )?
-    .json::<VmResponse>()?;
-    let result = (|| {
-        checked(
-            client
-                .post(format!("{base}/api/vms/{}/start", vm.id))
-                .send()?,
-        )?;
-        wait_for_running(client, base, vm.id)?;
-        Ok(started.elapsed())
-    })();
-    cleanup_vm(client, base, vm.id);
-    result
-}
-
-fn wait_for_running(client: &Client, base: &str, id: Uuid) -> Result<(), BenchmarkError> {
-    let deadline = Instant::now() + BOOT_TIMEOUT;
-    loop {
-        let vm =
-            checked(client.get(format!("{base}/api/vms/{id}")).send()?)?.json::<VmResponse>()?;
-        match vm.state {
-            VmState::Running => return Ok(()),
-            VmState::Error => return Err(BenchmarkError::FailedBoot(id)),
-            _ if Instant::now() >= deadline => return Err(BenchmarkError::Timeout(id)),
-            _ => thread::sleep(POLL_INTERVAL),
-        }
-    }
-}
-
-fn cleanup_vm(client: &Client, base: &str, id: Uuid) {
-    let state = client
-        .get(format!("{base}/api/vms/{id}"))
-        .send()
-        .ok()
-        .and_then(|response| response.json::<VmResponse>().ok())
-        .map(|vm| vm.state);
-    if matches!(state, Some(VmState::Running)) {
-        let _ = client.post(format!("{base}/api/vms/{id}/stop")).send();
-    }
-    let _ = client.delete(format!("{base}/api/vms/{id}")).send();
-}
-
-fn checked(response: Response) -> Result<Response, BenchmarkError> {
-    if response.status().is_success() {
-        Ok(response)
-    } else {
-        let status = response.status().as_u16();
-        let body = response.text().unwrap_or_default();
-        Err(BenchmarkError::Http { status, body })
     }
 }
 
@@ -201,23 +144,57 @@ fn resolve_api_base(flag: Option<&str>) -> String {
 mod tests {
     use super::*;
 
+    fn vm_flags(network: Uuid) -> Vec<String> {
+        vec![
+            "--template".to_owned(),
+            "ubuntu".to_owned(),
+            "--micro-network-id".to_owned(),
+            network.to_string(),
+        ]
+    }
+
     #[test]
-    fn cli_parses_boot_command() {
+    fn cli_parses_all_core_commands() {
         let network = Uuid::new_v4();
-        let cli = Cli::try_parse_from([
-            "firecrab-bench",
-            "boot",
-            "--count",
-            "5",
-            "--template",
-            "ubuntu",
-            "--micro-network-id",
-            &network.to_string(),
-        ])
-        .unwrap();
+        for (command, option, value) in [
+            ("boot", "--count", "5"),
+            ("create", "--concurrency", "10"),
+            ("density", "--max-vms", "20"),
+            ("lifecycle", "--iterations", "30"),
+        ] {
+            let mut arguments = vec!["firecrab-bench".to_owned(), command.to_owned()];
+            arguments.extend([option.to_owned(), value.to_owned()]);
+            arguments.extend(vm_flags(network));
+            assert!(
+                Cli::try_parse_from(arguments).is_ok(),
+                "failed to parse {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn density_parses_step_and_settle_time() {
+        let network = Uuid::new_v4();
+        let mut arguments = vec![
+            "firecrab-bench".to_owned(),
+            "density".to_owned(),
+            "--max-vms".to_owned(),
+            "20".to_owned(),
+            "--step".to_owned(),
+            "5".to_owned(),
+            "--settle-seconds".to_owned(),
+            "1".to_owned(),
+        ];
+        arguments.extend(vm_flags(network));
+        let cli = Cli::try_parse_from(arguments).unwrap();
         assert!(matches!(
             cli.command,
-            Command::Boot(BootArgs { count: 5, .. })
+            Command::Density(DensityArgs {
+                max_vms: 20,
+                step: 5,
+                settle_seconds: 1,
+                ..
+            })
         ));
     }
 
@@ -227,23 +204,5 @@ mod tests {
             resolve_api_base(Some("http://example.test/")),
             "http://example.test"
         );
-    }
-
-    #[test]
-    fn boot_benchmark_preserves_an_unreachable_api_failure() {
-        let result = run_boot(
-            "http://127.0.0.1:1",
-            BootArgs {
-                count: 1,
-                template: "ubuntu".to_owned(),
-                micro_network_id: Uuid::new_v4(),
-                ram: 512,
-                cpu: 1,
-                disk_gb: 8,
-            },
-        );
-        assert_eq!(result.successful_count, 0);
-        assert_eq!(result.failed_count, 1);
-        assert_eq!(result.failure_rate, 100.0);
     }
 }
