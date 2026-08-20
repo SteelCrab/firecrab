@@ -7,7 +7,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 | Version | Date | Work |
 | --- | --- | --- |
-| [Unreleased](#unreleased) | — | [#145], [#147], [#151], [#152], [#158], [#165] |
+| [Unreleased](#unreleased) | — | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
 
@@ -23,6 +23,10 @@ Entries land here as work merges, and move under the next version heading when t
 - `firecrab-cli` workspace crate ships `firecrab doctor`/`info`/`status` ([#152], [#152-comment]).
 - [`public-docs/firecrab-cli.md`](public-docs/firecrab-cli.md) documents the CLI's architecture and all three subcommands ([#152]).
 - Left nav rail gets solid SVG icons matched to each feature (MicroVM, Networks, Storage, Images, Host), replacing Unicode glyphs ([#165]).
+- `firecrab update --check` compares the installed version with the newest GitHub Release, with human-readable and JSON output ([#163], [#171]).
+- `firecrab update --apply` verifies the matching host bundle and delegates an atomic privileged swap to `firecrab-net-helper` ([#163], [#171]).
+- `GET` and `POST /api/update` expose cached update checks and detached update application to the dashboard ([#171]).
+- The dashboard navigation reports available updates, restart progress, completion, and stalled update guidance ([#171]).
 
 ### Changed
 
@@ -42,6 +46,12 @@ Entries land here as work merges, and move under the next version heading when t
 - `scripts/firecrab-doctor.sh` and the `firecrab-doctor` binary alias are removed; use `firecrab doctor` ([#152]).
 - OCI import and MicroBoot session logs auto-scroll to the latest line, matching `VmDetailModal` ([#165]).
 - OCI import log box height is unified to `40vh`, up from the `28vh` cap ([#165]).
+- Both `x86_64` and `aarch64` OCI imports pin the latest published stable Linux 7.1.9 kernel with immutable package and image digests ([#174], [#175]).
+- Systemd units expose the validated install layout and only the update paths required by the privileged helper ([#171]).
+
+### Deprecated
+
+- None.
 
 ### Fixed
 
@@ -49,6 +59,15 @@ Entries land here as work merges, and move under the next version heading when t
 - `install.sh`'s API-readiness poll no longer prints a `curl: (7) Failed to
   connect` line on every retry before `firecrab-api` finishes binding its
   listener ([#158]).
+- `aarch64` OCI imports use the dedicated MicroRegistry kernel instead of requiring the Ubuntu M2Image kernel ([#174], [#175]).
+- Self-update stages replacements beside each target, avoiding cross-mount `rename(2)` failures under systemd `ReadWritePaths` ([#171]).
+- The update helper derives its own install layout, rejects archive symlinks and special entries, and rolls back failed swaps accurately ([#171]).
+- Timed-out update checks terminate their child process, and a stalled dashboard restart wait now surfaces recovery guidance ([#171]).
+
+### Improved
+
+- Update documentation covers CLI checks, application, service restarts, and when the installer must still be rerun ([#171]).
+- Installation documentation separates the prepared payload script from manual Cargo and npm builds, including the required frontend output ([322e95c]).
 
 ## [0.1.1] - 2026-08-17
 
@@ -184,6 +203,11 @@ network helper.
 [#152]: https://github.com/SteelCrab/firecrab/issues/152
 [#152-comment]: https://github.com/SteelCrab/firecrab/issues/152#issuecomment-5328210931
 [#158]: https://github.com/SteelCrab/firecrab/issues/158
+[#163]: https://github.com/SteelCrab/firecrab/issues/163
 [#165]: https://github.com/SteelCrab/firecrab/pull/165
+[#171]: https://github.com/SteelCrab/firecrab/pull/171
+[#174]: https://github.com/SteelCrab/firecrab/issues/174
+[#175]: https://github.com/SteelCrab/firecrab/pull/175
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
+[322e95c]: https://github.com/SteelCrab/firecrab/commit/322e95c
