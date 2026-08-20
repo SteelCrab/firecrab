@@ -154,7 +154,8 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 | OCI | `/api/oci/inspect`, `POST /api/oci/import`, `GET /api/oci/import/{alias}` |
 | MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}`, `GET`/`PUT`/`DELETE /docker-hub` (Docker Hub login; secret write-only) |
 | Host | `/api/host` and `/api/network` |
-| Benchmarks | `GET`/`POST /api/benchmarks` for common-schema result history |
+| Benchmark results | `GET`/`POST /api/benchmarks` for common-schema result history |
+| Benchmark jobs | `GET`/`POST /api/benchmark-jobs`, `GET`/`DELETE /api/benchmark-jobs/{id}` |
 
 ## MicroNetwork
 
@@ -220,7 +221,7 @@ Save one account so pulls count against it instead.
 ```sh
 curl -s -X PUT http://127.0.0.1:5523/api/microregistry/docker-hub \
   -H 'Content-Type: application/json' \
-  -d '{"username":"pista","secret":"dckr_pat_..."}'
+  -d '{"username":"example-user","secret":"dckr_pat_..."}'
 ```
 
 Use a personal access token, not the account password.

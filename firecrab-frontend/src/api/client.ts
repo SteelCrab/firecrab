@@ -35,7 +35,7 @@ import type {
   VmLogResponse,
   VmResponse,
 } from "../bindings";
-import type { BenchmarkResult } from "../benchmark";
+import type { BenchmarkJob, BenchmarkResult, StartBenchmarkJobRequest } from "../benchmark";
 
 /** API failures split into what the server said vs. not reaching it at all. */
 export class ApiClientError extends Error {
@@ -145,6 +145,22 @@ export function getHostStatus(): Promise<HostStatusResponse> {
 
 export function listBenchmarks(): Promise<BenchmarkResult[]> {
   return fetchJson("/api/benchmarks");
+}
+
+export function listBenchmarkJobs(): Promise<BenchmarkJob[]> {
+  return fetchJson("/api/benchmark-jobs");
+}
+
+export function startBenchmarkJob(request: StartBenchmarkJobRequest): Promise<BenchmarkJob> {
+  return fetchJson("/api/benchmark-jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export function cancelBenchmarkJob(id: string): Promise<BenchmarkJob> {
+  return fetchJson(`/api/benchmark-jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 /** Newest release vs. this build (`GET /api/update`), cached 30 minutes by the API. */

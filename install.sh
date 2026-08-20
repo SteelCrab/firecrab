@@ -435,7 +435,7 @@ download_host_bundle() {
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$PAYLOAD_TMP/$tarball"; then
         die "failed to download $url
 Tag a GitHub Release, or install local binaries:
-  cargo build --release -p firecrab-api -p firecrab-net-helper -p firecrab-cli
+  cargo build --release -p firecrab-api -p firecrab-net-helper -p firecrab-cli -p firecrab-bench
   ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist"
     fi
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$sums_url" -o "$PAYLOAD_TMP/SHA256SUMS"; then
@@ -447,7 +447,7 @@ Tag a GitHub Release, or install local binaries:
     tar -xzf "$PAYLOAD_TMP/$tarball" -C "$PAYLOAD_TMP/root"
     PAYLOAD_ROOT=$PAYLOAD_TMP/root
     local name
-    for name in firecrab-api firecrab-net-helper firecrab; do
+    for name in firecrab-api firecrab-net-helper firecrab firecrab-bench; do
         [ -x "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing $name"
         firecrab_assert_binary_arch "$PAYLOAD_ROOT/$name" "$arch" \
             || die "$tarball: $name is not a $arch binary"
@@ -489,7 +489,7 @@ report_payload() {
             return 1
         fi
         local name gaps=0
-        for name in firecrab-api firecrab-net-helper firecrab; do
+        for name in firecrab-api firecrab-net-helper firecrab firecrab-bench; do
             if [ -x "$BIN_DIR/$name" ]; then
                 log "  $name"
             else
@@ -565,7 +565,7 @@ ensure_directories() {
 # Puts the payload binaries, and the dashboard, where the units expect them.
 install_binaries() {
     local name src
-    for name in firecrab-api firecrab-net-helper; do
+    for name in firecrab-api firecrab-net-helper firecrab-bench; do
         src=$(firecrab_resolve_binary "$name" "$PAYLOAD_BIN" "$LIBDIR") \
             || die "no $name in ${PAYLOAD_BIN:-<release>} or $LIBDIR — pass it via --bin-dir or install a release"
         if [ "$src" -ef "$LIBDIR/$name" ]; then
@@ -874,7 +874,7 @@ do_uninstall() {
             || warn "network teardown failed — bridges/nftables tables may remain until reboot"
     fi
 
-    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
+    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper" "$LIBDIR/firecrab-bench"
     $SUDO rm -f "$PREFIX/bin/firecrab"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true

@@ -36,3 +36,30 @@ export interface BenchmarkResult {
     firecracker_process_count: number | null;
   };
 }
+
+export type BenchmarkJobCommand = "boot" | "create" | "density" | "lifecycle";
+export type BenchmarkJobStatus = "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
+
+export interface StartBenchmarkJobRequest {
+  command: BenchmarkJobCommand;
+  template: string;
+  microNetworkId: string;
+  ram: number;
+  cpu: number;
+  diskGb: number;
+  count?: number;
+  concurrency?: number;
+  maxVms?: number;
+  step?: number;
+  iterations?: number;
+  confirmDensity?: boolean;
+}
+
+export interface BenchmarkJob {
+  id: string;
+  request: StartBenchmarkJobRequest;
+  status: BenchmarkJobStatus;
+  createdAtMs: number;
+  finishedAtMs?: number;
+  log: string;
+}

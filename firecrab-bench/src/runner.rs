@@ -1,3 +1,5 @@
+//! Core MicroVM benchmark algorithms and lifecycle cleanup helpers.
+
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -8,7 +10,9 @@ use uuid::Uuid;
 use crate::resources::HostResourceSampler;
 use crate::{ApiError, BenchmarkResult, VmApi, VmSpec};
 
+/// Interval between VM state observations.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// Maximum wait for one requested VM state transition.
 const STATE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Failure from one benchmark VM operation.
@@ -33,8 +37,11 @@ pub enum BenchmarkError {
     WorkerPanic,
 }
 
+/// Result of one create-and-boot attempt, including its cleanup handle.
 struct Operation {
+    /// Created VM identifier when creation reached the API.
     id: Option<Uuid>,
+    /// Measured latency or operation failure.
     result: Result<Duration, BenchmarkError>,
 }
 
@@ -152,6 +159,7 @@ pub fn run_lifecycle<A: VmApi>(api: &A, spec: &VmSpec, iterations: u32) -> Bench
         .with_host_resources(resources.finish())
 }
 
+/// Executes and cleans up one complete lifecycle iteration.
 pub(crate) fn lifecycle_once<A: VmApi>(
     api: &A,
     spec: &VmSpec,
@@ -180,6 +188,7 @@ pub(crate) fn lifecycle_once<A: VmApi>(
     result
 }
 
+/// Boots a bounded group using scoped worker threads.
 fn boot_group<A: VmApi>(
     api: &A,
     spec: &VmSpec,
@@ -205,6 +214,7 @@ fn boot_group<A: VmApi>(
     })
 }
 
+/// Measures one VM from create request through running state.
 fn boot_once<A: VmApi>(api: &A, spec: &VmSpec, prefix: &str, sequence: u32) -> Operation {
     let started = Instant::now();
     let name = benchmark_name(prefix, sequence);
@@ -220,11 +230,13 @@ fn boot_once<A: VmApi>(api: &A, spec: &VmSpec, prefix: &str, sequence: u32) -> O
     }
 }
 
+/// Starts one VM and waits until the API reports it running.
 fn start_and_wait<A: VmApi>(api: &A, id: Uuid) -> Result<(), BenchmarkError> {
     api.start(id)?;
     wait_for_state(api, id, VmState::Running, "running")
 }
 
+/// Polls a VM until the requested state, failure, or timeout.
 fn wait_for_state<A: VmApi>(
     api: &A,
     id: Uuid,
@@ -250,6 +262,7 @@ fn wait_for_state<A: VmApi>(
     }
 }
 
+/// Records one latency or failure and then removes its VM.
 fn record_operation<A: VmApi>(
     api: &A,
     operation: Operation,
@@ -264,6 +277,7 @@ fn record_operation<A: VmApi>(
     cleanup_if_created(api, operation.id);
 }
 
+/// Best-effort stop and delete for a possibly created benchmark VM.
 fn cleanup_if_created<A: VmApi>(api: &A, id: Option<Uuid>) {
     let Some(id) = id else { return };
     if matches!(api.state(id), Ok(VmState::Running)) {
@@ -272,8 +286,26 @@ fn cleanup_if_created<A: VmApi>(api: &A, id: Option<Uuid>) {
     let _ = api.delete(id);
 }
 
+/// Builds a recognizable VM name from the optional dashboard run tag.
 fn benchmark_name(prefix: &str, sequence: u32) -> String {
-    format!("bench-{prefix}-{sequence}-{}", Uuid::new_v4().simple())
+    let run_tag = std::env::var("FIRECRAB_BENCH_RUN_TAG").ok().filter(|tag| {
+        !tag.is_empty()
+            && tag
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric())
+    });
+    benchmark_name_with_tag(prefix, sequence, run_tag.as_deref())
+}
+
+/// Builds a unique VM name with a validated tag supplied by the caller.
+fn benchmark_name_with_tag(prefix: &str, sequence: u32, run_tag: Option<&str>) -> String {
+    match run_tag {
+        Some(tag) => format!(
+            "bench-{prefix}-{tag}-{sequence}-{}",
+            Uuid::new_v4().simple()
+        ),
+        None => format!("bench-{prefix}-{sequence}-{}", Uuid::new_v4().simple()),
+    }
 }
 
 #[cfg(test)]
@@ -283,6 +315,14 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+
+    #[test]
+    fn benchmark_names_keep_the_optional_run_tag() {
+        assert!(benchmark_name_with_tag("boot", 3, None).starts_with("bench-boot-3-"));
+        assert!(
+            benchmark_name_with_tag("boot", 3, Some("abc123")).starts_with("bench-boot-abc123-3-")
+        );
+    }
 
     struct FakeApi {
         states: Mutex<HashMap<Uuid, VmState>>,

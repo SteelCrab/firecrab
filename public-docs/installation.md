@@ -42,7 +42,9 @@ To patch an installed host with binaries you built yourself:
 ```sh
 git clone https://github.com/SteelCrab/firecrab.git
 cd firecrab
-cargo build --release -p firecrab-api -p firecrab-net-helper
+npm run build --prefix firecrab-frontend
+cargo build --release \
+  -p firecrab-api -p firecrab-net-helper -p firecrab-cli -p firecrab-bench
 ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist
 ```
 

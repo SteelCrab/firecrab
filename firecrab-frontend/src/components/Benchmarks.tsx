@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { VmResponse, VmState } from "../bindings";
 import { listBenchmarks } from "../api/client";
 import type { BenchmarkResult } from "../benchmark";
 import { useI18n } from "../i18n";
 import BenchmarkTrendChart, { type BenchmarkTrendPoint } from "./BenchmarkTrendChart";
+import BenchmarkControls from "./BenchmarkControls";
 
 const POLL_MILLIS = 15_000;
 const HISTORY_POINTS = 20;
@@ -19,6 +20,8 @@ export default function Benchmarks({ vms, vmsLoaded }: BenchmarksProps) {
   const { t } = useI18n();
   const [runs, setRuns] = useState<BenchmarkResult[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [resultRefresh, setResultRefresh] = useState(0);
+  const refreshResults = useCallback(() => setResultRefresh((value) => value + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,7 +41,7 @@ export default function Benchmarks({ vms, vmsLoaded }: BenchmarksProps) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [resultRefresh]);
 
   const latest = useMemo(() => {
     const values = new Map<string, BenchmarkResult>();
@@ -62,6 +65,8 @@ export default function Benchmarks({ vms, vmsLoaded }: BenchmarksProps) {
         <span>{t("Benchmark Overview", "Benchmark 개요")}</span>
         <span className="poll-note">{t("Results every 15s · VMs every 3s", "결과 15초 · VM 3초 간격 갱신")}</span>
       </h2>
+
+      <BenchmarkControls onResultPublished={refreshResults} />
 
       {!loaded ? (
         <div className="empty">{t("Loading benchmark results…", "Benchmark 결과 불러오는 중…")}</div>

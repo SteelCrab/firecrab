@@ -290,9 +290,11 @@ sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
 # Terminal 2 — API and Firecracker manager
 # Optional: stop a previous API binary only (ignore if none)
 pkill -x firecrab-api 2>/dev/null || true
-cargo run -p firecrab-api
+cargo build -p firecrab-bench
+FIRECRAB_BENCH_BIN="$PWD/target/debug/firecrab-bench" cargo run -p firecrab-api
 
 # Terminal 3 — dashboard at http://localhost:8080/
+# Benchmark controls: http://localhost:8080/#/benchmarks
 # Optional: stop a previous Vite from this checkout (ignore if none)
 pkill -f '[f]irecrab-frontend/node_modules/.bin/vite' 2>/dev/null || true
 npm install --prefix firecrab-frontend

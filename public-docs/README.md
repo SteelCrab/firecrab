@@ -22,6 +22,7 @@ Every page covers one topic.
 | Host setup | [Installation](installation.md) |
 | Headless host CLI | [firecrab CLI](firecrab-cli.md) |
 | Browser UI | [Dashboard](dashboard.md) |
+| Benchmark runner and Control Center | [Benchmarks](benchmarks.md) |
 | REST and WebSocket endpoints | [API](api.md) |
 | Bridges, DHCP, NAT, and policy | [Networking](networking.md) |
 | VM disk placement | [Storage](storage.md) |

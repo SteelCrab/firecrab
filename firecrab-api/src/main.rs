@@ -1,4 +1,7 @@
+//! Firecrab API process startup and dual-listener ownership.
+
 mod artifacts;
+mod benchmark_jobs;
 mod bootstrap;
 mod console;
 mod error;
@@ -37,21 +40,30 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 
 #[derive(Debug, Error)]
+/// Failure that prevents the API process from serving requests.
 enum StartupError {
+    /// HTTP listener configuration could not be loaded.
     #[error("failed to load HTTP configuration")]
     Config(#[source] ConfigError),
+    /// Installed VM templates could not be indexed.
     #[error("failed to initialize template registry")]
     Template(#[source] TemplateError),
+    /// Persisted control-plane state could not be opened.
     #[error("failed to load persisted VM state")]
     Persistence(#[source] PersistenceError),
+    /// One configured listener address could not be bound.
     #[error("failed to bind API listener at {address}")]
     Bind {
+        /// Listener address that failed.
         address: SocketAddr,
+        /// Operating-system bind error.
         #[source]
         source: io::Error,
     },
+    /// A bound listener's effective address could not be read.
     #[error("failed to inspect API listener address")]
     LocalAddress(#[source] io::Error),
+    /// An Axum listener terminated unexpectedly.
     #[error("API server terminated with an error")]
     Serve(#[source] io::Error),
 }
@@ -104,6 +116,7 @@ impl HttpListeners {
 }
 
 #[tokio::main]
+/// Starts Firecrab and renders the complete startup error chain on failure.
 async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
@@ -119,6 +132,7 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Installs the process-wide tracing subscriber.
 fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -128,6 +142,7 @@ fn init_tracing() {
         .init();
 }
 
+/// Loads persistent state and serves both dashboard listeners.
 async fn run() -> Result<(), StartupError> {
     init_tracing();
     let config = HttpConfig::load().map_err(StartupError::Config)?;

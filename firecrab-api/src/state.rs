@@ -9,6 +9,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use uuid::Uuid;
 
+use crate::benchmark_jobs::BenchmarkJobTracker;
 use crate::firecracker::{self, VmProcess};
 use crate::image_install::ImageInstallTracker;
 use crate::model::VmRecord;
@@ -115,6 +116,8 @@ pub struct AppState {
     /// unauthenticated rate limit is 60/hour per IP, so the dashboard's poll
     /// must not reach GitHub on every tick.
     pub(crate) update_check: Arc<AsyncMutex<Option<(std::time::Instant, UpdateCheckResponse)>>>,
+    /// Host-local `firecrab-bench` child process and recent job snapshots.
+    pub(crate) benchmark_jobs: BenchmarkJobTracker,
 }
 
 impl AppState {
@@ -160,6 +163,7 @@ impl AppState {
             microregistry_registers: ImageInstallTracker::default(),
             process_metrics: Arc::new(Mutex::new(ProcessMetricsTracker::default())),
             update_check: Arc::new(AsyncMutex::new(None)),
+            benchmark_jobs: BenchmarkJobTracker::from_env(),
         })
     }
 

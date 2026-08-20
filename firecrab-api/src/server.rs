@@ -1,3 +1,5 @@
+//! Axum router construction, listener policy, and HTTP middleware.
+
 use std::collections::HashSet;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
@@ -22,7 +24,9 @@ use crate::error::AppError;
 use crate::handlers;
 use crate::state::AppState;
 
+/// Maximum accepted JSON request body.
 const MAX_REQUEST_BODY: usize = 64 * 1024;
+/// Header used to correlate API errors and server logs.
 const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 /// Default management and API listener.
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:5523";
@@ -30,7 +34,9 @@ const DEFAULT_BIND_ADDR: &str = "127.0.0.1:5523";
 const DEFAULT_BENCHMARK_BIND_ADDR: &str = "127.0.0.1:15523";
 
 #[derive(Debug, Error)]
+/// Invalid or unsafe HTTP listener configuration.
 pub enum ConfigError {
+    /// Management listener is not a valid socket address.
     #[error("invalid FIRECRAB_BIND_ADDR: {0}")]
     InvalidBindAddress(String),
     #[error("invalid FIRECRAB_BENCH_BIND_ADDR: {0}")]
@@ -39,19 +45,26 @@ pub enum ConfigError {
     #[error("FIRECRAB_BIND_ADDR and FIRECRAB_BENCH_BIND_ADDR must differ: {0}")]
     /// Management and benchmark listeners resolved to the same address.
     DuplicateBindAddress(SocketAddr),
+    /// Public binding was requested without authentication and TLS.
     #[error("non-loopback bind requires both authentication and TLS")]
     InsecureNonLoopbackBind,
+    /// One configured CORS origin is not a valid header value.
     #[error("invalid FIRECRAB_ALLOWED_ORIGINS value: {0}")]
     InvalidOrigin(String),
 }
 
 #[derive(Debug, Clone)]
+/// Validated HTTP server and dashboard asset configuration.
 pub struct HttpConfig {
+    /// Management dashboard and REST API listener.
     pub bind_addr: SocketAddr,
     /// Address dedicated to benchmark dashboard access.
     pub benchmark_bind_addr: SocketAddr,
+    /// Explicit browser origins allowed to mutate API state.
     pub allowed_origins: Vec<HeaderValue>,
+    /// Maximum requests executing concurrently.
     pub max_concurrent_requests: usize,
+    /// Per-request processing deadline.
     pub request_timeout: Duration,
     /// Directory of built dashboard assets to serve, or `None` to serve none
     /// (`public-docs/dashboard.md`). Set when an installed deploy
@@ -62,6 +75,7 @@ pub struct HttpConfig {
 }
 
 impl HttpConfig {
+    /// Loads and validates HTTP configuration from the process environment.
     pub fn load() -> Result<Self, ConfigError> {
         let bind = bind_addr_or_default(env::var("FIRECRAB_BIND_ADDR").ok());
         let benchmark_bind =
@@ -88,6 +102,7 @@ impl HttpConfig {
         Ok(config)
     }
 
+    /// Builds test configuration using the default benchmark listener.
     fn from_values(
         bind: &str,
         origins: &str,
@@ -103,6 +118,7 @@ impl HttpConfig {
         )
     }
 
+    /// Validates explicit management and benchmark listener values.
     fn from_values_with_benchmark(
         bind: &str,
         benchmark_bind: &str,
@@ -162,6 +178,7 @@ fn resolve_static_root(configured: Option<String>) -> Option<PathBuf> {
     None
 }
 
+/// Resolves the configured management listener or its loopback default.
 fn bind_addr_or_default(configured: Option<String>) -> String {
     configured.unwrap_or_else(|| DEFAULT_BIND_ADDR.to_owned())
 }
@@ -171,28 +188,37 @@ fn benchmark_bind_addr_or_default(configured: Option<String>) -> String {
     configured.unwrap_or_else(|| DEFAULT_BENCHMARK_BIND_ADDR.to_owned())
 }
 
+/// Parses a permissive boolean environment flag.
 fn env_flag(name: &str) -> bool {
     env::var(name).is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
 }
 
+/// Reports whether a listener address is host-local.
 fn is_loopback(ip: IpAddr) -> bool {
     ip.is_loopback()
 }
 
 #[derive(Clone)]
+/// Origin allowlist shared with mutation middleware.
 struct HttpPolicy {
+    /// Exact allowed origin header values.
     allowed_origins: HashSet<HeaderValue>,
 }
 
 #[derive(Clone)]
+/// Shared concurrency and timeout policy.
 struct RequestLimits {
+    /// Semaphore bounding concurrent request work.
     permits: Arc<Semaphore>,
+    /// Deadline applied around downstream handlers.
     timeout: Duration,
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Correlation identifier assigned to one incoming request.
 pub struct RequestId(pub Uuid);
 
+/// Builds the complete API, WebSocket, dashboard, and middleware router.
 pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     let policy = HttpPolicy {
         allowed_origins: config.allowed_origins.iter().cloned().collect(),
@@ -248,6 +274,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/benchmarks",
             get(handlers::benchmarks::list_benchmarks).post(handlers::benchmarks::create_benchmark),
+        )
+        .route(
+            "/api/benchmark-jobs",
+            get(handlers::benchmark_jobs::list_jobs).post(handlers::benchmark_jobs::start_job),
+        )
+        .route(
+            "/api/benchmark-jobs/{id}",
+            get(handlers::benchmark_jobs::get_job).delete(handlers::benchmark_jobs::cancel_job),
         )
         // GET and POST share one path, matching this router's existing shape
         // for "read this resource / start work on it" pairs such as
@@ -395,6 +429,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .layer(middleware::from_fn(assign_request_id))
 }
 
+/// Assigns or propagates the request correlation identifier.
 async fn assign_request_id(mut request: Request, next: Next) -> Response {
     let request_id = RequestId(Uuid::new_v4());
     request.extensions_mut().insert(request_id);
@@ -456,6 +491,7 @@ fn is_same_origin(origin: &HeaderValue, request: &Request) -> bool {
     matches!(scheme, "http" | "https") && authority.is_some_and(|authority| host == authority)
 }
 
+/// Rejects browser requests outside the configured origin policy.
 async fn enforce_origin(
     State(policy): State<HttpPolicy>,
     request: Request,
@@ -471,6 +507,7 @@ async fn enforce_origin(
     Ok(next.run(request).await)
 }
 
+/// Applies the global concurrency permit and request deadline.
 async fn enforce_limits(
     State(limits): State<RequestLimits>,
     request: Request,
@@ -488,10 +525,12 @@ async fn enforce_limits(
         .map_err(|_| AppError::gateway_timeout(id))
 }
 
+/// Produces the API's structured fallback response.
 async fn not_found(Extension(id): Extension<RequestId>) -> Response {
     AppError::not_found(id.0).into_response()
 }
 
+/// Reads the correlation identifier assigned by middleware.
 pub fn request_id(request: &Request) -> Uuid {
     request
         .extensions()

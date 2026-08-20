@@ -49,6 +49,7 @@ A new group membership needs a new login session.
 
 The API and helper must use the same socket, by default `/run/firecrab/net-helper.sock`.
 Start the development helper with `./scripts/dev-net-helper.sh`, or check the installed one.
+The development script builds `target/debug/firecrab-net-helper` before invoking `sudo`.
 
 ```sh
 systemctl status firecrab-net-helper
