@@ -37,14 +37,43 @@ The installer prompts for your sudo password on the terminal.
 
 Pin a version by replacing `latest` with the tag, for example `v0.1.0`.
 
-To patch an installed host with binaries you built yourself:
+To patch an installed host with files built from a checkout, choose one of the following paths.
+
+### Prepared local payload
+
+Use the repository script to build every host binary and the dashboard:
 
 ```sh
 git clone https://github.com/SteelCrab/firecrab.git
 cd firecrab
-cargo build --release -p firecrab-api -p firecrab-net-helper
-./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist
+./scripts/ci-prepare-install-payload.sh
+./install.sh --bin-dir target/release
 ```
+
+The preparation script builds all host binaries and creates `firecrab-frontend/dist`.
+The installer detects that dashboard directory automatically.
+This local build path requires the repository Rust toolchain, Node.js, and npm.
+
+### Manual local payload
+
+Build the same payload one component at a time when inspecting or changing individual build steps:
+
+```sh
+git clone https://github.com/SteelCrab/firecrab.git
+cd firecrab
+cargo build --release --locked \
+  -p firecrab-api \
+  -p firecrab-net-helper \
+  -p firecrab-cli \
+  -p firecrab-bench
+npm ci --prefix firecrab-frontend
+npm run build --prefix firecrab-frontend
+./install.sh \
+  --bin-dir target/release \
+  --dashboard-dir firecrab-frontend/dist
+```
+
+The manual path must produce all four executables and `firecrab-frontend/dist/index.html` before installation.
 
 Open the dashboard after the services start.
 
