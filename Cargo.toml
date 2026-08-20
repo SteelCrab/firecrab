@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "firecrab-api",
     "firecrab-api-types",
+    "firecrab-bench",
     "firecrab-cli",
     "firecrab-helper-protocol",
     "firecrab-net-helper",
