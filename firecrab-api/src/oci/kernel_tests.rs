@@ -596,18 +596,37 @@ async fn a_host_with_no_kernel_source_is_told_so() {
 }
 
 #[test]
-fn the_compiled_pin_names_a_digest_and_the_published_registry_layout() {
-    let pinned = kernel::pinned_kernel(Architecture::X86_64).expect("x86_64 kernel is published");
+fn the_compiled_pins_name_the_latest_stable_registry_artifacts() {
+    let expected = [
+        (
+            Architecture::X86_64,
+            "vmlinux-7.1.9-x86_64",
+            "kernel/7.1.9/x86_64/vmlinux-7.1.9.tar.zst",
+            false,
+        ),
+        (
+            Architecture::Aarch64,
+            "Image-7.1.9-aarch64",
+            "kernel/7.1.9/aarch64/vmlinux-7.1.9.tar.zst",
+            true,
+        ),
+    ];
 
-    assert_eq!(pinned.alias, "vmlinux-7.1.8");
-    assert_eq!(pinned.version, "7.1.8");
-    assert_eq!(pinned.image, "vmlinux-7.1.8-x86_64");
-    assert_eq!(
-        kernel::package_key(Architecture::X86_64, &pinned),
-        "kernel/7.1.8/x86_64/vmlinux-7.1.8.tar.zst"
-    );
-    Sha256Digest::parse(pinned.package_digest).expect("package digest is pinned, not a tag");
-    Sha256Digest::parse(pinned.image_digest).expect("kernel digest is pinned, not a tag");
-    assert!(pinned.boot_args.contains("root=/dev/vda"));
-    assert!(pinned.boot_args.contains("console=ttyS0"));
+    for (architecture, image, package_key, needs_keep_bootcon) in expected {
+        let pinned = kernel::pinned_kernel(architecture)
+            .unwrap_or_else(|| panic!("{architecture} kernel is published"));
+
+        assert_eq!(pinned.alias, "vmlinux-7.1.9");
+        assert_eq!(pinned.version, "7.1.9");
+        assert_eq!(pinned.image, image);
+        assert_eq!(kernel::package_key(architecture, &pinned), package_key);
+        Sha256Digest::parse(pinned.package_digest).expect("package digest is pinned, not a tag");
+        Sha256Digest::parse(pinned.image_digest).expect("kernel digest is pinned, not a tag");
+        assert!(pinned.boot_args.contains("root=/dev/vda"));
+        assert!(pinned.boot_args.contains("console=ttyS0"));
+        assert_eq!(
+            pinned.boot_args.contains("keep_bootcon"),
+            needs_keep_bootcon
+        );
+    }
 }

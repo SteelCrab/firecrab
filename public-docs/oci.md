@@ -190,6 +190,7 @@ One static program supplies all three before a merged tree can boot.
 The packed ext4 is paired with the kernel firecrab publishes for this architecture, so no catalog image has to be installed first.
 
 - `virtio_blk`, `virtio_net`, `virtio_mmio`, and `ext4` are built in, and there is no initrd.
+- Each release pins the newest published stable kernel for both `x86_64` and `aarch64` with architecture-specific package and image digests.
 - Pinned by digest, fetched once from `FIRECRAB_IMAGE_BASE_URL`, cached at `<FIRECRAB_IMAGE_ROOT>/.oci/kernel/<arch>/`.
 - Re-verified on every reuse; a failed entry is refetched.
 - `FIRECRAB_OCI_KERNEL_PATH` names a host copy, which must match the same digest.
