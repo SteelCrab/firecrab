@@ -36,6 +36,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Firecracker command line an imported rootfs boots with on x86_64.
 const X86_64_BOOT_ARGS: &str = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
+/// Firecracker command line an imported rootfs boots with on aarch64.
+const AARCH64_BOOT_ARGS: &str =
+    "keep_bootcon console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw";
 
 /// One published kernel artifact this build trusts.
 ///
@@ -59,21 +62,27 @@ pub(super) struct PinnedKernel<'a> {
 
 /// The kernel this build pins for `architecture`.
 ///
-/// `None` means no dedicated kernel is published for that architecture yet and
-/// the caller must fall back to an installed catalog kernel. aarch64 is `None`
-/// until the arm64 build is published: the artifact is built on a native host,
-/// and a pin without a digest would be a tag by another name.
+/// Every supported architecture carries the latest stable kernel that was
+/// published when this release was built. `None` remains the signal for a
+/// future architecture that has no dedicated artifact yet.
 pub(super) fn pinned_kernel(architecture: Architecture) -> Option<PinnedKernel<'static>> {
     match architecture {
         Architecture::X86_64 => Some(PinnedKernel {
-            alias: "vmlinux-7.1.8",
-            version: "7.1.8",
-            image: "vmlinux-7.1.8-x86_64",
-            package_digest: "sha256:eb2efc87a8b64b9bcf5c4b7365193c578e6cf203c4773060ec157d6f34c11f53",
-            image_digest: "sha256:1d693ebb340ee418127aacf679080671679e455302a8f89ff8d4a45b6d293cdb",
+            alias: "vmlinux-7.1.9",
+            version: "7.1.9",
+            image: "vmlinux-7.1.9-x86_64",
+            package_digest: "sha256:fd058e64d2173b3911ad09a15aa6bcf15531941254ce44ba6e935b876662ba65",
+            image_digest: "sha256:079d2149a9378f5705da46232e99886187fecdd5517428d2c294b6bd1e0dca6b",
             boot_args: X86_64_BOOT_ARGS,
         }),
-        Architecture::Aarch64 => None,
+        Architecture::Aarch64 => Some(PinnedKernel {
+            alias: "vmlinux-7.1.9",
+            version: "7.1.9",
+            image: "Image-7.1.9-aarch64",
+            package_digest: "sha256:3a8576656d45eb051874a4b1cf4b8838d54d96aa268bc53706118e0bbeb727f7",
+            image_digest: "sha256:6d60d06429aa5e244cc5a0eb60383a97fde61f4aa40453d5cc6fecb59a64b58f",
+            boot_args: AARCH64_BOOT_ARGS,
+        }),
     }
 }
 
