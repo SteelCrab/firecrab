@@ -26,7 +26,7 @@ curl -i http://127.0.0.1:5523/api/vms
 ```
 
 Use `http://localhost:8080` for Vite development — `127.0.0.1:8080` is a
-different browser origin. Check for old processes on ports `5523` and `8080`.
+different browser origin. Check for old processes on ports `5523`, `15523`, and `8080`.
 
 ## Data appears empty
 
@@ -49,6 +49,7 @@ A new group membership needs a new login session.
 
 The API and helper must use the same socket, by default `/run/firecrab/net-helper.sock`.
 Start the development helper with `./scripts/dev-net-helper.sh`, or check the installed one.
+The development script builds `target/debug/firecrab-net-helper` before invoking `sudo`.
 
 ```sh
 systemctl status firecrab-net-helper

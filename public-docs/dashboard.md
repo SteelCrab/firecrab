@@ -3,9 +3,10 @@
 The dashboard is a React and TypeScript application.
 It uses the API and console WebSocket.
 
-## Development
+## Development mode
 
 Start the network helper in terminal 1.
+The script builds the current debug helper before starting it with `sudo`.
 
 ```sh
 ./scripts/dev-net-helper.sh
@@ -14,7 +15,8 @@ Start the network helper in terminal 1.
 Start the API in terminal 2.
 
 ```sh
-cargo run -p firecrab-api
+cargo build -p firecrab-bench
+FIRECRAB_BENCH_BIN="$PWD/target/debug/firecrab-bench" cargo run -p firecrab-api
 ```
 
 Start Vite in terminal 3.
@@ -26,6 +28,7 @@ npm run dev --prefix firecrab-frontend
 
 Open `http://localhost:8080/`.
 Use `localhost` because the development origin is exact.
+Open `http://localhost:8080/#/benchmarks` for the Benchmark Control Center.
 
 ## Screens
 
@@ -37,6 +40,7 @@ Use `localhost` because the development origin is exact.
 | Storage | Manage MicroStorage pools |
 | Images | Install M2Images or import an OCI image |
 | Host | Show host health and capacity |
+| Benchmarks | Show performance trends, result tables, and current VM state at `#/benchmarks` |
 
 ## VM workflow
 
@@ -80,12 +84,15 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" \
   cargo run -p firecrab-api
 ```
 
-Open `http://127.0.0.1:5523/`.
+Open the management dashboard at `http://127.0.0.1:5523/`.
+Open the benchmark dashboard at `http://127.0.0.1:15523/`.
+The benchmark listener selects `#/benchmarks` on first access.
+The Benchmark Control Center starts one Boot, Concurrent Create, Maximum Density, or Lifecycle Stress job at a time.
 The host installer configures this mode.
 
 ## Check
 
-- Confirm that ports `5523` and `8080` are not used by old processes.
+- Confirm that ports `5523`, `15523`, and `8080` are not used by old processes.
 - Run the API from the repository root.
 - Start the helper before starting a VM.
 - Forward WebSocket upgrades for `/ws` through a reverse proxy.

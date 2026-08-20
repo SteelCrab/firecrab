@@ -8,6 +8,7 @@ import VmTable from "./components/VmTable";
 import Console from "./components/Console";
 import VmDetailModal from "./components/VmDetailModal";
 import HostInfo from "./components/HostInfo";
+import Benchmarks from "./components/Benchmarks";
 import Images from "./components/Images";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
@@ -235,6 +236,7 @@ export default function App() {
         {view === "images" && <Images />}
         {view === "shells" && <Shells />}
         {view === "host" && <HostInfo />}
+        {view === "benchmarks" && <Benchmarks vms={state.vms} vmsLoaded={state.loaded} />}
       </div>
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
     </Shell>

@@ -1494,11 +1494,11 @@ mod tests {
     fn docker_hub_credential_response_never_serializes_the_secret() {
         let configured = DockerHubCredentialResponse {
             configured: true,
-            username: Some("pista".to_owned()),
+            username: Some("example-user".to_owned()),
         };
         let json = serde_json::to_value(&configured).unwrap();
         assert_eq!(json["configured"], true);
-        assert_eq!(json["username"], "pista");
+        assert_eq!(json["username"], "example-user");
         assert!(json.get("secret").is_none());
 
         let empty = DockerHubCredentialResponse {
@@ -1514,11 +1514,14 @@ mod tests {
     #[test]
     fn docker_hub_credential_request_round_trips_camel_case() {
         let request = DockerHubCredentialRequest {
-            username: "pista".to_owned(),
+            username: "example-user".to_owned(),
             secret: "dckr_pat_example".to_owned(),
         };
         let json = serde_json::to_string(&request).unwrap();
-        assert_eq!(json, r#"{"username":"pista","secret":"dckr_pat_example"}"#);
+        assert_eq!(
+            json,
+            r#"{"username":"example-user","secret":"dckr_pat_example"}"#
+        );
         assert_eq!(
             serde_json::from_str::<DockerHubCredentialRequest>(&json).unwrap(),
             request

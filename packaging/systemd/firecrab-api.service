@@ -1,6 +1,6 @@
 [Unit]
 Description=firecrab API and dashboard
-Documentation=https://github.com/pista/firecrab
+Documentation=https://github.com/SteelCrab/firecrab
 After=firecrab-net-helper.service network-online.target
 Wants=firecrab-net-helper.service
 

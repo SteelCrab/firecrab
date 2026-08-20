@@ -16,6 +16,7 @@ export const VIEWS = [
   { id: "images", labels: { en: "Images", ko: "이미지" } },
   { id: "shells", labels: { en: "Shells", ko: "Shell" }, icon: "/bash.png" },
   { id: "host", labels: { en: "Host", ko: "호스트" } },
+  { id: "benchmarks", labels: { en: "Benchmarks", ko: "Benchmark" } },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];
@@ -24,7 +25,15 @@ export function viewLabel(view: (typeof VIEWS)[number], locale: Locale): string 
   return view.labels[locale];
 }
 
-const DEFAULT_VIEW: ViewId = "vms";
+const MANAGEMENT_DEFAULT_VIEW: ViewId = "vms";
+const BENCHMARK_DEFAULT_VIEW: ViewId = "benchmarks";
+const BENCHMARK_PORT = "15523";
+
+function defaultView(): ViewId {
+  return window.location.port === BENCHMARK_PORT
+    ? BENCHMARK_DEFAULT_VIEW
+    : MANAGEMENT_DEFAULT_VIEW;
+}
 
 /**
  * Full-page serial console (not a modal). Hash form so the API host still
@@ -84,8 +93,8 @@ export function openConsoleWindow(vmId: string): Window | null {
   return win;
 }
 
-export function viewHash(view: ViewId = DEFAULT_VIEW): string {
-  return `#/${view}`;
+export function viewHash(view?: ViewId): string {
+  return `#/${view ?? defaultView()}`;
 }
 
 /** Dedicated New MicroVM page. Not a `VIEWS` id — `#/vms` stays the list. */
@@ -116,7 +125,7 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
     }
   }
   if (path === NEW_VM_PATH) return { kind: "vm-new" };
-  return { kind: "shell", view: parseViewId(path) ?? DEFAULT_VIEW };
+  return { kind: "shell", view: parseViewId(path) ?? defaultView() };
 }
 
 /**
@@ -138,7 +147,8 @@ export function useAppRoute(): {
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
 
-  // Empty / unknown shell hashes normalise to `#/vms`. Use `location.hash`
+  // Empty / unknown shell hashes normalise to the listener's default view.
+  // Port 5523 opens MicroVM management; port 15523 opens Benchmarks. Use `location.hash`
   // (not only replaceState) so the URL bar and any hash-dependent code see
   // the same route immediately on first paint after `npm run dev`.
   useEffect(() => {
@@ -147,10 +157,11 @@ export function useAppRoute(): {
     // `#/vms/new` is not a ViewId; do not rewrite it to the list.
     if (path === NEW_VM_PATH) return;
     if (parseViewId(path) === null && parseConsoleVmId(window.location.hash) === null) {
-      const next = viewHash(DEFAULT_VIEW);
+      const fallback = defaultView();
+      const next = viewHash(fallback);
       if (window.location.hash !== next) {
         window.history.replaceState(null, "", next);
-        setRoute({ kind: "shell", view: DEFAULT_VIEW });
+        setRoute({ kind: "shell", view: fallback });
       }
     }
   }, [route]);
@@ -174,6 +185,6 @@ export function useAppRoute(): {
 export function useHashView(): [ViewId, (view: ViewId) => void] {
   const { route, selectView } = useAppRoute();
   // Console and `#/vms/new` still highlight MicroVM; `selectView("vms")` is the list.
-  const view = route.kind === "shell" ? route.view : DEFAULT_VIEW;
+  const view = route.kind === "shell" ? route.view : MANAGEMENT_DEFAULT_VIEW;
   return [view, selectView];
 }

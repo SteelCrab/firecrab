@@ -1,6 +1,6 @@
 [Unit]
 Description=firecrab privileged network helper
-Documentation=https://github.com/pista/firecrab
+Documentation=https://github.com/SteelCrab/firecrab
 # Owns the bridges, TAPs, nftables tables and dnsmasq that the API asks for.
 # Must be listening before the API's startup reconcile runs, or the API only
 # logs a warning and the host side stays unprovisioned until the next VM start.

@@ -1,3 +1,5 @@
+//! Axum router construction, listener policy, and HTTP middleware.
+
 use std::collections::HashSet;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
@@ -22,24 +24,47 @@ use crate::error::AppError;
 use crate::handlers;
 use crate::state::AppState;
 
+/// Maximum accepted JSON request body.
 const MAX_REQUEST_BODY: usize = 64 * 1024;
+/// Header used to correlate API errors and server logs.
 const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+/// Default management and API listener.
+const DEFAULT_BIND_ADDR: &str = "127.0.0.1:5523";
+/// Default benchmark dashboard listener.
+const DEFAULT_BENCHMARK_BIND_ADDR: &str = "127.0.0.1:15523";
 
 #[derive(Debug, Error)]
+/// Invalid or unsafe HTTP listener configuration.
 pub enum ConfigError {
+    /// Management listener is not a valid socket address.
     #[error("invalid FIRECRAB_BIND_ADDR: {0}")]
     InvalidBindAddress(String),
+    #[error("invalid FIRECRAB_BENCH_BIND_ADDR: {0}")]
+    /// Benchmark listener address is not a socket address.
+    InvalidBenchmarkBindAddress(String),
+    #[error("FIRECRAB_BIND_ADDR and FIRECRAB_BENCH_BIND_ADDR must differ: {0}")]
+    /// Management and benchmark listeners resolved to the same address.
+    DuplicateBindAddress(SocketAddr),
+    /// Public binding was requested without authentication and TLS.
     #[error("non-loopback bind requires both authentication and TLS")]
     InsecureNonLoopbackBind,
+    /// One configured CORS origin is not a valid header value.
     #[error("invalid FIRECRAB_ALLOWED_ORIGINS value: {0}")]
     InvalidOrigin(String),
 }
 
 #[derive(Debug, Clone)]
+/// Validated HTTP server and dashboard asset configuration.
 pub struct HttpConfig {
+    /// Management dashboard and REST API listener.
     pub bind_addr: SocketAddr,
+    /// Address dedicated to benchmark dashboard access.
+    pub benchmark_bind_addr: SocketAddr,
+    /// Explicit browser origins allowed to mutate API state.
     pub allowed_origins: Vec<HeaderValue>,
+    /// Maximum requests executing concurrently.
     pub max_concurrent_requests: usize,
+    /// Per-request processing deadline.
     pub request_timeout: Duration,
     /// Directory of built dashboard assets to serve, or `None` to serve none
     /// (`public-docs/dashboard.md`). Set when an installed deploy
@@ -50,8 +75,11 @@ pub struct HttpConfig {
 }
 
 impl HttpConfig {
+    /// Loads and validates HTTP configuration from the process environment.
     pub fn load() -> Result<Self, ConfigError> {
         let bind = bind_addr_or_default(env::var("FIRECRAB_BIND_ADDR").ok());
+        let benchmark_bind =
+            benchmark_bind_addr_or_default(env::var("FIRECRAB_BENCH_BIND_ADDR").ok());
         let authentication_enabled = env_flag("FIRECRAB_AUTHENTICATION_ENABLED");
         let tls_enabled = env_flag("FIRECRAB_TLS_ENABLED");
         let production = env::var("FIRECRAB_ENV").is_ok_and(|value| value == "production");
@@ -63,20 +91,53 @@ impl HttpConfig {
             }
         });
 
-        let mut config = Self::from_values(&bind, &origins, authentication_enabled, tls_enabled)?;
+        let mut config = Self::from_values_with_benchmark(
+            &bind,
+            &benchmark_bind,
+            &origins,
+            authentication_enabled,
+            tls_enabled,
+        )?;
         config.static_root = resolve_static_root(env::var("FIRECRAB_STATIC_ROOT").ok());
         Ok(config)
     }
 
+    /// Builds test configuration using the default benchmark listener.
     fn from_values(
         bind: &str,
         origins: &str,
         authentication_enabled: bool,
         tls_enabled: bool,
     ) -> Result<Self, ConfigError> {
+        Self::from_values_with_benchmark(
+            bind,
+            DEFAULT_BENCHMARK_BIND_ADDR,
+            origins,
+            authentication_enabled,
+            tls_enabled,
+        )
+    }
+
+    /// Validates explicit management and benchmark listener values.
+    fn from_values_with_benchmark(
+        bind: &str,
+        benchmark_bind: &str,
+        origins: &str,
+        authentication_enabled: bool,
+        tls_enabled: bool,
+    ) -> Result<Self, ConfigError> {
         let bind_addr = SocketAddr::from_str(bind)
             .map_err(|_| ConfigError::InvalidBindAddress(bind.to_owned()))?;
-        if !(is_loopback(bind_addr.ip()) || authentication_enabled && tls_enabled) {
+        let benchmark_bind_addr = SocketAddr::from_str(benchmark_bind)
+            .map_err(|_| ConfigError::InvalidBenchmarkBindAddress(benchmark_bind.to_owned()))?;
+        if bind_addr == benchmark_bind_addr {
+            return Err(ConfigError::DuplicateBindAddress(bind_addr));
+        }
+        if !([bind_addr, benchmark_bind_addr]
+            .into_iter()
+            .all(|address| is_loopback(address.ip()))
+            || authentication_enabled && tls_enabled)
+        {
             return Err(ConfigError::InsecureNonLoopbackBind);
         }
 
@@ -92,6 +153,7 @@ impl HttpConfig {
 
         Ok(Self {
             bind_addr,
+            benchmark_bind_addr,
             allowed_origins,
             max_concurrent_requests: 128,
             request_timeout: Duration::from_secs(10),
@@ -116,32 +178,47 @@ fn resolve_static_root(configured: Option<String>) -> Option<PathBuf> {
     None
 }
 
+/// Resolves the configured management listener or its loopback default.
 fn bind_addr_or_default(configured: Option<String>) -> String {
-    configured.unwrap_or_else(|| "127.0.0.1:5523".to_owned())
+    configured.unwrap_or_else(|| DEFAULT_BIND_ADDR.to_owned())
 }
 
+/// Resolves the configured benchmark listener or its loopback default.
+fn benchmark_bind_addr_or_default(configured: Option<String>) -> String {
+    configured.unwrap_or_else(|| DEFAULT_BENCHMARK_BIND_ADDR.to_owned())
+}
+
+/// Parses a permissive boolean environment flag.
 fn env_flag(name: &str) -> bool {
     env::var(name).is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
 }
 
+/// Reports whether a listener address is host-local.
 fn is_loopback(ip: IpAddr) -> bool {
     ip.is_loopback()
 }
 
 #[derive(Clone)]
+/// Origin allowlist shared with mutation middleware.
 struct HttpPolicy {
+    /// Exact allowed origin header values.
     allowed_origins: HashSet<HeaderValue>,
 }
 
 #[derive(Clone)]
+/// Shared concurrency and timeout policy.
 struct RequestLimits {
+    /// Semaphore bounding concurrent request work.
     permits: Arc<Semaphore>,
+    /// Deadline applied around downstream handlers.
     timeout: Duration,
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Correlation identifier assigned to one incoming request.
 pub struct RequestId(pub Uuid);
 
+/// Builds the complete API, WebSocket, dashboard, and middleware router.
 pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     let policy = HttpPolicy {
         allowed_origins: config.allowed_origins.iter().cloned().collect(),
@@ -194,6 +271,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route(
+            "/api/benchmarks",
+            get(handlers::benchmarks::list_benchmarks).post(handlers::benchmarks::create_benchmark),
+        )
+        .route(
+            "/api/benchmark-jobs",
+            get(handlers::benchmark_jobs::list_jobs).post(handlers::benchmark_jobs::start_job),
+        )
+        .route(
+            "/api/benchmark-jobs/{id}",
+            get(handlers::benchmark_jobs::get_job).delete(handlers::benchmark_jobs::cancel_job),
+        )
         // GET and POST share one path, matching this router's existing shape
         // for "read this resource / start work on it" pairs such as
         // `/api/images/{alias}/install`.
@@ -340,6 +429,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .layer(middleware::from_fn(assign_request_id))
 }
 
+/// Assigns or propagates the request correlation identifier.
 async fn assign_request_id(mut request: Request, next: Next) -> Response {
     let request_id = RequestId(Uuid::new_v4());
     request.extensions_mut().insert(request_id);
@@ -401,6 +491,7 @@ fn is_same_origin(origin: &HeaderValue, request: &Request) -> bool {
     matches!(scheme, "http" | "https") && authority.is_some_and(|authority| host == authority)
 }
 
+/// Rejects browser requests outside the configured origin policy.
 async fn enforce_origin(
     State(policy): State<HttpPolicy>,
     request: Request,
@@ -416,6 +507,7 @@ async fn enforce_origin(
     Ok(next.run(request).await)
 }
 
+/// Applies the global concurrency permit and request deadline.
 async fn enforce_limits(
     State(limits): State<RequestLimits>,
     request: Request,
@@ -433,10 +525,12 @@ async fn enforce_limits(
         .map_err(|_| AppError::gateway_timeout(id))
 }
 
+/// Produces the API's structured fallback response.
 async fn not_found(Extension(id): Extension<RequestId>) -> Response {
     AppError::not_found(id.0).into_response()
 }
 
+/// Reads the correlation identifier assigned by middleware.
 pub fn request_id(request: &Request) -> Uuid {
     request
         .extensions()
@@ -455,6 +549,10 @@ mod tests {
             HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
                 .unwrap();
         assert!(config.bind_addr.ip().is_loopback());
+        assert_eq!(
+            config.benchmark_bind_addr,
+            SocketAddr::from(([127, 0, 0, 1], 15523))
+        );
     }
 
     #[test]
@@ -474,6 +572,64 @@ mod tests {
             bind_addr_or_default(Some("0.0.0.0:9999".to_owned())),
             "0.0.0.0:9999"
         );
+    }
+
+    #[test]
+    fn benchmark_bind_addr_defaults_when_unset() {
+        assert_eq!(benchmark_bind_addr_or_default(None), "127.0.0.1:15523");
+    }
+
+    #[test]
+    fn benchmark_bind_addr_honors_override() {
+        assert_eq!(
+            benchmark_bind_addr_or_default(Some("0.0.0.0:19999".to_owned())),
+            "0.0.0.0:19999"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_listener_addresses() {
+        let result = HttpConfig::from_values_with_benchmark(
+            "127.0.0.1:5523",
+            "127.0.0.1:5523",
+            "",
+            false,
+            false,
+        );
+        assert_matches!(result, Err(ConfigError::DuplicateBindAddress(_)));
+    }
+
+    #[test]
+    fn rejects_insecure_non_loopback_benchmark_bind() {
+        let result = HttpConfig::from_values_with_benchmark(
+            "127.0.0.1:5523",
+            "0.0.0.0:15523",
+            "",
+            false,
+            false,
+        );
+        assert_matches!(result, Err(ConfigError::InsecureNonLoopbackBind));
+    }
+
+    #[test]
+    fn rejects_invalid_benchmark_bind_address() {
+        let result = HttpConfig::from_values_with_benchmark(
+            "127.0.0.1:5523",
+            "not-an-address",
+            "",
+            false,
+            false,
+        );
+        assert_matches!(result, Err(ConfigError::InvalidBenchmarkBindAddress(_)));
+    }
+
+    #[test]
+    fn authentication_and_tls_allow_non_loopback_listeners() {
+        let config =
+            HttpConfig::from_values_with_benchmark("0.0.0.0:5523", "0.0.0.0:15523", "", true, true)
+                .unwrap();
+        assert!(config.bind_addr.ip().is_unspecified());
+        assert!(config.benchmark_bind_addr.ip().is_unspecified());
     }
 
     #[test]

@@ -1,3 +1,5 @@
+pub mod benchmark_jobs;
+pub mod benchmarks;
 pub mod bootstrap;
 pub mod builder_vm;
 pub mod console;

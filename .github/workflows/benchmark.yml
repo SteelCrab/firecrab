@@ -1,0 +1,137 @@
+name: Benchmark
+
+on:
+  schedule:
+    - cron: "0 18 * * *"
+    - cron: "0 19 * * 0"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Benchmark workload size
+        required: true
+        default: small
+        type: choice
+        options:
+          - small
+          - full
+          - stress
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    name: Core benchmark
+    if: github.event.schedule != '0 19 * * 0' && inputs.profile != 'stress'
+    runs-on: [self-hosted, linux, x64, kvm, firecrab-benchmark]
+    timeout-minutes: 360
+    env:
+      FIRECRAB_API: ${{ vars.FIRECRAB_BENCH_API || 'http://127.0.0.1:5523' }}
+      BENCH_TEMPLATE: ${{ vars.FIRECRAB_BENCH_TEMPLATE }}
+      BENCH_NETWORK_ID: ${{ vars.FIRECRAB_BENCH_NETWORK_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Validate dedicated runner configuration
+        run: |
+          test -e /dev/kvm
+          test -n "$BENCH_TEMPLATE"
+          test -n "$BENCH_NETWORK_ID"
+          curl -fsS "$FIRECRAB_API/api/host" >/dev/null
+
+      - name: Build benchmark runner
+        run: cargo build --release -p firecrab-bench --locked
+
+      - name: Capture previous history
+        run: curl -fsS "$FIRECRAB_API/api/benchmarks" -o benchmark-history.json || echo '[]' > benchmark-history.json
+
+      - name: Select workload
+        run: |
+          if [ "${{ inputs.profile }}" = full ] || [ "${{ github.event_name }}" = schedule ]; then
+            echo 'BOOT_COUNT=100' >>"$GITHUB_ENV"
+            echo 'CREATE_COUNT=50' >>"$GITHUB_ENV"
+            echo 'LIFECYCLE_COUNT=1000' >>"$GITHUB_ENV"
+            echo 'DENSITY_LIMIT=200' >>"$GITHUB_ENV"
+          else
+            echo 'BOOT_COUNT=5' >>"$GITHUB_ENV"
+            echo 'CREATE_COUNT=10' >>"$GITHUB_ENV"
+            echo 'LIFECYCLE_COUNT=20' >>"$GITHUB_ENV"
+            echo 'DENSITY_LIMIT=50' >>"$GITHUB_ENV"
+          fi
+
+      - name: Core benchmarks
+        run: |
+          mkdir -p benchmark-results
+          common="--template $BENCH_TEMPLATE --micro-network-id $BENCH_NETWORK_ID"
+          target/release/firecrab-bench --publish --output benchmark-results/boot.json boot --count "$BOOT_COUNT" $common
+          target/release/firecrab-bench --publish --output benchmark-results/create.json create --concurrency "$CREATE_COUNT" $common
+          target/release/firecrab-bench --publish --output benchmark-results/lifecycle.json lifecycle --iterations "$LIFECYCLE_COUNT" $common
+          target/release/firecrab-bench --publish --output benchmark-results/density.json density --max-vms "$DENSITY_LIMIT" --step 10 $common
+
+      - name: Compare boot P95 with previous commit
+        run: |
+          python3 - <<'PY'
+          import json
+          runs = json.load(open('benchmark-history.json'))
+          baseline = next((run for run in runs if run.get('test') == 'vm_boot' and run.get('latency')), None)
+          if baseline:
+              json.dump(baseline, open('benchmark-results/boot-baseline.json', 'w'))
+          PY
+          if test -f benchmark-results/boot-baseline.json; then
+            target/release/firecrab-bench --publish --output benchmark-results/regression.json regression \
+              --baseline benchmark-results/boot-baseline.json \
+              --current benchmark-results/boot.json --metric p95_ms --threshold-percent 10
+          fi
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ github.run_id }}
+          path: benchmark-results/
+
+  weekly-stress:
+    name: Weekly soak and leak
+    if: github.event.schedule == '0 19 * * 0' || inputs.profile == 'stress'
+    runs-on: [self-hosted, linux, x64, kvm, firecrab-benchmark]
+    timeout-minutes: 1500
+    env:
+      FIRECRAB_API: ${{ vars.FIRECRAB_BENCH_API || 'http://127.0.0.1:5523' }}
+      BENCH_TEMPLATE: ${{ vars.FIRECRAB_BENCH_TEMPLATE }}
+      BENCH_NETWORK_ID: ${{ vars.FIRECRAB_BENCH_NETWORK_ID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Validate dedicated runner configuration
+        run: |
+          test -e /dev/kvm
+          test -n "$BENCH_TEMPLATE"
+          test -n "$BENCH_NETWORK_ID"
+          curl -fsS "$FIRECRAB_API/api/host" >/dev/null
+
+      - name: Build benchmark runner
+        run: cargo build --release -p firecrab-bench --locked
+
+      - name: Weekly stress benchmarks
+        run: |
+          mkdir -p benchmark-results
+          common="--template $BENCH_TEMPLATE --micro-network-id $BENCH_NETWORK_ID"
+          target/release/firecrab-bench --publish --output benchmark-results/leak.json leak --iterations 10000 $common
+          target/release/firecrab-bench --publish --output benchmark-results/soak.json soak --duration 24h $common
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-stress-${{ github.run_id }}
+          path: benchmark-results/

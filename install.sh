@@ -2,8 +2,8 @@
 # firecrab host installer (public-docs/installation.md).
 #
 # Downloads a host bundle from a GitHub Release (or installs local binaries
-# via --bin-dir), then lays out systemd units so the dashboard is served on
-# http://127.0.0.1:5523/.
+# via --bin-dir), then lays out systemd units so management is served on
+# http://127.0.0.1:5523/ and benchmarks on http://127.0.0.1:15523/.
 #
 # Bundles are Linux x86_64/aarch64 × gnu (glibc) / musl. glibc hosts get the
 # gnu bundle; musl hosts (Alpine) get musl. Override with --libc.
@@ -435,7 +435,7 @@ download_host_bundle() {
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$PAYLOAD_TMP/$tarball"; then
         die "failed to download $url
 Tag a GitHub Release, or install local binaries:
-  cargo build --release -p firecrab-api -p firecrab-net-helper -p firecrab-cli
+  cargo build --release -p firecrab-api -p firecrab-net-helper -p firecrab-cli -p firecrab-bench
   ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist"
     fi
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$sums_url" -o "$PAYLOAD_TMP/SHA256SUMS"; then
@@ -447,7 +447,7 @@ Tag a GitHub Release, or install local binaries:
     tar -xzf "$PAYLOAD_TMP/$tarball" -C "$PAYLOAD_TMP/root"
     PAYLOAD_ROOT=$PAYLOAD_TMP/root
     local name
-    for name in firecrab-api firecrab-net-helper firecrab; do
+    for name in firecrab-api firecrab-net-helper firecrab firecrab-bench; do
         [ -x "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing $name"
         firecrab_assert_binary_arch "$PAYLOAD_ROOT/$name" "$arch" \
             || die "$tarball: $name is not a $arch binary"
@@ -489,7 +489,7 @@ report_payload() {
             return 1
         fi
         local name gaps=0
-        for name in firecrab-api firecrab-net-helper firecrab; do
+        for name in firecrab-api firecrab-net-helper firecrab firecrab-bench; do
             if [ -x "$BIN_DIR/$name" ]; then
                 log "  $name"
             else
@@ -565,7 +565,7 @@ ensure_directories() {
 # Puts the payload binaries, and the dashboard, where the units expect them.
 install_binaries() {
     local name src
-    for name in firecrab-api firecrab-net-helper; do
+    for name in firecrab-api firecrab-net-helper firecrab-bench; do
         src=$(firecrab_resolve_binary "$name" "$PAYLOAD_BIN" "$LIBDIR") \
             || die "no $name in ${PAYLOAD_BIN:-<release>} or $LIBDIR — pass it via --bin-dir or install a release"
         if [ "$src" -ef "$LIBDIR/$name" ]; then
@@ -655,6 +655,7 @@ install_config() {
 # assets and the working directory; uncomment only what you want to change.
 #
 # FIRECRAB_BIND_ADDR=127.0.0.1:5523
+# FIRECRAB_BENCH_BIND_ADDR=127.0.0.1:15523
 # A non-loopback address requires authentication AND TLS to be enabled.
 # FIRECRAB_ALLOWED_ORIGINS=
 # Empty is correct while the dashboard is served from this same origin.
@@ -730,12 +731,16 @@ start_units() {
 # on start_units's return don't race it.
 wait_for_api() {
     local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}
+    local benchmark_bind=${FIRECRAB_BENCH_BIND_ADDR:-127.0.0.1:15523}
     local _attempt
     for _attempt in $(seq 1 60); do
-        curl -fs -o /dev/null "http://$bind/" 2>/dev/null && return 0
+        if curl -fs -o /dev/null "http://$bind/" 2>/dev/null \
+            && curl -fs -o /dev/null "http://$benchmark_bind/" 2>/dev/null; then
+            return 0
+        fi
         sleep 1
     done
-    warn "firecrab-api did not answer http://$bind/ within 60s — journalctl -u firecrab-api -n 30"
+    warn "firecrab-api did not answer http://$bind/ and http://$benchmark_bind/ within 60s — journalctl -u firecrab-api -n 30"
     return 1
 }
 
@@ -843,7 +848,9 @@ do_install() {
     report_ufw
 
     local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}
-    log "done — dashboard at http://$bind/"
+    local benchmark_bind=${FIRECRAB_BENCH_BIND_ADDR:-127.0.0.1:15523}
+    log "done — management at http://$bind/"
+    log "done — benchmarks at http://$benchmark_bind/"
     if ! images_present; then
         step "guest images: install from the dashboard Images page"
     fi
@@ -867,7 +874,7 @@ do_uninstall() {
             || warn "network teardown failed — bridges/nftables tables may remain until reboot"
     fi
 
-    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
+    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper" "$LIBDIR/firecrab-bench"
     $SUDO rm -f "$PREFIX/bin/firecrab"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true

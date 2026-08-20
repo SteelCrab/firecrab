@@ -42,14 +42,17 @@ To patch an installed host with binaries you built yourself:
 ```sh
 git clone https://github.com/SteelCrab/firecrab.git
 cd firecrab
-cargo build --release -p firecrab-api -p firecrab-net-helper
+npm run build --prefix firecrab-frontend
+cargo build --release \
+  -p firecrab-api -p firecrab-net-helper -p firecrab-cli -p firecrab-bench
 ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist
 ```
 
-Open the dashboard after the services start.
+Open the dashboards after the services start.
 
 ```text
-http://127.0.0.1:5523/
+Management: http://127.0.0.1:5523/
+Benchmarks: http://127.0.0.1:15523/
 ```
 
 The install never installs a guest image.
@@ -96,6 +99,7 @@ systemctl status firecrab-net-helper firecrab-api
 firecrab doctor
 curl -s http://127.0.0.1:5523/api/vms
 curl -s http://127.0.0.1:5523/api/micro-networks
+curl -I http://127.0.0.1:15523/
 ```
 
 A new host has no MicroNetwork.
