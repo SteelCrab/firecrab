@@ -18,7 +18,7 @@ cargo test -p firecrab-bench
 - API 기본 주소 정규화
 - 지연 시간 백분위 계산
 - JSON 결과 실패율 계산
-- Run ID·Commit·Branch·Timestamp·Host·Version 메타데이터
+- Run ID·빌드 시점 Commit·Branch·Dirty 상태·Timestamp·Host·Version 메타데이터
 - Host CPU·메모리·Load Average·Firecracker 프로세스 수
 
 ## 수동 검증

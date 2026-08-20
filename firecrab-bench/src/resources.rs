@@ -14,6 +14,9 @@ pub struct RunMetadata {
     pub commit_sha: String,
     /// Git branch supplied by CI, or `unknown` for a local run.
     pub branch: String,
+    /// Whether the benchmark binary was built from tracked workspace changes.
+    #[serde(default)]
+    pub dirty: bool,
     /// RFC 3339 UTC timestamp recorded when the result is assembled.
     pub timestamp: String,
     /// Benchmark host name.
@@ -29,7 +32,7 @@ impl RunMetadata {
     pub fn capture() -> Self {
         Self {
             run_id: Uuid::new_v4(),
-            commit_sha: environment_value("GITHUB_SHA"),
+            commit_sha: runtime_or_build_value("GITHUB_SHA", env!("FIRECRAB_BUILD_COMMIT")),
             branch: std::env::var("GITHUB_HEAD_REF")
                 .ok()
                 .filter(|value| !value.is_empty())
@@ -38,7 +41,8 @@ impl RunMetadata {
                         .ok()
                         .filter(|value| !value.is_empty())
                 })
-                .unwrap_or_else(|| "unknown".to_owned()),
+                .unwrap_or_else(|| env!("FIRECRAB_BUILD_BRANCH").to_owned()),
+            dirty: env!("FIRECRAB_BUILD_DIRTY") == "true",
             timestamp: OffsetDateTime::now_utc()
                 .format(&Rfc3339)
                 .unwrap_or_else(|_| "unknown".to_owned()),
@@ -104,11 +108,11 @@ impl HostResourceSampler {
     }
 }
 
-fn environment_value(name: &str) -> String {
+fn runtime_or_build_value(name: &str, build_value: &str) -> String {
     std::env::var(name)
         .ok()
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
+        .unwrap_or_else(|| build_value.to_owned())
 }
 
 fn read_trimmed(path: &str) -> Option<String> {
@@ -231,6 +235,25 @@ mod tests {
         assert_ne!(metadata.run_id, Uuid::nil());
         assert!(metadata.timestamp.contains('T'));
         assert!(!metadata.firecrab_version.is_empty());
+        assert!(!metadata.commit_sha.is_empty());
+        assert!(!metadata.branch.is_empty());
+        assert!(
+            metadata.commit_sha == "unknown"
+                || metadata
+                    .commit_sha
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+        );
+    }
+
+    #[test]
+    fn older_run_metadata_defaults_to_a_clean_build() {
+        let mut value = serde_json::to_value(RunMetadata::capture()).unwrap();
+        value.as_object_mut().unwrap().remove("dirty");
+
+        let metadata: RunMetadata = serde_json::from_value(value).unwrap();
+
+        assert!(!metadata.dirty);
     }
 
     #[test]

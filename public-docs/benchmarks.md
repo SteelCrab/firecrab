@@ -8,6 +8,7 @@ The Benchmark Control Center starts host-local `firecrab-bench` jobs and display
 - [Safety](#safety)
 - [API](#api)
 - [CLI](#cli)
+- [Source metadata](#source-metadata)
 - [Development mode](#development-mode)
 - [Installation](#installation)
 - [Related](#related)
@@ -59,6 +60,16 @@ Run a small API benchmark and publish its result.
 ```
 
 Use the CLI directly for Network, Storage, Soak, Leak, and Regression commands not exposed by the MVP Control Center.
+
+## Source metadata
+
+`firecrab-bench` embeds the Git commit, branch, and tracked-workspace dirty state at build time.
+
+Dashboard-started jobs use this embedded identity, so they do not require GitHub Actions environment variables.
+
+GitHub Actions values override the embedded commit and branch when present.
+
+Rebuild the benchmark binary after switching commits or changing tracked workspace files.
 
 ## Development mode
 
