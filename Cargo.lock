@@ -437,11 +437,15 @@ version = "0.1.1"
 dependencies = [
  "clap",
  "firecrab-api-types",
+ "firecrab-helper-protocol",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -461,10 +465,12 @@ name = "firecrab-net-helper"
 version = "0.1.1"
 dependencies = [
  "firecrab-helper-protocol",
+ "flate2",
  "futures-util",
  "libc",
  "rtnetlink",
  "sha2",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

@@ -258,6 +258,7 @@ pub(crate) mod test_support {
             NetworkRequest::ApplyVmPolicy { .. } => "apply_vm_policy",
             NetworkRequest::RemoveVmPolicy { .. } => "remove_vm_policy",
             NetworkRequest::SyncDhcpLeases { .. } => "sync_dhcp_leases",
+            NetworkRequest::ApplySelfUpdate { .. } => "apply_self_update",
         }
     }
 

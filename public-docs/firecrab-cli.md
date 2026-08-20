@@ -11,6 +11,7 @@ It diagnoses host readiness, prints resolved configuration, and reports live sta
 | [doctor](#doctor) | The 13 host-readiness checks |
 | [info](#info) | Version and resolved paths |
 | [status](#status) | Live systemd and API state |
+| [update](#update) | Release check and in-place upgrade |
 | [Develop](#develop) | Running the CLI from a checkout, no install |
 | [Related](#related) | Other documents |
 
@@ -25,19 +26,25 @@ flowchart TB
     Doctor["doctor"]
     Info["info"]
     Status["status"]
+    Update["update"]
     Proc[("/dev/kvm, /proc/sys/net")]
     Tools["nft, ufw, systemctl,\ngetenforce, curl"]
     Paths["PREFIX, DATADIR,\nCONFDIR, UNITDIR"]
     Units["systemd units"]
     API[("firecrab-api\n:5523")]
+    GH[("api.github.com\nreleases/latest")]
+    Helper[("firecrab-net-helper\nsocket")]
     CLI --> Doctor
     CLI --> Info
     CLI --> Status
+    CLI --> Update
     Doctor -->|read| Proc
     Doctor -->|shell out| Tools
     Info -->|resolve| Paths
     Status -->|is-active| Units
     Status -->|GET /api/host| API
+    Update -->|GET releases/latest| GH
+    Update -->|ApplySelfUpdate| Helper
 ```
 
 | Subcommand | Talks to | Needs root |
@@ -45,6 +52,7 @@ flowchart TB
 | `doctor` | `/proc`, `/dev/kvm`, and external tools (`nft`, `ufw`, `systemctl`, `getenforce`, `curl`) | No — privileged checks degrade to SKIP with a fix hint |
 | `info` | Only environment variables and install defaults | No |
 | `status` | `systemctl is-active` and `GET /api/host` | No |
+| `update` | `api.github.com`, the release asset host, and the net-helper socket | `--check` no; `--apply` yes (root or the `firecrab` account) |
 
 ## doctor
 
@@ -102,6 +110,37 @@ firecrab status --api http://127.0.0.1:5523
 - `firecrab-api.service` / `firecrab-net-helper.service`: `systemctl is-active`, or `unknown` if `systemctl` itself cannot run.
 - `host`: `GET /api/host` — load average, memory, disk, and uptime — or `null` with `hostError` set if the API is unreachable or answers an error.
 - Base URL resolution is the same as `info`: `--api`, then `FIRECRAB_API`, then `http://127.0.0.1:5523`.
+
+## update
+
+Compares this build's version with the newest GitHub Release tag, and optionally installs it.
+
+```sh
+firecrab update --check
+firecrab update --check --json
+sudo firecrab update --apply
+```
+
+With no flag, `update` behaves as `--check`.
+
+| Flag | Effect |
+| --- | --- |
+| `--check` | Report only; no download. Exit 0 whether or not an update exists, 1 if the check itself failed |
+| `--apply` | Download the host bundle, verify SHA-256, and hand the swap to `firecrab-net-helper` |
+| `--json` | Emit `UpdateCheckResponse`, the same body `GET /api/update` returns |
+
+`--json` prints a report even when the check fails, with `latest` absent and `error` filled in.
+
+The CLI never writes to the install directories and never calls `systemctl`.
+It stages the bundle under `$DATADIR/updates/<uuid>` and sends one request to the helper, which re-verifies the checksum from its own open file descriptor before replacing anything.
+Unit files are not updated by `--apply`; see [Operations](operations.md#upgrade).
+
+| Variable | Default | Job |
+| --- | --- | --- |
+| `FIRECRAB_RELEASE_REPO` | `SteelCrab/firecrab` | Repository the release comes from |
+| `FIRECRAB_RELEASE_API` | GitHub `releases/latest` | Version-check endpoint |
+| `FIRECRAB_RELEASE_BASE` | GitHub releases root | Asset download root |
+| `FIRECRAB_LIBC` | This build's target | `gnu` or `musl` bundle selection |
 
 ## Develop
 

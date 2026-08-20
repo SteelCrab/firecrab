@@ -97,6 +97,8 @@ body {
   border-right: 1px solid var(--line);
   background: var(--bg-panel);
   min-height: calc(100vh - 8rem);
+  display: flex;
+  flex-direction: column;
 }
 .shell-nav ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.2rem; }
 
@@ -128,6 +130,46 @@ body {
   object-fit: contain;
   flex-shrink: 0;
   border-radius: 3px;
+}
+
+.update-indicator {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem 0;
+  border-top: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--ember);
+}
+.update-indicator-action {
+  border: 1px solid var(--ember);
+  border-radius: 3px;
+  background: none;
+  color: var(--ember);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+}
+.update-indicator-action:hover { background: rgba(196, 62, 18, 0.08); }
+
+/* The bounded-wait fallback: an apply that never reported a new version. */
+.update-indicator-stalled { color: var(--error); }
+.update-indicator-stalled .update-indicator-action {
+  border-color: var(--error);
+  color: var(--error);
+}
+.update-indicator-stalled .update-indicator-action:hover {
+  background: rgba(179, 38, 30, 0.08);
+}
+.update-indicator-hint {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--shell);
+  overflow-wrap: anywhere;
 }
 
 .panel-title-with-icon {
@@ -325,6 +367,10 @@ form.shell-create-grid .field-span-2 {
     padding: 0.65rem 0.2rem;
   }
   .shell-nav-label { display: none; }
+  .update-indicator-label { display: none; }
+  /* The journalctl hint is far wider than the collapsed icon rail. */
+  .update-indicator-hint { display: none; }
+  .update-indicator { padding: 0.6rem 0.2rem 0; }
 }
 
 @media (max-width: 700px) {

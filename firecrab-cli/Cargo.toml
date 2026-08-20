@@ -12,10 +12,16 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 firecrab-api-types = { path = "../firecrab-api-types" }
+firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+thiserror = { workspace = true }
+# `framing` is async-only, so the apply path wraps it in a current-thread
+# runtime. doctor/info/status stay fully synchronous.
+tokio = { version = "1", features = ["rt", "net", "io-util", "time"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

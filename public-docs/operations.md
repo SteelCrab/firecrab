@@ -75,9 +75,28 @@ The image directory contains source templates.
 
 ## Upgrade
 
-Run `install.sh` again to replace binaries from the latest GitHub Release.
-Use `--bin-dir` to drop in locally built binaries instead.
-The installer preserves VM data and `api.env`.
+Update in place from the latest GitHub Release.
+
+```sh
+firecrab update --check
+sudo firecrab update --apply
+```
+
+`--check` is read-only and needs no privilege; it is also what runs with no flag at all.
+`--apply` needs root or the `firecrab` service account, because the binary swap goes through the network helper's socket.
+The dashboard's bottom-left indicator runs the same two steps.
+
+The apply replaces binaries and the dashboard, then restarts both services.
+The helper writes only into the install layout it derives from its own units, and rejects any other; a host installed with a non-default `PREFIX` needs `install.sh` re-run once so both units carry it.
+It does **not** update the systemd unit files.
+A release whose notes say a unit changed needs `install.sh` re-run once.
+
+```sh
+curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
+```
+
+`install.sh` also remains the way to install local builds, with `--bin-dir`.
+Both paths preserve VM data and `api.env`.
 
 Check both services and run the doctor after an upgrade.
 

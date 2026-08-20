@@ -14,6 +14,15 @@ Group=@FIRECRAB_GROUP@
 WorkingDirectory=@DATADIR@
 Environment=FIRECRAB_IMAGE_ROOT=@DATADIR@/images
 Environment=FIRECRAB_STATIC_ROOT=@SHAREDIR@/dashboard
+# So `firecrab update`, spawned as a child of this service, resolves the same
+# install layout `firecrab info` reports instead of falling back to defaults.
+# PREFIX and FIRECRAB_LIBDIR are also what firecrab-net-helper.service exports
+# to itself: the helper re-derives the layout from them and rejects an
+# ApplySelfUpdate that disagrees, so both sides must be rendered from the same
+# install.sh values or every apply is refused.
+Environment=PREFIX=@PREFIX@
+Environment=FIRECRAB_LIBDIR=@LIBDIR@
+Environment=DATADIR=@DATADIR@
 EnvironmentFile=-@CONFDIR@/api.env
 ExecStart=@LIBDIR@/firecrab-api
 Restart=on-failure

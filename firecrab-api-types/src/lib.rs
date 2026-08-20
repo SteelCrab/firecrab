@@ -763,6 +763,35 @@ pub struct HostStatusResponse {
     pub uptime_seconds: u64,
 }
 
+/// `GET /api/update`, and the `--json` output of `firecrab update --check`.
+/// One type for both so the CLI's report and the API's answer cannot drift.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckResponse {
+    /// Version of the build that answered (`CARGO_PKG_VERSION`).
+    pub current: String,
+    /// Newest release's `tag_name` with any leading `v` stripped. `None` when
+    /// the check could not reach GitHub or the tag did not parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<String>,
+    /// True only when `latest` parsed and is strictly newer than `current`.
+    pub update_available: bool,
+    /// One-line reason there is no `latest` (unreachable, rate limited,
+    /// unparsable tag). `None` on a successful check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// `POST /api/update`: the detached updater was launched, nothing more.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateStartResponse {
+    /// Version this host is running at the moment the updater was launched.
+    pub current: String,
+    /// PID of the spawned `firecrab update --apply`, for journal correlation.
+    pub pid: u32,
+}
+
 /// One entry from `GET /api/images` — a template registry alias the create
 /// form can offer, with digests and a disk floor. Host paths are never
 /// exposed (`public-docs/images.md`).
@@ -1630,5 +1659,58 @@ mod tests {
         let parsed: BootstrapResponse = serde_json::from_value(json).expect("deserialize");
         assert!(parsed.step_timeline.is_empty());
         assert_eq!(parsed.current_step, None);
+    }
+
+    #[test]
+    fn update_check_response_serializes_camel_case() {
+        let response = UpdateCheckResponse {
+            current: "0.1.1".to_owned(),
+            latest: Some("0.1.2".to_owned()),
+            update_available: true,
+            error: None,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert_eq!(
+            json,
+            "{\"current\":\"0.1.1\",\"latest\":\"0.1.2\",\"updateAvailable\":true}"
+        );
+        assert_eq!(
+            serde_json::from_str::<UpdateCheckResponse>(&json).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn update_check_response_reports_a_failed_check_without_a_latest() {
+        let response = UpdateCheckResponse {
+            current: "0.1.1".to_owned(),
+            latest: None,
+            update_available: false,
+            error: Some("unreachable: connection refused".to_owned()),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(
+            !json.contains("\"latest\""),
+            "absent latest must be omitted: {json}"
+        );
+        assert!(json.contains("\"error\":\"unreachable: connection refused\""));
+        assert_eq!(
+            serde_json::from_str::<UpdateCheckResponse>(&json).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn update_start_response_serializes_camel_case() {
+        let response = UpdateStartResponse {
+            current: "0.1.1".to_owned(),
+            pid: 4242,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert_eq!(json, "{\"current\":\"0.1.1\",\"pid\":4242}");
+        assert_eq!(
+            serde_json::from_str::<UpdateStartResponse>(&json).unwrap(),
+            response
+        );
     }
 }
