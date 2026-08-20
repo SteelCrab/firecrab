@@ -300,10 +300,7 @@ fn benchmark_name(prefix: &str, sequence: u32) -> String {
 /// Builds a unique VM name with a validated tag supplied by the caller.
 fn benchmark_name_with_tag(prefix: &str, sequence: u32, run_tag: Option<&str>) -> String {
     match run_tag {
-        Some(tag) => format!(
-            "bench-{prefix}-{tag}-{sequence}-{}",
-            Uuid::new_v4().simple()
-        ),
+        Some(tag) => format!("bench-{prefix}-{tag}-{sequence}"),
         None => format!("bench-{prefix}-{sequence}-{}", Uuid::new_v4().simple()),
     }
 }
@@ -318,10 +315,19 @@ mod tests {
 
     #[test]
     fn benchmark_names_keep_the_optional_run_tag() {
-        assert!(benchmark_name_with_tag("boot", 3, None).starts_with("bench-boot-3-"));
-        assert!(
-            benchmark_name_with_tag("boot", 3, Some("abc123")).starts_with("bench-boot-abc123-3-")
+        let direct = benchmark_name_with_tag("boot", 3, None);
+        assert!(direct.starts_with("bench-boot-3-"));
+        assert!(direct.len() <= 64);
+
+        assert_eq!(
+            benchmark_name_with_tag("boot", 3, Some("abc123")),
+            "bench-boot-abc123-3"
         );
+
+        let dashboard_tag = Uuid::new_v4().simple().to_string();
+        let dashboard = benchmark_name_with_tag("lifecycle", 1_000, Some(&dashboard_tag));
+        assert!(dashboard.contains(&format!("-{dashboard_tag}-")));
+        assert!(dashboard.len() <= 64, "{dashboard}");
     }
 
     struct FakeApi {
