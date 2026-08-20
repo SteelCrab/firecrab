@@ -1,7 +1,8 @@
 # API
 
 `firecrab-api` provides REST endpoints and one console WebSocket.
-It listens on `127.0.0.1:5523` by default.
+The management and API listener uses `127.0.0.1:5523` by default.
+The benchmark dashboard listener uses `127.0.0.1:15523` and opens the benchmark view first.
 
 ## Run
 

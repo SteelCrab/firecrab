@@ -24,11 +24,21 @@ use crate::state::AppState;
 
 const MAX_REQUEST_BODY: usize = 64 * 1024;
 const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+/// Default management and API listener.
+const DEFAULT_BIND_ADDR: &str = "127.0.0.1:5523";
+/// Default benchmark dashboard listener.
+const DEFAULT_BENCHMARK_BIND_ADDR: &str = "127.0.0.1:15523";
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("invalid FIRECRAB_BIND_ADDR: {0}")]
     InvalidBindAddress(String),
+    #[error("invalid FIRECRAB_BENCH_BIND_ADDR: {0}")]
+    /// Benchmark listener address is not a socket address.
+    InvalidBenchmarkBindAddress(String),
+    #[error("FIRECRAB_BIND_ADDR and FIRECRAB_BENCH_BIND_ADDR must differ: {0}")]
+    /// Management and benchmark listeners resolved to the same address.
+    DuplicateBindAddress(SocketAddr),
     #[error("non-loopback bind requires both authentication and TLS")]
     InsecureNonLoopbackBind,
     #[error("invalid FIRECRAB_ALLOWED_ORIGINS value: {0}")]
@@ -38,6 +48,8 @@ pub enum ConfigError {
 #[derive(Debug, Clone)]
 pub struct HttpConfig {
     pub bind_addr: SocketAddr,
+    /// Address dedicated to benchmark dashboard access.
+    pub benchmark_bind_addr: SocketAddr,
     pub allowed_origins: Vec<HeaderValue>,
     pub max_concurrent_requests: usize,
     pub request_timeout: Duration,
@@ -52,6 +64,8 @@ pub struct HttpConfig {
 impl HttpConfig {
     pub fn load() -> Result<Self, ConfigError> {
         let bind = bind_addr_or_default(env::var("FIRECRAB_BIND_ADDR").ok());
+        let benchmark_bind =
+            benchmark_bind_addr_or_default(env::var("FIRECRAB_BENCH_BIND_ADDR").ok());
         let authentication_enabled = env_flag("FIRECRAB_AUTHENTICATION_ENABLED");
         let tls_enabled = env_flag("FIRECRAB_TLS_ENABLED");
         let production = env::var("FIRECRAB_ENV").is_ok_and(|value| value == "production");
@@ -63,7 +77,13 @@ impl HttpConfig {
             }
         });
 
-        let mut config = Self::from_values(&bind, &origins, authentication_enabled, tls_enabled)?;
+        let mut config = Self::from_values_with_benchmark(
+            &bind,
+            &benchmark_bind,
+            &origins,
+            authentication_enabled,
+            tls_enabled,
+        )?;
         config.static_root = resolve_static_root(env::var("FIRECRAB_STATIC_ROOT").ok());
         Ok(config)
     }
@@ -74,9 +94,34 @@ impl HttpConfig {
         authentication_enabled: bool,
         tls_enabled: bool,
     ) -> Result<Self, ConfigError> {
+        Self::from_values_with_benchmark(
+            bind,
+            DEFAULT_BENCHMARK_BIND_ADDR,
+            origins,
+            authentication_enabled,
+            tls_enabled,
+        )
+    }
+
+    fn from_values_with_benchmark(
+        bind: &str,
+        benchmark_bind: &str,
+        origins: &str,
+        authentication_enabled: bool,
+        tls_enabled: bool,
+    ) -> Result<Self, ConfigError> {
         let bind_addr = SocketAddr::from_str(bind)
             .map_err(|_| ConfigError::InvalidBindAddress(bind.to_owned()))?;
-        if !(is_loopback(bind_addr.ip()) || authentication_enabled && tls_enabled) {
+        let benchmark_bind_addr = SocketAddr::from_str(benchmark_bind)
+            .map_err(|_| ConfigError::InvalidBenchmarkBindAddress(benchmark_bind.to_owned()))?;
+        if bind_addr == benchmark_bind_addr {
+            return Err(ConfigError::DuplicateBindAddress(bind_addr));
+        }
+        if !([bind_addr, benchmark_bind_addr]
+            .into_iter()
+            .all(|address| is_loopback(address.ip()))
+            || authentication_enabled && tls_enabled)
+        {
             return Err(ConfigError::InsecureNonLoopbackBind);
         }
 
@@ -92,6 +137,7 @@ impl HttpConfig {
 
         Ok(Self {
             bind_addr,
+            benchmark_bind_addr,
             allowed_origins,
             max_concurrent_requests: 128,
             request_timeout: Duration::from_secs(10),
@@ -117,7 +163,12 @@ fn resolve_static_root(configured: Option<String>) -> Option<PathBuf> {
 }
 
 fn bind_addr_or_default(configured: Option<String>) -> String {
-    configured.unwrap_or_else(|| "127.0.0.1:5523".to_owned())
+    configured.unwrap_or_else(|| DEFAULT_BIND_ADDR.to_owned())
+}
+
+/// Resolves the configured benchmark listener or its loopback default.
+fn benchmark_bind_addr_or_default(configured: Option<String>) -> String {
+    configured.unwrap_or_else(|| DEFAULT_BENCHMARK_BIND_ADDR.to_owned())
 }
 
 fn env_flag(name: &str) -> bool {
@@ -459,6 +510,10 @@ mod tests {
             HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
                 .unwrap();
         assert!(config.bind_addr.ip().is_loopback());
+        assert_eq!(
+            config.benchmark_bind_addr,
+            SocketAddr::from(([127, 0, 0, 1], 15523))
+        );
     }
 
     #[test]
@@ -478,6 +533,64 @@ mod tests {
             bind_addr_or_default(Some("0.0.0.0:9999".to_owned())),
             "0.0.0.0:9999"
         );
+    }
+
+    #[test]
+    fn benchmark_bind_addr_defaults_when_unset() {
+        assert_eq!(benchmark_bind_addr_or_default(None), "127.0.0.1:15523");
+    }
+
+    #[test]
+    fn benchmark_bind_addr_honors_override() {
+        assert_eq!(
+            benchmark_bind_addr_or_default(Some("0.0.0.0:19999".to_owned())),
+            "0.0.0.0:19999"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_listener_addresses() {
+        let result = HttpConfig::from_values_with_benchmark(
+            "127.0.0.1:5523",
+            "127.0.0.1:5523",
+            "",
+            false,
+            false,
+        );
+        assert_matches!(result, Err(ConfigError::DuplicateBindAddress(_)));
+    }
+
+    #[test]
+    fn rejects_insecure_non_loopback_benchmark_bind() {
+        let result = HttpConfig::from_values_with_benchmark(
+            "127.0.0.1:5523",
+            "0.0.0.0:15523",
+            "",
+            false,
+            false,
+        );
+        assert_matches!(result, Err(ConfigError::InsecureNonLoopbackBind));
+    }
+
+    #[test]
+    fn rejects_invalid_benchmark_bind_address() {
+        let result = HttpConfig::from_values_with_benchmark(
+            "127.0.0.1:5523",
+            "not-an-address",
+            "",
+            false,
+            false,
+        );
+        assert_matches!(result, Err(ConfigError::InvalidBenchmarkBindAddress(_)));
+    }
+
+    #[test]
+    fn authentication_and_tls_allow_non_loopback_listeners() {
+        let config =
+            HttpConfig::from_values_with_benchmark("0.0.0.0:5523", "0.0.0.0:15523", "", true, true)
+                .unwrap();
+        assert!(config.bind_addr.ip().is_unspecified());
+        assert!(config.benchmark_bind_addr.ip().is_unspecified());
     }
 
     #[test]

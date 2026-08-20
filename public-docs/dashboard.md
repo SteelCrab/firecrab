@@ -81,12 +81,14 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" \
   cargo run -p firecrab-api
 ```
 
-Open `http://127.0.0.1:5523/`.
+Open the management dashboard at `http://127.0.0.1:5523/`.
+Open the benchmark dashboard at `http://127.0.0.1:15523/`.
+The benchmark listener selects `#/benchmarks` on first access.
 The host installer configures this mode.
 
 ## Check
 
-- Confirm that ports `5523` and `8080` are not used by old processes.
+- Confirm that ports `5523`, `15523`, and `8080` are not used by old processes.
 - Run the API from the repository root.
 - Start the helper before starting a VM.
 - Forward WebSocket upgrades for `/ws` through a reverse proxy.

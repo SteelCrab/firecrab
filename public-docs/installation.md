@@ -46,10 +46,11 @@ cargo build --release -p firecrab-api -p firecrab-net-helper
 ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist
 ```
 
-Open the dashboard after the services start.
+Open the dashboards after the services start.
 
 ```text
-http://127.0.0.1:5523/
+Management: http://127.0.0.1:5523/
+Benchmarks: http://127.0.0.1:15523/
 ```
 
 The install never installs a guest image.
@@ -96,6 +97,7 @@ systemctl status firecrab-net-helper firecrab-api
 firecrab doctor
 curl -s http://127.0.0.1:5523/api/vms
 curl -s http://127.0.0.1:5523/api/micro-networks
+curl -I http://127.0.0.1:15523/
 ```
 
 A new host has no MicroNetwork.

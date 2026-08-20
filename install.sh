@@ -2,8 +2,8 @@
 # firecrab host installer (public-docs/installation.md).
 #
 # Downloads a host bundle from a GitHub Release (or installs local binaries
-# via --bin-dir), then lays out systemd units so the dashboard is served on
-# http://127.0.0.1:5523/.
+# via --bin-dir), then lays out systemd units so management is served on
+# http://127.0.0.1:5523/ and benchmarks on http://127.0.0.1:15523/.
 #
 # Bundles are Linux x86_64/aarch64 × gnu (glibc) / musl. glibc hosts get the
 # gnu bundle; musl hosts (Alpine) get musl. Override with --libc.
@@ -655,6 +655,7 @@ install_config() {
 # assets and the working directory; uncomment only what you want to change.
 #
 # FIRECRAB_BIND_ADDR=127.0.0.1:5523
+# FIRECRAB_BENCH_BIND_ADDR=127.0.0.1:15523
 # A non-loopback address requires authentication AND TLS to be enabled.
 # FIRECRAB_ALLOWED_ORIGINS=
 # Empty is correct while the dashboard is served from this same origin.
@@ -730,12 +731,16 @@ start_units() {
 # on start_units's return don't race it.
 wait_for_api() {
     local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}
+    local benchmark_bind=${FIRECRAB_BENCH_BIND_ADDR:-127.0.0.1:15523}
     local _attempt
     for _attempt in $(seq 1 60); do
-        curl -fs -o /dev/null "http://$bind/" 2>/dev/null && return 0
+        if curl -fs -o /dev/null "http://$bind/" 2>/dev/null \
+            && curl -fs -o /dev/null "http://$benchmark_bind/" 2>/dev/null; then
+            return 0
+        fi
         sleep 1
     done
-    warn "firecrab-api did not answer http://$bind/ within 60s — journalctl -u firecrab-api -n 30"
+    warn "firecrab-api did not answer http://$bind/ and http://$benchmark_bind/ within 60s — journalctl -u firecrab-api -n 30"
     return 1
 }
 
@@ -843,7 +848,9 @@ do_install() {
     report_ufw
 
     local bind=${FIRECRAB_BIND_ADDR:-127.0.0.1:5523}
-    log "done — dashboard at http://$bind/"
+    local benchmark_bind=${FIRECRAB_BENCH_BIND_ADDR:-127.0.0.1:15523}
+    log "done — management at http://$bind/"
+    log "done — benchmarks at http://$benchmark_bind/"
     if ! images_present; then
         step "guest images: install from the dashboard Images page"
     fi

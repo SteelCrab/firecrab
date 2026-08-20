@@ -278,6 +278,7 @@ jobs:
         run: |
           set -o pipefail
           curl -fsS -o /dev/null -w 'dashboard %{http_code} %{content_type}\n' http://127.0.0.1:5523/
+          curl -fsS -o /dev/null -w 'benchmarks %{http_code} %{content_type}\n' http://127.0.0.1:15523/
           test "$(curl -fsS http://127.0.0.1:5523/api/vms)" = '[]'
 
           # Fresh install has zero MicroNetworks (no implicit fcbr0).

@@ -34,6 +34,7 @@ use server::{ConfigError, HttpConfig, build_router};
 use state::AppState;
 use templates::{TemplateError, TemplateRegistry};
 use thiserror::Error;
+use tokio::net::TcpListener;
 
 #[derive(Debug, Error)]
 enum StartupError {
@@ -53,6 +54,53 @@ enum StartupError {
     LocalAddress(#[source] io::Error),
     #[error("API server terminated with an error")]
     Serve(#[source] io::Error),
+}
+
+/// Management/API and benchmark dashboard listeners owned by one process.
+struct HttpListeners {
+    /// Management dashboard, REST API, and console listener.
+    api: TcpListener,
+    /// Benchmark-first dashboard listener.
+    benchmark: TcpListener,
+}
+
+impl HttpListeners {
+    /// Binds both addresses before either server starts accepting requests.
+    async fn bind(
+        api_address: SocketAddr,
+        benchmark_address: SocketAddr,
+    ) -> Result<Self, StartupError> {
+        let api = TcpListener::bind(api_address)
+            .await
+            .map_err(|source| StartupError::Bind {
+                address: api_address,
+                source,
+            })?;
+        let benchmark = TcpListener::bind(benchmark_address)
+            .await
+            .map_err(|source| StartupError::Bind {
+                address: benchmark_address,
+                source,
+            })?;
+        Ok(Self { api, benchmark })
+    }
+
+    /// Serves the same application router on both listeners.
+    async fn serve(self, app: axum::Router) -> Result<(), StartupError> {
+        let api_address = self.api.local_addr().map_err(StartupError::LocalAddress)?;
+        let benchmark_address = self
+            .benchmark
+            .local_addr()
+            .map_err(StartupError::LocalAddress)?;
+        tracing::info!(address = %api_address, "management API listening on http://{api_address}");
+        tracing::info!(address = %benchmark_address, "benchmark dashboard listening on http://{benchmark_address}");
+
+        let api_app = app.clone();
+        let api_server = async { axum::serve(self.api, api_app).await };
+        let benchmark_server = async { axum::serve(self.benchmark, app).await };
+        tokio::try_join!(api_server, benchmark_server).map_err(StartupError::Serve)?;
+        Ok(())
+    }
 }
 
 #[tokio::main]
@@ -103,17 +151,51 @@ async fn run() -> Result<(), StartupError> {
     microboot::spawn_warmup(state.clone());
     let app = build_router(state, &config);
 
-    let listener = tokio::net::TcpListener::bind(config.bind_addr)
+    HttpListeners::bind(config.bind_addr, config.benchmark_bind_addr)
+        .await?
+        .serve(app)
         .await
-        .map_err(|source| StartupError::Bind {
-            address: config.bind_addr,
-            source,
-        })?;
+}
 
-    let local_address = listener.local_addr().map_err(StartupError::LocalAddress)?;
-    tracing::info!(address = %local_address, "listening on http://{local_address}");
-    axum::serve(listener, app)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+
+    #[tokio::test]
+    async fn both_http_listeners_serve_the_same_application() {
+        let listeners = HttpListeners::bind(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+        )
         .await
-        .map_err(StartupError::Serve)?;
-    Ok(())
+        .unwrap();
+        let addresses = [
+            listeners.api.local_addr().unwrap(),
+            listeners.benchmark.local_addr().unwrap(),
+        ];
+        let app = axum::Router::new().route("/", get(|| async { "firecrab" }));
+        let task = tokio::spawn(listeners.serve(app));
+
+        for address in addresses {
+            let response = reqwest::get(format!("http://{address}/")).await.unwrap();
+            assert_eq!(response.text().await.unwrap(), "firecrab");
+        }
+
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn benchmark_bind_failure_identifies_its_address() {
+        let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = occupied.local_addr().unwrap();
+        let result = HttpListeners::bind(SocketAddr::from(([127, 0, 0, 1], 0)), address).await;
+        assert!(matches!(
+            result,
+            Err(StartupError::Bind {
+                address: failed,
+                ..
+            }) if failed == address
+        ));
+    }
 }

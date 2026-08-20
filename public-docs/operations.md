@@ -37,7 +37,8 @@ systemctl restart firecrab-api
 
 | Variable | Default | Job |
 | --- | --- | --- |
-| `FIRECRAB_BIND_ADDR` | `127.0.0.1:5523` | HTTP listen address |
+| `FIRECRAB_BIND_ADDR` | `127.0.0.1:5523` | Management and API listen address |
+| `FIRECRAB_BENCH_BIND_ADDR` | `127.0.0.1:15523` | Benchmark dashboard listen address |
 | `FIRECRAB_ALLOWED_ORIGINS` | Development origin | Browser origin list |
 | `FIRECRAB_IMAGE_ROOT` | Installed image path | Kernels and rootfs files |
 | `FIRECRAB_IMAGE_BASE_URL` | Public MicroRegistry | Image package base URL; `none` disables remote installs |
