@@ -4684,9 +4684,20 @@ mod tests {
         };
         let credential = RegistryCredential {
             registry,
-            username: "pista".to_owned(),
+            username: "example-user".to_owned(),
             secret: "dckr_pat_example".to_owned(),
         };
+        let expected_authorization = reqwest::Client::new()
+            .get("http://example.invalid")
+            .basic_auth(&credential.username, Some(&credential.secret))
+            .build()
+            .unwrap()
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
 
         resolve(&reference, Architecture::X86_64, true, Some(credential))
             .await
@@ -4694,7 +4705,7 @@ mod tests {
 
         assert_eq!(
             seen.lock().unwrap().as_deref(),
-            Some("Basic cGlzdGE6ZGNrcl9wYXRfZXhhbXBsZQ==")
+            Some(expected_authorization.as_str())
         );
     }
 
@@ -4718,7 +4729,10 @@ mod tests {
             &reference,
             Architecture::X86_64,
             true,
-            Some(RegistryCredential::docker_hub("pista", "dckr_pat_example")),
+            Some(RegistryCredential::docker_hub(
+                "example-user",
+                "dckr_pat_example",
+            )),
         )
         .await
         .expect("an anonymous resolve must still succeed");
@@ -4730,7 +4744,7 @@ mod tests {
     /// what serves the API. A login saved for one is the same account.
     #[test]
     fn a_docker_hub_login_covers_both_spellings_of_the_host() {
-        let credential = RegistryCredential::docker_hub("pista", "dckr_pat_example");
+        let credential = RegistryCredential::docker_hub("example-user", "dckr_pat_example");
 
         assert!(credential.covers(DOCKER_HUB_REGISTRY));
         assert!(credential.covers(DOCKER_HUB_ALIAS));

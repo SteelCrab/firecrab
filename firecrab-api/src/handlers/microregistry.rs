@@ -1439,12 +1439,12 @@ mod tests {
         let Json(saved) = put_docker_hub_credential(
             State(state.clone()),
             Extension(request_id()),
-            credential_body("pista", "dckr_pat_example"),
+            credential_body("example-user", "dckr_pat_example"),
         )
         .await
         .expect("a login must be storable");
         assert!(saved.configured);
-        assert_eq!(saved.username.as_deref(), Some("pista"));
+        assert_eq!(saved.username.as_deref(), Some("example-user"));
         assert!(
             !serde_json::to_string(&saved).unwrap().contains("dckr_pat"),
             "the response must never carry the secret"
@@ -1454,11 +1454,11 @@ mod tests {
             .await
             .unwrap();
         assert!(read.configured);
-        assert_eq!(read.username.as_deref(), Some("pista"));
+        assert_eq!(read.username.as_deref(), Some("example-user"));
 
         // Only the import path may read the secret, and it reads it from the store.
         let stored = state.store.docker_hub_credential().unwrap().unwrap();
-        assert_eq!(stored.username, "pista");
+        assert_eq!(stored.username, "example-user");
         assert_eq!(stored.secret, "dckr_pat_example");
 
         let status = delete_docker_hub_credential(State(state.clone()), Extension(request_id()))
@@ -1489,14 +1489,14 @@ mod tests {
         let Json(saved) = put_docker_hub_credential(
             State(state.clone()),
             Extension(request_id()),
-            credential_body(" pista\n", "dckr_pat_example\n"),
+            credential_body(" example-user\n", "dckr_pat_example\n"),
         )
         .await
         .expect("a pasted login must be accepted");
 
-        assert_eq!(saved.username.as_deref(), Some("pista"));
+        assert_eq!(saved.username.as_deref(), Some("example-user"));
         let stored = state.store.docker_hub_credential().unwrap().unwrap();
-        assert_eq!(stored.username, "pista");
+        assert_eq!(stored.username, "example-user");
         assert_eq!(stored.secret, "dckr_pat_example");
     }
 
@@ -1508,8 +1508,8 @@ mod tests {
         for (username, secret, field) in [
             ("", "dckr_pat_example", "username"),
             ("   ", "dckr_pat_example", "username"),
-            ("pista", "", "secret"),
-            ("pista", "  \n", "secret"),
+            ("example-user", "", "secret"),
+            ("example-user", "  \n", "secret"),
         ] {
             let (status, json) = error_json(
                 put_docker_hub_credential(

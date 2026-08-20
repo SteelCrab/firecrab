@@ -2647,7 +2647,7 @@ mod tests {
         let path = directory.path().join("firecrab.db");
         let store = Store::open(&path).unwrap();
         store
-            .put_docker_hub_credential("pista", "dckr_pat_secret")
+            .put_docker_hub_credential("example-user", "dckr_pat_secret")
             .unwrap();
 
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
@@ -2674,13 +2674,15 @@ mod tests {
         assert_eq!(store.docker_hub_credential().unwrap(), None);
 
         store
-            .put_docker_hub_credential("pista", "dckr_pat_secret")
+            .put_docker_hub_credential("example-user", "dckr_pat_secret")
             .unwrap();
         let stored = store.docker_hub_credential().unwrap().unwrap();
-        assert_eq!(stored.username, "pista");
+        assert_eq!(stored.username, "example-user");
         assert_eq!(stored.secret, "dckr_pat_secret");
 
-        store.put_docker_hub_credential("pista", "rotated").unwrap();
+        store
+            .put_docker_hub_credential("example-user", "rotated")
+            .unwrap();
         assert_eq!(
             store.docker_hub_credential().unwrap().unwrap().secret,
             "rotated"
