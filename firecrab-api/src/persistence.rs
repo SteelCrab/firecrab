@@ -149,6 +149,16 @@ const UPSERT_DOCKER_HUB_CREDENTIAL_SQL: &str =
 
 const DELETE_DOCKER_HUB_CREDENTIAL_SQL: &str = "DELETE FROM docker_hub_credential WHERE id = 1";
 
+/// Commit-addressed benchmark results published by `firecrab-bench`.
+const CREATE_BENCHMARK_RUNS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS benchmark_runs (
+    run_id TEXT PRIMARY KEY,
+    commit_sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    test_name TEXT NOT NULL,
+    result_json TEXT NOT NULL
+) STRICT";
+
 /// Username and access token for authenticated Docker Hub pulls.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DockerHubCredential {
@@ -612,6 +622,7 @@ impl Store {
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
+        conn.execute(CREATE_BENCHMARK_RUNS_TABLE_SQL, [])?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -692,6 +703,58 @@ impl Store {
             return Err(PersistenceError::MissingVm { id });
         }
         Ok(())
+    }
+
+    /// Stores one normalized benchmark result for commit history queries.
+    pub fn insert_benchmark_result(
+        &self,
+        run_id: Uuid,
+        commit_sha: &str,
+        branch: &str,
+        timestamp: &str,
+        test_name: &str,
+        result_json: &str,
+    ) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            "INSERT INTO benchmark_runs
+             (run_id, commit_sha, branch, timestamp, test_name, result_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                run_id.to_string(),
+                commit_sha,
+                branch,
+                timestamp,
+                test_name,
+                result_json
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Lists newest benchmark results first, bounded for dashboard polling.
+    pub fn list_benchmark_results(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<serde_json::Value>, PersistenceError> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT run_id, result_json FROM benchmark_runs
+             ORDER BY timestamp DESC, run_id DESC LIMIT ?1",
+        )?;
+        let mut rows = statement.query([limit])?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next()? {
+            let run_id: String = row.get(0)?;
+            let result_json: String = row.get(1)?;
+            let result = serde_json::from_str(&result_json).map_err(|_| {
+                PersistenceError::CorruptRecord {
+                    id: run_id,
+                    reason: "benchmark result_json is invalid".to_owned(),
+                }
+            })?;
+            results.push(result);
+        }
+        Ok(results)
     }
 
     /// Inserts a new MicroNetwork.
@@ -1848,6 +1911,42 @@ mod tests {
         store.clear_vm_shells(vm.id).unwrap();
         store.delete_shell(shell_id).unwrap();
         assert!(store.shell_detail(shell_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn benchmark_results_round_trip_newest_first() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("benchmarks.db")).unwrap();
+        for (timestamp, test_name) in [
+            ("2026-08-20T00:00:00Z", "vm_boot"),
+            ("2026-08-21T00:00:00Z", "network"),
+        ] {
+            let run_id = Uuid::new_v4();
+            let result = serde_json::json!({
+                "schema_version": 2,
+                "run": {
+                    "run_id": run_id,
+                    "commit_sha": "abc123",
+                    "branch": "main",
+                    "timestamp": timestamp
+                },
+                "test": test_name
+            });
+            store
+                .insert_benchmark_result(
+                    run_id,
+                    "abc123",
+                    "main",
+                    timestamp,
+                    test_name,
+                    &result.to_string(),
+                )
+                .unwrap();
+        }
+        let results = store.list_benchmark_results(10).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["test"], "network");
+        assert_eq!(results[1]["test"], "vm_boot");
     }
 
     #[test]

@@ -153,6 +153,7 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 | OCI | `/api/oci/inspect`, `POST /api/oci/import`, `GET /api/oci/import/{alias}` |
 | MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}`, `GET`/`PUT`/`DELETE /docker-hub` (Docker Hub login; secret write-only) |
 | Host | `/api/host` and `/api/network` |
+| Benchmarks | `GET`/`POST /api/benchmarks` for common-schema result history |
 
 ## MicroNetwork
 
