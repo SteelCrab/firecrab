@@ -155,6 +155,23 @@ body {
 }
 .update-indicator-action:hover { background: rgba(196, 62, 18, 0.08); }
 
+/* The bounded-wait fallback: an apply that never reported a new version. */
+.update-indicator-stalled { color: var(--error); }
+.update-indicator-stalled .update-indicator-action {
+  border-color: var(--error);
+  color: var(--error);
+}
+.update-indicator-stalled .update-indicator-action:hover {
+  background: rgba(179, 38, 30, 0.08);
+}
+.update-indicator-hint {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--shell);
+  overflow-wrap: anywhere;
+}
+
 .panel-title-with-icon {
   display: flex;
   align-items: center;
@@ -351,6 +368,8 @@ form.shell-create-grid .field-span-2 {
   }
   .shell-nav-label { display: none; }
   .update-indicator-label { display: none; }
+  /* The journalctl hint is far wider than the collapsed icon rail. */
+  .update-indicator-hint { display: none; }
   .update-indicator { padding: 0.6rem 0.2rem 0; }
 }
 
