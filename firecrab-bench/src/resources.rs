@@ -1,12 +1,12 @@
 use std::fs;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 /// Metadata identifying one benchmark execution and its environment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunMetadata {
     /// Unique identifier for this benchmark result.
     pub run_id: Uuid,
@@ -55,7 +55,7 @@ impl RunMetadata {
 }
 
 /// Host resource usage captured across one benchmark command.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HostResourceUsage {
     /// Average host CPU busy percentage during the command.
     pub cpu_percent: Option<f64>,
@@ -182,7 +182,7 @@ fn read_load_average() -> Option<f64> {
         .ok()
 }
 
-fn count_firecracker_processes() -> u32 {
+pub(crate) fn count_firecracker_processes() -> u32 {
     let Ok(entries) = fs::read_dir("/proc") else {
         return 0;
     };

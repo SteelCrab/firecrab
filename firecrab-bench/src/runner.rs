@@ -140,28 +140,9 @@ pub fn run_lifecycle<A: VmApi>(api: &A, spec: &VmSpec, iterations: u32) -> Bench
     let mut samples = Vec::new();
     let mut failures = Vec::new();
     for sequence in 1..=iterations {
-        let started = Instant::now();
-        let name = benchmark_name("lifecycle", sequence);
-        let mut id = None;
-        let result = (|| {
-            let vm_id = api.create(spec, &name)?;
-            id = Some(vm_id);
-            start_and_wait(api, vm_id)?;
-            api.stop(vm_id)?;
-            wait_for_state(api, vm_id, VmState::Stopped, "stopped")?;
-            start_and_wait(api, vm_id)?;
-            api.stop(vm_id)?;
-            wait_for_state(api, vm_id, VmState::Stopped, "stopped")?;
-            api.delete(vm_id)?;
-            id = None;
-            Ok::<_, BenchmarkError>(started.elapsed())
-        })();
-        match result {
+        match lifecycle_once(api, spec, "lifecycle", sequence) {
             Ok(elapsed) => samples.push(elapsed),
-            Err(error) => {
-                failures.push(format!("iteration {sequence}: {error}"));
-                cleanup_if_created(api, id);
-            }
+            Err(error) => failures.push(format!("iteration {sequence}: {error}")),
         }
     }
     let elapsed = suite_started.elapsed();
@@ -169,6 +150,34 @@ pub fn run_lifecycle<A: VmApi>(api: &A, spec: &VmSpec, iterations: u32) -> Bench
     BenchmarkResult::new("vm_lifecycle", iterations, &samples, failures)
         .with_metric("iterations_per_second", rate)
         .with_host_resources(resources.finish())
+}
+
+pub(crate) fn lifecycle_once<A: VmApi>(
+    api: &A,
+    spec: &VmSpec,
+    prefix: &str,
+    sequence: u32,
+) -> Result<Duration, BenchmarkError> {
+    let started = Instant::now();
+    let name = benchmark_name(prefix, sequence);
+    let mut id = None;
+    let result = (|| {
+        let vm_id = api.create(spec, &name)?;
+        id = Some(vm_id);
+        start_and_wait(api, vm_id)?;
+        api.stop(vm_id)?;
+        wait_for_state(api, vm_id, VmState::Stopped, "stopped")?;
+        start_and_wait(api, vm_id)?;
+        api.stop(vm_id)?;
+        wait_for_state(api, vm_id, VmState::Stopped, "stopped")?;
+        api.delete(vm_id)?;
+        id = None;
+        Ok(started.elapsed())
+    })();
+    if result.is_err() {
+        cleanup_if_created(api, id);
+    }
+    result
 }
 
 fn boot_group<A: VmApi>(

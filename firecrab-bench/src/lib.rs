@@ -3,18 +3,26 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 mod client;
+mod phase2;
+mod phase3;
+mod phase4;
 mod resources;
 mod runner;
 
 pub use client::{ApiError, HttpVmApi, VmApi, VmSpec};
+pub use phase2::{
+    NetworkConfig, StorageConfig, StorageMode, run_api_load, run_network, run_storage,
+};
+pub use phase3::{run_leak_check, run_regression_files, run_soak};
+pub use phase4::publish_result;
 pub use resources::{HostResourceUsage, RunMetadata};
 pub use runner::{BenchmarkError, run_boot, run_concurrent_creation, run_density, run_lifecycle};
 
 /// Aggregated latency values in milliseconds.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LatencySummary {
     /// Arithmetic mean of all successful observations.
     pub average_ms: f64,
@@ -59,7 +67,7 @@ fn percentile(sorted: &[u64], percentile: usize) -> u64 {
 }
 
 /// The normalized result emitted by a benchmark command.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkResult {
     /// Version of this serialized result contract.
     pub schema_version: u8,
@@ -78,13 +86,13 @@ pub struct BenchmarkResult {
     /// Failed operations as a percentage of all requested operations.
     pub failure_rate: f64,
     /// Latency statistics for successful operations.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency: Option<LatencySummary>,
     /// Per-operation failure messages; omitted when every operation succeeds.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failures: Vec<String>,
     /// Benchmark-specific numeric values such as VM/s or maximum density.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metrics: BTreeMap<String, f64>,
     /// Host CPU, memory, load, and Firecracker process measurements.
     pub host_resources: HostResourceUsage,
@@ -98,7 +106,23 @@ impl BenchmarkResult {
         samples: &[Duration],
         failures: Vec<String>,
     ) -> Self {
-        let successful_count = samples.len() as u32;
+        Self::from_counts(
+            test,
+            requested_count,
+            samples.len() as u32,
+            samples,
+            failures,
+        )
+    }
+
+    /// Builds a result whose successes do not necessarily have latency samples.
+    pub fn from_counts(
+        test: &str,
+        requested_count: u32,
+        successful_count: u32,
+        samples: &[Duration],
+        failures: Vec<String>,
+    ) -> Self {
         let failed_count = failures.len() as u32;
         let attempted_count = successful_count + failed_count;
         Self {
@@ -126,6 +150,12 @@ impl BenchmarkResult {
     /// Attaches host resource measurements collected across the command.
     pub fn with_host_resources(mut self, resources: HostResourceUsage) -> Self {
         self.host_resources = resources;
+        self
+    }
+
+    /// Attaches a latency summary produced by an external benchmark tool.
+    pub fn with_latency(mut self, latency: LatencySummary) -> Self {
+        self.latency = Some(latency);
         self
     }
 }
@@ -182,5 +212,12 @@ mod tests {
         assert_eq!(result.schema_version, 2);
         assert_ne!(result.run.run_id, uuid::Uuid::nil());
         assert_eq!(result.host_resources, HostResourceUsage::default());
+    }
+
+    #[test]
+    fn result_supports_successes_without_latency_samples() {
+        let result = BenchmarkResult::from_counts("network", 1, 1, &[], Vec::new());
+        assert_eq!(result.successful_count, 1);
+        assert!(result.latency.is_none());
     }
 }
