@@ -6,9 +6,11 @@ use std::time::Duration;
 use serde::Serialize;
 
 mod client;
+mod resources;
 mod runner;
 
 pub use client::{ApiError, HttpVmApi, VmApi, VmSpec};
+pub use resources::{HostResourceUsage, RunMetadata};
 pub use runner::{BenchmarkError, run_boot, run_concurrent_creation, run_density, run_lifecycle};
 
 /// Aggregated latency values in milliseconds.
@@ -61,8 +63,8 @@ fn percentile(sorted: &[u64], percentile: usize) -> u64 {
 pub struct BenchmarkResult {
     /// Version of this serialized result contract.
     pub schema_version: u8,
-    /// Git commit supplied by `GITHUB_SHA`, or `unknown` outside CI.
-    pub commit: String,
+    /// Commit, branch, timestamp, host, and version metadata.
+    pub run: RunMetadata,
     /// Benchmark case identifier, for example `vm_boot`.
     pub test: String,
     /// Number of requested benchmark operations.
@@ -84,6 +86,8 @@ pub struct BenchmarkResult {
     /// Benchmark-specific numeric values such as VM/s or maximum density.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub metrics: BTreeMap<String, f64>,
+    /// Host CPU, memory, load, and Firecracker process measurements.
+    pub host_resources: HostResourceUsage,
 }
 
 impl BenchmarkResult {
@@ -98,8 +102,8 @@ impl BenchmarkResult {
         let failed_count = failures.len() as u32;
         let attempted_count = successful_count + failed_count;
         Self {
-            schema_version: 1,
-            commit: std::env::var("GITHUB_SHA").unwrap_or_else(|_| "unknown".to_owned()),
+            schema_version: 2,
+            run: RunMetadata::capture(),
             test: test.to_owned(),
             requested_count,
             attempted_count,
@@ -109,12 +113,19 @@ impl BenchmarkResult {
             latency: LatencySummary::from_samples(samples),
             failures,
             metrics: BTreeMap::new(),
+            host_resources: HostResourceUsage::default(),
         }
     }
 
     /// Adds one command-specific metric to the serialized result.
     pub fn with_metric(mut self, name: &str, value: f64) -> Self {
         self.metrics.insert(name.to_owned(), value);
+        self
+    }
+
+    /// Attaches host resource measurements collected across the command.
+    pub fn with_host_resources(mut self, resources: HostResourceUsage) -> Self {
+        self.host_resources = resources;
         self
     }
 }
@@ -163,5 +174,13 @@ mod tests {
         let result = BenchmarkResult::new("vm_density", 10, &[], Vec::new())
             .with_metric("max_stable_microvms", 8.0);
         assert_eq!(result.metrics["max_stable_microvms"], 8.0);
+    }
+
+    #[test]
+    fn result_uses_the_common_schema() {
+        let result = BenchmarkResult::new("vm_boot", 1, &[Duration::from_millis(1)], Vec::new());
+        assert_eq!(result.schema_version, 2);
+        assert_ne!(result.run.run_id, uuid::Uuid::nil());
+        assert_eq!(result.host_resources, HostResourceUsage::default());
     }
 }

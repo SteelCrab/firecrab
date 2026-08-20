@@ -5,6 +5,7 @@ use firecrab_api_types::VmState;
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::resources::HostResourceSampler;
 use crate::{ApiError, BenchmarkResult, VmApi, VmSpec};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -39,6 +40,7 @@ struct Operation {
 
 /// Measures sequential create-request through running-state boot latency.
 pub fn run_boot<A: VmApi>(api: &A, spec: &VmSpec, count: u32) -> BenchmarkResult {
+    let resources = HostResourceSampler::start();
     let mut samples = Vec::new();
     let mut failures = Vec::new();
     for sequence in 1..=count {
@@ -46,6 +48,7 @@ pub fn run_boot<A: VmApi>(api: &A, spec: &VmSpec, count: u32) -> BenchmarkResult
         record_operation(api, operation, sequence, &mut samples, &mut failures);
     }
     BenchmarkResult::new("vm_boot", count, &samples, failures)
+        .with_host_resources(resources.finish())
 }
 
 /// Creates and boots one concurrent VM group.
@@ -54,6 +57,7 @@ pub fn run_concurrent_creation<A: VmApi>(
     spec: &VmSpec,
     concurrency: u32,
 ) -> BenchmarkResult {
+    let resources = HostResourceSampler::start();
     let started = Instant::now();
     let operations = boot_group(api, spec, "create", 1, concurrency);
     let mut samples = Vec::new();
@@ -72,6 +76,7 @@ pub fn run_concurrent_creation<A: VmApi>(
     BenchmarkResult::new("concurrent_creation", concurrency, &samples, failures)
         .with_metric("total_creation_time_ms", elapsed.as_millis() as f64)
         .with_metric("vm_per_second", rate)
+        .with_host_resources(resources.finish())
 }
 
 /// Adds VM batches until `max_vms` is reached or a batch becomes unstable.
@@ -82,6 +87,7 @@ pub fn run_density<A: VmApi>(
     step: u32,
     settle_time: Duration,
 ) -> BenchmarkResult {
+    let resources = HostResourceSampler::start();
     let mut running = Vec::new();
     let mut samples = Vec::new();
     let mut failures = Vec::new();
@@ -124,10 +130,12 @@ pub fn run_density<A: VmApi>(
     }
     BenchmarkResult::new("vm_density", max_vms, &samples, failures)
         .with_metric("max_stable_microvms", max_stable)
+        .with_host_resources(resources.finish())
 }
 
 /// Repeats create/start/stop/start/stop/delete and measures each full cycle.
 pub fn run_lifecycle<A: VmApi>(api: &A, spec: &VmSpec, iterations: u32) -> BenchmarkResult {
+    let resources = HostResourceSampler::start();
     let suite_started = Instant::now();
     let mut samples = Vec::new();
     let mut failures = Vec::new();
@@ -160,6 +168,7 @@ pub fn run_lifecycle<A: VmApi>(api: &A, spec: &VmSpec, iterations: u32) -> Bench
     let rate = samples.len() as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
     BenchmarkResult::new("vm_lifecycle", iterations, &samples, failures)
         .with_metric("iterations_per_second", rate)
+        .with_host_resources(resources.finish())
 }
 
 fn boot_group<A: VmApi>(
