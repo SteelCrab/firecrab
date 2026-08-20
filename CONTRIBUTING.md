@@ -82,6 +82,32 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 
 More dashboard notes: [public-docs/dashboard.md](public-docs/dashboard.md).
 
+### Build and install a local release
+
+Build all host binaries and the dashboard from the current checkout:
+
+```sh
+./scripts/ci-prepare-install-payload.sh
+```
+
+The script builds `firecrab-api`, `firecrab-net-helper`, `firecrab`, and
+`firecrab-bench` in the Cargo release profile, then creates
+`firecrab-frontend/dist` with npm.
+
+Install the prepared files from the repository root:
+
+```sh
+./install.sh --bin-dir target/release
+```
+
+Do not prefix `install.sh` with `sudo`.
+The installer requests privileges only for host operations that need them.
+When `firecrab-frontend/dist` exists, the installer detects it automatically,
+so `--dashboard-dir` is unnecessary.
+
+After installation, open the management dashboard at `http://127.0.0.1:5523/`
+and the benchmark dashboard at `http://127.0.0.1:15523/`.
+
 ## Checks before you open a PR
 
 Run what you can locally. CI will re-run the same gates on every pull request.
