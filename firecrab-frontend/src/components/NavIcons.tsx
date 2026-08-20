@@ -63,5 +63,14 @@ export default function NavIcon({ id, className }: { id: NavIconId; className?: 
           <rect x="6.5" y="20" width="11" height="1.6" rx="0.8" />
         </svg>
       );
+    // Three vertical bars — benchmark comparisons across commits.
+    case "benchmarks":
+      return (
+        <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+          <rect x="3" y="12" width="4" height="9" rx="1" />
+          <rect x="10" y="7" width="4" height="14" rx="1" />
+          <rect x="17" y="3" width="4" height="18" rx="1" />
+        </svg>
+      );
   }
 }

@@ -35,6 +35,7 @@ import type {
   VmLogResponse,
   VmResponse,
 } from "../bindings";
+import type { BenchmarkResult } from "../benchmark";
 
 /** API failures split into what the server said vs. not reaching it at all. */
 export class ApiClientError extends Error {
@@ -140,6 +141,10 @@ export function getNetworkInfo(): Promise<NetworkInfoResponse> {
 
 export function getHostStatus(): Promise<HostStatusResponse> {
   return fetchJson("/api/host");
+}
+
+export function listBenchmarks(): Promise<BenchmarkResult[]> {
+  return fetchJson("/api/benchmarks");
 }
 
 /** Newest release vs. this build (`GET /api/update`), cached 30 minutes by the API. */

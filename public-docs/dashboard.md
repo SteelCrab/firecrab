@@ -37,6 +37,7 @@ Use `localhost` because the development origin is exact.
 | Storage | Manage MicroStorage pools |
 | Images | Install M2Images or import an OCI image |
 | Host | Show host health and capacity |
+| Benchmarks | Show performance trends, result tables, and current VM state at `#/benchmarks` |
 
 ## VM workflow
 

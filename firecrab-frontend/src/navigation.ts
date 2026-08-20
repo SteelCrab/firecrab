@@ -16,6 +16,7 @@ export const VIEWS = [
   { id: "images", labels: { en: "Images", ko: "이미지" } },
   { id: "shells", labels: { en: "Shells", ko: "Shell" }, icon: "/bash.png" },
   { id: "host", labels: { en: "Host", ko: "호스트" } },
+  { id: "benchmarks", labels: { en: "Benchmarks", ko: "Benchmark" } },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];

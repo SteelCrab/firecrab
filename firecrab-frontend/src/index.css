@@ -751,6 +751,121 @@ a.btn {
 /* 좁은 셸에서 표만 가로로 스크롤되고 페이지는 그대로 */
 .table-scroll { overflow-x: auto; }
 
+.benchmark-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+.benchmark-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ember);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.benchmark-card span,
+.benchmark-card small { color: var(--shell); font-family: var(--font-mono); }
+.benchmark-card strong { font-family: var(--font-display); font-size: 1.05rem; }
+.benchmark-table td { white-space: nowrap; }
+.benchmark-dashboard { min-width: 0; }
+.benchmark-section {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+.benchmark-section > h3 {
+  margin: 0 0 0.9rem;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+.benchmark-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: 0.75rem;
+}
+.benchmark-chart {
+  min-width: 0;
+  padding: 0.85rem 0.85rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.benchmark-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+.benchmark-chart-head h4 {
+  margin: 0;
+  color: var(--shell);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.benchmark-chart-head strong { color: var(--ink); font-size: 0.82rem; }
+.benchmark-chart svg { display: block; width: 100%; height: 10rem; overflow: visible; }
+.benchmark-chart-guide { stroke: var(--line); stroke-width: 1; }
+.benchmark-chart-axis {
+  fill: var(--shell);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.benchmark-chart.is-empty {
+  min-height: 13.1rem;
+  display: flex;
+  flex-direction: column;
+}
+.benchmark-chart.is-empty p {
+  margin: auto;
+  color: var(--shell);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+.benchmark-state-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 1rem;
+}
+.benchmark-state-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--shell);
+  border-radius: 3px;
+  background: var(--bg);
+}
+.benchmark-state-card span {
+  color: var(--shell);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+.benchmark-state-card strong { font-family: var(--font-display); font-size: 1rem; }
+.benchmark-state-card.running { border-left-color: var(--ready); }
+.benchmark-state-card.starting,
+.benchmark-state-card.stopping { border-left-color: var(--amber); }
+.benchmark-state-card.error { border-left-color: var(--error); }
+.benchmark-state-card.total { border-left-color: var(--ember); }
+.benchmark-vm-table td { white-space: nowrap; }
+
+@media (max-width: 700px) {
+  .benchmark-chart-grid { grid-template-columns: 1fr; }
+  .benchmark-chart svg { height: 8.5rem; }
+}
+
 /* 페이지 안에 한 단계 들여 놓는 상세 블록 (모달의 .detail-body 대체) */
 .subpanel {
   margin-top: 1.25rem;
