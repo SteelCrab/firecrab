@@ -1050,21 +1050,16 @@ mod tests {
         );
     }
 
-    /// A tempdir layout plus a real bundle, for the two ApplySelfUpdate
-    /// dispatch tests below. Mirrors `self_update`'s own fixture, kept local
-    /// so this module's tests never depend on another module's test helpers.
+    /// A tempdir layout plus a real bundle, for the ApplySelfUpdate dispatch
+    /// tests below. The layout is the one `self_update::host_layout` resolves
+    /// for `PREFIX={dir}`, because `dispatch` now rejects any layout that is
+    /// not this host's real install — the caller must therefore also hold a
+    /// `HostLayoutEnv` pointing `PREFIX` at the same tempdir.
     fn self_update_fixture(dir: &tempfile::TempDir) -> (PathBuf, String, InstallLayout) {
         use std::io::Write as _;
 
         let root = dir.path();
-        let layout = InstallLayout {
-            bindir: root.join("bin"),
-            libdir: root.join("lib"),
-            sharedir: root.join("share"),
-        };
-        for path in [&layout.bindir, &layout.libdir, &layout.sharedir] {
-            std::fs::create_dir_all(path).expect("create layout dir");
-        }
+        let layout = self_update::test_support::layout_for_prefix(root);
         let updates = root.join("updates/job");
         std::fs::create_dir_all(&updates).expect("create download dir");
         let tarball = updates.join("firecrab-host-x86_64-gnu.tar.gz");
@@ -1102,87 +1097,126 @@ mod tests {
         (tarball, digest, layout)
     }
 
-    #[tokio::test]
-    async fn apply_self_update_rejects_a_relative_tarball_path() {
+    /// A current-thread runtime for the ApplySelfUpdate dispatch tests. They
+    /// hold `HostLayoutEnv`'s process-wide env lock for their whole body, and a
+    /// `MutexGuard` may not be held across a bare `.await` — `block_on` is a
+    /// plain blocking call, so the guard never crosses a suspension point.
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime")
+    }
+
+    #[test]
+    fn apply_self_update_rejects_a_relative_tarball_path() {
         let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
             .expect("helper config");
         let dir = short_tempdir();
         let (_, digest, layout) = self_update_fixture(&dir);
+        let _env = self_update::test_support::HostLayoutEnv::set(dir.path());
         let request = NetworkRequest::ApplySelfUpdate {
             tarball_path: PathBuf::from("bundle.tar.gz"),
             sha256: digest,
             layout,
         };
         assert_matches!(
-            dispatch(request, &config).await,
+            runtime().block_on(dispatch(request, &config)),
             Err(HelperFailure::InvalidRequest { .. })
         );
     }
 
-    #[tokio::test]
-    async fn apply_self_update_asks_the_loop_to_restart_after_responding() {
+    #[test]
+    fn apply_self_update_rejects_a_layout_that_is_not_this_hosts_install() {
+        // The helper derives its own layout from PREFIX and treats the wire
+        // field as a cross-check. Without this, the one unprivileged account
+        // the socket admits could aim root-owned writes anywhere it liked.
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
+        let dir = short_tempdir();
+        let (tarball, digest, _) = self_update_fixture(&dir);
+        let elsewhere = short_tempdir();
+        let layout = self_update::test_support::layout_for_prefix(elsewhere.path());
+        let _env = self_update::test_support::HostLayoutEnv::set(dir.path());
+        let request = NetworkRequest::ApplySelfUpdate {
+            tarball_path: tarball,
+            sha256: digest,
+            layout,
+        };
+        assert_matches!(
+            runtime().block_on(dispatch(request, &config)),
+            Err(HelperFailure::InvalidRequest { .. })
+        );
+    }
+
+    #[test]
+    fn apply_self_update_asks_the_loop_to_restart_after_responding() {
         // dispatch must only *report* that a restart is due — it must never
         // run systemctl itself, which is exactly why this test can call it.
         let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
             .expect("helper config");
         let dir = short_tempdir();
         let (tarball, digest, layout) = self_update_fixture(&dir);
+        let _env = self_update::test_support::HostLayoutEnv::set(dir.path());
         let request = NetworkRequest::ApplySelfUpdate {
             tarball_path: tarball,
             sha256: digest,
             layout,
         };
         assert_eq!(
-            dispatch(request, &config).await,
+            runtime().block_on(dispatch(request, &config)),
             Ok(AfterResponse::RestartUnits)
         );
     }
 
-    #[tokio::test]
-    async fn a_self_update_response_is_written_before_the_connection_closes() {
+    #[test]
+    fn a_self_update_response_is_written_before_the_connection_closes() {
         // A checksum mismatch fails *after* full validation and before any
         // restart, so this exercises the real response path without ever
         // reaching AfterResponse::RestartUnits.
         let dir = short_tempdir();
-        let (path, stop, handle) = start_helper(&dir);
         let fixture_dir = short_tempdir();
         let (tarball, _, layout) = self_update_fixture(&fixture_dir);
+        let _env = self_update::test_support::HostLayoutEnv::set(fixture_dir.path());
 
-        let mut stream = UnixStream::connect(&path).await.expect("connect");
-        let envelope = NetworkRequestEnvelope::new(
-            Uuid::new_v4(),
-            NetworkRequest::ApplySelfUpdate {
-                tarball_path: tarball,
-                sha256: "0".repeat(64),
-                layout,
-            },
-        );
-        write_frame(&mut stream, &envelope)
-            .await
-            .expect("send request");
-        let response: NetworkResponseEnvelope =
-            read_frame(&mut stream).await.expect("receive response");
-        assert_eq!(response.request_id, envelope.request_id);
-        assert_matches!(
-            response.result,
-            Err(HelperFailure::UpdateChecksumMismatch { .. })
-        );
+        runtime().block_on(async {
+            let (path, stop, handle) = start_helper(&dir);
+            let mut stream = UnixStream::connect(&path).await.expect("connect");
+            let envelope = NetworkRequestEnvelope::new(
+                Uuid::new_v4(),
+                NetworkRequest::ApplySelfUpdate {
+                    tarball_path: tarball,
+                    sha256: "0".repeat(64),
+                    layout,
+                },
+            );
+            write_frame(&mut stream, &envelope)
+                .await
+                .expect("send request");
+            let response: NetworkResponseEnvelope =
+                read_frame(&mut stream).await.expect("receive response");
+            assert_eq!(response.request_id, envelope.request_id);
+            assert_matches!(
+                response.result,
+                Err(HelperFailure::UpdateChecksumMismatch { .. })
+            );
 
-        // The connection is still usable: a failed apply is not a restart.
-        let next = NetworkRequestEnvelope::new(
-            Uuid::new_v4(),
-            NetworkRequest::DeleteTap {
-                vm_id: Uuid::new_v4(),
-            },
-        );
-        write_frame(&mut stream, &next)
-            .await
-            .expect("send follow-up");
-        let response: NetworkResponseEnvelope =
-            read_frame(&mut stream).await.expect("receive follow-up");
-        assert_eq!(response.result, Ok(()));
+            // The connection is still usable: a failed apply is not a restart.
+            let next = NetworkRequestEnvelope::new(
+                Uuid::new_v4(),
+                NetworkRequest::DeleteTap {
+                    vm_id: Uuid::new_v4(),
+                },
+            );
+            write_frame(&mut stream, &next)
+                .await
+                .expect("send follow-up");
+            let response: NetworkResponseEnvelope =
+                read_frame(&mut stream).await.expect("receive follow-up");
+            assert_eq!(response.result, Ok(()));
 
-        drop(stop);
-        handle.await.expect("helper task");
+            drop(stop);
+            handle.await.expect("helper task");
+        });
     }
 }

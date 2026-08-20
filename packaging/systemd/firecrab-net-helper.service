@@ -18,6 +18,14 @@ Group=@FIRECRAB_GROUP@
 RuntimeDirectory=firecrab
 RuntimeDirectoryMode=0751
 Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
+# The helper derives this host's real install layout from PREFIX and refuses
+# any ApplySelfUpdate whose `layout` field disagrees, so the caller can never
+# aim a root-owned binary swap at a directory of its choosing. Without this
+# line the helper falls back to install.sh's own /usr/local default, which is
+# correct for a default install and wrong for any other prefix — a host
+# installed with a custom PREFIX must re-run install.sh before self-updating.
+Environment=PREFIX=@PREFIX@
+Environment=FIRECRAB_LIBDIR=@LIBDIR@
 ExecStart=@LIBDIR@/firecrab-net-helper
 Restart=on-failure
 RestartSec=2

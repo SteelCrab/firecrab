@@ -202,11 +202,19 @@ pub enum NetworkRequest {
         micro_networks: Vec<MicroNetworkSpec>,
     },
     /// Install an already-downloaded host bundle over this host's binaries and
-    /// restart both services (`firecrab update --apply`). The caller has already
-    /// verified `sha256` against the release's `SHA256SUMS`; the helper re-verifies
-    /// it from its own open file descriptor rather than trusting the caller — the
-    /// helper is the trust boundary (same reasoning as `validate_prefix` and the
-    /// `egress_policy` allowlist lookup).
+    /// restart both services (`firecrab update --apply`).
+    ///
+    /// Nothing in this request is taken on trust (same reasoning as
+    /// `validate_prefix` and the `egress_policy` allowlist lookup):
+    /// * `sha256` is re-verified by the helper from its own open file
+    ///   descriptor, so a file swapped after the caller hashed it cannot be
+    ///   installed;
+    /// * `layout` is compared against the layout the helper derives from its
+    ///   *own* `PREFIX`/`FIRECRAB_LIBDIR`, and any difference is rejected — it
+    ///   is a cross-check that the caller agrees about this host, never a
+    ///   destination the helper will write to on request;
+    /// * every entry the bundle unpacks must be a regular file or a directory,
+    ///   so no symlink can redirect the helper's `chown`/`chmod`/`rename`.
     ApplySelfUpdate {
         /// Absolute path to the downloaded `firecrab-host-<arch>-<libc>.tar.gz`.
         tarball_path: PathBuf,
@@ -334,9 +342,15 @@ pub struct DhcpLeaseEntry {
 
 /// The install layout a self-update writes into: `install.sh`'s `$PREFIX/bin`,
 /// `$LIBDIR` (`$PREFIX/lib/firecrab`) and `$SHAREDIR` (`$PREFIX/share/firecrab`).
-/// The helper does not read install-time layout itself, so the (unprivileged)
-/// CLI resolves it exactly the way `firecrab info` does and sends it here; the
-/// helper re-validates every path before writing.
+///
+/// The (unprivileged) CLI resolves these exactly the way `firecrab info` does
+/// and sends them here, but the helper does **not** write where they point: it
+/// re-derives the same three paths from its own `PREFIX`/`FIRECRAB_LIBDIR`
+/// (exported by `packaging/systemd/firecrab-net-helper.service`) and rejects
+/// the request unless the two agree byte-for-byte. So this field is a
+/// "do we both mean the same host?" cross-check, not a destination — a caller
+/// that made it past the socket's uid allowlist still cannot point a
+/// root-owned binary swap at a directory of its choosing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstallLayout {
     /// Receives the `firecrab` CLI (`$PREFIX/bin`).

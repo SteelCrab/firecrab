@@ -110,6 +110,15 @@ pub enum ApplyOutcome {
 /// `$PREFIX` (else `/usr/local`), resolved exactly the way `firecrab info`
 /// does, with `FIRECRAB_LIBDIR` overriding only `libdir` — the same override
 /// `firecrab doctor` already honours.
+///
+/// **Must stay in sync with `firecrab-net-helper`'s
+/// `self_update::host_layout`.** The helper does not write where this points:
+/// it resolves the same three paths from its *own* environment and rejects the
+/// request unless the two agree byte-for-byte, so any change to the rules here
+/// has to be made there too or every `--apply` starts failing with
+/// "layout is not this host's install". Both processes get `PREFIX` and
+/// `FIRECRAB_LIBDIR` from their systemd units, rendered from the same
+/// `install.sh` values.
 pub fn resolve_layout() -> InstallLayout {
     let prefix = PathBuf::from(std::env::var("PREFIX").unwrap_or_else(|_| "/usr/local".to_owned()));
     let libdir = std::env::var("FIRECRAB_LIBDIR")

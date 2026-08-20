@@ -87,6 +87,7 @@ sudo firecrab update --apply
 The dashboard's bottom-left indicator runs the same two steps.
 
 The apply replaces binaries and the dashboard, then restarts both services.
+The helper writes only into the install layout it derives from its own units, and rejects any other; a host installed with a non-default `PREFIX` needs `install.sh` re-run once so both units carry it.
 It does **not** update the systemd unit files.
 A release whose notes say a unit changed needs `install.sh` re-run once.
 
