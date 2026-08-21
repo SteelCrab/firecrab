@@ -144,13 +144,23 @@ impl SubnetSpec {
     /// Parses a MicroNetwork's stored IPv6 `<prefix>/<length>` into the plan
     /// the helper and the leases are derived from. The gateway is the
     /// prefix's first address, mirroring how [`Self::gateway`] derives the
-    /// IPv4 one rather than storing it.
+    /// IPv4 one rather than storing it. The host bits of a non-canonical
+    /// prefix such as `fd00::5/64` are masked off first, so the gateway is
+    /// `fd00::1` and not `fd00::6`.
     pub fn parse_ipv6(cidr: &str, address_mode: Ipv6AddressMode) -> Option<MicroNetworkIpv6Spec> {
         let (network, prefix) = cidr.split_once('/')?;
         let network: Ipv6Addr = network.parse().ok()?;
         let prefix: u8 = prefix.parse().ok()?;
-        (prefix <= 128).then_some(MicroNetworkIpv6Spec {
-            gateway: Ipv6Addr::from(u128::from(network) + 1),
+        if prefix > 128 {
+            return None;
+        }
+        let spec = MicroNetworkIpv6Spec {
+            gateway: network,
+            prefix,
+            address_mode,
+        };
+        Some(MicroNetworkIpv6Spec {
+            gateway: Ipv6Addr::from(u128::from(spec.network_address()).checked_add(1)?),
             prefix,
             address_mode,
         })
@@ -470,6 +480,17 @@ pub fn protocol_address_mode(mode: Option<firecrab_api_types::Ipv6AddressMode>) 
     }
 }
 
+/// Unique-local prefixes masquerade (NAT66); every other accepted prefix
+/// is forwarded untranslated. Shared by the create response and the list
+/// path so the two cannot drift.
+pub fn ipv6_egress_mode(ipv6: &MicroNetworkIpv6Spec) -> firecrab_api_types::Ipv6EgressMode {
+    if ipv6.is_unique_local() {
+        firecrab_api_types::Ipv6EgressMode::Nat66
+    } else {
+        firecrab_api_types::Ipv6EgressMode::Direct
+    }
+}
+
 /// A per-host Unique Local `/64` for a MicroNetwork that was created without
 /// an explicit prefix (RFC 4193: `fd` + 40 bits of host-specific global id,
 /// then a 16-bit subnet id). Deterministic in both inputs, so a network keeps
@@ -613,6 +634,46 @@ mod tests {
         assert_eq!(chosen.uplink.as_deref(), Some("eth1"));
     }
 
+    #[test]
+    fn parse_ipv6_masks_the_prefix_before_deriving_the_gateway() {
+        let spec = SubnetSpec::parse_ipv6("fd00::5/64", Ipv6AddressMode::Slaac).unwrap();
+        assert_eq!(spec.gateway, "fd00::1".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(
+            spec.network_address(),
+            "fd00::".parse::<Ipv6Addr>().unwrap()
+        );
+
+        let canonical = SubnetSpec::parse_ipv6("2001:db8:1::/64", Ipv6AddressMode::Dhcpv6).unwrap();
+        assert_eq!(
+            canonical.gateway,
+            "2001:db8:1::1".parse::<Ipv6Addr>().unwrap()
+        );
+        assert_eq!(canonical.address_mode, Ipv6AddressMode::Dhcpv6);
+
+        assert!(
+            SubnetSpec::parse_ipv6(
+                "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128",
+                Ipv6AddressMode::Slaac
+            )
+            .is_none()
+        );
+        assert!(SubnetSpec::parse_ipv6("fd00::/129", Ipv6AddressMode::Slaac).is_none());
+    }
+
+    #[test]
+    fn ipv6_egress_mode_follows_unique_local_vs_global() {
+        let ula = SubnetSpec::parse_ipv6("fd00:1::/64", Ipv6AddressMode::Slaac).unwrap();
+        assert_eq!(
+            ipv6_egress_mode(&ula),
+            firecrab_api_types::Ipv6EgressMode::Nat66
+        );
+        let gua = SubnetSpec::parse_ipv6("2001:db8:1::/64", Ipv6AddressMode::Slaac).unwrap();
+        assert_eq!(
+            ipv6_egress_mode(&gua),
+            firecrab_api_types::Ipv6EgressMode::Direct
+        );
+    }
+
     fn dual_stack_subnet(id: u128, prefix6: &str, mode: Ipv6AddressMode) -> SubnetSpec {
         SubnetSpec {
             ipv6: Some(MicroNetworkIpv6Spec {
@@ -679,6 +740,22 @@ mod tests {
         .unwrap();
         tx.commit().unwrap();
         assert_eq!(lease.ipv6, None);
+    }
+
+    #[test]
+    fn rotating_a_dual_stack_lease_keeps_an_ipv6_address() {
+        let mut conn = open();
+        let subnet = dual_stack_subnet(1, "fd00:9::", Ipv6AddressMode::Slaac);
+        let tx = begin(&mut conn);
+        let first = allocate(&tx, Uuid::from_u128(7), subnet).unwrap();
+        tx.commit().unwrap();
+        assert!(first.ipv6.is_some());
+
+        let tx = begin(&mut conn);
+        let rotated = rotate(&tx, Uuid::from_u128(7), subnet, &HashSet::new()).unwrap();
+        tx.commit().unwrap();
+        assert!(rotated.ipv6.is_some());
+        assert_ne!(rotated.ipv4, first.ipv4);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::handlers::vms::parse_id;
-use crate::ipam::SubnetSpec;
+use crate::ipam::{SubnetSpec, ipv6_egress_mode};
 use crate::persistence::PersistenceError;
 use crate::server::RequestId;
 use crate::state::AppState;
@@ -370,17 +370,6 @@ fn resolve_ipv6_plan(req: &CreateMicroNetworkRequest, id: Uuid) -> Option<MicroN
     })
 }
 
-/// How a prefix's traffic leaves the host, from its scope alone: Unique
-/// Local space is not routable off-host and is masqueraded, a global prefix
-/// is forwarded untranslated.
-fn ipv6_egress_mode(ipv6: &MicroNetworkIpv6Spec) -> Ipv6EgressMode {
-    if ipv6.is_unique_local() {
-        Ipv6EgressMode::Nat66
-    } else {
-        Ipv6EgressMode::Direct
-    }
-}
-
 /// Brings every **explicit** MicroNetwork's host resources back to the
 /// desired state: one bridge per network, the nftables ruleset, and
 /// dnsmasq's served interfaces. There is no implicit default bridge.
@@ -530,10 +519,9 @@ fn validate_create(req: &CreateMicroNetworkRequest) -> BTreeMap<String, String> 
 /// Why an explicitly requested IPv6 prefix cannot back a MicroNetwork, if it
 /// can't. Only a `/64` is usable: SLAAC's EUI-64 interface identifier is
 /// exactly 64 bits, so any other length hands guests a prefix they cannot
-/// build their stored address from. The prefix must also be one a network
-/// can be built on — Unique Local or global, never link-local, multicast,
-/// loopback or unspecified. The helper re-validates all of this
-/// independently; this is the user-facing field error.
+/// build their stored address from. The prefix must also be Unique Local
+/// (`fc00::/7`) or global unicast (`2000::/3`). The helper re-validates all
+/// of this independently; this is the user-facing field error.
 fn ipv6_cidr_field_error(cidr: &str) -> Option<String> {
     let malformed =
         || Some("must be an IPv6 /64, e.g. fd00:1234:5678::/64 or 2001:db8:1::/64".to_owned());
@@ -543,14 +531,8 @@ fn ipv6_cidr_field_error(cidr: &str) -> Option<String> {
     if ipv6.prefix != 64 {
         return Some("prefix must be /64".to_owned());
     }
-    // `gateway` is the prefix's first address, so scope checks read off it.
-    let address = ipv6.gateway;
-    if address.is_unspecified()
-        || address.is_loopback()
-        || address.is_multicast()
-        || address.segments()[0] & 0xffc0 == 0xfe80
-    {
-        return Some("must be a unique-local (fd00::/8) or global prefix".to_owned());
+    if !ipv6.is_routable_scope() {
+        return Some("must be a unique-local (fc00::/7) or global (2000::/3) prefix".to_owned());
     }
     None
 }
@@ -914,6 +896,9 @@ mod tests {
             "2001:db8::/48", // SLAAC's EUI-64 needs exactly a /64
             "fe80::/64",     // link-local addresses no network of its own
             "ff02::/64",     // multicast
+            "fec0::/64",     // deprecated site-local
+            "100::/64",      // discard-only
+            "64:ff9b::/64",  // NAT64
             "172.31.0.0/24", // an IPv4 CIDR in the v6 field
         ] {
             let error = create_micro_network(

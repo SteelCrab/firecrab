@@ -180,10 +180,16 @@ pub async fn ensure_firewall(
     // forwarding, which no IPv4-only deployment should have switched on for
     // it. Best-effort like the host ACL punches above: a host that refuses
     // the sysctl still gets its v4 ruleset applied.
-    if micro_networks.iter().any(|network| network.ipv6.is_some())
-        && let Err(error) = crate::bridge::enable_ipv6_forward(&default_uplink)
-    {
-        println!("[WARN] failed to enable IPv6 forwarding: {error}");
+    if micro_networks.iter().any(|network| network.ipv6.is_some()) {
+        let mut uplinks: Vec<&str> = vec![default_uplink.as_str()];
+        uplinks.extend(
+            micro_networks
+                .iter()
+                .filter_map(|network| network.uplink.as_deref()),
+        );
+        if let Err(error) = crate::bridge::enable_ipv6_forward(&uplinks) {
+            println!("[WARN] failed to enable IPv6 forwarding: {error}");
+        }
     }
     if state.applied_ruleset.as_deref() == Some(base_ruleset.as_str())
         && state.applied_vms == desired_vms
@@ -589,17 +595,19 @@ fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enable
     };
 
     // Dual-stack VM: IPv6 stops being a blanket-dropped ethertype, and its
-    // leased address is pinned the way `ip saddr` is. Neighbor discovery and
-    // DAD are the two exceptions — both run before the guest owns the
-    // address, from the unspecified (`::`) or link-local source — and both
-    // stay behind the `ether saddr` pin, so a VM still cannot speak for
-    // another's MAC. Without an IPv6 lease none of this is rendered and the
-    // VM keeps the IPv4-only posture it had before.
+    // leased address is pinned the way `ip saddr` is. Neighbor discovery,
+    // DAD, MLD, and DHCPv6 are the exceptions — they run before the guest
+    // owns the address, from the unspecified (`::`) or link-local source —
+    // and they stay behind the `ether saddr` pin, so a VM still cannot
+    // speak for another's MAC. Guest-originated Router Advertisements are
+    // not in the set. Without an IPv6 lease none of this is rendered and
+    // the VM keeps the IPv4-only posture it had before.
     let (l2_v6_exceptions, l2_ethertypes, l2_v6_pin, v6_map_elements) = match policy.ipv6 {
         Some(ipv6) => (
             format!(
-                "{l2} ether saddr {mac} ip6 saddr :: accept\n\
-                 {l2} ether saddr {mac} ip6 saddr fe80::/10 accept\n"
+                "{l2} ether saddr {mac} ip6 saddr :: icmpv6 type nd-neighbor-solicit accept\n\
+                 {l2} ether saddr {mac} ip6 saddr fe80::/10 icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, mld-listener-report, mld2-listener-report }} accept\n\
+                 {l2} ether saddr {mac} ip6 saddr fe80::/10 udp dport 547 accept\n"
             ),
             format!("{l2} ether type != {{ ip, arp, ip6 }} drop\n"),
             format!("{l2} ether type ip6 ip6 saddr != {ipv6} drop\n"),
@@ -1248,10 +1256,13 @@ mod tests {
         assert!(ruleset.contains("ether type != { ip, arp, ip6 } drop"));
         // ...but only its own leased address may source them.
         assert!(ruleset.contains("ether type ip6 ip6 saddr != fd00:1::5 drop"));
-        // Neighbor discovery and DAD run from the link-local/unspecified
-        // address, which no lease can cover; the MAC pin above still applies.
-        assert!(ruleset.contains("ip6 saddr fe80::/10 accept"));
-        assert!(ruleset.contains("ip6 saddr :: accept"));
+        // Neighbor discovery, DAD, MLD, and DHCPv6 run from the
+        // link-local/unspecified address, which no lease can cover; the MAC
+        // pin above still applies. Guest-originated RAs stay dropped.
+        assert!(ruleset.contains("ip6 saddr :: icmpv6 type nd-neighbor-solicit accept"));
+        assert!(ruleset.contains("ip6 saddr fe80::/10 icmpv6 type"));
+        assert!(ruleset.contains("udp dport 547 accept"));
+        assert!(!ruleset.contains("nd-router-advert"));
         // L3 verdicts are reachable through the v6 maps.
         assert!(ruleset.contains(&format!(
             "add element inet firecrab vm_egress6 {{ fd00:1::5 : jump vm_{tag}_eg }}"

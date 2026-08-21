@@ -363,10 +363,17 @@ fn ipv6_sysctl_conf() -> String {
 }
 
 /// Writes the drop-in above into the guest. Best-effort: an image without
-/// `/etc/sysctl.d` simply keeps its own defaults.
+/// `/etc/sysctl.d` simply keeps its own defaults. A failed write is
+/// logged so an image that silently kept its own IPv6 defaults is visible.
 fn install_ipv6_sysctl(rootfs: &Path) {
     let _ = run_debugfs(rootfs, "mkdir /etc/sysctl.d");
-    let _ = write_into_image(rootfs, IPV6_SYSCTL_PATH, ipv6_sysctl_conf().as_bytes());
+    if let Err(error) = write_into_image(rootfs, IPV6_SYSCTL_PATH, ipv6_sysctl_conf().as_bytes()) {
+        tracing::warn!(
+            path = %rootfs.display(),
+            %error,
+            "failed to install IPv6 sysctl drop-in"
+        );
+    }
 }
 
 /// Copies a host fastfetch into a glibc guest. Missing loader or a failed

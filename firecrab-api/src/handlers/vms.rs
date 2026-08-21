@@ -1429,7 +1429,7 @@ async fn rotate_conflicted_lease(
         .ok_or_else(|| {
             format!("no MicroNetwork with id {micro_network_id} exists for vm {vm_id}")
         })?;
-    let subnet = SubnetSpec::parse(network.id, &network.subnet_cidr).ok_or_else(|| {
+    let subnet = SubnetSpec::from_micro_network(&network).ok_or_else(|| {
         format!(
             "MicroNetwork {} has an unparseable subnet {:?}",
             network.id, network.subnet_cidr

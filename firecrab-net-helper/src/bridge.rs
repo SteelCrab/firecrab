@@ -1,6 +1,7 @@
 //! Idempotent creation/repair of the single Firecrab-owned Linux bridge
 //! (`fcbr0`) that every VM's TAP device attaches to.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -354,22 +355,29 @@ pub fn enable_ip_forward() -> io::Result<()> {
 /// The host-wide sysctls that let a dual-stack MicroNetwork's traffic be
 /// routed at all, as `(path, value)` pairs in the order they must be
 /// written. Global IPv6 forwarding makes the kernel stop honoring router
-/// advertisements, so the uplink is pinned to `accept_ra=2` (accept them
-/// even as a router) first — otherwise switching this on would strip the
-/// host of its own RA-derived address and default route.
-fn ipv6_forward_sysctls(uplink: &str) -> Vec<(String, &'static str)> {
-    vec![
-        (format!("/proc/sys/net/ipv6/conf/{uplink}/accept_ra"), "2"),
-        ("/proc/sys/net/ipv6/conf/all/forwarding".to_owned(), "1"),
-    ]
+/// advertisements, so every in-use uplink is pinned to `accept_ra=2`
+/// (accept them even as a router) first — otherwise switching this on
+/// would strip the host of its RA-derived address and default route on
+/// any interface that is not the auto-detected default.
+fn ipv6_forward_sysctls(uplinks: &[&str]) -> Vec<(String, &'static str)> {
+    let mut seen = BTreeSet::new();
+    let mut sysctls = Vec::new();
+    for uplink in uplinks {
+        if uplink.is_empty() || !seen.insert(*uplink) {
+            continue;
+        }
+        sysctls.push((format!("/proc/sys/net/ipv6/conf/{uplink}/accept_ra"), "2"));
+    }
+    sysctls.push(("/proc/sys/net/ipv6/conf/all/forwarding".to_owned(), "1"));
+    sysctls
 }
 
 /// Applies [`ipv6_forward_sysctls`]. Called only once a MicroNetwork
 /// actually has an IPv6 prefix — a host that never asked for dual-stack
 /// keeps its own forwarding and RA settings untouched. A kernel built
 /// without IPv6 has no such knobs, so a missing path is success.
-pub fn enable_ipv6_forward(uplink: &str) -> io::Result<()> {
-    for (path, value) in ipv6_forward_sysctls(uplink) {
+pub fn enable_ipv6_forward(uplinks: &[&str]) -> io::Result<()> {
+    for (path, value) in ipv6_forward_sysctls(uplinks) {
         match fs::write(&path, value) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -766,7 +774,7 @@ mod tests {
 
     #[test]
     fn enabling_v6_forwarding_pins_the_uplinks_accept_ra_first() {
-        let sysctls = ipv6_forward_sysctls("eth0");
+        let sysctls = ipv6_forward_sysctls(&["eth0"]);
         // Turning on global forwarding makes the kernel ignore router
         // advertisements on every interface, which would cost the host its
         // own RA-derived address and default route. accept_ra=2 on the
@@ -778,6 +786,26 @@ mod tests {
                 ("/proc/sys/net/ipv6/conf/all/forwarding".to_owned(), "1"),
             ]
         );
+    }
+
+    #[test]
+    fn enabling_v6_forwarding_pins_every_distinct_uplink_before_forwarding() {
+        let sysctls = ipv6_forward_sysctls(&["wlan0", "eth0", "eth0"]);
+        assert_eq!(
+            sysctls.last(),
+            Some(&("/proc/sys/net/ipv6/conf/all/forwarding".to_owned(), "1"))
+        );
+        assert!(
+            sysctls
+                .iter()
+                .any(|(path, _)| path == "/proc/sys/net/ipv6/conf/eth0/accept_ra")
+        );
+        assert!(
+            sysctls
+                .iter()
+                .any(|(path, _)| path == "/proc/sys/net/ipv6/conf/wlan0/accept_ra")
+        );
+        assert_eq!(sysctls.len(), 3);
     }
 
     #[test]

@@ -105,6 +105,30 @@ impl DhcpActor {
 /// Renders `leases` into dnsmasq's `dhcp-host=` reservation file format,
 /// tagging each with its deterministic guest hostname (see
 /// [`guest_hostname`]) so the guest picks it up from DHCP option 12.
+/// Drops a v6 reservation unless that lease sits in a DHCPv6 network.
+/// SLAAC guests derive the address from the RA; putting it in
+/// `dhcp-hostsfile` would describe an assignment dnsmasq never makes.
+fn dhcpv6_reservations_only(
+    leases: &[DhcpLeaseEntry],
+    micro_networks: &[MicroNetworkSpec],
+) -> Vec<DhcpLeaseEntry> {
+    leases
+        .iter()
+        .copied()
+        .map(|mut lease| {
+            let dhcpv6 = micro_networks
+                .iter()
+                .find(|network| network.contains(lease.ipv4))
+                .and_then(|network| network.ipv6.as_ref())
+                .is_some_and(|ipv6| ipv6.address_mode == Ipv6AddressMode::Dhcpv6);
+            if !dhcpv6 {
+                lease.ipv6 = None;
+            }
+            lease
+        })
+        .collect()
+}
+
 fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
     let mut rendered = String::new();
     for lease in leases {
@@ -322,7 +346,8 @@ pub async fn sync_dhcp_leases(
 
     let hosts_path = Path::new(HOSTS_FILE);
     let candidate_path = hosts_path.with_extension("tmp");
-    write_atomic_candidate(&candidate_path, &render_hosts_file(leases)).await?;
+    let leases = dhcpv6_reservations_only(leases, micro_networks);
+    write_atomic_candidate(&candidate_path, &render_hosts_file(&leases)).await?;
     validate(&candidate_path, micro_networks).await?;
     tokio::fs::rename(&candidate_path, hosts_path)
         .await
@@ -355,7 +380,7 @@ pub async fn sync_dhcp_leases(
         }
     }
 
-    release_stale_leases(leases, micro_networks).await;
+    release_stale_leases(&leases, micro_networks).await;
     state.applied_revision = Some(revision);
     Ok(())
 }
@@ -808,6 +833,31 @@ mod tests {
     fn an_ipv4_only_reservation_is_unchanged_by_dual_stack_support() {
         let rendered = render_hosts_file(&[lease(1, "172.31.0.5", "02:fc:00:00:00:05")]);
         assert!(!rendered.contains('['));
+    }
+
+    #[test]
+    fn slaac_leases_drop_the_bracketed_ipv6_reservation() {
+        let mut lease = lease(1, "172.31.0.5", "02:fc:00:00:00:05");
+        lease.ipv6 = Some("fd00:1234:5678:9abc::5".parse().unwrap());
+        let slaac = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            "fd00:1234:5678:9abc::1",
+            Ipv6AddressMode::Slaac,
+        );
+        let dhcpv6 = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            "fd00:1234:5678:9abc::1",
+            Ipv6AddressMode::Dhcpv6,
+        );
+        let slaac_only = dhcpv6_reservations_only(&[lease], &[slaac]);
+        assert_eq!(slaac_only[0].ipv6, None);
+        assert_eq!(
+            dhcpv6_reservations_only(&[lease], &[dhcpv6])[0].ipv6,
+            lease.ipv6
+        );
+        assert!(!render_hosts_file(&slaac_only).contains('['));
     }
 
     #[test]

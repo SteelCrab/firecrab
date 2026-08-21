@@ -376,6 +376,17 @@ impl MicroNetworkIpv6Spec {
         (self.network_address().octets()[0] & 0xfe) == 0xfc
     }
 
+    /// Whether this prefix can back a MicroNetwork: Unique Local (`fc00::/7`)
+    /// or global unicast (`2000::/3`). Other reserved ranges — link-local,
+    /// multicast, deprecated site-local, discard-only, NAT64 — cannot.
+    pub fn is_routable_scope(&self) -> bool {
+        self.is_unique_local() || Self::is_global_unicast(self.network_address())
+    }
+
+    fn is_global_unicast(addr: Ipv6Addr) -> bool {
+        addr.segments()[0] & 0xe000 == 0x2000
+    }
+
     fn mask(&self) -> u128 {
         u128::MAX
             .checked_shl(128 - u32::from(self.prefix.min(128)))
@@ -875,6 +886,20 @@ mod tests {
             address_mode: Ipv6AddressMode::Slaac,
         };
         assert!(!gua.is_unique_local());
+        assert!(ula.is_routable_scope());
+        assert!(gua.is_routable_scope());
+
+        for gateway in ["fec0::1", "100::1", "64:ff9b::1", "fe80::1", "::1", "::"] {
+            let reserved = MicroNetworkIpv6Spec {
+                gateway: gateway.parse().unwrap(),
+                prefix: 64,
+                address_mode: Ipv6AddressMode::Slaac,
+            };
+            assert!(
+                !reserved.is_routable_scope(),
+                "{gateway} is not unique-local or global unicast"
+            );
+        }
     }
 
     #[test]

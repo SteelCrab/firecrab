@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use firecrab_api_types::{Ipv6AddressMode, Ipv6EgressMode, MicroNetworkResponse};
+use firecrab_api_types::{Ipv6AddressMode, MicroNetworkResponse};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 use uuid::Uuid;
@@ -846,13 +846,7 @@ impl Store {
                 ipv6_cidr,
                 ipv6_gateway: ipv6.map(|ipv6| ipv6.gateway.to_string()),
                 ipv6_address_mode,
-                ipv6_egress: ipv6.map(|ipv6| {
-                    if ipv6.is_unique_local() {
-                        Ipv6EgressMode::Nat66
-                    } else {
-                        Ipv6EgressMode::Direct
-                    }
-                }),
+                ipv6_egress: ipv6.as_ref().map(ipam::ipv6_egress_mode),
             });
         }
         Ok(networks)
@@ -1839,6 +1833,7 @@ fn decode_purpose(id: &str, purpose: &str) -> Result<crate::model::VmPurpose, Pe
 
 #[cfg(test)]
 mod tests {
+    use firecrab_api_types::Ipv6EgressMode;
     use tempfile::tempdir;
 
     use super::*;

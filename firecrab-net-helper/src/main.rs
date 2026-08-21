@@ -419,26 +419,23 @@ fn validate_prefix(prefix: u8) -> Result<(), HelperFailure> {
 /// The same trust-boundary re-validation for a network's IPv6 plan. Only a
 /// `/64` is accepted: SLAAC's EUI-64 interface identifier is exactly 64 bits
 /// wide, so any other length hands guests a prefix they cannot build the
-/// stored address from. The gateway must also be an address a network can
-/// actually be built on — global or Unique Local, never link-local,
-/// multicast, loopback or unspecified.
+/// stored address from. The prefix must be Unique Local (`fc00::/7`) or
+/// global unicast (`2000::/3`) — an allowlist, not a denylist of
+/// unspecified / loopback / multicast / link-local.
 fn validate_ipv6(ipv6: &MicroNetworkIpv6Spec) -> Result<(), HelperFailure> {
     if ipv6.prefix != 64 {
         return Err(HelperFailure::InvalidRequest {
             detail: format!("IPv6 prefix length {} must be 64", ipv6.prefix),
         });
     }
-    let gateway = ipv6.gateway;
-    let routable = !gateway.is_unspecified()
-        && !gateway.is_loopback()
-        && !gateway.is_multicast()
-        // fe80::/10 — a link-local gateway addresses no network of its own.
-        && (gateway.segments()[0] & 0xffc0 != 0xfe80);
-    if routable {
+    if ipv6.is_routable_scope() {
         Ok(())
     } else {
         Err(HelperFailure::InvalidRequest {
-            detail: format!("IPv6 gateway {gateway} is not a global or unique-local address"),
+            detail: format!(
+                "IPv6 gateway {} is not a global or unique-local address",
+                ipv6.gateway
+            ),
         })
     }
 }
@@ -1032,9 +1029,18 @@ mod tests {
 
     #[test]
     fn an_ipv6_gateway_outside_global_or_unique_local_space_is_rejected() {
-        // A link-local, multicast, loopback or unspecified gateway is not an
-        // address a MicroNetwork can be built on.
-        for gateway in ["fe80::1", "ff02::1", "::1", "::"] {
+        // Allowlist: Unique Local (fc00::/7) or global unicast (2000::/3).
+        // A denylist would still accept deprecated site-local, discard-only
+        // and NAT64 prefixes, none of which can back a MicroNetwork.
+        for gateway in [
+            "fe80::1",
+            "ff02::1",
+            "::1",
+            "::",
+            "fec0::1",
+            "100::1",
+            "64:ff9b::1",
+        ] {
             assert_matches!(
                 validate_ipv6(&ipv6_spec(gateway, 64)),
                 Err(HelperFailure::InvalidRequest { .. }),
