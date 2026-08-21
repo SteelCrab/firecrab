@@ -2,4 +2,4 @@
 import type { EgressPolicy } from "./EgressPolicy";
 import type { VmState } from "./VmState";
 
-export type MicroNetworkVm = { id: string, name: string, state: VmState, ipv4: string | null, egressPolicy: EgressPolicy, };
+export type MicroNetworkVm = { id: string, name: string, state: VmState, ipv4: string | null, ipv6: string | null, egressPolicy: EgressPolicy, };

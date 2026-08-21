@@ -23,6 +23,8 @@ export * from "./MicroRegistryRegisterRequest";
 export * from "./MicroRegistryRegisterResponse";
 export * from "./MicroRegistryResponse";
 export * from "./PackageOrigin";
+export * from "./Ipv6AddressMode";
+export * from "./Ipv6EgressMode";
 export * from "./MicroNetworkBridge";
 export * from "./MicroNetworkDetailResponse";
 export * from "./MicroNetworkFirewall";
