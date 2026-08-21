@@ -57,6 +57,18 @@ export const REGISTER_NETWORK_NAME = "register-e2e";
 /** Isolated subnet so the register spec does not share {@link NETWORK_CIDR}. */
 export const REGISTER_NETWORK_CIDR = "172.30.91.0/24";
 
+/** IPv4-only MicroNetwork created by the #146 IPv6 dashboard spec. */
+export const IPV6_E2E_V4_NAME = "ipv6-e2e-v4";
+
+/** Isolated subnet for {@link IPV6_E2E_V4_NAME}. */
+export const IPV6_E2E_V4_CIDR = "172.30.92.0/24";
+
+/** Dual-stack MicroNetwork created by the #146 IPv6 dashboard spec (auto ULA). */
+export const IPV6_E2E_V6_NAME = "ipv6-e2e-v6";
+
+/** Isolated subnet for {@link IPV6_E2E_V6_NAME}. */
+export const IPV6_E2E_V6_CIDR = "172.30.93.0/24";
+
 export const DEFAULT_API_URL = "http://127.0.0.1:5523";
 export const DEFAULT_BASE_URL = "http://localhost:8080";
 
