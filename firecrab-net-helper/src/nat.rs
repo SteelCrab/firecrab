@@ -61,15 +61,25 @@ pub(crate) fn uplink_exists(name: &str) -> bool {
 /// hook, which includes ordinary intra-host loopback traffic (e.g.
 /// systemd-resolved's 127.0.0.53 stub resolver), and broke host DNS
 /// resolution.
+///
+/// `egress6` is the IPv6 counterpart of `egress`, but carries only the
+/// prefixes that actually need translating: a Unique Local prefix is not
+/// routable off-host, so it is masqueraded through the same shared chain,
+/// while a global prefix contributes no pair at all and reaches the wire
+/// with the VM's own address intact (`public-docs/networking.md`).
 pub(crate) fn render_postrouting_chain(
     vm_subnets: &[String],
     egress: &[(String, String)],
+    egress6: &[(String, String)],
 ) -> String {
     let dispatch: String = egress
         .iter()
         .map(|(subnet, oif)| {
             format!("\t\tip saddr {subnet} oifname \"{oif}\" jump firecrab_postrouting\n")
         })
+        .chain(egress6.iter().map(|(prefix, oif)| {
+            format!("\t\tip6 saddr {prefix} oifname \"{oif}\" jump firecrab_postrouting\n")
+        }))
         .collect();
     let loopback_hairpin = if vm_subnets.is_empty() {
         String::new()
@@ -201,6 +211,7 @@ mod tests {
                 ("172.31.0.0/24".to_owned(), "eth0".to_owned()),
                 ("172.32.0.0/24".to_owned(), "eth1".to_owned()),
             ],
+            &[],
         );
         assert!(
             ruleset.contains("ip saddr 172.31.0.0/24 oifname \"eth0\" jump firecrab_postrouting")
@@ -214,8 +225,34 @@ mod tests {
     }
 
     #[test]
+    fn postrouting_masquerades_a_ula_prefix_through_its_own_uplink() {
+        let ruleset = render_postrouting_chain(
+            &["172.31.0.0/24".to_owned()],
+            &[("172.31.0.0/24".to_owned(), "eth0".to_owned())],
+            &[("fd00:1234:5678:9abc::/64".to_owned(), "eth0".to_owned())],
+        );
+        assert!(ruleset.contains(
+            "ip6 saddr fd00:1234:5678:9abc::/64 oifname \"eth0\" jump firecrab_postrouting"
+        ));
+        // One shared masquerade chain still serves both families.
+        assert_eq!(ruleset.matches("chain firecrab_postrouting").count(), 1);
+    }
+
+    #[test]
+    fn postrouting_leaves_a_network_with_no_v6_egress_untranslated() {
+        // A GUA network contributes no v6 pair: its addresses are publicly
+        // routable and must reach the wire unchanged.
+        let ruleset = render_postrouting_chain(
+            &["172.31.0.0/24".to_owned()],
+            &[("172.31.0.0/24".to_owned(), "eth0".to_owned())],
+            &[],
+        );
+        assert!(!ruleset.contains("ip6 saddr"));
+    }
+
+    #[test]
     fn postrouting_omits_dispatch_when_no_network_is_allowed_out() {
-        let ruleset = render_postrouting_chain(&["172.31.0.0/24".to_owned()], &[]);
+        let ruleset = render_postrouting_chain(&["172.31.0.0/24".to_owned()], &[], &[]);
         assert!(!ruleset.contains("oifname"));
         assert!(ruleset.contains("chain firecrab_postrouting"));
         assert!(ruleset.contains("ip saddr 127.0.0.0/8 ip daddr { 172.31.0.0/24 } masquerade"));

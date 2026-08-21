@@ -31,7 +31,7 @@ mod tap;
 use firecrab_helper_protocol::PROTOCOL_VERSION;
 use firecrab_helper_protocol::framing::{read_frame, write_frame};
 use firecrab_helper_protocol::network::{
-    HelperFailure, MicroNetworkSpec, NetworkRequest, NetworkRequestEnvelope,
+    HelperFailure, MicroNetworkIpv6Spec, MicroNetworkSpec, NetworkRequest, NetworkRequestEnvelope,
     NetworkResponseEnvelope, VmPolicySpec,
 };
 // Only referenced by the ApplySelfUpdate dispatch tests below (dispatch
@@ -416,12 +416,40 @@ fn validate_prefix(prefix: u8) -> Result<(), HelperFailure> {
     }
 }
 
+/// The same trust-boundary re-validation for a network's IPv6 plan. Only a
+/// `/64` is accepted: SLAAC's EUI-64 interface identifier is exactly 64 bits
+/// wide, so any other length hands guests a prefix they cannot build the
+/// stored address from. The gateway must also be an address a network can
+/// actually be built on — global or Unique Local, never link-local,
+/// multicast, loopback or unspecified.
+fn validate_ipv6(ipv6: &MicroNetworkIpv6Spec) -> Result<(), HelperFailure> {
+    if ipv6.prefix != 64 {
+        return Err(HelperFailure::InvalidRequest {
+            detail: format!("IPv6 prefix length {} must be 64", ipv6.prefix),
+        });
+    }
+    let gateway = ipv6.gateway;
+    let routable = !gateway.is_unspecified()
+        && !gateway.is_loopback()
+        && !gateway.is_multicast()
+        // fe80::/10 — a link-local gateway addresses no network of its own.
+        && (gateway.segments()[0] & 0xffc0 != 0xfe80);
+    if routable {
+        Ok(())
+    } else {
+        Err(HelperFailure::InvalidRequest {
+            detail: format!("IPv6 gateway {gateway} is not a global or unique-local address"),
+        })
+    }
+}
+
 /// Same check across a whole network set, applied before any of it is
 /// rendered into an nftables ruleset or a dnsmasq config.
 fn validate_micro_networks(micro_networks: &[MicroNetworkSpec]) -> Result<(), HelperFailure> {
-    micro_networks
-        .iter()
-        .try_for_each(|network| validate_prefix(network.prefix))
+    micro_networks.iter().try_for_each(|network| {
+        validate_prefix(network.prefix)?;
+        network.ipv6.as_ref().map_or(Ok(()), validate_ipv6)
+    })
 }
 
 /// Re-validates every supplied per-network uplink before nft is touched.
@@ -486,6 +514,7 @@ fn validate_vm_policies(
 ) -> Result<Vec<firewall::VmPolicy>, HelperFailure> {
     let mut vm_ids = HashSet::new();
     let mut ipv4s = HashSet::new();
+    let mut ipv6s = HashSet::new();
     let mut host_ports = HashSet::new();
     let mut policies = Vec::with_capacity(specs.len());
 
@@ -498,6 +527,16 @@ fn validate_vm_policies(
         if !ipv4s.insert(spec.ipv4) {
             return Err(HelperFailure::InvalidRequest {
                 detail: format!("duplicate VM policy IPv4 {}", spec.ipv4),
+            });
+        }
+        // Two VMs pinned to one v6 address would collide in the vm_egress6 /
+        // vm_ingress6 maps, which are keyed by address exactly like their v4
+        // counterparts.
+        if let Some(ipv6) = spec.ipv6
+            && !ipv6s.insert(ipv6)
+        {
+            return Err(HelperFailure::InvalidRequest {
+                detail: format!("duplicate VM policy IPv6 {ipv6}"),
             });
         }
         validate_port_forwards(&spec.port_forwards)?;
@@ -523,6 +562,7 @@ fn validate_vm_policies(
         policies.push(firewall::VmPolicy {
             vm_id: spec.vm_id,
             ipv4: spec.ipv4,
+            ipv6: spec.ipv6,
             mac: spec.mac,
             egress,
             allow_host_ssh: spec.allow_host_ssh,
@@ -549,6 +589,7 @@ async fn dispatch(
             micro_network_id,
             gateway,
             prefix,
+            ipv6,
         } => {
             // Sanity bound on a value that ultimately comes from user input
             // (a MicroNetwork's subnet CIDR) — the helper is the trust
@@ -558,12 +599,16 @@ async fn dispatch(
             // 8 keeps the reserved range from swallowing most of the host's
             // own address space.
             validate_prefix(prefix)?;
+            if let Some(ipv6) = ipv6.as_ref() {
+                validate_ipv6(ipv6)?;
+            }
             bridge::ensure_micro_network_bridge(
                 &config.bridge,
                 micro_network_id,
                 gateway,
                 prefix,
                 config.bridge_mtu,
+                ipv6,
             )
             .await
             .map(|()| AfterResponse::Continue)
@@ -596,6 +641,7 @@ async fn dispatch(
         NetworkRequest::ApplyVmPolicy {
             vm_id,
             ipv4,
+            ipv6,
             mac,
             egress_policy,
             allow_host_ssh,
@@ -612,6 +658,7 @@ async fn dispatch(
             let policy = firewall::VmPolicy {
                 vm_id,
                 ipv4,
+                ipv6,
                 mac,
                 egress,
                 allow_host_ssh,
@@ -702,6 +749,8 @@ fn error_chain(error: &dyn std::error::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    use firecrab_helper_protocol::network::Ipv6AddressMode;
+
     use super::*;
     use core::assert_matches;
 
@@ -840,6 +889,7 @@ mod tests {
         let request = NetworkRequest::ApplyVmPolicy {
             vm_id: Uuid::nil(),
             ipv4: "172.30.0.9".parse().unwrap(),
+            ipv6: None,
             mac: "02:fc:00:00:00:09".parse().unwrap(),
             egress_policy: "0.0.0.0/0".to_owned(),
             allow_host_ssh: false,
@@ -856,6 +906,7 @@ mod tests {
         let base = |port_forwards| NetworkRequest::ApplyVmPolicy {
             vm_id: Uuid::nil(),
             ipv4: "172.30.0.9".parse().unwrap(),
+            ipv6: None,
             mac: "02:fc:00:00:00:09".parse().unwrap(),
             egress_policy: "internet".to_owned(),
             allow_host_ssh: false,
@@ -889,6 +940,7 @@ mod tests {
         let first = VmPolicySpec {
             vm_id: Uuid::from_u128(1),
             ipv4: "172.30.0.40".parse().unwrap(),
+            ipv6: None,
             mac: "02:fc:00:00:00:01".parse().unwrap(),
             egress_policy: "internet".to_owned(),
             allow_host_ssh: false,
@@ -911,6 +963,7 @@ mod tests {
             prefix: 24,
             internet_enabled: true,
             uplink: uplink.map(str::to_owned),
+            ipv6: None,
         }
     }
 
@@ -954,6 +1007,80 @@ mod tests {
         }
     }
 
+    fn ipv6_spec(gateway: &str, prefix: u8) -> MicroNetworkIpv6Spec {
+        MicroNetworkIpv6Spec {
+            gateway: gateway.parse().unwrap(),
+            prefix,
+            address_mode: Ipv6AddressMode::Slaac,
+        }
+    }
+
+    #[test]
+    fn an_ipv6_prefix_that_is_not_a_64_is_rejected() {
+        // SLAAC's EUI-64 interface identifier is 64 bits wide, so anything
+        // else silently produces addresses no guest would configure.
+        for prefix in [0, 48, 56, 63, 65, 128] {
+            assert_matches!(
+                validate_ipv6(&ipv6_spec("fd00:1::1", prefix)),
+                Err(HelperFailure::InvalidRequest { .. }),
+                "{prefix}"
+            );
+        }
+        assert!(validate_ipv6(&ipv6_spec("fd00:1::1", 64)).is_ok());
+        assert!(validate_ipv6(&ipv6_spec("2001:db8:1::1", 64)).is_ok());
+    }
+
+    #[test]
+    fn an_ipv6_gateway_outside_global_or_unique_local_space_is_rejected() {
+        // A link-local, multicast, loopback or unspecified gateway is not an
+        // address a MicroNetwork can be built on.
+        for gateway in ["fe80::1", "ff02::1", "::1", "::"] {
+            assert_matches!(
+                validate_ipv6(&ipv6_spec(gateway, 64)),
+                Err(HelperFailure::InvalidRequest { .. }),
+                "{gateway}"
+            );
+        }
+    }
+
+    #[test]
+    fn firewall_snapshot_rejects_duplicate_ipv6s_before_nft() {
+        let first = VmPolicySpec {
+            vm_id: Uuid::from_u128(1),
+            ipv4: "172.30.0.40".parse().unwrap(),
+            ipv6: Some("fd00:1::5".parse().unwrap()),
+            mac: "02:fc:00:00:00:01".parse().unwrap(),
+            egress_policy: "internet".to_owned(),
+            allow_host_ssh: false,
+            port_forwards: Vec::new(),
+        };
+        let second = VmPolicySpec {
+            vm_id: Uuid::from_u128(2),
+            ipv4: "172.30.0.41".parse().unwrap(),
+            mac: "02:fc:00:00:00:02".parse().unwrap(),
+            ..first.clone()
+        };
+
+        assert_matches!(validate_vm_policies(vec![first, second]),
+            Err(HelperFailure::InvalidRequest { detail }) if detail.contains("duplicate VM policy IPv6"));
+    }
+
+    #[tokio::test]
+    async fn ensure_micro_network_bridge_rejects_a_bad_ipv6_plan_as_invalid_request() {
+        let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
+            .expect("helper config");
+        let request = NetworkRequest::EnsureMicroNetworkBridge {
+            micro_network_id: Uuid::nil(),
+            gateway: "172.31.0.1".parse().unwrap(),
+            prefix: 24,
+            ipv6: Some(ipv6_spec("fe80::1", 64)),
+        };
+        assert_matches!(
+            dispatch(request, &config).await,
+            Err(HelperFailure::InvalidRequest { .. })
+        );
+    }
+
     #[tokio::test]
     async fn ensure_micro_network_bridge_rejects_an_out_of_range_prefix_as_invalid_request() {
         let config = HelperConfig::from_values("/tmp/x.sock", None, bridge::DEFAULT_BRIDGE_MTU)
@@ -963,6 +1090,7 @@ mod tests {
                 micro_network_id: Uuid::nil(),
                 gateway: "172.31.0.1".parse().unwrap(),
                 prefix,
+                ipv6: None,
             };
             let result = dispatch(request, &config).await;
             assert_matches!(result, Err(HelperFailure::InvalidRequest { .. }));
