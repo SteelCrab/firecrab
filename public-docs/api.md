@@ -156,7 +156,7 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 
 ## MicroNetwork
 
-`POST /api/micro-networks` accepts `name`, `subnetCidr`, optional `internetEnabled` (default `true`), and optional `uplink`.
+`POST /api/micro-networks` accepts `name`, `subnetCidr`, optional `internetEnabled` (default `true`), optional `uplink`, optional `ipv6Cidr`, and optional `ipv6AddressMode`.
 `uplink` is a host NIC name.
 Omit it or send `null` to use the host default-route interface.
 An empty string on create is `400` with field `uplink`.
@@ -169,6 +169,14 @@ Detail `nat.uplink` is the effective interface after that default is applied.
 Omit `uplink` to leave the stored name unchanged.
 A name pins NAT to that NIC.
 `""` resets the stored name to auto.
+
+Omit both `ipv6Cidr` and `ipv6AddressMode` for IPv4-only.
+Send `ipv6AddressMode` without a prefix and the API generates a unique-local `/64`.
+`ipv6Cidr` must be a `/64`, unique-local or global.
+`ipv6AddressMode` is `slaac` or `dhcpv6`. Omitted next to a prefix means SLAAC.
+Responses add `ipv6Cidr`, `ipv6Gateway`, `ipv6AddressMode`, and `ipv6Egress` (`nat66` or `direct`).
+A network without IPv6, including one created before dual-stack existed, reports `null` for all four.
+`VmResponse.ipv6` carries the VM's stored address, or `null` on an IPv4-only network.
 
 `GET /api/network` still reports the default-route iface as `uplink`.
 It also returns `interfaces` for the dashboard picker.

@@ -213,6 +213,8 @@ mod tests {
                 subnet_cidr: "172.29.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
             }),
         )
         .await

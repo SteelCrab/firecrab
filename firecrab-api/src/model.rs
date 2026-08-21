@@ -23,6 +23,8 @@ pub struct Lease {
     pub vm_id: Uuid,
     /// Allocated IPv4 address.
     pub ipv4: Ipv4Addr,
+    /// Allocated IPv6 address, when the VM's MicroNetwork is dual-stack.
+    pub ipv6: Option<std::net::Ipv6Addr>,
     /// Allocated MAC address.
     pub mac: MacAddr,
 }

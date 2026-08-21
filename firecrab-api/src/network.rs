@@ -6,12 +6,14 @@ use std::time::Duration;
 use firecrab_helper_protocol::framing::{FrameError, read_frame, write_frame};
 pub use firecrab_helper_protocol::network::tap_name;
 use firecrab_helper_protocol::network::{
-    DhcpLeaseEntry, HelperFailure, MacAddr, MicroNetworkSpec, NetworkRequest,
+    DhcpLeaseEntry, HelperFailure, MicroNetworkIpv6Spec, MicroNetworkSpec, NetworkRequest,
     NetworkRequestEnvelope, NetworkResponseEnvelope, VmPolicySpec,
 };
 use thiserror::Error;
 use tokio::net::UnixStream;
 use uuid::Uuid;
+
+use crate::model::Lease;
 
 use crate::network_policy::EgressPolicy;
 
@@ -71,11 +73,13 @@ impl NetworkClient {
         micro_network_id: Uuid,
         gateway: Ipv4Addr,
         prefix: u8,
+        ipv6: Option<MicroNetworkIpv6Spec>,
     ) -> Result<(), NetworkError> {
         self.call(NetworkRequest::EnsureMicroNetworkBridge {
             micro_network_id,
             gateway,
             prefix,
+            ipv6,
         })
         .await
     }
@@ -127,20 +131,21 @@ impl NetworkClient {
         self.call(NetworkRequest::DeleteTap { vm_id }).await
     }
 
-    /// Applies `vm_id`'s isolation + egress firewall policy for its lease.
+    /// Applies a VM's isolation + egress firewall policy for `lease`. The
+    /// whole lease is passed rather than its parts: every address the helper
+    /// pins comes from it, so they cannot be mismatched at a call site.
     pub async fn apply_vm_policy(
         &self,
-        vm_id: Uuid,
-        ipv4: Ipv4Addr,
-        mac: MacAddr,
+        lease: &Lease,
         egress_policy: EgressPolicy,
         allow_host_ssh: bool,
         port_forwards: Vec<firecrab_helper_protocol::network::PortForwardSpec>,
     ) -> Result<(), NetworkError> {
         self.call(NetworkRequest::ApplyVmPolicy {
-            vm_id,
-            ipv4,
-            mac,
+            vm_id: lease.vm_id,
+            ipv4: lease.ipv4,
+            ipv6: lease.ipv6,
+            mac: lease.mac,
             egress_policy: egress_policy.id().to_owned(),
             allow_host_ssh,
             port_forwards,

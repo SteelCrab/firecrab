@@ -395,6 +395,9 @@ pub struct VmResponse {
     /// (see `Store::active_lease` — allocated at create, kept through
     /// stop/start, freed only on delete).
     pub ipv4: Option<String>,
+    /// Allocated IPv6 address, when this VM's MicroNetwork is dual-stack.
+    /// `null` for an IPv4-only network (`public-docs/networking.md`).
+    pub ipv6: Option<String>,
     /// Allocated MAC address, alongside `ipv4`.
     pub mac: Option<String>,
     /// Deterministic guest hostname (`fc-<12 hex>`, see
@@ -560,6 +563,56 @@ pub struct StorageDeviceResponse {
     pub kind: String,
 }
 
+/// How guests in a dual-stack MicroNetwork obtain their IPv6 address.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Ipv6AddressMode {
+    /// Router advertisements only — the guest derives its address from its
+    /// own MAC (EUI-64), which is the address the API stored for it.
+    #[default]
+    Slaac,
+    /// Stateful DHCPv6, from a per-VM reservation like the IPv4 one.
+    Dhcpv6,
+}
+
+impl Ipv6AddressMode {
+    /// The wire ID, shared with `firecrab-helper-protocol`'s own enum.
+    pub fn id(self) -> &'static str {
+        match self {
+            Ipv6AddressMode::Slaac => "slaac",
+            Ipv6AddressMode::Dhcpv6 => "dhcpv6",
+        }
+    }
+}
+
+impl fmt::Display for Ipv6AddressMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
+/// How a MicroNetwork's IPv6 traffic leaves the host. Reported rather than
+/// chosen: it follows from the prefix's scope, so a network given a global
+/// prefix cannot be silently masqueraded, and one on Unique Local space
+/// cannot be left unroutable.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Ipv6EgressMode {
+    /// Unique Local prefix: masqueraded out of the host's uplink.
+    Nat66,
+    /// Global prefix: forwarded untranslated, so VMs hold public addresses.
+    Direct,
+}
+
+impl fmt::Display for Ipv6EgressMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Ipv6EgressMode::Nat66 => "nat66",
+            Ipv6EgressMode::Direct => "direct",
+        })
+    }
+}
+
 /// Request body for `POST /api/micro-networks`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -580,6 +633,19 @@ pub struct CreateMicroNetworkRequest {
     /// the API (400), not stored as auto.
     #[serde(default)]
     pub uplink: Option<String>,
+    /// The network's IPv6 prefix, alongside — never instead of —
+    /// `subnet_cidr`. Giving one turns IPv6 on for the network: a Unique
+    /// Local `/64` egresses through NAT66, a global one is forwarded
+    /// untranslated (`public-docs/networking.md`). Omitted with
+    /// `ipv6_address_mode` set, the API generates a per-host ULA `/64`.
+    #[serde(default)]
+    pub ipv6_cidr: Option<String>,
+    /// How guests in it get a v6 address. Omitted alongside an
+    /// `ipv6_cidr` means SLAAC; omitted with no `ipv6_cidr` either means
+    /// the network is IPv4-only, which is what a request that says nothing
+    /// about IPv6 gets.
+    #[serde(default)]
+    pub ipv6_address_mode: Option<Ipv6AddressMode>,
 }
 
 /// Body for `PATCH /api/micro-networks/{id}`: flips one network's internet
@@ -624,6 +690,16 @@ pub struct MicroNetworkResponse {
     pub internet_enabled: bool,
     /// Stored host NIC for NAT, or `null` to use the host default route.
     pub uplink: Option<String>,
+    /// The network's IPv6 prefix, or `null` for a network created before
+    /// dual-stack existed (those stay IPv4-only until recreated).
+    pub ipv6_cidr: Option<String>,
+    /// Its IPv6 gateway — the first address of `ipv6_cidr`, held by the
+    /// bridge. Derived, never stored, exactly like `gateway`.
+    pub ipv6_gateway: Option<String>,
+    /// How its guests obtain a v6 address, alongside `ipv6_cidr`.
+    pub ipv6_address_mode: Option<Ipv6AddressMode>,
+    /// How its v6 traffic leaves the host, derived from the prefix's scope.
+    pub ipv6_egress: Option<Ipv6EgressMode>,
 }
 
 /// Response for `GET /api/network`: the host network firecrab has set up,
@@ -684,6 +760,16 @@ pub struct MicroNetworkSubnet {
     pub allocated_addresses: u32,
     /// Where guests get their address from.
     pub dhcp: String,
+    /// The network's IPv6 prefix, or `null` when it is IPv4-only.
+    pub ipv6_cidr: Option<String>,
+    /// The bridge's own address in that prefix, handed to guests as their
+    /// v6 router.
+    pub ipv6_gateway: Option<String>,
+    /// How guests in it obtain a v6 address.
+    pub ipv6_address_mode: Option<Ipv6AddressMode>,
+    /// How its v6 traffic leaves the host (NAT66 or direct), from the
+    /// prefix's scope.
+    pub ipv6_egress: Option<Ipv6EgressMode>,
 }
 
 /// The host bridge backing a MicroNetwork.
@@ -707,6 +793,9 @@ pub struct MicroNetworkNat {
     pub uplink: String,
     /// Masquerade source range.
     pub source_cidr: String,
+    /// Masquerade source prefix for IPv6, or `null` when the network is
+    /// IPv4-only or holds a global prefix that is never translated.
+    pub ipv6_source_cidr: Option<String>,
 }
 
 /// The isolation posture applied to a MicroNetwork's traffic. These are
@@ -740,6 +829,8 @@ pub struct MicroNetworkVm {
     pub state: VmState,
     /// Its address in this network, if it currently holds a lease.
     pub ipv4: Option<String>,
+    /// Its IPv6 address in this network, when the network is dual-stack.
+    pub ipv6: Option<String>,
     /// Its own outbound posture.
     pub egress_policy: EgressPolicy,
 }
@@ -1332,6 +1423,7 @@ mod tests {
             startup_timeline: Vec::new(),
             egress_policy: EgressPolicy::Internet,
             ipv4: Some("172.30.0.5".to_owned()),
+            ipv6: None,
             mac: Some("02:fc:00:00:00:05".to_owned()),
             hostname: "fc-abc123456789".to_owned(),
             micro_network_id: Uuid::nil(),
@@ -1388,6 +1480,7 @@ mod tests {
             startup_timeline: Vec::new(),
             egress_policy: EgressPolicy::Internet,
             ipv4: None,
+            ipv6: None,
             mac: None,
             hostname: "fc-abc123456789".to_owned(),
             micro_network_id: Uuid::nil(),
@@ -1613,6 +1706,104 @@ mod tests {
     }
 
     #[test]
+    fn a_dual_stack_vm_reports_both_of_its_addresses() {
+        let json = serde_json::to_string(&MicroNetworkVm {
+            id: Uuid::nil(),
+            name: "web".to_owned(),
+            state: VmState::Running,
+            ipv4: Some("172.31.0.5".to_owned()),
+            ipv6: Some("fd00:1::5".to_owned()),
+            egress_policy: EgressPolicy::Internet,
+        })
+        .unwrap();
+        assert!(json.contains("\"ipv6\":\"fd00:1::5\""));
+    }
+
+    #[test]
+    fn a_dual_stack_subnet_panel_reports_its_prefix_and_egress_mode() {
+        let subnet = MicroNetworkSubnet {
+            cidr: "172.31.0.0/24".to_owned(),
+            gateway: "172.31.0.1".to_owned(),
+            usable_addresses: 253,
+            allocated_addresses: 1,
+            dhcp: "dnsmasq".to_owned(),
+            ipv6_cidr: Some("2001:db8:1::/64".to_owned()),
+            ipv6_gateway: Some("2001:db8:1::1".to_owned()),
+            ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+            ipv6_egress: Some(Ipv6EgressMode::Direct),
+        };
+        let json = serde_json::to_string(&subnet).unwrap();
+        assert!(json.contains("\"ipv6Cidr\":\"2001:db8:1::/64\""));
+        assert!(json.contains("\"ipv6Egress\":\"direct\""));
+    }
+
+    #[test]
+    fn create_micro_network_request_defaults_to_ipv4_only() {
+        // No v6 fields: IPv4-only, matching a client that never heard of
+        // dual-stack and a dashboard that left the IPv6 select off.
+        let json = r#"{"name":"prod","subnetCidr":"172.31.0.0/24"}"#;
+        let request: CreateMicroNetworkRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.ipv6_cidr, None);
+        assert_eq!(request.ipv6_address_mode, None);
+    }
+
+    #[test]
+    fn create_micro_network_request_deserializes_an_explicit_ipv6_plan() {
+        let json = r#"{"name":"prod","subnetCidr":"172.31.0.0/24",
+            "ipv6Cidr":"2001:db8:1::/64","ipv6AddressMode":"dhcpv6"}"#;
+        let request: CreateMicroNetworkRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.ipv6_cidr.as_deref(), Some("2001:db8:1::/64"));
+        assert_eq!(request.ipv6_address_mode, Some(Ipv6AddressMode::Dhcpv6));
+    }
+
+    #[test]
+    fn ipv6_address_modes_use_their_wire_names() {
+        assert_eq!(
+            serde_json::to_string(&Ipv6AddressMode::Dhcpv6).unwrap(),
+            "\"dhcpv6\""
+        );
+        assert_eq!(Ipv6AddressMode::Slaac.id(), "slaac");
+        assert_eq!(Ipv6AddressMode::default(), Ipv6AddressMode::Slaac);
+    }
+
+    #[test]
+    fn ipv6_egress_modes_use_their_wire_names() {
+        assert_eq!(
+            serde_json::to_string(&Ipv6EgressMode::Nat66).unwrap(),
+            "\"nat66\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Ipv6EgressMode::Direct).unwrap(),
+            "\"direct\""
+        );
+    }
+
+    #[test]
+    fn a_dual_stack_micro_network_response_carries_its_v6_plan() {
+        let response = MicroNetworkResponse {
+            id: Uuid::from_u128(0x1234),
+            name: "prod".to_owned(),
+            subnet_cidr: "172.31.0.0/24".to_owned(),
+            gateway: "172.31.0.1".to_owned(),
+            internet_enabled: true,
+            uplink: None,
+            ipv6_cidr: Some("fd00:1::/64".to_owned()),
+            ipv6_gateway: Some("fd00:1::1".to_owned()),
+            ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+            ipv6_egress: Some(Ipv6EgressMode::Nat66),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"ipv6Cidr\":\"fd00:1::/64\""));
+        assert!(json.contains("\"ipv6Gateway\":\"fd00:1::1\""));
+        assert!(json.contains("\"ipv6AddressMode\":\"slaac\""));
+        assert!(json.contains("\"ipv6Egress\":\"nat66\""));
+        assert_eq!(
+            serde_json::from_str::<MicroNetworkResponse>(&json).unwrap(),
+            response
+        );
+    }
+
+    #[test]
     fn micro_network_response_round_trips() {
         let response = MicroNetworkResponse {
             id: Uuid::from_u128(0x1234),
@@ -1621,6 +1812,10 @@ mod tests {
             gateway: "172.31.0.1".to_owned(),
             internet_enabled: true,
             uplink: None,
+            ipv6_cidr: None,
+            ipv6_gateway: None,
+            ipv6_address_mode: None,
+            ipv6_egress: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         let decoded: MicroNetworkResponse = serde_json::from_str(&json).unwrap();

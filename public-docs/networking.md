@@ -1,6 +1,7 @@
 # Networking
 
 A MicroNetwork is a named IPv4 subnet.
+IPv6 is optional: send `ipv6AddressMode` or `ipv6Cidr` to add a prefix alongside it.
 It gives VMs a bridge, DHCP, NAT, and firewall policy.
 
 ## Create
@@ -64,6 +65,52 @@ Its values are `internet` and `isolated`.
 
 Both settings must allow internet traffic.
 DHCP and gateway DNS remain available to isolated VMs.
+
+## IPv6
+
+IPv6 is a create-time choice.
+IPv4 stays mandatory, so the prefix is a second family and not a replacement.
+
+Omit both `ipv6Cidr` and `ipv6AddressMode` and the network is IPv4-only.
+Send `ipv6AddressMode` without a prefix and the API generates a unique-local `/64`.
+Unique-local space is not routable off the host, so its traffic leaves through NAT66.
+
+Send a global prefix instead and nothing is translated.
+Its VMs then hold directly routable public addresses.
+
+```sh
+curl -s -X POST http://127.0.0.1:5523/api/micro-networks \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "public",
+    "subnetCidr": "172.33.0.0/24",
+    "ipv6Cidr": "2001:db8:1::/64",
+    "ipv6AddressMode": "slaac"
+  }'
+```
+
+The prefix must be a `/64`, and unique-local or global.
+The egress mode follows from that scope alone, so there is no separate switch.
+The response reports it as `ipv6Egress`, either `nat66` or `direct`.
+
+`ipv6AddressMode` selects how guests obtain an address.
+`slaac` advertises the prefix and the guest derives the EUI-64 of its own MAC.
+`dhcpv6` reserves one address per VM, the way the IPv4 lease already works.
+
+Both modes store the address before the VM starts.
+The firewall pins it the way it pins the IPv4 lease.
+Guests are configured with `addr_gen_mode=0` and no temporary addresses so the address they build is the stored one.
+
+A network created before dual-stack existed stays IPv4-only.
+Its `ipv6Cidr` is `null` and its VMs get no IPv6 address.
+
+An internet-disabled network drops IPv6 egress the same way it drops IPv4.
+Traffic routed between two MicroNetworks is denied in both families.
+
+```sh
+ip -6 -br addr show type bridge
+sudo nft list table inet firecrab
+```
 
 ## Host objects
 
