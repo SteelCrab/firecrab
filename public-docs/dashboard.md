@@ -74,10 +74,11 @@ npm run dev --prefix firecrab-frontend
 - Route: `#/networks`
 - IPv4 CIDR: required
 - IPv6 select:
-  - **Off (IPv4 only)** — omit `ipv6Cidr` and `ipv6AddressMode`
-  - **Enabled (auto ULA /64)** — send `ipv6AddressMode` (SLAAC or DHCPv6) and an optional prefix
+  - **Off (IPv4 only)** — omit `ipv6Cidr` and `ipv6AddressMode`; prefix and addressing fields are hidden
+  - **Enabled (auto ULA /64)** — prefix and addressing expand; send `ipv6AddressMode` (SLAAC or DHCPv6) and an optional prefix
 - Blank prefix with IPv6 on: unique-local `/64`
 - List IPv6 column: prefix + NAT66 or direct routing, or Off
+- Detail: IPv6 off is one line; IPv6 on shows prefix, gateway, mode, and NAT66/direct
 
 ## Images
 

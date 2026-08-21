@@ -11,7 +11,6 @@ A MicroNetwork is a named IPv4 subnet.
 - [Attach a VM](#attach-a-vm)
 - [Internet policy](#internet-policy)
 - [IPv6](#ipv6)
-- [AWS mapping](#aws-mapping)
 - [Host objects](#host-objects)
 - [Inspect](#inspect)
 - [Delete](#delete)
@@ -85,12 +84,13 @@ curl -s -X POST http://127.0.0.1:5523/api/micro-networks \
 - Send `ipv6AddressMode` without a prefix: unique-local `/64`
 - Unique-local: not routable off the host → NAT66
 - Global prefix: no translation; VMs hold public addresses
+- `2001:db8::/32` is documentation space (RFC 3849) — replace with an ISP-routed `/64` before use
 
 ```sh
 curl -s -X POST http://127.0.0.1:5523/api/micro-networks \
   -H 'Content-Type: application/json' \
   -d '{
-    "name": "public",
+    "name": "lab-v6",
     "subnetCidr": "172.33.0.0/24",
     "ipv6Cidr": "2001:db8:1::/64",
     "ipv6AddressMode": "slaac"
@@ -114,20 +114,6 @@ curl -s -X POST http://127.0.0.1:5523/api/micro-networks \
 ip -6 -br addr show type bridge
 sudo nft list table inet firecrab
 ```
-
-## AWS mapping
-
-| firecrab | AWS |
-| --- | --- |
-| MicroNetwork | VPC + subnet (combined) |
-| Bridge + gateway | Implicit subnet router |
-| `dhcp-range` | DHCP option set |
-| IPv4 NAT / IPv6 NAT66 | NAT Gateway |
-| Global IPv6, `ipv6Egress: direct` | Public IPv6 on the instance |
-| `internetEnabled` | Internet Gateway attach/detach |
-| VM `microNetworkId` | Launch into a VPC/subnet |
-| Cross-network deny | No peering by default |
-| Lease blocks delete | ENI still in the subnet |
 
 ## Host objects
 

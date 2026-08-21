@@ -74,14 +74,17 @@ FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm run test:ipv6 --prefix firecrab-e2e
 
 - Expect **1 passed, 1 skipped**
 
-Create IPv4-only and auto-ULA dual-stack (needs `./scripts/dev-net-helper.sh`):
+Create IPv4-only and auto-ULA dual-stack:
 
 ```sh
+./scripts/dev-net-helper.sh    # terminal session 1
 npm run test:ipv6 --prefix firecrab-e2e
 ```
 
 - Expect **2 passed**
 - `afterAll` deletes `ipv6-e2e-v4` and `ipv6-e2e-v6`
+- Needs a helper the API process can connect to (`/run/firecrab/net-helper.sock`)
+- systemd `firecrab-api` runs as user `firecrab`; a debug helper that recreates the socket as `root:pista` makes create return 500
 
 Playwright:
 

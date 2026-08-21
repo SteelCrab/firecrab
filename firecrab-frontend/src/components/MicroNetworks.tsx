@@ -88,6 +88,7 @@ export default function MicroNetworks() {
 
     setSubmitting(true);
     setFieldErrors(null);
+    setListError(null);
     try {
       await createMicroNetwork({
         name: name.trim(),
@@ -110,7 +111,13 @@ export default function MicroNetworks() {
       setIpv6AddressMode("slaac");
       await refresh();
     } catch (error) {
-      setFieldErrors(error as ApiClientError);
+      const client = error as ApiClientError;
+      setFieldErrors(client);
+      // 400 field maps already sit under the inputs. Helper-down / 500 would
+      // otherwise leave the form looking idle.
+      if (Object.keys(client.apiError?.fields ?? {}).length === 0) {
+        setListError(client.message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -222,30 +229,32 @@ export default function MicroNetworks() {
           </select>
           <span className="field-error"></span>
         </div>
-        <div className="field">
-          <label htmlFor="mn-ipv6">{t("IPv6 prefix", "IPv6 프리픽스")}</label>
-          <input
-            id="mn-ipv6"
-            placeholder={t("auto (ULA /64)", "자동 (ULA /64)")}
-            value={ipv6Cidr}
-            onChange={(event) => setIpv6Cidr(event.target.value)}
-            disabled={!ipv6Enabled}
-          />
-          {fieldError("ipv6Cidr")}
-        </div>
-        <div className="field">
-          <label htmlFor="mn-ipv6-mode">{t("IPv6 addressing", "IPv6 주소 할당")}</label>
-          <select
-            id="mn-ipv6-mode"
-            value={ipv6AddressMode}
-            onChange={(event) => setIpv6AddressMode(event.target.value as Ipv6AddressMode)}
-            disabled={!ipv6Enabled}
-          >
-            <option value="slaac">SLAAC (RA)</option>
-            <option value="dhcpv6">DHCPv6</option>
-          </select>
-          <span className="field-error"></span>
-        </div>
+        {ipv6Enabled && (
+          <>
+            <div className="field">
+              <label htmlFor="mn-ipv6">{t("IPv6 prefix", "IPv6 프리픽스")}</label>
+              <input
+                id="mn-ipv6"
+                placeholder={t("auto (ULA /64)", "자동 (ULA /64)")}
+                value={ipv6Cidr}
+                onChange={(event) => setIpv6Cidr(event.target.value)}
+              />
+              {fieldError("ipv6Cidr")}
+            </div>
+            <div className="field">
+              <label htmlFor="mn-ipv6-mode">{t("IPv6 addressing", "IPv6 주소 할당")}</label>
+              <select
+                id="mn-ipv6-mode"
+                value={ipv6AddressMode}
+                onChange={(event) => setIpv6AddressMode(event.target.value as Ipv6AddressMode)}
+              >
+                <option value="slaac">SLAAC (RA)</option>
+                <option value="dhcpv6">DHCPv6</option>
+              </select>
+              <span className="field-error"></span>
+            </div>
+          </>
+        )}
         <div className="field">
           <label>&nbsp;</label>
           <button className="btn primary" type="submit" disabled={submitting}>
@@ -427,7 +436,7 @@ function MicroNetworkDetail({
                 : t("direct (globally routable)", "직접 라우팅 (공인 프리픽스)")}
             </>
           ) : (
-            t("IPv4-only network", "IPv4 전용 네트워크")
+            t("Off", "꺼짐")
           )}
         </dd>
 
@@ -443,9 +452,13 @@ function MicroNetworkDetail({
             : t("Internet blocked — no masquerading; outbound traffic is dropped", "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop")}
           <br />
           {t("source", "출발")} {nat.sourceCidr}
-          <br />
-          {t("source (IPv6)", "출발 (IPv6)")}{" "}
-          {nat.ipv6SourceCidr ?? t("none — not translated", "없음 — 변환하지 않음")}
+          {subnet.ipv6Cidr && (
+            <>
+              <br />
+              {t("source (IPv6)", "출발 (IPv6)")}{" "}
+              {nat.ipv6SourceCidr ?? t("none — not translated", "없음 — 변환하지 않음")}
+            </>
+          )}
           <br />
           {t("uplink", "업링크")} {nat.uplink || t("(no uplink)", "(uplink 없음)")}
           <div className="field">

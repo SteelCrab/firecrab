@@ -48,14 +48,26 @@ test("IPv6 create fields stay off until the select is enabled", async ({ page })
   await openEnglish(page, "/#/networks");
   const panel = networkPanel(page);
   await expect(panel.locator("#mn-ipv6-enable")).toHaveValue("off");
-  await expect(panel.locator("#mn-ipv6")).toBeDisabled();
-  await expect(panel.locator("#mn-ipv6-mode")).toBeDisabled();
+  await expect(panel.locator("#mn-ipv6")).toHaveCount(0);
+  await expect(panel.locator("#mn-ipv6-mode")).toHaveCount(0);
 
   await panel.locator("#mn-ipv6-enable").selectOption("on");
-  await expect(panel.locator("#mn-ipv6")).toBeEnabled();
-  await expect(panel.locator("#mn-ipv6-mode")).toBeEnabled();
+  await expect(panel.locator("#mn-ipv6")).toBeVisible();
+  await expect(panel.locator("#mn-ipv6-mode")).toBeVisible();
   await expect(panel.locator("#mn-ipv6-mode")).toHaveValue("slaac");
 });
+
+async function submitCreate(page: Page, panel: ReturnType<typeof networkPanel>): Promise<void> {
+  const pending = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" && response.url().includes("/api/micro-networks"),
+  );
+  await panel.locator('button[type="submit"]').click();
+  const response = await pending;
+  if (!response.ok()) {
+    throw new Error(`POST /api/micro-networks ${response.status()}: ${await response.text()}`);
+  }
+}
 
 test("creates an IPv4-only network and an auto-ULA dual-stack network", async ({ page }) => {
   test.skip(
@@ -66,32 +78,21 @@ test("creates an IPv4-only network and an auto-ULA dual-stack network", async ({
   await openEnglish(page, "/#/networks");
   const panel = networkPanel(page);
   const rows = panel.locator("table.vm-table tbody tr");
-  const fieldError = panel.locator(".field-error").filter({ hasText: /\S/ });
 
   await page.locator("#mn-name").fill(IPV6_E2E_V4_NAME);
   await page.locator("#mn-subnet").fill(IPV6_E2E_V4_CIDR);
   await expect(panel.locator("#mn-ipv6-enable")).toHaveValue("off");
-  await panel.locator('button[type="submit"]').click();
+  await submitCreate(page, panel);
   const v4row = rows.filter({ hasText: IPV6_E2E_V4_NAME });
-  await expect(v4row.or(fieldError).first()).toBeVisible({ timeout: 30_000 });
-  if ((await v4row.count()) === 0) {
-    throw new Error(
-      `failed to create ${IPV6_E2E_V4_NAME}: ${(await fieldError.allTextContents()).join("; ")}`,
-    );
-  }
+  await expect(v4row).toBeVisible();
   await expect(v4row).toContainText("Off");
 
   await page.locator("#mn-name").fill(IPV6_E2E_V6_NAME);
   await page.locator("#mn-subnet").fill(IPV6_E2E_V6_CIDR);
   await panel.locator("#mn-ipv6-enable").selectOption("on");
-  await panel.locator('button[type="submit"]').click();
+  await submitCreate(page, panel);
   const v6row = rows.filter({ hasText: IPV6_E2E_V6_NAME });
-  await expect(v6row.or(fieldError).first()).toBeVisible({ timeout: 30_000 });
-  if ((await v6row.count()) === 0) {
-    throw new Error(
-      `failed to create ${IPV6_E2E_V6_NAME}: ${(await fieldError.allTextContents()).join("; ")}`,
-    );
-  }
+  await expect(v6row).toBeVisible();
   await expect(v6row).toContainText("NAT66");
 
   const networks = await api.listNetworks();
