@@ -1,17 +1,32 @@
 # API
 
-`firecrab-api` provides REST endpoints and one console WebSocket.
-It listens on `127.0.0.1:5523` by default.
+- REST endpoints and one console WebSocket
+- Default listen: `127.0.0.1:5523`
+
+## Contents
+
+- [Run](#run)
+- [Request rules](#request-rules)
+- [VM endpoints](#vm-endpoints)
+- [Create a VM](#create-a-vm)
+- [VM fields](#vm-fields)
+- [Guest `/etc/firecrab`](#guest-etcfirecrab)
+- [Other endpoints](#other-endpoints)
+- [MicroNetwork](#micronetwork)
+- [MicroRegistry](#microregistry)
+- [Docker Hub login](#docker-hub-login)
+- [VM states](#vm-states)
+- [Errors](#errors)
+- [Related](#related)
 
 ## Run
-
-Run the API from the repository root.
 
 ```sh
 cargo run -p firecrab-api
 ```
 
-Use `RUST_LOG=firecrab_api=debug` for detailed logs.
+- Run from the repository root
+- `RUST_LOG=firecrab_api=debug` for detailed logs
 
 ## Request rules
 
@@ -156,32 +171,39 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 
 ## MicroNetwork
 
-`POST /api/micro-networks` accepts `name`, `subnetCidr`, optional `internetEnabled` (default `true`), optional `uplink`, optional `ipv6Cidr`, and optional `ipv6AddressMode`.
-`uplink` is a host NIC name.
-Omit it or send `null` to use the host default-route interface.
-An empty string on create is `400` with field `uplink`.
+`POST /api/micro-networks`:
 
-`GET /api/micro-networks` and `GET /api/micro-networks/{id}` return the stored `uplink`.
-`null` means auto.
-Detail `nat.uplink` is the effective interface after that default is applied.
+- `name`, `subnetCidr`
+- optional `internetEnabled` (default `true`)
+- optional `uplink`, `ipv6Cidr`, `ipv6AddressMode`
 
-`PATCH /api/micro-networks/{id}` requires `internetEnabled`.
-Omit `uplink` to leave the stored name unchanged.
-A name pins NAT to that NIC.
-`""` resets the stored name to auto.
+Uplink:
 
-Omit both `ipv6Cidr` and `ipv6AddressMode` for IPv4-only.
-Send `ipv6AddressMode` without a prefix and the API generates a unique-local `/64`.
-`ipv6Cidr` must be a `/64`, unique-local or global.
-`ipv6AddressMode` is `slaac` or `dhcpv6`. Omitted next to a prefix means SLAAC.
-Responses add `ipv6Cidr`, `ipv6Gateway`, `ipv6AddressMode`, and `ipv6Egress` (`nat66` or `direct`).
-A network without IPv6, including one created before dual-stack existed, reports `null` for all four.
-`VmResponse.ipv6` carries the VM's stored address, or `null` on an IPv4-only network.
+- Host NIC name
+- Omit or `null`: host default-route interface
+- Empty string on create: `400` field `uplink`
+- `GET` list/detail: stored `uplink`; `null` means auto
+- Detail `nat.uplink`: effective interface after that default
+- `PATCH /api/micro-networks/{id}`: `internetEnabled` required
+- PATCH omit `uplink`: leave stored name
+- PATCH a name: pin NAT to that NIC
+- PATCH `""`: reset to auto
 
-`GET /api/network` still reports the default-route iface as `uplink`.
-It also returns `interfaces` for the dashboard picker.
-That list comes from `/sys/class/net` and omits `lo`, `fct*`, and `mnb*`.
-A bad or missing name is `400` `validation_failed` on field `uplink`.
+IPv6:
+
+- Omit both `ipv6Cidr` and `ipv6AddressMode`: IPv4-only
+- `ipv6AddressMode` without a prefix: unique-local `/64`
+- `ipv6Cidr`: `/64`, unique-local or global
+- `ipv6AddressMode`: `slaac` or `dhcpv6`; omitted next to a prefix means SLAAC
+- Response fields: `ipv6Cidr`, `ipv6Gateway`, `ipv6AddressMode`, `ipv6Egress` (`nat66` or `direct`)
+- No IPv6 (including pre-dual-stack rows): all four `null`
+- `VmResponse.ipv6`: stored address, or `null` on IPv4-only
+
+`GET /api/network`:
+
+- `uplink`: default-route iface
+- `interfaces`: dashboard picker from `/sys/class/net`, omits `lo`, `fct*`, `mnb*`
+- Bad or missing name: `400` `validation_failed` on field `uplink`
 
 ## MicroRegistry
 
