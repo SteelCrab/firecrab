@@ -302,22 +302,34 @@ jobs:
           cat dist/SHA256SUMS
 
       - name: Release notes
+        id: notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh api "repos/${{ github.repository }}/contributors" --paginate \
-            --jq '.[].login' > /tmp/contributors.txt
+          # Credit this release only. The repo-wide contributors endpoint is
+          # all-time, so it re-lists everyone who ever landed a commit.
+          PREVIOUS=$(python3 scripts/check-changelog.py --previous "${GITHUB_REF_NAME}")
+          if [ -n "$PREVIOUS" ]; then
+            # --paginate: compare returns at most 250 commits per page.
+            gh api "repos/${{ github.repository }}/compare/${PREVIOUS}...${GITHUB_REF_NAME}?per_page=100" \
+              --paginate --jq '.commits[].author.login // empty' > /tmp/contributors.txt
+          else
+            gh api "repos/${{ github.repository }}/contributors" --paginate \
+              --jq '.[].login' > /tmp/contributors.txt
+          fi
           python3 scripts/write-release-notes.py \
             --tag "${GITHUB_REF_NAME}" \
             --repo "${{ github.repository }}" \
             --contributors-file /tmp/contributors.txt \
             --out release-notes.md
+          echo "name=firecrab ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           cat release-notes.md
 
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
+          name: ${{ steps.notes.outputs.name }}
           files: dist/*
           body_path: release-notes.md
           generate_release_notes: false

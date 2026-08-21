@@ -51,6 +51,57 @@ VALID = dedent(
 )
 
 
+MULTI = dedent(
+    """\
+    # Changelog
+
+    ## [0.1.2] - 2026-08-21
+
+    ### Added
+
+    - Third release.
+
+    ## [0.1.1] - 2026-08-17
+
+    ### Added
+
+    - Second release.
+
+    ## [0.1.0] - 2026-08-16
+
+    ### Added
+
+    - First release.
+    """
+)
+
+
+class PreviousVersionTests(unittest.TestCase):
+    def test_returns_the_tag_of_the_preceding_release(self) -> None:
+        self.assertEqual(check_changelog.previous_version(MULTI, "v0.1.2"), "v0.1.1")
+        self.assertEqual(check_changelog.previous_version(MULTI, "v0.1.1"), "v0.1.0")
+
+    def test_accepts_a_bare_version(self) -> None:
+        self.assertEqual(check_changelog.previous_version(MULTI, "0.1.2"), "v0.1.1")
+
+    def test_oldest_release_has_no_predecessor(self) -> None:
+        self.assertIsNone(check_changelog.previous_version(MULTI, "v0.1.0"))
+
+    def test_unknown_tag_raises(self) -> None:
+        with self.assertRaises(check_changelog.ChangelogError):
+            check_changelog.previous_version(MULTI, "v9.9.9")
+
+    def test_repo_latest_release_points_at_the_one_below_it(self) -> None:
+        # The contributor range for a release must start at the release before
+        # it, so an earlier release's contributors are not re-listed.
+        repo = Path(__file__).resolve().parent.parent
+        text = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+        releases = check_changelog._split_releases(text)
+        self.assertGreaterEqual(len(releases), 2)
+        latest, second = releases[0][0], releases[1][0]
+        self.assertEqual(check_changelog.previous_version(text, f"v{latest}"), f"v{second}")
+
+
 class ValidateChangelogTests(unittest.TestCase):
     def test_valid_document_has_no_problems(self) -> None:
         self.assertEqual(check_changelog.validate_text(VALID, "0.1.0"), [])

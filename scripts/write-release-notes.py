@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -21,6 +23,52 @@ def _load_changelog():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def release_name(tag: str) -> str:
+    """Title shown above the release body, e.g. `firecrab v0.1.2`."""
+    pinned = tag if tag.startswith("v") else f"v{tag}"
+    return f"firecrab {pinned}"
+
+
+def _strip_version_heading(block: str) -> str:
+    """Drop the `## [x.y.z] - date` line the release page already states."""
+    lines = block.splitlines()
+    if lines and lines[0].startswith("## ["):
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _absolute_repo_links(block: str, repo: str, tag: str) -> str:
+    """Point in-repo markdown links at this tag's tree.
+
+    A release page is not a tree page, so `](public-docs/oci.md)` 404s there.
+    """
+    base = f"https://github.com/{repo}/blob/{tag}"
+    return re.sub(
+        r"\]\((?!https?://|#)([^)]+)\)",
+        lambda match: f"]({base}/{match.group(1).lstrip('./')})",
+        block,
+    )
+
+
+def _link_definitions(changelog_text: str, block: str) -> list[str]:
+    """Reference definitions for the shorthand links this block uses.
+
+    The changelog keeps them in one list at the bottom of the file, so a
+    single release's block carries `[#145]` with nothing to resolve it.
+    """
+    defined = dict(re.findall(r"(?m)^\[([^\]]+)\]:\s*(\S+)\s*$", changelog_text))
+    already = set(re.findall(r"(?m)^\[([^\]]+)\]:", block))
+    used = re.findall(r"\[([^\]]+)\](?!\(|:)", block)
+    out: list[str] = []
+    seen: set[str] = set()
+    for ref in used:
+        if ref in seen or ref in already or ref not in defined:
+            continue
+        seen.add(ref)
+        out.append(f"[{ref}]: {defined[ref]}")
+    return out
 
 
 def filter_contributors(names: list[str]) -> list[str]:
@@ -40,15 +88,30 @@ def filter_contributors(names: list[str]) -> list[str]:
     return out
 
 
-def git_contributors(repo: Path) -> list[str]:
-    result = subprocess.run(
-        ["git", "-C", str(repo), "shortlog", "-sn", "--all"],
+def _run_git(argv: list[str]) -> str:
+    return subprocess.run(
+        argv,
         check=True,
         capture_output=True,
         text=True,
-    )
+    ).stdout
+
+
+def git_contributors(
+    repo: Path,
+    since: str | None = None,
+    runner: Callable[[list[str]], str] = _run_git,
+) -> list[str]:
+    """Names behind the commits in a release.
+
+    `since` is the previous release's tag, which limits the list to work done
+    for this release. Without it the whole history is counted, which credits
+    every past release's contributors again.
+    """
+    argv = ["git", "-C", str(repo), "shortlog", "-sn"]
+    argv.append(f"{since}..HEAD" if since else "--all")
     names: list[str] = []
-    for line in result.stdout.splitlines():
+    for line in runner(argv).splitlines():
         parts = line.strip().split(None, 1)
         if len(parts) == 2:
             names.append(parts[1])
@@ -72,11 +135,13 @@ def build_notes(
     )
 
     changelog = _load_changelog()
-    changelog_block = changelog.extract_notes(changelog_text, pinned)
+    changelog_block = _strip_version_heading(
+        changelog.extract_notes(changelog_text, pinned)
+    )
+    definitions = _link_definitions(changelog_text, changelog_block)
+    changelog_block = _absolute_repo_links(changelog_block, repo, pinned)
 
     lines: list[str] = [
-        f"# firecrab {version}",
-        "",
         "## Install",
         "",
         "One command on a Linux host. The script detects `x86_64` or `aarch64`",
@@ -109,9 +174,11 @@ def build_notes(
         "",
         changelog_block.rstrip(),
         "",
-        "## Contributors",
-        "",
     ]
+    if definitions:
+        lines.extend(definitions)
+        lines.append("")
+    lines.extend(["## Contributors", ""])
     people = filter_contributors(contributors)
     if people:
         lines.append('<p align="left">')
@@ -155,6 +222,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--repo", default="SteelCrab/firecrab")
     parser.add_argument(
+        "--print-name",
+        action="store_true",
+        help="also print the release title on stdout",
+    )
+    parser.add_argument(
         "--contributors-file",
         type=Path,
         help="one name per line; default is git shortlog",
@@ -166,18 +238,27 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    changelog_text = args.changelog.read_text(encoding="utf-8")
+
     if args.contributors_file:
         contributors = args.contributors_file.read_text(encoding="utf-8").splitlines()
     else:
-        contributors = git_contributors(REPO)
+        # Only this release's work, so earlier releases' contributors are
+        # not credited again.
+        changelog = _load_changelog()
+        contributors = git_contributors(
+            REPO, since=changelog.previous_version(changelog_text, args.tag)
+        )
 
     write_notes(
         tag=args.tag,
-        changelog_text=args.changelog.read_text(encoding="utf-8"),
+        changelog_text=changelog_text,
         contributors=contributors,
         repo=args.repo,
         dest=args.out,
     )
+    if args.print_name:
+        print(release_name(args.tag))
     print(args.out)
     return 0
 
