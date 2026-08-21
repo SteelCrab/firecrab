@@ -5,6 +5,8 @@ interface VmRow {
   name: string;
   state: string;
   template: string;
+  ipv4?: string | null;
+  portForwards?: Array<{ hostPort: number; guestPort: number; protocol: string }>;
 }
 
 interface ImageRow {
@@ -69,6 +71,14 @@ export class ApiCleanup {
     const { status, json } = await this.request("GET", "/api/vms");
     if (status >= 400 || !Array.isArray(json)) return [];
     return json as VmRow[];
+  }
+
+  async getVm(id: string): Promise<VmRow | null> {
+    const { status, json } = await this.request("GET", `/api/vms/${id}`);
+    if (status >= 400 || !json || typeof json !== "object") return null;
+    const row = json as VmRow;
+    if (typeof row.id !== "string" || typeof row.name !== "string") return null;
+    return row;
   }
 
   async listImages(): Promise<ImageRow[]> {
