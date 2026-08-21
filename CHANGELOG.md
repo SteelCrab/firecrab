@@ -7,13 +7,39 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 | Version | Date | Work |
 | --- | --- | --- |
-| [Unreleased](#unreleased) | — | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
+| [Unreleased](#unreleased) | — | — |
+| [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
 
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- None.
+
+### Improved
+
+- None.
+
+## [0.1.2] - 2026-08-21
+
+firecrab gains a CLI (`doctor`/`info`/`status`/`update`) that can update the host in
+place, and OCI import provisions its own kernel instead of borrowing a guest image's.
 
 ### Added
 
@@ -63,6 +89,7 @@ Entries land here as work merges, and move under the next version heading when t
 - Self-update stages replacements beside each target, avoiding cross-mount `rename(2)` failures under systemd `ReadWritePaths` ([#171]).
 - The update helper derives its own install layout, rejects archive symlinks and special entries, and rolls back failed swaps accurately ([#171]).
 - Timed-out update checks terminate their child process, and a stalled dashboard restart wait now surfaces recovery guidance ([#171]).
+- Local installation guides now match the three binaries built by the prepared payload.
 
 ### Improved
 
@@ -189,7 +216,8 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.1.1...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.1.2...main
+[0.1.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.0
 [#141]: https://github.com/SteelCrab/firecrab/issues/141

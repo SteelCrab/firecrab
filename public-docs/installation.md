@@ -41,7 +41,7 @@ To patch an installed host with files built from a checkout, choose one of the f
 
 ### Prepared local payload
 
-Use the repository script to build every host binary and the dashboard:
+Use the repository script to build the required host binaries and the dashboard:
 
 ```sh
 git clone https://github.com/SteelCrab/firecrab.git
@@ -50,7 +50,8 @@ cd firecrab
 ./install.sh --bin-dir target/release
 ```
 
-The preparation script builds all host binaries and creates `firecrab-frontend/dist`.
+The preparation script builds `firecrab-api`, `firecrab-net-helper`, and the `firecrab` CLI,
+then creates `firecrab-frontend/dist`.
 The installer detects that dashboard directory automatically.
 This local build path requires the repository Rust toolchain, Node.js, and npm.
 
@@ -64,8 +65,7 @@ cd firecrab
 cargo build --release --locked \
   -p firecrab-api \
   -p firecrab-net-helper \
-  -p firecrab-cli \
-  -p firecrab-bench
+  -p firecrab-cli
 npm ci --prefix firecrab-frontend
 npm run build --prefix firecrab-frontend
 ./install.sh \
@@ -73,7 +73,8 @@ npm run build --prefix firecrab-frontend
   --dashboard-dir firecrab-frontend/dist
 ```
 
-The manual path must produce all four executables and `firecrab-frontend/dist/index.html` before installation.
+The manual path must produce `firecrab-api`, `firecrab-net-helper`, `firecrab`, and
+`firecrab-frontend/dist/index.html` before installation.
 
 Open the dashboard after the services start.
 
