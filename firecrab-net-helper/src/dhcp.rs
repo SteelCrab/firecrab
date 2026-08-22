@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use firecrab_helper_protocol::network::{
-    DhcpLeaseEntry, MacAddr, MicroNetworkSpec, guest_hostname,
+    DhcpLeaseEntry, Ipv6AddressMode, MacAddr, MicroNetworkSpec, guest_hostname,
 };
 use thiserror::Error;
 use tokio::fs::File;
@@ -105,6 +105,30 @@ impl DhcpActor {
 /// Renders `leases` into dnsmasq's `dhcp-host=` reservation file format,
 /// tagging each with its deterministic guest hostname (see
 /// [`guest_hostname`]) so the guest picks it up from DHCP option 12.
+/// Drops a v6 reservation unless that lease sits in a DHCPv6 network.
+/// SLAAC guests derive the address from the RA; putting it in
+/// `dhcp-hostsfile` would describe an assignment dnsmasq never makes.
+fn dhcpv6_reservations_only(
+    leases: &[DhcpLeaseEntry],
+    micro_networks: &[MicroNetworkSpec],
+) -> Vec<DhcpLeaseEntry> {
+    leases
+        .iter()
+        .copied()
+        .map(|mut lease| {
+            let dhcpv6 = micro_networks
+                .iter()
+                .find(|network| network.contains(lease.ipv4))
+                .and_then(|network| network.ipv6.as_ref())
+                .is_some_and(|ipv6| ipv6.address_mode == Ipv6AddressMode::Dhcpv6);
+            if !dhcpv6 {
+                lease.ipv6 = None;
+            }
+            lease
+        })
+        .collect()
+}
+
 fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
     let mut rendered = String::new();
     for lease in leases {
@@ -114,10 +138,18 @@ fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
         // parse the literal text "dhcp-host" as the leading MAC/hex field
         // and reject the whole file with "bad hex constant", silently
         // dropping every reservation.
+        // A dual-stack reservation carries the v6 address in the brackets
+        // dnsmasq uses to tell the two families apart on one line; a
+        // v4-only lease renders exactly the line it always did.
+        let ipv6 = match lease.ipv6 {
+            Some(ipv6) => format!("[{ipv6}],"),
+            None => String::new(),
+        };
         rendered.push_str(&format!(
-            "{},{},{}\n",
+            "{},{},{}{}\n",
             lease.mac,
             lease.ipv4,
+            ipv6,
             guest_hostname(lease.vm_id)
         ));
     }
@@ -243,15 +275,42 @@ fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) ->
     let served: String = micro_networks
         .iter()
         .map(|network| {
+            // A dual-stack network gets a second range on the same
+            // interface: addresses come from the guest itself under SLAAC
+            // (`ra-stateless` advertises the prefix and hands out
+            // configuration only) or from this file's reservations under
+            // DHCPv6 (`static`, exactly like the v4 range above).
+            let range6 = match &network.ipv6 {
+                Some(ipv6) => {
+                    let mode = match ipv6.address_mode {
+                        Ipv6AddressMode::Slaac => "ra-stateless",
+                        Ipv6AddressMode::Dhcpv6 => "static",
+                    };
+                    format!(
+                        "dhcp-range={},{mode},{}\n",
+                        ipv6.network_address(),
+                        ipv6.prefix
+                    )
+                }
+                None => String::new(),
+            };
             format!(
-                "interface={}\ndhcp-range={},static\n",
+                "interface={}\ndhcp-range={},static\n{range6}",
                 network.bridge_name(),
                 network.network_address()
             )
         })
         .collect();
+    // Router advertisements are what makes a guest configure a v6 address
+    // and a default route at all; an IPv4-only host never enables them.
+    let enable_ra = if micro_networks.iter().any(|network| network.ipv6.is_some()) {
+        "enable-ra\n"
+    } else {
+        ""
+    };
     format!(
         "{served}\
+         {enable_ra}\
          bind-dynamic\n\
          dhcp-hostsfile={}\n\
          dhcp-leasefile={LEASE_FILE}\n\
@@ -287,7 +346,8 @@ pub async fn sync_dhcp_leases(
 
     let hosts_path = Path::new(HOSTS_FILE);
     let candidate_path = hosts_path.with_extension("tmp");
-    write_atomic_candidate(&candidate_path, &render_hosts_file(leases)).await?;
+    let leases = dhcpv6_reservations_only(leases, micro_networks);
+    write_atomic_candidate(&candidate_path, &render_hosts_file(&leases)).await?;
     validate(&candidate_path, micro_networks).await?;
     tokio::fs::rename(&candidate_path, hosts_path)
         .await
@@ -320,7 +380,7 @@ pub async fn sync_dhcp_leases(
         }
     }
 
-    release_stale_leases(leases, micro_networks).await;
+    release_stale_leases(&leases, micro_networks).await;
     state.applied_revision = Some(revision);
     Ok(())
 }
@@ -554,6 +614,7 @@ fn reload(child: &mut Child) -> Result<(), DhcpError> {
 
 #[cfg(test)]
 mod tests {
+    use firecrab_helper_protocol::network::MicroNetworkIpv6Spec;
     use uuid::Uuid;
 
     use super::*;
@@ -562,6 +623,7 @@ mod tests {
         DhcpLeaseEntry {
             vm_id: Uuid::from_u128(vm_id),
             ipv4: ipv4.parse().unwrap(),
+            ipv6: None,
             mac: mac.parse().unwrap(),
         }
     }
@@ -670,6 +732,7 @@ mod tests {
             // internet toggle only governs what leaves it.
             internet_enabled: true,
             uplink: None,
+            ipv6: None,
         }
     }
 
@@ -694,6 +757,107 @@ mod tests {
             assert!(config.contains(&format!("interface={}", network.bridge_name())));
             assert!(config.contains(&format!("dhcp-range={},static", network.network_address())));
         }
+    }
+
+    fn dual_stack_network(
+        id: u128,
+        gateway: &str,
+        v6_gateway: &str,
+        address_mode: Ipv6AddressMode,
+    ) -> MicroNetworkSpec {
+        MicroNetworkSpec {
+            ipv6: Some(MicroNetworkIpv6Spec {
+                gateway: v6_gateway.parse().unwrap(),
+                prefix: 64,
+                address_mode,
+            }),
+            ..sample_network(id, gateway, 24)
+        }
+    }
+
+    #[test]
+    fn a_slaac_network_is_served_router_advertisements_and_no_addresses() {
+        let network = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            "fd00:1234:5678:9abc::1",
+            Ipv6AddressMode::Slaac,
+        );
+        let config = render_base_config(Path::new("/run/hosts"), &[network]);
+        assert!(config.contains("enable-ra"));
+        // ra-stateless: the guest builds its own address from the prefix, so
+        // dnsmasq hands out configuration only, never an address.
+        assert!(config.contains("dhcp-range=fd00:1234:5678:9abc::,ra-stateless,64"));
+    }
+
+    #[test]
+    fn a_dhcpv6_network_is_served_a_static_range_like_its_v4_one() {
+        let network = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            "fd00:1234:5678:9abc::1",
+            Ipv6AddressMode::Dhcpv6,
+        );
+        let config = render_base_config(Path::new("/run/hosts"), &[network]);
+        assert!(config.contains("enable-ra"));
+        assert!(config.contains("dhcp-range=fd00:1234:5678:9abc::,static,64"));
+        assert!(!config.contains("ra-stateless"));
+    }
+
+    #[test]
+    fn an_ipv4_only_network_is_served_no_router_advertisements() {
+        let config = render_base_config(
+            Path::new("/run/hosts"),
+            &[sample_network(0x1234, "172.31.0.1", 24)],
+        );
+        assert!(!config.contains("enable-ra"));
+        assert!(!config.contains("dhcp-range=fd"));
+    }
+
+    #[test]
+    fn a_dual_stack_reservation_carries_both_addresses_on_one_line() {
+        let mut lease = lease(1, "172.31.0.5", "02:fc:00:00:00:05");
+        lease.ipv6 = Some("fd00:1234:5678:9abc::5".parse().unwrap());
+        let rendered = render_hosts_file(&[lease]);
+        // dnsmasq wants the v6 address bracketed, alongside the v4 one.
+        assert_eq!(
+            rendered,
+            format!(
+                "02:fc:00:00:00:05,172.31.0.5,[fd00:1234:5678:9abc::5],{}\n",
+                guest_hostname(Uuid::from_u128(1))
+            )
+        );
+    }
+
+    #[test]
+    fn an_ipv4_only_reservation_is_unchanged_by_dual_stack_support() {
+        let rendered = render_hosts_file(&[lease(1, "172.31.0.5", "02:fc:00:00:00:05")]);
+        assert!(!rendered.contains('['));
+    }
+
+    #[test]
+    fn slaac_leases_drop_the_bracketed_ipv6_reservation() {
+        let mut lease = lease(1, "172.31.0.5", "02:fc:00:00:00:05");
+        lease.ipv6 = Some("fd00:1234:5678:9abc::5".parse().unwrap());
+        let slaac = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            "fd00:1234:5678:9abc::1",
+            Ipv6AddressMode::Slaac,
+        );
+        let dhcpv6 = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            "fd00:1234:5678:9abc::1",
+            Ipv6AddressMode::Dhcpv6,
+        );
+        let slaac_only = dhcpv6_reservations_only(&[lease], &[slaac]);
+        assert_eq!(slaac_only[0].ipv6, None);
+        assert_eq!(
+            dhcpv6_reservations_only(&[lease], &[dhcpv6])[0].ipv6,
+            lease.ipv6
+        );
+        assert!(!render_hosts_file(&slaac_only).contains('['));
     }
 
     #[test]

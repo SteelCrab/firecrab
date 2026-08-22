@@ -322,6 +322,7 @@ pub fn specialize_guest(
     // Rewrite the console wrapper on every start so MOTD/fastfetch appear
     // without requiring a re-import.
     patch_oci_console(rootfs);
+    install_ipv6_sysctl(rootfs);
     install_guest_toolbox_commands(rootfs);
     remove_injected_systemctl(rootfs);
     apply_vm_env(rootfs, env)?;
@@ -335,6 +336,44 @@ pub fn specialize_guest(
     // Metrics Agent: guest OS CPU/mem samples for the dashboard (own module).
     crate::guest_agent::install(rootfs)?;
     Ok(())
+}
+
+/// Guest path of the sysctl drop-in [`ipv6_sysctl_conf`] is written to.
+const IPV6_SYSCTL_PATH: &str = "/etc/sysctl.d/99-firecrab-ipv6.conf";
+
+/// The guest-side IPv6 settings a dual-stack MicroNetwork depends on.
+///
+/// The API computes and stores a VM's IPv6 address up front (EUI-64 of its
+/// MAC under SLAAC) and the host firewall pins that exact address, the same
+/// way it pins the IPv4 lease. So the guest must build the same one: modern
+/// systemd defaults to `addr_gen_mode=2` (stable-privacy), and privacy
+/// extensions would additionally source outbound traffic from a rotating
+/// temporary address — either would be dropped by L2 anti-spoofing.
+/// `accept_ra=2` keeps the router advertisement from the network's own
+/// bridge accepted. Harmless on an IPv4-only VM, which never gets a prefix
+/// to configure from in the first place.
+fn ipv6_sysctl_conf() -> String {
+    "# Managed by Firecrab. See public-docs/networking.md.\n\
+     net.ipv6.conf.default.addr_gen_mode = 0\n\
+     net.ipv6.conf.eth0.addr_gen_mode = 0\n\
+     net.ipv6.conf.default.use_tempaddr = 0\n\
+     net.ipv6.conf.eth0.use_tempaddr = 0\n\
+     net.ipv6.conf.eth0.accept_ra = 2\n"
+        .to_owned()
+}
+
+/// Writes the drop-in above into the guest. Best-effort: an image without
+/// `/etc/sysctl.d` simply keeps its own defaults. A failed write is
+/// logged so an image that silently kept its own IPv6 defaults is visible.
+fn install_ipv6_sysctl(rootfs: &Path) {
+    let _ = run_debugfs(rootfs, "mkdir /etc/sysctl.d");
+    if let Err(error) = write_into_image(rootfs, IPV6_SYSCTL_PATH, ipv6_sysctl_conf().as_bytes()) {
+        tracing::warn!(
+            path = %rootfs.display(),
+            %error,
+            "failed to install IPv6 sysctl drop-in"
+        );
+    }
 }
 
 /// Copies a host fastfetch into a glibc guest. Missing loader or a failed
@@ -840,6 +879,21 @@ mod tests {
 
     use super::*;
     use core::assert_matches;
+
+    #[test]
+    fn the_guest_ipv6_sysctl_pins_the_address_the_api_stored() {
+        let conf = ipv6_sysctl_conf();
+        // EUI-64 (addr_gen_mode 0), not systemd's stable-privacy default:
+        // anything else produces an address the firewall never pinned, and
+        // the guest's IPv6 traffic would be dropped at L2.
+        assert!(conf.contains("net.ipv6.conf.default.addr_gen_mode = 0"));
+        assert!(conf.contains("net.ipv6.conf.eth0.addr_gen_mode = 0"));
+        // Privacy extensions would source outbound traffic from a rotating
+        // temporary address, which is likewise not the leased one.
+        assert!(conf.contains("net.ipv6.conf.eth0.use_tempaddr = 0"));
+        // The gateway advertises the prefix and the default route.
+        assert!(conf.contains("net.ipv6.conf.eth0.accept_ra = 2"));
+    }
 
     fn template_file(directory: &Path, content: &[u8]) -> File {
         let path = directory.join("template.ext4");

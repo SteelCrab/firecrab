@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use firecrab_api_types::MicroNetworkResponse;
+use firecrab_api_types::{Ipv6AddressMode, MicroNetworkResponse};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 use uuid::Uuid;
@@ -77,16 +77,19 @@ const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_
     name TEXT NOT NULL,
     subnet_cidr TEXT NOT NULL,
     internet_enabled INTEGER NOT NULL DEFAULT 1,
-    uplink TEXT
+    uplink TEXT,
+    ipv6_cidr TEXT,
+    ipv6_address_mode TEXT
 ) STRICT";
 
 /// Selects every column [`Store::list_micro_networks`] needs.
-const SELECT_ALL_MICRO_NETWORKS_SQL: &str =
-    "SELECT id, name, subnet_cidr, internet_enabled, uplink FROM micro_networks";
+const SELECT_ALL_MICRO_NETWORKS_SQL: &str = "SELECT id, name, subnet_cidr, internet_enabled, \
+    uplink, ipv6_cidr, ipv6_address_mode FROM micro_networks";
 
 /// Inserts a new row; fails on a duplicate id.
 const INSERT_MICRO_NETWORK_SQL: &str = "INSERT INTO micro_networks \
-    (id, name, subnet_cidr, internet_enabled, uplink) VALUES (?1, ?2, ?3, ?4, ?5)";
+    (id, name, subnet_cidr, internet_enabled, uplink, ipv6_cidr, ipv6_address_mode) \
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
 
 /// MicroStorage pools (`public-docs/storage.md`).
 const CREATE_MICRO_STORAGES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_storages (
@@ -352,6 +355,43 @@ fn migrate_uplink_column(conn: &Connection) -> Result<(), PersistenceError> {
     Ok(())
 }
 
+/// Adds the IPv6 columns to a `micro_networks` table created before
+/// dual-stack existed. `NULL` keeps such a network IPv4-only: its VMs were
+/// given addresses out of one family only, and inventing a prefix under a
+/// running network would hand them a second one nothing has pinned.
+fn migrate_ipv6_columns(conn: &Connection) -> Result<(), PersistenceError> {
+    for (column, sql) in [
+        (
+            "ipv6_cidr",
+            "ALTER TABLE micro_networks ADD COLUMN ipv6_cidr TEXT",
+        ),
+        (
+            "ipv6_address_mode",
+            "ALTER TABLE micro_networks ADD COLUMN ipv6_address_mode TEXT",
+        ),
+    ] {
+        let has_column: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('micro_networks') WHERE name = ?1")?
+            .exists(params![column])?;
+        if !has_column {
+            conn.execute(sql, [])?;
+        }
+    }
+    Ok(())
+}
+
+/// Adds `ipv6` to a `network_leases` table created before dual-stack, the
+/// lease-side counterpart of [`migrate_ipv6_columns`].
+fn migrate_lease_ipv6_column(conn: &Connection) -> Result<(), PersistenceError> {
+    let has_column: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('network_leases') WHERE name = 'ipv6'")?
+        .exists([])?;
+    if !has_column {
+        conn.execute(ipam::ADD_LEASE_IPV6_COLUMN_SQL, [])?;
+    }
+    Ok(())
+}
+
 /// One-shot upgrade: VMs/leases created when the default network was
 /// implicit (`micro_network_id` NULL) get an explicit MicroNetwork row
 /// (`name=default`, `172.30.0.0/24`) and are reattached to it.
@@ -383,9 +423,20 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
         crate::ipam::LEGACY_DEFAULT_NETWORK,
         crate::ipam::LEGACY_DEFAULT_PREFIX
     );
+    // Promoted networks stay IPv4-only: the VMs being reattached were
+    // addressed out of one family, and inventing a prefix under them would
+    // hand out a second address nothing has pinned.
     conn.execute(
         INSERT_MICRO_NETWORK_SQL,
-        params![id.to_string(), "default", cidr, 1, Option::<String>::None],
+        params![
+            id.to_string(),
+            "default",
+            cidr,
+            1,
+            Option::<String>::None,
+            Option::<String>::None,
+            Option::<String>::None
+        ],
     )?;
     conn.execute(
         "UPDATE vms SET micro_network_id = ?1 \
@@ -595,6 +646,7 @@ impl Store {
         migrate_purpose_column(&conn)?;
         migrate_env_column(&conn)?;
         conn.execute(ipam::CREATE_LEASES_TABLE_SQL, [])?;
+        migrate_lease_ipv6_column(&conn)?;
         for index_sql in ipam::CREATE_LEASES_INDEXES_SQL {
             conn.execute(index_sql, [])?;
         }
@@ -604,6 +656,7 @@ impl Store {
         // leaves an older table's columns as they were.
         migrate_internet_enabled_column(&conn)?;
         migrate_uplink_column(&conn)?;
+        migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
@@ -707,6 +760,8 @@ impl Store {
                 network.subnet_cidr,
                 network.internet_enabled,
                 network.uplink,
+                network.ipv6_cidr,
+                network.ipv6_address_mode.map(|mode| mode.id().to_owned()),
             ],
         )?;
         Ok(())
@@ -768,6 +823,19 @@ impl Store {
                 })?
                 .gateway()
                 .to_string();
+            let ipv6_cidr: Option<String> = row.get(5)?;
+            let ipv6_address_mode = ipv6_cidr.as_ref().map(|_| {
+                match row.get::<_, Option<String>>(6).ok().flatten().as_deref() {
+                    Some("dhcpv6") => Ipv6AddressMode::Dhcpv6,
+                    _ => Ipv6AddressMode::Slaac,
+                }
+            });
+            // Both derived from the stored prefix, never stored themselves:
+            // the gateway the same way the v4 one is, and the egress mode
+            // from the prefix's own scope (ULA -> NAT66, global -> direct).
+            let ipv6 = ipv6_cidr.as_deref().and_then(|cidr| {
+                SubnetSpec::parse_ipv6(cidr, ipam::protocol_address_mode(ipv6_address_mode))
+            });
             networks.push(MicroNetworkResponse {
                 id,
                 name: row.get(1)?,
@@ -775,6 +843,10 @@ impl Store {
                 gateway,
                 internet_enabled: row.get(3)?,
                 uplink: row.get(4)?,
+                ipv6_cidr,
+                ipv6_gateway: ipv6.map(|ipv6| ipv6.gateway.to_string()),
+                ipv6_address_mode,
+                ipv6_egress: ipv6.as_ref().map(ipam::ipv6_egress_mode),
             });
         }
         Ok(networks)
@@ -1761,6 +1833,7 @@ fn decode_purpose(id: &str, purpose: &str) -> Result<crate::model::VmPurpose, Pe
 
 #[cfg(test)]
 mod tests {
+    use firecrab_api_types::Ipv6EgressMode;
     use tempfile::tempdir;
 
     use super::*;
@@ -2160,6 +2233,126 @@ mod tests {
     }
 
     #[test]
+    fn migrate_ipv6_columns_leaves_an_existing_network_ipv4_only() {
+        let directory = tempdir().unwrap();
+        let db_file = directory.path().join("firecrab.db");
+        let id = Uuid::new_v4();
+
+        // A `micro_networks` table from before dual-stack existed.
+        {
+            let conn = Connection::open(&db_file).unwrap();
+            conn.execute(
+                "CREATE TABLE micro_networks (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    subnet_cidr TEXT NOT NULL
+                ) STRICT",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO micro_networks (id, name, subnet_cidr) VALUES (?1, ?2, ?3)",
+                params![id.to_string(), "pre-migration", "172.31.0.0/24"],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&db_file).unwrap();
+        let network = store.micro_network(id).unwrap().expect("row survives");
+        // A network created before it had a prefix stays IPv4-only rather
+        // than silently acquiring one under its running VMs.
+        assert_eq!(network.ipv6_cidr, None);
+        assert_eq!(network.ipv6_gateway, None);
+        assert_eq!(network.ipv6_egress, None);
+    }
+
+    #[test]
+    fn a_dual_stack_network_derives_its_v6_gateway_and_egress_mode() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+
+        let ula = MicroNetworkResponse {
+            id: Uuid::new_v4(),
+            name: "ula".to_owned(),
+            subnet_cidr: "172.31.0.0/24".to_owned(),
+            gateway: "172.31.0.1".to_owned(),
+            internet_enabled: true,
+            uplink: None,
+            ipv6_cidr: Some("fd00:1::/64".to_owned()),
+            ipv6_gateway: Some("fd00:1::1".to_owned()),
+            ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+            ipv6_egress: Some(Ipv6EgressMode::Nat66),
+        };
+        let gua = MicroNetworkResponse {
+            id: Uuid::new_v4(),
+            name: "gua".to_owned(),
+            subnet_cidr: "172.32.0.0/24".to_owned(),
+            gateway: "172.32.0.1".to_owned(),
+            ipv6_cidr: Some("2001:db8:1::/64".to_owned()),
+            ipv6_gateway: Some("2001:db8:1::1".to_owned()),
+            ipv6_address_mode: Some(Ipv6AddressMode::Dhcpv6),
+            ipv6_egress: Some(Ipv6EgressMode::Direct),
+            ..ula.clone()
+        };
+        store.insert_micro_network(&ula).unwrap();
+        store.insert_micro_network(&gua).unwrap();
+
+        let stored = store.micro_network(ula.id).unwrap().unwrap();
+        // Derived on read, like the v4 gateway — never stored, so it cannot
+        // drift from the prefix it belongs to.
+        assert_eq!(stored.ipv6_gateway.as_deref(), Some("fd00:1::1"));
+        assert_eq!(stored.ipv6_egress, Some(Ipv6EgressMode::Nat66));
+        assert_eq!(stored.ipv6_address_mode, Some(Ipv6AddressMode::Slaac));
+
+        let stored = store.micro_network(gua.id).unwrap().unwrap();
+        assert_eq!(stored.ipv6_gateway.as_deref(), Some("2001:db8:1::1"));
+        // A global prefix is routable as-is: reporting NAT66 here would
+        // describe a translation the helper never renders.
+        assert_eq!(stored.ipv6_egress, Some(Ipv6EgressMode::Direct));
+        assert_eq!(stored.ipv6_address_mode, Some(Ipv6AddressMode::Dhcpv6));
+    }
+
+    #[test]
+    fn migrate_lease_ipv6_column_leaves_existing_leases_ipv4_only() {
+        let directory = tempdir().unwrap();
+        let db_file = directory.path().join("firecrab.db");
+        let vm_id = Uuid::new_v4();
+
+        // A `network_leases` table from before dual-stack existed.
+        {
+            let conn = Connection::open(&db_file).unwrap();
+            conn.execute(
+                "CREATE TABLE network_leases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    vm_id TEXT NOT NULL,
+                    ipv4 TEXT NOT NULL,
+                    mac TEXT NOT NULL,
+                    allocated_at TEXT NOT NULL,
+                    released_at TEXT,
+                    micro_network_id TEXT
+                ) STRICT",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO network_leases (vm_id, ipv4, mac, allocated_at, micro_network_id) \
+                 VALUES (?1, ?2, ?3, datetime('now'), ?4)",
+                params![
+                    vm_id.to_string(),
+                    "172.31.0.5",
+                    "02:fc:00:00:00:05",
+                    Uuid::new_v4().to_string()
+                ],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&db_file).unwrap();
+        let lease = store.active_lease(vm_id).unwrap().expect("lease survives");
+        assert_eq!(lease.ipv6, None);
+    }
+
+    #[test]
     fn migrate_uplink_column_leaves_existing_rows_null() {
         let directory = tempdir().unwrap();
         let db_file = directory.path().join("firecrab.db");
@@ -2206,6 +2399,10 @@ mod tests {
                 gateway: "172.31.0.1".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_gateway: None,
+                ipv6_address_mode: None,
+                ipv6_egress: None,
             })
             .unwrap();
 

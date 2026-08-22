@@ -3,11 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Isolated browser E2E for issue #90 (OCI import) and #108 (MicroRegistry register). Playwright is test-only.",
+  "description": "Isolated browser E2E for issue #90 (OCI import), #108 (MicroRegistry register), #146 (MicroNetwork IPv6), and OCI DHCP boot. Playwright is test-only.",
   "scripts": {
     "test": "playwright test",
     "test:import": "FIRECRAB_E2E_SKIP_GUEST_BOOT=1 playwright test",
     "test:register": "playwright test tests/microregistry-register.spec.ts",
+    "test:ipv6": "playwright test tests/network-ipv6.spec.ts",
+    "test:dhcp": "playwright test tests/oci-dhcp-boot.spec.ts",
     "test:headed": "playwright test --headed",
     "install-browsers": "playwright install chromium"
   },
