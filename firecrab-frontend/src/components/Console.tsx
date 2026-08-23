@@ -7,6 +7,7 @@ import { getVm, getVmLog } from "../api/client";
 import { formatVmExportBundle, serializeXtermBuffer } from "../lib/formatVmLog";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
+import ConsoleSshTab from "./ConsoleSshTab";
 import UsageCharts from "./UsageCharts";
 import { useI18n } from "../i18n";
 import {
@@ -137,6 +138,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   const [vmError, setVmError] = useState<string | null>(null);
   /** Hide toolbar + detail panel — terminal fills the window. */
   const [terminalOnly, setTerminalOnly] = useState(false);
+  const [surfaceTab, setSurfaceTab] = useState<"serial" | "ssh">("serial");
   const terminalOnlyRef = useRef(false);
   useEffect(() => {
     terminalOnlyRef.current = terminalOnly;
@@ -378,7 +380,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   // Refit when chrome visibility changes (detail panel / bar show·hide).
   useEffect(() => {
     scheduleFit();
-  }, [terminalOnly, scheduleFit]);
+  }, [terminalOnly, surfaceTab, scheduleFit]);
 
   const reconnectNow = () => {
     clearReconnectTimer();
@@ -468,6 +470,27 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
             </button>
           )}
 
+          <div className="console-tabs" role="tablist" aria-label={t("Console surface", "콘솔 화면")}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={surfaceTab === "serial"}
+              className={`btn console-bar-btn${surfaceTab === "serial" ? " is-active" : ""}`}
+              onClick={() => setSurfaceTab("serial")}
+            >
+              {t("Serial", "시리얼")}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={surfaceTab === "ssh"}
+              className={`btn console-bar-btn${surfaceTab === "ssh" ? " is-active" : ""}`}
+              onClick={() => setSurfaceTab("ssh")}
+            >
+              SSH
+            </button>
+          </div>
+
           <div className="console-settings">
             <button
               type="button"
@@ -541,12 +564,14 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
 
       <div
         className="console-surface"
+        hidden={surfaceTab !== "serial"}
         ref={containerRef}
         onClick={() => {
           setSettingsOpen(false);
           termRef.current?.focus();
         }}
       />
+      {surfaceTab === "ssh" ? <ConsoleSshTab vm={vm} /> : null}
 
       {/* Floating control when chrome is hidden — otherwise Esc is the only exit. */}
       {terminalOnly && (
