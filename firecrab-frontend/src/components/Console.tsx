@@ -76,9 +76,10 @@ const VM_POLL_MS = 3_000;
 interface ConsolePrefs {
   fontSize: number;
   themeId: ThemeId;
+  inspectOpen: boolean;
 }
 
-const DEFAULT_PREFS: ConsolePrefs = { fontSize: 13, themeId: "ember" };
+const DEFAULT_PREFS: ConsolePrefs = { fontSize: 13, themeId: "ember", inspectOpen: true };
 
 function loadPrefs(): ConsolePrefs {
   try {
@@ -90,7 +91,8 @@ function loadPrefs(): ConsolePrefs {
       : DEFAULT_PREFS.fontSize;
     const themeId =
       parsed.themeId && parsed.themeId in THEMES ? parsed.themeId : DEFAULT_PREFS.themeId;
-    return { fontSize, themeId };
+    const inspectOpen = typeof parsed.inspectOpen === "boolean" ? parsed.inspectOpen : true;
+    return { fontSize, themeId, inspectOpen };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -376,9 +378,10 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   }, [prefs, scheduleFit]);
 
   // Refit when chrome visibility changes (detail panel / bar show·hide).
+  const inspectOpen = prefs.inspectOpen;
   useEffect(() => {
     scheduleFit();
-  }, [terminalOnly, scheduleFit]);
+  }, [terminalOnly, inspectOpen, scheduleFit]);
 
   const reconnectNow = () => {
     clearReconnectTimer();
@@ -399,7 +402,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   };
 
   const canRetry = status === "disconnected" || status === "failed" || status === "reconnecting";
-  const title = vm ? `terminal — ${vm.name}` : `terminal — ${vmId.slice(0, 8)}`;
+  const sessionName = vm?.name ?? vmId.slice(0, 8);
 
   /** Server console.log + startup timeline + live xterm buffer for copy/download. */
   const buildExportText = useCallback(async () => {
@@ -426,20 +429,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       ref={pageRef}
     >
       {!terminalOnly && (
-        <div className="console-bar">
-          <button
-            type="button"
-            className="btn console-bar-btn"
-            onClick={handleClose}
-            title={t("Close window", "창 닫기")}
-          >
-            {t("Close", "창 닫기")}
-          </button>
-
-          <span className="console-title" title={vmId}>
-            {title}
-          </span>
-
+        <div className="console-bar" aria-label={`terminal — ${sessionName}`}>
           <span
             className={`console-status ${STATUS_CLASS[status]}`}
             role="status"
@@ -457,6 +447,17 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                     : t("Connection failed", "연결 실패")}
           </span>
 
+          <span className="console-session" title={vmId}>
+            <span className="console-session-caret" aria-hidden>
+              ▍
+            </span>
+            <span className="console-session-name">{sessionName}</span>
+            {vm?.hostname ? (
+              <span className="console-session-host">{vm.hostname}</span>
+            ) : null}
+            {vm?.ipv4 ? <span className="console-session-addr">{vm.ipv4}</span> : null}
+          </span>
+
           {canRetry && (
             <button
               type="button"
@@ -468,74 +469,76 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
             </button>
           )}
 
-          <div className="console-settings">
+          <div className="console-bar-actions">
+            <div className="console-settings">
+              <button
+                type="button"
+                className={`btn console-bar-btn${settingsOpen ? " is-active" : ""}`}
+                onClick={() => setSettingsOpen((o) => !o)}
+                aria-expanded={settingsOpen}
+                aria-haspopup="true"
+                title={t("Font · colors", "폰트 · 색상")}
+              >
+                {t("Display", "표시")}
+              </button>
+              {settingsOpen && (
+                <div className="console-settings-pop" role="dialog" aria-label={t("Terminal display settings", "터미널 표시 설정")}>
+                  <label className="console-settings-row">
+                    <span>{t("Font size", "글자 크기")}</span>
+                    <select
+                      value={prefs.fontSize}
+                      onChange={(e) => setPrefs((p) => ({ ...p, fontSize: Number(e.target.value) }))}
+                    >
+                      {FONT_SIZES.map((n) => (
+                        <option key={n} value={n}>
+                          {n}px
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="console-settings-row">
+                    <span>{t("Color theme", "색 테마")}</span>
+                    <select
+                      value={prefs.themeId}
+                      onChange={(e) =>
+                        setPrefs((p) => ({ ...p, themeId: e.target.value as ThemeId }))
+                      }
+                    >
+                      {Object.entries(THEMES).map(([id, { label }]) => (
+                        <option key={id} value={id}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+            </div>
+
+            <LogExportActions
+              text={buildExportText}
+              filename={logDownloadFilename("console", vm?.name ?? vmId)}
+              buttonClassName="btn console-bar-btn"
+              copyLabel={t("Copy log", "로그 복사")}
+              downloadLabel={t("Save log", "로그 저장")}
+            />
+
             <button
               type="button"
-              className={`btn console-bar-btn${settingsOpen ? " is-active" : ""}`}
-              onClick={() => setSettingsOpen((o) => !o)}
-              aria-expanded={settingsOpen}
-              aria-haspopup="true"
-              title={t("Font · colors", "폰트 · 색상")}
+              className="btn console-bar-btn"
+              onClick={() => {
+                setTerminalOnly(true);
+                setSettingsOpen(false);
+              }}
+              title={t("Hide the toolbar and details; show terminal only (Esc to return)", "툴바·세부정보를 숨기고 터미널만 표시 (Esc로 복귀)")}
             >
-              {t("Display", "표시")}
+              {t("Terminal only", "터미널만")}
             </button>
-            {settingsOpen && (
-              <div className="console-settings-pop" role="dialog" aria-label={t("Terminal display settings", "터미널 표시 설정")}>
-                <label className="console-settings-row">
-                  <span>{t("Font size", "글자 크기")}</span>
-                  <select
-                    value={prefs.fontSize}
-                    onChange={(e) => setPrefs((p) => ({ ...p, fontSize: Number(e.target.value) }))}
-                  >
-                    {FONT_SIZES.map((n) => (
-                      <option key={n} value={n}>
-                        {n}px
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="console-settings-row">
-                  <span>{t("Color theme", "색 테마")}</span>
-                  <select
-                    value={prefs.themeId}
-                    onChange={(e) =>
-                      setPrefs((p) => ({ ...p, themeId: e.target.value as ThemeId }))
-                    }
-                  >
-                    {Object.entries(THEMES).map(([id, { label }]) => (
-                      <option key={id} value={id}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            )}
+
+            <button type="button" className="btn console-close" onClick={handleClose} title={t("Close", "닫기")}>
+              {t("Close", "닫기")}
+            </button>
           </div>
-
-          <LogExportActions
-            text={buildExportText}
-            filename={logDownloadFilename("console", vm?.name ?? vmId)}
-            buttonClassName="btn console-bar-btn"
-            copyLabel={t("Copy log", "로그 복사")}
-            downloadLabel={t("Save log", "로그 저장")}
-          />
-
-          <button
-            type="button"
-            className="btn console-bar-btn"
-            onClick={() => {
-              setTerminalOnly(true);
-              setSettingsOpen(false);
-            }}
-            title={t("Hide the toolbar and details; show terminal only (Esc to return)", "툴바·세부정보를 숨기고 터미널만 표시 (Esc로 복귀)")}
-          >
-            {t("Terminal only", "터미널만")}
-          </button>
-
-          <button type="button" className="btn console-close" onClick={handleClose} title={t("Close", "닫기")}>
-            ✕
-          </button>
         </div>
       )}
 
@@ -560,20 +563,12 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
         </button>
       )}
 
-      {!terminalOnly && (
-        <aside className="console-detail" aria-label={t("VM details", "VM 세부정보")}>
-          <div className="console-detail-head">
-            <h2 className="console-detail-title">{t("Details", "세부정보")}</h2>
-            {vm && <span className={`state-badge ${vm.state}`}>{vm.state}</span>}
-            <button
-              type="button"
-              className="btn console-bar-btn"
-              onClick={() => setTerminalOnly(true)}
-              title={t("Show terminal only", "터미널만 보기")}
-            >
-              {t("Terminal only", "터미널만")}
-            </button>
-          </div>
+      {!terminalOnly && prefs.inspectOpen && (
+        <aside
+          id="console-inspect-rail"
+          className="console-detail"
+          aria-label={t("VM details", "VM 세부정보")}
+        >
           {vmError && !vm ? (
             <p className="console-detail-error">{vmError}</p>
           ) : vm ? (
@@ -607,13 +602,36 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                 <dl className="console-detail-fields mono">
                   <dt>ipv4</dt>
                   <dd>{vm.ipv4 ?? "—"}</dd>
+                  <dt>ipv6</dt>
+                  <dd>{vm.ipv6 ?? "—"}</dd>
                   <dt>mac</dt>
                   <dd>{vm.mac ?? "—"}</dd>
                   <dt>egress</dt>
                   <dd>{vm.egressPolicy === "internet" ? t("Internet access", "인터넷 허용") : t("Isolated", "격리")}</dd>
                   <dt>network</dt>
-                  <dd title={vm.microNetworkId}>{vm.microNetworkId}</dd>
+                  <dd title={vm.microNetworkId}>{vm.microNetworkId.slice(0, 8)}</dd>
                 </dl>
+              </section>
+              <section
+                className="console-detail-group console-detail-usage-group"
+                aria-label={t("Resource usage", "리소스 관측")}
+              >
+                <h3 className="console-detail-group-title">
+                  {t("Resource usage", "리소스 관측")}
+                </h3>
+                {vm.state === "running" && (vm.usageHistory?.length ?? 0) > 0 ? (
+                  <UsageCharts
+                    history={vm.usageHistory ?? []}
+                    ramMib={vm.ram}
+                    size="compact"
+                  />
+                ) : (
+                  <p className="console-detail-empty">
+                    {vm.state === "running"
+                      ? t("Collecting samples…", "샘플 수집 중…")
+                      : t("Available while running", "running일 때 표시")}
+                  </p>
+                )}
               </section>
               <section className="console-detail-group console-port-forward-group" aria-label="포트 포워딩">
                 <h3 className="console-detail-group-title">{t("Port Forwarding", "포트 포워딩")}</h3>
@@ -621,9 +639,9 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                   <dl className="console-detail-fields console-port-forward-list mono">
                     {vm.portForwards!.map((pf, index) => (
                       <div key={`${pf.protocol}-${pf.hostPort}-${pf.guestPort}-${index}`} style={{ display: "contents" }}>
-                        <dt>{t(`Rule ${String(index + 1).padStart(2, "0")}`, `규칙 ${String(index + 1).padStart(2, "0")}`)}</dt>
+                        <dt>{String(index + 1).padStart(2, "0")}</dt>
                         <dd>
-                          VM :{pf.guestPort} <span style={{ color: "var(--accent)" }}>→</span> Host :{pf.hostPort} ({pf.protocol.toUpperCase()})
+                          :{pf.guestPort} <span className="console-pf-arrow">→</span> :{pf.hostPort}/{pf.protocol}
                         </dd>
                       </div>
                     ))}
@@ -632,39 +650,39 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
                   <p className="console-detail-empty">{t("No active port forwarding rules.", "설정된 포트 포워딩 규칙이 없습니다.")}</p>
                 )}
               </section>
-              <section className="console-detail-group" aria-label="스토리지">
+              <section className="console-detail-group console-storage-group" aria-label="스토리지">
                 <h3 className="console-detail-group-title">{t("Storage", "스토리지")}</h3>
                 <dl className="console-detail-fields mono">
                   <dt>storage</dt>
                   <dd>{vm.storageRoot || "default"}</dd>
                 </dl>
               </section>
-              {vm.state === "running" && (
-                <section
-                  className="console-detail-group console-detail-usage-group"
-                  aria-label={t("Resource usage", "리소스 관측")}
-                >
-                  <h3 className="console-detail-group-title">
-                    {t("Resource usage", "리소스 관측")}
-                  </h3>
-                  {(vm.usageHistory?.length ?? 0) > 0 ? (
-                    <UsageCharts
-                      history={vm.usageHistory ?? []}
-                      ramMib={vm.ram}
-                      size="default"
-                    />
-                  ) : (
-                    <p className="usage-charts-empty">
-                      {t("Collecting samples…", "샘플 수집 중…")}
-                    </p>
-                  )}
-                </section>
-              )}
             </div>
           ) : (
             <p className="console-detail-loading">{t("Loading…", "불러오는 중…")}</p>
           )}
         </aside>
+      )}
+
+      {!terminalOnly && (
+        <button
+          type="button"
+          className={`console-inspect-bar${prefs.inspectOpen ? " is-open" : ""}`}
+          aria-expanded={prefs.inspectOpen}
+          aria-controls="console-inspect-rail"
+          onClick={() => setPrefs((p) => ({ ...p, inspectOpen: !p.inspectOpen }))}
+          title={
+            prefs.inspectOpen
+              ? t("Hide inspect", "inspect 숨기기")
+              : t("Show inspect", "inspect 보기")
+          }
+        >
+          <span className="console-inspect-chevron" aria-hidden>
+            {prefs.inspectOpen ? "▾" : "▴"}
+          </span>
+          <span className="console-inspect-bar-label">{t("inspect", "inspect")}</span>
+          {vm ? <span className={`state-badge ${vm.state}`}>{vm.state}</span> : null}
+        </button>
       )}
     </div>
   );

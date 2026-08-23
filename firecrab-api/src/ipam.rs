@@ -4,9 +4,11 @@
 //! is atomic under concurrent VM creation.
 
 use std::collections::HashSet;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
-use firecrab_helper_protocol::network::MicroNetworkSpec;
+use firecrab_helper_protocol::network::{
+    Ipv6AddressMode, MicroNetworkIpv6Spec, MicroNetworkSpec, slaac_address,
+};
 use rusqlite::{OptionalExtension, Transaction, params};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -22,7 +24,8 @@ pub const CREATE_LEASES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS network_le
     mac TEXT NOT NULL,
     allocated_at TEXT NOT NULL,
     released_at TEXT,
-    micro_network_id TEXT
+    micro_network_id TEXT,
+    ipv6 TEXT
 ) STRICT";
 
 /// Adds `micro_network_id` to a `network_leases` table created before
@@ -30,6 +33,11 @@ pub const CREATE_LEASES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS network_le
 /// [`crate::persistence::Store`] promotion to an explicit MicroNetwork.
 pub const ADD_LEASE_MICRO_NETWORK_COLUMN_SQL: &str =
     "ALTER TABLE network_leases ADD COLUMN micro_network_id TEXT";
+
+/// Adds `ipv6` to a `network_leases` table created before dual-stack
+/// MicroNetworks existed. `NULL` is the IPv4-only lease every row held then,
+/// and stays correct for a network that has no IPv6 prefix.
+pub const ADD_LEASE_IPV6_COLUMN_SQL: &str = "ALTER TABLE network_leases ADD COLUMN ipv6 TEXT";
 
 /// Partial indexes: uniqueness only applies to still-active leases, so
 /// released rows stay behind as history without blocking reuse.
@@ -63,6 +71,10 @@ pub struct SubnetSpec {
     pub network: Ipv4Addr,
     /// CIDR prefix length.
     pub prefix: u8,
+    /// The network's IPv6 plan, when it is dual-stack. IPv4 stays mandatory
+    /// — this is a second family, never a replacement
+    /// (`public-docs/networking.md`).
+    pub ipv6: Option<MicroNetworkIpv6Spec>,
 }
 
 impl SubnetSpec {
@@ -118,6 +130,39 @@ impl SubnetSpec {
             micro_network_id,
             network,
             prefix,
+            ipv6: None,
+        })
+    }
+
+    /// The same subnet with an IPv6 plan attached (or cleared). Kept
+    /// separate from [`Self::parse`] so every existing IPv4-only caller
+    /// keeps its current behavior untouched.
+    pub fn with_ipv6(self, ipv6: Option<MicroNetworkIpv6Spec>) -> Self {
+        Self { ipv6, ..self }
+    }
+
+    /// Parses a MicroNetwork's stored IPv6 `<prefix>/<length>` into the plan
+    /// the helper and the leases are derived from. The gateway is the
+    /// prefix's first address, mirroring how [`Self::gateway`] derives the
+    /// IPv4 one rather than storing it. The host bits of a non-canonical
+    /// prefix such as `fd00::5/64` are masked off first, so the gateway is
+    /// `fd00::1` and not `fd00::6`.
+    pub fn parse_ipv6(cidr: &str, address_mode: Ipv6AddressMode) -> Option<MicroNetworkIpv6Spec> {
+        let (network, prefix) = cidr.split_once('/')?;
+        let network: Ipv6Addr = network.parse().ok()?;
+        let prefix: u8 = prefix.parse().ok()?;
+        if prefix > 128 {
+            return None;
+        }
+        let spec = MicroNetworkIpv6Spec {
+            gateway: network,
+            prefix,
+            address_mode,
+        };
+        Some(MicroNetworkIpv6Spec {
+            gateway: Ipv6Addr::from(u128::from(spec.network_address()).checked_add(1)?),
+            prefix,
+            address_mode,
         })
     }
 
@@ -132,7 +177,34 @@ impl SubnetSpec {
             prefix: self.prefix,
             internet_enabled,
             uplink,
+            ipv6: self.ipv6,
         }
+    }
+
+    /// The IPv6 address this subnet hands `(ipv4, mac)`, or `None` when it
+    /// is IPv4-only. Under SLAAC that is the EUI-64 the guest builds for
+    /// itself from its MAC; under DHCPv6 it is the prefix plus the same host
+    /// offset the v4 address got, so one lease row describes both families
+    /// and neither can drift from the other.
+    fn ipv6_for(&self, ipv4: Ipv4Addr, mac: MacAddr) -> Option<Ipv6Addr> {
+        let ipv6 = self.ipv6?;
+        Some(match ipv6.address_mode {
+            Ipv6AddressMode::Slaac => slaac_address(ipv6.network_address(), mac),
+            Ipv6AddressMode::Dhcpv6 => {
+                let offset = u128::from(u32::from(ipv4).saturating_sub(u32::from(self.network)));
+                Ipv6Addr::from(u128::from(ipv6.network_address()) | offset)
+            }
+        })
+    }
+
+    /// The subnet a stored MicroNetwork row describes, both families at
+    /// once — the one place a row is turned into the spec the helper, the
+    /// DHCP snapshot and the lease allocator all work from.
+    pub fn from_micro_network(network: &firecrab_api_types::MicroNetworkResponse) -> Option<Self> {
+        let ipv6 = network.ipv6_cidr.as_deref().and_then(|cidr| {
+            Self::parse_ipv6(cidr, protocol_address_mode(network.ipv6_address_mode))
+        });
+        Some(Self::parse(network.id, &network.subnet_cidr)?.with_ipv6(ipv6))
     }
 
     /// The historical `172.30.0.0/24` layout under an explicit MicroNetwork
@@ -142,6 +214,7 @@ impl SubnetSpec {
             micro_network_id,
             network: LEGACY_DEFAULT_NETWORK,
             prefix: LEGACY_DEFAULT_PREFIX,
+            ipv6: None,
         }
     }
 }
@@ -252,19 +325,30 @@ fn allocate_excluding(
         .find(|candidate| !taken_macs.contains(candidate))
         .ok_or(IpamError::MacPoolExhausted)?;
 
+    // Derived from the pair just chosen rather than scanned for: both modes
+    // are a pure function of an address that is already unique in this
+    // subnet, so the v6 address cannot collide either.
+    let ipv6 = subnet.ipv6_for(ipv4, mac);
+
     tx.execute(
-        "INSERT INTO network_leases (vm_id, ipv4, mac, allocated_at, micro_network_id) \
-         VALUES (?1, ?2, ?3, datetime('now'), ?4)",
+        "INSERT INTO network_leases (vm_id, ipv4, ipv6, mac, allocated_at, micro_network_id) \
+         VALUES (?1, ?2, ?3, ?4, datetime('now'), ?5)",
         params![
             vm_id.to_string(),
             ipv4.to_string(),
+            ipv6.map(|ipv6| ipv6.to_string()),
             mac.to_string(),
             subnet.micro_network_id.to_string(),
         ],
     )?;
     bump_lease_revision(tx)?;
 
-    Ok(Lease { vm_id, ipv4, mac })
+    Ok(Lease {
+        vm_id,
+        ipv4,
+        ipv6,
+        mac,
+    })
 }
 
 /// Whether any still-active lease belongs to `micro_network_id` — what makes
@@ -314,12 +398,18 @@ fn release_active(tx: &Transaction<'_>, vm_id: Uuid) -> Result<(), IpamError> {
 /// `BEGIN IMMEDIATE` transaction.
 pub fn active_lease(conn: &rusqlite::Connection, vm_id: Uuid) -> Result<Option<Lease>, IpamError> {
     conn.query_row(
-        "SELECT ipv4, mac FROM network_leases WHERE vm_id = ?1 AND released_at IS NULL",
+        "SELECT ipv4, ipv6, mac FROM network_leases WHERE vm_id = ?1 AND released_at IS NULL",
         params![vm_id.to_string()],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        },
     )
     .optional()?
-    .map(|(ipv4, mac)| parse_lease(vm_id, ipv4, mac))
+    .map(|(ipv4, ipv6, mac)| parse_lease(vm_id, ipv4, ipv6, mac))
     .transpose()
 }
 
@@ -328,36 +418,115 @@ pub fn active_lease(conn: &rusqlite::Connection, vm_id: Uuid) -> Result<Option<L
 /// [`current_revision`], sent alongside so a stale snapshot is never
 /// applied out of order).
 pub fn active_leases(conn: &rusqlite::Connection) -> Result<Vec<Lease>, IpamError> {
-    let mut statement =
-        conn.prepare("SELECT vm_id, ipv4, mac FROM network_leases WHERE released_at IS NULL")?;
+    let mut statement = conn
+        .prepare("SELECT vm_id, ipv4, ipv6, mac FROM network_leases WHERE released_at IS NULL")?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
         ))
     })?;
     rows.map(|row| {
-        let (vm_id, ipv4, mac) = row?;
+        let (vm_id, ipv4, ipv6, mac) = row?;
         let vm_id = Uuid::parse_str(&vm_id).map_err(|_| IpamError::CorruptLease {
             vm_id: Uuid::nil(),
             reason: format!("stored vm_id {vm_id:?} is not a UUID"),
         })?;
-        parse_lease(vm_id, ipv4, mac)
+        parse_lease(vm_id, ipv4, ipv6, mac)
     })
     .collect()
 }
 
-fn parse_lease(vm_id: Uuid, ipv4: String, mac: String) -> Result<Lease, IpamError> {
+fn parse_lease(
+    vm_id: Uuid,
+    ipv4: String,
+    ipv6: Option<String>,
+    mac: String,
+) -> Result<Lease, IpamError> {
     let ipv4 = ipv4.parse().map_err(|_| IpamError::CorruptLease {
         vm_id,
         reason: format!("stored ipv4 {ipv4:?} does not parse"),
     })?;
+    let ipv6 = ipv6
+        .map(|ipv6| {
+            ipv6.parse::<Ipv6Addr>()
+                .map_err(|_| IpamError::CorruptLease {
+                    vm_id,
+                    reason: format!("stored ipv6 {ipv6:?} does not parse"),
+                })
+        })
+        .transpose()?;
     let mac = mac.parse().map_err(|_| IpamError::CorruptLease {
         vm_id,
         reason: format!("stored mac {mac:?} does not parse"),
     })?;
-    Ok(Lease { vm_id, ipv4, mac })
+    Ok(Lease {
+        vm_id,
+        ipv4,
+        ipv6,
+        mac,
+    })
+}
+
+/// The protocol's address-mode enum for the API-facing one a stored row
+/// carries. A row with no stored mode predates dual-stack (or holds no
+/// prefix at all), and SLAAC is the default either way.
+pub fn protocol_address_mode(mode: Option<firecrab_api_types::Ipv6AddressMode>) -> Ipv6AddressMode {
+    match mode {
+        Some(firecrab_api_types::Ipv6AddressMode::Dhcpv6) => Ipv6AddressMode::Dhcpv6,
+        _ => Ipv6AddressMode::Slaac,
+    }
+}
+
+/// Unique-local prefixes masquerade (NAT66); every other accepted prefix
+/// is forwarded untranslated. Shared by the create response and the list
+/// path so the two cannot drift.
+pub fn ipv6_egress_mode(ipv6: &MicroNetworkIpv6Spec) -> firecrab_api_types::Ipv6EgressMode {
+    if ipv6.is_unique_local() {
+        firecrab_api_types::Ipv6EgressMode::Nat66
+    } else {
+        firecrab_api_types::Ipv6EgressMode::Direct
+    }
+}
+
+/// A per-host Unique Local `/64` for a MicroNetwork that was created without
+/// an explicit prefix (RFC 4193: `fd` + 40 bits of host-specific global id,
+/// then a 16-bit subnet id). Deterministic in both inputs, so a network keeps
+/// the same prefix across restarts and two networks on one host — or the same
+/// network on two hosts — never share one. ULA scope is what makes this
+/// egress through NAT66 (`public-docs/networking.md`).
+pub fn auto_ula_prefix(host_id: &str, micro_network_id: Uuid) -> MicroNetworkIpv6Spec {
+    let global_id = Sha256::digest(host_id.as_bytes());
+    let subnet_id = Sha256::digest(micro_network_id.as_bytes());
+    let mut octets = [0_u8; 16];
+    octets[0] = 0xfd;
+    octets[1..6].copy_from_slice(&global_id[..5]);
+    octets[6..8].copy_from_slice(&subnet_id[..2]);
+    let network = Ipv6Addr::from(octets);
+    MicroNetworkIpv6Spec {
+        gateway: Ipv6Addr::from(u128::from(network) + 1),
+        prefix: 64,
+        address_mode: Ipv6AddressMode::Slaac,
+    }
+}
+
+/// This host's stable identity for [`auto_ula_prefix`]. `/etc/machine-id` is
+/// the canonical one; a host without it falls back to its hostname, so two
+/// Firecrab hosts on one L2 still get different prefixes.
+pub fn host_id() -> String {
+    std::fs::read_to_string("/etc/machine-id")
+        .map(|id| id.trim().to_owned())
+        .ok()
+        .filter(|id| !id.is_empty())
+        .or_else(|| {
+            std::fs::read_to_string("/etc/hostname")
+                .map(|name| name.trim().to_owned())
+                .ok()
+        })
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "firecrab".to_owned())
 }
 
 /// Current lease generation, bumped by every [`allocate`]/[`release`] (see
@@ -463,6 +632,173 @@ mod tests {
         let chosen = subnet.helper_spec(false, Some("eth1".to_owned()));
         assert!(!chosen.internet_enabled);
         assert_eq!(chosen.uplink.as_deref(), Some("eth1"));
+    }
+
+    #[test]
+    fn parse_ipv6_masks_the_prefix_before_deriving_the_gateway() {
+        let spec = SubnetSpec::parse_ipv6("fd00::5/64", Ipv6AddressMode::Slaac).unwrap();
+        assert_eq!(spec.gateway, "fd00::1".parse::<Ipv6Addr>().unwrap());
+        assert_eq!(
+            spec.network_address(),
+            "fd00::".parse::<Ipv6Addr>().unwrap()
+        );
+
+        let canonical = SubnetSpec::parse_ipv6("2001:db8:1::/64", Ipv6AddressMode::Dhcpv6).unwrap();
+        assert_eq!(
+            canonical.gateway,
+            "2001:db8:1::1".parse::<Ipv6Addr>().unwrap()
+        );
+        assert_eq!(canonical.address_mode, Ipv6AddressMode::Dhcpv6);
+
+        assert!(
+            SubnetSpec::parse_ipv6(
+                "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff/128",
+                Ipv6AddressMode::Slaac
+            )
+            .is_none()
+        );
+        assert!(SubnetSpec::parse_ipv6("fd00::/129", Ipv6AddressMode::Slaac).is_none());
+    }
+
+    #[test]
+    fn ipv6_egress_mode_follows_unique_local_vs_global() {
+        let ula = SubnetSpec::parse_ipv6("fd00:1::/64", Ipv6AddressMode::Slaac).unwrap();
+        assert_eq!(
+            ipv6_egress_mode(&ula),
+            firecrab_api_types::Ipv6EgressMode::Nat66
+        );
+        let gua = SubnetSpec::parse_ipv6("2001:db8:1::/64", Ipv6AddressMode::Slaac).unwrap();
+        assert_eq!(
+            ipv6_egress_mode(&gua),
+            firecrab_api_types::Ipv6EgressMode::Direct
+        );
+    }
+
+    fn dual_stack_subnet(id: u128, prefix6: &str, mode: Ipv6AddressMode) -> SubnetSpec {
+        SubnetSpec {
+            ipv6: Some(MicroNetworkIpv6Spec {
+                gateway: format!("{prefix6}1").parse().unwrap(),
+                prefix: 64,
+                address_mode: mode,
+            }),
+            ..SubnetSpec::legacy_default_subnet(Uuid::from_u128(id))
+        }
+    }
+
+    #[test]
+    fn a_slaac_lease_carries_the_eui64_of_the_mac_it_was_given() {
+        let mut conn = open();
+        let tx = begin(&mut conn);
+        let lease = allocate(
+            &tx,
+            Uuid::from_u128(7),
+            dual_stack_subnet(1, "fd00:1::", Ipv6AddressMode::Slaac),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        // The guest configures exactly this address itself from the RA,
+        // which is what lets the firewall pin it up front.
+        assert_eq!(
+            lease.ipv6,
+            Some(slaac_address("fd00:1::".parse().unwrap(), lease.mac))
+        );
+        // ...and it survives a reload from the row.
+        assert_eq!(
+            active_lease(&conn, Uuid::from_u128(7)).unwrap(),
+            Some(lease)
+        );
+    }
+
+    #[test]
+    fn a_dhcpv6_lease_mirrors_the_host_offset_of_its_v4_address() {
+        let mut conn = open();
+        let tx = begin(&mut conn);
+        let lease = allocate(
+            &tx,
+            Uuid::from_u128(7),
+            dual_stack_subnet(1, "fd00:2::", Ipv6AddressMode::Dhcpv6),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        // 172.30.0.2 is the first address handed out of the legacy /24, so
+        // its reservation is the second address of the prefix.
+        assert_eq!(lease.ipv4, "172.30.0.2".parse::<Ipv4Addr>().unwrap());
+        assert_eq!(lease.ipv6, Some("fd00:2::2".parse().unwrap()));
+    }
+
+    #[test]
+    fn an_ipv4_only_subnet_leases_no_v6_address() {
+        let mut conn = open();
+        let tx = begin(&mut conn);
+        let lease = allocate(
+            &tx,
+            Uuid::from_u128(7),
+            SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+        )
+        .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(lease.ipv6, None);
+    }
+
+    #[test]
+    fn rotating_a_dual_stack_lease_keeps_an_ipv6_address() {
+        let mut conn = open();
+        let subnet = dual_stack_subnet(1, "fd00:9::", Ipv6AddressMode::Slaac);
+        let tx = begin(&mut conn);
+        let first = allocate(&tx, Uuid::from_u128(7), subnet).unwrap();
+        tx.commit().unwrap();
+        assert!(first.ipv6.is_some());
+
+        let tx = begin(&mut conn);
+        let rotated = rotate(&tx, Uuid::from_u128(7), subnet, &HashSet::new()).unwrap();
+        tx.commit().unwrap();
+        assert!(rotated.ipv6.is_some());
+        assert_ne!(rotated.ipv4, first.ipv4);
+    }
+
+    #[test]
+    fn releasing_a_dual_stack_lease_frees_both_families_at_once() {
+        let mut conn = open();
+        let subnet = dual_stack_subnet(1, "fd00:3::", Ipv6AddressMode::Dhcpv6);
+        let tx = begin(&mut conn);
+        let first = allocate(&tx, Uuid::from_u128(7), subnet).unwrap();
+        tx.commit().unwrap();
+
+        let tx = begin(&mut conn);
+        release(&tx, Uuid::from_u128(7)).unwrap();
+        tx.commit().unwrap();
+        assert!(active_leases(&conn).unwrap().is_empty());
+
+        // The next VM gets the same pair back — one row, one lifetime.
+        let tx = begin(&mut conn);
+        let second = allocate(&tx, Uuid::from_u128(8), subnet).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(second.ipv4, first.ipv4);
+        assert_eq!(second.ipv6, first.ipv6);
+    }
+
+    #[test]
+    fn the_auto_ula_prefix_is_stable_per_host_and_distinct_per_network() {
+        let host = "3f8a1c2b4d5e6f708192a3b4c5d6e7f8";
+        let first = auto_ula_prefix(host, Uuid::from_u128(1));
+        let second = auto_ula_prefix(host, Uuid::from_u128(2));
+
+        // RFC 4193 Unique Local space, so egress is NAT66 by scope alone.
+        assert!(first.is_unique_local());
+        assert_eq!(first.prefix, 64);
+        assert_eq!(first.address_mode, Ipv6AddressMode::Slaac);
+        // Same host, same network: the same prefix every time it is asked.
+        assert_eq!(first, auto_ula_prefix(host, Uuid::from_u128(1)));
+        // Different networks on one host never collide...
+        assert_ne!(first.network_address(), second.network_address());
+        // ...and neither do two hosts.
+        assert_ne!(
+            first.network_address(),
+            auto_ula_prefix("00112233445566778899aabbccddeeff", Uuid::from_u128(1))
+                .network_address()
+        );
     }
 
     #[test]
@@ -698,6 +1034,7 @@ mod tests {
             micro_network_id: Uuid::from_u128(1),
             network: Ipv4Addr::new(172, 30, 0, 0),
             prefix: 29,
+            ipv6: None,
         };
 
         let tx = begin(&mut conn);

@@ -11,17 +11,19 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{
-    CreateMicroNetworkRequest, EgressPolicy, MicroNetworkBridge, MicroNetworkDetailResponse,
-    MicroNetworkFirewall, MicroNetworkNat, MicroNetworkResponse, MicroNetworkSubnet,
-    MicroNetworkVm, UpdateMicroNetworkRequest, VmState,
+    CreateMicroNetworkRequest, EgressPolicy, Ipv6AddressMode, Ipv6EgressMode, MicroNetworkBridge,
+    MicroNetworkDetailResponse, MicroNetworkFirewall, MicroNetworkNat, MicroNetworkResponse,
+    MicroNetworkSubnet, MicroNetworkVm, UpdateMicroNetworkRequest, VmState,
 };
-use firecrab_helper_protocol::network::micro_network_bridge_name;
+use firecrab_helper_protocol::network::{
+    Ipv6AddressMode as ProtocolIpv6AddressMode, MicroNetworkIpv6Spec, micro_network_bridge_name,
+};
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::handlers::vms::parse_id;
-use crate::ipam::SubnetSpec;
+use crate::ipam::{SubnetSpec, ipv6_egress_mode};
 use crate::persistence::PersistenceError;
 use crate::server::RequestId;
 use crate::state::AppState;
@@ -85,19 +87,31 @@ pub async fn get_micro_network(
         AppError::internal(request_id.0)
     })?;
 
-    let addresses: HashMap<Uuid, String> = leases
+    let addresses: HashMap<Uuid, (String, Option<String>)> = leases
         .into_iter()
-        .map(|lease| (lease.vm_id, lease.ipv4.to_string()))
+        .map(|lease| {
+            (
+                lease.vm_id,
+                (
+                    lease.ipv4.to_string(),
+                    lease.ipv6.map(|ipv6| ipv6.to_string()),
+                ),
+            )
+        })
         .collect();
     let mut members: Vec<MicroNetworkVm> = vms
         .into_values()
         .filter(|vm| vm.micro_network_id == id)
-        .map(|vm| MicroNetworkVm {
-            ipv4: addresses.get(&vm.id).cloned(),
-            id: vm.id,
-            name: vm.name,
-            state: vm.state,
-            egress_policy: vm.egress_policy,
+        .map(|vm| {
+            let lease = addresses.get(&vm.id);
+            MicroNetworkVm {
+                ipv4: lease.map(|(ipv4, _)| ipv4.clone()),
+                ipv6: lease.and_then(|(_, ipv6)| ipv6.clone()),
+                id: vm.id,
+                name: vm.name,
+                state: vm.state,
+                egress_policy: vm.egress_policy,
+            }
         })
         .collect();
     members.sort_by(|left, right| left.name.cmp(&right.name));
@@ -118,6 +132,10 @@ pub async fn get_micro_network(
             usable_addresses: subnet.usable_addresses(),
             allocated_addresses: members.iter().filter(|vm| vm.ipv4.is_some()).count() as u32,
             dhcp: format!("dnsmasq on {}", micro_network_bridge_name(id)),
+            ipv6_cidr: network.ipv6_cidr.clone(),
+            ipv6_gateway: network.ipv6_gateway.clone(),
+            ipv6_address_mode: network.ipv6_address_mode,
+            ipv6_egress: network.ipv6_egress,
         },
         bridge: MicroNetworkBridge {
             name: micro_network_bridge_name(id),
@@ -134,6 +152,12 @@ pub async fn get_micro_network(
                 .or_else(crate::handlers::network::read_uplink)
                 .unwrap_or_default(),
             source_cidr: network.subnet_cidr,
+            // Only a ULA prefix is ever translated; a global one reaches the
+            // wire with the VM's own address, so it has no NAT source range.
+            ipv6_source_cidr: network
+                .ipv6_cidr
+                .clone()
+                .filter(|_| network.ipv6_egress == Some(Ipv6EgressMode::Nat66)),
         },
         firewall: MicroNetworkFirewall {
             east_west_blocked: false,
@@ -151,23 +175,26 @@ pub async fn create_micro_network(
     ValidatedJson(req): ValidatedJson<CreateMicroNetworkRequest>,
 ) -> Result<(StatusCode, Json<MicroNetworkResponse>), AppError> {
     let mut fields = validate_create(&req);
-    if fields.is_empty()
-        && let Some(subnet) = SubnetSpec::parse(Uuid::nil(), &req.subnet_cidr)
-        && let Some(conflict) = overlapping_network(&state, subnet, request_id.0).await?
-    {
-        fields.insert(
-            "subnetCidr".to_owned(),
-            format!("overlaps {conflict}, which is already in use"),
-        );
-    }
     if !fields.is_empty() {
         return Err(AppError::validation(fields, request_id.0));
     }
+
     // Already checked by validate_create; re-parsed here (rather than
     // threaded through) since the request is consumed piecemeal below.
     let id = Uuid::new_v4();
+    // The v6 prefix is resolved before the overlap check so an auto-generated
+    // one is held to the same rule as an explicitly requested one.
+    let ipv6 = resolve_ipv6_plan(&req, id);
     let subnet = SubnetSpec::parse(id, &req.subnet_cidr)
-        .expect("validate_create already accepted this CIDR");
+        .expect("validate_create already accepted this CIDR")
+        .with_ipv6(ipv6);
+    if let Some((field, conflict)) = overlapping_network(&state, subnet, request_id.0).await? {
+        fields.insert(
+            field,
+            format!("overlaps {conflict}, which is already in use"),
+        );
+        return Err(AppError::validation(fields, request_id.0));
+    }
     let gateway = subnet.gateway();
 
     let network = MicroNetworkResponse {
@@ -177,6 +204,10 @@ pub async fn create_micro_network(
         gateway: gateway.to_string(),
         internet_enabled: req.internet_enabled,
         uplink: req.uplink,
+        ipv6_cidr: ipv6.map(|ipv6| ipv6.subnet_cidr()),
+        ipv6_gateway: ipv6.map(|ipv6| ipv6.gateway.to_string()),
+        ipv6_address_mode: ipv6.map(|_| req.ipv6_address_mode.unwrap_or_default()),
+        ipv6_egress: ipv6.as_ref().map(ipv6_egress_mode),
     };
 
     let store = state.store.clone();
@@ -196,7 +227,7 @@ pub async fn create_micro_network(
     // than leaving a DB record with no real bridge behind it.
     if let Err(error) = state
         .network
-        .ensure_micro_network_bridge(network.id, gateway, prefix)
+        .ensure_micro_network_bridge(network.id, gateway, prefix, ipv6)
         .await
     {
         tracing::error!(request_id = %request_id.0, micro_network_id = %network.id, %error, "failed to provision micro network bridge");
@@ -285,11 +316,14 @@ pub async fn update_micro_network(
 /// Two networks sharing addresses would make the host's routing table
 /// ambiguous, so the helper refuses the bridge outright — this just catches
 /// it earlier, with a field the form can show.
+/// Returns the offending request field and the network it collides with.
+/// Both families are checked: two networks sharing a v6 prefix leave the
+/// host's routing table just as ambiguous as two sharing a v4 subnet.
 async fn overlapping_network(
     state: &AppState,
     candidate: SubnetSpec,
     request_id: Uuid,
-) -> Result<Option<String>, AppError> {
+) -> Result<Option<(String, String)>, AppError> {
     let store = state.store.clone();
     let existing = tokio::task::spawn_blocking(move || store.list_micro_networks())
         .await
@@ -300,10 +334,40 @@ async fn overlapping_network(
         })?;
 
     Ok(existing.into_iter().find_map(|network| {
-        SubnetSpec::parse(network.id, &network.subnet_cidr)
-            .filter(|subnet| subnet.overlaps(&candidate))
-            .map(|_| format!("MicroNetwork {:?}", network.name))
+        let existing = SubnetSpec::from_micro_network(&network)?;
+        let label = format!("MicroNetwork {:?}", network.name);
+        if existing.overlaps(&candidate) {
+            return Some(("subnetCidr".to_owned(), label));
+        }
+        let (existing_v6, candidate_v6) = (existing.ipv6?, candidate.ipv6?);
+        existing_v6
+            .overlaps(&candidate_v6)
+            .then_some(("ipv6Cidr".to_owned(), label))
     }))
+}
+
+/// The IPv6 plan a create request asks for, or `None` when it asks for no
+/// IPv6 — the default, so a request that says nothing about v6 gets the
+/// IPv4-only network it has always got. Naming either an `ipv6Cidr` or an
+/// `ipv6AddressMode` turns it on; the prefix then defaults to a per-host
+/// Unique Local `/64` derived from this network's own id and the mode to
+/// SLAAC (`public-docs/networking.md`).
+fn resolve_ipv6_plan(req: &CreateMicroNetworkRequest, id: Uuid) -> Option<MicroNetworkIpv6Spec> {
+    if req.ipv6_cidr.is_none() && req.ipv6_address_mode.is_none() {
+        return None;
+    }
+    let address_mode = match req.ipv6_address_mode.unwrap_or_default() {
+        Ipv6AddressMode::Dhcpv6 => ProtocolIpv6AddressMode::Dhcpv6,
+        Ipv6AddressMode::Slaac => ProtocolIpv6AddressMode::Slaac,
+    };
+    Some(match req.ipv6_cidr.as_deref() {
+        Some(cidr) => SubnetSpec::parse_ipv6(cidr, address_mode)
+            .expect("validate_create already accepted this prefix"),
+        None => MicroNetworkIpv6Spec {
+            address_mode,
+            ..crate::ipam::auto_ula_prefix(&crate::ipam::host_id(), id)
+        },
+    })
 }
 
 /// Brings every **explicit** MicroNetwork's host resources back to the
@@ -329,7 +393,12 @@ pub(crate) async fn ensure_all_networks_locked(state: &AppState) -> Result<(), S
     for network in &micro_networks {
         state
             .network
-            .ensure_micro_network_bridge(network.micro_network_id, network.gateway, network.prefix)
+            .ensure_micro_network_bridge(
+                network.micro_network_id,
+                network.gateway,
+                network.prefix,
+                network.ipv6,
+            )
             .await
             .map_err(|error| {
                 format!(
@@ -439,7 +508,33 @@ fn validate_create(req: &CreateMicroNetworkRequest) -> BTreeMap<String, String> 
     {
         fields.insert("uplink".to_owned(), message);
     }
+    if let Some(cidr) = &req.ipv6_cidr
+        && let Some(message) = ipv6_cidr_field_error(cidr)
+    {
+        fields.insert("ipv6Cidr".to_owned(), message);
+    }
     fields
+}
+
+/// Why an explicitly requested IPv6 prefix cannot back a MicroNetwork, if it
+/// can't. Only a `/64` is usable: SLAAC's EUI-64 interface identifier is
+/// exactly 64 bits, so any other length hands guests a prefix they cannot
+/// build their stored address from. The prefix must also be Unique Local
+/// (`fc00::/7`) or global unicast (`2000::/3`). The helper re-validates all
+/// of this independently; this is the user-facing field error.
+fn ipv6_cidr_field_error(cidr: &str) -> Option<String> {
+    let malformed =
+        || Some("must be an IPv6 /64, e.g. fd00:1234:5678::/64 or 2001:db8:1::/64".to_owned());
+    let Some(ipv6) = SubnetSpec::parse_ipv6(cidr, ProtocolIpv6AddressMode::Slaac) else {
+        return malformed();
+    };
+    if ipv6.prefix != 64 {
+        return Some("prefix must be /64".to_owned());
+    }
+    if !ipv6.is_routable_scope() {
+        return Some("must be a unique-local (fc00::/7) or global (2000::/3) prefix".to_owned());
+    }
+    None
 }
 
 fn persist_update_error(error: PersistenceError, request_id: Uuid) -> AppError {
@@ -521,6 +616,10 @@ pub(crate) mod test_support {
             gateway: subnet.gateway().to_string(),
             internet_enabled: true,
             uplink: None,
+            ipv6_cidr: None,
+            ipv6_gateway: None,
+            ipv6_address_mode: None,
+            ipv6_egress: None,
         };
         state
             .store
@@ -569,6 +668,8 @@ mod tests {
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: None,
             }),
         )
         .await
@@ -612,6 +713,8 @@ mod tests {
                 subnet_cidr: "not-a-cidr".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: None,
             }),
         )
         .await
@@ -633,6 +736,8 @@ mod tests {
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: None,
             }),
         )
         .await
@@ -657,6 +762,8 @@ mod tests {
                     subnet_cidr: cidr.to_owned(),
                     internet_enabled: true,
                     uplink: None,
+                    ipv6_cidr: None,
+                    ipv6_address_mode: Default::default(),
                 }),
             )
             .await
@@ -677,6 +784,8 @@ mod tests {
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: None,
             }),
         )
         .await
@@ -687,6 +796,215 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(listed.len(), 2, "only rejected attempts leave no record");
+    }
+
+    #[tokio::test]
+    async fn create_without_ipv6_fields_stays_ipv4_only() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let created = create_network(&state, "prod", "172.31.0.0/24").await;
+
+        assert_eq!(created.ipv6_cidr, None);
+        assert_eq!(created.ipv6_gateway, None);
+        assert_eq!(created.ipv6_address_mode, None);
+        assert_eq!(created.ipv6_egress, None);
+    }
+
+    #[tokio::test]
+    async fn create_with_an_address_mode_and_no_cidr_gets_an_auto_ula_prefix() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (_, Json(created)) = create_micro_network(
+            State(state.clone()),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: "prod".to_owned(),
+                subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+            }),
+        )
+        .await
+        .expect("turning IPv6 on without a prefix generates a ULA");
+
+        // A per-host ULA /64, which is not routable off-host and therefore
+        // egresses through NAT66.
+        let cidr = created.ipv6_cidr.clone().expect("an auto prefix");
+        assert!(
+            cidr.starts_with("fd"),
+            "{cidr} should be RFC 4193 ULA space"
+        );
+        assert!(cidr.ends_with("/64"), "{cidr} should be a /64");
+        assert_eq!(created.ipv6_egress, Some(Ipv6EgressMode::Nat66));
+        assert_eq!(created.ipv6_address_mode, Some(Ipv6AddressMode::Slaac));
+        assert!(created.ipv6_gateway.is_some());
+
+        // A second network on the same host gets its own prefix.
+        let (_, Json(other)) = create_micro_network(
+            State(state),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: "stage".to_owned(),
+                subnet_cidr: "172.32.0.0/24".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+            }),
+        )
+        .await
+        .expect("a second IPv6-on network");
+        assert_ne!(other.ipv6_cidr, created.ipv6_cidr);
+    }
+
+    #[tokio::test]
+    async fn create_with_a_global_prefix_reports_direct_egress() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let (_, Json(created)) = create_micro_network(
+            State(state.clone()),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: "public".to_owned(),
+                subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+                ipv6_cidr: Some("2001:db8:1::/64".to_owned()),
+                ipv6_address_mode: Some(Ipv6AddressMode::Dhcpv6),
+            }),
+        )
+        .await
+        .expect("a global prefix is accepted");
+
+        assert_eq!(created.ipv6_cidr.as_deref(), Some("2001:db8:1::/64"));
+        assert_eq!(created.ipv6_gateway.as_deref(), Some("2001:db8:1::1"));
+        // Publicly routable, so its VMs keep their own addresses on the wire.
+        assert_eq!(created.ipv6_egress, Some(Ipv6EgressMode::Direct));
+        assert_eq!(created.ipv6_address_mode, Some(Ipv6AddressMode::Dhcpv6));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_ipv6_cidr_a_network_cannot_be_built_on() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        for cidr in [
+            "not-a-cidr",
+            "2001:db8::/48", // SLAAC's EUI-64 needs exactly a /64
+            "fe80::/64",     // link-local addresses no network of its own
+            "ff02::/64",     // multicast
+            "fec0::/64",     // deprecated site-local
+            "100::/64",      // discard-only
+            "64:ff9b::/64",  // NAT64
+            "172.31.0.0/24", // an IPv4 CIDR in the v6 field
+        ] {
+            let error = create_micro_network(
+                State(state.clone()),
+                extension(),
+                ValidatedJson(CreateMicroNetworkRequest {
+                    name: "bad".to_owned(),
+                    subnet_cidr: "172.31.0.0/24".to_owned(),
+                    internet_enabled: true,
+                    uplink: None,
+                    ipv6_cidr: Some(cidr.to_owned()),
+                    ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                error.into_response().status(),
+                StatusCode::BAD_REQUEST,
+                "{cidr} should be rejected"
+            );
+        }
+
+        let Json(listed) = list_micro_networks(State(state), extension())
+            .await
+            .unwrap();
+        assert!(listed.is_empty(), "a rejected request leaves no record");
+    }
+
+    #[tokio::test]
+    async fn an_ipv6_prefix_overlapping_an_existing_network_is_a_field_error() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let (_, Json(_)) = create_micro_network(
+            State(state.clone()),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: "prod".to_owned(),
+                subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+                ipv6_cidr: Some("2001:db8:1::/64".to_owned()),
+                ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+            }),
+        )
+        .await
+        .unwrap();
+
+        // The v4 subnets differ, so only the v6 prefix collides — and one
+        // prefix on two bridges is as ambiguous for the host's routing table
+        // as a shared v4 subnet is.
+        let error = create_micro_network(
+            State(state.clone()),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: "clash".to_owned(),
+                subnet_cidr: "172.32.0.0/24".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+                ipv6_cidr: Some("2001:db8:1::/64".to_owned()),
+                ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+
+        let Json(listed) = list_micro_networks(State(state), extension())
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn detail_reports_the_v6_plan_alongside_the_v4_one() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let (_, Json(network)) = create_micro_network(
+            State(state.clone()),
+            extension(),
+            ValidatedJson(CreateMicroNetworkRequest {
+                name: "prod".to_owned(),
+                subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Some(Ipv6AddressMode::Slaac),
+            }),
+        )
+        .await
+        .expect("IPv6-on create");
+
+        let Json(detail) = get_micro_network(
+            State(state.clone()),
+            extension(),
+            Path(network.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(detail.subnet.ipv6_cidr, network.ipv6_cidr);
+        assert_eq!(detail.subnet.ipv6_gateway, network.ipv6_gateway);
+        assert_eq!(detail.subnet.ipv6_egress, Some(Ipv6EgressMode::Nat66));
+        // A ULA prefix is masqueraded, so it is a NAT source range.
+        assert_eq!(detail.nat.ipv6_source_cidr, network.ipv6_cidr);
     }
 
     #[tokio::test]
@@ -1065,6 +1383,8 @@ mod tests {
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: None,
             }),
         )
         .await;
@@ -1095,6 +1415,8 @@ mod tests {
             subnet_cidr: "not-a-cidr".to_owned(),
             internet_enabled: true,
             uplink: None,
+            ipv6_cidr: None,
+            ipv6_address_mode: Default::default(),
         });
         assert!(fields.contains_key("name"));
         assert!(fields.contains_key("subnetCidr"));
@@ -1108,6 +1430,8 @@ mod tests {
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
             });
             assert!(
                 fields.contains_key("subnetCidr"),
@@ -1120,6 +1444,8 @@ mod tests {
                 subnet_cidr: cidr.to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
             });
             assert!(
                 !fields.contains_key("subnetCidr"),
@@ -1164,6 +1490,8 @@ mod tests {
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: Some(uplink.clone()),
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
             }),
         )
         .await
@@ -1201,6 +1529,8 @@ mod tests {
                     subnet_cidr: "172.31.0.0/24".to_owned(),
                     internet_enabled: true,
                     uplink,
+                    ipv6_cidr: None,
+                    ipv6_address_mode: Default::default(),
                 }),
             )
             .await
@@ -1347,6 +1677,8 @@ mod tests {
             subnet_cidr: "172.31.0.0/24".to_owned(),
             internet_enabled: true,
             uplink: Some(String::new()),
+            ipv6_cidr: None,
+            ipv6_address_mode: Default::default(),
         });
         assert!(fields.contains_key("uplink"));
 
