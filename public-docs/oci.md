@@ -171,6 +171,7 @@ One static program supplies all three before a merged tree can boot.
 - With a glibc loader, a digest-pinned official fastfetch (polyfilled, GLIBC_2.17) is copied to `/usr/bin/fastfetch`, cached at `<FIRECRAB_IMAGE_ROOT>/.oci/fastfetch/`.
 - `FIRECRAB_OCI_FASTFETCH_PATH` names a host binary; a missing program is not an import failure.
 - `/etc/firecrab/services.d` is created empty for the image entrypoint, which a later stage runs as a service rather than PID 1.
+- `/etc/firecrab/services.d/sshd` starts `sshd` with key-only root login after first-boot packages install `openssh-server` (or `openssh` on apk). Distroless images without a binary skip it.
 - Images that place `/sbin` or `/etc` behind a symbolic link are activated through it.
 - Resolution is clamped to the tree; an entry already occupying a guest path is replaced without writing through it.
 - A failed activation restores every path it touched.
@@ -208,6 +209,8 @@ The packed ext4 is paired with the kernel firecrab publishes for this architectu
 - Entrypoint, Cmd, Env, and WorkingDir become `/etc/firecrab/services.d/app`.
 - The injected init starts it after the sentinel. It is never PID 1.
 - On start, a `# >>> firecrab vm env` block sources `/etc/firecrab/vm.env`; guest paths are in [API](api.md).
+- Create writes an operator ed25519 pair under `{vms}/{id}/ssh/`. Start injects the public key into `/root/.ssh/authorized_keys` and a per-VM host key into `/etc/ssh/`.
+- Dashboard VM detail downloads `firecrab-<name>.pem`. The serial console SSH tab copies `ssh -i … root@<ipv4>` and `-6` for IPv6.
 
 ## Related
 
