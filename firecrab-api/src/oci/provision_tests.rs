@@ -255,6 +255,11 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
         "first boot should install a small package set: {boot}"
     );
     assert!(
+        boot.contains("openssh-server")
+            || boot.contains("apk add --no-cache") && boot.contains("openssh"),
+        "first boot should install openssh: {boot}"
+    );
+    assert!(
         boot.contains("/run/firecrab/$name.pid"),
         "each services.d entry must get its own pid file: {boot}"
     );
@@ -299,6 +304,13 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     }
     assert_eq!(guest_mode(&tree, "/tmp"), 0o1777);
     assert!(tree.join("etc/firecrab/services.d").is_dir());
+    let sshd = read_guest(&tree, crate::guest_ssh::GUEST_SSHD_SERVICE);
+    let sshd = String::from_utf8(sshd).expect("sshd service utf8");
+    assert!(sshd.contains("PermitRootLogin=prohibit-password"), "{sshd}");
+    assert_eq!(
+        guest_mode(&tree, crate::guest_ssh::GUEST_SSHD_SERVICE) & 0o111,
+        0o111
+    );
     // The image's own files are left exactly as they were.
     assert_eq!(read_guest(&tree, "/app/server"), b"binary");
 }
