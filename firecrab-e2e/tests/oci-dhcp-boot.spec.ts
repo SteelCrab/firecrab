@@ -5,6 +5,7 @@ import {
   DHCP_FIXED_ALIAS,
   DHCP_FIXED_REFERENCE,
   DHCP_HOST_PORT,
+  DHCP_SSH_HOST_PORT,
   DHCP_NETWORK_CIDR,
   DHCP_NETWORK_NAME,
   DHCP_REGISTRY_PORT,
@@ -153,6 +154,8 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
 
   const row = page.locator("table.vm-table tbody tr", { hasText: DHCP_VM_NAME });
   await expect(row).toBeVisible();
+  // Row actions live behind the Actions toggle now.
+  await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await row.getByRole("button", { name: "start" }).click();
   await expect(row.locator(".state-badge")).toHaveText(/running|error/, { timeout: 240_000 });
   if ((await row.locator(".state-badge").textContent()) !== "running") {
@@ -191,4 +194,69 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
       }),
     ]),
   );
+
+  await expect(page.getByRole("button", { name: /Download key|키 다운로드/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
+
+  // SSH from the VM list: Actions → SSH connect opens a dialog with the panel.
+  await openEnglish(page, "/#/vms");
+  const sshRow = page.locator("table.vm-table tbody tr", { hasText: DHCP_VM_NAME });
+  await sshRow.getByRole("button", { name: /^Actions$|^작업$/ }).click();
+  await sshRow.getByRole("menuitem", { name: /SSH connect|SSH 연결/ }).click();
+  const sshDialog = page.getByRole("dialog", { name: new RegExp(`SSH — ${DHCP_VM_NAME}`) });
+  await expect(sshDialog.locator(".console-ssh-block-label", { hasText: /^fingerprint$/i })).toBeVisible();
+  await sshDialog.getByRole("button", { name: "✕" }).click();
+  await expect(sshDialog).toHaveCount(0);
+
+  await openEnglish(page, `/#/console/${detail!.id}`);
+  await page.getByRole("tab", { name: "SSH" }).click();
+  await expect(page.locator(".console-ssh-block-label", { hasText: /^fingerprint$/i })).toBeVisible();
+  // `check` is a copyable one-liner that decides instead of printing a fingerprint.
+  await expect(page.locator(".console-ssh-block-label", { hasText: /^check ipv4$/ })).toBeVisible();
+  await expect(
+    page.locator(".console-ssh-code").filter({ hasText: "echo MATCH" }).first(),
+  ).toContainText("ssh-keyscan -t ed25519");
+  await expect(page.locator(".console-ssh-code").filter({ hasText: "ssh -i" }).first()).toContainText(
+    `ssh -i firecrab-${DHCP_VM_NAME}.pem root@`,
+  );
+  await expect(page.getByRole("button", { name: /Download |다운로드/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
+
+  // The key sits behind the eye until asked for.
+  await expect(page.locator(".console-ssh-code.is-masked")).toHaveCount(1);
+  await page.getByRole("button", { name: /Show key|키 보기/ }).click();
+  await expect(page.locator(".console-ssh-code.is-masked")).toHaveCount(0);
+  await page.getByRole("button", { name: /Hide key|키 가리기/ }).click();
+  await expect(page.locator(".console-ssh-code.is-masked")).toHaveCount(1);
+
+  // A jump through the Firecrab host needs no rule at all, so the command is
+  // always there — the port forward below is the alternative, not the only way.
+  await expect(
+    page.locator(".console-ssh-code").filter({ hasText: "ssh -J" }).first(),
+  ).toContainText(`root@${detail!.ipv4}`);
+
+  // SSH port forward: the panel writes host:PORT → guest 22 through the same
+  // endpoint the detail modal uses, and then prints the `ssh -p` command.
+  await page.locator("#ssh-forward-host-port").fill(String(DHCP_SSH_HOST_PORT));
+  await page.getByRole("button", { name: /Create SSH port forward|SSH 포트 포워드 만들기/ }).click();
+  await expect(
+    page.locator(".console-ssh-code").filter({ hasText: `ssh -p ${DHCP_SSH_HOST_PORT}` }).first(),
+  ).toContainText(`-i firecrab-${DHCP_VM_NAME}.pem root@`);
+  const forwarded = await api.getVm(detail!.id);
+  expect(forwarded?.portForwards).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        guestPort: 22,
+        hostPort: DHCP_SSH_HOST_PORT,
+        protocol: "tcp",
+      }),
+    ]),
+  );
+
+  // Removing takes back only the SSH rule; the guest-80 forward stays.
+  await page.getByRole("button", { name: /Remove SSH port forward|SSH 포트 포워드 제거/ }).click();
+  await expect(page.locator("#ssh-forward-host-port")).toBeVisible();
+  const afterRemove = await api.getVm(detail!.id);
+  expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 22)).toBe(false);
+  expect(afterRemove?.portForwards?.some((pf) => pf.guestPort === 80)).toBe(true);
 });

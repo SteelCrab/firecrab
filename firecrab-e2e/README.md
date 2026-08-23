@@ -104,6 +104,7 @@ npm run test:dhcp --prefix firecrab-e2e
 ```
 
 - Expect **2 passed**
+- Guest boot also opens the SSH tab and checks a copyable `ssh -i firecrab-oci-e2e-dhcp.pem` block
 - `afterAll` deletes `oci-e2e-dhcp` (VM, network, imported alias)
 - An orphan dnsmasq holding `:67` fails the boot half with `FIRECRAB_NETWORK_FAILED no-ipv4-address`
 - Needs a helper the API process can connect to (`/run/firecrab/net-helper.sock`)
