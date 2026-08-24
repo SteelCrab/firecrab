@@ -17,8 +17,17 @@ spec.loader.exec_module(sbom)
 class M2ImageSbomTests(unittest.TestCase):
     def test_parse_alpine_installed_database(self):
         packages = sbom.parse_alpine(
-            """P:busybox\nV:1.37.0-r18\nA:x86_64\nL:GPL-2.0-only\no:busybox\n\n"
-            "P:linux-virt\nV:6.15.4-r0\nA:x86_64\nL:GPL-2.0-only\no:linux-lts\n"""
+            "P:busybox\n"
+            "V:1.37.0-r18\n"
+            "A:x86_64\n"
+            "L:GPL-2.0-only\n"
+            "o:busybox\n"
+            "\n"
+            "P:linux-virt\n"
+            "V:6.15.4-r0\n"
+            "A:x86_64\n"
+            "L:GPL-2.0-only\n"
+            "o:linux-lts\n"
         )
         self.assertEqual([p["name"] for p in packages], ["busybox", "linux-virt"])
         self.assertEqual(packages[1]["version"], "6.15.4-r0")
@@ -26,8 +35,16 @@ class M2ImageSbomTests(unittest.TestCase):
 
     def test_parse_dpkg_ignores_non_installed_entries(self):
         packages = sbom.parse_dpkg(
-            """Package: linux-image-6.17.0-10-generic\nStatus: install ok installed\nArchitecture: amd64\nVersion: 6.17.0-10.10\nSource: linux-signed (6.17.0-10.10)\n\n"
-            "Package: removed-package\nStatus: deinstall ok config-files\nArchitecture: amd64\nVersion: 1.0\n"""
+            "Package: linux-image-6.17.0-10-generic\n"
+            "Status: install ok installed\n"
+            "Architecture: amd64\n"
+            "Version: 6.17.0-10.10\n"
+            "Source: linux-signed (6.17.0-10.10)\n"
+            "\n"
+            "Package: removed-package\n"
+            "Status: deinstall ok config-files\n"
+            "Architecture: amd64\n"
+            "Version: 1.0\n"
         )
         self.assertEqual(len(packages), 1)
         self.assertEqual(packages[0]["name"], "linux-image-6.17.0-10-generic")
