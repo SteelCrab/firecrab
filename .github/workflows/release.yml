@@ -152,8 +152,33 @@ jobs:
         run: npm ci --omit=dev
         working-directory: firecrab-frontend
 
+      - name: Install M2Image compliance test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y e2fsprogs zstd shellcheck
+
       - name: Compliance unit tests
-        run: python3 -m unittest scripts/test_release_compliance.py
+        run: |
+          python3 -m unittest \
+            scripts/test_release_compliance.py \
+            scripts/test_m2image_sbom.py \
+            scripts/test_m2image_compliance.py \
+            scripts/test_m2image_source_publication.py \
+            scripts/test_fetch_m2image_sources.py
+
+      - name: M2Image release compliance contracts
+        run: |
+          shellcheck \
+            scripts/collect-m2image-compliance.sh \
+            scripts/package-m2images.sh \
+            scripts/package-m2image-sources.sh \
+            scripts/publish-m2images-r2.sh \
+            scripts/test-m2image-package-compliance.sh \
+            scripts/test-m2image-source-package.sh \
+            scripts/test-m2image-source-publish.sh
+          bash scripts/test-m2image-package-compliance.sh
+          bash scripts/test-m2image-source-package.sh
+          bash scripts/test-m2image-source-publish.sh
 
       - name: Generate release license inventory
         run: |
@@ -375,7 +400,7 @@ jobs:
           cp artifacts/firecrab-license-compliance/release-license-inventory.json dist/
           cp LICENSE dist/LICENSE
           cp licenses/GPL-2.0-only.txt dist/GPL-2.0-only.txt
-          ./scripts/bake-install-sh.sh "${GITHUB_REF_NAME}" dist/install.sh
+          ./scripts/bake-install-shake.sh "${GITHUB_REF_NAME}" dist/install.sh
           (cd dist && sha256sum ./* > SHA256SUMS)
           ls -l dist
           cat dist/SHA256SUMS
