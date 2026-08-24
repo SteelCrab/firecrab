@@ -8,7 +8,9 @@ usage() {
     exit 2
 }
 
-[ $# -ge 4 ] && [ $# -le 5 ] || usage
+if (( $# < 4 || $# > 5 )); then
+    usage
+fi
 arch=$1
 bin_dir=$2
 dashboard_dir=$3
