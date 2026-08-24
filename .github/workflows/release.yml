@@ -400,7 +400,7 @@ jobs:
           cp artifacts/firecrab-license-compliance/release-license-inventory.json dist/
           cp LICENSE dist/LICENSE
           cp licenses/GPL-2.0-only.txt dist/GPL-2.0-only.txt
-          ./scripts/bake-install-shake.sh "${GITHUB_REF_NAME}" dist/install.sh
+          ./scripts/bake-install-sh.sh "${GITHUB_REF_NAME}" dist/install.sh
           (cd dist && sha256sum ./* > SHA256SUMS)
           ls -l dist
           cat dist/SHA256SUMS
