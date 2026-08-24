@@ -154,7 +154,8 @@ def exercise(cases):
         }
 
 
-results = list(adversarial_cases() | exercise())
+pipeline = adversarial_cases() | exercise()
+results = list(pipeline())
 failed = False
 for result in results:
     print(
