@@ -1,0 +1,58 @@
+name: Apply 176 M2Image source identity v2
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: validation/176-source-identity
+
+      - name: Patch source identity fallbacks
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('scripts/m2image_sbom.py')
+          text = p.read_text(encoding='utf-8')
+          changes = [
+              ('"source": fields.get("o", ""),', '"source": fields.get("o") or fields["P"],'),
+              ('source = fields.get("Source", "")\n        if source:\n            source = source.split(" ", 1)[0]', 'source = fields.get("Source") or fields["Package"]\n        source = source.split(" ", 1)[0]'),
+              ('"source": "" if source == "(none)" else source,', '"source": name if source == "(none)" or not source else source,'),
+          ]
+          for old, new in changes:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one source match for {old!r}, got {text.count(old)}')
+              text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('scripts/test_m2image_sbom.py')
+          text = p.read_text(encoding='utf-8')
+          marker = '\n\nif __name__ == "__main__":\n'
+          if marker not in text:
+              raise SystemExit('test footer marker missing')
+          tests = '''\n\n    def test_source_identity_falls_back_to_binary_name(self):\n        alpine = sbom.parse_alpine("P:local-apk\\nV:1-r0\\nA:x86_64\\nL:MIT\\n")\n        dpkg = sbom.parse_dpkg(\n            "Package: same-source-deb\\n"\n            "Status: install ok installed\\n"\n            "Architecture: amd64\\n"\n            "Version: 2.0-1\\n"\n        )\n        rpm = sbom.parse_rpm_tsv(\n            "local-rpm\\t0:3.0-1\\tx86_64\\tMIT\\t(none)\\n"\n        )\n        self.assertEqual(alpine[0]["source"], "local-apk")\n        self.assertEqual(dpkg[0]["source"], "same-source-deb")\n        self.assertEqual(rpm[0]["source"], "local-rpm")\n\n    def test_parsed_source_identity_is_never_empty(self):\n        packages = []\n        packages += sbom.parse_alpine("P:a\\nV:1\\n")\n        packages += sbom.parse_dpkg(\n            "Package: d\\nStatus: install ok installed\\nVersion: 1\\nArchitecture: all\\n"\n        )\n        packages += sbom.parse_rpm_tsv("r\\t0:1-1\\tnoarch\\tMIT\\t(none)\\n")\n        self.assertTrue(all(pkg["source"] for pkg in packages))\n'''
+          text = text.replace(marker, tests + marker, 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Focused validation
+        run: |
+          git diff --check
+          python3 -m py_compile scripts/m2image_sbom.py scripts/test_m2image_sbom.py
+          python3 -m unittest scripts/test_m2image_sbom.py
+
+      - name: Commit validated changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/m2image_sbom.py scripts/test_m2image_sbom.py
+          git commit -m 'fix(compliance): retain complete M2Image source identities'
+          git push origin HEAD:validation/176-source-identity
