@@ -34,7 +34,7 @@ def parse_alpine(text: str) -> list[dict[str, str]]:
                     "version": fields["V"],
                     "arch": fields.get("A", "unknown"),
                     "license": fields.get("L", ""),
-                    "source": fields.get("o", ""),
+                    "source": fields.get("o") or fields["P"],
                 }
             )
     return packages
@@ -58,9 +58,8 @@ def parse_dpkg(text: str) -> list[dict[str, str]]:
             continue
         if not fields.get("Package") or not fields.get("Version"):
             continue
-        source = fields.get("Source", "")
-        if source:
-            source = source.split(" ", 1)[0]
+        source = fields.get("Source") or fields["Package"]
+        source = source.split(" ", 1)[0]
         packages.append(
             {
                 "name": fields["Package"],
@@ -90,7 +89,7 @@ def parse_rpm_tsv(text: str) -> list[dict[str, str]]:
                 "version": version,
                 "arch": arch or "unknown",
                 "license": license_text,
-                "source": "" if source == "(none)" else source,
+                "source": name if source == "(none)" or not source else source,
             }
         )
     return packages

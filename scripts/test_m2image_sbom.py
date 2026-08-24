@@ -146,5 +146,30 @@ class M2ImageSbomTests(unittest.TestCase):
             self.assertEqual(parsed["packages"][1]["name"], "busybox")
 
 
+    def test_source_identity_falls_back_to_binary_name(self):
+        alpine = sbom.parse_alpine("P:local-apk\nV:1-r0\nA:x86_64\nL:MIT\n")
+        dpkg = sbom.parse_dpkg(
+            "Package: same-source-deb\n"
+            "Status: install ok installed\n"
+            "Architecture: amd64\n"
+            "Version: 2.0-1\n"
+        )
+        rpm = sbom.parse_rpm_tsv(
+            "local-rpm\t0:3.0-1\tx86_64\tMIT\t(none)\n"
+        )
+        self.assertEqual(alpine[0]["source"], "local-apk")
+        self.assertEqual(dpkg[0]["source"], "same-source-deb")
+        self.assertEqual(rpm[0]["source"], "local-rpm")
+
+    def test_parsed_source_identity_is_never_empty(self):
+        packages = []
+        packages += sbom.parse_alpine("P:a\nV:1\n")
+        packages += sbom.parse_dpkg(
+            "Package: d\nStatus: install ok installed\nVersion: 1\nArchitecture: all\n"
+        )
+        packages += sbom.parse_rpm_tsv("r\t0:1-1\tnoarch\tMIT\t(none)\n")
+        self.assertTrue(all(pkg["source"] for pkg in packages))
+
+
 if __name__ == "__main__":
     unittest.main()
