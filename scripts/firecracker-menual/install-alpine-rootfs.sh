@@ -33,7 +33,11 @@ sbom_generator="${repo_dir}/scripts/m2image_sbom.py"
 # Alpine builds alongside it (mkinitfs) has to ship as the VM's initrd too —
 # without it the kernel can never reach /dev/vda to mount the real root.
 # bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu).
-rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
+# spdx-licenses-text: Alpine's normal runtime packages intentionally omit most
+# license files. Keep the distribution-packaged SPDX License List text corpus
+# in the image so release packaging can recover a complete canonical license
+# bundle without fetching mutable web content or inventing license text.
+rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt spdx-licenses-text'
 
 info() {
   printf '[INFO] %s\n' "$1"
