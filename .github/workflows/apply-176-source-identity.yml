@@ -1,0 +1,83 @@
+name: Apply 176 M2Image source identity
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: validation/176-source-identity
+
+      - name: Require source identity for every package
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: expected exactly one source match, got {text.count(old)}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'scripts/m2image_sbom.py',
+              '''                    "source": fields.get("o", ""),\n''',
+              '''                    # Alpine's origin field names the source package. Older or\n                    # locally-built package DB entries may omit it; in that case the\n                    # binary package name is still the correct minimum source identity.\n                    "source": fields.get("o") or fields["P"],\n''',
+              'Alpine source fallback',
+          )
+          replace_once(
+              'scripts/m2image_sbom.py',
+              '''        source = fields.get("Source", "")\n        if source:\n            source = source.split(" ", 1)[0]\n''',
+              '''        # Debian control data omits Source when source and binary package\n        # names are identical. Preserve an explicit source name when present and\n        # otherwise fall back to Package so corresponding-source resolution never\n        # has an empty identity.\n        source = fields.get("Source") or fields["Package"]\n        source = source.split(" ", 1)[0]\n''',
+              'dpkg source fallback',
+          )
+          replace_once(
+              'scripts/m2image_sbom.py',
+              '''                "source": "" if source == "(none)" else source,\n''',
+              '''                # SOURCERPM is normally authoritative. Synthetic/local RPMs\n                # may report (none); retain the package name as a resolvable minimum\n                # source identity instead of silently emitting an empty field.\n                "source": name if source == "(none)" or not source else source,\n''',
+              'rpm source fallback',
+          )
+
+          p = Path('scripts/test_m2image_sbom.py')
+          text = p.read_text(encoding='utf-8')
+          anchor = '''    def test_parse_rpm_tsv_rejects_wrong_field_count(self):\n'''
+          tests = '''    def test_source_identity_falls_back_to_binary_package_name(self):\n        alpine = sbom.parse_alpine(\n            "P:local-apk\\nV:1-r0\\nA:x86_64\\nL:MIT\\n"\n        )\n        dpkg = sbom.parse_dpkg(\n            "Package: same-source-deb\\n"\n            "Status: install ok installed\\n"\n            "Architecture: amd64\\n"\n            "Version: 2.0-1\\n"\n        )\n        rpm = sbom.parse_rpm_tsv(\n            "local-rpm\\t0:3.0-1\\tx86_64\\tMIT\\t(none)\\n"\n        )\n        self.assertEqual(alpine[0]["source"], "local-apk")\n        self.assertEqual(dpkg[0]["source"], "same-source-deb")\n        self.assertEqual(rpm[0]["source"], "local-rpm")\n\n    def test_every_parsed_package_has_source_identity(self):\n        packages = []\n        packages += sbom.parse_alpine("P:a\\nV:1\\n")\n        packages += sbom.parse_dpkg(\n            "Package: d\\nStatus: install ok installed\\nVersion: 1\\nArchitecture: all\\n"\n        )\n        packages += sbom.parse_rpm_tsv("r\\t0:1-1\\tnoarch\\tMIT\\t(none)\\n")\n        self.assertTrue(all(pkg["source"] for pkg in packages))\n\n'''
+          if text.count(anchor) != 1:
+              raise SystemExit('test insertion anchor not unique')
+          p.write_text(text.replace(anchor, tests + anchor, 1), encoding='utf-8')
+          PY
+
+      - name: Focused validation
+        run: |
+          git diff --check
+          python3 -m py_compile scripts/m2image_sbom.py scripts/test_m2image_sbom.py
+          python3 -m unittest scripts/test_m2image_sbom.py
+          python3 - <<'PY'
+          import importlib.util, pathlib
+          path = pathlib.Path('scripts/m2image_sbom.py')
+          spec = importlib.util.spec_from_file_location('m2', path)
+          m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          cases = [
+              m.parse_alpine('P:a\nV:1\n'),
+              m.parse_dpkg('Package: d\nStatus: install ok installed\nVersion: 1\nArchitecture: all\n'),
+              m.parse_rpm_tsv('r\t0:1-1\tnoarch\tMIT\t(none)\n'),
+          ]
+          assert all(p['source'] for group in cases for p in group)
+          print('source identity completeness passed')
+          PY
+
+      - name: Commit validated non-workflow changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/m2image_sbom.py scripts/test_m2image_sbom.py
+          git commit -m 'fix(compliance): retain complete M2Image source identities'
+          git push origin HEAD:validation/176-source-identity
