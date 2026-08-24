@@ -1,0 +1,36 @@
+name: Save #176 Alpine SPDX corpus candidate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  save:
+    if: github.event.pull_request.head.ref == 'validation/176-m2image-license-source-bundle'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: validation/176-m2image-license-source-bundle
+          fetch-depth: 0
+
+      - name: Apply validated product change
+        run: |
+          python3 .github/validation/add-alpine-spdx-license-texts.py
+          git diff --check
+          git diff -- scripts/firecracker-menual/install-alpine-rootfs.sh
+
+      - name: Commit product file only
+        run: |
+          if git diff --quiet -- scripts/firecracker-menual/install-alpine-rootfs.sh; then
+            echo 'Alpine SPDX corpus change already saved.'
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/firecracker-menual/install-alpine-rootfs.sh
+          git commit -m 'build(images): include Alpine SPDX license texts'
+          git push origin HEAD:validation/176-m2image-license-source-bundle
