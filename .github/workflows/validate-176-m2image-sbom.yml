@@ -1,0 +1,46 @@
+name: Validate 176 M2Image SBOM core
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  sbom-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Python syntax and unit tests
+        run: |
+          python3 -m py_compile scripts/m2image_sbom.py scripts/test_m2image_sbom.py
+          python3 -m unittest scripts/test_m2image_sbom.py
+      - name: Deterministic CLI smoke
+        run: |
+          tmp=$(mktemp -d)
+          cat >"$tmp/installed" <<'EOF'
+          P:busybox
+          V:1.37.0-r18
+          A:x86_64
+          L:GPL-2.0-only
+          o:busybox
+
+          P:linux-virt
+          V:6.15.4-r0
+          A:x86_64
+          L:GPL-2.0-only
+          o:linux-lts
+          EOF
+          SOURCE_DATE_EPOCH=0 python3 scripts/m2image_sbom.py \
+            --format alpine \
+            --distribution alpine \
+            --image-alias alpine-3.24.1 \
+            --image-version 3.24.1 \
+            --architecture x86_64 \
+            --package-db "$tmp/installed" \
+            --output "$tmp/sbom.spdx.json"
+          python3 - "$tmp/sbom.spdx.json" <<'PY'
+          import json, sys
+          doc = json.load(open(sys.argv[1]))
+          assert doc['spdxVersion'] == 'SPDX-2.3'
+          assert any('linux-virt@6.15.4-r0' in a['comment'] for a in doc.get('annotations', []))
+          assert len(doc['packages']) == 3
+          PY
