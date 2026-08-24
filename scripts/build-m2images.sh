@@ -9,6 +9,7 @@ repo_dir=$(cd -- "${script_dir}/.." && pwd -P)
 manifest=${M2IMAGE_MANIFEST:-${repo_dir}/packaging/m2images.json}
 dist_dir=${DIST_DIR:-${repo_dir}/dist/m2images}
 out_dir=${OUT_DIR:-}
+compliance_dir=${M2IMAGE_COMPLIANCE_DIR:-${repo_dir}/images/compliance}
 alias_filter=all
 architecture=${M2IMAGE_ARCH:-}
 package_images=1
@@ -70,6 +71,7 @@ require_command sha256sum
 python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" validate >/dev/null
 architecture=$(normalize_architecture "${architecture:-$(uname -m)}")
 export M2IMAGE_ARCH=$architecture
+mkdir -p "$compliance_dir"
 
 if [ -z "$out_dir" ]; then
   out_dir="${dist_dir}/${architecture}"
@@ -108,8 +110,18 @@ for alias in "${selected_aliases[@]}"; do
     builder_environment+=("${key}=${value}")
   done < <(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" environment "$alias")
 
+  sbom_output="${compliance_dir}/${alias}-${architecture}.spdx.json"
+  rm -f -- "$sbom_output"
   info "building ${alias} (distribution ${version}, ${architecture})"
-  env "${builder_environment[@]}" "${repo_dir}/${builder}"
+  env "M2IMAGE_ALIAS=${alias}" "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \
+    "${builder_environment[@]}" "${repo_dir}/${builder}"
+  [ -s "$sbom_output" ] || fail "builder did not produce M2Image SBOM: $sbom_output"
+  python3 - "$sbom_output" "$alias" <<'PY_VALIDATE'
+import json, sys
+doc = json.load(open(sys.argv[1], encoding='utf-8'))
+assert doc.get('spdxVersion') == 'SPDX-2.3'
+assert doc.get('packages', [{}])[0].get('name') == sys.argv[2]
+PY_VALIDATE
 done
 
 if [ "$package_images" -eq 1 ]; then

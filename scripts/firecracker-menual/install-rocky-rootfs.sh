@@ -25,6 +25,9 @@ rocky_repository_base=${ROCKY_REPOSITORY_BASE:-https://download.rockylinux.org/p
 rocky_container_build=${ROCKY_CONTAINER_BUILD:-20260525.0}
 rootfs_size='2G'
 rootfs_hostname='firecrab'
+m2image_alias=${M2IMAGE_ALIAS:-}
+sbom_output=${M2IMAGE_SBOM_OUTPUT:-}
+sbom_generator="${repo_dir}/scripts/m2image_sbom.py"
 extract_vmlinux="${script_dir}/extract-vmlinux"
 extract_arm64_image="${script_dir}/extract-arm64-image"
 container_mounts=()
@@ -612,6 +615,8 @@ main() {
       "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
       "M2IMAGE_DISTRO_SERIES=${M2IMAGE_DISTRO_SERIES:-9.8}" \
       "M2IMAGE_DISTRO_VERSION=${rocky_release}" \
+      "M2IMAGE_ALIAS=${m2image_alias}" \
+      "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \
       "ROCKY_REPOSITORY_BASE=${rocky_repository_base}" \
       "ROCKY_CONTAINER_BUILD=${rocky_container_build}" \
       "FIRECRAB_SSH_PUBLIC_KEY=${FIRECRAB_SSH_PUBLIC_KEY:-}" \
@@ -661,6 +666,24 @@ main() {
       "$rootfs_size" "$rootfs_hostname" "$rootfs_packages" \
       "$initrd_image_name" "$rocky_release" "$rocky_arch" "$rootfs_image_name" \
       "$rocky_repository_base"
+
+  if [ -n "$sbom_output" ]; then
+    [ -n "$m2image_alias" ] || fail 'M2IMAGE_ALIAS is required with M2IMAGE_SBOM_OUTPUT'
+    require_command python3
+    local package_db="${build_dir}/rpm-packages.tsv"
+    chroot "$container_root" /usr/bin/rpm --root /work/rootfs -qa \
+      --qf '%{NAME}\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\t%{ARCH}\t%{LICENSE}\t%{SOURCERPM}\n' \
+      >"$package_db"
+    [ -s "$package_db" ] || fail 'Rocky rpm package query returned no installed packages'
+    python3 "$sbom_generator" \
+      --format rpm-tsv --distribution rocky \
+      --image-alias "$m2image_alias" --image-version "$rocky_release" \
+      --architecture "$rocky_arch" \
+      --package-db "$package_db" --output "$sbom_output"
+    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+      chown "${SUDO_UID}:${SUDO_GID}" "$sbom_output"
+    fi
+  fi
 
   prepare_kernel
   [ -s "${artifact_dir}/${rootfs_image_name}" ] || \
