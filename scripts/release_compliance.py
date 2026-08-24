@@ -177,9 +177,11 @@ def _read_notice(path: Path) -> str | None:
 
 
 def cargo_records(
-    metadata: dict[str, Any], runtime_ids: set[str], build_ids: set[str]
+    metadatas: list[dict[str, Any]], runtime_ids: set[str], build_ids: set[str]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    packages = _packages_by_id(metadata)
+    packages: dict[str, dict[str, Any]] = {}
+    for metadata in metadatas:
+        packages.update(_packages_by_id(metadata))
 
     def record(package_id: str) -> dict[str, Any]:
         package = packages[package_id]
@@ -335,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     lock = _read_json(args.frontend_lock)
     runtime_ids, build_ids = merge_cargo_sets(cargo_metadatas)
     cargo_runtime, cargo_build = cargo_records(
-        cargo_metadatas[0], runtime_ids, build_ids
+        cargo_metadatas, runtime_ids, build_ids
     )
     npm_runtime_raw, npm_build_raw = npm_sets(lock)
     npm_runtime = npm_records(npm_runtime_raw, Path(args.frontend_root))
