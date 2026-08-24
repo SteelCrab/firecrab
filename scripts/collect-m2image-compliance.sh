@@ -14,8 +14,9 @@ architecture=${2:-}
 fail() { printf '[FAIL] %s\n' "$*" >&2; exit 1; }
 require_command() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required"; }
 
-[ -n "$alias" ] && [ -n "$architecture" ] \
-  || fail 'usage: collect-m2image-compliance.sh <alias> <x86_64|aarch64>'
+if [ -z "$alias" ] || [ -z "$architecture" ]; then
+  fail 'usage: collect-m2image-compliance.sh <alias> <x86_64|aarch64>'
+fi
 case "$architecture" in x86_64|aarch64) ;; *) fail "unsupported architecture: $architecture" ;; esac
 for command in python3 debugfs mktemp rm mkdir; do require_command "$command"; done
 
