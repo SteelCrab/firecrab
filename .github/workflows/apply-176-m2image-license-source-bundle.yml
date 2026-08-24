@@ -7,7 +7,7 @@ on:
 permissions:
   contents: write
 
-# Fork-only mutation harness. Removed before promotion.
+# Fork-only branch copy; default-branch harness performs validation.
 jobs:
   patch-and-validate:
     runs-on: ubuntu-latest
