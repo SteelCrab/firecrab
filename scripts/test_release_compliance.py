@@ -130,7 +130,7 @@ class ReleaseComplianceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = self.cargo_fixture(Path(tmp))
             runtime, build = rc.cargo_sets(metadata)
-            runtime_records, _ = rc.cargo_records(metadata, runtime, build)
+            runtime_records, _ = rc.cargo_records([metadata], runtime, build)
         self.assertEqual(runtime_records[0]["name"], "runtime-dep")
         self.assertEqual(runtime_records[0]["notices"][0]["name"], "LICENSE-MIT")
         self.assertIn("MIT text", runtime_records[0]["notices"][0]["text"])
@@ -175,7 +175,10 @@ class ReleaseComplianceTests(unittest.TestCase):
             frontend = root / "frontend"
             frontend.mkdir()
             cargo.write_text(json.dumps(metadata), encoding="utf-8")
-            lock.write_text(json.dumps({"packages": {"": {"name": "app"}}}), encoding="utf-8")
+            lock.write_text(
+                json.dumps({"packages": {"": {"name": "app"}}}),
+                encoding="utf-8",
+            )
             notices = root / "out" / "THIRD_PARTY_NOTICES.txt"
             inventory = root / "out" / "release-license-inventory.json"
             code = rc.main(
@@ -197,6 +200,68 @@ class ReleaseComplianceTests(unittest.TestCase):
             self.assertTrue(notices.is_file())
             data = json.loads(inventory.read_text(encoding="utf-8"))
             self.assertEqual(len(data["runtime"]), 1)
+
+    def test_multi_target_union_keeps_target_only_runtime_packages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def target_metadata(label: str, dep_id: str):
+                api_dir = root / f"api-{label}"
+                dep_dir = root / dep_id
+                api_dir.mkdir()
+                dep_dir.mkdir()
+                (api_dir / "Cargo.toml").write_text(
+                    "[package]\nname='firecrab-api'\nversion='0.1.0'\n",
+                    encoding="utf-8",
+                )
+                (dep_dir / "Cargo.toml").write_text(
+                    f"[package]\nname='{dep_id}'\nversion='1.0.0'\n",
+                    encoding="utf-8",
+                )
+                return {
+                    "packages": [
+                        package(
+                            "api",
+                            "firecrab-api",
+                            manifest_path=str(api_dir / "Cargo.toml"),
+                        ),
+                        package(
+                            dep_id,
+                            dep_id,
+                            manifest_path=str(dep_dir / "Cargo.toml"),
+                        ),
+                    ],
+                    "workspace_members": ["api"],
+                    "resolve": {
+                        "nodes": [
+                            {
+                                "id": "api",
+                                "deps": [
+                                    {
+                                        "pkg": dep_id,
+                                        "dep_kinds": [{"kind": None, "target": None}],
+                                    }
+                                ],
+                            },
+                            {"id": dep_id, "deps": []},
+                        ]
+                    },
+                }
+
+            x86 = target_metadata("x86", "x86-runtime")
+            arm = target_metadata("arm", "arm-runtime")
+            runtime, build = rc.merge_cargo_sets([x86, arm])
+            runtime_records, build_records = rc.cargo_records(
+                [x86, arm], runtime, build
+            )
+
+        self.assertEqual(runtime, {"x86-runtime", "arm-runtime"})
+        self.assertEqual(build, set())
+        self.assertEqual(
+            {item["name"] for item in runtime_records},
+            {"x86-runtime", "arm-runtime"},
+        )
+        self.assertEqual(build_records, [])
 
 
 if __name__ == "__main__":
