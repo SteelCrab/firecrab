@@ -26,6 +26,7 @@ LEGAL_PREFIXES = (
     "notice",
     "authors",
 )
+RPM_KEY_METADATA_DISPOSITION = "rpm-key-metadata"
 
 
 def _read_json(path: Path) -> dict:
@@ -86,6 +87,18 @@ def _source_resolver(distribution: str, source: str, source_version: str, commit
     }
 
 
+def _non_source_disposition(distribution: str, package_name: str, disposition: str) -> str:
+    if (
+        distribution.lower() == "rocky"
+        and package_name == "gpg-pubkey"
+        and disposition == RPM_KEY_METADATA_DISPOSITION
+    ):
+        return disposition
+    raise ValueError(
+        f"{package_name}: unsupported source-disposition {disposition!r}"
+    )
+
+
 def source_map(spdx: dict) -> dict:
     packages = spdx.get("packages") or []
     if len(packages) < 2:
@@ -97,13 +110,28 @@ def source_map(spdx: dict) -> dict:
     records = []
     for package in packages[1:]:
         fields = _comment_fields(package.get("comment"))
+        package_name = str(package.get("name") or "<unknown>")
+        binary_version = str(package.get("versionInfo") or "unknown")
+        disposition = fields.get("source-disposition", "")
+        if disposition:
+            records.append(
+                {
+                    "binaryPackage": package.get("name"),
+                    "binaryVersion": binary_version,
+                    "architecture": architecture,
+                    "declaredLicense": fields.get("package-manager-license") or None,
+                    "sourceDisposition": _non_source_disposition(
+                        distribution, package_name, disposition
+                    ),
+                }
+            )
+            continue
+
         source = fields.get("source-package")
         if not source:
             raise ValueError(
-                f"{package.get('name', '<unknown>')}@{package.get('versionInfo', '<unknown>')}: "
-                "missing source-package identity"
+                f"{package_name}@{binary_version}: missing source-package identity"
             )
-        binary_version = str(package.get("versionInfo") or "unknown")
         source_version = fields.get("source-version") or binary_version
         source_commit = fields.get("source-commit", "")
         records.append(
@@ -223,11 +251,12 @@ def build_bundle(*, spdx_path: Path, legal_root: Path, gpl2_text: Path, output_d
         "FireCrab M2Image compliance bundle\n"
         "=================================\n\n"
         "sbom.spdx.json identifies the installed binary packages. source-map.json\n"
-        "records the package-manager source identity observed for every binary.\n"
-        "licenses/ contains copyright/license material recovered from the built\n"
-        "guest plus FireCrab's canonical GPL-2.0 text. Source-map metadata is an\n"
-        "input to release corresponding-source publication; it is not itself a\n"
-        "statement that corresponding-source obligations have been satisfied.\n",
+        "records the package-manager source identity or an explicit non-source\n"
+        "disposition observed for every binary. licenses/ contains copyright/license\n"
+        "material recovered from the built guest plus FireCrab's canonical GPL-2.0\n"
+        "text. Source-map metadata is an input to release corresponding-source\n"
+        "publication; it is not itself a statement that corresponding-source\n"
+        "obligations have been satisfied.\n",
         encoding="utf-8",
     )
     shutil.copyfile(spdx_path, output_dir / "sbom.spdx.json")

@@ -19,6 +19,8 @@ import sys
 from pathlib import Path
 from urllib.parse import quote
 
+RPM_KEY_METADATA_DISPOSITION = "rpm-key-metadata"
+
 
 def parse_alpine(text: str) -> list[dict[str, str]]:
     packages: list[dict[str, str]] = []
@@ -94,13 +96,31 @@ def parse_rpm_tsv(text: str) -> list[dict[str, str]]:
         name, version, arch, license_text, source = parts
         if not name or not version:
             raise ValueError(f"rpm TSV line {lineno}: package name/version may not be empty")
+        if source == "(none)" or not source:
+            if name != "gpg-pubkey":
+                raise ValueError(
+                    f"rpm TSV line {lineno}: {name}@{version} has no SOURCERPM"
+                )
+            packages.append(
+                {
+                    "name": name,
+                    "version": version,
+                    "arch": arch or "unknown",
+                    "license": license_text,
+                    "source": "",
+                    "source_version": "",
+                    "source_commit": "",
+                    "source_disposition": RPM_KEY_METADATA_DISPOSITION,
+                }
+            )
+            continue
         packages.append(
             {
                 "name": name,
                 "version": version,
                 "arch": arch or "unknown",
                 "license": license_text,
-                "source": name if source == "(none)" or not source else source,
+                "source": source,
                 "source_version": version,
                 "source_commit": "",
             }
@@ -243,6 +263,8 @@ def make_spdx(
             comments.append(f"source-version={pkg['source_version']}")
         if pkg.get("source_commit"):
             comments.append(f"source-commit={pkg['source_commit']}")
+        if pkg.get("source_disposition"):
+            comments.append(f"source-disposition={pkg['source_disposition']}")
         if comments:
             entry["comment"] = "; ".join(comments)
         doc["packages"].append(entry)

@@ -50,7 +50,17 @@ python3 "${script_dir}/m2image_compliance.py" \
   --gpl2-text "${repo_dir}/licenses/GPL-2.0-only.txt" \
   --output-dir "$bundle"
 
+# Freeze the exact package-to-source publication contract into the same
+# compliance directory that is copied into the M2Image archive. The separate
+# materializer consumes this plan later; packaging never has to rediscover
+# package metadata from a moving distribution repository.
+python3 "${script_dir}/m2image_source_publication.py" plan \
+  --source-map "$bundle/source-map.json" \
+  --output "$bundle/source-publication-plan.json"
+
 [ -s "$bundle/bundle.json" ] || fail "compliance bundle metadata missing: $bundle/bundle.json"
 [ -s "$bundle/source-map.json" ] || fail "source map missing: $bundle/source-map.json"
+[ -s "$bundle/source-publication-plan.json" ] \
+  || fail "source publication plan missing: $bundle/source-publication-plan.json"
 [ -s "$bundle/licenses/index.json" ] || fail "license index missing: $bundle/licenses/index.json"
 [ -s "$bundle/licenses/GPL-2.0-only.txt" ] || fail 'GPL-2.0 text missing from M2Image compliance bundle'

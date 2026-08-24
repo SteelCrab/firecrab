@@ -57,6 +57,26 @@ class M2ImageSbomTests(unittest.TestCase):
         self.assertEqual(packages[0]["license"], "GPLv2")
         self.assertTrue(packages[0]["source"].endswith(".src.rpm"))
 
+    def test_rpm_gpg_pubkey_is_explicit_non_source_metadata(self):
+        packages = sbom.parse_rpm_tsv(
+            "gpg-pubkey\t0:350d275d-627e00a1\t(none)\tpubkey\t(none)\n"
+        )
+        self.assertEqual(packages[0]["source"], "")
+        self.assertEqual(packages[0]["source_disposition"], "rpm-key-metadata")
+        document = sbom.make_spdx(
+            distribution="rocky",
+            image_alias="rocky-9.8",
+            image_version="9.8",
+            architecture="x86_64",
+            packages=packages,
+        )
+        self.assertIn("source-disposition=rpm-key-metadata", document["packages"][1]["comment"])
+        self.assertNotIn("source-package=", document["packages"][1]["comment"])
+
+    def test_rpm_non_key_package_without_source_rpm_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "has no SOURCERPM"):
+            sbom.parse_rpm_tsv("local-rpm\t0:3.0-1\tx86_64\tMIT\t(none)\n")
+
     def test_rpm_tsv_rejects_wrong_field_count(self):
         with self.assertRaisesRegex(ValueError, "expected 5 fields"):
             sbom.parse_rpm_tsv("kernel-core\t1.2\tx86_64\n")
@@ -145,8 +165,7 @@ class M2ImageSbomTests(unittest.TestCase):
             self.assertEqual(parsed["spdxVersion"], "SPDX-2.3")
             self.assertEqual(parsed["packages"][1]["name"], "busybox")
 
-
-    def test_source_identity_falls_back_to_binary_name(self):
+    def test_source_identity_falls_back_to_binary_name_for_apk_and_dpkg(self):
         alpine = sbom.parse_alpine("P:local-apk\nV:1-r0\nA:x86_64\nL:MIT\n")
         dpkg = sbom.parse_dpkg(
             "Package: same-source-deb\n"
@@ -154,22 +173,19 @@ class M2ImageSbomTests(unittest.TestCase):
             "Architecture: amd64\n"
             "Version: 2.0-1\n"
         )
-        rpm = sbom.parse_rpm_tsv(
-            "local-rpm\t0:3.0-1\tx86_64\tMIT\t(none)\n"
-        )
         self.assertEqual(alpine[0]["source"], "local-apk")
         self.assertEqual(dpkg[0]["source"], "same-source-deb")
-        self.assertEqual(rpm[0]["source"], "local-rpm")
 
-    def test_parsed_source_identity_is_never_empty(self):
+    def test_parsed_source_identity_or_disposition_is_never_implicit(self):
         packages = []
         packages += sbom.parse_alpine("P:a\nV:1\n")
         packages += sbom.parse_dpkg(
             "Package: d\nStatus: install ok installed\nVersion: 1\nArchitecture: all\n"
         )
-        packages += sbom.parse_rpm_tsv("r\t0:1-1\tnoarch\tMIT\t(none)\n")
-        self.assertTrue(all(pkg["source"] for pkg in packages))
-
+        packages += sbom.parse_rpm_tsv("gpg-pubkey\t0:1-1\t(none)\tpubkey\t(none)\n")
+        self.assertTrue(
+            all(pkg.get("source") or pkg.get("source_disposition") for pkg in packages)
+        )
 
     def test_source_provenance_preserves_alpine_commit_and_dpkg_source_version(self):
         alpine = sbom.parse_alpine(

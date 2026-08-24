@@ -158,6 +158,15 @@ def get_field(value: Any, dotted_field: str) -> Any:
     return value
 
 
+def source_registry_key(manifest: dict[str, Any], alias: str, architecture: str) -> str:
+    artifact = find_image(manifest, alias)["artifacts"][architecture]
+    package_key = str(artifact["registryKey"])
+    suffix = f"/{alias}.tar.zst"
+    if not package_key.endswith(suffix):
+        fail(f"registry key for {alias}/{architecture} has an unexpected package suffix")
+    return package_key[: -len(suffix)] + f"/{alias}.sources.tar.zst"
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -183,8 +192,11 @@ def build_catalog(
         for architecture in architectures:
             artifact = image["artifacts"][architecture]
             package = dist_dir / architecture / f"{alias}.tar.zst"
+            source_package = dist_dir / architecture / f"{alias}.sources.tar.zst"
             if not package.is_file():
                 fail(f"package not found: {package}")
+            if not source_package.is_file():
+                fail(f"source package not found: {source_package}")
             entries.append(
                 {
                     "alias": alias,
@@ -196,6 +208,9 @@ def build_catalog(
                     "package": artifact["registryKey"],
                     "sha256": sha256(package),
                     "sizeBytes": package.stat().st_size,
+                    "source": source_registry_key(manifest, alias, architecture),
+                    "sourceSha256": sha256(source_package),
+                    "sourceSizeBytes": source_package.stat().st_size,
                     "minDiskGb": image["minDiskGb"],
                     "publishedAt": published_at(package),
                 }
@@ -234,6 +249,10 @@ def parser() -> argparse.ArgumentParser:
     registry_key = subparsers.add_parser("registry-key")
     registry_key.add_argument("alias")
     registry_key.add_argument("architecture", choices=SUPPORTED_ARCHITECTURES)
+
+    source_key = subparsers.add_parser("source-registry-key")
+    source_key.add_argument("alias")
+    source_key.add_argument("architecture", choices=SUPPORTED_ARCHITECTURES)
 
     catalog = subparsers.add_parser("catalog")
     catalog.add_argument("--dist-dir", type=Path, required=True)
@@ -277,6 +296,8 @@ def main() -> int:
                 print(artifact[key])
     elif args.command == "registry-key":
         print(find_image(manifest, args.alias)["artifacts"][args.architecture]["registryKey"])
+    elif args.command == "source-registry-key":
+        print(source_registry_key(manifest, args.alias, args.architecture))
     elif args.command == "catalog":
         aliases = args.aliases or [image["alias"] for image in manifest["images"]]
         architectures = args.architectures or manifest["architectures"]

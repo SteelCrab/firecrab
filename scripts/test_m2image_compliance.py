@@ -12,14 +12,14 @@ compliance = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compliance)
 
 
-def spdx(packages):
+def spdx(packages, distribution="alpine"):
     return {
         "spdxVersion": "SPDX-2.3",
         "packages": [
             {
-                "name": "alpine-3.24.1",
-                "versionInfo": "3.24.1",
-                "comment": "distribution=alpine; architecture=x86_64",
+                "name": f"{distribution}-image",
+                "versionInfo": "1",
+                "comment": f"distribution={distribution}; architecture=x86_64",
             },
             *packages,
         ],
@@ -96,6 +96,35 @@ class M2ImageComplianceTests(unittest.TestCase):
             rocky_source["sourceArtifact"],
             "kernel-5.14.0-687.41.1.el9_8.src.rpm",
         )
+
+    def test_rocky_gpg_pubkey_records_explicit_non_source_disposition(self):
+        doc = spdx(
+            [
+                {
+                    "name": "gpg-pubkey",
+                    "versionInfo": "0:350d275d-627e00a1",
+                    "comment": "source-disposition=rpm-key-metadata",
+                }
+            ],
+            distribution="rocky",
+        )
+        mapped = compliance.source_map(doc)["packages"][0]
+        self.assertEqual(mapped["sourceDisposition"], "rpm-key-metadata")
+        self.assertNotIn("source", mapped)
+
+    def test_non_source_disposition_is_narrowly_scoped(self):
+        doc = spdx(
+            [
+                {
+                    "name": "bash",
+                    "versionInfo": "5.1",
+                    "comment": "source-disposition=rpm-key-metadata",
+                }
+            ],
+            distribution="rocky",
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported source-disposition"):
+            compliance.source_map(doc)
 
     def test_bundle_copies_guest_legal_material_and_canonical_gpl(self):
         with tempfile.TemporaryDirectory() as tmpdir:

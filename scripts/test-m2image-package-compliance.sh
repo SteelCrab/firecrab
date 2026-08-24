@@ -32,12 +32,14 @@ V:1.37.0-r18
 A:x86_64
 L:GPL-2.0-only
 o:busybox
+c:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 P:linux-virt
 V:6.15.4-r0
 A:x86_64
 L:GPL-2.0-only
 o:linux-lts
+c:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 EOF_APK
 SOURCE_DATE_EPOCH=0 python3 "$root/scripts/m2image_sbom.py" \
   --format alpine --distribution alpine --image-alias "$alias" \
@@ -48,16 +50,37 @@ SOURCE_DATE_EPOCH=0 python3 "$root/scripts/m2image_sbom.py" \
 M2IMAGE_COMPLIANCE_DIR="$image_root/compliance" IMAGE_ROOT="$image_root" \
   bash "$root/scripts/collect-m2image-compliance.sh" "$alias" "$arch"
 
+plan="$image_root/compliance/${alias}-${arch}/source-publication-plan.json"
+python3 - "$plan" <<'PY_PLAN'
+import json, sys
+plan = json.load(open(sys.argv[1], encoding='utf-8'))
+assert plan['coveragePolicy'] == 'all-installed-packages'
+assert plan['packageCount'] == 2
+assert plan['sourceBackedPackageCount'] == 2
+assert plan['nonSourcePackageCount'] == 0
+assert plan['sourceCount'] == 2
+PY_PLAN
+
 IMAGE_ROOT="$image_root" OUT_DIR="$out" ZSTD_LEVEL=1 ZSTD_THREADS=1 \
   "$root/scripts/package-m2images.sh" --alias "$alias" --arch "$arch"
 zstd -dc "$out/${alias}.tar.zst" | tar -tf - >"$tmp/members"
 grep -qx 'compliance/sbom.spdx.json' "$tmp/members"
 grep -qx 'compliance/bundle.json' "$tmp/members"
 grep -qx 'compliance/source-map.json' "$tmp/members"
+grep -qx 'compliance/source-publication-plan.json' "$tmp/members"
 grep -qx 'compliance/licenses/index.json' "$tmp/members"
 grep -qx 'compliance/licenses/GPL-2.0-only.txt' "$tmp/members"
 grep -qx 'compliance/licenses/guest/usr/share/licenses/busybox/COPYING' "$tmp/members"
 grep -qx 'compliance/licenses/guest/usr/share/doc/curl/copyright' "$tmp/members"
+
+rm -f "$image_root/compliance/${alias}-${arch}/source-publication-plan.json"
+if IMAGE_ROOT="$image_root" OUT_DIR="$tmp/no-source-plan" ZSTD_LEVEL=1 ZSTD_THREADS=1 \
+  "$root/scripts/package-m2images.sh" --alias "$alias" --arch "$arch" \
+  >"$tmp/no-source-plan.out" 2>&1; then
+  echo 'packaging unexpectedly succeeded without the source publication plan' >&2
+  exit 1
+fi
+grep -q 'missing M2Image compliance artifact: .*source-publication-plan.json' "$tmp/no-source-plan.out"
 
 rm -rf "$image_root/compliance/${alias}-${arch}"
 if IMAGE_ROOT="$image_root" OUT_DIR="$tmp/no-sbom" ZSTD_LEVEL=1 ZSTD_THREADS=1 \
