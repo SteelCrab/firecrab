@@ -26,7 +26,8 @@ trap 'rm -rf "$work"' EXIT
 bins="$work/bins"
 dashboard="$work/dashboard"
 compliance="$work/compliance"
-mkdir -p "$bins" "$dashboard" "$compliance"
+unpacked="$work/unpacked"
+mkdir -p "$bins" "$dashboard" "$compliance" "$unpacked"
 
 write_elf64 "$bins/firecrab-api" 62
 write_elf64 "$bins/firecrab-net-helper" 62
@@ -53,14 +54,11 @@ for need in \
     }
 done
 
-tar -xzf "$bundle" -C "$work/unpacked" --warning=no-unknown-keyword 2>/dev/null || {
-    mkdir -p "$work/unpacked"
-    tar -xzf "$bundle" -C "$work/unpacked"
-}
-cmp "$ROOT/LICENSE" "$work/unpacked/LICENSE"
-cmp "$ROOT/licenses/GPL-2.0-only.txt" "$work/unpacked/licenses/GPL-2.0-only.txt"
-cmp "$compliance/THIRD_PARTY_NOTICES.txt" "$work/unpacked/THIRD_PARTY_NOTICES.txt"
-cmp "$compliance/release-license-inventory.json" "$work/unpacked/release-license-inventory.json"
+tar -xzf "$bundle" -C "$unpacked"
+cmp "$ROOT/LICENSE" "$unpacked/LICENSE"
+cmp "$ROOT/licenses/GPL-2.0-only.txt" "$unpacked/licenses/GPL-2.0-only.txt"
+cmp "$compliance/THIRD_PARTY_NOTICES.txt" "$unpacked/THIRD_PARTY_NOTICES.txt"
+cmp "$compliance/release-license-inventory.json" "$unpacked/release-license-inventory.json"
 
 rm "$compliance/THIRD_PARTY_NOTICES.txt"
 if "$ROOT/scripts/package-host-release.sh" \
