@@ -1,0 +1,217 @@
+name: Apply 176 M2Image SBOM builder integration
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: validation/176-m2image-builder-integration
+
+      - name: Integrate built-rootfs SBOM generation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_or_verify(path, old, new, label):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old in text:
+                  if text.count(old) != 1:
+                      raise SystemExit(f'{label}: source appeared {text.count(old)} times')
+                  p.write_text(text.replace(old, new, 1), encoding='utf-8')
+              elif new not in text:
+                  raise SystemExit(f'{label}: neither source nor integrated form found')
+
+          replace_or_verify(
+              'scripts/build-m2images.sh',
+              '''dist_dir=${DIST_DIR:-${repo_dir}/dist/m2images}\nout_dir=${OUT_DIR:-}\nalias_filter=all\n''',
+              '''dist_dir=${DIST_DIR:-${repo_dir}/dist/m2images}\nout_dir=${OUT_DIR:-}\ncompliance_dir=${M2IMAGE_COMPLIANCE_DIR:-${repo_dir}/images/compliance}\nalias_filter=all\n''',
+              'build compliance dir',
+          )
+          replace_or_verify(
+              'scripts/build-m2images.sh',
+              '''export M2IMAGE_ARCH=$architecture\n\nif [ -z "$out_dir" ]; then\n''',
+              '''export M2IMAGE_ARCH=$architecture\nmkdir -p "$compliance_dir"\n\nif [ -z "$out_dir" ]; then\n''',
+              'build compliance mkdir',
+          )
+          replace_or_verify(
+              'scripts/build-m2images.sh',
+              '''  info "building ${alias} (distribution ${version}, ${architecture})"\n  env "${builder_environment[@]}" "${repo_dir}/${builder}"\ndone\n''',
+              '''  sbom_output="${compliance_dir}/${alias}-${architecture}.spdx.json"\n  rm -f -- "$sbom_output"\n  info "building ${alias} (distribution ${version}, ${architecture})"\n  env "M2IMAGE_ALIAS=${alias}" "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \\\n    "${builder_environment[@]}" "${repo_dir}/${builder}"\n  [ -s "$sbom_output" ] || fail "builder did not produce M2Image SBOM: $sbom_output"\n  python3 - "$sbom_output" "$alias" <<'PY_VALIDATE'\nimport json, sys\ndoc = json.load(open(sys.argv[1], encoding='utf-8'))\nassert doc.get('spdxVersion') == 'SPDX-2.3'\nassert doc.get('packages', [{}])[0].get('name') == sys.argv[2]\nPY_VALIDATE\ndone\n''',
+              'build per-alias sbom',
+          )
+
+          replace_or_verify(
+              'scripts/firecracker-menual/install-alpine-rootfs.sh',
+              '''rootfs_size='512M'\nrootfs_hostname='firecrab'\n\n# Like the Ubuntu builder''',
+              '''rootfs_size='512M'\nrootfs_hostname='firecrab'\nm2image_alias=${M2IMAGE_ALIAS:-}\nsbom_output=${M2IMAGE_SBOM_OUTPUT:-}\nsbom_generator="${repo_dir}/scripts/m2image_sbom.py"\n\n# Like the Ubuntu builder''',
+              'alpine sbom vars',
+          )
+          replace_or_verify(
+              'scripts/firecracker-menual/install-alpine-rootfs.sh',
+              '''      "M2IMAGE_DISTRO_VERSION=${alpine_version_setting}" \\\n      "FIRECRAB_SSH_PUBLIC_KEY=${FIRECRAB_SSH_PUBLIC_KEY:-}" \\\n''',
+              '''      "M2IMAGE_DISTRO_VERSION=${alpine_version_setting}" \\\n      "M2IMAGE_ALIAS=${m2image_alias}" \\\n      "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \\\n      "FIRECRAB_SSH_PUBLIC_KEY=${FIRECRAB_SSH_PUBLIC_KEY:-}" \\\n''',
+              'alpine sudo env',
+          )
+          replace_or_verify(
+              'scripts/firecracker-menual/install-alpine-rootfs.sh',
+              '''    "$rootfs_packages" "$initrd_image_name"\n\n  extract_kernel\n''',
+              '''    "$rootfs_packages" "$initrd_image_name"\n\n  if [ -n "$sbom_output" ]; then\n    [ -n "$m2image_alias" ] || fail 'M2IMAGE_ALIAS is required with M2IMAGE_SBOM_OUTPUT'\n    require_command python3\n    [ -f "$mount_dir/lib/apk/db/installed" ] \\\n      || fail 'Alpine package database missing from built staging root'\n    python3 "$sbom_generator" \\\n      --format alpine --distribution alpine \\\n      --image-alias "$m2image_alias" --image-version "$alpine_version" \\\n      --architecture "$alpine_arch" \\\n      --package-db "$mount_dir/lib/apk/db/installed" --output "$sbom_output"\n    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then\n      chown "${SUDO_UID}:${SUDO_GID}" "$sbom_output"\n    fi\n  fi\n\n  extract_kernel\n''',
+              'alpine generate sbom',
+          )
+
+          replace_or_verify(
+              'scripts/firecracker-menual/install-ubuntu-roofs.sh',
+              '''rootfs_size='2G'\nrootfs_hostname='firecrab'\n\n# linux-image-virtual''',
+              '''rootfs_size='2G'\nrootfs_hostname='firecrab'\nm2image_alias=${M2IMAGE_ALIAS:-}\nsbom_output=${M2IMAGE_SBOM_OUTPUT:-}\nsbom_generator="${repo_dir}/scripts/m2image_sbom.py"\n\n# linux-image-virtual''',
+              'ubuntu sbom vars',
+          )
+          replace_or_verify(
+              'scripts/firecracker-menual/install-ubuntu-roofs.sh',
+              '''      "M2IMAGE_DISTRO_VERSION=${M2IMAGE_DISTRO_VERSION:-}" \\\n      "$script_path"\n''',
+              '''      "M2IMAGE_DISTRO_VERSION=${M2IMAGE_DISTRO_VERSION:-}" \\\n      "M2IMAGE_ALIAS=${m2image_alias}" \\\n      "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \\\n      "$script_path"\n''',
+              'ubuntu sudo env',
+          )
+          replace_or_verify(
+              'scripts/firecracker-menual/install-ubuntu-roofs.sh',
+              '''  verify_rootfs_content\n\n  info "creating Ubuntu rootfs image: ${rootfs_image}"\n''',
+              '''  verify_rootfs_content\n\n  if [ -n "$sbom_output" ]; then\n    [ -n "$m2image_alias" ] || fail 'M2IMAGE_ALIAS is required with M2IMAGE_SBOM_OUTPUT'\n    require_command python3\n    [ -f "$mount_dir/var/lib/dpkg/status" ] \\\n      || fail 'Ubuntu dpkg status database missing from built staging root'\n    case "$ubuntu_arch" in\n      amd64) sbom_arch=x86_64 ;;\n      arm64) sbom_arch=aarch64 ;;\n    esac\n    python3 "$sbom_generator" \\\n      --format dpkg --distribution ubuntu \\\n      --image-alias "$m2image_alias" --image-version "$ubuntu_series" \\\n      --architecture "$sbom_arch" \\\n      --package-db "$mount_dir/var/lib/dpkg/status" --output "$sbom_output"\n    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then\n      chown "${SUDO_UID}:${SUDO_GID}" "$sbom_output"\n    fi\n  fi\n\n  info "creating Ubuntu rootfs image: ${rootfs_image}"\n''',
+              'ubuntu generate sbom',
+          )
+
+          replace_or_verify(
+              'scripts/firecracker-menual/install-rocky-rootfs.sh',
+              '''rootfs_size='2G'\nrootfs_hostname='firecrab'\nextract_vmlinux="${script_dir}/extract-vmlinux"\n''',
+              '''rootfs_size='2G'\nrootfs_hostname='firecrab'\nm2image_alias=${M2IMAGE_ALIAS:-}\nsbom_output=${M2IMAGE_SBOM_OUTPUT:-}\nsbom_generator="${repo_dir}/scripts/m2image_sbom.py"\nextract_vmlinux="${script_dir}/extract-vmlinux"\n''',
+              'rocky sbom vars',
+          )
+          replace_or_verify(
+              'scripts/firecracker-menual/install-rocky-rootfs.sh',
+              '''      "M2IMAGE_DISTRO_VERSION=${rocky_release}" \\\n      "ROCKY_REPOSITORY_BASE=${rocky_repository_base}" \\\n''',
+              '''      "M2IMAGE_DISTRO_VERSION=${rocky_release}" \\\n      "M2IMAGE_ALIAS=${m2image_alias}" \\\n      "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \\\n      "ROCKY_REPOSITORY_BASE=${rocky_repository_base}" \\\n''',
+              'rocky sudo env',
+          )
+          replace_or_verify(
+              'scripts/firecracker-menual/install-rocky-rootfs.sh',
+              '''      "$rocky_repository_base"\n\n  prepare_kernel\n''',
+              '''      "$rocky_repository_base"\n\n  if [ -n "$sbom_output" ]; then\n    [ -n "$m2image_alias" ] || fail 'M2IMAGE_ALIAS is required with M2IMAGE_SBOM_OUTPUT'\n    require_command python3\n    local package_db="${build_dir}/rpm-packages.tsv"\n    chroot "$container_root" /usr/bin/rpm --root /work/rootfs -qa \\\n      --qf '%{NAME}\\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\\t%{ARCH}\\t%{LICENSE}\\t%{SOURCERPM}\\n' \\\n      >"$package_db"\n    [ -s "$package_db" ] || fail 'Rocky rpm package query returned no installed packages'\n    python3 "$sbom_generator" \\\n      --format rpm-tsv --distribution rocky \\\n      --image-alias "$m2image_alias" --image-version "$rocky_release" \\\n      --architecture "$rocky_arch" \\\n      --package-db "$package_db" --output "$sbom_output"\n    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then\n      chown "${SUDO_UID}:${SUDO_GID}" "$sbom_output"\n    fi\n  fi\n\n  prepare_kernel\n''',
+              'rocky generate sbom',
+          )
+
+          replace_or_verify(
+              'scripts/package-m2images.sh',
+              '''image_root=${IMAGE_ROOT:-${FIRECRAB_IMAGE_ROOT:-${repo_dir}/images}}\ndist_dir=${DIST_DIR:-${repo_dir}/dist/m2images}\n''',
+              '''image_root=${IMAGE_ROOT:-${FIRECRAB_IMAGE_ROOT:-${repo_dir}/images}}\ncompliance_root=${M2IMAGE_COMPLIANCE_DIR:-${image_root}/compliance}\ndist_dir=${DIST_DIR:-${repo_dir}/dist/m2images}\n''',
+              'package compliance root',
+          )
+          replace_or_verify(
+              'scripts/package-m2images.sh',
+              '''  [ -n "$rootfs_rel" ] || fail "no rootfs artifact configured for $alias/$architecture"\n  cp -- "$motd_file" "$staging/.firecrab-motd"\n''',
+              '''  [ -n "$rootfs_rel" ] || fail "no rootfs artifact configured for $alias/$architecture"\n\n  local sbom_source="${compliance_root}/${alias}-${architecture}.spdx.json"\n  [ -s "$sbom_source" ] || fail "missing M2Image SBOM: $sbom_source (build $alias first)"\n  python3 - "$sbom_source" "$alias" <<'PY_SBOM'\nimport json, sys\ndoc = json.load(open(sys.argv[1], encoding='utf-8'))\nassert doc.get('spdxVersion') == 'SPDX-2.3', 'M2Image SBOM is not SPDX 2.3'\nassert doc.get('packages', [{}])[0].get('name') == sys.argv[2], 'M2Image SBOM alias mismatch'\nPY_SBOM\n  mkdir -p "$staging/compliance"\n  cp -- "$sbom_source" "$staging/compliance/sbom.spdx.json"\n  files+=("compliance/sbom.spdx.json")\n\n  cp -- "$motd_file" "$staging/.firecrab-motd"\n''',
+              'package sbom member',
+          )
+          PY
+
+          cat > scripts/test-m2image-package-compliance.sh <<'EOF_TEST'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          image_root="$tmp/images"
+          out="$tmp/out"
+          mkdir -p "$image_root" "$out" "$image_root/compliance"
+          alias=alpine-3.24.1
+          arch=x86_64
+
+          while IFS= read -r rel; do
+            [ -n "$rel" ] || continue
+            mkdir -p "$image_root/$(dirname -- "$rel")"
+            case "$rel" in
+              rootfs/*)
+                stage="$tmp/root-stage"
+                mkdir -p "$stage/etc"
+                printf 'synthetic\n' >"$stage/etc/os-release"
+                truncate -s 16M "$image_root/$rel"
+                mkfs.ext4 -q -F -d "$stage" "$image_root/$rel"
+                ;;
+              *) printf 'synthetic artifact\n' >"$image_root/$rel" ;;
+            esac
+          done < <(python3 "$root/scripts/m2image-manifest.py" artifacts "$alias" "$arch")
+
+          cat >"$tmp/apk-installed" <<'EOF_APK'
+          P:busybox
+          V:1.37.0-r18
+          A:x86_64
+          L:GPL-2.0-only
+          o:busybox
+
+          P:linux-virt
+          V:6.15.4-r0
+          A:x86_64
+          L:GPL-2.0-only
+          o:linux-lts
+          EOF_APK
+          SOURCE_DATE_EPOCH=0 python3 "$root/scripts/m2image_sbom.py" \
+            --format alpine --distribution alpine --image-alias "$alias" \
+            --image-version 3.24.1 --architecture "$arch" \
+            --package-db "$tmp/apk-installed" \
+            --output "$image_root/compliance/${alias}-${arch}.spdx.json"
+
+          IMAGE_ROOT="$image_root" OUT_DIR="$out" ZSTD_LEVEL=1 ZSTD_THREADS=1 \
+            "$root/scripts/package-m2images.sh" --alias "$alias" --arch "$arch"
+          zstd -dc "$out/${alias}.tar.zst" | tar -tf - >"$tmp/members"
+          grep -qx 'compliance/sbom.spdx.json' "$tmp/members"
+
+          rm "$image_root/compliance/${alias}-${arch}.spdx.json"
+          if IMAGE_ROOT="$image_root" OUT_DIR="$tmp/no-sbom" ZSTD_LEVEL=1 ZSTD_THREADS=1 \
+            "$root/scripts/package-m2images.sh" --alias "$alias" --arch "$arch" \
+            >"$tmp/no-sbom.out" 2>&1; then
+            echo 'packaging unexpectedly succeeded without an M2Image SBOM' >&2
+            exit 1
+          fi
+          grep -q 'missing M2Image SBOM' "$tmp/no-sbom.out"
+          echo 'M2Image package compliance contract passed'
+          EOF_TEST
+          chmod +x scripts/test-m2image-package-compliance.sh
+
+      - name: Static and focused validation
+        run: |
+          git diff --check
+          python3 -m py_compile scripts/m2image_sbom.py scripts/test_m2image_sbom.py
+          python3 -m unittest scripts/test_m2image_sbom.py
+          bash -n scripts/build-m2images.sh scripts/package-m2images.sh \
+            scripts/firecracker-menual/install-alpine-rootfs.sh \
+            scripts/firecracker-menual/install-ubuntu-roofs.sh \
+            scripts/firecracker-menual/install-rocky-rootfs.sh \
+            scripts/test-m2image-package-compliance.sh
+          shellcheck scripts/build-m2images.sh scripts/package-m2images.sh \
+            scripts/firecracker-menual/install-alpine-rootfs.sh \
+            scripts/firecracker-menual/install-ubuntu-roofs.sh \
+            scripts/firecracker-menual/install-rocky-rootfs.sh \
+            scripts/test-m2image-package-compliance.sh
+          bash scripts/test-m2image-package-compliance.sh
+
+      - name: Commit validated non-workflow changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/build-m2images.sh scripts/package-m2images.sh \
+            scripts/firecracker-menual/install-alpine-rootfs.sh \
+            scripts/firecracker-menual/install-ubuntu-roofs.sh \
+            scripts/firecracker-menual/install-rocky-rootfs.sh \
+            scripts/test-m2image-package-compliance.sh
+          if git diff --cached --quiet; then
+            echo 'validated integration already committed'
+            exit 0
+          fi
+          git commit -m 'feat(compliance): package per-M2Image SPDX SBOMs'
+          git push origin HEAD:validation/176-m2image-builder-integration
