@@ -35,6 +35,8 @@ def parse_alpine(text: str) -> list[dict[str, str]]:
                     "arch": fields.get("A", "unknown"),
                     "license": fields.get("L", ""),
                     "source": fields.get("o") or fields["P"],
+                    "source_version": fields["V"],
+                    "source_commit": fields.get("c", ""),
                 }
             )
     return packages
@@ -58,8 +60,15 @@ def parse_dpkg(text: str) -> list[dict[str, str]]:
             continue
         if not fields.get("Package") or not fields.get("Version"):
             continue
-        source = fields.get("Source") or fields["Package"]
-        source = source.split(" ", 1)[0]
+        source_field = fields.get("Source", "")
+        source = fields["Package"]
+        source_version = fields["Version"]
+        if source_field:
+            match = re.fullmatch(r"([^\s(]+)(?:\s+\(([^)]+)\))?", source_field)
+            if not match:
+                raise ValueError(f"invalid dpkg Source field: {source_field!r}")
+            source = match.group(1)
+            source_version = match.group(2) or source_version
         packages.append(
             {
                 "name": fields["Package"],
@@ -67,6 +76,8 @@ def parse_dpkg(text: str) -> list[dict[str, str]]:
                 "arch": fields.get("Architecture", "unknown"),
                 "license": "",
                 "source": source,
+                "source_version": source_version,
+                "source_commit": "",
             }
         )
     return packages
@@ -90,6 +101,8 @@ def parse_rpm_tsv(text: str) -> list[dict[str, str]]:
                 "arch": arch or "unknown",
                 "license": license_text,
                 "source": name if source == "(none)" or not source else source,
+                "source_version": version,
+                "source_commit": "",
             }
         )
     return packages
@@ -226,6 +239,10 @@ def make_spdx(
             comments.append(f"package-manager-license={pkg['license']}")
         if pkg.get("source"):
             comments.append(f"source-package={pkg['source']}")
+        if pkg.get("source_version"):
+            comments.append(f"source-version={pkg['source_version']}")
+        if pkg.get("source_commit"):
+            comments.append(f"source-commit={pkg['source_commit']}")
         if comments:
             entry["comment"] = "; ".join(comments)
         doc["packages"].append(entry)

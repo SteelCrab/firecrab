@@ -122,6 +122,11 @@ doc = json.load(open(sys.argv[1], encoding='utf-8'))
 assert doc.get('spdxVersion') == 'SPDX-2.3'
 assert doc.get('packages', [{}])[0].get('name') == sys.argv[2]
 PY_VALIDATE
+  M2IMAGE_MANIFEST="$manifest" IMAGE_ROOT="${repo_dir}/images" \
+    M2IMAGE_COMPLIANCE_DIR="$compliance_dir" \
+    bash "${script_dir}/collect-m2image-compliance.sh" "$alias" "$architecture"
+  [ -s "${compliance_dir}/${alias}-${architecture}/bundle.json" ] \
+    || fail "builder did not produce M2Image compliance bundle for ${alias}/${architecture}"
 done
 
 if [ "$package_images" -eq 1 ]; then

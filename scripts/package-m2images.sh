@@ -108,17 +108,23 @@ package_one() {
 
   [ -n "$rootfs_rel" ] || fail "no rootfs artifact configured for $alias/$architecture"
 
-  local sbom_source="${compliance_root}/${alias}-${architecture}.spdx.json"
-  [ -s "$sbom_source" ] || fail "missing M2Image SBOM: $sbom_source (build $alias first)"
-  python3 - "$sbom_source" "$alias" <<'PY_SBOM'
+  local compliance_source="${compliance_root}/${alias}-${architecture}"
+  [ -d "$compliance_source" ] \
+    || fail "missing M2Image compliance bundle: $compliance_source (build $alias first)"
+  for required in bundle.json source-map.json sbom.spdx.json README.txt \
+    licenses/index.json licenses/GPL-2.0-only.txt; do
+    [ -s "${compliance_source}/${required}" ] \
+      || fail "missing M2Image compliance artifact: ${compliance_source}/${required}"
+  done
+  python3 - "${compliance_source}/sbom.spdx.json" "$alias" <<'PY_SBOM'
 import json, sys
 doc = json.load(open(sys.argv[1], encoding='utf-8'))
 assert doc.get('spdxVersion') == 'SPDX-2.3', 'M2Image SBOM is not SPDX 2.3'
 assert doc.get('packages', [{}])[0].get('name') == sys.argv[2], 'M2Image SBOM alias mismatch'
 PY_SBOM
   mkdir -p "$staging/compliance"
-  cp -- "$sbom_source" "$staging/compliance/sbom.spdx.json"
-  files+=("compliance/sbom.spdx.json")
+  cp -a -- "$compliance_source/." "$staging/compliance/"
+  files+=("compliance")
 
   cp -- "$motd_file" "$staging/.firecrab-motd"
   (

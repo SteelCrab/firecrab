@@ -15,8 +15,10 @@ while IFS= read -r rel; do
   case "$rel" in
     rootfs/*)
       stage="$tmp/root-stage"
-      mkdir -p "$stage/etc"
+      mkdir -p "$stage/etc" "$stage/usr/share/licenses/busybox" "$stage/usr/share/doc/curl"
       printf 'synthetic\n' >"$stage/etc/os-release"
+      printf 'busybox license\n' >"$stage/usr/share/licenses/busybox/COPYING"
+      printf 'curl copyright\n' >"$stage/usr/share/doc/curl/copyright"
       truncate -s 16M "$image_root/$rel"
       mkfs.ext4 -q -F -d "$stage" "$image_root/$rel"
       ;;
@@ -43,17 +45,26 @@ SOURCE_DATE_EPOCH=0 python3 "$root/scripts/m2image_sbom.py" \
   --package-db "$tmp/apk-installed" \
   --output "$image_root/compliance/${alias}-${arch}.spdx.json"
 
+M2IMAGE_COMPLIANCE_DIR="$image_root/compliance" IMAGE_ROOT="$image_root" \
+  bash "$root/scripts/collect-m2image-compliance.sh" "$alias" "$arch"
+
 IMAGE_ROOT="$image_root" OUT_DIR="$out" ZSTD_LEVEL=1 ZSTD_THREADS=1 \
   "$root/scripts/package-m2images.sh" --alias "$alias" --arch "$arch"
 zstd -dc "$out/${alias}.tar.zst" | tar -tf - >"$tmp/members"
 grep -qx 'compliance/sbom.spdx.json' "$tmp/members"
+grep -qx 'compliance/bundle.json' "$tmp/members"
+grep -qx 'compliance/source-map.json' "$tmp/members"
+grep -qx 'compliance/licenses/index.json' "$tmp/members"
+grep -qx 'compliance/licenses/GPL-2.0-only.txt' "$tmp/members"
+grep -qx 'compliance/licenses/guest/usr/share/licenses/busybox/COPYING' "$tmp/members"
+grep -qx 'compliance/licenses/guest/usr/share/doc/curl/copyright' "$tmp/members"
 
-rm "$image_root/compliance/${alias}-${arch}.spdx.json"
+rm -rf "$image_root/compliance/${alias}-${arch}"
 if IMAGE_ROOT="$image_root" OUT_DIR="$tmp/no-sbom" ZSTD_LEVEL=1 ZSTD_THREADS=1 \
   "$root/scripts/package-m2images.sh" --alias "$alias" --arch "$arch" \
   >"$tmp/no-sbom.out" 2>&1; then
   echo 'packaging unexpectedly succeeded without an M2Image SBOM' >&2
   exit 1
 fi
-grep -q 'missing M2Image SBOM' "$tmp/no-sbom.out"
+grep -q 'missing M2Image compliance bundle' "$tmp/no-sbom.out"
 echo 'M2Image package compliance contract passed'

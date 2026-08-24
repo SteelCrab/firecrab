@@ -171,5 +171,37 @@ class M2ImageSbomTests(unittest.TestCase):
         self.assertTrue(all(pkg["source"] for pkg in packages))
 
 
+    def test_source_provenance_preserves_alpine_commit_and_dpkg_source_version(self):
+        alpine = sbom.parse_alpine(
+            "P:busybox\nV:1.37.0-r31\nA:x86_64\nL:GPL-2.0-only\n"
+            "o:busybox\nc:0123456789abcdef0123456789abcdef01234567\n"
+        )[0]
+        deb = sbom.parse_dpkg(
+            "Package: linux-image-virtual\nStatus: install ok installed\n"
+            "Architecture: amd64\nVersion: 7.0.0-30.30\n"
+            "Source: linux-meta (7.0.0.30.30)\n"
+        )[0]
+        self.assertEqual(alpine["source_version"], "1.37.0-r31")
+        self.assertEqual(alpine["source_commit"], "0123456789abcdef0123456789abcdef01234567")
+        self.assertEqual(deb["source"], "linux-meta")
+        self.assertEqual(deb["source_version"], "7.0.0.30.30")
+
+    def test_spdx_emits_source_version_and_commit_evidence(self):
+        packages = sbom.parse_alpine(
+            "P:busybox\nV:1.37.0-r31\nA:x86_64\nL:GPL-2.0-only\n"
+            "o:busybox\nc:0123456789abcdef0123456789abcdef01234567\n"
+        )
+        document = sbom.make_spdx(
+            distribution="alpine",
+            image_alias="alpine-3.24.1",
+            image_version="3.24.1",
+            architecture="x86_64",
+            packages=packages,
+        )
+        comment = document["packages"][1]["comment"]
+        self.assertIn("source-version=1.37.0-r31", comment)
+        self.assertIn("source-commit=0123456789abcdef0123456789abcdef01234567", comment)
+
+
 if __name__ == "__main__":
     unittest.main()
