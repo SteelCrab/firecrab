@@ -35,7 +35,8 @@ jobs:
               git clone -q https://github.com/sandialabs/talkpipe.git /tmp/talkpipe
               git -C /tmp/talkpipe checkout -q 0ceb36bc1ab31df227c52a5eab990b61abd050bc
               test "$(git -C /tmp/talkpipe rev-parse HEAD)" = 0ceb36bc1ab31df227c52a5eab990b61abd050bc
-              pip install --no-cache-dir -q "pydantic>=2.4.0" "numpy>=1.22.2" greenlet
+              pip install --no-cache-dir -q \
+                "pydantic>=2.4.0" "numpy>=1.22.2" networkx "prompt_toolkit>=3.0.13" greenlet
               PYTHONPATH=/tmp/talkpipe/src python3 .github/validation/talkpipe-176.py
             '
 
