@@ -4,6 +4,7 @@ set -euo pipefail
 
 RELEASES_URL='https://github.com/firecracker-microvm/firecracker/releases'
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+FIRECRACKER_NOTICE_DIR="${FIRECRACKER_NOTICE_DIR:-/usr/local/share/firecrab/firecracker}"
 
 tmpdir=''
 
@@ -91,6 +92,7 @@ main() {
   info "architecture: ${arch}"
   info "version: ${version}"
   info "install directory: ${INSTALL_DIR}"
+  info "notice directory: ${FIRECRACKER_NOTICE_DIR}"
 
   # Download the Firecracker release archive into a temporary working directory.
   tmpdir=$(mktemp -d)
@@ -107,11 +109,27 @@ main() {
     fail "Firecracker binary was not found in archive: ${archive}"
   fi
 
+  # Firecracker's release builder deliberately ships these three files beside
+  # the binary. Validate them before mutating the host, then preserve the exact
+  # upstream bytes under FireCrab's stable share tree.
+  release_dir=$(dirname -- "$binary_path")
+  for notice in LICENSE NOTICE THIRD-PARTY; do
+    if [ ! -f "$release_dir/$notice" ]; then
+      fail "Firecracker release archive is missing required notice: ${notice}"
+    fi
+  done
+
   # Install the executable and set the final file mode to be runnable by users.
   target_path="${INSTALL_DIR}/firecracker"
   info "installing binary: ${target_path}"
   run_install install -d -m 0755 "$INSTALL_DIR"
   run_install install -m 0755 "$binary_path" "$target_path"
+
+  info "preserving Firecracker notices: ${FIRECRACKER_NOTICE_DIR}"
+  run_install install -d -m 0755 "$FIRECRACKER_NOTICE_DIR"
+  for notice in LICENSE NOTICE THIRD-PARTY; do
+    run_install install -m 0644 "$release_dir/$notice" "$FIRECRACKER_NOTICE_DIR/$notice"
+  done
 
   # Verify that the installed binary is executable and reports its version.
   if [ ! -x "$target_path" ]; then
