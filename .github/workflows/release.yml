@@ -129,9 +129,56 @@ jobs:
           name: firecrab-dashboard
           path: firecrab-frontend/dist
 
+  license-compliance:
+    name: Release license compliance
+    needs: release-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: firecrab-frontend/package-lock.json
+
+      - name: Fetch dependency sources
+        run: cargo fetch --locked
+
+      - name: Install frontend runtime dependencies
+        run: npm ci --omit=dev
+        working-directory: firecrab-frontend
+
+      - name: Compliance unit tests
+        run: python3 -m unittest scripts/test_release_compliance.py
+
+      - name: Generate release license inventory
+        run: |
+          set -euo pipefail
+          cargo metadata --format-version=1 --locked > cargo-metadata.json
+          python3 scripts/release_compliance.py \
+            --cargo-metadata cargo-metadata.json \
+            --frontend-lock firecrab-frontend/package-lock.json \
+            --frontend-root firecrab-frontend \
+            --notices-out dist/compliance/THIRD_PARTY_NOTICES.txt \
+            --inventory-out dist/compliance/release-license-inventory.json \
+            --deny-incompatible
+
+      - name: Host archive compliance contract
+        run: bash scripts/test-host-release-compliance.sh
+
+      - name: Upload compliance artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firecrab-license-compliance
+          path: dist/compliance
+
   package-host:
     name: Host bundle (${{ matrix.arch }} ${{ matrix.libc }})
-    needs: [build-release, build-dashboard]
+    needs: [build-release, build-dashboard, license-compliance]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -163,13 +210,29 @@ jobs:
           name: firecrab-dashboard
           path: dashboard
 
+      - name: Download compliance material
+        uses: actions/download-artifact@v8
+        with:
+          name: firecrab-license-compliance
+          path: compliance
+
       - name: Pack firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz
         run: |
           mkdir -p bins
           tar -xzf bins-tar/firecrab-${{ matrix.target }}.tar.gz -C bins
           ./scripts/package-host-release.sh \
             "${{ matrix.arch }}" bins dashboard \
-            "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz"
+            "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz" \
+            compliance
+
+      - name: Verify host compliance members
+        run: |
+          set -euo pipefail
+          tar -tzf "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz" > members.txt
+          for path in LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json \
+              licenses/GPL-2.0-only.txt extract-vmlinux; do
+            grep -qx "$path" members.txt || { echo "missing $path" >&2; exit 1; }
+          done
 
       - name: Upload host bundle
         uses: actions/upload-artifact@v7
@@ -296,6 +359,10 @@ jobs:
           mkdir -p dist
           find artifacts -type f -name 'firecrab-host-*.tar.gz' -print
           find artifacts -type f -name 'firecrab-host-*.tar.gz' -exec cp -t dist {} +
+          cp artifacts/firecrab-license-compliance/THIRD_PARTY_NOTICES.txt dist/
+          cp artifacts/firecrab-license-compliance/release-license-inventory.json dist/
+          cp LICENSE dist/LICENSE
+          cp licenses/GPL-2.0-only.txt dist/GPL-2.0-only.txt
           ./scripts/bake-install-sh.sh "${GITHUB_REF_NAME}" dist/install.sh
           (cd dist && sha256sum ./* > SHA256SUMS)
           ls -l dist
