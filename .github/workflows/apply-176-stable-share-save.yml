@@ -1,0 +1,88 @@
+name: Save 176 stable-share patch
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  save-patch:
+    if: github.head_ref == 'validation/176-stable-share'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: validation/176-stable-share
+
+      - name: Patch install paths
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{label}: expected one source match, got {text.count(old)}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once('install.sh', 'PAYLOAD_EXTRACT=\nPAYLOAD_DASHBOARD=\n',
+              'PAYLOAD_EXTRACT=\nPAYLOAD_DASHBOARD=\nPAYLOAD_LICENSE=\nPAYLOAD_THIRD_PARTY=\nPAYLOAD_INVENTORY=\nPAYLOAD_GPL=\n',
+              'payload variables')
+
+          replace_once('install.sh', '    if $SUDO bash "$script"; then\n',
+              '    if $SUDO env FIRECRACKER_NOTICE_DIR="$SHAREDIR/firecracker" bash "$script"; then\n',
+              'Firecracker notice directory')
+
+          replace_once('install.sh',
+              '''    for name in firecrab-api firecrab-net-helper firecrab; do\n        [ -x "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing $name"\n        firecrab_assert_binary_arch "$PAYLOAD_ROOT/$name" "$arch" \\\n            || die "$tarball: $name is not a $arch binary"\n    done\n    log "host bundle $arch/$LIBC"\n''',
+              '''    for name in firecrab-api firecrab-net-helper firecrab; do\n        [ -x "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing $name"\n        firecrab_assert_binary_arch "$PAYLOAD_ROOT/$name" "$arch" \\\n            || die "$tarball: $name is not a $arch binary"\n    done\n    for name in LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json \\\n            licenses/GPL-2.0-only.txt; do\n        [ -f "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing compliance artifact $name"\n    done\n    log "host bundle $arch/$LIBC"\n''',
+              'release compliance validation')
+
+          replace_once('install.sh',
+              '''        PAYLOAD_BIN=$BIN_DIR\n        PAYLOAD_UNITS=$REPO_ROOT/packaging/systemd\n        PAYLOAD_EXTRACT=$REPO_ROOT/scripts/firecracker-menual\n        if [ -n "$DASHBOARD_DIR" ]; then\n''',
+              '''        PAYLOAD_BIN=$BIN_DIR\n        PAYLOAD_UNITS=$REPO_ROOT/packaging/systemd\n        PAYLOAD_EXTRACT=$REPO_ROOT/scripts/firecracker-menual\n        PAYLOAD_LICENSE=$REPO_ROOT/LICENSE\n        PAYLOAD_GPL=$REPO_ROOT/licenses/GPL-2.0-only.txt\n        if [ -f "$REPO_ROOT/dist/compliance/THIRD_PARTY_NOTICES.txt" ] \\\n            && [ -f "$REPO_ROOT/dist/compliance/release-license-inventory.json" ]; then\n            PAYLOAD_THIRD_PARTY=$REPO_ROOT/dist/compliance/THIRD_PARTY_NOTICES.txt\n            PAYLOAD_INVENTORY=$REPO_ROOT/dist/compliance/release-license-inventory.json\n        else\n            PAYLOAD_THIRD_PARTY=\n            PAYLOAD_INVENTORY=\n        fi\n        if [ -n "$DASHBOARD_DIR" ]; then\n''',
+              'local compliance payload')
+
+          replace_once('install.sh',
+              '''    PAYLOAD_EXTRACT=$PAYLOAD_ROOT\n    PAYLOAD_DASHBOARD=$PAYLOAD_ROOT/dashboard\n}\n''',
+              '''    PAYLOAD_EXTRACT=$PAYLOAD_ROOT\n    PAYLOAD_DASHBOARD=$PAYLOAD_ROOT/dashboard\n    PAYLOAD_LICENSE=$PAYLOAD_ROOT/LICENSE\n    PAYLOAD_THIRD_PARTY=$PAYLOAD_ROOT/THIRD_PARTY_NOTICES.txt\n    PAYLOAD_INVENTORY=$PAYLOAD_ROOT/release-license-inventory.json\n    PAYLOAD_GPL=$PAYLOAD_ROOT/licenses/GPL-2.0-only.txt\n}\n''',
+              'release compliance payload')
+
+          replace_once('install.sh',
+              '''# Puts the payload binaries, and the dashboard, where the units expect them.\ninstall_binaries() {\n''',
+              '''# Keep the same release attribution available after the archive is unpacked.\n# Firecracker's separately installed upstream notices live below firecracker/.\ninstall_compliance() {\n    [ -f "$PAYLOAD_LICENSE" ] || die "missing FireCrab LICENSE in install payload"\n    [ -f "$PAYLOAD_GPL" ] || die "missing GPL-2.0 text in install payload"\n    $SUDO install -d -o root -g root -m 0755 "$SHAREDIR/licenses"\n    $SUDO install -o root -g root -m 0644 "$PAYLOAD_LICENSE" "$SHAREDIR/LICENSE"\n    $SUDO install -o root -g root -m 0644 \\\n        "$PAYLOAD_GPL" "$SHAREDIR/licenses/GPL-2.0-only.txt"\n    if [ -n "$PAYLOAD_THIRD_PARTY" ] && [ -n "$PAYLOAD_INVENTORY" ]; then\n        $SUDO install -o root -g root -m 0644 \\\n            "$PAYLOAD_THIRD_PARTY" "$SHAREDIR/THIRD_PARTY_NOTICES.txt"\n        $SUDO install -o root -g root -m 0644 \\\n            "$PAYLOAD_INVENTORY" "$SHAREDIR/release-license-inventory.json"\n    fi\n    log "license and attribution material installed to $SHAREDIR"\n}\n\n# Puts the payload binaries, and the dashboard, where the units expect them.\ninstall_binaries() {\n''',
+              'install compliance function')
+
+          replace_once('install.sh',
+              '    resolve_payload\n    ensure_account\n    ensure_directories\n    install_binaries\n',
+              '    resolve_payload\n    ensure_account\n    ensure_directories\n    install_compliance\n    install_binaries\n',
+              'install compliance call')
+
+          replace_once('install.sh',
+              '''    $SUDO rm -f "$PREFIX/bin/firecrab"\n    $SUDO rm -rf "$SHAREDIR/dashboard"\n    $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true\n''',
+              '''    $SUDO rm -f "$PREFIX/bin/firecrab"\n    $SUDO rm -rf "$SHAREDIR/dashboard"\n    $SUDO rm -f "$SHAREDIR/LICENSE" "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \\\n        "$SHAREDIR/release-license-inventory.json"\n    $SUDO rm -rf "$SHAREDIR/licenses"\n    # Firecracker is installed independently and is intentionally not removed;\n    # keep its upstream notices alongside that remaining binary.\n    $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true\n''',
+              'uninstall compliance cleanup')
+
+          prep = Path('scripts/ci-prepare-install-payload.sh')
+          prep.write_text(prep.read_text(encoding='utf-8') + '''\n# Prepare the same target-complete attribution payload installed from releases.\ncargo fetch --locked\ntmp=$(mktemp -d)\ntrap 'rm -rf "$tmp"' EXIT\nmetadata_args=()\nfor target in \\\n    x86_64-unknown-linux-musl \\\n    x86_64-unknown-linux-gnu \\\n    aarch64-unknown-linux-musl \\\n    aarch64-unknown-linux-gnu; do\n    path="$tmp/cargo-metadata-${target}.json"\n    cargo metadata --format-version=1 --locked --filter-platform "$target" > "$path"\n    metadata_args+=(--cargo-metadata "$path")\ndone\npython3 scripts/release_compliance.py \\\n    "${metadata_args[@]}" \\\n    --frontend-lock firecrab-frontend/package-lock.json \\\n    --frontend-root firecrab-frontend \\\n    --notices-out dist/compliance/THIRD_PARTY_NOTICES.txt \\\n    --inventory-out dist/compliance/release-license-inventory.json \\\n    --deny-incompatible\n''', encoding='utf-8')
+          PY
+
+      - name: Validate
+        run: |
+          git diff --check
+          bash -n install.sh scripts/ci-prepare-install-payload.sh
+          shellcheck install.sh scripts/ci-prepare-install-payload.sh
+          python3 -m unittest scripts/test_release_compliance.py
+          bash scripts/test-install-firecracker.sh
+          git diff --stat
+
+      - name: Save non-workflow patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add install.sh scripts/ci-prepare-install-payload.sh
+          git commit -m 'fix(install): retain release compliance material'
+          git push origin HEAD:validation/176-stable-share
