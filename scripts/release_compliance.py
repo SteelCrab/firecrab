@@ -24,13 +24,22 @@ def _packages_by_id(metadata: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {package["id"]: package for package in metadata.get("packages", [])}
 
 
+def _is_proc_macro(package: dict[str, Any]) -> bool:
+    return any(
+        "proc-macro" in target.get("kind", [])
+        for target in package.get("targets", [])
+    )
+
+
 def cargo_sets(metadata: dict[str, Any]) -> tuple[set[str], set[str]]:
     """Return external (runtime, build/test-only) Cargo package IDs.
 
-    Runtime traversal follows only normal dependency edges from the three shipped
-    workspace binaries. Proc-macro packages are classified as build-only even when
-    reached through a normal edge because their code executes during compilation,
-    not in the distributed binaries.
+    The metadata should be produced with ``cargo metadata --filter-platform`` for
+    a shipped target. Runtime traversal follows normal dependency edges from the
+    three distributed binaries. A second traversal follows every dependency kind;
+    anything reachable there but not at runtime is classified build/test-only.
+    Proc-macro crates are compile-time even when Cargo represents their edge as a
+    normal dependency.
     """
     packages = _packages_by_id(metadata)
     workspace = set(metadata.get("workspace_members", []))
@@ -47,37 +56,46 @@ def cargo_sets(metadata: dict[str, Any]) -> tuple[set[str], set[str]]:
             "Cargo metadata does not contain the shipped FireCrab workspace roots"
         )
 
+    def closure(*, runtime_only: bool) -> set[str]:
+        visited: set[str] = set()
+        queue: deque[str] = deque(roots)
+        while queue:
+            package_id = queue.popleft()
+            if package_id in visited:
+                continue
+            visited.add(package_id)
+            node = nodes.get(package_id)
+            if not node:
+                continue
+            for dep in node.get("deps", []):
+                dep_id = dep["pkg"]
+                kinds = dep.get("dep_kinds") or [{"kind": None}]
+                if runtime_only:
+                    if not any(
+                        kind.get("kind") in (None, "normal") for kind in kinds
+                    ):
+                        continue
+                    if _is_proc_macro(packages.get(dep_id, {})):
+                        continue
+                queue.append(dep_id)
+        return visited
+
+    runtime = closure(runtime_only=True) - workspace
+    reachable = closure(runtime_only=False) - workspace
+    return runtime, reachable - runtime
+
+
+def merge_cargo_sets(
+    metadatas: list[dict[str, Any]],
+) -> tuple[set[str], set[str]]:
+    """Union dependency classifications across all shipped host targets."""
     runtime: set[str] = set()
-    queue: deque[str] = deque(roots)
-    visited: set[str] = set()
-
-    while queue:
-        package_id = queue.popleft()
-        if package_id in visited:
-            continue
-        visited.add(package_id)
-        node = nodes.get(package_id)
-        if not node:
-            continue
-        for dep in node.get("deps", []):
-            kinds = dep.get("dep_kinds") or [{"kind": None}]
-            if not any(kind.get("kind") in (None, "normal") for kind in kinds):
-                continue
-            dep_id = dep["pkg"]
-            dep_package = packages.get(dep_id, {})
-            target_kinds = {
-                kind
-                for target in dep_package.get("targets", [])
-                for kind in target.get("kind", [])
-            }
-            if "proc-macro" in target_kinds:
-                continue
-            if dep_id not in workspace:
-                runtime.add(dep_id)
-            queue.append(dep_id)
-
-    external = set(packages) - workspace
-    return runtime, external - runtime
+    reachable: set[str] = set()
+    for metadata in metadatas:
+        target_runtime, target_build = cargo_sets(metadata)
+        runtime |= target_runtime
+        reachable |= target_runtime | target_build
+    return runtime, reachable - runtime
 
 
 def npm_sets(
@@ -109,11 +127,12 @@ def _npm_name(path: str) -> str:
 
 
 def license_allowed(expression: str | None) -> bool:
-    """Reject missing/UNLICENSED and GPL/AGPL-only expressions.
+    """Apply the repo's mechanical release-license deny policy.
 
-    Dual-license expressions pass when at least one OR branch avoids the blocked
-    family. LGPL is not treated as GPL here; it carries separate obligations but
-    is not an automatic incompatibility for this gate.
+    Missing/UNLICENSED metadata and GPL/AGPL-only expressions are rejected.
+    Dual-license expressions pass when at least one OR branch avoids that blocked
+    family. LGPL is not treated as GPL here; its notices and obligations still
+    remain in the generated attribution bundle.
     """
     if not expression:
         return False
@@ -182,6 +201,13 @@ def cargo_records(
             "notices": notices,
         }
 
+    missing = (runtime_ids | build_ids) - set(packages)
+    if missing:
+        raise ValueError(
+            "Cargo metadata package table is missing resolved IDs: "
+            + ", ".join(sorted(missing))
+        )
+
     return (
         [record(package_id) for package_id in sorted(runtime_ids)],
         [record(package_id) for package_id in sorted(build_ids)],
@@ -236,9 +262,9 @@ def render_notices(
         "FireCrab third-party notices",
         "============================",
         "",
-        "This file is generated from Cargo metadata and the frontend npm lockfile",
-        "during the release build. Runtime entries are dependencies reachable by the",
-        "distributed host binaries or marked non-dev in the frontend lockfile.",
+        "This file is generated from target-filtered Cargo metadata and the frontend",
+        "npm lockfile during the release build. Runtime entries are reachable by the",
+        "distributed Linux host binaries or marked non-dev in the frontend lockfile.",
         "Build/test-only dependencies are inventoried separately at the end.",
         "",
         f"Runtime dependencies: {len(runtime)}",
@@ -292,7 +318,12 @@ def inventory(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cargo-metadata", required=True)
+    parser.add_argument(
+        "--cargo-metadata",
+        required=True,
+        action="append",
+        help="target-filtered Cargo metadata JSON; repeat for each shipped target",
+    )
     parser.add_argument("--frontend-lock", required=True)
     parser.add_argument("--frontend-root", required=True)
     parser.add_argument("--notices-out", required=True)
@@ -300,10 +331,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deny-incompatible", action="store_true")
     args = parser.parse_args(argv)
 
-    cargo = _read_json(args.cargo_metadata)
+    cargo_metadatas = [_read_json(path) for path in args.cargo_metadata]
     lock = _read_json(args.frontend_lock)
-    runtime_ids, build_ids = cargo_sets(cargo)
-    cargo_runtime, cargo_build = cargo_records(cargo, runtime_ids, build_ids)
+    runtime_ids, build_ids = merge_cargo_sets(cargo_metadatas)
+    cargo_runtime, cargo_build = cargo_records(
+        cargo_metadatas[0], runtime_ids, build_ids
+    )
     npm_runtime_raw, npm_build_raw = npm_sets(lock)
     npm_runtime = npm_records(npm_runtime_raw, Path(args.frontend_root))
     npm_build = npm_records(npm_build_raw, Path(args.frontend_root))
