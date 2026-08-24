@@ -2,9 +2,16 @@
 import hashlib
 import importlib.util
 import json
+import sys
 import tempfile
+import types
 from pathlib import Path
 
+# Load the exact pinned Pipe API without importing TalkPipe's optional top-level
+# application stack. The workflow mounts Sandia's pinned checkout at /tmp/talkpipe.
+talkpipe_pkg = types.ModuleType("talkpipe")
+talkpipe_pkg.__path__ = ["/tmp/talkpipe/src/talkpipe"]
+sys.modules["talkpipe"] = talkpipe_pkg
 from talkpipe.pipe.core import segment, source
 
 ROOT = Path("/work")
