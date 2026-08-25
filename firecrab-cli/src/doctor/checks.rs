@@ -91,10 +91,10 @@ fn find_databases(env: &DoctorEnv) -> Vec<PathBuf> {
         Path::new(&env.datadir).join("data/firecrab.db"),
         Path::new(&env.datadir).join("firecrab.db"),
     ];
-    if let Some(image_root) = &env.image_root {
-        if let Some(parent) = Path::new(image_root).parent() {
-            candidates.push(abs_dir(parent).join("data/firecrab.db"));
-        }
+    if let Some(image_root) = &env.image_root
+        && let Some(parent) = Path::new(image_root).parent()
+    {
+        candidates.push(abs_dir(parent).join("data/firecrab.db"));
     }
 
     let mut seen = std::collections::HashSet::new();
@@ -308,21 +308,18 @@ pub fn check_dnsmasq(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckRe
     let mut alive = false;
     if let Ok(pid_raw) = fs::read_to_string(&env.dnsmasq_pid) {
         let pid = pid_raw.trim();
-        if !pid.is_empty() && Path::new(&format!("/proc/{pid}")).is_dir() {
-            if let Ok(cmdline) = fs::read(format!("/proc/{pid}/cmdline")) {
-                if String::from_utf8_lossy(&cmdline)
-                    .replace('\0', " ")
-                    .contains("dnsmasq")
-                {
-                    alive = true;
-                }
-            }
+        if !pid.is_empty()
+            && Path::new(&format!("/proc/{pid}")).is_dir()
+            && let Ok(cmdline) = fs::read(format!("/proc/{pid}/cmdline"))
+            && String::from_utf8_lossy(&cmdline)
+                .replace('\0', " ")
+                .contains("dnsmasq")
+        {
+            alive = true;
         }
     }
-    if !alive {
-        if let Ok(out) = runner.run("pgrep", &["-af", "dnsmasq.*firecrab"]) {
-            alive = out.status.success();
-        }
+    if !alive && let Ok(out) = runner.run("pgrep", &["-af", "dnsmasq.*firecrab"]) {
+        alive = out.status.success();
     }
 
     let conf_ifaces: Vec<String> = fs::read_to_string(&env.dnsmasq_conf)
@@ -532,15 +529,15 @@ pub fn check_ufw(runner: &dyn CommandRunner) -> Vec<CheckResult> {
                 Some(&format!("sudo ufw allow in on {br} to any port 53")),
             ));
         }
-        if let Some(up) = &uplink {
-            if !ufw_has_route_allow(br, up, &status) {
-                any_fail = true;
-                results.push(CheckResult::fail(
-                    format!("ufw: no route allow {br} → {up}"),
-                    Some("guest outbound new connections time out (DEFAULT_FORWARD_POLICY=DROP)"),
-                    Some(&format!("sudo ufw route allow in on {br} out on {up}")),
-                ));
-            }
+        if let Some(up) = &uplink
+            && !ufw_has_route_allow(br, up, &status)
+        {
+            any_fail = true;
+            results.push(CheckResult::fail(
+                format!("ufw: no route allow {br} → {up}"),
+                Some("guest outbound new connections time out (DEFAULT_FORWARD_POLICY=DROP)"),
+                Some(&format!("sudo ufw route allow in on {br} out on {up}")),
+            ));
         }
     }
     if uplink.is_none() {
@@ -921,14 +918,14 @@ pub fn check_image_install_tools(env: &DoctorEnv, runner: &dyn CommandRunner) ->
             Some("install packages: tar zstd  (then retry dashboard image install)"),
         )];
     }
-    if let Some(base_url) = &env.image_base_url {
-        if matches!(base_url.as_str(), "none" | "NONE" | "-") {
-            return vec![CheckResult::skip(
-                format!("image-install: remote disabled (FIRECRAB_IMAGE_BASE_URL={base_url})"),
-                Some("dashboard will not download packages; seed images/ on the host"),
-                Some("see public-docs/installation.md (M2Image)"),
-            )];
-        }
+    if let Some(base_url) = &env.image_base_url
+        && matches!(base_url.as_str(), "none" | "NONE" | "-")
+    {
+        return vec![CheckResult::skip(
+            format!("image-install: remote disabled (FIRECRAB_IMAGE_BASE_URL={base_url})"),
+            Some("dashboard will not download packages; seed images/ on the host"),
+            Some("see public-docs/installation.md (M2Image)"),
+        )];
     }
     vec![CheckResult::pass("image_install_tools")]
 }

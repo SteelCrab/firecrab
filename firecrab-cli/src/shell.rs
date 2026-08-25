@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io;
 use std::process::Output;
 
@@ -24,7 +23,7 @@ impl CommandRunner for RealCommandRunner {
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct FakeCommandRunner {
-    responses: HashMap<String, (i32, String, String)>,
+    responses: std::collections::HashMap<String, (i32, String, String)>,
 }
 
 #[cfg(test)]
