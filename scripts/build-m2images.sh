@@ -117,10 +117,30 @@ for alias in "${selected_aliases[@]}"; do
     "${builder_environment[@]}" "${repo_dir}/${builder}"
   [ -s "$sbom_output" ] || fail "builder did not produce M2Image SBOM: $sbom_output"
   python3 - "$sbom_output" "$alias" <<'PY_VALIDATE'
-import json, sys
-doc = json.load(open(sys.argv[1], encoding='utf-8'))
-assert doc.get('spdxVersion') == 'SPDX-2.3'
-assert doc.get('packages', [{}])[0].get('name') == sys.argv[2]
+import json
+import sys
+
+path, expected_alias = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as stream:
+        doc = json.load(stream)
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"invalid M2Image SBOM {path}: {exc}") from exc
+
+if doc.get("spdxVersion") != "SPDX-2.3":
+    raise SystemExit(
+        f"invalid M2Image SBOM {path}: expected SPDX-2.3, "
+        f"got {doc.get('spdxVersion')!r}"
+    )
+packages = doc.get("packages")
+if not isinstance(packages, list) or not packages:
+    raise SystemExit(f"invalid M2Image SBOM {path}: packages must be a non-empty list")
+actual_alias = packages[0].get("name") if isinstance(packages[0], dict) else None
+if actual_alias != expected_alias:
+    raise SystemExit(
+        f"invalid M2Image SBOM {path}: expected image alias {expected_alias!r}, "
+        f"got {actual_alias!r}"
+    )
 PY_VALIDATE
   M2IMAGE_MANIFEST="$manifest" IMAGE_ROOT="${repo_dir}/images" \
     M2IMAGE_COMPLIANCE_DIR="$compliance_dir" \
