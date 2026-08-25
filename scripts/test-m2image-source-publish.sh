@@ -7,6 +7,7 @@ trap 'rm -rf -- "$tmp"' EXIT
 dist="$tmp/dist"
 mapfile -t aliases < <(python3 "$root/scripts/m2image-manifest.py" aliases)
 mapfile -t architectures < <(python3 "$root/scripts/m2image-manifest.py" architectures)
+expected_images=$((${#aliases[@]} * ${#architectures[@]}))
 
 for arch in "${architectures[@]}"; do
   mkdir -p "$dist/$arch"
@@ -39,10 +40,11 @@ done
 # The strict catalog binds both hashes and refuses a missing source sibling.
 python3 "$root/scripts/m2image-manifest.py" catalog \
   --dist-dir "$dist" --output "$tmp/catalog.json"
-python3 - "$tmp/catalog.json" <<'PY'
+python3 - "$tmp/catalog.json" "$expected_images" <<'PY'
 import json, sys
 catalog = json.load(open(sys.argv[1], encoding='utf-8'))
-assert len(catalog['images']) == 6
+expected = int(sys.argv[2])
+assert len(catalog['images']) == expected
 for image in catalog['images']:
     assert image['source'].endswith('.sources.tar.zst')
     assert len(image['sourceSha256']) == 64
@@ -50,9 +52,12 @@ for image in catalog['images']:
     assert len(image['sha256']) == 64
 PY
 
-catalog_line=$(grep -n 'publishing catalog last' "$tmp/publish.out" | cut -d: -f1)
-last_source_line=$(grep -n 'uploading exact source' "$tmp/publish.out" | tail -n1 | cut -d: -f1)
-last_binary_line=$(grep -nE '^\[INFO\] uploading [^e]' "$tmp/publish.out" | tail -n1 | cut -d: -f1)
+catalog_line=$(grep -nF '[INFO] publishing catalog last' "$tmp/publish.out" | tail -n1 | cut -d: -f1 || true)
+last_source_line=$(grep -nF '[INFO] uploading exact source ' "$tmp/publish.out" | tail -n1 | cut -d: -f1 || true)
+last_binary_line=$(grep -nE '^\[INFO\] uploading [^ ]+/[^ ]+ -> r2://' "$tmp/publish.out" | tail -n1 | cut -d: -f1 || true)
+for value in "$catalog_line" "$last_source_line" "$last_binary_line"; do
+  test -n "$value" || { echo 'expected publication ordering log line is missing' >&2; exit 1; }
+done
 test "$catalog_line" -gt "$last_source_line"
 test "$catalog_line" -gt "$last_binary_line"
 
