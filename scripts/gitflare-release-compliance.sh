@@ -16,6 +16,29 @@ WORK="$ROOT/.gitflare/release-compliance-preflight"
 RECEIPTS="$ROOT/dist/gitflare-receipts"
 LOG="$RECEIPTS/run.log"
 
+fail() {
+    printf 'preflight: FAIL: %s\n' "$*" >&2
+    return 1
+}
+
+if [ -n "$EXPECTED_SHA" ]; then
+    case "$EXPECTED_SHA" in
+        *[!0-9a-fA-F]*|'') fail "GITFLARE_EXPECTED_SHA must be hexadecimal" ;;
+    esac
+    [ "${#EXPECTED_SHA}" -eq 40 ] || [ "${#EXPECTED_SHA}" -eq 64 ] \
+        || fail "GITFLARE_EXPECTED_SHA must be a 40- or 64-character object id"
+    [ "${ACTUAL_SHA,,}" = "${EXPECTED_SHA,,}" ] \
+        || fail "checkout SHA mismatch: expected $EXPECTED_SHA, got $ACTUAL_SHA"
+fi
+
+# Assert the source boundary before this script creates any untracked state.
+if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
+    git status --short
+    fail "source checkout is not clean"
+fi
+
+git fsck --no-reflogs --connectivity-only
+
 rm -rf -- "$WORK" "$RECEIPTS"
 mkdir -p "$WORK/cargo" "$WORK/npm-cache" "$WORK/target" "$RECEIPTS"
 
@@ -70,36 +93,13 @@ PY
 }
 trap finish EXIT
 
-fail() {
-    printf 'preflight: FAIL: %s\n' "$*" >&2
-    return 1
-}
-
 require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
 }
 
-for command in git python3 cargo npm shellcheck sha256sum tar zstd; do
+for command in git python3 cargo rustc node npm shellcheck sha256sum tar zstd; do
     require_command "$command"
 done
-
-if [ -n "$EXPECTED_SHA" ]; then
-    case "$EXPECTED_SHA" in
-        *[!0-9a-fA-F]*|'') fail "GITFLARE_EXPECTED_SHA must be hexadecimal" ;;
-    esac
-    [ "${#EXPECTED_SHA}" -eq 40 ] || [ "${#EXPECTED_SHA}" -eq 64 ] \
-        || fail "GITFLARE_EXPECTED_SHA must be a 40- or 64-character object id"
-    [ "${ACTUAL_SHA,,}" = "${EXPECTED_SHA,,}" ] \
-        || fail "checkout SHA mismatch: expected $EXPECTED_SHA, got $ACTUAL_SHA"
-fi
-
-# No generated output or prior work is allowed to exist before the proof starts.
-if [ -n "$(git status --porcelain=v1 --untracked-files=all)" ]; then
-    git status --short
-    fail "source checkout is not clean"
-fi
-
-git fsck --no-reflogs --connectivity-only
 
 export CARGO_HOME="$WORK/cargo"
 export CARGO_TARGET_DIR="$WORK/target"
