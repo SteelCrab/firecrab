@@ -52,13 +52,23 @@ M2IMAGE_COMPLIANCE_DIR="$image_root/compliance" IMAGE_ROOT="$image_root" \
 
 plan="$image_root/compliance/${alias}-${arch}/source-publication-plan.json"
 python3 - "$plan" <<'PY_PLAN'
-import json, sys
-plan = json.load(open(sys.argv[1], encoding='utf-8'))
-assert plan['coveragePolicy'] == 'all-installed-packages'
-assert plan['packageCount'] == 2
-assert plan['sourceBackedPackageCount'] == 2
-assert plan['nonSourcePackageCount'] == 0
-assert plan['sourceCount'] == 2
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as stream:
+    plan = json.load(stream)
+expected = {
+    'coveragePolicy': 'all-installed-packages',
+    'packageCount': 2,
+    'sourceBackedPackageCount': 2,
+    'nonSourcePackageCount': 0,
+    'sourceCount': 2,
+}
+for field, value in expected.items():
+    if plan.get(field) != value:
+        raise SystemExit(
+            f"source publication plan {field} mismatch: expected {value!r}, got {plan.get(field)!r}"
+        )
 PY_PLAN
 
 IMAGE_ROOT="$image_root" OUT_DIR="$out" ZSTD_LEVEL=1 ZSTD_THREADS=1 \
