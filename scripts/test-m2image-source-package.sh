@@ -54,11 +54,22 @@ python3 "$root/scripts/m2image_source_publication.py" plan \
   --source-map "$tmp/source-map.json" --output "$plan"
 cp "$plan" "$materialized/source-publication-plan.json"
 source_id=$(python3 - "$plan" <<'PY'
-import json, sys
-plan = json.load(open(sys.argv[1], encoding='utf-8'))
-assert plan['packageCount'] == 2
-assert plan['sourceCount'] == 1
-print(plan['sources'][0]['sourceId'])
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as stream:
+    plan = json.load(stream)
+if plan.get('packageCount') != 2:
+    raise SystemExit(f"expected packageCount=2, got {plan.get('packageCount')!r}")
+if plan.get('sourceCount') != 1:
+    raise SystemExit(f"expected sourceCount=1, got {plan.get('sourceCount')!r}")
+sources = plan.get('sources')
+if not isinstance(sources, list) or len(sources) != 1:
+    raise SystemExit('expected exactly one source unit')
+source_id = sources[0].get('sourceId') if isinstance(sources[0], dict) else None
+if not isinstance(source_id, str) or not source_id:
+    raise SystemExit('source unit is missing sourceId')
+print(source_id)
 PY
 )
 mkdir -p "$materialized/sources/$source_id"
