@@ -126,6 +126,23 @@ class ReleaseComplianceTests(unittest.TestCase):
         self.assertTrue(rc.license_allowed("Apache-2.0"))
         self.assertFalse(rc.license_allowed(None))
 
+    def test_license_policy_fails_closed_on_unreviewed_declarations(self):
+        for expression in (
+            "Proprietary",
+            "GPLv2",
+            "LicenseRef-file:COPYING",
+            "SEE LICENSE IN LICENSE",
+            "Unknown-License-1.0",
+        ):
+            with self.subTest(expression=expression):
+                self.assertFalse(rc.license_allowed(expression))
+        self.assertFalse(rc.license_allowed("MIT AND GPL-2.0-only"))
+        self.assertTrue(rc.license_allowed("MIT AND BSD-3-Clause"))
+        self.assertTrue(rc.license_allowed("MIT/Apache-2.0"))
+        self.assertTrue(
+            rc.license_allowed("Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT")
+        )
+
     def test_cargo_records_keep_packaged_license_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             metadata = self.cargo_fixture(Path(tmp))
