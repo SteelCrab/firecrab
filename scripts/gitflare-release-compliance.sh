@@ -52,10 +52,12 @@ done
 rm -rf -- "$WORK" "$RECEIPTS"
 mkdir -p "$WORK/cargo" "$WORK/npm-cache" "$WORK/target" "$RECEIPTS"
 
-# Preserve the runner's original stdout/stderr. The tee is closed before the
-# evidence files are hashed so run.log cannot change underneath SHA256SUMS.
+# Preserve the runner's original stdout/stderr. The tee is closed and awaited
+# before the evidence files are hashed so run.log cannot change underneath
+# SHA256SUMS.
 exec 3>&1 4>&2
 exec > >(tee "$LOG") 2>&1
+TEE_PID=$!
 
 finish() {
     rc=$?
@@ -91,8 +93,9 @@ PY
             "$RECEIPTS/release-license-inventory.json" 2>/dev/null || true
     fi
 
-    # Stop writing to run.log before hashing it.
+    # Stop writing to run.log and wait for tee to flush before hashing it.
     exec 1>&3 2>&4
+    wait "$TEE_PID" || true
     exec 3>&- 4>&-
 
     (
