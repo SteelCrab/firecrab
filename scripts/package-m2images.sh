@@ -117,10 +117,23 @@ package_one() {
       || fail "missing M2Image compliance artifact: ${compliance_source}/${required}"
   done
   python3 - "${compliance_source}/sbom.spdx.json" "$alias" <<'PY_SBOM'
-import json, sys
-doc = json.load(open(sys.argv[1], encoding='utf-8'))
-assert doc.get('spdxVersion') == 'SPDX-2.3', 'M2Image SBOM is not SPDX 2.3'
-assert doc.get('packages', [{}])[0].get('name') == sys.argv[2], 'M2Image SBOM alias mismatch'
+import json
+import sys
+
+path, expected_alias = sys.argv[1:3]
+with open(path, encoding='utf-8') as stream:
+    doc = json.load(stream)
+if doc.get('spdxVersion') != 'SPDX-2.3':
+    raise SystemExit('M2Image SBOM is not SPDX 2.3')
+packages = doc.get('packages')
+if not isinstance(packages, list) or not packages:
+    raise SystemExit('M2Image SBOM packages must be a non-empty list')
+first = packages[0]
+if not isinstance(first, dict) or first.get('name') != expected_alias:
+    actual = first.get('name') if isinstance(first, dict) else None
+    raise SystemExit(
+        f"M2Image SBOM alias mismatch: expected {expected_alias!r}, got {actual!r}"
+    )
 PY_SBOM
   mkdir -p "$staging/compliance"
   cp -a -- "$compliance_source/." "$staging/compliance/"
