@@ -21,6 +21,10 @@ fail() {
     return 1
 }
 
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
+}
+
 if [ -n "$EXPECTED_SHA" ]; then
     case "$EXPECTED_SHA" in
         *[!0-9a-fA-F]*|'') fail "GITFLARE_EXPECTED_SHA must be hexadecimal" ;;
@@ -39,10 +43,18 @@ fi
 
 git fsck --no-reflogs --connectivity-only
 
+# Fail before installing the receipt trap if the runner image itself is missing
+# a required tool. The runner log is the receipt for an invalid execution image.
+for command in git python3 cargo rustc node npm shellcheck sha256sum tar zstd; do
+    require_command "$command"
+done
+
 rm -rf -- "$WORK" "$RECEIPTS"
 mkdir -p "$WORK/cargo" "$WORK/npm-cache" "$WORK/target" "$RECEIPTS"
 
-# Capture the complete command transcript without hiding it from the CI runner.
+# Preserve the runner's original stdout/stderr. The tee is closed before the
+# evidence files are hashed so run.log cannot change underneath SHA256SUMS.
+exec 3>&1 4>&2
 exec > >(tee "$LOG") 2>&1
 
 finish() {
@@ -79,6 +91,10 @@ PY
             "$RECEIPTS/release-license-inventory.json" 2>/dev/null || true
     fi
 
+    # Stop writing to run.log before hashing it.
+    exec 1>&3 2>&4
+    exec 3>&- 4>&-
+
     (
         cd "$RECEIPTS"
         find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\n' \
@@ -87,19 +103,11 @@ PY
             > SHA256SUMS
     )
     tar -C "$ROOT/dist" -czf "$ROOT/dist/gitflare-receipts.tar.gz" gitflare-receipts
-    printf 'gitflare receipt sha256: '
-    sha256sum "$ROOT/dist/gitflare-receipts.tar.gz" | awk '{print $1}'
+    receipt_sha=$(sha256sum "$ROOT/dist/gitflare-receipts.tar.gz" | awk '{print $1}')
+    printf 'gitflare receipt sha256: %s\n' "$receipt_sha"
     exit "$rc"
 }
 trap finish EXIT
-
-require_command() {
-    command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"
-}
-
-for command in git python3 cargo rustc node npm shellcheck sha256sum tar zstd; do
-    require_command "$command"
-done
 
 export CARGO_HOME="$WORK/cargo"
 export CARGO_TARGET_DIR="$WORK/target"
@@ -204,4 +212,7 @@ print(f"runtime dependencies: {len(inventory['runtime'])}")
 print(f"build/test-only dependencies: {len(inventory['buildTestOnly'])}")
 PY
 
+# The successful Workflow snapshot should retain evidence, not a dependency
+# cache. All reusable dependency state is intentionally discarded here.
+rm -rf -- "$WORK" firecrab-frontend/node_modules
 printf 'preflight: PASS for %s\n' "$ACTUAL_SHA"
