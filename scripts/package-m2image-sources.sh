@@ -78,14 +78,28 @@ python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" \
 plan="${compliance_root}/${alias}-${architecture}/source-publication-plan.json"
 [ -s "$plan" ] || fail "source publication plan not found: $plan"
 python3 - "$plan" "$alias" "$architecture" <<'PY_PLAN'
-import json, sys
-plan = json.load(open(sys.argv[1], encoding='utf-8'))
+import json
+import sys
+
+path, expected_alias, expected_arch = sys.argv[1:4]
+with open(path, encoding='utf-8') as stream:
+    plan = json.load(stream)
 image = plan.get('image') or {}
-assert plan.get('schemaVersion') == 1, 'source plan schemaVersion must be 1'
-assert plan.get('coveragePolicy') == 'all-installed-packages', 'unsupported source coverage policy'
-assert image.get('alias') == sys.argv[2], 'source plan alias mismatch'
-assert image.get('architecture') == sys.argv[3], 'source plan architecture mismatch'
-assert plan.get('packageCount', 0) > 0, 'source plan has no installed packages'
+if plan.get('schemaVersion') != 1:
+    raise SystemExit('source plan schemaVersion must be 1')
+if plan.get('coveragePolicy') != 'all-installed-packages':
+    raise SystemExit('unsupported source coverage policy')
+if image.get('alias') != expected_alias:
+    raise SystemExit(
+        f"source plan alias mismatch: expected {expected_alias!r}, got {image.get('alias')!r}"
+    )
+if image.get('architecture') != expected_arch:
+    raise SystemExit(
+        f"source plan architecture mismatch: expected {expected_arch!r}, got {image.get('architecture')!r}"
+    )
+package_count = plan.get('packageCount')
+if not isinstance(package_count, int) or package_count <= 0:
+    raise SystemExit('source plan has no installed packages')
 PY_PLAN
 
 out_dir="${dist_dir}/${architecture}"
@@ -107,10 +121,15 @@ if [ -n "$materialized_dir" ]; then
   # against the exact frozen plan we are packaging now. This rejects stale
   # indexes and prevents a release from pairing source bytes with another build.
   python3 - "$plan" "$bundle/source-publication-plan.json" <<'PY_MATCH'
-import json, sys
-expected = json.load(open(sys.argv[1], encoding='utf-8'))
-actual = json.load(open(sys.argv[2], encoding='utf-8'))
-assert actual == expected, 'materialized source plan does not match frozen M2Image plan'
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as stream:
+    expected = json.load(stream)
+with open(sys.argv[2], encoding='utf-8') as stream:
+    actual = json.load(stream)
+if actual != expected:
+    raise SystemExit('materialized source plan does not match frozen M2Image plan')
 PY_MATCH
   python3 "${script_dir}/m2image_source_publication.py" index \
     --plan "$plan" --source-root "$bundle/sources" \
