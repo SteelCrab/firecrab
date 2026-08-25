@@ -91,6 +91,14 @@ def fetch_rocky(unit: dict, image: dict, destination: Path) -> None:
     require_tool("curl")
     source = unit["source"]
     artifact = str(source["sourceArtifact"])
+    if (
+        not artifact
+        or artifact in {".", ".."}
+        or "/" in artifact
+        or "\\" in artifact
+        or Path(artifact).name != artifact
+    ):
+        raise ValueError(f"Rocky source artifact must be a bare filename: {artifact!r}")
     version = str(image.get("version") or "")
     if not version:
         raise ValueError("Rocky source plan image is missing version")
@@ -264,12 +272,20 @@ def _literal_sha512sums(apkbuild: Path) -> dict[str, str]:
     return checksums
 
 
-def _alpine_distfiles_branch(image: dict) -> str:
+def _alpine_release_series(image: dict) -> str:
     version = str(image.get("version") or "")
     match = re.fullmatch(r"(\d+)\.(\d+)(?:\.\d+)?", version)
     if match is None:
-        raise ValueError(f"cannot derive Alpine distfiles branch from image version {version!r}")
-    return f"v{match.group(1)}.{match.group(2)}"
+        raise ValueError(f"cannot derive Alpine release series from image version {version!r}")
+    return f"{match.group(1)}.{match.group(2)}"
+
+
+def _alpine_distfiles_branch(image: dict) -> str:
+    return f"v{_alpine_release_series(image)}"
+
+
+def _alpine_abuild_image(image: dict) -> str:
+    return f"alpine:{_alpine_release_series(image)}"
 
 
 def _recover_alpine_distfiles(recipe_root: Path, distfiles: Path, image: dict) -> list[str]:
@@ -301,7 +317,7 @@ def _recover_alpine_distfiles(recipe_root: Path, distfiles: Path, image: dict) -
     return recovered
 
 
-def _alpine_abuild_fetch(work_root: Path, distfiles: Path) -> int:
+def _alpine_abuild_fetch(work_root: Path, distfiles: Path, image: dict) -> int:
     command = [
         "docker",
         "run",
@@ -310,7 +326,7 @@ def _alpine_abuild_fetch(work_root: Path, distfiles: Path) -> int:
         f"{work_root.resolve()}:/src",
         "-v",
         f"{distfiles.resolve()}:/dist",
-        "alpine:3.24",
+        _alpine_abuild_image(image),
         "sh",
         "-lc",
         (
@@ -360,13 +376,13 @@ def fetch_alpine(unit: dict, image: dict, destination: Path, cache_dir: Path) ->
     with tempfile.TemporaryDirectory(prefix="firecrab-abuild-fetch-") as tmpdir:
         work_root = Path(tmpdir) / "recipe"
         shutil.copytree(recipe_root, work_root)
-        first_rc = _alpine_abuild_fetch(work_root, distfiles)
+        first_rc = _alpine_abuild_fetch(work_root, distfiles, image)
         recovered: list[str] = []
         if first_rc:
             recovered = _recover_alpine_distfiles(recipe_root, distfiles, image)
             if not recovered:
                 raise subprocess.CalledProcessError(first_rc, "abuild fetch")
-            retry_rc = _alpine_abuild_fetch(work_root, distfiles)
+            retry_rc = _alpine_abuild_fetch(work_root, distfiles, image)
             if retry_rc:
                 raise subprocess.CalledProcessError(retry_rc, "abuild fetch after distfiles recovery")
 
