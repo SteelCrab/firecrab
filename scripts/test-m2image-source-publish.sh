@@ -41,15 +41,33 @@ done
 python3 "$root/scripts/m2image-manifest.py" catalog \
   --dist-dir "$dist" --output "$tmp/catalog.json"
 python3 - "$tmp/catalog.json" "$expected_images" <<'PY'
-import json, sys
-catalog = json.load(open(sys.argv[1], encoding='utf-8'))
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as stream:
+    catalog = json.load(stream)
 expected = int(sys.argv[2])
-assert len(catalog['images']) == expected
-for image in catalog['images']:
-    assert image['source'].endswith('.sources.tar.zst')
-    assert len(image['sourceSha256']) == 64
-    assert image['sourceSizeBytes'] > 0
-    assert len(image['sha256']) == 64
+images = catalog.get('images')
+if not isinstance(images, list) or len(images) != expected:
+    raise SystemExit(
+        f"catalog image count mismatch: expected {expected}, got "
+        f"{len(images) if isinstance(images, list) else type(images).__name__}"
+    )
+for image in images:
+    if not isinstance(image, dict):
+        raise SystemExit('catalog image entry is not an object')
+    source = image.get('source')
+    if not isinstance(source, str) or not source.endswith('.sources.tar.zst'):
+        raise SystemExit(f"catalog source sibling is invalid: {source!r}")
+    source_sha = image.get('sourceSha256')
+    if not isinstance(source_sha, str) or len(source_sha) != 64:
+        raise SystemExit('catalog sourceSha256 is not a 64-character digest')
+    source_size = image.get('sourceSizeBytes')
+    if not isinstance(source_size, int) or source_size <= 0:
+        raise SystemExit('catalog sourceSizeBytes must be positive')
+    binary_sha = image.get('sha256')
+    if not isinstance(binary_sha, str) or len(binary_sha) != 64:
+        raise SystemExit('catalog binary sha256 is not a 64-character digest')
 PY
 
 catalog_line=$(grep -nF '[INFO] publishing catalog last' "$tmp/publish.out" | tail -n1 | cut -d: -f1 || true)
