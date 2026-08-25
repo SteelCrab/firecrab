@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
+import hashlib
 import importlib.util
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location(
@@ -196,6 +198,33 @@ class SourcePublicationTests(unittest.TestCase):
             for item in index["sources"][0]["files"]:
                 self.assertEqual(len(item["sha256"]), 64)
                 self.assertTrue(item["path"].startswith("sources/"))
+
+    def test_index_streams_large_source_file_hashing(self):
+        src = {
+            "type": "ubuntu-source-package",
+            "sourcePackage": "linux",
+            "sourceVersion": "7.0.0",
+        }
+        plan = sourcepub.publication_plan(
+            source_map("ubuntu", [package("linux-image", "7.0.0", src)])
+        )
+        payload = b"a" * (sourcepub.HASH_CHUNK_SIZE + 17)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bundle = Path(tmpdir) / "bundle"
+            source_root = bundle / "sources"
+            unit_dir = source_root / plan["sources"][0]["sourceId"]
+            unit_dir.mkdir(parents=True)
+            source_file = unit_dir / "linux.tar.xz"
+            source_file.write_bytes(payload)
+            with mock.patch.object(
+                Path,
+                "read_bytes",
+                side_effect=AssertionError("source indexing must stream file reads"),
+            ):
+                index = sourcepub.source_index(plan, source_root)
+            item = index["sources"][0]["files"][0]
+            self.assertEqual(item["bytes"], len(payload))
+            self.assertEqual(item["sha256"], hashlib.sha256(payload).hexdigest())
 
     def test_index_counts_explicit_non_source_coverage(self):
         src = {
