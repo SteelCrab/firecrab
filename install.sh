@@ -598,6 +598,9 @@ install_compliance() {
             "$PAYLOAD_THIRD_PARTY" "$SHAREDIR/THIRD_PARTY_NOTICES.txt"
         $SUDO install -o root -g root -m 0644 \
             "$PAYLOAD_INVENTORY" "$SHAREDIR/release-license-inventory.json"
+    else
+        $SUDO rm -f "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \
+            "$SHAREDIR/release-license-inventory.json"
     fi
     log "license and attribution material installed to $SHAREDIR"
 }
