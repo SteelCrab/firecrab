@@ -133,6 +133,8 @@ jobs:
     name: Release license compliance
     needs: release-test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
