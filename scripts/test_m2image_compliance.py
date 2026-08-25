@@ -56,6 +56,28 @@ class M2ImageComplianceTests(unittest.TestCase):
         )
         self.assertTrue(mapped["source"]["metadataUrl"].endswith("0123456789abcdef0123456789abcdef01234567"))
 
+    def test_source_map_preserves_binary_package_architecture_from_purl(self):
+        doc = spdx(
+            [
+                {
+                    "name": "filesystem",
+                    "versionInfo": "3.16-5.el9",
+                    "externalRefs": [
+                        {
+                            "referenceCategory": "PACKAGE_MANAGER",
+                            "referenceType": "purl",
+                            "referenceLocator": "pkg:rpm/rocky/filesystem@3.16-5.el9?arch=noarch",
+                        }
+                    ],
+                    "comment": "source-package=filesystem-3.16-5.el9.src.rpm",
+                }
+            ],
+            distribution="rocky",
+        )
+        result = compliance.source_map(doc)
+        self.assertEqual(result["image"]["architecture"], "x86_64")
+        self.assertEqual(result["packages"][0]["architecture"], "noarch")
+
     def test_ubuntu_and_rocky_resolvers_preserve_source_evidence(self):
         ubuntu = {
             "spdxVersion": "SPDX-2.3",
