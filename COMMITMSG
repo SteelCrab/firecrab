@@ -1,7 +1,0 @@
-fix: chore: bump the pinned Rust toolchain to 1.97.1
-
-- rust-toolchain.toml: bump pinned Rust toolchain
-
-Fixes #131
-
-Signed-off-by: Vedant Madane <6527493+VedantMadane@users.noreply.github.com>
