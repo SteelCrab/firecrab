@@ -12,7 +12,37 @@ from typing import Any
 
 HOST_ROOTS = {"firecrab-api", "firecrab-net-helper", "firecrab-cli"}
 NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "AUTHORS")
-BLOCKED_RE = re.compile(r"(?:^|[ (])(?:A?GPL)-", re.IGNORECASE)
+
+# Keep the mechanical release gate deliberately small and fail closed. These are
+# the SPDX identifiers present in the current shipped runtime dependency corpus,
+# plus the LGPL family already permitted by the repository policy. Adding a new
+# runtime license should require an explicit policy review rather than silently
+# passing because its spelling happens not to contain "GPL".
+ALLOWED_LICENSE_IDS = {
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "LGPL-2.0-only",
+    "LGPL-2.0-or-later",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+    "MIT",
+    "Unlicense",
+    "Unicode-3.0",
+    "Zlib",
+}
+ALLOWED_LICENSE_EXCEPTIONS = {"LLVM-exception"}
+LEGACY_LICENSE_EXPRESSIONS = {"MIT/Apache-2.0": "MIT OR Apache-2.0"}
+_LICENSE_TOKEN_RE = re.compile(
+    r"\s*(\(|\)|AND\b|OR\b|WITH\b|[A-Za-z0-9][A-Za-z0-9.+-]*)",
+    re.IGNORECASE,
+)
 
 
 def _read_json(path: str | Path) -> dict[str, Any]:
@@ -126,24 +156,93 @@ def _npm_name(path: str) -> str:
     return path.rsplit(marker, 1)[-1] if marker in path else path
 
 
-def license_allowed(expression: str | None) -> bool:
-    """Apply the repo's mechanical release-license deny policy.
+def _license_tokens(expression: str) -> list[str] | None:
+    tokens: list[str] = []
+    position = 0
+    while position < len(expression):
+        match = _LICENSE_TOKEN_RE.match(expression, position)
+        if match is None:
+            return None
+        token = match.group(1)
+        tokens.append(token.upper() if token.upper() in {"AND", "OR", "WITH"} else token)
+        position = match.end()
+    return tokens
 
-    Missing/UNLICENSED metadata and GPL/AGPL-only expressions are rejected.
-    Dual-license expressions pass when at least one OR branch avoids that blocked
-    family. LGPL is not treated as GPL here; its notices and obligations still
-    remain in the generated attribution bundle.
+
+def _evaluate_license_expression(tokens: list[str]) -> bool:
+    position = 0
+
+    def parse_expression() -> bool:
+        nonlocal position
+        value = parse_term()
+        while position < len(tokens) and tokens[position] == "OR":
+            position += 1
+            value = parse_term() or value
+        return value
+
+    def parse_term() -> bool:
+        nonlocal position
+        value = parse_factor()
+        while position < len(tokens) and tokens[position] == "AND":
+            position += 1
+            value = parse_factor() and value
+        return value
+
+    def parse_factor() -> bool:
+        nonlocal position
+        if position >= len(tokens):
+            raise ValueError("unexpected end of license expression")
+        token = tokens[position]
+        if token == "(":
+            position += 1
+            value = parse_expression()
+            if position >= len(tokens) or tokens[position] != ")":
+                raise ValueError("unbalanced license expression")
+            position += 1
+            return value
+        if token in {"AND", "OR", "WITH", ")"}:
+            raise ValueError(f"unexpected token {token!r}")
+        position += 1
+        allowed = token in ALLOWED_LICENSE_IDS
+        if position < len(tokens) and tokens[position] == "WITH":
+            position += 1
+            if position >= len(tokens):
+                raise ValueError("missing license exception")
+            exception = tokens[position]
+            if exception in {"AND", "OR", "WITH", "(", ")"}:
+                raise ValueError("invalid license exception")
+            position += 1
+            allowed = allowed and exception in ALLOWED_LICENSE_EXCEPTIONS
+        return allowed
+
+    result = parse_expression()
+    if position != len(tokens):
+        raise ValueError("trailing tokens in license expression")
+    return result
+
+
+def license_allowed(expression: str | None) -> bool:
+    """Apply the repo's fail-closed mechanical release-license policy.
+
+    Runtime license metadata must be a recognized expression composed from the
+    reviewed SPDX identifiers above. OR branches pass when at least one reviewed
+    choice is available; AND requires every component to be reviewed. Unknown
+    identifiers, unresolved LicenseRefs, proprietary labels, malformed legacy GPL
+    spellings, and blocked GPL/AGPL-only branches therefore fail closed.
     """
     if not expression:
         return False
     expression = expression.strip()
-    if expression.upper() in {"UNLICENSED", "SEE LICENSE IN"}:
+    if not expression:
         return False
-    alternatives = re.split(r"\s+OR\s+", expression, flags=re.IGNORECASE)
-    return any(
-        not BLOCKED_RE.search(alternative.replace("LGPL-", "L-GPL-"))
-        for alternative in alternatives
-    )
+    expression = LEGACY_LICENSE_EXPRESSIONS.get(expression, expression)
+    tokens = _license_tokens(expression)
+    if not tokens:
+        return False
+    try:
+        return _evaluate_license_expression(tokens)
+    except ValueError:
+        return False
 
 
 def _license_files(root: Path, explicit: str | None = None) -> list[Path]:
