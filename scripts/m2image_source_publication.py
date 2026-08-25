@@ -19,6 +19,7 @@ from pathlib import Path
 
 ALPINE_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 RPM_KEY_METADATA_DISPOSITION = "rpm-key-metadata"
+HASH_CHUNK_SIZE = 1024 * 1024
 
 
 def _read_json(path: Path) -> dict:
@@ -32,6 +33,16 @@ def _read_json(path: Path) -> dict:
 def _source_key(source: dict) -> str:
     payload = json.dumps(source, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()[:20]
+
+
+def _hash_file(path: Path) -> tuple[int, str]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(HASH_CHUNK_SIZE):
+            size += len(chunk)
+            digest.update(chunk)
+    return size, digest.hexdigest()
 
 
 def _normalized_source(distribution: str, source: dict) -> dict:
@@ -221,12 +232,12 @@ def source_index(plan: dict, source_root: Path) -> dict:
         for path in sorted(directory.rglob("*")):
             if not path.is_file() or path.is_symlink():
                 continue
-            data = path.read_bytes()
+            size, sha256 = _hash_file(path)
             files.append(
                 {
                     "path": path.relative_to(source_root.parent).as_posix(),
-                    "bytes": len(data),
-                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "bytes": size,
+                    "sha256": sha256,
                 }
             )
         if not files:
