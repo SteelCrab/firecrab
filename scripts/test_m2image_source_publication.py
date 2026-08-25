@@ -111,6 +111,31 @@ class SourcePublicationTests(unittest.TestCase):
                 )
             )
 
+    def test_rocky_rejects_source_artifact_paths(self):
+        for artifact in (
+            "../../evil.src.rpm",
+            "nested/evil.src.rpm",
+            "..\\evil.src.rpm",
+        ):
+            with self.subTest(artifact=artifact):
+                with self.assertRaisesRegex(ValueError, "bare filename"):
+                    sourcepub.publication_plan(
+                        source_map(
+                            "rocky",
+                            [
+                                package(
+                                    "kernel-core",
+                                    "5.14.0-570.26.1.el9_6",
+                                    {
+                                        "type": "rocky-source-rpm",
+                                        "sourceArtifact": artifact,
+                                        "sourceVersion": "5.14.0-570.26.1.el9_6",
+                                    },
+                                )
+                            ],
+                        )
+                    )
+
     def test_rocky_gpg_pubkey_is_covered_without_fake_source_unit(self):
         src = {
             "type": "rocky-source-rpm",
