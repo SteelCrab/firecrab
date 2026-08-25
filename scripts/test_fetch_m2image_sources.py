@@ -42,10 +42,31 @@ class AlpineDistfilesRecoveryTests(unittest.TestCase):
             )
             self.assertEqual(fetcher._literal_sha512sums(apkbuild), {})
 
-    def test_distfiles_branch_comes_from_release_series(self):
-        self.assertEqual(fetcher._alpine_distfiles_branch({"version": "3.24.1"}), "v3.24")
-        with self.assertRaisesRegex(ValueError, "cannot derive Alpine distfiles branch"):
+    def test_alpine_branch_and_builder_image_come_from_release_series(self):
+        image = {"version": "3.24.1"}
+        self.assertEqual(fetcher._alpine_distfiles_branch(image), "v3.24")
+        self.assertEqual(fetcher._alpine_abuild_image(image), "alpine:3.24")
+        with self.assertRaisesRegex(ValueError, "cannot derive Alpine release series"):
             fetcher._alpine_distfiles_branch({"version": "edge"})
+        with self.assertRaisesRegex(ValueError, "cannot derive Alpine release series"):
+            fetcher._alpine_abuild_image({"version": "edge"})
+
+    def test_abuild_fetch_uses_image_series_in_docker_tag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            work = root / "recipe"
+            dist = root / "distfiles"
+            work.mkdir()
+            dist.mkdir()
+            completed = mock.Mock(returncode=0)
+            with mock.patch.object(fetcher.subprocess, "run", return_value=completed) as run:
+                result = fetcher._alpine_abuild_fetch(
+                    work, dist, {"version": "3.25.2"}
+                )
+            self.assertEqual(result, 0)
+            command = run.call_args.args[0]
+            self.assertIn("alpine:3.25", command)
+            self.assertNotIn("alpine:3.24", command)
 
     def test_recovery_accepts_only_checksum_matching_archive(self):
         payload = b"iproute2 exact source bytes"
@@ -130,6 +151,30 @@ class AlpineDistfilesRecoveryTests(unittest.TestCase):
                 )
             self.assertEqual(recovered, [])
             mocked.assert_not_called()
+
+
+class RockySourceFetchTests(unittest.TestCase):
+    def test_fetch_rejects_tampered_artifact_path_before_network(self):
+        unit = {
+            "source": {
+                "sourceArtifact": "../../evil.src.rpm",
+                "sourceVersion": "1-1.el9",
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            destination = Path(tmpdir)
+            with (
+                mock.patch.object(fetcher, "require_tool"),
+                mock.patch.object(fetcher, "fetch_url") as mocked_fetch,
+            ):
+                with self.assertRaisesRegex(ValueError, "bare filename"):
+                    fetcher.fetch_rocky(
+                        unit,
+                        {"distribution": "rocky", "version": "9.8"},
+                        destination,
+                    )
+            mocked_fetch.assert_not_called()
+            self.assertFalse((destination.parent / "evil.src.rpm").exists())
 
 
 class BatchedSourceFetchTests(unittest.TestCase):
