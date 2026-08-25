@@ -16,7 +16,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 LEGAL_PREFIXES = (
     "license",
@@ -45,6 +45,29 @@ def _comment_fields(comment: str | None) -> dict[str, str]:
         if key and value:
             fields[key] = value
     return fields
+
+
+def _package_architecture(package: dict, image_architecture: str) -> str:
+    """Return the binary package architecture already encoded in its SPDX purl.
+
+    Older synthetic fixtures and pre-architecture SBOMs may not carry a purl;
+    keep the image architecture as a compatibility fallback for those inputs.
+    Real M2Image SBOMs emit ``?arch=...`` from the package database, preserving
+    values such as Rocky ``noarch`` instead of rewriting them to the image arch.
+    """
+    for reference in package.get("externalRefs") or []:
+        if reference.get("referenceType") != "purl":
+            continue
+        locator = reference.get("referenceLocator")
+        if not isinstance(locator, str):
+            continue
+        try:
+            values = parse_qs(urlsplit(locator).query).get("arch")
+        except ValueError:
+            continue
+        if values and values[0]:
+            return values[0]
+    return image_architecture
 
 
 def _source_resolver(distribution: str, source: str, source_version: str, commit: str) -> dict:
@@ -112,13 +135,14 @@ def source_map(spdx: dict) -> dict:
         fields = _comment_fields(package.get("comment"))
         package_name = str(package.get("name") or "<unknown>")
         binary_version = str(package.get("versionInfo") or "unknown")
+        package_architecture = _package_architecture(package, architecture)
         disposition = fields.get("source-disposition", "")
         if disposition:
             records.append(
                 {
                     "binaryPackage": package.get("name"),
                     "binaryVersion": binary_version,
-                    "architecture": architecture,
+                    "architecture": package_architecture,
                     "declaredLicense": fields.get("package-manager-license") or None,
                     "sourceDisposition": _non_source_disposition(
                         distribution, package_name, disposition
@@ -138,7 +162,7 @@ def source_map(spdx: dict) -> dict:
             {
                 "binaryPackage": package.get("name"),
                 "binaryVersion": binary_version,
-                "architecture": architecture,
+                "architecture": package_architecture,
                 "declaredLicense": fields.get("package-manager-license") or None,
                 "source": _source_resolver(
                     distribution, source, source_version, source_commit
