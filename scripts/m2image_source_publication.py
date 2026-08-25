@@ -89,6 +89,13 @@ def _normalized_source(distribution: str, source: dict) -> dict:
         version = str(source.get("sourceVersion") or "")
         if not artifact or not version:
             raise ValueError("Rocky source identity requires sourceArtifact and sourceVersion")
+        if (
+            artifact in {".", ".."}
+            or "/" in artifact
+            or "\\" in artifact
+            or Path(artifact).name != artifact
+        ):
+            raise ValueError(f"Rocky source artifact must be a bare filename: {artifact!r}")
         if not artifact.endswith((".src.rpm", ".nosrc.rpm")):
             raise ValueError(f"Rocky source artifact is not an SRPM: {artifact!r}")
         return {
