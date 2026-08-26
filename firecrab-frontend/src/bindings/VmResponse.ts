@@ -20,6 +20,7 @@ export type VmResponse = {
   startupTimeline: Array<StartupStepRun>;
   egressPolicy: EgressPolicy;
   ipv4: string | null;
+  ipv6: string | null;
   mac: string | null;
   hostname: string;
   microNetworkId: string;

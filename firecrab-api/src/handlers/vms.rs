@@ -7,7 +7,9 @@ use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use firecrab_api_types::{VmLogResponse, VmResponse};
-use firecrab_helper_protocol::network::{DhcpLeaseEntry, MicroNetworkSpec, VmPolicySpec};
+use firecrab_helper_protocol::network::{
+    DhcpLeaseEntry, Ipv6AddressMode, MicroNetworkSpec, VmPolicySpec,
+};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -536,14 +538,7 @@ pub async fn update_vm_port_forwards(
                 .collect();
             if let Err(error) = state
                 .network
-                .apply_vm_policy(
-                    id,
-                    lease.ipv4,
-                    lease.mac,
-                    record.egress_policy,
-                    false,
-                    port_forwards_specs,
-                )
+                .apply_vm_policy(&lease, record.egress_policy, false, port_forwards_specs)
                 .await
             {
                 tracing::error!(
@@ -1434,7 +1429,7 @@ async fn rotate_conflicted_lease(
         .ok_or_else(|| {
             format!("no MicroNetwork with id {micro_network_id} exists for vm {vm_id}")
         })?;
-    let subnet = SubnetSpec::parse(network.id, &network.subnet_cidr).ok_or_else(|| {
+    let subnet = SubnetSpec::from_micro_network(&network).ok_or_else(|| {
         format!(
             "MicroNetwork {} has an unparseable subnet {:?}",
             network.id, network.subnet_cidr
@@ -1501,14 +1496,7 @@ async fn setup_vm_network(
 
     if let Err(error) = state
         .network
-        .apply_vm_policy(
-            vm_id,
-            lease.ipv4,
-            lease.mac,
-            egress_policy,
-            false,
-            port_forwards,
-        )
+        .apply_vm_policy(&lease, egress_policy, false, port_forwards)
         .await
     {
         // A failed apply_vm_policy leaves nothing installed (nft applies a
@@ -1592,20 +1580,41 @@ pub(crate) async fn sync_dhcp_leases(state: &AppState) -> Result<(), String> {
     .map_err(|error| format!("dhcp lease snapshot task failed: {error}"))?
     .map_err(|error| format!("dhcp lease snapshot failed: {error}"))?;
 
-    let entries = leases
-        .into_iter()
-        .map(|lease| DhcpLeaseEntry {
-            vm_id: lease.vm_id,
-            ipv4: lease.ipv4,
-            mac: lease.mac,
-        })
-        .collect();
+    let micro_networks = micro_network_specs(state).await?;
+    let entries = dhcp_lease_entries(&leases, &micro_networks);
 
     state
         .network
-        .sync_dhcp_leases(revision, entries, micro_network_specs(state).await?)
+        .sync_dhcp_leases(revision, entries, micro_networks)
         .await
         .map_err(|error| format!("dhcp sync failed: {error}"))
+}
+
+/// The reservation snapshot dnsmasq is handed. A v6 address is included only
+/// for a network that actually hands addresses out over DHCPv6 — under SLAAC
+/// the guest builds the same address itself from the router advertisement, and
+/// a reservation in a range that allocates nothing would describe an
+/// assignment dnsmasq never makes.
+fn dhcp_lease_entries(
+    leases: &[Lease],
+    micro_networks: &[MicroNetworkSpec],
+) -> Vec<DhcpLeaseEntry> {
+    leases
+        .iter()
+        .map(|lease| {
+            let dhcpv6 = micro_networks
+                .iter()
+                .find(|network| network.contains(lease.ipv4))
+                .and_then(|network| network.ipv6.as_ref())
+                .is_some_and(|ipv6| ipv6.address_mode == Ipv6AddressMode::Dhcpv6);
+            DhcpLeaseEntry {
+                vm_id: lease.vm_id,
+                ipv4: lease.ipv4,
+                ipv6: lease.ipv6.filter(|_| dhcpv6),
+                mac: lease.mac,
+            }
+        })
+        .collect()
 }
 
 /// Builds the complete host-firewall policy snapshot for VMs whose network
@@ -1653,6 +1662,7 @@ pub(crate) async fn active_vm_policy_specs(state: &AppState) -> Result<Vec<VmPol
         policies.push(VmPolicySpec {
             vm_id,
             ipv4: lease.ipv4,
+            ipv6: lease.ipv6,
             mac: lease.mac,
             egress_policy: egress_policy.id().to_owned(),
             allow_host_ssh: false,
@@ -1675,7 +1685,7 @@ pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNet
     networks
         .into_iter()
         .map(|network| {
-            SubnetSpec::parse(network.id, &network.subnet_cidr)
+            SubnetSpec::from_micro_network(&network)
                 .map(|subnet| subnet.helper_spec(network.internet_enabled, network.uplink))
                 .ok_or_else(|| {
                     format!(
@@ -1713,7 +1723,7 @@ async fn resolve_subnet(
             )
         })?;
 
-    SubnetSpec::parse(network.id, &network.subnet_cidr).ok_or_else(|| {
+    SubnetSpec::from_micro_network(&network).ok_or_else(|| {
         tracing::error!(
             request_id = %request_id,
             micro_network_id = %network.id,
@@ -1877,6 +1887,9 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         startup_timeline: vm.startup_timeline.clone(),
         egress_policy: vm.egress_policy,
         ipv4: lease.map(|lease| lease.ipv4.to_string()),
+        ipv6: lease
+            .and_then(|lease| lease.ipv6)
+            .map(|ipv6| ipv6.to_string()),
         mac: lease.map(|lease| lease.mac.to_string()),
         hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
         micro_network_id: vm.micro_network_id,
@@ -3809,6 +3822,8 @@ while True:
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
             }),
         )
         .await
@@ -4119,6 +4134,8 @@ while True:
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
             }),
         )
         .await

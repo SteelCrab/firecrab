@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { MicroNetworkDetailResponse, MicroNetworkResponse } from "../bindings";
+import type {
+  Ipv6AddressMode,
+  MicroNetworkDetailResponse,
+  MicroNetworkResponse,
+} from "../bindings";
 import {
   ApiClientError,
   createMicroNetwork,
@@ -25,6 +29,11 @@ export default function MicroNetworks() {
   const [subnetCidr, setSubnetCidr] = useState("");
   const [internetEnabled, setInternetEnabled] = useState(true);
   const [uplink, setUplink] = useState("");
+  // Off is IPv4-only. On sends `ipv6AddressMode` (and an optional prefix);
+  // the API then generates a per-host ULA /64 when the prefix is blank.
+  const [ipv6Enabled, setIpv6Enabled] = useState(false);
+  const [ipv6Cidr, setIpv6Cidr] = useState("");
+  const [ipv6AddressMode, setIpv6AddressMode] = useState<Ipv6AddressMode>("slaac");
   const [interfaces, setInterfaces] = useState<string[]>([]);
   const [defaultUplink, setDefaultUplink] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -79,20 +88,36 @@ export default function MicroNetworks() {
 
     setSubmitting(true);
     setFieldErrors(null);
+    setListError(null);
     try {
       await createMicroNetwork({
         name: name.trim(),
         subnetCidr: subnetCidr.trim(),
         internetEnabled,
         ...(uplink ? { uplink } : {}),
+        ...(ipv6Enabled
+          ? {
+              ipv6AddressMode,
+              ...(ipv6Cidr.trim() ? { ipv6Cidr: ipv6Cidr.trim() } : {}),
+            }
+          : {}),
       });
       setName("");
       setSubnetCidr("");
       setInternetEnabled(true);
       setUplink("");
+      setIpv6Enabled(false);
+      setIpv6Cidr("");
+      setIpv6AddressMode("slaac");
       await refresh();
     } catch (error) {
-      setFieldErrors(error as ApiClientError);
+      const client = error as ApiClientError;
+      setFieldErrors(client);
+      // 400 field maps already sit under the inputs. Helper-down / 500 would
+      // otherwise leave the form looking idle.
+      if (Object.keys(client.apiError?.fields ?? {}).length === 0) {
+        setListError(client.message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -193,6 +218,44 @@ export default function MicroNetworks() {
           {fieldError("uplink")}
         </div>
         <div className="field">
+          <label htmlFor="mn-ipv6-enable">IPv6</label>
+          <select
+            id="mn-ipv6-enable"
+            value={ipv6Enabled ? "on" : "off"}
+            onChange={(event) => setIpv6Enabled(event.target.value === "on")}
+          >
+            <option value="off">{t("Off (IPv4 only)", "꺼짐 (IPv4만)")}</option>
+            <option value="on">{t("Enabled (auto ULA /64)", "연결 (자동 ULA /64)")}</option>
+          </select>
+          <span className="field-error"></span>
+        </div>
+        {ipv6Enabled && (
+          <>
+            <div className="field">
+              <label htmlFor="mn-ipv6">{t("IPv6 prefix", "IPv6 프리픽스")}</label>
+              <input
+                id="mn-ipv6"
+                placeholder={t("auto (ULA /64)", "자동 (ULA /64)")}
+                value={ipv6Cidr}
+                onChange={(event) => setIpv6Cidr(event.target.value)}
+              />
+              {fieldError("ipv6Cidr")}
+            </div>
+            <div className="field">
+              <label htmlFor="mn-ipv6-mode">{t("IPv6 addressing", "IPv6 주소 할당")}</label>
+              <select
+                id="mn-ipv6-mode"
+                value={ipv6AddressMode}
+                onChange={(event) => setIpv6AddressMode(event.target.value as Ipv6AddressMode)}
+              >
+                <option value="slaac">SLAAC (RA)</option>
+                <option value="dhcpv6">DHCPv6</option>
+              </select>
+              <span className="field-error"></span>
+            </div>
+          </>
+        )}
+        <div className="field">
           <label>&nbsp;</label>
           <button className="btn primary" type="submit" disabled={submitting}>
             {submitting ? t("Creating…", "생성 중…") : t("Create", "생성")}
@@ -215,6 +278,7 @@ export default function MicroNetworks() {
                 <th>name</th>
                 <th>subnet CIDR</th>
                 <th>gateway</th>
+                <th>IPv6</th>
                 <th>{t("Internet", "인터넷")}</th>
                 <th>{t("Uplink", "업링크")}</th>
                 <th>NAT</th>
@@ -232,6 +296,15 @@ export default function MicroNetworks() {
                   <td className="name">{network.name}</td>
                   <td className="mono">{network.subnetCidr}</td>
                   <td className="mono">{network.gateway}</td>
+                  <td className="mono">
+                    {network.ipv6Cidr ?? t("Off", "꺼짐")}
+                    {network.ipv6Egress && (
+                      <>
+                        <br />
+                        {network.ipv6Egress === "nat66" ? "NAT66" : t("direct", "직접 라우팅")}
+                      </>
+                    )}
+                  </td>
                   <td>{network.internetEnabled ? t("Enabled", "연결") : t("Blocked", "차단")}</td>
                   <td className="mono">{network.uplink ?? t("Auto", "자동")}</td>
                   <td className="mono">
@@ -351,6 +424,22 @@ function MicroNetworkDetail({
           {t("Addresses", "주소")} {subnet.allocatedAddresses}/{subnet.usableAddresses} {t("used", "사용 중")} · {subnet.dhcp}
         </dd>
 
+        <dt>IPv6</dt>
+        <dd>
+          {subnet.ipv6Cidr ? (
+            <>
+              {subnet.ipv6Cidr} · gateway {subnet.ipv6Gateway}
+              <br />
+              {subnet.ipv6AddressMode === "dhcpv6" ? "DHCPv6" : "SLAAC (RA)"} ·{" "}
+              {subnet.ipv6Egress === "nat66"
+                ? t("NAT66 (unique-local prefix)", "NAT66 (unique-local 프리픽스)")
+                : t("direct (globally routable)", "직접 라우팅 (공인 프리픽스)")}
+            </>
+          ) : (
+            t("Off", "꺼짐")
+          )}
+        </dd>
+
         <dt>{t("Bridge", "브릿지")}</dt>
         <dd>
           {bridge.name} · TAP {bridge.attachedTaps} {t("attached", "개 연결")}
@@ -363,6 +452,13 @@ function MicroNetworkDetail({
             : t("Internet blocked — no masquerading; outbound traffic is dropped", "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop")}
           <br />
           {t("source", "출발")} {nat.sourceCidr}
+          {subnet.ipv6Cidr && (
+            <>
+              <br />
+              {t("source (IPv6)", "출발 (IPv6)")}{" "}
+              {nat.ipv6SourceCidr ?? t("none — not translated", "없음 — 변환하지 않음")}
+            </>
+          )}
           <br />
           {t("uplink", "업링크")} {nat.uplink || t("(no uplink)", "(uplink 없음)")}
           <div className="field">
@@ -409,7 +505,10 @@ function MicroNetworkDetail({
           {detail.vms.length === 0
             ? t("None", "없음")
             : detail.vms
-                .map((vm) => `${vm.name} (${vm.ipv4 ?? t("no address", "주소 없음")}, ${vm.state})`)
+                .map(
+                  (vm) =>
+                    `${vm.name} (${[vm.ipv4, vm.ipv6].filter(Boolean).join(", ") || t("no address", "주소 없음")}, ${vm.state})`,
+                )
                 .join(", ")}
         </dd>
       </dl>

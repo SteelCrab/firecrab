@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.1.3](#013---2026-08-21) | 2026-08-21 | [45790c3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
@@ -31,6 +32,31 @@ Entries land here as work merges, and move under the next version heading when t
 ### Fixed
 
 - None.
+
+### Improved
+
+- None.
+
+## [0.1.3] - 2026-08-21
+
+Release notes credit that release's own contributors and stop repeating their title.
+
+### Added
+
+- None.
+
+### Changed
+
+- A GitHub Release is titled `firecrab v<tag>`, and its body no longer repeats that title ([45790c3]).
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- Release notes credit the commits between the previous release and this tag ([45790c3]).
+- Shorthand references resolve, and in-repo document links point at the released tag ([45790c3]).
 
 ### Improved
 
@@ -216,7 +242,8 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.1.2...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.1.3...main
+[0.1.3]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.3
 [0.1.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.0
@@ -239,3 +266,4 @@ network helper.
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
 [322e95c]: https://github.com/SteelCrab/firecrab/commit/322e95c
+[45790c3]: https://github.com/SteelCrab/firecrab/commit/45790c3

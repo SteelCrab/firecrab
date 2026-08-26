@@ -2,7 +2,7 @@
 //! and L2 anti-spoofing (`bridge firecrab_l2`), both idempotently rendered
 //! and applied as single atomic `nft -f -` transactions.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::Stdio;
 
 use firecrab_helper_protocol::network::{MacAddr, MicroNetworkSpec, tap_name};
@@ -52,6 +52,10 @@ pub struct VmPolicy {
     pub vm_id: Uuid,
     /// The VM's leased IPv4 address.
     pub ipv4: Ipv4Addr,
+    /// The VM's leased IPv6 address, when its MicroNetwork is dual-stack.
+    /// `None` keeps the VM IPv4-only: every IPv6 frame it sends is dropped
+    /// at L2, exactly as before this field existed.
+    pub ipv6: Option<Ipv6Addr>,
     /// The VM's Firecracker guest MAC.
     pub mac: MacAddr,
     /// Outbound (egress) posture for this VM.
@@ -172,6 +176,21 @@ pub async fn ensure_firewall(
     // the Firecrab ruleset is unchanged, so a UFW reload or firewalld
     // restart is repaired on the next reconcile.
     crate::host_acl::ensure_all(&default_uplink, micro_networks).await;
+    // Routing a dual-stack network's traffic needs host-wide IPv6
+    // forwarding, which no IPv4-only deployment should have switched on for
+    // it. Best-effort like the host ACL punches above: a host that refuses
+    // the sysctl still gets its v4 ruleset applied.
+    if micro_networks.iter().any(|network| network.ipv6.is_some()) {
+        let mut uplinks: Vec<&str> = vec![default_uplink.as_str()];
+        uplinks.extend(
+            micro_networks
+                .iter()
+                .filter_map(|network| network.uplink.as_deref()),
+        );
+        if let Err(error) = crate::bridge::enable_ipv6_forward(&uplinks) {
+            println!("[WARN] failed to enable IPv6 forwarding: {error}");
+        }
+    }
     if state.applied_ruleset.as_deref() == Some(base_ruleset.as_str())
         && state.applied_vms == desired_vms
     {
@@ -260,7 +279,7 @@ pub async fn remove_vm_policy(actor: &FirewallActor, vm_id: Uuid) -> Result<(), 
     let Some((_, policy)) = state.applied_vms.get(&vm_id).cloned() else {
         return Ok(());
     };
-    run_nft(&render_vm_policy_removal(vm_id, policy.ipv4)).await?;
+    run_nft(&render_vm_policy_removal(vm_id, policy.ipv4, policy.ipv6)).await?;
     state.applied_vms.remove(&vm_id);
     Ok(())
 }
@@ -357,6 +376,55 @@ fn offline_subnet_cidrs(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
         .collect()
 }
 
+/// Every Firecrab-owned IPv6 prefix, for the networks that have one.
+fn subnet_cidrs6(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
+    micro_networks
+        .iter()
+        .filter_map(|network| network.ipv6.as_ref())
+        .map(|ipv6| ipv6.subnet_cidr())
+        .collect()
+}
+
+/// The IPv6 prefixes that need NAT66, as `(prefix, oifname)` pairs. Only a
+/// Unique Local prefix qualifies: a global prefix is routable as-is, so
+/// translating it would hide the very addresses the network was given
+/// (`public-docs/networking.md`). A network with the internet switched off
+/// contributes no pair either, same as [`egress_pairs`].
+fn egress_pairs6(
+    default_uplink: &str,
+    micro_networks: &[MicroNetworkSpec],
+) -> Vec<(String, String)> {
+    micro_networks
+        .iter()
+        .filter(|network| network.internet_enabled)
+        .filter_map(|network| {
+            let ipv6 = network
+                .ipv6
+                .as_ref()
+                .filter(|ipv6| ipv6.is_unique_local())?;
+            Some((
+                ipv6.subnet_cidr(),
+                network
+                    .uplink
+                    .as_deref()
+                    .unwrap_or(default_uplink)
+                    .to_owned(),
+            ))
+        })
+        .collect()
+}
+
+/// The IPv6 prefixes whose internet is switched off — [`offline_subnet_cidrs`]
+/// for the second family.
+fn offline_subnet_cidrs6(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
+    micro_networks
+        .iter()
+        .filter(|network| !network.internet_enabled)
+        .filter_map(|network| network.ipv6.as_ref())
+        .map(|ipv6| ipv6.subnet_cidr())
+        .collect()
+}
+
 /// Renders the whole VM-independent desired state for both owned tables as
 /// one nft(8) script. `add table` + `delete table` before recreating keeps
 /// this idempotent without ever touching a table this helper doesn't own.
@@ -377,9 +445,14 @@ fn render_apply_ruleset(
     for (_, oif) in &egress {
         nat::validate_uplink(oif)?;
     }
+    let egress6 = egress_pairs6(default_uplink, micro_networks);
+    for (_, oif) in &egress6 {
+        nat::validate_uplink(oif)?;
+    }
     let bridges = bridge_names(micro_networks);
     let subnets = subnet_cidrs(micro_networks);
-    let postrouting = nat::render_postrouting_chain(&subnets, &egress);
+    let subnets6 = subnet_cidrs6(micro_networks);
+    let postrouting = nat::render_postrouting_chain(&subnets, &egress, &egress6);
 
     // One dispatch pair per bridge: the per-VM verdict maps below are keyed
     // by leased IP (globally unique across networks, since their subnets
@@ -418,6 +491,21 @@ fn render_apply_ruleset(
     } else {
         format!("\t\tip saddr {{ {} }} drop\n", offline.join(", "))
     };
+    // The same two isolation rules for the second family. Rendered only when
+    // a network actually has a prefix, so an IPv4-only host keeps exactly
+    // the ruleset it had before dual-stack existed: with no v6 rule to match,
+    // an IPv6 packet falls through to firecrab_egress's trailing drop.
+    let cross_network_drop6 = if subnets6.is_empty() {
+        String::new()
+    } else {
+        format!("\t\tip6 daddr {{ {} }} drop\n", subnets6.join(", "))
+    };
+    let offline6 = offline_subnet_cidrs6(micro_networks);
+    let offline_drop6 = if offline6.is_empty() {
+        String::new()
+    } else {
+        format!("\t\tip6 saddr {{ {} }} drop\n", offline6.join(", "))
+    };
     Ok(format!(
         // L3: NAT + egress/ingress dispatch keyed by the VM's leased IP. The
         // L2 table below guarantees the source IP is genuine, so keying L3
@@ -432,6 +520,12 @@ fn render_apply_ruleset(
          \tmap vm_ingress {{\n\
          \t\ttype ipv4_addr : verdict\n\
          \t}}\n\
+         \tmap vm_egress6 {{\n\
+         \t\ttype ipv6_addr : verdict\n\
+         \t}}\n\
+         \tmap vm_ingress6 {{\n\
+         \t\ttype ipv6_addr : verdict\n\
+         \t}}\n\
          \tchain forward_dispatch {{\n\
          \t\ttype filter hook forward priority filter; policy accept;\n\
          {forward_dispatch}\
@@ -441,11 +535,15 @@ fn render_apply_ruleset(
          \t\tip daddr {{ {internal_destinations} }} drop\n\
          {offline_drop}\
          \t\tip saddr vmap @vm_egress\n\
+         {cross_network_drop6}\
+         {offline_drop6}\
+         \t\tip6 saddr vmap @vm_egress6\n\
          \t\tdrop\n\
          \t}}\n\
          \tchain firecrab_ingress {{\n\
          \t\tct state established,related accept\n\
          \t\tip daddr vmap @vm_ingress\n\
+         \t\tip6 daddr vmap @vm_ingress6\n\
          \t\tdrop\n\
          \t}}\n\
          {postrouting}\
@@ -496,6 +594,36 @@ fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enable
         String::new()
     };
 
+    // Dual-stack VM: IPv6 stops being a blanket-dropped ethertype, and its
+    // leased address is pinned the way `ip saddr` is. Neighbor discovery,
+    // DAD, MLD, and DHCPv6 are the exceptions — they run before the guest
+    // owns the address, from the unspecified (`::`) or link-local source —
+    // and they stay behind the `ether saddr` pin, so a VM still cannot
+    // speak for another's MAC. Guest-originated Router Advertisements are
+    // not in the set. Without an IPv6 lease none of this is rendered and
+    // the VM keeps the IPv4-only posture it had before.
+    let (l2_v6_exceptions, l2_ethertypes, l2_v6_pin, v6_map_elements) = match policy.ipv6 {
+        Some(ipv6) => (
+            format!(
+                "{l2} ether saddr {mac} ip6 saddr :: icmpv6 type nd-neighbor-solicit accept\n\
+                 {l2} ether saddr {mac} ip6 saddr fe80::/10 icmpv6 type {{ nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, mld-listener-report, mld2-listener-report }} accept\n\
+                 {l2} ether saddr {mac} ip6 saddr fe80::/10 udp dport 547 accept\n"
+            ),
+            format!("{l2} ether type != {{ ip, arp, ip6 }} drop\n"),
+            format!("{l2} ether type ip6 ip6 saddr != {ipv6} drop\n"),
+            format!(
+                "add element inet {TABLE_INET} vm_egress6 {{ {ipv6} : jump vm_{tag}_eg }}\n\
+                 add element inet {TABLE_INET} vm_ingress6 {{ {ipv6} : jump vm_{tag}_in }}\n"
+            ),
+        ),
+        None => (
+            String::new(),
+            format!("{l2} ether type != {{ ip, arp }} drop\n"),
+            String::new(),
+            String::new(),
+        ),
+    };
+
     let mut dnat_prerouting_rules = String::new();
     let mut dnat_output_rules = String::new();
     let mut dnat_forward_accept_rules = String::new();
@@ -535,11 +663,13 @@ fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enable
          flush chain bridge {TABLE_BRIDGE} vm_{tag}_l2\n\
          {l2} ether saddr {mac} ip saddr 0.0.0.0 udp sport 68 udp dport 67 accept\n\
          {l2} ether type arp arp operation request arp saddr ip 0.0.0.0 arp saddr ether {mac} accept\n\
-         {l2} ether type != {{ ip, arp }} drop\n\
+         {l2_v6_exceptions}\
+         {l2_ethertypes}\
          {l2} ether saddr != {mac} drop\n\
          {l2} ether type arp arp saddr ether != {mac} drop\n\
          {l2} ether type arp arp saddr ip != {ip} drop\n\
          {l2} ether type ip ip saddr != {ip} drop\n\
+         {l2_v6_pin}\
          {l2} accept\n\
          add element bridge {TABLE_BRIDGE} l2_ingress {{ \"{tap}\" : jump vm_{tag}_l2 }}\n\
          add chain inet {TABLE_INET} vm_{tag}_eg\n\
@@ -551,6 +681,7 @@ fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enable
          {ingress_rule}\
          {dnat_forward_accept_rules}\
          add element inet {TABLE_INET} vm_ingress {{ {ip} : jump vm_{tag}_in }}\n\
+         {v6_map_elements}\
          add chain inet {TABLE_INET} vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}\n\
          flush chain inet {TABLE_INET} vm_{tag}_dnat\n\
          {dnat_prerouting_rules}\
@@ -573,7 +704,7 @@ fn render_vm_policy_replacement(
     debug_assert_eq!(previous.vm_id, policy.vm_id);
     format!(
         "{}{}",
-        render_vm_policy_removal(previous.vm_id, previous.ipv4),
+        render_vm_policy_removal(previous.vm_id, previous.ipv4, previous.ipv6),
         render_vm_policy_for_network(uplink, policy, internet_enabled)
     )
 }
@@ -581,13 +712,23 @@ fn render_vm_policy_replacement(
 /// Removes every object [`render_vm_policy`] created for `vm_id`, and nothing
 /// else. Each map element is deleted before the chain it jumps to, so nft
 /// never rejects a still-referenced chain.
-fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr) -> String {
+fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr, ipv6: Option<Ipv6Addr>) -> String {
     let tap = tap_name(vm_id);
     let tag = vm_id.simple();
+    // Only a policy that installed v6 elements has any to delete; asking nft
+    // to remove an element that was never added fails the whole transaction.
+    let v6_elements = match ipv6 {
+        Some(ipv6) => format!(
+            "delete element inet {TABLE_INET} vm_egress6 {{ {ipv6} }}\n\
+             delete element inet {TABLE_INET} vm_ingress6 {{ {ipv6} }}\n"
+        ),
+        None => String::new(),
+    };
     format!(
         "delete element bridge {TABLE_BRIDGE} l2_ingress {{ \"{tap}\" }}\n\
          delete chain bridge {TABLE_BRIDGE} vm_{tag}_l2\n\
          delete element inet {TABLE_INET} vm_egress {{ {ipv4} }}\n\
+         {v6_elements}\
          delete chain inet {TABLE_INET} vm_{tag}_eg\n\
          delete element inet {TABLE_INET} vm_ingress {{ {ipv4} }}\n\
          delete chain inet {TABLE_INET} vm_{tag}_in\n\
@@ -728,6 +869,8 @@ async fn run_nft(ruleset: &str) -> Result<(), FirewallError> {
 
 #[cfg(test)]
 mod tests {
+    use firecrab_helper_protocol::network::{Ipv6AddressMode, MicroNetworkIpv6Spec};
+
     use super::*;
     use core::assert_matches;
 
@@ -738,7 +881,112 @@ mod tests {
             prefix,
             internet_enabled: true,
             uplink: None,
+            ipv6: None,
         }
+    }
+
+    fn dual_stack_network(
+        id: u128,
+        gateway: &str,
+        prefix: u8,
+        v6_gateway: &str,
+        address_mode: Ipv6AddressMode,
+    ) -> MicroNetworkSpec {
+        MicroNetworkSpec {
+            ipv6: Some(MicroNetworkIpv6Spec {
+                gateway: v6_gateway.parse().unwrap(),
+                prefix: 64,
+                address_mode,
+            }),
+            ..sample_network(id, gateway, prefix)
+        }
+    }
+
+    #[test]
+    fn a_dual_stack_network_gets_ip6_maps_and_nat66() {
+        let network = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            24,
+            "fd00:1234:5678:9abc::1",
+            Ipv6AddressMode::Slaac,
+        );
+        let ruleset = render_apply_ruleset("eth0", &[network]).unwrap();
+
+        // The v6 policy maps mirror their v4 counterparts.
+        assert!(ruleset.contains("map vm_egress6"));
+        assert!(ruleset.contains("map vm_ingress6"));
+        assert!(ruleset.contains("type ipv6_addr : verdict"));
+        assert!(ruleset.contains("ip6 saddr vmap @vm_egress6"));
+        assert!(ruleset.contains("ip6 daddr vmap @vm_ingress6"));
+        // A ULA prefix is not routable off-host, so it is masqueraded.
+        assert!(ruleset.contains(
+            "ip6 saddr fd00:1234:5678:9abc::/64 oifname \"eth0\" jump firecrab_postrouting"
+        ));
+    }
+
+    #[test]
+    fn a_global_prefix_egresses_without_nat66() {
+        let network = dual_stack_network(
+            0x1234,
+            "172.31.0.1",
+            24,
+            "2001:db8:1::1",
+            Ipv6AddressMode::Slaac,
+        );
+        let ruleset = render_apply_ruleset("eth0", &[network]).unwrap();
+
+        // Publicly routable: forwarded with the VM's own source address.
+        assert!(!ruleset.contains("ip6 saddr 2001:db8:1::/64 oifname"));
+        // The policy path is still wired up — only the translation is absent.
+        assert!(ruleset.contains("ip6 saddr vmap @vm_egress6"));
+    }
+
+    #[test]
+    fn an_ipv4_only_network_renders_no_v6_nat_or_isolation_rules() {
+        let ruleset =
+            render_apply_ruleset("eth0", &[sample_network(0x1234, "172.31.0.1", 24)]).unwrap();
+        assert!(!ruleset.contains("ip6 saddr fd"));
+        assert!(!ruleset.contains("ip6 daddr {"));
+    }
+
+    #[test]
+    fn traffic_routed_between_dual_stack_micro_networks_is_dropped_for_v6_too() {
+        let networks = [
+            dual_stack_network(
+                0x1234,
+                "172.31.0.1",
+                24,
+                "fd00:1::1",
+                Ipv6AddressMode::Slaac,
+            ),
+            dual_stack_network(
+                0x5678,
+                "172.32.0.1",
+                24,
+                "fd00:2::1",
+                Ipv6AddressMode::Dhcpv6,
+            ),
+        ];
+        let ruleset = render_apply_ruleset("eth0", &networks).unwrap();
+        assert!(ruleset.contains("ip6 daddr { fd00:1::/64, fd00:2::/64 } drop"));
+    }
+
+    #[test]
+    fn a_dual_stack_network_with_the_internet_off_drops_v6_egress_too() {
+        let offline = MicroNetworkSpec {
+            internet_enabled: false,
+            ..dual_stack_network(
+                0x1234,
+                "172.31.0.1",
+                24,
+                "fd00:1::1",
+                Ipv6AddressMode::Slaac,
+            )
+        };
+        let ruleset = render_apply_ruleset("eth0", &[offline]).unwrap();
+        assert!(ruleset.contains("ip6 saddr { fd00:1::/64 } drop"));
+        assert!(!ruleset.contains("ip6 saddr fd00:1::/64 oifname"));
     }
 
     #[test]
@@ -969,6 +1217,7 @@ mod tests {
         VmPolicy {
             vm_id: Uuid::from_u128(0x1234),
             ipv4: Ipv4Addr::new(172, 30, 0, 42),
+            ipv6: None,
             mac: "02:fc:aa:bb:cc:dd".parse().unwrap(),
             egress,
             allow_host_ssh,
@@ -988,6 +1237,62 @@ mod tests {
         assert!(ruleset.contains("ether type ip ip saddr != 172.30.0.42 drop"));
         // Non-IPv4/ARP ethertypes (IPv6, VLAN) are dropped.
         assert!(ruleset.contains("ether type != { ip, arp } drop"));
+    }
+
+    fn dual_stack_policy() -> VmPolicy {
+        VmPolicy {
+            ipv6: Some("fd00:1::5".parse().unwrap()),
+            ..sample_policy(EgressPolicy::Internet, false)
+        }
+    }
+
+    #[test]
+    fn a_dual_stack_vm_policy_pins_its_v6_source_the_way_it_pins_v4() {
+        let policy = dual_stack_policy();
+        let tag = policy.vm_id.simple();
+        let ruleset = render_vm_policy("eth0", &policy);
+
+        // IPv6 frames are no longer dropped wholesale for this VM...
+        assert!(ruleset.contains("ether type != { ip, arp, ip6 } drop"));
+        // ...but only its own leased address may source them.
+        assert!(ruleset.contains("ether type ip6 ip6 saddr != fd00:1::5 drop"));
+        // Neighbor discovery, DAD, MLD, and DHCPv6 run from the
+        // link-local/unspecified address, which no lease can cover; the MAC
+        // pin above still applies. Guest-originated RAs stay dropped.
+        assert!(ruleset.contains("ip6 saddr :: icmpv6 type nd-neighbor-solicit accept"));
+        assert!(ruleset.contains("ip6 saddr fe80::/10 icmpv6 type"));
+        assert!(ruleset.contains("udp dport 547 accept"));
+        assert!(!ruleset.contains("nd-router-advert"));
+        // L3 verdicts are reachable through the v6 maps.
+        assert!(ruleset.contains(&format!(
+            "add element inet firecrab vm_egress6 {{ fd00:1::5 : jump vm_{tag}_eg }}"
+        )));
+        assert!(ruleset.contains(&format!(
+            "add element inet firecrab vm_ingress6 {{ fd00:1::5 : jump vm_{tag}_in }}"
+        )));
+    }
+
+    #[test]
+    fn an_ipv4_only_vm_policy_still_drops_every_v6_frame() {
+        let ruleset = render_vm_policy("eth0", &sample_policy(EgressPolicy::Internet, false));
+        assert!(ruleset.contains("ether type != { ip, arp } drop"));
+        assert!(!ruleset.contains("vm_egress6"));
+    }
+
+    #[test]
+    fn removing_a_dual_stack_policy_deletes_its_v6_map_elements() {
+        let policy = dual_stack_policy();
+        let ruleset = render_vm_policy_removal(policy.vm_id, policy.ipv4, policy.ipv6);
+        assert!(ruleset.contains("delete element inet firecrab vm_egress6 { fd00:1::5 }"));
+        assert!(ruleset.contains("delete element inet firecrab vm_ingress6 { fd00:1::5 }"));
+    }
+
+    #[test]
+    fn removing_an_ipv4_only_policy_touches_no_v6_map() {
+        let policy = sample_policy(EgressPolicy::Internet, false);
+        let ruleset = render_vm_policy_removal(policy.vm_id, policy.ipv4, None);
+        assert!(!ruleset.contains("vm_egress6"));
+        assert!(!ruleset.contains("vm_ingress6"));
     }
 
     #[test]
@@ -1223,7 +1528,7 @@ mod tests {
     #[test]
     fn removal_deletes_map_elements_before_their_chains() {
         let vm = Uuid::from_u128(0x1234);
-        let ruleset = render_vm_policy_removal(vm, Ipv4Addr::new(172, 30, 0, 42));
+        let ruleset = render_vm_policy_removal(vm, Ipv4Addr::new(172, 30, 0, 42), None);
         let tag = vm.simple();
         let l2_elem = ruleset
             .find("delete element bridge firecrab_l2 l2_ingress")

@@ -596,6 +596,8 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>ip</dt>
               <dd>{vm.ipv4 ?? "—"}</dd>
+              <dt>ipv6</dt>
+              <dd>{vm.ipv6 ?? "—"}</dd>
               <dt>mac</dt>
               <dd>{vm.mac ?? "—"}</dd>
               <dt>hostname</dt>

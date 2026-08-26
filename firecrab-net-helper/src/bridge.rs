@@ -1,12 +1,13 @@
 //! Idempotent creation/repair of the single Firecrab-owned Linux bridge
 //! (`fcbr0`) that every VM's TAP device attaches to.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use firecrab_helper_protocol::network::{
-    MICRO_NETWORK_BRIDGE_PREFIX, TAP_PREFIX, micro_network_bridge_name,
+    MICRO_NETWORK_BRIDGE_PREFIX, MicroNetworkIpv6Spec, TAP_PREFIX, micro_network_bridge_name,
 };
 use futures_util::TryStreamExt;
 use rtnetlink::packet_route::{
@@ -40,6 +41,9 @@ struct BridgeConfig<'a> {
     network: Ipv4Addr,
     prefix: u8,
     mtu: u32,
+    /// The network's IPv6 plan, or `None` for an IPv4-only bridge — which
+    /// keeps IPv6 switched off on the interface entirely, as before.
+    ipv6: Option<MicroNetworkIpv6Spec>,
 }
 
 /// Failure modes for [`ensure_bridge`].
@@ -87,13 +91,21 @@ pub enum BridgeError {
         /// The bridge's name.
         name: String,
     },
-    /// Writing the per-interface IPv6-disable sysctl failed.
-    #[error("failed to disable IPv6 on {name}")]
+    /// Writing one of the per-interface IPv6 sysctls failed.
+    #[error("failed to configure IPv6 on {name}")]
     Ipv6Disable {
         /// The bridge's name.
         name: String,
         #[source]
         source: io::Error,
+    },
+    /// The bridge already has the IPv6 gateway but at a different prefix.
+    #[error("bridge IPv6 gateway {gateway}/{prefix} has a conflicting prefix")]
+    Ipv6GatewayPrefixConflict {
+        /// The gateway address that was already assigned.
+        gateway: Ipv6Addr,
+        /// The prefix length that was requested instead.
+        prefix: u8,
     },
     /// Writing the per-interface route_localnet sysctl failed.
     #[error("failed to enable route_localnet on {name}")]
@@ -137,6 +149,7 @@ pub async fn ensure_bridge(actor: &BridgeActor, mtu: u32) -> Result<(), BridgeEr
             network: BRIDGE_NETWORK,
             prefix: BRIDGE_PREFIX,
             mtu,
+            ipv6: None,
         },
     )
     .await
@@ -154,6 +167,7 @@ pub async fn ensure_micro_network_bridge(
     gateway: Ipv4Addr,
     prefix: u8,
     mtu: u32,
+    ipv6: Option<MicroNetworkIpv6Spec>,
 ) -> Result<(), BridgeError> {
     let name = micro_network_bridge_name(micro_network_id);
     let network = Ipv4Addr::from(u32::from(gateway) & prefix_mask(prefix));
@@ -165,6 +179,7 @@ pub async fn ensure_micro_network_bridge(
             network,
             prefix,
             mtu,
+            ipv6,
         },
     )
     .await
@@ -323,9 +338,10 @@ async fn ensure_bridge_for(
         .execute()
         .await
         .map_err(BridgeError::Netlink)?;
-    disable_ipv6(config.name)?;
+    apply_ipv6_sysctls(config.name, config.ipv6.as_ref())?;
     enable_route_localnet(config.name)?;
-    ensure_gateway(&handle, bridge.header.index, config).await
+    ensure_gateway(&handle, bridge.header.index, config).await?;
+    ensure_gateway6(&handle, bridge.header.index, config).await
 }
 
 /// Enables IPv4 forwarding globally — required for NAT'd VM egress to work
@@ -336,19 +352,77 @@ pub fn enable_ip_forward() -> io::Result<()> {
     fs::write("/proc/sys/net/ipv4/ip_forward", "1")
 }
 
-/// The bridge is IPv4-only for now. Writing the per-interface sysctl also
-/// flushes any IPv6 addresses the kernel already auto-assigned.
-fn disable_ipv6(name: &str) -> Result<(), BridgeError> {
-    let path = format!("/proc/sys/net/ipv6/conf/{name}/disable_ipv6");
-    match fs::write(&path, "1") {
-        Ok(()) => Ok(()),
-        // A kernel without IPv6 support has nothing to disable.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(BridgeError::Ipv6Disable {
-            name: name.to_owned(),
-            source,
-        }),
+/// The host-wide sysctls that let a dual-stack MicroNetwork's traffic be
+/// routed at all, as `(path, value)` pairs in the order they must be
+/// written. Global IPv6 forwarding makes the kernel stop honoring router
+/// advertisements, so every in-use uplink is pinned to `accept_ra=2`
+/// (accept them even as a router) first — otherwise switching this on
+/// would strip the host of its RA-derived address and default route on
+/// any interface that is not the auto-detected default.
+fn ipv6_forward_sysctls(uplinks: &[&str]) -> Vec<(String, &'static str)> {
+    let mut seen = BTreeSet::new();
+    let mut sysctls = Vec::new();
+    for uplink in uplinks {
+        if uplink.is_empty() || !seen.insert(*uplink) {
+            continue;
+        }
+        sysctls.push((format!("/proc/sys/net/ipv6/conf/{uplink}/accept_ra"), "2"));
     }
+    sysctls.push(("/proc/sys/net/ipv6/conf/all/forwarding".to_owned(), "1"));
+    sysctls
+}
+
+/// Applies [`ipv6_forward_sysctls`]. Called only once a MicroNetwork
+/// actually has an IPv6 prefix — a host that never asked for dual-stack
+/// keeps its own forwarding and RA settings untouched. A kernel built
+/// without IPv6 has no such knobs, so a missing path is success.
+pub fn enable_ipv6_forward(uplinks: &[&str]) -> io::Result<()> {
+    for (path, value) in ipv6_forward_sysctls(uplinks) {
+        match fs::write(&path, value) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// The per-interface IPv6 sysctls a bridge needs, as `(name, value)` pairs.
+///
+/// An IPv4-only bridge keeps the single `disable_ipv6=1` write it always
+/// had, which also flushes any address the kernel auto-assigned. A
+/// dual-stack bridge instead becomes the guests' router: IPv6 is switched
+/// on, router advertisements are *sent* rather than accepted (a bridge that
+/// took its own guests' RAs would configure itself from them), and traffic
+/// arriving on it is forwarded.
+fn ipv6_sysctls(ipv6: Option<&MicroNetworkIpv6Spec>) -> Vec<(&'static str, &'static str)> {
+    match ipv6 {
+        None => vec![("disable_ipv6", "1")],
+        Some(_) => vec![
+            ("disable_ipv6", "0"),
+            ("accept_ra", "0"),
+            ("forwarding", "1"),
+        ],
+    }
+}
+
+/// Writes [`ipv6_sysctls`] for one interface. A kernel built without IPv6
+/// has no such knobs, so a missing path is success, not a failure.
+fn apply_ipv6_sysctls(name: &str, ipv6: Option<&MicroNetworkIpv6Spec>) -> Result<(), BridgeError> {
+    for (key, value) in ipv6_sysctls(ipv6) {
+        let path = format!("/proc/sys/net/ipv6/conf/{name}/{key}");
+        match fs::write(&path, value) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(BridgeError::Ipv6Disable {
+                    name: name.to_owned(),
+                    source,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Lets the kernel route packets sourced from or destined to 127.0.0.0/8
@@ -456,6 +530,56 @@ async fn ensure_gateway(
         .execute()
         .await
         .map_err(BridgeError::Netlink)
+}
+
+/// Adds `config`'s IPv6 gateway to the bridge if it isn't already assigned;
+/// a no-op for an IPv4-only network. The v6 counterpart of
+/// [`ensure_gateway`], including its "same address at a different prefix is
+/// a conflict, not something to silently re-add" rule.
+async fn ensure_gateway6(
+    handle: &Handle,
+    bridge_index: u32,
+    config: &BridgeConfig<'_>,
+) -> Result<(), BridgeError> {
+    let Some(ipv6) = config.ipv6.as_ref() else {
+        return Ok(());
+    };
+
+    let mut addresses = handle
+        .address()
+        .get()
+        .set_link_index_filter(bridge_index)
+        .execute();
+    while let Some(address) = addresses.try_next().await.map_err(BridgeError::Netlink)? {
+        if ipv6_address(&address) == Some(ipv6.gateway) {
+            if address.header.prefix_len == ipv6.prefix {
+                return Ok(());
+            }
+            return Err(BridgeError::Ipv6GatewayPrefixConflict {
+                gateway: ipv6.gateway,
+                prefix: ipv6.prefix,
+            });
+        }
+    }
+
+    handle
+        .address()
+        .add(bridge_index, IpAddr::V6(ipv6.gateway), ipv6.prefix)
+        .execute()
+        .await
+        .map_err(BridgeError::Netlink)
+}
+
+/// Extracts the IPv6 address from an rtnetlink address attribute list, if any.
+fn ipv6_address(address: &rtnetlink::packet_route::address::AddressMessage) -> Option<Ipv6Addr> {
+    address
+        .attributes
+        .iter()
+        .find_map(|attribute| match attribute {
+            AddressAttribute::Address(IpAddr::V6(ipv6))
+            | AddressAttribute::Local(IpAddr::V6(ipv6)) => Some(*ipv6),
+            _ => None,
+        })
 }
 
 /// Extracts the IPv4 address from an rtnetlink address attribute list, if any.
@@ -636,6 +760,71 @@ mod tests {
     #[test]
     fn a_route_on_the_owned_bridge_interface_is_excluded() {
         assert!(route_belongs_to_own_bridge(Some(7), Some(7)));
+    }
+
+    use firecrab_helper_protocol::network::Ipv6AddressMode;
+
+    fn sample_ipv6() -> MicroNetworkIpv6Spec {
+        MicroNetworkIpv6Spec {
+            gateway: "fd00:1234:5678:9abc::1".parse().unwrap(),
+            prefix: 64,
+            address_mode: Ipv6AddressMode::Slaac,
+        }
+    }
+
+    #[test]
+    fn enabling_v6_forwarding_pins_the_uplinks_accept_ra_first() {
+        let sysctls = ipv6_forward_sysctls(&["eth0"]);
+        // Turning on global forwarding makes the kernel ignore router
+        // advertisements on every interface, which would cost the host its
+        // own RA-derived address and default route. accept_ra=2 on the
+        // uplink keeps them, and has to be written before forwarding is.
+        assert_eq!(
+            sysctls,
+            vec![
+                ("/proc/sys/net/ipv6/conf/eth0/accept_ra".to_owned(), "2"),
+                ("/proc/sys/net/ipv6/conf/all/forwarding".to_owned(), "1"),
+            ]
+        );
+    }
+
+    #[test]
+    fn enabling_v6_forwarding_pins_every_distinct_uplink_before_forwarding() {
+        let sysctls = ipv6_forward_sysctls(&["wlan0", "eth0", "eth0"]);
+        assert_eq!(
+            sysctls.last(),
+            Some(&("/proc/sys/net/ipv6/conf/all/forwarding".to_owned(), "1"))
+        );
+        assert!(
+            sysctls
+                .iter()
+                .any(|(path, _)| path == "/proc/sys/net/ipv6/conf/eth0/accept_ra")
+        );
+        assert!(
+            sysctls
+                .iter()
+                .any(|(path, _)| path == "/proc/sys/net/ipv6/conf/wlan0/accept_ra")
+        );
+        assert_eq!(sysctls.len(), 3);
+    }
+
+    #[test]
+    fn an_ipv4_only_bridge_keeps_ipv6_switched_off() {
+        // Unchanged from before dual-stack existed: the kernel's own
+        // autoconfigured addresses are flushed and nothing v6 is served.
+        assert_eq!(ipv6_sysctls(None), vec![("disable_ipv6", "1")]);
+    }
+
+    #[test]
+    fn a_dual_stack_bridge_routes_v6_instead_of_disabling_it() {
+        let sysctls = ipv6_sysctls(Some(&sample_ipv6()));
+        assert!(sysctls.contains(&("disable_ipv6", "0")));
+        // This bridge *is* the guests' router, so it must advertise rather
+        // than listen for advertisements...
+        assert!(sysctls.contains(&("accept_ra", "0")));
+        // ...and forward what they send it.
+        assert!(sysctls.contains(&("forwarding", "1")));
+        assert!(!sysctls.contains(&("disable_ipv6", "1")));
     }
 
     #[test]
