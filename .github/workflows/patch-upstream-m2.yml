@@ -53,12 +53,11 @@ jobs:
               '        # MicroBoot; exercise the public MicroRegistry install path next.\n',
           )
 
-          # The release manifest renamed Alpine to 3.24.1. Only replace the
-          # retired exact alias, not an already-current 3.24.1 spelling.
           text, alias_count = re.subn(r'alpine-3\.24(?!\.1)', 'alpine-3.24.1', text)
           if alias_count < 1:
               raise SystemExit('no retired alpine-3.24 aliases found')
 
+          matrix_expr = '$' + '{{ matrix.template }}'
           hosted = re.compile(
               r'      - name: Import guest image\n.*?(?=      - name: Images on disk\n)',
               re.S,
@@ -66,10 +65,10 @@ jobs:
           hosted_repl = '''      - name: Install M2Image
         run: |
           chmod +x scripts/ci-install-m2image.sh
-          scripts/ci-install-m2image.sh "${{ matrix.template }}"
-          echo "BOOT_TEMPLATE=${{ matrix.template }}" >>"$GITHUB_ENV"
+          scripts/ci-install-m2image.sh "__MATRIX__"
+          echo "BOOT_TEMPLATE=__MATRIX__" >>"$GITHUB_ENV"
 
-'''
+'''.replace('__MATRIX__', matrix_expr)
           text, count = hosted.subn(hosted_repl, text, count=1)
           if count != 1:
               raise SystemExit(f'hosted import block replacements: {count}')
@@ -81,10 +80,10 @@ jobs:
           self_repl = '''      - name: Install M2Image
         run: |
           chmod +x scripts/ci-install-m2image.sh
-          scripts/ci-install-m2image.sh "${{ matrix.template }}"
-          echo "BOOT_TEMPLATE=${{ matrix.template }}" >>"$GITHUB_ENV"
+          scripts/ci-install-m2image.sh "__MATRIX__"
+          echo "BOOT_TEMPLATE=__MATRIX__" >>"$GITHUB_ENV"
 
-'''
+'''.replace('__MATRIX__', matrix_expr)
           text, count = self_hosted.subn(self_repl, text, count=1)
           if count != 1:
               raise SystemExit(f'self-hosted import block replacements: {count}')
