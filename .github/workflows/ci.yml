@@ -213,7 +213,7 @@ jobs:
           AFTER=$(ls -la /var/lib/firecrab 2>&1 || true)
           test "$BEFORE" = "$AFTER" || { echo "--doctor mutated host state"; exit 1; }
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -463,7 +463,7 @@ jobs:
           ls -l /dev/kvm
           uname -a
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -605,7 +605,7 @@ jobs:
       - name: Install pinned toolchain
         run: rustup show
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
