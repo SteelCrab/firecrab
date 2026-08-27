@@ -32,10 +32,10 @@ pub fn resolve_api_base(flag: Option<&str>) -> String {
     if let Some(f) = flag {
         return f.trim_end_matches('/').to_owned();
     }
-    if let Ok(env_val) = std::env::var("FIRECRAB_API") {
-        if !env_val.is_empty() {
-            return env_val.trim_end_matches('/').to_owned();
-        }
+    if let Ok(env_val) = std::env::var("FIRECRAB_API")
+        && !env_val.is_empty()
+    {
+        return env_val.trim_end_matches('/').to_owned();
     }
     DEFAULT_API_BASE.to_owned()
 }
