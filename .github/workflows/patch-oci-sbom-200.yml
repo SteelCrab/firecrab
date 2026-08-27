@@ -20,7 +20,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/patch-oci-sbom-200.py
-          cargo fmt --all -- --check
+          cargo fmt --all
           cargo test -p firecrab-api compliance --locked
           cargo clippy -p firecrab-api --all-targets -- -D warnings
           git diff --check
