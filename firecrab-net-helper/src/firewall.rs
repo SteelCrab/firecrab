@@ -682,10 +682,10 @@ fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enable
          {dnat_forward_accept_rules}\
          add element inet {TABLE_INET} vm_ingress {{ {ip} : jump vm_{tag}_in }}\n\
          {v6_map_elements}\
-         add chain inet {TABLE_INET} vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}\n\
+         add chain inet {TABLE_INET} vm_{tag}_dnat {{ type nat hook prerouting priority -100; policy accept; }}\n\
          flush chain inet {TABLE_INET} vm_{tag}_dnat\n\
          {dnat_prerouting_rules}\
-         add chain inet {TABLE_INET} vm_{tag}_dnat_out {{ type nat hook output priority dstnat; policy accept; }}\n\
+         add chain inet {TABLE_INET} vm_{tag}_dnat_out {{ type nat hook output priority -100; policy accept; }}\n\
          flush chain inet {TABLE_INET} vm_{tag}_dnat_out\n\
          {dnat_output_rules}"
     )
@@ -732,9 +732,9 @@ fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr, ipv6: Option<Ipv6Addr>)
          delete chain inet {TABLE_INET} vm_{tag}_eg\n\
          delete element inet {TABLE_INET} vm_ingress {{ {ipv4} }}\n\
          delete chain inet {TABLE_INET} vm_{tag}_in\n\
-         add chain inet {TABLE_INET} vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}\n\
+         add chain inet {TABLE_INET} vm_{tag}_dnat {{ type nat hook prerouting priority -100; policy accept; }}\n\
          delete chain inet {TABLE_INET} vm_{tag}_dnat\n\
-         add chain inet {TABLE_INET} vm_{tag}_dnat_out {{ type nat hook output priority dstnat; policy accept; }}\n\
+         add chain inet {TABLE_INET} vm_{tag}_dnat_out {{ type nat hook output priority -100; policy accept; }}\n\
          delete chain inet {TABLE_INET} vm_{tag}_dnat_out\n"
     )
 }
@@ -1352,10 +1352,10 @@ mod tests {
         ];
         let ruleset = render_vm_policy("eth0", &policy);
         assert!(ruleset.contains(&format!(
-            "add chain inet firecrab vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}"
+            "add chain inet firecrab vm_{tag}_dnat {{ type nat hook prerouting priority -100; policy accept; }}"
         )));
         assert!(ruleset.contains(&format!(
-            "add chain inet firecrab vm_{tag}_dnat_out {{ type nat hook output priority dstnat; policy accept; }}"
+            "add chain inet firecrab vm_{tag}_dnat_out {{ type nat hook output priority -100; policy accept; }}"
         )));
         assert!(ruleset.contains(&format!(
             "add rule inet firecrab vm_{tag}_dnat iifname \"eth0\" tcp dport 8080 dnat ip to 172.30.0.42:80"

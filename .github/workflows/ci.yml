@@ -148,7 +148,7 @@ jobs:
     # A GitHub-hosted Linux runner is a throwaway VM with systemd, so the whole
     # installer can be exercised for real — the one thing this cannot cover is
     # booting a guest, since install.sh never installs a guest image itself
-    # (see below); that needs an OCI import, covered by the vm-boot jobs.
+    # (see below); that needs an M2Image package install, covered by vm-boot.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -171,6 +171,7 @@ jobs:
         run: |
           shellcheck install.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
+            scripts/ci-install-m2image.sh \
             scripts/verify-release-binary.sh \
             scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \
             scripts/build-m2images.sh scripts/package-m2images.sh \
@@ -293,12 +294,12 @@ jobs:
           # microNetworkId is required (serde) — omit it → 400.
           test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:5523/api/vms \
                -H 'content-type: application/json' \
-               -d '{"name":"no-net","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2}')" = 400
+               -d '{"name":"no-net","template":"alpine-3.24.1","cpu":1,"ram":512,"diskGb":2}')" = 400
 
           # Unknown MicroNetwork → 400 field error, no VM row left behind.
           code=$(curl -s -o /tmp/create-bad-net.json -w '%{http_code}' -X POST http://127.0.0.1:5523/api/vms \
                -H 'content-type: application/json' \
-               -d '{"name":"bad-net","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2,"microNetworkId":"00000000-0000-0000-0000-000000000099"}')
+               -d '{"name":"bad-net","template":"alpine-3.24.1","cpu":1,"ram":512,"diskGb":2,"microNetworkId":"00000000-0000-0000-0000-000000000099"}')
           test "$code" = 400
           grep -q microNetworkId /tmp/create-bad-net.json
           test "$(curl -fsS http://127.0.0.1:5523/api/vms)" = '[]'
@@ -306,7 +307,7 @@ jobs:
           # Valid network but no guest image installed → template rejected.
           code=$(curl -s -o /tmp/create-no-image.json -w '%{http_code}' -X POST http://127.0.0.1:5523/api/vms \
                -H 'content-type: application/json' \
-               -d "{\"name\":\"need-image\",\"template\":\"alpine-3.24\",\"cpu\":1,\"ram\":512,\"diskGb\":2,\"microNetworkId\":\"$NET\"}")
+               -d "{\"name\":\"need-image\",\"template\":\"alpine-3.24.1\",\"cpu\":1,\"ram\":512,\"diskGb\":2,\"microNetworkId\":\"$NET\"}")
           test "$code" = 400
           grep -q template /tmp/create-no-image.json
           test "$(curl -fsS http://127.0.0.1:5523/api/vms)" = '[]'
@@ -429,9 +430,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep in sync with firecrab-api/src/templates.rs default_specs().
+        # Keep in sync with packaging/m2images.json and known_specs().
         template:
-          - alpine-3.24
+          - alpine-3.24.1
           - ubuntu-26.04
           - rocky-9.8
         # GitHub-hosted Linux images with nested KVM (x86_64).
@@ -473,57 +474,24 @@ jobs:
         run: ./scripts/ci-prepare-install-payload.sh
 
       - name: Install firecrab
-        # Alpine is the M2Image catalog default; install.sh no longer
-        # preinstalls a guest image itself (see the next step).
+        # install.sh intentionally leaves guest images to MicroRegistry or
+        # MicroBoot; exercise the public MicroRegistry install path next.
         run: |
           set -euo pipefail
           sudo -E env "PATH=$PATH" ./install.sh \
             --bin-dir target/release \
             --dashboard-dir firecrab-frontend/dist
 
-      - name: Import guest image
-        # Ubuntu/Rocky come from OCI import now, replacing install.sh's old
-        # --with-ubuntu-image/--with-rocky-image. The registered alias is the
-        # reference's repository and tag (public-docs/oci.md#name-and-register),
-        # which does not always match matrix.template (e.g. Rocky's Docker Hub
-        # repo is rockylinux/rockylinux, not rocky) — so it is captured into
-        # BOOT_TEMPLATE instead of assumed.
+      - name: Install M2Image
         run: |
-          set -euo pipefail
-          case "${{ matrix.template }}" in
-            ubuntu-*) reference=ubuntu:26.04 ;;
-            rocky-*) reference=rockylinux/rockylinux:9.8 ;;
-            *)
-              echo "BOOT_TEMPLATE=${{ matrix.template }}" >>"$GITHUB_ENV"
-              exit 0
-              ;;
-          esac
-          alias=$(curl -fsS "http://127.0.0.1:5523/api/oci/inspect?reference=$reference" \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["alias"])')
-          body=$(mktemp)
-          code=$(curl -sS -o "$body" -w '%{http_code}' -X POST http://127.0.0.1:5523/api/oci/import \
-            -H 'content-type: application/json' -d "{\"reference\":\"$reference\"}")
-          case "$code" in
-            202) ;;
-            409) echo "BOOT_TEMPLATE=$alias" >>"$GITHUB_ENV"; exit 0 ;;
-            *) echo "oci/import $reference: HTTP $code $(cat "$body")" >&2; exit 1 ;;
-          esac
-          status=unknown
-          for _ in $(seq 1 180); do
-            status=$(curl -fsS "http://127.0.0.1:5523/api/oci/import/$alias" \
-              | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
-            case "$status" in
-              succeeded) break ;;
-              failed) echo "oci/import $reference failed" >&2; exit 1 ;;
-              *) sleep 2 ;;
-            esac
-          done
-          test "$status" = succeeded
-          echo "BOOT_TEMPLATE=$alias" >>"$GITHUB_ENV"
+          chmod +x scripts/ci-install-m2image.sh
+          scripts/ci-install-m2image.sh "${{ matrix.template }}"
+          echo "BOOT_TEMPLATE=${{ matrix.template }}" >>"$GITHUB_ENV"
 
       - name: Images on disk
         run: |
           sudo ls -l /var/lib/firecrab/images/rootfs/ || true
+          curl -fsS http://127.0.0.1:5523/api/images
           curl -fsS http://127.0.0.1:5523/api/vms
 
       - name: Boot M2 guest (create → start → ping → stop)
@@ -555,7 +523,7 @@ jobs:
       matrix:
         include:
           - host: debian-12
-            template: alpine-3.24
+            template: alpine-3.24.1
             runner: '["self-hosted","linux","x64","kvm","debian-12"]'
           - host: debian-12
             template: ubuntu-26.04
@@ -564,7 +532,7 @@ jobs:
             template: rocky-9.8
             runner: '["self-hosted","linux","x64","kvm","debian-12"]'
           - host: fedora
-            template: alpine-3.24
+            template: alpine-3.24.1
             runner: '["self-hosted","linux","x64","kvm","fedora"]'
           - host: fedora
             template: ubuntu-26.04
@@ -573,7 +541,7 @@ jobs:
             template: rocky-9.8
             runner: '["self-hosted","linux","x64","kvm","fedora"]'
           - host: archlinux
-            template: alpine-3.24
+            template: alpine-3.24.1
             runner: '["self-hosted","linux","x64","kvm","arch"]'
           - host: archlinux
             template: ubuntu-26.04
@@ -582,7 +550,7 @@ jobs:
             template: rocky-9.8
             runner: '["self-hosted","linux","x64","kvm","arch"]'
           - host: opensuse
-            template: alpine-3.24
+            template: alpine-3.24.1
             runner: '["self-hosted","linux","x64","kvm","opensuse"]'
           - host: opensuse
             template: ubuntu-26.04
@@ -591,7 +559,7 @@ jobs:
             template: rocky-9.8
             runner: '["self-hosted","linux","x64","kvm","opensuse"]'
           - host: aarch64
-            template: alpine-3.24
+            template: alpine-3.24.1
             runner: '["self-hosted","linux","arm64","kvm"]'
     steps:
       - uses: actions/checkout@v7
@@ -621,44 +589,11 @@ jobs:
             --bin-dir target/release \
             --dashboard-dir firecrab-frontend/dist
 
-      - name: Import guest image
-        # Ubuntu/Rocky come from OCI import; see the vm-boot job for why the
-        # registered alias (BOOT_TEMPLATE) is captured instead of assumed to
-        # equal matrix.template. A self-hosted runner is long-lived, so a
-        # prior nightly's image is expected: 409 (already registered) is not
-        # an error here.
+      - name: Install M2Image
         run: |
-          set -euo pipefail
-          case "${{ matrix.template }}" in
-            ubuntu-*) reference=ubuntu:26.04 ;;
-            rocky-*) reference=rockylinux/rockylinux:9.8 ;;
-            *)
-              echo "BOOT_TEMPLATE=${{ matrix.template }}" >>"$GITHUB_ENV"
-              exit 0
-              ;;
-          esac
-          alias=$(curl -fsS "http://127.0.0.1:5523/api/oci/inspect?reference=$reference" \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["alias"])')
-          body=$(mktemp)
-          code=$(curl -sS -o "$body" -w '%{http_code}' -X POST http://127.0.0.1:5523/api/oci/import \
-            -H 'content-type: application/json' -d "{\"reference\":\"$reference\"}")
-          case "$code" in
-            202) ;;
-            409) echo "BOOT_TEMPLATE=$alias" >>"$GITHUB_ENV"; exit 0 ;;
-            *) echo "oci/import $reference: HTTP $code $(cat "$body")" >&2; exit 1 ;;
-          esac
-          status=unknown
-          for _ in $(seq 1 180); do
-            status=$(curl -fsS "http://127.0.0.1:5523/api/oci/import/$alias" \
-              | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
-            case "$status" in
-              succeeded) break ;;
-              failed) echo "oci/import $reference failed" >&2; exit 1 ;;
-              *) sleep 2 ;;
-            esac
-          done
-          test "$status" = succeeded
-          echo "BOOT_TEMPLATE=$alias" >>"$GITHUB_ENV"
+          chmod +x scripts/ci-install-m2image.sh
+          scripts/ci-install-m2image.sh "${{ matrix.template }}"
+          echo "BOOT_TEMPLATE=${{ matrix.template }}" >>"$GITHUB_ENV"
 
       - name: Boot M2 guest
         run: |
