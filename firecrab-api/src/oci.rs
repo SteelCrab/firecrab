@@ -2079,6 +2079,8 @@ pub(crate) mod provision;
 #[cfg(test)]
 mod provision_tests;
 
+mod compliance;
+
 mod ext4;
 
 #[cfg(test)]
@@ -3327,6 +3329,40 @@ async fn import_oci_image_in_scratch(
     tracker.append_log(alias, "merging layers");
     let merged = merge_validated_layers(&validated, &scratch.join("rootfs")).await?;
 
+    tracker.append_log(alias, "detecting OCI package database");
+    let sbom = match compliance::generate_spdx(
+        merged.path(),
+        alias,
+        reference.version.as_str(),
+        cached.resolved.architecture,
+    ) {
+        Ok(Some(document)) => {
+            tracker.append_log(
+                alias,
+                format!(
+                    "generated SPDX SBOM from {} ({} packages)",
+                    document.package_manager, document.package_count
+                ),
+            );
+            Some(document)
+        }
+        Ok(None) => {
+            let warning =
+                "warning: no apk/dpkg/rpm package database detected; importing without an SBOM";
+            tracker.append_log(alias, warning);
+            tracing::warn!(alias, "{warning}");
+            None
+        }
+        Err(error) => {
+            tracker.append_log(
+                alias,
+                format!("warning: OCI SBOM generation failed: {error}; importing without an SBOM"),
+            );
+            tracing::warn!(alias, error = %error, "OCI SBOM generation failed; continuing import");
+            None
+        }
+    };
+
     tracker.append_log(alias, "provisioning guest runtime");
     let options = GuestRuntimeOptions {
         image_root,
@@ -3346,9 +3382,44 @@ async fn import_oci_image_in_scratch(
     tracker.append_log(alias, "pairing host kernel");
     let bootable = pair_ext4_with_host_kernel(ext4, image_root).await?;
 
-    tracker.append_log(alias, "naming and registering template");
+    tracker.append_log(alias, "naming template");
     let named = name_oci_image(bootable, reference, templates)?;
-    register_named_oci_image(named, templates)?;
+
+    let compliance_path = if let Some(document) = sbom.as_ref() {
+        match compliance::write_spdx_bundle(
+            image_root,
+            alias,
+            cached.resolved.architecture,
+            document,
+        ) {
+            Ok(path) => {
+                tracker.append_log(alias, format!("attached SPDX SBOM at {}", path.display()));
+                Some(path)
+            }
+            Err(error) => {
+                tracker.append_log(
+                    alias,
+                    format!("warning: could not persist OCI SBOM: {error}; continuing import"),
+                );
+                tracing::warn!(
+                    alias,
+                    error = %error,
+                    "could not persist OCI SBOM; continuing import"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    tracker.append_log(alias, "registering template");
+    if let Err(error) = register_named_oci_image(named, templates) {
+        if compliance_path.is_some() {
+            compliance::remove_bundle(image_root, alias, cached.resolved.architecture);
+        }
+        return Err(error);
+    }
     Ok(())
 }
 

@@ -88,12 +88,8 @@ pub(super) fn generate_spdx(
         PackageDb::Dpkg(path) => parse_dpkg(&read_text(path)?)?,
         PackageDb::Rpm(path) => parse_rpm_db(path)?,
     };
-    packages.sort_by(|a, b| {
-        (&a.name, &a.version, &a.arch).cmp(&(&b.name, &b.version, &b.arch))
-    });
-    packages.dedup_by(|a, b| {
-        a.name == b.name && a.version == b.version && a.arch == b.arch
-    });
+    packages.sort_by(|a, b| (&a.name, &a.version, &a.arch).cmp(&(&b.name, &b.version, &b.arch)));
+    packages.dedup_by(|a, b| a.name == b.name && a.version == b.version && a.arch == b.arch);
     if packages.is_empty() {
         return Err(format!(
             "{} package database contained no installed packages: {}",
@@ -224,12 +220,10 @@ fn parse_dpkg(text: &str) -> Result<Vec<PackageRecord>, String> {
         for line in paragraph.lines() {
             if line.starts_with([' ', '\t']) {
                 if let Some(key) = current.as_ref() {
-                    fields
-                        .entry(key.clone())
-                        .and_modify(|value| {
-                            value.push(' ');
-                            value.push_str(line.trim());
-                        });
+                    fields.entry(key.clone()).and_modify(|value| {
+                        value.push(' ');
+                        value.push_str(line.trim());
+                    });
                 }
                 continue;
             }
@@ -308,7 +302,11 @@ fn parse_rpm_header(blob: &[u8]) -> Result<PackageRecord, String> {
     let store_size = be_u32(blob, start + 12)? as usize;
     let indexes_start = start + 16;
     let store_start = indexes_start
-        .checked_add(index_count.checked_mul(16).ok_or("RPM header index overflow")?)
+        .checked_add(
+            index_count
+                .checked_mul(16)
+                .ok_or("RPM header index overflow")?,
+        )
         .ok_or("RPM header offset overflow")?;
     let store_end = store_start
         .checked_add(store_size)
@@ -350,8 +348,7 @@ fn parse_rpm_header(blob: &[u8]) -> Result<PackageRecord, String> {
     Ok(PackageRecord {
         name,
         version: complete_version,
-        arch: rpm_string(store, indexes.get(&RPMTAG_ARCH))?
-            .unwrap_or_else(|| "unknown".to_owned()),
+        arch: rpm_string(store, indexes.get(&RPMTAG_ARCH))?.unwrap_or_else(|| "unknown".to_owned()),
         license: rpm_string(store, indexes.get(&RPMTAG_LICENSE))?.unwrap_or_default(),
         source: rpm_string(store, indexes.get(&RPMTAG_SOURCERPM))?.unwrap_or_default(),
     })
@@ -378,7 +375,10 @@ fn rpm_string(store: &[u8], index: Option<&RpmIndex>) -> Result<Option<String>, 
     let bytes = store
         .get(index.offset..)
         .ok_or_else(|| "RPM string offset is outside the data store".to_owned())?;
-    let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(bytes.len());
     let value = std::str::from_utf8(&bytes[..end])
         .map_err(|error| format!("RPM string is not UTF-8: {error}"))?;
     Ok(Some(value.to_owned()))
@@ -525,7 +525,7 @@ fn package_fingerprint(packages: &[PackageRecord]) -> String {
         digest.update(package.source.as_bytes());
         digest.update([0xff]);
     }
-    format!("{digest:x}")
+    format!("{:x}", digest.finalize())
 }
 
 fn rfc3339_now() -> String {
@@ -548,8 +548,7 @@ fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let day_of_era = z - era * 146_097;
     let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096)
-            / 365;
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let mut year = year_of_era + era * 400;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_prime = (5 * day_of_year + 2) / 153;
@@ -616,14 +615,9 @@ mod tests {
     fn unknown_package_manager_is_warning_only_signal() {
         let directory = tempfile::tempdir().unwrap();
         assert!(
-            generate_spdx(
-                directory.path(),
-                "scratch",
-                "latest",
-                Architecture::X86_64,
-            )
-            .unwrap()
-            .is_none()
+            generate_spdx(directory.path(), "scratch", "latest", Architecture::X86_64,)
+                .unwrap()
+                .is_none()
         );
     }
 
@@ -665,7 +659,12 @@ mod tests {
                 b"bash-5.1.8-9.el9.src.rpm\0".to_vec(),
                 1,
             ),
-            (RPMTAG_EPOCH, RPM_INT32_TYPE, 0_u32.to_be_bytes().to_vec(), 1),
+            (
+                RPMTAG_EPOCH,
+                RPM_INT32_TYPE,
+                0_u32.to_be_bytes().to_vec(),
+                1,
+            ),
         ]);
         let package = parse_rpm_header(&blob).unwrap();
         assert_eq!(package.name, "bash");
