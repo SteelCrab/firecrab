@@ -194,6 +194,15 @@ else
 fi
 rm -f "$piped_out" "$piped_err"
 
+# FireCrab installs the upstream Firecracker binary from its official release
+# archive. That installer must preserve the exact LICENSE/NOTICE/THIRD-PARTY
+# files shipped beside the binary and reject an incomplete release archive.
+if bash "$ROOT/scripts/test-install-firecracker.sh"; then
+    pass "Firecracker release notices are preserved"
+else
+    fail "Firecracker release notices are preserved"
+fi
+
 # --- host tarball layout ----------------------------------------------------
 
 write_elf64() {

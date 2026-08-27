@@ -53,6 +53,10 @@ PAYLOAD_BIN=
 PAYLOAD_UNITS=
 PAYLOAD_EXTRACT=
 PAYLOAD_DASHBOARD=
+PAYLOAD_LICENSE=
+PAYLOAD_THIRD_PARTY=
+PAYLOAD_INVENTORY=
+PAYLOAD_GPL=
 
 # BEGIN RELEASE_HELPERS
 if [ -f "$REPO_ROOT/scripts/firecrab-release.sh" ]; then
@@ -409,7 +413,7 @@ ensure_firecracker() {
             return 1
         fi
     fi
-    if $SUDO bash "$script"; then
+    if $SUDO env FIRECRACKER_NOTICE_DIR="$SHAREDIR/firecracker" bash "$script"; then
         rm -f "$fetched"
         have firecracker && return 0
     fi
@@ -452,6 +456,10 @@ Tag a GitHub Release, or install local binaries:
         firecrab_assert_binary_arch "$PAYLOAD_ROOT/$name" "$arch" \
             || die "$tarball: $name is not a $arch binary"
     done
+    for name in LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json \
+            licenses/GPL-2.0-only.txt; do
+        [ -f "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing compliance artifact $name"
+    done
     log "host bundle $arch/$LIBC"
 }
 
@@ -463,6 +471,16 @@ resolve_payload() {
         PAYLOAD_BIN=$BIN_DIR
         PAYLOAD_UNITS=$REPO_ROOT/packaging/systemd
         PAYLOAD_EXTRACT=$REPO_ROOT/scripts/firecracker-menual
+        PAYLOAD_LICENSE=$REPO_ROOT/LICENSE
+        PAYLOAD_GPL=$REPO_ROOT/licenses/GPL-2.0-only.txt
+        if [ -f "$REPO_ROOT/dist/compliance/THIRD_PARTY_NOTICES.txt" ] \
+            && [ -f "$REPO_ROOT/dist/compliance/release-license-inventory.json" ]; then
+            PAYLOAD_THIRD_PARTY=$REPO_ROOT/dist/compliance/THIRD_PARTY_NOTICES.txt
+            PAYLOAD_INVENTORY=$REPO_ROOT/dist/compliance/release-license-inventory.json
+        else
+            PAYLOAD_THIRD_PARTY=
+            PAYLOAD_INVENTORY=
+        fi
         if [ -n "$DASHBOARD_DIR" ]; then
             PAYLOAD_DASHBOARD=$DASHBOARD_DIR
         elif [ -f "$REPO_ROOT/firecrab-frontend/dist/index.html" ]; then
@@ -478,6 +496,10 @@ resolve_payload() {
     PAYLOAD_UNITS=$PAYLOAD_ROOT/systemd
     PAYLOAD_EXTRACT=$PAYLOAD_ROOT
     PAYLOAD_DASHBOARD=$PAYLOAD_ROOT/dashboard
+    PAYLOAD_LICENSE=$PAYLOAD_ROOT/LICENSE
+    PAYLOAD_THIRD_PARTY=$PAYLOAD_ROOT/THIRD_PARTY_NOTICES.txt
+    PAYLOAD_INVENTORY=$PAYLOAD_ROOT/release-license-inventory.json
+    PAYLOAD_GPL=$PAYLOAD_ROOT/licenses/GPL-2.0-only.txt
 }
 
 report_payload() {
@@ -560,6 +582,27 @@ ensure_directories() {
             "$DATADIR" "$DATADIR/data" "$DATADIR/images" "$DATADIR/updates"
     $SUDO install -d -o root -g "$FIRECRAB_GROUP" -m 0750 "$CONFDIR"
     log "directories ready under $DATADIR, $CONFDIR"
+}
+
+# Keep the same release attribution available after the archive is unpacked.
+# Firecracker's separately installed upstream notices live below firecracker/.
+install_compliance() {
+    [ -f "$PAYLOAD_LICENSE" ] || die "missing FireCrab LICENSE in install payload"
+    [ -f "$PAYLOAD_GPL" ] || die "missing GPL-2.0 text in install payload"
+    $SUDO install -d -o root -g root -m 0755 "$SHAREDIR/licenses"
+    $SUDO install -o root -g root -m 0644 "$PAYLOAD_LICENSE" "$SHAREDIR/LICENSE"
+    $SUDO install -o root -g root -m 0644 \
+        "$PAYLOAD_GPL" "$SHAREDIR/licenses/GPL-2.0-only.txt"
+    if [ -n "$PAYLOAD_THIRD_PARTY" ] && [ -n "$PAYLOAD_INVENTORY" ]; then
+        $SUDO install -o root -g root -m 0644 \
+            "$PAYLOAD_THIRD_PARTY" "$SHAREDIR/THIRD_PARTY_NOTICES.txt"
+        $SUDO install -o root -g root -m 0644 \
+            "$PAYLOAD_INVENTORY" "$SHAREDIR/release-license-inventory.json"
+    else
+        $SUDO rm -f "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \
+            "$SHAREDIR/release-license-inventory.json"
+    fi
+    log "license and attribution material installed to $SHAREDIR"
 }
 
 # Puts the payload binaries, and the dashboard, where the units expect them.
@@ -833,6 +876,7 @@ do_install() {
     resolve_payload
     ensure_account
     ensure_directories
+    install_compliance
     install_binaries
     label_selinux_binaries
     install_config
@@ -870,6 +914,11 @@ do_uninstall() {
     $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
     $SUDO rm -f "$PREFIX/bin/firecrab"
     $SUDO rm -rf "$SHAREDIR/dashboard"
+    $SUDO rm -f "$SHAREDIR/LICENSE" "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \
+        "$SHAREDIR/release-license-inventory.json"
+    $SUDO rm -rf "$SHAREDIR/licenses"
+    # Firecracker is installed independently and is intentionally not removed;
+    # keep its upstream notices alongside that remaining binary.
     $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true
     # The file-context rule outlives the directory, so leaving it behind would
     # silently relabel whatever is installed there next.
