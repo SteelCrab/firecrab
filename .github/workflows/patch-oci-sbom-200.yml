@@ -1,0 +1,36 @@
+name: Patch OCI SBOM 200
+
+on:
+  push:
+    branches:
+      - feat/oci-sbom-200
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/oci-sbom-200
+
+      - name: Apply integration patch
+        run: |
+          set -euo pipefail
+          python3 scripts/patch-oci-sbom-200.py
+          cargo fmt --all -- --check
+          cargo test -p firecrab-api compliance --locked
+          cargo clippy -p firecrab-api --all-targets -- -D warnings
+          git diff --check
+
+      - name: Commit durable changes
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add firecrab-api/src/oci.rs firecrab-api/src/oci/compliance.rs
+          git diff --cached --check
+          git commit -m 'feat(oci): generate SPDX SBOMs during import'
+          git push origin HEAD:feat/oci-sbom-200
