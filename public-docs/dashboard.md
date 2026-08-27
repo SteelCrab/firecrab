@@ -78,6 +78,9 @@ npm run dev --prefix firecrab-frontend
 - Both commands carry `<hostIP>` as a placeholder: the address the dashboard is served from
   is often not the one that reaches the host from elsewhere
 - SHA256 is the guest `ssh_host_ed25519` key, not the PEM. First `ssh` prompt must match.
+- Terminal chrome is light; the serial surface stays dark
+- Inspect rail: four equal cards (general, specs, network, usage) then ports + storage; a bottom white bar toggles it
+- Terminal Network group: ipv4, ipv6 (`—` when the network is IPv4-only), mac, egress, network id
 - List poll: 3 seconds
 - Detail: start progress and logs
 - While `running`, list / detail / terminal show guest OS CPU percent and memory used (MemTotal − MemAvailable) when the Firecrab Metrics Agent is in the guest (systemd on Ubuntu/Rocky, OpenRC on Alpine)

@@ -18,6 +18,9 @@ extract_arm64_image="${script_dir}/extract-arm64-image"
 build_dir="${repo_dir}/build/alpine-rootfs"
 rootfs_size='512M'
 rootfs_hostname='firecrab'
+m2image_alias=${M2IMAGE_ALIAS:-}
+sbom_output=${M2IMAGE_SBOM_OUTPUT:-}
+sbom_generator="${repo_dir}/scripts/m2image_sbom.py"
 
 # Like the Ubuntu builder, this script expands the official base archive into
 # a staging directory, installs packages with the distribution's own package
@@ -30,7 +33,11 @@ rootfs_hostname='firecrab'
 # Alpine builds alongside it (mkinitfs) has to ship as the VM's initrd too —
 # without it the kernel can never reach /dev/vda to mount the real root.
 # bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu).
-rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
+# spdx-licenses-text: Alpine's normal runtime packages intentionally omit most
+# license files. Keep the distribution-packaged SPDX License List text corpus
+# in the image so release packaging can recover a complete canonical license
+# bundle without fetching mutable web content or inventing license text.
+rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt spdx-licenses-text'
 
 info() {
   printf '[INFO] %s\n' "$1"
@@ -432,6 +439,8 @@ main() {
       "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
       "M2IMAGE_DISTRO_SERIES=${alpine_series}" \
       "M2IMAGE_DISTRO_VERSION=${alpine_version_setting}" \
+      "M2IMAGE_ALIAS=${m2image_alias}" \
+      "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \
       "FIRECRAB_SSH_PUBLIC_KEY=${FIRECRAB_SSH_PUBLIC_KEY:-}" \
       "$script_path"
   fi
@@ -488,6 +497,21 @@ main() {
     "$mount_dir" "$archive_path" "$ssh_public_key" "$kernel_artifact_dir" "$artifact_dir" \
     "$alpine_branch" "$alpine_version" "$alpine_arch" "$rootfs_hostname" "$rootfs_size" \
     "$rootfs_packages" "$initrd_image_name"
+
+  if [ -n "$sbom_output" ]; then
+    [ -n "$m2image_alias" ] || fail 'M2IMAGE_ALIAS is required with M2IMAGE_SBOM_OUTPUT'
+    require_command python3
+    [ -f "$mount_dir/lib/apk/db/installed" ] \
+      || fail 'Alpine package database missing from built staging root'
+    python3 "$sbom_generator" \
+      --format alpine --distribution alpine \
+      --image-alias "$m2image_alias" --image-version "$alpine_version" \
+      --architecture "$alpine_arch" \
+      --package-db "$mount_dir/lib/apk/db/installed" --output "$sbom_output"
+    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+      chown "${SUDO_UID}:${SUDO_GID}" "$sbom_output"
+    fi
+  fi
 
   extract_kernel
   restore_output_ownership

@@ -1,0 +1,34 @@
+name: Clippy warnings
+
+on:
+  pull_request:
+
+jobs:
+  warnings:
+    name: Clippy warning regression gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Warning gate unit tests
+        run: python3 -m unittest scripts/test_check_clippy_warnings.py
+
+      - name: Collect and gate Clippy warnings
+        run: |
+          cargo clippy --workspace --all-targets --message-format=json > clippy-messages.json
+          python3 scripts/check_clippy_warnings.py \
+            clippy-messages.json .github/clippy-warning-baseline.json

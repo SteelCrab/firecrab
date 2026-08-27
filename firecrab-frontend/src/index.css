@@ -933,15 +933,18 @@ table.vm-table {
 .detail-usage-panel .panel-title {
   margin-bottom: 0.65rem;
 }
-.console-detail-usage-group {
-  grid-column: 1 / -1;
-}
 .console-detail-usage-group .usage-charts {
   margin: 0;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  max-width: 12.5rem;
+  gap: 0.45rem;
 }
 .console-detail-usage-group .usage-spark {
-  max-width: none;
-  min-width: 10rem;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 12.5rem;
+  min-width: 0;
 }
 .vm-table .name { font-weight: 600; }
 .link-button {
@@ -1222,15 +1225,26 @@ table.image-table .image-package-url a:hover {
   font-size: 0.85rem;
 }
 
-/* Full-page serial console (`#/console/<id>`) — usually opened in a new
-   window from the VM list. Toolbar + xterm + bottom detail; "터미널만"
-   collapses chrome so only the surface remains. */
+/* Full-page serial console (`#/console/<id>`). Chrome matches the light
+   dashboard; the xterm well stays dark. Resource sparks stay in one
+   inspect column instead of stretching the full rail. */
 .console-page {
+  --tty-bg: var(--bg);
+  --tty-panel: var(--bg-panel);
+  --tty-line: var(--line);
+  --tty-ink: var(--ink);
+  --tty-dim: var(--shell);
+  --tty-ember: var(--ember);
+  --tty-ready: var(--ready);
+  --tty-warn: var(--amber);
+  --tty-bad: var(--error);
+  --tty-term: #171b22;
   position: fixed;
   inset: 0;
   display: flex;
   flex-direction: column;
-  background: var(--ink);
+  background: var(--tty-panel);
+  color: var(--tty-ink);
   z-index: 20;
   width: 100%;
   height: 100%;
@@ -1243,18 +1257,382 @@ table.image-table .image-package-url a:hover {
   gap: 0.15rem;
   flex-shrink: 0;
 }
-.console-bar {
+.console-page .console-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 0.65rem;
-  padding: 0.55rem 0.75rem;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--line);
+  gap: 0.45rem 0.85rem;
+  padding: 0.4rem 0.85rem;
+  background: var(--tty-panel);
+  border-bottom: 1px solid var(--tty-line);
   font-family: var(--font-mono);
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   flex: 0 0 auto;
 }
+.console-session {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  letter-spacing: 0.01em;
+}
+.console-session-caret {
+  color: var(--tty-ember);
+  font-size: 0.7rem;
+  line-height: 1;
+  transform: translateY(1px);
+}
+.console-session-name {
+  color: var(--tty-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.console-session-host,
+.console-session-addr {
+  color: var(--tty-dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+.console-session-addr { color: var(--tty-ink); }
+.console-page .console-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--tty-dim);
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.console-page .console-status-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 1px;
+  background: currentColor;
+}
+.console-page .console-status.connecting { color: var(--tty-warn); }
+.console-page .console-status.connecting .console-status-dot {
+  animation: console-pulse 1.1s ease-in-out infinite;
+}
+.console-page .console-status.connected { color: var(--tty-ready); }
+.console-page .console-status.error { color: var(--tty-bad); }
+
+@keyframes console-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .console-page .console-status.connecting .console-status-dot {
+    animation: none;
+  }
+}
+
+.console-bar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+.console-page .console-bar-btn {
+  border: 0;
+  background: transparent;
+  color: var(--tty-dim);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.28rem 0.45rem;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.console-page .console-bar-btn:hover {
+  color: var(--tty-ink);
+  background: var(--tty-bg);
+}
+.console-page .console-bar-btn.is-active {
+  color: var(--tty-ember);
+  background: rgba(196, 62, 18, 0.14);
+}
+
+.console-page .console-settings { position: relative; flex-shrink: 0; }
+.console-page .console-settings-pop {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 2;
+  min-width: 12rem;
+  padding: 0.7rem 0.8rem;
+  background: var(--tty-panel);
+  border: 1px solid var(--tty-line);
+  border-radius: 2px;
+  box-shadow: 0 0.5rem 1.25rem rgba(23, 27, 34, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.console-page .console-settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--tty-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.console-page .console-settings-row select {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--tty-ink);
+  background: var(--tty-bg);
+  border: 1px solid var(--tty-line);
+  border-radius: 2px;
+  padding: 0.3rem 0.4rem;
+}
+
+.console-page .console-close {
+  border: 0;
+  background: none;
+  color: var(--tty-dim);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.28rem 0.45rem;
+  flex-shrink: 0;
+}
+.console-page .console-close:hover { color: var(--tty-bad); }
+
+/* `flex: 1; min-height: 0` so the surface absorbs leftover height after the
+   detail panel and FitAddon measures the real box on chrome show/hide.
+   A non-zero min-height keeps the first fit() from collapsing to 0 rows. */
+.console-page .console-surface {
+  flex: 1 1 auto;
+  min-height: 12rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  overflow: hidden;
+  position: relative;
+  background: var(--tty-term);
+}
+.console-page.is-terminal-only .console-surface {
+  padding: 0.5rem 0.65rem;
+  min-height: 0;
+}
+.console-page .console-surface .xterm {
+  height: 100% !important;
+  width: 100% !important;
+  padding: 0;
+}
+.console-page .console-surface .xterm-viewport {
+  overflow-y: auto !important;
+}
+.console-page .console-surface .xterm-screen {
+  height: 100%;
+}
+.console-page .console-surface .xterm .xterm-helper-textarea {
+  z-index: 10 !important;
+}
+.console-page .console-surface .xterm .composition-view {
+  background: var(--tty-term);
+  color: #e8ecf1;
+  font-family: var(--font-mono);
+  z-index: 11;
+}
+
+.console-page .console-detail {
+  flex: 0 0 auto;
+  background: var(--tty-panel);
+  border-top: 1px solid var(--tty-line);
+  color: var(--tty-ink);
+  padding: 0.55rem 0.85rem 0.55rem;
+}
+.console-inspect-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.38rem 0.85rem;
+  border: 0;
+  border-top: 1px solid var(--tty-line);
+  background: var(--tty-panel);
+  color: var(--tty-dim);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: lowercase;
+  cursor: pointer;
+  text-align: left;
+}
+.console-inspect-bar:hover,
+.console-inspect-bar:focus-visible {
+  color: var(--tty-ink);
+  background: var(--tty-bg);
+}
+.console-inspect-bar.is-open {
+  border-top-color: var(--tty-line);
+}
+.console-inspect-chevron {
+  color: var(--tty-ember);
+  font-size: 0.75rem;
+  line-height: 1;
+  width: 0.9rem;
+}
+.console-inspect-bar-label {
+  flex: 1 1 auto;
+  letter-spacing: 0.16em;
+}
+.console-inspect-bar .state-badge {
+  margin-left: auto;
+}
+.console-page .state-badge {
+  color: var(--tty-dim);
+}
+.console-page .state-badge.running { color: var(--tty-ready); }
+.console-page .state-badge.error { color: var(--tty-bad); }
+.console-page .state-badge.starting,
+.console-page .state-badge.stopping { color: var(--tty-warn); }
+.console-page .console-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  align-items: stretch;
+}
+@media (max-width: 960px) {
+  .console-page .console-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .console-page .console-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.console-page .console-detail-group {
+  min-width: 0;
+  min-height: 7.25rem;
+  padding: 0.5rem 0.65rem 0.55rem;
+  border: 1px solid var(--tty-line);
+  border-radius: 3px;
+  background: var(--tty-bg);
+}
+.console-page .console-detail-group-title {
+  margin: 0 0 0.4rem;
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: lowercase;
+  color: var(--tty-ember);
+}
+.console-page .console-detail-fields {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.18rem 0.7rem;
+  margin: 0;
+  font-size: 0.74rem;
+  align-items: baseline;
+}
+.console-page .console-detail-fields dt {
+  color: var(--tty-dim);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.console-page .console-detail-fields dd {
+  margin: 0;
+  color: var(--tty-ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.console-page .console-pf-arrow {
+  color: var(--tty-ember);
+}
+.console-page .console-port-forward-group,
+.console-page .console-storage-group {
+  grid-column: span 2;
+}
+.console-page .console-port-forward-list {
+  grid-auto-rows: minmax(1.4rem, auto);
+  row-gap: 0.3rem;
+  max-height: 4.8rem;
+  overflow-y: auto;
+  padding-right: 0.35rem;
+  scrollbar-gutter: stable;
+}
+@media (max-width: 960px) {
+  .console-page .console-port-forward-group,
+  .console-page .console-storage-group {
+    grid-column: span 1;
+  }
+}
+.console-page .console-detail .mono {
+  font-family: var(--font-mono);
+}
+.console-page .console-detail-loading,
+.console-page .console-detail-error,
+.console-page .console-detail-empty {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--tty-dim);
+}
+.console-page .console-detail-error { color: var(--tty-bad); }
+.console-page .console-detail-usage-group {
+  grid-column: span 1;
+}
+.console-page .console-detail-usage-group .usage-charts {
+  max-width: none;
+  width: 100%;
+}
+.console-page .console-detail-usage-group .usage-spark {
+  max-width: none;
+  width: 100%;
+}
+.console-page .usage-spark-unit { color: var(--tty-ink); }
+.console-page .usage-spark-svg {
+  background: var(--tty-panel);
+  border-color: var(--tty-line);
+}
+
+.console-page .console-exit-only {
+  position: fixed;
+  top: 0.55rem;
+  right: 0.65rem;
+  z-index: 30;
+  border: 1px solid var(--tty-line);
+  border-radius: 2px;
+  background: var(--tty-panel);
+  color: var(--tty-ink);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.3rem 0.55rem;
+  cursor: pointer;
+  box-shadow: none;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+.console-page .console-exit-only:hover,
+.console-page .console-exit-only:focus-visible {
+  opacity: 1;
+  color: var(--tty-ember);
+}
+
+/* Shared by the VM detail overlay and Images export buttons (light chrome). */
 .console-title {
   flex: 1 1 auto;
   min-width: 8rem;
@@ -1264,31 +1642,6 @@ table.image-table .image-package-url a:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.console-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--dim);
-  flex-shrink: 0;
-}
-.console-status-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: currentColor;
-}
-.console-status.connecting { color: var(--amber); }
-.console-status.connecting .console-status-dot {
-  animation: console-pulse 1.1s ease-in-out infinite;
-}
-.console-status.connected { color: var(--ready); }
-.console-status.error { color: var(--error); }
-
-@keyframes console-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
 .console-bar-btn {
   border: 1px solid var(--line);
   background: var(--bg);
@@ -1307,42 +1660,6 @@ table.image-table .image-package-url a:hover {
   color: var(--ember);
   background: rgba(196, 62, 18, 0.08);
 }
-
-.console-settings { position: relative; flex-shrink: 0; }
-.console-settings-pop {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  right: 0;
-  z-index: 2;
-  min-width: 12rem;
-  padding: 0.65rem 0.75rem;
-  background: var(--bg-panel);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  box-shadow: 0 0.5rem 1.25rem rgba(23, 27, 34, 0.18);
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-.console-settings-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  color: var(--shell);
-  letter-spacing: 0.04em;
-}
-.console-settings-row select {
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 0.3rem 0.4rem;
-}
-
 .console-close {
   border: 0;
   background: none;
@@ -1354,22 +1671,6 @@ table.image-table .image-package-url a:hover {
 }
 .console-close:hover { color: var(--error); }
 
-/* `flex: 1; min-height: 0` so the surface absorbs leftover height after the
-   detail panel and FitAddon measures the real box on chrome show/hide.
-   A non-zero min-height keeps the first fit() from collapsing to 0 rows. */
-.console-surface {
-  flex: 1 1 auto;
-  min-height: 12rem;
-  width: 100%;
-  padding: 0.5rem;
-  overflow: hidden;
-  position: relative;
-  background: #171b22;
-}
-.console-page.is-terminal-only .console-surface {
-  padding: 0;
-  min-height: 0;
-}
 .console-page .console-surface[hidden] {
   display: none !important;
 }
@@ -1472,160 +1773,6 @@ table.image-table .image-package-url a:hover {
   width: 1.05rem;
   height: 1.05rem;
 }
-.console-surface .xterm {
-  height: 100% !important;
-  width: 100% !important;
-  padding: 0;
-}
-.console-surface .xterm-viewport {
-  overflow-y: auto !important;
-}
-.console-surface .xterm-screen {
-  height: 100%;
-}
-/* IME candidate windows follow the helper textarea. Keep it above the
-   canvas and let xterm position it on the cursor (do not pin left:-9999). */
-.console-surface .xterm .xterm-helper-textarea {
-  z-index: 10 !important;
-}
-.console-surface .xterm .composition-view {
-  background: #171b22;
-  color: #e8ecf1;
-  font-family: var(--font-mono);
-  z-index: 11;
-}
-
-/* Bottom VM metadata — field groups; Resource usage spans full width when running. */
-.console-detail {
-  flex: 0 0 auto;
-  background: var(--bg-panel);
-  border-top: 1px solid var(--line);
-  color: var(--ink);
-  padding: 0.55rem 0.75rem 0.7rem;
-}
-.console-detail-head {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  margin-bottom: 0.45rem;
-}
-.console-detail-title {
-  margin: 0;
-  flex: 1 1 auto;
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--shell);
-}
-.console-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.65rem 1rem;
-  align-items: start;
-}
-@media (max-width: 960px) {
-  .console-detail-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 520px) {
-  .console-detail-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-.console-detail-group {
-  min-width: 0;
-  padding: 0.4rem 0.55rem 0.5rem;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  background: var(--bg);
-}
-.console-detail-group-title {
-  margin: 0 0 0.35rem;
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--shell);
-}
-.console-detail-fields {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.2rem 0.65rem;
-  margin: 0;
-  font-size: 0.74rem;
-  align-items: baseline;
-}
-.console-detail-fields dt {
-  color: var(--shell);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-size: 0.65rem;
-  white-space: nowrap;
-}
-.console-detail-fields dd {
-  margin: 0;
-  color: var(--ink);
-  min-width: 0;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-.console-port-forward-group {
-  grid-column: span 2;
-}
-.console-port-forward-list {
-  grid-auto-rows: minmax(1.4rem, auto);
-  row-gap: 0.3rem;
-  max-height: 4.8rem;
-  overflow-y: auto;
-  padding-right: 0.35rem;
-  scrollbar-gutter: stable;
-}
-@media (max-width: 520px) {
-  .console-port-forward-group {
-    grid-column: span 1;
-  }
-}
-.console-detail .mono {
-  font-family: var(--font-mono);
-}
-.console-detail-loading,
-.console-detail-error,
-.console-detail-empty {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  color: var(--dim);
-}
-.console-detail-error { color: var(--error); }
-
-/* Recover chrome after "터미널만" without relying solely on Esc. */
-.console-exit-only {
-  position: fixed;
-  top: 0.6rem;
-  right: 0.6rem;
-  z-index: 30;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--ink);
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-  padding: 0.3rem 0.55rem;
-  cursor: pointer;
-  box-shadow: 0 0.25rem 0.75rem rgba(23, 27, 34, 0.2);
-  opacity: 0.55;
-  transition: opacity 0.15s ease;
-}
-.console-exit-only:hover,
-.console-exit-only:focus-visible {
-  opacity: 1;
-}
-
 /* VM detail still uses the shared overlay chrome (read-only log, not xterm). */
 .console-overlay {
   position: fixed;
@@ -1648,6 +1795,50 @@ table.image-table .image-package-url a:hover {
   overflow: hidden;
   box-shadow: 0 1.5rem 3rem rgba(23, 27, 34, 0.35);
 }
+.console-panel .console-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.65rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  flex: 0 0 auto;
+}
+.console-panel .console-title {
+  flex: 1 1 auto;
+  min-width: 8rem;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.console-panel .console-bar-btn {
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--shell);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.console-panel .console-bar-btn:hover { border-color: var(--shell); color: var(--ink); }
+.console-panel .console-close {
+  border: 0;
+  background: none;
+  color: var(--shell);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  padding: 0.15rem 0.4rem;
+  flex-shrink: 0;
+}
+.console-panel .console-close:hover { color: var(--error); }
 
 .detail-body {
   padding: 1.25rem;

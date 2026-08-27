@@ -18,6 +18,9 @@ rootfs_image=''
 rootfs_link=''
 rootfs_size='2G'
 rootfs_hostname='firecrab'
+m2image_alias=${M2IMAGE_ALIAS:-}
+sbom_output=${M2IMAGE_SBOM_OUTPUT:-}
+sbom_generator="${repo_dir}/scripts/m2image_sbom.py"
 
 # linux-image-virtual: Ubuntu's own officially-maintained kernel package
 # (public-docs/images.md) — replaces the self-built vanilla kernel every
@@ -712,6 +715,8 @@ main() {
       "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
       "M2IMAGE_DISTRO_SERIES=${ubuntu_series_setting}" \
       "M2IMAGE_DISTRO_VERSION=${M2IMAGE_DISTRO_VERSION:-}" \
+      "M2IMAGE_ALIAS=${m2image_alias}" \
+      "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \
       "$script_path"
   fi
 
@@ -767,6 +772,25 @@ main() {
   extract_kernel
   configure_guest_dns
   verify_rootfs_content
+
+  if [ -n "$sbom_output" ]; then
+    [ -n "$m2image_alias" ] || fail 'M2IMAGE_ALIAS is required with M2IMAGE_SBOM_OUTPUT'
+    require_command python3
+    [ -f "$mount_dir/var/lib/dpkg/status" ] \
+      || fail 'Ubuntu dpkg status database missing from built staging root'
+    case "$ubuntu_arch" in
+      amd64) sbom_arch=x86_64 ;;
+      arm64) sbom_arch=aarch64 ;;
+    esac
+    python3 "$sbom_generator" \
+      --format dpkg --distribution ubuntu \
+      --image-alias "$m2image_alias" --image-version "$ubuntu_series" \
+      --architecture "$sbom_arch" \
+      --package-db "$mount_dir/var/lib/dpkg/status" --output "$sbom_output"
+    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+      chown "${SUDO_UID}:${SUDO_GID}" "$sbom_output"
+    fi
+  fi
 
   info "creating Ubuntu rootfs image: ${rootfs_image}"
   # Disable orphan_file when the host's e2fsprogs supports it so images built

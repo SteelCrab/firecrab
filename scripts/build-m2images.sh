@@ -9,6 +9,7 @@ repo_dir=$(cd -- "${script_dir}/.." && pwd -P)
 manifest=${M2IMAGE_MANIFEST:-${repo_dir}/packaging/m2images.json}
 dist_dir=${DIST_DIR:-${repo_dir}/dist/m2images}
 out_dir=${OUT_DIR:-}
+compliance_dir=${M2IMAGE_COMPLIANCE_DIR:-${repo_dir}/images/compliance}
 alias_filter=all
 architecture=${M2IMAGE_ARCH:-}
 package_images=1
@@ -70,6 +71,7 @@ require_command sha256sum
 python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" validate >/dev/null
 architecture=$(normalize_architecture "${architecture:-$(uname -m)}")
 export M2IMAGE_ARCH=$architecture
+mkdir -p "$compliance_dir"
 
 if [ -z "$out_dir" ]; then
   out_dir="${dist_dir}/${architecture}"
@@ -108,8 +110,43 @@ for alias in "${selected_aliases[@]}"; do
     builder_environment+=("${key}=${value}")
   done < <(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" environment "$alias")
 
+  sbom_output="${compliance_dir}/${alias}-${architecture}.spdx.json"
+  rm -f -- "$sbom_output"
   info "building ${alias} (distribution ${version}, ${architecture})"
-  env "${builder_environment[@]}" "${repo_dir}/${builder}"
+  env "M2IMAGE_ALIAS=${alias}" "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \
+    "${builder_environment[@]}" "${repo_dir}/${builder}"
+  [ -s "$sbom_output" ] || fail "builder did not produce M2Image SBOM: $sbom_output"
+  python3 - "$sbom_output" "$alias" <<'PY_VALIDATE'
+import json
+import sys
+
+path, expected_alias = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as stream:
+        doc = json.load(stream)
+except (OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"invalid M2Image SBOM {path}: {exc}") from exc
+
+if doc.get("spdxVersion") != "SPDX-2.3":
+    raise SystemExit(
+        f"invalid M2Image SBOM {path}: expected SPDX-2.3, "
+        f"got {doc.get('spdxVersion')!r}"
+    )
+packages = doc.get("packages")
+if not isinstance(packages, list) or not packages:
+    raise SystemExit(f"invalid M2Image SBOM {path}: packages must be a non-empty list")
+actual_alias = packages[0].get("name") if isinstance(packages[0], dict) else None
+if actual_alias != expected_alias:
+    raise SystemExit(
+        f"invalid M2Image SBOM {path}: expected image alias {expected_alias!r}, "
+        f"got {actual_alias!r}"
+    )
+PY_VALIDATE
+  M2IMAGE_MANIFEST="$manifest" IMAGE_ROOT="${repo_dir}/images" \
+    M2IMAGE_COMPLIANCE_DIR="$compliance_dir" \
+    bash "${script_dir}/collect-m2image-compliance.sh" "$alias" "$architecture"
+  [ -s "${compliance_dir}/${alias}-${architecture}/bundle.json" ] \
+    || fail "builder did not produce M2Image compliance bundle for ${alias}/${architecture}"
 done
 
 if [ "$package_images" -eq 1 ]; then
