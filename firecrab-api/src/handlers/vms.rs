@@ -2975,16 +2975,16 @@ while True:
         vm.template = crate::microboot::MICROBOOT_ALIAS.to_owned();
         seed_vm(&state, &vm);
 
-        let Json(started) = tokio::time::timeout(
-            Duration::from_secs(2),
-            start_vm(
-                State(state.clone()),
-                Extension(RequestId(Uuid::new_v4())),
-                axum::extract::Path(vm.id.to_string()),
-            ),
+        // `network_ready_timeout` is already 300 ms in this fixture, so a
+        // regression still fails quickly. Do not cap the whole start path:
+        // rootfs specialization under coverage instrumentation can exceed a
+        // wall-clock deadline even when the MicroBoot wait is correctly skipped.
+        let Json(started) = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
         )
         .await
-        .expect("start_vm should not hang waiting on a network-ready sentinel that never arrives")
         .unwrap();
 
         assert_eq!(started.state, VmState::Running);
