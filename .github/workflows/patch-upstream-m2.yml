@@ -1,0 +1,35 @@
+name: Patch upstream M2 fix
+
+on:
+  push:
+    branches:
+      - fix/m2image-microregistry-boot
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/m2image-microregistry-boot
+
+      - name: Apply patch
+        run: |
+          set -euo pipefail
+          python3 scripts/patch-upstream-m2.py
+          git diff --check
+          shellcheck scripts/ci-install-m2image.sh
+          cargo test -p firecrab-net-helper firewall --locked
+
+      - name: Commit durable changes
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/ci.yml firecrab-net-helper/src/firewall.rs
+          git diff --cached --check
+          git commit -m 'fix(ci): boot M2Images through MicroRegistry'
+          git push origin HEAD:fix/m2image-microregistry-boot
