@@ -108,3 +108,11 @@ if text.count(old) != 1:
 text = text.replace(old, new, 1)
 
 path.write_text(text)
+
+compliance = Path("firecrab-api/src/oci/compliance.rs")
+compliance_text = compliance.read_text()
+old = '    format!("{digest:x}")\n'
+new = '    format!("{:x}", digest.finalize())\n'
+if compliance_text.count(old) != 1:
+    raise SystemExit(f"fingerprint anchor count={compliance_text.count(old)}")
+compliance.write_text(compliance_text.replace(old, new, 1))
