@@ -79,6 +79,20 @@ pub(super) fn generate_spdx(
     image_version: &str,
     architecture: Architecture,
 ) -> Result<Option<GeneratedSbom>, String> {
+    // OCI import calls this synchronous scanner from async code. Mark the
+    // filesystem/SQLite work as blocking so Tokio can replace the worker while
+    // the package database is being inspected.
+    tokio::task::block_in_place(|| {
+        generate_spdx_blocking(rootfs, alias, image_version, architecture)
+    })
+}
+
+fn generate_spdx_blocking(
+    rootfs: &Path,
+    alias: &str,
+    image_version: &str,
+    architecture: Architecture,
+) -> Result<Option<GeneratedSbom>, String> {
     let Some(database) = detect_package_db(rootfs) else {
         return Ok(None);
     };
@@ -234,7 +248,14 @@ fn parse_dpkg(text: &str) -> Result<Vec<PackageRecord>, String> {
             fields.insert(key.clone(), value.trim().to_owned());
             current = Some(key);
         }
-        if fields.get("Status").map(String::as_str) != Some("install ok installed") {
+        let installed = fields.get("Status").is_some_and(|status| {
+            let mut parts = status.split_whitespace();
+            matches!(
+                (parts.next(), parts.next(), parts.next(), parts.next()),
+                (Some(_), Some(_), Some("installed"), None)
+            )
+        });
+        if !installed {
             continue;
         }
         let Some(name) = fields.get("Package").cloned() else {
@@ -591,13 +612,13 @@ mod tests {
     }
 
     #[test]
-    fn dpkg_database_ignores_removed_packages() {
+    fn dpkg_database_tracks_installed_state_and_ignores_removed_packages() {
         let directory = tempfile::tempdir().unwrap();
         let db = directory.path().join("var/lib/dpkg");
         fs::create_dir_all(&db).unwrap();
         fs::write(
             db.join("status"),
-            "Package: curl\nStatus: install ok installed\nArchitecture: amd64\nVersion: 8.5.0-2ubuntu10\nSource: curl (8.5.0-2ubuntu10)\n\nPackage: old\nStatus: deinstall ok config-files\nArchitecture: amd64\nVersion: 1\n",
+            "Package: curl\nStatus: install ok installed\nArchitecture: amd64\nVersion: 8.5.0-2ubuntu10\nSource: curl (8.5.0-2ubuntu10)\n\nPackage: held\nStatus: hold ok installed\nArchitecture: amd64\nVersion: 2\n\nPackage: repair\nStatus: install reinstreq installed\nArchitecture: amd64\nVersion: 3\n\nPackage: old\nStatus: deinstall ok config-files\nArchitecture: amd64\nVersion: 1\n\nPackage: malformed\nStatus: install installed\nArchitecture: amd64\nVersion: 4\n\nPackage: extra\nStatus: install ok installed extra\nArchitecture: amd64\nVersion: 5\n",
         )
         .unwrap();
         let generated = generate_spdx(
@@ -608,7 +629,7 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(generated.package_count, 1);
+        assert_eq!(generated.package_count, 3);
     }
 
     #[test]
