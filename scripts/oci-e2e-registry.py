@@ -22,7 +22,9 @@ import hashlib
 import io
 import json
 import os
+import re
 import signal
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -42,11 +44,17 @@ LAYER_TYPE = "application/vnd.oci.image.layer.v1.tar+gzip"
 READY_COMMAND = (
     f"while true; do echo {READY_SENTINEL}; /etc/firecrab/busybox sleep 2; done"
 )
+OPENSSH_PROGRAMS = (Path("/usr/sbin/sshd"), Path("/usr/bin/ssh-keygen"))
+OPENSSH_HELPER_DIRS = (Path("/usr/lib/openssh"), Path("/usr/libexec/openssh"))
 
 
 def host_oci_arch() -> str:
-    machine = os.uname().machine
-    return "arm64" if machine in ("aarch64", "arm64") else "amd64"
+    machine = os.uname().machine.lower()
+    if machine in ("x86_64", "amd64"):
+        return "amd64"
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    raise RuntimeError(f"unsupported OCI SSH E2E host architecture: {machine}")
 
 
 def sha256_digest(data: bytes) -> str:
@@ -57,18 +65,95 @@ def descriptor(media_type: str, digest: str, size: int) -> dict:
     return {"mediaType": media_type, "digest": digest, "size": size}
 
 
+def dynamic_runtime_files(program: Path) -> set[Path]:
+    if not program.is_file():
+        raise RuntimeError(f"OCI SSH E2E requires {program}")
+    completed = subprocess.run(
+        ["ldd", str(program)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    files = {program}
+    for line in completed.stdout.splitlines():
+        match = re.search(r"(?:=>\s*)?(/[^\s(]+)", line)
+        if match:
+            files.add(Path(match.group(1)))
+    return files
+
+
+def openssh_programs() -> set[Path]:
+    programs = set(OPENSSH_PROGRAMS)
+    for directory in OPENSSH_HELPER_DIRS:
+        if directory.is_dir():
+            programs.update(
+                path
+                for path in directory.glob("sshd-*")
+                if path.is_file() and os.access(path, os.X_OK)
+            )
+    return programs
+
+
+def add_directory(archive: tarfile.TarFile, guest_path: Path) -> None:
+    member = tarfile.TarInfo(str(guest_path).lstrip("/") + "/")
+    member.type = tarfile.DIRTYPE
+    member.mode = 0o755
+    member.uid = 0
+    member.gid = 0
+    archive.addfile(member)
+
+
+def add_regular_file(
+    archive: tarfile.TarFile,
+    guest_path: Path,
+    payload: bytes,
+    mode: int,
+) -> None:
+    member = tarfile.TarInfo(str(guest_path).lstrip("/"))
+    member.size = len(payload)
+    member.mode = mode
+    member.uid = 0
+    member.gid = 0
+    archive.addfile(member, io.BytesIO(payload))
+
+
 def build_layer_tar() -> bytes:
+    runtime_files: set[Path] = set()
+    for program in openssh_programs():
+        runtime_files.update(dynamic_runtime_files(program))
+    directories = {Path("/etc")}
+    for guest_path in runtime_files:
+        directories.update(guest_path.parents)
+    directories.discard(Path("/"))
+
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        directory = tarfile.TarInfo("etc")
-        directory.type = tarfile.DIRTYPE
-        directory.mode = 0o755
-        archive.addfile(directory)
+        for directory in sorted(directories, key=lambda path: (len(path.parts), str(path))):
+            add_directory(archive, directory)
+
+        for guest_path in sorted(runtime_files, key=str):
+            add_regular_file(
+                archive,
+                guest_path,
+                guest_path.read_bytes(),
+                guest_path.stat().st_mode & 0o777,
+            )
+
+        add_regular_file(
+            archive,
+            Path("/etc/passwd"),
+            b"root:x:0:0:root:/root:/usr/bin/sh\n"
+            b"sshd:x:74:74:Privilege-separated SSH:/run/sshd:/usr/sbin/nologin\n",
+            0o644,
+        )
+        add_regular_file(
+            archive,
+            Path("/etc/group"),
+            b"root:x:0:\nsshd:x:74:\n",
+            0o644,
+        )
         payload = f"{READY_SENTINEL}\n".encode()
-        member = tarfile.TarInfo("etc/firecrab-e2e")
-        member.size = len(payload)
-        member.mode = 0o644
-        archive.addfile(member, io.BytesIO(payload))
+        add_regular_file(archive, Path("/etc/firecrab-e2e"), payload, 0o644)
     return buffer.getvalue()
 
 

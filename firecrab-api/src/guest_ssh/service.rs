@@ -14,7 +14,7 @@ pub const GUEST_SSHD_DROPIN: &str = "/etc/ssh/sshd_config.d/50-firecrab.conf";
 /// for: it exits at startup when the privilege-separation directory is not
 /// root-owned, and StrictModes refuses the key when `/root` is not.
 pub fn sshd_service_script() -> String {
-    r#"#!/bin/sh
+    r#"#!/etc/firecrab/busybox sh
 # Firecrab: start sshd with key-only root login (issue #181).
 mkdir -p /run/sshd /root/.ssh
 if [ ! -x /usr/sbin/sshd ]; then
@@ -34,6 +34,7 @@ chmod 700 /root/.ssh
 chmod 600 /root/.ssh/authorized_keys 2>/dev/null
 ssh-keygen -A >/dev/null 2>&1
 exec /usr/sbin/sshd -D -e \
+  -f /etc/ssh/sshd_config.d/50-firecrab.conf \
   -o PermitRootLogin=prohibit-password \
   -o PasswordAuthentication=no \
   -o PubkeyAuthentication=yes \
@@ -77,5 +78,7 @@ mod tests {
         assert!(script.contains("no /usr/sbin/sshd"));
         assert!(script.contains("ssh-keygen -A"));
         assert!(script.contains("exec /usr/sbin/sshd -D"));
+        assert!(script.contains("-f /etc/ssh/sshd_config.d/50-firecrab.conf"));
+        assert!(script.starts_with("#!/etc/firecrab/busybox sh\n"));
     }
 }

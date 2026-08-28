@@ -6,6 +6,7 @@ interface VmRow {
   state: string;
   template: string;
   ipv4?: string | null;
+  ipv6?: string | null;
   portForwards?: Array<{ hostPort: number; guestPort: number; protocol: string }>;
 }
 

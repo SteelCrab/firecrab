@@ -1,7 +1,14 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { arch, tmpdir } from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+
 import { expect, test, type Page } from "@playwright/test";
 
 import { ApiCleanup } from "../src/api.js";
 import {
+  apiUrl,
   DHCP_FIXED_ALIAS,
   DHCP_FIXED_REFERENCE,
   DHCP_HOST_PORT,
@@ -17,11 +24,11 @@ import {
 import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
 
 /**
- * OCI guest DHCP + port-forward boot — the nginx-stable dashboard path
- * (busybox `udhcpc`, `FIRECRAB_NETWORK_READY`) without Docker Hub.
+ * OCI guest dual-stack DHCP + SSH boot — the nginx-stable dashboard path
+ * (busybox `udhcpc`, SLAAC, `FIRECRAB_NETWORK_READY`) without Docker Hub.
  *
- *   FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm run test:dhcp --prefix firecrab-e2e
- *   npm run test:dhcp --prefix firecrab-e2e
+ *   FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm --prefix firecrab-e2e run test:dhcp
+ *   npm --prefix firecrab-e2e run test:dhcp
  *
  * Guest boot needs a helper the API can connect to
  * (`./scripts/dev-net-helper.sh`, socket `/run/firecrab/net-helper.sock`).
@@ -33,6 +40,8 @@ test.describe.configure({ mode: "serial" });
 let registry: LocalOciRegistry;
 let createdNetworkId: string | null = null;
 const api = new ApiCleanup();
+const execFileAsync = promisify(execFile);
+const SSH_AUTH_READY = "FIRECRAB_SSH_AUTH_READY";
 
 function reference(): string {
   return registry.announcement.reference;
@@ -46,6 +55,13 @@ function sentinel(): string {
   return registry.announcement.ready;
 }
 
+function expectedOciArchitecture(): "amd64" | "arm64" {
+  const machine = arch();
+  if (machine === "x64") return "amd64";
+  if (machine === "arm64") return "arm64";
+  throw new Error(`unsupported OCI SSH E2E host architecture: ${machine}`);
+}
+
 async function openEnglish(page: Page, hash: string): Promise<void> {
   await page.addInitScript(() => {
     localStorage.setItem("firecrab.locale", "en");
@@ -57,14 +73,82 @@ async function cleanupOwned(): Promise<void> {
   const imported = registry?.announcement.alias ?? DHCP_FIXED_ALIAS;
   await api.deleteOwnedVms(imported, DHCP_VM_NAME);
   await api.deleteImportedImage(imported);
-  await api.deleteOwnedNetwork(createdNetworkId, DHCP_NETWORK_NAME);
+  await api.deleteNetworksByName([DHCP_NETWORK_NAME]);
   createdNetworkId = null;
+}
+
+async function authenticateWithDownloadedKey(vmId: string, ipv6: string): Promise<void> {
+  const response = await fetch(`${apiUrl()}/api/vms/${vmId}/ssh-key`);
+  expect(response.status, "download operator SSH key").toBe(200);
+  const privateKey = await response.text();
+  expect(privateKey).toContain("BEGIN OPENSSH PRIVATE KEY");
+
+  const scratch = await mkdtemp(path.join(tmpdir(), "firecrab-e2e-ssh-"));
+  const keyPath = path.join(scratch, `firecrab-${DHCP_VM_NAME}.pem`);
+  try {
+    await writeFile(keyPath, privateKey, { encoding: "utf8", mode: 0o600 });
+    const authenticate = async (label: string, targetArgs: string[]): Promise<void> => {
+      let lastError = "ssh did not run";
+      let authenticatedOutput: string | null = null;
+      const deadline = Date.now() + 60_000;
+      while (Date.now() < deadline) {
+        try {
+          const { stdout } = await execFileAsync(
+            "ssh",
+            [
+              "-i",
+              keyPath,
+              "-o",
+              "BatchMode=yes",
+              "-o",
+              "ConnectTimeout=5",
+              "-o",
+              "IdentitiesOnly=yes",
+              "-o",
+              "StrictHostKeyChecking=no",
+              "-o",
+              "UserKnownHostsFile=/dev/null",
+              "-o",
+              "LogLevel=ERROR",
+              ...targetArgs,
+              `printf ${SSH_AUTH_READY}`,
+            ],
+            { timeout: 10_000 },
+          );
+          authenticatedOutput = stdout;
+          break;
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
+      }
+      if (authenticatedOutput === null) {
+        const logResponse = await fetch(`${apiUrl()}/api/vms/${vmId}/log`);
+        const logBody = (await logResponse.json()) as { consoleLog?: string };
+        const consoleTail = (logBody.consoleLog ?? "").slice(-8_000);
+        throw new Error(
+          `${label} SSH key authentication did not become ready: ${lastError}\nGuest console tail:\n${consoleTail}`,
+        );
+      }
+      expect(authenticatedOutput.trim()).toBe(SSH_AUTH_READY);
+    };
+
+    await authenticate("IPv4 port-forward", [
+      "-p",
+      String(DHCP_SSH_HOST_PORT),
+      "root@127.0.0.1",
+    ]);
+    await authenticate("IPv6 direct", ["-6", `root@${ipv6}`]);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 }
 
 test.beforeAll(async () => {
   registry = await startLocalOciRegistry(DHCP_REGISTRY_PORT);
   expect(registry.announcement.reference).toBe(DHCP_FIXED_REFERENCE);
   expect(registry.announcement.alias).toBe(DHCP_FIXED_ALIAS);
+  expect(registry.announcement.architecture).toBe(expectedOciArchitecture());
   await cleanupOwned();
 });
 
@@ -100,7 +184,9 @@ test("inspects the DHCP-boot fixture and imports it as a registered image", asyn
   await expect(page.locator("table.image-table")).toContainText(alias());
 });
 
-test("starts the imported guest with a port forward and gets a DHCP lease", async ({ page }) => {
+test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IPv6", async ({
+  page,
+}) => {
   test.skip(
     SKIP_GUEST_BOOT,
     "FIRECRAB_E2E_SKIP_GUEST_BOOT is set — import already covered. Unset the flag (and run ./scripts/dev-net-helper.sh) to boot through DHCP.",
@@ -116,6 +202,7 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
   );
   await page.locator("#mn-name").fill(DHCP_NETWORK_NAME);
   await page.locator("#mn-subnet").fill(DHCP_NETWORK_CIDR);
+  await networkPanel.locator("#mn-ipv6-enable").selectOption("on");
   await networkPanel.locator('button[type="submit"]').click();
   const networkResponse = await pendingNetwork;
   if (!networkResponse.ok()) {
@@ -130,6 +217,9 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
   const networks = await api.listNetworks();
   createdNetworkId = networks.find((network) => network.name === DHCP_NETWORK_NAME)?.id ?? null;
   expect(createdNetworkId, `API missing ${DHCP_NETWORK_NAME}`).toBeTruthy();
+  expect(networks.find((network) => network.id === createdNetworkId)?.ipv6Cidr ?? "").toMatch(
+    /^fd[0-9a-f:]+\/64$/i,
+  );
 
   await openEnglish(page, "/#/vms");
   await page.locator("#vm-list-add").click();
@@ -156,7 +246,7 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
-  await row.getByRole("button", { name: "start" }).click();
+  await row.getByRole("menuitem", { name: "start" }).click();
   await expect(row.locator(".state-badge")).toHaveText(/running|error/, { timeout: 240_000 });
   if ((await row.locator(".state-badge").textContent()) !== "running") {
     await row.locator("button.link-button").click();
@@ -185,6 +275,7 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
   const detail = await api.getVm(vm!.id);
   expect(detail?.state).toBe("running");
   expect(detail?.ipv4 ?? "").toMatch(/^172\.30\.94\./);
+  expect(detail?.ipv6 ?? "").toMatch(/^fd[0-9a-f:]+$/i);
   expect(detail?.portForwards).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -197,6 +288,8 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
 
   await expect(page.getByRole("button", { name: /Download key|키 다운로드/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
+  await page.locator(".console-panel > .console-bar .console-close").click();
+  await expect(page.locator(".console-overlay")).toHaveCount(0);
 
   // SSH from the VM list: Actions → SSH connect opens a dialog with the panel.
   await openEnglish(page, "/#/vms");
@@ -213,12 +306,16 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
   await expect(page.locator(".console-ssh-block-label", { hasText: /^fingerprint$/i })).toBeVisible();
   // `check` is a copyable one-liner that decides instead of printing a fingerprint.
   await expect(page.locator(".console-ssh-block-label", { hasText: /^check ipv4$/ })).toBeVisible();
+  await expect(page.locator(".console-ssh-block-label", { hasText: /^check ipv6$/ })).toBeVisible();
   await expect(
     page.locator(".console-ssh-code").filter({ hasText: "echo MATCH" }).first(),
   ).toContainText("ssh-keyscan -t ed25519");
   await expect(page.locator(".console-ssh-code").filter({ hasText: "ssh -i" }).first()).toContainText(
     `ssh -i firecrab-${DHCP_VM_NAME}.pem root@`,
   );
+  await expect(
+    page.locator(".console-ssh-code").filter({ hasText: "ssh -6 -i" }).first(),
+  ).toContainText(`root@${detail!.ipv6}`);
   await expect(page.getByRole("button", { name: /Download |다운로드/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
 
@@ -252,6 +349,10 @@ test("starts the imported guest with a port forward and gets a DHCP lease", asyn
       }),
     ]),
   );
+
+  // Exercise the real contract, not only the dashboard text: guest sshd must
+  // answer on 22/tcp and accept the per-VM key downloaded from the API.
+  await authenticateWithDownloadedKey(detail!.id, detail!.ipv6!);
 
   // Removing takes back only the SSH rule; the guest-80 forward stays.
   await page.getByRole("button", { name: /Remove SSH port forward|SSH 포트 포워드 제거/ }).click();
