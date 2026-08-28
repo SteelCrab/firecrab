@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { defaultInteractiveTerminalOptions } from "../lib/terminal";
+import { defaultInteractiveTerminalOptions, enableTerminalTouchScroll } from "../lib/terminal";
 
 type Status = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -104,6 +104,7 @@ export default function InlineConsole({ vmId }: { vmId: string }) {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
+    const stopTouchScroll = enableTerminalTouchScroll(term, container);
     termRef.current = term;
     fitRef.current = fitAddon;
     scheduleFit();
@@ -181,6 +182,7 @@ export default function InlineConsole({ vmId }: { vmId: string }) {
       intentionalCloseRef.current = true;
       window.clearTimeout(bootTimer);
       clearReconnectTimer();
+      stopTouchScroll();
       observer.disconnect();
       window.removeEventListener("resize", onWinResize);
       const socket = socketRef.current;

@@ -3,16 +3,50 @@
  * Shared by the VM detail modal, serial console, and (later) image install logs.
  */
 
+/**
+ * `navigator.clipboard.writeText` is async. On HTTP (LAN phone) and after an
+ * `await`, the user gesture is already gone, so a failed write-then-fallback
+ * never reaches `execCommand`. Only call the async API when it can succeed
+ * in this same turn.
+ */
+export function shouldPreferAsyncClipboard(
+  isSecureContext: boolean,
+  hasWriteText: boolean,
+): boolean {
+  return isSecureContext && hasWriteText;
+}
+
+/**
+ * iOS ignores `execCommand('copy')` when the source is off-screen (`left: -9999px`).
+ * Keep a 1×1 transparent node at the origin instead.
+ */
+export function prepareClipboardFallbackTextarea(area: HTMLTextAreaElement): void {
+  area.setAttribute("readonly", "");
+  area.setAttribute("aria-hidden", "true");
+  area.style.position = "fixed";
+  area.style.top = "0";
+  area.style.left = "0";
+  area.style.width = "1px";
+  area.style.height = "1px";
+  area.style.padding = "0";
+  area.style.border = "0";
+  area.style.outline = "none";
+  area.style.boxShadow = "none";
+  area.style.opacity = "0.01";
+  area.style.zIndex = "10000";
+}
+
 /** Copy `text` to the system clipboard. Returns false if the API is unavailable or rejects. */
 export async function copyText(text: string): Promise<boolean> {
   const value = text ?? "";
-  try {
-    if (navigator.clipboard?.writeText) {
+  const hasWriteText = typeof navigator.clipboard?.writeText === "function";
+  if (shouldPreferAsyncClipboard(window.isSecureContext, hasWriteText)) {
+    try {
       await navigator.clipboard.writeText(value);
       return true;
+    } catch {
+      /* fall through to execCommand — gesture may already be gone */
     }
-  } catch {
-    /* fall through to execCommand */
   }
   return copyTextFallback(value);
 }
@@ -22,18 +56,34 @@ function copyTextFallback(text: string): boolean {
   try {
     const area = document.createElement("textarea");
     area.value = text;
-    area.setAttribute("readonly", "");
-    area.style.position = "fixed";
-    area.style.left = "-9999px";
-    area.style.top = "0";
+    prepareClipboardFallbackTextarea(area);
     document.body.appendChild(area);
-    area.select();
+    selectFallbackTextarea(area, text);
     const ok = document.execCommand("copy");
     document.body.removeChild(area);
     return ok;
   } catch {
     return false;
   }
+}
+
+function selectFallbackTextarea(area: HTMLTextAreaElement, text: string): void {
+  const ios =
+    /ipad|iphone|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  if (ios) {
+    area.contentEditable = "true";
+    area.readOnly = false;
+    const range = document.createRange();
+    range.selectNodeContents(area);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    area.setSelectionRange(0, text.length);
+    return;
+  }
+  area.focus();
+  area.select();
 }
 
 /**

@@ -13,6 +13,7 @@ import { useI18n } from "../i18n";
 import {
   defaultInteractiveTerminalOptions,
   enableTerminalIme,
+  enableTerminalTouchScroll,
   isImeComposing,
 } from "../lib/terminal";
 
@@ -234,6 +235,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     term.loadAddon(fitAddon);
     term.open(container);
     enableTerminalIme(term, container);
+    const stopTouchScroll = enableTerminalTouchScroll(term, container);
     termRef.current = term;
     fitRef.current = fitAddon;
     scheduleFit();
@@ -347,6 +349,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       window.clearTimeout(bootTimer);
       clearReconnectTimer();
       dataListener.dispose();
+      stopTouchScroll();
       ro.disconnect();
       window.removeEventListener("resize", onWinResize);
       window.removeEventListener("keydown", onKey);
@@ -389,6 +392,28 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     clearReconnectTimer();
     reconnectAttemptRef.current = 0;
     setReconnectKey((k) => k + 1);
+  };
+
+  /** Clipboard API, then a prompt — phones on HTTP have no `readText`. */
+  const pasteIntoTerminal = async () => {
+    const term = termRef.current;
+    if (!term) return;
+    let text = "";
+    try {
+      if (window.isSecureContext && navigator.clipboard?.readText) {
+        text = await navigator.clipboard.readText();
+      }
+    } catch {
+      text = "";
+    }
+    if (!text) {
+      const typed = window.prompt(
+        t("Paste into the serial console", "시리얼 콘솔에 붙여넣을 텍스트"),
+      );
+      if (typed === null) return;
+      text = typed;
+    }
+    if (text) term.paste(text);
   };
 
   /**
@@ -545,6 +570,14 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               copyLabel={t("Copy log", "로그 복사")}
               downloadLabel={t("Save log", "로그 저장")}
             />
+            <button
+              type="button"
+              className="btn console-bar-btn"
+              onClick={() => void pasteIntoTerminal()}
+              title={t("Paste into the serial console", "시리얼 콘솔에 붙여넣기")}
+            >
+              {t("Paste", "붙여넣기")}
+            </button>
             <button
               type="button"
               className="btn console-bar-btn"

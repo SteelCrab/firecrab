@@ -1248,7 +1248,10 @@ table.image-table .image-package-url a:hover {
   z-index: 20;
   width: 100%;
   height: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
   min-height: 100dvh;
+  overflow: hidden;
 }
 
 .console-tabs {
@@ -1411,17 +1414,24 @@ table.image-table .image-package-url a:hover {
 }
 .console-page .console-close:hover { color: var(--tty-bad); }
 
-/* `flex: 1; min-height: 0` so the surface absorbs leftover height after the
-   detail panel and FitAddon measures the real box on chrome show/hide.
-   A non-zero min-height keeps the first fit() from collapsing to 0 rows. */
+/* `flex: 1 1 0; min-height: 0` so the surface absorbs leftover height after
+   the inspect rail. A content-sized min-height overflowed the fixed page on
+   phones and left no page scroll. */
 .console-page .console-surface {
-  flex: 1 1 auto;
-  min-height: 12rem;
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
   padding: 0.5rem 0.65rem;
   overflow: hidden;
   position: relative;
   background: var(--tty-term);
+  touch-action: none;
+}
+.console-page .console-surface .xterm,
+.console-page .console-surface .xterm-viewport,
+.console-page .console-surface .xterm-screen,
+.console-page .console-surface .xterm-rows {
+  touch-action: none;
 }
 .console-page.is-terminal-only .console-surface {
   padding: 0.5rem 0.65rem;
@@ -1433,7 +1443,9 @@ table.image-table .image-package-url a:hover {
   padding: 0;
 }
 .console-page .console-surface .xterm-viewport {
-  overflow-y: auto !important;
+  /* xterm 6 uses a custom scrollbar; native overflow here has nothing to
+     scroll (scrollHeight === clientHeight) and steals the finger pan. */
+  overflow: hidden !important;
 }
 .console-page .console-surface .xterm-screen {
   height: 100%;
@@ -1454,6 +1466,7 @@ table.image-table .image-package-url a:hover {
   border-top: 1px solid var(--tty-line);
   color: var(--tty-ink);
   padding: 0.55rem 0.85rem 0.55rem;
+  min-height: 0;
 }
 .console-inspect-bar {
   flex: 0 0 auto;
@@ -1516,6 +1529,23 @@ table.image-table .image-package-url a:hover {
 @media (max-width: 520px) {
   .console-page .console-detail-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 720px) {
+  .console-page .console-detail {
+    flex: 0 1 auto;
+    max-height: 36vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  .console-page .console-detail-group {
+    min-height: 0;
+  }
+  .console-page .console-bar-btn,
+  .console-page .console-close {
+    min-height: 2.25rem;
+    padding: 0.4rem 0.55rem;
   }
 }
 .console-page .console-detail-group {
@@ -1685,11 +1715,13 @@ table.image-table .image-package-url a:hover {
   min-height: 0;
 }
 .console-ssh {
-  flex: 1 1 auto;
-  min-height: 12rem;
+  flex: 1 1 0;
+  min-height: 0;
   overflow: auto;
   padding: 1.1rem 1.25rem 1.25rem;
   background: var(--bg);
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .console-ssh-lead {
   margin: 0 0 0.85rem;
@@ -1753,6 +1785,8 @@ table.image-table .image-package-url a:hover {
   font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.45;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .console-ssh-code code {
   font-family: inherit;
@@ -1928,9 +1962,18 @@ table.image-table .image-package-url a:hover {
 }
 
 .inline-console-surface {
+  touch-action: none;
   height: 16rem;
   padding: 0.4rem;
   background: #171b22;
+}
+.inline-console-surface .xterm,
+.inline-console-surface .xterm-viewport,
+.inline-console-surface .xterm-screen {
+  touch-action: none;
+}
+.inline-console-surface .xterm-viewport {
+  overflow: hidden !important;
 }
 
 .inline-console-ended {

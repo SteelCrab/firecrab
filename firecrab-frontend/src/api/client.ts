@@ -115,8 +115,17 @@ export function getSshHostKey(id: string): Promise<SshHostKeyResponse> {
   return fetchJson(`/api/vms/${id}/ssh-host-key`);
 }
 
+const sshKeyPemCache = new Map<string, string>();
+
+/** Sync cache hit so a copy click can call `clipboard` in the same user gesture. */
+export function peekSshKeyPem(id: string): string | undefined {
+  return sshKeyPemCache.get(id);
+}
+
 /** Reads the operator private key as text, for copying it to the clipboard. */
 export async function fetchSshKeyPem(id: string): Promise<string> {
+  const cached = sshKeyPemCache.get(id);
+  if (cached !== undefined) return cached;
   let response: Response;
   try {
     response = await fetch(`/api/vms/${id}/ssh-key`);
@@ -126,7 +135,9 @@ export async function fetchSshKeyPem(id: string): Promise<string> {
   if (!response.ok) {
     throw await fail(response);
   }
-  return response.text();
+  const text = await response.text();
+  sshKeyPemCache.set(id, text);
+  return text;
 }
 
 /** Downloads the operator private key. Filename comes from Content-Disposition. */

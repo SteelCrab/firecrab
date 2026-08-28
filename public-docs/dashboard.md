@@ -79,6 +79,12 @@ npm run dev --prefix firecrab-frontend
   is often not the one that reaches the host from elsewhere
 - SHA256 is the guest `ssh_host_ed25519` key, not the PEM. First `ssh` prompt must match.
 - Terminal chrome is light; the serial surface stays dark
+- Phone: inspect rail is capped and scrolls
+- SSH commands fill the remaining column and scroll
+- Serial: a finger or pen drag pans the buffer
+- A mouse drag on a desktop still selects text
+- Paste uses the clipboard, or a prompt on HTTP
+- Copy buttons skip `clipboard.writeText` on HTTP so `execCommand` still runs in the same tap
 - Inspect rail: four equal cards (general, specs, network, usage) then ports + storage; a bottom white bar toggles it
 - Terminal Network group: ipv4, ipv6 (`—` when the network is IPv4-only), mac, egress, network id
 - List poll: 3 seconds

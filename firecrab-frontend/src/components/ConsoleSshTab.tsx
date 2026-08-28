@@ -1,6 +1,6 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PortForward, VmResponse } from "../bindings";
-import { downloadSshKey, fetchSshKeyPem, updateVmPortForwards } from "../api/client";
+import { downloadSshKey, fetchSshKeyPem, peekSshKeyPem, updateVmPortForwards } from "../api/client";
 import { isValidPort } from "../lib/portForward";
 import { copyText } from "../lib/textExport";
 import { useI18n } from "../i18n";
@@ -155,14 +155,14 @@ function CopyableBlock({
   action?: ReactNode;
 }) {
   const { t } = useI18n();
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const onCopy = async () => {
     const ok = await copyText(command);
     if (timer.current !== null) clearTimeout(timer.current);
-    setCopied(ok);
-    timer.current = setTimeout(() => setCopied(false), 2_000);
+    setStatus(ok ? "copied" : "failed");
+    timer.current = setTimeout(() => setStatus("idle"), 2_000);
   };
 
   return (
@@ -170,7 +170,11 @@ function CopyableBlock({
       <div className="console-ssh-block-head">
         <span className="console-ssh-block-label">{label}</span>
         <button type="button" className="btn console-bar-btn" onClick={() => void onCopy()}>
-          {copied ? t("Copied", "복사됨") : t("Copy", "복사")}
+          {status === "copied"
+            ? t("Copied", "복사됨")
+            : status === "failed"
+              ? t("Failed", "실패")
+              : t("Copy", "복사")}
         </button>
         {action}
       </div>
@@ -190,9 +194,9 @@ export default function ConsoleSshTab({ vm }: ConsoleSshTabProps) {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [keyCopied, setKeyCopied] = useState(false);
+  const [keyCopied, setKeyCopied] = useState<"idle" | "copied" | "failed">("idle");
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** PEM body, fetched only once the operator asks to see or copy it. */
+  /** PEM body. Prefetched so Copy key can write the clipboard in the same tap. */
   const [keyText, setKeyText] = useState<string | null>(null);
   const [keyShown, setKeyShown] = useState(false);
   /**
@@ -202,6 +206,34 @@ export default function ConsoleSshTab({ vm }: ConsoleSshTabProps) {
    */
   const [written, setWritten] = useState<{ id: string; forwards: PortForward[] } | null>(null);
   const [hostPort, setHostPort] = useState("22022");
+
+  // Prefetch so Copy key can write the clipboard in the same tap. An `await
+  // fetch` before `writeText` drops the user gesture on iOS / HTTP.
+  const vmId = vm?.id;
+  useEffect(() => {
+    setKeyShown(false);
+    if (!vmId) {
+      setKeyText(null);
+      return;
+    }
+    const cached = peekSshKeyPem(vmId);
+    if (cached !== undefined) {
+      setKeyText(cached);
+      return;
+    }
+    setKeyText(null);
+    let cancelled = false;
+    fetchSshKeyPem(vmId)
+      .then((pem) => {
+        if (!cancelled) setKeyText(pem);
+      })
+      .catch(() => {
+        /* eye / copy still fetch on demand */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [vmId]);
 
   if (!vm) {
     return (
@@ -230,8 +262,6 @@ export default function ConsoleSshTab({ vm }: ConsoleSshTabProps) {
       .finally(() => setBusy(false));
   };
 
-  // The private key reaches the browser only when asked for, and is kept for
-  // the rest of the session so the eye and the copy button share one fetch.
   const loadKey = async (): Promise<string> => {
     if (keyText !== null) return keyText;
     const pem = await fetchSshKeyPem(vm.id);
@@ -258,14 +288,22 @@ export default function ConsoleSshTab({ vm }: ConsoleSshTabProps) {
 
   // The PEM never lands on disk this way — handy on a host reached through a
   // browser, where the download would sit on the wrong machine.
+  const flashKeyCopy = (ok: boolean) => {
+    if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+    setKeyCopied(ok ? "copied" : "failed");
+    copyTimer.current = setTimeout(() => setKeyCopied("idle"), 2_000);
+  };
+
   const onCopyKey = async () => {
     setError(null);
+    const ready = keyText ?? peekSshKeyPem(vm.id);
+    if (ready !== undefined) {
+      flashKeyCopy(await copyText(ready));
+      return;
+    }
     setBusy(true);
     try {
-      const copied = await copyText(await loadKey());
-      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
-      setKeyCopied(copied);
-      copyTimer.current = setTimeout(() => setKeyCopied(false), 2_000);
+      flashKeyCopy(await copyText(await loadKey()));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -339,7 +377,11 @@ export default function ConsoleSshTab({ vm }: ConsoleSshTabProps) {
             onClick={() => void onCopyKey()}
             title={t("Copy the private key text", "개인 키 본문을 클립보드로 복사")}
           >
-            {keyCopied ? t("Key copied", "키 복사됨") : t("Copy key", "키 복사")}
+            {keyCopied === "copied"
+              ? t("Key copied", "키 복사됨")
+              : keyCopied === "failed"
+                ? t("Failed", "실패")
+                : t("Copy key", "키 복사")}
           </button>
         </div>
         <pre className={`console-ssh-code${keyShown ? "" : " is-masked"}`}>

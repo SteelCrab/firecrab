@@ -16,6 +16,7 @@ import {
   assignVmStorage,
   downloadSshKey,
   fetchSshKeyPem,
+  peekSshKeyPem,
   getVm,
   getVmLog,
   listImages,
@@ -633,13 +634,19 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                   title={t("Copy the private key text", "개인 키 본문을 클립보드로 복사")}
                   onClick={() => {
                     setSshKeyError(null);
+                    const ready = peekSshKeyPem(vm.id);
+                    const flash = (copied: boolean) => {
+                      setSshKeyCopied(copied);
+                      setTimeout(() => setSshKeyCopied(false), 2_000);
+                    };
+                    if (ready !== undefined) {
+                      void copyText(ready).then(flash);
+                      return;
+                    }
                     setSshKeyBusy(true);
                     fetchSshKeyPem(vm.id)
                       .then(copyText)
-                      .then((copied) => {
-                        setSshKeyCopied(copied);
-                        setTimeout(() => setSshKeyCopied(false), 2_000);
-                      })
+                      .then(flash)
                       .catch((error: unknown) => {
                         setSshKeyError(error instanceof Error ? error.message : String(error));
                       })
