@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.1.3](#013---2026-08-28) | 2026-08-28 | [#146], [#178], [#183], [#184], [#176], [#190], [#140], [#189], [#198], [#131], [#188], [45790c3] |
+| [0.1.3](#013---2026-08-28) | 2026-08-28 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#140], [#189], [#198], [#131], [#188], [#194], [#208], [45790c3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
@@ -39,9 +39,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ## [0.1.3] - 2026-08-28
 
-MicroNetworks can opt into IPv6 beside IPv4, host and M2Image releases ship
-license and corresponding-source artifacts, and CI fails when Clippy warnings
-grow past the checked-in baseline.
+MicroNetworks can opt into IPv6 beside IPv4, OCI guests gain an automatic SSH
+daemon and per-VM operator key pair, host and M2Image releases ship license and
+corresponding-source artifacts, and CI fails when Clippy warnings grow past the
+checked-in baseline.
 
 ### Added
 
@@ -53,6 +54,22 @@ grow past the checked-in baseline.
   detail panel ([#178]).
 - The serial console inspect rail is four equal cards with a bottom toggle,
   and the network card shows the guest IPv6 address ([#183], [#184]).
+- OCI imports install OpenSSH and drop a minimal sshd service that generates
+  host keys on first boot ([#186]).
+- Every guest provisions an ed25519 operator key pair in its storage directory
+  and authorizes its public key inside the rootfs ([#186]).
+- `GET /api/vms/:id/ssh-key` exposes the operator private key, and `GET
+  /api/vms/:id/ssh-host-key` verifies the guest host-key fingerprint via
+  SHA-256 against authorized runtime state ([#186]).
+- The dashboard introduces an SSH connect panel (accessible via the VM actions
+  menu, VM detail modal, and serial console tabs) with masked private key
+  preview, clipboard copy commands, and host fingerprint verification ([#186]).
+- VM table row actions are reorganized into a kebab dropdown menu with direct
+  SSH connect ([#186]).
+- [`public-docs/dashboard.md`](public-docs/dashboard.md),
+  [`public-docs/api.md`](public-docs/api.md), and
+  [`public-docs/oci.md`](public-docs/oci.md) document the SSH connect panel,
+  endpoints, and guest sshd service ([#186]).
 - Host release archives include `LICENSE`, `THIRD_PARTY_NOTICES.txt`, the
   license inventory, and the GPL-2.0 text required by `extract-vmlinux`;
   `install.sh` installs them under `$PREFIX/share/firecrab` ([#176], [#190]).
@@ -79,8 +96,14 @@ grow past the checked-in baseline.
 - Shorthand references resolve, and in-repo document links point at the released tag ([45790c3]).
 - IPv6 prefixes are allowlisted to `/64` unique-local or global, and the host
   uplink keeps RA so the default route is not dropped ([#178]).
+- Reassigning VM storage preserves the existing operator key pair instead of
+  regenerating a mismatched key ([#186]).
+- OCI SSH daemon starts and verifies connectivity on dual-stack IPv4/IPv6 networks ([#186]).
+- Fake Firecracker spawns in test suites retry on transient `ETXTBSY` ([#186]).
 - Host and M2Image packaging fail closed on missing, incompatible, or tampered
   license and source material ([#190]).
+- `firecrab-cli` builds cleanly with zero Clippy warnings ([#194]).
+- Microboot test startup eliminates timing flakes ([#208]).
 
 ### Improved
 
@@ -295,10 +318,13 @@ network helper.
 [#178]: https://github.com/SteelCrab/firecrab/pull/178
 [#183]: https://github.com/SteelCrab/firecrab/issues/183
 [#184]: https://github.com/SteelCrab/firecrab/pull/184
+[#186]: https://github.com/SteelCrab/firecrab/pull/186
 [#188]: https://github.com/SteelCrab/firecrab/pull/188
 [#189]: https://github.com/SteelCrab/firecrab/pull/189
 [#190]: https://github.com/SteelCrab/firecrab/pull/190
+[#194]: https://github.com/SteelCrab/firecrab/pull/194
 [#198]: https://github.com/SteelCrab/firecrab/pull/198
+[#208]: https://github.com/SteelCrab/firecrab/pull/208
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
 [322e95c]: https://github.com/SteelCrab/firecrab/commit/322e95c
