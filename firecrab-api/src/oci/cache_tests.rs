@@ -3,7 +3,7 @@ use core::assert_matches;
 
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -13,6 +13,7 @@ use axum::extract::{Path as AxumPath, State};
 use axum::http::{Response, StatusCode, header::CONTENT_TYPE};
 use axum::routing::get;
 use tempfile::tempdir;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 const REPOSITORY: &str = "team/app";
@@ -109,11 +110,46 @@ fn ordinary_manifest(config: &FixtureBlob, layers: &[FixtureBlob]) -> Vec<u8> {
     )
 }
 
+/// Sticky gate so a fixture blob cannot finish until the test releases it.
+/// `Notify` alone drops a signal that arrives before `notified().await`.
+struct BlobHold {
+    released: AtomicBool,
+    notify: Notify,
+}
+
+impl BlobHold {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            released: AtomicBool::new(false),
+            notify: Notify::new(),
+        })
+    }
+
+    async fn wait(&self) {
+        loop {
+            if self.released.load(Ordering::SeqCst) {
+                return;
+            }
+            let notified = self.notify.notified();
+            if self.released.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn release(&self) {
+        self.released.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
+    }
+}
+
 #[derive(Clone)]
 struct BlobReply {
     bytes: Arc<Vec<u8>>,
     digest_header: Option<String>,
     delay: Duration,
+    hold: Option<Arc<BlobHold>>,
 }
 
 impl BlobReply {
@@ -122,6 +158,7 @@ impl BlobReply {
             bytes: Arc::new(descriptor.bytes.clone()),
             digest_header: Some(descriptor.digest.to_string()),
             delay: Duration::ZERO,
+            hold: None,
         }
     }
 
@@ -130,16 +167,21 @@ impl BlobReply {
             bytes: Arc::new(bytes.into()),
             digest_header: Some(digest.to_string()),
             delay: Duration::ZERO,
+            hold: None,
         }
     }
 
-    fn delayed(mut self) -> Self {
-        self.delay = Duration::from_millis(40);
-        self
+    fn delayed(self) -> Self {
+        self.with_delay(Duration::from_millis(40))
     }
 
     fn with_delay(mut self, delay: Duration) -> Self {
         self.delay = delay;
+        self
+    }
+
+    fn with_hold(mut self, hold: Arc<BlobHold>) -> Self {
+        self.hold = Some(hold);
         self
     }
 }
@@ -294,6 +336,9 @@ async fn serve_blob(
         .max_active_blob_requests
         .fetch_max(active, Ordering::SeqCst);
     let _active_request = ActiveBlobRequest(Arc::clone(&state.active_blob_requests));
+    if let Some(hold) = &reply.hold {
+        hold.wait().await;
+    }
     if !reply.delay.is_zero() {
         tokio::time::sleep(reply.delay).await;
     }
@@ -634,41 +679,59 @@ async fn parallel_downloads_are_bounded_and_return_manifest_order() {
     let first = FixtureBlob::new(LAYER_MEDIA_TYPE, b"slow first layer".to_vec());
     let second = FixtureBlob::new(LAYER_MEDIA_TYPE, b"quick second layer".to_vec());
     let third = FixtureBlob::new(LAYER_MEDIA_TYPE, b"quickest third layer".to_vec());
+    let hold_first = BlobHold::new();
     let registry = TestRegistry::start(
         ordinary_manifest(&config, &[first.clone(), second.clone(), third.clone()]),
         [
-            (
-                config.digest.clone(),
-                BlobReply::for_descriptor(&config).with_delay(Duration::from_millis(10)),
-            ),
+            (config.digest.clone(), BlobReply::for_descriptor(&config)),
             (
                 first.digest.clone(),
-                BlobReply::for_descriptor(&first).with_delay(Duration::from_millis(200)),
+                BlobReply::for_descriptor(&first).with_hold(Arc::clone(&hold_first)),
             ),
-            (
-                second.digest.clone(),
-                BlobReply::for_descriptor(&second).with_delay(Duration::from_millis(25)),
-            ),
-            (
-                third.digest.clone(),
-                BlobReply::for_descriptor(&third).with_delay(Duration::from_millis(5)),
-            ),
+            (second.digest.clone(), BlobReply::for_descriptor(&second)),
+            (third.digest.clone(), BlobReply::for_descriptor(&third)),
         ],
     )
     .await;
     let directory = tempdir().expect("create image root");
     let cache = BlobCache::new(directory.path());
+    let reference = registry.reference();
+    let cache_for_pull = cache.clone();
 
-    let cached = cache_image_blobs_with_parallelism(
-        &registry.reference(),
-        Architecture::X86_64,
-        true,
-        &cache,
-        None,
-        2,
-    )
+    let pull = tokio::spawn(async move {
+        cache_image_blobs_with_parallelism(
+            &reference,
+            Architecture::X86_64,
+            true,
+            &cache_for_pull,
+            None,
+            2,
+        )
+        .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let completions = registry.blob_completions();
+            let done = |digest: &Sha256Digest| {
+                completions
+                    .iter()
+                    .any(|completed| completed == digest.as_str())
+            };
+            if done(&second.digest) && done(&third.digest) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
     .await
-    .expect("cache blobs with bounded parallelism");
+    .expect("fast layers finish while the first layer is held");
+
+    hold_first.release();
+    let cached = pull
+        .await
+        .expect("join bounded pull")
+        .expect("cache blobs with bounded parallelism");
 
     assert_eq!(registry.max_active_blob_requests(), 2);
     let completions = registry.blob_completions();
