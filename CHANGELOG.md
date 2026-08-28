@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.1.3](#013---2026-08-21) | 2026-08-21 | [45790c3] |
+| [0.1.3](#013---2026-08-28) | 2026-08-28 | [#146], [#178], [#183], [#184], [#176], [#190], [#140], [#189], [#198], [#131], [#188], [45790c3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
@@ -37,17 +37,37 @@ Entries land here as work merges, and move under the next version heading when t
 
 - None.
 
-## [0.1.3] - 2026-08-21
+## [0.1.3] - 2026-08-28
 
-Release notes credit that release's own contributors and stop repeating their title.
+MicroNetworks can opt into IPv6 beside IPv4, host and M2Image releases ship
+license and corresponding-source artifacts, and CI fails when Clippy warnings
+grow past the checked-in baseline.
 
 ### Added
 
-- None.
+- MicroNetworks accept an optional IPv6 `/64` at create time (`ipv6Cidr`,
+  `ipv6AddressMode` SLAAC or DHCPv6). Unique-local prefixes use NAT66, global
+  prefixes are forwarded untranslated, and existing IPv4-only networks stay
+  IPv4-only ([#146], [#178]).
+- The dashboard Networks create form has an IPv6 select, list column, and
+  detail panel ([#178]).
+- The serial console inspect rail is four equal cards with a bottom toggle,
+  and the network card shows the guest IPv6 address ([#183], [#184]).
+- Host release archives include `LICENSE`, `THIRD_PARTY_NOTICES.txt`, the
+  license inventory, and the GPL-2.0 text required by `extract-vmlinux`;
+  `install.sh` installs them under `$PREFIX/share/firecrab` ([#176], [#190]).
+- M2Image packages ship SPDX 2.3 SBOMs and matching corresponding-source
+  archives, and catalog publication refuses a binary without its source
+  sibling ([#176], [#190]).
+- CI compares Clippy warnings to a checked-in baseline and fails on a new
+  warning or a stale baseline ([#140], [#189]).
+- [`public-docs/ci.md`](public-docs/ci.md) documents that Clippy gate ([#198]).
 
 ### Changed
 
 - A GitHub Release is titled `firecrab v<tag>`, and its body no longer repeats that title ([45790c3]).
+- The pinned Rust toolchain is 1.97.1 (`rust-toolchain.toml`) ([#131], [#188]).
+- `install.sh` rejects a prepared payload that is missing the compliance artifacts ([#190]).
 
 ### Deprecated
 
@@ -57,10 +77,15 @@ Release notes credit that release's own contributors and stop repeating their ti
 
 - Release notes credit the commits between the previous release and this tag ([45790c3]).
 - Shorthand references resolve, and in-repo document links point at the released tag ([45790c3]).
+- IPv6 prefixes are allowlisted to `/64` unique-local or global, and the host
+  uplink keeps RA so the default route is not dropped ([#178]).
+- Host and M2Image packaging fail closed on missing, incompatible, or tampered
+  license and source material ([#190]).
 
 ### Improved
 
-- None.
+- Networking, API, and dashboard docs cover IPv6 create-time choice, NAT66 vs
+  direct egress, and guest sysctl ([#178]).
 
 ## [0.1.2] - 2026-08-21
 
@@ -247,10 +272,13 @@ network helper.
 [0.1.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.0
+[#131]: https://github.com/SteelCrab/firecrab/issues/131
+[#140]: https://github.com/SteelCrab/firecrab/issues/140
 [#141]: https://github.com/SteelCrab/firecrab/issues/141
 [#142]: https://github.com/SteelCrab/firecrab/issues/142
 [#143]: https://github.com/SteelCrab/firecrab/issues/143
 [#145]: https://github.com/SteelCrab/firecrab/pull/145
+[#146]: https://github.com/SteelCrab/firecrab/issues/146
 [#147]: https://github.com/SteelCrab/firecrab/issues/147
 [#147-comment]: https://github.com/SteelCrab/firecrab/issues/147#issuecomment-5327667852
 [#151]: https://github.com/SteelCrab/firecrab/pull/153
@@ -263,6 +291,14 @@ network helper.
 [#171]: https://github.com/SteelCrab/firecrab/pull/171
 [#174]: https://github.com/SteelCrab/firecrab/issues/174
 [#175]: https://github.com/SteelCrab/firecrab/pull/175
+[#176]: https://github.com/SteelCrab/firecrab/issues/176
+[#178]: https://github.com/SteelCrab/firecrab/pull/178
+[#183]: https://github.com/SteelCrab/firecrab/issues/183
+[#184]: https://github.com/SteelCrab/firecrab/pull/184
+[#188]: https://github.com/SteelCrab/firecrab/pull/188
+[#189]: https://github.com/SteelCrab/firecrab/pull/189
+[#190]: https://github.com/SteelCrab/firecrab/pull/190
+[#198]: https://github.com/SteelCrab/firecrab/pull/198
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
 [322e95c]: https://github.com/SteelCrab/firecrab/commit/322e95c
