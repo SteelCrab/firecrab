@@ -542,7 +542,7 @@ jobs:
         env:
           # Reuse the firecrab-api service installed above; Playwright still
           # starts its isolated Vite dashboard on :8080.
-          CI: ""
+          FIRECRAB_E2E_REUSE_SERVER: "1"
         run: npm --prefix firecrab-e2e run test:dhcp
 
       - name: Console log and journals (on failure)
@@ -689,7 +689,7 @@ jobs:
         if: matrix.host == 'aarch64'
         env:
           # Reuse the native arm64 API and net-helper services installed above.
-          CI: ""
+          FIRECRAB_E2E_REUSE_SERVER: "1"
         run: npm --prefix firecrab-e2e run test:dhcp
 
       - name: Logs (on failure)
