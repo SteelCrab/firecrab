@@ -281,10 +281,9 @@ mod compliance_coverage {
         fs::create_dir_all(directory.path().join("etc")).unwrap();
         fs::write(directory.path().join("etc/os-release"), "ID='fedora'\n").unwrap();
 
-        let generated =
-            generate_spdx(directory.path(), "fedora-test", "42", Architecture::Aarch64)
-                .unwrap()
-                .unwrap();
+        let generated = generate_spdx(directory.path(), "fedora-test", "42", Architecture::Aarch64)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(generated.package_manager, "rpm");
         assert_eq!(generated.package_count, 1);
@@ -317,10 +316,9 @@ mod compliance_coverage {
             ])],
         );
 
-        let generated =
-            generate_spdx(directory.path(), "minimal", "latest", Architecture::X86_64)
-                .unwrap()
-                .unwrap();
+        let generated = generate_spdx(directory.path(), "minimal", "latest", Architecture::X86_64)
+            .unwrap()
+            .unwrap();
 
         let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
         assert_eq!(json["packages"][1]["versionInfo"], "1.0");
@@ -403,10 +401,9 @@ mod compliance_coverage {
         )
         .unwrap();
 
-        let generated =
-            generate_spdx(directory.path(), "tiny", "latest", Architecture::X86_64)
-                .unwrap()
-                .unwrap();
+        let generated = generate_spdx(directory.path(), "tiny", "latest", Architecture::X86_64)
+            .unwrap()
+            .unwrap();
         assert_eq!(generated.package_count, 1);
         let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
         assert!(
@@ -447,10 +444,9 @@ mod compliance_coverage {
         )
         .unwrap();
 
-        let generated =
-            generate_spdx(directory.path(), "debian-test", "sid", Architecture::X86_64)
-                .unwrap()
-                .unwrap();
+        let generated = generate_spdx(directory.path(), "debian-test", "sid", Architecture::X86_64)
+            .unwrap()
+            .unwrap();
         assert_eq!(generated.package_manager, "dpkg");
         assert_eq!(generated.package_count, 1);
         let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
@@ -493,13 +489,8 @@ mod compliance_coverage {
             package_count: 1,
         };
 
-        let path = write_spdx_bundle(
-            directory.path(),
-            "replace-me",
-            Architecture::X86_64,
-            &first,
-        )
-        .unwrap();
+        let path = write_spdx_bundle(directory.path(), "replace-me", Architecture::X86_64, &first)
+            .unwrap();
         write_spdx_bundle(
             directory.path(),
             "replace-me",
