@@ -113,10 +113,10 @@ fn stamp_script_body(revision_id: Uuid, content: &str) -> String {
         body.push('\n');
     }
     let stamp = format!("# firecrab-shell revision={revision_id}");
-    if body.starts_with("#!") {
-        if let Some((shebang, rest)) = body.split_once('\n') {
-            return format!("{shebang}\n{stamp}\n{rest}");
-        }
+    if body.starts_with("#!")
+        && let Some((shebang, rest)) = body.split_once('\n')
+    {
+        return format!("{shebang}\n{stamp}\n{rest}");
     }
     format!("{stamp}\n{body}")
 }
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn max_content_fits_under_request_body() {
-        assert!(MAX_SHELL_CONTENT_BYTES < 64 * 1024);
+        const { assert!(MAX_SHELL_CONTENT_BYTES < 64 * 1024) };
     }
 
     #[test]

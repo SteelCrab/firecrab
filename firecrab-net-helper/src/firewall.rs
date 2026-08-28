@@ -433,7 +433,8 @@ fn offline_subnet_cidrs6(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
 /// lives.
 ///
 /// Per-VM rules live in separate named chains + verdict-map elements (see
-/// [`render_vm_policy`]) so replacing one VM's policy never disturbs another.
+/// [`render_vm_policy_for_network`]) so replacing one VM's policy never
+/// disturbs another.
 /// The complete desired VM snapshot is appended to this recreation in the
 /// same transaction by [`render_reconciled_ruleset`].
 fn render_apply_ruleset(
@@ -567,6 +568,7 @@ fn render_apply_ruleset(
 /// An identical policy is skipped by [`apply_vm_policy`]; a changed one is
 /// rendered through [`render_vm_policy_replacement`] so it cannot disturb
 /// any other VM's chains or map elements.
+#[cfg(test)]
 fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
     render_vm_policy_for_network(uplink, policy, true)
 }
@@ -709,8 +711,8 @@ fn render_vm_policy_replacement(
     )
 }
 
-/// Removes every object [`render_vm_policy`] created for `vm_id`, and nothing
-/// else. Each map element is deleted before the chain it jumps to, so nft
+/// Removes every object [`render_vm_policy_for_network`] created for `vm_id`,
+/// and nothing else. Each map element is deleted before the chain it jumps to, so nft
 /// never rejects a still-referenced chain.
 fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr, ipv6: Option<Ipv6Addr>) -> String {
     let tap = tap_name(vm_id);
@@ -1142,7 +1144,7 @@ mod tests {
     #[test]
     fn global_ruleset_dispatches_bridge_traffic_from_accept_policy_base_chains() {
         let network = sample_network(0x1234, "172.31.0.1", 24);
-        let ruleset = render_apply_ruleset("eth0", &[network.clone()]).unwrap();
+        let ruleset = render_apply_ruleset("eth0", std::slice::from_ref(&network)).unwrap();
         assert!(ruleset.contains("policy accept"));
         let bridge = network.bridge_name();
         assert!(ruleset.contains(&format!("iifname \"{bridge}\" jump firecrab_egress")));

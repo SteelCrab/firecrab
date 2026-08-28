@@ -434,10 +434,10 @@ pub async fn delete_staged_package(
         ));
     }
 
-    if let Err(error) = tokio::fs::remove_file(&path).await {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            return Err(AppError::internal(request_id.0));
-        }
+    if let Err(error) = tokio::fs::remove_file(&path).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(AppError::internal(request_id.0));
     }
     if image_install::clear_staged_package_origin(state.templates.image_root_path(), &alias)
         .is_err()
@@ -621,7 +621,7 @@ mod tests {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        let tar = Command::new("tar")
+        let mut tar = Command::new("tar")
             .args(["-C"])
             .arg(source)
             .arg("-cf")
@@ -633,10 +633,11 @@ mod tests {
         let status = Command::new("zstd")
             .args(["-q", "-f", "-o"])
             .arg(dest)
-            .stdin(tar.stdout.unwrap())
+            .stdin(tar.stdout.take().expect("tar stdout"))
             .status()
             .expect("zstd");
         assert!(status.success(), "zstd failed");
+        assert!(tar.wait().expect("wait for tar").success(), "tar failed");
     }
 
     #[tokio::test]
@@ -662,9 +663,8 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let app = axum::Router::new().fallback_service(tower_http::services::ServeDir::new(
-            source.path().to_path_buf(),
-        ));
+        let app = axum::Router::new()
+            .fallback_service(tower_http::services::ServeDir::new(source.path()));
         tokio::spawn(async move {
             axum::serve(listener, app).await.ok();
         });
@@ -858,7 +858,7 @@ mod tests {
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
-        let err = result.err().expect("should fail");
+        let err = result.expect_err("should fail");
         assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
     }
 
@@ -1093,9 +1093,8 @@ mod tests {
         // Empty source dir → downloads 404.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let app = axum::Router::new().fallback_service(tower_http::services::ServeDir::new(
-            source.path().to_path_buf(),
-        ));
+        let app = axum::Router::new()
+            .fallback_service(tower_http::services::ServeDir::new(source.path()));
         tokio::spawn(async move {
             axum::serve(listener, app).await.ok();
         });
@@ -1238,6 +1237,42 @@ mod tests {
         assert_eq!(
             state.image_packages.snapshot("ubuntu-26.04").status,
             ImageInstallStatus::Idle
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_staged_package_returns_internal_when_unlink_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+        );
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, b"pretend tar.zst").unwrap();
+
+        let parent = staged.parent().unwrap();
+        let original = fs::metadata(parent).unwrap().permissions();
+        let mut locked = original.clone();
+        locked.set_mode(0o555);
+        fs::set_permissions(parent, locked).unwrap();
+        let result = delete_staged_package(
+            State(state),
+            Path("ubuntu-26.04".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await;
+        fs::set_permissions(parent, original).unwrap();
+
+        assert_eq!(
+            result.unwrap_err().into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
         );
     }
 

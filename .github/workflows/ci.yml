@@ -46,12 +46,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: cargo clippy
-        # Not -D warnings: several workspace crates carry dead_code warnings
-        # for network-automation pieces (IPAM, egress policy, ...) that are
-        # already merged ahead of the task that wires them up
-        # (public-docs/networking.md).
-        # Denying warnings here would fail CI on legitimate WIP, not bugs.
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test -p firecrab-cli
         run: cargo test -p firecrab-cli --locked
