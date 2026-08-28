@@ -299,7 +299,7 @@ fn create_placeholder_rootfs(rootfs_dest: &Path) -> Result<(), String> {
     // overwrites this completely — only its structure has to be valid.
     std::process::Command::new("mkfs.ext4")
         .args(["-q", "-F"])
-        .arg(rootfs_dest)
+        .arg(&rootfs_dest)
         .arg("16M")
         .status()
         .map_err(|error| format!("run mkfs.ext4 for {}: {error}", rootfs_dest.display()))

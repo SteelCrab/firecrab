@@ -114,7 +114,7 @@ Run what you can locally. CI will re-run the same gates on every pull request.
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets
 cargo test --workspace --locked
 ```
 

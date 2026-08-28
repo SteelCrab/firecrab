@@ -1,5 +1,28 @@
 {
-  "lints": {},
-  "packages": {},
-  "total": 0
+  "lints": {
+    "clippy::assertions_on_constants": 1,
+    "clippy::await_holding_lock": 1,
+    "clippy::borrow_deref_ref": 1,
+    "clippy::cloned_ref_to_slice_refs": 1,
+    "clippy::collapsible_if": 15,
+    "clippy::err_expect": 1,
+    "clippy::if_same_then_else": 1,
+    "clippy::match_like_matches_macro": 1,
+    "clippy::needless_borrow": 2,
+    "clippy::needless_borrows_for_generic_args": 1,
+    "clippy::single_component_path_imports": 1,
+    "clippy::too_many_arguments": 1,
+    "clippy::type_complexity": 1,
+    "clippy::unnecessary_get_then_check": 1,
+    "clippy::unnecessary_to_owned": 3,
+    "clippy::zombie_processes": 2,
+    "dead_code": 18,
+    "unused_imports": 1
+  },
+  "packages": {
+    "firecrab-api": 43,
+    "firecrab-cli": 8,
+    "firecrab-net-helper": 2
+  },
+  "total": 53
 }

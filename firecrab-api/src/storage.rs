@@ -10,6 +10,7 @@ use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
 use firecrab_api_types::{StorageDeviceResponse, StorageRootResponse};
+use libc;
 use thiserror::Error;
 
 /// Id of the implicit single root when `FIRECRAB_STORAGE_ROOTS` is unset.
@@ -122,7 +123,6 @@ impl StorageRegistry {
     }
 
     /// Every registered root, in registration order.
-    #[cfg(test)]
     pub fn roots(&self) -> &[StorageRoot] {
         &self.roots
     }
@@ -156,7 +156,9 @@ impl StorageRegistry {
             .map(|root| {
                 let (total_gib, available_gib) =
                     available_and_total_gib(&root.path).unwrap_or((0, 0));
-                let kind = if root.id == DEFAULT_ROOT_ID {
+                let kind = if root.id == DEFAULT_ROOT_ID && self.roots.len() == 1 {
+                    "default"
+                } else if root.id == DEFAULT_ROOT_ID {
                     "default"
                 } else {
                     "env"
@@ -191,7 +193,6 @@ impl StorageRegistry {
     }
 
     /// Ensures `id` is registered and has at least `need_bytes` free.
-    #[cfg(test)]
     pub fn ensure_capacity(&self, id: &str, need_bytes: u64) -> Result<(), StorageError> {
         let root = self
             .get(id)

@@ -1047,7 +1047,6 @@ impl Store {
     }
 
     /// Creates a shell and its first revision (version 1).
-    #[allow(clippy::too_many_arguments)]
     pub fn create_shell(
         &self,
         id: Uuid,

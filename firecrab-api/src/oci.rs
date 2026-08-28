@@ -2230,7 +2230,6 @@ impl LayerCache {
     }
 
     /// Returns the verified tar path for one compressed descriptor/diff-ID pair.
-    #[cfg(test)]
     pub fn path_for(
         &self,
         descriptor: &Descriptor,
@@ -2493,25 +2492,21 @@ pub struct ValidatedLayer {
 
 impl ValidatedLayer {
     /// Original cached registry bytes and their manifest descriptor.
-    #[cfg(test)]
     pub fn source(&self) -> &CachedBlob {
         &self.layer.source
     }
 
     /// Digest of the uncompressed tar stream from config `rootfs.diff_ids`.
-    #[cfg(test)]
     pub fn diff_id(&self) -> &Sha256Digest {
         &self.layer.diff_id
     }
 
     /// Path of the validated, uncompressed layer tar.
-    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.layer.path
     }
 
     /// Number of bytes in the validated tar stream.
-    #[cfg(test)]
     pub fn size(&self) -> u64 {
         self.layer.size
     }
@@ -2573,25 +2568,21 @@ impl OciExt4Image {
     }
 
     /// Length of the image file in bytes.
-    #[cfg(test)]
     pub fn size_bytes(&self) -> u64 {
         self.size_bytes
     }
 
     /// Measured payload of the provisioned tree packed into the image.
-    #[cfg(test)]
     pub fn payload_bytes(&self) -> u64 {
         self.payload_bytes
     }
 
     /// Free space remaining after packing, from `tune2fs`.
-    #[cfg(test)]
     pub fn free_bytes(&self) -> u64 {
         self.free_bytes
     }
 
     /// Digest of the toolbox program the provisioned tree will boot.
-    #[cfg(test)]
     pub fn toolbox_digest(&self) -> &Sha256Digest {
         &self.toolbox
     }
@@ -2636,7 +2627,6 @@ impl OciBootableImage {
     }
 
     /// Architecture the paired kernel was classified as.
-    #[cfg(test)]
     pub fn architecture(&self) -> Architecture {
         self.architecture
     }
@@ -2690,19 +2680,16 @@ pub struct RegisteredOciImage {
 
 impl RegisteredOciImage {
     /// Registered alias.
-    #[cfg(test)]
     pub fn alias(&self) -> &str {
         &self.alias
     }
 
     /// Registered version.
-    #[cfg(test)]
     pub fn version(&self) -> &str {
         &self.version
     }
 
     /// Rootfs path relative to the image root.
-    #[cfg(test)]
     pub fn rootfs(&self) -> &Path {
         &self.rootfs
     }
@@ -2726,25 +2713,21 @@ impl OciProcessConfig {
     }
 
     /// Config `Entrypoint`.
-    #[cfg(test)]
     pub fn entrypoint(&self) -> &[String] {
         &self.entrypoint
     }
 
     /// Config `Cmd`.
-    #[cfg(test)]
     pub fn cmd(&self) -> &[String] {
         &self.cmd
     }
 
     /// Config `Env` entries, each `KEY=value`.
-    #[cfg(test)]
     pub fn env(&self) -> &[String] {
         &self.env
     }
 
     /// Config `WorkingDir`, empty when the image did not set one.
-    #[cfg(test)]
     pub fn working_dir(&self) -> &str {
         &self.working_dir
     }
@@ -2779,7 +2762,6 @@ impl ToolboxProgram {
     }
 
     /// Program size in bytes.
-    #[cfg(test)]
     pub fn size(&self) -> u64 {
         self.size
     }
@@ -2807,13 +2789,11 @@ impl FastfetchProgram {
     }
 
     /// SHA-256 of the program bytes.
-    #[cfg(test)]
     pub fn digest(&self) -> &Sha256Digest {
         &self.digest
     }
 
     /// Program size in bytes.
-    #[cfg(test)]
     pub fn size(&self) -> u64 {
         self.size
     }
@@ -3126,6 +3106,18 @@ pub async fn merge_validated_layers(
     destination: &Path,
 ) -> Result<MergedRootfs, ResolveError> {
     merge::merge_validated_layers(layers, destination).await
+}
+
+/// Pulls (or reuses) the pinned toolbox image and returns its static program.
+///
+/// The program is fetched through the same verified pipeline as any other
+/// image and cached under the image root, so only the first import on a host
+/// contacts the registry. Operators can point
+/// `FIRECRAB_OCI_TOOLBOX_IMAGE` at a mirror.
+pub async fn provision_toolbox(
+    options: &GuestRuntimeOptions<'_>,
+) -> Result<ToolboxProgram, ResolveError> {
+    busybox::ensure_toolbox(options).await
 }
 
 /// Pulls (or reuses) the pinned fastfetch program for glibc guests.

@@ -132,7 +132,6 @@ pub(super) async fn provision_merged_rootfs(
 ///
 /// Split from acquisition so the injection rules can be tested without a
 /// registry, and so a caller that already holds a program never re-verifies it.
-#[cfg(test)]
 pub(super) async fn inject_with_toolbox(
     rootfs: MergedRootfs,
     toolbox: &ToolboxProgram,
