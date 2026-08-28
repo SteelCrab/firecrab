@@ -533,10 +533,7 @@ pub async fn spawn_vm(
     }
     terminate_with_parent(&mut command);
 
-    let mut child = command.spawn().map_err(|source| FirecrackerError::Spawn {
-        binary: binary.to_owned(),
-        source,
-    })?;
+    let mut child = spawn_firecracker(binary, &mut command).await?;
 
     let stdin = child.stdin.take().expect("stdin was piped");
     let stdout = child.stdout.take().expect("stdout was piped");
@@ -669,6 +666,36 @@ pub async fn stop_vm(
     Ok(())
 }
 
+/// `execve` of a script that was just written can fail with `ETXTBSY` on
+/// this CI sandbox when many tests spawn at once. Production Firecracker
+/// is a stable binary, so the retry is test-only.
+async fn spawn_firecracker(
+    binary: &Path,
+    command: &mut Command,
+) -> Result<Child, FirecrackerError> {
+    const BUSY_ATTEMPTS: u32 = 8;
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(source)
+                if cfg!(test)
+                    && source.kind() == io::ErrorKind::ExecutableFileBusy
+                    && attempt < BUSY_ATTEMPTS =>
+            {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(10 * u64::from(attempt))).await;
+            }
+            Err(source) => {
+                return Err(FirecrackerError::Spawn {
+                    binary: binary.to_owned(),
+                    source,
+                });
+            }
+        }
+    }
+}
+
 /// Test-only helpers for standing in a fake Firecracker binary (a small
 /// Python script) so process-spawning tests don't need the real one.
 #[cfg(test)]
@@ -713,12 +740,25 @@ sys.exit(0)
 
     /// Writes an executable fake Firecracker script combining the prelude
     /// with `body`.
+    ///
+    /// The bytes are fsync'd and renamed into place so `execve` does not see
+    /// a writer still attached. Without that, concurrent `cargo test --release`
+    /// runs hit `ETXTBSY` (`ExecutableFileBusy`) on this sandbox.
     pub fn fake_firecracker(directory: &Path, body: &str) -> PathBuf {
+        use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
 
+        fs::create_dir_all(directory).unwrap();
         let path = directory.join("fake-firecracker");
-        fs::write(&path, format!("{FAKE_PRELUDE}{body}")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let tmp = directory.join("fake-firecracker.tmp");
+        {
+            let mut file = fs::File::create(&tmp).unwrap();
+            file.write_all(format!("{FAKE_PRELUDE}{body}").as_bytes())
+                .unwrap();
+            file.sync_all().unwrap();
+        }
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::rename(&tmp, &path).unwrap();
         path
     }
 
@@ -919,6 +959,22 @@ mod tests {
 
     use super::test_support::{SERVE_LOOP, fake_firecracker, process_alive, short_tempdir};
 
+    #[test]
+    fn fake_firecracker_script_can_be_execd_immediately() {
+        let directory = short_tempdir();
+        let sock = directory.path().join("sock");
+        let path = fake_firecracker(directory.path(), "sys.exit(0)\n");
+        let status = std::process::Command::new(&path)
+            .arg("--api-sock")
+            .arg(&sock)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "fresh fake-firecracker must be executable"
+        );
+    }
+
     fn fake_pid(runtime: &crate::artifacts::HostRuntimePaths) -> i32 {
         let pid_file = format!("{}.pid", api_sock_path(runtime).display());
         fs::read_to_string(pid_file)
@@ -953,11 +1009,7 @@ mod tests {
         let pid = process.pid().unwrap() as i32;
         assert!(process_alive(pid));
 
-        // The broker must see the same bytes that get tee'd to the log file,
-        // checked here (rather than in a standalone test) so this doesn't add
-        // an extra concurrent Firecracker spawn: this sandbox's fork/exec
-        // gets measurably ETXTBSY-flaky for `fake_firecracker` scripts once
-        // 7+ of these tests spawn processes in the same `cargo test` run.
+        // The broker must see the same bytes that get tee'd to the log file.
         let (backlog, _receiver) = process.console.subscribe();
         assert!(
             String::from_utf8_lossy(&backlog).contains("booted"),
