@@ -94,6 +94,84 @@ pub fn ensure_operator_key(paths: &VmArtifactPaths) -> Result<VmSshPaths, SshErr
     Ok(ssh)
 }
 
+/// Moves `{from}/ssh` onto `{to}/ssh` when an operator key already exists.
+///
+/// Storage reassignment is allowed before the first disk exists, but the
+/// operator key is created at VM create. Leaving it on the old root would
+/// make `GET /ssh-key` miss the file (or mint a second key on next start).
+pub fn relocate_ssh_artifacts(
+    from: &VmArtifactPaths,
+    to: &VmArtifactPaths,
+) -> Result<(), SshError> {
+    let src = VmSshPaths::from_artifacts(from);
+    if !src.dir.is_dir() {
+        return Ok(());
+    }
+    to.ensure_directories().map_err(|source| SshError::Io {
+        path: to.dir.clone(),
+        source: io::Error::other(source.to_string()),
+    })?;
+    let dst = VmSshPaths::from_artifacts(to);
+    if src.dir == dst.dir {
+        return Ok(());
+    }
+    if dst.dir.exists() {
+        fs::remove_dir_all(&dst.dir).map_err(|source| SshError::Io {
+            path: dst.dir.clone(),
+            source,
+        })?;
+    }
+    match fs::rename(&src.dir, &dst.dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::CrossesDevices => {
+            copy_tree(&src.dir, &dst.dir)?;
+            fs::remove_dir_all(&src.dir).map_err(|source| SshError::Io {
+                path: src.dir.clone(),
+                source,
+            })
+        }
+        Err(source) => Err(SshError::Io {
+            path: src.dir,
+            source,
+        }),
+    }
+}
+
+fn copy_tree(src: &Path, dst: &Path) -> Result<(), SshError> {
+    fs::create_dir_all(dst).map_err(|source| SshError::Io {
+        path: dst.to_owned(),
+        source,
+    })?;
+    chmod(dst, 0o700)?;
+    for entry in fs::read_dir(src).map_err(|source| SshError::Io {
+        path: src.to_owned(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| SshError::Io {
+            path: src.to_owned(),
+            source,
+        })?;
+        let to = dst.join(entry.file_name());
+        let from = entry.path();
+        let file_type = entry.file_type().map_err(|source| SshError::Io {
+            path: from.clone(),
+            source,
+        })?;
+        if file_type.is_dir() {
+            copy_tree(&from, &to)?;
+        } else {
+            fs::copy(&from, &to).map_err(|source| SshError::Io {
+                path: to.clone(),
+                source,
+            })?;
+            if let Ok(mode) = fs::metadata(&from).map(|meta| meta.permissions().mode()) {
+                let _ = chmod(&to, mode & 0o777);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Operator pair plus a stable guest host key pair.
 pub fn ensure_vm_ssh_keys(paths: &VmArtifactPaths) -> Result<VmSshPaths, SshError> {
     let ssh = ensure_operator_key(paths)?;
@@ -218,5 +296,29 @@ mod tests {
         assert!(fp.starts_with("SHA256:"), "{fp}");
         ensure_vm_ssh_keys(&paths).unwrap();
         assert_eq!(host_fingerprint(&paths).as_deref(), Some(fp.as_str()));
+    }
+
+    #[test]
+    fn relocate_ssh_artifacts_moves_the_operator_key() {
+        let directory = tempdir().unwrap();
+        let from = artifacts(&directory.path().join("from"));
+        let to = artifacts(&directory.path().join("to"));
+        let first = ensure_operator_key(&from).unwrap();
+        let bytes = fs::read(&first.operator_private).unwrap();
+
+        relocate_ssh_artifacts(&from, &to).unwrap();
+
+        assert!(!first.operator_private.is_file());
+        let moved = VmSshPaths::from_artifacts(&to);
+        assert_eq!(fs::read(&moved.operator_private).unwrap(), bytes);
+    }
+
+    #[test]
+    fn relocate_ssh_artifacts_is_a_no_op_when_nothing_was_generated() {
+        let directory = tempdir().unwrap();
+        let from = artifacts(&directory.path().join("from"));
+        let to = artifacts(&directory.path().join("to"));
+        relocate_ssh_artifacts(&from, &to).unwrap();
+        assert!(!VmSshPaths::from_artifacts(&to).dir.exists());
     }
 }

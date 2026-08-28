@@ -6,7 +6,9 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderValue,
+};
 use axum::response::IntoResponse;
 use firecrab_api_types::{SshHostKeyCheckResponse, SshHostKeyResponse, VmLogResponse, VmResponse};
 use firecrab_helper_protocol::network::{
@@ -172,6 +174,7 @@ pub async fn download_ssh_key(
     if let Ok(value) = HeaderValue::from_str(&disposition) {
         headers.insert(CONTENT_DISPOSITION, value);
     }
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok((headers, body))
 }
 
@@ -2387,6 +2390,17 @@ pub async fn assign_vm_storage(
         return Err(AppError::validation(fields, request_id.0));
     }
 
+    let new_paths = crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(target), id);
+    let old_ssh = old_paths.clone();
+    let new_ssh = new_paths.clone();
+    tokio::task::spawn_blocking(move || crate::guest_ssh::relocate_ssh_artifacts(&old_ssh, &new_ssh))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, vm_id = %id, %error, "failed to move SSH artifacts");
+            AppError::internal(request_id.0)
+        })?;
+
     let updated = {
         let mut vms = state
             .vms
@@ -2408,6 +2422,12 @@ pub async fn assign_vm_storage(
         {
             vm.storage_root = previous_root;
         }
+        let old_ssh = old_paths;
+        let new_ssh = new_paths;
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::guest_ssh::relocate_ssh_artifacts(&new_ssh, &old_ssh)
+        })
+        .await;
         return Err(error);
     }
     tracing::info!(
@@ -4022,6 +4042,85 @@ while True:
             state.vms_dir_for(&reassigned.storage_root),
             pool.join("vms")
         );
+    }
+
+    #[tokio::test]
+    async fn assign_vm_storage_preserves_the_operator_key() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("assigned-pool");
+        let state = test_state(directory.path()).await;
+        let net = seed_network(&state).await;
+        let pool_id = seed_pool(&state, "assigned-pool", &pool).await;
+
+        let (_, Json(created)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(create_request_on("move-key", net)),
+        )
+        .await
+        .unwrap();
+
+        let first = download_ssh_key(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(created.id.to_string()),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(
+            first.headers().get(axum::http::header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        let first_bytes = axum::body::to_bytes(first.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            first_bytes.starts_with(b"-----BEGIN"),
+            "operator key should be a PEM: {}",
+            String::from_utf8_lossy(&first_bytes)
+        );
+
+        let Json(_) = assign_vm_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(created.id.to_string()),
+            ValidatedJson(firecrab_api_types::AssignVmStorageRequest {
+                storage_root: pool_id,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let second = download_ssh_key(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(created.id.to_string()),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        let second_bytes = axum::body::to_bytes(second.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(first_bytes, second_bytes);
+    }
+
+    #[tokio::test]
+    async fn download_ssh_key_unknown_vm_is_not_found() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let error = match download_ssh_key(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        {
+            Ok(_) => panic!("unknown VM must not yield a key"),
+            Err(error) => error,
+        };
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     /// Seeds a MicroStorage pool and returns its id, for the assign tests

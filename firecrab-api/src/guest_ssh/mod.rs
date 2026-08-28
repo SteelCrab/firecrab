@@ -17,5 +17,7 @@ pub mod service;
 pub mod verify;
 
 pub use install::install_on_guest;
-pub use keys::{VmSshPaths, ensure_operator_key, host_fingerprint, pem_filename};
+pub use keys::{
+    VmSshPaths, ensure_operator_key, host_fingerprint, pem_filename, relocate_ssh_artifacts,
+};
 pub use service::{GUEST_SSHD_SERVICE, sshd_service_script};
