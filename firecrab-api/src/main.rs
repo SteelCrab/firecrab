@@ -20,6 +20,7 @@ mod process_metrics;
 mod rootfs;
 mod server;
 mod shells;
+mod source_deployment;
 mod state;
 mod storage;
 mod templates;

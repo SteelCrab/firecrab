@@ -10,6 +10,7 @@
 - [VM endpoints](#vm-endpoints)
 - [Create a VM](#create-a-vm)
 - [VM fields](#vm-fields)
+- [Git source deployments](#git-source-deployments)
 - [Guest `/etc/firecrab`](#guest-etcfirecrab)
 - [Other endpoints](#other-endpoints)
 - [MicroNetwork](#micronetwork)
@@ -90,6 +91,48 @@ The response has status `201` and includes the VM UUID.
 | `storageRoot` | Optional storage ID |
 | `shellIds` | Optional Shell repository ids (latest revision pinned) |
 | `env` | Optional string map. Create omit = `{}`. PUT omit = keep stored; `{}` clears. Allowed while `running` (guest service restarts). POSIX keys, 64 entries, 256-byte keys, 4096-byte values, no NUL. Plaintext in the guest. |
+| `sourceDeployment` | Optional public HTTPS Git repository cloned, built, and run inside the guest. |
+
+## Git source deployments
+
+- `sourceDeployment` works with catalog images and OCI-imported images.
+- Clone, checkout, build, and run commands execute inside the MicroVM, never on the Firecrab host.
+- The selected image must contain the requested build toolchain.
+- `native` launches `runCommand` as the primary service.
+- `wasm` launches `artifactPath` with `wasmer run`; the selected image must contain Wasmer.
+- On an OCI-imported image, the source deployment replaces the image's original Entrypoint/Cmd service.
+- MVP accepts public HTTPS repositories only. Embedded credentials and private repository secrets are rejected.
+
+Native example:
+
+```json
+{
+  "sourceDeployment": {
+    "repository": "https://github.com/acme/api.git",
+    "revision": "main",
+    "buildCommand": "cargo build --release",
+    "runtime": "native",
+    "runCommand": "./target/release/api"
+  }
+}
+```
+
+MicroWASM example:
+
+```json
+{
+  "sourceDeployment": {
+    "repository": "https://github.com/acme/api.git",
+    "revision": "v1.0.0",
+    "buildCommand": "cargo build --release --target wasm32-wasip1",
+    "runtime": "wasm",
+    "artifactPath": "target/wasm32-wasip1/release/api.wasm",
+    "args": ["--port", "8080"]
+  }
+}
+```
+
+Guest console markers expose `CLONING`, `CHECKOUT`, `BUILDING`, `BUILT`, `RUNNING`, and `FAILED` phases under the `FIRECRAB_SOURCE_` prefix.
 
 ## Guest `/etc/firecrab`
 

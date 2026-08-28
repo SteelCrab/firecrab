@@ -200,6 +200,13 @@ const CREATE_PORT_FORWARDS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS port_fo
 const CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL: &str = "CREATE UNIQUE INDEX IF NOT EXISTS port_forwards_host_port_protocol \
      ON port_forwards(host_port, protocol)";
 
+/// Optional Git-to-workload configuration attached to one VM.
+const CREATE_VM_SOURCE_DEPLOYMENTS_TABLE_SQL: &str =
+    "CREATE TABLE IF NOT EXISTS vm_source_deployments (
+    vm_id TEXT PRIMARY KEY,
+    spec TEXT NOT NULL
+) STRICT";
+
 /// Adds `disk_gb` to a `vms` table created before the column existed (a
 /// bare `CREATE TABLE IF NOT EXISTS` doesn't retrofit new columns onto an
 /// already-created table). `2` matches the fixed rootfs template size that
@@ -665,6 +672,7 @@ impl Store {
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_UNIQUE_HOST_PORT_SQL, [])?;
+        conn.execute(CREATE_VM_SOURCE_DEPLOYMENTS_TABLE_SQL, [])?;
         // After micro_networks exists: promote pre-MicroNetwork VMs/leases
         // that still have NULL micro_network_id onto one explicit row.
         promote_implicit_default_network(&conn)?;
@@ -1520,6 +1528,53 @@ impl Store {
         Ok(out)
     }
 
+    /// Stores the immutable Git source deployment selected at VM creation.
+    pub fn set_vm_source_deployment(
+        &self,
+        vm_id: Uuid,
+        deployment: &firecrab_api_types::SourceDeployment,
+    ) -> Result<(), PersistenceError> {
+        let spec = serde_json::to_string(deployment)
+            .expect("SourceDeployment contains only JSON-serializable values");
+        self.lock().execute(
+            "INSERT INTO vm_source_deployments (vm_id, spec) VALUES (?1, ?2) \
+             ON CONFLICT(vm_id) DO UPDATE SET spec = excluded.spec",
+            params![vm_id.to_string(), spec],
+        )?;
+        Ok(())
+    }
+
+    /// Fetches the Git source deployment attached to a VM.
+    pub fn vm_source_deployment(
+        &self,
+        vm_id: Uuid,
+    ) -> Result<Option<firecrab_api_types::SourceDeployment>, PersistenceError> {
+        let raw: Option<String> = self
+            .lock()
+            .query_row(
+                "SELECT spec FROM vm_source_deployments WHERE vm_id = ?1",
+                params![vm_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        raw.map(|spec| {
+            serde_json::from_str(&spec).map_err(|_| PersistenceError::CorruptRecord {
+                id: vm_id.to_string(),
+                reason: "source deployment is not valid JSON".to_owned(),
+            })
+        })
+        .transpose()
+    }
+
+    /// Clears a VM's Git source deployment metadata.
+    pub fn clear_vm_source_deployment(&self, vm_id: Uuid) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            "DELETE FROM vm_source_deployments WHERE vm_id = ?1",
+            params![vm_id.to_string()],
+        )?;
+        Ok(())
+    }
+
     /// Fetches all port forwarding rules across all VMs.
     pub fn list_all_port_forwards(
         &self,
@@ -1891,6 +1946,49 @@ mod tests {
             Err(PersistenceError::MissingVm { id }) if id == first.id);
         let result = store.update(&record(Uuid::new_v4(), "ghost"));
         assert_matches!(result, Err(PersistenceError::MissingVm { .. }));
+    }
+
+    #[test]
+    fn source_deployment_round_trips_and_clears() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let vm = record(Uuid::new_v4(), "source-vm");
+        store.insert(&vm).unwrap();
+        let deployment = firecrab_api_types::SourceDeployment {
+            repository: "https://github.com/SteelCrab/example.git".to_owned(),
+            revision: "main".to_owned(),
+            build_command: "cargo build --release".to_owned(),
+            runtime: firecrab_api_types::SourceRuntime::Native {
+                run_command: "./target/release/example".to_owned(),
+            },
+        };
+
+        store.set_vm_source_deployment(vm.id, &deployment).unwrap();
+        assert_eq!(
+            store.vm_source_deployment(vm.id).unwrap().as_ref(),
+            Some(&deployment)
+        );
+        store.clear_vm_source_deployment(vm.id).unwrap();
+        assert_eq!(store.vm_source_deployment(vm.id).unwrap(), None);
+    }
+
+    #[test]
+    fn source_deployment_rejects_corrupt_json() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        let vm = record(Uuid::new_v4(), "corrupt-source");
+        store.insert(&vm).unwrap();
+        store
+            .lock()
+            .execute(
+                "INSERT INTO vm_source_deployments (vm_id, spec) VALUES (?1, ?2)",
+                params![vm.id.to_string(), "not-json"],
+            )
+            .unwrap();
+        assert_matches!(
+            store.vm_source_deployment(vm.id),
+            Err(PersistenceError::CorruptRecord { .. })
+        );
     }
 
     #[test]
