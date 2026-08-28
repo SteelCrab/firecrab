@@ -20,6 +20,7 @@ The pipeline caches layers, merges them, injects a guest runtime, writes ext4, p
 | [Kernel](#kernel) | The published kernel and its cache |
 | [Name and register](#name-and-register) | Alias rules and the local template |
 | [Service](#service) | The image entrypoint as a service |
+| [Git source deployment](#git-source-deployment) | Replace the entrypoint with a repository workload |
 | [Related](#related) | Other documents |
 
 ## Architecture
@@ -208,6 +209,14 @@ The packed ext4 is paired with the kernel firecrab publishes for this architectu
 - Entrypoint, Cmd, Env, and WorkingDir become `/etc/firecrab/services.d/app`.
 - The injected init starts it after the sentinel. It is never PID 1.
 - On start, a `# >>> firecrab vm env` block sources `/etc/firecrab/vm.env`; guest paths are in [API](api.md).
+
+## Git source deployment
+
+- A VM created from an OCI-imported template accepts the same `sourceDeployment` object as a catalog-image VM.
+- The injected `source-deployment` service replaces `/etc/firecrab/services.d/app`, so the OCI Entrypoint/Cmd and the repository workload never start together.
+- Git installation, clone, checkout, build, and native or Wasmer launch stay inside the Firecracker guest.
+- The OCI image supplies language build tools and, for MicroWASM, Wasmer.
+- See [API](api.md) for native and WASM request examples.
 
 ## Related
 

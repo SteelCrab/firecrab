@@ -41,6 +41,7 @@ export * from "./ShellRef";
 export * from "./ShellResponse";
 export * from "./ShellRevisionResponse";
 export * from "./ShellRevisionSummary";
+export * from "./SourceDeployment";
 export * from "./StartupStep";
 export * from "./StartupStepOutcome";
 export * from "./StartupStepRun";

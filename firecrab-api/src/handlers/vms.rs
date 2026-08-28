@@ -208,6 +208,7 @@ pub async fn create_vm(
     let record = vm.clone();
     let shell_ids = req.shell_ids.clone();
     let port_forwards = req.port_forwards.clone();
+    let source_deployment = req.source_deployment.clone();
     let insert_result = tokio::task::spawn_blocking(move || {
         store.insert(&record)?;
         if !shell_ids.is_empty() {
@@ -216,6 +217,9 @@ pub async fn create_vm(
         }
         if !port_forwards.is_empty() {
             store.set_vm_port_forwards(record.id, &port_forwards)?;
+        }
+        if let Some(deployment) = &source_deployment {
+            store.set_vm_source_deployment(record.id, deployment)?;
         }
         Ok::<_, crate::persistence::PersistenceError>(())
     })
@@ -234,6 +238,7 @@ pub async fn create_vm(
         let _ = tokio::task::spawn_blocking(move || {
             let _ = store.clear_vm_shells(vm_id);
             let _ = store.clear_vm_port_forwards(vm_id);
+            let _ = store.clear_vm_source_deployment(vm_id);
             store.delete(vm_id)
         })
         .await;
@@ -277,6 +282,7 @@ pub async fn create_vm(
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = store.clear_vm_shells(vm_id);
                 let _ = store.clear_vm_port_forwards(vm_id);
+                let _ = store.clear_vm_source_deployment(vm_id);
                 store.delete(vm_id)
             })
             .await;
@@ -295,6 +301,7 @@ pub async fn create_vm(
             let store = state.store.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = store.clear_vm_shells(vm_id);
+                let _ = store.clear_vm_source_deployment(vm_id);
                 store.delete(vm_id)
             })
             .await;
@@ -942,6 +949,7 @@ pub async fn delete_vm(
         // an otherwise-successful delete over.
         let _ = store.clear_vm_shells(id);
         let _ = store.clear_vm_port_forwards(id);
+        let _ = store.clear_vm_source_deployment(id);
         match store.release_lease(id) {
             Ok(()) | Err(IpamError::NotLeased { .. }) => Ok(()),
             Err(error) => Err(error.to_string()),
@@ -1142,6 +1150,11 @@ async fn finish_run_start(
             .map_err(|error| format!("shell pin load failed: {error}"))?;
         crate::shells::install(&rootfs, &shell_scripts)
             .map_err(|error| format!("shell inject failed: {error}"))?;
+        let source_deployment = store_for_shells
+            .vm_source_deployment(record.id)
+            .map_err(|error| format!("source deployment load failed: {error}"))?;
+        crate::source_deployment::install(&rootfs, source_deployment.as_ref(), &record.env)
+            .map_err(|error| format!("source deployment inject failed: {error}"))?;
 
         set_startup_step(
             &state_for_blocking,
@@ -1874,6 +1887,7 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         .store
         .list_vm_port_forwards(vm.id)
         .unwrap_or_else(|_| Vec::new());
+    let source_deployment = state.store.vm_source_deployment(vm.id).unwrap_or(None);
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
@@ -1902,6 +1916,7 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         shell_refs,
         port_forwards,
         env: vm.env.clone(),
+        source_deployment,
     }
 }
 
@@ -2080,13 +2095,109 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
     if let Some(message) = validate_vm_env(&req.env) {
         fields.insert("env".to_owned(), message);
     }
+    if let Some(deployment) = &req.source_deployment
+        && let Some(message) = validate_source_deployment(deployment)
+    {
+        fields.insert("sourceDeployment".to_owned(), message);
+    }
     fields
+}
+
+/// Maximum accepted public repository URL size.
+const MAX_SOURCE_REPOSITORY_BYTES: usize = 2048;
+/// Maximum branch, tag, or commit revision size.
+const MAX_SOURCE_REVISION_BYTES: usize = 256;
+/// Maximum build or native launch command size.
+const MAX_SOURCE_COMMAND_BYTES: usize = 4096;
+/// Maximum number of arguments forwarded to a WASM module.
+const MAX_SOURCE_ARGS: usize = 32;
+/// Maximum byte length of one WASM module argument.
+const MAX_SOURCE_ARG_BYTES: usize = 1024;
+
+/// Validates the public Git boundary and runtime-specific launch fields.
+fn validate_source_deployment(deployment: &firecrab_api_types::SourceDeployment) -> Option<String> {
+    let repository = deployment.repository.as_str();
+    let Some(https_repository) = repository.strip_prefix("https://") else {
+        return Some("repository must be a public HTTPS Git URL without credentials".to_owned());
+    };
+    let (authority, repository_path) = https_repository.split_once('/').unwrap_or_default();
+    if repository.len() > MAX_SOURCE_REPOSITORY_BYTES
+        || authority.is_empty()
+        || repository_path.is_empty()
+        || authority.contains('@')
+        || repository.chars().any(char::is_whitespace)
+        || repository.chars().any(char::is_control)
+    {
+        return Some("repository must be a public HTTPS Git URL without credentials".to_owned());
+    }
+    if deployment.revision.len() > MAX_SOURCE_REVISION_BYTES
+        || deployment.revision.starts_with('-')
+        || deployment.revision.contains('\0')
+        || deployment.revision.chars().any(char::is_control)
+    {
+        return Some(format!(
+            "revision must be at most {MAX_SOURCE_REVISION_BYTES} bytes without NUL"
+        ));
+    }
+    if deployment.build_command.is_empty()
+        || deployment.build_command.len() > MAX_SOURCE_COMMAND_BYTES
+        || deployment.build_command.contains('\0')
+    {
+        return Some(format!(
+            "buildCommand must be 1-{MAX_SOURCE_COMMAND_BYTES} bytes without NUL"
+        ));
+    }
+    match &deployment.runtime {
+        firecrab_api_types::SourceRuntime::Native { run_command } => {
+            if run_command.is_empty()
+                || run_command.len() > MAX_SOURCE_COMMAND_BYTES
+                || run_command.contains('\0')
+            {
+                return Some(format!(
+                    "runCommand must be 1-{MAX_SOURCE_COMMAND_BYTES} bytes without NUL"
+                ));
+            }
+        }
+        firecrab_api_types::SourceRuntime::Wasm {
+            artifact_path,
+            args,
+        } => {
+            let path = std::path::Path::new(artifact_path);
+            if artifact_path.is_empty()
+                || artifact_path.len() > MAX_SOURCE_REPOSITORY_BYTES
+                || path.is_absolute()
+                || path.extension().and_then(|value| value.to_str()) != Some("wasm")
+                || path.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir | std::path::Component::RootDir
+                    )
+                })
+            {
+                return Some(
+                    "artifactPath must be a repository-relative .wasm path without '..'".to_owned(),
+                );
+            }
+            if args.len() > MAX_SOURCE_ARGS
+                || args
+                    .iter()
+                    .any(|arg| arg.len() > MAX_SOURCE_ARG_BYTES || arg.contains('\0'))
+            {
+                return Some(format!(
+                    "args must contain at most {MAX_SOURCE_ARGS} values of at most {MAX_SOURCE_ARG_BYTES} bytes"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// Caps for `CreateVmRequest.env` / `UpdateVmResourcesRequest.env`.
 /// The request body is already 64 KiB; these keep a single map from filling it.
 const MAX_VM_ENV_ENTRIES: usize = 64;
+/// Maximum POSIX environment key length.
 const MAX_VM_ENV_KEY_BYTES: usize = 256;
+/// Maximum environment value length.
 const MAX_VM_ENV_VALUE_BYTES: usize = 4096;
 
 /// POSIX unquoted `export KEY=` identifier: `[A-Za-z_][A-Za-z0-9_]*`.
@@ -2512,6 +2623,7 @@ mod tests {
             shell_ids: Vec::new(),
             port_forwards: Vec::new(),
             env: BTreeMap::new(),
+            source_deployment: None,
         };
 
         let too_small = validate_create(&base, &state);
@@ -2534,6 +2646,154 @@ mod tests {
             ..base
         };
         assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
+    }
+
+    #[tokio::test]
+    async fn validates_native_and_wasm_source_deployments() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let network_id = seed_network(&state).await;
+        let mut request = create_request_on("source", network_id);
+        request.source_deployment = Some(firecrab_api_types::SourceDeployment {
+            repository: "https://github.com/SteelCrab/example.git".to_owned(),
+            revision: "main".to_owned(),
+            build_command: "cargo build --release".to_owned(),
+            runtime: firecrab_api_types::SourceRuntime::Native {
+                run_command: "./target/release/example".to_owned(),
+            },
+        });
+        assert!(
+            !validate_create(&request, &state).contains_key("sourceDeployment"),
+            "valid native deployment must be accepted"
+        );
+
+        request.source_deployment.as_mut().unwrap().repository =
+            "git://github.com/SteelCrab/example.git".to_owned();
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().repository =
+            "https://token@github.com/private/repo.git".to_owned();
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().repository = "https://github.com".to_owned();
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().repository =
+            "https://github.com/SteelCrab/example.git".to_owned();
+        request.source_deployment.as_mut().unwrap().revision = "-main".to_owned();
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().revision = "main".to_owned();
+        request
+            .source_deployment
+            .as_mut()
+            .unwrap()
+            .build_command
+            .clear();
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().build_command = "cargo build".to_owned();
+        if let firecrab_api_types::SourceRuntime::Native { run_command } =
+            &mut request.source_deployment.as_mut().unwrap().runtime
+        {
+            run_command.clear();
+        }
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment = Some(firecrab_api_types::SourceDeployment {
+            repository: "https://github.com/SteelCrab/example.git".to_owned(),
+            revision: String::new(),
+            build_command: "cargo build --target wasm32-wasip1".to_owned(),
+            runtime: firecrab_api_types::SourceRuntime::Wasm {
+                artifact_path: "target/api.wasm".to_owned(),
+                args: vec!["--port".to_owned(), "8080".to_owned()],
+            },
+        });
+        assert!(
+            !validate_create(&request, &state).contains_key("sourceDeployment"),
+            "valid wasm deployment must be accepted"
+        );
+
+        request.source_deployment.as_mut().unwrap().runtime =
+            firecrab_api_types::SourceRuntime::Wasm {
+                artifact_path: "../escape.wasm".to_owned(),
+                args: Vec::new(),
+            };
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().runtime =
+            firecrab_api_types::SourceRuntime::Wasm {
+                artifact_path: "/tmp/app.wasm".to_owned(),
+                args: Vec::new(),
+            };
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().runtime =
+            firecrab_api_types::SourceRuntime::Wasm {
+                artifact_path: "target/api.bin".to_owned(),
+                args: Vec::new(),
+            };
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().runtime =
+            firecrab_api_types::SourceRuntime::Wasm {
+                artifact_path: "target/api.wasm".to_owned(),
+                args: vec!["x".to_owned(); 33],
+            };
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().runtime =
+            firecrab_api_types::SourceRuntime::Wasm {
+                artifact_path: String::new(),
+                args: Vec::new(),
+            };
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().runtime =
+            firecrab_api_types::SourceRuntime::Wasm {
+                artifact_path: "target/api.wasm".to_owned(),
+                args: vec!["ok".to_owned(), "bad\0arg".to_owned()],
+            };
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment = Some(firecrab_api_types::SourceDeployment {
+            repository: "https://github.com/SteelCrab/exa mple.git".to_owned(),
+            revision: "main".to_owned(),
+            build_command: "cargo build".to_owned(),
+            runtime: firecrab_api_types::SourceRuntime::Native {
+                run_command: "./app".to_owned(),
+            },
+        });
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().repository =
+            "https://github.com/SteelCrab/example.git".to_owned();
+        request.source_deployment.as_mut().unwrap().revision = "main\n".to_owned();
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().revision = "a".repeat(257);
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().revision = "main".to_owned();
+        request.source_deployment.as_mut().unwrap().build_command = "x\0".to_owned();
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().build_command = "cargo build".to_owned();
+        request.source_deployment.as_mut().unwrap().runtime =
+            firecrab_api_types::SourceRuntime::Native {
+                run_command: "x\0".to_owned(),
+            };
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
+
+        request.source_deployment.as_mut().unwrap().repository = format!(
+            "https://example.com/{}",
+            "a".repeat(MAX_SOURCE_REPOSITORY_BYTES)
+        );
+        request.source_deployment.as_mut().unwrap().runtime =
+            firecrab_api_types::SourceRuntime::Native {
+                run_command: "./app".to_owned(),
+            };
+        assert!(validate_create(&request, &state).contains_key("sourceDeployment"));
     }
 
     #[tokio::test]
@@ -3880,6 +4140,7 @@ while True:
             shell_ids: Vec::new(),
             port_forwards: Vec::new(),
             env: BTreeMap::new(),
+            source_deployment: None,
         }
     }
 
@@ -4286,6 +4547,52 @@ while True:
             firecrab_helper_protocol::network::guest_hostname(created.id)
         );
         assert_eq!(created.egress_policy, EgressPolicy::Internet);
+    }
+
+    #[tokio::test]
+    async fn create_vm_persists_source_deployment_and_delete_clears_it() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let network_id = seed_network(&state).await;
+        let deployment = firecrab_api_types::SourceDeployment {
+            repository: "https://github.com/SteelCrab/example.git".to_owned(),
+            revision: "main".to_owned(),
+            build_command: "cargo build --release".to_owned(),
+            runtime: firecrab_api_types::SourceRuntime::Native {
+                run_command: "./target/release/example".to_owned(),
+            },
+        };
+        let mut request = create_request_on("source-vm", network_id);
+        request.source_deployment = Some(deployment.clone());
+
+        let (status, Json(created)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(request),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(created.source_deployment.as_ref(), Some(&deployment));
+        assert_eq!(
+            state
+                .store
+                .vm_source_deployment(created.id)
+                .unwrap()
+                .as_ref(),
+            Some(&deployment)
+        );
+
+        let status = delete_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(created.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(state.store.vm_source_deployment(created.id).unwrap(), None);
     }
 
     #[tokio::test]

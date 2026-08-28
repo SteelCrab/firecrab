@@ -69,6 +69,7 @@ npm run dev --prefix firecrab-frontend
 - After an API upgrade: stop/start reinstalls the agent on the guest disk
 - Resource changes: inactive VMs only
 - Disk: grow only
+- Optional Git source deployment on create: clone, build, and run inside the guest
 - Per-VM `env`: editable while `running`; save restarts the guest service; stored in plaintext
 - Image without `/etc/firecrab/services.d/app`: ignores runtime env (`hasGuestService` on `GET /api/images`)
 
