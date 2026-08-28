@@ -48,9 +48,7 @@ const RPM_STRING_TYPE: u32 = 6;
 #[test]
 fn rpm_sqlite_database_generates_spdx_and_deduplicates() {
     let directory = tempfile::tempdir().unwrap();
-    let database = directory
-        .path()
-        .join("usr/lib/sysimage/rpm/rpmdb.sqlite");
+    let database = directory.path().join("usr/lib/sysimage/rpm/rpmdb.sqlite");
     fs::create_dir_all(database.parent().unwrap()).unwrap();
 
     let connection = Connection::open(&database).unwrap();
@@ -66,7 +64,12 @@ fn rpm_sqlite_database_generates_spdx_and_deduplicates() {
         (RPMTAG_VERSION, RPM_STRING_TYPE, b"5.2\0".to_vec(), 1),
         (RPMTAG_RELEASE, RPM_STRING_TYPE, b"1.fc42\0".to_vec(), 1),
         (RPMTAG_ARCH, RPM_STRING_TYPE, b"aarch64\0".to_vec(), 1),
-        (RPMTAG_LICENSE, RPM_STRING_TYPE, b"GPL-3.0-or-later\0".to_vec(), 1),
+        (
+            RPMTAG_LICENSE,
+            RPM_STRING_TYPE,
+            b"GPL-3.0-or-later\0".to_vec(),
+            1,
+        ),
         (
             RPMTAG_SOURCERPM,
             RPM_STRING_TYPE,
@@ -97,14 +100,9 @@ fn rpm_sqlite_database_generates_spdx_and_deduplicates() {
     fs::create_dir_all(directory.path().join("etc")).unwrap();
     fs::write(directory.path().join("etc/os-release"), "ID='fedora'\n").unwrap();
 
-    let generated = generate_spdx(
-        directory.path(),
-        "fedora-test",
-        "42",
-        Architecture::Aarch64,
-    )
-    .unwrap()
-    .unwrap();
+    let generated = generate_spdx(directory.path(), "fedora-test", "42", Architecture::Aarch64)
+        .unwrap()
+        .unwrap();
 
     assert_eq!(generated.package_manager, "rpm");
     assert_eq!(generated.package_count, 1);
@@ -137,14 +135,9 @@ fn rpm_header_defaults_cover_optional_metadata() {
         ])],
     );
 
-    let generated = generate_spdx(
-        directory.path(),
-        "minimal",
-        "latest",
-        Architecture::X86_64,
-    )
-    .unwrap()
-    .unwrap();
+    let generated = generate_spdx(directory.path(), "minimal", "latest", Architecture::X86_64)
+        .unwrap()
+        .unwrap();
 
     let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
     assert_eq!(json["packages"][1]["versionInfo"], "1.0");
@@ -164,13 +157,8 @@ fn rpm_database_reports_invalid_sqlite_and_header_data() {
     fs::create_dir_all(database.parent().unwrap()).unwrap();
     fs::write(&database, b"not a sqlite database").unwrap();
 
-    let error = generate_spdx(
-        directory.path(),
-        "broken",
-        "latest",
-        Architecture::X86_64,
-    )
-    .unwrap_err();
+    let error =
+        generate_spdx(directory.path(), "broken", "latest", Architecture::X86_64).unwrap_err();
     assert!(error.contains("RPM database"));
 
     fs::remove_file(&database).unwrap();
@@ -232,14 +220,9 @@ fn apk_defaults_and_empty_database_error_are_exercised() {
     )
     .unwrap();
 
-    let generated = generate_spdx(
-        directory.path(),
-        "tiny",
-        "latest",
-        Architecture::X86_64,
-    )
-    .unwrap()
-    .unwrap();
+    let generated = generate_spdx(directory.path(), "tiny", "latest", Architecture::X86_64)
+        .unwrap()
+        .unwrap();
     assert_eq!(generated.package_count, 1);
     let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
     assert!(
@@ -250,13 +233,8 @@ fn apk_defaults_and_empty_database_error_are_exercised() {
     );
 
     fs::write(db.join("installed"), "P:no-version\n").unwrap();
-    let error = generate_spdx(
-        directory.path(),
-        "empty",
-        "latest",
-        Architecture::X86_64,
-    )
-    .unwrap_err();
+    let error =
+        generate_spdx(directory.path(), "empty", "latest", Architecture::X86_64).unwrap_err();
     assert!(error.contains("contained no installed packages"));
 }
 
@@ -285,14 +263,9 @@ fn dpkg_parser_handles_continuations_and_incomplete_records() {
     )
     .unwrap();
 
-    let generated = generate_spdx(
-        directory.path(),
-        "debian-test",
-        "sid",
-        Architecture::X86_64,
-    )
-    .unwrap()
-    .unwrap();
+    let generated = generate_spdx(directory.path(), "debian-test", "sid", Architecture::X86_64)
+        .unwrap()
+        .unwrap();
     assert_eq!(generated.package_manager, "dpkg");
     assert_eq!(generated.package_count, 1);
     let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
@@ -310,23 +283,14 @@ fn symlinked_package_database_is_not_followed() {
     let directory = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
     fs::create_dir_all(outside.path().join("apk/db")).unwrap();
-    fs::write(
-        outside.path().join("apk/db/installed"),
-        "P:escape\nV:1\n",
-    )
-    .unwrap();
+    fs::write(outside.path().join("apk/db/installed"), "P:escape\nV:1\n").unwrap();
     fs::create_dir_all(directory.path()).unwrap();
     symlink(outside.path(), directory.path().join("lib")).unwrap();
 
     assert!(
-        generate_spdx(
-            directory.path(),
-            "escape",
-            "latest",
-            Architecture::X86_64,
-        )
-        .unwrap()
-        .is_none()
+        generate_spdx(directory.path(), "escape", "latest", Architecture::X86_64,)
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -344,13 +308,8 @@ fn bundle_can_be_replaced_and_removed() {
         package_count: 1,
     };
 
-    let path = write_spdx_bundle(
-        directory.path(),
-        "replace-me",
-        Architecture::X86_64,
-        &first,
-    )
-    .unwrap();
+    let path =
+        write_spdx_bundle(directory.path(), "replace-me", Architecture::X86_64, &first).unwrap();
     write_spdx_bundle(
         directory.path(),
         "replace-me",
@@ -360,17 +319,9 @@ fn bundle_can_be_replaced_and_removed() {
     .unwrap();
     assert_eq!(fs::read(&path).unwrap(), second.bytes);
 
-    remove_bundle(
-        directory.path(),
-        "replace-me",
-        Architecture::X86_64,
-    );
+    remove_bundle(directory.path(), "replace-me", Architecture::X86_64);
     assert!(!path.parent().unwrap().exists());
-    remove_bundle(
-        directory.path(),
-        "replace-me",
-        Architecture::X86_64,
-    );
+    remove_bundle(directory.path(), "replace-me", Architecture::X86_64);
 }
 
 fn create_rpm_database(path: &Path, blobs: Vec<Vec<u8>>) {
