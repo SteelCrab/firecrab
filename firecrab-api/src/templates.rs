@@ -214,6 +214,8 @@ fn requires_pci_transport_for_arch(name: &str, architecture: &str) -> bool {
 /// Registry of verified template versions, resolved by alias or by exact
 /// `(name, version)`. Alias maps are behind locks so a successful image
 /// install can register a newly downloaded template without restarting.
+type TemplateVersions = HashMap<(String, String), Arc<TemplateVersion>>;
+
 #[derive(Debug)]
 pub struct TemplateRegistry {
     /// Directory fd artifacts are opened beneath via `openat2`.
@@ -223,7 +225,7 @@ pub struct TemplateRegistry {
     /// alias -> `(name, version)` it currently resolves to.
     aliases: Arc<Mutex<HashMap<String, (String, String)>>>,
     /// `(name, version)` -> the resolved, verified template.
-    versions: Arc<Mutex<HashMap<(String, String), Arc<TemplateVersion>>>>,
+    versions: Arc<Mutex<TemplateVersions>>,
     /// Caches `open_verified`'s full-file hash by (device, inode), so many
     /// VMs starting at once against the same untouched multi-GB template
     /// don't each independently re-read and re-hash it (`public-docs/api.md`'s
@@ -576,10 +578,7 @@ impl TemplateRegistry {
                 // Catalog artifacts belong to their known_spec alias. An OCI
                 // import borrows the Ubuntu kernel; deleting that import must
                 // not take the kernel with it or the next import cannot pair.
-                match catalog_owner_of(relative) {
-                    Some(owner) if owner != removed.name => false,
-                    _ => true,
-                }
+                !matches!(catalog_owner_of(relative), Some(owner) if owner != removed.name)
             })
             .map(|relative| self.image_root_path.join(relative))
             .collect()

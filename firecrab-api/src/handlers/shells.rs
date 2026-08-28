@@ -225,13 +225,13 @@ fn validate_shell_write(
             "must be 1-64 ASCII letters, numbers, '.', '_' or '-'".to_owned(),
         );
     }
-    if let Some(description) = description {
-        if description.len() > 512 {
-            fields.insert(
-                "description".to_owned(),
-                "must be at most 512 characters".to_owned(),
-            );
-        }
+    if let Some(description) = description
+        && description.len() > 512
+    {
+        fields.insert(
+            "description".to_owned(),
+            "must be at most 512 characters".to_owned(),
+        );
     }
     validate_content(content, &mut fields);
     fields
