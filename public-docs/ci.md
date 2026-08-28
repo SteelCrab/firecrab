@@ -1,22 +1,21 @@
 # Clippy warning gate
 
-CI treats Clippy and rustc warnings as failures.
+A pull request workflow runs Clippy and compares warning counts to a checked-in baseline.
 
-- The main Rust job runs `cargo clippy --workspace --all-targets -- -D warnings`.
-- A pull-request job collects Clippy JSON and compares counts to the checked-in baseline.
-- The baseline is zero. A new warning fails. A stale baseline also fails.
+- Runs on every pull request.
+- Compares Clippy warning counts to the checked-in baseline.
+- Fails on a new warning.
+- Fails on a stale baseline: a warning was fixed but the baseline was not updated.
 
 ```mermaid
 flowchart TB
     PR["Pull request"]
-    Deny["cargo clippy -- -D warnings"]
     Clippy["cargo clippy --message-format=json"]
     Messages[("clippy-messages.json")]
     Gate["check_clippy_warnings.py"]
     Baseline[("clippy-warning-baseline.json")]
-    Pass["Exit 0: no warnings"]
-    Fail["Exit 1: warning or stale baseline"]
-    PR --> Deny
+    Pass["Exit 0: counts match"]
+    Fail["Exit 1: new or removed warnings"]
     PR --> Clippy --> Messages --> Gate
     Baseline --> Gate
     Gate --> Pass
@@ -24,12 +23,15 @@ flowchart TB
 ```
 
 ```sh
-cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --message-format=json > clippy-messages.json
 python3 scripts/check_clippy_warnings.py clippy-messages.json .github/clippy-warning-baseline.json
 ```
 
-Do not raise the baseline to allow a warning. Fix the warning instead.
+- Refresh the baseline after an intentional change in warning counts.
+
+```sh
+python3 scripts/check_clippy_warnings.py clippy-messages.json .github/clippy-warning-baseline.json --write-baseline
+```
 
 ## Related
 

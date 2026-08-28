@@ -450,20 +450,20 @@ pub async fn update_vm_port_forwards(
             break;
         }
     }
-    if !fields.contains_key("portForwards")
-        && let Ok(all_pfs) = state.store.list_all_port_forwards()
-    {
-        for (owner_id, existing_pf) in all_pfs {
-            if owner_id != id
-                && req.port_forwards.iter().any(|pf| {
-                    pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
-                })
-            {
-                fields.insert(
-                    "portForwards".to_owned(),
-                    "one or more host ports are already in use by another VM".to_owned(),
-                );
-                break;
+    if !fields.contains_key("portForwards") {
+        if let Ok(all_pfs) = state.store.list_all_port_forwards() {
+            for (owner_id, existing_pf) in all_pfs {
+                if owner_id != id
+                    && req.port_forwards.iter().any(|pf| {
+                        pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
+                    })
+                {
+                    fields.insert(
+                        "portForwards".to_owned(),
+                        "one or more host ports are already in use by another VM".to_owned(),
+                    );
+                    break;
+                }
             }
         }
     }
@@ -525,31 +525,33 @@ pub async fn update_vm_port_forwards(
             }
         })?;
 
-    if is_active && let Some(lease) = state.store.active_lease(id).ok().flatten() {
-        let port_forwards_specs = req
-            .port_forwards
-            .iter()
-            .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
-                host_port: pf.host_port,
-                guest_port: pf.guest_port,
-                protocol: pf.protocol.to_string(),
-            })
-            .collect();
-        if let Err(error) = state
-            .network
-            .apply_vm_policy(&lease, record.egress_policy, false, port_forwards_specs)
-            .await
-        {
-            tracing::error!(
-                request_id = %request_id.0, %error,
-                "failed to apply updated port forwards; rolling back the persisted rules"
-            );
-            let store = state.store.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                store.set_vm_port_forwards(id, &previous_forwards)
-            })
-            .await;
-            return Err(AppError::internal(request_id.0));
+    if is_active {
+        if let Some(lease) = state.store.active_lease(id).ok().flatten() {
+            let port_forwards_specs = req
+                .port_forwards
+                .iter()
+                .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
+                    host_port: pf.host_port,
+                    guest_port: pf.guest_port,
+                    protocol: pf.protocol.to_string(),
+                })
+                .collect();
+            if let Err(error) = state
+                .network
+                .apply_vm_policy(&lease, record.egress_policy, false, port_forwards_specs)
+                .await
+            {
+                tracing::error!(
+                    request_id = %request_id.0, %error,
+                    "failed to apply updated port forwards; rolling back the persisted rules"
+                );
+                let store = state.store.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    store.set_vm_port_forwards(id, &previous_forwards)
+                })
+                .await;
+                return Err(AppError::internal(request_id.0));
+            }
         }
     }
 
@@ -694,10 +696,10 @@ fn validate_update(
             format!("must be at most {MAX_DISK_GB} GiB"),
         );
     }
-    if let Some(env) = &req.env
-        && let Some(message) = validate_vm_env(env)
-    {
-        fields.insert("env".to_owned(), message);
+    if let Some(env) = &req.env {
+        if let Some(message) = validate_vm_env(env) {
+            fields.insert("env".to_owned(), message);
+        }
     }
     fields
 }
@@ -805,7 +807,7 @@ async fn finish_start(
                 "vm running"
             );
             let lease = lease_for(state, id).await;
-            Ok(Json(vm_response(state, &running, lease.as_ref())))
+            Ok(Json(vm_response(&state, &running, lease.as_ref())))
         }
         // The guest exited before we could record running; the exit monitor
         // already landed the record on its terminal state.
@@ -820,7 +822,7 @@ async fn finish_start(
                 return Err(AppError::not_found(request_id.0));
             };
             let lease = lease_for(state, id).await;
-            Ok(Json(vm_response(state, &record, lease.as_ref())))
+            Ok(Json(vm_response(&state, &record, lease.as_ref())))
         }
     }
 }
@@ -2013,7 +2015,7 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             "storageRoot".to_owned(),
             "is not a registered storage root".to_owned(),
         );
-    } else if !fields.contains_key("diskGb") {
+    } else if fields.get("diskGb").is_none() {
         // Only probe free space once diskGb itself is in range — otherwise
         // the capacity message would hide a simpler validation error.
         let need_bytes = u64::from(req.disk_gb) * 1024 * 1024 * 1024;
@@ -2059,18 +2061,18 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
                 break;
             }
         }
-        if !fields.contains_key("portForwards")
-            && let Ok(all_pfs) = state.store.list_all_port_forwards()
-        {
-            for (_, existing_pf) in all_pfs {
-                if req.port_forwards.iter().any(|pf| {
-                    pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
-                }) {
-                    fields.insert(
-                        "portForwards".to_owned(),
-                        "one or more host ports are already in use by another VM".to_owned(),
-                    );
-                    break;
+        if !fields.contains_key("portForwards") {
+            if let Ok(all_pfs) = state.store.list_all_port_forwards() {
+                for (_, existing_pf) in all_pfs {
+                    if req.port_forwards.iter().any(|pf| {
+                        pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
+                    }) {
+                        fields.insert(
+                            "portForwards".to_owned(),
+                            "one or more host ports are already in use by another VM".to_owned(),
+                        );
+                        break;
+                    }
                 }
             }
         }
@@ -3564,31 +3566,30 @@ while True:
         let replacement = state.store.active_lease(vm.id).unwrap().unwrap();
         assert_eq!(replacement.ipv4, Ipv4Addr::new(172, 30, 0, 4));
 
-        {
-            let requests = requests.lock().unwrap();
-            let policy_ips: Vec<Ipv4Addr> = requests
-                .iter()
-                .filter_map(|request| match request {
-                    NetworkRequest::ApplyVmPolicy { ipv4, .. } => Some(*ipv4),
-                    _ => None,
-                })
-                .collect();
-            assert_eq!(
-                policy_ips,
-                vec![
-                    Ipv4Addr::new(172, 30, 0, 2),
-                    Ipv4Addr::new(172, 30, 0, 3),
-                    Ipv4Addr::new(172, 30, 0, 4),
-                ]
-            );
-            assert!(requests.iter().any(|request| {
-                matches!(
-                    request,
-                    NetworkRequest::SyncDhcpLeases { leases, .. }
-                        if leases.iter().any(|lease| lease.vm_id == vm.id && lease.ipv4 == replacement.ipv4)
-                )
-            }));
-        }
+        let requests = requests.lock().unwrap();
+        let policy_ips: Vec<Ipv4Addr> = requests
+            .iter()
+            .filter_map(|request| match request {
+                NetworkRequest::ApplyVmPolicy { ipv4, .. } => Some(*ipv4),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            policy_ips,
+            vec![
+                Ipv4Addr::new(172, 30, 0, 2),
+                Ipv4Addr::new(172, 30, 0, 3),
+                Ipv4Addr::new(172, 30, 0, 4),
+            ]
+        );
+        assert!(requests.iter().any(|request| {
+            matches!(
+                request,
+                NetworkRequest::SyncDhcpLeases { leases, .. }
+                    if leases.iter().any(|lease| lease.vm_id == vm.id && lease.ipv4 == replacement.ipv4)
+            )
+        }));
+        drop(requests);
 
         let Json(stopped) = stop_vm(
             State(state.clone()),

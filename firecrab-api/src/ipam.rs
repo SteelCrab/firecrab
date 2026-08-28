@@ -54,7 +54,6 @@ pub const CREATE_LEASES_INDEXES_SQL: [&str; 3] = [
 /// `micro_network_id` rows to an explicit MicroNetwork on upgrade.
 pub(crate) const LEGACY_DEFAULT_NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
 /// Legacy gateway for the same promotion path.
-#[cfg(test)]
 pub(crate) const LEGACY_DEFAULT_GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
 /// Legacy prefix for the same promotion path.
 pub(crate) const LEGACY_DEFAULT_PREFIX: u8 = 24;
@@ -210,7 +209,6 @@ impl SubnetSpec {
 
     /// The historical `172.30.0.0/24` layout under an explicit MicroNetwork
     /// id — used by upgrade promotion and unit tests that need a full /24.
-    #[cfg(test)]
     pub fn legacy_default_subnet(micro_network_id: Uuid) -> Self {
         Self {
             micro_network_id,
@@ -283,7 +281,7 @@ pub fn rotate(
     subnet: SubnetSpec,
     unavailable_ipv4s: &HashSet<Ipv4Addr>,
 ) -> Result<Lease, IpamError> {
-    let current = active_lease(tx, vm_id)?.ok_or(IpamError::NotLeased { vm_id })?;
+    let current = active_lease(&*tx, vm_id)?.ok_or(IpamError::NotLeased { vm_id })?;
     let mut excluded = unavailable_ipv4s.clone();
     // A caller may only know about the most recent conflict, but never hand
     // the just-released address straight back to the VM.

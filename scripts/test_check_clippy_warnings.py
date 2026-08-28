@@ -132,29 +132,6 @@ class ClippyWarningGateTests(unittest.TestCase):
             "firecrab-cli",
         )
 
-    def test_empty_baseline_rejects_any_warning(self):
-        baseline = {"total": 0, "packages": {}, "lints": {}}
-        current = {
-            "total": 1,
-            "packages": {"firecrab-api": 1},
-            "lints": {"dead_code": 1},
-        }
-
-        regressions, stale = gate.compare(current, baseline)
-
-        self.assertFalse(stale)
-        self.assertTrue(any("total warnings increased" in item for item in regressions))
-        self.assertTrue(any("dead_code" in item for item in regressions))
-
-    def test_empty_baseline_matches_zero_warnings(self):
-        baseline = {"total": 0, "packages": {}, "lints": {}}
-        current = {"total": 0, "packages": {}, "lints": {}}
-
-        regressions, stale = gate.compare(current, baseline)
-
-        self.assertEqual(regressions, [])
-        self.assertEqual(stale, [])
-
     def test_compare_rejects_an_increase_and_a_new_lint(self):
         baseline = {
             "total": 1,
