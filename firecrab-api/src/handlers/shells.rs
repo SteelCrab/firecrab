@@ -370,6 +370,23 @@ mod tests {
         assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
+    #[test]
+    fn rejects_a_description_longer_than_512_bytes() {
+        let too_long = "x".repeat(513);
+        let fields = validate_shell_write("ok", Some(&too_long), "echo hi\n");
+        assert_eq!(
+            fields.get("description").map(String::as_str),
+            Some("must be at most 512 characters")
+        );
+
+        let at_limit = "x".repeat(512);
+        let fields = validate_shell_write("ok", Some(&at_limit), "echo hi\n");
+        assert!(
+            !fields.contains_key("description"),
+            "512 bytes must still be accepted: {fields:?}"
+        );
+    }
+
     #[tokio::test]
     async fn rejects_empty_content() {
         let state = app_state().await;

@@ -1241,6 +1241,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_staged_package_returns_internal_when_unlink_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+        let staged = crate::image_install::staged_package_path(
+            state.templates.image_root_path(),
+            "ubuntu-26.04",
+        );
+        fs::create_dir_all(staged.parent().unwrap()).unwrap();
+        fs::write(&staged, b"pretend tar.zst").unwrap();
+
+        let parent = staged.parent().unwrap();
+        let original = fs::metadata(parent).unwrap().permissions();
+        let mut locked = original.clone();
+        locked.set_mode(0o555);
+        fs::set_permissions(parent, locked).unwrap();
+        let result = delete_staged_package(
+            State(state),
+            Path("ubuntu-26.04".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await;
+        fs::set_permissions(parent, original).unwrap();
+
+        assert_eq!(
+            result.unwrap_err().into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[tokio::test]
     async fn delete_staged_package_refuses_when_nothing_is_staged() {
         let directory = tempdir().unwrap();
         let state = empty_state(directory.path()).await;

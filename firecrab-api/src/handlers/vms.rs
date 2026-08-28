@@ -2534,6 +2534,38 @@ mod tests {
         assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
     }
 
+    #[tokio::test]
+    async fn validate_create_rejects_a_host_port_already_used_by_another_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let owner = record("owner", Uuid::new_v4());
+        seed_vm(&state, &owner);
+        state
+            .store
+            .set_vm_port_forwards(
+                owner.id,
+                &[firecrab_api_types::PortForward {
+                    host_port: 8080,
+                    guest_port: 80,
+                    protocol: firecrab_api_types::PortProtocol::Tcp,
+                }],
+            )
+            .unwrap();
+
+        let mut req = create_request_on("new-vm", Uuid::from_u128(1));
+        req.port_forwards = vec![firecrab_api_types::PortForward {
+            host_port: 8080,
+            guest_port: 90,
+            protocol: firecrab_api_types::PortProtocol::Tcp,
+        }];
+        let fields = validate_create(&req, &state);
+        assert_eq!(
+            fields.get("portForwards").map(String::as_str),
+            Some("one or more host ports are already in use by another VM"),
+            "{fields:?}"
+        );
+    }
+
     #[test]
     fn lists_vms_sorted_by_name_then_id() {
         let low = Uuid::from_u128(1);
@@ -3451,6 +3483,44 @@ while True:
         // otherwise the response body would keep showing rules that were
         // never installed on the host.
         assert_eq!(state.store.list_vm_port_forwards(vm.id).unwrap(), previous);
+    }
+
+    #[tokio::test]
+    async fn update_port_forwards_rejects_a_host_port_owned_by_another_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let owner = record("owner", Uuid::new_v4());
+        seed_vm(&state, &owner);
+        state
+            .store
+            .set_vm_port_forwards(
+                owner.id,
+                &[firecrab_api_types::PortForward {
+                    host_port: 8080,
+                    guest_port: 80,
+                    protocol: firecrab_api_types::PortProtocol::Tcp,
+                }],
+            )
+            .unwrap();
+
+        let other = record("other", Uuid::new_v4());
+        seed_vm(&state, &other);
+
+        let error = update_vm_port_forwards(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(other.id.to_string()),
+            ValidatedJson(firecrab_api_types::UpdateVmPortForwardsRequest {
+                port_forwards: vec![firecrab_api_types::PortForward {
+                    host_port: 8080,
+                    guest_port: 90,
+                    protocol: firecrab_api_types::PortProtocol::Tcp,
+                }],
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
