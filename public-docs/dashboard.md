@@ -81,9 +81,10 @@ npm run dev --prefix firecrab-frontend
 - Terminal chrome is light; the serial surface stays dark
 - Phone: inspect rail is capped and scrolls
 - SSH commands fill the remaining column and scroll
-- Serial: a finger or pen drag pans the buffer
+- Serial: a quick finger drag pans the buffer
+- A still hold opens the OS paste menu
+- Hold then drag selects text and copies it
 - A mouse drag on a desktop still selects text
-- Paste uses the clipboard, or a prompt on HTTP
 - Copy buttons skip `clipboard.writeText` on HTTP so `execCommand` still runs in the same tap
 - Inspect rail: four equal cards (general, specs, network, usage) then ports + storage; a bottom white bar toggles it
 - Terminal Network group: ipv4, ipv6 (`—` when the network is IPv4-only), mac, egress, network id

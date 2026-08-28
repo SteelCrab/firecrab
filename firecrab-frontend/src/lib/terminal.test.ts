@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  classifyTerminalGesture,
+  linearSelect,
   linesFromPointerDelta,
   shouldPanTerminalPointer,
 } from "./terminal";
@@ -24,4 +26,17 @@ test("pointer delta keeps a sub-cell remainder so slow drags still accumulate", 
 
   const combined = linesFromPointerDelta(8, 10, partial.acc);
   assert.equal(combined.lines, -1);
+});
+
+test("a quick drag pans; a still hold then drag stays hold", () => {
+  assert.equal(classifyTerminalGesture(80, 24, "pending"), "pan");
+  assert.equal(classifyTerminalGesture(80, 2, "pending"), "pending");
+  assert.equal(classifyTerminalGesture(520, 2, "pending"), "hold");
+  assert.equal(classifyTerminalGesture(600, 40, "hold"), "hold");
+  assert.equal(classifyTerminalGesture(600, 40, "pan"), "pan");
+});
+
+test("linearSelect spans cells across rows", () => {
+  assert.deepEqual(linearSelect(10, 2, 3, 5, 3), { column: 2, row: 3, length: 4 });
+  assert.deepEqual(linearSelect(10, 8, 1, 1, 2), { column: 8, row: 1, length: 4 });
 });

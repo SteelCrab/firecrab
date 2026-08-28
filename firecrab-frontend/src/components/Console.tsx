@@ -394,28 +394,6 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     setReconnectKey((k) => k + 1);
   };
 
-  /** Clipboard API, then a prompt — phones on HTTP have no `readText`. */
-  const pasteIntoTerminal = async () => {
-    const term = termRef.current;
-    if (!term) return;
-    let text = "";
-    try {
-      if (window.isSecureContext && navigator.clipboard?.readText) {
-        text = await navigator.clipboard.readText();
-      }
-    } catch {
-      text = "";
-    }
-    if (!text) {
-      const typed = window.prompt(
-        t("Paste into the serial console", "시리얼 콘솔에 붙여넣을 텍스트"),
-      );
-      if (typed === null) return;
-      text = typed;
-    }
-    if (text) term.paste(text);
-  };
-
   /**
    * Prefer closing a script-opened popup (`window.open` from the list).
    * If the browser refuses (normal tab / no script opener), fall back to
@@ -567,17 +545,9 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               text={buildExportText}
               filename={logDownloadFilename("console", vm?.name ?? vmId)}
               buttonClassName="btn console-bar-btn"
-              copyLabel={t("Copy log", "로그 복사")}
+              showCopy={false}
               downloadLabel={t("Save log", "로그 저장")}
             />
-            <button
-              type="button"
-              className="btn console-bar-btn"
-              onClick={() => void pasteIntoTerminal()}
-              title={t("Paste into the serial console", "시리얼 콘솔에 붙여넣기")}
-            >
-              {t("Paste", "붙여넣기")}
-            </button>
             <button
               type="button"
               className="btn console-bar-btn"

@@ -1451,7 +1451,8 @@ table.image-table .image-package-url a:hover {
   height: 100%;
 }
 .console-page .console-surface .xterm .xterm-helper-textarea {
-  z-index: 10 !important;
+  /* No !important — xterm raises this for the OS copy/paste menu. */
+  z-index: 10;
 }
 .console-page .console-surface .xterm .composition-view {
   background: var(--tty-term);

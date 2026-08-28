@@ -15,6 +15,8 @@ interface LogExportActionsProps {
   buttonClassName?: string;
   copyLabel?: string;
   downloadLabel?: string;
+  /** Hide the copy button (serial console uses hold-drag copy instead). */
+  showCopy?: boolean;
 }
 
 type Feedback = "idle" | "busy" | "copied" | "saved" | "failed" | "empty";
@@ -38,6 +40,7 @@ export default function LogExportActions({
   buttonClassName = "btn",
   copyLabel,
   downloadLabel,
+  showCopy = true,
 }: LogExportActionsProps) {
   const { t } = useI18n();
   const [feedback, setFeedback] = useState<Feedback>("idle");
@@ -89,15 +92,17 @@ export default function LogExportActions({
 
   return (
     <div className={`log-export-actions ${className}`.trim()} role="group" aria-label={t("Export log", "로그 내보내기")}>
-      <button
-        type="button"
-        className={buttonClassName}
-        disabled={disabled || feedback === "busy"}
-        onClick={() => void run("copy")}
-        title={t("Copy the full log to the clipboard", "로그 전체를 클립보드에 복사")}
-      >
-        {copyLabel ?? t("Copy", "복사")}
-      </button>
+      {showCopy ? (
+        <button
+          type="button"
+          className={buttonClassName}
+          disabled={disabled || feedback === "busy"}
+          onClick={() => void run("copy")}
+          title={t("Copy the full log to the clipboard", "로그 전체를 클립보드에 복사")}
+        >
+          {copyLabel ?? t("Copy", "복사")}
+        </button>
+      ) : null}
       <button
         type="button"
         className={buttonClassName}
