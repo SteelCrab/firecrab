@@ -4,7 +4,7 @@
     "clippy::await_holding_lock": 1,
     "clippy::borrow_deref_ref": 1,
     "clippy::cloned_ref_to_slice_refs": 1,
-    "clippy::collapsible_if": 15,
+    "clippy::collapsible_if": 8,
     "clippy::err_expect": 1,
     "clippy::if_same_then_else": 1,
     "clippy::match_like_matches_macro": 1,
@@ -16,13 +16,11 @@
     "clippy::unnecessary_get_then_check": 1,
     "clippy::unnecessary_to_owned": 3,
     "clippy::zombie_processes": 2,
-    "dead_code": 18,
-    "unused_imports": 1
+    "dead_code": 18
   },
   "packages": {
     "firecrab-api": 43,
-    "firecrab-cli": 8,
     "firecrab-net-helper": 2
   },
-  "total": 53
+  "total": 45
 }
