@@ -14,6 +14,8 @@ import type {
 import {
   ApiClientError,
   assignVmStorage,
+  downloadSshKey,
+  fetchSshKeyPem,
   getVm,
   getVmLog,
   listImages,
@@ -26,7 +28,8 @@ import {
 } from "../api/client";
 import { isEditableState, isEnvEditableState, isPortEditableState } from "../model";
 import { isValidPort } from "../lib/portForward";
-import { logDownloadFilename } from "../lib/textExport";
+import { copyText, logDownloadFilename } from "../lib/textExport";
+import ConsoleSshTab from "./ConsoleSshTab";
 import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
 import ShellCheckboxList from "./ShellCheckboxList";
@@ -92,6 +95,11 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [images, setImages] = useState<ImageResponse[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
+  const [sshKeyBusy, setSshKeyBusy] = useState(false);
+  /** SSH commands are long; they stay folded until asked for. */
+  const [sshOpen, setSshOpen] = useState(false);
+  const [sshKeyCopied, setSshKeyCopied] = useState(false);
+  const [sshKeyError, setSshKeyError] = useState<string | null>(null);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
   const [storageRoots, setStorageRoots] = useState<StorageRootResponse[]>([]);
 
@@ -598,6 +606,67 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               <dd>{vm.ipv4 ?? "—"}</dd>
               <dt>ipv6</dt>
               <dd>{vm.ipv6 ?? "—"}</dd>
+              <dt>ssh</dt>
+              <dd>
+                <button
+                  type="button"
+                  className="btn small secondary"
+                  disabled={sshKeyBusy}
+                  onClick={() => {
+                    setSshKeyError(null);
+                    setSshKeyBusy(true);
+                    downloadSshKey(vm.id, vm.name)
+                      .catch((error: unknown) => {
+                        setSshKeyError(error instanceof Error ? error.message : String(error));
+                      })
+                      .finally(() => setSshKeyBusy(false));
+                  }}
+                >
+                  {sshKeyBusy
+                    ? t("Downloading…", "받는 중…")
+                    : t("Download key", "키 다운로드")}
+                </button>
+                <button
+                  type="button"
+                  className="btn small secondary"
+                  disabled={sshKeyBusy}
+                  title={t("Copy the private key text", "개인 키 본문을 클립보드로 복사")}
+                  onClick={() => {
+                    setSshKeyError(null);
+                    setSshKeyBusy(true);
+                    fetchSshKeyPem(vm.id)
+                      .then(copyText)
+                      .then((copied) => {
+                        setSshKeyCopied(copied);
+                        setTimeout(() => setSshKeyCopied(false), 2_000);
+                      })
+                      .catch((error: unknown) => {
+                        setSshKeyError(error instanceof Error ? error.message : String(error));
+                      })
+                      .finally(() => setSshKeyBusy(false));
+                  }}
+                >
+                  {sshKeyCopied ? t("Key copied", "키 복사됨") : t("Copy key", "키 복사")}
+                </button>
+                <button
+                  type="button"
+                  className="btn small secondary"
+                  aria-expanded={sshOpen}
+                  onClick={() => setSshOpen((open) => !open)}
+                >
+                  {sshOpen ? t("Hide SSH", "SSH 접기") : t("SSH", "SSH")}
+                </button>
+                {vm.sshHostFingerprint ? (
+                  <div className="mono" style={{ marginTop: "0.35rem", fontSize: "0.75rem" }}>
+                    {vm.sshHostFingerprint}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: "0.75rem", color: "var(--muted, #888)", marginTop: "0.35rem" }}>
+                    {t("Host fingerprint after first start", "호스트 지문은 첫 시작 후")}
+                  </div>
+                )}
+                {sshKeyError ? <div className="field-error">{sshKeyError}</div> : null}
+              </dd>
               <dt>mac</dt>
               <dd>{vm.mac ?? "—"}</dd>
               <dt>hostname</dt>
@@ -605,6 +674,11 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               <dt>id</dt>
               <dd title={vm.id}>{vm.id}</dd>
             </dl>
+            {sshOpen && (
+              <section className="panel detail-ssh-panel" aria-label="SSH">
+                <ConsoleSshTab vm={vm} />
+              </section>
+            )}
             {isEnvEditableState(vm.state) && (
               <div className="detail-edit-actions">
                 {editing ? (

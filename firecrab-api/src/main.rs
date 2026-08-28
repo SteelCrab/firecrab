@@ -5,6 +5,7 @@ mod error;
 mod extract;
 mod firecracker;
 mod guest_agent;
+mod guest_ssh;
 mod handlers;
 mod image_install;
 mod ipam;

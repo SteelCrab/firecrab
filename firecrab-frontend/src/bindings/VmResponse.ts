@@ -44,4 +44,6 @@ export type VmResponse = {
   portForwards?: Array<PortForward>;
   /** Per-VM environment. Empty is valid. Stored and applied in plaintext. */
   env?: { [key: string]: string };
+  /** SHA256 fingerprint of the guest SSH host key; null until first start. */
+  sshHostFingerprint?: string | null;
 };

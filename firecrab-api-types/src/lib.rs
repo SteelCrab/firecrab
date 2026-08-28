@@ -437,6 +437,59 @@ pub struct VmResponse {
     /// Per-VM environment. Empty is valid. Stored and applied in plaintext.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// SHA256 fingerprint of the guest SSH host key. `null` until first start
+    /// has generated the per-VM host key (`public-docs/oci.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_host_fingerprint: Option<String>,
+}
+
+/// `GET /api/vms/{id}/ssh-host-key` — guest host key after first start.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyResponse {
+    /// `SHA256:…` fingerprint (`ssh-keygen -lf`).
+    pub fingerprint: String,
+    /// OpenSSH public key line.
+    pub public_key: String,
+}
+
+/// What a live host-key check concluded.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SshHostKeyCheckStatus {
+    /// The guest presented the key Firecrab injected.
+    Match,
+    /// The guest answered with a different key.
+    Mismatch,
+    /// Port 22 did not answer, so nothing was compared.
+    Unreachable,
+    /// The VM has no address yet, so nothing was scanned.
+    NoAddress,
+    /// No host key on disk yet — the VM has never started.
+    NoHostKey,
+}
+
+/// `GET /api/vms/{id}/ssh-host-key/check` — what the guest answers with now.
+///
+/// Runs on the Firecrab host, so it replaces the operator pasting
+/// `ssh-keyscan | ssh-keygen -lf` output back into the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyCheckResponse {
+    /// Outcome the dashboard renders.
+    pub status: SshHostKeyCheckStatus,
+    /// Address scanned. `null` when the VM has no address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// Fingerprint Firecrab injected into the guest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    /// Fingerprint the guest presented. `null` unless the scan answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<String>,
+    /// Why the scan could not answer, for the unreachable case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// One guest-agent usage sample for dashboard graphs.
@@ -1442,6 +1495,7 @@ mod tests {
             shell_refs: Vec::new(),
             port_forwards: Vec::new(),
             env: BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+            ssh_host_fingerprint: Some("SHA256:test".to_owned()),
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
@@ -1453,6 +1507,46 @@ mod tests {
         assert!(json.contains("\"memoryUsedPercent\":35.2"));
         assert!(json.contains("\"usageHistory\""));
         assert!(!json.contains("packageUpdate"));
+    }
+
+    /// The dashboard switches on these exact strings
+    /// (`firecrab-frontend/src/bindings/SshHostKeyCheckStatus.ts`).
+    #[test]
+    fn ssh_host_key_check_status_serializes_camel_case() {
+        for (status, json) in [
+            (SshHostKeyCheckStatus::Match, "\"match\""),
+            (SshHostKeyCheckStatus::Mismatch, "\"mismatch\""),
+            (SshHostKeyCheckStatus::Unreachable, "\"unreachable\""),
+            (SshHostKeyCheckStatus::NoAddress, "\"noAddress\""),
+            (SshHostKeyCheckStatus::NoHostKey, "\"noHostKey\""),
+        ] {
+            assert_eq!(serde_json::to_string(&status).unwrap(), json);
+            assert_eq!(
+                serde_json::from_str::<SshHostKeyCheckStatus>(json).unwrap(),
+                status
+            );
+        }
+    }
+
+    /// Absent fields must not reach the client as `null` keys.
+    #[test]
+    fn ssh_host_key_check_omits_what_the_scan_never_learned() {
+        let check = SshHostKeyCheckResponse {
+            status: SshHostKeyCheckStatus::NoAddress,
+            address: None,
+            expected: Some("SHA256:test".to_owned()),
+            observed: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&check).expect("serialize check");
+        assert_eq!(
+            serde_json::from_str::<SshHostKeyCheckResponse>(&json).unwrap(),
+            check
+        );
+        assert!(json.contains("\"status\":\"noAddress\""), "{json}");
+        assert!(json.contains("\"expected\":\"SHA256:test\""), "{json}");
+        assert!(!json.contains("observed"), "{json}");
+        assert!(!json.contains("detail"), "{json}");
     }
 
     #[test]
@@ -1493,6 +1587,7 @@ mod tests {
             shell_refs: Vec::new(),
             port_forwards: Vec::new(),
             env: BTreeMap::new(),
+            ssh_host_fingerprint: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"env\":{}"));

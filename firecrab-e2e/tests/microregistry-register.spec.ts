@@ -279,6 +279,8 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
 
   const row = page.locator("table.vm-table tbody tr", { hasText: REGISTER_VM_NAME });
   await expect(row).toBeVisible();
+  // Row actions live behind the Actions toggle now.
+  await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await row.getByRole("button", { name: "start" }).click();
   await expect(row.locator(".state-badge")).toHaveText(/running|error/, { timeout: 240_000 });
   if ((await row.locator(".state-badge").textContent()) !== "running") {

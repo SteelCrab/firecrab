@@ -93,6 +93,9 @@ export const DHCP_NETWORK_CIDR = "172.30.94.0/24";
 /** Host port forwarded to guest 80 — away from a developer's own 8888. */
 export const DHCP_HOST_PORT = 18888;
 
+/** Host port the SSH panel forwards to guest 22 — away from {@link DHCP_HOST_PORT}. */
+export const DHCP_SSH_HOST_PORT = 18022;
+
 /** Guest line when DHCP never handed an address. */
 export const NETWORK_FAILED = "FIRECRAB_NETWORK_FAILED";
 

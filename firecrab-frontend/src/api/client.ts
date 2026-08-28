@@ -21,6 +21,7 @@ import type {
   MicroStorageDetailResponse,
   MicroStorageResponse,
   NetworkInfoResponse,
+  SshHostKeyResponse,
   ShellDetailResponse,
   ShellResponse,
   ShellRevisionResponse,
@@ -108,6 +109,49 @@ export function getVm(id: string): Promise<VmResponse> {
 
 export function getVmLog(id: string): Promise<VmLogResponse> {
   return fetchJson(`/api/vms/${id}/log`);
+}
+
+export function getSshHostKey(id: string): Promise<SshHostKeyResponse> {
+  return fetchJson(`/api/vms/${id}/ssh-host-key`);
+}
+
+/** Reads the operator private key as text, for copying it to the clipboard. */
+export async function fetchSshKeyPem(id: string): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/vms/${id}/ssh-key`);
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+  return response.text();
+}
+
+/** Downloads the operator private key. Filename comes from Content-Disposition. */
+export async function downloadSshKey(id: string, fallbackName: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/vms/${id}/ssh-key`);
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+  const blob = await response.blob();
+  const header = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="([^"]+)"/.exec(header);
+  const filename = match?.[1] ?? `firecrab-${fallbackName}.pem`;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function createVm(request: CreateVmRequest): Promise<VmResponse> {

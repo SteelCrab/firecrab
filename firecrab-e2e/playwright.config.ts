@@ -9,6 +9,10 @@ const skipGuestBoot =
   process.env.FIRECRAB_E2E_SKIP_GUEST_BOOT === "1" ||
   process.env.FIRECRAB_E2E_SKIP_GUEST_BOOT === "true" ||
   process.env.FIRECRAB_E2E_SKIP_GUEST_BOOT === "yes";
+const reuseExistingServer =
+  process.env.FIRECRAB_E2E_REUSE_SERVER === "1" ||
+  process.env.FIRECRAB_E2E_REUSE_SERVER === "true";
+const inCi = Boolean(process.env.CI) || Boolean(process.env.GITHUB_ACTIONS);
 const baseURL = (process.env.FIRECRAB_E2E_BASE_URL ?? "http://localhost:8080").replace(
   /\/$/,
   "",
@@ -39,7 +43,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  forbidOnly: !!process.env.CI,
+  forbidOnly: inCi,
   timeout: skipGuestBoot ? 240_000 : 420_000,
   expect: { timeout: 15_000 },
   reporter: [["list"]],
@@ -61,14 +65,14 @@ export default defineConfig({
       command: "node firecrab-e2e/scripts/ensure-api.mjs",
       cwd: repoRoot,
       url: "http://127.0.0.1:5523/api/host",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: reuseExistingServer || !inCi,
       timeout: 180_000,
     },
     {
       command: "npm run dev",
       cwd: frontend,
       url: "http://localhost:8080",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: reuseExistingServer || !inCi,
       timeout: 120_000,
     },
   ],
