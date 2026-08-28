@@ -52,6 +52,7 @@ export * from "./UpdateStartResponse";
 export * from "./UpdateVmShellsRequest";
 export * from "./UpdateVmPortForwardsRequest";
 export * from "./UpdateVmResourcesRequest";
+export * from "./SshHostKeyResponse";
 export * from "./VmLogResponse";
 export * from "./VmResponse";
 export * from "./VmState";

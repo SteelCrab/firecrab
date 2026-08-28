@@ -91,22 +91,29 @@ npm run test:ipv6 --prefix firecrab-e2e
 OCI DHCP boot (busybox `udhcpc`, nginx-stable path), form only:
 
 ```sh
-FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm run test:dhcp --prefix firecrab-e2e
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm --prefix firecrab-e2e run test:dhcp
 ```
 
 - Expect **1 passed, 1 skipped**
 
-Create a dedicated network, start the imported guest with `80:18888/tcp`, assert DHCP:
+Create a dedicated dual-stack network, start the imported guest with `80:18888/tcp`, and prove
+IPv4 and IPv6 SSH authentication:
 
 ```sh
 ./scripts/dev-net-helper.sh    # terminal session 1
-npm run test:dhcp --prefix firecrab-e2e
+npm --prefix firecrab-e2e run test:dhcp
 ```
 
 - Expect **2 passed**
+- Guest boot opens the SSH tab, downloads the per-VM key, forwards host port `18022` to guest
+  `22/tcp`, and proves key-only root login over both forwarded IPv4 and the guest's direct IPv6
 - `afterAll` deletes `oci-e2e-dhcp` (VM, network, imported alias)
 - An orphan dnsmasq holding `:67` fails the boot half with `FIRECRAB_NETWORK_FAILED no-ipv4-address`
 - Needs a helper the API process can connect to (`/run/firecrab/net-helper.sock`)
+- Needs the OpenSSH client (`ssh`), server (`/usr/sbin/sshd`), and `ldd` on the host; the local
+  fixture packages the host server and its runtime libraries without contacting an external registry
+- Requires a native KVM host for each architecture; scheduled CI runs this path on x86_64 and on
+  the gated `self-hosted,linux,arm64,kvm` runner when `ENABLE_M2_SELF_HOSTED=true`
 
 Playwright:
 

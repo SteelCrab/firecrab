@@ -99,7 +99,12 @@ export async function startLocalOciRegistry(
     );
   }
 
-  if (!announcement.reference || !announcement.alias || !announcement.ready) {
+  if (
+    !announcement.reference ||
+    !announcement.alias ||
+    !announcement.ready ||
+    !announcement.architecture
+  ) {
     await terminate(child);
     throw new Error(`registry announcement missing fields: ${JSON.stringify(announcement)}`);
   }

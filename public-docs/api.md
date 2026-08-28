@@ -45,6 +45,9 @@ cargo run -p firecrab-api
 | `POST` | `/api/vms/{id}/start` | Start a VM |
 | `POST` | `/api/vms/{id}/stop` | Stop a VM |
 | `GET` | `/api/vms/{id}/log` | Read logs |
+| `GET` | `/api/vms/{id}/ssh-key` | Download the operator ed25519 private key (`firecrab-<name>.pem`) |
+| `GET` | `/api/vms/{id}/ssh-host-key` | Guest host key fingerprint after first start |
+| `GET` | `/api/vms/{id}/ssh-host-key/check` | Scan the guest now and compare it with the injected host key |
 | `PUT` | `/api/vms/{id}/storage` | Assign storage |
 | `GET` | `/ws/vms/{id}/console` | Open the serial console |
 
@@ -105,6 +108,7 @@ Catalog templates (Alpine, Ubuntu, Rocky) do not use this tree.
 | `/etc/firecrab/dhcp.script` | `udhcpc` hook. Applies address, default route, and `/etc/resolv.conf`. |
 | `/etc/firecrab/services.d/` | Directory of guest services. `rc.boot` starts every executable after the sentinel. |
 | `/etc/firecrab/services.d/app` | Image Entrypoint, Cmd, Env, and WorkingDir. Never PID 1. |
+| `/etc/firecrab/services.d/sshd` | Key-only `sshd -D` after first-boot `openssh-server`. |
 | `/etc/firecrab/vm.env` | Per-VM `env` sidecar. `services.d/app` sources it. Plaintext. |
 | `/etc/firecrab/base-packages.ok` | Stamp after the first-boot package install. |
 
