@@ -1624,17 +1624,16 @@ mod tests {
         write_file(&root.join("kernel/old-vmlinux"), b"old kernel");
         write_file(&root.join("rootfs/root.ext4"), b"rootfs-content-here");
         if managed_kernel {
-            let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../docs/vm-linux/images/x86_64/vmlinux-7.2.2-x86_64");
-            assert!(
-                source.is_file(),
-                "the checked-in 7.2.2 x86_64 kernel fixture is required"
-            );
-            let destination = root.join(kernel_manager::cache_path("7.2.2").unwrap());
-            fs::create_dir_all(destination.parent().unwrap()).unwrap();
-            if fs::hard_link(&source, &destination).is_err() {
-                fs::copy(source, destination).unwrap();
-            }
+            // Digest-pinned, so no local placeholder can stand in for it —
+            // fetch the real published 7.2.2 kernel from the MicroRegistry.
+            kernel_cache::ensure_managed_kernel(
+                root,
+                crate::image_install::Architecture::HOST,
+                "7.2.2",
+                Some(image_install::DEFAULT_IMAGE_BASE_URL),
+            )
+            .await
+            .expect("download and verify the real 7.2.2 kernel from the MicroRegistry");
         }
         let templates = TemplateRegistry::from_specs(
             root,
