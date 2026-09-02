@@ -641,9 +641,14 @@ form.create-grid {
   /* Long option text truncates inside the cell instead of overflowing. */
   text-overflow: ellipsis;
 }
-.field .field-error {
+.field-error {
   font-size: 0.75rem;
   color: var(--error);
+}
+.field .field-error {
+  /* Reserves the line's height so a field's layout doesn't jump when its
+     error appears/disappears. Standalone banners (list/action errors) don't
+     need this — their surrounding layout isn't per-field. */
   min-height: 1em;
 }
 /* Row 2: storage · network · egress · spacer · submit */
@@ -1873,11 +1878,6 @@ table.image-table .image-package-url a:hover {
   gap: 0.6rem;
   margin: 0 0 1.5rem;
 }
-.detail-edit-actions .field-error {
-  font-size: 0.75rem;
-  color: var(--error);
-}
-
 /* MicroNetwork 목록에서 상세를 열어둔 행 */
 .vm-table tbody tr.selected > td {
   background: rgba(255, 122, 41, 0.12);
