@@ -19,7 +19,10 @@ pub struct StatusReport {
 
 /// Wraps `systemctl is-active`; any runner error (missing binary, non-UTF8
 /// output) collapses to `"unknown"` rather than failing the whole report.
-fn systemd_is_active(runner: &dyn CommandRunner, unit: &str) -> String {
+///
+/// `pub(crate)` so `service::units::is_active` can delegate to the same rule
+/// instead of duplicating it.
+pub(crate) fn systemd_is_active(runner: &dyn CommandRunner, unit: &str) -> String {
     match runner.run("systemctl", &["is-active", unit]) {
         Ok(out) => String::from_utf8_lossy(&out.stdout).trim().to_owned(),
         Err(_) => "unknown".to_owned(),

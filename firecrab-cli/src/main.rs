@@ -7,6 +7,7 @@ mod host_api_tests;
 mod image;
 mod info;
 mod network;
+mod service;
 mod shell;
 mod status;
 mod update;
@@ -74,6 +75,11 @@ enum Command {
         #[command(subcommand)]
         command: image::Command,
     },
+    /// Install, remove, or control the firecrab host services.
+    Service {
+        #[command(subcommand)]
+        command: service::Command,
+    },
 }
 
 fn main() {
@@ -105,6 +111,13 @@ fn run(cli: Cli) -> i32 {
             let client = build_api_client(api.as_deref());
             finish_api_command(image::run(&client, command))
         }
+        Command::Service { command } => match service::run(&shell::RealCommandRunner, command) {
+            Ok(()) => 0,
+            Err(error) => {
+                error.report();
+                1
+            }
+        },
     }
 }
 
@@ -464,4 +477,73 @@ mod tests {
         assert_eq!(code, 1);
     }
 
+    #[test]
+    fn cli_parses_service_commands() {
+        let install = Cli::try_parse_from([
+            "firecrab",
+            "service",
+            "install",
+            "--version",
+            "v0.3.0",
+            "--libc",
+            "musl",
+            "--bin-dir",
+            "target/release",
+            "--dashboard-dir",
+            "firecrab-frontend/dist",
+            "--no-deps",
+            "--no-frontend",
+            "--check",
+        ])
+        .unwrap();
+        match install.command {
+            Command::Service {
+                command: service::Command::Install(opts),
+            } => {
+                assert_eq!(opts.version.as_deref(), Some("v0.3.0"));
+                assert_eq!(opts.libc.as_deref(), Some("musl"));
+                assert_eq!(
+                    opts.bin_dir.as_deref(),
+                    Some(std::path::Path::new("target/release"))
+                );
+                assert_eq!(
+                    opts.dashboard_dir.as_deref(),
+                    Some(std::path::Path::new("firecrab-frontend/dist"))
+                );
+                assert!(opts.no_deps && opts.no_frontend && opts.check);
+            }
+            _ => panic!("expected service install"),
+        }
+
+        let uninstall =
+            Cli::try_parse_from(["firecrab", "service", "uninstall", "--purge"]).unwrap();
+        assert!(matches!(
+            uninstall.command,
+            Command::Service {
+                command: service::Command::Uninstall { purge: true }
+            }
+        ));
+
+        let reinstall =
+            Cli::try_parse_from(["firecrab", "service", "reinstall", "--purge"]).unwrap();
+        assert!(matches!(
+            reinstall.command,
+            Command::Service {
+                command: service::Command::Reinstall { purge: true, .. }
+            }
+        ));
+
+        for verb in ["start", "stop", "restart", "enable", "disable"] {
+            assert!(
+                Cli::try_parse_from(["firecrab", "service", verb]).is_ok(),
+                "failed to parse service {verb}"
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["firecrab", "service", "install", "--dashboard-dir", "x"])
+                .is_err(),
+            "--dashboard-dir requires --bin-dir"
+        );
+        assert!(Cli::try_parse_from(["firecrab", "service", "bogus"]).is_err());
+    }
 }
