@@ -600,14 +600,14 @@ fn the_compiled_pins_name_the_latest_stable_registry_artifacts() {
     let expected = [
         (
             Architecture::X86_64,
-            "vmlinux-7.1.9-x86_64",
-            "kernel/7.1.9/x86_64/vmlinux-7.1.9.tar.zst",
+            "vmlinux-7.2.2-x86_64",
+            "kernel/7.2.2/x86_64/vmlinux-7.2.2.tar.zst",
             false,
         ),
         (
             Architecture::Aarch64,
-            "Image-7.1.9-aarch64",
-            "kernel/7.1.9/aarch64/vmlinux-7.1.9.tar.zst",
+            "Image-7.2.2-aarch64",
+            "kernel/7.2.2/aarch64/vmlinux-7.2.2.tar.zst",
             true,
         ),
     ];
@@ -616,8 +616,8 @@ fn the_compiled_pins_name_the_latest_stable_registry_artifacts() {
         let pinned = kernel::pinned_kernel(architecture)
             .unwrap_or_else(|| panic!("{architecture} kernel is published"));
 
-        assert_eq!(pinned.alias, "vmlinux-7.1.9");
-        assert_eq!(pinned.version, "7.1.9");
+        assert_eq!(pinned.alias, "vmlinux-7.2.2");
+        assert_eq!(pinned.version, "7.2.2");
         assert_eq!(pinned.image, image);
         assert_eq!(kernel::package_key(architecture, &pinned), package_key);
         Sha256Digest::parse(pinned.package_digest).expect("package digest is pinned, not a tag");

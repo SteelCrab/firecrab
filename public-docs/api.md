@@ -12,6 +12,7 @@
 - [VM fields](#vm-fields)
 - [Guest `/etc/firecrab`](#guest-etcfirecrab)
 - [Other endpoints](#other-endpoints)
+- [Images and kernels](#images-and-kernels)
 - [MicroNetwork](#micronetwork)
 - [MicroRegistry](#microregistry)
 - [Docker Hub login](#docker-hub-login)
@@ -168,10 +169,44 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 | MicroNetwork | `/api/micro-networks` and `/{id}` |
 | MicroStorage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}`; VM pin `PUT /api/vms/{id}/shells` (Alpine OpenRC + Ubuntu/Rocky systemd; prefer POSIX `/bin/sh`) |
-| Images | `/api/images`, `/package`, `/install`, `/bootstrap` |
+| Images | `/api/images`, `/{alias}`, `/{alias}/package`, `/{alias}/install`, `/{alias}/kernel`, `/{alias}/bootstrap` |
+| Kernels | `/api/kernels`, `/{version}/install`, `/{version}` |
 | OCI | `/api/oci/inspect`, `POST /api/oci/import`, `GET /api/oci/import/{alias}` |
 | MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}`, `GET`/`PUT`/`DELETE /docker-hub` (Docker Hub login; secret write-only) |
 | Host | `/api/host` and `/api/network` |
+
+## Images and kernels
+
+`GET /api/images` lists installed and known-but-uninstalled M2Images.
+`GET /api/images/{alias}` returns one complete image detail record.
+Image records include `kernelVersion` for a managed kernel, the public
+`kernelImage` filename, and the kernel/rootfs/initrd digests.
+
+`GET /api/kernels` lists the host architecture's digest-pinned kernel catalog
+and local cache state. The newest catalog entry is Linux `7.2.2`; `7.1.9`
+remains available as a compatibility or rollback choice.
+
+| Method | Path | Job |
+| --- | --- | --- |
+| `GET` | `/api/kernels` | List catalog versions and installed/in-use state |
+| `GET`, `POST` | `/api/kernels/{version}/install` | Read or start kernel download and verification |
+| `DELETE` | `/api/kernels/{version}` | Remove an unused local kernel cache |
+| `PUT` | `/api/images/{alias}/kernel` | Pair an installed image with an installed kernel |
+
+Install a kernel before updating an image.
+
+```sh
+curl -s -X POST http://127.0.0.1:5523/api/kernels/7.2.2/install
+curl -s -X PUT http://127.0.0.1:5523/api/images/ubuntu-26.04/kernel \
+  -H 'Content-Type: application/json' \
+  -d '{"kernelVersion":"7.2.2"}'
+```
+
+The update keeps the image's rootfs and optional initrd. It returns `409`
+`kernel_required` when the selected cache is absent or fails verification,
+and `409` `in_use` when an instance VM still references the image.
+Deleting an image does not delete a managed kernel cache; deleting a kernel
+is refused while any installed image references it.
 
 ## MicroNetwork
 
@@ -303,5 +338,6 @@ Use `requestId` to find the matching server log.
 - [Networking](networking.md)
 - [Storage](storage.md)
 - [Images](images.md)
+- [Kernel management](kernels.md)
 - [OCI images](oci.md)
 - [Troubleshooting](troubleshooting.md)

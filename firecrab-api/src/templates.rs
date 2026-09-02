@@ -492,6 +492,45 @@ impl TemplateRegistry {
         self.register_spec_inner(spec, true)
     }
 
+    /// Replaces the current alias pin while retaining shared artifacts that
+    /// the new version still references. The returned paths are safe to
+    /// delete after the caller has observed a successful replacement.
+    ///
+    /// Image kernel updates use this instead of unregistering first: a
+    /// failed verification or manifest write must not leave an installed
+    /// image without a usable alias.
+    pub fn replace_alias(
+        &self,
+        spec: TemplateSpec,
+    ) -> Result<(Arc<TemplateVersion>, Vec<PathBuf>), TemplateError> {
+        let version = self.build_version(&spec)?;
+        let version_key = (spec.alias.clone(), version.version.clone());
+
+        // Persist before changing the live maps, matching register_spec's
+        // restart-safety guarantee.
+        self.persist_registration(&spec)?;
+
+        let mut versions = self
+            .versions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut aliases = self
+            .aliases
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let old_key = aliases.insert(spec.alias, version_key.clone());
+        versions.insert(version_key.clone(), version.clone());
+
+        let removed = old_key
+            .filter(|key| key != &version_key)
+            .and_then(|key| versions.remove(&key));
+        let orphan_paths = removed
+            .as_deref()
+            .map(|template| self.orphan_paths(template, &versions))
+            .unwrap_or_default();
+        Ok((version, orphan_paths))
+    }
+
     /// `persist` is false only while replaying the manifest at startup —
     /// rewriting each entry as it is restored would be pure churn.
     fn register_spec_inner(
@@ -499,20 +538,7 @@ impl TemplateRegistry {
         spec: TemplateSpec,
         persist: bool,
     ) -> Result<Arc<TemplateVersion>, TemplateError> {
-        let initrd = spec
-            .initrd
-            .as_ref()
-            .map(|path| verify_artifact(&self.image_root, path))
-            .transpose()?;
-        verify_kernel_architecture(&self.image_root, &spec.kernel)?;
-        let version = Arc::new(TemplateVersion {
-            name: spec.alias.clone(),
-            version: spec.version.clone(),
-            kernel: verify_artifact(&self.image_root, &spec.kernel)?,
-            initrd,
-            rootfs: verify_artifact(&self.image_root, &spec.rootfs)?,
-            boot_args: spec.boot_args.clone(),
-        });
+        let version = self.build_version(&spec)?;
         let version_key = (spec.alias.clone(), version.version.clone());
 
         // Persisted before the in-memory maps change so a manifest that
@@ -536,6 +562,23 @@ impl TemplateRegistry {
         versions.insert(version_key.clone(), version.clone());
         aliases.insert(spec.alias, version_key);
         Ok(version)
+    }
+
+    fn build_version(&self, spec: &TemplateSpec) -> Result<Arc<TemplateVersion>, TemplateError> {
+        let initrd = spec
+            .initrd
+            .as_ref()
+            .map(|path| verify_artifact(&self.image_root, path))
+            .transpose()?;
+        verify_kernel_architecture(&self.image_root, &spec.kernel)?;
+        Ok(Arc::new(TemplateVersion {
+            name: spec.alias.clone(),
+            version: spec.version.clone(),
+            kernel: verify_artifact(&self.image_root, &spec.kernel)?,
+            initrd,
+            rootfs: verify_artifact(&self.image_root, &spec.rootfs)?,
+            boot_args: spec.boot_args.clone(),
+        }))
     }
 
     /// Absolute paths of `removed`'s artifacts that no version in
@@ -573,13 +616,17 @@ impl TemplateRegistry {
                 if still_referenced.contains(*relative) {
                     return false;
                 }
+                // The independently managed kernel catalog owns its cache.
+                // Removing the last OCI image that currently references a
+                // kernel must not silently uninstall that kernel from the
+                // separate kernel-management screen.
+                if crate::kernel_manager::version_for_path(relative).is_some() {
+                    return false;
+                }
                 // Catalog artifacts belong to their known_spec alias. An OCI
                 // import borrows the Ubuntu kernel; deleting that import must
                 // not take the kernel with it or the next import cannot pair.
-                match catalog_owner_of(relative) {
-                    Some(owner) if owner != removed.name => false,
-                    _ => true,
-                }
+                !matches!(catalog_owner_of(relative), Some(owner) if owner != removed.name)
             })
             .map(|relative| self.image_root_path.join(relative))
             .collect()
@@ -1458,6 +1505,70 @@ mod tests {
                 .any(|path| path.ends_with("rootfs/nginx-1.27.ext4")),
             "the imported rootfs is this alias's own file: {orphans:?}"
         );
+    }
+
+    #[test]
+    fn managed_kernel_cache_survives_removing_its_last_image_reference() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let kernel = crate::kernel_manager::cache_path("7.2.2").expect("catalog kernel");
+        fs::create_dir_all(root.join(kernel.parent().unwrap())).unwrap();
+        fs::write(root.join(&kernel), b"managed-kernel").unwrap();
+        fs::write(root.join("rootfs.ext4"), b"rootfs").unwrap();
+        let registry = TemplateRegistry::from_specs(
+            root,
+            [TemplateSpec {
+                alias: "managed-image".to_owned(),
+                version: "v1".to_owned(),
+                kernel: kernel.clone(),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs.ext4"),
+                boot_args: String::new(),
+            }],
+        )
+        .unwrap();
+
+        let (_version, orphans) = registry.unregister_alias("managed-image").unwrap();
+        assert!(!orphans.iter().any(|path| path.ends_with(&kernel)));
+        assert!(orphans.iter().any(|path| path.ends_with("rootfs.ext4")));
+    }
+
+    #[test]
+    fn replacing_an_alias_keeps_shared_rootfs_and_persists_the_new_pin() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        fs::write(root.join("kernel-old"), b"old").unwrap();
+        fs::write(root.join("kernel-new"), b"new").unwrap();
+        fs::write(root.join("rootfs"), b"rootfs").unwrap();
+        let registry = TemplateRegistry::load_from(root).unwrap();
+        registry
+            .register_spec(TemplateSpec {
+                alias: "demo".to_owned(),
+                version: "v1".to_owned(),
+                kernel: PathBuf::from("kernel-old"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: String::new(),
+            })
+            .unwrap();
+
+        let (_updated, orphans) = registry
+            .replace_alias(TemplateSpec {
+                alias: "demo".to_owned(),
+                version: "v2".to_owned(),
+                kernel: PathBuf::from("kernel-new"),
+                initrd: None,
+                rootfs: PathBuf::from("rootfs"),
+                boot_args: String::new(),
+            })
+            .unwrap();
+        assert_eq!(registry.resolve_alias("demo").unwrap().version, "v2");
+        assert!(registry.resolve_version("demo", "v1").is_none());
+        assert!(orphans.iter().any(|path| path.ends_with("kernel-old")));
+        assert!(!orphans.iter().any(|path| path.ends_with("rootfs")));
+
+        let restarted = TemplateRegistry::load_from(root).unwrap();
+        assert_eq!(restarted.resolve_alias("demo").unwrap().version, "v2");
     }
 
     #[test]

@@ -9,6 +9,7 @@ mod guest_ssh;
 mod handlers;
 mod image_install;
 mod ipam;
+mod kernel_manager;
 mod m2image_manifest;
 mod microboot;
 mod model;
