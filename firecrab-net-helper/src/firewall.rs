@@ -1241,7 +1241,7 @@ mod tests {
     fn a_dual_stack_vm_policy_pins_its_v6_source_the_way_it_pins_v4() {
         let policy = dual_stack_policy();
         let tag = policy.vm_id.simple();
-        let ruleset = render_vm_policy("eth0", &policy);
+        let ruleset = render_vm_policy_for_network("eth0", &policy, true);
 
         // IPv6 frames are no longer dropped wholesale for this VM...
         assert!(ruleset.contains("ether type != { ip, arp, ip6 } drop"));
@@ -1265,7 +1265,11 @@ mod tests {
 
     #[test]
     fn an_ipv4_only_vm_policy_still_drops_every_v6_frame() {
-        let ruleset = render_vm_policy("eth0", &sample_policy(EgressPolicy::Internet, false));
+        let ruleset = render_vm_policy_for_network(
+            "eth0",
+            &sample_policy(EgressPolicy::Internet, false),
+            true,
+        );
         assert!(ruleset.contains("ether type != { ip, arp } drop"));
         assert!(!ruleset.contains("vm_egress6"));
     }
