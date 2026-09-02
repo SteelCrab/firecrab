@@ -229,6 +229,8 @@ mod tests {
         ImageResponse {
             alias: "alpine-3.24.1".to_owned(),
             version: "3.24.1".to_owned(),
+            kernel_version: None,
+            kernel_image: "vmlinuz".to_owned(),
             kernel_sha256: String::new(),
             rootfs_sha256: String::new(),
             initrd_sha256: None,
