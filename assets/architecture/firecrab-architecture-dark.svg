@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1140 880" role="img" aria-label="Firecrab architecture in five stacked layers, read top to bottom. External layer, outside the host: the firecrab-frontend dashboard, firecrab-cli, REST clients, and an image registry holding OCI or M2Image sources. Control layer: firecrab-api, the unprivileged hub every path crosses. Network layer: firecrab-net-helper, the only privileged capability-bounded process, which provisions MicroNetwork. Runtime layer: identical Firecracker guest microVMs, N of them. Storage layer: MicroStorage on the host disk, holding VM images as kernels and root filesystems, one writable disk per VM, and the state of which VMs and networks exist.">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+            <path fill="#A08B7A" d="M0,0 L10,5 L0,10 Z"/>
+          </marker>
+          <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+            <path fill="#F0824B" d="M0,0 L10,5 L0,10 Z"/>
+          </marker>
+        </defs>
+        <rect x="0" y="0" width="1140" height="880" fill="#14100E"/>
+
+        <!-- ============ host boundary ============ -->
+        <rect fill="#221A15" stroke="#5C4C3F" stroke-width="2" stroke-dasharray="7 6" x="100" y="150" width="960" height="700" rx="10"/>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" letter-spacing="1.2" text-anchor="start" x="120" y="173">FIRECRAB HOST</text>
+
+        <!-- ============ layer rules + rail labels ============ -->
+        <line stroke="#5C4C3F" stroke-width="1" x1="84" y1="184" x2="1060" y2="184"/>
+        <line stroke="#5C4C3F" stroke-width="1" x1="84" y1="322" x2="1060" y2="322"/>
+        <line stroke="#5C4C3F" stroke-width="1" x1="84" y1="472" x2="1060" y2="472"/>
+        <line stroke="#5C4C3F" stroke-width="1" x1="84" y1="702" x2="1060" y2="702"/>
+
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="600" letter-spacing="1.6" text-anchor="end" x="76" y="80">EXTERNAL</text>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="600" letter-spacing="1.6" text-anchor="end" x="76" y="257">CONTROL</text>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="600" letter-spacing="1.6" text-anchor="end" x="76" y="401">NETWORK</text>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="600" letter-spacing="1.6" text-anchor="end" x="76" y="591">RUNTIME</text>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="600" letter-spacing="1.6" text-anchor="end" x="76" y="780">STORAGE</text>
+
+        <!-- ============ layer 1 · external ============ -->
+        <rect fill="#2F2620" stroke="#3F342C" stroke-width="1.5" x="200" y="40" width="180" height="72" rx="2"/>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" text-anchor="middle" x="290" y="74">firecrab-frontend</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="290" y="94">React dashboard</text>
+
+        <rect fill="#2F2620" stroke="#3F342C" stroke-width="1.5" x="400" y="40" width="180" height="72" rx="2"/>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" text-anchor="middle" x="490" y="74">firecrab-cli</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="490" y="94">terminal client</text>
+
+        <rect fill="#2F2620" stroke="#3F342C" stroke-width="1.5" x="600" y="40" width="180" height="72" rx="2"/>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" text-anchor="middle" x="690" y="74">REST client</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="690" y="94">curl &#183; scripts &#183; CI</text>
+
+        <rect fill="#2F2620" stroke="#3F342C" stroke-width="1.5" x="840" y="40" width="180" height="72" rx="2"/>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" text-anchor="middle" x="930" y="74">Image registry</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="930" y="94">OCI &#183; M2Image source</text>
+
+        <!-- ============ layer 2 · control ============ -->
+        <rect fill="#2F2620" stroke="#F3EAE0" stroke-width="2.5" x="140" y="204" width="650" height="98" rx="2"/>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" letter-spacing="0.8" text-anchor="end" x="772" y="224">UNPRIVILEGED</text>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" font-weight="600" text-anchor="middle" x="465" y="248">firecrab-api</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="465" y="269">REST + WebSocket &#183; SQLite &#183; Firecracker supervisor</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="465" y="287">OCI / M2Image pull</text>
+
+        <!-- ============ layer 3 · network ============ -->
+        <rect fill="#3F291D" stroke="#F0824B" stroke-width="2.5" x="140" y="347" width="330" height="100" rx="2"/>
+        <text fill="#FFB088" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" letter-spacing="0.8" text-anchor="end" x="452" y="370">CAPABILITY&#8209;BOUNDED</text>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" text-anchor="middle" x="305" y="399">firecrab-net-helper</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="305" y="421">bridge &#183; TAP &#183; nftables &#183; dnsmasq</text>
+
+        <rect fill="#2F2620" stroke="#5C4C3F" stroke-width="1.5" x="510" y="347" width="280" height="100" rx="2"/>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" font-weight="600" text-anchor="middle" x="650" y="387">MicroNetwork</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" x="650" y="409">isolated bridge + subnet</text>
+
+        <!-- ============ layer 4 · runtime ============ -->
+        <rect fill="#1C1511" stroke="#3F342C" stroke-width="1.5" x="140" y="492" width="880" height="190" rx="8"/>
+
+        <rect fill="#2F2620" stroke="#5C4C3F" stroke-width="1.5" x="175" y="528" width="243" height="118" rx="2"/>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="600" text-anchor="middle" x="296" y="566">Guest VM 1</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" x="296" y="590">Firecracker process</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" x="296" y="610">KVM &#183; TAP &#183; rootfs</text>
+
+        <rect fill="#2F2620" stroke="#5C4C3F" stroke-width="1.5" x="443" y="528" width="243" height="118" rx="2"/>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="600" text-anchor="middle" x="564" y="566">Guest VM 2</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" x="564" y="590">Firecracker process</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" x="564" y="610">KVM &#183; TAP &#183; rootfs</text>
+
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="17" text-anchor="middle" x="713" y="592">&#8943;</text>
+
+        <rect fill="#2F2620" stroke="#3F342C" stroke-width="1.5" x="741" y="528" width="243" height="118" rx="2"/>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="600" text-anchor="middle" x="862" y="576">Guest VM N</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" x="862" y="600">one process per microVM</text>
+
+        <!-- ============ layer 5 · storage ============ -->
+        <rect fill="#1C1511" stroke="#5C4C3F" stroke-width="1.5" x="140" y="724" width="880" height="105" rx="2"/>
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="16" font-weight="600" text-anchor="start" x="170" y="759">MicroStorage</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" x="170" y="780">on the host disk</text>
+
+        <line stroke="#5C4C3F" stroke-width="1" x1="560" y1="742" x2="560" y2="812"/>
+        <line stroke="#5C4C3F" stroke-width="1" x1="790" y1="742" x2="790" y2="812"/>
+
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13.5" font-weight="600" text-anchor="start" x="390" y="759">VM images</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" x="390" y="780">kernels + rootfs</text>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" text-anchor="start" x="390" y="800">images/</text>
+
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13.5" font-weight="600" text-anchor="start" x="590" y="759">VM disks</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" x="590" y="780">one writable disk per VM</text>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" text-anchor="start" x="590" y="800">data/vms/&lt;id&gt;/</text>
+
+        <text fill="#F3EAE0" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13.5" font-weight="600" text-anchor="start" x="820" y="759">State</text>
+        <text fill="#B3A18F" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" x="820" y="780">which VMs and networks exist</text>
+        <text fill="#B3A18F" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" text-anchor="start" x="820" y="800">data/firecrab.db</text>
+
+        <!-- ============ wires ============ -->
+        <!-- external -> control -->
+        <path fill="none" stroke="#A08B7A" stroke-width="2.2" marker-end="url(#arrow)" d="M290,112 L290,204"/>
+        <path fill="none" stroke="#A08B7A" stroke-width="2.2" marker-end="url(#arrow)" d="M490,112 L490,204"/>
+        <path fill="none" stroke="#A08B7A" stroke-width="2.2" marker-end="url(#arrow)" d="M690,112 L690,204"/>
+        <path fill="none" stroke="#A08B7A" stroke-width="2.2" marker-end="url(#arrow)" d="M930,112 L930,136 L760,136 L760,204"/>
+
+        <!-- control -> network -->
+        <path fill="none" stroke="#F0824B" stroke-width="2.2" marker-end="url(#arrow-accent)" d="M300,302 L300,347"/>
+        <!-- net-helper -> micronetwork -->
+        <path fill="none" stroke="#F0824B" stroke-width="2.2" marker-end="url(#arrow-accent)" d="M470,397 L510,397"/>
+        <!-- network -> runtime -->
+        <path fill="none" stroke="#A08B7A" stroke-width="2.2" marker-end="url(#arrow)" d="M650,447 L650,492"/>
+
+        <!-- control -> runtime, down the right side -->
+        <path fill="none" stroke="#A08B7A" stroke-width="2.2" marker-end="url(#arrow)" d="M790,253 L900,253 L900,492"/>
+        <!-- control -> storage, down the left gutter -->
+        <path fill="none" stroke="#A08B7A" stroke-width="2.2" marker-end="url(#arrow)" d="M140,253 L118,253 L118,776 L140,776"/>
+        <!-- runtime -> storage -->
+        <path fill="none" stroke="#A08B7A" stroke-width="2.2" marker-end="url(#arrow)" d="M580,682 L580,724"/>
+      </svg>
