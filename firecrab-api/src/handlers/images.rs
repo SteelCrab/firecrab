@@ -4,13 +4,19 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus, ImageResponse, PackageOrigin};
+use firecrab_api_types::{
+    ImageInstallResponse, ImageInstallStatus, ImageResponse, PackageOrigin,
+    UpdateImageKernelRequest,
+};
 
 use crate::error::AppError;
+use crate::extract::ValidatedJson;
 use crate::image_install;
+use crate::kernel_manager;
+use crate::oci::kernel as kernel_cache;
 use crate::server::RequestId;
 use crate::state::AppState;
-use crate::templates::{TemplateRegistry, TemplateVersion};
+use crate::templates::{TemplateRegistry, TemplateSpec, TemplateVersion};
 
 /// Smallest disk (GiB) that can hold `rootfs_bytes`, matching create validation.
 fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
@@ -18,7 +24,7 @@ fn min_disk_gb_for(rootfs_bytes: u64) -> u16 {
     rootfs_bytes.div_ceil(GIB).try_into().unwrap_or(u16::MAX)
 }
 
-fn installed_response(
+pub(crate) fn installed_response(
     templates: &TemplateRegistry,
     template: &TemplateVersion,
     package_url: Option<String>,
@@ -29,6 +35,8 @@ fn installed_response(
     ImageResponse {
         alias: template.name.clone(),
         version: template.version.clone(),
+        kernel_version: crate::kernel_manager::version_for_path(template.kernel.relative_path()),
+        kernel_image: artifact_name(template.kernel.relative_path()),
         kernel_sha256: template.kernel.sha256().to_owned(),
         rootfs_sha256: template.rootfs.sha256().to_owned(),
         initrd_sha256: template
@@ -49,16 +57,30 @@ fn installed_response(
     }
 }
 
+fn installed_response_for_state(state: &AppState, template: &TemplateVersion) -> ImageResponse {
+    installed_response(
+        &state.templates,
+        template,
+        state
+            .image_packages
+            .base_url()
+            .map(|base| image_install::package_url(base, &template.name)),
+        image_install::staged_package_exists(state.templates.image_root_path(), &template.name),
+        image_install::staged_package_origin(state.templates.image_root_path(), &template.name),
+    )
+}
+
 fn not_installed_response(
-    alias: &str,
-    version: &str,
+    spec: &TemplateSpec,
     package_url: Option<String>,
     package_staged: bool,
     package_origin: Option<PackageOrigin>,
 ) -> ImageResponse {
     ImageResponse {
-        alias: alias.to_owned(),
-        version: version.to_owned(),
+        alias: spec.alias.clone(),
+        version: spec.version.clone(),
+        kernel_version: crate::kernel_manager::version_for_path(&spec.kernel),
+        kernel_image: artifact_name(&spec.kernel),
         kernel_sha256: String::new(),
         rootfs_sha256: String::new(),
         initrd_sha256: None,
@@ -71,6 +93,12 @@ fn not_installed_response(
         description: String::new(),
         has_guest_service: false,
     }
+}
+
+fn artifact_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".to_owned())
 }
 
 /// `GET /api/images`: known templates (installed + not-yet-installed).
@@ -105,7 +133,7 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
                     Some(template) => {
                         installed_response(&templates, template.as_ref(), url, staged, origin)
                     }
-                    None => not_installed_response(&spec.alias, &spec.version, url, staged, origin),
+                    None => not_installed_response(&spec, url, staged, origin),
                 }
             })
             .collect();
@@ -134,6 +162,185 @@ pub async fn list_images(State(state): State<AppState>) -> Json<Vec<ImageRespons
     .await
     .unwrap_or_default();
     Json(images)
+}
+
+/// `GET /api/images/{alias}` — one image's complete public detail record.
+pub async fn list_image_detail(
+    State(state): State<AppState>,
+    Path(alias): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<Json<ImageResponse>, AppError> {
+    if alias == crate::microboot::MICROBOOT_ALIAS {
+        return Err(AppError::not_found(request_id.0));
+    }
+    let known = TemplateRegistry::known_spec(&alias);
+    let template = state.templates.resolve_alias(&alias);
+    if known.is_none() && template.is_none() {
+        return Err(AppError::not_found(request_id.0));
+    }
+
+    let templates = state.templates.clone();
+    let package_base = state.image_packages.base_url().map(str::to_owned);
+    let image_root = templates.image_root_path().to_path_buf();
+    let response = tokio::task::spawn_blocking(move || {
+        let package_url = package_base
+            .as_deref()
+            .map(|base| image_install::package_url(base, &alias));
+        let staged = image_install::staged_package_exists(&image_root, &alias);
+        let origin = image_install::staged_package_origin(&image_root, &alias);
+        match (template, known) {
+            (Some(template), _) => {
+                installed_response(&templates, template.as_ref(), package_url, staged, origin)
+            }
+            (None, Some(spec)) => not_installed_response(&spec, package_url, staged, origin),
+            (None, None) => unreachable!("detail guard checked known or installed"),
+        }
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?;
+    Ok(Json(response))
+}
+
+/// `PUT /api/images/{alias}/kernel` — pair an installed image with an
+/// installed managed kernel. The rootfs remains unchanged and existing VM
+/// records are protected by refusing updates while the alias is in use.
+pub async fn update_image_kernel(
+    State(state): State<AppState>,
+    Path(alias): Path<String>,
+    Extension(request_id): Extension<RequestId>,
+    ValidatedJson(request): ValidatedJson<UpdateImageKernelRequest>,
+) -> Result<Json<ImageResponse>, AppError> {
+    if alias == crate::microboot::MICROBOOT_ALIAS
+        || (TemplateRegistry::known_spec(&alias).is_none()
+            && state.templates.resolve_alias(&alias).is_none())
+    {
+        return Err(AppError::not_found(request_id.0));
+    }
+    let Some(current) = state.templates.resolve_alias(&alias) else {
+        return Err(AppError::conflict(
+            "not_installed",
+            "image is not installed on this host",
+            request_id.0,
+        ));
+    };
+
+    let version = request.kernel_version.trim().to_owned();
+    if version.is_empty() {
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("kernelVersion".to_owned(), "must not be empty".to_owned());
+        return Err(AppError::validation(fields, request_id.0));
+    }
+    let Some(kernel_path) = kernel_manager::cache_path(&version) else {
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert(
+            "kernelVersion".to_owned(),
+            "must name a kernel from GET /api/kernels".to_owned(),
+        );
+        return Err(AppError::validation(fields, request_id.0));
+    };
+    if current.kernel.relative_path() == kernel_path {
+        if kernel_cache::cached_kernel_is_valid(
+            state.templates.image_root_path(),
+            crate::image_install::Architecture::HOST,
+            &version,
+        )
+        .await
+        {
+            return Ok(Json(installed_response_for_state(&state, &current)));
+        }
+        return Err(AppError::conflict(
+            "kernel_required",
+            "install and verify the selected kernel before updating this image",
+            request_id.0,
+        ));
+    }
+    let next_spec = TemplateSpec {
+        alias: alias.clone(),
+        version: format!("{}-kernel-{}", current.version, version),
+        kernel: kernel_path.clone(),
+        initrd: current
+            .initrd
+            .as_ref()
+            .map(|artifact| artifact.relative_path().to_path_buf()),
+        rootfs: current.rootfs.relative_path().to_path_buf(),
+        boot_args: current.boot_args.clone(),
+    };
+    drop(current);
+    if state.image_installs.is_running(&alias) || state.image_packages.is_running(&alias) {
+        return Err(AppError::conflict(
+            "image_operation_in_progress",
+            "cannot update the kernel while an image package or install job is running",
+            request_id.0,
+        ));
+    }
+    let image_root = state.templates.image_root_path().to_path_buf();
+    let selected_kernel_is_valid = kernel_cache::cached_kernel_is_valid(
+        &image_root,
+        crate::image_install::Architecture::HOST,
+        &version,
+    )
+    .await;
+    if !selected_kernel_is_valid {
+        return Err(AppError::conflict(
+            "kernel_required",
+            "install and verify the selected kernel before updating this image",
+            request_id.0,
+        ));
+    }
+
+    {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let users: Vec<String> = vms
+            .values()
+            .filter(|vm| vm.template == alias && vm.purpose == crate::model::VmPurpose::Instance)
+            .map(|vm| {
+                format!(
+                    "{} [{}]",
+                    vm.name,
+                    crate::persistence::encode_state(vm.state)
+                )
+            })
+            .collect();
+        if !users.is_empty() {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert("vms".to_owned(), users.join(", "));
+            fields.insert("count".to_owned(), users.len().to_string());
+            return Err(AppError::in_use_with_fields(
+                "image is still used by one or more VMs; delete those VMs before changing its kernel",
+                fields,
+                request_id.0,
+            ));
+        }
+    }
+
+    let templates = state.templates.clone();
+    let (updated, orphan_paths) = tokio::task::spawn_blocking(move || {
+        templates.replace_alias(next_spec)
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?
+    .map_err(|error| {
+        tracing::error!(request_id = %request_id.0, alias, %error, "failed to update image kernel");
+        AppError::internal(request_id.0)
+    })?;
+
+    for path in orphan_paths {
+        if let Err(error) = tokio::fs::remove_file(&path).await
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                alias = %alias,
+                path = %path.display(),
+                %error,
+                "failed to remove replaced image artifact"
+            );
+        }
+    }
+
+    Ok(Json(installed_response_for_state(&state, updated.as_ref())))
 }
 
 /// `GET /api/images/{alias}/package` — latest package acquisition snapshot.
@@ -1373,5 +1580,214 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn image_detail_exposes_kernel_metadata_for_a_known_image() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+
+        let Json(image) = list_image_detail(
+            State(state),
+            Path("ubuntu-26.04".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap();
+
+        assert!(!image.installed);
+        assert!(image.kernel_version.is_none());
+        assert!(!image.kernel_image.is_empty());
+        assert!(image.kernel_sha256.is_empty());
+    }
+
+    #[tokio::test]
+    async fn image_detail_rejects_unknown_and_internal_aliases() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+
+        for alias in ["no-such-image", crate::microboot::MICROBOOT_ALIAS] {
+            let result = list_image_detail(
+                State(state.clone()),
+                Path(alias.to_owned()),
+                Extension(RequestId(uuid::Uuid::nil())),
+            )
+            .await;
+            assert_eq!(
+                result.err().unwrap().into_response().status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+    }
+
+    async fn installed_demo_state(root: &Path, managed_kernel: bool) -> AppState {
+        write_file(&root.join("kernel/old-vmlinux"), b"old kernel");
+        write_file(&root.join("rootfs/root.ext4"), b"rootfs-content-here");
+        if managed_kernel {
+            // Digest-pinned, so no local placeholder can stand in for it —
+            // fetch the real published 7.2.2 kernel from the MicroRegistry.
+            kernel_cache::ensure_managed_kernel(
+                root,
+                crate::image_install::Architecture::HOST,
+                "7.2.2",
+                Some(image_install::DEFAULT_IMAGE_BASE_URL),
+            )
+            .await
+            .expect("download and verify the real 7.2.2 kernel from the MicroRegistry");
+        }
+        let templates = TemplateRegistry::from_specs(
+            root,
+            [TemplateSpec {
+                alias: "demo".to_owned(),
+                version: "demo-v1".to_owned(),
+                kernel: Path::new("kernel/old-vmlinux").to_path_buf(),
+                initrd: None,
+                rootfs: Path::new("rootfs/root.ext4").to_path_buf(),
+                boot_args: "console=ttyS0".to_owned(),
+            }],
+        )
+        .unwrap();
+        AppState::with_db_file(templates, root.join("state.db"))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn image_kernel_update_validates_installation_and_catalog_membership() {
+        let directory = tempdir().unwrap();
+        let state = empty_state(directory.path()).await;
+
+        let not_installed = update_image_kernel(
+            State(state.clone()),
+            Path("ubuntu-26.04".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+            ValidatedJson(UpdateImageKernelRequest {
+                kernel_version: "7.2.2".to_owned(),
+            }),
+        )
+        .await;
+        assert_eq!(
+            not_installed.err().unwrap().into_response().status(),
+            StatusCode::CONFLICT
+        );
+
+        let unknown_alias = update_image_kernel(
+            State(state),
+            Path("no-such-image".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+            ValidatedJson(UpdateImageKernelRequest {
+                kernel_version: "7.2.2".to_owned(),
+            }),
+        )
+        .await;
+        assert_eq!(
+            unknown_alias.err().unwrap().into_response().status(),
+            StatusCode::NOT_FOUND
+        );
+
+        let directory = tempdir().unwrap();
+        let state = installed_demo_state(directory.path(), false).await;
+        for kernel_version in [String::new(), "9.9.9".to_owned()] {
+            let result = update_image_kernel(
+                State(state.clone()),
+                Path("demo".to_owned()),
+                Extension(RequestId(uuid::Uuid::nil())),
+                ValidatedJson(UpdateImageKernelRequest { kernel_version }),
+            )
+            .await;
+            assert_eq!(
+                result.err().unwrap().into_response().status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+
+        let result = update_image_kernel(
+            State(state),
+            Path("demo".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+            ValidatedJson(UpdateImageKernelRequest {
+                kernel_version: "7.2.2".to_owned(),
+            }),
+        )
+        .await;
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "kernel_required");
+    }
+
+    #[tokio::test]
+    async fn image_kernel_update_rejects_an_image_used_by_a_vm() {
+        if crate::image_install::Architecture::HOST != crate::image_install::Architecture::X86_64 {
+            return;
+        }
+        let directory = tempdir().unwrap();
+        let state = installed_demo_state(directory.path(), true).await;
+        let vm_id = uuid::Uuid::new_v4();
+        let mut vm = crate::handlers::vms::test_support::record("blocker", vm_id);
+        vm.template = "demo".to_owned();
+        state.vms.lock().unwrap().insert(vm_id, vm);
+
+        let result = update_image_kernel(
+            State(state),
+            Path("demo".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+            ValidatedJson(UpdateImageKernelRequest {
+                kernel_version: "7.2.2".to_owned(),
+            }),
+        )
+        .await;
+        let response = result.err().unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "in_use");
+        assert_eq!(json["error"]["fields"]["count"], "1");
+        assert!(
+            json["error"]["fields"]["vms"]
+                .as_str()
+                .unwrap()
+                .contains("blocker")
+        );
+    }
+
+    #[tokio::test]
+    async fn image_kernel_update_replaces_the_alias_and_keeps_the_rootfs() {
+        if crate::image_install::Architecture::HOST != crate::image_install::Architecture::X86_64 {
+            return;
+        }
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let state = installed_demo_state(root, true).await;
+        let old_kernel = root.join("kernel/old-vmlinux");
+        let rootfs = root.join("rootfs/root.ext4");
+        let managed_kernel = root.join(kernel_manager::cache_path("7.2.2").unwrap());
+
+        let Json(image) = update_image_kernel(
+            State(state.clone()),
+            Path("demo".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+            ValidatedJson(UpdateImageKernelRequest {
+                kernel_version: "7.2.2".to_owned(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(image.kernel_version.as_deref(), Some("7.2.2"));
+        assert_eq!(image.kernel_image, "vmlinux-7.2.2-x86_64");
+        assert_eq!(image.version, "demo-v1-kernel-7.2.2");
+        assert!(!old_kernel.exists());
+        assert!(rootfs.exists());
+        assert!(managed_kernel.exists());
+        assert_eq!(
+            state.templates.resolve_alias("demo").unwrap().version,
+            "demo-v1-kernel-7.2.2"
+        );
     }
 }

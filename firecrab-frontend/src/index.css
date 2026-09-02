@@ -641,9 +641,14 @@ form.create-grid {
   /* Long option text truncates inside the cell instead of overflowing. */
   text-overflow: ellipsis;
 }
-.field .field-error {
+.field-error {
   font-size: 0.75rem;
   color: var(--error);
+}
+.field .field-error {
+  /* Reserves the line's height so a field's layout doesn't jump when its
+     error appears/disappears. Standalone banners (list/action errors) don't
+     need this — their surrounding layout isn't per-field. */
   min-height: 1em;
 }
 /* Row 2: storage · network · egress · spacer · submit */
@@ -1157,6 +1162,43 @@ table.image-table .image-package-url a {
 }
 table.image-table .image-package-url a:hover {
   text-decoration: underline;
+}
+
+.kernel-update-control {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 1rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+.kernel-update-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.kernel-update-row select {
+  min-width: 12rem;
+  height: 2rem;
+  padding: 0 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  font: inherit;
+}
+.kernel-update-control small { color: var(--dim); }
+.kernel-table .kernel-digest { white-space: nowrap; }
+.kernel-catalog-note {
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+@media (max-width: 700px) {
+  .kernel-update-row { align-items: stretch; flex-direction: column; }
+  .kernel-update-row select { width: 100%; }
 }
 
 /* The image table's per-row OS logo (Images.tsx). */
@@ -1873,11 +1915,6 @@ table.image-table .image-package-url a:hover {
   gap: 0.6rem;
   margin: 0 0 1.5rem;
 }
-.detail-edit-actions .field-error {
-  font-size: 0.75rem;
-  color: var(--error);
-}
-
 /* MicroNetwork 목록에서 상세를 열어둔 행 */
 .vm-table tbody tr.selected > td {
   background: rgba(255, 122, 41, 0.12);

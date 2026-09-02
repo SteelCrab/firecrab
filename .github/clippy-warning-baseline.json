@@ -6,7 +6,6 @@
     "clippy::collapsible_if": 8,
     "clippy::err_expect": 1,
     "clippy::if_same_then_else": 1,
-    "clippy::match_like_matches_macro": 1,
     "clippy::needless_borrow": 2,
     "clippy::needless_borrows_for_generic_args": 1,
     "clippy::single_component_path_imports": 1,
@@ -18,7 +17,7 @@
     "dead_code": 17
   },
   "packages": {
-    "firecrab-api": 43
+    "firecrab-api": 42
   },
-  "total": 43
+  "total": 42
 }

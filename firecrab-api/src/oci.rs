@@ -2089,7 +2089,7 @@ mod boot;
 #[cfg(test)]
 mod boot_tests;
 
-mod kernel;
+pub(crate) mod kernel;
 
 #[cfg(test)]
 mod kernel_tests;
