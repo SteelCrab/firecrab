@@ -2,15 +2,25 @@ use clap::{Parser, Subcommand};
 
 mod api_client;
 mod doctor;
+#[cfg(test)]
+mod host_api_tests;
+mod image;
 mod info;
+mod network;
+mod service;
 mod shell;
 mod status;
 mod update;
+mod vm;
+mod vm_console;
 
 /// `clap`-derived top-level CLI, replacing `scripts/firecrab-doctor.sh`.
 #[derive(Parser)]
 #[command(name = "firecrab", version, about = "firecrab host CLI")]
 struct Cli {
+    /// Override the API base URL (else FIRECRAB_API, else http://127.0.0.1:5523).
+    #[arg(long, global = true, value_name = "URL")]
+    api: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -31,18 +41,12 @@ enum Command {
         /// Emit the [`info::InfoReport`] as JSON instead of the human format.
         #[arg(long)]
         json: bool,
-        /// Override the API base URL (else FIRECRAB_API, else http://127.0.0.1:5523).
-        #[arg(long)]
-        api: Option<String>,
     },
     /// Show systemd unit status and the API host status.
     Status {
         /// Emit the [`status::StatusReport`] as JSON instead of the human format.
         #[arg(long)]
         json: bool,
-        /// Override the API base URL (else FIRECRAB_API, else http://127.0.0.1:5523).
-        #[arg(long)]
-        api: Option<String>,
     },
     /// Check for a newer firecrab release, and optionally install it.
     Update {
@@ -56,16 +60,77 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Manage MicroVMs through the host API.
+    Vm {
+        #[command(subcommand)]
+        command: vm::Command,
+    },
+    /// Manage MicroNetworks through the host API.
+    Network {
+        #[command(subcommand)]
+        command: network::Command,
+    },
+    /// Inspect template images through the host API.
+    Image {
+        #[command(subcommand)]
+        command: image::Command,
+    },
+    /// Install, remove, or control the firecrab host services.
+    Service {
+        #[command(subcommand)]
+        command: service::Command,
+    },
 }
 
 fn main() {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::Doctor { digest, json } => std::process::exit(run_doctor(digest, json)),
-        Command::Info { json, api } => run_info(json, api),
-        Command::Status { json, api } => run_status(json, api),
-        Command::Update { check, apply, json } => {
-            std::process::exit(run_update(check, apply, json))
+    std::process::exit(run(Cli::parse()));
+}
+
+fn run(cli: Cli) -> i32 {
+    let Cli { api, command } = cli;
+    match command {
+        Command::Doctor { digest, json } => run_doctor(digest, json),
+        Command::Info { json } => {
+            run_info(json, api);
+            0
+        }
+        Command::Status { json } => {
+            run_status(json, api);
+            0
+        }
+        Command::Update { check, apply, json } => run_update(check, apply, json),
+        Command::Vm { command } => {
+            let client = build_api_client(api.as_deref());
+            finish_api_command(vm::run(&client, command))
+        }
+        Command::Network { command } => {
+            let client = build_api_client(api.as_deref());
+            finish_api_command(network::run(&client, command))
+        }
+        Command::Image { command } => {
+            let client = build_api_client(api.as_deref());
+            finish_api_command(image::run(&client, command))
+        }
+        Command::Service { command } => match service::run(&shell::RealCommandRunner, command) {
+            Ok(()) => 0,
+            Err(error) => {
+                error.report();
+                1
+            }
+        },
+    }
+}
+
+fn build_api_client(api: Option<&str>) -> api_client::ApiClient {
+    api_client::ApiClient::new(api_client::resolve_api_base(api))
+}
+
+fn finish_api_command<E: std::fmt::Display>(result: Result<(), E>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{error}");
+            1
         }
     }
 }
@@ -222,10 +287,10 @@ mod tests {
     #[test]
     fn cli_parses_info_api_flag() {
         let cli = Cli::try_parse_from(["firecrab", "info", "--api", "http://x:1"]).unwrap();
+        assert_eq!(cli.api.as_deref(), Some("http://x:1"));
         match cli.command {
-            Command::Info { json, api } => {
+            Command::Info { json } => {
                 assert!(!json);
-                assert_eq!(api.as_deref(), Some("http://x:1"));
             }
             _ => panic!("expected Info"),
         }
@@ -234,13 +299,8 @@ mod tests {
     #[test]
     fn cli_parses_status_subcommand() {
         let cli = Cli::try_parse_from(["firecrab", "status"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Command::Status {
-                json: false,
-                api: None
-            }
-        ));
+        assert!(matches!(cli.command, Command::Status { json: false }));
+        assert!(cli.api.is_none());
     }
 
     #[test]
@@ -300,5 +360,190 @@ mod tests {
         let code = run_update(false, false, false);
         unsafe { std::env::remove_var("FIRECRAB_RELEASE_API") };
         assert!(code == 0 || code == 1, "unexpected exit code {code}");
+    }
+
+    #[test]
+    fn cli_parses_vm_commands() {
+        let list = Cli::try_parse_from([
+            "firecrab",
+            "vm",
+            "list",
+            "--json",
+            "--api",
+            "http://host.test:5523",
+        ])
+        .unwrap();
+        assert_eq!(list.api.as_deref(), Some("http://host.test:5523"));
+        assert!(matches!(
+            list.command,
+            Command::Vm {
+                command: vm::Command::List { json: true }
+            }
+        ));
+
+        let create = Cli::try_parse_from([
+            "firecrab",
+            "--api",
+            "http://host.test:5523",
+            "vm",
+            "create",
+            "--name",
+            "demo",
+            "--template",
+            "alpine-3.24.1",
+            "--network",
+            "11111111-1111-4111-8111-111111111111",
+        ])
+        .unwrap();
+        assert_eq!(create.api.as_deref(), Some("http://host.test:5523"));
+        assert!(matches!(
+            create.command,
+            Command::Vm {
+                command: vm::Command::Create {
+                    cpu: 1,
+                    ram: 512,
+                    disk_gb: 2,
+                    ..
+                }
+            }
+        ));
+
+        for action in ["start", "stop", "delete"] {
+            assert!(
+                Cli::try_parse_from([
+                    "firecrab",
+                    "vm",
+                    action,
+                    "11111111-1111-4111-8111-111111111111"
+                ])
+                .is_ok(),
+                "failed to parse vm {action}"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_parses_network_commands() {
+        assert!(Cli::try_parse_from(["firecrab", "network", "list"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "firecrab",
+                "network",
+                "create",
+                "--name",
+                "lab",
+                "--subnet-cidr",
+                "172.31.0.0/24"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "firecrab",
+                "network",
+                "delete",
+                "11111111-1111-4111-8111-111111111111"
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn cli_parses_image_list() {
+        assert!(matches!(
+            Cli::try_parse_from(["firecrab", "image", "list", "--json"])
+                .unwrap()
+                .command,
+            Command::Image {
+                command: image::Command::List { json: true }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_missing_create_arguments_and_bad_uuid() {
+        assert!(Cli::try_parse_from(["firecrab", "vm", "create"]).is_err());
+        assert!(Cli::try_parse_from(["firecrab", "network", "create"]).is_err());
+        assert!(Cli::try_parse_from(["firecrab", "vm", "start", "not-a-uuid"]).is_err());
+    }
+
+    #[test]
+    fn api_command_failure_returns_non_zero() {
+        let code =
+            run(
+                Cli::try_parse_from(["firecrab", "--api", "http://127.0.0.1:1", "image", "list"])
+                    .unwrap(),
+            );
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn cli_parses_service_commands() {
+        let install = Cli::try_parse_from([
+            "firecrab",
+            "service",
+            "install",
+            "--version",
+            "v0.3.0",
+            "--libc",
+            "musl",
+            "--bin-dir",
+            "target/release",
+            "--dashboard-dir",
+            "firecrab-frontend/dist",
+            "--no-deps",
+            "--no-frontend",
+            "--check",
+        ])
+        .unwrap();
+        match install.command {
+            Command::Service {
+                command: service::Command::Install(opts),
+            } => {
+                assert_eq!(opts.version.as_deref(), Some("v0.3.0"));
+                assert_eq!(opts.libc.as_deref(), Some("musl"));
+                assert_eq!(
+                    opts.bin_dir.as_deref(),
+                    Some(std::path::Path::new("target/release"))
+                );
+                assert_eq!(
+                    opts.dashboard_dir.as_deref(),
+                    Some(std::path::Path::new("firecrab-frontend/dist"))
+                );
+                assert!(opts.no_deps && opts.no_frontend && opts.check);
+            }
+            _ => panic!("expected service install"),
+        }
+
+        let uninstall =
+            Cli::try_parse_from(["firecrab", "service", "uninstall", "--purge"]).unwrap();
+        assert!(matches!(
+            uninstall.command,
+            Command::Service {
+                command: service::Command::Uninstall { purge: true }
+            }
+        ));
+
+        let reinstall =
+            Cli::try_parse_from(["firecrab", "service", "reinstall", "--purge"]).unwrap();
+        assert!(matches!(
+            reinstall.command,
+            Command::Service {
+                command: service::Command::Reinstall { purge: true, .. }
+            }
+        ));
+
+        for verb in ["start", "stop", "restart", "enable", "disable"] {
+            assert!(
+                Cli::try_parse_from(["firecrab", "service", verb]).is_ok(),
+                "failed to parse service {verb}"
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["firecrab", "service", "install", "--dashboard-dir", "x"])
+                .is_err(),
+            "--dashboard-dir requires --bin-dir"
+        );
+        assert!(Cli::try_parse_from(["firecrab", "service", "bogus"]).is_err());
     }
 }

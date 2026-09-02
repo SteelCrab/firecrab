@@ -79,6 +79,7 @@ flowchart TB
 
 ```sh
 curl -s 'http://127.0.0.1:5523/api/oci/inspect?reference=nginx:1.27'
+firecrab image inspect nginx:1.27
 ```
 
 - Docker Hub's anonymous quota is per source address, so a shared egress IP answers `429`.
@@ -95,7 +96,14 @@ curl -s 'http://127.0.0.1:5523/api/oci/inspect?reference=nginx:1.27'
 curl -s -X POST http://127.0.0.1:5523/api/oci/import \
   -H 'Content-Type: application/json' \
   -d '{"reference":"nginx:1.27"}'
+
+firecrab image import nginx:1.27
+firecrab image import-status nginx-1.27
 ```
+
+- `firecrab image import` returns after the API accepts the background job.
+- `firecrab image import-status <alias>` prints the current snapshot; `--json` preserves the API shape.
+- A failed snapshot exits `1` and reports the last non-empty import log line.
 
 | Failure | Answer |
 | --- | --- |

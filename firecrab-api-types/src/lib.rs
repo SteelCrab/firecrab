@@ -111,7 +111,7 @@ impl VmState {
 }
 
 /// Body for `POST /api/vms`.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateVmRequest {
     /// 1–64 chars, alphanumeric plus `.`/`_`/`-`.
@@ -667,7 +667,7 @@ impl fmt::Display for Ipv6EgressMode {
 }
 
 /// Request body for `POST /api/micro-networks`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMicroNetworkRequest {
     /// 1–64 chars, alphanumeric plus `.`/`_`/`-` (same convention as VM names).
@@ -1333,6 +1333,14 @@ mod tests {
         assert_eq!(request.egress_policy, EgressPolicy::Internet);
         assert!(request.shell_ids.is_empty());
         assert!(request.env.is_empty());
+
+        let serialized = serde_json::to_value(&request).unwrap();
+        assert_eq!(serialized["diskGb"], 2);
+        assert_eq!(serialized["egressPolicy"], "internet");
+        assert_eq!(
+            serialized["microNetworkId"],
+            "00000000-0000-0000-0000-000000000001"
+        );
     }
 
     #[test]
@@ -1776,6 +1784,10 @@ mod tests {
         assert_eq!(request.name, "prod");
         assert_eq!(request.subnet_cidr, "172.31.0.0/24");
         assert_eq!(request.uplink, None);
+
+        let serialized = serde_json::to_value(&request).unwrap();
+        assert_eq!(serialized["subnetCidr"], "172.31.0.0/24");
+        assert_eq!(serialized["internetEnabled"], true);
     }
 
     #[test]

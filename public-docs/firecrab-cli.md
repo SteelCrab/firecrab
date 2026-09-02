@@ -1,7 +1,8 @@
 # firecrab CLI
 
 `firecrab` is a host command-line client for the same loopback REST API the dashboard uses.
-It diagnoses host readiness, prints resolved configuration, and reports live status, all without a browser.
+It diagnoses host readiness, prints resolved configuration, reports live status, and manages images,
+MicroNetworks, and VM lifecycles without a browser.
 
 ## Contents
 
@@ -11,14 +12,17 @@ It diagnoses host readiness, prints resolved configuration, and reports live sta
 | [doctor](#doctor) | The 13 host-readiness checks |
 | [info](#info) | Version and resolved paths |
 | [status](#status) | Live systemd and API state |
+| [Host API commands](#host-api-commands) | Image, MicroNetwork, and VM operations |
 | [update](#update) | Release check and in-place upgrade |
 | [Develop](#develop) | Running the CLI from a checkout, no install |
 | [Related](#related) | Other documents |
 
 ## Architecture
 
-Each subcommand is independent: `doctor` reads the host directly, `info` reads only local configuration, and `status` is the only one that calls the API.
-None of the three starts or manages `firecrab-api` or `firecrab-net-helper` — the CLI is a client, not a second control plane.
+Each subcommand is independent: `doctor` reads the host directly, `info` reads only local configuration,
+and `status`, `image`, `network`, and `vm` call `firecrab-api`.
+The resource commands never talk to Firecracker, nftables, or `firecrab-net-helper` directly — the CLI
+is a client, not a second control plane.
 
 ```mermaid
 flowchart TB
@@ -26,6 +30,8 @@ flowchart TB
     Doctor["doctor"]
     Info["info"]
     Status["status"]
+    Resources["image / network / vm"]
+    Console["vm console"]
     Update["update"]
     Proc[("/dev/kvm, /proc/sys/net")]
     Tools["nft, ufw, systemctl,\ngetenforce, curl"]
@@ -37,12 +43,16 @@ flowchart TB
     CLI --> Doctor
     CLI --> Info
     CLI --> Status
+    CLI --> Resources
+    CLI --> Console
     CLI --> Update
     Doctor -->|read| Proc
     Doctor -->|shell out| Tools
     Info -->|resolve| Paths
     Status -->|is-active| Units
     Status -->|GET /api/host| API
+    Resources -->|REST API| API
+    Console -->|WebSocket serial stream| API
     Update -->|GET releases/latest| GH
     Update -->|ApplySelfUpdate| Helper
 ```
@@ -52,6 +62,8 @@ flowchart TB
 | `doctor` | `/proc`, `/dev/kvm`, and external tools (`nft`, `ufw`, `systemctl`, `getenforce`, `curl`) | No — privileged checks degrade to SKIP with a fix hint |
 | `info` | Only environment variables and install defaults | No |
 | `status` | `systemctl is-active` and `GET /api/host` | No |
+| `image`, `network`, and VM lifecycle commands | The corresponding `firecrab-api` REST resources | No |
+| `vm console` | The running VM's serial-console WebSocket | No |
 | `update` | `api.github.com`, the release asset host, and the net-helper socket | `--check` no; `--apply` yes (root or the `firecrab` account) |
 
 ## doctor
@@ -111,6 +123,83 @@ firecrab status --api http://127.0.0.1:5523
 - `host`: `GET /api/host` — load average, memory, disk, and uptime — or `null` with `hostError` set if the API is unreachable or answers an error.
 - Base URL resolution is the same as `info`: `--api`, then `FIRECRAB_API`, then `http://127.0.0.1:5523`.
 
+## Host API commands
+
+The resource commands use the same validation and lifecycle rules as the dashboard because every
+operation goes through `firecrab-api`.
+
+| Command | API operation |
+| --- | --- |
+| `firecrab image list [--json]` | `GET /api/images` |
+| `firecrab image inspect REFERENCE [--json]` | `GET /api/oci/inspect?reference=...` |
+| `firecrab image import REFERENCE [--json]` | `POST /api/oci/import` |
+| `firecrab image import-status ALIAS [--json]` | `GET /api/oci/import/{alias}` |
+| `firecrab network list [--json]` | `GET /api/micro-networks` |
+| `firecrab network create --name NAME --subnet-cidr CIDR [--json]` | `POST /api/micro-networks` |
+| `firecrab network delete ID [--json]` | `DELETE /api/micro-networks/{id}` |
+| `firecrab vm list [--json]` | `GET /api/vms` |
+| `firecrab vm create --name NAME --template ALIAS --network UUID [--cpu N] [--ram MIB] [--disk-gb GIB] [--egress internet\|isolated] [--storage-root ID] [--json]` | `POST /api/vms` |
+| `firecrab vm start ID [--json]` | `POST /api/vms/{id}/start` |
+| `firecrab vm stop ID [--json]` | `POST /api/vms/{id}/stop` |
+| `firecrab vm delete ID [--json]` | `DELETE /api/vms/{id}` |
+| `firecrab vm console ID` (`terminal` alias) | `GET /ws/vms/{id}/console` WebSocket upgrade |
+
+`vm create` defaults to one vCPU, 512 MiB RAM, and a 2 GiB disk. Override them with `--cpu N`,
+`--ram MIB`, and `--disk-gb GIB`. `--egress internet|isolated` selects the VM's outbound posture,
+and `--storage-root ID` selects a registered storage root. Pass `--json` to any resource command for
+machine-readable output.
+
+Attach to a running VM's serial console without a browser:
+
+```sh
+firecrab vm console VM_ID
+# Equivalent discoverable alias:
+firecrab vm terminal VM_ID
+```
+
+The initial stream includes up to 256 KiB of boot backlog, followed by live ttyS0 output. The CLI
+puts a local TTY in raw mode, so Ctrl+C and other control bytes reach the guest. Type Ctrl+] to
+detach without stopping the VM. Terminal settings are restored on normal exit, VM shutdown, and
+connection errors. An `http://` API base maps to `ws://`; `https://` maps to `wss://`. If the VM is
+not running, the command exits `1` and preserves the API's HTTP status and JSON error body.
+
+OCI import runs in the API background. Inspect first to confirm the host architecture and derived
+alias, start the import, then poll that alias until it succeeds:
+
+```sh
+firecrab image inspect nginx:1.27
+firecrab image import nginx:1.27
+firecrab image import-status nginx-1.27
+```
+
+`import` exits after the API accepts the job and prints the alias to poll. `import-status` exits `1`
+when the job has failed and includes the last non-empty log line in the error. See
+[OCI images](oci.md) for pipeline and registry authentication details.
+
+Create the dependencies in image → network → VM order:
+
+```sh
+firecrab image list
+firecrab network create --name app --subnet-cidr 172.31.20.0/24
+# Copy the network id from the result.
+firecrab vm create \
+  --name app-1 \
+  --template alpine-3.24.1 \
+  --network NETWORK_ID
+```
+
+The API base resolves in this order: global `--api URL`, `FIRECRAB_API`, then
+`http://127.0.0.1:5523`. The global flag may appear before or after a subcommand:
+
+```sh
+firecrab --api http://127.0.0.1:5523 vm list
+firecrab vm list --api http://127.0.0.1:5523
+```
+
+A successful resource command exits `0`. An unreachable API or an API error exits `1`; for a
+non-success HTTP response, the CLI prints both the HTTP status and the API response body so validation
+fields and request IDs remain visible.
+
 ## update
 
 Compares this build's version with the newest GitHub Release tag, and optionally installs it.
@@ -154,9 +243,10 @@ cargo build -p firecrab-cli
 ./target/debug/firecrab doctor
 ./target/debug/firecrab info
 
-# status needs a running API — point it at a dev instance
+# status and resource commands need a running API — point them at a dev instance
 # (see "Develop from source" in CONTRIBUTING.md for Terminals 1-3 of firecrab-api itself)
 ./target/debug/firecrab status --api http://127.0.0.1:5523
+./target/debug/firecrab image list --api http://127.0.0.1:5523
 ```
 
 - `cargo run -p firecrab-cli -- doctor` works too; `cargo build` first is only for repeat runs without a rebuild each time.

@@ -85,6 +85,59 @@ http://127.0.0.1:5523/
 The install never installs a guest image.
 Import one afterwards with [OCI import](oci.md) or the dashboard Images page.
 
+## CLI-only installation
+
+`firecrab` (the CLI) is a single static binary.
+Install it on a machine that already runs `firecrab-api` elsewhere, or on the host itself alongside an existing full install.
+
+### From a GitHub Release
+
+Download the host bundle for the target architecture and libc, then extract only the `firecrab` binary.
+
+```sh
+# x86_64 glibc host (Debian, Ubuntu, Fedora, Arch, openSUSE)
+curl -fsSL -o firecrab-host.tar.gz \
+  https://github.com/SteelCrab/firecrab/releases/latest/download/firecrab-host-x86_64-gnu.tar.gz
+tar -xzf firecrab-host.tar.gz firecrab
+sudo install -m 755 firecrab /usr/local/bin/firecrab
+```
+
+Replace `x86_64-gnu` with the correct variant for your machine:
+
+| Architecture | libc | Filename suffix |
+| --- | --- | --- |
+| x86\_64 | glibc (Debian, Ubuntu, Fedora, …) | `x86_64-gnu` |
+| x86\_64 | musl (Alpine) | `x86_64-musl` |
+| aarch64 | glibc | `aarch64-gnu` |
+| aarch64 | musl | `aarch64-musl` |
+
+Pin a version by replacing `latest` with a tag, for example `v0.1.0`.
+
+### From source
+
+```sh
+git clone https://github.com/SteelCrab/firecrab.git
+cd firecrab
+cargo build --release --locked -p firecrab-cli
+sudo install -m 755 target/release/firecrab /usr/local/bin/firecrab
+```
+
+Requires the repository Rust toolchain (`rust-toolchain.toml`).
+
+### On a host with a full install
+
+`install.sh` with `--no-frontend --no-deps` updates only the service binaries and skips the dashboard and package installs.
+Pass `--bin-dir` when installing from a local build:
+
+```sh
+# update all service binaries from the latest release, no dashboard refresh
+curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh \
+  | bash -s -- --no-frontend --no-deps
+
+# or from a local build
+./install.sh --bin-dir target/release --no-frontend --no-deps
+```
+
 ## Common options
 
 | Option | Result |
