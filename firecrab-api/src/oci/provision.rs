@@ -927,7 +927,7 @@ if [ ! -f /etc/firecrab/base-packages.ok ]; then
   if [ -x /usr/bin/apt-get ]; then
     if DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq \
       && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq \
-        iputils-ping iproute2 ca-certificates curl procps openssh-server; then
+        iputils-ping iproute2 ca-certificates curl procps openssh-server udev; then
       ok=1
     fi
   elif [ -x /usr/bin/dnf ]; then
@@ -941,7 +941,7 @@ if [ ! -f /etc/firecrab/base-packages.ok ]; then
   elif [ -x /usr/bin/apk ]; then
     /usr/bin/apk add --no-cache iputils iproute2 ca-certificates curl procps openssh && ok=1
   elif [ -x /usr/bin/zypper ]; then
-    /usr/bin/zypper --non-interactive install -y iputils iproute2 ca-certificates curl procps openssh && ok=1
+    /usr/bin/zypper --non-interactive install -y iputils iproute2 ca-certificates curl procps openssh udev && ok=1
   elif [ -x /usr/bin/pacman ]; then
     /usr/bin/pacman -Sy --noconfirm --needed iputils iproute2 ca-certificates curl procps-ng openssh && ok=1
   else

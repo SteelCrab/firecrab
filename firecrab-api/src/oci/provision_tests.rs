@@ -1109,3 +1109,49 @@ async fn a_provisioned_tree_records_the_program_it_will_boot() {
         &Sha256Digest::of_bytes(&program)
     );
 }
+
+/// `debugfs`-audited: apt-get and zypper images ship no `systemd-udevd`
+/// (issue #225), while dnf-based Rocky already carries it and apk-based
+/// Alpine isn't systemd at all. Pull `udev` in only where it's confirmed
+/// missing and a real, separate package.
+#[test]
+fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
+    let script = provision::BASE_PACKAGE_INSTALL;
+
+    // Each branch's command may wrap onto a continuation line (apt-get's
+    // `\`), so join unindented and compare each `elif` block, not one line.
+    let joined = script.replace("\\\n", " ");
+    let block_with = |needle: &str| {
+        joined
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line contains {needle:?} in:\n{joined}"))
+    };
+
+    assert!(
+        block_with("apt-get install").contains("udev"),
+        "Debian/Ubuntu ship no systemd-udevd on a minimal OCI base — #225"
+    );
+    assert!(
+        block_with("zypper --non-interactive install").contains("udev"),
+        "openSUSE ships no systemd-udevd on a minimal OCI base — #225"
+    );
+
+    // Rocky/RHEL already carries systemd-udev; Alpine isn't systemd; Arch
+    // folds udev into the `systemd` package itself — adding a separate
+    // `udev` package there would 404 and break the whole install chain.
+    for needle in ["dnf install", "microdnf -y install", "yum install"] {
+        assert!(
+            !block_with(needle).contains("udev"),
+            "{needle} line must stay untouched — dnf-family already ships systemd-udev"
+        );
+    }
+    assert!(
+        !block_with("apk add").contains("udev"),
+        "Alpine is not systemd"
+    );
+    assert!(
+        !block_with("pacman -Sy").contains("udev"),
+        "Arch folds udev into the systemd package; a separate `udev` package does not exist"
+    );
+}
