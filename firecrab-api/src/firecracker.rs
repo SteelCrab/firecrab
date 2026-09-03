@@ -959,16 +959,38 @@ mod tests {
 
     use super::test_support::{SERVE_LOOP, fake_firecracker, process_alive, short_tempdir};
 
+    /// Guards the `fake_firecracker` write: the +x bit is set and the body is
+    /// complete, so a fresh fake runs.
+    ///
+    /// `ETXTBSY` is tolerated the same way [`spawn_firecracker`] tolerates it,
+    /// because it is not something the helper can prevent: another test's
+    /// forked child can still hold a write descriptor on the file we just
+    /// wrote, and `rename` leaves the inode — and therefore that descriptor —
+    /// untouched.
     #[test]
     fn fake_firecracker_script_can_be_execd_immediately() {
+        const BUSY_ATTEMPTS: u32 = 8;
         let directory = short_tempdir();
         let sock = directory.path().join("sock");
         let path = fake_firecracker(directory.path(), "sys.exit(0)\n");
-        let status = std::process::Command::new(&path)
-            .arg("--api-sock")
-            .arg(&sock)
-            .status()
-            .unwrap();
+        let mut attempt = 0;
+        let status = loop {
+            match std::process::Command::new(&path)
+                .arg("--api-sock")
+                .arg(&sock)
+                .status()
+            {
+                Ok(status) => break status,
+                Err(source)
+                    if source.kind() == io::ErrorKind::ExecutableFileBusy
+                        && attempt < BUSY_ATTEMPTS =>
+                {
+                    attempt += 1;
+                    std::thread::sleep(Duration::from_millis(10 * u64::from(attempt)));
+                }
+                Err(source) => panic!("fresh fake-firecracker must be executable: {source}"),
+            }
+        };
         assert!(
             status.success(),
             "fresh fake-firecracker must be executable"
