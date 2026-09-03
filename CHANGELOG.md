@@ -8,8 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.2.0](#020---2026-09-03) | 2026-09-03 | [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
-| [0.1.3](#013---2026-08-28) | 2026-08-28 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#140], [#189], [#198], [#131], [#188], [#194], [#208], [45790c3] |
+| [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
@@ -40,46 +39,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ## [0.2.0] - 2026-09-03
 
-firecrab expands host operations and kernel lifecycle management, and hardens guest
-provisioning and release validation.
-
-### Added
-
-- Host API VM, network, image, and console operations in `firecrab-cli`, plus CLI
-  service-management helpers ([1ffba72], [8bcc2af]).
-- Digest-pinned kernel catalog management and per-image kernel updates in the API and
-  dashboard ([37075bf], [1a44619], [664d446]).
-
-### Changed
-
-- CI fails on any new Clippy warning instead of maintaining a warning baseline
-  ([76f6ef3]).
-
-### Deprecated
-
-- None.
-
-### Fixed
-
-- Existing and newly provisioned guests recover missing network-ready units through
-  repaired symlinks and distro-specific fallbacks ([73d5fe1], [a8152a4]).
-- OCI imports install `udev` on apt-based and zypper-based images that need it for
-  systemd-based guests ([3bc13d0]).
-- Dashboard field errors use the same styling outside form fields ([3b910c9]).
-
-### Improved
-
-- README architecture guidance is condensed into a layered diagram and a shorter
-  first-time-reader flow ([677cbef], [77e7347], [4360419]).
-- CLI-only installation is documented alongside the prepared host payload flow
-  ([c27e516]).
-
-## [0.1.3] - 2026-08-28
-
-MicroNetworks can opt into IPv6 beside IPv4, OCI guests gain an automatic SSH
-daemon and per-VM operator key pair, host and M2Image releases ship license and
-corresponding-source artifacts, and CI fails when Clippy warnings grow past the
-checked-in baseline.
+firecrab adds optional IPv6 networking, managed SSH access, expanded host operations,
+and kernel lifecycle management, while hardening guest provisioning, compliance
+artifacts, and release validation.
 
 ### Added
 
@@ -113,15 +75,20 @@ checked-in baseline.
 - M2Image packages ship SPDX 2.3 SBOMs and matching corresponding-source
   archives, and catalog publication refuses a binary without its source
   sibling ([#176], [#190]).
-- CI compares Clippy warnings to a checked-in baseline and fails on a new
-  warning or a stale baseline ([#140], [#189]).
-- [`public-docs/ci.md`](public-docs/ci.md) documents that Clippy gate ([#198]).
+- Host API VM, network, image, and console operations in `firecrab-cli`, plus CLI
+  service-management helpers ([1ffba72], [8bcc2af]).
+- Digest-pinned kernel catalog management and per-image kernel updates in the API and
+  dashboard ([37075bf], [1a44619], [664d446]).
 
 ### Changed
 
-- A GitHub Release is titled `firecrab v<tag>`, and its body no longer repeats that title ([45790c3]).
+- CI fails on any new Clippy warning instead of maintaining a warning baseline
+  ([76f6ef3]).
+- A GitHub Release is titled `firecrab v<tag>`, and its body no longer repeats that title
+  ([45790c3]).
 - The pinned Rust toolchain is 1.97.1 (`rust-toolchain.toml`) ([#131], [#188]).
-- `install.sh` rejects a prepared payload that is missing the compliance artifacts ([#190]).
+- `install.sh` rejects a prepared payload that is missing the compliance artifacts
+  ([#190]).
 
 ### Deprecated
 
@@ -129,13 +96,20 @@ checked-in baseline.
 
 ### Fixed
 
+- Existing and newly provisioned guests recover missing network-ready units through
+  repaired symlinks and distro-specific fallbacks ([73d5fe1], [a8152a4]).
+- OCI imports install `udev` on apt-based and zypper-based images that need it for
+  systemd-based guests ([3bc13d0]).
+- Dashboard field errors use the same styling outside form fields ([3b910c9]).
 - Release notes credit the commits between the previous release and this tag ([45790c3]).
-- Shorthand references resolve, and in-repo document links point at the released tag ([45790c3]).
+- Shorthand references resolve, and in-repo document links point at the released tag
+  ([45790c3]).
 - IPv6 prefixes are allowlisted to `/64` unique-local or global, and the host
   uplink keeps RA so the default route is not dropped ([#178]).
 - Reassigning VM storage preserves the existing operator key pair instead of
   regenerating a mismatched key ([#186]).
-- OCI SSH daemon starts and verifies connectivity on dual-stack IPv4/IPv6 networks ([#186]).
+- OCI SSH daemon starts and verifies connectivity on dual-stack IPv4/IPv6 networks
+  ([#186]).
 - Fake Firecracker spawns in test suites retry on transient `ETXTBSY` ([#186]).
 - Host and M2Image packaging fail closed on missing, incompatible, or tampered
   license and source material ([#190]).
@@ -144,8 +118,13 @@ checked-in baseline.
 
 ### Improved
 
+- README architecture guidance is condensed into a layered diagram and a shorter
+  first-time-reader flow ([677cbef], [77e7347], [4360419]).
+- CLI-only installation is documented alongside the prepared host payload flow
+  ([c27e516]).
 - Networking, API, and dashboard docs cover IPv6 create-time choice, NAT66 vs
   direct egress, and guest sysctl ([#178]).
+- [`public-docs/ci.md`](public-docs/ci.md) documents the Clippy gate ([#198]).
 
 ## [0.1.2] - 2026-08-21
 
@@ -329,7 +308,6 @@ network helper.
 
 [Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.2.0...main
 [0.2.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.0
-[0.1.3]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.3
 [0.1.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.0
