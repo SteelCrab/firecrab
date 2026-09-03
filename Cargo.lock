@@ -401,7 +401,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "firecrab-api"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "async-compression",
  "axum",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "firecrab-api-types"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "firecrab-cli"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "clap",
  "firecrab-api-types",
@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "firecrab-helper-protocol"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "firecrab-net-helper"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "firecrab-helper-protocol",
  "flate2",

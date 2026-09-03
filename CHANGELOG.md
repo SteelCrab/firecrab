@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.2.0](#020---2026-09-03) | 2026-09-03 | [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
 | [0.1.3](#013---2026-08-28) | 2026-08-28 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#140], [#189], [#198], [#131], [#188], [#194], [#208], [45790c3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
@@ -36,6 +37,42 @@ Entries land here as work merges, and move under the next version heading when t
 ### Improved
 
 - None.
+
+## [0.2.0] - 2026-09-03
+
+firecrab expands host operations and kernel lifecycle management, and hardens guest
+provisioning and release validation.
+
+### Added
+
+- Host API VM, network, image, and console operations in `firecrab-cli`, plus CLI
+  service-management helpers ([1ffba72], [8bcc2af]).
+- Digest-pinned kernel catalog management and per-image kernel updates in the API and
+  dashboard ([37075bf], [1a44619], [664d446]).
+
+### Changed
+
+- CI fails on any new Clippy warning instead of maintaining a warning baseline
+  ([76f6ef3]).
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- Existing and newly provisioned guests recover missing network-ready units through
+  repaired symlinks and distro-specific fallbacks ([73d5fe1], [a8152a4]).
+- OCI imports install `udev` on apt-based and zypper-based images that need it for
+  systemd-based guests ([3bc13d0]).
+- Dashboard field errors use the same styling outside form fields ([3b910c9]).
+
+### Improved
+
+- README architecture guidance is condensed into a layered diagram and a shorter
+  first-time-reader flow ([677cbef], [77e7347], [4360419]).
+- CLI-only installation is documented alongside the prepared host payload flow
+  ([c27e516]).
 
 ## [0.1.3] - 2026-08-28
 
@@ -290,7 +327,8 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.1.3...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.2.0...main
+[0.2.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.0
 [0.1.3]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.3
 [0.1.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.1
@@ -325,6 +363,20 @@ network helper.
 [#194]: https://github.com/SteelCrab/firecrab/pull/194
 [#198]: https://github.com/SteelCrab/firecrab/pull/198
 [#208]: https://github.com/SteelCrab/firecrab/pull/208
+[1ffba72]: https://github.com/SteelCrab/firecrab/commit/1ffba72
+[8bcc2af]: https://github.com/SteelCrab/firecrab/commit/8bcc2af
+[37075bf]: https://github.com/SteelCrab/firecrab/commit/37075bf
+[1a44619]: https://github.com/SteelCrab/firecrab/commit/1a44619
+[664d446]: https://github.com/SteelCrab/firecrab/commit/664d446
+[73d5fe1]: https://github.com/SteelCrab/firecrab/commit/73d5fe1
+[a8152a4]: https://github.com/SteelCrab/firecrab/commit/a8152a4
+[3bc13d0]: https://github.com/SteelCrab/firecrab/commit/3bc13d0
+[3b910c9]: https://github.com/SteelCrab/firecrab/commit/3b910c9
+[76f6ef3]: https://github.com/SteelCrab/firecrab/commit/76f6ef3
+[c27e516]: https://github.com/SteelCrab/firecrab/commit/c27e516
+[677cbef]: https://github.com/SteelCrab/firecrab/commit/677cbef
+[77e7347]: https://github.com/SteelCrab/firecrab/commit/77e7347
+[4360419]: https://github.com/SteelCrab/firecrab/commit/4360419
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
 [322e95c]: https://github.com/SteelCrab/firecrab/commit/322e95c
