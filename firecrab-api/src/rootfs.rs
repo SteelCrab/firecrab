@@ -427,7 +427,7 @@ fn patch_oci_console(rootfs: &Path) {
     );
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.console", "0100755");
-    if let Some(agetty) = agetty.as_deref() {
+    if let Some(agetty) = agetty {
         let _ = write_into_image(
             rootfs,
             crate::oci::provision::GUEST_AGETTY_WRAPPER,
