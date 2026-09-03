@@ -267,6 +267,66 @@ mod tests {
         assert_eq!(run_count(&counter), 1);
     }
 
+    /// Exercises the `ETXTBSY` retry instead of assuming it. An open write
+    /// descriptor makes `execve` fail for exactly as long as it lives, which is
+    /// the race a parallel test run hits by accident when one test writes a
+    /// stub while another forks.
+    #[tokio::test]
+    async fn a_busy_stub_is_retried_until_the_writer_closes_it() {
+        let dir = tempdir().unwrap();
+        let counter = dir.path().join("runs");
+        let cli = stub_cli(
+            dir.path(),
+            r#"{"current":"0.1.1","latest":"0.1.2","updateAvailable":true}"#,
+            &counter,
+        );
+
+        let writer = fs::OpenOptions::new().write(true).open(&cli).unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            drop(writer);
+        });
+
+        let report = run_check_command(&cli, CHECK_TIMEOUT).await;
+        releaser.join().unwrap();
+
+        assert_eq!(
+            report.current, "0.1.1",
+            "the stub's own report must win once it is no longer busy"
+        );
+        assert!(report.error.is_none(), "{:?}", report.error);
+        assert_eq!(run_count(&counter), 1, "only the winning attempt runs");
+    }
+
+    /// A stub that never stops being busy exhausts the retry and degrades to a
+    /// fallback report, rather than hanging or inventing a version.
+    #[tokio::test]
+    async fn a_stub_that_stays_busy_becomes_a_fallback_report() {
+        let dir = tempdir().unwrap();
+        let counter = dir.path().join("runs");
+        let cli = stub_cli(
+            dir.path(),
+            r#"{"current":"0.1.1","latest":"0.1.2","updateAvailable":true}"#,
+            &counter,
+        );
+        // Held for the whole test: every attempt sees ETXTBSY.
+        let _writer = fs::OpenOptions::new().write(true).open(&cli).unwrap();
+
+        let report = run_check_command(&cli, CHECK_TIMEOUT).await;
+
+        assert_eq!(report.current, env!("CARGO_PKG_VERSION"));
+        assert!(
+            report
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("cannot run"),
+            "{:?}",
+            report.error
+        );
+        assert_eq!(run_count(&counter), 0, "the stub never got to run");
+    }
+
     #[tokio::test]
     async fn get_update_check_serves_the_cached_result() {
         let dir = tempdir().unwrap();

@@ -768,6 +768,35 @@ sys.exit(0)
         tempfile::tempdir_in("/tmp").unwrap()
     }
 
+    /// Runs a fake Firecracker, tolerating `ETXTBSY` the way
+    /// [`super::spawn_firecracker`] does.
+    ///
+    /// `execve` refuses a file that any process still holds open for writing,
+    /// and a concurrent test's forked child inherits exactly such a descriptor
+    /// for the moment between its `fork` and its `exec`. `rename` cannot help,
+    /// because the descriptor follows the inode.
+    pub fn exec_tolerating_busy(path: &Path, api_sock: &Path) -> std::process::ExitStatus {
+        const BUSY_ATTEMPTS: u32 = 8;
+        let mut attempt = 0;
+        loop {
+            match std::process::Command::new(path)
+                .arg("--api-sock")
+                .arg(api_sock)
+                .status()
+            {
+                Ok(status) => return status,
+                Err(source)
+                    if source.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && attempt < BUSY_ATTEMPTS =>
+                {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10 * u64::from(attempt)));
+                }
+                Err(source) => panic!("fake-firecracker must be executable: {source}"),
+            }
+        }
+    }
+
     /// Whether a process with `pid` still exists.
     pub fn process_alive(pid: i32) -> bool {
         // SAFETY: signal 0 only probes for existence.
@@ -957,7 +986,9 @@ mod tests {
         assert_eq!(config["machine-config"]["mem_size_mib"], 1024);
     }
 
-    use super::test_support::{SERVE_LOOP, fake_firecracker, process_alive, short_tempdir};
+    use super::test_support::{
+        SERVE_LOOP, exec_tolerating_busy, fake_firecracker, process_alive, short_tempdir,
+    };
 
     /// Guards the `fake_firecracker` write: the +x bit is set and the body is
     /// complete, so a fresh fake runs.
@@ -969,31 +1000,43 @@ mod tests {
     /// untouched.
     #[test]
     fn fake_firecracker_script_can_be_execd_immediately() {
-        const BUSY_ATTEMPTS: u32 = 8;
         let directory = short_tempdir();
         let sock = directory.path().join("sock");
         let path = fake_firecracker(directory.path(), "sys.exit(0)\n");
-        let mut attempt = 0;
-        let status = loop {
-            match std::process::Command::new(&path)
-                .arg("--api-sock")
-                .arg(&sock)
-                .status()
-            {
-                Ok(status) => break status,
-                Err(source)
-                    if source.kind() == io::ErrorKind::ExecutableFileBusy
-                        && attempt < BUSY_ATTEMPTS =>
-                {
-                    attempt += 1;
-                    std::thread::sleep(Duration::from_millis(10 * u64::from(attempt)));
-                }
-                Err(source) => panic!("fresh fake-firecracker must be executable: {source}"),
-            }
-        };
+        let status = exec_tolerating_busy(&path, &sock);
         assert!(
             status.success(),
             "fresh fake-firecracker must be executable"
+        );
+    }
+
+    /// Exercises the `ETXTBSY` retry instead of assuming it: an open write
+    /// descriptor makes `execve` fail for exactly as long as it lives, which
+    /// is the race a parallel run hits by accident.
+    #[test]
+    fn a_busy_fake_firecracker_is_retried_until_the_writer_closes_it() {
+        let directory = short_tempdir();
+        let sock = directory.path().join("sock");
+        let path = fake_firecracker(directory.path(), "sys.exit(0)\n");
+
+        let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        match std::process::Command::new(&path).status() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy => {}
+            other => panic!(
+                "an open write descriptor must make execve fail with ETXTBSY, \
+                 otherwise this test proves nothing: {other:?}"
+            ),
+        }
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            drop(writer);
+        });
+
+        let status = exec_tolerating_busy(&path, &sock);
+        releaser.join().unwrap();
+        assert!(
+            status.success(),
+            "the retry must outlast a transient ETXTBSY"
         );
     }
 
