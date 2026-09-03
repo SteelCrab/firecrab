@@ -641,10 +641,10 @@ pub async fn delete_staged_package(
         ));
     }
 
-    if let Err(error) = tokio::fs::remove_file(&path).await {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            return Err(AppError::internal(request_id.0));
-        }
+    if let Err(error) = tokio::fs::remove_file(&path).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(AppError::internal(request_id.0));
     }
     if image_install::clear_staged_package_origin(state.templates.image_root_path(), &alias)
         .is_err()
@@ -828,7 +828,7 @@ mod tests {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        let tar = Command::new("tar")
+        let mut tar = Command::new("tar")
             .args(["-C"])
             .arg(source)
             .arg("-cf")
@@ -840,10 +840,13 @@ mod tests {
         let status = Command::new("zstd")
             .args(["-q", "-f", "-o"])
             .arg(dest)
-            .stdin(tar.stdout.unwrap())
+            .stdin(tar.stdout.take().expect("tar stdout"))
             .status()
             .expect("zstd");
         assert!(status.success(), "zstd failed");
+        // Reaps `tar` instead of leaving a zombie, and catches a `tar` that
+        // failed halfway — otherwise a truncated archive looks like success.
+        assert!(tar.wait().expect("tar wait").success(), "tar failed");
     }
 
     #[tokio::test]
@@ -869,9 +872,8 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let app = axum::Router::new().fallback_service(tower_http::services::ServeDir::new(
-            source.path().to_path_buf(),
-        ));
+        let app = axum::Router::new()
+            .fallback_service(tower_http::services::ServeDir::new(source.path()));
         tokio::spawn(async move {
             axum::serve(listener, app).await.ok();
         });
@@ -1065,7 +1067,7 @@ mod tests {
             Extension(RequestId(uuid::Uuid::nil())),
         )
         .await;
-        let err = result.err().expect("should fail");
+        let err = result.expect_err("should fail");
         assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
     }
 
@@ -1300,9 +1302,8 @@ mod tests {
         // Empty source dir → downloads 404.
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let app = axum::Router::new().fallback_service(tower_http::services::ServeDir::new(
-            source.path().to_path_buf(),
-        ));
+        let app = axum::Router::new()
+            .fallback_service(tower_http::services::ServeDir::new(source.path()));
         tokio::spawn(async move {
             axum::serve(listener, app).await.ok();
         });
