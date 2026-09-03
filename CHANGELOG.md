@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
+| [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [#232], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
@@ -101,6 +101,9 @@ artifacts, and release validation.
 - OCI imports install `udev` on apt-based and zypper-based images that need it for
   systemd-based guests ([3bc13d0]).
 - Dashboard field errors use the same styling outside form fields ([3b910c9]).
+- Serial consoles print a session-ended banner before respawning a guest shell after
+  `exit`, making the new session boundary visible for both agetty and BusyBox fallback
+  consoles ([#232]).
 - Release notes credit the commits between the previous release and this tag ([45790c3]).
 - Shorthand references resolve, and in-repo document links point at the released tag
   ([45790c3]).
@@ -341,6 +344,7 @@ network helper.
 [#194]: https://github.com/SteelCrab/firecrab/pull/194
 [#198]: https://github.com/SteelCrab/firecrab/pull/198
 [#208]: https://github.com/SteelCrab/firecrab/pull/208
+[#232]: https://github.com/SteelCrab/firecrab/pull/232
 [1ffba72]: https://github.com/SteelCrab/firecrab/commit/1ffba72
 [8bcc2af]: https://github.com/SteelCrab/firecrab/commit/8bcc2af
 [37075bf]: https://github.com/SteelCrab/firecrab/commit/37075bf
