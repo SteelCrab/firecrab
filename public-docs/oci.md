@@ -79,6 +79,7 @@ flowchart TB
 
 ```sh
 curl -s 'http://127.0.0.1:5523/api/oci/inspect?reference=nginx:1.27'
+firecrab image inspect nginx:1.27
 ```
 
 - Docker Hub's anonymous quota is per source address, so a shared egress IP answers `429`.
@@ -95,7 +96,14 @@ curl -s 'http://127.0.0.1:5523/api/oci/inspect?reference=nginx:1.27'
 curl -s -X POST http://127.0.0.1:5523/api/oci/import \
   -H 'Content-Type: application/json' \
   -d '{"reference":"nginx:1.27"}'
+
+firecrab image import nginx:1.27
+firecrab image import-status nginx-1.27
 ```
+
+- `firecrab image import` returns after the API accepts the background job.
+- `firecrab image import-status <alias>` prints the current snapshot; `--json` preserves the API shape.
+- A failed snapshot exits `1` and reports the last non-empty import log line.
 
 | Failure | Answer |
 | --- | --- |
@@ -191,11 +199,13 @@ One static program supplies all three before a merged tree can boot.
 The packed ext4 is paired with the kernel firecrab publishes for this architecture, so no catalog image has to be installed first.
 
 - `virtio_blk`, `virtio_net`, `virtio_mmio`, and `ext4` are built in, and there is no initrd.
-- Each release pins the newest published stable kernel for both `x86_64` and `aarch64` with architecture-specific package and image digests.
+- The current release pins Linux `7.2.2` for both `x86_64` and `aarch64`; `7.1.9` remains in the kernel-management catalog for rollback.
+- Each entry has architecture-specific package and image digests.
 - Pinned by digest, fetched once from `FIRECRAB_IMAGE_BASE_URL`, cached at `<FIRECRAB_IMAGE_ROOT>/.oci/kernel/<arch>/`.
 - Re-verified on every reuse; a failed entry is refetched.
 - `FIRECRAB_OCI_KERNEL_PATH` names a host copy, which must match the same digest.
 - A host that cannot reach the registry falls back to an installed catalog kernel.
+- The dashboard's Kernels page uses the same cache; install a version there before pairing it with an image from the image detail panel.
 
 ## Name and register
 

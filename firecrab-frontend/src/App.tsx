@@ -9,6 +9,7 @@ import Console from "./components/Console";
 import VmDetailModal from "./components/VmDetailModal";
 import HostInfo from "./components/HostInfo";
 import Images from "./components/Images";
+import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import Shell from "./components/Shell";
@@ -233,6 +234,7 @@ export default function App() {
         {view === "networks" && <MicroNetworks />}
         {view === "storages" && <MicroStorages />}
         {view === "images" && <Images />}
+        {view === "kernels" && <Kernels />}
         {view === "shells" && <Shells />}
         {view === "host" && <HostInfo />}
       </div>

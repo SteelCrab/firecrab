@@ -3,6 +3,10 @@
 # Please see the documentation for all configuration options:
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 
+# Every group batches minor and patch bumps into one pull request per ecosystem.
+# Majors stay separate, because those are the ones that need a human to read the
+# changelog.
+
 version: 2
 updates:
   # Rust workspace (Cargo.toml at repo root)
@@ -10,15 +14,41 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      cargo-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # Frontend (firecrab-frontend/package.json)
   - package-ecosystem: "npm"
     directory: "/firecrab-frontend"
     schedule:
       interval: "weekly"
+    groups:
+      frontend-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Browser E2E suite (firecrab-e2e/package.json), including Playwright
+  - package-ecosystem: "npm"
+    directory: "/firecrab-e2e"
+    schedule:
+      interval: "weekly"
+    groups:
+      e2e-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions used by ci.yml / release.yml
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"

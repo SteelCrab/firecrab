@@ -9,6 +9,7 @@ React and TypeScript UI on the API and console WebSocket.
 - [VM workflow](#vm-workflow)
 - [Networks](#networks)
 - [Images](#images)
+- [Kernels](#kernels)
 - [Production](#production)
 - [Check](#check)
 - [Related](#related)
@@ -46,6 +47,7 @@ npm run dev --prefix firecrab-frontend
 | Networks | MicroNetworks at `#/networks`. IPv6 is a create-time select |
 | Storage | MicroStorage pools |
 | Images | M2Image install or OCI import |
+| Kernels | Digest-pinned kernel installation and lifecycle |
 | Host | Host health and capacity |
 
 ## VM workflow
@@ -109,6 +111,16 @@ npm run dev --prefix firecrab-frontend
 - Poll until the alias is in the local catalog and can create a VM
 - Installed custom alias: register into this host's MicroRegistry catalog
 - Local catalog row: SQLite, survives restart
+- Image detail shows the kernel version, filename, and digests
+- Image detail can switch an installed image to an installed managed kernel when no instance VM uses it
+
+## Kernels
+
+- Route: `#/kernels`
+- Install and verify the host architecture's digest-pinned kernel releases
+- View version, architecture, image digest, usage, and job logs
+- Delete only kernels no image references
+- See [Kernel management](kernels.md) for the REST contract
 
 ## Production
 
@@ -131,6 +143,7 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" \
 ## Related
 
 - [API](api.md)
+- [Kernel management](kernels.md)
 - [OCI images](oci.md)
 - [Networking](networking.md)
 - [Troubleshooting](troubleshooting.md)

@@ -221,10 +221,10 @@ fn vm_env_insertion_index(script: &str) -> usize {
         }
         pos += line.len();
     }
-    if let Some(after_export) = last_export_end {
-        if exec_start.is_none_or(|exec| after_export <= exec) {
-            return after_export;
-        }
+    if let Some(after_export) = last_export_end
+        && exec_start.is_none_or(|exec| after_export <= exec)
+    {
+        return after_export;
     }
     exec_start.unwrap_or(script.len())
 }

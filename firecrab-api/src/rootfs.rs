@@ -617,10 +617,47 @@ start() {{
     )
 }
 
-/// Replaces the guest readiness script when the template already has one.
+/// Systemd unit for the readiness oneshot, installed by
+/// [`install_network_ready_fallback`] on an image that never baked one in.
+/// Content matches `install_network_ready_sentinel` in
+/// `scripts/firecracker-menual/install-ubuntu-roofs.sh` so an image ends up
+/// wired the same regardless of which path installed it.
+const NETWORK_READY_UNIT_PATH: &str = "/etc/systemd/system/firecrab-network-ready.service";
+/// `multi-user.target.wants` symlink that actually enables
+/// [`NETWORK_READY_UNIT_PATH`] — systemd ignores a unit file that isn't also
+/// linked here.
+const NETWORK_READY_UNIT_WANTS_PATH: &str =
+    "/etc/systemd/system/multi-user.target.wants/firecrab-network-ready.service";
+/// Content for [`NETWORK_READY_UNIT_PATH`].
+const NETWORK_READY_UNIT: &str = r#"[Unit]
+Description=Firecrab network readiness sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+StandardOutput=tty
+TTYPath=/dev/console
+ExecStart=/usr/local/sbin/firecrab-network-ready.sh
+
+[Install]
+WantedBy=multi-user.target
+"#;
+/// OpenRC default-runlevel symlink [`install_network_ready_fallback`] creates
+/// to actually enable [`NETWORK_READY_OPENRC_PATH`] — writing the script
+/// alone does not start it at boot.
+const NETWORK_READY_OPENRC_RUNLEVEL_PATH: &str = "/etc/runlevels/default/firecrab-network-ready";
+
+/// Replaces the guest readiness script when the template already has one,
+/// otherwise installs one from scratch (issue #220: an image built outside
+/// `install-*-rootfs.sh`, such as `nginx-1.27`, can reach the host with
+/// neither path present — the guest then never attempts DHCP or prints a
+/// sentinel, and the host silently burns the full `network_ready_timeout`
+/// before marking the VM `error`).
 /// Ubuntu/Rocky: systemd oneshot script. Alpine: OpenRC init script.
 fn patch_network_ready_script(rootfs: &Path) -> Result<(), RootfsError> {
-    if guest_path_exists(rootfs, NETWORK_READY_SCRIPT_PATH) {
+    let has_systemd_script = guest_path_exists(rootfs, NETWORK_READY_SCRIPT_PATH);
+    if has_systemd_script {
         write_into_image(
             rootfs,
             NETWORK_READY_SCRIPT_PATH,
@@ -629,14 +666,146 @@ fn patch_network_ready_script(rootfs: &Path) -> Result<(), RootfsError> {
         // debugfs `write` creates regular files as 0664; the oneshot unit
         // invokes this path directly, so it must stay executable.
         set_guest_file_mode(rootfs, NETWORK_READY_SCRIPT_PATH, "0100755");
+        ensure_network_ready_unit_enabled(rootfs)?;
     }
-    if guest_path_exists(rootfs, NETWORK_READY_OPENRC_PATH) {
+    let has_openrc_script = guest_path_exists(rootfs, NETWORK_READY_OPENRC_PATH);
+    if has_openrc_script {
         write_into_image(
             rootfs,
             NETWORK_READY_OPENRC_PATH,
             network_ready_openrc().as_bytes(),
         )?;
         set_guest_file_mode(rootfs, NETWORK_READY_OPENRC_PATH, "0100755");
+        ensure_network_ready_openrc_enabled(rootfs)?;
+    }
+    if !has_systemd_script && !has_openrc_script {
+        install_network_ready_fallback(rootfs)?;
+    }
+    Ok(())
+}
+
+/// Repairs a disk whose readiness script survived on disk (e.g. from an
+/// earlier, partial provisioning pass) while its systemd unit and
+/// `multi-user.target.wants` symlink never landed — issue #224, found on two
+/// live `debian-latest` VMs where the guest never attempted DHCP because
+/// systemd had nothing telling it to run the script at all. A no-op once the
+/// unit is already there, so an image with its own pre-baked, correctly
+/// enabled unit is left untouched.
+fn ensure_network_ready_unit_enabled(rootfs: &Path) -> Result<(), RootfsError> {
+    if !guest_path_exists(rootfs, "/etc/systemd/system") {
+        return Ok(());
+    }
+    if !guest_path_exists(rootfs, NETWORK_READY_UNIT_PATH) {
+        write_into_image(
+            rootfs,
+            NETWORK_READY_UNIT_PATH,
+            NETWORK_READY_UNIT.as_bytes(),
+        )?;
+    }
+    if guest_path_exists(rootfs, "/etc/systemd/system/multi-user.target.wants")
+        && !guest_path_exists(rootfs, NETWORK_READY_UNIT_WANTS_PATH)
+    {
+        ensure_symlink(
+            rootfs,
+            NETWORK_READY_UNIT_WANTS_PATH,
+            NETWORK_READY_UNIT_PATH,
+        )?;
+    }
+    Ok(())
+}
+
+/// OpenRC counterpart of [`ensure_network_ready_unit_enabled`].
+fn ensure_network_ready_openrc_enabled(rootfs: &Path) -> Result<(), RootfsError> {
+    if guest_path_exists(rootfs, "/etc/runlevels/default")
+        && !guest_path_exists(rootfs, NETWORK_READY_OPENRC_RUNLEVEL_PATH)
+    {
+        ensure_symlink(
+            rootfs,
+            NETWORK_READY_OPENRC_RUNLEVEL_PATH,
+            NETWORK_READY_OPENRC_PATH,
+        )?;
+    }
+    Ok(())
+}
+
+/// Installs the readiness oneshot on an image that shipped with neither the
+/// systemd script nor the OpenRC one — mirrors
+/// [`crate::guest_agent::install`]'s systemd-or-OpenRC branching and its
+/// "nothing we can write into offline" no-op when `/usr/local` itself is
+/// missing.
+fn install_network_ready_fallback(rootfs: &Path) -> Result<(), RootfsError> {
+    if !ensure_bin_dir(rootfs)? {
+        return Ok(());
+    }
+    write_into_image(
+        rootfs,
+        NETWORK_READY_SCRIPT_PATH,
+        network_ready_script().as_bytes(),
+    )?;
+    set_guest_file_mode(rootfs, NETWORK_READY_SCRIPT_PATH, "0100755");
+
+    if guest_path_exists(rootfs, "/etc/systemd/system") {
+        write_into_image(
+            rootfs,
+            NETWORK_READY_UNIT_PATH,
+            NETWORK_READY_UNIT.as_bytes(),
+        )?;
+        // systemd only honors *symlinks* under multi-user.target.wants.
+        if guest_path_exists(rootfs, "/etc/systemd/system/multi-user.target.wants") {
+            ensure_symlink(
+                rootfs,
+                NETWORK_READY_UNIT_WANTS_PATH,
+                NETWORK_READY_UNIT_PATH,
+            )?;
+        }
+    }
+    if guest_path_exists(rootfs, "/etc/init.d") {
+        write_into_image(
+            rootfs,
+            NETWORK_READY_OPENRC_PATH,
+            network_ready_openrc().as_bytes(),
+        )?;
+        set_guest_file_mode(rootfs, NETWORK_READY_OPENRC_PATH, "0100755");
+        if guest_path_exists(rootfs, "/etc/runlevels/default") {
+            ensure_symlink(
+                rootfs,
+                NETWORK_READY_OPENRC_RUNLEVEL_PATH,
+                NETWORK_READY_OPENRC_PATH,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Ensures `/usr/local/sbin` exists so the readiness script can be
+/// installed. Alpine templates ship `/usr/local` without `sbin`.
+fn ensure_bin_dir(rootfs: &Path) -> Result<bool, RootfsError> {
+    if guest_path_exists(rootfs, "/usr/local/sbin") {
+        return Ok(true);
+    }
+    if !guest_path_exists(rootfs, "/usr/local") {
+        return Ok(false);
+    }
+    let _ = run_debugfs(rootfs, "mkdir /usr/local/sbin");
+    if !guest_path_exists(rootfs, "/usr/local/sbin") {
+        return Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: "debugfs failed to create /usr/local/sbin for network-ready fallback".into(),
+        });
+    }
+    Ok(true)
+}
+
+/// Creates `link` → `target` inside the image and verifies the link exists.
+/// debugfs may exit 0 even when the command failed, so we check positively.
+fn ensure_symlink(rootfs: &Path, link: &str, target: &str) -> Result<(), RootfsError> {
+    remove_from_image(rootfs, link);
+    let _ = run_debugfs(rootfs, &format!("symlink {link} {target}"));
+    if !guest_path_exists(rootfs, link) {
+        return Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: format!("debugfs failed to create symlink {link} → {target}"),
+        });
     }
     Ok(())
 }
@@ -1475,6 +1644,177 @@ mod tests {
         run_debugfs(&rootfs, "mkdir /etc").unwrap();
 
         specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
+    }
+
+    /// Mirrors the OpenRC seed-and-rewrite coverage below (Ubuntu templates
+    /// historically enabled systemd-resolved's stub without installing the
+    /// package — this rewrite is how an already-baked image picks up the
+    /// `getent`-then-`dig@gateway` fallback without a re-import).
+    #[test]
+    fn specialize_guest_patches_an_existing_systemd_network_ready_script() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        write_into_image(
+            &rootfs,
+            NETWORK_READY_SCRIPT_PATH,
+            b"#!/bin/sh\necho stale placeholder\n",
+        )
+        .unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let script = debugfs_cat(&rootfs, NETWORK_READY_SCRIPT_PATH);
+        assert!(
+            script.contains("FIRECRAB_NETWORK_READY"),
+            "stale script must be rewritten, not left in place: {script}"
+        );
+        assert!(!script.contains("stale placeholder"), "{script}");
+        // Patching an existing script must not also install the fallback
+        // unit — the image's own pre-baked unit is the one that runs it.
+        assert!(!guest_path_exists(&rootfs, NETWORK_READY_UNIT_PATH));
+    }
+
+    /// #224: two live `debian-latest` VM disks had the readiness script on
+    /// disk (from an earlier, partial provisioning pass) but no
+    /// `multi-user.target.wants` symlink — systemd never started it, so the
+    /// guest never attempted DHCP. `patch_network_ready_script` must repair
+    /// a missing unit/symlink even when the script already exists, not just
+    /// rewrite the script's content.
+    #[test]
+    fn specialize_guest_repairs_a_stale_disks_missing_network_ready_unit() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system/multi-user.target.wants").unwrap();
+        write_into_image(
+            &rootfs,
+            NETWORK_READY_SCRIPT_PATH,
+            b"#!/bin/sh\necho stale placeholder\n",
+        )
+        .unwrap();
+        // The unit file and its enablement symlink are both absent — the
+        // exact state found on the two affected VM disks.
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let unit = debugfs_cat(&rootfs, NETWORK_READY_UNIT_PATH);
+        assert!(
+            unit.contains("ExecStart=/usr/local/sbin/firecrab-network-ready.sh"),
+            "{unit}"
+        );
+        assert!(
+            guest_path_exists(&rootfs, NETWORK_READY_UNIT_WANTS_PATH),
+            "unit must be (re)enabled, not just (re)written"
+        );
+    }
+
+    /// Repairing must stay a no-op once the unit is already correctly
+    /// enabled — it must not, say, replace a real image's own unit content.
+    #[test]
+    fn specialize_guest_does_not_disturb_an_already_enabled_network_ready_unit() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system/multi-user.target.wants").unwrap();
+        write_into_image(
+            &rootfs,
+            NETWORK_READY_SCRIPT_PATH,
+            b"#!/bin/sh\necho stale placeholder\n",
+        )
+        .unwrap();
+        write_into_image(
+            &rootfs,
+            NETWORK_READY_UNIT_PATH,
+            b"[Unit]\nDescription=the image's own unit\n",
+        )
+        .unwrap();
+        ensure_symlink(
+            &rootfs,
+            NETWORK_READY_UNIT_WANTS_PATH,
+            NETWORK_READY_UNIT_PATH,
+        )
+        .unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let unit = debugfs_cat(&rootfs, NETWORK_READY_UNIT_PATH);
+        assert!(
+            unit.contains("the image's own unit"),
+            "an already-enabled unit must not be overwritten: {unit}"
+        );
+    }
+
+    /// #220: `nginx-1.27` was never built through `install-*-rootfs.sh`, so
+    /// it shipped with neither the readiness script nor its systemd unit —
+    /// the host then burned the full `network_ready_timeout` (180s) waiting
+    /// for a sentinel the guest had no way to print. An image that has
+    /// `/usr/local/sbin` and `/etc/systemd/system` but never baked in either
+    /// readiness path must get one installed from scratch.
+    #[test]
+    fn specialize_guest_installs_a_systemd_network_ready_fallback_when_the_image_shipped_none() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system/multi-user.target.wants").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let script = debugfs_cat(&rootfs, NETWORK_READY_SCRIPT_PATH);
+        assert!(script.contains("FIRECRAB_NETWORK_READY"), "{script}");
+        assert!(script.contains("FIRECRAB_NETWORK_FAILED"), "{script}");
+        let unit = debugfs_cat(&rootfs, NETWORK_READY_UNIT_PATH);
+        assert!(
+            unit.contains("ExecStart=/usr/local/sbin/firecrab-network-ready.sh"),
+            "{unit}"
+        );
+        assert!(unit.contains("WantedBy=multi-user.target"), "{unit}");
+        assert!(
+            guest_path_exists(&rootfs, NETWORK_READY_UNIT_WANTS_PATH),
+            "unit must be enabled, not just written"
+        );
+    }
+
+    /// Same gap on an OpenRC (Alpine-style) image: no `/etc/init.d` script,
+    /// no runlevel symlink.
+    #[test]
+    fn specialize_guest_installs_an_openrc_network_ready_fallback_when_the_image_shipped_none() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/init.d").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/runlevels").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/runlevels/default").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let script = debugfs_cat(&rootfs, NETWORK_READY_OPENRC_PATH);
+        assert!(script.contains("openrc-run"), "{script}");
+        assert!(
+            guest_path_exists(&rootfs, NETWORK_READY_OPENRC_RUNLEVEL_PATH),
+            "service must be enabled in the default runlevel, not just written"
+        );
     }
 
     fn sample_app_service() -> String {

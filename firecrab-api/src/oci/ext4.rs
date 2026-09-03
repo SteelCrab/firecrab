@@ -166,6 +166,7 @@ pub(super) async fn write_provisioned_ext4_with_limit(
     write_measured_ext4(rootfs, destination, size, payload).await
 }
 
+#[cfg(test)]
 pub(super) async fn write_provisioned_ext4_with_size(
     rootfs: &ProvisionedRootfs,
     destination: &Path,

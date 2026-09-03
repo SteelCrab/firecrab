@@ -28,6 +28,7 @@ MicroVM control-plane records and VM filesystem artifacts have separate storage 
     .microboot/                  # Alpine netboot kernel, initramfs, and placeholder disk
     .oci/blobs/sha256/<hex>       # verified raw OCI config and layer blobs
     .oci/layers/sha256/<diff-id>/ # verified uncompressed layer tar streams
+    .oci/kernel/<arch>/<image>    # digest-pinned managed guest kernels
     .packages/                   # staged M2Image archives and origin markers
     kernel/
     rootfs/
@@ -41,6 +42,9 @@ The `images/` directory is the default `FIRECRAB_IMAGE_ROOT` and contains immuta
 Replacing a source image does not modify a VM disk that was already prepared.
 Temporary download, package-build, and bootstrap scratch files can also appear under `.packages/` while a job is running or after an interrupted job.
 OCI config and layer blobs stay as raw registry bytes under `.oci/blobs/sha256/`; verified tar streams stay separately under `.oci/layers/sha256/`, retaining both the uncompressed config diff ID and compressed manifest digest. Both caches rehash entries before reuse.
+Managed kernel images share `.oci/kernel/<arch>/` between the Kernels page,
+OCI import, and image kernel updates. They are deleted only through kernel
+management and only after all image references are removed.
 `GET /api/oci/inspect` reads metadata only and does not populate this cache.
 
 Other installed and runtime files live outside `/var/lib/firecrab`.
@@ -50,7 +54,7 @@ Other installed and runtime files live outside `/var/lib/firecrab`.
 | `/etc/firecrab/api.env` | Operator-owned API configuration |
 | `/etc/systemd/system/firecrab-*.service` | Installed systemd units |
 | `/usr/local/lib/firecrab/` | API, network helper, and `extract-vmlinux` |
-| `/usr/local/bin/firecrab` | Host CLI (`doctor`/`info`/`status`) |
+| `/usr/local/bin/firecrab` | Host CLI (diagnostics, status, and VM/network/image operations) |
 | `/usr/local/share/firecrab/dashboard/` | Installed dashboard assets |
 | `/run/firecrab/` | Ephemeral helper socket, dnsmasq configuration, PID, hosts, and leases |
 | systemd journal and Linux networking state | Service logs, bridges, TAPs, nftables, and live processes |

@@ -11,6 +11,8 @@ import type {
   HostStatusResponse,
   ImageInstallResponse,
   ImageResponse,
+  KernelInstallResponse,
+  KernelResponse,
   OciImportRequest,
   OciInspectResponse,
   MicroRegistryRegisterRequest,
@@ -28,6 +30,7 @@ import type {
   StorageDeviceResponse,
   StorageRootResponse,
   UpdateCheckResponse,
+  UpdateImageKernelRequest,
   UpdateMicroNetworkRequest,
   UpdateStartResponse,
   UpdateVmShellsRequest,
@@ -199,6 +202,51 @@ export function startUpdate(): Promise<UpdateStartResponse> {
 /** Template registry aliases available for create (`GET /api/images`). */
 export function listImages(): Promise<ImageResponse[]> {
   return fetchJson("/api/images");
+}
+
+/** Full public detail for one M2Image (`GET /api/images/{alias}`). */
+export function getImage(alias: string): Promise<ImageResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}`);
+}
+
+/** Host-architecture digest-pinned kernel catalog (`GET /api/kernels`). */
+export function listKernels(): Promise<KernelResponse[]> {
+  return fetchJson("/api/kernels");
+}
+
+/** Start a kernel package download + verification. */
+export function startKernelInstall(version: string): Promise<KernelInstallResponse> {
+  return fetchJson(`/api/kernels/${encodeURIComponent(version)}/install`, {
+    method: "POST",
+  });
+}
+
+/** Poll one kernel package job. */
+export function getKernelInstall(version: string): Promise<KernelInstallResponse> {
+  return fetchJson(`/api/kernels/${encodeURIComponent(version)}/install`);
+}
+
+/** Delete one unused installed kernel. */
+export async function deleteKernel(version: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/kernels/${encodeURIComponent(version)}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) throw await fail(response);
+}
+
+/** Pair an installed image with an installed managed kernel. */
+export function updateImageKernel(
+  alias: string,
+  request: UpdateImageKernelRequest,
+): Promise<ImageResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/kernel`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
 }
 
 /** Published M2Image packages and this host's matching cache/install state. */
