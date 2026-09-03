@@ -13,6 +13,7 @@
 //! dashboard already observes.
 
 use std::ffi::OsString;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -103,22 +104,45 @@ fn fallback_report(error: String) -> UpdateCheckResponse {
 /// orphan; because a failed check is deliberately never cached
 /// ([`cached_check`]), every subsequent poll during an outage would leak
 /// another one.
+///
+/// The `ETXTBSY` retry mirrors [`crate::firecracker`]'s spawn path. A test's
+/// stub CLI is written and immediately exec'd, and a *different* test's forked
+/// child can still hold a write descriptor on it — `rename` does not change
+/// the inode, so the write-then-rename dance cannot prevent this. Without the
+/// retry the spawn error becomes a [`fallback_report`], whose `current` is
+/// this build's own version rather than the stub's. Production `firecrab` is
+/// an installed binary, so the retry is test-only.
 async fn run_check_command(cli: &Path, timeout: Duration) -> UpdateCheckResponse {
-    let child = Command::new(cli)
-        .args(["update", "--check", "--json"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .output();
-    let output = match tokio::time::timeout(timeout, child).await {
-        Err(_) => return fallback_report(format!("{} did not answer in time", cli.display())),
-        Ok(Err(error)) => return fallback_report(format!("cannot run {}: {error}", cli.display())),
-        Ok(Ok(output)) => output,
-    };
-    match serde_json::from_slice::<UpdateCheckResponse>(&output.stdout) {
-        Ok(report) => report,
-        Err(error) => fallback_report(format!("unreadable check output: {error}")),
+    const BUSY_ATTEMPTS: u32 = 8;
+    let mut attempt = 0;
+    loop {
+        let child = Command::new(cli)
+            .args(["update", "--check", "--json"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .output();
+        let output = match tokio::time::timeout(timeout, child).await {
+            Err(_) => return fallback_report(format!("{} did not answer in time", cli.display())),
+            Ok(Err(error))
+                if cfg!(test)
+                    && error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && attempt < BUSY_ATTEMPTS =>
+            {
+                attempt += 1;
+                tokio::time::sleep(Duration::from_millis(10 * u64::from(attempt))).await;
+                continue;
+            }
+            Ok(Err(error)) => {
+                return fallback_report(format!("cannot run {}: {error}", cli.display()));
+            }
+            Ok(Ok(output)) => output,
+        };
+        return match serde_json::from_slice::<UpdateCheckResponse>(&output.stdout) {
+            Ok(report) => report,
+            Err(error) => fallback_report(format!("unreadable check output: {error}")),
+        };
     }
 }
 
@@ -241,6 +265,66 @@ mod tests {
         assert!(report.update_available);
         assert!(report.error.is_none());
         assert_eq!(run_count(&counter), 1);
+    }
+
+    /// Exercises the `ETXTBSY` retry instead of assuming it. An open write
+    /// descriptor makes `execve` fail for exactly as long as it lives, which is
+    /// the race a parallel test run hits by accident when one test writes a
+    /// stub while another forks.
+    #[tokio::test]
+    async fn a_busy_stub_is_retried_until_the_writer_closes_it() {
+        let dir = tempdir().unwrap();
+        let counter = dir.path().join("runs");
+        let cli = stub_cli(
+            dir.path(),
+            r#"{"current":"0.1.1","latest":"0.1.2","updateAvailable":true}"#,
+            &counter,
+        );
+
+        let writer = fs::OpenOptions::new().write(true).open(&cli).unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            drop(writer);
+        });
+
+        let report = run_check_command(&cli, CHECK_TIMEOUT).await;
+        releaser.join().unwrap();
+
+        assert_eq!(
+            report.current, "0.1.1",
+            "the stub's own report must win once it is no longer busy"
+        );
+        assert!(report.error.is_none(), "{:?}", report.error);
+        assert_eq!(run_count(&counter), 1, "only the winning attempt runs");
+    }
+
+    /// A stub that never stops being busy exhausts the retry and degrades to a
+    /// fallback report, rather than hanging or inventing a version.
+    #[tokio::test]
+    async fn a_stub_that_stays_busy_becomes_a_fallback_report() {
+        let dir = tempdir().unwrap();
+        let counter = dir.path().join("runs");
+        let cli = stub_cli(
+            dir.path(),
+            r#"{"current":"0.1.1","latest":"0.1.2","updateAvailable":true}"#,
+            &counter,
+        );
+        // Held for the whole test: every attempt sees ETXTBSY.
+        let _writer = fs::OpenOptions::new().write(true).open(&cli).unwrap();
+
+        let report = run_check_command(&cli, CHECK_TIMEOUT).await;
+
+        assert_eq!(report.current, env!("CARGO_PKG_VERSION"));
+        assert!(
+            report
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("cannot run"),
+            "{:?}",
+            report.error
+        );
+        assert_eq!(run_count(&counter), 0, "the stub never got to run");
     }
 
     #[tokio::test]
