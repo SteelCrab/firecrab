@@ -211,10 +211,11 @@ fn inject_blocking(
             set_root_shell(tree, &shell)?;
         }
         ensure_securetty(tree, &mut unwind)?;
+        let agetty = first_existing(tree, GUEST_AGETTY_CANDIDATES);
         install_file(
             tree,
             GUEST_INITTAB,
-            inittab(first_existing(tree, GUEST_AGETTY_CANDIDATES).as_deref()).as_bytes(),
+            inittab(agetty.as_deref()).as_bytes(),
             0o644,
             &mut unwind,
         )?;
@@ -232,6 +233,15 @@ fn inject_blocking(
             0o755,
             &mut unwind,
         )?;
+        if let Some(agetty) = agetty.as_deref() {
+            install_file(
+                tree,
+                GUEST_AGETTY_WRAPPER,
+                agetty_wrapper_script(agetty).as_bytes(),
+                0o755,
+                &mut unwind,
+            )?;
+        }
         install_file(
             tree,
             GUEST_MOTD,
@@ -709,9 +719,10 @@ fn guest_path_unusable(guest_path: &str, reason: GuestPathViolation) -> ResolveE
 /// wrapper still prints MOTD and drops into ash.
 pub(crate) fn inittab(agetty: Option<&str>) -> String {
     let console = match agetty {
-        Some(path) => format!(
-            "ttyS0::respawn:{path} --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
-        ),
+        // Wrapped so `exit` prints a session-boundary banner (issue #223)
+        // before agetty re-enters — a bare `respawn:{path} --autologin`
+        // gives no sign the shell ever restarted.
+        Some(_) => format!("ttyS0::respawn:{GUEST_TOOLBOX} sh {GUEST_AGETTY_WRAPPER}"),
         None => format!("::respawn:-{GUEST_TOOLBOX} sh {GUEST_CONSOLE_SCRIPT}"),
     };
     format!(
@@ -952,6 +963,19 @@ if [ ! -f /etc/firecrab/base-packages.ok ]; then
 fi
 "#;
 
+/// Guest path of the agetty respawn wrapper (issue #223).
+pub(crate) const GUEST_AGETTY_WRAPPER: &str = "/etc/firecrab/rc.agetty";
+
+/// Printed on every console respawn after the first (issue #223): busybox
+/// `respawn` and agetty's `--autologin` both re-enter silently, so `exit`
+/// otherwise looks like it did nothing. `/run` is tmpfs — a genuine reboot
+/// always starts clean, so this only fires when the guest shell actually exited.
+const SESSION_BANNER_PRELUDE: &str = r#"if [ -f /run/firecrab-console-active ]; then
+  printf '\n=== session ended — starting a new one ===\n\n'
+fi
+$BB touch /run/firecrab-console-active
+"#;
+
 /// Interactive console: MOTD, fastfetch when present, then ash.
 pub(crate) fn console_script() -> String {
     format!(
@@ -963,7 +987,7 @@ export PATH
 export LANG="${{LANG:-C.UTF-8}}"
 export LC_ALL="$LANG" LC_CTYPE="$LANG"
 $BB stty iutf8 2>/dev/null
-if [ -s /etc/hostname ]; then
+{SESSION_BANNER_PRELUDE}if [ -s /etc/hostname ]; then
   $BB hostname -F /etc/hostname 2>/dev/null
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null
 fi
@@ -974,6 +998,21 @@ elif [ -x /usr/bin/neofetch ]; then
   /usr/bin/neofetch
 fi
 exec $BB sh
+"#
+    )
+}
+
+/// Wraps `agetty --autologin` so `exit` has a visible effect (issue #223).
+/// A bare respawn is invisible — `--autologin` re-enters with no prompt and
+/// no output change. Prints the same session-boundary banner as
+/// [`console_script`] before handing off; `exec` still makes agetty the
+/// tty's session leader exactly as a direct inittab invocation would.
+pub(crate) fn agetty_wrapper_script(agetty: &str) -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
+# Firecrab injected agetty wrapper (public-docs/oci.md).
+BB={GUEST_TOOLBOX}
+{SESSION_BANNER_PRELUDE}exec {agetty} --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux
 "#
     )
 }

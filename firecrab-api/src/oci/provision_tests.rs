@@ -481,15 +481,31 @@ async fn an_image_with_agetty_and_bash_uses_the_serial_getty() {
         .expect("inject");
 
     let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab");
+    // #223: routed through the agetty wrapper (session-ended banner on
+    // respawn), not a bare `respawn:/usr/sbin/agetty` line.
     assert!(
-        inittab.contains(
-            "ttyS0::respawn:/usr/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
-        ),
+        inittab.contains(&format!(
+            "ttyS0::respawn:{} sh {}",
+            provision::GUEST_TOOLBOX,
+            provision::GUEST_AGETTY_WRAPPER
+        )),
         "{inittab}"
     );
     assert!(
         !inittab.contains("rc.console"),
         "agetty replaces the ash wrapper: {inittab}"
+    );
+    let wrapper =
+        String::from_utf8(read_guest(&tree, provision::GUEST_AGETTY_WRAPPER)).expect("wrapper");
+    assert!(
+        wrapper.contains(
+            "exec /usr/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
+        ),
+        "{wrapper}"
+    );
+    assert!(
+        wrapper.contains("session ended"),
+        "wrapper must print a session-boundary banner on respawn: {wrapper}"
     );
     let passwd = String::from_utf8(read_guest(&tree, "/etc/passwd")).expect("passwd");
     assert!(
@@ -1154,4 +1170,34 @@ fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
         !block_with("pacman -Sy").contains("udev"),
         "Arch folds udev into the systemd package; a separate `udev` package does not exist"
     );
+}
+
+/// #223: `exit` must look like it did something. Both console entry points
+/// gate the banner on a tmpfs marker (`/run` is wiped every real reboot),
+/// so it only fires on an actual respawn, never on the guest's first attach.
+#[test]
+fn console_and_agetty_wrapper_gate_the_session_banner_on_a_tmpfs_marker() {
+    for script in [
+        provision::console_script(),
+        provision::agetty_wrapper_script("/usr/sbin/agetty"),
+    ] {
+        let marker_check = script
+            .find("if [ -f /run/firecrab-console-active ]")
+            .unwrap_or_else(|| panic!("no first-attach guard in:\n{script}"));
+        let banner = script
+            .find("session ended")
+            .unwrap_or_else(|| panic!("no session-ended banner in:\n{script}"));
+        let touch = script
+            .find("touch /run/firecrab-console-active")
+            .unwrap_or_else(|| panic!("marker is never (re)created in:\n{script}"));
+        assert!(
+            marker_check < banner,
+            "banner must be inside the marker-file guard, not unconditional: {script}"
+        );
+        assert!(
+            touch > banner,
+            "marker must be (re)touched after printing, so the very next \
+             respawn also sees it: {script}"
+        );
+    }
 }

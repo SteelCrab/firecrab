@@ -427,6 +427,18 @@ fn patch_oci_console(rootfs: &Path) {
     );
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.console", "0100755");
+    if let Some(agetty) = agetty {
+        let _ = write_into_image(
+            rootfs,
+            crate::oci::provision::GUEST_AGETTY_WRAPPER,
+            crate::oci::provision::agetty_wrapper_script(agetty).as_bytes(),
+        );
+        set_guest_file_mode(
+            rootfs,
+            crate::oci::provision::GUEST_AGETTY_WRAPPER,
+            "0100755",
+        );
+    }
 }
 
 /// Puts missing `ping`/`wget`/`vi` on PATH for an already-imported OCI disk.
@@ -1535,9 +1547,24 @@ mod tests {
         specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
         let inittab = debugfs_cat(&rootfs, "/etc/inittab");
+        // #223: routed through the agetty wrapper (session-ended banner on
+        // respawn), not a bare `respawn:/usr/sbin/agetty` line.
         assert!(
-            inittab.contains("ttyS0::respawn:/usr/sbin/agetty"),
+            inittab.contains(&format!(
+                "ttyS0::respawn:{} sh {}",
+                crate::oci::provision::GUEST_TOOLBOX,
+                crate::oci::provision::GUEST_AGETTY_WRAPPER
+            )),
             "{inittab}"
+        );
+        let wrapper = debugfs_cat(&rootfs, crate::oci::provision::GUEST_AGETTY_WRAPPER);
+        assert!(
+            wrapper.contains("exec /usr/sbin/agetty --autologin root"),
+            "{wrapper}"
+        );
+        assert!(
+            wrapper.contains("session ended"),
+            "wrapper must print a session-boundary banner on respawn: {wrapper}"
         );
         let passwd = debugfs_cat(&rootfs, "/etc/passwd");
         assert!(
