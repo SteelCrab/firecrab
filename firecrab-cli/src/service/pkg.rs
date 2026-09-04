@@ -74,6 +74,7 @@ impl PkgManager {
             (_, "iproute2") => vec!["iproute2"],
             (_, "dnsmasq-utils") => vec!["dnsmasq-utils"],
             (_, "e2fsprogs") => vec!["e2fsprogs"],
+            (_, "fakeroot") => vec!["fakeroot"],
             (_, "xz") => vec!["xz"],
             (_, "nftables") => vec!["nftables"],
             (_, "dnsmasq") => vec!["dnsmasq"],

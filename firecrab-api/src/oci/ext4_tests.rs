@@ -171,6 +171,82 @@ async fn a_planned_image_over_the_operator_ceiling_fails_before_mkfs() {
     assert!(!destination.exists());
 }
 
+/// merge.rs's OCI layer extraction is unprivileged (`preserve_ownerships(false)`),
+/// so a fixture tree here — like a real merged layer tree — is owned by
+/// whichever uid runs the test, never root. `mkfs.ext4 -d` copies that
+/// ownership verbatim unless `run_mkfs` corrects it, and a guest that boots
+/// with non-root-owned directories fails any package postinst that checks
+/// for that (systemd 261's "unsafe path transition", issue #250).
+#[tokio::test]
+async fn packed_inodes_are_root_owned_even_though_the_source_tree_is_not() {
+    let directory = tempdir().expect("create fixture directory");
+    let tree = tree_with_payload(directory.path(), 4096);
+    let destination = directory.path().join("rootfs.ext4");
+
+    let source_uid = std::fs::metadata(tree.join("app/payload"))
+        .expect("stat fixture file")
+        .uid();
+    assert_ne!(
+        source_uid, 0,
+        "fixture must start non-root-owned to exercise the fix; test is running as root"
+    );
+
+    ext4::write_provisioned_ext4(&provisioned(tree), &destination)
+        .await
+        .expect("pack tree");
+
+    let output = std::process::Command::new("debugfs")
+        .args(["-R", "stat /app/payload"])
+        .arg(&destination)
+        .output()
+        .expect("run debugfs stat");
+    let stat = String::from_utf8_lossy(&output.stdout);
+    let tokens: Vec<&str> = stat.split_whitespace().collect();
+    let field = |name: &str| {
+        tokens
+            .iter()
+            .position(|t| *t == name)
+            .map(|i| tokens[i + 1])
+            .unwrap_or_else(|| panic!("debugfs stat missing {name} field: {stat}"))
+    };
+    assert_eq!(
+        field("User:"),
+        "0",
+        "packed file must be root-owned: {stat}"
+    );
+    assert_eq!(
+        field("Group:"),
+        "0",
+        "packed file must be root-owned: {stat}"
+    );
+}
+
+#[test]
+fn run_mkfs_reports_a_readable_error_when_fakeroot_chown_cannot_reach_the_tree() {
+    let directory = tempdir().expect("create fixture directory");
+    let missing_tree = directory.path().join("no-such-tree");
+    let image = directory.path().join("image.ext4");
+    let destination = directory.path().join("rootfs.ext4");
+    std::fs::write(&image, []).expect("create empty image placeholder");
+
+    let error = ext4::run_mkfs(&missing_tree, &image, &destination)
+        .expect_err("chown -R over a nonexistent tree must fail");
+    assert_matches!(error, ResolveError::Ext4Build { ref detail, .. } if detail.contains("fakeroot chown"), "{error}");
+}
+
+#[test]
+fn run_mkfs_reports_a_readable_error_when_mkfs_ext4_itself_fails() {
+    let directory = tempdir().expect("create fixture directory");
+    let tree = tree_with_payload(directory.path(), 1024);
+    // mkfs.ext4 cannot create its output under a parent that does not exist.
+    let image = directory.path().join("no-such-dir/image.ext4");
+    let destination = directory.path().join("rootfs.ext4");
+
+    let error =
+        ext4::run_mkfs(&tree, &image, &destination).expect_err("mkfs.ext4 must fail to run");
+    assert_matches!(error, ResolveError::Ext4Build { .. }, "{error}");
+}
+
 #[tokio::test]
 async fn ext4_refusals_render_operator_readable_messages() {
     let rendered = [

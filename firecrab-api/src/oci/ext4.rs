@@ -280,28 +280,80 @@ fn write_blocking(
     })
 }
 
-fn run_mkfs(tree: &Path, image: &Path, destination: &Path) -> Result<(), ResolveError> {
-    let mut command = std::process::Command::new("mkfs.ext4");
+/// Sibling of `image` that carries `fakeroot`'s ownership ledger from the
+/// `chown` step into the `mkfs.ext4` step below.
+fn fakeroot_state_path(image: &Path) -> PathBuf {
+    let mut name = image.file_name().unwrap_or_default().to_os_string();
+    name.push(".fakeroot-state");
+    image.with_file_name(name)
+}
+
+/// Packs `tree` into `image` with every inode owned by root, without the
+/// extracting process needing real root privilege.
+///
+/// `tree` is a merged OCI layer tree from `merge.rs`, whose extraction is
+/// deliberately unprivileged (`preserve_ownerships(false)`): every entry
+/// lands owned by the host process's own uid, not root. `mkfs.ext4 -d`
+/// otherwise copies that real ownership straight into the guest disk, and a
+/// guest booting with non-root-owned directories fails any package postinst
+/// that checks for it — reproduced with `apt-get install openssh-server`
+/// pulling in systemd, whose postinst refuses to configure ("Detected
+/// unsafe path transition ... during canonicalization", exit 73) — see
+/// issue #250. `fakeroot -s`/`-i` carries a faked `chown -R 0:0` into
+/// `mkfs.ext4`'s own `stat()` calls without ever touching `tree`'s real
+/// on-host ownership.
+pub(super) fn run_mkfs(tree: &Path, image: &Path, destination: &Path) -> Result<(), ResolveError> {
+    let state = fakeroot_state_path(image);
+    let chown = std::process::Command::new("fakeroot")
+        .arg("-s")
+        .arg(&state)
+        .arg("--")
+        .arg("chown")
+        .arg("-R")
+        .arg("0:0")
+        .arg(tree)
+        .output()
+        .map_err(|source| ext4_io("run fakeroot chown", tree.to_owned(), source))?;
+    if !chown.status.success() {
+        let _ = fs::remove_file(&state);
+        return Err(ResolveError::Ext4Build {
+            path: destination.to_owned(),
+            detail: format!(
+                "fakeroot chown -R 0:0 failed: {}",
+                command_failure_detail(&chown)
+            ),
+        });
+    }
+
+    let mut command = std::process::Command::new("fakeroot");
+    command.arg("-i").arg(&state).arg("--");
+    command.arg("mkfs.ext4");
     command.args(["-F", "-q", "-m", "0", "-L", "rootfs"]);
     command.args(orphan_file_args());
     command.arg("-d").arg(tree).arg(image);
-    let output = command
-        .output()
-        .map_err(|source| ext4_io("run mkfs.ext4", image.to_owned(), source))?;
+    let output = command.output();
+    let _ = fs::remove_file(&state);
+    let output = output.map_err(|source| ext4_io("run mkfs.ext4", image.to_owned(), source))?;
     if output.status.success() {
         return Ok(());
     }
+    Err(ResolveError::Ext4Build {
+        path: destination.to_owned(),
+        detail: command_failure_detail(&output),
+    })
+}
+
+/// Readable failure detail from a finished command: stderr, then stdout,
+/// then the exit status, whichever is first non-empty.
+fn command_failure_detail(output: &std::process::Output) -> String {
     let mut detail = String::from_utf8_lossy(&output.stderr).into_owned();
     if detail.trim().is_empty() {
         detail = String::from_utf8_lossy(&output.stdout).into_owned();
     }
     if detail.trim().is_empty() {
-        detail = format!("mkfs.ext4 exited with status {}", output.status);
+        detail = format!("exited with status {}", output.status);
     }
-    Err(ResolveError::Ext4Build {
-        path: destination.to_owned(),
-        detail: detail.trim().to_owned(),
-    })
+    detail.trim().to_owned()
 }
 
 fn inspect_free_bytes(image: &Path, destination: &Path) -> Result<u64, ResolveError> {
