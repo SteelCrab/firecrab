@@ -36,11 +36,12 @@ jobs:
         # rust-toolchain.toml pins channel 1.96.0 + clippy/rustfmt/llvm-tools
         run: rustup show
 
-      - name: Install dnsmasq
+      - name: Install dnsmasq, fakeroot
         # firecrab-net-helper's dhcp.rs tests shell out to the real
-        # `dnsmasq --test` to validate generated configs — not preinstalled
-        # on the runner image.
-        run: sudo apt-get update && sudo apt-get install -y dnsmasq
+        # `dnsmasq --test` to validate generated configs, and oci::ext4's
+        # tests pack a root-owned image via real `fakeroot` (issue #250) —
+        # neither preinstalled on the runner image.
+        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
