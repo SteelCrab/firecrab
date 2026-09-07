@@ -206,9 +206,6 @@ One logical change per commit is nice; a tidy PR history is more important than 
 | Installer shellcheck + install/uninstall smoke | yes | Guest boot skipped (`install.sh` never installs an image) |
 | Frontend lint + build | yes | Node 22 |
 | Multi-distro installer deps | yes | Debian, Fedora, Arch, openSUSE containers |
-| M2 guest boot matrix | no | Nightly / `workflow_dispatch` only (KVM + images) |
-
-If your change affects VM boot, say so in the PR so maintainers can trigger the boot matrix.
 
 ## Documentation
 
