@@ -281,11 +281,19 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = tcp.read(&mut buffer).await.unwrap();
+                assert!(read > 0, "client closed before sending request headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
             tcp.write_all(
                 b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{\"code\":\"vm_not_running\"}",
             )
             .await
             .unwrap();
+            tcp.shutdown().await.unwrap();
         });
 
         let error = stream(
