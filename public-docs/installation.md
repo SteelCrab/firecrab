@@ -6,6 +6,20 @@ glibc hosts (Debian, Fedora, Arch, openSUSE, Ubuntu) get the gnu bundle.
 musl hosts (Alpine) get the musl bundle.
 Pass `--libc gnu` or `--libc musl` to override.
 
+## Contents
+
+| Section | Content |
+| --- | --- |
+| [Requirements](#requirements) | Linux host prerequisites |
+| [Check the host](#check-the-host) | Read-only readiness check |
+| [Install](#install) | Full Linux host installation |
+| [CLI-only installation](#cli-only-installation) | Linux, macOS, and Windows remote client |
+| [Common options](#common-options) | Full host installer flags |
+| [Default paths](#default-paths) | Full host filesystem layout |
+| [Check the result](#check-the-result) | Service and API verification |
+| [Upgrade](#upgrade) | Full host upgrade |
+| [Related](#related) | Other documents |
+
 ## Requirements
 
 - Linux with systemd
@@ -87,31 +101,74 @@ Import one afterwards with [OCI import](oci.md) or the dashboard Images page.
 
 ## CLI-only installation
 
-`firecrab` (the CLI) is a single static binary.
-Install it on a machine that already runs `firecrab-api` elsewhere, or on the host itself alongside an existing full install.
+`firecrab` is a standalone remote client for Linux, macOS, and Windows.
+The CLI-only installers require no root access, Rust toolchain, Firecracker, or local host services.
+After installation, save and verify a remote endpoint with the [CLI host profiles](firecrab-cli.md#host-profiles).
 
-### From a GitHub Release
+### Linux and macOS
 
-Download the host bundle for the target architecture and libc, then extract only the `firecrab` binary.
+The POSIX installer detects Linux or macOS and x86_64 or ARM64, verifies `SHA256SUMS`, and installs to `~/.local/bin`.
+Download the installer and the separately published release checksum, verify the installer, and only then execute it.
 
 ```sh
-# x86_64 glibc host (Debian, Ubuntu, Fedora, Arch, openSUSE)
-curl -fsSL -o firecrab-host.tar.gz \
-  https://github.com/SteelCrab/firecrab/releases/latest/download/firecrab-host-x86_64-gnu.tar.gz
-tar -xzf firecrab-host.tar.gz firecrab
-sudo install -m 755 firecrab /usr/local/bin/firecrab
+curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.sh
+curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/SHA256SUMS
+grep ' install-cli.sh$' SHA256SUMS > install-cli.sh.sha256
+if command -v sha256sum >/dev/null; then
+  sha256sum -c install-cli.sh.sha256
+else
+  shasum -a 256 -c install-cli.sh.sha256
+fi
+sh install-cli.sh
 ```
 
-Replace `x86_64-gnu` with the correct variant for your machine:
+Pin a version or choose another user-writable directory when needed.
 
-| Architecture | libc | Filename suffix |
-| --- | --- | --- |
-| x86\_64 | glibc (Debian, Ubuntu, Fedora, …) | `x86_64-gnu` |
-| x86\_64 | musl (Alpine) | `x86_64-musl` |
-| aarch64 | glibc | `aarch64-gnu` |
-| aarch64 | musl | `aarch64-musl` |
+```sh
+sh install-cli.sh --version v0.1.3 --install-dir "$HOME/bin"
+```
 
-Pin a version by replacing `latest` with a tag, for example `v0.1.0`.
+The installer prints an `export PATH=...` line when the destination is not already on `PATH`.
+Pass `--version TAG` to pin the client archive; changing only the installer script URL does not change its default `latest` archive selection.
+Use an installation directory controlled by the current user, not a shared writable directory.
+
+### Windows
+
+Download the user-level PowerShell installer and separately published release checksum, verify it, and only then execute it.
+
+```powershell
+Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.ps1 -OutFile install-cli.ps1
+Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/SHA256SUMS -OutFile SHA256SUMS
+$expected = ((Get-Content SHA256SUMS | Where-Object { $_ -match ' install-cli\.ps1$' }) -split '\s+')[0]
+if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw 'installer checksum mismatch' }
+& ./install-cli.ps1
+```
+
+It installs `firecrab.exe` under `%LOCALAPPDATA%\Programs\firecrab\bin` and adds that directory to the user `PATH`.
+Open a new terminal after the first installation.
+
+Pin a client archive by passing `-Version` to the downloaded installer.
+
+```powershell
+& ./install-cli.ps1 -Version v0.1.3
+```
+
+Use an installation directory controlled by the current user, not a shared writable directory.
+
+### Release assets
+
+The installers select one of these standalone archives.
+
+| Client | Asset |
+| --- | --- |
+| Linux x86_64 | `firecrab-cli-x86_64-linux.tar.gz` |
+| Linux ARM64 | `firecrab-cli-aarch64-linux.tar.gz` |
+| macOS Intel | `firecrab-cli-x86_64-macos.tar.gz` |
+| macOS Apple silicon | `firecrab-cli-aarch64-macos.tar.gz` |
+| Windows x86_64 | `firecrab-cli-x86_64-windows.zip` |
+
+Archive URLs may be pinned by replacing `latest` with a tag, for example `v0.1.0`.
+When using either installer script, pass `--version` or `-Version` as shown above.
 
 ### From source
 
@@ -119,10 +176,10 @@ Pin a version by replacing `latest` with a tag, for example `v0.1.0`.
 git clone https://github.com/SteelCrab/firecrab.git
 cd firecrab
 cargo build --release --locked -p firecrab-cli
-sudo install -m 755 target/release/firecrab /usr/local/bin/firecrab
 ```
 
 Requires the repository Rust toolchain (`rust-toolchain.toml`).
+Copy `target/release/firecrab` or `target\release\firecrab.exe` into a directory on the user `PATH`.
 
 ### On a host with a full install
 

@@ -1,26 +1,36 @@
 use clap::{Parser, Subcommand};
 
 mod api_client;
+#[cfg(target_os = "linux")]
 mod doctor;
 #[cfg(test)]
 mod host_api_tests;
+mod hosts;
 mod image;
+#[cfg(target_os = "linux")]
 mod info;
 mod network;
+#[cfg(target_os = "linux")]
 mod service;
+#[cfg(target_os = "linux")]
 mod shell;
+#[cfg(target_os = "linux")]
 mod status;
+#[cfg(target_os = "linux")]
 mod update;
 mod vm;
 mod vm_console;
 
 /// `clap`-derived top-level CLI, replacing `scripts/firecrab-doctor.sh`.
 #[derive(Parser)]
-#[command(name = "firecrab", version, about = "firecrab host CLI")]
+#[command(name = "firecrab", version, about = "firecrab client for Linux hosts")]
 struct Cli {
-    /// Override the API base URL (else FIRECRAB_API, else http://127.0.0.1:5523).
+    /// Override the API base URL.
     #[arg(long, global = true, value_name = "URL")]
     api: Option<String>,
+    /// Use a named host from ~/firecrab/config.toml.
+    #[arg(long, global = true, value_name = "NAME")]
+    host: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -28,6 +38,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Diagnose host readiness for firecrab (KVM, nft, dnsmasq, UFW, ...).
+    #[cfg(target_os = "linux")]
     Doctor {
         /// Also print sha256 (first 12 hex chars) of template images.
         #[arg(long)]
@@ -37,18 +48,21 @@ enum Command {
         json: bool,
     },
     /// Show version and resolved host configuration paths.
+    #[cfg(target_os = "linux")]
     Info {
         /// Emit the [`info::InfoReport`] as JSON instead of the human format.
         #[arg(long)]
         json: bool,
     },
     /// Show systemd unit status and the API host status.
+    #[cfg(target_os = "linux")]
     Status {
         /// Emit the [`status::StatusReport`] as JSON instead of the human format.
         #[arg(long)]
         json: bool,
     },
     /// Check for a newer firecrab release, and optionally install it.
+    #[cfg(target_os = "linux")]
     Update {
         /// Only report whether a newer release exists (the default).
         #[arg(long)]
@@ -75,7 +89,13 @@ enum Command {
         #[command(subcommand)]
         command: image::Command,
     },
+    /// Save and select remote firecrab hosts.
+    Host {
+        #[command(subcommand)]
+        command: hosts::Command,
+    },
     /// Install, remove, or control the firecrab host services.
+    #[cfg(target_os = "linux")]
     Service {
         #[command(subcommand)]
         command: service::Command,
@@ -87,30 +107,37 @@ fn main() {
 }
 
 fn run(cli: Cli) -> i32 {
-    let Cli { api, command } = cli;
+    let Cli { api, host, command } = cli;
     match command {
+        #[cfg(target_os = "linux")]
         Command::Doctor { digest, json } => run_doctor(digest, json),
+        #[cfg(target_os = "linux")]
         Command::Info { json } => {
-            run_info(json, api);
-            0
+            finish_api_command(run_info(json, api.as_deref(), host.as_deref()))
         }
+        #[cfg(target_os = "linux")]
         Command::Status { json } => {
-            run_status(json, api);
-            0
+            finish_api_command(run_status(json, api.as_deref(), host.as_deref()))
         }
+        #[cfg(target_os = "linux")]
         Command::Update { check, apply, json } => run_update(check, apply, json),
-        Command::Vm { command } => {
-            let client = build_api_client(api.as_deref());
-            finish_api_command(vm::run(&client, command))
-        }
+        Command::Vm { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+            vm::run(client, command)
+        }),
         Command::Network { command } => {
-            let client = build_api_client(api.as_deref());
-            finish_api_command(network::run(&client, command))
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                network::run(client, command)
+            })
         }
         Command::Image { command } => {
-            let client = build_api_client(api.as_deref());
-            finish_api_command(image::run(&client, command))
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                image::run(client, command)
+            })
         }
+        Command::Host { command } => {
+            finish_api_command(hosts::run(command, api.as_deref(), host.as_deref()))
+        }
+        #[cfg(target_os = "linux")]
         Command::Service { command } => match service::run(&shell::RealCommandRunner, command) {
             Ok(()) => 0,
             Err(error) => {
@@ -121,8 +148,24 @@ fn run(cli: Cli) -> i32 {
     }
 }
 
-fn build_api_client(api: Option<&str>) -> api_client::ApiClient {
-    api_client::ApiClient::new(api_client::resolve_api_base(api))
+/// Builds a client after applying flag, environment, and saved-host precedence.
+fn build_api_client(
+    api: Option<&str>,
+    host: Option<&str>,
+) -> Result<api_client::ApiClient, hosts::Error> {
+    api_client::resolve_api_base(api, host).map(api_client::ApiClient::new)
+}
+
+/// Resolves one remote client and maps either resolution or API failure to an exit code.
+fn run_with_api_client<E, F>(api: Option<&str>, host: Option<&str>, command: F) -> i32
+where
+    E: std::fmt::Display,
+    F: FnOnce(&api_client::ApiClient) -> Result<(), E>,
+{
+    match build_api_client(api, host) {
+        Ok(client) => finish_api_command(command(&client)),
+        Err(error) => finish_api_command(Err(error)),
+    }
 }
 
 fn finish_api_command<E: std::fmt::Display>(result: Result<(), E>) -> i32 {
@@ -140,6 +183,7 @@ fn finish_api_command<E: std::fmt::Display>(result: Result<(), E>) -> i32 {
 /// [`doctor::Report::exit_code`] computes. Split out of `main()` so this
 /// logic is unit-testable without needing a live `std::process::exit` —
 /// same pattern as `firecrab-api/src/main.rs`'s `run()`.
+#[cfg(target_os = "linux")]
 fn run_doctor(digest: bool, json: bool) -> i32 {
     let env = doctor::DoctorEnv::from_process_env();
     let runner = shell::RealCommandRunner;
@@ -154,21 +198,24 @@ fn run_doctor(digest: bool, json: bool) -> i32 {
 
 /// Runs the `info` subcommand end-to-end — extracted for the same
 /// testability reason as [`run_doctor`].
-fn run_info(json: bool, api: Option<String>) {
-    let api_base = api_client::resolve_api_base(api.as_deref());
+#[cfg(target_os = "linux")]
+fn run_info(json: bool, api: Option<&str>, host: Option<&str>) -> Result<(), hosts::Error> {
+    let api_base = api_client::resolve_api_base(api, host)?;
     let report = info::collect(&api_base);
     if json {
         info::print_json(&report);
     } else {
         info::print_human(&report);
     }
+    Ok(())
 }
 
 /// Runs the `status` subcommand end-to-end — extracted for the same
 /// testability reason as [`run_doctor`].
-fn run_status(json: bool, api: Option<String>) {
+#[cfg(target_os = "linux")]
+fn run_status(json: bool, api: Option<&str>, host: Option<&str>) -> Result<(), hosts::Error> {
     let runner = shell::RealCommandRunner;
-    let api_base = api_client::resolve_api_base(api.as_deref());
+    let api_base = api_client::resolve_api_base(api, host)?;
     let client = api_client::ApiClient::new(api_base);
     let report = status::collect(&runner, &client);
     if json {
@@ -176,6 +223,7 @@ fn run_status(json: bool, api: Option<String>) {
     } else {
         status::print_human(&report);
     }
+    Ok(())
 }
 
 /// Runs the `update` subcommand end-to-end and returns the process exit code —
@@ -184,6 +232,7 @@ fn run_status(json: bool, api: Option<String>) {
 /// With neither flag given this behaves as `--check`: a read-only default is
 /// the safe one for a command that can otherwise replace every binary on the
 /// host.
+#[cfg(target_os = "linux")]
 fn run_update(check: bool, apply: bool, json: bool) -> i32 {
     let outcome = update::run_check();
     if check || !apply {
@@ -237,41 +286,48 @@ mod tests {
     // outcomes, since those depend on what's actually installed on the
     // machine running the tests.
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_doctor_json_returns_valid_exit_code() {
         let code = run_doctor(false, true);
         assert!(code == 0 || code == 1, "unexpected exit code {code}");
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_doctor_human_returns_valid_exit_code() {
         let code = run_doctor(false, false);
         assert!(code == 0 || code == 1, "unexpected exit code {code}");
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_info_json_does_not_panic() {
-        run_info(true, Some("http://127.0.0.1:1".to_owned()));
+        run_info(true, Some("http://127.0.0.1:1"), None).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_info_human_does_not_panic() {
-        run_info(false, Some("http://127.0.0.1:1".to_owned()));
+        run_info(false, Some("http://127.0.0.1:1"), None).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_status_json_does_not_panic() {
         // Port 1 is a reserved, never-listening port, so the API portion
         // fails fast (connection refused) instead of waiting out the
         // client's 3s timeout.
-        run_status(true, Some("http://127.0.0.1:1".to_owned()));
+        run_status(true, Some("http://127.0.0.1:1"), None).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_status_human_does_not_panic() {
-        run_status(false, Some("http://127.0.0.1:1".to_owned()));
+        run_status(false, Some("http://127.0.0.1:1"), None).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn cli_parses_doctor_digest_and_json_flags() {
         let cli = Cli::try_parse_from(["firecrab", "doctor", "--digest", "--json"]).unwrap();
@@ -284,6 +340,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn cli_parses_info_api_flag() {
         let cli = Cli::try_parse_from(["firecrab", "info", "--api", "http://x:1"]).unwrap();
@@ -296,6 +353,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn cli_parses_status_subcommand() {
         let cli = Cli::try_parse_from(["firecrab", "status"]).unwrap();
@@ -308,6 +366,7 @@ mod tests {
         assert!(Cli::try_parse_from(["firecrab", "bogus"]).is_err());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn cli_parses_update_flags() {
         let cli = Cli::try_parse_from(["firecrab", "update", "--apply", "--json"]).unwrap();
@@ -321,6 +380,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn cli_defaults_update_to_a_read_only_check() {
         let cli = Cli::try_parse_from(["firecrab", "update"]).unwrap();
@@ -334,11 +394,13 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn cli_rejects_check_and_apply_together() {
         assert!(Cli::try_parse_from(["firecrab", "update", "--check", "--apply"]).is_err());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_update_check_json_returns_a_valid_exit_code() {
         let _guard = update::ENV_LOCK.lock().unwrap();
@@ -352,6 +414,7 @@ mod tests {
         assert_eq!(code, 1, "an unreachable check must exit non-zero");
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn run_update_check_human_does_not_panic() {
         let _guard = update::ENV_LOCK.lock().unwrap();
@@ -461,6 +524,29 @@ mod tests {
     }
 
     #[test]
+    fn cli_parses_host_commands_and_global_selection() {
+        let add = Cli::try_parse_from([
+            "firecrab",
+            "host",
+            "add",
+            "prod",
+            "https://prod.example:5523",
+            "--use",
+        ])
+        .unwrap();
+        assert!(matches!(
+            add.command,
+            Command::Host {
+                command: hosts::Command::Add { r#use: true, .. }
+            }
+        ));
+
+        let list = Cli::try_parse_from(["firecrab", "vm", "list", "--host", "prod"]).unwrap();
+        assert_eq!(list.host.as_deref(), Some("prod"));
+        assert!(matches!(list.command, Command::Vm { .. }));
+    }
+
+    #[test]
     fn cli_rejects_missing_create_arguments_and_bad_uuid() {
         assert!(Cli::try_parse_from(["firecrab", "vm", "create"]).is_err());
         assert!(Cli::try_parse_from(["firecrab", "network", "create"]).is_err());
@@ -477,6 +563,7 @@ mod tests {
         assert_eq!(code, 1);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn cli_parses_service_commands() {
         let install = Cli::try_parse_from([
