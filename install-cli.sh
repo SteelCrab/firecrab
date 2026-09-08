@@ -25,6 +25,8 @@ Options:
 
 Environment:
   FIRECRAB_RELEASE_BASE  Alternate release root for mirrors or tests
+  FIRECRAB_TEST_ALLOW_FILE_URL=1
+                         Permit file:// release roots in tests only
   FIRECRAB_VERSION       Default release tag
   FIRECRAB_INSTALL_DIR   Default destination directory
 EOF
@@ -55,6 +57,17 @@ if [ -z "$INSTALL_DIR" ]; then
     INSTALL_DIR="$HOME/.local/bin"
 fi
 RELEASE_BASE=${RELEASE_BASE%/}
+case "$RELEASE_BASE" in
+    https://?*) ;;
+    file://?*)
+        [ "${FIRECRAB_TEST_ALLOW_FILE_URL:-}" = 1 ] \
+            || { printf '%s\n' 'file:// release roots require FIRECRAB_TEST_ALLOW_FILE_URL=1' >&2; exit 1; }
+        ;;
+    *)
+        printf '%s\n' 'FIRECRAB_RELEASE_BASE must use HTTPS' >&2
+        exit 1
+        ;;
+esac
 
 raw_os=${FIRECRAB_CLI_OS:-$(uname -s 2>/dev/null || printf unknown)}
 case "$raw_os" in

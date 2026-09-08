@@ -108,16 +108,24 @@ After installation, save and verify a remote endpoint with the [CLI host profile
 ### Linux and macOS
 
 The POSIX installer detects Linux or macOS and x86_64 or ARM64, verifies `SHA256SUMS`, and installs to `~/.local/bin`.
+Download the installer and the separately published release checksum, verify the installer, and only then execute it.
 
 ```sh
-curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.sh | sh
+curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.sh
+curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/SHA256SUMS
+grep ' install-cli.sh$' SHA256SUMS > install-cli.sh.sha256
+if command -v sha256sum >/dev/null; then
+  sha256sum -c install-cli.sh.sha256
+else
+  shasum -a 256 -c install-cli.sh.sha256
+fi
+sh install-cli.sh
 ```
 
 Pin a version or choose another user-writable directory when needed.
 
 ```sh
-curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.sh \
-  | sh -s -- --version v0.1.3 --install-dir "$HOME/bin"
+sh install-cli.sh --version v0.1.3 --install-dir "$HOME/bin"
 ```
 
 The installer prints an `export PATH=...` line when the destination is not already on `PATH`.
@@ -126,10 +134,14 @@ Use an installation directory controlled by the current user, not a shared writa
 
 ### Windows
 
-Run the user-level PowerShell installer.
+Download the user-level PowerShell installer and separately published release checksum, verify it, and only then execute it.
 
 ```powershell
-irm https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.ps1 | iex
+Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.ps1 -OutFile install-cli.ps1
+Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/SHA256SUMS -OutFile SHA256SUMS
+$expected = ((Get-Content SHA256SUMS | Where-Object { $_ -match ' install-cli\.ps1$' }) -split '\s+')[0]
+if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw 'installer checksum mismatch' }
+& ./install-cli.ps1
 ```
 
 It installs `firecrab.exe` under `%LOCALAPPDATA%\Programs\firecrab\bin` and adds that directory to the user `PATH`.
@@ -138,8 +150,7 @@ Open a new terminal after the first installation.
 Pin a client archive by passing `-Version` to the downloaded installer.
 
 ```powershell
-$installer = irm https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.ps1
-& ([scriptblock]::Create($installer)) -Version v0.1.3
+& ./install-cli.ps1 -Version v0.1.3
 ```
 
 Use an installation directory controlled by the current user, not a shared writable directory.

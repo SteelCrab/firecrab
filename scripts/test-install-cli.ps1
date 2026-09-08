@@ -12,57 +12,12 @@ function Restore-ProcessEnvironment {
     }
 }
 
-function Start-ReleaseFixtureServer {
-    param(
-        [string]$Archive,
-        [string]$Sums,
-        [int]$Port
-    )
-
-    Start-Job -ScriptBlock {
-        param($ArchivePath, $SumsPath, $ListenPort)
-
-        $listener = New-Object System.Net.HttpListener
-        $listener.Prefixes.Add("http://127.0.0.1:$ListenPort/")
-        $listener.Start()
-        Write-Output "ready"
-        try {
-            while ($true) {
-                $pending = $listener.GetContextAsync()
-                while (-not $pending.IsCompleted) {
-                    Start-Sleep -Milliseconds 50
-                }
-                $context = $pending.GetAwaiter().GetResult()
-                $path = $context.Request.Url.AbsolutePath
-                if ($path -eq "/releases/latest/download/firecrab-cli-x86_64-windows.zip") {
-                    $body = [System.IO.File]::ReadAllBytes($ArchivePath)
-                    $context.Response.StatusCode = 200
-                } elseif ($path -eq "/releases/latest/download/SHA256SUMS") {
-                    $body = [System.IO.File]::ReadAllBytes($SumsPath)
-                    $context.Response.StatusCode = 200
-                } else {
-                    $body = [System.Text.Encoding]::UTF8.GetBytes("not found")
-                    $context.Response.StatusCode = 404
-                }
-                try {
-                    $context.Response.ContentLength64 = $body.Length
-                    $context.Response.OutputStream.Write($body, 0, $body.Length)
-                } finally {
-                    $context.Response.Close()
-                }
-            }
-        } finally {
-            $listener.Close()
-        }
-    } -ArgumentList $Archive, $Sums, $Port
-}
-
 $oldArch = $env:FIRECRAB_CLI_ARCH
 $oldReleaseBase = $env:FIRECRAB_RELEASE_BASE
+$oldAllowFileUrl = $env:FIRECRAB_TEST_ALLOW_FILE_URL
 $oldProcessPath = $env:Path
 $oldUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("firecrab-cli-test-" + [guid]::NewGuid())
-$server = $null
 
 try {
     $env:FIRECRAB_CLI_ARCH = "x86_64"
@@ -94,24 +49,8 @@ try {
     $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
     [System.IO.File]::WriteAllText($sums, "$hash  $asset`n")
 
-    $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-    $probe.Start()
-    $port = ([System.Net.IPEndPoint]$probe.LocalEndpoint).Port
-    $probe.Stop()
-    $server = Start-ReleaseFixtureServer -Archive $archive -Sums $sums -Port $port
-    $ready = $false
-    foreach ($attempt in 1..50) {
-        Start-Sleep -Milliseconds 50
-        if ((Receive-Job -Job $server -Keep) -contains "ready") {
-            $ready = $true
-            break
-        }
-    }
-    if (-not $ready) {
-        throw "release fixture server did not start"
-    }
-
-    $env:FIRECRAB_RELEASE_BASE = "http://127.0.0.1:$port/releases"
+    $env:FIRECRAB_RELEASE_BASE = ([System.Uri](Join-Path $scratch "releases")).AbsoluteUri.TrimEnd("/")
+    $env:FIRECRAB_TEST_ALLOW_FILE_URL = "1"
     & $installer -InstallDir $installDir
     $installed = Join-Path $installDir "firecrab.exe"
     if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
@@ -169,15 +108,30 @@ try {
     if (-not $rejected -or [System.IO.File]::ReadAllText($installed) -ne "firecrab replacement") {
         throw "tampered release was not rejected with the installed binary preserved"
     }
-} finally {
-    if ($null -ne $server) {
-        Stop-Job -Job $server -ErrorAction SilentlyContinue
-        Remove-Job -Job $server -Force -ErrorAction SilentlyContinue
+
+    foreach ($unsafeBase in @("http://example.test/releases", "ftp://example.test/releases")) {
+        $env:FIRECRAB_RELEASE_BASE = $unsafeBase
+        try {
+            & $installer -PrintUrl
+            throw "unsafe release URL was accepted: $unsafeBase"
+        } catch {
+            if ($_.Exception.Message -match "unsafe release URL was accepted") { throw }
+        }
     }
+    $env:FIRECRAB_RELEASE_BASE = ([System.Uri](Join-Path $scratch "releases")).AbsoluteUri.TrimEnd("/")
+    Remove-Item -LiteralPath Env:FIRECRAB_TEST_ALLOW_FILE_URL
+    try {
+        & $installer -PrintUrl
+        throw "file release URL was accepted without explicit test opt-in"
+    } catch {
+        if ($_.Exception.Message -match "was accepted without") { throw }
+    }
+} finally {
     [Environment]::SetEnvironmentVariable("Path", $oldUserPath, "User")
     $env:Path = $oldProcessPath
     Restore-ProcessEnvironment -Name "FIRECRAB_CLI_ARCH" -Value $oldArch
     Restore-ProcessEnvironment -Name "FIRECRAB_RELEASE_BASE" -Value $oldReleaseBase
+    Restore-ProcessEnvironment -Name "FIRECRAB_TEST_ALLOW_FILE_URL" -Value $oldAllowFileUrl
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }
 

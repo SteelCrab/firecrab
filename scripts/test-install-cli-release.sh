@@ -38,6 +38,7 @@ tar -czf "$release/firecrab-cli-x86_64-linux.tar.gz" -C "$release/payload" firec
 )
 
 FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
+FIRECRAB_TEST_ALLOW_FILE_URL=1 \
 FIRECRAB_CLI_OS=Linux \
 FIRECRAB_CLI_ARCH=x86_64 \
 PATH="/usr/bin:/bin" \
@@ -53,6 +54,7 @@ printf 'leave this file alone\n' >"$victim"
 unlink "$scratch/bin/firecrab"
 ln -s "$victim" "$scratch/bin/firecrab"
 FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
+FIRECRAB_TEST_ALLOW_FILE_URL=1 \
 FIRECRAB_CLI_OS=Linux \
 FIRECRAB_CLI_ARCH=x86_64 \
     "$ROOT/install-cli.sh" --install-dir "$scratch/bin" >/dev/null
@@ -75,6 +77,7 @@ fi
 relative_output=$(
     cd "$scratch"
     FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
+    FIRECRAB_TEST_ALLOW_FILE_URL=1 \
     FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 \
         "$ROOT/install-cli.sh" --install-dir relative-bin
 )
@@ -88,11 +91,29 @@ fi
 
 printf 'tampered\n' >>"$release/firecrab-cli-x86_64-linux.tar.gz"
 if FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
+    FIRECRAB_TEST_ALLOW_FILE_URL=1 \
     FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 \
     "$ROOT/install-cli.sh" --install-dir "$scratch/bin" >/dev/null 2>&1; then
     fail "tampered archive is rejected"
 else
     pass "tampered archive is rejected"
+fi
+
+for unsafe_base in http://example.test/releases ftp://example.test/releases; do
+    if FIRECRAB_RELEASE_BASE="$unsafe_base" \
+        FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 \
+        "$ROOT/install-cli.sh" --print-url >/dev/null 2>&1; then
+        fail "unsafe release URL is rejected: $unsafe_base"
+    else
+        pass "unsafe release URL is rejected: $unsafe_base"
+    fi
+done
+if FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
+    FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 \
+    "$ROOT/install-cli.sh" --print-url >/dev/null 2>&1; then
+    fail "file release URL requires explicit test opt-in"
+else
+    pass "file release URL requires explicit test opt-in"
 fi
 
 if [ "$failed" -ne 0 ]; then

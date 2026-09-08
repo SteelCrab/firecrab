@@ -25,6 +25,17 @@ $releaseBase = if ($env:FIRECRAB_RELEASE_BASE) {
 } else {
     "https://github.com/SteelCrab/firecrab/releases"
 }
+$releaseUri = $null
+if (-not [System.Uri]::TryCreate($releaseBase, [System.UriKind]::Absolute, [ref]$releaseUri)) {
+    throw "FIRECRAB_RELEASE_BASE must be an absolute HTTPS URL"
+}
+if ($releaseUri.Scheme -eq "file") {
+    if ($env:FIRECRAB_TEST_ALLOW_FILE_URL -ne "1") {
+        throw "file:// release roots require FIRECRAB_TEST_ALLOW_FILE_URL=1"
+    }
+} elseif ($releaseUri.Scheme -ne "https") {
+    throw "FIRECRAB_RELEASE_BASE must use HTTPS"
+}
 
 $rawArchitecture = if ($env:FIRECRAB_CLI_ARCH) {
     $env:FIRECRAB_CLI_ARCH
@@ -127,8 +138,13 @@ New-Item -ItemType Directory -Path $temporary | Out-Null
 try {
     $archive = Join-Path $temporary $asset
     $sums = Join-Path $temporary "SHA256SUMS"
-    Invoke-WebRequest -UseBasicParsing -Uri $assetUrl -OutFile $archive
-    Invoke-WebRequest -UseBasicParsing -Uri "$downloadRoot/SHA256SUMS" -OutFile $sums
+    if ($releaseUri.Scheme -eq "file") {
+        Copy-Item -LiteralPath ([System.Uri]$assetUrl).LocalPath -Destination $archive
+        Copy-Item -LiteralPath ([System.Uri]"$downloadRoot/SHA256SUMS").LocalPath -Destination $sums
+    } else {
+        Invoke-WebRequest -UseBasicParsing -Uri $assetUrl -OutFile $archive
+        Invoke-WebRequest -UseBasicParsing -Uri "$downloadRoot/SHA256SUMS" -OutFile $sums
+    }
 
     $checksumLine = Get-Content $sums | Where-Object {
         $fields = $_ -split "\s+"
