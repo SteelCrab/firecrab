@@ -117,15 +117,19 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-24.04
-            asset: firecrab-cli-x86_64-linux.tar.gz
+            asset: firecrab-cli-x86_64-linux-musl.tar.gz
             musl: true
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            asset: firecrab-cli-x86_64-linux-gnu.tar.gz
+            musl: false
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
-            asset: firecrab-cli-aarch64-linux.tar.gz
+            asset: firecrab-cli-aarch64-linux-musl.tar.gz
             musl: true
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
-            asset: firecrab-cli-x86_64-macos.tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            asset: firecrab-cli-aarch64-linux-gnu.tar.gz
             musl: false
           - target: aarch64-apple-darwin
             runner: macos-15
@@ -135,6 +139,12 @@ jobs:
             runner: windows-latest
             asset: firecrab-cli-x86_64-windows.zip
             musl: false
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            asset: firecrab-cli-aarch64-windows.zip
+            musl: false
+    env:
+      RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v7
 
@@ -287,9 +297,9 @@ jobs:
             x86_64-unknown-linux-gnu
             aarch64-unknown-linux-musl
             aarch64-unknown-linux-gnu
-            x86_64-apple-darwin
             aarch64-apple-darwin
             x86_64-pc-windows-msvc
+            aarch64-pc-windows-msvc
           )
           metadata_args=()
           for target in "${targets[@]}"; do

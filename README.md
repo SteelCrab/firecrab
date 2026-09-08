@@ -55,6 +55,43 @@ The installer cannot enable KVM. If `/dev/kvm` is missing, turn on hardware (or
 nested) virtualization first. Every option, install path, and troubleshooting step is
 in the [installation guide](public-docs/installation.md).
 
+### Install the remote CLI binary
+
+The standalone `firecrab` client manages a remote Linux host from Linux, Apple
+silicon macOS, or x86_64/ARM64 Windows. It does not install Firecracker or local host
+services.
+
+On Linux or macOS, download and verify the release installer before executing it:
+
+```sh
+curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.sh
+curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/SHA256SUMS
+grep ' install-cli.sh$' SHA256SUMS > install-cli.sh.sha256
+if command -v sha256sum >/dev/null; then
+  sha256sum -c install-cli.sh.sha256
+else
+  shasum -a 256 -c install-cli.sh.sha256
+fi
+sh install-cli.sh
+```
+
+Linux automatically selects the matching GNU or musl archive. The default destination
+is `~/.local/bin/firecrab`.
+
+On Windows PowerShell:
+
+```powershell
+Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.ps1 -OutFile install-cli.ps1
+Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/SHA256SUMS -OutFile SHA256SUMS
+$expected = ((Get-Content SHA256SUMS | Where-Object { $_ -match ' install-cli\.ps1$' }) -split '\s+')[0]
+if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw 'installer checksum mismatch' }
+& ./install-cli.ps1
+```
+
+The Windows installer selects x86_64 or ARM64 and adds its user-level installation
+directory to `PATH`. See [CLI host profiles](public-docs/firecrab-cli.md#host-profiles)
+for connecting the installed client to a firecrab host.
+
 ## Quick start
 
 Open `http://127.0.0.1:5523/` after installation, then:

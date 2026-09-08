@@ -13,17 +13,41 @@ expect_eq() {
 }
 
 expect_eq \
-    "$(FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 "$ROOT/install-cli.sh" --print-asset)" \
-    firecrab-cli-x86_64-linux.tar.gz \
-    "Linux x86_64 asset"
+    "$(FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 FIRECRAB_CLI_LIBC=gnu "$ROOT/install-cli.sh" --print-asset)" \
+    firecrab-cli-x86_64-linux-gnu.tar.gz \
+    "Linux x86_64 GNU asset"
+expect_eq \
+    "$(FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=arm64 FIRECRAB_CLI_LIBC=musl "$ROOT/install-cli.sh" --print-asset)" \
+    firecrab-cli-aarch64-linux-musl.tar.gz \
+    "Linux ARM64 musl asset"
+expect_eq \
+    "$(FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 FIRECRAB_CLI_LIBC=musl "$ROOT/install-cli.sh" --print-asset)" \
+    firecrab-cli-x86_64-linux-musl.tar.gz \
+    "Linux x86_64 musl asset"
+expect_eq \
+    "$(FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=arm64 FIRECRAB_CLI_LIBC=glibc "$ROOT/install-cli.sh" --print-asset)" \
+    firecrab-cli-aarch64-linux-gnu.tar.gz \
+    "Linux ARM64 glibc alias selects GNU asset"
 expect_eq \
     "$(FIRECRAB_CLI_OS=Darwin FIRECRAB_CLI_ARCH=arm64 "$ROOT/install-cli.sh" --print-asset)" \
     firecrab-cli-aarch64-macos.tar.gz \
     "Apple silicon asset"
 expect_eq \
-    "$(FIRECRAB_CLI_OS=linux FIRECRAB_CLI_ARCH=aarch64 "$ROOT/install-cli.sh" --version 1.2.3 --print-url)" \
-    "https://github.com/SteelCrab/firecrab/releases/download/v1.2.3/firecrab-cli-aarch64-linux.tar.gz" \
+    "$(FIRECRAB_CLI_OS=linux FIRECRAB_CLI_ARCH=aarch64 FIRECRAB_CLI_LIBC=gnu "$ROOT/install-cli.sh" --version 1.2.3 --print-url)" \
+    "https://github.com/SteelCrab/firecrab/releases/download/v1.2.3/firecrab-cli-aarch64-linux-gnu.tar.gz" \
     "bare version becomes a v-prefixed release URL"
+if FIRECRAB_CLI_OS=Darwin FIRECRAB_CLI_ARCH=x86_64 \
+    "$ROOT/install-cli.sh" --print-asset >/dev/null 2>&1; then
+    fail "Intel macOS is rejected"
+else
+    pass "Intel macOS is rejected"
+fi
+if FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 FIRECRAB_CLI_LIBC=other \
+    "$ROOT/install-cli.sh" --print-asset >/dev/null 2>&1; then
+    fail "unknown Linux libc is rejected"
+else
+    pass "unknown Linux libc is rejected"
+fi
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
@@ -31,16 +55,17 @@ release="$scratch/releases/latest/download"
 mkdir -p "$release/payload" "$scratch/bin"
 printf '#!/bin/sh\nprintf "firecrab test\\n"\n' >"$release/payload/firecrab"
 chmod +x "$release/payload/firecrab"
-tar -czf "$release/firecrab-cli-x86_64-linux.tar.gz" -C "$release/payload" firecrab
+tar -czf "$release/firecrab-cli-x86_64-linux-gnu.tar.gz" -C "$release/payload" firecrab
 (
     cd "$release"
-    sha256sum firecrab-cli-x86_64-linux.tar.gz >SHA256SUMS
+    sha256sum firecrab-cli-x86_64-linux-gnu.tar.gz >SHA256SUMS
 )
 
 FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
 FIRECRAB_TEST_ALLOW_FILE_URL=1 \
 FIRECRAB_CLI_OS=Linux \
 FIRECRAB_CLI_ARCH=x86_64 \
+FIRECRAB_CLI_LIBC=gnu \
 PATH="/usr/bin:/bin" \
     "$ROOT/install-cli.sh" --install-dir "$scratch/bin" >/dev/null
 if [ -x "$scratch/bin/firecrab" ] && [ "$("$scratch/bin/firecrab")" = "firecrab test" ]; then
@@ -57,6 +82,7 @@ FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
 FIRECRAB_TEST_ALLOW_FILE_URL=1 \
 FIRECRAB_CLI_OS=Linux \
 FIRECRAB_CLI_ARCH=x86_64 \
+FIRECRAB_CLI_LIBC=gnu \
     "$ROOT/install-cli.sh" --install-dir "$scratch/bin" >/dev/null
 if [ ! -L "$scratch/bin/firecrab" ] \
     && [ "$(cat "$victim")" = "leave this file alone" ] \
@@ -68,6 +94,7 @@ fi
 
 if env -u HOME \
     FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 \
+    FIRECRAB_CLI_LIBC=gnu \
     "$ROOT/install-cli.sh" --install-dir "$scratch/bin" --check >/dev/null; then
     pass "explicit install directory does not require HOME"
 else
@@ -79,6 +106,7 @@ relative_output=$(
     FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
     FIRECRAB_TEST_ALLOW_FILE_URL=1 \
     FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 \
+    FIRECRAB_CLI_LIBC=gnu \
         "$ROOT/install-cli.sh" --install-dir relative-bin
 )
 absolute_bin="$(cd "$scratch" && pwd -P)/relative-bin"
@@ -89,10 +117,11 @@ else
     fail "relative install directory produces a usable absolute PATH"
 fi
 
-printf 'tampered\n' >>"$release/firecrab-cli-x86_64-linux.tar.gz"
+printf 'tampered\n' >>"$release/firecrab-cli-x86_64-linux-gnu.tar.gz"
 if FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
     FIRECRAB_TEST_ALLOW_FILE_URL=1 \
     FIRECRAB_CLI_OS=Linux FIRECRAB_CLI_ARCH=x86_64 \
+    FIRECRAB_CLI_LIBC=gnu \
     "$ROOT/install-cli.sh" --install-dir "$scratch/bin" >/dev/null 2>&1; then
     fail "tampered archive is rejected"
 else
