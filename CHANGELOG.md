@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [#232], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
+| [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [#232], [#254], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
@@ -39,9 +39,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ## [0.2.0] - 2026-09-03
 
-firecrab adds optional IPv6 networking, managed SSH access, expanded host operations,
-and kernel lifecycle management, while hardening guest provisioning, compliance
-artifacts, and release validation.
+firecrab adds optional IPv6 networking, managed SSH access, a cross-platform remote
+CLI, expanded host operations, and kernel lifecycle management, while hardening guest
+provisioning, compliance artifacts, and release validation.
 
 ### Added
 
@@ -77,6 +77,9 @@ artifacts, and release validation.
   sibling ([#176], [#190]).
 - Host API VM, network, image, and console operations in `firecrab-cli`, plus CLI
   service-management helpers ([1ffba72], [8bcc2af]).
+- Standalone Linux, macOS, and Windows clients manage saved API or SSH host profiles
+  under `~/firecrab/config.toml` and run remote VM, network, image, and console
+  operations ([#254]).
 - Digest-pinned kernel catalog management and per-image kernel updates in the API and
   dashboard ([37075bf], [1a44619], [664d446]).
 
@@ -89,6 +92,8 @@ artifacts, and release validation.
 - The pinned Rust toolchain is 1.97.1 (`rust-toolchain.toml`) ([#131], [#188]).
 - `install.sh` rejects a prepared payload that is missing the compliance artifacts
   ([#190]).
+- CLI releases include native Linux, macOS, and Windows archives with checksum-verified
+  user-level POSIX and PowerShell installers ([#254]).
 
 ### Deprecated
 
@@ -118,6 +123,8 @@ artifacts, and release validation.
   license and source material ([#190]).
 - `firecrab-cli` builds cleanly with zero Clippy warnings ([#194]).
 - Microboot test startup eliminates timing flakes ([#208]).
+- CLI installers reject non-HTTPS release sources; local `file://` fixtures require an
+  explicit test-only opt-in ([#254]).
 
 ### Improved
 
@@ -125,6 +132,8 @@ artifacts, and release validation.
   first-time-reader flow ([677cbef], [77e7347], [4360419]).
 - CLI-only installation is documented alongside the prepared host payload flow
   ([c27e516]).
+- CLI-only installation verifies the separately published checksum before executing a
+  downloaded POSIX or PowerShell installer ([#254]).
 - Networking, API, and dashboard docs cover IPv6 create-time choice, NAT66 vs
   direct egress, and guest sysctl ([#178]).
 - [`public-docs/ci.md`](public-docs/ci.md) documents the Clippy gate ([#198]).
@@ -345,6 +354,7 @@ network helper.
 [#198]: https://github.com/SteelCrab/firecrab/pull/198
 [#208]: https://github.com/SteelCrab/firecrab/pull/208
 [#232]: https://github.com/SteelCrab/firecrab/pull/232
+[#254]: https://github.com/SteelCrab/firecrab/pull/254
 [1ffba72]: https://github.com/SteelCrab/firecrab/commit/1ffba72
 [8bcc2af]: https://github.com/SteelCrab/firecrab/commit/8bcc2af
 [37075bf]: https://github.com/SteelCrab/firecrab/commit/37075bf
