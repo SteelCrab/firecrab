@@ -35,6 +35,9 @@ jobs:
         # before they reach a tagged build.
         run: cargo test --workspace --release --locked
 
+      - name: CLI installer contract
+        run: bash scripts/test-install-cli-release.sh
+
   build-release:
     name: Build (${{ matrix.target }})
     needs: release-test
@@ -104,6 +107,98 @@ jobs:
           name: firecrab-${{ matrix.target }}
           path: firecrab-${{ matrix.target }}.tar.gz
 
+  build-cli:
+    name: CLI (${{ matrix.target }})
+    needs: [release-test, license-compliance]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            asset: firecrab-cli-x86_64-linux.tar.gz
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            asset: firecrab-cli-aarch64-linux.tar.gz
+            musl: true
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            asset: firecrab-cli-x86_64-macos.tar.gz
+            musl: false
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            asset: firecrab-cli-aarch64-macos.tar.gz
+            musl: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            asset: firecrab-cli-x86_64-windows.zip
+            musl: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download compliance material
+        uses: actions/download-artifact@v8
+        with:
+          name: firecrab-license-compliance
+          path: compliance
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install musl linker
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Test CLI
+        run: cargo test --release --locked --target ${{ matrix.target }} -p firecrab-cli
+
+      - name: Build CLI
+        run: cargo build --release --locked --target ${{ matrix.target }} -p firecrab-cli
+
+      - name: Smoke CLI on Unix
+        if: runner.os != 'Windows'
+        run: ./target/${{ matrix.target }}/release/firecrab --version
+
+      - name: Package CLI on Unix
+        if: runner.os != 'Windows'
+        run: |
+          mkdir package
+          cp target/${{ matrix.target }}/release/firecrab package/
+          cp LICENSE package/
+          cp compliance/THIRD_PARTY_NOTICES.txt package/
+          cp compliance/release-license-inventory.json package/
+          tar -czf "${{ matrix.asset }}" -C package \
+            firecrab LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json
+
+      - name: Test and smoke CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/test-install-cli.ps1
+          & "target/${{ matrix.target }}/release/firecrab.exe" --version
+
+      - name: Package CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/firecrab.exe" package/
+          Copy-Item LICENSE package/
+          Copy-Item compliance/THIRD_PARTY_NOTICES.txt package/
+          Copy-Item compliance/release-license-inventory.json package/
+          Compress-Archive -Path package/* -DestinationPath "${{ matrix.asset }}"
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firecrab-cli-${{ matrix.target }}
+          path: ${{ matrix.asset }}
+
   build-dashboard:
     name: Build dashboard
     needs: release-test
@@ -171,6 +266,8 @@ jobs:
       - name: M2Image release compliance contracts
         run: |
           shellcheck \
+            install-cli.sh \
+            scripts/test-install-cli-release.sh \
             scripts/collect-m2image-compliance.sh \
             scripts/package-m2images.sh \
             scripts/package-m2image-sources.sh \
@@ -190,6 +287,9 @@ jobs:
             x86_64-unknown-linux-gnu
             aarch64-unknown-linux-musl
             aarch64-unknown-linux-gnu
+            x86_64-apple-darwin
+            aarch64-apple-darwin
+            x86_64-pc-windows-msvc
           )
           metadata_args=()
           for target in "${targets[@]}"; do
@@ -376,6 +476,7 @@ jobs:
     name: Publish GitHub Release
     needs:
       - build-release
+      - build-cli
       - package-host
       - smoke-host-x86_64-gnu
       - smoke-host-aarch64
@@ -398,10 +499,13 @@ jobs:
           mkdir -p dist
           find artifacts -type f -name 'firecrab-host-*.tar.gz' -print
           find artifacts -type f -name 'firecrab-host-*.tar.gz' -exec cp -t dist {} +
+          find artifacts -type f \( -name 'firecrab-cli-*.tar.gz' -o -name 'firecrab-cli-*.zip' \) -print
+          find artifacts -type f \( -name 'firecrab-cli-*.tar.gz' -o -name 'firecrab-cli-*.zip' \) -exec cp -t dist {} +
           cp artifacts/firecrab-license-compliance/THIRD_PARTY_NOTICES.txt dist/
           cp artifacts/firecrab-license-compliance/release-license-inventory.json dist/
           cp LICENSE dist/LICENSE
           cp licenses/GPL-2.0-only.txt dist/GPL-2.0-only.txt
+          cp install-cli.sh install-cli.ps1 dist/
           ./scripts/bake-install-sh.sh "${GITHUB_REF_NAME}" dist/install.sh
           (cd dist && sha256sum ./* > SHA256SUMS)
           ls -l dist

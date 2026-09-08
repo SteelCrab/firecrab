@@ -1,8 +1,9 @@
 # firecrab CLI
 
-`firecrab` is a host command-line client for the same loopback REST API the dashboard uses.
-It diagnoses host readiness, prints resolved configuration, reports live status, and manages images,
-MicroNetworks, and VM lifecycles without a browser.
+`firecrab` is a Linux, macOS, and Windows command-line client for the same REST API the dashboard uses.
+It selects named Linux firecrab hosts and manages images, MicroNetworks, and VM lifecycles without a browser.
+Linux builds also diagnose and administer the local host.
+See [Installation](installation.md#cli-only-installation) for user-level installers.
 
 ## Contents
 
@@ -12,25 +13,27 @@ MicroNetworks, and VM lifecycles without a browser.
 | [doctor](#doctor) | The 13 host-readiness checks |
 | [info](#info) | Version and resolved paths |
 | [status](#status) | Live systemd and API state |
+| [Host profiles](#host-profiles) | Saved endpoints and selection order |
 | [Host API commands](#host-api-commands) | Image, MicroNetwork, and VM operations |
-| [update](#update) | Release check and in-place upgrade |
+| [update](#update) | Linux host release check and in-place upgrade |
 | [Develop](#develop) | Running the CLI from a checkout, no install |
 | [Related](#related) | Other documents |
 
 ## Architecture
 
-Each subcommand is independent: `doctor` reads the host directly, `info` reads only local configuration,
-and `status`, `image`, `network`, and `vm` call `firecrab-api`.
+Remote commands run on Linux, macOS, and Windows and call `firecrab-api` on a Linux host.
+The `doctor`, `info`, `status`, `update`, and `service` commands are present only in Linux builds.
 The resource commands never talk to Firecracker, nftables, or `firecrab-net-helper` directly — the CLI
 is a client, not a second control plane.
 
 ```mermaid
-flowchart TB
-    CLI["firecrab"]
-    Doctor["doctor"]
-    Info["info"]
-    Status["status"]
-    Resources["image / network / vm"]
+flowchart TD
+    CLI["firecrab<br/>Linux / macOS / Windows"]
+    Config[("~/firecrab/config.toml")]
+    Select["--api / FIRECRAB_API / --host / current host"]
+    Linux["Linux-only local commands"]
+    Doctor["doctor / info / status / service"]
+    Resources["host / image / network / vm"]
     Console["vm console"]
     Update["update"]
     Proc[("/dev/kvm, /proc/sys/net")]
@@ -40,31 +43,24 @@ flowchart TB
     API[("firecrab-api\n:5523")]
     GH[("api.github.com\nreleases/latest")]
     Helper[("firecrab-net-helper\nsocket")]
-    CLI --> Doctor
-    CLI --> Info
-    CLI --> Status
+    CLI --> Config
+    Config --> Select
+    CLI --> Select
+    CLI --> Linux
+    Linux --> Doctor
     CLI --> Resources
-    CLI --> Console
-    CLI --> Update
+    Select --> Console
+    Linux --> Update
     Doctor -->|read| Proc
     Doctor -->|shell out| Tools
-    Info -->|resolve| Paths
-    Status -->|is-active| Units
-    Status -->|GET /api/host| API
-    Resources -->|REST API| API
+    Doctor -->|resolve| Paths
+    Doctor -->|is-active| Units
+    Select --> Resources
+    Resources -->|HTTP(S) REST API| API
     Console -->|WebSocket serial stream| API
     Update -->|GET releases/latest| GH
     Update -->|ApplySelfUpdate| Helper
 ```
-
-| Subcommand | Talks to | Needs root |
-| --- | --- | --- |
-| `doctor` | `/proc`, `/dev/kvm`, and external tools (`nft`, `ufw`, `systemctl`, `getenforce`, `curl`) | No — privileged checks degrade to SKIP with a fix hint |
-| `info` | Only environment variables and install defaults | No |
-| `status` | `systemctl is-active` and `GET /api/host` | No |
-| `image`, `network`, and VM lifecycle commands | The corresponding `firecrab-api` REST resources | No |
-| `vm console` | The running VM's serial-console WebSocket | No |
-| `update` | `api.github.com`, the release asset host, and the net-helper socket | `--check` no; `--apply` yes (root or the `firecrab` account) |
 
 ## doctor
 
@@ -107,7 +103,7 @@ firecrab info --json
 
 - Fields: `version`, `prefix`, `datadir`, `confdir`, `unitdir`, `apiBase`.
 - Path defaults mirror `install.sh`: `PREFIX=/usr/local`, `DATADIR=/var/lib/firecrab`, `CONFDIR=/etc/firecrab`, `UNITDIR=/etc/systemd/system`, each overridable by the same-named environment variable.
-- `apiBase` resolves `--api`, then `FIRECRAB_API`, then `http://127.0.0.1:5523`.
+- `apiBase` uses the same endpoint selection order as [Host profiles](#host-profiles).
 
 ## status
 
@@ -121,7 +117,47 @@ firecrab status --api http://127.0.0.1:5523
 
 - `firecrab-api.service` / `firecrab-net-helper.service`: `systemctl is-active`, or `unknown` if `systemctl` itself cannot run.
 - `host`: `GET /api/host` — load average, memory, disk, and uptime — or `null` with `hostError` set if the API is unreachable or answers an error.
-- Base URL resolution is the same as `info`: `--api`, then `FIRECRAB_API`, then `http://127.0.0.1:5523`.
+- Base URL resolution uses the same endpoint selection order as [Host profiles](#host-profiles).
+
+## Host profiles
+
+Save each Linux host once, then use its short name from any supported client OS.
+
+```sh
+firecrab host add prod https://firecrab.example.com:5523 --use
+firecrab host add lab http://192.0.2.20:5523
+firecrab host list
+firecrab host show
+firecrab --host lab vm list
+firecrab host use prod
+firecrab host remove lab
+```
+
+The first added host becomes current automatically.
+The configuration is written atomically to `~/firecrab/config.toml`.
+On Windows, `~` is `%USERPROFILE%`; `FIRECRAB_CONFIG_DIR` overrides the directory for portable or test environments.
+
+```toml
+current_host = "prod"
+
+[hosts.prod]
+url = "https://firecrab.example.com:5523"
+```
+
+Host names use letters, digits, `.`, `_`, or `-`.
+URLs require `http://` or `https://`; embedded credentials, query strings, and fragments are rejected.
+The config stores endpoint URLs only, never passwords or private-key contents.
+Unknown TOML keys are rejected before a profile mutation, preventing a client upgrade or downgrade from silently removing configuration.
+
+Endpoint selection order:
+
+1. Global `--api URL`
+2. `FIRECRAB_API`
+3. Global `--host NAME`
+4. `current_host` from `~/firecrab/config.toml`
+5. `http://127.0.0.1:5523`
+
+`host show [NAME]` resolves the endpoint and probes `GET /api/host` so connection and TLS errors are visible before a mutation.
 
 ## Host API commands
 
@@ -188,8 +224,8 @@ firecrab vm create \
   --network NETWORK_ID
 ```
 
-The API base resolves in this order: global `--api URL`, `FIRECRAB_API`, then
-`http://127.0.0.1:5523`. The global flag may appear before or after a subcommand:
+The API base uses the [Host profiles](#host-profiles) selection order.
+Global flags may appear before or after a subcommand:
 
 ```sh
 firecrab --api http://127.0.0.1:5523 vm list
@@ -202,7 +238,7 @@ fields and request IDs remain visible.
 
 ## update
 
-Compares this build's version with the newest GitHub Release tag, and optionally installs it.
+This Linux-only host command compares the build with the newest GitHub Release tag and optionally installs it.
 
 ```sh
 firecrab update --check
@@ -248,6 +284,8 @@ cargo build -p firecrab-cli
 ./target/debug/firecrab status --api http://127.0.0.1:5523
 ./target/debug/firecrab image list --api http://127.0.0.1:5523
 ```
+
+On Windows, run `target\debug\firecrab.exe`; the `host`, `image`, `network`, and `vm` commands are identical.
 
 - `cargo run -p firecrab-cli -- doctor` works too; `cargo build` first is only for repeat runs without a rebuild each time.
 - Unit tests (`FakeCommandRunner`, no real host state touched): `cargo test -p firecrab-cli`.

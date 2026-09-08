@@ -35,18 +35,23 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-/// `--api` flag > `FIRECRAB_API` env > `DEFAULT_API_BASE`. Trailing slash
-/// stripped so callers can always do `format!("{base}/api/host")`.
-pub fn resolve_api_base(flag: Option<&str>) -> String {
-    if let Some(f) = flag {
-        return f.trim_end_matches('/').to_owned();
+/// Resolves `--api` > `FIRECRAB_API` > `--host` > current host > loopback.
+pub fn resolve_api_base(
+    flag: Option<&str>,
+    requested_host: Option<&str>,
+) -> Result<String, crate::hosts::Error> {
+    if let Some(flag) = flag {
+        return crate::hosts::normalize_url(flag);
     }
-    if let Ok(env_val) = std::env::var("FIRECRAB_API")
-        && !env_val.is_empty()
+    if let Ok(environment) = std::env::var("FIRECRAB_API")
+        && !environment.is_empty()
     {
-        return env_val.trim_end_matches('/').to_owned();
+        return crate::hosts::normalize_url(&environment);
     }
-    DEFAULT_API_BASE.to_owned()
+    let selected = crate::hosts::selected(requested_host)?;
+    Ok(selected
+        .map(|host| host.url)
+        .unwrap_or_else(|| DEFAULT_API_BASE.to_owned()))
 }
 
 /// Thin blocking HTTP client for firecrab-api, used by `status`/other
@@ -294,7 +299,7 @@ mod tests {
     #[test]
     fn resolve_api_base_prefers_flag() {
         assert_eq!(
-            resolve_api_base(Some("http://example.test:9000/")),
+            resolve_api_base(Some("http://example.test:9000/"), Some("ignored")).unwrap(),
             "http://example.test:9000"
         );
     }
@@ -302,10 +307,13 @@ mod tests {
     #[test]
     fn resolve_api_base_falls_back_to_default() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
         // SAFETY: serialized by ENV_LOCK against the other test in this
         // file that touches FIRECRAB_API; no other test reads it.
         unsafe { std::env::remove_var("FIRECRAB_API") };
-        assert_eq!(resolve_api_base(None), DEFAULT_API_BASE);
+        unsafe { std::env::set_var("FIRECRAB_CONFIG_DIR", directory.path()) };
+        assert_eq!(resolve_api_base(None, None).unwrap(), DEFAULT_API_BASE);
+        unsafe { std::env::remove_var("FIRECRAB_CONFIG_DIR") };
     }
 
     #[test]
@@ -313,9 +321,44 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: serialized by ENV_LOCK — see the note above.
         unsafe { std::env::set_var("FIRECRAB_API", "http://env-example.test:1234/") };
-        let result = resolve_api_base(None);
+        let result = resolve_api_base(None, Some("ignored")).unwrap();
         unsafe { std::env::remove_var("FIRECRAB_API") };
         assert_eq!(result, "http://env-example.test:1234");
+    }
+
+    #[test]
+    fn resolve_api_base_reads_an_explicit_and_current_saved_host() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("config.toml"),
+            r#"
+current_host = "lab"
+
+[hosts.lab]
+url = "http://lab.example:5523"
+
+[hosts.prod]
+url = "https://prod.example:5523/"
+"#,
+        )
+        .unwrap();
+        // SAFETY: ENV_LOCK serializes every environment-changing test here.
+        unsafe {
+            std::env::remove_var("FIRECRAB_API");
+            std::env::set_var("FIRECRAB_CONFIG_DIR", directory.path());
+        }
+
+        assert_eq!(
+            resolve_api_base(None, Some("prod")).unwrap(),
+            "https://prod.example:5523"
+        );
+        assert_eq!(
+            resolve_api_base(None, None).unwrap(),
+            "http://lab.example:5523"
+        );
+
+        unsafe { std::env::remove_var("FIRECRAB_CONFIG_DIR") };
     }
 
     #[test]

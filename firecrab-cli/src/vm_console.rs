@@ -2,8 +2,8 @@
 
 use std::io::IsTerminal;
 
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use futures_util::{SinkExt, StreamExt};
-use nix::sys::termios::{self, SetArg, Termios};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
@@ -162,31 +162,25 @@ fn map_websocket_error(error: WebSocketError) -> Error {
     Error::Connection(error.to_string())
 }
 
-/// Restores the exact input terminal attributes when the console exits.
-struct RawTerminal {
-    original: Termios,
-}
+/// Restores the process terminal mode when the console exits.
+struct RawTerminal;
 
 impl RawTerminal {
+    /// Enables raw input only when stdin is attached to a terminal.
     fn enter() -> Result<Option<Self>, Error> {
         let input = std::io::stdin();
         if !input.is_terminal() {
             return Ok(None);
         }
 
-        let original =
-            termios::tcgetattr(&input).map_err(|error| Error::Terminal(error.to_string()))?;
-        let mut raw = original.clone();
-        termios::cfmakeraw(&mut raw);
-        termios::tcsetattr(&input, SetArg::TCSANOW, &raw)
-            .map_err(|error| Error::Terminal(error.to_string()))?;
-        Ok(Some(Self { original }))
+        enable_raw_mode().map_err(|error| Error::Terminal(error.to_string()))?;
+        Ok(Some(Self))
     }
 }
 
 impl Drop for RawTerminal {
     fn drop(&mut self) {
-        let _ = termios::tcsetattr(std::io::stdin(), SetArg::TCSANOW, &self.original);
+        let _ = disable_raw_mode();
     }
 }
 
@@ -287,11 +281,19 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = tcp.read(&mut buffer).await.unwrap();
+                assert!(read > 0, "client closed before sending request headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
             tcp.write_all(
                 b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{\"code\":\"vm_not_running\"}",
             )
             .await
             .unwrap();
+            tcp.shutdown().await.unwrap();
         });
 
         let error = stream(
