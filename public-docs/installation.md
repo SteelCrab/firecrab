@@ -161,11 +161,13 @@ The installers select one of these standalone archives.
 
 | Client | Asset |
 | --- | --- |
-| Linux x86_64 | `firecrab-cli-x86_64-linux.tar.gz` |
-| Linux ARM64 | `firecrab-cli-aarch64-linux.tar.gz` |
-| macOS Intel | `firecrab-cli-x86_64-macos.tar.gz` |
+| Linux x86_64 glibc | `firecrab-cli-x86_64-linux-gnu.tar.gz` |
+| Linux x86_64 musl | `firecrab-cli-x86_64-linux-musl.tar.gz` |
+| Linux ARM64 glibc | `firecrab-cli-aarch64-linux-gnu.tar.gz` |
+| Linux ARM64 musl | `firecrab-cli-aarch64-linux-musl.tar.gz` |
 | macOS Apple silicon | `firecrab-cli-aarch64-macos.tar.gz` |
 | Windows x86_64 | `firecrab-cli-x86_64-windows.zip` |
+| Windows ARM64 | `firecrab-cli-aarch64-windows.zip` |
 
 Archive URLs may be pinned by replacing `latest` with a tag, for example `v0.1.0`.
 When using either installer script, pass `--version` or `-Version` as shown above.
