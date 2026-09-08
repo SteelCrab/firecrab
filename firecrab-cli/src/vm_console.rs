@@ -2,8 +2,8 @@
 
 use std::io::IsTerminal;
 
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use futures_util::{SinkExt, StreamExt};
-use nix::sys::termios::{self, SetArg, Termios};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
@@ -162,31 +162,25 @@ fn map_websocket_error(error: WebSocketError) -> Error {
     Error::Connection(error.to_string())
 }
 
-/// Restores the exact input terminal attributes when the console exits.
-struct RawTerminal {
-    original: Termios,
-}
+/// Restores the process terminal mode when the console exits.
+struct RawTerminal;
 
 impl RawTerminal {
+    /// Enables raw input only when stdin is attached to a terminal.
     fn enter() -> Result<Option<Self>, Error> {
         let input = std::io::stdin();
         if !input.is_terminal() {
             return Ok(None);
         }
 
-        let original =
-            termios::tcgetattr(&input).map_err(|error| Error::Terminal(error.to_string()))?;
-        let mut raw = original.clone();
-        termios::cfmakeraw(&mut raw);
-        termios::tcsetattr(&input, SetArg::TCSANOW, &raw)
-            .map_err(|error| Error::Terminal(error.to_string()))?;
-        Ok(Some(Self { original }))
+        enable_raw_mode().map_err(|error| Error::Terminal(error.to_string()))?;
+        Ok(Some(Self))
     }
 }
 
 impl Drop for RawTerminal {
     fn drop(&mut self) {
-        let _ = termios::tcsetattr(std::io::stdin(), SetArg::TCSANOW, &self.original);
+        let _ = disable_raw_mode();
     }
 }
 
