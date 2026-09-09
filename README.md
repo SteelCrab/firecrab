@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.1.3-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.2.0-informational"></a>
 </p>
 
 ```text
@@ -54,6 +54,43 @@ curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/instal
 The installer cannot enable KVM. If `/dev/kvm` is missing, turn on hardware (or
 nested) virtualization first. Every option, install path, and troubleshooting step is
 in the [installation guide](public-docs/installation.md).
+
+### Install the remote CLI binary
+
+The standalone `firecrab` client manages a remote Linux host from Linux, Apple
+silicon macOS, or x86_64/ARM64 Windows. It does not install Firecracker or local host
+services.
+
+On Linux or macOS, download and verify the release installer before executing it:
+
+```sh
+curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.sh
+curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/SHA256SUMS
+grep ' install-cli.sh$' SHA256SUMS > install-cli.sh.sha256
+if command -v sha256sum >/dev/null; then
+  sha256sum -c install-cli.sh.sha256
+else
+  shasum -a 256 -c install-cli.sh.sha256
+fi
+sh install-cli.sh
+```
+
+Linux automatically selects the matching GNU or musl archive. The default destination
+is `~/.local/bin/firecrab`.
+
+On Windows PowerShell:
+
+```powershell
+Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.ps1 -OutFile install-cli.ps1
+Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/SHA256SUMS -OutFile SHA256SUMS
+$expected = ((Get-Content SHA256SUMS | Where-Object { $_ -match ' install-cli\.ps1$' }) -split '\s+')[0]
+if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw 'installer checksum mismatch' }
+& ./install-cli.ps1
+```
+
+The Windows installer selects x86_64 or ARM64 and adds its user-level installation
+directory to `PATH`. See [CLI host profiles](public-docs/firecrab-cli.md#host-profiles)
+for connecting the installed client to a firecrab host.
 
 ## Quick start
 

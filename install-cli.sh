@@ -29,6 +29,7 @@ Environment:
                          Permit file:// release roots in tests only
   FIRECRAB_VERSION       Default release tag
   FIRECRAB_INSTALL_DIR   Default destination directory
+  FIRECRAB_CLI_LIBC      Linux libc override: gnu, glibc, or musl
 EOF
 }
 
@@ -83,7 +84,30 @@ case "$raw_arch" in
     *) printf 'unsupported client architecture: %s\n' "$raw_arch" >&2; exit 1 ;;
 esac
 
-asset="firecrab-cli-${architecture}-${platform}.tar.gz"
+case "$platform" in
+    linux)
+        raw_libc=${FIRECRAB_CLI_LIBC:-}
+        if [ -z "$raw_libc" ]; then
+            if [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ] \
+                || { command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; }; then
+                raw_libc=musl
+            else
+                raw_libc=gnu
+            fi
+        fi
+        case "$raw_libc" in
+            gnu|glibc) libc=gnu ;;
+            musl) libc=musl ;;
+            *) printf 'unsupported Linux libc: %s\n' "$raw_libc" >&2; exit 1 ;;
+        esac
+        asset="firecrab-cli-${architecture}-linux-${libc}.tar.gz"
+        ;;
+    macos)
+        [ "$architecture" = aarch64 ] \
+            || { printf '%s\n' 'unsupported macOS client architecture: x86_64' >&2; exit 1; }
+        asset="firecrab-cli-aarch64-macos.tar.gz"
+        ;;
+esac
 case "$VERSION" in
     ''|latest) download_root="$RELEASE_BASE/latest/download" ;;
     v*) download_root="$RELEASE_BASE/download/$VERSION" ;;
