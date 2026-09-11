@@ -3274,7 +3274,7 @@ async fn import_oci_image(
         tracker, templates, reference, alias, image_root, &scratch, credential,
     )
     .await;
-    if let Err(error) = tokio::fs::remove_dir_all(&scratch).await
+    if let Err(error) = remove_import_scratch(&scratch).await
         && error.kind() != io::ErrorKind::NotFound
     {
         tracing::warn!(
@@ -3288,7 +3288,7 @@ async fn import_oci_image(
 }
 
 async fn reset_import_scratch(scratch: &Path) -> Result<(), ResolveError> {
-    match tokio::fs::remove_dir_all(scratch).await {
+    match remove_import_scratch(scratch).await {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
@@ -3298,6 +3298,49 @@ async fn reset_import_scratch(scratch: &Path) -> Result<(), ResolveError> {
     tokio::fs::create_dir_all(scratch)
         .await
         .map_err(|error| cache_io("create import scratch", scratch.to_owned(), error))
+}
+
+/// Removes a scratch tree, tolerating directories a merged layer stamped
+/// owner-non-writable (Fedora's `/usr/bin`, `/usr/lib*`, `/root`, `/afs`, ...
+/// ship 555/550 by design — see `apply_directory_metadata`). `remove_dir_all`
+/// cannot unlink entries under those without a chmod pass first, which left
+/// every retry wedged on the previous attempt's leftovers.
+async fn remove_import_scratch(scratch: &Path) -> io::Result<()> {
+    let path = scratch.to_owned();
+    tokio::task::spawn_blocking(move || {
+        make_tree_removable(&path)?;
+        std::fs::remove_dir_all(&path)
+    })
+    .await
+    .unwrap_or_else(|error| Err(io::Error::other(format!("removal task failed: {error}"))))
+}
+
+/// Recursively grants the owner write+execute on every directory under
+/// `path` (including `path` itself) so a subsequent removal can unlink
+/// everything beneath it. Missing paths are not an error — the caller's
+/// removal call handles that the same way it always has.
+fn make_tree_removable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o700 != 0o700 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o700))?;
+    }
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            make_tree_removable(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 async fn import_oci_image_in_scratch(
