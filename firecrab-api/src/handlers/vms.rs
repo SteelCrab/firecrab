@@ -2805,7 +2805,13 @@ mod tests {
     }
 
     async fn wait_for_state(state: &AppState, id: Uuid, want: VmState) {
-        for _ in 0..100 {
+        // 30s, not the 3s this budget used to be: the background start/stop
+        // task this polls for spawns a real subprocess, and under coverage
+        // instrumentation plus a full parallel `cargo test` run that can take
+        // much longer than in a normal build without ever indicating a real
+        // regression (see e8c1ab9's identical fix for `start_vm`'s own
+        // deadline).
+        for _ in 0..1000 {
             if memory_state(state, id) == Some(want) {
                 return;
             }
