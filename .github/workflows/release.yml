@@ -406,15 +406,32 @@ jobs:
     steps:
       - name: Unpack tools
         # git: actions/checkout in the container. timeout(1): smoke-release-exec.sh.
+        # Retries absorb transient mirror hiccups (same helper as ci.yml's
+        # installer-deps bootstrap step).
         run: |
+          retry() {
+            n=0
+            until [ "$n" -ge 5 ]; do
+              "$@" && return 0
+              n=$((n + 1))
+              echo "retrying ($n/5): $*" >&2
+              sleep 5
+            done
+            return 1
+          }
+
           if command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq tar gzip git ca-certificates coreutils
+            retry apt-get update -qq && retry apt-get install -y -qq tar gzip git ca-certificates coreutils
           elif command -v dnf >/dev/null; then
-            dnf install -y -q tar gzip git ca-certificates
+            retry dnf install -y -q tar gzip git ca-certificates
           elif command -v pacman >/dev/null; then
-            pacman -Sy --noconfirm --needed tar gzip git ca-certificates
+            retry pacman -Sy --noconfirm --needed tar gzip git ca-certificates
           elif command -v zypper >/dev/null; then
-            zypper --non-interactive install --no-recommends tar gzip git ca-certificates
+            # Tumbleweed's oss snapshot is replaced while the container
+            # still has the previous repomd. A stale appdata-icons.tar.gz
+            # hash then makes `zypper install git` fail even after retries
+            # unless metadata is discarded first.
+            retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends tar gzip git ca-certificates'
           fi
         shell: sh -e {0}
 
