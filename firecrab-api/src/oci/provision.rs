@@ -937,8 +937,19 @@ pub(crate) const BASE_PACKAGE_INSTALL: &str = r#"
 if [ ! -f /etc/firecrab/base-packages.ok ]; then
   ok=0
   if [ -x /usr/bin/apt-get ]; then
-    if DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq \
-      && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq \
+    # Runs synchronously in sysinit — an unreachable/slow mirror must fail
+    # fast, or it blocks the console (and every respawn behind it) forever.
+    # ConnectTimeout bounds the TCP handshake specifically; Timeout alone
+    # left a black-holed mirror IP taking ~30s per address to fail. But a
+    # sources.list with several Release files (main+updates+backports+
+    # security), each retried across several mirror IPs, still stacks these
+    # per-attempt timeouts into 90s+ — so a hard wall-clock cap wraps the
+    # whole call as a backstop independent of apt's own timeout accounting.
+    APT_OPTS="-o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 \
+      -o Acquire::http::ConnectTimeout=5 -o Acquire::https::ConnectTimeout=5 \
+      -o Acquire::Retries=1"
+    if /usr/bin/timeout 25 env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq $APT_OPTS \
+      && /usr/bin/timeout 25 env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq $APT_OPTS \
         iputils-ping iproute2 ca-certificates curl procps openssh-server udev; then
       ok=1
     fi
