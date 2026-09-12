@@ -1242,3 +1242,38 @@ async fn character_and_block_devices_are_not_extracted_into_the_merged_tree() {
         }
     }
 }
+
+/// Fedora ships `/etc/gshadow` with mode 0: no owner-read bit at all.
+/// `run_mkfs` reads merged files back as the unprivileged host user under
+/// `fakeroot`, which cannot bypass the kernel's real DAC read check, so a
+/// literal 0 would make the file unreadable and fail the ext4 build.
+#[tokio::test]
+async fn files_with_no_owner_read_bit_gain_it_after_merge() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "etc/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "etc/gshadow",
+        EntryType::Regular,
+        None,
+        b"root:*::root\n",
+        0o000,
+    );
+    let layers = validate(vec![layer(&directory, "unreadable-file", &finish(builder))]).await;
+    let destination = directory.path().join("unreadable-file-rootfs");
+
+    merge_validated_layers(&layers, &destination)
+        .await
+        .expect("merge a layer containing a file with no owner-read bit");
+
+    let mode = std::fs::metadata(destination.join("etc/gshadow"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(
+        mode & 0o7777,
+        0o400,
+        "merged file must gain owner-read despite the layer shipping mode 0"
+    );
+}
