@@ -4838,4 +4838,86 @@ mod tests {
             );
         }
     }
+
+    /// A hardened image can merge in directories a lower layer stamped
+    /// owner-non-writable (Fedora's `/usr/bin`-style 555 trees). Reusing a
+    /// scratch directory for the next import must chmod its way through
+    /// those before it can unlink them, not wedge on the first entry.
+    #[tokio::test]
+    async fn reset_import_scratch_recreates_trees_with_owner_non_writable_directories() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create scratch fixture root");
+        let scratch = root.path().join("scratch");
+        let locked = scratch.join("usr/bin");
+        std::fs::create_dir_all(&locked).expect("create locked subtree");
+        std::fs::write(locked.join("payload"), b"merged layer file").expect("write locked file");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))
+            .expect("lock down subtree like a hardened image ships it");
+
+        reset_import_scratch(&scratch)
+            .await
+            .expect("reset scratch despite owner-non-writable directories");
+
+        assert!(scratch.is_dir(), "scratch must exist after reset");
+        assert_eq!(
+            std::fs::read_dir(&scratch).unwrap().count(),
+            0,
+            "reset must leave an empty scratch tree"
+        );
+    }
+
+    /// The very first import for an alias has nothing to clean up yet.
+    #[tokio::test]
+    async fn reset_import_scratch_creates_a_fresh_tree_when_none_exists() {
+        let root = tempfile::tempdir().expect("create scratch fixture root");
+        let scratch = root.path().join("never-created").join("scratch");
+
+        reset_import_scratch(&scratch)
+            .await
+            .expect("create scratch when nothing previously existed");
+
+        assert!(scratch.is_dir());
+    }
+
+    /// A `symlink_metadata` failure that is not "missing" — for example, a
+    /// parent directory whose traversal bit was stripped — must propagate
+    /// instead of being swallowed the way a genuinely missing path is.
+    #[test]
+    fn make_tree_removable_propagates_errors_other_than_not_found() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create fixture root");
+        let blocked = root.path().join("blocked");
+        std::fs::create_dir(&blocked).expect("create blocked directory");
+        let target = blocked.join("child");
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))
+            .expect("strip traversal permission from blocked directory");
+
+        let result = make_tree_removable(&target);
+
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore traversal permission so the fixture can be cleaned up");
+        let error = result.expect_err("stat through a non-traversable directory must fail");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    /// The scratch path itself is always a directory in production, but the
+    /// recursive chmod must not mistreat a stray non-directory left in its
+    /// place by, e.g., a prior partial write.
+    #[test]
+    fn make_tree_removable_ignores_non_directory_paths() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create fixture root");
+        let file_path = root.path().join("not-a-directory");
+        std::fs::write(&file_path, b"stray file").expect("write fixture file");
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644))
+            .expect("set fixture file mode");
+
+        make_tree_removable(&file_path).expect("non-directory paths are left alone");
+
+        let mode = std::fs::metadata(&file_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o644, "must not chmod a non-directory");
+    }
 }
