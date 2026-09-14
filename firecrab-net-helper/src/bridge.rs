@@ -226,20 +226,50 @@ pub async fn teardown_all(actor: &BridgeActor) -> Result<(), BridgeError> {
     let (connection, handle, _) = new_connection().map_err(BridgeError::Connection)?;
     tokio::spawn(connection);
 
-    let mut links = handle.link().get().execute();
-    let mut seen = Vec::new();
-    while let Some(link) = links.try_next().await.map_err(BridgeError::Netlink)? {
-        seen.push((link.header.index, link.attributes));
+    teardown_with(&mut HostTeardownNetwork(handle)).await
+}
+
+/// All host effects of teardown, including firewall cleanup. Tests supply an
+/// in-memory implementation so they cannot delete a running VM's network.
+trait TeardownNetwork {
+    async fn list_links(&mut self) -> Result<Vec<(u32, Vec<LinkAttribute>)>, rtnetlink::Error>;
+    async fn delete_link(&mut self, index: u32) -> Result<(), rtnetlink::Error>;
+    async fn remove_forward_rules(&mut self, name: &str);
+}
+
+struct HostTeardownNetwork(Handle);
+
+impl TeardownNetwork for HostTeardownNetwork {
+    async fn list_links(&mut self) -> Result<Vec<(u32, Vec<LinkAttribute>)>, rtnetlink::Error> {
+        let mut links = self.0.link().get().execute();
+        let mut seen = Vec::new();
+        while let Some(link) = links.try_next().await? {
+            seen.push((link.header.index, link.attributes));
+        }
+        Ok(seen)
     }
 
+    async fn delete_link(&mut self, index: u32) -> Result<(), rtnetlink::Error> {
+        self.0.link().del(index).execute().await
+    }
+
+    async fn remove_forward_rules(&mut self, name: &str) {
+        crate::firewall::remove_iptables_forward_for_bridge(name).await;
+    }
+}
+
+/// Shared production/test control flow; keeps the original ENODEV handling
+/// and stops on every other error before cleaning that bridge's firewall.
+async fn teardown_with(network: &mut impl TeardownNetwork) -> Result<(), BridgeError> {
+    let seen = network.list_links().await.map_err(BridgeError::Netlink)?;
     for (index, name) in owned_links(&seen) {
-        match handle.link().del(index).execute().await {
+        match network.delete_link(index).await {
             Ok(()) => {}
             Err(error) if is_enodev(&error) => {}
             Err(error) => return Err(BridgeError::Netlink(error)),
         }
         if name == BRIDGE_NAME || name.starts_with(MICRO_NETWORK_BRIDGE_PREFIX) {
-            crate::firewall::remove_iptables_forward_for_bridge(&name).await;
+            network.remove_forward_rules(&name).await;
         }
     }
     Ok(())
@@ -883,13 +913,156 @@ mod tests {
         assert!(!is_enodev(&rtnetlink::Error::RequestFailed));
     }
 
+    #[derive(Debug, PartialEq)]
+    enum TeardownCall {
+        List,
+        Delete(u32),
+        RemoveForwardRules(String),
+    }
+
+    #[derive(Default)]
+    struct FakeTeardownNetwork {
+        links: Vec<(u32, Vec<LinkAttribute>)>,
+        list_error: Option<rtnetlink::Error>,
+        delete_error: Option<(u32, rtnetlink::Error)>,
+        calls: Vec<TeardownCall>,
+    }
+
+    impl FakeTeardownNetwork {
+        fn with_links(links: &[(u32, &str)]) -> Self {
+            Self {
+                links: links
+                    .iter()
+                    .map(|(index, name)| (*index, vec![LinkAttribute::IfName((*name).to_owned())]))
+                    .collect(),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl TeardownNetwork for FakeTeardownNetwork {
+        async fn list_links(&mut self) -> Result<Vec<(u32, Vec<LinkAttribute>)>, rtnetlink::Error> {
+            self.calls.push(TeardownCall::List);
+            match self.list_error.take() {
+                Some(error) => Err(error),
+                None => Ok(self.links.clone()),
+            }
+        }
+
+        async fn delete_link(&mut self, index: u32) -> Result<(), rtnetlink::Error> {
+            self.calls.push(TeardownCall::Delete(index));
+            if self
+                .delete_error
+                .as_ref()
+                .is_some_and(|(failed, _)| *failed == index)
+            {
+                return Err(self.delete_error.take().unwrap().1);
+            }
+            self.links.retain(|(existing, _)| *existing != index);
+            Ok(())
+        }
+
+        async fn remove_forward_rules(&mut self, name: &str) {
+            self.calls
+                .push(TeardownCall::RemoveForwardRules(name.to_owned()));
+        }
+    }
+
+    fn teardown_netlink_error(errno: i32) -> rtnetlink::Error {
+        let mut message = rtnetlink::packet_core::ErrorMessage::default();
+        message.code = std::num::NonZeroI32::new(-errno);
+        rtnetlink::Error::NetlinkError(message)
+    }
+
     #[tokio::test]
     async fn teardown_all_is_a_no_op_when_nothing_firecrab_owns_is_present() {
-        // Read-only rtnetlink listing needs no special privilege; on a host
-        // with no fcbr0/mnb*/fct* interfaces, nothing is ever deleted, so
-        // this never reaches the point of needing CAP_NET_ADMIN (same
-        // reasoning as tap.rs's deleting_a_tap_that_was_never_created_is_a_no_op).
-        let actor = BridgeActor::new();
-        assert!(teardown_all(&actor).await.is_ok());
+        for links in [vec![], vec![(1, "lo"), (2, "eth0"), (3, "docker0")]] {
+            let mut network = FakeTeardownNetwork::with_links(&links);
+            let result = teardown_with(&mut network).await;
+            assert!(result.is_ok(), "{result:?}");
+            assert_eq!(network.calls, vec![TeardownCall::List]);
+            assert_eq!(network.links.len(), links.len());
+        }
+    }
+
+    #[tokio::test]
+    async fn teardown_deletes_only_owned_links_and_cleans_only_bridge_rules() {
+        use TeardownCall::*;
+        let mut network = FakeTeardownNetwork::with_links(&[
+            (1, "lo"),
+            (2, BRIDGE_NAME),
+            (3, "eth0"),
+            (4, "mnbdead"),
+            (5, "fctcafe"),
+        ]);
+        let result = teardown_with(&mut network).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            network.calls,
+            vec![
+                List,
+                Delete(2),
+                RemoveForwardRules(BRIDGE_NAME.to_owned()),
+                Delete(4),
+                RemoveForwardRules("mnbdead".to_owned()),
+                Delete(5),
+            ]
+        );
+        assert_eq!(
+            network.links,
+            FakeTeardownNetwork::with_links(&[(1, "lo"), (3, "eth0")]).links
+        );
+
+        // A second teardown has nothing left to delete.
+        network.calls.clear();
+        let result = teardown_with(&mut network).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(network.calls, vec![List]);
+    }
+
+    #[tokio::test]
+    async fn teardown_cleans_rules_and_continues_when_a_bridge_disappeared() {
+        use TeardownCall::*;
+        let mut network = FakeTeardownNetwork::with_links(&[(2, "mnbdead"), (3, "fctcafe")]);
+        network.delete_error = Some((2, teardown_netlink_error(libc::ENODEV)));
+        let result = teardown_with(&mut network).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            network.calls,
+            vec![
+                List,
+                Delete(2),
+                RemoveForwardRules("mnbdead".to_owned()),
+                Delete(3)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn teardown_stops_on_permission_error_without_removing_rules() {
+        let mut network = FakeTeardownNetwork::with_links(&[(2, "mnbdead"), (3, "fctcafe")]);
+        network.delete_error = Some((2, teardown_netlink_error(libc::EPERM)));
+        let error = teardown_with(&mut network).await.unwrap_err();
+        assert!(
+            matches!(error, BridgeError::Netlink(rtnetlink::Error::NetlinkError(ref message))
+            if message.raw_code() == -libc::EPERM),
+            "{error:?}"
+        );
+        assert_eq!(
+            network.calls,
+            vec![TeardownCall::List, TeardownCall::Delete(2)]
+        );
+    }
+
+    #[tokio::test]
+    async fn teardown_propagates_listing_failure_without_mutating_network() {
+        let mut network = FakeTeardownNetwork::with_links(&[(2, BRIDGE_NAME)]);
+        network.list_error = Some(rtnetlink::Error::RequestFailed);
+        let error = teardown_with(&mut network).await.unwrap_err();
+        assert!(
+            matches!(error, BridgeError::Netlink(rtnetlink::Error::RequestFailed)),
+            "{error:?}"
+        );
+        assert_eq!(network.calls, vec![TeardownCall::List]);
     }
 }
