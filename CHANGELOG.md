@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.2.1](#021---2026-09-14) | 2026-09-14 | [#262], [#263], [#264], [#265] |
 | [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [#232], [#254], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
@@ -32,6 +33,41 @@ Entries land here as work merges, and move under the next version heading when t
 ### Fixed
 
 - None.
+
+### Improved
+
+- None.
+
+## [0.2.1] - 2026-09-14
+
+firecrab hardens OCI import against slow mirrors and hardened base images, and
+stabilizes release and coverage CI.
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- OCI imports no longer freeze the guest console on an unreachable apt mirror;
+  `apt-get update`/`install` inside guest `sysinit` is bounded by a hard
+  wall-clock timeout ([#262]).
+- OCI import no longer wedges after importing a hardened image (e.g.
+  `fedora:46`) with non-writable directories or unreadable files; scratch
+  cleanup chmods before removal, and merged files guarantee owner-read so
+  `mkfs.ext4` can copy them ([#263]).
+- Release smoke tests retry Unpack tools package-manager installs to absorb
+  transient mirror hiccups ([#264]).
+- VM start tests no longer flake under coverage instrumentation; `wait_for_state`'s
+  real-time budget is widened ([#265]).
 
 ### Improved
 
@@ -355,6 +391,10 @@ network helper.
 [#208]: https://github.com/SteelCrab/firecrab/pull/208
 [#232]: https://github.com/SteelCrab/firecrab/pull/232
 [#254]: https://github.com/SteelCrab/firecrab/pull/254
+[#262]: https://github.com/SteelCrab/firecrab/pull/262
+[#263]: https://github.com/SteelCrab/firecrab/pull/263
+[#264]: https://github.com/SteelCrab/firecrab/pull/264
+[#265]: https://github.com/SteelCrab/firecrab/pull/265
 [1ffba72]: https://github.com/SteelCrab/firecrab/commit/1ffba72
 [8bcc2af]: https://github.com/SteelCrab/firecrab/commit/8bcc2af
 [37075bf]: https://github.com/SteelCrab/firecrab/commit/37075bf
