@@ -895,6 +895,9 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
+# Package configuration can take minutes on a small guest. Let init start
+# the console while this worker installs packages, then starts services.
+(
 {base_packages}
 
 # Fallback only: glibc guests already received a pinned /usr/bin/fastfetch at
@@ -919,6 +922,7 @@ for service in {services}/*; do
   echo $! > /run/firecrab/$name.pid
   [ "$name" = app ] && echo $! > /run/firecrab-app.pid
 done
+) </dev/null >/dev/console 2>&1 &
 exit 0
 "#,
         agent = crate::guest_agent::BIN_PATH,
@@ -928,51 +932,7 @@ exit 0
     )
 }
 
-/// First-boot install of a small operator set. Slim OCI images ship a
-/// package manager and empty lists, so `apt-get install ping` fails until
-/// `update` has run. A failed attempt leaves no stamp and retries next boot.
-/// Distroless trees have no manager; the busybox applets are enough.
-pub(crate) const BASE_PACKAGE_INSTALL: &str = r#"
-# First boot only. Container images rarely ship ping/curl.
-if [ ! -f /etc/firecrab/base-packages.ok ]; then
-  ok=0
-  if [ -x /usr/bin/apt-get ]; then
-    # Runs synchronously in sysinit — an unreachable/slow mirror must fail
-    # fast, or it blocks the console (and every respawn behind it) forever.
-    # ConnectTimeout bounds the TCP handshake specifically; Timeout alone
-    # left a black-holed mirror IP taking ~30s per address to fail. But a
-    # sources.list with several Release files (main+updates+backports+
-    # security), each retried across several mirror IPs, still stacks these
-    # per-attempt timeouts into 90s+ — so a hard wall-clock cap wraps the
-    # whole call as a backstop independent of apt's own timeout accounting.
-    APT_OPTS="-o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 \
-      -o Acquire::http::ConnectTimeout=5 -o Acquire::https::ConnectTimeout=5 \
-      -o Acquire::Retries=1"
-    if /usr/bin/timeout 25 env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq $APT_OPTS \
-      && /usr/bin/timeout 25 env DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq $APT_OPTS \
-        iputils-ping iproute2 ca-certificates curl procps openssh-server udev; then
-      ok=1
-    fi
-  elif [ -x /usr/bin/dnf ]; then
-    /usr/bin/dnf install -y -q iputils iproute ca-certificates curl procps-ng openssh-server && ok=1
-  elif [ -x /usr/bin/microdnf ]; then
-    /usr/bin/microdnf -y install iputils iproute ca-certificates curl procps-ng openssh-server && ok=1
-  elif [ -x /usr/bin/yum ]; then
-    /usr/bin/yum install -y -q iputils iproute ca-certificates curl procps-ng openssh-server && ok=1
-  elif [ -x /sbin/apk ]; then
-    /sbin/apk add --no-cache iputils iproute2 ca-certificates curl procps openssh && ok=1
-  elif [ -x /usr/bin/apk ]; then
-    /usr/bin/apk add --no-cache iputils iproute2 ca-certificates curl procps openssh && ok=1
-  elif [ -x /usr/bin/zypper ]; then
-    /usr/bin/zypper --non-interactive install -y iputils iproute2 ca-certificates curl procps openssh udev && ok=1
-  elif [ -x /usr/bin/pacman ]; then
-    /usr/bin/pacman -Sy --noconfirm --needed iputils iproute2 ca-certificates curl procps-ng openssh && ok=1
-  else
-    ok=1
-  fi
-  [ "$ok" -eq 1 ] && $BB touch /etc/firecrab/base-packages.ok
-fi
-"#;
+pub(in crate::oci) const BASE_PACKAGE_INSTALL: &str = include_str!("guest/install-packages.sh");
 
 /// Guest path of the agetty respawn wrapper (issue #223).
 pub(crate) const GUEST_AGETTY_WRAPPER: &str = "/etc/firecrab/rc.agetty";

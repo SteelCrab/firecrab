@@ -1145,7 +1145,7 @@ fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
     };
 
     assert!(
-        block_with("apt-get install").contains("udev"),
+        block_with("PACKAGES=").contains("udev"),
         "Debian/Ubuntu ship no systemd-udevd on a minimal OCI base — #225"
     );
     assert!(
@@ -1170,6 +1170,88 @@ fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
         !block_with("pacman -Sy").contains("udev"),
         "Arch folds udev into the systemd package; a separate `udev` package does not exist"
     );
+}
+
+/// Execute the generated installer against fake package tools. The timeout
+/// wrapper rejects any attempt to put a dpkg transaction under a deadline.
+#[test]
+fn apt_install_bounds_downloads_but_finishes_interrupted_configuration() {
+    for fail_download in [false, true] {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let write_tool = |name: &str, body: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        write_tool("dpkg", "echo recover >> \"$TEST_LOG\"; exit 1");
+        write_tool(
+            "timeout",
+            r#"
+echo "timeout $*" >> "$TEST_LOG"
+case " $* " in
+  *" --download-only "*|*" update "*) shift; exec "$@" ;;
+  *) exit 99 ;;
+esac
+"#,
+        );
+        write_tool(
+            "apt-get",
+            r#"
+echo "apt $*" >> "$TEST_LOG"
+case " $* " in
+  *" --download-only "*) [ "$FAIL_DOWNLOAD" != 1 ] ;;
+  *" --no-download "*) touch "$TEST_INSTALLED" ;;
+  *" update "*) exit 0 ;;
+  *) exit 98 ;;
+esac
+"#,
+        );
+        // Only touch is needed from the toolbox on this successful apt branch.
+        write_tool("bb", "exec \"$@\"");
+        let stamp = root.join("base-packages.ok");
+        let log = root.join("commands.log");
+        let installed = root.join("installed");
+        let mut script = provision::BASE_PACKAGE_INSTALL.to_owned();
+        for name in ["apt-get", "dpkg", "timeout"] {
+            script = script.replace(
+                &format!("/usr/bin/{name}"),
+                root.join(name).to_str().unwrap(),
+            );
+        }
+        script = script
+            .replace("/etc/firecrab/base-packages.ok", stamp.to_str().unwrap())
+            .replace("/dev/console", root.join("console").to_str().unwrap());
+        let run = || {
+            std::process::Command::new("sh")
+                .args(["-c", &script])
+                .env("BB", root.join("bb"))
+                .env("TEST_LOG", &log)
+                .env("TEST_INSTALLED", &installed)
+                .env("FAIL_DOWNLOAD", if fail_download { "1" } else { "0" })
+                .output()
+                .unwrap()
+        };
+        let output = run();
+        assert!(output.status.success(), "{output:?}");
+        let commands = std::fs::read_to_string(&log).unwrap();
+        assert!(commands.starts_with("recover\n"), "{commands}");
+        assert!(commands.contains("timeout 25 "), "{commands}");
+        assert!(commands.contains("timeout 120 "), "{commands}");
+        assert_eq!(installed.exists(), !fail_download, "{commands}");
+        assert_eq!(stamp.exists(), !fail_download, "{commands}");
+        if fail_download {
+            assert!(
+                std::fs::read_to_string(root.join("console"))
+                    .unwrap()
+                    .contains("FIRECRAB_PACKAGES_FAILED")
+            );
+        } else {
+            assert!(commands.contains("--fix-broken --no-install-recommends --no-download"));
+            assert!(run().status.success());
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), commands);
+        }
+    }
 }
 
 /// #223: `exit` must look like it did something. Both console entry points
