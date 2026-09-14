@@ -29,7 +29,7 @@ is a client, not a second control plane.
 ```mermaid
 flowchart TD
     CLI["firecrab<br/>Linux / macOS / Windows"]
-    Config[("~/firecrab/config.toml")]
+    Config[("~/.firecrab/config.toml")]
     Select["--api / FIRECRAB_API / --host / current host"]
     Linux["Linux-only local commands"]
     Doctor["doctor / info / status / service"]
@@ -56,7 +56,7 @@ flowchart TD
     Doctor -->|resolve| Paths
     Doctor -->|is-active| Units
     Select --> Resources
-    Resources -->|HTTP(S) REST API| API
+    Resources -->|REST API| API
     Console -->|WebSocket serial stream| API
     Update -->|GET releases/latest| GH
     Update -->|ApplySelfUpdate| Helper
@@ -134,7 +134,7 @@ firecrab host remove lab
 ```
 
 The first added host becomes current automatically.
-The configuration is written atomically to `~/firecrab/config.toml`.
+The configuration is written atomically to `~/.firecrab/config.toml`.
 On Windows, `~` is `%USERPROFILE%`; `FIRECRAB_CONFIG_DIR` overrides the directory for portable or test environments.
 
 ```toml
@@ -154,7 +154,7 @@ Endpoint selection order:
 1. Global `--api URL`
 2. `FIRECRAB_API`
 3. Global `--host NAME`
-4. `current_host` from `~/firecrab/config.toml`
+4. `current_host` from `~/.firecrab/config.toml`
 5. `http://127.0.0.1:5523`
 
 `host show [NAME]` resolves the endpoint and probes `GET /api/host` so connection and TLS errors are visible before a mutation.

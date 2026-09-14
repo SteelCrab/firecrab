@@ -75,6 +75,8 @@ fi
 sh install-cli.sh
 ```
 
+Remove the standalone client with `sh install-cli.sh --uninstall`. Add `--purge` to also remove saved host profiles from `~/.firecrab/config.toml`.
+
 Linux automatically selects the matching GNU or musl archive. The default destination
 is `~/.local/bin/firecrab`.
 

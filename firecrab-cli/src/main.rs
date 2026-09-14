@@ -28,7 +28,7 @@ struct Cli {
     /// Override the API base URL.
     #[arg(long, global = true, value_name = "URL")]
     api: Option<String>,
-    /// Use a named host from ~/firecrab/config.toml.
+    /// Use a named host from ~/.firecrab/config.toml.
     #[arg(long, global = true, value_name = "NAME")]
     host: Option<String>,
     #[command(subcommand)]

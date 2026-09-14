@@ -54,7 +54,7 @@ pub enum Command {
     },
 }
 
-/// A named host entry in `~/firecrab/config.toml`.
+/// A named host entry in `~/.firecrab/config.toml`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct HostEntry {
@@ -288,10 +288,10 @@ fn config_path_from(
     } else {
         non_empty(home).or_else(|| non_empty(user_profile))
     }?;
-    Some(PathBuf::from(home).join("firecrab").join(CONFIG_FILE))
+    Some(PathBuf::from(home).join(".firecrab").join(CONFIG_FILE))
 }
 
-/// Returns the configured path, normally `~/firecrab/config.toml`.
+/// Returns the configured path, normally `~/.firecrab/config.toml`.
 pub fn config_path() -> Result<PathBuf, Error> {
     config_path_from(
         std::env::var_os("FIRECRAB_CONFIG_DIR"),
@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn config_path_uses_the_requested_cross_platform_home() {
         let unix = config_path_from(None, Some("/home/alice".into()), None, false).unwrap();
-        assert_eq!(unix, Path::new("/home/alice/firecrab/config.toml"));
+        assert_eq!(unix, Path::new("/home/alice/.firecrab/config.toml"));
 
         let windows = config_path_from(
             None,
@@ -622,7 +622,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(windows, Path::new(r"C:\Users\alice/firecrab/config.toml"));
+        assert_eq!(windows, Path::new(r"C:\Users\alice/.firecrab/config.toml"));
     }
 
     #[test]
