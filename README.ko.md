@@ -213,18 +213,37 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 테스트:
 
 ```sh
-cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+
+# 커버리지, 로컬에서는 선택 사항 — CI와 동일한 명령
+cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+
+# 프론트엔드 lint, 타입체크, 빌드
+npm install --prefix firecrab-frontend
+npm run lint --prefix firecrab-frontend
+npm run build --prefix firecrab-frontend
 
 # OCI inspect → import 브라우저 E2E (로컬 레지스트리 fixture, Docker Hub 없음)
 npm install --prefix firecrab-e2e
 npm run install-browsers --prefix firecrab-e2e
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
+
+# 문서 링크 + CHANGELOG 형식
+python3 scripts/check-doc-links.py
+python3 scripts/check-changelog.py
 ```
 
-E2E 기대 결과는 1 passed, 1 skipped입니다. skip된 테스트는 VM을 만들어 부팅하므로, 플래그
-없이 실행하려면 KVM·Firecracker와 `./scripts/dev-net-helper.sh`가 필요합니다.
-[firecrab-e2e/README.md](firecrab-e2e/README.md)와
-[웹 대시보드 가이드](public-docs/dashboard.md)를 참고하세요.
+`cargo clippy`는 `-D warnings`로 실행됩니다 — 베이스라인 없이 경고 하나만 있어도 CI가
+실패합니다. `npm test --prefix firecrab-e2e`는 스펙 파일 4개(OCI import, MicroRegistry
+register, MicroNetwork IPv6, OCI DHCP boot)를 함께 실행합니다. 스펙별 pass/skip 개수,
+필요한 환경, register 스펙의 알려진 leftover-catalog-row 문제(L3 `microregistry_local`에
+아직 DELETE가 없어 이전 실행의 잔여 행이 `beforeAll`을 실패시킴)는
+[firecrab-e2e/README.md](firecrab-e2e/README.md)에 있습니다. PR 전 전체 점검 목록
+(shellcheck, 설치 스크립트 스모크 테스트, rustdoc 포함)은
+[CONTRIBUTING.md](./CONTRIBUTING.md#checks-before-you-open-a-pr)를 참고하세요.
+[웹 대시보드 가이드](public-docs/dashboard.md)도 참고하세요.
 
 ## 문서
 

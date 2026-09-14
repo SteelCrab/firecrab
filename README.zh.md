@@ -190,10 +190,26 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 # http://127.0.0.1:5523/
 ```
 
-运行 Rust 测试套件：
+运行 Rust 测试套件（fmt、clippy、test）：
 
 ```sh
-cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+```
+
+覆盖率（本地可选，与 CI 命令一致）：
+
+```sh
+cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+```
+
+前端 lint、类型检查、构建：
+
+```sh
+npm install --prefix firecrab-frontend
+npm run lint --prefix firecrab-frontend
+npm run build --prefix firecrab-frontend
 ```
 
 OCI 检查 → 导入的浏览器 E2E（本地仓库 fixture，不访问 Docker Hub）：
@@ -204,10 +220,20 @@ npm run install-browsers --prefix firecrab-e2e
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
 ```
 
-预期为 1 passed、1 skipped。
-被跳过的测试会创建并启动 VM。去掉该标志运行 `npm test --prefix firecrab-e2e` 需要
-KVM、Firecracker 和 `./scripts/dev-net-helper.sh`。
-详见 [firecrab-e2e/README.md](firecrab-e2e/README.md)。
+文档链接 + CHANGELOG 格式：
+
+```sh
+python3 scripts/check-doc-links.py
+python3 scripts/check-changelog.py
+```
+
+`cargo clippy` 以 `-D warnings` 运行——没有基线，一条警告即导致 CI 失败。
+`npm test --prefix firecrab-e2e` 会同时运行全部 4 个 spec 文件（OCI import、MicroRegistry
+register、MicroNetwork IPv6、OCI DHCP boot）。各 spec 的 pass/skip 数量、所需环境，以及
+register spec 已知的 leftover-catalog-row 问题（L3 `microregistry_local` 尚无 DELETE，
+上一次运行残留的行会导致 `beforeAll` 失败）见 [firecrab-e2e/README.md](firecrab-e2e/README.md)。
+提交 PR 前的完整检查列表（含 shellcheck、安装脚本冒烟测试、rustdoc）见
+[CONTRIBUTING.md](./CONTRIBUTING.md#checks-before-you-open-a-pr)。
 
 更多开发说明和浏览器工作流见[网页仪表盘指南](public-docs/dashboard.md)。
 
