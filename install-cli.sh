@@ -8,6 +8,8 @@ INSTALL_DIR=${FIRECRAB_INSTALL_DIR:-}
 CHECK=0
 PRINT_ASSET=0
 PRINT_URL=0
+UNINSTALL=0
+PURGE=0
 
 usage() {
     cat <<'EOF'
@@ -18,6 +20,8 @@ Install the firecrab client without root, Cargo, or the Linux host services.
 Options:
   --version VER       Release tag such as v0.1.3 (default: latest)
   --install-dir DIR   Destination directory (default: ~/.local/bin)
+  --uninstall         Remove the standalone firecrab client
+  --purge             With --uninstall, also remove saved host configuration
   --check             Print the selected asset and destination without changes
   --print-asset       Print the selected release asset name
   --print-url         Print the selected release asset URL
@@ -29,6 +33,7 @@ Environment:
                          Permit file:// release roots in tests only
   FIRECRAB_VERSION       Default release tag
   FIRECRAB_INSTALL_DIR   Default destination directory
+  FIRECRAB_CONFIG_DIR    Configuration directory (default: ~/.firecrab)
   FIRECRAB_CLI_LIBC      Linux libc override: gnu, glibc, or musl
 EOF
 }
@@ -45,6 +50,8 @@ while [ "$#" -gt 0 ]; do
             INSTALL_DIR=$2
             shift 2
             ;;
+        --uninstall) UNINSTALL=1; shift ;;
+        --purge) PURGE=1; shift ;;
         --check) CHECK=1; shift ;;
         --print-asset) PRINT_ASSET=1; shift ;;
         --print-url) PRINT_URL=1; shift ;;
@@ -53,10 +60,44 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+[ "$PURGE" -eq 0 ] || [ "$UNINSTALL" -eq 1 ] \
+    || { printf '%s\n' '--purge requires --uninstall' >&2; exit 2; }
+
 if [ -z "$INSTALL_DIR" ]; then
     [ -n "${HOME:-}" ] || { printf '%s\n' 'HOME is not set; pass --install-dir or FIRECRAB_INSTALL_DIR' >&2; exit 1; }
     INSTALL_DIR="$HOME/.local/bin"
 fi
+
+if [ "$UNINSTALL" -eq 1 ]; then
+    binary="$INSTALL_DIR/firecrab"
+    if [ -d "$binary" ]; then
+        printf 'cannot uninstall: %s is a directory\n' "$binary" >&2
+        exit 1
+    fi
+    if [ -e "$binary" ] || [ -L "$binary" ]; then
+        rm -f "$binary"
+        printf 'removed firecrab CLI from %s\n' "$binary"
+    else
+        printf 'firecrab CLI is not installed at %s\n' "$binary"
+    fi
+
+    if [ "$PURGE" -eq 1 ]; then
+        if [ -n "${FIRECRAB_CONFIG_DIR:-}" ]; then
+            config_dir=$FIRECRAB_CONFIG_DIR
+        else
+            [ -n "${HOME:-}" ] || { printf '%s\n' 'HOME is not set; set FIRECRAB_CONFIG_DIR to purge configuration' >&2; exit 1; }
+            config_dir="$HOME/.firecrab"
+        fi
+        config="$config_dir/config.toml"
+        if [ -e "$config" ] || [ -L "$config" ]; then
+            rm -f "$config"
+            printf 'removed saved hosts from %s\n' "$config"
+        fi
+        rmdir "$config_dir" 2>/dev/null || true
+    fi
+    exit 0
+fi
+
 RELEASE_BASE=${RELEASE_BASE%/}
 case "$RELEASE_BASE" in
     https://?*) ;;

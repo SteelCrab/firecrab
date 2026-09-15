@@ -122,6 +122,13 @@ fi
 sh install-cli.sh
 ```
 
+Remove the client with the same installer. Saved host profiles are retained by default; add `--purge` to also remove `~/.firecrab/config.toml`.
+
+```sh
+sh install-cli.sh --uninstall
+sh install-cli.sh --uninstall --purge
+```
+
 Pin a version or choose another user-writable directory when needed.
 
 ```sh
