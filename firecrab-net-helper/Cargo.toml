@@ -10,7 +10,7 @@ firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 flate2 = "1"
 futures-util = "0.3"
 libc = "0.2"
-rtnetlink = "0.21"
+rtnetlink = "0.23"
 sha2 = { workspace = true }
 tar = { version = "0.4", default-features = false }
 thiserror = { workspace = true }
