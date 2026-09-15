@@ -7,8 +7,8 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 | Version | Date | Work |
 | --- | --- | --- |
-| [Unreleased](#unreleased) | — | [#272] |
-| [0.2.2](#022---2026-09-15) | 2026-09-15 | [#269], [#270], [88ba35d], [729bb47] |
+| [Unreleased](#unreleased) | — | — |
+| [0.2.2](#022---2026-09-15) | 2026-09-15 | [#269], [#270], [#272], [88ba35d], [729bb47] |
 | [0.2.1](#021---2026-09-14) | 2026-09-14 | [#262], [#263], [#264], [#265] |
 | [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [#232], [#254], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
@@ -21,12 +21,37 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- The standalone CLI installer supports the --uninstall option; --uninstall
-  --purge also removes saved host profiles and the configuration file ([#272]).
+- None.
 
 ### Changed
 
-- Standalone CLI host profiles now default to ~/.firecrab/config.toml, avoiding
+- None.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- None.
+
+### Improved
+
+- None.
+
+## [0.2.2] - 2026-09-15
+
+firecrab adds standalone CLI cleanup, improves OCI package portability and
+release documentation, and hardens network teardown testing.
+
+### Added
+
+- The standalone CLI installer supports `--uninstall`. Adding `--purge` also
+  removes saved host profiles and the configuration file ([#272]).
+
+### Changed
+
+- Standalone CLI host profiles now default to `~/.firecrab/config.toml`, avoiding
   collisions with a source checkout ([#272]).
 
 ### Deprecated
@@ -37,31 +62,6 @@ Entries land here as work merges, and move under the next version heading when t
 
 - The CLI documentation's Mermaid edge label now renders correctly on GitHub
   ([#272]).
-
-### Improved
-
-- Installation and CLI documentation now cover the new configuration path and
-  uninstall commands ([#272]).
-
-## [0.2.2] - 2026-09-15
-
-firecrab improves OCI package portability and release documentation, and
-hardens network teardown testing.
-
-### Added
-
-- None.
-
-### Changed
-
-- None.
-
-### Deprecated
-
-- None.
-
-### Fixed
-
 - OCI imports no longer time out halfway through guest package configuration
   when an apt mirror is slow or unreachable; the guest setup timeout now
   covers the full package-manager operation ([#269]).
@@ -70,6 +70,8 @@ hardens network teardown testing.
 
 ### Improved
 
+- Installation and CLI documentation now cover the new configuration path and
+  uninstall commands ([#272]).
 - Network bridge teardown control flow is easier to exercise with deterministic
   tests ([#270]).
 - README test instructions now include formatting, Clippy, coverage, frontend,
