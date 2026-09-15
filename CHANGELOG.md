@@ -7,7 +7,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 
 | Version | Date | Work |
 | --- | --- | --- |
-| [Unreleased](#unreleased) | — | — |
+| [Unreleased](#unreleased) | — | [#272] |
 | [0.2.2](#022---2026-09-15) | 2026-09-15 | [#269], [#270], [88ba35d], [729bb47] |
 | [0.2.1](#021---2026-09-14) | 2026-09-14 | [#262], [#263], [#264], [#265] |
 | [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [#232], [#254], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
@@ -21,11 +21,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- None.
+- The standalone CLI installer supports the --uninstall option; --uninstall
+  --purge also removes saved host profiles and the configuration file ([#272]).
 
 ### Changed
 
-- None.
+- Standalone CLI host profiles now default to ~/.firecrab/config.toml, avoiding
+  collisions with a source checkout ([#272]).
 
 ### Deprecated
 
@@ -33,11 +35,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
-- None.
+- The CLI documentation's Mermaid edge label now renders correctly on GitHub
+  ([#272]).
 
 ### Improved
 
-- None.
+- Installation and CLI documentation now cover the new configuration path and
+  uninstall commands ([#272]).
 
 ## [0.2.2] - 2026-09-15
 
@@ -387,7 +391,7 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.2.0...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.2.2...main
 [0.2.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.0
 [0.1.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.1
@@ -430,6 +434,7 @@ network helper.
 [#265]: https://github.com/SteelCrab/firecrab/pull/265
 [#269]: https://github.com/SteelCrab/firecrab/pull/269
 [#270]: https://github.com/SteelCrab/firecrab/pull/270
+[#272]: https://github.com/SteelCrab/firecrab/pull/272
 [88ba35d]: https://github.com/SteelCrab/firecrab/commit/88ba35d
 [729bb47]: https://github.com/SteelCrab/firecrab/commit/729bb47
 [1ffba72]: https://github.com/SteelCrab/firecrab/commit/1ffba72
