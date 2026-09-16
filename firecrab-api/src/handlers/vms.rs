@@ -440,6 +440,7 @@ pub async fn create_vm(
             let store = state.store.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = store.clear_vm_shells(vm_id);
+                let _ = store.clear_vm_port_forwards(vm_id);
                 store.delete(vm_id)
             })
             .await;
