@@ -4046,6 +4046,91 @@ while True:
         assert!(state.vms.lock().unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn allocate_lease_failure_frees_host_port_for_reuse() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+
+        let (_, Json(full)) = crate::handlers::micro_networks::create_micro_network(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                name: "full-net".to_owned(),
+                subnet_cidr: "172.30.0.0/28".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
+            }),
+        )
+        .await
+        .expect("seed full micro network");
+        let (_, Json(spare)) = crate::handlers::micro_networks::create_micro_network(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(firecrab_api_types::CreateMicroNetworkRequest {
+                name: "spare-net".to_owned(),
+                subnet_cidr: "172.31.0.0/24".to_owned(),
+                internet_enabled: true,
+                uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
+            }),
+        )
+        .await
+        .expect("seed spare micro network");
+
+        // Occupy every assignable address on the /28 so the next
+        // `allocate_lease` fails with `PoolExhausted` after the VM row and
+        // its port forwards are already persisted.
+        let subnet = SubnetSpec::from_micro_network(&full).expect("seeded CIDR parses");
+        for _ in 0..subnet.usable_addresses() {
+            state.store.allocate_lease(Uuid::new_v4(), subnet).unwrap();
+        }
+
+        let claimed = firecrab_api_types::PortForward {
+            host_port: 8080,
+            guest_port: 80,
+            protocol: firecrab_api_types::PortProtocol::Tcp,
+        };
+        let failed = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateVmRequest {
+                port_forwards: vec![claimed.clone()],
+                ..create_request_on("doomed", full.id)
+            }),
+        )
+        .await;
+        assert!(
+            failed.is_err(),
+            "exhausted /28 must fail lease allocation, got {failed:?}"
+        );
+
+        // The failed create's compensation must have released the host port:
+        // `delete` alone does not cascade to `port_forwards`, so without the
+        // `clear_vm_port_forwards` call the orphaned row keeps the global
+        // (host_port, protocol) unique index blocked and this create is
+        // rejected by validation instead.
+        let (_, Json(retry)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(CreateVmRequest {
+                port_forwards: vec![claimed],
+                ..create_request_on("retry", spare.id)
+            }),
+        )
+        .await
+        .expect("host port must be reusable after failed-create compensation");
+        assert_eq!(retry.port_forwards.len(), 1);
+        assert_eq!(retry.port_forwards[0].host_port, 8080);
+        assert_eq!(
+            state.store.list_all_port_forwards().unwrap().len(),
+            1,
+            "no orphaned port forward may survive the failed create"
+        );
+    }
+
     fn create_request_on(name: &str, micro_network_id: Uuid) -> CreateVmRequest {
         CreateVmRequest {
             name: name.to_owned(),

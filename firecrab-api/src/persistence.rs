@@ -2656,37 +2656,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_create_compensation_frees_host_port_for_reuse() {
-        let directory = tempdir().unwrap();
-        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
-        let failed = record(Uuid::new_v4(), "failed-vm");
-        store.insert(&failed).unwrap();
-        let claimed = firecrab_api_types::PortForward {
-            host_port: 8080,
-            guest_port: 80,
-            protocol: firecrab_api_types::PortProtocol::Tcp,
-        };
-        store
-            .set_vm_port_forwards(failed.id, std::slice::from_ref(&claimed))
-            .unwrap();
-
-        // Mirrors `handlers::vms::create_vm` compensation on `allocate_lease`
-        // failure: `delete` alone does not cascade to `port_forwards`, so the
-        // unique index on (host_port, protocol) keeps blocking reuse unless
-        // the compensation clears port forwards first.
-        let _ = store.clear_vm_shells(failed.id);
-        let _ = store.clear_vm_port_forwards(failed.id);
-        store.delete(failed.id).unwrap();
-
-        let retry = record(Uuid::new_v4(), "retry-vm");
-        store.insert(&retry).unwrap();
-        store
-            .set_vm_port_forwards(retry.id, std::slice::from_ref(&claimed))
-            .unwrap();
-        assert_eq!(store.list_vm_port_forwards(retry.id).unwrap().len(), 1);
-    }
-
-    #[test]
     fn opens_in_wal_mode() {
         let directory = tempdir().unwrap();
         let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
