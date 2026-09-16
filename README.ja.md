@@ -19,7 +19,8 @@
 <p align="center">
   <a href="./README.md">English</a> ·
   <a href="./README.ko.md">한국어</a> ·
-  <a href="./README.zh.md">中文</a>
+  <a href="./README.zh.md">中文</a> ·
+  <a href="./README.id.md">Bahasa Indonesia</a>
 </p>
 
 firecrab は、管理下の Linux ホストで隔離された

@@ -19,7 +19,8 @@
 <p align="center">
   <a href="./README.md">English</a> ·
   <a href="./README.ko.md">한국어</a> ·
-  <a href="./README.ja.md">日本語</a>
+  <a href="./README.ja.md">日本語</a> ·
+  <a href="./README.id.md">Bahasa Indonesia</a>
 </p>
 
 firecrab 在你管理的 Linux 主机上运行和管理隔离的
