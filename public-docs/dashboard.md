@@ -46,7 +46,7 @@ npm run dev --prefix firecrab-frontend
 | Terminal | Serial console |
 | Networks | MicroNetworks at `#/networks`. IPv6 is a create-time select |
 | Storage | MicroStorage pools |
-| Images | M2Image install or OCI import |
+| Images | M2Image inventory, OCI Import, and MicroRegistry |
 | Kernels | Digest-pinned kernel installation and lifecycle |
 | Host | Host health and capacity |
 
@@ -107,6 +107,8 @@ npm run dev --prefix firecrab-frontend
 
 ## Images
 
+- Panels: M2Image inventory, OCI Import, and MicroRegistry
+- MicroBoot is API-only; only its dashboard panel was removed. The backend bootstrap capability remains available through the [bootstrap API](images.md#bootstrap)
 - Inspect an OCI reference, then import
 - Poll until the alias is in the local catalog and can create a VM
 - Installed custom alias: register into this host's MicroRegistry catalog
