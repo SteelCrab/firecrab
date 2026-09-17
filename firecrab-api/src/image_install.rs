@@ -161,6 +161,7 @@ impl ImageInstallTracker {
     /// This is the compiled-manifest layout only. A download resolves the key
     /// from the catalog first (see [`remote_package_path`]), so this is the
     /// fallback spelling rather than what a job necessarily fetches.
+    #[cfg(test)]
     pub fn package_url_for(&self, alias: &str) -> Option<String> {
         self.base_url
             .as_deref()
@@ -468,6 +469,7 @@ pub async fn run_image_install(
 
 /// Backward-compatible combined operation for callers outside the dashboard.
 /// The dashboard uses the two explicit operations above.
+#[cfg(test)]
 pub async fn run_install(
     tracker: ImageInstallTracker,
     templates: TemplateRegistry,
@@ -1135,7 +1137,7 @@ mod tests {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).unwrap();
         }
-        let tar = Command::new("tar")
+        let mut tar = Command::new("tar")
             .args(["-C"])
             .arg(source)
             .arg("-cf")
@@ -1147,10 +1149,13 @@ mod tests {
         let status = Command::new("zstd")
             .args(["-q", "-f", "-o"])
             .arg(dest)
-            .stdin(tar.stdout.unwrap())
+            .stdin(tar.stdout.take().expect("tar stdout"))
             .status()
             .expect("zstd");
         assert!(status.success(), "zstd failed");
+        // Reaps `tar` instead of leaving a zombie, and catches a `tar` that
+        // failed halfway — otherwise a truncated archive looks like success.
+        assert!(tar.wait().expect("tar wait").success(), "tar failed");
     }
 
     #[tokio::test]
@@ -1423,9 +1428,8 @@ mod tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let app = axum::Router::new().fallback_service(tower_http::services::ServeDir::new(
-            source.path().to_path_buf(),
-        ));
+        let app = axum::Router::new()
+            .fallback_service(tower_http::services::ServeDir::new(source.path()));
         tokio::spawn(async move {
             axum::serve(listener, app).await.ok();
         });

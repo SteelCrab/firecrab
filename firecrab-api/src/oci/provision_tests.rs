@@ -255,6 +255,11 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
         "first boot should install a small package set: {boot}"
     );
     assert!(
+        boot.contains("openssh-server")
+            || boot.contains("apk add --no-cache") && boot.contains("openssh"),
+        "first boot should install openssh: {boot}"
+    );
+    assert!(
         boot.contains("/run/firecrab/$name.pid"),
         "each services.d entry must get its own pid file: {boot}"
     );
@@ -299,6 +304,13 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     }
     assert_eq!(guest_mode(&tree, "/tmp"), 0o1777);
     assert!(tree.join("etc/firecrab/services.d").is_dir());
+    let sshd = read_guest(&tree, crate::guest_ssh::GUEST_SSHD_SERVICE);
+    let sshd = String::from_utf8(sshd).expect("sshd service utf8");
+    assert!(sshd.contains("PermitRootLogin=prohibit-password"), "{sshd}");
+    assert_eq!(
+        guest_mode(&tree, crate::guest_ssh::GUEST_SSHD_SERVICE) & 0o111,
+        0o111
+    );
     // The image's own files are left exactly as they were.
     assert_eq!(read_guest(&tree, "/app/server"), b"binary");
 }
@@ -469,15 +481,31 @@ async fn an_image_with_agetty_and_bash_uses_the_serial_getty() {
         .expect("inject");
 
     let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab");
+    // #223: routed through the agetty wrapper (session-ended banner on
+    // respawn), not a bare `respawn:/usr/sbin/agetty` line.
     assert!(
-        inittab.contains(
-            "ttyS0::respawn:/usr/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
-        ),
+        inittab.contains(&format!(
+            "ttyS0::respawn:{} sh {}",
+            provision::GUEST_TOOLBOX,
+            provision::GUEST_AGETTY_WRAPPER
+        )),
         "{inittab}"
     );
     assert!(
         !inittab.contains("rc.console"),
         "agetty replaces the ash wrapper: {inittab}"
+    );
+    let wrapper =
+        String::from_utf8(read_guest(&tree, provision::GUEST_AGETTY_WRAPPER)).expect("wrapper");
+    assert!(
+        wrapper.contains(
+            "exec /usr/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
+        ),
+        "{wrapper}"
+    );
+    assert!(
+        wrapper.contains("session ended"),
+        "wrapper must print a session-boundary banner on respawn: {wrapper}"
     );
     let passwd = String::from_utf8(read_guest(&tree, "/etc/passwd")).expect("passwd");
     assert!(
@@ -1096,4 +1124,162 @@ async fn a_provisioned_tree_records_the_program_it_will_boot() {
         provisioned.toolbox_digest(),
         &Sha256Digest::of_bytes(&program)
     );
+}
+
+/// `debugfs`-audited: apt-get and zypper images ship no `systemd-udevd`
+/// (issue #225), while dnf-based Rocky already carries it and apk-based
+/// Alpine isn't systemd at all. Pull `udev` in only where it's confirmed
+/// missing and a real, separate package.
+#[test]
+fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
+    let script = provision::BASE_PACKAGE_INSTALL;
+
+    // Each branch's command may wrap onto a continuation line (apt-get's
+    // `\`), so join unindented and compare each `elif` block, not one line.
+    let joined = script.replace("\\\n", " ");
+    let block_with = |needle: &str| {
+        joined
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line contains {needle:?} in:\n{joined}"))
+    };
+
+    assert!(
+        block_with("PACKAGES=").contains("udev"),
+        "Debian/Ubuntu ship no systemd-udevd on a minimal OCI base — #225"
+    );
+    assert!(
+        block_with("zypper --non-interactive install").contains("udev"),
+        "openSUSE ships no systemd-udevd on a minimal OCI base — #225"
+    );
+
+    // Rocky/RHEL already carries systemd-udev; Alpine isn't systemd; Arch
+    // folds udev into the `systemd` package itself — adding a separate
+    // `udev` package there would 404 and break the whole install chain.
+    for needle in ["dnf install", "microdnf -y install", "yum install"] {
+        assert!(
+            !block_with(needle).contains("udev"),
+            "{needle} line must stay untouched — dnf-family already ships systemd-udev"
+        );
+    }
+    assert!(
+        !block_with("apk add").contains("udev"),
+        "Alpine is not systemd"
+    );
+    assert!(
+        !block_with("pacman -Sy").contains("udev"),
+        "Arch folds udev into the systemd package; a separate `udev` package does not exist"
+    );
+}
+
+/// Execute the generated installer against fake package tools. The timeout
+/// wrapper rejects any attempt to put a dpkg transaction under a deadline.
+#[test]
+fn apt_install_bounds_downloads_but_finishes_interrupted_configuration() {
+    for fail_download in [false, true] {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let write_tool = |name: &str, body: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        write_tool("dpkg", "echo recover >> \"$TEST_LOG\"; exit 1");
+        write_tool(
+            "timeout",
+            r#"
+echo "timeout $*" >> "$TEST_LOG"
+case " $* " in
+  *" --download-only "*|*" update "*) shift; exec "$@" ;;
+  *) exit 99 ;;
+esac
+"#,
+        );
+        write_tool(
+            "apt-get",
+            r#"
+echo "apt $*" >> "$TEST_LOG"
+case " $* " in
+  *" --download-only "*) [ "$FAIL_DOWNLOAD" != 1 ] ;;
+  *" --no-download "*) touch "$TEST_INSTALLED" ;;
+  *" update "*) exit 0 ;;
+  *) exit 98 ;;
+esac
+"#,
+        );
+        // Only touch is needed from the toolbox on this successful apt branch.
+        write_tool("bb", "exec \"$@\"");
+        let stamp = root.join("base-packages.ok");
+        let log = root.join("commands.log");
+        let installed = root.join("installed");
+        let mut script = provision::BASE_PACKAGE_INSTALL.to_owned();
+        for name in ["apt-get", "dpkg", "timeout"] {
+            script = script.replace(
+                &format!("/usr/bin/{name}"),
+                root.join(name).to_str().unwrap(),
+            );
+        }
+        script = script
+            .replace("/etc/firecrab/base-packages.ok", stamp.to_str().unwrap())
+            .replace("/dev/console", root.join("console").to_str().unwrap());
+        let run = || {
+            std::process::Command::new("sh")
+                .args(["-c", &script])
+                .env("BB", root.join("bb"))
+                .env("TEST_LOG", &log)
+                .env("TEST_INSTALLED", &installed)
+                .env("FAIL_DOWNLOAD", if fail_download { "1" } else { "0" })
+                .output()
+                .unwrap()
+        };
+        let output = run();
+        assert!(output.status.success(), "{output:?}");
+        let commands = std::fs::read_to_string(&log).unwrap();
+        assert!(commands.starts_with("recover\n"), "{commands}");
+        assert!(commands.contains("timeout 25 "), "{commands}");
+        assert!(commands.contains("timeout 120 "), "{commands}");
+        assert_eq!(installed.exists(), !fail_download, "{commands}");
+        assert_eq!(stamp.exists(), !fail_download, "{commands}");
+        if fail_download {
+            assert!(
+                std::fs::read_to_string(root.join("console"))
+                    .unwrap()
+                    .contains("FIRECRAB_PACKAGES_FAILED")
+            );
+        } else {
+            assert!(commands.contains("--fix-broken --no-install-recommends --no-download"));
+            assert!(run().status.success());
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), commands);
+        }
+    }
+}
+
+/// #223: `exit` must look like it did something. Both console entry points
+/// gate the banner on a tmpfs marker (`/run` is wiped every real reboot),
+/// so it only fires on an actual respawn, never on the guest's first attach.
+#[test]
+fn console_and_agetty_wrapper_gate_the_session_banner_on_a_tmpfs_marker() {
+    for script in [
+        provision::console_script(),
+        provision::agetty_wrapper_script("/usr/sbin/agetty"),
+    ] {
+        let marker_check = script
+            .find("if [ -f /run/firecrab-console-active ]")
+            .unwrap_or_else(|| panic!("no first-attach guard in:\n{script}"));
+        let banner = script
+            .find("session ended")
+            .unwrap_or_else(|| panic!("no session-ended banner in:\n{script}"));
+        let touch = script
+            .find("touch /run/firecrab-console-active")
+            .unwrap_or_else(|| panic!("marker is never (re)created in:\n{script}"));
+        assert!(
+            marker_check < banner,
+            "banner must be inside the marker-file guard, not unconditional: {script}"
+        );
+        assert!(
+            touch > banner,
+            "marker must be (re)touched after printing, so the very next \
+             respawn also sees it: {script}"
+        );
+    }
 }

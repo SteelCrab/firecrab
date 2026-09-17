@@ -139,6 +139,7 @@ class ReleaseComplianceTests(unittest.TestCase):
         self.assertFalse(rc.license_allowed("MIT AND GPL-2.0-only"))
         self.assertTrue(rc.license_allowed("MIT AND BSD-3-Clause"))
         self.assertTrue(rc.license_allowed("MIT/Apache-2.0"))
+        self.assertTrue(rc.license_allowed("Apache-2.0/MIT"))
         self.assertTrue(
             rc.license_allowed("Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT")
         )

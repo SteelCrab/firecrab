@@ -1,10 +1,8 @@
 import type { ViewId } from "../navigation";
 
 /**
- * One hand-drawn solid icon per nav destination (24x24, `fill: currentColor`
- * so it tracks the button's text color through hover/active states exactly
- * like the glyph it replaces). `shells` keeps its own bash.png brand mark in
- * `Shell.tsx` and has no entry here.
+ * One icon per nav destination. `shells` keeps its own bash.png brand mark in
+ * `Shell.tsx` and has no entry here; `kernels` uses the official Tux asset.
  */
 export type NavIconId = Exclude<ViewId, "shells">;
 
@@ -53,6 +51,18 @@ export default function NavIcon({ id, className }: { id: NavIconId; className?: 
           <circle cx="8" cy="9.5" r="1.8" />
           <path d="M5 17l4.5-5.5L13 15l2.5-3L19 17z" />
         </svg>
+      );
+    // Official Tux mascot — independently managed Linux kernels.
+    case "kernels":
+      return (
+        <img
+          src="/tux.svg"
+          alt=""
+          className={className}
+          width={18}
+          height={18}
+          aria-hidden="true"
+        />
       );
     // Desktop + stand — this host machine, as distinct from the VMs it runs.
     case "host":

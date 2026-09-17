@@ -476,7 +476,7 @@ fn validate_uplinks(micro_networks: &[MicroNetworkSpec]) -> Result<(), HelperFai
 /// `validate_micro_networks` and the `egress_policy` allowlist lookup) and
 /// does not assume the caller's own check already caught a malformed value.
 /// In particular, an unrecognized protocol must be rejected outright:
-/// `firewall::render_vm_policy` treats anything that isn't `"udp"` as TCP,
+/// `firewall::render_vm_policy_for_network` treats anything that isn't `"udp"` as TCP,
 /// so a bad value silently reaching it would render a DNAT rule the caller
 /// never asked for instead of failing loudly.
 fn validate_port_forwards(

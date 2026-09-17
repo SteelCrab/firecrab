@@ -61,11 +61,6 @@ impl NetworkClient {
             .map_err(|_| NetworkError::Timeout)?
     }
 
-    /// Idempotently ensures the shared bridge exists.
-    pub async fn ensure_bridge(&self) -> Result<(), NetworkError> {
-        self.call(NetworkRequest::EnsureBridge).await
-    }
-
     /// Idempotently ensures a MicroNetwork's own bridge exists, gated at
     /// `gateway`/`prefix` (`public-docs/networking.md`).
     pub async fn ensure_micro_network_bridge(

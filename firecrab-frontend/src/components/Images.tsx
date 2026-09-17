@@ -5,6 +5,7 @@ import type {
   BootstrapStepRun,
   ImageInstallResponse,
   ImageResponse,
+  KernelResponse,
   MicroRegistryRegisterResponse,
   MicroRegistryResponse,
   OciInspectResponse,
@@ -25,6 +26,7 @@ import {
   getOciImport,
   inspectOciImage,
   listImages,
+  listKernels,
   listVms,
   startBootstrap,
   startImageInstall,
@@ -32,6 +34,7 @@ import {
   startMicroRegistryRegister,
   startOciImport,
   stopVm,
+  updateImageKernel,
 } from "../api/client";
 import { logDownloadFilename } from "../lib/textExport";
 import Banner from "./Banner";
@@ -331,16 +334,32 @@ function computeMenuItems(
 function ImageDetail({
   image,
   registryMinDiskGb,
+  kernels,
+  kernelUpdateBusy,
+  onUpdateKernel,
   usedByVms,
   usedByError,
 }: {
   image: ImageResponse;
   registryMinDiskGb?: number;
+  kernels: KernelResponse[];
+  kernelUpdateBusy: boolean;
+  onUpdateKernel: (version: string) => Promise<void>;
   usedByVms: VmResponse[] | null;
   usedByError: string | null;
 }) {
   const { t } = useI18n();
   const minDiskGb = Math.max(image.minDiskGb, registryMinDiskGb ?? 0);
+  const [targetKernel, setTargetKernel] = useState(image.kernelVersion ?? "");
+  useEffect(() => {
+    setTargetKernel(image.kernelVersion ?? "");
+  }, [image.alias, image.kernelVersion]);
+  const installedKernels = kernels.filter((kernel) => kernel.installed);
+  const canUpdateKernel =
+    image.installed &&
+    targetKernel !== "" &&
+    targetKernel !== image.kernelVersion &&
+    !kernelUpdateBusy;
 
   return (
     <div className="subpanel">
@@ -350,6 +369,25 @@ function ImageDetail({
 
         <dt>{t("Version", "버전")}</dt>
         <dd>{image.version}</dd>
+
+        <dt>{t("Kernel version", "커널 버전")}</dt>
+        <dd>{image.kernelVersion ?? t("Distro-provided kernel", "배포판 제공 커널")}</dd>
+
+        <dt>{t("Kernel image", "커널 이미지")}</dt>
+        <dd>{image.kernelImage || "—"}</dd>
+
+        <dt>{t("Kernel SHA256", "커널 SHA256")}</dt>
+        <dd>{image.kernelSha256 || "—"}</dd>
+
+        <dt>{t("Rootfs SHA256", "rootfs SHA256")}</dt>
+        <dd>{image.rootfsSha256 || "—"}</dd>
+
+        {image.initrdSha256 && (
+          <>
+            <dt>initrd SHA256</dt>
+            <dd>{image.initrdSha256}</dd>
+          </>
+        )}
 
         <dt>{t("Minimum disk", "최소 디스크")}</dt>
         <dd>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</dd>
@@ -375,6 +413,46 @@ function ImageDetail({
                 : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
         </dd>
       </dl>
+      {image.installed && (
+        <div className="kernel-update-control">
+          <label htmlFor={`image-kernel-${image.alias}`}>
+            {t("Update image kernel", "이미지 커널 업데이트")}
+          </label>
+          <div className="kernel-update-row">
+            <select
+              id={`image-kernel-${image.alias}`}
+              value={targetKernel}
+              onChange={(event) => setTargetKernel(event.target.value)}
+              disabled={kernelUpdateBusy || installedKernels.length === 0}
+            >
+              <option value="">
+                {installedKernels.length === 0
+                  ? t("Install a kernel first", "먼저 커널을 설치하세요")
+                  : t("Select installed kernel", "설치된 커널을 선택하세요")}
+              </option>
+              {installedKernels.map((kernel) => (
+                <option key={kernel.version} value={kernel.version}>
+                  {kernel.version}{kernel.version === image.kernelVersion ? t(" · current", " · 현재") : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={!canUpdateKernel}
+              onClick={() => void onUpdateKernel(targetKernel)}
+            >
+              {kernelUpdateBusy ? t("Updating…", "업데이트 중…") : t("Update kernel", "커널 업데이트")}
+            </button>
+          </div>
+          <small>
+            {t(
+              "Only images with no VM references can change their kernel.",
+              "VM이 연결되지 않은 이미지만 커널을 변경할 수 있습니다.",
+            )}
+          </small>
+        </div>
+      )}
     </div>
   );
 }
@@ -951,6 +1029,7 @@ export default function Images() {
   const [listError, setListError] = useState<string | null>(null);
   const [registry, setRegistry] = useState<MicroRegistryResponse | null>(null);
   const [registryError, setRegistryError] = useState<string | null>(null);
+  const [kernels, setKernels] = useState<KernelResponse[]>([]);
   const [registerAlias, setRegisterAlias] = useState("");
   const [registerVersion, setRegisterVersion] = useState("");
   const [registerJob, setRegisterJob] = useState<MicroRegistryRegisterResponse | null>(null);
@@ -1022,10 +1101,19 @@ export default function Images() {
     }
   }, []);
 
+  const refreshKernels = useCallback(async () => {
+    try {
+      setKernels(await listKernels());
+    } catch (error) {
+      setActionError((error as Error).message);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshList();
     void refreshRegistry();
-  }, [refreshList, refreshRegistry]);
+    void refreshKernels();
+  }, [refreshList, refreshRegistry, refreshKernels]);
 
   const selectedImage = (images ?? []).find((image) => image.alias === selectedAlias) ?? null;
 
@@ -1292,6 +1380,30 @@ export default function Images() {
       pollPackage(alias);
     } catch (error) {
       setActionError((error as Error).message);
+    } finally {
+      setBusyAlias(null);
+    }
+  };
+
+  const handleUpdateKernel = async (alias: string, version: string) => {
+    setBusyAlias(alias);
+    setActionError(null);
+    try {
+      await updateImageKernel(alias, { kernelVersion: version });
+      await Promise.all([refreshList(), refreshKernels()]);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.apiError?.code === "in_use") {
+        const count = error.apiError.fields?.count ?? "";
+        const vms = error.apiError.fields?.vms ?? "";
+        setActionError(
+          t(
+            `'${alias}' has ${count} VM(s) still using it, so its kernel cannot change: ${vms}. Delete those VMs first.`,
+            `'${alias}' 이미지를 쓰는 VM ${count}개가 있어 커널을 바꿀 수 없습니다: ${vms}. 먼저 해당 VM을 삭제하세요.`,
+          ),
+        );
+      } else {
+        setActionError((error as Error).message);
+      }
     } finally {
       setBusyAlias(null);
     }
@@ -1723,6 +1835,9 @@ export default function Images() {
           <ImageDetail
             image={selectedImage}
             registryMinDiskGb={registry?.images.find((entry) => entry.alias === selectedImage.alias)?.minDiskGb}
+            kernels={kernels}
+            kernelUpdateBusy={busyAlias === selectedImage.alias}
+            onUpdateKernel={(version) => handleUpdateKernel(selectedImage.alias, version)}
             usedByVms={usedByVms}
             usedByError={usedByError}
           />

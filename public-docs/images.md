@@ -132,6 +132,43 @@ Deleting an installed image does not delete its staged package.
 The API validates paths and artifacts before use.
 Restart the API after replacing files outside the API workflow.
 
+## Details and kernel management
+
+`GET /api/images/{alias}` returns the same image record as the catalog with
+the current kernel filename, kernel SHA-256, rootfs SHA-256, optional initrd
+SHA-256, and `kernelVersion` when the image uses a managed kernel.
+
+`GET /api/kernels` lists the host architecture's digest-pinned kernel catalog.
+The current release includes Linux `7.2.2` as the newest entry and keeps
+`7.1.9` available for rollback or compatibility checks.
+
+Install a kernel independently from any image.
+
+```sh
+curl -s -X POST http://127.0.0.1:5523/api/kernels/7.2.2/install
+curl -s http://127.0.0.1:5523/api/kernels/7.2.2/install
+```
+
+The install job downloads and verifies the package, then stores one kernel at
+`.oci/kernel/<architecture>/`. A cached kernel is reusable by OCI imports and
+image updates.
+
+After a kernel is installed, update an installed image with:
+
+```sh
+curl -s -X PUT http://127.0.0.1:5523/api/images/ubuntu-26.04/kernel \
+  -H 'Content-Type: application/json' \
+  -d '{"kernelVersion":"7.2.2"}'
+```
+
+The update changes the image alias's kernel pin and leaves its rootfs and
+initrd unchanged. It is refused while an instance VM references the image,
+or when the selected kernel is not installed and verified.
+
+`DELETE /api/kernels/{version}` removes an installed kernel only when no
+installed image references it. Deleting an image does not remove a managed
+kernel cache, so kernel lifecycle remains independent.
+
 ## Register
 
 Register when an installed custom alias should appear in this host's MicroRegistry list.
@@ -154,6 +191,7 @@ For a new distribution family, add its manifest entry and builder, then update:
 ## Related
 
 - [OCI images](oci.md)
+- [Kernel management](kernels.md)
 - [Publish to Cloudflare R2](publish.md)
 - [Installation](installation.md)
 - [API](api.md)

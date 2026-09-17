@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.1.0-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.2.2-informational"></a>
 </p>
 
 ```text
@@ -19,7 +19,8 @@
 <p align="center">
   <a href="./README.md">English</a> ·
   <a href="./README.ko.md">한국어</a> ·
-  <a href="./README.zh.md">中文</a>
+  <a href="./README.zh.md">中文</a> ·
+  <a href="./README.id.md">Bahasa Indonesia</a>
 </p>
 
 firecrab は、管理下の Linux ホストで隔離された
@@ -204,10 +205,26 @@ FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
 # http://127.0.0.1:5523/
 ```
 
-Rust のテストスイートは次で実行します。
+Rust のテストスイート（fmt、clippy、test）は次で実行します。
 
 ```sh
-cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+```
+
+カバレッジ（ローカルでは任意、CI と同じコマンド）:
+
+```sh
+cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+```
+
+フロントエンドの lint・型チェック・ビルド:
+
+```sh
+npm install --prefix firecrab-frontend
+npm run lint --prefix firecrab-frontend
+npm run build --prefix firecrab-frontend
 ```
 
 OCI inspect → import のブラウザ E2E（ローカルレジストリ fixture、Docker Hub なし）:
@@ -218,10 +235,21 @@ npm run install-browsers --prefix firecrab-e2e
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
 ```
 
-期待値は 1 passed、1 skipped です。
-skipped のテストは VM を作って起動します。フラグなしの `npm test --prefix firecrab-e2e` には
-KVM、Firecracker、`./scripts/dev-net-helper.sh` が必要です。
-詳細は [firecrab-e2e/README.md](firecrab-e2e/README.md) を見てください。
+ドキュメントリンク + CHANGELOG の形式チェック:
+
+```sh
+python3 scripts/check-doc-links.py
+python3 scripts/check-changelog.py
+```
+
+`cargo clippy` は `-D warnings` 付きで実行されます — ベースラインなしで、警告1件でも CI が
+失敗します。`npm test --prefix firecrab-e2e` は 4 つの spec ファイル(OCI import、
+MicroRegistry register、MicroNetwork IPv6、OCI DHCP boot)をまとめて実行します。spec ごとの
+pass/skip 数、必要な環境、register spec の既知の leftover-catalog-row 問題(L3
+`microregistry_local` にはまだ DELETE がなく、前回実行の残留行が `beforeAll` を失敗させる)は
+[firecrab-e2e/README.md](firecrab-e2e/README.md) にあります。PR 前の完全なチェック一覧
+(shellcheck、インストーラのスモークテスト、rustdoc を含む)は
+[CONTRIBUTING.md](./CONTRIBUTING.md#checks-before-you-open-a-pr) を参照してください。
 
 開発時の注意点とブラウザのワークフローは[Web ダッシュボードガイド](public-docs/dashboard.md)にあります。
 

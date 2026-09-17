@@ -9,7 +9,41 @@ failed=0
 pass() { printf 'ok  %s\n' "$*"; }
 fail() { printf 'not ok  %s\n' "$*" >&2; failed=1; }
 
+cli_home=$(mktemp -d)
+mkdir -p "$cli_home/bin" "$cli_home/.firecrab"
+printf 'binary\n' >"$cli_home/bin/firecrab"
+printf 'current_host = "lab"\n' >"$cli_home/.firecrab/config.toml"
+HOME="$cli_home" sh ./install-cli.sh --install-dir "$cli_home/bin" --uninstall >/dev/null
+if [ ! -e "$cli_home/bin/firecrab" ] && [ -e "$cli_home/.firecrab/config.toml" ]; then
+    pass "install-cli.sh --uninstall removes the binary and keeps config"
+else
+    fail "install-cli.sh --uninstall removes the binary and keeps config"
+fi
+
+printf 'binary\n' >"$cli_home/bin/firecrab"
+HOME="$cli_home" sh ./install-cli.sh --install-dir "$cli_home/bin" --uninstall --purge >/dev/null
+if [ ! -e "$cli_home/bin/firecrab" ] && [ ! -e "$cli_home/.firecrab/config.toml" ]; then
+    pass "install-cli.sh --uninstall --purge removes binary and config"
+else
+    fail "install-cli.sh --uninstall --purge removes binary and config"
+fi
+rm -rf "$cli_home"
+
 help=$("./install.sh" --help)
+
+cli_help=$(sh ./install-cli.sh --help)
+if printf '%s\n' "$cli_help" | grep -q -- '--uninstall' \
+    && printf '%s\n' "$cli_help" | grep -q -- '--purge'; then
+    pass "CLI installer help documents uninstall and purge"
+else
+    fail "CLI installer help documents uninstall and purge"
+fi
+
+if sh ./install-cli.sh --purge >/dev/null 2>&1; then
+    fail "install-cli.sh rejects --purge without --uninstall"
+else
+    pass "install-cli.sh rejects --purge without --uninstall"
+fi
 
 if printf '%s\n' "$help" | grep -q -- '--bin-dir'; then
     pass "--help mentions --bin-dir"

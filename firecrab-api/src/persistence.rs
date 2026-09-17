@@ -586,6 +586,27 @@ pub(crate) struct LocalCatalogEntry {
     pub published_at: String,
 }
 
+/// The one shell and the first revision [`Store::create_shell`] inserts
+/// together, kept as a struct because the two rows share a timestamp and must
+/// be written in one transaction.
+#[derive(Debug, Clone, Copy)]
+pub struct NewShell<'a> {
+    /// Shell id.
+    pub id: Uuid,
+    /// Operator-facing shell name.
+    pub name: &'a str,
+    /// Optional description.
+    pub description: Option<&'a str>,
+    /// Id of the first revision (version 1).
+    pub revision_id: Uuid,
+    /// Script body of that first revision.
+    pub content: &'a str,
+    /// Hex SHA-256 of `content`.
+    pub content_sha256: &'a str,
+    /// Creation timestamp shared by both rows.
+    pub now_ms: u64,
+}
+
 /// Handle to the VM records SQLite database. Cheaply `Clone`able; all
 /// clones share one connection behind a mutex.
 #[derive(Debug, Clone)]
@@ -1047,16 +1068,16 @@ impl Store {
     }
 
     /// Creates a shell and its first revision (version 1).
-    pub fn create_shell(
-        &self,
-        id: Uuid,
-        name: &str,
-        description: Option<&str>,
-        revision_id: Uuid,
-        content: &str,
-        content_sha256: &str,
-        now_ms: u64,
-    ) -> Result<(), PersistenceError> {
+    pub fn create_shell(&self, shell: &NewShell<'_>) -> Result<(), PersistenceError> {
+        let &NewShell {
+            id,
+            name,
+            description,
+            revision_id,
+            content,
+            content_sha256,
+            now_ms,
+        } = shell;
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
@@ -1900,7 +1921,15 @@ mod tests {
         let shell_id = Uuid::new_v4();
         let rev1 = Uuid::new_v4();
         store
-            .create_shell(shell_id, "web-init", None, rev1, "echo a\n", "aa", 1)
+            .create_shell(&NewShell {
+                id: shell_id,
+                name: "web-init",
+                description: None,
+                revision_id: rev1,
+                content: "echo a\n",
+                content_sha256: "aa",
+                now_ms: 1,
+            })
             .unwrap();
         let rev2 = Uuid::new_v4();
         let version = store

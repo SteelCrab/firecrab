@@ -132,6 +132,7 @@ pub(super) async fn provision_merged_rootfs(
 ///
 /// Split from acquisition so the injection rules can be tested without a
 /// registry, and so a caller that already holds a program never re-verifies it.
+#[cfg(test)]
 pub(super) async fn inject_with_toolbox(
     rootfs: MergedRootfs,
     toolbox: &ToolboxProgram,
@@ -210,10 +211,11 @@ fn inject_blocking(
             set_root_shell(tree, &shell)?;
         }
         ensure_securetty(tree, &mut unwind)?;
+        let agetty = first_existing(tree, GUEST_AGETTY_CANDIDATES);
         install_file(
             tree,
             GUEST_INITTAB,
-            inittab(first_existing(tree, GUEST_AGETTY_CANDIDATES).as_deref()).as_bytes(),
+            inittab(agetty.as_deref()).as_bytes(),
             0o644,
             &mut unwind,
         )?;
@@ -231,6 +233,15 @@ fn inject_blocking(
             0o755,
             &mut unwind,
         )?;
+        if let Some(agetty) = agetty.as_deref() {
+            install_file(
+                tree,
+                GUEST_AGETTY_WRAPPER,
+                agetty_wrapper_script(agetty).as_bytes(),
+                0o755,
+                &mut unwind,
+            )?;
+        }
         install_file(
             tree,
             GUEST_MOTD,
@@ -242,6 +253,13 @@ fn inject_blocking(
             tree,
             GUEST_DHCP_SCRIPT,
             dhcp_script().as_bytes(),
+            0o755,
+            &mut unwind,
+        )?;
+        install_file(
+            tree,
+            crate::guest_ssh::GUEST_SSHD_SERVICE,
+            crate::guest_ssh::sshd_service_script().as_bytes(),
             0o755,
             &mut unwind,
         )?;
@@ -701,9 +719,10 @@ fn guest_path_unusable(guest_path: &str, reason: GuestPathViolation) -> ResolveE
 /// wrapper still prints MOTD and drops into ash.
 pub(crate) fn inittab(agetty: Option<&str>) -> String {
     let console = match agetty {
-        Some(path) => format!(
-            "ttyS0::respawn:{path} --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
-        ),
+        // Wrapped so `exit` prints a session-boundary banner (issue #223)
+        // before agetty re-enters — a bare `respawn:{path} --autologin`
+        // gives no sign the shell ever restarted.
+        Some(_) => format!("ttyS0::respawn:{GUEST_TOOLBOX} sh {GUEST_AGETTY_WRAPPER}"),
         None => format!("::respawn:-{GUEST_TOOLBOX} sh {GUEST_CONSOLE_SCRIPT}"),
     };
     format!(
@@ -876,6 +895,9 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
+# Package configuration can take minutes on a small guest. Let init start
+# the console while this worker installs packages, then starts services.
+(
 {base_packages}
 
 # Fallback only: glibc guests already received a pinned /usr/bin/fastfetch at
@@ -900,6 +922,7 @@ for service in {services}/*; do
   echo $! > /run/firecrab/$name.pid
   [ "$name" = app ] && echo $! > /run/firecrab-app.pid
 done
+) </dev/null >/dev/console 2>&1 &
 exit 0
 "#,
         agent = crate::guest_agent::BIN_PATH,
@@ -909,39 +932,19 @@ exit 0
     )
 }
 
-/// First-boot install of a small operator set. Slim OCI images ship a
-/// package manager and empty lists, so `apt-get install ping` fails until
-/// `update` has run. A failed attempt leaves no stamp and retries next boot.
-/// Distroless trees have no manager; the busybox applets are enough.
-pub(crate) const BASE_PACKAGE_INSTALL: &str = r#"
-# First boot only. Container images rarely ship ping/curl.
-if [ ! -f /etc/firecrab/base-packages.ok ]; then
-  ok=0
-  if [ -x /usr/bin/apt-get ]; then
-    if DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq \
-      && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq \
-        iputils-ping iproute2 ca-certificates curl procps; then
-      ok=1
-    fi
-  elif [ -x /usr/bin/dnf ]; then
-    /usr/bin/dnf install -y -q iputils iproute ca-certificates curl procps-ng && ok=1
-  elif [ -x /usr/bin/microdnf ]; then
-    /usr/bin/microdnf -y install iputils iproute ca-certificates curl procps-ng && ok=1
-  elif [ -x /usr/bin/yum ]; then
-    /usr/bin/yum install -y -q iputils iproute ca-certificates curl procps-ng && ok=1
-  elif [ -x /sbin/apk ]; then
-    /sbin/apk add --no-cache iputils iproute2 ca-certificates curl procps && ok=1
-  elif [ -x /usr/bin/apk ]; then
-    /usr/bin/apk add --no-cache iputils iproute2 ca-certificates curl procps && ok=1
-  elif [ -x /usr/bin/zypper ]; then
-    /usr/bin/zypper --non-interactive install -y iputils iproute2 ca-certificates curl procps && ok=1
-  elif [ -x /usr/bin/pacman ]; then
-    /usr/bin/pacman -Sy --noconfirm --needed iputils iproute2 ca-certificates curl procps-ng && ok=1
-  else
-    ok=1
-  fi
-  [ "$ok" -eq 1 ] && $BB touch /etc/firecrab/base-packages.ok
+pub(in crate::oci) const BASE_PACKAGE_INSTALL: &str = include_str!("guest/install-packages.sh");
+
+/// Guest path of the agetty respawn wrapper (issue #223).
+pub(crate) const GUEST_AGETTY_WRAPPER: &str = "/etc/firecrab/rc.agetty";
+
+/// Printed on every console respawn after the first (issue #223): busybox
+/// `respawn` and agetty's `--autologin` both re-enter silently, so `exit`
+/// otherwise looks like it did nothing. `/run` is tmpfs — a genuine reboot
+/// always starts clean, so this only fires when the guest shell actually exited.
+const SESSION_BANNER_PRELUDE: &str = r#"if [ -f /run/firecrab-console-active ]; then
+  printf '\n=== session ended — starting a new one ===\n\n'
 fi
+$BB touch /run/firecrab-console-active
 "#;
 
 /// Interactive console: MOTD, fastfetch when present, then ash.
@@ -955,7 +958,7 @@ export PATH
 export LANG="${{LANG:-C.UTF-8}}"
 export LC_ALL="$LANG" LC_CTYPE="$LANG"
 $BB stty iutf8 2>/dev/null
-if [ -s /etc/hostname ]; then
+{SESSION_BANNER_PRELUDE}if [ -s /etc/hostname ]; then
   $BB hostname -F /etc/hostname 2>/dev/null
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null
 fi
@@ -966,6 +969,21 @@ elif [ -x /usr/bin/neofetch ]; then
   /usr/bin/neofetch
 fi
 exec $BB sh
+"#
+    )
+}
+
+/// Wraps `agetty --autologin` so `exit` has a visible effect (issue #223).
+/// A bare respawn is invisible — `--autologin` re-enters with no prompt and
+/// no output change. Prints the same session-boundary banner as
+/// [`console_script`] before handing off; `exec` still makes agetty the
+/// tty's session leader exactly as a direct inittab invocation would.
+pub(crate) fn agetty_wrapper_script(agetty: &str) -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
+# Firecrab injected agetty wrapper (public-docs/oci.md).
+BB={GUEST_TOOLBOX}
+{SESSION_BANNER_PRELUDE}exec {agetty} --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux
 "#
     )
 }

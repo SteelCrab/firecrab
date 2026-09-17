@@ -120,7 +120,7 @@ struct FirewallState {
     /// currently installed. Keeping the full value lets an identical
     /// re-apply be a true no-op, while a changed lease, egress setting, or
     /// uplink can be replaced atomically. The uplink has to be part of this
-    /// key too: `render_vm_policy` bakes it into the DNAT rules' `iifname`
+    /// key too: `render_vm_policy_for_network` bakes it into the DNAT rules' `iifname`
     /// match, so an uplink change with an otherwise-identical `VmPolicy`
     /// still needs a real reapply, not a no-op.
     applied_vms: std::collections::HashMap<Uuid, (String, VmPolicy)>,
@@ -433,7 +433,7 @@ fn offline_subnet_cidrs6(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
 /// lives.
 ///
 /// Per-VM rules live in separate named chains + verdict-map elements (see
-/// [`render_vm_policy`]) so replacing one VM's policy never disturbs another.
+/// [`render_vm_policy_for_network`]) so replacing one VM's policy never disturbs another.
 /// The complete desired VM snapshot is appended to this recreation in the
 /// same transaction by [`render_reconciled_ruleset`].
 fn render_apply_ruleset(
@@ -560,15 +560,6 @@ fn render_apply_ruleset(
          \t}}\n\
          }}\n"
     ))
-}
-
-/// Renders one VM's isolation rules: L2 anti-spoofing tied to the lease, plus
-/// L3 egress/ingress verdicts. Every per-VM object is named after the vm_id.
-/// An identical policy is skipped by [`apply_vm_policy`]; a changed one is
-/// rendered through [`render_vm_policy_replacement`] so it cannot disturb
-/// any other VM's chains or map elements.
-fn render_vm_policy(uplink: &str, policy: &VmPolicy) -> String {
-    render_vm_policy_for_network(uplink, policy, true)
 }
 
 fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enabled: bool) -> String {
@@ -709,7 +700,7 @@ fn render_vm_policy_replacement(
     )
 }
 
-/// Removes every object [`render_vm_policy`] created for `vm_id`, and nothing
+/// Removes every object [`render_vm_policy_for_network`] created for `vm_id`, and nothing
 /// else. Each map element is deleted before the chain it jumps to, so nft
 /// never rejects a still-referenced chain.
 fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr, ipv6: Option<Ipv6Addr>) -> String {
@@ -1142,7 +1133,7 @@ mod tests {
     #[test]
     fn global_ruleset_dispatches_bridge_traffic_from_accept_policy_base_chains() {
         let network = sample_network(0x1234, "172.31.0.1", 24);
-        let ruleset = render_apply_ruleset("eth0", &[network.clone()]).unwrap();
+        let ruleset = render_apply_ruleset("eth0", std::slice::from_ref(&network)).unwrap();
         assert!(ruleset.contains("policy accept"));
         let bridge = network.bridge_name();
         assert!(ruleset.contains(&format!("iifname \"{bridge}\" jump firecrab_egress")));
@@ -1228,7 +1219,7 @@ mod tests {
     #[test]
     fn vm_policy_pins_l2_source_to_the_lease_and_blocks_ipv6_vlan() {
         let policy = sample_policy(EgressPolicy::Internet, false);
-        let ruleset = render_vm_policy("eth0", &policy);
+        let ruleset = render_vm_policy_for_network("eth0", &policy, true);
         let mac = "02:fc:aa:bb:cc:dd";
         // Spoofed source MAC / ARP sender / IPv4 source are all dropped.
         assert!(ruleset.contains(&format!("ether saddr != {mac} drop")));
@@ -1250,7 +1241,7 @@ mod tests {
     fn a_dual_stack_vm_policy_pins_its_v6_source_the_way_it_pins_v4() {
         let policy = dual_stack_policy();
         let tag = policy.vm_id.simple();
-        let ruleset = render_vm_policy("eth0", &policy);
+        let ruleset = render_vm_policy_for_network("eth0", &policy, true);
 
         // IPv6 frames are no longer dropped wholesale for this VM...
         assert!(ruleset.contains("ether type != { ip, arp, ip6 } drop"));
@@ -1274,7 +1265,11 @@ mod tests {
 
     #[test]
     fn an_ipv4_only_vm_policy_still_drops_every_v6_frame() {
-        let ruleset = render_vm_policy("eth0", &sample_policy(EgressPolicy::Internet, false));
+        let ruleset = render_vm_policy_for_network(
+            "eth0",
+            &sample_policy(EgressPolicy::Internet, false),
+            true,
+        );
         assert!(ruleset.contains("ether type != { ip, arp } drop"));
         assert!(!ruleset.contains("vm_egress6"));
     }
@@ -1297,7 +1292,11 @@ mod tests {
 
     #[test]
     fn vm_policy_allows_only_the_two_dhcp_exceptions() {
-        let ruleset = render_vm_policy("eth0", &sample_policy(EgressPolicy::Internet, false));
+        let ruleset = render_vm_policy_for_network(
+            "eth0",
+            &sample_policy(EgressPolicy::Internet, false),
+            true,
+        );
         // DHCP discover/request from an unconfigured client (src 0.0.0.0).
         assert!(ruleset.contains(
             "ether saddr 02:fc:aa:bb:cc:dd ip saddr 0.0.0.0 udp sport 68 udp dport 67 accept"
@@ -1310,11 +1309,19 @@ mod tests {
 
     #[test]
     fn internet_egress_accepts_but_isolated_falls_through_to_default_drop() {
-        let internet = render_vm_policy("eth0", &sample_policy(EgressPolicy::Internet, false));
+        let internet = render_vm_policy_for_network(
+            "eth0",
+            &sample_policy(EgressPolicy::Internet, false),
+            true,
+        );
         let tag = Uuid::from_u128(0x1234).simple();
         assert!(internet.contains(&format!("add rule inet firecrab vm_{tag}_eg accept")));
 
-        let isolated = render_vm_policy("eth0", &sample_policy(EgressPolicy::Isolated, false));
+        let isolated = render_vm_policy_for_network(
+            "eth0",
+            &sample_policy(EgressPolicy::Isolated, false),
+            true,
+        );
         // Isolated leaves the egress chain empty (no accept rule for it).
         assert!(!isolated.contains(&format!("add rule inet firecrab vm_{tag}_eg accept")));
         // But the chain and its dispatch element still exist.
@@ -1325,12 +1332,20 @@ mod tests {
     #[test]
     fn host_ssh_is_allowed_only_when_requested() {
         let tag = Uuid::from_u128(0x1234).simple();
-        let with_ssh = render_vm_policy("eth0", &sample_policy(EgressPolicy::Internet, true));
+        let with_ssh = render_vm_policy_for_network(
+            "eth0",
+            &sample_policy(EgressPolicy::Internet, true),
+            true,
+        );
         assert!(with_ssh.contains(&format!(
             "add rule inet firecrab vm_{tag}_in tcp dport 22 ct state new,established accept"
         )));
 
-        let without = render_vm_policy("eth0", &sample_policy(EgressPolicy::Internet, false));
+        let without = render_vm_policy_for_network(
+            "eth0",
+            &sample_policy(EgressPolicy::Internet, false),
+            true,
+        );
         assert!(!without.contains("tcp dport 22"));
     }
 
@@ -1350,7 +1365,7 @@ mod tests {
                 protocol: "udp".to_owned(),
             },
         ];
-        let ruleset = render_vm_policy("eth0", &policy);
+        let ruleset = render_vm_policy_for_network("eth0", &policy, true);
         assert!(ruleset.contains(&format!(
             "add chain inet firecrab vm_{tag}_dnat {{ type nat hook prerouting priority dstnat; policy accept; }}"
         )));
@@ -1392,7 +1407,7 @@ mod tests {
             guest_port: 80,
             protocol: "tcp".to_owned(),
         }];
-        let ruleset = render_vm_policy("eth0", &policy);
+        let ruleset = render_vm_policy_for_network("eth0", &policy, true);
         assert!(
             ruleset.contains("vm_")
                 && ruleset.contains("_dnat_out fib daddr type local tcp dport 8080")
@@ -1460,7 +1475,7 @@ mod tests {
             guest_port: 80,
             protocol: "tcp".to_owned(),
         }];
-        let ruleset = render_vm_policy("wan0", &policy);
+        let ruleset = render_vm_policy_for_network("wan0", &policy, true);
         // Prerouting DNAT only matches traffic arriving on the uplink, so
         // routed traffic between VMs (or any other host-forwarded traffic)
         // hitting the same destination port cannot be hijacked to this VM.
@@ -1471,7 +1486,11 @@ mod tests {
 
     #[test]
     fn vm_policy_objects_are_namespaced_so_replacing_one_vm_cannot_touch_another() {
-        let a = render_vm_policy("eth0", &sample_policy(EgressPolicy::Internet, false));
+        let a = render_vm_policy_for_network(
+            "eth0",
+            &sample_policy(EgressPolicy::Internet, false),
+            true,
+        );
         let tag_a = Uuid::from_u128(0x1234).simple();
         let tag_b = Uuid::from_u128(0x9999).simple();
         // A's rendered ruleset only ever names A's objects.
@@ -1674,7 +1693,7 @@ mod tests {
 
     #[tokio::test]
     async fn applying_the_same_policy_under_a_different_uplink_is_not_a_no_op() {
-        // `render_vm_policy` bakes the uplink into the DNAT rules' `iifname`
+        // `render_vm_policy_for_network` bakes the uplink into the DNAT rules' `iifname`
         // match, so a changed uplink with an otherwise byte-identical
         // `VmPolicy` must still be treated as a real change, not skipped.
         let actor = FirewallActor::new();

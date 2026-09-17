@@ -103,6 +103,8 @@ pub struct AppState {
     pub(crate) image_installs: ImageInstallTracker,
     /// Async package acquisition jobs (`POST /api/images/{alias}/package`).
     pub(crate) image_packages: ImageInstallTracker,
+    /// Async digest-pinned kernel acquisition jobs (`POST /api/kernels/{version}/install`).
+    pub(crate) kernel_installs: ImageInstallTracker,
     /// Async from-scratch distro bootstrap sessions (`POST /api/images/{alias}/bootstrap`).
     pub(crate) bootstraps: crate::bootstrap::BootstrapTracker,
     /// Async OCI import jobs (`POST /api/oci/import`).
@@ -155,6 +157,7 @@ impl AppState {
             network_mutations: Arc::new(AsyncMutex::new(())),
             image_installs: ImageInstallTracker::from_env(),
             image_packages: ImageInstallTracker::from_env(),
+            kernel_installs: ImageInstallTracker::from_env(),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
             oci_imports: ImageInstallTracker::default(),
             microregistry_registers: ImageInstallTracker::default(),

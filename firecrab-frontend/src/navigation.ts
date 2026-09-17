@@ -14,6 +14,7 @@ export const VIEWS = [
   { id: "networks", labels: { en: "Networks", ko: "네트워크" } },
   { id: "storages", labels: { en: "Storage", ko: "스토리지" } },
   { id: "images", labels: { en: "Images", ko: "이미지" } },
+  { id: "kernels", labels: { en: "Kernels", ko: "커널" } },
   { id: "shells", labels: { en: "Shells", ko: "Shell" }, icon: "/bash.png" },
   { id: "host", labels: { en: "Host", ko: "호스트" } },
 ] as const;

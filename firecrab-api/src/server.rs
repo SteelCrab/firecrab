@@ -192,6 +192,18 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
+        .route(
+            "/api/vms/{id}/ssh-key",
+            get(handlers::vms::download_ssh_key),
+        )
+        .route(
+            "/api/vms/{id}/ssh-host-key",
+            get(handlers::vms::get_ssh_host_key),
+        )
+        .route(
+            "/api/vms/{id}/ssh-host-key/check",
+            get(handlers::vms::check_ssh_host_key),
+        )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
         // GET and POST share one path, matching this router's existing shape
@@ -228,7 +240,21 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/images", get(handlers::images::list_images))
         .route(
             "/api/images/{alias}",
-            delete(handlers::images::delete_image),
+            get(handlers::images::list_image_detail).delete(handlers::images::delete_image),
+        )
+        .route(
+            "/api/images/{alias}/kernel",
+            axum::routing::put(handlers::images::update_image_kernel),
+        )
+        .route("/api/kernels", get(handlers::kernels::list_kernels))
+        .route(
+            "/api/kernels/{version}",
+            delete(handlers::kernels::delete_kernel),
+        )
+        .route(
+            "/api/kernels/{version}/install",
+            get(handlers::kernels::get_kernel_install)
+                .post(handlers::kernels::start_kernel_install),
         )
         .route(
             "/api/images/{alias}/install",

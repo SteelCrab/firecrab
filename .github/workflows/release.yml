@@ -35,6 +35,9 @@ jobs:
         # before they reach a tagged build.
         run: cargo test --workspace --release --locked
 
+      - name: CLI installer contract
+        run: bash scripts/test-install-cli-release.sh
+
   build-release:
     name: Build (${{ matrix.target }})
     needs: release-test
@@ -104,6 +107,108 @@ jobs:
           name: firecrab-${{ matrix.target }}
           path: firecrab-${{ matrix.target }}.tar.gz
 
+  build-cli:
+    name: CLI (${{ matrix.target }})
+    needs: [release-test, license-compliance]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            asset: firecrab-cli-x86_64-linux-musl.tar.gz
+            musl: true
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            asset: firecrab-cli-x86_64-linux-gnu.tar.gz
+            musl: false
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            asset: firecrab-cli-aarch64-linux-musl.tar.gz
+            musl: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            asset: firecrab-cli-aarch64-linux-gnu.tar.gz
+            musl: false
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            asset: firecrab-cli-aarch64-macos.tar.gz
+            musl: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            asset: firecrab-cli-x86_64-windows.zip
+            musl: false
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            asset: firecrab-cli-aarch64-windows.zip
+            musl: false
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download compliance material
+        uses: actions/download-artifact@v8
+        with:
+          name: firecrab-license-compliance
+          path: compliance
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install musl linker
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Test CLI
+        run: cargo test --release --locked --target ${{ matrix.target }} -p firecrab-cli
+
+      - name: Build CLI
+        run: cargo build --release --locked --target ${{ matrix.target }} -p firecrab-cli
+
+      - name: Smoke CLI on Unix
+        if: runner.os != 'Windows'
+        run: ./target/${{ matrix.target }}/release/firecrab --version
+
+      - name: Package CLI on Unix
+        if: runner.os != 'Windows'
+        run: |
+          mkdir package
+          cp target/${{ matrix.target }}/release/firecrab package/
+          cp LICENSE package/
+          cp compliance/THIRD_PARTY_NOTICES.txt package/
+          cp compliance/release-license-inventory.json package/
+          tar -czf "${{ matrix.asset }}" -C package \
+            firecrab LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json
+
+      - name: Test and smoke CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/test-install-cli.ps1
+          & "target/${{ matrix.target }}/release/firecrab.exe" --version
+
+      - name: Package CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/firecrab.exe" package/
+          Copy-Item LICENSE package/
+          Copy-Item compliance/THIRD_PARTY_NOTICES.txt package/
+          Copy-Item compliance/release-license-inventory.json package/
+          Compress-Archive -Path package/* -DestinationPath "${{ matrix.asset }}"
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firecrab-cli-${{ matrix.target }}
+          path: ${{ matrix.asset }}
+
   build-dashboard:
     name: Build dashboard
     needs: release-test
@@ -111,7 +216,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -141,7 +246,7 @@ jobs:
       - name: Install pinned toolchain
         run: rustup show
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -171,6 +276,8 @@ jobs:
       - name: M2Image release compliance contracts
         run: |
           shellcheck \
+            install-cli.sh \
+            scripts/test-install-cli-release.sh \
             scripts/collect-m2image-compliance.sh \
             scripts/package-m2images.sh \
             scripts/package-m2image-sources.sh \
@@ -190,6 +297,9 @@ jobs:
             x86_64-unknown-linux-gnu
             aarch64-unknown-linux-musl
             aarch64-unknown-linux-gnu
+            aarch64-apple-darwin
+            x86_64-pc-windows-msvc
+            aarch64-pc-windows-msvc
           )
           metadata_args=()
           for target in "${targets[@]}"; do
@@ -296,15 +406,32 @@ jobs:
     steps:
       - name: Unpack tools
         # git: actions/checkout in the container. timeout(1): smoke-release-exec.sh.
+        # Retries absorb transient mirror hiccups (same helper as ci.yml's
+        # installer-deps bootstrap step).
         run: |
+          retry() {
+            n=0
+            until [ "$n" -ge 5 ]; do
+              "$@" && return 0
+              n=$((n + 1))
+              echo "retrying ($n/5): $*" >&2
+              sleep 5
+            done
+            return 1
+          }
+
           if command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq tar gzip git ca-certificates coreutils
+            retry apt-get update -qq && retry apt-get install -y -qq tar gzip git ca-certificates coreutils
           elif command -v dnf >/dev/null; then
-            dnf install -y -q tar gzip git ca-certificates
+            retry dnf install -y -q tar gzip git ca-certificates
           elif command -v pacman >/dev/null; then
-            pacman -Sy --noconfirm --needed tar gzip git ca-certificates
+            retry pacman -Sy --noconfirm --needed tar gzip git ca-certificates
           elif command -v zypper >/dev/null; then
-            zypper --non-interactive install --no-recommends tar gzip git ca-certificates
+            # Tumbleweed's oss snapshot is replaced while the container
+            # still has the previous repomd. A stale appdata-icons.tar.gz
+            # hash then makes `zypper install git` fail even after retries
+            # unless metadata is discarded first.
+            retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends tar gzip git ca-certificates'
           fi
         shell: sh -e {0}
 
@@ -376,6 +503,7 @@ jobs:
     name: Publish GitHub Release
     needs:
       - build-release
+      - build-cli
       - package-host
       - smoke-host-x86_64-gnu
       - smoke-host-aarch64
@@ -398,10 +526,13 @@ jobs:
           mkdir -p dist
           find artifacts -type f -name 'firecrab-host-*.tar.gz' -print
           find artifacts -type f -name 'firecrab-host-*.tar.gz' -exec cp -t dist {} +
+          find artifacts -type f \( -name 'firecrab-cli-*.tar.gz' -o -name 'firecrab-cli-*.zip' \) -print
+          find artifacts -type f \( -name 'firecrab-cli-*.tar.gz' -o -name 'firecrab-cli-*.zip' \) -exec cp -t dist {} +
           cp artifacts/firecrab-license-compliance/THIRD_PARTY_NOTICES.txt dist/
           cp artifacts/firecrab-license-compliance/release-license-inventory.json dist/
           cp LICENSE dist/LICENSE
           cp licenses/GPL-2.0-only.txt dist/GPL-2.0-only.txt
+          cp install-cli.sh install-cli.ps1 dist/
           ./scripts/bake-install-sh.sh "${GITHUB_REF_NAME}" dist/install.sh
           (cd dist && sha256sum ./* > SHA256SUMS)
           ls -l dist
@@ -409,21 +540,9 @@ jobs:
 
       - name: Release notes
         id: notes
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Credit this release only. The repo-wide contributors endpoint is
-          # all-time, so it re-lists everyone who ever landed a commit.
-          PREVIOUS=$(python3 scripts/check-changelog.py --previous "${GITHUB_REF_NAME}")
-          if [ -n "$PREVIOUS" ]; then
-            # --paginate: compare returns at most 250 commits per page.
-            gh api "repos/${{ github.repository }}/compare/${PREVIOUS}...${GITHUB_REF_NAME}?per_page=100" \
-              --paginate --jq '.commits[].author.login // empty' > /tmp/contributors.txt
-          else
-            gh api "repos/${{ github.repository }}/contributors" --paginate \
-              --jq '.[].login' > /tmp/contributors.txt
-          fi
+          printf '%s\n' SteelCrab > /tmp/contributors.txt
           python3 scripts/write-release-notes.py \
             --tag "${GITHUB_REF_NAME}" \
             --repo "${{ github.repository }}" \

@@ -79,6 +79,7 @@ flowchart TB
 
 ```sh
 curl -s 'http://127.0.0.1:5523/api/oci/inspect?reference=nginx:1.27'
+firecrab image inspect nginx:1.27
 ```
 
 - Docker Hub's anonymous quota is per source address, so a shared egress IP answers `429`.
@@ -95,7 +96,14 @@ curl -s 'http://127.0.0.1:5523/api/oci/inspect?reference=nginx:1.27'
 curl -s -X POST http://127.0.0.1:5523/api/oci/import \
   -H 'Content-Type: application/json' \
   -d '{"reference":"nginx:1.27"}'
+
+firecrab image import nginx:1.27
+firecrab image import-status nginx-1.27
 ```
+
+- `firecrab image import` returns after the API accepts the background job.
+- `firecrab image import-status <alias>` prints the current snapshot; `--json` preserves the API shape.
+- A failed snapshot exits `1` and reports the last non-empty import log line.
 
 | Failure | Answer |
 | --- | --- |
@@ -171,6 +179,7 @@ One static program supplies all three before a merged tree can boot.
 - With a glibc loader, a digest-pinned official fastfetch (polyfilled, GLIBC_2.17) is copied to `/usr/bin/fastfetch`, cached at `<FIRECRAB_IMAGE_ROOT>/.oci/fastfetch/`.
 - `FIRECRAB_OCI_FASTFETCH_PATH` names a host binary; a missing program is not an import failure.
 - `/etc/firecrab/services.d` is created empty for the image entrypoint, which a later stage runs as a service rather than PID 1.
+- `/etc/firecrab/services.d/sshd` starts `sshd` with key-only root login after first-boot packages install `openssh-server` (or `openssh` on apk). Distroless images without a binary skip it.
 - Images that place `/sbin` or `/etc` behind a symbolic link are activated through it.
 - Resolution is clamped to the tree; an entry already occupying a guest path is replaced without writing through it.
 - A failed activation restores every path it touched.
@@ -190,11 +199,13 @@ One static program supplies all three before a merged tree can boot.
 The packed ext4 is paired with the kernel firecrab publishes for this architecture, so no catalog image has to be installed first.
 
 - `virtio_blk`, `virtio_net`, `virtio_mmio`, and `ext4` are built in, and there is no initrd.
-- Each release pins the newest published stable kernel for both `x86_64` and `aarch64` with architecture-specific package and image digests.
+- The current release pins Linux `7.2.2` for both `x86_64` and `aarch64`; `7.1.9` remains in the kernel-management catalog for rollback.
+- Each entry has architecture-specific package and image digests.
 - Pinned by digest, fetched once from `FIRECRAB_IMAGE_BASE_URL`, cached at `<FIRECRAB_IMAGE_ROOT>/.oci/kernel/<arch>/`.
 - Re-verified on every reuse; a failed entry is refetched.
 - `FIRECRAB_OCI_KERNEL_PATH` names a host copy, which must match the same digest.
 - A host that cannot reach the registry falls back to an installed catalog kernel.
+- The dashboard's Kernels page uses the same cache; install a version there before pairing it with an image from the image detail panel.
 
 ## Name and register
 
@@ -208,6 +219,8 @@ The packed ext4 is paired with the kernel firecrab publishes for this architectu
 - Entrypoint, Cmd, Env, and WorkingDir become `/etc/firecrab/services.d/app`.
 - The injected init starts it after the sentinel. It is never PID 1.
 - On start, a `# >>> firecrab vm env` block sources `/etc/firecrab/vm.env`; guest paths are in [API](api.md).
+- Create writes an operator ed25519 pair under `{vms}/{id}/ssh/`. Start injects the public key into `/root/.ssh/authorized_keys` and a per-VM host key into `/etc/ssh/`.
+- Dashboard VM detail downloads `firecrab-<name>.pem`. The serial console SSH tab copies `ssh -i … root@<ipv4>` and `-6` for IPv6.
 
 ## Related
 

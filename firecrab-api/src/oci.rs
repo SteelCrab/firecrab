@@ -2091,7 +2091,7 @@ mod boot;
 #[cfg(test)]
 mod boot_tests;
 
-mod kernel;
+pub(crate) mod kernel;
 
 #[cfg(test)]
 mod kernel_tests;
@@ -2232,6 +2232,7 @@ impl LayerCache {
     }
 
     /// Returns the verified tar path for one compressed descriptor/diff-ID pair.
+    #[cfg(test)]
     pub fn path_for(
         &self,
         descriptor: &Descriptor,
@@ -2494,21 +2495,25 @@ pub struct ValidatedLayer {
 
 impl ValidatedLayer {
     /// Original cached registry bytes and their manifest descriptor.
+    #[cfg(test)]
     pub fn source(&self) -> &CachedBlob {
         &self.layer.source
     }
 
     /// Digest of the uncompressed tar stream from config `rootfs.diff_ids`.
+    #[cfg(test)]
     pub fn diff_id(&self) -> &Sha256Digest {
         &self.layer.diff_id
     }
 
     /// Path of the validated, uncompressed layer tar.
+    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.layer.path
     }
 
     /// Number of bytes in the validated tar stream.
+    #[cfg(test)]
     pub fn size(&self) -> u64 {
         self.layer.size
     }
@@ -2570,21 +2575,25 @@ impl OciExt4Image {
     }
 
     /// Length of the image file in bytes.
+    #[cfg(test)]
     pub fn size_bytes(&self) -> u64 {
         self.size_bytes
     }
 
     /// Measured payload of the provisioned tree packed into the image.
+    #[cfg(test)]
     pub fn payload_bytes(&self) -> u64 {
         self.payload_bytes
     }
 
     /// Free space remaining after packing, from `tune2fs`.
+    #[cfg(test)]
     pub fn free_bytes(&self) -> u64 {
         self.free_bytes
     }
 
     /// Digest of the toolbox program the provisioned tree will boot.
+    #[cfg(test)]
     pub fn toolbox_digest(&self) -> &Sha256Digest {
         &self.toolbox
     }
@@ -2629,6 +2638,7 @@ impl OciBootableImage {
     }
 
     /// Architecture the paired kernel was classified as.
+    #[cfg(test)]
     pub fn architecture(&self) -> Architecture {
         self.architecture
     }
@@ -2682,16 +2692,19 @@ pub struct RegisteredOciImage {
 
 impl RegisteredOciImage {
     /// Registered alias.
+    #[cfg(test)]
     pub fn alias(&self) -> &str {
         &self.alias
     }
 
     /// Registered version.
+    #[cfg(test)]
     pub fn version(&self) -> &str {
         &self.version
     }
 
     /// Rootfs path relative to the image root.
+    #[cfg(test)]
     pub fn rootfs(&self) -> &Path {
         &self.rootfs
     }
@@ -2715,21 +2728,25 @@ impl OciProcessConfig {
     }
 
     /// Config `Entrypoint`.
+    #[cfg(test)]
     pub fn entrypoint(&self) -> &[String] {
         &self.entrypoint
     }
 
     /// Config `Cmd`.
+    #[cfg(test)]
     pub fn cmd(&self) -> &[String] {
         &self.cmd
     }
 
     /// Config `Env` entries, each `KEY=value`.
+    #[cfg(test)]
     pub fn env(&self) -> &[String] {
         &self.env
     }
 
     /// Config `WorkingDir`, empty when the image did not set one.
+    #[cfg(test)]
     pub fn working_dir(&self) -> &str {
         &self.working_dir
     }
@@ -2764,6 +2781,7 @@ impl ToolboxProgram {
     }
 
     /// Program size in bytes.
+    #[cfg(test)]
     pub fn size(&self) -> u64 {
         self.size
     }
@@ -2791,11 +2809,13 @@ impl FastfetchProgram {
     }
 
     /// SHA-256 of the program bytes.
+    #[cfg(test)]
     pub fn digest(&self) -> &Sha256Digest {
         &self.digest
     }
 
     /// Program size in bytes.
+    #[cfg(test)]
     pub fn size(&self) -> u64 {
         self.size
     }
@@ -3110,18 +3130,6 @@ pub async fn merge_validated_layers(
     merge::merge_validated_layers(layers, destination).await
 }
 
-/// Pulls (or reuses) the pinned toolbox image and returns its static program.
-///
-/// The program is fetched through the same verified pipeline as any other
-/// image and cached under the image root, so only the first import on a host
-/// contacts the registry. Operators can point
-/// `FIRECRAB_OCI_TOOLBOX_IMAGE` at a mirror.
-pub async fn provision_toolbox(
-    options: &GuestRuntimeOptions<'_>,
-) -> Result<ToolboxProgram, ResolveError> {
-    busybox::ensure_toolbox(options).await
-}
-
 /// Pulls (or reuses) the pinned fastfetch program for glibc guests.
 ///
 /// A missing or unverifiable program is `None`: the console still boots, and
@@ -3268,7 +3276,7 @@ async fn import_oci_image(
         tracker, templates, reference, alias, image_root, &scratch, credential,
     )
     .await;
-    if let Err(error) = tokio::fs::remove_dir_all(&scratch).await
+    if let Err(error) = remove_import_scratch(&scratch).await
         && error.kind() != io::ErrorKind::NotFound
     {
         tracing::warn!(
@@ -3282,7 +3290,7 @@ async fn import_oci_image(
 }
 
 async fn reset_import_scratch(scratch: &Path) -> Result<(), ResolveError> {
-    match tokio::fs::remove_dir_all(scratch).await {
+    match remove_import_scratch(scratch).await {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
@@ -3292,6 +3300,49 @@ async fn reset_import_scratch(scratch: &Path) -> Result<(), ResolveError> {
     tokio::fs::create_dir_all(scratch)
         .await
         .map_err(|error| cache_io("create import scratch", scratch.to_owned(), error))
+}
+
+/// Removes a scratch tree, tolerating directories a merged layer stamped
+/// owner-non-writable (Fedora's `/usr/bin`, `/usr/lib*`, `/root`, `/afs`, ...
+/// ship 555/550 by design — see `apply_directory_metadata`). `remove_dir_all`
+/// cannot unlink entries under those without a chmod pass first, which left
+/// every retry wedged on the previous attempt's leftovers.
+async fn remove_import_scratch(scratch: &Path) -> io::Result<()> {
+    let path = scratch.to_owned();
+    tokio::task::spawn_blocking(move || {
+        make_tree_removable(&path)?;
+        std::fs::remove_dir_all(&path)
+    })
+    .await
+    .unwrap_or_else(|error| Err(io::Error::other(format!("removal task failed: {error}"))))
+}
+
+/// Recursively grants the owner write+execute on every directory under
+/// `path` (including `path` itself) so a subsequent removal can unlink
+/// everything beneath it. Missing paths are not an error — the caller's
+/// removal call handles that the same way it always has.
+fn make_tree_removable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o700 != 0o700 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o700))?;
+    }
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            make_tree_removable(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 async fn import_oci_image_in_scratch(
@@ -4857,5 +4908,87 @@ mod tests {
                 "{input} must not parse"
             );
         }
+    }
+
+    /// A hardened image can merge in directories a lower layer stamped
+    /// owner-non-writable (Fedora's `/usr/bin`-style 555 trees). Reusing a
+    /// scratch directory for the next import must chmod its way through
+    /// those before it can unlink them, not wedge on the first entry.
+    #[tokio::test]
+    async fn reset_import_scratch_recreates_trees_with_owner_non_writable_directories() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create scratch fixture root");
+        let scratch = root.path().join("scratch");
+        let locked = scratch.join("usr/bin");
+        std::fs::create_dir_all(&locked).expect("create locked subtree");
+        std::fs::write(locked.join("payload"), b"merged layer file").expect("write locked file");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))
+            .expect("lock down subtree like a hardened image ships it");
+
+        reset_import_scratch(&scratch)
+            .await
+            .expect("reset scratch despite owner-non-writable directories");
+
+        assert!(scratch.is_dir(), "scratch must exist after reset");
+        assert_eq!(
+            std::fs::read_dir(&scratch).unwrap().count(),
+            0,
+            "reset must leave an empty scratch tree"
+        );
+    }
+
+    /// The very first import for an alias has nothing to clean up yet.
+    #[tokio::test]
+    async fn reset_import_scratch_creates_a_fresh_tree_when_none_exists() {
+        let root = tempfile::tempdir().expect("create scratch fixture root");
+        let scratch = root.path().join("never-created").join("scratch");
+
+        reset_import_scratch(&scratch)
+            .await
+            .expect("create scratch when nothing previously existed");
+
+        assert!(scratch.is_dir());
+    }
+
+    /// A `symlink_metadata` failure that is not "missing" — for example, a
+    /// parent directory whose traversal bit was stripped — must propagate
+    /// instead of being swallowed the way a genuinely missing path is.
+    #[test]
+    fn make_tree_removable_propagates_errors_other_than_not_found() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create fixture root");
+        let blocked = root.path().join("blocked");
+        std::fs::create_dir(&blocked).expect("create blocked directory");
+        let target = blocked.join("child");
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))
+            .expect("strip traversal permission from blocked directory");
+
+        let result = make_tree_removable(&target);
+
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore traversal permission so the fixture can be cleaned up");
+        let error = result.expect_err("stat through a non-traversable directory must fail");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    /// The scratch path itself is always a directory in production, but the
+    /// recursive chmod must not mistreat a stray non-directory left in its
+    /// place by, e.g., a prior partial write.
+    #[test]
+    fn make_tree_removable_ignores_non_directory_paths() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create fixture root");
+        let file_path = root.path().join("not-a-directory");
+        std::fs::write(&file_path, b"stray file").expect("write fixture file");
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644))
+            .expect("set fixture file mode");
+
+        make_tree_removable(&file_path).expect("non-directory paths are left alone");
+
+        let mode = std::fs::metadata(&file_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o644, "must not chmod a non-directory");
     }
 }

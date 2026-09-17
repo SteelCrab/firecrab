@@ -111,7 +111,7 @@ impl VmState {
 }
 
 /// Body for `POST /api/vms`.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateVmRequest {
     /// 1–64 chars, alphanumeric plus `.`/`_`/`-`.
@@ -437,6 +437,59 @@ pub struct VmResponse {
     /// Per-VM environment. Empty is valid. Stored and applied in plaintext.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// SHA256 fingerprint of the guest SSH host key. `null` until first start
+    /// has generated the per-VM host key (`public-docs/oci.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_host_fingerprint: Option<String>,
+}
+
+/// `GET /api/vms/{id}/ssh-host-key` — guest host key after first start.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyResponse {
+    /// `SHA256:…` fingerprint (`ssh-keygen -lf`).
+    pub fingerprint: String,
+    /// OpenSSH public key line.
+    pub public_key: String,
+}
+
+/// What a live host-key check concluded.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SshHostKeyCheckStatus {
+    /// The guest presented the key Firecrab injected.
+    Match,
+    /// The guest answered with a different key.
+    Mismatch,
+    /// Port 22 did not answer, so nothing was compared.
+    Unreachable,
+    /// The VM has no address yet, so nothing was scanned.
+    NoAddress,
+    /// No host key on disk yet — the VM has never started.
+    NoHostKey,
+}
+
+/// `GET /api/vms/{id}/ssh-host-key/check` — what the guest answers with now.
+///
+/// Runs on the Firecrab host, so it replaces the operator pasting
+/// `ssh-keyscan | ssh-keygen -lf` output back into the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyCheckResponse {
+    /// Outcome the dashboard renders.
+    pub status: SshHostKeyCheckStatus,
+    /// Address scanned. `null` when the VM has no address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// Fingerprint Firecrab injected into the guest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    /// Fingerprint the guest presented. `null` unless the scan answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed: Option<String>,
+    /// Why the scan could not answer, for the unreachable case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// One guest-agent usage sample for dashboard graphs.
@@ -614,7 +667,7 @@ impl fmt::Display for Ipv6EgressMode {
 }
 
 /// Request body for `POST /api/micro-networks`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMicroNetworkRequest {
     /// 1–64 chars, alphanumeric plus `.`/`_`/`-` (same convention as VM names).
@@ -897,6 +950,14 @@ pub struct ImageResponse {
     pub alias: String,
     /// Pinned version tag the alias currently resolves to (or will after install).
     pub version: String,
+    /// Upstream kernel release when the image uses a managed kernel. Distro
+    /// kernels built into an M2Image may not expose a standalone release tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kernel_version: Option<String>,
+    /// Kernel filename (not a host path), useful when the release is distro
+    /// supplied or otherwise has no managed catalog version.
+    #[serde(default)]
+    pub kernel_image: String,
     /// SHA256 of the kernel artifact (hex). Empty when not installed yet.
     pub kernel_sha256: String,
     /// SHA256 of the rootfs artifact (hex). Empty when not installed yet.
@@ -935,6 +996,65 @@ pub struct ImageResponse {
     /// Uninstalled and catalog-only rows are `false`.
     #[serde(default)]
     pub has_guest_service: bool,
+}
+
+/// A kernel release known to this Firecracker build, plus its local cache
+/// state. Kernels are managed independently from M2Image rootfs artifacts.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KernelResponse {
+    /// Upstream Linux release, for example `7.2.2`.
+    pub version: String,
+    /// Firecracker architecture label (`x86_64` or `aarch64`).
+    pub architecture: String,
+    /// Kernel filename inside the verified package.
+    pub image: String,
+    /// SHA256 of the unpacked kernel image.
+    pub image_sha256: String,
+    /// SHA256 of the compressed MicroRegistry package.
+    pub package_sha256: String,
+    /// Local unpacked image size when installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// Whether a verified copy is present in the local kernel cache.
+    pub installed: bool,
+    /// Whether an installed image currently references this kernel.
+    pub in_use: bool,
+    /// Remote package URL when kernel downloads are enabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_url: Option<String>,
+}
+
+/// Request body for `PUT /api/images/{alias}/kernel`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateImageKernelRequest {
+    /// Managed kernel release to pair with the image.
+    pub kernel_version: String,
+}
+
+/// Status + log for `GET/POST /api/kernels/{version}/install`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KernelInstallResponse {
+    /// Kernel release targeted by this job.
+    pub version: String,
+    /// Current job state.
+    pub status: ImageInstallStatus,
+    /// Multi-line acquisition and verification log.
+    pub log: String,
+    /// Epoch millis when the attempt started, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    /// Epoch millis when the attempt ended, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+    /// Bytes downloaded from the package source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloaded_bytes: Option<u64>,
+    /// Total package bytes advertised by the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
 }
 
 /// Producer of a package in the host's local `.packages` cache.
@@ -1280,6 +1400,14 @@ mod tests {
         assert_eq!(request.egress_policy, EgressPolicy::Internet);
         assert!(request.shell_ids.is_empty());
         assert!(request.env.is_empty());
+
+        let serialized = serde_json::to_value(&request).unwrap();
+        assert_eq!(serialized["diskGb"], 2);
+        assert_eq!(serialized["egressPolicy"], "internet");
+        assert_eq!(
+            serialized["microNetworkId"],
+            "00000000-0000-0000-0000-000000000001"
+        );
     }
 
     #[test]
@@ -1442,6 +1570,7 @@ mod tests {
             shell_refs: Vec::new(),
             port_forwards: Vec::new(),
             env: BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+            ssh_host_fingerprint: Some("SHA256:test".to_owned()),
         };
 
         let json = serde_json::to_string(&response).expect("serialize response");
@@ -1453,6 +1582,46 @@ mod tests {
         assert!(json.contains("\"memoryUsedPercent\":35.2"));
         assert!(json.contains("\"usageHistory\""));
         assert!(!json.contains("packageUpdate"));
+    }
+
+    /// The dashboard switches on these exact strings
+    /// (`firecrab-frontend/src/bindings/SshHostKeyCheckStatus.ts`).
+    #[test]
+    fn ssh_host_key_check_status_serializes_camel_case() {
+        for (status, json) in [
+            (SshHostKeyCheckStatus::Match, "\"match\""),
+            (SshHostKeyCheckStatus::Mismatch, "\"mismatch\""),
+            (SshHostKeyCheckStatus::Unreachable, "\"unreachable\""),
+            (SshHostKeyCheckStatus::NoAddress, "\"noAddress\""),
+            (SshHostKeyCheckStatus::NoHostKey, "\"noHostKey\""),
+        ] {
+            assert_eq!(serde_json::to_string(&status).unwrap(), json);
+            assert_eq!(
+                serde_json::from_str::<SshHostKeyCheckStatus>(json).unwrap(),
+                status
+            );
+        }
+    }
+
+    /// Absent fields must not reach the client as `null` keys.
+    #[test]
+    fn ssh_host_key_check_omits_what_the_scan_never_learned() {
+        let check = SshHostKeyCheckResponse {
+            status: SshHostKeyCheckStatus::NoAddress,
+            address: None,
+            expected: Some("SHA256:test".to_owned()),
+            observed: None,
+            detail: None,
+        };
+        let json = serde_json::to_string(&check).expect("serialize check");
+        assert_eq!(
+            serde_json::from_str::<SshHostKeyCheckResponse>(&json).unwrap(),
+            check
+        );
+        assert!(json.contains("\"status\":\"noAddress\""), "{json}");
+        assert!(json.contains("\"expected\":\"SHA256:test\""), "{json}");
+        assert!(!json.contains("observed"), "{json}");
+        assert!(!json.contains("detail"), "{json}");
     }
 
     #[test]
@@ -1493,6 +1662,7 @@ mod tests {
             shell_refs: Vec::new(),
             port_forwards: Vec::new(),
             env: BTreeMap::new(),
+            ssh_host_fingerprint: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"env\":{}"));
@@ -1509,6 +1679,8 @@ mod tests {
         let image = ImageResponse {
             alias: "ubuntu-26.04".to_owned(),
             version: "ubuntu-26.04-v2".to_owned(),
+            kernel_version: Some("7.2.2".to_owned()),
+            kernel_image: "vmlinux-7.2.2-x86_64".to_owned(),
             kernel_sha256: "k".repeat(64),
             rootfs_sha256: "r".repeat(64),
             initrd_sha256: None,
@@ -1529,6 +1701,8 @@ mod tests {
         assert_eq!(json["minDiskGb"], 2);
         assert_eq!(json["rootfsSizeBytes"], 2 * 1024 * 1024 * 1024u64);
         assert_eq!(json["kernelSha256"], "k".repeat(64));
+        assert_eq!(json["kernelVersion"], "7.2.2");
+        assert_eq!(json["kernelImage"], "vmlinux-7.2.2-x86_64");
         assert_eq!(json["installed"], true);
         assert_eq!(
             json["packageUrl"],
@@ -1538,6 +1712,7 @@ mod tests {
         let omitted = serde_json::from_value::<ImageResponse>(serde_json::json!({
             "alias": "ubuntu-26.04",
             "version": "v1",
+            "kernelImage": "vmlinux",
             "kernelSha256": "k",
             "rootfsSha256": "r",
             "minDiskGb": 2,
@@ -1546,6 +1721,48 @@ mod tests {
         }))
         .unwrap();
         assert!(!omitted.has_guest_service);
+    }
+
+    #[test]
+    fn kernel_management_types_keep_the_wire_names_and_status() {
+        let kernel = KernelResponse {
+            version: "7.2.2".to_owned(),
+            architecture: "x86_64".to_owned(),
+            image: "vmlinux-7.2.2-x86_64".to_owned(),
+            image_sha256: "a".repeat(64),
+            package_sha256: "b".repeat(64),
+            size_bytes: Some(52 * 1024 * 1024),
+            installed: true,
+            in_use: false,
+            package_url: Some(
+                "https://registry.example/kernel/7.2.2/x86_64/vmlinux-7.2.2.tar.zst".to_owned(),
+            ),
+        };
+        let json = serde_json::to_value(&kernel).unwrap();
+        assert_eq!(json["imageSha256"], "a".repeat(64));
+        assert_eq!(json["packageSha256"], "b".repeat(64));
+        assert_eq!(json["sizeBytes"], 52 * 1024 * 1024);
+        assert_eq!(json["inUse"], false);
+
+        let request: UpdateImageKernelRequest = serde_json::from_value(serde_json::json!({
+            "kernelVersion": "7.2.2"
+        }))
+        .unwrap();
+        assert_eq!(request.kernel_version, "7.2.2");
+
+        let job = KernelInstallResponse {
+            version: "7.2.2".to_owned(),
+            status: ImageInstallStatus::Succeeded,
+            log: "kernel ready".to_owned(),
+            started_at_ms: Some(1),
+            ended_at_ms: Some(2),
+            downloaded_bytes: None,
+            total_bytes: None,
+        };
+        let json = serde_json::to_value(job).unwrap();
+        assert_eq!(json["status"], "succeeded");
+        assert_eq!(json["startedAtMs"], 1);
+        assert!(json.get("downloadedBytes").is_none());
     }
 
     #[test]
@@ -1681,6 +1898,10 @@ mod tests {
         assert_eq!(request.name, "prod");
         assert_eq!(request.subnet_cidr, "172.31.0.0/24");
         assert_eq!(request.uplink, None);
+
+        let serialized = serde_json::to_value(&request).unwrap();
+        assert_eq!(serialized["subnetCidr"], "172.31.0.0/24");
+        assert_eq!(serialized["internetEnabled"], true);
     }
 
     #[test]

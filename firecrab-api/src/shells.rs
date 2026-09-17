@@ -24,6 +24,10 @@ use crate::rootfs::{
 /// request cap with room for wrappers.
 pub const MAX_SHELL_CONTENT_BYTES: usize = 32 * 1024;
 
+/// Enforced at compile time rather than by a test, so raising the limit past
+/// the request cap cannot build at all.
+const _: () = assert!(MAX_SHELL_CONTENT_BYTES < 64 * 1024);
+
 /// Max shells pinned on one VM.
 pub const MAX_SHELLS_PER_VM: usize = 8;
 
@@ -113,10 +117,10 @@ fn stamp_script_body(revision_id: Uuid, content: &str) -> String {
         body.push('\n');
     }
     let stamp = format!("# firecrab-shell revision={revision_id}");
-    if body.starts_with("#!") {
-        if let Some((shebang, rest)) = body.split_once('\n') {
-            return format!("{shebang}\n{stamp}\n{rest}");
-        }
+    if body.starts_with("#!")
+        && let Some((shebang, rest)) = body.split_once('\n')
+    {
+        return format!("{shebang}\n{stamp}\n{rest}");
     }
     format!("{stamp}\n{body}")
 }
@@ -378,11 +382,6 @@ mod tests {
             content_sha256("hello\n"),
             "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
         );
-    }
-
-    #[test]
-    fn max_content_fits_under_request_body() {
-        assert!(MAX_SHELL_CONTENT_BYTES < 64 * 1024);
     }
 
     #[test]
