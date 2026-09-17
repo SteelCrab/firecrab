@@ -19,7 +19,8 @@
 <p align="center">
   <a href="./README.md">English</a> ·
   <a href="./README.zh.md">中文</a> ·
-  <a href="./README.ja.md">日本語</a>
+  <a href="./README.ja.md">日本語</a> ·
+  <a href="./README.id.md">Bahasa Indonesia</a>
 </p>
 
 **firecrab은 사용자가 관리하는 Linux 호스트 한 대에서
