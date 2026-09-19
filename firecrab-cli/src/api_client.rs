@@ -150,6 +150,7 @@ impl ApiClient {
 
     /// Sends `body` as JSON with `PUT` and deserializes any successful 2xx
     /// response body.
+    #[cfg(test)]
     pub fn put<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
     where
         B: Serialize + ?Sized,
@@ -177,6 +178,7 @@ impl ApiClient {
 
     /// Sends `GET` and returns the raw successful body. Used for attachments
     /// such as `GET /api/vms/{id}/ssh-key` that are not JSON.
+    #[cfg(test)]
     pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>, ApiError> {
         let resp = self
             .client
@@ -529,8 +531,11 @@ url = "https://prod.example:5523/"
 
     #[test]
     fn get_bytes_returns_the_raw_body() {
-        let (base, requests, server) =
-            serve_once("200 OK", Some("application/x-pem-file"), "-----BEGIN KEY-----\n");
+        let (base, requests, server) = serve_once(
+            "200 OK",
+            Some("application/x-pem-file"),
+            "-----BEGIN KEY-----\n",
+        );
         let client = ApiClient::new(base);
 
         let body = client.get_bytes("/api/vms/123/ssh-key").unwrap();
