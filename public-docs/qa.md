@@ -1,126 +1,163 @@
-# microManager macOS QA
+# QA work list
 
-This page records a live add → delete → cleanup run of Firecrab on Apple silicon.
-The API was `http://127.0.0.1:5523` behind a managed Debian VM.
-The date is 2026-09-20.
-The host was macOS 26.6.2 on arm64 (Apple M5).
+Use this list on **Linux**, **macOS**, and **Windows**.
+The product surface after the API is up is the same: `http://127.0.0.1:5523`.
+Mark every row `PASS`, `FAILED`, or `WARNING`.
+`WARNING` is skip or leftover, not a silent pass.
 
-Verdicts are `PASS`, `FAILED`, and `WARNING`.
-`WARNING` is a skipped or leftover step, not a product failure.
+Flow for every resource: **add → use or mutate → delete → leftover empty**.
+Prefix names with `qa-` and use a dedicated subnet per run.
+Do not apply `POST /api/update` unless that row is in scope.
+Do not delete catalog images you did not install in this run.
+
+CLI and curl are equivalent for shared resource commands.
+Env, shells, kernels, storage assignment, port forwards, and Docker Hub are API or dashboard only.
 
 ## Contents
 
-- [Method](#method)
-- [Totals](#totals)
-- [Gate](#gate)
-- [Coverage](#coverage)
-- [I10 OCI import](#i10-oci-import)
-- [WARNING](#warning)
-- [Leftovers](#leftovers)
+- [Platform gate](#platform-gate)
+- [Shared host](#shared-host)
+- [MicroNetwork](#micronetwork)
+- [MicroStorage](#microstorage)
+- [Shells](#shells)
+- [Images, kernels, OCI](#images-kernels-oci)
+- [MicroVM](#microvm)
+- [CLI](#cli)
+- [Cleanup](#cleanup)
 - [Related](#related)
 
-## Method
+## Platform gate
 
-Six agents ran in parallel with disjoint name prefixes and subnets.
-Each agent created its own resources, then deleted them, then confirmed the list was empty.
-Agents did not stop or uninstall the management VM.
-They did not apply `POST /api/update`.
-They did not delete catalog images `ubuntu-26.04` or `rocky-9.8`.
+Reach `GET /api/host` → 200 before the shared list.
+The install command differs by OS.
+The API contract does not.
 
-| Agent | Job | Prefix |
+| ID | OS | Work |
 | --- | --- | --- |
-| `qa-mac-host` | Host doctor, validate, status, `/api/host` | none (read-only) |
-| `qa-network` | MicroNetwork add, patch, delete | `qa-net-a`, `172.31.201.0/24` |
-| `qa-storage-shells` | MicroStorage and Shell add, delete | `qa-st-`, `qa-sh-` |
-| `qa-images` | Kernel, alpine install, OCI inspect/import | alpine kept as a fixture |
-| `qa-vm` | VM create, env, start, stop, delete | `qa-vm-`, `172.31.202.0/24` |
-| `qa-registry` | MicroRegistry and Docker Hub negatives | fake Docker Hub login deleted |
+| G1 | Linux | `firecrab doctor` then `firecrab service install` / `start` / `status` |
+| G2 | macOS | `firecrab service doctor` then `install` / `status` (nested virt required) |
+| G3 | Windows | Same shape as macOS when microManager ships; until then mark WARNING |
+| G4 | all | `GET /api/host` 200; dashboard `GET /` HTML 200 |
+| G5 | all | `GET /api/no-such-route` JSON 404 with `requestId` |
 
-## Totals
+Linux `firecrab service` drives host systemd.
+macOS and Windows `firecrab service` drive the management VM, not a workload MicroVM.
 
-| Verdict | Count |
+## Shared host
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| H1 | `GET /api/update` | check only | do not `POST` unless U1 |
+| H2 | `GET /api/network` | uplink present; no `lo` / `fct*` / `mnb*` in picker | none |
+| U1 | `POST /api/update` | optional dedicated run | host comes back; API 200 |
+
+## MicroNetwork
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| N1 | IPv4 network | `POST /api/micro-networks` name + `subnetCidr` → 201 | `DELETE` → 204, GET → 404 |
+| N2 | list and detail | `GET /api/micro-networks` and `GET /{id}` | with N1 |
+| N3 | internet toggle | `PATCH` `internetEnabled` false then true | with N1 |
+| N4 | IPv6 SLAAC | `POST` with `ipv6AddressMode=slaac` (ULA `/64`) | `DELETE` that id |
+| N5 | empty uplink | `POST` `uplink=""` → 400 | no row |
+| N6 | busy network | `DELETE` while a VM is attached → 409 | delete VM first, then network |
+
+## MicroStorage
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| S1 | list roots | `GET /api/storage` has `default` | none |
+| S2 | host devices | `GET /api/storage/devices` | none |
+| S3 | register pool | `POST /api/micro-storages` absolute host path → 201 | `DELETE` → 204, GET → 404 |
+
+The path is on the Firecrab host (Linux, or the Debian guest on macOS/Windows).
+
+## Shells
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| L1 | create | `POST /api/shells` name + `/bin/sh` body → 201 | `DELETE` → 204 |
+| L2 | revision | `POST /api/shells/{id}/revisions` | with L1 |
+| L3 | get body | `GET` shell and revision | with L1 |
+
+## Images, kernels, OCI
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| I1 | catalogs | `GET /api/images`, `/api/kernels`, `/api/microregistry` | none |
+| I2 | kernel | `POST /api/kernels/{version}/install` to succeeded | `DELETE` if unused; 409 `in_use` if paired |
+| I3 | M2Image | `POST /api/images/{alias}/package` then `/install` | `DELETE` package staging; delete image only if this run installed it |
+| I4 | kernel pair | `PUT /api/images/{alias}/kernel` | 409 `kernel_required` if cache missing |
+| I5 | OCI inspect | `GET /api/oci/inspect?reference=…` | none (no blobs) |
+| I6 | OCI import | `POST /api/oci/import` then poll `/import/{alias}` | `DELETE /api/images/{alias}` |
+| I7 | register | `POST /api/microregistry/register` for a custom installed alias | image delete in I6 |
+| I8 | Docker Hub | `GET` (no secret); optional `PUT` fake then `DELETE` | `configured=false` or prior login restored |
+| I9 | missing alias | `GET /api/images/does-not-exist` → 404 | none |
+| I10 | bootstrap | `POST /api/images/{alias}/bootstrap` | `DELETE /api/images/bootstrap/{id}` always drops the builder VM |
+
+I10 is slow.
+Run it as its own pass.
+
+`fakeroot` must be on the Firecrab host or OCI import fails at ext4 pack.
+
+## MicroVM
+
+Need an installed template (I3 or I6) and a network (N1).
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| V1 | create | `POST /api/vms` name, template, cpu, ram, disk, `microNetworkId`, `env` | after V10 |
+| V2 | get | `GET /api/vms` and `GET /{id}`; state `created` | with V1 |
+| V3 | env (stopped) | `PUT /api/vms/{id}` with `env` | with V1 |
+| V4 | ports | `PUT /api/vms/{id}/port-forwards` tcp or udp | with V1 |
+| V5 | shells pin | `PUT /api/vms/{id}/shells` | with V1 |
+| V6 | storage | `PUT /api/vms/{id}/storage` | with V1 |
+| V7 | start | `POST /{id}/start` → `running`; log has `FIRECRAB_NETWORK_READY` | `POST /stop` |
+| V8 | ssh | `GET /ssh-key`, `/ssh-host-key`, `/ssh-host-key/check` | with V1 |
+| V9 | console | `GET /ws/vms/{id}/console` → 101 | with V1 |
+| V10 | env (running) | `PUT env` while `running` (restarts `services.d/app`) | with V7 |
+| V11 | stop | `POST /{id}/stop` → `stopped` | with V1 |
+| V12 | delete running | `DELETE` while `running` → not allowed | stop first |
+| V13 | delete stopped | `DELETE /api/vms/{id}` → 204, GET → 404 | confirm list |
+| V14 | no network | `POST /api/vms` without `microNetworkId` → 400 | no row |
+
+CPU, RAM, disk, and egress edits only in `created` / `stopped` / `error`.
+Env may change in `running`.
+
+## CLI
+
+Shared on every OS once the API is up.
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| C1 | `firecrab vm list\|create\|start\|stop\|delete` | same rules as V* | leftover `[]` |
+| C2 | `firecrab vm console` | attach then detach | with C1 |
+| C3 | `firecrab network list\|create\|delete` | same as N* | leftover `[]` |
+| C4 | `firecrab image list\|inspect\|import\|import-status` | same as I5–I6 | delete imported alias |
+| C5 | `firecrab host add\|list\|use\|show\|remove` | local `~/.firecrab` | `host remove` |
+
+Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
+`doctor`, `info`, `status`, `update --check|--apply`, systemd `service start|stop|restart|enable|disable`.
+
+## Cleanup
+
+| ID | Work |
 | --- | --- |
-| PASS | 81 |
-| FAILED | 0 |
-| WARNING | 8 |
-
-I10 started as `FAILED` and became `PASS` after the guest gained `fakeroot`.
-
-## Gate
-
-| Check | Result |
-| --- | --- |
-| `firecrab service doctor` | Five host checks PASS, including nested virtualization |
-| `firecrab service validate` | Kernel, OS/data disks, and VZ config PASS |
-| `firecrab service install` | Cached artifacts; guest provision marker preserved |
-| `firecrab service status` | launchd loaded; API reachable; guest `192.168.64.30` |
-| `GET /api/host` | HTTP 200 |
-
-Unsupported machines fail before a VM starts.
-See [Installation](installation.md) for the CLI.
-
-## Coverage
-
-| Area | Flow | Result |
-| --- | --- | --- |
-| MicroNetwork | add, patch internet, SLAAC IPv6, delete, empty `uplink` 400 | PASS |
-| MicroStorage | register `/var/lib/firecrab/qa-st-pool`, delete | PASS |
-| Shell | create, revision, delete | PASS |
-| Kernel 7.2.2 | install, pair with alpine | PASS |
-| Image alpine-3.24.1 | package, install | PASS |
-| OCI inspect `busybox:1.36.1` | aarch64 alias | PASS |
-| OCI import `busybox:1.36.1` | succeeded in 1.94s after fakeroot, then delete | PASS |
-| MicroVM | create with `env`, mutate env and ports, start, stop, delete | PASS |
-| Guest start | `running` in 12.1s; `FIRECRAB_NETWORK_READY`; IPv4 `172.31.202.2` | PASS |
-| SSH | operator key, host-key `match` | PASS |
-| Console | WebSocket 101 | PASS |
-| Docker Hub | PUT fake credential, GET omits secret, DELETE | PASS |
-| Dashboard | `GET /` HTML 200 | PASS |
-| Unknown API path | JSON 404 with `requestId` | PASS |
-
-`GET /api/update` reported `current=0.2.2` and was not applied.
-
-## I10 OCI import
-
-The first import failed with `OCI ext4 run fakeroot chown failed at …/rootfs: No such file or directory (os error 2)`.
-That message is spawn `ENOENT` for the `fakeroot` binary, not a missing tree.
-The Debian guest apt list had `e2fsprogs` and not `fakeroot`.
-Guest `install.sh --no-deps` does not pull Linux host packages.
-
-After `apt-get install -y fakeroot` (1.37.1.1-1) on the running guest, import succeeded and the template was deleted.
-The durable fix installs `fakeroot` on first boot and names a missing binary in the error.
-
-See [OCI images](oci.md).
-
-## WARNING
-
-| ID | Item | Why it is WARNING |
-| --- | --- | --- |
-| H11 | Delete the management VM | Skipped so the API stayed up |
-| H12 | Purge management disks | Same as H11 |
-| I15 | Image bootstrap | Skipped; the job is a full builder VM |
-| I16 | MicroRegistry register | No leftover custom alias after busybox delete |
-| I17 | Delete kernel 7.2.2 | HTTP 409 `in_use` by alpine; fixture kept |
-| I19 | Delete alpine-3.24.1 | Shared VM fixture; left installed |
-| V14 | Delete a running VM | Needs a second VM; stop-then-delete PASSed |
-| R8 | Mac CLI gaps | Env, shells, kernels, and Docker Hub are API/dashboard only |
-
-H11 and H12 are protocol choices.
-I17 and I19 leave alpine plus kernel 7.2.2 on the guest.
-R8 matches the documented CLI surface in [firecrab CLI](firecrab-cli.md).
-
-## Leftovers
-
-After cleanup, VMs, networks, storages, and shells were empty lists.
-Docker Hub was `configured=false`.
-`busybox-1.36.1` was not installed.
-`alpine-3.24.1` stayed installed with kernel 7.2.2.
-The management VM remained running.
+| X1 | `GET /api/vms` is `[]` for `qa-*` names |
+| X2 | `GET /api/micro-networks` has no `qa-*` |
+| X3 | `GET /api/micro-storages` has no `qa-*` |
+| X4 | `GET /api/shells` has no `qa-*` |
+| X5 | custom OCI alias gone; catalog fixtures only if you chose to keep them |
+| X6 | Docker Hub not left with a QA secret |
 
 ## Related
 
 - [API](api.md)
+- [Installation](installation.md)
+- [firecrab CLI](firecrab-cli.md)
+- [Networking](networking.md)
+- [Storage](storage.md)
+- [Images](images.md)
 - [OCI images](oci.md)
 - [Operations](operations.md)
-- [firecrab CLI](firecrab-cli.md)
-- [Troubleshooting](troubleshooting.md)
+- [Dashboard](dashboard.md)

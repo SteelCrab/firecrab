@@ -21,8 +21,8 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- Public documentation records the Apple silicon microManager live QA run
-  ([#266]).
+- Public documentation lists the shared Linux, macOS, and Windows QA work
+  list ([#266]).
 
 ### Changed
 
