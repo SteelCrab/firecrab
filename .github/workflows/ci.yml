@@ -66,6 +66,37 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  micromanager-macos:
+    name: microManager (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Swift unit tests
+        run: swift test --package-path micromanager-macos --scratch-path target/swift-micromanager-tests
+
+      - name: Build and sign helper
+        run: scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
+
+      - name: Verify entitlement and diagnostics
+        run: |
+          codesign --verify --strict target/debug/firecrab-micromanager-macos
+          codesign -d --entitlements :- target/debug/firecrab-micromanager-macos 2>&1 \
+            | grep -q com.apple.security.virtualization
+          set +e
+          target/debug/firecrab-micromanager-macos doctor --json
+          rc=$?
+          set -e
+          test "$rc" -eq 0 -o "$rc" -eq 1
+
+      - name: macOS CLI clippy and tests
+        run: |
+          cargo clippy -p firecrab-cli --all-targets -- -D warnings
+          cargo test -p firecrab-cli --locked
+
   docs:
     name: Rust (rustdoc)
     runs-on: ubuntu-latest
@@ -166,6 +197,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck install.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
+            scripts/build-micromanager-macos.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/verify-release-binary.sh \
             scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \

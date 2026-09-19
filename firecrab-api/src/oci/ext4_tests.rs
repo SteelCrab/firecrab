@@ -222,6 +222,28 @@ async fn packed_inodes_are_root_owned_even_though_the_source_tree_is_not() {
 }
 
 #[test]
+fn missing_fakeroot_binary_is_named_instead_of_the_tree() {
+    let tree =
+        std::path::PathBuf::from("/var/lib/firecrab/images/.oci/import/busybox-1.36.1/rootfs");
+    let destination = std::path::PathBuf::from("/var/lib/firecrab/images/busybox-1.36.1.ext4");
+    let error = ext4::fakeroot_spawn_error(
+        "run fakeroot chown",
+        destination,
+        std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory"),
+    );
+    let rendered = error.to_string();
+    assert_matches!(
+        error,
+        ResolveError::Ext4Build { ref detail, .. } if detail.contains("missing fakeroot binary"),
+        "{error}"
+    );
+    assert!(
+        !rendered.contains(tree.to_str().unwrap()),
+        "must not blame the tree path for a missing binary: {rendered}"
+    );
+}
+
+#[test]
 fn run_mkfs_reports_a_readable_error_when_fakeroot_chown_cannot_reach_the_tree() {
     let directory = tempdir().expect("create fixture directory");
     let missing_tree = directory.path().join("no-such-tree");

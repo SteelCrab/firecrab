@@ -21,6 +21,7 @@ Every page covers one topic.
 | Terms and resource model | [Core concepts](concepts.md) |
 | Host setup | [Installation](installation.md) |
 | Headless host CLI | [firecrab CLI](firecrab-cli.md) |
+| Managed Debian VM on macOS | [microManager on macOS](micromanager-macos.md) |
 | Browser UI | [Dashboard](dashboard.md) |
 | REST and WebSocket endpoints | [API](api.md) |
 | Bridges, DHCP, NAT, and policy | [Networking](networking.md) |

@@ -2,7 +2,7 @@
 
 `firecrab` is a Linux, macOS, and Windows command-line client for the same REST API the dashboard uses.
 It selects named Linux firecrab hosts and manages images, MicroNetworks, and VM lifecycles without a browser.
-Linux builds also diagnose and administer the local host.
+Linux builds diagnose and administer the native host; Apple silicon macOS builds expose `service` for the managed Debian VM.
 See [Installation](installation.md#cli-only-installation) for user-level installers.
 
 ## Contents
@@ -21,8 +21,8 @@ See [Installation](installation.md#cli-only-installation) for user-level install
 
 ## Architecture
 
-Remote commands run on Linux, macOS, and Windows and call `firecrab-api` on a Linux host.
-The `doctor`, `info`, `status`, `update`, and `service` commands are present only in Linux builds.
+Remote commands run on Linux, macOS, and Windows and call the selected `firecrab-api`.
+The top-level Linux commands administer a native host, while macOS `service` provisions and controls the local managed Debian VM.
 The resource commands never talk to Firecracker, nftables, or `firecrab-net-helper` directly — the CLI
 is a client, not a second control plane.
 
@@ -31,8 +31,8 @@ flowchart TD
     CLI["firecrab<br/>Linux / macOS / Windows"]
     Config[("~/.firecrab/config.toml")]
     Select["--api / FIRECRAB_API / --host / current host"]
-    Linux["Linux-only local commands"]
-    Doctor["doctor / info / status / service"]
+    Local["platform-local commands"]
+    Doctor["Linux native host / macOS managed service"]
     Resources["host / image / network / vm"]
     Console["vm console"]
     Update["update"]
@@ -46,11 +46,11 @@ flowchart TD
     CLI --> Config
     Config --> Select
     CLI --> Select
-    CLI --> Linux
-    Linux --> Doctor
+    CLI --> Local
+    Local --> Doctor
     CLI --> Resources
     Select --> Console
-    Linux --> Update
+    Local --> Update
     Doctor -->|read| Proc
     Doctor -->|shell out| Tools
     Doctor -->|resolve| Paths

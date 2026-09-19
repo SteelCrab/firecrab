@@ -181,7 +181,7 @@ pub struct PortForward {
 }
 
 /// Body for `PUT /api/vms/{id}/shells`: replace pinned shells (inactive VMs).
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateVmShellsRequest {
     /// Shell ids to pin (latest revision each). Empty clears all pins.
@@ -189,7 +189,7 @@ pub struct UpdateVmShellsRequest {
 }
 
 /// Body for `PUT /api/vms/{id}/port-forwards`: replace port forwarding rules.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateVmPortForwardsRequest {
     /// Inbound port forwarding rules (DNAT).
@@ -263,7 +263,7 @@ pub struct ShellRevisionSummary {
 }
 
 /// Body for `POST /api/shells` — creates the shell and its first revision.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateShellRequest {
     /// 1–64 safe name characters.
@@ -275,7 +275,7 @@ pub struct CreateShellRequest {
 }
 
 /// Body for `POST /api/shells/{id}/revisions` — appends an immutable revision.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CreateShellRevisionRequest {
     /// New script body.
@@ -297,7 +297,7 @@ pub struct ShellRevisionResponse {
 
 /// Body for `PUT /api/vms/{id}`: replaces cpu/ram/disk for a VM that isn't
 /// currently running. Takes effect on the next start, not live.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct UpdateVmResourcesRequest {
     /// New RAM in MiB.

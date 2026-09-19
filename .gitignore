@@ -4,8 +4,9 @@
 /firecracker-config.json
 /firecracker-console.log
 
-# Rust
+# Rust / Swift
 target/
+.build/
 lcov.info
 doc-coverage.txt
 

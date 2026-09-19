@@ -52,13 +52,17 @@ fi
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 release="$scratch/releases/latest/download"
-mkdir -p "$release/payload" "$scratch/bin"
+mkdir -p "$release/payload" "$scratch/bin" "$scratch/mac-bin"
 printf '#!/bin/sh\nprintf "firecrab test\\n"\n' >"$release/payload/firecrab"
-chmod +x "$release/payload/firecrab"
+printf '#!/bin/sh\nprintf "micromanager test\\n"\n' >"$release/payload/firecrab-micromanager-macos"
+chmod +x "$release/payload/firecrab" "$release/payload/firecrab-micromanager-macos"
 tar -czf "$release/firecrab-cli-x86_64-linux-gnu.tar.gz" -C "$release/payload" firecrab
+tar -czf "$release/firecrab-cli-aarch64-macos.tar.gz" -C "$release/payload" \
+    firecrab firecrab-micromanager-macos
 (
     cd "$release"
-    sha256sum firecrab-cli-x86_64-linux-gnu.tar.gz >SHA256SUMS
+    sha256sum firecrab-cli-x86_64-linux-gnu.tar.gz \
+        firecrab-cli-aarch64-macos.tar.gz >SHA256SUMS
 )
 
 FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
@@ -72,6 +76,20 @@ if [ -x "$scratch/bin/firecrab" ] && [ "$("$scratch/bin/firecrab")" = "firecrab 
     pass "local release installs an executable client"
 else
     fail "local release installs an executable client"
+fi
+
+FIRECRAB_RELEASE_BASE="file://$scratch/releases" \
+FIRECRAB_TEST_ALLOW_FILE_URL=1 \
+FIRECRAB_CLI_OS=Darwin \
+FIRECRAB_CLI_ARCH=arm64 \
+PATH="/usr/bin:/bin" \
+    "$ROOT/install-cli.sh" --install-dir "$scratch/mac-bin" >/dev/null
+if [ -x "$scratch/mac-bin/firecrab" ] \
+    && [ -x "$scratch/mac-bin/firecrab-micromanager-macos" ] \
+    && [ "$("$scratch/mac-bin/firecrab-micromanager-macos")" = "micromanager test" ]; then
+    pass "macOS release installs the client and microManager helper"
+else
+    fail "macOS release installs the client and microManager helper"
 fi
 
 victim="$scratch/victim"
