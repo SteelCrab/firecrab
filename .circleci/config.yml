@@ -1,13 +1,83 @@
 version: 2.1
 
+parameters:
+  run-micromanager-e2e:
+    description: Enable after the native Apple silicon machine runner is registered.
+    type: boolean
+    default: false
+
+commands:
+  install-rust:
+    steps:
+      - run:
+          name: Install pinned Rust toolchain
+          command: |
+            if ! command -v rustup >/dev/null 2>&1; then
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal
+              printf 'export PATH=%q:$PATH\n' "$HOME/.cargo/bin" >> "$BASH_ENV"
+              export PATH="$HOME/.cargo/bin:$PATH"
+            fi
+            rustup show
+
+  build-micromanager:
+    steps:
+      - run:
+          name: Build signed helper and CLI
+          command: |
+            scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
+            codesign --verify --strict target/debug/firecrab-micromanager-macos
+            codesign -d --entitlements :- target/debug/firecrab-micromanager-macos 2>&1 \
+              | grep -q com.apple.security.virtualization
+            cargo build -p firecrab-cli --locked
+
 jobs:
-  micromanager-macos:
-    # M4 is intentional: microManager requires Apple silicon with nested
-    # virtualization. The doctor gate fails before installation if CircleCI's
-    # macOS VM does not expose that host capability.
+  micromanager-macos-build:
+    # CircleCI managed M4 is itself a VM. It builds/tests correctly, but build
+    # #2 proved that it does not expose Virtualization.framework or nested
+    # virtualization to the job process, so runtime E2E must not run here.
     macos:
       xcode: "16.4.0"
     resource_class: m4pro.medium
+    shell: /bin/bash --login -eo pipefail
+    steps:
+      - checkout
+      - install-rust
+
+      - run:
+          name: Swift unit tests
+          command: >-
+            swift test --package-path micromanager-macos
+            --scratch-path target/swift-micromanager-tests
+
+      - build-micromanager
+
+      - run:
+          name: macOS CLI clippy and tests
+          command: |
+            cargo clippy -p firecrab-cli --all-targets -- -D warnings
+            cargo test -p firecrab-cli --locked
+            target/debug/firecrab --help
+            target/debug/firecrab host list
+
+      - run:
+          name: Verify managed-runner diagnostic contract
+          command: |
+            mkdir -p artifacts
+            rc=0
+            target/debug/firecrab-micromanager-macos doctor --json \
+              > artifacts/doctor.json || rc=$?
+            test "$rc" -eq 0 -o "$rc" -eq 1
+            python3 -m json.tool artifacts/doctor.json
+
+      - store_artifacts:
+          path: artifacts
+
+  micromanager-macos-e2e:
+    # Proposed resource class for a native M3-or-later Mac. Register the
+    # CircleCI machine runner before enabling run-micromanager-e2e.
+    machine: true
+    resource_class: steelcrab/firecrab-macos-arm64-vz
     shell: /bin/bash --login -eo pipefail
     steps:
       - checkout
@@ -21,39 +91,8 @@ jobs:
             printf 'export FIRECRAB_MICROMANAGER_HELPER=%q\n' \
               "$CIRCLE_WORKING_DIRECTORY/target/debug/firecrab-micromanager-macos" >> "$BASH_ENV"
 
-      - run:
-          name: Install pinned Rust toolchain
-          command: |
-            if ! command -v rustup >/dev/null 2>&1; then
-              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-                | sh -s -- -y --profile minimal
-              printf 'export PATH=%q:$PATH\n' "$HOME/.cargo/bin" >> "$BASH_ENV"
-              export PATH="$HOME/.cargo/bin:$PATH"
-            fi
-            rustup show
-
-      - run:
-          name: Swift unit tests
-          command: >-
-            swift test --package-path micromanager-macos
-            --scratch-path target/swift-micromanager-tests
-
-      - run:
-          name: Build signed helper and CLI
-          command: |
-            scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
-            codesign --verify --strict target/debug/firecrab-micromanager-macos
-            codesign -d --entitlements :- target/debug/firecrab-micromanager-macos 2>&1 \
-              | grep -q com.apple.security.virtualization
-            cargo build -p firecrab-cli --locked
-
-      - run:
-          name: macOS CLI clippy and tests
-          command: |
-            cargo clippy -p firecrab-cli --all-targets -- -D warnings
-            cargo test -p firecrab-cli --locked
-            target/debug/firecrab --help
-            target/debug/firecrab host list
+      - install-rust
+      - build-micromanager
 
       - run:
           name: G2 capability, fresh install, and service status
@@ -83,6 +122,11 @@ jobs:
             fi
 
 workflows:
-  micromanager:
+  micromanager-build:
     jobs:
-      - micromanager-macos
+      - micromanager-macos-build
+
+  micromanager-runtime:
+    when: << pipeline.parameters.run-micromanager-e2e >>
+    jobs:
+      - micromanager-macos-e2e
