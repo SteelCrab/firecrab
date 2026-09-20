@@ -36,6 +36,10 @@ The API contract does not.
 | --- | --- | --- |
 | G1 | Linux | `firecrab doctor` then `firecrab service install` / `start` / `status` |
 | G2 | macOS | `firecrab service doctor` then `install` / `status` (nested virt required) |
+
+GitHub-hosted ARM64 macOS runners do not support nested virtualization.
+Hosted CI is build and unit tests only.
+VM create, boot, and network checks run on a self-hosted Mac.
 | G3 | Windows | Same shape as macOS when microManager ships; until then mark WARNING |
 | G4 | all | `GET /api/host` 200; dashboard `GET /` HTML 200 |
 | G5 | all | `GET /api/no-such-route` JSON 404 with `requestId` |

@@ -5,7 +5,7 @@
 # RUN:  G4 G5 H1 H2 N1-N5 S1-S3 L1-L3 I1 I8(GET) I9 V14
 #       C3 C5 when `firecrab` is on PATH; X1-X4 X6
 # SKIP: G1  Linux install job (doctor / install / status)
-#       G2  macOS microManager job (doctor --json, no service install)
+#       G2  GitHub macOS hosted: build only; E2E is self-hosted Mac
 #       G3  Windows QA gate job
 #       U1  do not POST /api/update
 #       N6  DELETE busy needs a VM

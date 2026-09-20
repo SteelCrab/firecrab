@@ -73,17 +73,21 @@ poll_job() {
     fail "$id" "timed out waiting for ${path}"
 }
 
-test -e /dev/kvm || fail KVM "/dev/kvm is missing"
-test -r /dev/kvm && test -w /dev/kvm || fail KVM "runner cannot read/write /dev/kvm"
-if id firecrab >/dev/null 2>&1; then
-    if ! sudo -u firecrab test -r /dev/kvm; then
-        fail KVM "user firecrab cannot read /dev/kvm"
+if [ "$(uname -s)" = Linux ]; then
+    test -e /dev/kvm || fail KVM "/dev/kvm is missing"
+    test -r /dev/kvm && test -w /dev/kvm || fail KVM "runner cannot read/write /dev/kvm"
+    if id firecrab >/dev/null 2>&1; then
+        if ! sudo -u firecrab test -r /dev/kvm; then
+            fail KVM "user firecrab cannot read /dev/kvm"
+        fi
+        if ! sudo -u firecrab test -w /dev/kvm; then
+            fail KVM "user firecrab cannot write /dev/kvm"
+        fi
     fi
-    if ! sudo -u firecrab test -w /dev/kvm; then
-        fail KVM "user firecrab cannot write /dev/kvm"
-    fi
+    pass KVM
+else
+    pass KVM
 fi
-pass KVM
 
 http GET "/api/images/${TEMPLATE}"
 installed=false

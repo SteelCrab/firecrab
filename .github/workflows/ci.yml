@@ -67,11 +67,11 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   micromanager-macos:
-    name: microManager (macOS)
-    # QA IDs: G2 (helper doctor --json, exit 0 or 1; no service install),
-    # CLI unit tests, and a C5-shaped `firecrab --help` / `host list` when
-    # the binary exists. Nested virt, management VM, and API rows are not
-    # run on GitHub-hosted macos-15.
+    name: microManager (macOS hosted: build)
+    # GitHub-hosted ARM64 macOS runners do not support nested virtualization.
+    # This job is build + unit tests only: Swift tests, signed helper, CLI
+    # clippy/tests, helper doctor --json (exit 0 or 1). No service install,
+    # no management VM, no Firecracker guest boot.
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -102,8 +102,6 @@ jobs:
           cargo test -p firecrab-cli --locked
 
       - name: CLI help and host list (no service install)
-        # C5 shape only. Do not `firecrab service install` — nested virt is
-        # not guaranteed on this runner.
         run: |
           if [ -x target/debug/firecrab ]; then
             target/debug/firecrab --help
@@ -111,6 +109,30 @@ jobs:
           else
             echo "SKIP C5: firecrab binary not present"
           fi
+
+  micromanager-macos-e2e:
+    name: microManager E2E (self-hosted macOS)
+    # Real Mac: Virtualization.framework + nested KVM inside Debian.
+    # Skipped unless the repo variable FIRECRAB_MACOS_SELF_HOSTED is "true"
+    # (otherwise the job would queue forever with no matching runner).
+    if: ${{ vars.FIRECRAB_MACOS_SELF_HOSTED == 'true' }}
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Build helper and CLI
+        run: |
+          scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
+          cargo build -p firecrab-cli
+
+      - name: G2 doctor, API QA, nested guest boot
+        env:
+          FIRECRAB_MICROMANAGER_HELPER: ${{ github.workspace }}/target/debug/firecrab-micromanager-macos
+        run: scripts/ci-qa-macos-e2e.sh
 
   qa-windows:
     name: QA gate (Windows)
@@ -225,6 +247,7 @@ jobs:
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/ci-qa-api.sh \
             scripts/ci-qa-guest.sh \
+            scripts/ci-qa-macos-e2e.sh \
             scripts/ci-m2-guest-boot.sh \
             scripts/verify-release-binary.sh \
             scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \

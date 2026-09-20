@@ -25,10 +25,12 @@ NET=$(curl -fsS -X POST "$API/api/micro-networks" \
   -d "{\"name\":\"$NAME_NET\",\"subnetCidr\":\"$SUBNET\",\"internetEnabled\":true}" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 echo "micro_network_id=$NET"
-ip -br link show type bridge | grep -Eq '^mnb' || {
-  echo "expected mnb* bridge after MicroNetwork create" >&2
-  exit 1
-}
+if [ "$(uname -s)" = Linux ]; then
+  ip -br link show type bridge | grep -Eq '^mnb' || {
+    echo "expected mnb* bridge after MicroNetwork create" >&2
+    exit 1
+  }
+fi
 
 VM=$(curl -fsS -X POST "$API/api/vms" \
   -H 'content-type: application/json' \
@@ -57,7 +59,19 @@ test "$state" = running
 ipv4=$(curl -fsS "$API/api/vms/$VM" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ipv4") or "")')
 test -n "$ipv4"
 echo "ipv4=$ipv4"
-ping -c 3 -W 5 "$ipv4"
+if [ "$(uname -s)" = Linux ]; then
+  ping -c 3 -W 5 "$ipv4"
+else
+  # Nested Firecracker lives inside the management guest. The Mac/Windows
+  # runner cannot ping 172.31.x.x; the serial marker is the reachability check.
+  curl -fsS "$API/api/vms/$VM/log" | python3 -c '
+import json, sys
+log = json.load(sys.stdin).get("consoleLog") or ""
+if "FIRECRAB_NETWORK_READY" not in log:
+    sys.stderr.write("missing FIRECRAB_NETWORK_READY in console log\n")
+    sys.exit(1)
+'
+fi
 
 curl -fsS -X POST "$API/api/vms/$VM/stop" --max-time 120 >/dev/null
 curl -fsS -X DELETE "$API/api/vms/$VM"
