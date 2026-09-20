@@ -47,7 +47,8 @@ Hosted CI is build and unit tests only.
 VM create, boot, and network checks run on a self-hosted Mac.
 
 Linux `firecrab service` drives host systemd.
-macOS and Windows `firecrab service` drive the management VM, not a workload MicroVM.
+macOS `firecrab service` drives the management VM, not a workload MicroVM.
+Windows management-VM support is future until microManager ships; keep G3 `WARNING`.
 
 ## Shared host
 

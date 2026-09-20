@@ -50,7 +50,7 @@ flowchart TD
     Local --> Doctor
     CLI --> Resources
     Select --> Console
-    Local --> Update
+    Local -->|Linux only| Update
     Doctor -->|read| Proc
     Doctor -->|shell out| Tools
     Doctor -->|resolve| Paths

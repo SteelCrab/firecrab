@@ -109,7 +109,7 @@ After installation, either configure a [remote host profile](firecrab-cli.md#hos
 
 ### Linux and macOS
 
-The POSIX installer detects Linux or macOS and x86_64 or ARM64, verifies `SHA256SUMS`, and installs to `~/.local/bin`.
+The POSIX installer supports Linux x86_64 and ARM64, and macOS Apple silicon only; it verifies `SHA256SUMS` and installs to `~/.local/bin`.
 Download the installer and the separately published release checksum, verify the installer, and only then execute it.
 
 ```sh
