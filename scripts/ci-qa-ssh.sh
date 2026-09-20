@@ -26,6 +26,7 @@ KEY=${FIRECRAB_QA_SSH_KEY-}
 KNOWN_HOSTS=${FIRECRAB_QA_KNOWN_HOSTS-}
 OWN_KNOWN_HOSTS=0
 HOST_PUBLIC_KEY=
+SSH_TRANSPORT=()
 
 cleanup() {
     if [ "$OWN_KEY" = 1 ] && [ -n "${KEY:-}" ]; then
@@ -53,6 +54,46 @@ http() {
 json_get() {
     local expr=$1
     printf '%s' "$BODY" | python3 -c "import json,sys; d=json.load(sys.stdin); print($expr)"
+}
+
+configure_guest_transport() {
+    local manager_host=${FIRECRAB_QA_MANAGER_HOST:-}
+    local manager_key=${FIRECRAB_QA_MANAGER_KEY:-}
+    local manager_known_hosts proxy
+    local -a proxy_command
+
+    if [ "$(uname -s)" = Linux ]; then
+        return
+    fi
+    if [ -z "$manager_host" ] || [ -z "$manager_key" ]; then
+        if [ "${FIRECRAB_QA_REQUIRE_LIVE_GUEST:-0}" = 1 ]; then
+            fail V8d "management VM SSH proxy is required for live guest login"
+        fi
+        return
+    fi
+    [ -r "$manager_key" ] || fail V8d "management VM SSH key is not readable: ${manager_key}"
+    manager_known_hosts="$(dirname -- "$manager_key")/known_hosts"
+    proxy_command=(
+        /usr/bin/ssh -i "$manager_key"
+        -o BatchMode=yes
+        -o ConnectTimeout=5
+        -o StrictHostKeyChecking=accept-new
+        -o "UserKnownHostsFile=$manager_known_hosts"
+        "root@$manager_host"
+    )
+    printf -v proxy '%q ' "${proxy_command[@]}"
+    proxy+='-W %h:%p'
+    SSH_TRANSPORT=(-o "ProxyCommand=$proxy")
+}
+
+guest_ssh() {
+    ssh "${SSH_TRANSPORT[@]}" -i "$KEY" \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$KNOWN_HOSTS" \
+        -o IdentitiesOnly=yes \
+        -o ConnectTimeout=5 \
+        -o BatchMode=yes \
+        "root@${IPV4}" "$@"
 }
 
 if [ -z "$KEY" ]; then
@@ -106,29 +147,18 @@ if [ -z "$KNOWN_HOSTS" ]; then
 fi
 printf '%s %s\n' "$IPV4" "$HOST_PUBLIC_KEY" > "$KNOWN_HOSTS"
 
-if [ "$(uname -s)" = Linux ]; then
+configure_guest_transport
+if [ "$(uname -s)" = Linux ] || [ ${#SSH_TRANSPORT[@]} -gt 0 ]; then
     ssh_ok=0
     for _ in $(seq 1 30); do
-        if ssh -i "$KEY" \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$KNOWN_HOSTS" \
-            -o IdentitiesOnly=yes \
-            -o ConnectTimeout=5 \
-            -o BatchMode=yes \
-            "root@${IPV4}" true >/dev/null 2>&1; then
+        if guest_ssh true >/dev/null 2>&1; then
             ssh_ok=1
             break
         fi
         sleep 3
     done
     [ "$ssh_ok" = 1 ] || fail V8d "ssh root@${IPV4} never became ready"
-    uname_out=$(ssh -i "$KEY" \
-        -o StrictHostKeyChecking=yes \
-        -o UserKnownHostsFile="$KNOWN_HOSTS" \
-        -o IdentitiesOnly=yes \
-        -o ConnectTimeout=5 \
-        -o BatchMode=yes \
-        "root@${IPV4}" uname -s)
+    uname_out=$(guest_ssh uname -s)
     [ -n "$uname_out" ] || fail V8d "ssh uname empty"
     pass "V8d ssh root@${IPV4} ${uname_out}"
 else

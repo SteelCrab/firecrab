@@ -273,24 +273,38 @@ if [ "$FIRST_REFERENCE" = 1 ]; then
   }
 else
   curl -fsS -X POST "$API/api/vms/$VM/stop" --max-time 120 >/dev/null
-  curl -fsS -X DELETE "$API/api/vms/$VM"
+  for _ in $(seq 1 30); do
+    state=$(curl -fsS "$API/api/vms/$VM" | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')
+    [ "$state" = stopped ] && break
+    sleep 2
+  done
+  [ "$state" = stopped ] || {
+    echo "VM did not reach stopped after API stop (state=$state)" >&2
+    exit 1
+  }
+  delete_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+    -X DELETE "$API/api/vms/$VM")
+  [ "$delete_code" = 200 ] || [ "$delete_code" = 204 ] || {
+    echo "VM DELETE returned $delete_code" >&2
+    exit 1
+  }
 fi
 DELETED_VM=$VM
 VM=
-if [ "$FIRST_REFERENCE" = 1 ]; then
-  if [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$API/api/vms/$DELETED_VM")" != 404 ]; then
-    echo "V13 expected GET deleted VM 404" >&2
-    exit 1
-  fi
-  remaining_vms=$(curl -fsS --max-time 30 "$API/api/vms")
-  printf '%s' "$remaining_vms" | python3 -c '
+if [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "$API/api/vms/$DELETED_VM")" != 404 ]; then
+  echo "V13 expected GET deleted VM 404" >&2
+  exit 1
+fi
+remaining_vms=$(curl -fsS --max-time 30 "$API/api/vms")
+printf '%s' "$remaining_vms" | python3 -c '
 import json, sys
 if any(row.get("id") == sys.argv[1] for row in json.load(sys.stdin)):
     raise SystemExit("deleted VM remains in API list")
 ' "$DELETED_VM" || {
-    echo "V13 deleted VM remains in API list" >&2
-    exit 1
-  }
+  echo "V13 deleted VM remains in API list" >&2
+  exit 1
+}
+if [ "$FIRST_REFERENCE" = 1 ]; then
   cli_vms=$(cli vm list --json)
   printf '%s' "$cli_vms" | python3 -c '
 import json, sys
@@ -301,13 +315,13 @@ if any(row.get("id") == sys.argv[1] for row in json.load(sys.stdin)):
     exit 1
   }
   echo "PASS C1/$TEMPLATE (CLI list/create/start/stop/delete)"
-  echo "PASS V13/$TEMPLATE (CLI delete + API 404/list absence)"
 fi
+echo "PASS V13/$TEMPLATE (delete + API 404/list absence)"
 if [ -n "${STORAGE:-}" ]; then
   curl -fsS -X DELETE "$API/api/micro-storages/$STORAGE" >/dev/null
   STORAGE=
 fi
-curl -fsS -X DELETE "$API/api/micro-networks/$NET" >/dev/null 2>&1 || true
+curl -fsS -X DELETE "$API/api/micro-networks/$NET" >/dev/null
 NET=
 
 echo "M2 boot ok: template=$TEMPLATE"
