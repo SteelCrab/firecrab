@@ -132,7 +132,7 @@ jobs:
             asset: firecrab-cli-aarch64-linux-gnu.tar.gz
             musl: false
           - target: aarch64-apple-darwin
-            runner: macos-15
+            runner: macos-latest
             asset: firecrab-cli-aarch64-macos.tar.gz
             musl: false
           - target: x86_64-pc-windows-msvc
@@ -170,9 +170,24 @@ jobs:
       - name: Build CLI
         run: cargo build --release --locked --target ${{ matrix.target }} -p firecrab-cli
 
+      - name: Build and sign macOS microManager helper
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: scripts/build-micromanager-macos.sh target/${{ matrix.target }}/release/firecrab-micromanager-macos
+
       - name: Smoke CLI on Unix
         if: runner.os != 'Windows'
         run: ./target/${{ matrix.target }}/release/firecrab --version
+
+      - name: Smoke macOS microManager diagnostics
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          helper=target/${{ matrix.target }}/release/firecrab-micromanager-macos
+          codesign --verify --strict "$helper"
+          set +e
+          "$helper" doctor --json
+          rc=$?
+          set -e
+          test "$rc" -eq 0 -o "$rc" -eq 1
 
       - name: Package CLI on Unix
         if: runner.os != 'Windows'
@@ -182,8 +197,12 @@ jobs:
           cp LICENSE package/
           cp compliance/THIRD_PARTY_NOTICES.txt package/
           cp compliance/release-license-inventory.json package/
-          tar -czf "${{ matrix.asset }}" -C package \
-            firecrab LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json
+          members=(firecrab LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json)
+          if [ "${{ matrix.target }}" = aarch64-apple-darwin ]; then
+            cp target/${{ matrix.target }}/release/firecrab-micromanager-macos package/
+            members+=(firecrab-micromanager-macos)
+          fi
+          tar -czf "${{ matrix.asset }}" -C package "${members[@]}"
 
       - name: Test and smoke CLI on Windows
         if: runner.os == 'Windows'
@@ -277,6 +296,7 @@ jobs:
         run: |
           shellcheck \
             install-cli.sh \
+            scripts/build-micromanager-macos.sh \
             scripts/test-install-cli-release.sh \
             scripts/collect-m2image-compliance.sh \
             scripts/package-m2images.sh \
@@ -430,7 +450,9 @@ jobs:
             # Tumbleweed's oss snapshot is replaced while the container
             # still has the previous repomd. A stale appdata-icons.tar.gz
             # hash then makes `zypper install git` fail even after retries
-            # unless metadata is discarded first.
+            # unless metadata is discarded first. Its CDN also rejects some
+            # plain HTTP object requests, so switch every repo to HTTPS first.
+            sed -i 's#^baseurl=http://#baseurl=https://#' /etc/zypp/repos.d/*.repo
             retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends tar gzip git ca-certificates'
           fi
         shell: sh -e {0}

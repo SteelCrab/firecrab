@@ -69,17 +69,19 @@ if [ -z "$INSTALL_DIR" ]; then
 fi
 
 if [ "$UNINSTALL" -eq 1 ]; then
-    binary="$INSTALL_DIR/firecrab"
-    if [ -d "$binary" ]; then
-        printf 'cannot uninstall: %s is a directory\n' "$binary" >&2
-        exit 1
-    fi
-    if [ -e "$binary" ] || [ -L "$binary" ]; then
-        rm -f "$binary"
-        printf 'removed firecrab CLI from %s\n' "$binary"
-    else
-        printf 'firecrab CLI is not installed at %s\n' "$binary"
-    fi
+    for name in firecrab firecrab-micromanager-macos; do
+        binary="$INSTALL_DIR/$name"
+        if [ -d "$binary" ]; then
+            printf 'cannot uninstall: %s is a directory\n' "$binary" >&2
+            exit 1
+        fi
+        if [ -e "$binary" ] || [ -L "$binary" ]; then
+            rm -f "$binary"
+            printf 'removed %s from %s\n' "$name" "$binary"
+        elif [ "$name" = firecrab ]; then
+            printf 'firecrab CLI is not installed at %s\n' "$binary"
+        fi
+    done
 
     if [ "$PURGE" -eq 1 ]; then
         if [ -n "${FIRECRAB_CONFIG_DIR:-}" ]; then
@@ -160,6 +162,9 @@ asset_url="$download_root/$asset"
 [ "$PRINT_URL" -eq 0 ] || { printf '%s\n' "$asset_url"; exit 0; }
 if [ "$CHECK" -eq 1 ]; then
     printf 'would install %s to %s/firecrab\n' "$asset_url" "$INSTALL_DIR"
+    if [ "$platform" = macos ]; then
+        printf 'would install the signed microManager helper to %s/firecrab-micromanager-macos\n' "$INSTALL_DIR"
+    fi
     exit 0
 fi
 
@@ -168,9 +173,11 @@ command -v tar >/dev/null 2>&1 || { printf '%s\n' 'tar is required' >&2; exit 1;
 
 temporary=$(mktemp -d 2>/dev/null || mktemp -d -t firecrab-cli)
 temporary_binary=
+temporary_helper=
 cleanup() {
     rm -rf "$temporary"
     [ -z "$temporary_binary" ] || rm -f "$temporary_binary"
+    [ -z "$temporary_helper" ] || rm -f "$temporary_helper"
 }
 trap cleanup EXIT HUP INT TERM
 curl -fsSL "$asset_url" -o "$temporary/$asset"
@@ -195,16 +202,34 @@ INSTALL_DIR=$(cd "$INSTALL_DIR" && pwd -P)
 tar -xzf "$temporary/$asset" -C "$temporary/unpacked"
 [ -f "$temporary/unpacked/firecrab" ] \
     || { printf '%s\n' 'release archive does not contain firecrab' >&2; exit 1; }
+if [ "$platform" = macos ]; then
+    [ -f "$temporary/unpacked/firecrab-micromanager-macos" ] \
+        || { printf '%s\n' 'macOS release archive does not contain firecrab-micromanager-macos' >&2; exit 1; }
+fi
 [ ! -d "$INSTALL_DIR/firecrab" ] \
     || { printf '%s\n' 'install destination firecrab is a directory' >&2; exit 1; }
+[ "$platform" != macos ] || [ ! -d "$INSTALL_DIR/firecrab-micromanager-macos" ] \
+    || { printf '%s\n' 'install destination firecrab-micromanager-macos is a directory' >&2; exit 1; }
+
 temporary_binary=$(mktemp "$INSTALL_DIR/.firecrab-install.XXXXXX") \
     || { printf '%s\n' 'could not create a private temporary install file' >&2; exit 1; }
 cp "$temporary/unpacked/firecrab" "$temporary_binary"
 chmod 0755 "$temporary_binary"
+if [ "$platform" = macos ]; then
+    temporary_helper=$(mktemp "$INSTALL_DIR/.firecrab-micromanager-install.XXXXXX") \
+        || { printf '%s\n' 'could not create a private temporary helper install file' >&2; exit 1; }
+    cp "$temporary/unpacked/firecrab-micromanager-macos" "$temporary_helper"
+    chmod 0755 "$temporary_helper"
+    mv -f "$temporary_helper" "$INSTALL_DIR/firecrab-micromanager-macos"
+    temporary_helper=
+fi
 mv -f "$temporary_binary" "$INSTALL_DIR/firecrab"
 temporary_binary=
 
 printf 'installed firecrab to %s/firecrab\n' "$INSTALL_DIR"
+if [ "$platform" = macos ]; then
+    printf 'installed microManager helper to %s/firecrab-micromanager-macos\n' "$INSTALL_DIR"
+fi
 case ":${PATH:-}:" in
     *:"$INSTALL_DIR":*) ;;
     *)
