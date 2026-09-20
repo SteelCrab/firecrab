@@ -34,7 +34,7 @@ fi
 
 VM=$(curl -fsS -X POST "$API/api/vms" \
   -H 'content-type: application/json' \
-  -d "{\"name\":\"$NAME_VM\",\"template\":\"$TEMPLATE\",\"cpu\":1,\"ram\":512,\"diskGb\":2,\"microNetworkId\":\"$NET\"}" \
+  -d "{\"name\":\"$NAME_VM\",\"template\":\"$TEMPLATE\",\"cpu\":1,\"ram\":${FIRECRAB_QA_RAM:-1024},\"diskGb\":${FIRECRAB_QA_DISK_GB:-2},\"microNetworkId\":\"$NET\"}" \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 echo "vm_id=$VM"
 

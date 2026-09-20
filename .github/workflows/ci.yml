@@ -362,11 +362,11 @@ jobs:
           sudo -u firecrab test -r /dev/kvm
           sudo -u firecrab test -w /dev/kvm
 
-      - name: QA guest boot (alpine)
-        timeout-minutes: 20
-        # I3 install + V1/V7/V11/V13 via scripts/ci-qa-guest.sh.
-        # Firecracker start needs rw /dev/kvm (previous step).
-        run: scripts/ci-qa-guest.sh alpine-3.24.1
+      - name: QA guest boot (alpine, ubuntu, rocky)
+        timeout-minutes: 50
+        # Catalog M2Images: alpine-3.24.1, ubuntu-26.04, rocky-9.8.
+        # No fedora image exists; rocky is the RHEL-family third.
+        run: scripts/ci-qa-guest.sh alpine-3.24.1 ubuntu-26.04 rocky-9.8
 
       - name: Dashboard, MicroNetwork, and create-VM API smoke
         # No guest image here, so no guest boot. Still exercise the

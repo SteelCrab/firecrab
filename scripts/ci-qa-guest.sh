@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # QA guest boot (public-docs/qa.md I3, V1, V7, V11, V13) on a host with /dev/kvm.
+# Default templates are the three catalog M2Images (alpine, ubuntu, rocky).
+# There is no fedora catalog image; rocky-9.8 is the RHEL-family third.
 # GitHub Ubuntu: chmod 666 /dev/kvm first (nested virt is not guaranteed).
 # Prerequisites: firecrab-api on :5523, outbound registry, KVM rw.
 set -euo pipefail
 
 API=${FIRECRAB_API:-http://127.0.0.1:5523}
 API=${API%/}
-TEMPLATE=${1:-alpine-3.24.1}
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+if [ $# -eq 0 ]; then
+    set -- alpine-3.24.1 ubuntu-26.04 rocky-9.8
+fi
+TEMPLATES=("$@")
 
 pass() { printf 'PASS %s\n' "$1"; }
 fail() {
@@ -89,35 +94,44 @@ else
     pass KVM
 fi
 
-http GET "/api/images/${TEMPLATE}"
-installed=false
-if [ "$CODE" = 200 ]; then
-    installed=$(json_get 'str(d.get("installed") or False).lower()')
-fi
-
-if [ "$installed" != "true" ]; then
-    http POST "/api/images/${TEMPLATE}/package"
-    if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
-        fail I3 "POST /package HTTP ${CODE}"
+boot_template() {
+    local template=$1
+    local installed
+    printf 'guest boot template=%s\n' "$template"
+    http GET "/api/images/${template}"
+    installed=false
+    if [ "$CODE" = 200 ]; then
+        installed=$(json_get 'str(d.get("installed") or False).lower()')
     fi
-    poll_job I3 "/api/images/${TEMPLATE}/package"
-    http POST "/api/images/${TEMPLATE}/install"
-    if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
-        fail I3 "POST /install HTTP ${CODE}"
-    fi
-    poll_job I3 "/api/images/${TEMPLATE}/install"
-    http GET "/api/images/${TEMPLATE}"
-    [ "$CODE" = 200 ] || fail I3 "GET image after install HTTP ${CODE}"
-    [ "$(json_get 'str(d.get("installed") or False).lower()')" = "true" ] \
-        || fail I3 "template ${TEMPLATE} not installed"
-fi
-pass I3
 
-"$root/scripts/ci-m2-guest-boot.sh" "$TEMPLATE"
-pass V1
-pass V7
-pass V11
-pass V13
+    if [ "$installed" != "true" ]; then
+        http POST "/api/images/${template}/package"
+        if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
+            fail "I3/${template}" "POST /package HTTP ${CODE}"
+        fi
+        poll_job "I3/${template}" "/api/images/${template}/package"
+        http POST "/api/images/${template}/install"
+        if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
+            fail "I3/${template}" "POST /install HTTP ${CODE}"
+        fi
+        poll_job "I3/${template}" "/api/images/${template}/install"
+        http GET "/api/images/${template}"
+        [ "$CODE" = 200 ] || fail "I3/${template}" "GET image after install HTTP ${CODE}"
+        [ "$(json_get 'str(d.get("installed") or False).lower()')" = "true" ] \
+            || fail "I3/${template}" "template ${template} not installed"
+    fi
+    pass "I3/${template}"
+
+    "$root/scripts/ci-m2-guest-boot.sh" "$template"
+    pass "V1/${template}"
+    pass "V7/${template}"
+    pass "V11/${template}"
+    pass "V13/${template}"
+}
+
+for TEMPLATE in "${TEMPLATES[@]}"; do
+    boot_template "$TEMPLATE"
+done
 
 http GET /api/vms
 [ "$CODE" = 200 ] || fail X1 "GET /api/vms HTTP ${CODE}"
