@@ -9,9 +9,9 @@
 #       G3  Windows QA gate job
 #       U1  do not POST /api/update
 #       N6  DELETE busy needs a VM
-#       I2-I7 I10  download / KVM / bootstrap
-#       V1-V13     no guest image / no nested KVM
-#       C1 C2 C4   guest boot
+#       I2 I4-I7 I10  not in this script (I3 + V* boot: ci-qa-guest.sh)
+#       V1-V13     ci-qa-guest.sh on Ubuntu with /dev/kvm
+#       C1 C2 C4   guest boot / image import
 #       X5         no custom OCI alias
 # N4: IPv6 SLAAC POST; HTTP 400 → SKIP with body, do not fail.
 # Prefix qa-ci-; IPv4 172.31.201.0/24. Never name a network "ci".
@@ -151,27 +151,27 @@ skip G2 "macOS microManager job covers service doctor"
 skip G3 "Windows QA gate job; microManager is not shipped"
 skip U1 "do not POST /api/update"
 skip N6 "DELETE busy needs a VM"
-skip I2 "kernel install skipped in GHA"
-skip I3 "M2Image package/install skipped in GHA"
-skip I4 "kernel pair skipped in GHA"
-skip I5 "OCI inspect skipped in GHA"
-skip I6 "OCI import skipped in GHA"
-skip I7 "microregistry register skipped in GHA"
-skip I10 "bootstrap skipped in GHA"
-skip V1 "no guest image / no nested KVM"
-skip V2 "no guest image / no nested KVM"
-skip V3 "no guest image / no nested KVM"
-skip V4 "no guest image / no nested KVM"
-skip V5 "no guest image / no nested KVM"
-skip V6 "no guest image / no nested KVM"
-skip V7 "no guest image / no nested KVM"
-skip V8 "no guest image / no nested KVM"
-skip V9 "no guest image / no nested KVM"
-skip V10 "no guest image / no nested KVM"
-skip V11 "no guest image / no nested KVM"
-skip V12 "no guest image / no nested KVM"
-skip V13 "no guest image / no nested KVM"
-skip C1 "guest boot skipped in GHA"
+skip I2 "kernel install skipped in this script"
+skip I3 "M2Image package/install runs in ci-qa-guest.sh"
+skip I4 "kernel pair skipped in this script"
+skip I5 "OCI inspect skipped in this script"
+skip I6 "OCI import skipped in this script"
+skip I7 "microregistry register skipped in this script"
+skip I10 "bootstrap skipped in this script"
+skip V1 "guest boot runs in ci-qa-guest.sh"
+skip V2 "guest boot runs in ci-qa-guest.sh"
+skip V3 "guest boot runs in ci-qa-guest.sh"
+skip V4 "guest boot runs in ci-qa-guest.sh"
+skip V5 "guest boot runs in ci-qa-guest.sh"
+skip V6 "guest boot runs in ci-qa-guest.sh"
+skip V7 "guest boot runs in ci-qa-guest.sh"
+skip V8 "guest boot runs in ci-qa-guest.sh"
+skip V9 "guest boot runs in ci-qa-guest.sh"
+skip V10 "guest boot runs in ci-qa-guest.sh"
+skip V11 "guest boot runs in ci-qa-guest.sh"
+skip V12 "guest boot runs in ci-qa-guest.sh"
+skip V13 "guest boot runs in ci-qa-guest.sh"
+skip C1 "guest boot runs in ci-qa-guest.sh"
 skip C2 "vm console skipped in GHA"
 skip C4 "image import skipped in GHA"
 skip X5 "no custom OCI alias"

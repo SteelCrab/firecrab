@@ -196,10 +196,11 @@ jobs:
 
   install:
     name: Installer (shellcheck, --check, doctor, install/uninstall)
-    # A GitHub-hosted Linux runner is a throwaway VM with systemd, so the whole
-    # installer can be exercised for real — the one thing this cannot cover is
-    # booting a guest, since install.sh never installs a guest image itself.
-    runs-on: ubuntu-latest
+    # GitHub Ubuntu exposes /dev/kvm on typical x86_64 hosted runners. Nested
+    # virt is not a stability guarantee; if the device is missing this job fails
+    # the guest-boot step instead of skipping it. Full E2E still belongs on a
+    # self-hosted runner when flake rate matters.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -223,6 +224,8 @@ jobs:
             scripts/build-micromanager-macos.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/ci-qa-api.sh \
+            scripts/ci-qa-guest.sh \
+            scripts/ci-m2-guest-boot.sh \
             scripts/verify-release-binary.sh \
             scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \
             scripts/build-m2images.sh scripts/package-m2images.sh \
@@ -326,6 +329,20 @@ jobs:
         # Shared QA IDs from public-docs/qa.md: see scripts/ci-qa-api.sh.
         # Leaves the later "ci" / 172.31.0.0/24 smoke network contract unchanged.
         run: scripts/ci-qa-api.sh
+
+      - name: Enable KVM
+        run: |
+          sudo chmod 666 /dev/kvm
+          ls -l /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          sudo -u firecrab test -r /dev/kvm
+          sudo -u firecrab test -w /dev/kvm
+
+      - name: QA guest boot (alpine)
+        timeout-minutes: 20
+        # I3 install + V1/V7/V11/V13 via scripts/ci-qa-guest.sh.
+        # Firecracker start needs rw /dev/kvm (previous step).
+        run: scripts/ci-qa-guest.sh alpine-3.24.1
 
       - name: Dashboard, MicroNetwork, and create-VM API smoke
         # No guest image here, so no guest boot. Still exercise the
