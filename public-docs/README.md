@@ -31,6 +31,7 @@ Every page covers one topic.
 | OCI inspect and import | [OCI images](oci.md) |
 | Services and maintenance | [Operations](operations.md) |
 | Failure checks | [Troubleshooting](troubleshooting.md) |
+| Linux, macOS, and Windows QA list | [QA work list](qa.md) |
 | Clippy warning regression check | [Clippy warning gate](ci.md) |
 
 ## Name aliases

@@ -21,7 +21,8 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- None.
+- Public documentation lists the shared Linux, macOS, and Windows QA work
+  list ([#266]).
 
 ### Changed
 
@@ -434,6 +435,7 @@ network helper.
 [#263]: https://github.com/SteelCrab/firecrab/pull/263
 [#264]: https://github.com/SteelCrab/firecrab/pull/264
 [#265]: https://github.com/SteelCrab/firecrab/pull/265
+[#266]: https://github.com/SteelCrab/firecrab/issues/266
 [#269]: https://github.com/SteelCrab/firecrab/pull/269
 [#270]: https://github.com/SteelCrab/firecrab/pull/270
 [#272]: https://github.com/SteelCrab/firecrab/pull/272
