@@ -140,7 +140,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Document G3
-        run: echo "SKIP G3: Windows microManager is not shipped"
+        run: |
+          echo "SKIP G3: Windows microManager is not shipped"
 
   docs:
     name: Rust (rustdoc)
