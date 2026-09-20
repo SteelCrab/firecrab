@@ -29,6 +29,8 @@ Entries land here as work merges, and move under the next version heading when t
   Reinstall and ordinary uninstall preserve managed data, while explicit
   `uninstall --purge` removes it. The complete path is validated on Apple M5 with
   macOS 26.6.2; other M3-or-later hosts remain runtime and E2E gated ([#266]).
+- Public documentation lists the shared Linux, macOS, and Windows QA work
+  list ([#266]).
 
 ### Changed
 
