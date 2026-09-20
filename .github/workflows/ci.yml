@@ -68,6 +68,10 @@ jobs:
 
   micromanager-macos:
     name: microManager (macOS)
+    # QA IDs: G2 (helper doctor --json, exit 0 or 1; no service install),
+    # CLI unit tests, and a C5-shaped `firecrab --help` / `host list` when
+    # the binary exists. Nested virt, management VM, and API rows are not
+    # run on GitHub-hosted macos-15.
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
@@ -96,6 +100,25 @@ jobs:
         run: |
           cargo clippy -p firecrab-cli --all-targets -- -D warnings
           cargo test -p firecrab-cli --locked
+
+      - name: CLI help and host list (no service install)
+        # C5 shape only. Do not `firecrab service install` — nested virt is
+        # not guaranteed on this runner.
+        run: |
+          if [ -x target/debug/firecrab ]; then
+            target/debug/firecrab --help
+            target/debug/firecrab host list
+          else
+            echo "SKIP C5: firecrab binary not present"
+          fi
+
+  qa-windows:
+    name: QA gate (Windows)
+    # G3 only: Windows microManager is not shipped. No API rows.
+    runs-on: windows-latest
+    steps:
+      - name: Document G3
+        run: echo "SKIP G3: Windows microManager is not shipped"
 
   docs:
     name: Rust (rustdoc)
@@ -199,6 +222,7 @@ jobs:
           shellcheck install.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
             scripts/build-micromanager-macos.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
+            scripts/ci-qa-api.sh \
             scripts/verify-release-binary.sh \
             scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \
             scripts/build-m2images.sh scripts/package-m2images.sh \
@@ -297,6 +321,11 @@ jobs:
           # At least one image FAIL, and nothing else.
           printf '%s\n' "$out" | grep -q '^\[FAIL\] images:'
           test "$code" -eq 1
+
+      - name: QA work list (API, no guest boot)
+        # Shared QA IDs from public-docs/qa.md: see scripts/ci-qa-api.sh.
+        # Leaves the later "ci" / 172.31.0.0/24 smoke network contract unchanged.
+        run: scripts/ci-qa-api.sh
 
       - name: Dashboard, MicroNetwork, and create-VM API smoke
         # No guest image here, so no guest boot. Still exercise the
