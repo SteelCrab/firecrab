@@ -362,11 +362,10 @@ jobs:
           sudo -u firecrab test -r /dev/kvm
           sudo -u firecrab test -w /dev/kvm
 
-      - name: QA guest boot (alpine, ubuntu, rocky)
-        timeout-minutes: 50
-        # Catalog M2Images: alpine-3.24.1, ubuntu-26.04, rocky-9.8.
-        # No fedora image exists; rocky is the RHEL-family third.
-        run: scripts/ci-qa-guest.sh alpine-3.24.1 ubuntu-26.04 rocky-9.8
+      - name: QA guest boot (OCI alpine, ubuntu, fedora)
+        timeout-minutes: 90
+        # I5 inspect + I6 import + V1/V7/V11/V13 + X5 delete for each reference.
+        run: scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42
 
       - name: Dashboard, MicroNetwork, and create-VM API smoke
         # No guest image here, so no guest boot. Still exercise the

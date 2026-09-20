@@ -78,4 +78,4 @@ fi
 printf 'PASS G2 API\n'
 
 "$root/scripts/ci-qa-api.sh"
-"$root/scripts/ci-qa-guest.sh" alpine-3.24.1 ubuntu-26.04 rocky-9.8
+"$root/scripts/ci-qa-guest.sh" alpine:3.21 ubuntu:24.04 fedora:42

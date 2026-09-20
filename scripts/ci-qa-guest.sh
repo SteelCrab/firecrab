@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# QA guest boot (public-docs/qa.md I3, V1, V7, V11, V13) on a host with /dev/kvm.
-# Default templates are the three catalog M2Images (alpine, ubuntu, rocky).
-# There is no fedora catalog image; rocky-9.8 is the RHEL-family third.
+# QA guest boot from OCI images (public-docs/qa.md I5, I6, V1, V7, V11, V13, X5).
+# Default references: alpine, ubuntu, fedora from Docker Hub.
 # GitHub Ubuntu: chmod 666 /dev/kvm first (nested virt is not guaranteed).
-# Prerequisites: firecrab-api on :5523, outbound registry, KVM rw.
+# Prerequisites: firecrab-api on :5523, fakeroot, outbound registry, KVM rw.
 set -euo pipefail
 
 API=${FIRECRAB_API:-http://127.0.0.1:5523}
 API=${API%/}
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 if [ $# -eq 0 ]; then
-    set -- alpine-3.24.1 ubuntu-26.04 rocky-9.8
+    set -- alpine:3.21 ubuntu:24.04 fedora:42
 fi
-TEMPLATES=("$@")
+REFERENCES=("$@")
 
 pass() { printf 'PASS %s\n' "$1"; }
 fail() {
@@ -49,6 +48,18 @@ http() {
     rm -f "$out"
 }
 
+inspect_ref() {
+    local ref=$1
+    local out
+    out=$(mktemp)
+    CODE=$(curl -sS -o "$out" -w '%{http_code}' --connect-timeout 5 --max-time 60 \
+        -G "${API}/api/oci/inspect" \
+        --data-urlencode "reference=${ref}" \
+        -H "Origin: ${API}") || CODE=000
+    BODY=$(cat "$out")
+    rm -f "$out"
+}
+
 json_get() {
     local expr=$1
     printf '%s' "$BODY" | python3 -c "import json,sys; d=json.load(sys.stdin); print($expr)"
@@ -58,7 +69,7 @@ poll_job() {
     local id=$1
     local path=$2
     local status
-    for _ in $(seq 1 120); do
+    for _ in $(seq 1 240); do
         http GET "$path"
         if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
             fail "$id" "poll ${path} HTTP ${CODE}"
@@ -94,43 +105,53 @@ else
     pass KVM
 fi
 
-boot_template() {
-    local template=$1
-    local installed
-    printf 'guest boot template=%s\n' "$template"
-    http GET "/api/images/${template}"
+boot_oci() {
+    local reference=$1
+    local alias installed disk body
+    printf 'OCI guest boot reference=%s\n' "$reference"
+
+    inspect_ref "$reference"
+    [ "$CODE" = 200 ] || fail "I5/${reference}" "inspect HTTP ${CODE}"
+    alias=$(json_get 'd["alias"]')
+    [ -n "$alias" ] || fail "I5/${reference}" "inspect missing alias"
+    pass "I5/${reference} alias=${alias}"
+
+    http GET "/api/images/${alias}"
     installed=false
     if [ "$CODE" = 200 ]; then
         installed=$(json_get 'str(d.get("installed") or False).lower()')
     fi
 
     if [ "$installed" != "true" ]; then
-        http POST "/api/images/${template}/package"
+        body=$(python3 -c 'import json,sys; print(json.dumps({"reference":sys.argv[1]}))' "$reference")
+        http POST /api/oci/import "$body"
         if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
-            fail "I3/${template}" "POST /package HTTP ${CODE}"
+            fail "I6/${reference}" "POST /api/oci/import HTTP ${CODE}"
         fi
-        poll_job "I3/${template}" "/api/images/${template}/package"
-        http POST "/api/images/${template}/install"
-        if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
-            fail "I3/${template}" "POST /install HTTP ${CODE}"
-        fi
-        poll_job "I3/${template}" "/api/images/${template}/install"
-        http GET "/api/images/${template}"
-        [ "$CODE" = 200 ] || fail "I3/${template}" "GET image after install HTTP ${CODE}"
+        poll_job "I6/${reference}" "/api/oci/import/${alias}"
+        http GET "/api/images/${alias}"
+        [ "$CODE" = 200 ] || fail "I6/${reference}" "GET image after import HTTP ${CODE}"
         [ "$(json_get 'str(d.get("installed") or False).lower()')" = "true" ] \
-            || fail "I3/${template}" "template ${template} not installed"
+            || fail "I6/${reference}" "alias ${alias} not installed"
     fi
-    pass "I3/${template}"
+    pass "I6/${alias}"
 
-    "$root/scripts/ci-m2-guest-boot.sh" "$template"
-    pass "V1/${template}"
-    pass "V7/${template}"
-    pass "V11/${template}"
-    pass "V13/${template}"
+    disk=$(json_get 'd.get("minDiskGb") or 2')
+    FIRECRAB_QA_DISK_GB=$disk "$root/scripts/ci-m2-guest-boot.sh" "$alias"
+    pass "V1/${alias}"
+    pass "V7/${alias}"
+    pass "V11/${alias}"
+    pass "V13/${alias}"
+
+    http DELETE "/api/images/${alias}"
+    if [ "$CODE" != 204 ] && [ "$CODE" != 200 ]; then
+        fail "X5/${alias}" "DELETE image HTTP ${CODE}"
+    fi
+    pass "X5/${alias}"
 }
 
-for TEMPLATE in "${TEMPLATES[@]}"; do
-    boot_template "$TEMPLATE"
+for REFERENCE in "${REFERENCES[@]}"; do
+    boot_oci "$REFERENCE"
 done
 
 http GET /api/vms

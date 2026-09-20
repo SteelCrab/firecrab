@@ -9,7 +9,8 @@
 #       G3  Windows QA gate job
 #       U1  do not POST /api/update
 #       N6  DELETE busy needs a VM
-#       I2 I4-I7 I10  not in this script (I3 + V* boot: ci-qa-guest.sh)
+#       I2 I3 I4 I7 I10  M2Image/bootstrap not in this script
+#       I5 I6 + V* boot: ci-qa-guest.sh (OCI alpine/ubuntu/fedora)
 #       V1-V13     ci-qa-guest.sh on Ubuntu with /dev/kvm
 #       C1 C2 C4   guest boot / image import
 #       X5         no custom OCI alias
@@ -152,10 +153,10 @@ skip G3 "Windows QA gate job; microManager is not shipped"
 skip U1 "do not POST /api/update"
 skip N6 "DELETE busy needs a VM"
 skip I2 "kernel install skipped in this script"
-skip I3 "M2Image package/install runs in ci-qa-guest.sh"
+skip I3 "M2Image package/install not in OCI guest boot"
 skip I4 "kernel pair skipped in this script"
-skip I5 "OCI inspect skipped in this script"
-skip I6 "OCI import skipped in this script"
+skip I5 "OCI inspect runs in ci-qa-guest.sh"
+skip I6 "OCI import runs in ci-qa-guest.sh"
 skip I7 "microregistry register skipped in this script"
 skip I10 "bootstrap skipped in this script"
 skip V1 "guest boot runs in ci-qa-guest.sh"
