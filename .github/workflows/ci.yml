@@ -67,7 +67,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
   micromanager-macos:
-    name: microManager (macOS hosted: build)
+    name: "microManager (macOS hosted: build)"
     # GitHub-hosted ARM64 macOS runners do not support nested virtualization.
     # This job is build + unit tests only: Swift tests, signed helper, CLI
     # clippy/tests, helper doctor --json (exit 0 or 1). No service install,
