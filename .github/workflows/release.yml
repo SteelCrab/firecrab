@@ -450,7 +450,9 @@ jobs:
             # Tumbleweed's oss snapshot is replaced while the container
             # still has the previous repomd. A stale appdata-icons.tar.gz
             # hash then makes `zypper install git` fail even after retries
-            # unless metadata is discarded first.
+            # unless metadata is discarded first. Its CDN also rejects some
+            # plain HTTP object requests, so switch every repo to HTTPS first.
+            sed -i 's#^baseurl=http://#baseurl=https://#' /etc/zypp/repos.d/*.repo
             retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends tar gzip git ca-certificates'
           fi
         shell: sh -e {0}
