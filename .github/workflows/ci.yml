@@ -72,7 +72,7 @@ jobs:
     # This job is build + unit tests only: Swift tests, signed helper, CLI
     # clippy/tests, helper doctor --json (exit 0 or 1). No service install,
     # no management VM, no Firecracker guest boot.
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
 

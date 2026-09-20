@@ -132,7 +132,7 @@ jobs:
             asset: firecrab-cli-aarch64-linux-gnu.tar.gz
             musl: false
           - target: aarch64-apple-darwin
-            runner: macos-15
+            runner: macos-latest
             asset: firecrab-cli-aarch64-macos.tar.gz
             musl: false
           - target: x86_64-pc-windows-msvc
