@@ -339,9 +339,20 @@ done
   echo "ip=$ip"
 }} >"$ready"
 set +e
-wait "$vm_pid"
-rc=$?
-exit "$rc"
+while :; do
+  if ! kill -0 "$vm_pid" 2>/dev/null; then
+    wait "$vm_pid"
+    rc=$?
+    rm -f "$ready"
+    exit "$rc"
+  fi
+  if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+    wait "$tunnel_pid" 2>/dev/null
+    rm -f "$ready"
+    exit 1
+  fi
+  sleep 1
+done
 "#
     )
 }
