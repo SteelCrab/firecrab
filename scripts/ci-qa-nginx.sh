@@ -146,6 +146,11 @@ guest_ssh() {
         "root@${ipv4}" "$@"
 }
 
+read_guest_qa_nginx() {
+    local ipv4=$1
+    guest_ssh "$ipv4" ". /etc/firecrab/vm.env && printf \"%s\\n\" \"\$QA_NGINX\""
+}
+
 printf 'nginx OCI reference=%s\n' "$REFERENCE"
 
 inspect_ref "$REFERENCE"
@@ -258,8 +263,10 @@ if [ "$(uname -s)" = Linux ]; then
         sleep 3
     done
     [ "$ssh_ok" = 1 ] || fail V8 "ssh root@${IPV4} never became ready"
-    env_file=$(guest_ssh "$IPV4" cat /etc/firecrab/vm.env)
-    printf '%s\n' "$env_file" | grep -q '^QA_NGINX=ci$' || fail V3 "guest /etc/firecrab/vm.env missing QA_NGINX=ci"
+    env_value=$(read_guest_qa_nginx "$IPV4") \
+        || fail V3 "guest /etc/firecrab/vm.env could not be sourced"
+    [ "$env_value" = ci ] \
+        || fail V3 "guest /etc/firecrab/vm.env missing QA_NGINX=ci (got ${env_value:-missing})"
     pass "V3 guest vm.env"
     guest_ssh "$IPV4" test -x /var/lib/firecrab/shells/00.sh \
         || fail V5 "guest missing pinned /var/lib/firecrab/shells/00.sh"
@@ -275,8 +282,10 @@ print(json.dumps({
     http PUT "/api/vms/${VM_ID}" "$PUT"
     [ "$CODE" = 200 ] || fail V10 "PUT env while running HTTP ${CODE}"
     sleep 2
-    env_file=$(guest_ssh "$IPV4" cat /etc/firecrab/vm.env)
-    printf '%s\n' "$env_file" | grep -q '^QA_NGINX=two$' || fail V10 "guest vm.env not updated to QA_NGINX=two"
+    env_value=$(read_guest_qa_nginx "$IPV4") \
+        || fail V10 "guest /etc/firecrab/vm.env could not be sourced after update"
+    [ "$env_value" = two ] \
+        || fail V10 "guest vm.env not updated to QA_NGINX=two (got ${env_value:-missing})"
     pass V10
 else
     warning "NGX6 skip live ssh on $(uname -s)"
