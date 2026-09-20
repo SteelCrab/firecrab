@@ -249,6 +249,7 @@ jobs:
             scripts/ci-qa-api.sh \
             scripts/ci-qa-guest.sh \
             scripts/ci-qa-nginx.sh \
+            scripts/ci-qa-ssh.sh \
             scripts/ci-qa-macos-e2e.sh \
             scripts/ci-m2-guest-boot.sh \
             scripts/verify-release-binary.sh \

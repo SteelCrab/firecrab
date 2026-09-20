@@ -124,7 +124,19 @@ Need an installed template (I3 or I6) and a network (N1).
 | V5 | shells pin | `shellIds` on create or `PUT`; guest `/var/lib/firecrab/shells/00.sh` | with V1 |
 | V6 | storage | `PUT /api/vms/{id}/storage` | with V1 |
 | V7 | start | `POST /{id}/start` → `running`; log has `FIRECRAB_NETWORK_READY` | `POST /stop` |
-| V8 | ssh | `GET /ssh-key`, `/ssh-host-key`, `/ssh-host-key/check` | with V1 |
+| V8 | ssh | key, host-key, check, live login (V8a–V8d) | with V7 |
+
+SSH is required after `running`, not only on nginx.
+
+| ID | Work | Expect |
+| --- | --- | --- |
+| V8a | `GET /api/vms/{id}/ssh-key` | OpenSSH PEM (`firecrab-<name>.pem`) |
+| V8b | `GET /api/vms/{id}/ssh-host-key` | `fingerprint` and `publicKey` |
+| V8c | `GET /api/vms/{id}/ssh-host-key/check` | `status=match` (poll until sshd answers) |
+| V8d | `ssh -i key -o IdentitiesOnly=yes root@<ipv4> true` | exit 0; `uname -s` non-empty |
+
+V8d is Linux-only when the Firecracker TAP is on the same host.
+On a Mac runner mark V8d `WARNING`.
 | V9 | console | `GET /ws/vms/{id}/console` → 101 | with V1 |
 | V10 | env (running) | `PUT env` while `running` (restarts `services.d/app`) | with V7 |
 | V11 | stop | `POST /{id}/stop` → `stopped` | with V1 |
@@ -148,13 +160,14 @@ CI script: `scripts/ci-qa-nginx.sh`.
 | NGX3 | V1 create with `env.QA_NGINX=ci`, `shellIds`, `portForwards` 18080→80/tcp | 201 |
 | NGX4 | V7 start → `running` with ipv4 | ping or `FIRECRAB_NETWORK_READY` |
 | NGX5 | V4 live | `curl http://127.0.0.1:18080/` → 200 |
-| NGX6 | V8 + V3 live | SSH `cat /etc/firecrab/vm.env` has `QA_NGINX=ci` |
+| NGX6 | V8a–V8d | PEM, host-key `match`, `ssh root@ipv4 true` |
+| NGX6b | V3 live | SSH `cat /etc/firecrab/vm.env` has `QA_NGINX=ci` |
 | NGX7 | V5 live | SSH `test -x /var/lib/firecrab/shells/00.sh` |
 | NGX8 | V10 live | `PUT env QA_NGINX=two` while running; guest file updates |
 | NGX9 | V11 stop, V13 delete VM, X5 delete alias, delete shell and network | leftover empty |
 
 On macOS the API is tunneled; live curl/SSH of 172.31/18080 is Linux-only.
-Mark NGX5–NGX8 `WARNING` on the Mac host, not a silent pass.
+Mark NGX5–NGX8 and V8d `WARNING` on the Mac host, not a silent pass.
 
 ## CLI
 
@@ -187,8 +200,9 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | Script | Runs |
 | --- | --- |
 | `scripts/ci-qa-api.sh` | G4 G5 H1 H2 N1–N5 S1–S3 L1–L3 I1 I8 I9 V14 C3 C5 X1–X4 X6 |
-| `scripts/ci-qa-nginx.sh` | NGX1–NGX9 (nginx import, env, port-forward, shells) |
-| `scripts/ci-qa-guest.sh` | I5 I6 V1 V7 V11 V13 X5 for `alpine:3.21` `ubuntu:24.04` `fedora:42` |
+| `scripts/ci-qa-nginx.sh` | NGX1–NGX9 including V8a–V8d SSH |
+| `scripts/ci-qa-ssh.sh` | V8a–V8d (called from guest boot and nginx) |
+| `scripts/ci-qa-guest.sh` | I5 I6 V1 V7 V8 V11 V13 X5 for `alpine:3.21` `ubuntu:24.04` `fedora:42` |
 | GitHub macOS hosted | build and unit tests only |
 | Self-hosted macOS | `ci-qa-macos-e2e.sh` when `FIRECRAB_MACOS_SELF_HOSTED` is true |
 

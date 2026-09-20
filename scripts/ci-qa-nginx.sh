@@ -235,10 +235,8 @@ fi
 
 KEY=$(mktemp)
 chmod 600 "$KEY"
-curl -sS --connect-timeout 5 --max-time 30 -o "$KEY" "${API}/api/vms/${VM_ID}/ssh-key" \
-    || fail V8 "GET ssh-key failed"
-grep -q 'BEGIN OPENSSH PRIVATE KEY\|BEGIN.*PRIVATE KEY' "$KEY" || fail V8 "ssh-key is not a PEM"
-pass V8
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+FIRECRAB_API=$API FIRECRAB_QA_SSH_KEY=$KEY "$root/scripts/ci-qa-ssh.sh" "$VM_ID" "$IPV4"
 
 if [ "$(uname -s)" = Linux ]; then
     ssh_ok=0

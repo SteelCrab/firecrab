@@ -140,6 +140,7 @@ boot_oci() {
     FIRECRAB_QA_DISK_GB=$disk "$root/scripts/ci-m2-guest-boot.sh" "$alias"
     pass "V1/${alias}"
     pass "V7/${alias}"
+    pass "V8/${alias}"
     pass "V11/${alias}"
     pass "V13/${alias}"
 

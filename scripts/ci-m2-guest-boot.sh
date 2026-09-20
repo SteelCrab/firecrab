@@ -11,6 +11,7 @@ set -euo pipefail
 
 TEMPLATE=${1:?template alias required (e.g. alpine-3.24.1)}
 API=${FIRECRAB_API:-http://127.0.0.1:5523}
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # Unique /24 per template hash so parallel matrix jobs on one host would not
 # collide if ever co-located (each CI job is its own runner today).
 SUBNET_THIRD=$(printf '%s' "$TEMPLATE" | cksum | awk '{print ($1 % 200) + 20}')
@@ -19,6 +20,19 @@ NAME_NET="boot-$(echo "$TEMPLATE" | tr -c 'a-zA-Z0-9' '-')"
 NAME_VM="m2-$(echo "$TEMPLATE" | tr -c 'a-zA-Z0-9' '-')"
 
 echo "M2 boot: template=$TEMPLATE subnet=$SUBNET api=$API"
+
+NET=
+VM=
+cleanup_boot() {
+  if [ -n "${VM:-}" ]; then
+    curl -sS -o /dev/null --max-time 120 -X POST "$API/api/vms/$VM/stop" || true
+    curl -sS -o /dev/null --max-time 30 -X DELETE "$API/api/vms/$VM" || true
+  fi
+  if [ -n "${NET:-}" ]; then
+    curl -sS -o /dev/null --max-time 15 -X DELETE "$API/api/micro-networks/$NET" || true
+  fi
+}
+trap cleanup_boot EXIT
 
 NET=$(curl -fsS -X POST "$API/api/micro-networks" \
   -H 'content-type: application/json' \
@@ -73,10 +87,12 @@ if "FIRECRAB_NETWORK_READY" not in log:
 '
 fi
 
+FIRECRAB_API=$API "$root/scripts/ci-qa-ssh.sh" "$VM" "$ipv4"
+
 curl -fsS -X POST "$API/api/vms/$VM/stop" --max-time 120 >/dev/null
 curl -fsS -X DELETE "$API/api/vms/$VM"
-
-# Network may still be held if delete is slow; best-effort cleanup.
+VM=
 curl -fsS -X DELETE "$API/api/micro-networks/$NET" >/dev/null 2>&1 || true
+NET=
 
 echo "M2 boot ok: template=$TEMPLATE"
