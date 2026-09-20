@@ -10,6 +10,7 @@ VM_ID=${1:?vm id required}
 IPV4=${2-}
 
 pass() { printf 'PASS %s\n' "$1"; }
+warning() { printf 'WARNING %s\n' "$1"; }
 fail() {
     printf 'FAILED %s: %s\n' "$1" "$2" >&2
     if [ -n "${BODY:-}" ]; then
@@ -22,10 +23,16 @@ CODE=
 BODY=
 OWN_KEY=0
 KEY=${FIRECRAB_QA_SSH_KEY-}
+KNOWN_HOSTS=${FIRECRAB_QA_KNOWN_HOSTS-}
+OWN_KNOWN_HOSTS=0
+HOST_PUBLIC_KEY=
 
 cleanup() {
     if [ "$OWN_KEY" = 1 ] && [ -n "${KEY:-}" ]; then
         rm -f "$KEY"
+    fi
+    if [ "$OWN_KNOWN_HOSTS" = 1 ] && [ -n "${KNOWN_HOSTS:-}" ]; then
+        rm -f "$KNOWN_HOSTS"
     fi
 }
 trap cleanup EXIT
@@ -64,6 +71,8 @@ http GET "/api/vms/${VM_ID}/ssh-host-key"
 [ "$CODE" = 200 ] || fail V8b "GET /ssh-host-key HTTP ${CODE}"
 fp=$(json_get 'd.get("fingerprint") or ""')
 [ -n "$fp" ] || fail V8b "missing fingerprint"
+HOST_PUBLIC_KEY=$(json_get 'd.get("publicKey") or ""')
+[ -n "$HOST_PUBLIC_KEY" ] || fail V8b "missing publicKey"
 pass "V8b ${fp}"
 
 check_ok=0
@@ -90,12 +99,19 @@ if [ -z "$IPV4" ]; then
 fi
 [ -n "$IPV4" ] || fail V8d "no ipv4 for ssh"
 
+if [ -z "$KNOWN_HOSTS" ]; then
+    KNOWN_HOSTS=$(mktemp)
+    chmod 600 "$KNOWN_HOSTS"
+    OWN_KNOWN_HOSTS=1
+fi
+printf '%s %s\n' "$IPV4" "$HOST_PUBLIC_KEY" > "$KNOWN_HOSTS"
+
 if [ "$(uname -s)" = Linux ]; then
     ssh_ok=0
     for _ in $(seq 1 30); do
         if ssh -i "$KEY" \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$KNOWN_HOSTS" \
             -o IdentitiesOnly=yes \
             -o ConnectTimeout=5 \
             -o BatchMode=yes \
@@ -107,8 +123,8 @@ if [ "$(uname -s)" = Linux ]; then
     done
     [ "$ssh_ok" = 1 ] || fail V8d "ssh root@${IPV4} never became ready"
     uname_out=$(ssh -i "$KEY" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$KNOWN_HOSTS" \
         -o IdentitiesOnly=yes \
         -o ConnectTimeout=5 \
         -o BatchMode=yes \
@@ -116,5 +132,5 @@ if [ "$(uname -s)" = Linux ]; then
     [ -n "$uname_out" ] || fail V8d "ssh uname empty"
     pass "V8d ssh root@${IPV4} ${uname_out}"
 else
-    pass "V8d skip live ssh on $(uname -s)"
+    warning "V8d skip live ssh on $(uname -s)"
 fi

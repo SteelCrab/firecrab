@@ -11,6 +11,7 @@ SUBNET=172.31.221.0/24
 PREFIX=qa-ngx-
 
 pass() { printf 'PASS %s\n' "$1"; }
+warning() { printf 'WARNING %s\n' "$1"; }
 fail() {
     printf 'FAILED %s: %s\n' "$1" "$2" >&2
     if [ -n "${BODY:-}" ]; then
@@ -26,6 +27,8 @@ VM_ID=
 SHELL_ID=
 ALIAS=
 KEY=
+KNOWN_HOSTS=
+IMPORTED_IMAGE=0
 
 cleanup() {
     if [ -n "${VM_ID:-}" ]; then
@@ -38,11 +41,14 @@ cleanup() {
     if [ -n "${SHELL_ID:-}" ]; then
         curl -sS -o /dev/null --max-time 15 -X DELETE "${API}/api/shells/${SHELL_ID}" || true
     fi
-    if [ -n "${ALIAS:-}" ]; then
+    if [ "${IMPORTED_IMAGE:-0}" = 1 ] && [ -n "${ALIAS:-}" ]; then
         curl -sS -o /dev/null --max-time 15 -X DELETE "${API}/api/images/${ALIAS}" || true
     fi
     if [ -n "${KEY:-}" ]; then
         rm -f "$KEY"
+    fi
+    if [ -n "${KNOWN_HOSTS:-}" ]; then
+        rm -f "$KNOWN_HOSTS"
     fi
 }
 trap cleanup EXIT
@@ -132,8 +138,8 @@ guest_ssh() {
     local ipv4=$1
     shift
     ssh -i "$KEY" \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$KNOWN_HOSTS" \
         -o IdentitiesOnly=yes \
         -o ConnectTimeout=5 \
         -o BatchMode=yes \
@@ -159,6 +165,7 @@ if [ "$installed" != "true" ]; then
     if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
         fail I6 "POST /api/oci/import HTTP ${CODE}"
     fi
+    IMPORTED_IMAGE=1
     poll_job I6 "/api/oci/import/${ALIAS}"
     http GET "/api/images/${ALIAS}"
     [ "$CODE" = 200 ] || fail I6 "GET image after import HTTP ${CODE}"
@@ -230,13 +237,16 @@ if [ "$(uname -s)" = Linux ]; then
     [ "$http_ok" = 1 ] || fail V4 "port-forward http://127.0.0.1:${HOST_PORT}/ not 200"
     pass "V4 curl :${HOST_PORT}"
 else
-    pass "V4 skip live curl on $(uname -s)"
+    warning "NGX5 skip live curl on $(uname -s)"
 fi
 
 KEY=$(mktemp)
 chmod 600 "$KEY"
+KNOWN_HOSTS=$(mktemp)
+chmod 600 "$KNOWN_HOSTS"
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-FIRECRAB_API=$API FIRECRAB_QA_SSH_KEY=$KEY "$root/scripts/ci-qa-ssh.sh" "$VM_ID" "$IPV4"
+FIRECRAB_API=$API FIRECRAB_QA_SSH_KEY=$KEY FIRECRAB_QA_KNOWN_HOSTS=$KNOWN_HOSTS \
+    "$root/scripts/ci-qa-ssh.sh" "$VM_ID" "$IPV4"
 
 if [ "$(uname -s)" = Linux ]; then
     ssh_ok=0
@@ -269,7 +279,10 @@ print(json.dumps({
     printf '%s\n' "$env_file" | grep -q '^QA_NGINX=two$' || fail V10 "guest vm.env not updated to QA_NGINX=two"
     pass V10
 else
-    pass "V3/V5/V10 skip guest ssh on $(uname -s)"
+    warning "NGX6 skip live ssh on $(uname -s)"
+    warning "NGX6b skip guest env check on $(uname -s)"
+    warning "NGX7 skip guest shell check on $(uname -s)"
+    warning "NGX8 skip running env update on $(uname -s)"
 fi
 
 http POST "/api/vms/${VM_ID}/stop"

@@ -91,7 +91,9 @@ poll_job() {
 
 if [ "$(uname -s)" = Linux ]; then
     test -e /dev/kvm || fail KVM "/dev/kvm is missing"
-    test -r /dev/kvm && test -w /dev/kvm || fail KVM "runner cannot read/write /dev/kvm"
+    if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+        fail KVM "runner cannot read/write /dev/kvm"
+    fi
     if id firecrab >/dev/null 2>&1; then
         if ! sudo -u firecrab test -r /dev/kvm; then
             fail KVM "user firecrab cannot read /dev/kvm"
@@ -107,7 +109,7 @@ fi
 
 boot_oci() {
     local reference=$1
-    local alias installed disk body
+    local alias installed disk body imported_image=0
     printf 'OCI guest boot reference=%s\n' "$reference"
 
     inspect_ref "$reference"
@@ -128,6 +130,7 @@ boot_oci() {
         if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
             fail "I6/${reference}" "POST /api/oci/import HTTP ${CODE}"
         fi
+        imported_image=1
         poll_job "I6/${reference}" "/api/oci/import/${alias}"
         http GET "/api/images/${alias}"
         [ "$CODE" = 200 ] || fail "I6/${reference}" "GET image after import HTTP ${CODE}"
@@ -144,11 +147,13 @@ boot_oci() {
     pass "V11/${alias}"
     pass "V13/${alias}"
 
-    http DELETE "/api/images/${alias}"
-    if [ "$CODE" != 204 ] && [ "$CODE" != 200 ]; then
-        fail "X5/${alias}" "DELETE image HTTP ${CODE}"
+    if [ "$imported_image" = 1 ]; then
+        http DELETE "/api/images/${alias}"
+        if [ "$CODE" != 204 ] && [ "$CODE" != 200 ]; then
+            fail "X5/${alias}" "DELETE image HTTP ${CODE}"
+        fi
+        pass "X5/${alias}"
     fi
-    pass "X5/${alias}"
 }
 
 for REFERENCE in "${REFERENCES[@]}"; do
