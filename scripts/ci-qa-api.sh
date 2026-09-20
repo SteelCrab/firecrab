@@ -173,8 +173,8 @@ skip V11 "guest boot runs in ci-qa-guest.sh"
 skip V12 "guest boot runs in ci-qa-guest.sh"
 skip V13 "guest boot runs in ci-qa-guest.sh"
 skip C1 "guest boot runs in ci-qa-guest.sh"
-skip C2 "vm console skipped in GHA"
-skip C4 "image import skipped in GHA"
+skip C2 "guest boot runs in ci-qa-guest.sh"
+skip C4 "guest boot image CLI runs in ci-qa-guest.sh"
 skip X5 "no custom OCI alias"
 
 http GET /api/host

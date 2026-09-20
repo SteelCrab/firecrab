@@ -110,7 +110,10 @@ Run it as its own pass.
 
 CI boots these OCI references (inspect, import, start, stop, delete alias):
 `alpine:3.21`, `ubuntu:24.04`, `fedora:42`.
-The nginx row below is a separate pass.
+The first reference additionally covers N6, V2, V6, V9, V12, C1, C2, and C4;
+the nginx row below is a separate pass. If the first alias is already
+installed, CI preserves it and marks the import rows `WARNING` rather than
+claiming an import that did not run.
 
 ## MicroVM
 
@@ -203,11 +206,11 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | `scripts/ci-qa-api.sh` | G4 G5 H1 H2 N1–N5 S1–S3 L1–L3 I1 I8 I9 V14 C3 C5 X1–X4 X6 |
 | `scripts/ci-qa-nginx.sh` | NGX1–NGX9 including V8a–V8d SSH |
 | `scripts/ci-qa-ssh.sh` | V8a–V8d (called from guest boot and nginx) |
-| `scripts/ci-qa-guest.sh` | I5 I6 V1 V7 V8 V11 V13 X5 for `alpine:3.21` `ubuntu:24.04` `fedora:42` |
+| `scripts/ci-qa-guest.sh` | I5 I6 V1 V2 V6 V7 V8 V9 V11 V12 V13 N6 C1 C2 C4 X5; expanded rows run for the first OCI reference, API guest flow for the remaining `alpine:3.21` `ubuntu:24.04` `fedora:42` references |
 | GitHub macOS hosted | build and unit tests only |
 | Self-hosted macOS | `ci-qa-macos-e2e.sh` when `FIRECRAB_MACOS_SELF_HOSTED` is true |
 
-Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1 N6 V6 V9 V12 C1 C2 C4.
+Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1.
 
 ## Related
 
