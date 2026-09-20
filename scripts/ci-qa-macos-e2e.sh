@@ -78,4 +78,5 @@ fi
 printf 'PASS G2 API\n'
 
 "$root/scripts/ci-qa-api.sh"
+"$root/scripts/ci-qa-nginx.sh" nginx:1.27-alpine
 "$root/scripts/ci-qa-guest.sh" alpine:3.21 ubuntu:24.04 fedora:42

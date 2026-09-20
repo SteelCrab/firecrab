@@ -248,6 +248,7 @@ jobs:
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/ci-qa-api.sh \
             scripts/ci-qa-guest.sh \
+            scripts/ci-qa-nginx.sh \
             scripts/ci-qa-macos-e2e.sh \
             scripts/ci-m2-guest-boot.sh \
             scripts/verify-release-binary.sh \
@@ -361,6 +362,10 @@ jobs:
           test -r /dev/kvm && test -w /dev/kvm
           sudo -u firecrab test -r /dev/kvm
           sudo -u firecrab test -w /dev/kvm
+
+      - name: QA nginx env, port-forward, shells
+        timeout-minutes: 25
+        run: scripts/ci-qa-nginx.sh nginx:1.27-alpine
 
       - name: QA guest boot (OCI alpine, ubuntu, fedora)
         timeout-minutes: 90
