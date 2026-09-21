@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Self-hosted macOS E2E: G2 doctor, then API + nested Firecracker guest boot.
-# GitHub-hosted ARM64 macOS runners do not support nested virtualization.
-# This script is for a real Mac runner (`runs-on: [self-hosted, macOS]`).
+# macOS E2E: G2 capability gate, fresh install, API QA, and nested guest boot.
+# The runner must expose Virtualization.framework nested virtualization.
 #
-# Does not `firecrab service install`. The runner must already have a
-# provisioned management VM; this job starts it if needed.
+# CI must set isolated FIRECRAB_INSTALL_DIR and FIRECRAB_MICROMANAGER_HOME
+# paths. The gate installs the current checkout; the caller purges afterward.
+# Usage: scripts/ci-qa-macos-e2e.sh [gate|api|nginx|guest|all]
 set -euo pipefail
 
 if [ "$(uname -s)" != Darwin ]; then
@@ -16,6 +16,15 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 API=${FIRECRAB_API:-http://127.0.0.1:5523}
 API=${API%/}
 export FIRECRAB_API=$API
+PHASE=${1:-all}
+
+case "$PHASE" in
+    gate | api | nginx | guest | all) ;;
+    *)
+        printf 'usage: %s [gate|api|nginx|guest|all]\n' "$0" >&2
+        exit 2
+        ;;
+esac
 
 if [ -z "${FIRECRAB_MICROMANAGER_HELPER:-}" ]; then
     for candidate in \
@@ -40,8 +49,43 @@ command -v firecrab >/dev/null 2>&1 || {
     exit 1
 }
 
-printf 'G2 doctor\n'
-firecrab service doctor --json | python3 -c '
+require_api() {
+    curl -fsS --connect-timeout 2 --max-time 5 "${API}/api/host" >/dev/null || {
+        printf '%s\n' 'FAILED G2: management API is not reachable; run the gate phase first' >&2
+        exit 1
+    }
+}
+
+configure_manager_ssh() {
+    local managed_home marker manager_key manager_host
+    managed_home=${FIRECRAB_MICROMANAGER_HOME:?FIRECRAB_MICROMANAGER_HOME must be an isolated CI path}
+    marker="$managed_home/runtime/manager-ready"
+    manager_key="$managed_home/runtime/manager_ed25519"
+
+    [ -r "$marker" ] || {
+        printf 'FAILED G2: missing management VM marker %s\n' "$marker" >&2
+        exit 1
+    }
+    [ -r "$manager_key" ] || {
+        printf 'FAILED G2: missing management VM SSH key %s\n' "$manager_key" >&2
+        exit 1
+    }
+    manager_host=$(sed -n 's/^ip=//p' "$marker")
+    [ -n "$manager_host" ] || {
+        printf 'FAILED G2: management VM marker has no ip: %s\n' "$marker" >&2
+        exit 1
+    }
+
+    export FIRECRAB_QA_MANAGER_HOST=$manager_host
+    export FIRECRAB_QA_MANAGER_KEY=$manager_key
+    export FIRECRAB_QA_REQUIRE_LIVE_GUEST=1
+}
+
+run_gate() {
+    : "${FIRECRAB_INSTALL_DIR:?FIRECRAB_INSTALL_DIR must be an isolated CI path}"
+    : "${FIRECRAB_MICROMANAGER_HOME:?FIRECRAB_MICROMANAGER_HOME must be an isolated CI path}"
+    printf 'G2 doctor\n'
+    firecrab service doctor --json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 if d.get("ready") is True:
@@ -50,33 +94,40 @@ checks = d.get("checks") or []
 print(json.dumps(d, indent=2))
 sys.exit(1)
 ' || {
-    printf '%s\n' 'FAILED G2: firecrab service doctor --json is not ready' >&2
-    firecrab service doctor || true
-    exit 1
-}
-printf 'PASS G2\n'
-
-wait_api() {
-    for _ in $(seq 1 60); do
-        if curl -fsS --connect-timeout 2 --max-time 5 "${API}/api/host" >/dev/null; then
-            return 0
-        fi
-        sleep 3
-    done
-    return 1
-}
-
-if ! curl -fsS --connect-timeout 2 --max-time 5 "${API}/api/host" >/dev/null; then
-    printf 'API down; firecrab service start\n'
-    firecrab service start || true
-    wait_api || {
-        printf '%s\n' 'FAILED G2: API not reachable after service start. Run firecrab service install on this runner once.' >&2
-        firecrab service status || true
+        printf '%s\n' 'FAILED G2: nested virtualization capability is not ready' >&2
+        firecrab service doctor || true
         exit 1
     }
-fi
-printf 'PASS G2 API\n'
+    printf 'G2 install current checkout\n'
+    firecrab service install
+    firecrab service status
+    require_api
+    configure_manager_ssh
+    printf 'PASS G2 capability, fresh install, service status, and management SSH\n'
+}
 
-"$root/scripts/ci-qa-api.sh"
-"$root/scripts/ci-qa-nginx.sh" nginx:1.27-alpine
-"$root/scripts/ci-qa-guest.sh" alpine:3.21 ubuntu:24.04 fedora:42
+case "$PHASE" in
+    gate)
+        run_gate
+        ;;
+    api)
+        require_api
+        "$root/scripts/ci-qa-api.sh"
+        ;;
+    nginx)
+        require_api
+        configure_manager_ssh
+        "$root/scripts/ci-qa-nginx.sh" nginx:1.27-alpine
+        ;;
+    guest)
+        require_api
+        configure_manager_ssh
+        "$root/scripts/ci-qa-guest.sh" alpine:3.21 ubuntu:24.04 fedora:42
+        ;;
+    all)
+        run_gate
+        "$root/scripts/ci-qa-api.sh"
+        "$root/scripts/ci-qa-nginx.sh" nginx:1.27-alpine
+        "$root/scripts/ci-qa-guest.sh" alpine:3.21 ubuntu:24.04 fedora:42
+        ;;
+esac

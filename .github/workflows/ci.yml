@@ -66,12 +66,11 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
-  micromanager-macos:
-    name: "microManager (macOS hosted: build)"
-    # GitHub-hosted ARM64 macOS runners do not support nested virtualization.
-    # This job is build + unit tests only: Swift tests, signed helper, CLI
-    # clippy/tests, helper doctor --json (exit 0 or 1). No service install,
-    # no management VM, no Firecracker guest boot.
+  micromanager-macos-build:
+    name: microManager (GitHub-hosted macOS build)
+    # GitHub-hosted ARM64 macOS does not expose nested virtualization. Keep
+    # this job to build/unit/signing checks. Runtime E2E remains a manual
+    # native-Mac check because this repository has no self-hosted Mac runner.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -80,59 +79,31 @@ jobs:
         run: rustup show
 
       - name: Swift unit tests
-        run: swift test --package-path micromanager-macos --scratch-path target/swift-micromanager-tests
+        run: >-
+          swift test --package-path micromanager-macos
+          --scratch-path target/swift-micromanager-tests
 
-      - name: Build and sign helper
-        run: scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
-
-      - name: Verify entitlement and diagnostics
+      - name: Build signed helper and CLI
         run: |
+          scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
           codesign --verify --strict target/debug/firecrab-micromanager-macos
           codesign -d --entitlements :- target/debug/firecrab-micromanager-macos 2>&1 \
             | grep -q com.apple.security.virtualization
-          set +e
-          target/debug/firecrab-micromanager-macos doctor --json
-          rc=$?
-          set -e
-          test "$rc" -eq 0 -o "$rc" -eq 1
+          cargo build -p firecrab-cli --locked
 
       - name: macOS CLI clippy and tests
         run: |
           cargo clippy -p firecrab-cli --all-targets -- -D warnings
           cargo test -p firecrab-cli --locked
+          target/debug/firecrab --help
+          target/debug/firecrab host list
 
-      - name: CLI help and host list (no service install)
+      - name: Verify hosted-runner diagnostic contract
         run: |
-          if [ -x target/debug/firecrab ]; then
-            target/debug/firecrab --help
-            target/debug/firecrab host list
-          else
-            echo "SKIP C5: firecrab binary not present"
-          fi
-
-  micromanager-macos-e2e:
-    name: microManager E2E (self-hosted macOS)
-    # Real Mac: Virtualization.framework + nested KVM inside Debian.
-    # Skipped unless the repo variable FIRECRAB_MACOS_SELF_HOSTED is "true"
-    # (otherwise the job would queue forever with no matching runner).
-    if: ${{ vars.FIRECRAB_MACOS_SELF_HOSTED == 'true' }}
-    runs-on: [self-hosted, macOS]
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install pinned Rust toolchain
-        run: rustup show
-
-      - name: Build helper and CLI
-        run: |
-          scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
-          cargo build -p firecrab-cli
-
-      - name: G2 doctor, API QA, nested guest boot
-        env:
-          FIRECRAB_MICROMANAGER_HELPER: ${{ github.workspace }}/target/debug/firecrab-micromanager-macos
-        run: scripts/ci-qa-macos-e2e.sh
+          rc=0
+          target/debug/firecrab-micromanager-macos doctor --json > doctor.json || rc=$?
+          test "$rc" -eq 0 -o "$rc" -eq 1
+          python3 -m json.tool doctor.json
 
   qa-windows:
     name: QA gate (Windows)

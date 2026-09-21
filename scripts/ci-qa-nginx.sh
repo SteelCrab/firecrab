@@ -29,6 +29,7 @@ ALIAS=
 KEY=
 KNOWN_HOSTS=
 IMPORTED_IMAGE=0
+SSH_TRANSPORT=()
 
 cleanup() {
     if [ -n "${VM_ID:-}" ]; then
@@ -134,10 +135,54 @@ wait_running() {
     fail V7 "timed out waiting for running"
 }
 
+configure_guest_transport() {
+    local manager_host=${FIRECRAB_QA_MANAGER_HOST:-}
+    local manager_key=${FIRECRAB_QA_MANAGER_KEY:-}
+    local manager_known_hosts proxy
+    local -a proxy_command
+
+    if [ "$(uname -s)" = Linux ]; then
+        return
+    fi
+    if [ -z "$manager_host" ] || [ -z "$manager_key" ]; then
+        [ "${FIRECRAB_QA_REQUIRE_LIVE_GUEST:-0}" != 1 ] \
+            || fail V8 "management VM SSH proxy is required for nginx live checks"
+        return
+    fi
+    [ -r "$manager_key" ] || fail V8 "management VM SSH key is not readable: ${manager_key}"
+    manager_known_hosts="$(dirname -- "$manager_key")/known_hosts"
+    proxy_command=(
+        /usr/bin/ssh -i "$manager_key"
+        -o BatchMode=yes
+        -o ConnectTimeout=5
+        -o StrictHostKeyChecking=accept-new
+        -o "UserKnownHostsFile=$manager_known_hosts"
+        "root@$manager_host"
+    )
+    printf -v proxy '%q ' "${proxy_command[@]}"
+    proxy+='-W %h:%p'
+    SSH_TRANSPORT=(-o "ProxyCommand=$proxy")
+}
+
+manager_curl_status() {
+    local manager_host=${FIRECRAB_QA_MANAGER_HOST:-}
+    local manager_key=${FIRECRAB_QA_MANAGER_KEY:-}
+    local manager_known_hosts
+    manager_known_hosts="$(dirname -- "$manager_key")/known_hosts"
+    ssh -i "$manager_key" \
+        -o BatchMode=yes \
+        -o ConnectTimeout=5 \
+        -o StrictHostKeyChecking=accept-new \
+        -o "UserKnownHostsFile=$manager_known_hosts" \
+        "root@$manager_host" \
+        curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 \
+        "http://127.0.0.1:${HOST_PORT}/"
+}
+
 guest_ssh() {
     local ipv4=$1
     shift
-    ssh -i "$KEY" \
+    ssh "${SSH_TRANSPORT[@]}" -i "$KEY" \
         -o StrictHostKeyChecking=yes \
         -o UserKnownHostsFile="$KNOWN_HOSTS" \
         -o IdentitiesOnly=yes \
@@ -176,8 +221,10 @@ if [ "$installed" != "true" ]; then
     [ "$CODE" = 200 ] || fail I6 "GET image after import HTTP ${CODE}"
     [ "$(json_get 'str(d.get("installed") or False).lower()')" = "true" ] \
         || fail I6 "alias ${ALIAS} not installed"
+    pass I6
+else
+    warning "I6 reused installed alias=${ALIAS}; no import occurred"
 fi
-pass I6
 DISK=$(json_get 'd.get("minDiskGb") or 2')
 
 http POST /api/micro-networks \
@@ -214,9 +261,7 @@ http POST /api/vms "$CREATE"
 VM_ID=$(json_get 'd["id"]')
 [ "$(json_get 'd.get("env",{}).get("QA_NGINX") or ""')" = "ci" ] || fail V3 "create env QA_NGINX missing"
 pass V1
-pass V3
-pass V4
-pass V5
+pass "V3 create response preserved QA_NGINX"
 
 http POST "/api/vms/${VM_ID}/start"
 if [ "$CODE" != 200 ] && [ "$CODE" != 202 ]; then
@@ -228,22 +273,25 @@ IPV4=$(json_get 'd.get("ipv4") or ""')
 pass V7
 printf 'ipv4=%s\n' "$IPV4"
 
-if [ "$(uname -s)" = Linux ]; then
-    http_ok=0
-    for _ in $(seq 1 30); do
+configure_guest_transport
+http_ok=0
+for _ in $(seq 1 30); do
+    if [ "$(uname -s)" = Linux ]; then
         pf=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 \
             "http://127.0.0.1:${HOST_PORT}/" || true)
-        if [ "$pf" = 200 ]; then
-            http_ok=1
-            break
-        fi
-        sleep 2
-    done
-    [ "$http_ok" = 1 ] || fail V4 "port-forward http://127.0.0.1:${HOST_PORT}/ not 200"
-    pass "V4 curl :${HOST_PORT}"
-else
-    warning "NGX5 skip live curl on $(uname -s)"
-fi
+    elif [ ${#SSH_TRANSPORT[@]} -gt 0 ]; then
+        pf=$(manager_curl_status || true)
+    else
+        pf=
+    fi
+    if [ "$pf" = 200 ]; then
+        http_ok=1
+        break
+    fi
+    sleep 2
+done
+[ "$http_ok" = 1 ] || fail V4 "management VM port-forward :${HOST_PORT} did not return 200"
+pass "V4 live curl :${HOST_PORT}"
 
 KEY=$(mktemp)
 chmod 600 "$KEY"
@@ -253,7 +301,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 FIRECRAB_API=$API FIRECRAB_QA_SSH_KEY=$KEY FIRECRAB_QA_KNOWN_HOSTS=$KNOWN_HOSTS \
     "$root/scripts/ci-qa-ssh.sh" "$VM_ID" "$IPV4"
 
-if [ "$(uname -s)" = Linux ]; then
+if [ "$(uname -s)" = Linux ] || [ ${#SSH_TRANSPORT[@]} -gt 0 ]; then
     ssh_ok=0
     for _ in $(seq 1 30); do
         if guest_ssh "$IPV4" true >/dev/null 2>&1; then

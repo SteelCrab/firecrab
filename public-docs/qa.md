@@ -42,9 +42,10 @@ The API contract does not.
 | G4 | all | `GET /api/host` 200; dashboard `GET /` HTML 200 |
 | G5 | all | `GET /api/no-such-route` JSON 404 with `requestId` |
 
-GitHub-hosted ARM64 macOS runners do not support nested virtualization.
-Hosted CI is build and unit tests only.
-VM create, boot, and network checks run on a self-hosted Mac.
+GitHub-hosted ARM64 macOS runners do not expose nested virtualization. They
+run build/unit/signing checks only. This repository does not register a
+persistent self-hosted Mac, so microManager runtime E2E is manual on a native
+M3-or-later Mac; `doctor` must report `ready: true` before it runs.
 
 Linux `firecrab service` drives host systemd.
 macOS `firecrab service` drives the management VM, not a workload MicroVM.
@@ -139,8 +140,11 @@ SSH is required after `running`, not only on nginx.
 | V8c | `GET /api/vms/{id}/ssh-host-key/check` | `status=match` (poll until sshd answers) |
 | V8d | `ssh -i key -o IdentitiesOnly=yes root@<ipv4> true` | exit 0; `uname -s` non-empty |
 
-V8d is Linux-only when the Firecracker TAP is on the same host.
-On a Mac runner mark V8d `WARNING`.
+On macOS, V8d reaches the workload guest through the management VM SSH proxy.
+Missing proxy configuration is a failure in the required E2E suite.
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
 | V9 | console | `GET /ws/vms/{id}/console` → 101 | with V1 |
 | V10 | env (running) | `PUT env` while `running` (restarts `services.d/app`) | with V7 |
 | V11 | stop | `POST /{id}/stop` → `stopped` | with V1 |
@@ -170,8 +174,9 @@ CI script: `scripts/ci-qa-nginx.sh`.
 | NGX8 | V10 live | `PUT env QA_NGINX=two` while running; guest file updates |
 | NGX9 | V11 stop, V13 delete VM, X5 delete alias, delete shell and network | leftover empty |
 
-On macOS the API is tunneled; live curl/SSH of 172.31/18080 is Linux-only.
-Mark NGX5–NGX8 and V8d `WARNING` on the Mac host, not a silent pass.
+On macOS the API and port-forward live behind the management VM. The suite
+runs NGX5 inside that VM and proxies NGX6–NGX8 SSH through it; these rows are
+required rather than warnings.
 
 ## CLI
 
@@ -207,8 +212,8 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | `scripts/ci-qa-nginx.sh` | NGX1–NGX9 including V8a–V8d SSH |
 | `scripts/ci-qa-ssh.sh` | V8a–V8d (called from guest boot and nginx) |
 | `scripts/ci-qa-guest.sh` | I5 I6 V1 V2 V6 V7 V8 V9 V11 V12 V13 N6 C1 C2 C4 X5; expanded rows run for the first OCI reference, API guest flow for the remaining `alpine:3.21` `ubuntu:24.04` `fedora:42` references |
-| GitHub macOS hosted | build and unit tests only |
-| Self-hosted macOS | `ci-qa-macos-e2e.sh` when `FIRECRAB_MACOS_SELF_HOSTED` is true |
+| GitHub-hosted macOS | Swift/Rust checks, signed helper, and diagnostic JSON; no runtime E2E |
+| Native M3+ manual run | `ci-qa-macos-e2e.sh`; fresh install plus API/nginx/guest E2E; capability failure is fatal |
 
 Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1.
 

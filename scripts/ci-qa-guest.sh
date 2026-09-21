@@ -117,7 +117,7 @@ if [ "$(uname -s)" = Linux ]; then
     fi
     pass KVM
 else
-    pass KVM
+    printf '%s\n' 'KVM will be proven by the nested guest boot'
 fi
 
 CLI_BIN=${FIRECRAB_QA_CLI:-}
@@ -226,8 +226,10 @@ if not row or row.get("installed") is not True:
             [ "$CODE" = 200 ] || fail "I6/${reference}" "GET image after import HTTP ${CODE}"
             [ "$(json_get 'str(d.get("installed") or False).lower()')" = "true" ] \
                 || fail "I6/${reference}" "alias ${alias} not installed"
+            pass "I6/${alias}"
+        else
+            warning "I6/${reference}" "${alias} was already installed; import not attempted"
         fi
-        pass "I6/${alias}"
     fi
 
     if [ "$first_reference" = 1 ]; then
@@ -244,6 +246,9 @@ print(row.get("minDiskGb") or 2 if row else 2)
     else
         disk=$(json_get 'd.get("minDiskGb") or 2')
         FIRECRAB_QA_DISK_GB=$disk "$root/scripts/ci-m2-guest-boot.sh" "$alias"
+    fi
+    if [ "$first_reference" = 1 ] && [ "$(uname -s)" != Linux ]; then
+        pass "KVM nested Firecracker guest boot"
     fi
     pass "V1/${alias}"
     pass "V7/${alias}"
