@@ -43,10 +43,9 @@ The API contract does not.
 | G5 | all | `GET /api/no-such-route` JSON 404 with `requestId` |
 
 GitHub-hosted ARM64 macOS runners do not expose nested virtualization. They
-run build/unit/signing checks only; runtime E2E requires a native M3-or-later
-GitHub Actions self-hosted runner. Its capability gate must report `ready:
-true` rather than skip E2E. Because this is a public repository, fork pull
-requests never run code on the persistent self-hosted runner.
+run build/unit/signing checks only. This repository does not register a
+persistent self-hosted Mac, so microManager runtime E2E is manual on a native
+M3-or-later Mac; `doctor` must report `ready: true` before it runs.
 
 Linux `firecrab service` drives host systemd.
 macOS `firecrab service` drives the management VM, not a workload MicroVM.
@@ -214,7 +213,7 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | `scripts/ci-qa-ssh.sh` | V8a–V8d (called from guest boot and nginx) |
 | `scripts/ci-qa-guest.sh` | I5 I6 V1 V2 V6 V7 V8 V9 V11 V12 V13 N6 C1 C2 C4 X5; expanded rows run for the first OCI reference, API guest flow for the remaining `alpine:3.21` `ubuntu:24.04` `fedora:42` references |
 | GitHub-hosted macOS | Swift/Rust checks, signed helper, and diagnostic JSON; no runtime E2E |
-| GitHub self-hosted native M3+ | `[self-hosted, macOS, ARM64, firecrab-nested-virt]`; fresh install plus API/nginx/guest E2E; capability failure is fatal |
+| Native M3+ manual run | `ci-qa-macos-e2e.sh`; fresh install plus API/nginx/guest E2E; capability failure is fatal |
 
 Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1.
 

@@ -69,8 +69,8 @@ jobs:
   micromanager-macos-build:
     name: microManager (GitHub-hosted macOS build)
     # GitHub-hosted ARM64 macOS does not expose nested virtualization. Keep
-    # this job to build/unit/signing checks; runtime E2E runs on the labeled
-    # native self-hosted Mac below.
+    # this job to build/unit/signing checks. Runtime E2E remains a manual
+    # native-Mac check because this repository has no self-hosted Mac runner.
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -104,54 +104,6 @@ jobs:
           target/debug/firecrab-micromanager-macos doctor --json > doctor.json || rc=$?
           test "$rc" -eq 0 -o "$rc" -eq 1
           python3 -m json.tool doctor.json
-
-  micromanager-macos-e2e:
-    name: microManager E2E (native M3+ macOS)
-    # Never expose a persistent self-hosted runner to untrusted fork code.
-    # Same-repository PRs, main pushes, schedules, and manual runs are allowed.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64, firecrab-nested-virt]
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Configure isolated microManager paths
-        run: |
-          {
-            printf 'FIRECRAB_INSTALL_DIR=%s/firecrab-ci/bin\n' "$RUNNER_TEMP"
-            printf 'FIRECRAB_MICROMANAGER_HOME=%s/firecrab-ci/micromanager\n' "$RUNNER_TEMP"
-            printf 'FIRECRAB_MICROMANAGER_HELPER=%s/target/debug/firecrab-micromanager-macos\n' \
-              "$GITHUB_WORKSPACE"
-          } >> "$GITHUB_ENV"
-
-      - name: Install pinned Rust toolchain
-        run: rustup show
-
-      - name: Build signed helper and CLI
-        run: |
-          scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
-          cargo build -p firecrab-cli --locked
-
-      - name: G2 capability, fresh install, and service status
-        run: scripts/ci-qa-macos-e2e.sh gate
-
-      - name: Shared API QA
-        run: scripts/ci-qa-macos-e2e.sh api
-
-      - name: nginx workload E2E
-        run: scripts/ci-qa-macos-e2e.sh nginx
-
-      - name: OCI guest lifecycle E2E
-        run: scripts/ci-qa-macos-e2e.sh guest
-
-      - name: Purge isolated microManager state
-        if: always()
-        run: |
-          if [ -x target/debug/firecrab ]; then
-            target/debug/firecrab service uninstall --purge
-          fi
 
   qa-windows:
     name: QA gate (Windows)
