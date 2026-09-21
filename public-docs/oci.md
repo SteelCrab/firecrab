@@ -14,7 +14,7 @@ The pipeline caches layers, merges them, injects a guest runtime, writes ext4, p
 | [Layer decompression](#layer-decompression) | Compressed stream to verified tar |
 | [Layer safety preflight](#layer-safety-preflight) | Tar rules checked before extraction |
 | [Layer merge](#layer-merge) | Manifest order, whiteouts, atomic publish |
-| [Guest toolbox](#guest-toolbox) | The static program the guest boots as PID 1 |
+| [Guest toolbox](#guest-toolbox) | Static utilities and fallback PID 1 |
 | [Guest activation](#guest-activation) | Init, boot script, console, metrics |
 | [Ext4 image](#ext4-image) | Sizing and publishing the rootfs |
 | [Kernel](#kernel) | The published kernel and its cache |
@@ -158,8 +158,7 @@ Rejection keeps the verified blob and decompressed tar as cache entries.
 
 ## Guest toolbox
 
-A container image is an application, not an operating system: no PID 1, no DHCP client, nothing that reports readiness.
-One static program supplies all three before a merged tree can boot.
+Many container images have no init or DHCP client. A static BusyBox supplies utilities for every import and PID 1 when no supported native init is available.
 
 - Taken from a digest-pinned busybox image, pulled through the same verified stages as the image being imported.
 - Must be a 64-bit executable for this host with no dynamic loader recorded, because the merged tree has none to satisfy.
@@ -168,14 +167,25 @@ One static program supplies all three before a merged tree can boot.
 
 ## Guest activation
 
-- Installs an init at `/sbin/init` and the toolbox at `/etc/firecrab/busybox` (basename `busybox`, so the multiplexer runs).
+The merged tree is inspected before provisioning. Detection follows guest symlinks
+within the image; configuration directories alone do not identify an init system.
+
+| Detected init | Activation |
+| --- | --- |
+| systemd executable in `/usr/lib/systemd/systemd` or `/lib/systemd/systemd` | Boots systemd; enables `firecrab-agent.service` and `firecrab-oci.service` in `multi-user.target` |
+| OpenRC runner plus `openrc-init`, or an existing executable init with an OpenRC inittab | Boots OpenRC; enables `/etc/init.d/firecrab-agent` and `firecrab-oci` in the default runlevel |
+| Neither, incomplete init installation, or distroless | Installs BusyBox at `/sbin/init` with a Firecrab inittab |
+
+- Native inittabs are preserved. `/sbin/init` is linked to the selected native init when needed.
+- The decision is saved in `/etc/firecrab/init-system`; VM specialization preserves it and does not add duplicate metrics or readiness services. Previously imported templates keep their existing BusyBox behavior; re-import to use detection.
+- Installs the toolbox at `/etc/firecrab/busybox` for all three paths.
 - The image then boots on the same kernel command line every other template uses.
-- The boot script mounts `/proc`, `/sys`, `/dev` (with `/dev/fd`), and `/run`.
+- In the fallback path, the boot script mounts `/proc`, `/sys`, `/dev` (with `/dev/fd`), and `/run`. Native init owns its mounts.
 - The interface comes up before the lease is asked for; the result is `FIRECRAB_NETWORK_READY` with the address or `FIRECRAB_NETWORK_FAILED` with a reason.
-- The metrics agent reporting guest CPU and memory is started.
+- The metrics agent reporting guest CPU and memory is managed by the selected native service, or launched by the BusyBox boot script.
 - Missing PATH tools (`ping`, `wget`, `vi`, `nc`) become busybox symlinks.
 - After DHCP, the first boot installs a small set through apt/dnf/apk/zypper/pacman and stamps `/etc/firecrab/base-packages.ok`.
-- With util-linux `agetty` and bash, the serial console is `ttyS0 → agetty → login → bash`; otherwise the wrapper prints MOTD and drops into ash.
+- In the BusyBox fallback, with util-linux `agetty` and bash, the serial console is `ttyS0 → agetty → login → bash`; otherwise the wrapper prints MOTD and drops into ash.
 - With a glibc loader, a digest-pinned official fastfetch (polyfilled, GLIBC_2.17) is copied to `/usr/bin/fastfetch`, cached at `<FIRECRAB_IMAGE_ROOT>/.oci/fastfetch/`.
 - `FIRECRAB_OCI_FASTFETCH_PATH` names a host binary; a missing program is not an import failure.
 - `/etc/firecrab/services.d` is created empty for the image entrypoint, which a later stage runs as a service rather than PID 1.
@@ -217,7 +227,7 @@ The packed ext4 is paired with the kernel firecrab publishes for this architectu
 ## Service
 
 - Entrypoint, Cmd, Env, and WorkingDir become `/etc/firecrab/services.d/app`.
-- The injected init starts it after the sentinel. It is never PID 1.
+- The OCI bootstrap starts it after the sentinel under the selected init. It is never PID 1.
 - On start, a `# >>> firecrab vm env` block sources `/etc/firecrab/vm.env`; guest paths are in [API](api.md).
 - Create writes an operator ed25519 pair under `{vms}/{id}/ssh/`. Start injects the public key into `/root/.ssh/authorized_keys` and a per-VM host key into `/etc/ssh/`.
 - Dashboard VM detail downloads `firecrab-<name>.pem`. The serial console SSH tab copies `ssh -i … root@<ipv4>` and `-6` for IPv6.

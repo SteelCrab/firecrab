@@ -2552,7 +2552,7 @@ impl ProvisionedRootfs {
         &self.path
     }
 
-    /// Digest of the toolbox program installed as the guest's PID 1.
+    /// Digest of the toolbox supplying utilities and the fallback PID 1.
     pub fn toolbox_digest(&self) -> &Sha256Digest {
         &self.toolbox
     }
@@ -2592,7 +2592,7 @@ impl OciExt4Image {
         self.free_bytes
     }
 
-    /// Digest of the toolbox program the provisioned tree will boot.
+    /// Digest of the toolbox program installed in the provisioned tree.
     #[cfg(test)]
     pub fn toolbox_digest(&self) -> &Sha256Digest {
         &self.toolbox
@@ -3141,10 +3141,9 @@ pub async fn ensure_guest_fastfetch(image_root: &Path) -> Option<FastfetchProgra
 
 /// Installs a bootable Firecrab guest runtime into a merged OCI tree.
 ///
-/// A container tree has no PID 1, no DHCP client, and nothing that reports
-/// readiness, so it cannot boot as a MicroVM. This stage adds an init, a
-/// DHCP client, the readiness sentinel, and the metrics agent, editing the
-/// merged tree in place. The merged handle is consumed because injection is
+/// Detects systemd or OpenRC and registers native services, falling back to
+/// BusyBox PID 1 when neither is usable. Adds DHCP, the readiness sentinel,
+/// and the metrics agent, editing the merged tree in place. The merged handle is consumed because injection is
 /// not repeatable, and a failure restores exactly the paths it touched.
 pub async fn provision_merged_rootfs(
     rootfs: MergedRootfs,
