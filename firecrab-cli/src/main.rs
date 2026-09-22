@@ -9,10 +9,8 @@ mod hosts;
 mod image;
 #[cfg(target_os = "linux")]
 mod info;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod micromanager;
-#[cfg(target_os = "windows")]
-mod micromanager_windows;
 mod network;
 #[cfg(target_os = "linux")]
 mod service;
@@ -114,7 +112,7 @@ enum Command {
     #[cfg(target_os = "windows")]
     Service {
         #[command(subcommand)]
-        command: micromanager_windows::Command,
+        command: micromanager::Command,
     },
 }
 
@@ -170,7 +168,7 @@ fn run(cli: Cli) -> i32 {
             }
         },
         #[cfg(target_os = "windows")]
-        Command::Service { command } => match micromanager_windows::run(command) {
+        Command::Service { command } => match micromanager::run(command) {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("{error}");

@@ -13,10 +13,17 @@ const VALIDATION_GATES: [&str; 4] = [
 
 /// Reports `key=value` lines so the parser never depends on guest locale.
 const DISTRO_PROBE: &str = "printf 'kernel=%s\\n' \"$(uname -r)\"; \
+printf 'uptime=%s\\n' \"$(cut -d. -f1 /proc/uptime)\"; \
 [ -e /dev/kvm ] && printf 'kvm=present\\n'; \
 (exec 3<>/dev/kvm) 2>/dev/null && printf 'kvm_open=ok\\n'; \
 grep -Eqw 'vmx|svm' /proc/cpuinfo && printf 'nested=yes\\n'; \
 exit 0";
+
+/// `kvm_intel` loads about 25 seconds into the WSL2 utility VM's boot, so a probe
+/// run right after a cold start sees no `/dev/kvm` on a host that supports it.
+const KVM_SETTLE_SECONDS: u64 = 60;
+
+mod install;
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -26,18 +33,22 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Import the managed Debian distribution and place the guest binaries.
+    Install,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("could not render the capability report: {0}")]
     Render(#[from] serde_json::Error),
+    #[error(transparent)]
+    Install(#[from] install::Error),
 }
 
 pub fn run(command: Command) -> Result<i32, Error> {
     match command {
         Command::Doctor { json } => {
-            let report = report(&Inputs::live());
+            let report = report(Inputs::live());
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -45,6 +56,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             }
             Ok(i32::from(!report.ready))
         }
+        Command::Install => Ok(install::run()?),
     }
 }
 
@@ -159,110 +171,129 @@ fn major_version(version: &str) -> Option<u32> {
     version.split('.').next()?.parse().ok()
 }
 
-fn report(inputs: &Inputs) -> CapabilityReport {
-    let mut checks = Vec::new();
-
-    let wsl_major = inputs.wsl_version.as_deref().and_then(major_version);
-    checks.push(match (&inputs.wsl_version, wsl_major) {
-        (Some(version), Some(2..)) => Diagnostic {
-            id: "wsl_version",
-            status: Status::Pass,
-            detail: format!("WSL {version} is installed."),
-            fix: None,
-        },
-        (Some(version), _) => Diagnostic {
-            id: "wsl_version",
-            status: Status::Fail,
-            detail: format!("WSL {version} is older than the required WSL 2."),
-            fix: Some("Update WSL with `wsl --update`.".to_string()),
-        },
-        (None, _) => Diagnostic {
+fn wsl_version_check(version: Option<&str>) -> Diagnostic {
+    let Some(version) = version else {
+        return Diagnostic {
             id: "wsl_version",
             status: Status::Fail,
             detail: "`wsl --version` did not report an installed WSL.".to_string(),
             fix: Some("Install WSL with `wsl --install`.".to_string()),
-        },
-    });
+        };
+    };
+    if major_version(version) < Some(2) {
+        return Diagnostic {
+            id: "wsl_version",
+            status: Status::Fail,
+            detail: format!("WSL {version} is older than the required WSL 2."),
+            fix: Some("Update WSL with `wsl --update`.".to_string()),
+        };
+    }
+    Diagnostic {
+        id: "wsl_version",
+        status: Status::Pass,
+        detail: format!("WSL {version} is installed."),
+        fix: None,
+    }
+}
 
-    checks.push(match &inputs.default_distro {
-        Some(distro) => Diagnostic {
-            id: "wsl_distribution",
-            status: Status::Pass,
-            detail: format!("The default distribution is {distro}."),
-            fix: None,
-        },
-        None => Diagnostic {
+fn distribution_check(distribution: Option<&str>) -> Diagnostic {
+    let Some(distribution) = distribution else {
+        return Diagnostic {
             id: "wsl_distribution",
             status: Status::Fail,
             detail: "WSL has no installed distribution.".to_string(),
             fix: Some("Install one with `wsl --install -d Debian`.".to_string()),
-        },
-    });
+        };
+    };
+    Diagnostic {
+        id: "wsl_distribution",
+        status: Status::Pass,
+        detail: format!("The default distribution is {distribution}."),
+        fix: None,
+    }
+}
 
+fn kvm_check(probe: &BTreeMap<String, String>, kernel: &str) -> Diagnostic {
+    if !probe.contains_key("kvm") {
+        let uptime = probe.get("uptime").and_then(|value| value.parse().ok());
+        if uptime.is_some_and(|seconds: u64| seconds < KVM_SETTLE_SECONDS) {
+            return Diagnostic {
+                id: "kvm_device",
+                status: Status::Warning,
+                detail: "/dev/kvm has not appeared yet; the distribution is still starting."
+                    .to_string(),
+                fix: Some("Wait for the distribution to settle, then check again.".to_string()),
+            };
+        }
+        return Diagnostic {
+            id: "kvm_device",
+            status: Status::Fail,
+            detail: format!("/dev/kvm is missing from WSL2 kernel {kernel}."),
+            fix: Some(
+                "Enable nested virtualization for WSL2 and update to a kernel that builds KVM."
+                    .to_string(),
+            ),
+        };
+    }
+    if !probe.contains_key("kvm_open") {
+        return Diagnostic {
+            id: "kvm_device",
+            status: Status::Warning,
+            detail: "/dev/kvm exists but this user cannot open it.".to_string(),
+            fix: Some(
+                "Join the kvm group inside the distribution: `sudo usermod -aG kvm $USER`."
+                    .to_string(),
+            ),
+        };
+    }
+    Diagnostic {
+        id: "kvm_device",
+        status: Status::Pass,
+        detail: format!("/dev/kvm opens inside WSL2 on kernel {kernel}."),
+        fix: None,
+    }
+}
+
+fn nested_virtualization_check(probe: &BTreeMap<String, String>) -> Diagnostic {
+    if !probe.contains_key("nested") {
+        return Diagnostic {
+            id: "nested_virtualization",
+            status: Status::Fail,
+            detail: "The WSL2 guest reports no hardware virtualization extensions.".to_string(),
+            fix: Some(
+                "Enable virtualization in firmware, and nested virtualization if this host is itself a VM."
+                    .to_string(),
+            ),
+        };
+    }
+    Diagnostic {
+        id: "nested_virtualization",
+        status: Status::Pass,
+        detail: "The WSL2 guest sees hardware virtualization extensions.".to_string(),
+        fix: None,
+    }
+}
+
+fn report(inputs: Inputs) -> CapabilityReport {
     let kernel = inputs
         .distro
         .get("kernel")
         .or(inputs.wsl_kernel.as_ref())
         .map(String::as_str)
         .unwrap_or("unknown");
-    checks.push(
-        match (
-            inputs.distro.contains_key("kvm"),
-            inputs.distro.contains_key("kvm_open"),
-        ) {
-            (true, true) => Diagnostic {
-                id: "kvm_device",
-                status: Status::Pass,
-                detail: format!("/dev/kvm opens inside WSL2 on kernel {kernel}."),
-                fix: None,
-            },
-            (true, false) => Diagnostic {
-                id: "kvm_device",
-                status: Status::Warning,
-                detail: "/dev/kvm exists but this user cannot open it.".to_string(),
-                fix: Some(
-                    "Join the kvm group inside the distribution: `sudo usermod -aG kvm $USER`."
-                        .to_string(),
-                ),
-            },
-            (false, _) => Diagnostic {
-                id: "kvm_device",
-                status: Status::Fail,
-                detail: format!("/dev/kvm is missing from WSL2 kernel {kernel}."),
-                fix: Some(
-                    "Enable nested virtualization for WSL2 and update to a kernel that builds KVM."
-                        .to_string(),
-                ),
-            },
-        },
-    );
-
-    let nested = inputs.distro.contains_key("nested");
-    checks.push(Diagnostic {
-        id: "nested_virtualization",
-        status: if nested { Status::Pass } else { Status::Fail },
-        detail: if nested {
-            "The WSL2 guest sees hardware virtualization extensions.".to_string()
-        } else {
-            "The WSL2 guest reports no hardware virtualization extensions.".to_string()
-        },
-        fix: if nested {
-            None
-        } else {
-            Some(
-                "Enable virtualization in firmware, and nested virtualization if this host is itself a VM."
-                    .to_string(),
-            )
-        },
-    });
-
+    let checks = vec![
+        wsl_version_check(inputs.wsl_version.as_deref()),
+        distribution_check(inputs.default_distro.as_deref()),
+        kvm_check(&inputs.distro, kernel),
+        nested_virtualization_check(&inputs.distro),
+    ];
     CapabilityReport {
         product: "microManager",
         platform: "Windows",
-        os_version: inputs.windows_version.clone(),
-        architecture: inputs.architecture,
         ready: !checks.iter().any(|check| check.status == Status::Fail),
         checks,
+        os_version: inputs.windows_version,
+        architecture: inputs.architecture,
         validation_gates: VALIDATION_GATES,
     }
 }
@@ -295,7 +326,7 @@ mod tests {
             wsl_kernel: Some("6.18.33.2-2".to_string()),
             default_distro: Some("Debian".to_string()),
             distro: parse_probe(
-                "kernel=6.18.33.2-microsoft-standard-WSL2\nkvm=present\nkvm_open=ok\nnested=yes\n",
+                "kernel=6.18.33.2-microsoft-standard-WSL2\nuptime=900\nkvm=present\nkvm_open=ok\nnested=yes\n",
             ),
         }
     }
@@ -336,7 +367,7 @@ mod tests {
 
     #[test]
     fn a_fully_capable_host_is_ready() {
-        let report = report(&ready_inputs());
+        let report = report(ready_inputs());
         assert!(report.ready);
         assert!(
             report
@@ -351,9 +382,23 @@ mod tests {
     fn an_unopenable_kvm_device_warns_without_blocking() {
         let mut inputs = ready_inputs();
         inputs.distro.remove("kvm_open");
-        let report = report(&inputs);
+        let report = report(inputs);
         assert_eq!(check(&report, "kvm_device").status, Status::Warning);
         assert!(report.ready);
+    }
+
+    #[test]
+    fn a_cold_started_distribution_warns_instead_of_failing() {
+        let mut inputs = ready_inputs();
+        inputs.distro.remove("kvm");
+        inputs.distro.remove("kvm_open");
+        inputs.distro.insert("uptime".to_string(), "12".to_string());
+        let report = report(inputs);
+        assert_eq!(check(&report, "kvm_device").status, Status::Warning);
+        assert!(
+            report.ready,
+            "a still-starting guest must not block install"
+        );
     }
 
     #[test]
@@ -361,7 +406,7 @@ mod tests {
         let mut inputs = ready_inputs();
         inputs.distro.remove("kvm");
         inputs.distro.remove("kvm_open");
-        let report = report(&inputs);
+        let report = report(inputs);
         assert_eq!(check(&report, "kvm_device").status, Status::Fail);
         assert!(!report.ready);
     }
@@ -370,7 +415,7 @@ mod tests {
     fn wsl1_is_rejected() {
         let mut inputs = ready_inputs();
         inputs.wsl_version = Some("1.0.0.0".to_string());
-        let report = report(&inputs);
+        let report = report(inputs);
         assert_eq!(check(&report, "wsl_version").status, Status::Fail);
         assert!(!report.ready);
     }
@@ -384,7 +429,7 @@ mod tests {
             distro: BTreeMap::new(),
             ..ready_inputs()
         };
-        let report = report(&inputs);
+        let report = report(inputs);
         assert!(!report.ready);
         assert_eq!(check(&report, "wsl_version").status, Status::Fail);
         assert_eq!(check(&report, "wsl_distribution").status, Status::Fail);
@@ -393,14 +438,14 @@ mod tests {
 
     #[test]
     fn the_human_report_matches_the_macos_helper_format() {
-        let rendered = render_human(&report(&ready_inputs()));
+        let rendered = render_human(&report(ready_inputs()));
         assert!(rendered.starts_with("[PASS] wsl_version: WSL 2.7.14.0 is installed."));
         assert!(rendered.contains("[PASS] kvm_device: /dev/kvm opens inside WSL2"));
     }
 
     #[test]
     fn the_json_report_keeps_the_shared_field_names() {
-        let json = serde_json::to_value(report(&ready_inputs())).expect("report serializes");
+        let json = serde_json::to_value(report(ready_inputs())).expect("report serializes");
         assert_eq!(json["platform"], "Windows");
         assert_eq!(json["product"], "microManager");
         assert_eq!(json["ready"], true);
