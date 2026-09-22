@@ -11,6 +11,8 @@ mod image;
 mod info;
 #[cfg(target_os = "macos")]
 mod micromanager;
+#[cfg(target_os = "windows")]
+mod micromanager_windows;
 mod network;
 #[cfg(target_os = "linux")]
 mod service;
@@ -108,6 +110,12 @@ enum Command {
         #[command(subcommand)]
         command: service::Command,
     },
+    /// Inspect the WSL2 backend that will host the managed Debian VM.
+    #[cfg(target_os = "windows")]
+    Service {
+        #[command(subcommand)]
+        command: micromanager_windows::Command,
+    },
 }
 
 fn main() {
@@ -158,6 +166,14 @@ fn run(cli: Cli) -> i32 {
             Ok(()) => 0,
             Err(error) => {
                 error.report();
+                1
+            }
+        },
+        #[cfg(target_os = "windows")]
+        Command::Service { command } => match micromanager_windows::run(command) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("{error}");
                 1
             }
         },

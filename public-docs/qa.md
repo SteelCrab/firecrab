@@ -38,7 +38,7 @@ The API contract does not.
 | --- | --- | --- |
 | G1 | Linux | `firecrab doctor` then `firecrab service install` / `start` / `status` |
 | G2 | macOS | `firecrab service doctor` then `install` / `status` (nested virt required) |
-| G3 | Windows | Same shape as macOS when microManager ships; until then mark WARNING |
+| G3 | Windows | `firecrab service doctor` reports the WSL2 backend; the rest of microManager is unimplemented, so mark WARNING |
 | G4 | all | `GET /api/host` 200; dashboard `GET /` HTML 200 |
 | G5 | all | `GET /api/no-such-route` JSON 404 with `requestId` |
 
