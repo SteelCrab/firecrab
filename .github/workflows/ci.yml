@@ -66,6 +66,54 @@ jobs:
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
+  micromanager-macos-build:
+    name: microManager (GitHub-hosted macOS build)
+    # GitHub-hosted ARM64 macOS does not expose nested virtualization. Keep
+    # this job to build/unit/signing checks. Runtime E2E remains a manual
+    # native-Mac check because this repository has no self-hosted Mac runner.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Swift unit tests
+        run: >-
+          swift test --package-path micromanager-macos
+          --scratch-path target/swift-micromanager-tests
+
+      - name: Build signed helper and CLI
+        run: |
+          scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
+          codesign --verify --strict target/debug/firecrab-micromanager-macos
+          codesign -d --entitlements :- target/debug/firecrab-micromanager-macos 2>&1 \
+            | grep -q com.apple.security.virtualization
+          cargo build -p firecrab-cli --locked
+
+      - name: macOS CLI clippy and tests
+        run: |
+          cargo clippy -p firecrab-cli --all-targets -- -D warnings
+          cargo test -p firecrab-cli --locked
+          target/debug/firecrab --help
+          target/debug/firecrab host list
+
+      - name: Verify hosted-runner diagnostic contract
+        run: |
+          rc=0
+          target/debug/firecrab-micromanager-macos doctor --json > doctor.json || rc=$?
+          test "$rc" -eq 0 -o "$rc" -eq 1
+          python3 -m json.tool doctor.json
+
+  qa-windows:
+    name: QA gate (Windows)
+    # G3 only: Windows microManager is not shipped. No API rows.
+    runs-on: windows-latest
+    steps:
+      - name: Document G3
+        run: |
+          echo "SKIP G3: Windows microManager is not shipped"
+
   docs:
     name: Rust (rustdoc)
     runs-on: ubuntu-latest
@@ -142,10 +190,11 @@ jobs:
 
   install:
     name: Installer (shellcheck, --check, doctor, install/uninstall)
-    # A GitHub-hosted Linux runner is a throwaway VM with systemd, so the whole
-    # installer can be exercised for real — the one thing this cannot cover is
-    # booting a guest, since install.sh never installs a guest image itself.
-    runs-on: ubuntu-latest
+    # GitHub Ubuntu exposes /dev/kvm on typical x86_64 hosted runners. Nested
+    # virt is not a stability guarantee; if the device is missing this job fails
+    # the guest-boot step instead of skipping it. Full E2E still belongs on a
+    # self-hosted runner when flake rate matters.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -166,7 +215,14 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck install.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
+            scripts/build-micromanager-macos.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
+            scripts/ci-qa-api.sh \
+            scripts/ci-qa-guest.sh \
+            scripts/ci-qa-nginx.sh \
+            scripts/ci-qa-ssh.sh \
+            scripts/ci-qa-macos-e2e.sh \
+            scripts/ci-m2-guest-boot.sh \
             scripts/verify-release-binary.sh \
             scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \
             scripts/build-m2images.sh scripts/package-m2images.sh \
@@ -265,6 +321,32 @@ jobs:
           # At least one image FAIL, and nothing else.
           printf '%s\n' "$out" | grep -q '^\[FAIL\] images:'
           test "$code" -eq 1
+
+      - name: QA work list (API, no guest boot)
+        # Shared QA IDs from public-docs/qa.md: see scripts/ci-qa-api.sh.
+        # Leaves the later "ci" / 172.31.0.0/24 smoke network contract unchanged.
+        run: scripts/ci-qa-api.sh
+
+      - name: Enable KVM
+        run: |
+          sudo chmod 666 /dev/kvm
+          ls -l /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          sudo -u firecrab test -r /dev/kvm
+          sudo -u firecrab test -w /dev/kvm
+
+      - name: QA nginx env, port-forward, shells
+        timeout-minutes: 25
+        run: scripts/ci-qa-nginx.sh nginx:1.27-alpine
+
+      - name: QA guest boot (OCI alpine, ubuntu, fedora)
+        timeout-minutes: 90
+        # Every reference runs I5 + V1/V7/V8/V11/V13/X5; fresh later aliases
+        # use the API for I6, while the first fresh alias uses the CLI.
+        # The first reference additionally runs N6/V2/V6/V9/V12 and C1/C2/C4;
+        # a pre-existing first alias is preserved and its unperformed import is
+        # reported as WARNING rather than a false PASS.
+        run: scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42
 
       - name: Dashboard, MicroNetwork, and create-VM API smoke
         # No guest image here, so no guest boot. Still exercise the
@@ -393,7 +475,9 @@ jobs:
             # Tumbleweed's oss snapshot is replaced while the container
             # still has the previous repomd. A stale appdata-icons.tar.gz
             # hash then makes `zypper install git` fail even after retries
-            # unless metadata is discarded first.
+            # unless metadata is discarded first. Its CDN also rejects some
+            # plain HTTP object requests, so switch every repo to HTTPS first.
+            sed -i 's#^baseurl=http://#baseurl=https://#' /etc/zypp/repos.d/*.repo
             retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends bash ca-certificates curl git'
           fi
         shell: sh -e {0}

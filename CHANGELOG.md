@@ -21,6 +21,14 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Apple silicon macOS releases include an entitlement-signed `microManager`
+  helper exposed through `firecrab service`. Install pins and verifies Debian 13,
+  Firecracker v1.17.0, and Firecrab v0.2.2 artifacts; provisions separate OS and
+  persistent data disks; requires usable nested KVM and a real Firecracker workload
+  boot; and starts a launchd-resident VM with a key-only localhost API tunnel.
+  Reinstall and ordinary uninstall preserve managed data, while explicit
+  `uninstall --purge` removes it. The complete path is validated on Apple M5 with
+  macOS 26.6.2; other M3-or-later hosts remain runtime and E2E gated ([#266]).
 - Public documentation lists the shared Linux, macOS, and Windows QA work
   list ([#266]).
 - Windows host lab script for microManager, with the recorded WSL2 result:
@@ -36,7 +44,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
-- None.
+- The macOS management guest installs `fakeroot`, and a missing binary is
+  reported as such, so OCI import can pack ext4 without a false missing-tree
+  error ([#266]).
 
 ### Improved
 

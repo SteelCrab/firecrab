@@ -9,6 +9,8 @@ mod hosts;
 mod image;
 #[cfg(target_os = "linux")]
 mod info;
+#[cfg(target_os = "macos")]
+mod micromanager;
 mod network;
 #[cfg(target_os = "linux")]
 mod service;
@@ -94,6 +96,12 @@ enum Command {
         #[command(subcommand)]
         command: hosts::Command,
     },
+    /// Manage the local Debian management VM through Apple Virtualization.framework.
+    #[cfg(target_os = "macos")]
+    Service {
+        #[command(subcommand)]
+        command: micromanager::Command,
+    },
     /// Install, remove, or control the firecrab host services.
     #[cfg(target_os = "linux")]
     Service {
@@ -137,6 +145,14 @@ fn run(cli: Cli) -> i32 {
         Command::Host { command } => {
             finish_api_command(hosts::run(command, api.as_deref(), host.as_deref()))
         }
+        #[cfg(target_os = "macos")]
+        Command::Service { command } => match micromanager::run(command) {
+            Ok(code) => code,
+            Err(error) => {
+                eprintln!("{error}");
+                1
+            }
+        },
         #[cfg(target_os = "linux")]
         Command::Service { command } => match service::run(&shell::RealCommandRunner, command) {
             Ok(()) => 0,
@@ -544,6 +560,41 @@ mod tests {
         let list = Cli::try_parse_from(["firecrab", "vm", "list", "--host", "prod"]).unwrap();
         assert_eq!(list.host.as_deref(), Some("prod"));
         assert!(matches!(list.command, Command::Vm { .. }));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cli_parses_macos_service_commands() {
+        let doctor = Cli::try_parse_from(["firecrab", "service", "doctor", "--json"]).unwrap();
+        assert!(matches!(
+            doctor.command,
+            Command::Service {
+                command: micromanager::Command::Doctor { json: true }
+            }
+        ));
+        for action in [
+            "install",
+            "reinstall",
+            "start",
+            "stop",
+            "status",
+            "validate",
+            "run",
+        ] {
+            assert!(Cli::try_parse_from(["firecrab", "service", action]).is_ok());
+        }
+        assert!(Cli::try_parse_from(["firecrab", "service", "uninstall", "--purge"]).is_ok());
+        assert!(Cli::try_parse_from(["firecrab", "micromanager", "doctor"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "firecrab",
+                "service",
+                "validate",
+                "--kernel",
+                "/tmp/vmlinuz"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

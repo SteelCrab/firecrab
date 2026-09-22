@@ -148,6 +148,23 @@ impl ApiClient {
         Self::decode_json(resp)
     }
 
+    /// Sends `body` as JSON with `PUT` and deserializes any successful 2xx
+    /// response body.
+    #[cfg(test)]
+    pub fn put<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
+    where
+        B: Serialize + ?Sized,
+        T: DeserializeOwned,
+    {
+        let resp = self
+            .client
+            .put(self.url(path))
+            .json(body)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(resp)
+    }
+
     /// Sends a `DELETE` request to an API path. Any 2xx response, including
     /// the API's usual `204 No Content`, is successful.
     pub fn delete(&self, path: &str) -> Result<(), ApiError> {
@@ -157,6 +174,21 @@ impl ApiClient {
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::ensure_success(resp).map(|_| ())
+    }
+
+    /// Sends `GET` and returns the raw successful body. Used for attachments
+    /// such as `GET /api/vms/{id}/ssh-key` that are not JSON.
+    #[cfg(test)]
+    pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>, ApiError> {
+        let resp = self
+            .client
+            .get(self.url(path))
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::ensure_success(resp)?
+            .bytes()
+            .map(|bytes| bytes.to_vec())
+            .map_err(|e| ApiError::Unreachable(format!("bad response body: {e}")))
     }
 
     /// Joins the resolved origin and an absolute API path.
@@ -470,6 +502,48 @@ url = "https://prod.example:5523/"
         let request = requests.recv().unwrap();
         assert_eq!(request.method, "DELETE");
         assert_eq!(request.path, "/api/micro-networks/123");
+        assert!(request.body.is_empty());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn put_sends_path_and_json_body() {
+        let (base, requests, server) =
+            serve_once("200 OK", Some("application/json"), r#"{"value":"updated"}"#);
+        let client = ApiClient::new(base);
+        let body = FixtureRequest {
+            name: "example",
+            count: 3,
+        };
+
+        let response: FixtureResponse = client.put("/api/vms/123", &body).unwrap();
+
+        assert_eq!(response.value, "updated");
+        let request = requests.recv().unwrap();
+        assert_eq!(request.method, "PUT");
+        assert_eq!(request.path, "/api/vms/123");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&request.body).unwrap(),
+            serde_json::json!({"name": "example", "count": 3})
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn get_bytes_returns_the_raw_body() {
+        let (base, requests, server) = serve_once(
+            "200 OK",
+            Some("application/x-pem-file"),
+            "-----BEGIN KEY-----\n",
+        );
+        let client = ApiClient::new(base);
+
+        let body = client.get_bytes("/api/vms/123/ssh-key").unwrap();
+
+        assert_eq!(body, b"-----BEGIN KEY-----\n");
+        let request = requests.recv().unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/api/vms/123/ssh-key");
         assert!(request.body.is_empty());
         server.join().unwrap();
     }

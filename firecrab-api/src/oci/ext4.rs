@@ -80,6 +80,25 @@ fn ext4_io(operation: &'static str, path: PathBuf, source: io::Error) -> Resolve
     }
 }
 
+/// Maps a failed `Command::new("fakeroot").output()` spawn.
+///
+/// `ErrorKind::NotFound` is the missing `fakeroot` binary (PATH ENOENT),
+/// not a missing tree. Blaming `path` made operators think chown could
+/// not see the merged rootfs.
+pub(super) fn fakeroot_spawn_error(
+    operation: &'static str,
+    path: PathBuf,
+    source: io::Error,
+) -> ResolveError {
+    if source.kind() == io::ErrorKind::NotFound {
+        return ResolveError::Ext4Build {
+            path,
+            detail: "missing fakeroot binary; install the fakeroot package".to_owned(),
+        };
+    }
+    ext4_io(operation, path, source)
+}
+
 /// Shared cancellation state consulted between ext4 write steps.
 struct Ext4Control {
     /// Current phase, shared with the caller's cancellation guard.
@@ -313,7 +332,9 @@ pub(super) fn run_mkfs(tree: &Path, image: &Path, destination: &Path) -> Result<
         .arg("0:0")
         .arg(tree)
         .output()
-        .map_err(|source| ext4_io("run fakeroot chown", tree.to_owned(), source))?;
+        .map_err(|source| {
+            fakeroot_spawn_error("run fakeroot chown", destination.to_owned(), source)
+        })?;
     if !chown.status.success() {
         let _ = fs::remove_file(&state);
         return Err(ResolveError::Ext4Build {
@@ -333,7 +354,8 @@ pub(super) fn run_mkfs(tree: &Path, image: &Path, destination: &Path) -> Result<
     command.arg("-d").arg(tree).arg(image);
     let output = command.output();
     let _ = fs::remove_file(&state);
-    let output = output.map_err(|source| ext4_io("run mkfs.ext4", image.to_owned(), source))?;
+    let output = output
+        .map_err(|source| fakeroot_spawn_error("run mkfs.ext4", destination.to_owned(), source))?;
     if output.status.success() {
         return Ok(());
     }
