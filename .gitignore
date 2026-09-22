@@ -9,6 +9,10 @@ target/
 lcov.info
 doc-coverage.txt
 
+# Python
+__pycache__/
+*.pyc
+
 # Frontend build output / dependencies
 firecrab-frontend/dist/
 node_modules/
