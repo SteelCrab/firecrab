@@ -23,6 +23,8 @@ Entries land here as work merges, and move under the next version heading when t
 
 - Public documentation lists the shared Linux, macOS, and Windows QA work
   list ([#266]).
+- Windows host lab script for microManager, with the recorded WSL2 result:
+  usable `/dev/kvm` and a booted nested Firecracker microVM ([#266]).
 
 ### Changed
 
