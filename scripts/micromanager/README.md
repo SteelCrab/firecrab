@@ -78,9 +78,32 @@ fetching with `powershell.exe -c "Invoke-WebRequest ..."`, which reaches the
 host through the user-mode gateway at `10.0.2.2`, then read them under
 `/mnt/c`.
 
+## Networking result, 2026-09-23
+
+Same lab, same caveat about the extra nesting layer.
+
+- The WSL2 kernel has `CONFIG_TUN=m`, `CONFIG_BRIDGE=m`, `CONFIG_NF_TABLES=y`,
+  `CONFIG_NF_NAT=y`, and `CONFIG_VETH=y`, and exposes `/dev/net/tun`.
+- A bridge, a TAP enslaved to it, an nftables nat/masquerade chain, and
+  `ip_forward` all came up and tore down cleanly.
+- A Firecracker microVM on that TAP reached its gateway, the internet through
+  masquerade, and DNS.
+- With `dnsmasq` on the bridge the guest took a lease
+  (DISCOVER/OFFER/REQUEST/ACK) with its default route and resolver.
+- A full teardown, rebuild, and second boot left no stray interfaces or
+  nftables tables.
+- A 256 MiB Alpine 3.22.2 ext4 rootfs booted over virtio-blk, writable, with
+  DHCP and DNS (`workload_exit=0`).
+- Outbound ICMP is flaky under the lab's four NAT layers: one boot failed and
+  the next passed with the same configuration. DNS passed every time.
+- The Alpine virt kernel builds `virtio_net` as a module, so a minimal
+  initramfs boots without `eth0`. `images/kernel/vmlinux-7.1.8-x86_64` has it
+  built in.
+
+The same lab now runs `firecrab service install` end to end; see
+[microManager on Windows](../../public-docs/micromanager-windows.md).
+
 ## Next feasibility gate
 
-Run these same checks against Hyper-V and compare the two backends. Then boot
-a workload microVM with a real rootfs and networking, and verify DHCP, DNS,
-orderly shutdown and startup recovery, as described in
-[issue #266](https://github.com/SteelCrab/firecrab/issues/266).
+Run these same checks against Hyper-V and compare the two backends, as
+described in [issue #266](https://github.com/SteelCrab/firecrab/issues/266).

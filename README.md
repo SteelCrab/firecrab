@@ -66,7 +66,9 @@ and Firecracker through nested KVM, and register the resident launchd service th
 exposes the managed dashboard on localhost. The full path has been validated on Apple M5 with macOS
 26.6.2; other M3-or-later configurations remain gated by `firecrab service doctor` and
 end-to-end installation evidence. See [microManager on macOS](public-docs/micromanager-macos.md).
-Other client platforms do not install local host services.
+On Windows, the same `firecrab service install` imports a pinned Debian WSL2
+distribution, runs Firecrab and Firecracker inside it through nested KVM, and keeps it
+resident with a per-user scheduled task. See [microManager on Windows](public-docs/micromanager-windows.md).
 
 On Linux or macOS, download and verify the release installer before executing it:
 

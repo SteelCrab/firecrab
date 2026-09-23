@@ -129,6 +129,7 @@ Performance and sleep/wake evidence for other supported Mac models still needs t
 
 ## Related
 
+- [microManager on Windows](micromanager-windows.md)
 - [Architecture](architecture.md)
 - [Installation](installation.md)
 - [firecrab CLI](firecrab-cli.md)

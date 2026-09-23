@@ -174,6 +174,7 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 
 It installs `firecrab.exe` under `%LOCALAPPDATA%\Programs\firecrab\bin` and adds that directory to the user `PATH`.
 Open a new terminal after the first installation.
+To run Firecrab on this Windows host instead of only managing a remote one, continue with [microManager on Windows](micromanager-windows.md).
 
 Pin a client archive by passing `-Version` to the downloaded installer.
 
