@@ -134,6 +134,28 @@ jobs:
           $report.checks | Format-Table id, status, detail -AutoSize
           exit 0
 
+  micromanager-pr-report:
+    name: microManager PR report
+    # On a pull request that touches macOS or Windows microManager files,
+    # keeps one comment with each job's steps and log tails, the commands that
+    # reproduce the job locally, and the runtime E2E the hosted runners cannot
+    # run. Fork pull requests get the job summary only: their token is
+    # read-only.
+    needs: [micromanager-macos-build, micromanager-windows-build]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Comment the microManager jobs on the pull request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/micromanager-pr-report.py
+
   docs:
     name: Rust (rustdoc)
     runs-on: ubuntu-latest
@@ -153,6 +175,9 @@ jobs:
           python3 -m unittest scripts/test_check_changelog.py
           python3 -m unittest scripts/test_write_release_notes.py
           python3 scripts/check-changelog.py
+
+      - name: microManager PR report
+        run: python3 -m unittest scripts/test_micromanager_pr_report.py
 
       - name: Cache cargo
         uses: actions/cache@v6
