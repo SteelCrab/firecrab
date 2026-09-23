@@ -48,7 +48,7 @@ npm run dev --prefix firecrab-frontend
 | Storage | MicroStorage pools |
 | Images | M2Image install or OCI import |
 | Kernels | Digest-pinned kernel installation and lifecycle |
-| Host | Host health and capacity |
+| Host | Host OS with its icon, then health and capacity |
 
 ## VM workflow
 

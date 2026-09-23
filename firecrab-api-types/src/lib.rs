@@ -905,6 +905,62 @@ pub struct HostStatusResponse {
     pub disk_available_gib: u64,
     /// Seconds since the host booted (`/proc/uptime`'s first field).
     pub uptime_seconds: u64,
+    /// The machine behind the dashboard. Absent from APIs that predate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<HostPlatformResponse>,
+}
+
+/// Which operating system the machine behind the dashboard runs. On macOS
+/// and Windows, Firecrab itself runs inside microManager's Linux VM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostOs {
+    /// Firecrab runs directly on this Linux host.
+    Linux,
+    /// microManager runs Firecrab in a Virtualization.framework VM.
+    Macos,
+    /// microManager runs Firecrab in a WSL2 distribution.
+    Windows,
+}
+
+/// What microManager records about the machine it runs on, so the API inside
+/// its Linux VM can report it. Written to [`HOST_PLATFORM_DESCRIPTOR_PATH`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostPlatformDescriptor {
+    /// `macos` or `windows`.
+    pub os: HostOs,
+    /// Product name, such as `Windows 11` or `macOS`.
+    pub name: String,
+    /// Product version, such as `10.0.26200.9457` or `26.6.2`.
+    pub version: String,
+    /// `x86_64` or `arm64`.
+    pub architecture: String,
+    /// How the Linux VM is hosted, such as `WSL2 2.7.14.0`.
+    pub virtualization: String,
+}
+
+/// Where microManager leaves a [`HostPlatformDescriptor`] inside its Linux VM.
+pub const HOST_PLATFORM_DESCRIPTOR_PATH: &str = "/etc/firecrab/host-platform.json";
+
+/// The `platform` part of `GET /api/host`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostPlatformResponse {
+    /// The operating system of the machine behind the dashboard.
+    pub os: HostOs,
+    /// Its product name; on Linux, the distribution's `PRETTY_NAME`.
+    pub name: String,
+    /// Its product version, when microManager reported one.
+    pub version: Option<String>,
+    /// `x86_64` or `arm64`.
+    pub architecture: String,
+    /// How microManager hosts Firecrab's VM; `None` on a Linux host.
+    pub virtualization: Option<String>,
+    /// The Linux system Firecrab runs on: the host itself, or microManager's VM.
+    pub system: String,
+    /// That system's kernel release.
+    pub kernel: String,
 }
 
 /// `GET /api/update`, and the `--json` output of `firecrab update --check`.
@@ -1873,6 +1929,48 @@ mod tests {
             "{\"loadAverage1m\":0.0,\"memoryTotalMib\":0,\"memoryAvailableMib\":0,\
              \"diskTotalGib\":0,\"diskAvailableGib\":0,\"uptimeSeconds\":0}"
         );
+    }
+
+    #[test]
+    fn host_status_response_reads_apis_that_predate_the_platform() {
+        let old = "{\"loadAverage1m\":0.5,\"memoryTotalMib\":1,\"memoryAvailableMib\":1,\
+                   \"diskTotalGib\":1,\"diskAvailableGib\":1,\"uptimeSeconds\":9}";
+        let status: HostStatusResponse = serde_json::from_str(old).unwrap();
+        assert_eq!(status.platform, None);
+    }
+
+    #[test]
+    fn host_platform_response_serializes_camel_case() {
+        let platform = HostPlatformResponse {
+            os: HostOs::Windows,
+            name: "Windows 11".to_owned(),
+            version: Some("10.0.26200.9457".to_owned()),
+            architecture: "x86_64".to_owned(),
+            virtualization: Some("WSL2 2.7.14.0".to_owned()),
+            system: "Debian GNU/Linux 13 (trixie)".to_owned(),
+            kernel: "6.18.33.2-microsoft-standard-WSL2".to_owned(),
+        };
+        let json = serde_json::to_value(HostStatusResponse {
+            platform: Some(platform),
+            ..HostStatusResponse::default()
+        })
+        .unwrap();
+        assert_eq!(json["platform"]["os"], "windows");
+        assert_eq!(json["platform"]["virtualization"], "WSL2 2.7.14.0");
+        assert_eq!(
+            json["platform"]["kernel"],
+            "6.18.33.2-microsoft-standard-WSL2"
+        );
+    }
+
+    #[test]
+    fn host_platform_descriptor_is_the_file_micromanager_writes() {
+        let text = "{\"os\":\"macos\",\"name\":\"macOS\",\"version\":\"26.6.2\",\
+                    \"architecture\":\"arm64\",\"virtualization\":\"Virtualization.framework\"}";
+        let descriptor: HostPlatformDescriptor = serde_json::from_str(text).unwrap();
+        assert_eq!(descriptor.os, HostOs::Macos);
+        assert_eq!(serde_json::to_string(&descriptor).unwrap(), text);
+        assert!(HOST_PLATFORM_DESCRIPTOR_PATH.starts_with("/etc/firecrab/"));
     }
 
     #[test]

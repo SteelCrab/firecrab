@@ -68,6 +68,7 @@ firecrab service uninstall --purge  # also delete managed OS and persistent data
 ```
 
 The dashboard and API are available at `http://127.0.0.1:5523/` while status is healthy.
+Each start pushes the macOS version into the guest's `/etc/firecrab/host-platform.json`, so the dashboard's Host view names macOS, not the Debian VM.
 Ordinary uninstall retains the 0600 management SSH private key with the other managed data; use `--purge` to remove it.
 The API remains loopback-only inside Debian and reaches macOS through a key-only SSH tunnel.
 The launchd `io.firecrab.micromanager` agent restarts the management VM and tunnel after a process crash.

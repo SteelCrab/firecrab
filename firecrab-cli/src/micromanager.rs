@@ -3,6 +3,7 @@
 //! Each host has its own backend module; everything they share lives beside them.
 
 mod artifact;
+mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
 mod managed_home;

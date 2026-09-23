@@ -136,7 +136,8 @@ fn probe_target(distributions: &[String]) -> Option<&str> {
     distributions.first().map(String::as_str)
 }
 
-fn field(text: &str, label: &str) -> Option<String> {
+/// The value after `label:` in `wsl --version` style output.
+pub(super) fn field(text: &str, label: &str) -> Option<String> {
     text.lines()
         .filter_map(|line| line.split_once(':'))
         .find(|(name, _)| name.trim() == label)
