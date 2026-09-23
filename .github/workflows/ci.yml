@@ -105,14 +105,56 @@ jobs:
           test "$rc" -eq 0 -o "$rc" -eq 1
           python3 -m json.tool doctor.json
 
-  qa-windows:
-    name: QA gate (Windows)
-    # G3 only: Windows microManager is not shipped. No API rows.
+  micromanager-windows-build:
+    name: microManager (GitHub-hosted Windows build)
+    # GitHub-hosted Windows runners do not expose nested virtualization to
+    # WSL2. Keep this job to build/unit/diagnostic checks. Runtime E2E remains
+    # a manual Windows-host check, like the native-Mac check for macOS.
     runs-on: windows-latest
     steps:
-      - name: Document G3
+      - uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Windows CLI clippy and tests
         run: |
-          echo "SKIP G3: Windows microManager is not shipped"
+          cargo clippy -p firecrab-cli --all-targets -- -D warnings
+          cargo test -p firecrab-cli --locked
+          cargo build -p firecrab-cli --locked
+
+      - name: Verify hosted-runner diagnostic contract
+        shell: pwsh
+        run: |
+          $json = & target/debug/firecrab.exe service doctor --json
+          $rc = $LASTEXITCODE
+          if ($rc -ne 0 -and $rc -ne 1) { throw "doctor exited with $rc" }
+          $report = $json | Out-String | ConvertFrom-Json
+          if ($report.platform -ne 'Windows') { throw "unexpected platform $($report.platform)" }
+          $report.checks | Format-Table id, status, detail -AutoSize
+          exit 0
+
+  micromanager-pr-report:
+    name: microManager PR report
+    # On a pull request that touches macOS or Windows microManager files,
+    # keeps one comment with each job's steps and log tails, the commands that
+    # reproduce the job locally, and the runtime E2E the hosted runners cannot
+    # run. Fork pull requests get the job summary only: their token is
+    # read-only.
+    needs: [micromanager-macos-build, micromanager-windows-build]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Comment the microManager jobs on the pull request
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/micromanager-pr-report.py
 
   docs:
     name: Rust (rustdoc)
@@ -133,6 +175,9 @@ jobs:
           python3 -m unittest scripts/test_check_changelog.py
           python3 -m unittest scripts/test_write_release_notes.py
           python3 scripts/check-changelog.py
+
+      - name: microManager PR report
+        run: python3 -m unittest scripts/test_micromanager_pr_report.py
 
       - name: Cache cargo
         uses: actions/cache@v6

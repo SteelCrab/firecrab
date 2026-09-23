@@ -6,7 +6,7 @@
 #       C3 C5 when `firecrab` is on PATH; X1-X4 X6
 # SKIP: G1  Linux install job (doctor / install / status)
 #       G2  GitHub macOS hosted: build only; E2E is self-hosted Mac
-#       G3  Windows QA gate job
+#       G3  Windows microManager job; E2E is a manual Windows host
 #       U1  do not POST /api/update
 #       N6  DELETE busy needs a VM
 #       I2 I3 I4 I7 I10  M2Image/bootstrap not in this script
@@ -149,7 +149,7 @@ fi
 
 skip G1 "Linux install job covers doctor/install/status"
 skip G2 "macOS microManager job covers service doctor"
-skip G3 "Windows QA gate job; microManager is not shipped"
+skip G3 "Windows microManager job covers service doctor"
 skip U1 "do not POST /api/update"
 skip N6 "DELETE busy needs a VM"
 skip I2 "kernel install skipped in this script"

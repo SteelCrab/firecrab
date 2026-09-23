@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-use sha2::{Digest, Sha256, Sha512};
+use super::super::artifact::{self, ArtifactSpec, HashAlgorithm};
 
 pub const DEBIAN_BUILD: &str = "20260914-2601";
 pub const DEBIAN_ARCHIVE: &str = "debian-13-generic-arm64-20260914-2601.tar.xz";
@@ -26,22 +26,7 @@ const DEBIAN_RAW_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const DATA_DISK_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const PROVISION_SCHEMA: u32 = 4;
 const EXTRACT_ARM64_IMAGE: &str =
-    include_str!("../../../scripts/firecracker-menual/extract-arm64-image");
-
-#[derive(Clone, Copy, Debug)]
-enum HashAlgorithm {
-    Sha256,
-    Sha512,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ArtifactSpec {
-    label: &'static str,
-    filename: &'static str,
-    url: &'static str,
-    algorithm: HashAlgorithm,
-    digest: &'static str,
-}
+    include_str!("../../../../scripts/firecracker-menual/extract-arm64-image");
 
 const ARTIFACTS: [ArtifactSpec; 4] = [
     ArtifactSpec {
@@ -100,17 +85,8 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
-    #[error("could not download {url}: {source}")]
-    Request {
-        url: String,
-        #[source]
-        source: reqwest::Error,
-    },
-    #[error("artifact request failed for {url}: HTTP {status}")]
-    HttpStatus {
-        url: String,
-        status: reqwest::StatusCode,
-    },
+    #[error(transparent)]
+    Artifact(#[from] artifact::Error),
     #[error("could not {action} {path}: {source}")]
     Io {
         action: &'static str,
@@ -127,33 +103,11 @@ pub enum Error {
     InvalidDisk { path: PathBuf, detail: String },
     #[error("guest provisioning failed: {0}")]
     GuestProvision(String),
-    #[error("checksum mismatch for {path}: expected {expected}, got {actual}")]
-    Checksum {
-        path: PathBuf,
-        expected: String,
-        actual: String,
-    },
 }
 
 pub fn download_all(managed_home: &Path) -> Result<DownloadedArtifacts, Error> {
     let directory = managed_home.join("downloads");
-    fs::create_dir_all(&directory).map_err(|source| Error::CreateDirectory {
-        path: directory.clone(),
-        source,
-    })?;
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(concat!("firecrab-micromanager/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|source| Error::Request {
-            url: "client initialization".to_string(),
-            source,
-        })?;
-
-    for spec in ARTIFACTS {
-        download_one(&client, spec, &directory)?;
-    }
-
+    artifact::fetch_all(&ARTIFACTS, &directory)?;
     Ok(DownloadedArtifacts {
         debian_archive: directory.join(ARTIFACTS[0].filename),
         firecracker_archive: directory.join(ARTIFACTS[1].filename),
@@ -802,102 +756,6 @@ fn write_private(path: &Path, contents: &[u8], mode: u32) -> Result<(), Error> {
     Ok(())
 }
 
-fn download_one(
-    client: &reqwest::blocking::Client,
-    spec: ArtifactSpec,
-    directory: &Path,
-) -> Result<(), Error> {
-    let destination = directory.join(spec.filename);
-    if destination.is_file() {
-        match verify_file(&destination, spec.algorithm, spec.digest) {
-            Ok(()) => {
-                println!(
-                    "[PASS] download: {} (cached, checksum verified)",
-                    spec.label
-                );
-                return Ok(());
-            }
-            Err(Error::Checksum { .. }) => {
-                fs::remove_file(&destination)
-                    .map_err(|source| io_error("remove corrupt artifact", &destination, source))?;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-
-    println!("[DOWNLOAD] {}", spec.label);
-    let mut response = client
-        .get(spec.url)
-        .send()
-        .map_err(|source| Error::Request {
-            url: spec.url.to_string(),
-            source,
-        })?;
-    if !response.status().is_success() {
-        return Err(Error::HttpStatus {
-            url: spec.url.to_string(),
-            status: response.status(),
-        });
-    }
-
-    let mut staged = tempfile::NamedTempFile::new_in(directory)
-        .map_err(|source| io_error("create partial artifact", directory, source))?;
-    io::copy(&mut response, &mut staged)
-        .map_err(|source| io_error("write artifact", staged.path(), source))?;
-    staged
-        .flush()
-        .map_err(|source| io_error("flush artifact", staged.path(), source))?;
-    staged
-        .as_file()
-        .sync_all()
-        .map_err(|source| io_error("sync artifact", staged.path(), source))?;
-    verify_file(staged.path(), spec.algorithm, spec.digest)?;
-    staged
-        .persist(&destination)
-        .map_err(|error| io_error("publish artifact", &destination, error.error))?;
-    println!("[PASS] download: {}", spec.label);
-    Ok(())
-}
-
-fn verify_file(path: &Path, algorithm: HashAlgorithm, expected: &str) -> Result<(), Error> {
-    let mut file = File::open(path).map_err(|source| io_error("open artifact", path, source))?;
-    let actual = match algorithm {
-        HashAlgorithm::Sha256 => digest_reader::<Sha256>(&mut file, path)?,
-        HashAlgorithm::Sha512 => digest_reader::<Sha512>(&mut file, path)?,
-    };
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(Error::Checksum {
-            path: path.to_owned(),
-            expected: expected.to_string(),
-            actual,
-        })
-    }
-}
-
-fn digest_reader<D: Digest + Default>(reader: &mut File, path: &Path) -> Result<String, Error> {
-    let mut digest = D::default();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|source| io_error("hash artifact", path, source))?;
-        if read == 0 {
-            break;
-        }
-        digest.update(&buffer[..read]);
-    }
-    let output = digest.finalize();
-    let mut encoded = String::with_capacity(output.len() * 2);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for byte in output {
-        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    Ok(encoded)
-}
-
 fn io_error(action: &'static str, path: &Path, source: io::Error) -> Error {
     Error::Io {
         action,
@@ -909,36 +767,6 @@ fn io_error(action: &'static str, path: &Path, source: io::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn known_sha256_and_sha512_are_verified() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("artifact");
-        fs::write(&path, b"firecrab").unwrap();
-        verify_file(
-            &path,
-            HashAlgorithm::Sha256,
-            "be3c6071577be45dcc1c1f56fc1cc57360cdfe575357996b798c2bc017bcaeba",
-        )
-        .unwrap();
-        verify_file(
-            &path,
-            HashAlgorithm::Sha512,
-            "67d2e2cc2815461602d60de13d417c816dab7d24685f769f9d479d2b581127cbd92da06e0fe3a7c93e26252d46dc1d5e5c052448b54cea14289a72a4e6548eac",
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn checksum_mismatch_names_expected_and_actual() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("artifact");
-        fs::write(&path, b"tampered").unwrap();
-        assert!(matches!(
-            verify_file(&path, HashAlgorithm::Sha256, &"0".repeat(64)),
-            Err(Error::Checksum { .. })
-        ));
-    }
 
     #[test]
     fn gpt_linux_partition_partuuid_is_derived_from_disk() {

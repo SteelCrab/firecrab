@@ -181,6 +181,7 @@ mod tests {
                 disk_available_gib: 10,
                 disk_total_gib: 40,
                 uptime_seconds: 3600,
+                platform: None,
             }),
             host_error: None,
         };

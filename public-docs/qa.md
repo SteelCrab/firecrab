@@ -38,7 +38,7 @@ The API contract does not.
 | --- | --- | --- |
 | G1 | Linux | `firecrab doctor` then `firecrab service install` / `start` / `status` |
 | G2 | macOS | `firecrab service doctor` then `install` / `status` (nested virt required) |
-| G3 | Windows | Same shape as macOS when microManager ships; until then mark WARNING |
+| G3 | Windows | `firecrab service doctor` then `install` / `status` (WSL2 with nested virt required) |
 | G4 | all | `GET /api/host` 200; dashboard `GET /` HTML 200 |
 | G5 | all | `GET /api/no-such-route` JSON 404 with `requestId` |
 
@@ -46,10 +46,15 @@ GitHub-hosted ARM64 macOS runners do not expose nested virtualization. They
 run build/unit/signing checks only. This repository does not register a
 persistent self-hosted Mac, so microManager runtime E2E is manual on a native
 M3-or-later Mac; `doctor` must report `ready: true` before it runs.
+GitHub-hosted Windows runners do not expose nested virtualization to WSL2
+either, so Windows runtime E2E is manual on a Windows host whose `doctor`
+reports `ready: true`.
+`FIRECRAB_QA_WAIT_FACTOR` multiplies the guest waits in the nginx and SSH
+checks for hosts whose guests install first-boot packages slowly.
 
 Linux `firecrab service` drives host systemd.
 macOS `firecrab service` drives the management VM, not a workload MicroVM.
-Windows management-VM support is future until microManager ships; keep G3 `WARNING`.
+Windows `firecrab service` drives the managed WSL2 distribution the same way.
 
 ## Shared host
 
@@ -213,7 +218,10 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | `scripts/ci-qa-ssh.sh` | V8a–V8d (called from guest boot and nginx) |
 | `scripts/ci-qa-guest.sh` | I5 I6 V1 V2 V6 V7 V8 V9 V11 V12 V13 N6 C1 C2 C4 X5; expanded rows run for the first OCI reference, API guest flow for the remaining `alpine:3.21` `ubuntu:24.04` `fedora:42` references |
 | GitHub-hosted macOS | Swift/Rust checks, signed helper, and diagnostic JSON; no runtime E2E |
+| GitHub-hosted Windows | Rust clippy/tests and diagnostic JSON; no runtime E2E |
+| Windows host manual run | `ci-qa-windows-e2e.ps1`; fresh install, then the API/nginx/guest scripts inside the managed distribution |
 | Native M3+ manual run | `ci-qa-macos-e2e.sh`; fresh install plus API/nginx/guest E2E; capability failure is fatal |
+| microManager PR report | `micromanager-pr-report.py`; comments both hosted jobs' results, log tails, and the manual E2E commands on PRs that touch them |
 
 Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1.
 

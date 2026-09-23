@@ -1899,6 +1899,26 @@ table.image-table .image-package-url a:hover {
 .detail-fields dt { color: var(--shell); text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.7rem; }
 .detail-fields dd { margin: 0; color: var(--ink); word-break: break-all; }
 
+/* Host view: one label column across its field lists, so values line up. */
+.host-info .detail-fields { grid-template-columns: min(9rem, 40%) 1fr; }
+.host-info .detail-fields dt { word-break: keep-all; }
+.host-info .detail-fields dd { word-break: normal; overflow-wrap: anywhere; }
+.host-platform {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin: 0 0 1rem;
+}
+.host-platform-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.host-platform-name { font-size: 1.05rem; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.host-platform-version { font-weight: 400; color: var(--shell); }
+.host-platform-details { font-size: 0.78rem; color: var(--shell); overflow-wrap: anywhere; }
+
 .detail-edit-input {
   font-family: var(--font-mono);
   font-size: 0.82rem;

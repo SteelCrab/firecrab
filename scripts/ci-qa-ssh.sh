@@ -24,6 +24,8 @@ BODY=
 OWN_KEY=0
 KEY=${FIRECRAB_QA_SSH_KEY-}
 KNOWN_HOSTS=${FIRECRAB_QA_KNOWN_HOSTS-}
+# Hosts with slow guest first boots (a nested lab) scale every guest wait.
+WAIT_FACTOR=${FIRECRAB_QA_WAIT_FACTOR:-1}
 OWN_KNOWN_HOSTS=0
 HOST_PUBLIC_KEY=
 SSH_TRANSPORT=()
@@ -118,7 +120,7 @@ pass "V8b ${fp}"
 
 check_ok=0
 status=
-for _ in $(seq 1 40); do
+for _ in $(seq 1 $((40 * WAIT_FACTOR))); do
     http GET "/api/vms/${VM_ID}/ssh-host-key/check"
     if [ "$CODE" = 200 ]; then
         status=$(json_get 'd.get("status") or ""')
@@ -150,7 +152,7 @@ printf '%s %s\n' "$IPV4" "$HOST_PUBLIC_KEY" > "$KNOWN_HOSTS"
 configure_guest_transport
 if [ "$(uname -s)" = Linux ] || [ ${#SSH_TRANSPORT[@]} -gt 0 ]; then
     ssh_ok=0
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 $((30 * WAIT_FACTOR))); do
         if guest_ssh true >/dev/null 2>&1; then
             ssh_ok=1
             break

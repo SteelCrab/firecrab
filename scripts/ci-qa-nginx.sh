@@ -7,6 +7,8 @@ API=${FIRECRAB_API:-http://127.0.0.1:5523}
 API=${API%/}
 REFERENCE=${1:-nginx:1.27-alpine}
 HOST_PORT=${FIRECRAB_QA_NGINX_PORT:-18080}
+# Hosts with slow guest first boots (a nested lab) scale every guest wait.
+WAIT_FACTOR=${FIRECRAB_QA_WAIT_FACTOR:-1}
 SUBNET=172.31.221.0/24
 PREFIX=qa-ngx-
 
@@ -275,7 +277,7 @@ printf 'ipv4=%s\n' "$IPV4"
 
 configure_guest_transport
 http_ok=0
-for _ in $(seq 1 30); do
+for _ in $(seq 1 $((30 * WAIT_FACTOR))); do
     if [ "$(uname -s)" = Linux ]; then
         pf=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 \
             "http://127.0.0.1:${HOST_PORT}/" || true)
@@ -303,7 +305,7 @@ FIRECRAB_API=$API FIRECRAB_QA_SSH_KEY=$KEY FIRECRAB_QA_KNOWN_HOSTS=$KNOWN_HOSTS 
 
 if [ "$(uname -s)" = Linux ] || [ ${#SSH_TRANSPORT[@]} -gt 0 ]; then
     ssh_ok=0
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 $((30 * WAIT_FACTOR))); do
         if guest_ssh "$IPV4" true >/dev/null 2>&1; then
             ssh_ok=1
             break
@@ -329,9 +331,15 @@ print(json.dumps({
 }))' "$DISK")
     http PUT "/api/vms/${VM_ID}" "$PUT"
     [ "$CODE" = 200 ] || fail V10 "PUT env while running HTTP ${CODE}"
-    sleep 2
-    env_value=$(read_guest_qa_nginx "$IPV4") \
-        || fail V10 "guest /etc/firecrab/vm.env could not be sourced after update"
+    # The API pushes vm.env to a running guest in the background; a busy
+    # guest (first-boot package installs) can take more than a moment.
+    env_value=
+    for _ in $(seq 1 $((15 * WAIT_FACTOR))); do
+        sleep 2
+        env_value=$(read_guest_qa_nginx "$IPV4") \
+            || fail V10 "guest /etc/firecrab/vm.env could not be sourced after update"
+        [ "$env_value" = two ] && break
+    done
     [ "$env_value" = two ] \
         || fail V10 "guest vm.env not updated to QA_NGINX=two (got ${env_value:-missing})"
     pass V10

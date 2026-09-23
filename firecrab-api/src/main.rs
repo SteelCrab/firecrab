@@ -7,6 +7,7 @@ mod firecracker;
 mod guest_agent;
 mod guest_ssh;
 mod handlers;
+mod host_platform;
 mod image_install;
 mod ipam;
 mod kernel_manager;
