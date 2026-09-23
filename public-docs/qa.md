@@ -221,6 +221,7 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | GitHub-hosted Windows | Rust clippy/tests and diagnostic JSON; no runtime E2E |
 | Windows host manual run | `ci-qa-windows-e2e.ps1`; fresh install, then the API/nginx/guest scripts inside the managed distribution |
 | Native M3+ manual run | `ci-qa-macos-e2e.sh`; fresh install plus API/nginx/guest E2E; capability failure is fatal |
+| microManager PR report | `micromanager-pr-report.py`; comments both hosted jobs' results, log tails, and the manual E2E commands on PRs that touch them |
 
 Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1.
 
