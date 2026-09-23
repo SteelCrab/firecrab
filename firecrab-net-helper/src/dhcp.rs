@@ -267,11 +267,17 @@ async fn release_lease(ip: Ipv4Addr, mac: MacAddr, interface: String) {
 /// tell which interface a broadcast-flag-0 DHCPDISCOVER arrived on, so the
 /// unicast DHCPOFFER a client without a broadcast flag expects never goes
 /// out — `bind-dynamic` binds directly to `fcbr0` instead.
+///
+/// dnsmasq also binds every loopback address unless told otherwise, and
+/// guests never query it there. WSL2 already listens on `10.255.255.254:53`
+/// on `lo`, and a host resolver may own `127.0.0.1:53`; either makes
+/// dnsmasq exit with "Address already in use", so `lo` is excluded.
 fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) -> String {
     // One `interface=`/`dhcp-range=` pair per served MicroNetwork. dnsmasq
     // picks the range matching the interface a request arrived on, so a VM
     // on a given bridge is offered that network's reservation only.
-    // Zero networks: no interface= lines (dnsmasq will not serve Firecrab).
+    // Zero networks: no interface= lines, which is why `sync_dhcp_leases`
+    // never starts dnsmasq without a network to serve.
     let served: String = micro_networks
         .iter()
         .map(|network| {
@@ -312,6 +318,7 @@ fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) ->
         "{served}\
          {enable_ra}\
          bind-dynamic\n\
+         except-interface=lo\n\
          dhcp-hostsfile={}\n\
          dhcp-leasefile={LEASE_FILE}\n\
          pid-file={PID_FILE}\n\
@@ -341,6 +348,15 @@ pub async fn sync_dhcp_leases(
         networks_changed,
         dnsmasq_running,
     ) {
+        return Ok(());
+    }
+    // Without a bridge to serve, dnsmasq's config has no `interface=` line,
+    // and dnsmasq then answers DNS on every host interface, uplink included.
+    // Nothing to serve means nothing runs.
+    if micro_networks.is_empty() {
+        stop_running_dnsmasq(&mut state).await;
+        state.served_networks = Some(Vec::new());
+        state.applied_revision = Some(revision);
         return Ok(());
     }
 
@@ -741,7 +757,9 @@ mod tests {
         let config = render_base_config(Path::new("/run/firecrab/dnsmasq-hosts.conf"), &[]);
         assert!(config.contains("bind-dynamic"));
         // No MicroNetworks: no interface= lines (empty explicit set).
-        assert!(!config.contains("interface="));
+        assert!(!config.lines().any(|line| line.starts_with("interface=")));
+        // Loopback is never served, so another listener there cannot stop dnsmasq.
+        assert!(config.contains("except-interface=lo\n"));
     }
 
     #[test]
@@ -1012,6 +1030,29 @@ mod tests {
             .take()
             .expect("stand-in child remains tracked");
         child.kill().await.expect("stop stand-in dnsmasq");
+    }
+
+    #[tokio::test]
+    async fn with_no_micro_network_dnsmasq_is_stopped_instead_of_serving_every_interface() {
+        let actor = DhcpActor::new();
+        {
+            let mut state = actor.state.lock().await;
+            state.applied_revision = Some(5);
+            state.served_networks = Some(vec![sample_network(0x1234, "172.31.0.1", 24)]);
+            state.child = Some(
+                Command::new("sleep")
+                    .arg("60")
+                    .spawn()
+                    .expect("spawn stand-in dnsmasq"),
+            );
+        }
+
+        // No hosts file is written and nothing is spawned, so this needs no root.
+        assert!(sync_dhcp_leases(&actor, 6, &[], &[]).await.is_ok());
+        let state = actor.state.lock().await;
+        assert!(state.child.is_none(), "the running dnsmasq is stopped");
+        assert_eq!(state.served_networks.as_deref(), Some(&[][..]));
+        assert_eq!(state.applied_revision, Some(6));
     }
 
     #[test]
