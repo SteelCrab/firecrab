@@ -6,6 +6,9 @@ use std::process::{Command as ProcessCommand, Output};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use firecrab_api_types::HostOs;
+
+use super::super::host_platform::{self, HOST_PLATFORM_DESCRIPTOR_PATH};
 use super::lifecycle::Layout;
 
 const LABEL: &str = "io.firecrab.micromanager";
@@ -18,6 +21,8 @@ pub struct DaemonPaths {
     pub ready: PathBuf,
     pub manager_ready: PathBuf,
     pub log: PathBuf,
+    /// This Mac's description, pushed into the guest for `GET /api/host`.
+    pub platform: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +103,7 @@ pub fn uninstall(layout: &Layout) -> Result<(), Error> {
 pub fn start(layout: &Layout) -> Result<Status, Error> {
     let paths = paths(layout)?;
     stop_if_loaded(layout)?;
+    write_host_platform(&paths)?;
     let _ = fs::remove_file(&paths.ready);
     let _ = fs::remove_file(&paths.manager_ready);
     launchctl(
@@ -156,7 +162,27 @@ pub fn paths(layout: &Layout) -> Result<DaemonPaths, Error> {
         ready: runtime.join("daemon-ready"),
         manager_ready: runtime.join("manager-ready"),
         log: runtime.join("daemon.log"),
+        platform: runtime.join("host-platform.json"),
     })
+}
+
+/// Refreshed on every start, since a macOS update changes the version. The
+/// wrapper pushes it into the guest once the tunnel is up.
+fn write_host_platform(paths: &DaemonPaths) -> Result<(), Error> {
+    let version = ProcessCommand::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+        .unwrap_or_default();
+    let descriptor = host_platform::descriptor_json(
+        HostOs::Macos,
+        "macOS",
+        &version,
+        "Virtualization.framework",
+    );
+    write_atomic(&paths.platform, format!("{descriptor}\n").as_bytes(), 0o600)
 }
 
 fn wait_ready(layout: &Layout, timeout: Duration) -> Result<Status, Error> {
@@ -274,6 +300,10 @@ fn render_wrapper(
     let manager_ready = shell_quote(&paths.manager_ready);
     let console = shell_quote(&layout.managed_home.join("runtime/vm-console.log"));
     let known_hosts = shell_quote(&layout.managed_home.join("runtime/known_hosts"));
+    let platform = shell_quote(&paths.platform);
+    let platform_write = shell_quote(Path::new(&format!(
+        "mkdir -p /etc/firecrab && cat > {HOST_PLATFORM_DESCRIPTOR_PATH}"
+    )));
     format!(
         r#"#!/bin/bash
 set -Eeuo pipefail
@@ -284,6 +314,7 @@ ready={ready}
 manager_ready={manager_ready}
 console={console}
 known_hosts={known_hosts}
+platform={platform}
 vm_pid=
 tunnel_pid=
 cleanup() {{
@@ -333,6 +364,12 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:5523/api/host >/dev/null
+# Tells the guest's API which Mac it serves; failing to only costs the Host view.
+if [ -f "$platform" ]; then
+  /usr/bin/ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 \
+    -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known_hosts" \
+    "root@$ip" {platform_write} <"$platform" || true
+fi
 {{
   echo "vm_pid=$vm_pid"
   echo "tunnel_pid=$tunnel_pid"
@@ -457,6 +494,7 @@ mod tests {
             ready: layout.managed_home.join("runtime/daemon-ready"),
             manager_ready: layout.managed_home.join("runtime/manager-ready"),
             log: layout.managed_home.join("runtime/daemon.log"),
+            platform: layout.managed_home.join("runtime/host-platform.json"),
         };
         let script = render_wrapper(
             &layout,
@@ -469,6 +507,9 @@ mod tests {
         assert!(script.contains("systemctl poweroff"));
         assert!(script.contains("kill -KILL"));
         assert!(script.contains("'/tmp/firecrab state/micromanager'"));
+        assert!(script.contains(
+            "'mkdir -p /etc/firecrab && cat > /etc/firecrab/host-platform.json' <\"$platform\" || true"
+        ));
     }
 
     #[test]
@@ -479,6 +520,7 @@ mod tests {
             ready: PathBuf::from("/tmp/ready"),
             manager_ready: PathBuf::from("/tmp/manager-ready"),
             log: PathBuf::from("/tmp/daemon.log"),
+            platform: PathBuf::from("/tmp/host-platform.json"),
         };
         let plist = render_plist(&paths);
         assert!(plist.contains(LABEL));

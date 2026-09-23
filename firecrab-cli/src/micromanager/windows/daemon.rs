@@ -13,6 +13,10 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use firecrab_api_types::HostOs;
+
+use super::super::host_platform::{self, HOST_PLATFORM_DESCRIPTOR_PATH};
+use super::doctor;
 use super::lifecycle::Layout;
 use super::wsl::{self, DISTRO_NAME};
 
@@ -117,9 +121,62 @@ pub fn start() -> Result<Status, Error> {
     if task_state() == TaskState::Missing {
         return Err(Error::NotInstalled);
     }
+    publish_host_platform();
     schtasks(&["/Change", "/TN", TASK_NAME, "/ENABLE"])?;
     schtasks(&["/Run", "/TN", TASK_NAME])?;
     wait_ready(READY_TIMEOUT)
+}
+
+/// Leaves the Windows and WSL versions where the guest's API reports them.
+/// Refreshed on every start, since Windows and WSL updates change both; a
+/// failure only costs the dashboard's Host view, so it never stops a start.
+fn publish_host_platform() {
+    let windows = wsl::run_program("cmd.exe", &["/c", "ver"]).unwrap_or_default();
+    let wsl_version = wsl::run(&["--version"])
+        .ok()
+        .and_then(|text| doctor::field(&text, "WSL version"));
+    let (name, version) = windows_release(&windows);
+    let virtualization = match wsl_version {
+        Some(version) => format!("WSL2 {version}"),
+        None => "WSL2".to_string(),
+    };
+    let descriptor =
+        host_platform::descriptor_json(HostOs::Windows, name, &version, &virtualization);
+    let script = format!(
+        "mkdir -p /etc/firecrab && printf '%s\\n' {} > {HOST_PLATFORM_DESCRIPTOR_PATH}",
+        wsl::shell_quote(&descriptor)
+    );
+    if let Err(error) = wsl::root_shell(&script) {
+        println!("[WARNING] host_platform: {error}");
+    }
+}
+
+/// `Microsoft Windows [Version 10.0.26200.9457]` becomes `Windows 11` and
+/// `10.0.26200.9457`. The word "Version" is localized, so the dotted number is
+/// found by shape. Windows 11 kept version 10.0 and starts at build 22000.
+fn windows_release(ver: &str) -> (&'static str, String) {
+    let Some(version) = ver
+        .split(|c: char| c.is_whitespace() || c == '[' || c == ']')
+        .find(|word| {
+            word.split('.').count() >= 3
+                && word
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        })
+    else {
+        return ("Windows", String::new());
+    };
+    let build: u32 = version
+        .split('.')
+        .nth(2)
+        .and_then(|build| build.parse().ok())
+        .unwrap_or(0);
+    let name = if build >= 22000 {
+        "Windows 11"
+    } else {
+        "Windows 10"
+    };
+    (name, version.to_string())
 }
 
 /// Disables the task first, or its one-minute trigger would start the guest again.
@@ -382,6 +439,63 @@ mod tests {
                 "schtasks.exe /Create /TN Firecrab\\microManager /XML {} /F",
                 definition.display()
             )]
+        );
+    }
+
+    #[test]
+    fn windows_releases_are_named_by_build() {
+        assert_eq!(
+            windows_release("\r\nMicrosoft Windows [Version 10.0.26200.9457]\r\n"),
+            ("Windows 11", "10.0.26200.9457".to_string())
+        );
+        assert_eq!(
+            windows_release("Microsoft Windows [Versión 10.0.19045.4529]"),
+            ("Windows 10", "10.0.19045.4529".to_string())
+        );
+        assert_eq!(windows_release(""), ("Windows", String::new()));
+    }
+
+    #[test]
+    fn start_publishes_the_host_platform_into_the_guest() {
+        let wsl = fake::answer(|line| match line {
+            l if l.starts_with("schtasks.exe /Query") => Ok(DISABLED.into()),
+            "cmd.exe /c ver" => Ok("Microsoft Windows [Version 10.0.26200.9457]\n".into()),
+            "wsl.exe --version" => {
+                Ok("WSL version: 2.7.14.0\nKernel version: 6.18.33.2-2\n".into())
+            }
+            "wsl.exe --list --running --quiet" => Ok(String::new()),
+            _ => Ok(String::new()),
+        });
+        start().expect("start returns once the task reads back disabled");
+        let write = wsl
+            .calls()
+            .into_iter()
+            .find(|call| call.contains("/etc/firecrab/host-platform.json"))
+            .expect("the descriptor is written");
+        assert!(
+            write.starts_with(
+                "wsl.exe -d firecrab-debian -u root --exec sh -c mkdir -p /etc/firecrab"
+            )
+        );
+        assert!(write.contains(r#""name":"Windows 11""#));
+        assert!(write.contains(r#""version":"10.0.26200.9457""#));
+        assert!(write.contains(r#""virtualization":"WSL2 2.7.14.0""#));
+    }
+
+    #[test]
+    fn a_failed_platform_write_does_not_stop_the_start() {
+        let schtasks = fake::answer(|line| match line {
+            l if l.starts_with("schtasks.exe /Query") => Ok(DISABLED.into()),
+            l if l.contains("host-platform.json") => Err("Catastrophic failure".into()),
+            "wsl.exe --list --running --quiet" => Ok(String::new()),
+            _ => Ok(String::new()),
+        });
+        start().expect("the Host view is cosmetic");
+        assert!(
+            schtasks
+                .calls()
+                .iter()
+                .any(|call| call.ends_with("/Run /TN Firecrab\\microManager"))
         );
     }
 
