@@ -217,10 +217,11 @@ fn socket_exists(path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Looks for the `inet firecrab` and `bridge firecrab_l2` tables. Missing
-/// tables are only a `Fail` once the helper socket is up with a bridge
-/// already attached — before that, zero MicroNetworks is a normal, empty
-/// state, not a fault.
+/// Looks for the `inet firecrab` table. Missing it is only a `Fail` once the
+/// helper socket is up with a bridge already attached — before that, zero
+/// MicroNetworks is a normal, empty state, not a fault. Each VM's
+/// `netdev firecrab_l2_<vm>` table exists only while that VM runs, so it is
+/// not checked here.
 pub fn check_nft(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult> {
     let out = match runner.run("nft", &["list", "tables"]) {
         Ok(o) => o,
@@ -251,7 +252,7 @@ pub fn check_nft(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult
         {
             return vec![CheckResult::skip(
                 "nft: cannot list tables (permission denied)",
-                Some("cannot confirm inet firecrab / bridge firecrab_l2"),
+                Some("cannot confirm inet firecrab"),
                 Some("re-run as root: sudo nft list tables"),
             )];
         }
@@ -262,40 +263,26 @@ pub fn check_nft(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult
         )];
     }
 
-    let has_inet = combined
-        .lines()
-        .any(|l| l.trim().starts_with("table inet firecrab"));
-    let has_bridge = combined
-        .lines()
-        .any(|l| l.trim().starts_with("table bridge firecrab_l2"));
-    let mut missing = Vec::new();
-    if !has_inet {
-        missing.push("inet firecrab");
-    }
-    if !has_bridge {
-        missing.push("bridge firecrab_l2");
-    }
-    if missing.is_empty() {
+    if combined.lines().any(|l| l.trim() == "table inet firecrab") {
         return vec![CheckResult::pass("nft")];
     }
-    let missing_joined = missing.join(", ");
 
     if socket_exists(&env.helper_sock) {
         if list_firecrab_bridges(runner).is_empty() {
             return vec![CheckResult::skip(
-                format!("nft: firecrab tables not present yet ({missing_joined})"),
+                "nft: inet firecrab table not present yet",
                 Some("ok with zero MicroNetworks until ensure_firewall runs"),
                 Some("POST /api/micro-networks or restart firecrab-api"),
             )];
         }
         return vec![CheckResult::fail(
-            format!("nft: missing firecrab tables: {missing_joined}"),
-            Some("net-helper socket is up but tables are absent"),
+            "nft: missing the inet firecrab table",
+            Some("net-helper socket is up but the table is absent"),
             Some("systemctl restart firecrab-net-helper  (or start a VM so rules are applied)"),
         )];
     }
     vec![CheckResult::skip(
-        format!("nft: firecrab tables not present yet ({missing_joined})"),
+        "nft: inet firecrab table not present yet",
         Some("expected after firecrab-net-helper is running"),
         Some("start firecrab-net-helper, then re-run doctor"),
     )]
@@ -1241,17 +1228,32 @@ mod tests {
     }
 
     #[test]
-    fn nft_pass_when_both_tables_present() {
+    fn nft_pass_when_the_inet_table_is_present() {
+        let mut fake = FakeCommandRunner::new();
+        // No bridge table: the L2 rules live in per-VM netdev tables now.
+        fake.set(
+            "nft",
+            &["list", "tables"],
+            0,
+            "table inet firecrab\ntable netdev firecrab_l2_00000000000000000000000000001234\n",
+            "",
+        );
+        let results = check_nft(&DoctorEnv::default(), &fake);
+        assert_eq!(results[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn nft_does_not_mistake_a_similarly_named_table_for_ours() {
         let mut fake = FakeCommandRunner::new();
         fake.set(
             "nft",
             &["list", "tables"],
             0,
-            "table inet firecrab\ntable bridge firecrab_l2\n",
+            "table inet firecrab_old\n",
             "",
         );
         let results = check_nft(&DoctorEnv::default(), &fake);
-        assert_eq!(results[0].status, Status::Pass);
+        assert_ne!(results[0].status, Status::Pass);
     }
 
     #[test]
@@ -1759,7 +1761,7 @@ mod tests {
         };
         let results = check_nft(&env, &fake);
         assert_eq!(results[0].status, Status::Fail);
-        assert!(results[0].title.contains("missing firecrab tables"));
+        assert!(results[0].title.contains("missing the inet firecrab table"));
     }
 
     #[test]
