@@ -105,14 +105,34 @@ jobs:
           test "$rc" -eq 0 -o "$rc" -eq 1
           python3 -m json.tool doctor.json
 
-  qa-windows:
-    name: QA gate (Windows)
-    # G3 only: Windows microManager is not shipped. No API rows.
+  micromanager-windows-build:
+    name: microManager (GitHub-hosted Windows build)
+    # GitHub-hosted Windows runners do not expose nested virtualization to
+    # WSL2. Keep this job to build/unit/diagnostic checks. Runtime E2E remains
+    # a manual Windows-host check, like the native-Mac check for macOS.
     runs-on: windows-latest
     steps:
-      - name: Document G3
+      - uses: actions/checkout@v7
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Windows CLI clippy and tests
         run: |
-          echo "SKIP G3: Windows microManager is not shipped"
+          cargo clippy -p firecrab-cli --all-targets -- -D warnings
+          cargo test -p firecrab-cli --locked
+          cargo build -p firecrab-cli --locked
+
+      - name: Verify hosted-runner diagnostic contract
+        shell: pwsh
+        run: |
+          $json = & target/debug/firecrab.exe service doctor --json
+          $rc = $LASTEXITCODE
+          if ($rc -ne 0 -and $rc -ne 1) { throw "doctor exited with $rc" }
+          $report = $json | Out-String | ConvertFrom-Json
+          if ($report.platform -ne 'Windows') { throw "unexpected platform $($report.platform)" }
+          $report.checks | Format-Table id, status, detail -AutoSize
+          exit 0
 
   docs:
     name: Rust (rustdoc)
