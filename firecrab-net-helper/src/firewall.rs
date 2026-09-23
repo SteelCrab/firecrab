@@ -1,8 +1,11 @@
 //! Per-VM and global nftables rules: NAT/egress dispatch (`inet firecrab`)
-//! and L2 anti-spoofing (`bridge firecrab_l2`), both idempotently rendered
-//! and applied as single atomic `nft -f -` transactions.
+//! and L2 anti-spoofing (one `netdev firecrab_l2_<vm>` table per VM, hooked
+//! on that VM's TAP ingress), idempotently rendered and applied as single
+//! atomic `nft -f -` transactions.
 
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::path::Path;
 use std::process::Stdio;
 
 use firecrab_helper_protocol::network::{MacAddr, MicroNetworkSpec, tap_name};
@@ -17,8 +20,16 @@ use crate::nat;
 
 /// Name of the owned `inet` table (NAT/egress dispatch).
 const TABLE_INET: &str = "firecrab";
-/// Name of the owned `bridge` table (L2 anti-spoofing).
-const TABLE_BRIDGE: &str = "firecrab_l2";
+/// Prefix of each VM's own `netdev` table (L2 anti-spoofing on its TAP).
+/// The `netdev` family filters a TAP's frames before the bridge sees them,
+/// and unlike the `bridge` family it exists on every kernel Firecrab runs
+/// on, including WSL2's.
+const L2_TABLE_PREFIX: &str = "firecrab_l2_";
+/// The shared `bridge` table earlier helpers used for L2 anti-spoofing.
+/// Deleted when found and never created again.
+const LEGACY_BRIDGE_TABLE: &str = "firecrab_l2";
+/// Where the kernel lists network devices; a VM's TAP appears here once created.
+const SYS_CLASS_NET: &str = "/sys/class/net";
 
 /// The egress posture the helper resolves an API-supplied policy ID into.
 /// The API selects the ID; the helper is the trust boundary and owns the
@@ -162,6 +173,7 @@ pub async fn ensure_firewall(
     let mut state = actor.state.lock().await;
     state.networks = micro_networks.to_vec();
     let base_ruleset = render_apply_ruleset(&default_uplink, micro_networks)?;
+    let vm_policies = installable_policies(vm_policies, tap_exists);
     let desired_vms: std::collections::HashMap<Uuid, (String, VmPolicy)> = vm_policies
         .iter()
         .cloned()
@@ -197,12 +209,16 @@ pub async fn ensure_firewall(
         return Ok(());
     }
 
-    let ruleset = render_reconciled_ruleset(
+    let mut ruleset = render_reconciled_ruleset(
         base_ruleset.as_str(),
         &default_uplink,
         micro_networks,
-        vm_policies,
+        &vm_policies,
     );
+    ruleset.push_str(&render_stale_l2_removal(
+        &list_tables().await?,
+        &vm_policies,
+    ));
     run_nft(&ruleset).await?;
     // Best-effort iptables compat: coexist with Docker's FORWARD DROP policy.
     ensure_iptables_compat(
@@ -289,11 +305,66 @@ pub async fn remove_vm_policy(actor: &FirewallActor, vm_id: Uuid) -> Result<(), 
 /// `install.sh --uninstall` removing the binaries.
 pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError> {
     let mut state = actor.state.lock().await;
-    run_nft(&render_remove_ruleset()).await?;
+    run_nft(&render_remove_ruleset(&list_tables().await?)).await?;
     state.applied_vms.clear();
     state.applied_ruleset = None;
     state.networks.clear();
     Ok(())
+}
+
+/// Policies whose TAP exists right now. A VM's L2 chain hooks its TAP's
+/// ingress, and older kernels refuse a hook on a device that does not exist
+/// yet. Leaving a TAP-less VM out is safe: it cannot send a frame, and
+/// `apply_vm_policy` installs its policy right after `create_tap`. Recording
+/// it here instead would turn that apply into a no-op with no L2 table.
+fn installable_policies(policies: &[VmPolicy], tap_exists: impl Fn(&str) -> bool) -> Vec<VmPolicy> {
+    policies
+        .iter()
+        .filter(|policy| tap_exists(&tap_name(policy.vm_id)))
+        .cloned()
+        .collect()
+}
+
+fn tap_exists(tap: &str) -> bool {
+    Path::new(SYS_CLASS_NET).join(tap).exists()
+}
+
+/// The `netdev` table holding one VM's L2 anti-spoofing chain.
+fn l2_table(vm_id: Uuid) -> String {
+    format!("{L2_TABLE_PREFIX}{}", vm_id.simple())
+}
+
+/// Deletes the legacy shared `bridge` table and every per-VM L2 table that
+/// no desired policy owns. `listing` is `nft list tables` output, one
+/// `table <family> <name>` per line; names that do not look like ours are
+/// never touched.
+fn render_stale_l2_removal(listing: &str, desired: &[VmPolicy]) -> String {
+    let keep: HashSet<String> = desired
+        .iter()
+        .map(|policy| l2_table(policy.vm_id))
+        .collect();
+    listing
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            if words.next()? != "table" {
+                return None;
+            }
+            let (family, name) = (words.next()?, words.next()?);
+            if !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            {
+                return None;
+            }
+            let stale = match family {
+                "bridge" => name == LEGACY_BRIDGE_TABLE,
+                "netdev" => name.starts_with(L2_TABLE_PREFIX) && !keep.contains(name),
+                _ => false,
+            };
+            stale.then(|| format!("delete table {family} {name}\n"))
+        })
+        .collect()
 }
 
 /// Every Firecrab-owned bridge: one per MicroNetwork. Names are derived from
@@ -425,8 +496,8 @@ fn offline_subnet_cidrs6(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
         .collect()
 }
 
-/// Renders the whole VM-independent desired state for both owned tables as
-/// one nft(8) script. `add table` + `delete table` before recreating keeps
+/// Renders the whole VM-independent desired state of the owned `inet` table
+/// as one nft(8) script. `add table` + `delete table` before recreating keeps
 /// this idempotent without ever touching a table this helper doesn't own.
 /// Deletion is required: nft's `flush table` removes rules but preserves
 /// named map/set elements, which is exactly where stale VM IPv4 ownership
@@ -507,10 +578,10 @@ fn render_apply_ruleset(
         format!("\t\tip6 saddr {{ {} }} drop\n", offline6.join(", "))
     };
     Ok(format!(
-        // L3: NAT + egress/ingress dispatch keyed by the VM's leased IP. The
-        // L2 table below guarantees the source IP is genuine, so keying L3
-        // policy on `ip saddr` is safe even though the routed packet's
-        // iifname is the bridge, not the individual TAP.
+        // L3: NAT + egress/ingress dispatch keyed by the VM's leased IP. Each
+        // VM's `netdev` L2 table guarantees the source IP is genuine, so
+        // keying L3 policy on `ip saddr` is safe even though the routed
+        // packet's iifname is the bridge, not the individual TAP.
         "add table inet {TABLE_INET}\n\
          delete table inet {TABLE_INET}\n\
          table inet {TABLE_INET} {{\n\
@@ -547,17 +618,6 @@ fn render_apply_ruleset(
          \t\tdrop\n\
          \t}}\n\
          {postrouting}\
-         }}\n\
-         add table bridge {TABLE_BRIDGE}\n\
-         delete table bridge {TABLE_BRIDGE}\n\
-         table bridge {TABLE_BRIDGE} {{\n\
-         \tmap l2_ingress {{\n\
-         \t\ttype ifname : verdict\n\
-         \t}}\n\
-         \tchain prerouting {{\n\
-         \t\ttype filter hook prerouting priority -300; policy accept;\n\
-         \t\tiifname vmap @l2_ingress\n\
-         \t}}\n\
          }}\n"
     ))
 }
@@ -565,9 +625,10 @@ fn render_apply_ruleset(
 fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enabled: bool) -> String {
     let tap = tap_name(policy.vm_id);
     let tag = policy.vm_id.simple();
+    let l2_table = l2_table(policy.vm_id);
     let ip = policy.ipv4;
     let mac = policy.mac;
-    let l2 = format!("add rule bridge {TABLE_BRIDGE} vm_{tag}_l2");
+    let l2 = format!("add rule netdev {l2_table} l2");
     let eg = format!("add rule inet {TABLE_INET} vm_{tag}_eg");
     let in_ = format!("add rule inet {TABLE_INET} vm_{tag}_in");
 
@@ -649,9 +710,13 @@ fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enable
             .push_str(&format!("{in_} {proto} dport {gp} ct status dnat accept\n"));
     }
 
+    // `add` then `delete` makes recreating the table idempotent; its base
+    // chain sees every frame the VM sends, before the bridge switches it.
     format!(
-        "add chain bridge {TABLE_BRIDGE} vm_{tag}_l2\n\
-         flush chain bridge {TABLE_BRIDGE} vm_{tag}_l2\n\
+        "add table netdev {l2_table}\n\
+         delete table netdev {l2_table}\n\
+         add table netdev {l2_table}\n\
+         add chain netdev {l2_table} l2 {{ type filter hook ingress device \"{tap}\" priority -300; policy accept; }}\n\
          {l2} ether saddr {mac} ip saddr 0.0.0.0 udp sport 68 udp dport 67 accept\n\
          {l2} ether type arp arp operation request arp saddr ip 0.0.0.0 arp saddr ether {mac} accept\n\
          {l2_v6_exceptions}\
@@ -662,7 +727,6 @@ fn render_vm_policy_for_network(uplink: &str, policy: &VmPolicy, internet_enable
          {l2} ether type ip ip saddr != {ip} drop\n\
          {l2_v6_pin}\
          {l2} accept\n\
-         add element bridge {TABLE_BRIDGE} l2_ingress {{ \"{tap}\" : jump vm_{tag}_l2 }}\n\
          add chain inet {TABLE_INET} vm_{tag}_eg\n\
          flush chain inet {TABLE_INET} vm_{tag}_eg\n\
          {egress_rule}\
@@ -704,7 +768,7 @@ fn render_vm_policy_replacement(
 /// else. Each map element is deleted before the chain it jumps to, so nft
 /// never rejects a still-referenced chain.
 fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr, ipv6: Option<Ipv6Addr>) -> String {
-    let tap = tap_name(vm_id);
+    let l2_table = l2_table(vm_id);
     let tag = vm_id.simple();
     // Only a policy that installed v6 elements has any to delete; asking nft
     // to remove an element that was never added fails the whole transaction.
@@ -715,9 +779,11 @@ fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr, ipv6: Option<Ipv6Addr>)
         ),
         None => String::new(),
     };
+    // The L2 table goes with `add` + `delete`, so this succeeds even when the
+    // TAP, and with it the kernel's hook, is already gone.
     format!(
-        "delete element bridge {TABLE_BRIDGE} l2_ingress {{ \"{tap}\" }}\n\
-         delete chain bridge {TABLE_BRIDGE} vm_{tag}_l2\n\
+        "add table netdev {l2_table}\n\
+         delete table netdev {l2_table}\n\
          delete element inet {TABLE_INET} vm_egress {{ {ipv4} }}\n\
          {v6_elements}\
          delete chain inet {TABLE_INET} vm_{tag}_eg\n\
@@ -732,14 +798,32 @@ fn render_vm_policy_removal(vm_id: Uuid, ipv4: Ipv4Addr, ipv6: Option<Ipv6Addr>)
 
 /// `add table` before `delete table` makes removal idempotent even if the
 /// table was never installed, without depending on nft's newer `destroy`.
-#[allow(dead_code)]
-fn render_remove_ruleset() -> String {
+/// The L2 tables come from `listing` because each VM has its own, and the
+/// legacy `bridge` table must not be named on a kernel without that family.
+fn render_remove_ruleset(listing: &str) -> String {
     format!(
         "add table inet {TABLE_INET}\n\
          delete table inet {TABLE_INET}\n\
-         add table bridge {TABLE_BRIDGE}\n\
-         delete table bridge {TABLE_BRIDGE}\n"
+         {}",
+        render_stale_l2_removal(listing, &[])
     )
+}
+
+/// The tables the kernel has right now, as `nft list tables` prints them.
+async fn list_tables() -> Result<String, FirewallError> {
+    let output = Command::new("nft")
+        .args(["list", "tables"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(FirewallError::Spawn)?;
+    if !output.status.success() {
+        return Err(FirewallError::NftFailed {
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Best-effort: insert iptables FORWARD ACCEPT rules for every Firecrab bridge
@@ -1122,10 +1206,11 @@ mod tests {
     }
 
     #[test]
-    fn ruleset_only_declares_the_two_owned_tables() {
+    fn ruleset_only_declares_the_owned_inet_table() {
         let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
         assert!(ruleset.contains("table inet firecrab"));
-        assert!(ruleset.contains("table bridge firecrab_l2"));
+        // The bridge family is absent on some kernels (WSL2), so it is never named.
+        assert!(!ruleset.contains("bridge firecrab"));
         // Never a blanket flush of the whole host ruleset.
         assert!(!ruleset.contains("flush ruleset"));
     }
@@ -1168,10 +1253,10 @@ mod tests {
     }
 
     #[test]
-    fn global_ruleset_recreates_only_the_two_owned_tables() {
+    fn global_ruleset_recreates_only_the_owned_inet_table() {
         let ruleset = render_apply_ruleset("eth0", &[]).unwrap();
         assert!(ruleset.contains("add table inet firecrab\ndelete table inet firecrab"));
-        assert!(ruleset.contains("add table bridge firecrab_l2\ndelete table bridge firecrab_l2"));
+        assert_eq!(ruleset.matches("delete table").count(), 1);
         assert!(!ruleset.contains("flush ruleset"));
     }
 
@@ -1199,9 +1284,71 @@ mod tests {
 
     #[test]
     fn remove_ruleset_deletes_only_the_owned_tables_idempotently() {
-        let ruleset = render_remove_ruleset();
+        let listing = "table inet firecrab\n\
+                       table bridge firecrab_l2\n\
+                       table netdev firecrab_l2_00000000000000000000000000001234\n\
+                       table inet filter\n";
+        let ruleset = render_remove_ruleset(listing);
         assert!(ruleset.contains("add table inet firecrab\ndelete table inet firecrab"));
-        assert!(ruleset.contains("add table bridge firecrab_l2\ndelete table bridge firecrab_l2"));
+        assert!(ruleset.contains("delete table bridge firecrab_l2\n"));
+        assert!(
+            ruleset.contains("delete table netdev firecrab_l2_00000000000000000000000000001234\n")
+        );
+        assert!(
+            !ruleset.contains("filter"),
+            "foreign tables are never touched"
+        );
+    }
+
+    #[test]
+    fn a_kernel_without_the_bridge_family_is_never_asked_about_it() {
+        // WSL2's kernel lists no bridge tables, and naming one fails the
+        // whole transaction there.
+        let ruleset = render_remove_ruleset("table inet firecrab\n");
+        assert!(!ruleset.contains("bridge"));
+    }
+
+    #[test]
+    fn stale_l2_removal_keeps_desired_vms_and_drops_the_rest() {
+        let desired = sample_policy(EgressPolicy::Internet, false);
+        let kept = l2_table(desired.vm_id);
+        let orphan = l2_table(Uuid::from_u128(0x9999));
+        let listing = format!(
+            "table inet firecrab\ntable netdev {kept}\ntable netdev {orphan}\ntable bridge firecrab_l2\n"
+        );
+        let removal = render_stale_l2_removal(&listing, std::slice::from_ref(&desired));
+        assert!(removal.contains(&format!("delete table netdev {orphan}\n")));
+        assert!(removal.contains("delete table bridge firecrab_l2\n"));
+        assert!(!removal.contains(&kept));
+        assert!(!removal.contains("inet"));
+    }
+
+    #[test]
+    fn stale_l2_removal_ignores_foreign_and_malformed_names() {
+        let listing = "table netdev other_l2_1\n\
+                       table bridge filter\n\
+                       table netdev firecrab_l2_x;flush\n\
+                       garbage line\n\
+                       table\n";
+        assert_eq!(render_stale_l2_removal(listing, &[]), "");
+    }
+
+    #[test]
+    fn only_vms_whose_tap_exists_are_installed() {
+        let with_tap = sample_policy(EgressPolicy::Internet, false);
+        let without_tap = VmPolicy {
+            vm_id: Uuid::from_u128(0x9999),
+            ..with_tap.clone()
+        };
+        let present = tap_name(with_tap.vm_id);
+        let installable =
+            installable_policies(&[with_tap.clone(), without_tap], |tap| tap == present);
+        assert_eq!(installable, [with_tap]);
+    }
+
+    #[test]
+    fn a_missing_sys_class_net_entry_means_no_tap() {
+        assert!(!tap_exists("fct-does-not-exist"));
     }
 
     fn sample_policy(egress: EgressPolicy, allow_host_ssh: bool) -> VmPolicy {
@@ -1214,6 +1361,19 @@ mod tests {
             allow_host_ssh,
             port_forwards: Vec::new(),
         }
+    }
+
+    #[test]
+    fn l2_rules_hook_the_vms_own_tap_before_the_bridge() {
+        let policy = sample_policy(EgressPolicy::Internet, false);
+        let ruleset = render_vm_policy_for_network("eth0", &policy, true);
+        let table = l2_table(policy.vm_id);
+        let tap = tap_name(policy.vm_id);
+        assert!(ruleset.contains(&format!(
+            "add chain netdev {table} l2 {{ type filter hook ingress device \"{tap}\" priority -300; policy accept; }}"
+        )));
+        assert!(ruleset.contains(&format!("add rule netdev {table} l2 ether saddr != ")));
+        assert!(!ruleset.contains("bridge"), "{ruleset}");
     }
 
     #[test]
@@ -1494,11 +1654,15 @@ mod tests {
         let tag_a = Uuid::from_u128(0x1234).simple();
         let tag_b = Uuid::from_u128(0x9999).simple();
         // A's rendered ruleset only ever names A's objects.
-        assert!(a.contains(&format!("vm_{tag_a}_l2")));
-        assert!(!a.contains(&format!("vm_{tag_b}")));
-        // Per-VM apply uses add+flush on named chains, never a table flush.
+        assert!(a.contains(&format!("firecrab_l2_{tag_a}")));
+        assert!(!a.contains(&format!("{tag_b}")));
+        // Per-VM apply recreates A's own L2 table and flushes only A's
+        // named inet chains, never a shared table.
         assert!(!a.contains("flush table"));
-        assert!(a.contains(&format!("flush chain bridge firecrab_l2 vm_{tag_a}_l2")));
+        assert!(a.contains(&format!(
+            "add table netdev firecrab_l2_{tag_a}\ndelete table netdev firecrab_l2_{tag_a}\n"
+        )));
+        assert!(a.contains(&format!("flush chain inet firecrab vm_{tag_a}_eg")));
     }
 
     #[test]
@@ -1534,7 +1698,7 @@ mod tests {
             .find("delete element inet firecrab vm_egress { 172.30.0.42 }")
             .expect("the old IP map key is removed");
         let new_chain = ruleset
-            .find("add chain bridge firecrab_l2")
+            .find("add chain netdev firecrab_l2_")
             .expect("the replacement starts by adding new chains");
         let new_element = ruleset
             .find("add element inet firecrab vm_egress { 172.30.0.43 : jump")
@@ -1549,16 +1713,10 @@ mod tests {
         let vm = Uuid::from_u128(0x1234);
         let ruleset = render_vm_policy_removal(vm, Ipv4Addr::new(172, 30, 0, 42), None);
         let tag = vm.simple();
-        let l2_elem = ruleset
-            .find("delete element bridge firecrab_l2 l2_ingress")
-            .unwrap();
-        let l2_chain = ruleset
-            .find(&format!("delete chain bridge firecrab_l2 vm_{tag}_l2"))
-            .unwrap();
-        assert!(
-            l2_elem < l2_chain,
-            "map element must be deleted before its chain"
-        );
+        // The TAP may already be gone, so the L2 table is removed idempotently.
+        assert!(ruleset.starts_with(&format!(
+            "add table netdev firecrab_l2_{tag}\ndelete table netdev firecrab_l2_{tag}\n"
+        )));
 
         let eg_elem = ruleset
             .find("delete element inet firecrab vm_egress")
