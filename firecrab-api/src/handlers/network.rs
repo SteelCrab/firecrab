@@ -108,7 +108,9 @@ pub async fn get_host_status(State(state): State<AppState>) -> Json<HostStatusRe
 }
 
 fn read_host_status(vms_dir: &Path) -> HostStatusResponse {
-    let (disk_total_gib, disk_available_gib) = read_disk_usage_gib(vms_dir).unwrap_or((0, 0));
+    // A fresh install has no VM directory yet; size the filesystem it will live on.
+    let (disk_total_gib, disk_available_gib) =
+        read_disk_usage_gib(&crate::storage::nearest_existing(vms_dir)).unwrap_or((0, 0));
     HostStatusResponse {
         load_average_1m: read_load_average().unwrap_or(0.0),
         memory_total_mib: read_meminfo_kib("MemTotal").map(kib_to_mib).unwrap_or(0),
@@ -317,12 +319,19 @@ mod tests {
     }
 
     #[test]
-    fn read_host_status_falls_back_to_zero_disk_usage_for_a_missing_path() {
+    fn a_vm_directory_that_does_not_exist_yet_reports_the_disk_it_will_use() {
+        // A fresh install has created no VM yet; the dashboard used to show 0 / 0 GiB.
         let status = read_host_status(Path::new("/no/such/path/at/all"));
-        assert_eq!(status.disk_total_gib, 0);
-        assert_eq!(status.disk_available_gib, 0);
-        // Unrelated to disk lookup, so still real values.
+        assert_eq!(
+            (status.disk_total_gib, status.disk_available_gib),
+            read_disk_usage_gib(Path::new("/")).expect("df works on /")
+        );
         assert!(status.memory_total_mib > 0);
+    }
+
+    #[test]
+    fn disk_usage_is_absent_when_df_cannot_answer() {
+        assert_eq!(read_disk_usage_gib(Path::new("/no/such/path/at/all")), None);
     }
 
     #[tokio::test]
