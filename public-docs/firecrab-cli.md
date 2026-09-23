@@ -71,7 +71,7 @@ Runs 13 checks in a fixed order and prints one summary line, then a `[FAIL]`/`[S
 | `kvm` | `/dev/kvm` exists and the current user can read and write it |
 | `firecracker` | the `firecracker` binary runs and reports a version |
 | `ip_forward` | `net.ipv4.ip_forward` is `1` |
-| `nft` | the `inet firecrab` and `bridge firecrab_l2` tables exist |
+| `nft` | the `inet firecrab` table exists |
 | `dnsmasq` | a firecrab `dnsmasq` process is alive and serving every bridge |
 | `helper_socket` | the net-helper socket exists and the API account can reach it |
 | `ufw` | UFW, if active, allows DHCP, DNS, and forwarding on every firecrab bridge |
