@@ -395,6 +395,17 @@ pub(crate) fn install_guest_fastfetch(rootfs: &Path, program: &Path) {
 
 /// Rewrites the injected busybox console on an OCI-imported disk.
 fn patch_oci_console(rootfs: &Path) {
+    if guest_path_exists(rootfs, crate::oci::provision::INIT_SYSTEM_PATH) {
+        let Ok(output) = run_debugfs(
+            rootfs,
+            &format!("cat {}", crate::oci::provision::INIT_SYSTEM_PATH),
+        ) else {
+            return;
+        };
+        if output.stdout != b"busybox\n" {
+            return;
+        }
+    }
     if !guest_path_exists(rootfs, "/etc/firecrab") {
         return;
     }
@@ -668,6 +679,10 @@ const NETWORK_READY_OPENRC_RUNLEVEL_PATH: &str = "/etc/runlevels/default/firecra
 /// before marking the VM `error`).
 /// Ubuntu/Rocky: systemd oneshot script. Alpine: OpenRC init script.
 fn patch_network_ready_script(rootfs: &Path) -> Result<(), RootfsError> {
+    // New OCI imports already own DHCP/readiness through their chosen init.
+    if guest_path_exists(rootfs, crate::oci::provision::INIT_SYSTEM_PATH) {
+        return Ok(());
+    }
     let has_systemd_script = guest_path_exists(rootfs, NETWORK_READY_SCRIPT_PATH);
     if has_systemd_script {
         write_into_image(

@@ -1,18 +1,15 @@
-//! Gives a merged container tree the guest runtime a MicroVM needs to boot.
-//!
-//! A container rootfs fails three ways at once: the kernel finds no `/sbin/init`
-//! and panics, nothing asks for a DHCP lease so the guest never gets an address,
-//! and nothing prints the readiness sentinel the host waits 180 seconds for.
-//! Firecrab's existing guest features cannot fill the gap — they install only
-//! when systemd or OpenRC is already present and no-op otherwise, which is
-//! exactly the container case.
-//!
-//! So this stage injects an init, a DHCP client, the readiness sentinel, and the
-//! metrics agent, all from one static program. The image's own userland is left
-//! alone: its entrypoint becomes an ordinary service under the injected init in
-//! a later stage, never PID 1.
+//! Activates an OCI tree using its native init, or a static BusyBox fallback.
+//! Native services own metrics and OCI bootstrap; only the fallback installs
+//! a BusyBox `/sbin/init` and replaces `/etc/inittab`.
 
 use super::*;
+
+#[path = "init_system.rs"]
+mod init_system;
+use init_system::InitSystem;
+
+/// Persists the import decision across VM specialization.
+pub(crate) const INIT_SYSTEM_PATH: &str = "/etc/firecrab/init-system";
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
@@ -39,6 +36,8 @@ const GUEST_INITTAB: &str = "/etc/inittab";
 const GUEST_BOOT_SCRIPT: &str = "/etc/firecrab/rc.boot";
 /// Console wrapper used when the image has no agetty (MOTD + ash).
 const GUEST_CONSOLE_SCRIPT: &str = "/etc/firecrab/rc.console";
+/// Serial console a native init respawns; BusyBox init uses the inittab instead.
+const GUEST_SERIAL_SCRIPT: &str = "/etc/firecrab/rc.serial";
 /// util-linux getty, in the usual usr-merge locations.
 pub(crate) const GUEST_AGETTY_CANDIDATES: &[&str] = &["/sbin/agetty", "/usr/sbin/agetty"];
 /// Login shell for the serial console.
@@ -190,6 +189,7 @@ fn inject_blocking(
     let mut unwind = InjectedPaths::default();
     let result = (|| {
         control.check()?;
+        let init = init_system::detect(tree)?;
         for (mount_point, mode) in GUEST_MOUNT_POINTS {
             ensure_guest_directory(tree, mount_point, *mode, &mut unwind)?;
         }
@@ -198,7 +198,14 @@ fn inject_blocking(
 
         control.check()?;
         install_program(tree, GUEST_TOOLBOX, toolbox.path(), &mut unwind)?;
-        install_symlink(tree, GUEST_INIT, GUEST_TOOLBOX, &mut unwind)?;
+        init_system::install(tree, init, &mut unwind)?;
+        install_file(
+            tree,
+            INIT_SYSTEM_PATH,
+            init.name().as_bytes(),
+            0o644,
+            &mut unwind,
+        )?;
         install_toolbox_commands(tree, &mut unwind)?;
         if let Some(path) = fastfetch
             && first_existing(tree, fastfetch::GLIBC_LOADERS).is_some()
@@ -208,21 +215,23 @@ fn inject_blocking(
 
         control.check()?;
         if let Some(shell) = first_existing(tree, GUEST_BASH_CANDIDATES) {
-            set_root_shell(tree, &shell)?;
+            set_root_shell(tree, &shell, &mut unwind)?;
         }
         ensure_securetty(tree, &mut unwind)?;
         let agetty = first_existing(tree, GUEST_AGETTY_CANDIDATES);
-        install_file(
-            tree,
-            GUEST_INITTAB,
-            inittab(agetty.as_deref()).as_bytes(),
-            0o644,
-            &mut unwind,
-        )?;
+        if init == InitSystem::BusyBox {
+            install_file(
+                tree,
+                GUEST_INITTAB,
+                inittab(agetty.as_deref()).as_bytes(),
+                0o644,
+                &mut unwind,
+            )?;
+        }
         install_file(
             tree,
             GUEST_BOOT_SCRIPT,
-            boot_script().as_bytes(),
+            boot_script_for(init == InitSystem::BusyBox).as_bytes(),
             0o755,
             &mut unwind,
         )?;
@@ -276,9 +285,12 @@ fn inject_blocking(
 
     match result {
         Ok(()) => {
+            // Displaced image entries live beside their replacements until
+            // the injection commits. Remove them while their parent
+            // directories are still writable, then restore the image modes.
+            unwind.keep();
             unwind.restore_modes();
             control.finish();
-            unwind.keep();
             Ok(())
         }
         Err(error) => {
@@ -334,8 +346,24 @@ impl InjectedPaths {
         }
     }
 
-    /// Keeps everything: injection succeeded.
+    /// Keeps the injected paths and removes temporary displaced entries.
+    ///
+    /// `displace_existing` moves an image entry aside so a failed injection
+    /// can put it back. On success those backups must not remain in the guest
+    /// image. This runs before [`Self::restore_modes`] because a parent may
+    /// have been temporarily made writable solely for the replacement.
     fn keep(&mut self) {
+        for (backup, _) in self.displaced.drain(..) {
+            if let Err(error) = fs::remove_file(&backup)
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                tracing::warn!(
+                    error = %error,
+                    path = %backup.display(),
+                    "failed to remove a committed guest backup"
+                );
+            }
+        }
         self.kept = true;
     }
 
@@ -755,7 +783,11 @@ pub(crate) fn first_existing(tree: &Path, candidates: &[&str]) -> Option<String>
 }
 
 /// Points root's login shell at `shell` so agetty/login start bash.
-fn set_root_shell(tree: &Path, shell: &str) -> Result<(), ResolveError> {
+fn set_root_shell(
+    tree: &Path,
+    shell: &str,
+    unwind: &mut InjectedPaths,
+) -> Result<(), ResolveError> {
     let path = tree.join("etc/passwd");
     let current = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -765,11 +797,13 @@ fn set_root_shell(tree: &Path, shell: &str) -> Result<(), ResolveError> {
         Err(source) => return Err(injection_io("read guest passwd", path, source)),
     };
     let rewritten = rewrite_root_shell(&current, shell);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|source| injection_io("create guest etc", parent.to_owned(), source))?;
-    }
-    fs::write(&path, rewritten).map_err(|source| injection_io("write guest passwd", path, source))
+    let mode = fs::symlink_metadata(&path)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_file())
+        .map(|metadata| metadata.permissions().mode() & 0o7777)
+        .filter(|mode| *mode != 0)
+        .unwrap_or(0o644);
+    install_file(tree, "/etc/passwd", rewritten.as_bytes(), mode, unwind)
 }
 
 /// Ensures `/etc/securetty` lists ttyS0 so root may log in on the serial console.
@@ -783,7 +817,13 @@ fn ensure_securetty(tree: &Path, unwind: &mut InjectedPaths) -> Result<(), Resol
                 next.push('\n');
             }
             next.push_str("ttyS0\n");
-            fs::write(&path, next).map_err(|source| injection_io("update securetty", path, source))
+            let mode = fs::symlink_metadata(&path)
+                .ok()
+                .filter(|metadata| metadata.file_type().is_file())
+                .map(|metadata| metadata.permissions().mode() & 0o7777)
+                .filter(|mode| *mode != 0)
+                .unwrap_or(0o644);
+            install_file(tree, "/etc/securetty", next.as_bytes(), mode, unwind)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             install_file(tree, "/etc/securetty", b"ttyS0\n", 0o644, unwind)
@@ -819,6 +859,11 @@ pub(crate) fn rewrite_root_shell(passwd: &str, shell: &str) -> String {
 
 /// Everything between the kernel handing off and the host seeing a sentinel.
 pub(crate) fn boot_script() -> String {
+    boot_script_for(true)
+}
+
+/// Native init has already mounted the virtual filesystems and owns metrics.
+fn boot_script_for(fallback: bool) -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab guest runtime for an imported OCI image (public-docs/oci.md).
@@ -826,12 +871,14 @@ pub(crate) fn boot_script() -> String {
 # readiness timeout for a sentinel that will now never be printed.
 BB={GUEST_TOOLBOX}
 
+if [ "{fallback}" = true ]; then
 $BB mount -t proc -o nosuid,nodev,noexec proc /proc 2>/dev/null
 $BB mount -t sysfs -o nosuid,nodev,noexec sysfs /sys 2>/dev/null
 $BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
 $BB mkdir -p /dev/pts
 $BB mount -t devpts -o nosuid,noexec devpts /dev/pts 2>/dev/null
 $BB mount -t tmpfs -o nosuid,nodev,mode=755 tmpfs /run 2>/dev/null
+fi
 # Official images expect the Linux fd nodes Docker always provides.
 # Bash process substitution (initdb, entrypoints) opens /dev/fd/N.
 [ -e /dev/fd ] || $BB ln -sf /proc/self/fd /dev/fd
@@ -851,7 +898,9 @@ export LC_ALL="$LANG" LC_CTYPE="$LANG"
 $BB stty iutf8 2>/dev/null
 
 # Metrics first, so the dashboard has samples even when the network fails.
-$BB setsid $BB sh {agent} >/dev/null 2>&1 &
+if [ "{fallback}" = true ]; then
+  $BB setsid $BB sh {agent} >/dev/null 2>&1 &
+fi
 
 $BB ip link set lo up 2>/dev/null
 # A bare udhcpc on an administratively down link never sends a single packet and
@@ -861,7 +910,10 @@ if ! $BB ip link set eth0 up 2>/dev/null; then
   exit 0
 fi
 
-$BB udhcpc -i eth0 -n -q -t 8 -T 2 -s {dhcp} >/dev/console 2>&1
+# Reuse a lease already supplied by the native network service.
+if ! $BB ip -4 -o addr show eth0 | $BB grep -q 'inet '; then
+  $BB udhcpc -i eth0 -n -q -t 8 -T 2 -s {dhcp} >/dev/console 2>&1
+fi
 
 ipv4=""
 tries=0
@@ -973,6 +1025,34 @@ exec $BB sh
     )
 }
 
+/// Serial console for a native init (systemd or OpenRC), which has no inittab
+/// entry for it. The same console as the fallback: agetty autologin when the
+/// guest has agetty (looked up at boot, since first-boot packages may add it),
+/// otherwise MOTD and ash. The init service runs it with no terminal, so it
+/// binds `ttyS0` itself. systemd and supervise-daemon start it as a session
+/// leader, so opening `ttyS0` also makes it the controlling terminal. `setsid`
+/// must not be used here: it would fork, the parent would exit, and the init
+/// would respawn another shell on the same terminal every second.
+pub(crate) fn serial_console_script() -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
+# Firecrab serial console under a native init (public-docs/oci.md).
+BB={GUEST_TOOLBOX}
+exec </dev/ttyS0 >/dev/ttyS0 2>&1
+for agetty in {agetty}; do
+  [ -x "$agetty" ] || continue
+{SESSION_BANNER_PRELUDE}  exec "$agetty" {AGETTY_ARGS}
+done
+exec $BB sh {GUEST_CONSOLE_SCRIPT}
+"#,
+        agetty = GUEST_AGETTY_CANDIDATES.join(" "),
+    )
+}
+
+/// agetty's arguments for the root autologin console on `ttyS0`.
+const AGETTY_ARGS: &str =
+    "--autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux";
+
 /// Wraps `agetty --autologin` so `exit` has a visible effect (issue #223).
 /// A bare respawn is invisible — `--autologin` re-enters with no prompt and
 /// no output change. Prints the same session-boundary banner as
@@ -983,7 +1063,7 @@ pub(crate) fn agetty_wrapper_script(agetty: &str) -> String {
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab injected agetty wrapper (public-docs/oci.md).
 BB={GUEST_TOOLBOX}
-{SESSION_BANNER_PRELUDE}exec {agetty} --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux
+{SESSION_BANNER_PRELUDE}exec {agetty} {AGETTY_ARGS}
 "#
     )
 }

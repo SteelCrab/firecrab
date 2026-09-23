@@ -313,6 +313,12 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     );
     // The image's own files are left exactly as they were.
     assert_eq!(read_guest(&tree, "/app/server"), b"binary");
+    assert!(
+        snapshot(&tree)
+            .keys()
+            .all(|path| !path.to_string_lossy().contains(".firecrab-")),
+        "successful provisioning must not leave displaced image backups"
+    );
 }
 
 #[tokio::test]
@@ -682,7 +688,7 @@ async fn usr_merged_images_are_provisioned_through_their_symlinked_sbin() {
 }
 
 #[tokio::test]
-async fn a_read_only_usr_sbin_can_still_have_its_init_replaced() {
+async fn a_read_only_usr_sbin_preserves_native_systemd() {
     let directory = tempdir().expect("create fixture directory");
     let mut builder = Builder::new(Vec::new());
     append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
@@ -731,7 +737,7 @@ async fn a_read_only_usr_sbin_can_still_have_its_init_replaced() {
 
     assert_eq!(
         std::fs::read_link(tree.join("usr/sbin/init")).expect("read init link"),
-        Path::new(provision::GUEST_TOOLBOX)
+        Path::new("../lib/systemd/systemd")
     );
     assert!(
         tree.join("usr/lib/systemd/systemd").is_file(),
@@ -1076,6 +1082,70 @@ async fn a_late_failure_restores_an_image_supplied_init() {
 }
 
 #[tokio::test]
+async fn a_late_failure_restores_passwd_and_securetty_edits() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "bin/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "bin/bash",
+        EntryType::Regular,
+        None,
+        b"bash",
+        0o755,
+    );
+    append_entry(&mut builder, "etc/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "etc/passwd",
+        EntryType::Regular,
+        None,
+        b"root:x:0:0:root:/root:/bin/sh\n",
+        0o640,
+    );
+    append_entry(
+        &mut builder,
+        "etc/securetty",
+        EntryType::Regular,
+        None,
+        b"console\n",
+        0o600,
+    );
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "usr/local",
+        EntryType::Regular,
+        None,
+        b"not a directory",
+        0o644,
+    );
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "late-passwd", &finish(builder)).await;
+    let tree = merged.path().to_owned();
+    let before = snapshot(&tree);
+
+    let error = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect_err("a blocked /usr/local must fail after passwd edits");
+    assert_matches!(
+        error,
+        ResolveError::GuestPathUnusable {
+            reason: GuestPathViolation::NonDirectoryAncestor { .. },
+            ..
+        }
+    );
+    assert_eq!(snapshot(&tree), before);
+    assert_eq!(
+        read_guest(&tree, "/etc/passwd"),
+        b"root:x:0:0:root:/root:/bin/sh\n"
+    );
+    assert_eq!(read_guest(&tree, "/etc/securetty"), b"console\n");
+    assert_eq!(guest_mode(&tree, "/etc/passwd"), 0o640);
+    assert_eq!(guest_mode(&tree, "/etc/securetty"), 0o600);
+}
+
+#[tokio::test]
 async fn a_directory_occupying_a_guest_file_path_is_refused() {
     let directory = tempdir().expect("create fixture directory");
     let mut builder = Builder::new(Vec::new());
@@ -1281,5 +1351,208 @@ fn console_and_agetty_wrapper_gate_the_session_banner_on_a_tmpfs_marker() {
             "marker must be (re)touched after printing, so the very next \
              respawn also sees it: {script}"
         );
+    }
+}
+
+/// Run the whole merge → activation → ext4 → specialization path. A native
+/// inittab must survive VM starts, and metrics/readiness must not be registered
+/// a second time by the catalog specialization helpers.
+#[tokio::test]
+async fn native_init_registration_survives_specialization() {
+    for systemd in [true, false] {
+        let directory = tempdir().unwrap();
+        let mut builder = Builder::new(Vec::new());
+        let binary = if systemd {
+            "usr/lib/systemd/systemd"
+        } else {
+            "bin/busybox"
+        };
+        append_entry(
+            &mut builder,
+            binary,
+            EntryType::Regular,
+            None,
+            b"native-init",
+            0o755,
+        );
+        append_entry(
+            &mut builder,
+            "sbin/init",
+            EntryType::Symlink,
+            Some(if systemd {
+                "/usr/lib/systemd/systemd"
+            } else {
+                "/bin/busybox"
+            }),
+            &[],
+            0o777,
+        );
+        if !systemd {
+            append_entry(
+                &mut builder,
+                "sbin/openrc-run",
+                EntryType::Regular,
+                None,
+                b"runner",
+                0o755,
+            );
+        }
+        if !systemd {
+            append_entry(
+                &mut builder,
+                "sbin/openrc",
+                EntryType::Regular,
+                None,
+                b"openrc",
+                0o755,
+            );
+        }
+        let table = b"::sysinit:/sbin/openrc sysinit\n::wait:/sbin/openrc boot\n::wait:/sbin/openrc default\n";
+        append_entry(
+            &mut builder,
+            "etc/inittab",
+            EntryType::Regular,
+            None,
+            table,
+            0o644,
+        );
+        let merged = merged(&directory, "native", &finish(builder)).await;
+        let tree = merged.path().to_owned();
+        let toolbox = toolbox(&directory, "toolbox", &static_program()).await;
+        let rootfs = provision::inject_with_toolbox(merged, &toolbox)
+            .await
+            .unwrap();
+        let process =
+            service::process_config_from_image_config(br#"{"config":{"Cmd":["/app/server"]}}"#)
+                .unwrap();
+        install_oci_service(&rootfs, &process).unwrap();
+        assert_eq!(read_guest(&tree, "/etc/inittab"), table);
+        assert_eq!(
+            std::fs::read_link(tree.join("sbin/init")).unwrap(),
+            Path::new(if systemd {
+                "/usr/lib/systemd/systemd"
+            } else {
+                "/bin/busybox"
+            })
+        );
+        let (agent, link) = if systemd {
+            (
+                "/etc/systemd/system/firecrab-agent.service",
+                "/etc/systemd/system/multi-user.target.wants/firecrab-agent.service",
+            )
+        } else {
+            (
+                "/etc/init.d/firecrab-agent",
+                "/etc/runlevels/default/firecrab-agent",
+            )
+        };
+        assert_eq!(
+            std::fs::read_link(tree.join(link.trim_start_matches('/'))).unwrap(),
+            Path::new(agent)
+        );
+        let (console, console_link) = if systemd {
+            (
+                "/etc/systemd/system/firecrab-console.service",
+                "/etc/systemd/system/multi-user.target.wants/firecrab-console.service",
+            )
+        } else {
+            (
+                "/etc/init.d/firecrab-console",
+                "/etc/runlevels/default/firecrab-console",
+            )
+        };
+        assert_eq!(
+            std::fs::read_link(tree.join(console_link.trim_start_matches('/'))).unwrap(),
+            Path::new(console)
+        );
+        let boot = read_guest(&tree, "/etc/firecrab/rc.boot");
+        assert!(String::from_utf8_lossy(&boot).contains("if [ \"false\" = true ]; then"));
+        assert!(String::from_utf8_lossy(&boot).contains("FIRECRAB_NETWORK_READY"));
+        assert!(String::from_utf8_lossy(&boot).contains("services.d/*"));
+        let disk = directory.path().join("native.ext4");
+        let output = std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F", "-d"])
+            .arg(&tree)
+            .arg(&disk)
+            .arg("32768")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for _ in 0..2 {
+            crate::rootfs::specialize_guest(&disk, Uuid::nil(), &BTreeMap::new()).unwrap();
+        }
+        for (path, expected) in [
+            ("/etc/inittab", table.to_vec()),
+            ("/etc/firecrab/rc.boot", boot),
+            (agent, read_guest(&tree, agent)),
+            (console, read_guest(&tree, console)),
+            (
+                "/etc/firecrab/rc.serial",
+                read_guest(&tree, "/etc/firecrab/rc.serial"),
+            ),
+        ] {
+            let output = crate::rootfs::run_debugfs(&disk, &format!("cat {path}")).unwrap();
+            assert_eq!(output.stdout, expected, "specialization changed {path}");
+        }
+        assert!(!crate::rootfs::guest_path_exists(
+            &disk,
+            crate::guest_agent::UNIT_PATH
+        ));
+        assert!(!crate::rootfs::guest_path_exists(
+            &disk,
+            crate::guest_agent::OPENRC_PATH
+        ));
+        assert!(!crate::rootfs::guest_path_exists(
+            &disk,
+            "/etc/init.d/firecrab-network-ready"
+        ));
+        assert!(!crate::rootfs::guest_path_exists(
+            &disk,
+            "/etc/systemd/system/firecrab-network-ready.service"
+        ));
+    }
+}
+
+#[tokio::test]
+async fn config_directories_and_broken_init_links_do_not_select_native_init() {
+    for target in ["/missing/systemd", "/usr/lib/systemd/systemd"] {
+        let directory = tempdir().unwrap();
+        let mut builder = Builder::new(Vec::new());
+        for path in ["etc/systemd/system/", "etc/init.d/"] {
+            append_entry(&mut builder, path, EntryType::Directory, None, &[], 0o755);
+        }
+        append_entry(
+            &mut builder,
+            "usr/lib/systemd/systemd",
+            EntryType::Symlink,
+            Some(target),
+            &[],
+            0o777,
+        );
+        append_entry(
+            &mut builder,
+            "sbin/openrc-run",
+            EntryType::Regular,
+            None,
+            b"runner",
+            0o755,
+        );
+        let merged = merged(&directory, "incomplete", &finish(builder)).await;
+        let tree = merged.path().to_owned();
+        let toolbox = toolbox(&directory, "toolbox", &static_program()).await;
+        provision::inject_with_toolbox(merged, &toolbox)
+            .await
+            .unwrap();
+        assert_eq!(read_guest(&tree, provision::INIT_SYSTEM_PATH), b"busybox\n");
+        assert_eq!(
+            std::fs::read_link(tree.join("sbin/init")).unwrap(),
+            Path::new(provision::GUEST_TOOLBOX)
+        );
+        // BusyBox init serves the console from its inittab.
+        assert!(!tree.join("etc/firecrab/rc.serial").exists());
     }
 }
