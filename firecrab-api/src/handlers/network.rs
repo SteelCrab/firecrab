@@ -120,6 +120,7 @@ fn read_host_status(vms_dir: &Path) -> HostStatusResponse {
         disk_total_gib,
         disk_available_gib,
         uptime_seconds: read_uptime().unwrap_or(0),
+        platform: Some(crate::host_platform::read_host_platform()),
     }
 }
 
@@ -347,6 +348,11 @@ mod tests {
 
         assert!(status.memory_total_mib > 0);
         assert!(status.uptime_seconds > 0);
+        assert!(
+            status
+                .platform
+                .is_some_and(|platform| !platform.kernel.is_empty())
+        );
     }
 
     #[test]
