@@ -206,6 +206,8 @@ One logical change per commit is nice; a tidy PR history is more important than 
 | Installer shellcheck + install/uninstall smoke | yes | Guest boot skipped (`install.sh` never installs an image) |
 | Frontend lint + build | yes | Node 22 |
 | Multi-distro installer deps | yes | Debian, Fedora, Arch, openSUSE containers |
+| microManager macOS and Windows builds | yes | Hosted runners: build, unit tests, `doctor --json`; no nested virtualization, so no runtime E2E |
+| microManager PR report | yes | On PRs touching either platform, one comment with each job's steps and log tails, the commands to reproduce it, and the manual E2E commands |
 
 ## Documentation
 
