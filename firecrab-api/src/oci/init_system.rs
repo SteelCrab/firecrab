@@ -122,9 +122,22 @@ pub(super) fn install(
             if guest_file(tree, GUEST_INIT)? != guest_file(tree, binary)? {
                 install_symlink(tree, GUEST_INIT, binary, unwind)?;
             }
+            install_serial_console(tree, unwind)?;
+            // Firecrab owns ttyS0 on every path. An image getty there would
+            // ask for a root password a container image never set, and two
+            // programs reading one terminal split its input between them.
+            for getty in ["serial-getty@ttyS0.service", "console-getty.service"] {
+                install_symlink(
+                    tree,
+                    &format!("/etc/systemd/system/{getty}"),
+                    "/dev/null",
+                    unwind,
+                )?;
+            }
             for (name, body) in [
                 ("firecrab-agent", SYSTEMD_AGENT),
                 ("firecrab-oci", SYSTEMD_BOOT),
+                ("firecrab-console", SYSTEMD_CONSOLE),
             ] {
                 let unit = format!("/etc/systemd/system/{name}.service");
                 install_file(tree, &unit, body.as_bytes(), 0o644, unwind)?;
@@ -148,10 +161,18 @@ pub(super) fn install(
                     break;
                 }
             }
-            for (name, body) in [
+            let mut services = vec![
                 ("firecrab-agent", OPENRC_AGENT),
                 ("firecrab-oci", OPENRC_BOOT),
-            ] {
+            ];
+            // An inittab line cannot be masked without rewriting the native
+            // inittab, so an image that already runs something on ttyS0
+            // keeps it.
+            if !openrc_serves_serial(tree)? {
+                install_serial_console(tree, unwind)?;
+                services.push(("firecrab-console", OPENRC_CONSOLE));
+            }
+            for (name, body) in services {
                 let script = format!("#!{runner}\n{body}");
                 let path = format!("/etc/init.d/{name}");
                 install_file(tree, &path, script.as_bytes(), 0o755, unwind)?;
@@ -165,6 +186,32 @@ pub(super) fn install(
             Ok(())
         }
     }
+}
+
+fn install_serial_console(tree: &Path, unwind: &mut InjectedPaths) -> Result<(), ResolveError> {
+    install_file(
+        tree,
+        GUEST_SERIAL_SCRIPT,
+        serial_console_script().as_bytes(),
+        0o755,
+        unwind,
+    )
+}
+
+/// True when the image's inittab or default runlevel already runs something
+/// on the serial console.
+fn openrc_serves_serial(tree: &Path) -> Result<bool, ResolveError> {
+    if let Some(path) = guest_file(tree, GUEST_INITTAB)? {
+        let table = fs::read_to_string(&path)
+            .map_err(|error| injection_io("read OpenRC inittab", path, error))?;
+        if table
+            .lines()
+            .any(|line| !line.trim_start().starts_with('#') && line.contains("ttyS0"))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(guest_file(tree, "/etc/runlevels/default/agetty.ttyS0")?.is_some())
 }
 
 const SYSTEMD_AGENT: &str = r#"[Unit]
@@ -198,6 +245,20 @@ StandardError=journal+console
 WantedBy=multi-user.target
 "#;
 
+// Restart=always brings the console back after `exit`, like BusyBox respawn.
+const SYSTEMD_CONSOLE: &str = r#"[Unit]
+Description=Firecrab serial console
+After=systemd-user-sessions.service
+
+[Service]
+ExecStart=/etc/firecrab/busybox sh /etc/firecrab/rc.serial
+Restart=always
+RestartSec=0
+
+[Install]
+WantedBy=multi-user.target
+"#;
+
 const OPENRC_AGENT: &str = r#"description="Firecrab Metrics Agent"
 command="/etc/firecrab/busybox"
 command_args="sh /usr/local/sbin/firecrab-guest-agent"
@@ -216,6 +277,18 @@ depend() {
 }
 start() {
     /etc/firecrab/busybox sh /etc/firecrab/rc.boot
+}
+"#;
+
+// supervise-daemon respawns it after `exit`; 0 lifts its restart limit.
+const OPENRC_CONSOLE: &str = r#"description="Firecrab serial console"
+supervisor=supervise-daemon
+command="/etc/firecrab/busybox"
+command_args="sh /etc/firecrab/rc.serial"
+respawn_delay=1
+respawn_max=0
+depend() {
+    need localmount
 }
 "#;
 
@@ -288,6 +361,73 @@ mod tests {
     }
 
     #[test]
+    fn systemd_serves_the_serial_console_through_firecrab() {
+        let tree = tempfile::tempdir().unwrap();
+        program(tree.path(), "/usr/lib/systemd/systemd");
+        let init = detect(tree.path()).unwrap();
+        let mut unwind = InjectedPaths::default();
+        install(tree.path(), init, &mut unwind).unwrap();
+        unwind.keep();
+        let units = tree.path().join("etc/systemd/system");
+        assert_eq!(
+            fs::read_link(units.join("multi-user.target.wants/firecrab-console.service")).unwrap(),
+            Path::new("/etc/systemd/system/firecrab-console.service")
+        );
+        for getty in ["serial-getty@ttyS0.service", "console-getty.service"] {
+            assert_eq!(
+                fs::read_link(units.join(getty)).unwrap(),
+                Path::new("/dev/null")
+            );
+        }
+        let script = fs::read_to_string(tree.path().join("etc/firecrab/rc.serial")).unwrap();
+        assert!(script.contains("exec </dev/ttyS0 >/dev/ttyS0 2>&1"));
+        assert!(script.contains("--autologin root"));
+    }
+
+    #[test]
+    fn openrc_gets_a_serial_console_unless_the_image_runs_one() {
+        let commented =
+            "::wait:/sbin/openrc default\n#ttyS0::respawn:/sbin/getty -L 115200 ttyS0\n";
+        let active = "::wait:/sbin/openrc default\nttyS0::respawn:/sbin/getty -L 115200 ttyS0\n";
+        let plain = "::wait:/sbin/openrc default\n";
+        for (inittab, runlevel_getty, console) in [
+            (commented, false, true),
+            (active, false, false),
+            (plain, true, false),
+        ] {
+            let tree = tempfile::tempdir().unwrap();
+            for path in ["/sbin/openrc-run", "/sbin/openrc", "/bin/busybox"] {
+                program(tree.path(), path);
+            }
+            std::os::unix::fs::symlink("/bin/busybox", tree.path().join("sbin/init")).unwrap();
+            fs::create_dir_all(tree.path().join("etc")).unwrap();
+            fs::write(tree.path().join("etc/inittab"), inittab).unwrap();
+            if runlevel_getty {
+                program(tree.path(), "/etc/init.d/agetty.ttyS0");
+                fs::create_dir_all(tree.path().join("etc/runlevels/default")).unwrap();
+                std::os::unix::fs::symlink(
+                    "/etc/init.d/agetty.ttyS0",
+                    tree.path().join("etc/runlevels/default/agetty.ttyS0"),
+                )
+                .unwrap();
+            }
+            let init = detect(tree.path()).unwrap();
+            assert_eq!(init, InitSystem::OpenRc("/sbin/openrc-run"));
+            let mut unwind = InjectedPaths::default();
+            install(tree.path(), init, &mut unwind).unwrap();
+            unwind.keep();
+            let link = tree.path().join("etc/runlevels/default/firecrab-console");
+            assert_eq!(link.is_symlink(), console, "{inittab:?}");
+            assert_eq!(tree.path().join("etc/firecrab/rc.serial").exists(), console);
+            assert_eq!(
+                fs::read_to_string(tree.path().join("etc/inittab")).unwrap(),
+                inittab,
+                "the native inittab is never rewritten"
+            );
+        }
+    }
+
+    #[test]
     fn non_executable_systemd_is_not_an_init() {
         let tree = tempfile::tempdir().unwrap();
         program(tree.path(), "/usr/lib/systemd/systemd");
@@ -305,8 +445,10 @@ mod tests {
         for script in [
             boot_script_for(true),
             boot_script_for(false),
+            serial_console_script(),
             OPENRC_AGENT.into(),
             OPENRC_BOOT.into(),
+            OPENRC_CONSOLE.into(),
         ] {
             let mut child = std::process::Command::new("sh")
                 .arg("-n")

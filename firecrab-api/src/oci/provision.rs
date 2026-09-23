@@ -36,6 +36,8 @@ const GUEST_INITTAB: &str = "/etc/inittab";
 const GUEST_BOOT_SCRIPT: &str = "/etc/firecrab/rc.boot";
 /// Console wrapper used when the image has no agetty (MOTD + ash).
 const GUEST_CONSOLE_SCRIPT: &str = "/etc/firecrab/rc.console";
+/// Serial console a native init respawns; BusyBox init uses the inittab instead.
+const GUEST_SERIAL_SCRIPT: &str = "/etc/firecrab/rc.serial";
 /// util-linux getty, in the usual usr-merge locations.
 pub(crate) const GUEST_AGETTY_CANDIDATES: &[&str] = &["/sbin/agetty", "/usr/sbin/agetty"];
 /// Login shell for the serial console.
@@ -1023,6 +1025,34 @@ exec $BB sh
     )
 }
 
+/// Serial console for a native init (systemd or OpenRC), which has no inittab
+/// entry for it. The same console as the fallback: agetty autologin when the
+/// guest has agetty (looked up at boot, since first-boot packages may add it),
+/// otherwise MOTD and ash. The init service runs it with no terminal, so it
+/// binds `ttyS0` itself. systemd and supervise-daemon start it as a session
+/// leader, so opening `ttyS0` also makes it the controlling terminal. `setsid`
+/// must not be used here: it would fork, the parent would exit, and the init
+/// would respawn another shell on the same terminal every second.
+pub(crate) fn serial_console_script() -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
+# Firecrab serial console under a native init (public-docs/oci.md).
+BB={GUEST_TOOLBOX}
+exec </dev/ttyS0 >/dev/ttyS0 2>&1
+for agetty in {agetty}; do
+  [ -x "$agetty" ] || continue
+{SESSION_BANNER_PRELUDE}  exec "$agetty" {AGETTY_ARGS}
+done
+exec $BB sh {GUEST_CONSOLE_SCRIPT}
+"#,
+        agetty = GUEST_AGETTY_CANDIDATES.join(" "),
+    )
+}
+
+/// agetty's arguments for the root autologin console on `ttyS0`.
+const AGETTY_ARGS: &str =
+    "--autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux";
+
 /// Wraps `agetty --autologin` so `exit` has a visible effect (issue #223).
 /// A bare respawn is invisible — `--autologin` re-enters with no prompt and
 /// no output change. Prints the same session-boundary banner as
@@ -1033,7 +1063,7 @@ pub(crate) fn agetty_wrapper_script(agetty: &str) -> String {
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab injected agetty wrapper (public-docs/oci.md).
 BB={GUEST_TOOLBOX}
-{SESSION_BANNER_PRELUDE}exec {agetty} --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux
+{SESSION_BANNER_PRELUDE}exec {agetty} {AGETTY_ARGS}
 "#
     )
 }

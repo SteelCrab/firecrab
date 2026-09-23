@@ -1450,6 +1450,21 @@ async fn native_init_registration_survives_specialization() {
             std::fs::read_link(tree.join(link.trim_start_matches('/'))).unwrap(),
             Path::new(agent)
         );
+        let (console, console_link) = if systemd {
+            (
+                "/etc/systemd/system/firecrab-console.service",
+                "/etc/systemd/system/multi-user.target.wants/firecrab-console.service",
+            )
+        } else {
+            (
+                "/etc/init.d/firecrab-console",
+                "/etc/runlevels/default/firecrab-console",
+            )
+        };
+        assert_eq!(
+            std::fs::read_link(tree.join(console_link.trim_start_matches('/'))).unwrap(),
+            Path::new(console)
+        );
         let boot = read_guest(&tree, "/etc/firecrab/rc.boot");
         assert!(String::from_utf8_lossy(&boot).contains("if [ \"false\" = true ]; then"));
         assert!(String::from_utf8_lossy(&boot).contains("FIRECRAB_NETWORK_READY"));
@@ -1474,6 +1489,11 @@ async fn native_init_registration_survives_specialization() {
             ("/etc/inittab", table.to_vec()),
             ("/etc/firecrab/rc.boot", boot),
             (agent, read_guest(&tree, agent)),
+            (console, read_guest(&tree, console)),
+            (
+                "/etc/firecrab/rc.serial",
+                read_guest(&tree, "/etc/firecrab/rc.serial"),
+            ),
         ] {
             let output = crate::rootfs::run_debugfs(&disk, &format!("cat {path}")).unwrap();
             assert_eq!(output.stdout, expected, "specialization changed {path}");
@@ -1532,5 +1552,7 @@ async fn config_directories_and_broken_init_links_do_not_select_native_init() {
             std::fs::read_link(tree.join("sbin/init")).unwrap(),
             Path::new(provision::GUEST_TOOLBOX)
         );
+        // BusyBox init serves the console from its inittab.
+        assert!(!tree.join("etc/firecrab/rc.serial").exists());
     }
 }

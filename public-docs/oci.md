@@ -186,6 +186,7 @@ within the image; configuration directories alone do not identify an init system
 - Missing PATH tools (`ping`, `wget`, `vi`, `nc`) become busybox symlinks.
 - After DHCP, the first boot installs a small set through apt/dnf/apk/zypper/pacman and stamps `/etc/firecrab/base-packages.ok`.
 - In the BusyBox fallback, with util-linux `agetty` and bash, the serial console is `ttyS0 → agetty → login → bash`; otherwise the wrapper prints MOTD and drops into ash.
+- Native init runs the same console from `firecrab-console` (systemd unit or OpenRC service), respawned after `exit`. systemd's `serial-getty@ttyS0` and `console-getty` are masked; an OpenRC image that already runs something on `ttyS0` keeps it.
 - With a glibc loader, a digest-pinned official fastfetch (polyfilled, GLIBC_2.17) is copied to `/usr/bin/fastfetch`, cached at `<FIRECRAB_IMAGE_ROOT>/.oci/fastfetch/`.
 - `FIRECRAB_OCI_FASTFETCH_PATH` names a host binary; a missing program is not an import failure.
 - `/etc/firecrab/services.d` is created empty for the image entrypoint, which a later stage runs as a service rather than PID 1.
