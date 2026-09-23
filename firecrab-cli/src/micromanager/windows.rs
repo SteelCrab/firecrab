@@ -1,458 +1,381 @@
-use std::collections::BTreeMap;
-use std::process::Command as ProcessCommand;
+//! microManager on Windows: a managed WSL2 Debian distribution that runs Firecrab.
+//!
+//! Commands and their output follow the macOS backend line for line, so the
+//! same `[PASS]`/`[FAILED]` reading works on both hosts.
 
-use clap::Subcommand;
-use serde::Serialize;
+mod daemon;
+mod doctor;
+mod lifecycle;
+mod provision;
+mod wsl;
 
-const VALIDATION_GATES: [&str; 4] = [
-    "architecture-matched Debian with systemd boots",
-    "the management guest exposes usable /dev/kvm",
-    "an actual Firecracker workload microVM boots",
-    "guest networking, console, shutdown, and recovery pass",
-];
-
-/// Reports `key=value` lines so the parser never depends on guest locale.
-const DISTRO_PROBE: &str = "printf 'kernel=%s\\n' \"$(uname -r)\"; \
-printf 'uptime=%s\\n' \"$(cut -d. -f1 /proc/uptime)\"; \
-[ -e /dev/kvm ] && printf 'kvm=present\\n'; \
-(exec 3<>/dev/kvm) 2>/dev/null && printf 'kvm_open=ok\\n'; \
-grep -Eqw 'vmx|svm' /proc/cpuinfo && printf 'nested=yes\\n'; \
-exit 0";
-
-/// `kvm_intel` loads about 25 seconds into the WSL2 utility VM's boot, so a probe
-/// run right after a cold start sees no `/dev/kvm` on a host that supports it.
-const KVM_SETTLE_SECONDS: u64 = 60;
-
-mod install;
-
-#[derive(Subcommand)]
-pub enum Command {
-    /// Detect WSL2 and the nested virtualization the managed Debian guest needs.
-    Doctor {
-        /// Emit a machine-readable capability report.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Import the managed Debian distribution and place the guest binaries.
-    Install,
-}
+use super::Command;
+use doctor::Status;
+use wsl::DISTRO_NAME;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("the host is not ready; run `firecrab service doctor` and fix the FAILED checks")]
+    NotReady,
     #[error("could not render the capability report: {0}")]
     Render(#[from] serde_json::Error),
     #[error(transparent)]
-    Install(#[from] install::Error),
+    Lifecycle(#[from] lifecycle::Error),
+    #[error(transparent)]
+    Provision(#[from] provision::Error),
+    #[error(transparent)]
+    Daemon(#[from] daemon::Error),
+    #[error(transparent)]
+    Wsl(#[from] wsl::Error),
+    #[error("the management VM did not become healthy: {0}")]
+    Unhealthy(String),
+    #[error("{DISTRO_NAME} is not imported; run `firecrab service install`")]
+    NotInstalled,
+    #[error("could not run wsl.exe: {0}")]
+    Console(#[source] std::io::Error),
 }
 
 pub fn run(command: Command) -> Result<i32, Error> {
     match command {
-        Command::Doctor { json } => {
-            let report = report(Inputs::live());
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!("{}", render_human(&report));
-            }
-            Ok(i32::from(!report.ready))
+        Command::Install => run_install(false),
+        Command::Reinstall => run_install(true),
+        Command::Uninstall { purge } => {
+            run_uninstall(&lifecycle::Layout::from_process_env()?, purge)
         }
-        Command::Install => Ok(install::run()?),
-    }
-}
-
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "lowercase")]
-enum Status {
-    Pass,
-    Warning,
-    Fail,
-}
-
-#[derive(Serialize, PartialEq, Eq, Debug)]
-struct Diagnostic {
-    id: &'static str,
-    status: Status,
-    detail: String,
-    fix: Option<String>,
-}
-
-#[derive(Serialize, PartialEq, Eq, Debug)]
-#[serde(rename_all = "camelCase")]
-struct CapabilityReport {
-    product: &'static str,
-    platform: &'static str,
-    os_version: String,
-    architecture: &'static str,
-    ready: bool,
-    checks: Vec<Diagnostic>,
-    validation_gates: [&'static str; 4],
-}
-
-struct Inputs {
-    windows_version: String,
-    architecture: &'static str,
-    wsl_version: Option<String>,
-    wsl_kernel: Option<String>,
-    default_distro: Option<String>,
-    distro: BTreeMap<String, String>,
-}
-
-impl Inputs {
-    fn live() -> Self {
-        let wsl = console_output("wsl.exe", &["--version"]).unwrap_or_default();
-        let default_distro = console_output("wsl.exe", &["--list", "--quiet"])
-            .as_deref()
-            .and_then(first_distro);
-        let distro = console_output("wsl.exe", &["-e", "sh", "-c", DISTRO_PROBE])
-            .as_deref()
-            .map(parse_probe)
-            .unwrap_or_default();
-        Self {
-            windows_version: console_output("cmd.exe", &["/c", "ver"])
-                .as_deref()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .unwrap_or("unknown")
-                .to_string(),
-            architecture: std::env::consts::ARCH,
-            wsl_version: field(&wsl, "WSL version"),
-            wsl_kernel: field(&wsl, "Kernel version"),
-            default_distro,
-            distro,
+        Command::Start => run_start(),
+        Command::Stop => run_stop(),
+        Command::Status => run_status(),
+        Command::Doctor { json } => run_doctor(json),
+        Command::Validate => {
+            run_validate(provision::host()?, &lifecycle::Layout::from_process_env()?)
         }
+        Command::Run => run_foreground(),
     }
 }
 
-fn console_output(program: &str, args: &[&str]) -> Option<String> {
-    let output = ProcessCommand::new(program).args(args).output().ok()?;
-    output
-        .status
-        .success()
-        .then(|| decode_console(&output.stdout))
-}
-
-/// `wsl.exe` writes UTF-16LE, while `cmd.exe` writes the OEM code page.
-fn decode_console(bytes: &[u8]) -> String {
-    let body = bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes);
-    let utf16le = body.len() >= 2 && body.len().is_multiple_of(2) && body[1] == 0;
-    if !utf16le {
-        return String::from_utf8_lossy(body).into_owned();
+fn run_doctor(json: bool) -> Result<i32, Error> {
+    let report = doctor::report(doctor::Inputs::live());
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("{}", doctor::render_human(&report));
     }
-    let units: Vec<u16> = body
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-        .collect();
-    String::from_utf16_lossy(&units)
+    Ok(i32::from(!report.ready))
 }
 
-fn field(text: &str, label: &str) -> Option<String> {
-    text.lines()
-        .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.trim() == label)
-        .map(|(_, value)| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+fn run_install(reinstall: bool) -> Result<i32, Error> {
+    let report = doctor::report(doctor::Inputs::live());
+    if !report.ready {
+        println!("{}", doctor::render_human(&report));
+        return Err(Error::NotReady);
+    }
+    let host = provision::host()?;
+    let layout = lifecycle::Layout::from_process_env()?;
+    lifecycle::prepare(&layout)?;
+    daemon::stop()?;
+
+    let artifacts = provision::download_all(host, &layout.downloads())?;
+    let imported = provision::ensure_distro(&layout, &artifacts.debian_rootfs)?;
+    let guest = provision::ensure_provisioned(&layout, host, reinstall || imported)?;
+    let task = daemon::install(&layout)?;
+    let status = daemon::start()?;
+    if !status.success() {
+        print_daemon_status(&status);
+        return Err(Error::Unhealthy(format!(
+            "task={:?}, ready={}, API reachable={}",
+            status.task, status.ready, status.api_reachable
+        )));
+    }
+    println!(
+        "microManager {}\n  managed data: {}\n  distribution: {DISTRO_NAME} (WSL 2, {})\n  Debian WSL rootfs {}: {}\n  Firecracker {}: {}\n  Firecrab {} host: {}\n  guest installer: {}\n  provision marker: {}\n  scheduled task: \\{} ({})\n  API: http://127.0.0.1:5523/\n  guest: {}",
+        if reinstall {
+            "reinstalled"
+        } else {
+            "installed"
+        },
+        layout.managed_home.display(),
+        host.architecture,
+        provision::DEBIAN_ROOTFS_VERSION,
+        artifacts.debian_rootfs.display(),
+        provision::FIRECRACKER_VERSION,
+        artifacts.firecracker.display(),
+        provision::FIRECRAB_VERSION,
+        artifacts.firecrab_host.display(),
+        artifacts.installer.display(),
+        layout.provision_marker().display(),
+        daemon::TASK_NAME,
+        task.display(),
+        guest.lines().collect::<Vec<_>>().join(", ")
+    );
+    Ok(0)
 }
 
-fn first_distro(text: &str) -> Option<String> {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(str::to_string)
+fn run_start() -> Result<i32, Error> {
+    let status = daemon::start()?;
+    print_daemon_status(&status);
+    Ok(i32::from(!status.success()))
 }
 
-fn parse_probe(text: &str) -> BTreeMap<String, String> {
-    text.lines()
-        .filter_map(|line| line.trim().split_once('='))
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect()
+fn run_stop() -> Result<i32, Error> {
+    daemon::stop()?;
+    println!("[PASS] task_scheduler: stopped");
+    Ok(0)
 }
 
-fn major_version(version: &str) -> Option<u32> {
-    version.split('.').next()?.parse().ok()
+fn run_status() -> Result<i32, Error> {
+    let status = daemon::status();
+    print_daemon_status(&status);
+    Ok(i32::from(!status.success()))
 }
 
-fn wsl_version_check(version: Option<&str>) -> Diagnostic {
-    let Some(version) = version else {
-        return Diagnostic {
-            id: "wsl_version",
-            status: Status::Fail,
-            detail: "`wsl --version` did not report an installed WSL.".to_string(),
-            fix: Some("Install WSL with `wsl --install`.".to_string()),
-        };
+fn print_daemon_status(status: &daemon::Status) {
+    let task = match status.task {
+        daemon::TaskState::Enabled => "enabled",
+        daemon::TaskState::Disabled => "disabled",
+        daemon::TaskState::Missing => "not registered",
     };
-    if major_version(version) < Some(2) {
-        return Diagnostic {
-            id: "wsl_version",
-            status: Status::Fail,
-            detail: format!("WSL {version} is older than the required WSL 2."),
-            fix: Some("Update WSL with `wsl --update`.".to_string()),
-        };
-    }
-    Diagnostic {
-        id: "wsl_version",
-        status: Status::Pass,
-        detail: format!("WSL {version} is installed."),
-        fix: None,
-    }
-}
-
-fn distribution_check(distribution: Option<&str>) -> Diagnostic {
-    let Some(distribution) = distribution else {
-        return Diagnostic {
-            id: "wsl_distribution",
-            status: Status::Fail,
-            detail: "WSL has no installed distribution.".to_string(),
-            fix: Some("Install one with `wsl --install -d Debian`.".to_string()),
-        };
-    };
-    Diagnostic {
-        id: "wsl_distribution",
-        status: Status::Pass,
-        detail: format!("The default distribution is {distribution}."),
-        fix: None,
-    }
-}
-
-fn kvm_check(probe: &BTreeMap<String, String>, kernel: &str) -> Diagnostic {
-    if !probe.contains_key("kvm") {
-        let uptime = probe.get("uptime").and_then(|value| value.parse().ok());
-        if uptime.is_some_and(|seconds: u64| seconds < KVM_SETTLE_SECONDS) {
-            return Diagnostic {
-                id: "kvm_device",
-                status: Status::Warning,
-                detail: "/dev/kvm has not appeared yet; the distribution is still starting."
-                    .to_string(),
-                fix: Some("Wait for the distribution to settle, then check again.".to_string()),
-            };
+    println!(
+        "[{}] task_scheduler: {task}",
+        Status::from_pass(status.task == daemon::TaskState::Enabled).label()
+    );
+    println!(
+        "[{}] management_vm: {}",
+        Status::from_pass(status.ready).label(),
+        status
+            .detail
+            .as_deref()
+            .filter(|detail| !detail.is_empty())
+            .unwrap_or("not ready")
+    );
+    println!(
+        "[{}] api: {}",
+        Status::from_pass(status.api_reachable).label(),
+        if status.api_reachable {
+            "http://127.0.0.1:5523/"
+        } else {
+            "unreachable"
         }
-        return Diagnostic {
-            id: "kvm_device",
-            status: Status::Fail,
-            detail: format!("/dev/kvm is missing from WSL2 kernel {kernel}."),
-            fix: Some(
-                "Enable nested virtualization for WSL2 and update to a kernel that builds KVM."
-                    .to_string(),
-            ),
-        };
-    }
-    if !probe.contains_key("kvm_open") {
-        return Diagnostic {
-            id: "kvm_device",
-            status: Status::Warning,
-            detail: "/dev/kvm exists but this user cannot open it.".to_string(),
-            fix: Some(
-                "Join the kvm group inside the distribution: `sudo usermod -aG kvm $USER`."
-                    .to_string(),
-            ),
-        };
-    }
-    Diagnostic {
-        id: "kvm_device",
-        status: Status::Pass,
-        detail: format!("/dev/kvm opens inside WSL2 on kernel {kernel}."),
-        fix: None,
-    }
+    );
 }
 
-fn nested_virtualization_check(probe: &BTreeMap<String, String>) -> Diagnostic {
-    if !probe.contains_key("nested") {
-        return Diagnostic {
-            id: "nested_virtualization",
-            status: Status::Fail,
-            detail: "The WSL2 guest reports no hardware virtualization extensions.".to_string(),
-            fix: Some(
-                "Enable virtualization in firmware, and nested virtualization if this host is itself a VM."
-                    .to_string(),
-            ),
-        };
+/// Every managed setting with its own status line, all reported in one run.
+fn run_validate(host: &provision::Host, layout: &lifecycle::Layout) -> Result<i32, Error> {
+    let mut lines = vec![(
+        if layout.managed_home.is_dir() {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+        "managed_home",
+        layout.managed_home.display().to_string(),
+    )];
+    lines.extend(
+        provision::validate_downloads(host, &layout.downloads())
+            .into_iter()
+            .map(|(label, result)| match result {
+                Ok(()) => (Status::Pass, "download", format!("{label}: verified")),
+                Err(error) => (Status::Fail, "download", format!("{label}: {error}")),
+            }),
+    );
+    lines.push(if wsl::contains(&wsl::distributions(), DISTRO_NAME) {
+        (
+            Status::Pass,
+            "distribution",
+            format!("{DISTRO_NAME} is registered"),
+        )
+    } else {
+        (
+            Status::Fail,
+            "distribution",
+            format!("{DISTRO_NAME} is not registered"),
+        )
+    });
+    lines.push(match provision::guest_result(layout) {
+        Ok(Some(result)) => (
+            Status::Pass,
+            "provision",
+            result.lines().collect::<Vec<_>>().join(", "),
+        ),
+        Ok(None) => (Status::Fail, "provision", "not provisioned".to_string()),
+        Err(error) => (Status::Fail, "provision", error.to_string()),
+    });
+    lines.push(match daemon::task_state() {
+        daemon::TaskState::Enabled => (Status::Pass, "task_scheduler", "enabled".to_string()),
+        daemon::TaskState::Disabled => (
+            Status::Warning,
+            "task_scheduler",
+            "disabled; `firecrab service start` enables it".to_string(),
+        ),
+        daemon::TaskState::Missing => {
+            (Status::Fail, "task_scheduler", "not registered".to_string())
+        }
+    });
+    for (status, id, detail) in &lines {
+        println!("[{}] {id}: {detail}", status.label());
     }
-    Diagnostic {
-        id: "nested_virtualization",
-        status: Status::Pass,
-        detail: "The WSL2 guest sees hardware virtualization extensions.".to_string(),
-        fix: None,
-    }
+    Ok(i32::from(
+        lines.iter().any(|(status, ..)| *status == Status::Fail),
+    ))
 }
 
-fn report(inputs: Inputs) -> CapabilityReport {
-    let kernel = inputs
-        .distro
-        .get("kernel")
-        .or(inputs.wsl_kernel.as_ref())
-        .map(String::as_str)
-        .unwrap_or("unknown");
-    let checks = vec![
-        wsl_version_check(inputs.wsl_version.as_deref()),
-        distribution_check(inputs.default_distro.as_deref()),
-        kvm_check(&inputs.distro, kernel),
-        nested_virtualization_check(&inputs.distro),
-    ];
-    CapabilityReport {
-        product: "microManager",
-        platform: "Windows",
-        ready: !checks.iter().any(|check| check.status == Status::Fail),
-        checks,
-        os_version: inputs.windows_version,
-        architecture: inputs.architecture,
-        validation_gates: VALIDATION_GATES,
+/// A root console in the managed distribution. It keeps the distribution
+/// running while it is open, like `run` on macOS keeps its VM in the foreground.
+fn run_foreground() -> Result<i32, Error> {
+    if !wsl::contains(&wsl::distributions(), DISTRO_NAME) {
+        return Err(Error::NotInstalled);
     }
+    let status = std::process::Command::new("wsl.exe")
+        .args(["-d", DISTRO_NAME, "-u", "root", "--cd", "~"])
+        .status()
+        .map_err(Error::Console)?;
+    Ok(status.code().unwrap_or(1))
 }
 
-fn render_human(report: &CapabilityReport) -> String {
-    report
-        .checks
-        .iter()
-        .map(|check| {
-            let label = match check.status {
-                Status::Pass => "PASS",
-                Status::Warning => "WARNING",
-                Status::Fail => "FAILED",
-            };
-            format!("[{label}] {}: {}", check.id, check.detail)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Without `--purge` the distribution stays registered, so its Firecrab data
+/// and the managed home survive for the next install, as on macOS.
+fn run_uninstall(layout: &lifecycle::Layout, purge: bool) -> Result<i32, Error> {
+    if purge {
+        lifecycle::validate_purge(layout)?;
+    }
+    daemon::uninstall(layout)?;
+    if purge {
+        if wsl::contains(&wsl::distributions(), DISTRO_NAME) {
+            wsl::run(&["--unregister", DISTRO_NAME])?;
+        }
+        lifecycle::purge(layout)?;
+    }
+    println!("microManager uninstalled");
+    if purge {
+        println!(
+            "  purged managed data: {} and WSL distribution {DISTRO_NAME}",
+            layout.managed_home.display()
+        );
+    } else {
+        println!(
+            "  preserved managed data: {} and WSL distribution {DISTRO_NAME}",
+            layout.managed_home.display()
+        );
+    }
+    Ok(0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wsl::fake;
 
-    fn ready_inputs() -> Inputs {
-        Inputs {
-            windows_version: "Microsoft Windows [Version 10.0.26200.1]".to_string(),
-            architecture: "x86_64",
-            wsl_version: Some("2.7.14.0".to_string()),
-            wsl_kernel: Some("6.18.33.2-2".to_string()),
-            default_distro: Some("Debian".to_string()),
-            distro: parse_probe(
-                "kernel=6.18.33.2-microsoft-standard-WSL2\nuptime=900\nkvm=present\nkvm_open=ok\nnested=yes\n",
-            ),
-        }
-    }
+    const ENABLED: &str = "<Task><Settings><Enabled>true</Enabled></Settings></Task>";
 
-    fn check<'a>(report: &'a CapabilityReport, id: &str) -> &'a Diagnostic {
-        report
-            .checks
-            .iter()
-            .find(|check| check.id == id)
-            .expect("check is reported")
-    }
-
-    #[test]
-    fn decodes_utf16_wsl_output() {
-        let mut bytes = vec![0xFF, 0xFE];
-        for unit in "WSL version: 2.7.14.0".encode_utf16() {
-            bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-        assert_eq!(
-            field(&decode_console(&bytes), "WSL version").as_deref(),
-            Some("2.7.14.0")
-        );
-    }
-
-    #[test]
-    fn decodes_plain_utf8_output() {
-        assert_eq!(decode_console(b"Debian\n"), "Debian\n");
-    }
-
-    #[test]
-    fn reads_the_first_installed_distribution() {
-        assert_eq!(
-            first_distro("\nDebian\nUbuntu\n").as_deref(),
-            Some("Debian")
-        );
-        assert_eq!(first_distro("  \n"), None);
-    }
-
-    #[test]
-    fn a_fully_capable_host_is_ready() {
-        let report = report(ready_inputs());
-        assert!(report.ready);
-        assert!(
-            report
-                .checks
-                .iter()
-                .all(|check| check.status == Status::Pass)
-        );
-        assert_eq!(check(&report, "kvm_device").fix, None);
-    }
-
-    #[test]
-    fn an_unopenable_kvm_device_warns_without_blocking() {
-        let mut inputs = ready_inputs();
-        inputs.distro.remove("kvm_open");
-        let report = report(inputs);
-        assert_eq!(check(&report, "kvm_device").status, Status::Warning);
-        assert!(report.ready);
-    }
-
-    #[test]
-    fn a_cold_started_distribution_warns_instead_of_failing() {
-        let mut inputs = ready_inputs();
-        inputs.distro.remove("kvm");
-        inputs.distro.remove("kvm_open");
-        inputs.distro.insert("uptime".to_string(), "12".to_string());
-        let report = report(inputs);
-        assert_eq!(check(&report, "kvm_device").status, Status::Warning);
-        assert!(
-            report.ready,
-            "a still-starting guest must not block install"
-        );
-    }
-
-    #[test]
-    fn a_missing_kvm_device_fails() {
-        let mut inputs = ready_inputs();
-        inputs.distro.remove("kvm");
-        inputs.distro.remove("kvm_open");
-        let report = report(inputs);
-        assert_eq!(check(&report, "kvm_device").status, Status::Fail);
-        assert!(!report.ready);
-    }
-
-    #[test]
-    fn wsl1_is_rejected() {
-        let mut inputs = ready_inputs();
-        inputs.wsl_version = Some("1.0.0.0".to_string());
-        let report = report(inputs);
-        assert_eq!(check(&report, "wsl_version").status, Status::Fail);
-        assert!(!report.ready);
-    }
-
-    #[test]
-    fn a_missing_wsl_reports_every_dependent_check() {
-        let inputs = Inputs {
-            wsl_version: None,
-            wsl_kernel: None,
-            default_distro: None,
-            distro: BTreeMap::new(),
-            ..ready_inputs()
+    fn layout() -> (tempfile::TempDir, lifecycle::Layout) {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let layout = lifecycle::Layout {
+            managed_home: directory.path().join("Firecrab").join("micromanager"),
         };
-        let report = report(inputs);
-        assert!(!report.ready);
-        assert_eq!(check(&report, "wsl_version").status, Status::Fail);
-        assert_eq!(check(&report, "wsl_distribution").status, Status::Fail);
-        assert_eq!(check(&report, "nested_virtualization").status, Status::Fail);
+        lifecycle::prepare(&layout).expect("managed directories");
+        (directory, layout)
+    }
+
+    /// A host with WSL but nothing else registered or running.
+    fn empty_host(line: &str) -> wsl::fake::Reply {
+        match line {
+            "wsl.exe --version" => {
+                Ok("WSL version: 2.7.14.0\nKernel version: 6.18.33.2-2\n".into())
+            }
+            "cmd.exe /c ver" => Ok("Microsoft Windows [Version 10.0.26200.1]\n".into()),
+            _ => Err("not found".into()),
+        }
     }
 
     #[test]
-    fn the_human_report_matches_the_macos_helper_format() {
-        let rendered = render_human(&report(ready_inputs()));
-        assert!(rendered.starts_with("[PASS] wsl_version: WSL 2.7.14.0 is installed."));
-        assert!(rendered.contains("[PASS] kvm_device: /dev/kvm opens inside WSL2"));
+    fn doctor_passes_the_readiness_through_as_the_exit_code() {
+        let _wsl = fake::answer(empty_host);
+        assert_eq!(run(Command::Doctor { json: false }).expect("reported"), 0);
+        assert_eq!(run(Command::Doctor { json: true }).expect("reported"), 0);
+
+        let _no_wsl = fake::answer(|_| Err("not found".into()));
+        assert_eq!(run(Command::Doctor { json: false }).expect("reported"), 1);
     }
 
     #[test]
-    fn the_json_report_keeps_the_shared_field_names() {
-        let json = serde_json::to_value(report(ready_inputs())).expect("report serializes");
-        assert_eq!(json["platform"], "Windows");
-        assert_eq!(json["product"], "microManager");
-        assert_eq!(json["ready"], true);
+    fn install_stops_at_a_failed_doctor() {
+        let _no_wsl = fake::answer(|_| Err("not found".into()));
+        assert!(matches!(run(Command::Install), Err(Error::NotReady)));
+        assert!(matches!(run(Command::Reinstall), Err(Error::NotReady)));
+    }
+
+    #[test]
+    fn status_and_stop_report_an_uninstalled_host() {
+        let _wsl = fake::answer(empty_host);
+        assert_eq!(run(Command::Status).expect("reported"), 1);
+        assert_eq!(run(Command::Stop).expect("nothing to stop"), 0);
+        assert!(matches!(
+            run(Command::Start),
+            Err(Error::Daemon(daemon::Error::NotInstalled))
+        ));
+    }
+
+    #[test]
+    fn run_needs_the_managed_distribution() {
+        let _wsl = fake::answer(|_| Ok("Debian\n".into()));
+        assert!(matches!(run(Command::Run), Err(Error::NotInstalled)));
+    }
+
+    #[test]
+    fn validate_fails_until_everything_is_in_place() {
+        let (_directory, layout) = layout();
+        let _wsl = fake::answer(|line| match line {
+            "wsl.exe --list --quiet" => Ok("firecrab-debian\n".into()),
+            l if l.starts_with("schtasks.exe /Query") => Ok(ENABLED.into()),
+            other => panic!("unexpected {other}"),
+        });
+        let host = provision::host().expect("this host is supported");
         assert_eq!(
-            json["validationGates"][1],
-            "the management guest exposes usable /dev/kvm"
+            run_validate(host, &layout).expect("reported"),
+            1,
+            "nothing is downloaded"
         );
-        assert_eq!(json["checks"][0]["id"], "wsl_version");
+    }
+
+    #[test]
+    fn uninstall_keeps_the_distribution_and_data_without_purge() {
+        let (_directory, layout) = layout();
+        let wsl = fake::answer(|line| match line {
+            l if l.starts_with("schtasks.exe /Query") => Ok(ENABLED.into()),
+            "wsl.exe --list --running --quiet" => Ok(String::new()),
+            _ => Ok(String::new()),
+        });
+        assert_eq!(run_uninstall(&layout, false).expect("uninstalled"), 0);
+        assert!(layout.managed_home.is_dir());
+        assert!(!wsl.calls().iter().any(|call| call.contains("--unregister")));
+    }
+
+    #[test]
+    fn purge_unregisters_the_distribution_and_deletes_the_managed_home() {
+        let (_directory, layout) = layout();
+        let wsl = fake::answer(|line| match line {
+            "wsl.exe --list --quiet" => Ok("Debian\nfirecrab-debian\n".into()),
+            "wsl.exe --list --running --quiet" => Ok(String::new()),
+            l if l.starts_with("schtasks.exe /Query") => Err("not found".into()),
+            _ => Ok(String::new()),
+        });
+        assert_eq!(run_uninstall(&layout, true).expect("purged"), 0);
+        assert!(!layout.managed_home.exists());
+        assert!(
+            wsl.calls()
+                .contains(&"wsl.exe --unregister firecrab-debian".to_string())
+        );
+    }
+
+    #[test]
+    fn an_unsafe_purge_is_refused_before_anything_is_removed() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let layout = lifecycle::Layout {
+            managed_home: directory.path().join("firecrab"),
+        };
+        let _wsl = fake::answer(|line| panic!("nothing may run: {line}"));
+        assert!(matches!(
+            run_uninstall(&layout, true),
+            Err(Error::Lifecycle(_))
+        ));
     }
 }

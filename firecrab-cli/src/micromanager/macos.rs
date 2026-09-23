@@ -7,40 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-use clap::Subcommand;
+use super::Command;
 
 const HELPER_NAME: &str = "firecrab-micromanager-macos";
 const HELPER_ENV: &str = "FIRECRAB_MICROMANAGER_HELPER";
-
-#[derive(Subcommand)]
-pub enum Command {
-    /// Install the CLI and native helper for the current user.
-    Install,
-    /// Replace installed binaries while preserving managed VM data.
-    Reinstall,
-    /// Remove installed binaries and optionally all managed VM data.
-    Uninstall {
-        /// Also delete the managed OS and persistent data disks.
-        #[arg(long)]
-        purge: bool,
-    },
-    /// Start and register the resident management VM daemon.
-    Start,
-    /// Stop and unload the resident management VM daemon.
-    Stop,
-    /// Show launchd, VM readiness, and local API status.
-    Status,
-    /// Detect Virtualization.framework, entitlement, and nested virtualization support.
-    Doctor {
-        /// Emit a machine-readable capability report.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show and validate the managed Debian VM configuration.
-    Validate,
-    /// Boot the managed Debian VM and attach its serial console.
-    Run,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

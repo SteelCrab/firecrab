@@ -2,7 +2,9 @@ use std::ffi::OsString;
 use std::fs::{self, File, Permissions};
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
+
+use super::super::managed_home;
 
 const CLI_NAME: &str = "firecrab";
 const HELPER_NAME: &str = "firecrab-micromanager-macos";
@@ -66,10 +68,8 @@ pub enum Error {
     AlreadyInstalled(PathBuf),
     #[error("refusing to replace a directory: {0}")]
     TargetDirectory(PathBuf),
-    #[error("refusing to use managed path containing a symlink: {0}")]
-    UnsafeManagedPath(PathBuf),
-    #[error("refusing to purge unsafe managed path {0}")]
-    UnsafePurge(PathBuf),
+    #[error(transparent)]
+    ManagedHome(#[from] managed_home::Error),
     #[error("could not {action} {path}: {source}")]
     Io {
         action: &'static str,
@@ -110,12 +110,12 @@ pub fn install_from(
 
 pub fn uninstall_at(layout: &Layout, purge: bool) -> Result<(), Error> {
     if purge {
-        validate_purge_target(&layout.managed_home)?;
+        managed_home::validate_purge(&layout.managed_home)?;
     }
     remove_binary(&layout.cli_path())?;
     remove_binary(&layout.helper_path())?;
     if purge {
-        purge_managed_home(&layout.managed_home)?;
+        managed_home::purge(&layout.managed_home)?;
     }
     Ok(())
 }
@@ -161,7 +161,7 @@ fn stage_binary(source: &Path, install_dir: &Path) -> Result<tempfile::NamedTemp
 }
 
 fn ensure_managed_directories(managed_home: &Path) -> Result<(), Error> {
-    reject_symlink_components(managed_home)?;
+    managed_home::reject_symlink_components(managed_home)?;
     for path in [
         managed_home.to_owned(),
         managed_home.join("system"),
@@ -181,65 +181,6 @@ fn remove_binary(path: &Path) -> Result<(), Error> {
         Ok(_) => fs::remove_file(path).map_err(|source| io_error("remove binary", path, source)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(io_error("inspect binary", path, source)),
-    }
-}
-
-fn purge_managed_home(path: &Path) -> Result<(), Error> {
-    validate_purge_target(path)?;
-    match fs::remove_dir_all(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(io_error("purge managed data", path, source)),
-    }
-}
-
-fn validate_purge_target(path: &Path) -> Result<(), Error> {
-    validate_purge_path(path)?;
-    reject_symlink_components(path)?;
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(Error::UnsafePurge(path.to_owned()))
-        }
-        Ok(metadata) if metadata.is_dir() => Ok(()),
-        Ok(_) => Err(Error::UnsafePurge(path.to_owned())),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(io_error("inspect managed data", path, source)),
-    }
-}
-
-fn reject_symlink_components(path: &Path) -> Result<(), Error> {
-    let mut current = PathBuf::new();
-    let mut normal_component_count = 0;
-    for component in path.components() {
-        current.push(component.as_os_str());
-        if matches!(component, Component::Normal(_)) {
-            normal_component_count += 1;
-        }
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() && normal_component_count > 1 => {
-                return Err(Error::UnsafeManagedPath(current));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => break,
-            Err(source) => {
-                return Err(io_error("inspect managed path", &current, source));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_purge_path(path: &Path) -> Result<(), Error> {
-    let safe = path.is_absolute()
-        && path.file_name().is_some_and(|name| name == "micromanager")
-        && path.components().count() >= 4
-        && !path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir));
-    if safe {
-        Ok(())
-    } else {
-        Err(Error::UnsafePurge(path.to_owned()))
     }
 }
 
@@ -336,7 +277,7 @@ mod tests {
         };
         assert!(matches!(
             uninstall_at(&unsafe_layout, true),
-            Err(Error::UnsafePurge(_))
+            Err(Error::ManagedHome(managed_home::Error::UnsafePurge(_)))
         ));
         assert!(installed_layout.cli_path().is_file());
         assert!(installed_layout.helper_path().is_file());
@@ -359,7 +300,9 @@ mod tests {
 
         assert!(matches!(
             uninstall_at(&layout, true),
-            Err(Error::UnsafeManagedPath(_))
+            Err(Error::ManagedHome(managed_home::Error::UnsafeManagedPath(
+                _
+            )))
         ));
         assert!(real_managed_home.is_dir());
     }

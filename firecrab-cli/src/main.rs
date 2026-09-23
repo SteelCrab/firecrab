@@ -96,8 +96,8 @@ enum Command {
         #[command(subcommand)]
         command: hosts::Command,
     },
-    /// Manage the local Debian management VM through Apple Virtualization.framework.
-    #[cfg(target_os = "macos")]
+    /// Manage the local Debian management VM that runs Firecrab on this host.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     Service {
         #[command(subcommand)]
         command: micromanager::Command,
@@ -107,12 +107,6 @@ enum Command {
     Service {
         #[command(subcommand)]
         command: service::Command,
-    },
-    /// Inspect the WSL2 backend that will host the managed Debian VM.
-    #[cfg(target_os = "windows")]
-    Service {
-        #[command(subcommand)]
-        command: micromanager::Command,
     },
 }
 
@@ -151,7 +145,7 @@ fn run(cli: Cli) -> i32 {
         Command::Host { command } => {
             finish_api_command(hosts::run(command, api.as_deref(), host.as_deref()))
         }
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::Service { command } => match micromanager::run(command) {
             Ok(code) => code,
             Err(error) => {
@@ -164,14 +158,6 @@ fn run(cli: Cli) -> i32 {
             Ok(()) => 0,
             Err(error) => {
                 error.report();
-                1
-            }
-        },
-        #[cfg(target_os = "windows")]
-        Command::Service { command } => match micromanager::run(command) {
-            Ok(code) => code,
-            Err(error) => {
-                eprintln!("{error}");
                 1
             }
         },
@@ -576,9 +562,9 @@ mod tests {
         assert!(matches!(list.command, Command::Vm { .. }));
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
-    fn cli_parses_macos_service_commands() {
+    fn cli_parses_micromanager_service_commands() {
         let doctor = Cli::try_parse_from(["firecrab", "service", "doctor", "--json"]).unwrap();
         assert!(matches!(
             doctor.command,
