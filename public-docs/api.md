@@ -175,6 +175,30 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 | MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}`, `GET`/`PUT`/`DELETE /docker-hub` (Docker Hub login; secret write-only) |
 | Host | `/api/host` and `/api/network` |
 
+## Host
+
+`GET /api/host` reports load, memory, disk, uptime, and a `platform` object for the machine behind the dashboard.
+
+```json
+"platform": {
+  "os": "windows",
+  "name": "Windows 11",
+  "version": "10.0.26200.9457",
+  "architecture": "x86_64",
+  "virtualization": "WSL2 2.7.14.0",
+  "system": "Debian GNU/Linux 13 (trixie)",
+  "kernel": "6.18.33.2-microsoft-standard-WSL2"
+}
+```
+
+- `os` is `linux`, `macos`, or `windows`.
+- On a Linux host, `name` and `system` are its os-release `PRETTY_NAME`, and `version` and `virtualization` are `null`.
+- Under microManager, `system` and `kernel` describe the managed Linux VM Firecrab runs in.
+  The outer machine comes from `/etc/firecrab/host-platform.json`, which `firecrab service start` writes on macOS and Windows.
+- `architecture` spells ARM64 as `arm64` on every host.
+- Disk figures come from the filesystem that holds, or will hold, the VM directory.
+- APIs before this field omit `platform`.
+
 ## Images and kernels
 
 `GET /api/images` lists installed and known-but-uninstalled M2Images.

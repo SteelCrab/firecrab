@@ -71,6 +71,8 @@ In the lab the API answered again 100 seconds after `wsl --shutdown`: up to a mi
 
 `stop` disables the task before ending it, stops `firecrab-api` and `firecrab-net-helper`, and terminates the distribution.
 The task stays disabled, across logons too, until `start` enables it again.
+`start` also writes the Windows and WSL versions to the guest's `/etc/firecrab/host-platform.json` for the dashboard's Host view.
+A failed write prints a `[WARNING]` and does not stop the start.
 `status` reports the task, the guest units, and the API on three lines.
 
 ```text
