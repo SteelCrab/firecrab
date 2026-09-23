@@ -1,18 +1,23 @@
 //! Pinned artifact download and verification shared by every microManager host.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::Duration;
+
+use reqwest::StatusCode;
+use reqwest::header::RANGE;
 
 use sha2::{Digest, Sha256, Sha512};
 
 /// Each host pins with the digests its upstreams publish, so one backend alone
 /// does not have to use every algorithm.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HashAlgorithm {
     Sha256,
+    /// Debian's cloud images publish only SHA-512; Windows never pins one.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Sha512,
 }
 
@@ -130,6 +135,15 @@ fn build_client() -> Result<reqwest::blocking::Client, Error> {
         })
 }
 
+/// salsa.debian.org drops long transfers partway through and sometimes answers a
+/// retry with a 500, so one clean request is not something a user can count on.
+const ATTEMPTS: u32 = 6;
+const RETRY_DELAY: Duration = if cfg!(test) {
+    Duration::ZERO
+} else {
+    Duration::from_secs(3)
+};
+
 /// Stages into a temporary file so an interrupted download never lands under the
 /// artifact's real name, where the next run would treat it as complete.
 fn download_one(
@@ -138,23 +152,17 @@ fn download_one(
     directory: &Path,
     destination: &Path,
 ) -> Result<(), Error> {
-    let mut response = client
-        .get(spec.url)
-        .send()
-        .map_err(|source| Error::Request {
-            url: spec.url.to_string(),
-            source,
-        })?;
-    if !response.status().is_success() {
-        return Err(Error::HttpStatus {
-            url: spec.url.to_string(),
-            status: response.status(),
-        });
-    }
     let mut staged = tempfile::NamedTempFile::new_in(directory)
         .map_err(|source| io_error("create partial artifact", directory, source))?;
-    io::copy(&mut response, &mut staged)
-        .map_err(|source| io_error("write artifact", staged.path(), source))?;
+    let mut attempt = 1;
+    while let Err(error) = resume(client, spec, staged.as_file_mut()) {
+        if attempt == ATTEMPTS || !retryable(&error) {
+            return Err(error);
+        }
+        println!("[RETRY] {}: {error}", spec.label);
+        attempt += 1;
+        thread::sleep(RETRY_DELAY * attempt);
+    }
     staged
         .flush()
         .map_err(|source| io_error("flush artifact", staged.path(), source))?;
@@ -167,6 +175,54 @@ fn download_one(
         .persist(destination)
         .map_err(|error| io_error("publish artifact", destination, error.error))?;
     Ok(())
+}
+
+/// Continues from whatever an earlier attempt already wrote. A server that
+/// ignores the range sends the whole body again, so the file starts over.
+fn resume(
+    client: &reqwest::blocking::Client,
+    spec: &ArtifactSpec,
+    file: &mut File,
+) -> Result<(), Error> {
+    let written = file
+        .seek(SeekFrom::End(0))
+        .map_err(|source| io_error("inspect partial artifact", Path::new(spec.filename), source))?;
+    let mut request = client.get(spec.url);
+    if written > 0 {
+        request = request.header(RANGE, format!("bytes={written}-"));
+    }
+    let mut response = request.send().map_err(|source| Error::Request {
+        url: spec.url.to_string(),
+        source,
+    })?;
+    match response.status() {
+        StatusCode::PARTIAL_CONTENT => {}
+        // Everything is already here; the digest check decides whether it is right.
+        StatusCode::RANGE_NOT_SATISFIABLE if written > 0 => return Ok(()),
+        status if status.is_success() => {
+            file.set_len(0)
+                .and_then(|()| file.seek(SeekFrom::Start(0)).map(drop))
+                .map_err(|source| io_error("restart artifact", Path::new(spec.filename), source))?;
+        }
+        status => {
+            return Err(Error::HttpStatus {
+                url: spec.url.to_string(),
+                status,
+            });
+        }
+    }
+    io::copy(&mut response, file)
+        .map_err(|source| io_error("write artifact", Path::new(spec.filename), source))?;
+    Ok(())
+}
+
+/// A 4xx will not change on retry; a dropped connection or a 5xx often does.
+fn retryable(error: &Error) -> bool {
+    match error {
+        Error::HttpStatus { status, .. } => status.is_server_error(),
+        Error::Request { .. } | Error::Io { .. } => true,
+        Error::CreateDirectory { .. } | Error::Checksum { .. } => false,
+    }
 }
 
 fn digest_reader<D: Digest + Default>(reader: &mut File, path: &Path) -> Result<String, Error> {
@@ -205,6 +261,7 @@ mod tests {
 
     const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     const ABC_SHA512: &str = "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f";
+    const ABCDEF_SHA256: &str = "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721";
     const WRONG_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
     fn spec(algorithm: HashAlgorithm, digest: &'static str) -> ArtifactSpec {
@@ -266,6 +323,96 @@ mod tests {
         .expect_err("a corrupt cache must not be accepted");
         assert!(matches!(error, Error::Request { .. }));
         assert!(!path.exists(), "the corrupt file is removed");
+    }
+
+    /// Answers each connection with the next canned response and records the
+    /// request it answered, so a test can see what a retry asked for.
+    fn serve(responses: Vec<&'static str>) -> (&'static str, thread::JoinHandle<Vec<String>>) {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener binds");
+        let url = format!(
+            "http://{}/abc.bin",
+            listener.local_addr().expect("bound address")
+        );
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("client connects");
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).expect("request is readable");
+                requests.push(String::from_utf8_lossy(&buffer[..read]).to_lowercase());
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("response is written");
+            }
+            requests
+        });
+        (Box::leak(url.into_boxed_str()), handle)
+    }
+
+    fn remote_spec(url: &'static str) -> ArtifactSpec {
+        ArtifactSpec {
+            url,
+            ..spec(HashAlgorithm::Sha256, ABCDEF_SHA256)
+        }
+    }
+
+    #[test]
+    fn a_dropped_transfer_resumes_from_the_bytes_already_written() {
+        let (url, server) = serve(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc",
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef",
+        ]);
+        let directory = tempfile::tempdir().expect("temp dir");
+        fetch_all(&[remote_spec(url)], directory.path()).expect("the retry completes the file");
+
+        let requests = server.join().expect("server finishes");
+        assert!(
+            !requests[0].contains("range:"),
+            "the first request asks for everything"
+        );
+        assert!(
+            requests[1].contains("range: bytes=3-"),
+            "the retry resumes: {}",
+            requests[1]
+        );
+        assert_eq!(
+            fs::read(directory.path().join("abc.bin")).expect("published"),
+            b"abcdef"
+        );
+    }
+
+    #[test]
+    fn a_server_that_ignores_the_range_restarts_the_file() {
+        let (url, server) = serve(vec![
+            "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabc",
+            "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nabcdef",
+        ]);
+        let directory = tempfile::tempdir().expect("temp dir");
+        fetch_all(&[remote_spec(url)], directory.path())
+            .expect("the full body replaces the partial one");
+
+        server.join().expect("server finishes");
+        assert_eq!(
+            fs::read(directory.path().join("abc.bin")).expect("published"),
+            b"abcdef"
+        );
+    }
+
+    #[test]
+    fn a_client_error_is_not_retried() {
+        let (url, server) = serve(vec!["HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"]);
+        let directory = tempfile::tempdir().expect("temp dir");
+        let error =
+            fetch_all(&[remote_spec(url)], directory.path()).expect_err("a missing artifact fails");
+
+        server.join().expect("server finishes");
+        // A retry would have hit the closed listener and failed as a request error instead.
+        assert!(
+            matches!(error, Error::HttpStatus { status, .. } if status == StatusCode::NOT_FOUND)
+        );
+        assert!(!directory.path().join("abc.bin").exists());
     }
 
     #[test]
