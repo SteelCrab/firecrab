@@ -31,13 +31,6 @@ Entries land here as work merges, and move under the next version heading when t
   macOS 26.6.2; other M3-or-later hosts remain runtime and E2E gated ([#266]).
 - Public documentation lists the shared Linux, macOS, and Windows QA work
   list ([#266]).
-- Windows host lab script for microManager, with the recorded WSL2 result:
-  usable `/dev/kvm` and a booted nested Firecracker microVM ([#266]).
-- Windows `firecrab service doctor` reports WSL version, the default
-  distribution, whether `/dev/kvm` opens inside it, and whether the guest sees
-  virtualization extensions, in the same check and JSON shape as the macOS
-  helper. The remaining microManager commands are not implemented on Windows
-  ([#266]).
 
 ### Changed
 
