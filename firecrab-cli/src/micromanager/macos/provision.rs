@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use super::super::artifact::{self, ArtifactSpec, HashAlgorithm};
+use super::super::report;
 
 pub const DEBIAN_BUILD: &str = "20260914-2601";
 pub const DEBIAN_ARCHIVE: &str = "debian-13-generic-arm64-20260914-2601.tar.xz";
@@ -24,7 +25,7 @@ const FIRECRAB_INSTALL_SHA256: &str =
     "af2fb56b92dff1559cdaa449aa025808e0990437c16ccc0bb2b4d558ef50dacb";
 const DEBIAN_RAW_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const DATA_DISK_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-const PROVISION_SCHEMA: u32 = 4;
+const PROVISION_SCHEMA: u32 = 5;
 const EXTRACT_ARM64_IMAGE: &str =
     include_str!("../../../../scripts/firecracker-menual/extract-arm64-image");
 
@@ -105,9 +106,9 @@ pub enum Error {
     GuestProvision(String),
 }
 
-pub fn download_all(managed_home: &Path) -> Result<DownloadedArtifacts, Error> {
+pub fn download_all(managed_home: &Path, assume_yes: bool) -> Result<DownloadedArtifacts, Error> {
     let directory = managed_home.join("downloads");
-    artifact::fetch_all(&ARTIFACTS, &directory)?;
+    artifact::fetch_all(&ARTIFACTS, &directory, assume_yes)?;
     Ok(DownloadedArtifacts {
         debian_archive: directory.join(ARTIFACTS[0].filename),
         firecracker_archive: directory.join(ARTIFACTS[1].filename),
@@ -243,7 +244,7 @@ fn reset_failed_system(system: &Path, runtime: &Path) -> Result<(), Error> {
     if !failed.is_file() && !outdated {
         return Ok(());
     }
-    println!(
+    report!(
         "[RESET] {} Debian system disk; persistent data is preserved",
         if outdated { "outdated" } else { "failed" }
     );
@@ -273,11 +274,11 @@ fn reset_failed_system(system: &Path, runtime: &Path) -> Result<(), Error> {
 fn prepare_os_disk(archive: &Path, destination: &Path, system: &Path) -> Result<(), Error> {
     if destination.is_file() {
         validate_os_disk(destination)?;
-        println!("[PASS] disk: Debian OS disk (preserved)");
+        report!("[PASS] disk: Debian OS disk (preserved)");
         return Ok(());
     }
 
-    println!("[PREPARE] Debian OS disk");
+    report!("[PREPARE] Debian OS disk");
     let staging = tempfile::tempdir_in(system)
         .map_err(|source| io_error("create OS disk staging directory", system, source))?;
     let output = ProcessCommand::new("/usr/bin/tar")
@@ -300,7 +301,7 @@ fn prepare_os_disk(archive: &Path, destination: &Path, system: &Path) -> Result<
         .map_err(|source| io_error("protect OS disk", &extracted, source))?;
     fs::rename(&extracted, destination)
         .map_err(|source| io_error("publish OS disk", destination, source))?;
-    println!("[PASS] disk: Debian OS disk");
+    report!("[PASS] disk: Debian OS disk");
     Ok(())
 }
 
@@ -416,7 +417,7 @@ fn prepare_sparse_disk(path: &Path, size: u64) -> Result<(), Error> {
                 detail: format!("expected at least {size} bytes, got {actual}"),
             });
         }
-        println!("[PASS] disk: persistent data disk (preserved)");
+        report!("[PASS] disk: persistent data disk (preserved)");
         return Ok(());
     }
     let parent = path.parent().ok_or_else(|| Error::InvalidDisk {
@@ -436,7 +437,7 @@ fn prepare_sparse_disk(path: &Path, size: u64) -> Result<(), Error> {
     staged
         .persist(path)
         .map_err(|error| io_error("publish data disk", path, error.error))?;
-    println!("[PASS] disk: persistent data disk");
+    report!("[PASS] disk: persistent data disk");
     Ok(())
 }
 
@@ -548,6 +549,12 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 SSHCONF
 systemctl enable --now ssh
+
+phase console
+# Persist the mask on the OS disk so it applies on every future boot, EFI or direct-kernel;
+# console=hvc0 keeps boot output flowing, only the getty login prompt is suppressed.
+systemctl mask getty.target
+systemctl stop getty.target || true
 
 phase kernel
 kernel=/boot/vmlinuz-$(uname -r)
@@ -693,9 +700,25 @@ echo passed >"$work/result"
 "#
 }
 
+/// cloud-init's `bootcmd` runs in a stage whose unit is ordered
+/// `Before=sysinit.target`, and therefore strictly before `getty.target` can be
+/// reached. Masking there keeps the provisioning console free of a login
+/// prompt on the first EFI boot -- the one boot that happens before the guest
+/// script persists the same mask on the OS disk. EFI boot ignores the kernel
+/// command line, so this is the only hook that covers it. Stopping
+/// `serial-getty@hvc0` cancels the start job the boot transaction already queued.
+const USER_DATA: &str = concat!(
+    "#cloud-config\n",
+    "ssh_pwauth: false\n",
+    "bootcmd:\n",
+    "  - [ sh, -c, 'systemctl mask getty.target; systemctl stop getty.target serial-getty@hvc0.service 2>/dev/null || true' ]\n",
+    "runcmd:\n",
+    "  - [ bash, -lc, 'mkdir -p /mnt/firecrab && mount -t virtiofs firecrab /mnt/firecrab && exec bash /mnt/firecrab/provision/guest-provision.sh' ]\n",
+);
+
 fn prepare_seed_iso(runtime: &Path, destination: &Path) -> Result<(), Error> {
     if destination.is_file() {
-        println!("[PASS] seed: cloud-init ISO (preserved)");
+        report!("[PASS] seed: cloud-init ISO (preserved)");
         return Ok(());
     }
     let seed = tempfile::tempdir_in(runtime)
@@ -710,8 +733,7 @@ fn prepare_seed_iso(runtime: &Path, destination: &Path) -> Result<(), Error> {
         b"version: 2\nethernets:\n  primary:\n    match:\n      name: 'en*'\n    dhcp4: true\n",
         0o600,
     )?;
-    let user_data = b"#cloud-config\nssh_pwauth: false\nruncmd:\n  - [ bash, -lc, 'mkdir -p /mnt/firecrab && mount -t virtiofs firecrab /mnt/firecrab && exec bash /mnt/firecrab/provision/guest-provision.sh' ]\n";
-    write_private(&seed.path().join("user-data"), user_data, 0o600)?;
+    write_private(&seed.path().join("user-data"), USER_DATA.as_bytes(), 0o600)?;
 
     let staged = runtime.join("cloud-init-seed.partial.iso");
     let _ = fs::remove_file(&staged);
@@ -732,7 +754,7 @@ fn prepare_seed_iso(runtime: &Path, destination: &Path) -> Result<(), Error> {
         .map_err(|source| io_error("protect cloud-init seed", &staged, source))?;
     fs::rename(&staged, destination)
         .map_err(|source| io_error("publish cloud-init seed", destination, source))?;
-    println!("[PASS] seed: cloud-init ISO");
+    report!("[PASS] seed: cloud-init ISO");
     Ok(())
 }
 
@@ -800,9 +822,36 @@ mod tests {
     }
 
     #[test]
+    fn cloud_init_masks_getty_before_the_provision_script_runs() {
+        let bootcmd = USER_DATA.find("bootcmd:").expect("bootcmd stanza");
+        let runcmd = USER_DATA.find("runcmd:").expect("runcmd stanza");
+        assert!(
+            bootcmd < runcmd,
+            "bootcmd must precede runcmd so getty is masked before provisioning: {USER_DATA}"
+        );
+        assert!(
+            USER_DATA.contains("systemctl mask getty.target"),
+            "{USER_DATA}"
+        );
+        assert!(USER_DATA.starts_with("#cloud-config\n"), "{USER_DATA}");
+        assert!(USER_DATA.contains("ssh_pwauth: false"), "{USER_DATA}");
+        assert!(
+            USER_DATA.contains("guest-provision.sh"),
+            "the seed must still launch the guest script: {USER_DATA}"
+        );
+    }
+
+    #[test]
     fn guest_scripts_require_ssh_ready_and_nested_firecracker() {
         let provision = guest_provision_script();
         assert!(provision.contains("openssh-server"));
+        // The mask lives on the OS disk so an EFI-booted console never shows a login prompt.
+        let console = provision.find("\nphase console\n").expect("console phase");
+        let mask = provision
+            .find("\nsystemctl mask getty.target\n")
+            .expect("getty.target mask");
+        let kernel = provision.find("\nphase kernel\n").expect("kernel phase");
+        assert!(console < mask && mask < kernel);
         assert!(
             provision.contains("e2fsprogs fakeroot "),
             "Debian guest apt-get must install fakeroot next to e2fsprogs; OCI import packs ext4 via fakeroot"
@@ -830,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn guest_result_requires_every_schema4_gate_and_boot_artifact() {
+    fn guest_result_requires_every_schema_gate_and_boot_artifact() {
         let directory = tempfile::tempdir().unwrap();
         let runtime = directory.path().join("runtime");
         let system = directory.path().join("system");

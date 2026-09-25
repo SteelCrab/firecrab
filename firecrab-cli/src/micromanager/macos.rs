@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-use super::Command;
+use super::{Command, report};
 
 const HELPER_NAME: &str = "firecrab-micromanager-macos";
 const HELPER_ENV: &str = "FIRECRAB_MICROMANAGER_HELPER";
@@ -46,8 +46,8 @@ pub enum Error {
 
 pub fn run(command: Command) -> Result<i32, Error> {
     match command {
-        Command::Install => run_install(false),
-        Command::Reinstall => run_install(true),
+        Command::Install { yes } => run_install(false, yes),
+        Command::Reinstall { yes } => run_install(true, yes),
         Command::Uninstall { purge } => run_uninstall(purge),
         Command::Start => run_start(),
         Command::Stop => run_stop(),
@@ -62,7 +62,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
     }
 }
 
-fn run_install(reinstall: bool) -> Result<i32, Error> {
+fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     let cli_source = std::env::current_exe().map_err(Error::CurrentExecutable)?;
     let helper_source = resolve_helper_source(
         std::env::var_os(HELPER_ENV),
@@ -70,15 +70,20 @@ fn run_install(reinstall: bool) -> Result<i32, Error> {
         std::env::var_os("PATH"),
     )?;
     let layout = lifecycle::Layout::from_process_env()?;
-    daemon::stop(&layout)?;
     let binaries_in_place = same_file(&cli_source, &layout.cli_path())
         && same_file(&helper_source, &layout.helper_path());
-    if !reinstall && binaries_in_place {
-        println!("[PASS] binaries: already installed");
-    } else {
-        lifecycle::install_from(&cli_source, &helper_source, &layout, reinstall)?;
+    let install_binaries = reinstall || !binaries_in_place;
+    if install_binaries {
+        lifecycle::check_install(&cli_source, &helper_source, &layout, reinstall)?;
     }
-    let artifacts = provision::download_all(&layout.managed_home)?;
+    // Before anything changes, so declining the download leaves the host as it was.
+    let artifacts = provision::download_all(&layout.managed_home, assume_yes)?;
+    daemon::stop(&layout)?;
+    if install_binaries {
+        lifecycle::install_from(&cli_source, &helper_source, &layout, reinstall)?;
+    } else {
+        report!("[PASS] binaries: already installed");
+    }
     let prepared = provision::prepare(&layout.managed_home, &artifacts)?;
     let guest_result = ensure_guest_provisioned(&layout, &prepared)?;
     let daemon_paths = daemon::install(&layout, &layout.helper_path(), &prepared.ssh_private_key)?;
@@ -90,7 +95,7 @@ fn run_install(reinstall: bool) -> Result<i32, Error> {
         ))
         .into());
     }
-    println!(
+    report!(
         "microManager {}\n  CLI: {}\n  helper: {}\n  managed data: {}\n  Debian {}: {}\n  Firecracker {}: {}\n  Firecrab {} host: {}\n  guest installer: {}\n  OS disk: {}\n  data disk: {}\n  cloud-init seed: {}\n  EFI variable store: {}\n  provision marker: {}\n  SSH key: {}\n  launchd: {}\n  API: http://127.0.0.1:5523/\n  guest: {}",
         if reinstall {
             "reinstalled"
@@ -129,7 +134,7 @@ fn run_start() -> Result<i32, Error> {
 fn run_stop() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
     daemon::stop(&layout)?;
-    println!("[PASS] launchd: stopped");
+    report!("[PASS] launchd: stopped");
     Ok(0)
 }
 
@@ -137,11 +142,25 @@ fn run_status() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
     let status = daemon::status(&layout)?;
     print_daemon_status(&status);
+    print_log_paths(&layout);
     Ok(i32::from(!status.success()))
 }
 
+fn print_log_paths(layout: &lifecycle::Layout) {
+    let runtime = layout.managed_home.join("runtime");
+    report!("  logs: daemon {}", runtime.join("daemon.log").display());
+    report!(
+        "        console {}",
+        runtime.join("vm-console.log").display()
+    );
+    report!(
+        "        provision {}",
+        runtime.join("guest-provision.log").display()
+    );
+}
+
 fn print_daemon_status(status: &daemon::Status) {
-    println!(
+    report!(
         "[{}] launchd: {}",
         if status.loaded { "PASS" } else { "FAILED" },
         if status.loaded {
@@ -150,7 +169,7 @@ fn print_daemon_status(status: &daemon::Status) {
             "not loaded"
         }
     );
-    println!(
+    report!(
         "[{}] management_vm: {}",
         if status.ready { "PASS" } else { "FAILED" },
         status
@@ -161,7 +180,7 @@ fn print_daemon_status(status: &daemon::Status) {
             .unwrap_or("not ready")
             .replace('\n', ", ")
     );
-    println!(
+    report!(
         "[{}] api: {}",
         if status.api_reachable {
             "PASS"
@@ -189,11 +208,11 @@ fn ensure_guest_provisioned(
         })?;
     }
     if let Some(result) = provision::guest_result(prepared)? {
-        println!("[PASS] guest: Debian provisioning (preserved)");
+        report!("[PASS] guest: Debian provisioning (preserved)");
         return Ok(result);
     }
 
-    println!("[BOOT] Debian EFI provisioning VM");
+    report!("[BOOT] Debian EFI provisioning VM");
     let helper = layout.helper_path();
     let status = ProcessCommand::new(&helper)
         .arg("provision")
@@ -207,7 +226,7 @@ fn ensure_guest_provisioned(
         return Err(Error::ProvisionExit(status));
     }
     let result = provision::guest_result(prepared)?.ok_or(Error::MissingProvisionMarker)?;
-    println!("[PASS] guest: Debian provisioning");
+    report!("[PASS] guest: Debian provisioning");
     Ok(result)
 }
 
@@ -215,11 +234,11 @@ fn run_uninstall(purge: bool) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
     daemon::uninstall(&layout)?;
     lifecycle::uninstall_at(&layout, purge)?;
-    println!("microManager uninstalled");
+    report!("microManager uninstalled");
     if purge {
-        println!("  purged managed data: {}", layout.managed_home.display());
+        report!("  purged managed data: {}", layout.managed_home.display());
     } else {
-        println!(
+        report!(
             "  preserved managed data: {}",
             layout.managed_home.display()
         );
@@ -282,8 +301,8 @@ fn helper_path(override_path: Option<OsString>, current_exe: Option<&Path>) -> P
 
 fn command_arguments(command: &Command) -> Vec<OsString> {
     match command {
-        Command::Install
-        | Command::Reinstall
+        Command::Install { .. }
+        | Command::Reinstall { .. }
         | Command::Uninstall { .. }
         | Command::Start
         | Command::Stop

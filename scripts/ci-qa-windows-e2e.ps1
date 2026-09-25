@@ -84,7 +84,7 @@ function Invoke-Gate {
         Fail "WSL2 nested virtualization capability is not ready"
     }
     Write-Output "G3 install"
-    & $Cli service install
+    & $Cli service install --yes
     if ($LASTEXITCODE -ne 0) { Fail "service install exited with $LASTEXITCODE" }
     & $Cli service status
     if ($LASTEXITCODE -ne 0) { Fail "service status exited with $LASTEXITCODE" }

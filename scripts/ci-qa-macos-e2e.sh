@@ -99,7 +99,7 @@ sys.exit(1)
         exit 1
     }
     printf 'G2 install current checkout\n'
-    firecrab service install
+    firecrab service install --yes
     firecrab service status
     require_api
     configure_manager_ssh

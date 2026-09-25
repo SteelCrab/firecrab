@@ -584,6 +584,8 @@ mod tests {
             assert!(Cli::try_parse_from(["firecrab", "service", action]).is_ok());
         }
         assert!(Cli::try_parse_from(["firecrab", "service", "uninstall", "--purge"]).is_ok());
+        assert!(Cli::try_parse_from(["firecrab", "service", "install", "--yes"]).is_ok());
+        assert!(Cli::try_parse_from(["firecrab", "service", "reinstall", "--yes"]).is_ok());
         assert!(Cli::try_parse_from(["firecrab", "micromanager", "doctor"]).is_err());
         assert!(
             Cli::try_parse_from([

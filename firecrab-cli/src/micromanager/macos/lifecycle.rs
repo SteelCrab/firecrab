@@ -79,7 +79,9 @@ pub enum Error {
     },
 }
 
-pub fn install_from(
+/// Everything [`install_from`] would refuse, so the installer can ask before it
+/// downloads or stops anything, and a refusal costs neither.
+pub fn check_install(
     cli_source: &Path,
     helper_source: &Path,
     layout: &Layout,
@@ -87,14 +89,25 @@ pub fn install_from(
 ) -> Result<(), Error> {
     validate_source(cli_source)?;
     validate_source(helper_source)?;
+    validate_target(&layout.cli_path(), reinstall)?;
+    validate_target(&layout.helper_path(), reinstall)?;
+    Ok(managed_home::reject_symlink_components(
+        &layout.managed_home,
+    )?)
+}
+
+pub fn install_from(
+    cli_source: &Path,
+    helper_source: &Path,
+    layout: &Layout,
+    reinstall: bool,
+) -> Result<(), Error> {
+    check_install(cli_source, helper_source, layout, reinstall)?;
     fs::create_dir_all(&layout.install_dir)
         .map_err(|source| io_error("create install directory", &layout.install_dir, source))?;
 
     let cli_target = layout.cli_path();
     let helper_target = layout.helper_path();
-    validate_target(&cli_target, reinstall)?;
-    validate_target(&helper_target, reinstall)?;
-
     let cli_staged = stage_binary(cli_source, &layout.install_dir)?;
     let helper_staged = stage_binary(helper_source, &layout.install_dir)?;
     ensure_managed_directories(&layout.managed_home)?;
@@ -258,6 +271,28 @@ mod tests {
         assert!(matches!(
             install_from(&cli, &helper, &layout, false),
             Err(Error::AlreadyInstalled(_))
+        ));
+    }
+
+    #[test]
+    fn install_checks_run_before_anything_is_written() {
+        let (_directory, cli, helper, layout) = fixture();
+        check_install(&cli, &helper, &layout, false).unwrap();
+        assert!(!layout.install_dir.exists(), "a check must not install");
+        assert!(
+            !layout.managed_home.exists(),
+            "a check must not create state"
+        );
+
+        install_from(&cli, &helper, &layout, false).unwrap();
+        assert!(matches!(
+            check_install(&cli, &helper, &layout, false),
+            Err(Error::AlreadyInstalled(_))
+        ));
+        check_install(&cli, &helper, &layout, true).unwrap();
+        assert!(matches!(
+            check_install(&layout.managed_home, &helper, &layout, true),
+            Err(Error::InvalidSource(_))
         ));
     }
 

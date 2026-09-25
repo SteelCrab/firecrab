@@ -37,8 +37,8 @@ pub enum Error {
 
 pub fn run(command: Command) -> Result<i32, Error> {
     match command {
-        Command::Install => run_install(false),
-        Command::Reinstall => run_install(true),
+        Command::Install { yes } => run_install(false, yes),
+        Command::Reinstall { yes } => run_install(true, yes),
         Command::Uninstall { purge } => {
             run_uninstall(&lifecycle::Layout::from_process_env()?, purge)
         }
@@ -63,7 +63,7 @@ fn run_doctor(json: bool) -> Result<i32, Error> {
     Ok(i32::from(!report.ready))
 }
 
-fn run_install(reinstall: bool) -> Result<i32, Error> {
+fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     let report = doctor::report(doctor::Inputs::live());
     if !report.ready {
         println!("{}", doctor::render_human(&report));
@@ -72,9 +72,10 @@ fn run_install(reinstall: bool) -> Result<i32, Error> {
     let host = provision::host()?;
     let layout = lifecycle::Layout::from_process_env()?;
     lifecycle::prepare(&layout)?;
+    // Before the service stops, so declining the download leaves it running.
+    let artifacts = provision::download_all(host, &layout.downloads(), assume_yes)?;
     daemon::stop()?;
 
-    let artifacts = provision::download_all(host, &layout.downloads())?;
     let imported = provision::ensure_distro(&layout, &artifacts.debian_rootfs)?;
     let guest = provision::ensure_provisioned(&layout, host, reinstall || imported)?;
     let task = daemon::install(&layout)?;
@@ -299,8 +300,14 @@ mod tests {
     #[test]
     fn install_stops_at_a_failed_doctor() {
         let _no_wsl = fake::answer(|_| Err("not found".into()));
-        assert!(matches!(run(Command::Install), Err(Error::NotReady)));
-        assert!(matches!(run(Command::Reinstall), Err(Error::NotReady)));
+        assert!(matches!(
+            run(Command::Install { yes: false }),
+            Err(Error::NotReady)
+        ));
+        assert!(matches!(
+            run(Command::Reinstall { yes: false }),
+            Err(Error::NotReady)
+        ));
     }
 
     #[test]

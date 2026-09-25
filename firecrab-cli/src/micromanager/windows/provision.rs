@@ -154,8 +154,8 @@ pub struct Downloaded {
     pub installer: PathBuf,
 }
 
-pub fn download_all(host: &Host, directory: &Path) -> Result<Downloaded, Error> {
-    artifact::fetch_all(&host.artifacts, directory)?;
+pub fn download_all(host: &Host, directory: &Path, assume_yes: bool) -> Result<Downloaded, Error> {
+    artifact::fetch_all(&host.artifacts, directory, assume_yes)?;
     let [debian, firecracker, firecrab, installer] = &host.artifacts;
     Ok(Downloaded {
         debian_rootfs: directory.join(debian.filename),
