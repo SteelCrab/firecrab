@@ -1,7 +1,6 @@
 import type {
   ApiError,
   AssignVmStorageRequest,
-  BootstrapResponse,
   CreateMicroNetworkRequest,
   CreateMicroStorageRequest,
   CreateShellRequest,
@@ -497,41 +496,4 @@ export function updateVmPortForwards(id: string, request: UpdateVmPortForwardsRe
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
   });
-}
-
-/** Bootstrap a distro from scratch inside a builder VM (`POST /api/images/{alias}/bootstrap`). */
-export function startBootstrap(alias: string): Promise<BootstrapResponse> {
-  return fetchJson(`/api/images/${encodeURIComponent(alias)}/bootstrap`, { method: "POST" });
-}
-
-/** Poll one bootstrap session (`GET /api/images/bootstrap/{bootstrapId}`). */
-export function getBootstrap(bootstrapId: string): Promise<BootstrapResponse> {
-  return fetchJson(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`);
-}
-
-/**
- * The bootstrap still running on this host, if any
- * (`GET /api/images/bootstrap`).
- *
- * `startBootstrap` returns the session id, but only to the page that issued
- * it — reload that page, or leave and come back, and the id is gone while
- * the build keeps going. This asks the server for it instead, which is what
- * lets the session panel and its console reappear. Resolves to `null` when
- * nothing is building.
- */
-export function getActiveBootstrap(): Promise<BootstrapResponse | null> {
-  return fetchJson(`/api/images/bootstrap`);
-}
-
-/** Cancel a bootstrap and delete its builder VM (`DELETE /api/images/bootstrap/{bootstrapId}`). */
-export async function cancelBootstrap(bootstrapId: string): Promise<void> {
-  let response: Response;
-  try {
-    response = await fetch(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`, { method: "DELETE" });
-  } catch (error) {
-    throw ApiClientError.transport(transportDetail(error));
-  }
-  if (!response.ok) {
-    throw await fail(response);
-  }
 }
