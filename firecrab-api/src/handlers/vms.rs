@@ -3997,7 +3997,9 @@ while True:
         firecracker::sigkill(pid);
 
         wait_for_state(&state, vm.id, VmState::Error).await;
-        assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+        // The exit monitor tears the network down before it persists, so a
+        // persisted row also means the helper calls below are all recorded.
+        wait_for_db_state(&state, vm.id, VmState::Error).await;
         assert!(state.processes.lock().unwrap().is_empty());
 
         let calls = log.lock().unwrap().clone();

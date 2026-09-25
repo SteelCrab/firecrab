@@ -360,10 +360,16 @@ async fn dropping_the_fixture_stops_the_listener_and_deletes_scratch() {
 
     registry.shutdown();
 
-    assert!(
-        tokio::net::TcpStream::connect(&address).await.is_err(),
-        "listener must not survive shutdown"
-    );
+    // The port closes soon, not instantly: abort() only schedules the serve
+    // task's cancellation, and a parallel test forking a subprocess holds an
+    // inherited copy of the listening socket until that child execs.
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while tokio::net::TcpStream::connect(&address).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "listener must not survive shutdown");
     assert!(
         !scratch.exists(),
         "scratch blobs must be deleted on shutdown, including after failure"
