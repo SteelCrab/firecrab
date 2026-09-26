@@ -68,10 +68,19 @@ pub fn attach(api_base: &str, id: Uuid) -> Result<(), Error> {
     // Restore canonical input before printing a local status line. This also
     // runs on every error path; Drop remains a second safety net for panics.
     drop(raw_terminal);
-    match result? {
+    let detach = match result {
+        Ok(detach) => detach,
+        Err(error) => {
+            // A cancelled stdin read can stay blocked until the next byte.
+            runtime.shutdown_background();
+            return Err(error);
+        }
+    };
+    match detach {
         Detach::Detached => eprintln!("\r\nconsole detached"),
         Detach::SessionEnded => eprintln!("\r\nguest session ended"),
     }
+    runtime.shutdown_background();
     Ok(())
 }
 

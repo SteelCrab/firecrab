@@ -37,6 +37,9 @@ pub(crate) enum ScannedOutput {
 pub(crate) struct SessionEndScanner {
     /// Trailing bytes that could still be the start of a marker.
     held: Vec<u8>,
+    /// Marker prefix already released by [`Self::flush`]. A later chunk can
+    /// still finish that marker; anything else clears the memory.
+    flushed_prefix: usize,
 }
 
 impl SessionEndScanner {
@@ -52,6 +55,7 @@ impl SessionEndScanner {
         }
         let (visible, held) = rest.split_at(rest.len() - partial_marker_len(rest));
         replay.extend_from_slice(visible);
+        self.flushed_prefix = 0;
         self.held = held.to_vec();
         replay
     }
@@ -61,6 +65,26 @@ impl SessionEndScanner {
     pub(crate) fn push(&mut self, chunk: &[u8]) -> ScannedOutput {
         let mut data = std::mem::take(&mut self.held);
         data.extend_from_slice(chunk);
+        if data.is_empty() {
+            return ScannedOutput::Output(Vec::new());
+        }
+        if self.flushed_prefix != 0 {
+            let remaining = &SESSION_ENDED_MARKER[self.flushed_prefix..];
+            let matched = data
+                .iter()
+                .zip(remaining)
+                .take_while(|(actual, expected)| actual == expected)
+                .count();
+            if matched == remaining.len() {
+                self.flushed_prefix = 0;
+                return ScannedOutput::SessionEnded(Vec::new());
+            }
+            if matched == data.len() {
+                self.held = data;
+                return ScannedOutput::Output(Vec::new());
+            }
+            self.flushed_prefix = 0;
+        }
         if let Some(position) = find_marker(&data) {
             data.truncate(position);
             return ScannedOutput::SessionEnded(data);
@@ -77,7 +101,16 @@ impl SessionEndScanner {
     /// Releases held-back bytes once output has gone idle without the rest of
     /// a marker arriving.
     pub(crate) fn flush(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.held)
+        let flushed = std::mem::take(&mut self.held);
+        let continued = SESSION_ENDED_MARKER
+            .get(self.flushed_prefix..self.flushed_prefix + flushed.len())
+            == Some(flushed.as_slice());
+        if continued {
+            self.flushed_prefix += flushed.len();
+        } else {
+            self.flushed_prefix = 0;
+        }
+        flushed
     }
 }
 
@@ -155,6 +188,25 @@ mod tests {
         assert!(scanner.is_holding());
         assert_eq!(scanner.flush(), b"\x1b]fire");
         assert!(!scanner.is_holding());
+    }
+
+    #[test]
+    fn a_flushed_prefix_still_ends_the_session_when_the_rest_arrives() {
+        let mut scanner = SessionEndScanner::default();
+        let (head, tail) = SESSION_ENDED_MARKER.split_at(5);
+
+        assert_eq!(scanner.push(head), ScannedOutput::Output(Vec::new()));
+        assert_eq!(scanner.flush(), head);
+        assert_eq!(scanner.push(tail), ScannedOutput::SessionEnded(Vec::new()));
+    }
+
+    #[test]
+    fn a_flushed_prefix_is_ordinary_output_when_the_next_chunk_diverges() {
+        let mut scanner = SessionEndScanner::default();
+
+        scanner.push(b"\x1b]f");
+        assert_eq!(scanner.flush(), b"\x1b]f");
+        assert_eq!(scanner.push(b"oo"), ScannedOutput::Output(b"oo".to_vec()));
     }
 
     #[test]
