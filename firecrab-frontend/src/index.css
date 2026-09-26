@@ -518,8 +518,6 @@ form.shell-create-grid .field-span-2 {
 .microregistry-table .actions { text-align: right; }
 .microregistry-image { font-weight: 600; }
 .microregistry-status { min-width: 12rem; }
-.microboot-table td:nth-child(2) { min-width: 10rem; }
-.microboot-session { margin-top: 1rem; }
 .package-progress { display: block; }
 .package-progress-track {
   display: block;
@@ -1064,19 +1062,6 @@ table.image-table .state-cell {
   font-size: 0.66rem;
   color: var(--error);
   word-break: break-word;
-}
-/* `.step-detail` is shared with `VmDetailModal`'s PipelineStepper, where
-   the step-detail span is the *only* place a startup failure reason is
-   shown anywhere in the UI (its own `.detail-log` is built from static
-   step labels + console output, never from `run.detail`) — clamping it
-   there would silently hide the one thing an operator needs to see. This
-   modifier is opt-in and applied only in the bootstrap panel (Images.tsx),
-   where it's safe for the opposite reason: the same text this clamps is
-   always shown in full, unclamped, in the `.detail-log` `<pre>` directly
-   below this stepper. Do not move this onto `.step-detail` itself. */
-.step-detail-clamped {
-  max-height: 3.6em;
-  overflow: hidden;
 }
 
 .pipeline-step.succeeded .step-bar {
@@ -1941,57 +1926,4 @@ table.image-table .image-package-url a:hover {
 }
 .vm-table tbody tr {
   cursor: default;
-}
-
-/* Live builder-VM console embedded in the bootstrap panel. Fixed height:
-   this sits inside a panel that must stay scannable, so the terminal gets a
-   bounded window rather than growing with output. */
-.inline-console {
-  margin-top: 0.75rem;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.inline-console-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.6rem;
-  background: var(--bg-panel);
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-}
-
-.inline-console-title {
-  font-weight: 600;
-}
-
-.inline-console-status {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-  opacity: 0.75;
-}
-
-.inline-console-status.connected {
-  color: var(--ready);
-  opacity: 1;
-}
-
-.inline-console-status.disconnected,
-.inline-console-status.reconnecting {
-  color: var(--amber);
-  opacity: 1;
-}
-
-.inline-console-surface {
-  height: 16rem;
-  padding: 0.4rem;
-  background: #171b22;
-}
-
-.inline-console-ended {
-  margin-top: 0.75rem;
-  font-size: 0.85rem;
-  opacity: 0.7;
 }

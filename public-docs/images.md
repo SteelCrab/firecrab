@@ -4,6 +4,9 @@ An M2Image contains a kernel and root filesystem.
 It is the source template for new VM disks.
 A container image from a registry is imported separately; see [OCI images](oci.md).
 
+The dashboard's Images screen has M2Image inventory, OCI Import, and
+MicroRegistry panels. MicroBoot is [API-only](#bootstrap).
+
 Supported aliases are `alpine-3.24.1`, `ubuntu-26.04`, and `rocky-9.8`.
 All three support x86_64 and ARM64. Rocky is exposed only through the
 versioned `rocky-9.8` alias.
@@ -102,8 +105,16 @@ Release packages are uploaded with [rclone to Cloudflare R2](publish.md).
 
 ## Bootstrap
 
-The dashboard can build a supported image in a temporary builder VM.
-This path does not need Docker or a host chroot.
+MicroBoot is API-only; its dashboard panel has been removed, not the backend
+bootstrap capability. It can build a supported image in a temporary builder
+VM without Docker or a host chroot.
+
+| Method | Route | Job |
+| --- | --- | --- |
+| POST | `/api/images/{alias}/bootstrap` | Start a bootstrap job |
+| GET | `/api/images/bootstrap` | Get the active job, or `null` if none is running |
+| GET | `/api/images/bootstrap/{bootstrapId}` | Get job progress |
+| DELETE | `/api/images/bootstrap/{bootstrapId}` | Cancel the job and remove its builder VM |
 
 The builder downloads distribution files and creates an ext4 rootfs.
 firecrab stops the builder before reading its disk.
