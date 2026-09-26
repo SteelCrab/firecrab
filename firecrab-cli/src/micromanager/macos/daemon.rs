@@ -59,6 +59,8 @@ pub enum Error {
     ReadyTimeout(u64),
     #[error("invalid manager-ready marker: {0}")]
     InvalidMarker(String),
+    #[error("microManager is not installed ({0} is missing); run `firecrab service install`")]
+    NotInstalled(PathBuf),
 }
 
 pub fn install(
@@ -102,6 +104,7 @@ pub fn uninstall(layout: &Layout) -> Result<(), Error> {
 
 pub fn start(layout: &Layout) -> Result<Status, Error> {
     let paths = paths(layout)?;
+    require_installed(&paths)?;
     stop_if_loaded(layout)?;
     write_host_platform(&paths)?;
     let _ = fs::remove_file(&paths.ready);
@@ -115,6 +118,17 @@ pub fn start(layout: &Layout) -> Result<Status, Error> {
         false,
     )?;
     wait_ready(layout, Duration::from_secs(180))
+}
+
+/// `launchctl bootstrap` of a missing plist reports only "Input/output error".
+fn require_installed(paths: &DaemonPaths) -> Result<(), Error> {
+    match [&paths.plist, &paths.wrapper]
+        .into_iter()
+        .find(|path| !path.is_file())
+    {
+        Some(missing) => Err(Error::NotInstalled(missing.clone())),
+        None => Ok(()),
+    }
 }
 
 pub fn stop(layout: &Layout) -> Result<(), Error> {
@@ -360,17 +374,29 @@ done
 test -f "$manager_ready"
 ip=$(sed -n 's/^ip=//p' "$manager_ready")
 test -n "$ip"
-/usr/bin/ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 \
-  -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known_hosts" \
-  -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
-  -N -L 127.0.0.1:5523:127.0.0.1:5523 "root@$ip" &
-tunnel_pid=$!
-for _ in $(seq 1 60); do
-  if /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:5523/api/host >/dev/null; then break; fi
-  kill -0 "$tunnel_pid" 2>/dev/null || exit 1
-  sleep 1
-done
-/usr/bin/curl -fsS --max-time 2 http://127.0.0.1:5523/api/host >/dev/null
+open_tunnel() {{
+  /usr/bin/ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 \
+    -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known_hosts" \
+    -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+    -N -L 127.0.0.1:5523:127.0.0.1:5523 "root@$ip" &
+  tunnel_pid=$!
+  for _ in $(seq 1 60); do
+    if /usr/bin/curl -fsS --max-time 2 http://127.0.0.1:5523/api/host >/dev/null; then return 0; fi
+    kill -0 "$tunnel_pid" 2>/dev/null || return 1
+    sleep 1
+  done
+  kill -TERM "$tunnel_pid" 2>/dev/null
+  wait "$tunnel_pid" 2>/dev/null
+  return 1
+}}
+publish_ready() {{
+  {{
+    echo "vm_pid=$vm_pid"
+    echo "tunnel_pid=$tunnel_pid"
+    echo "ip=$ip"
+  }} >"$ready"
+}}
+open_tunnel
 # Tells the guest's API which Mac it serves; failing to only costs the Host view.
 if [ -f "$platform" ]; then
   /usr/bin/ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 \
@@ -381,12 +407,12 @@ fi
 # relay; the VM and its workloads keep running.
 "$cli" service forward-ports --key "$key" --known-hosts "$known_hosts" "$ip" &
 relay_pid=$!
-{{
-  echo "vm_pid=$vm_pid"
-  echo "tunnel_pid=$tunnel_pid"
-  echo "ip=$ip"
-}} >"$ready"
+publish_ready
 set +e
+# A dropped tunnel (sleep, a network stall) only reconnects: restarting the VM
+# would take every microVM inside it down too. A guest that stays unreachable
+# through every attempt is restarted like a crashed one.
+reconnects=0
 while :; do
   if ! kill -0 "$vm_pid" 2>/dev/null; then
     wait "$vm_pid"
@@ -397,7 +423,15 @@ while :; do
   if ! kill -0 "$tunnel_pid" 2>/dev/null; then
     wait "$tunnel_pid" 2>/dev/null
     rm -f "$ready"
-    exit 1
+    reconnects=$((reconnects + 1))
+    [ "$reconnects" -le 5 ] || exit 1
+    echo "API tunnel exited; reconnecting ($reconnects/5)"
+    if open_tunnel; then
+      reconnects=0
+      publish_ready
+    else
+      sleep 5
+    fi
   fi
   if ! kill -0 "$relay_pid" 2>/dev/null; then
     wait "$relay_pid" 2>/dev/null
@@ -498,6 +532,7 @@ fn io_error(action: &'static str, path: &Path, source: io::Error) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn wrapper_supervises_vm_tunnel_and_escalating_shutdown() {
@@ -532,6 +567,140 @@ mod tests {
         assert!(script.contains(
             "'mkdir -p /etc/firecrab && cat > /etc/firecrab/host-platform.json' <\"$platform\" || true"
         ));
+    }
+
+    fn write_executable(path: &Path, body: &str) {
+        fs::write(path, body).unwrap();
+        fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn read_marker(path: &Path) -> Option<HashMap<String, String>> {
+        let text = fs::read_to_string(path).ok()?;
+        let marker: HashMap<_, _> = text
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect();
+        (marker.len() == 3).then_some(marker)
+    }
+
+    fn wait_for<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(30) {
+            if let Some(value) = probe() {
+                return value;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    fn signal(pid: &str, signal: &str) {
+        ProcessCommand::new("/bin/kill")
+            .args([signal, pid])
+            .status()
+            .unwrap();
+    }
+
+    /// Runs the real wrapper with stand-ins for the helper, ssh, and curl, then
+    /// kills the tunnel the way a sleep or network stall would.
+    #[test]
+    fn a_dropped_tunnel_reconnects_without_restarting_the_vm() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let layout = Layout {
+            install_dir: root.join("bin"),
+            managed_home: root.join("micromanager"),
+        };
+        let runtime = layout.managed_home.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        let paths = DaemonPaths {
+            plist: root.join("agent.plist"),
+            wrapper: runtime.join("daemon.sh"),
+            ready: runtime.join("daemon-ready"),
+            manager_ready: runtime.join("manager-ready"),
+            log: runtime.join("daemon.log"),
+            platform: runtime.join("host-platform.json"),
+        };
+        let helper = root.join("helper");
+        write_executable(
+            &helper,
+            "#!/bin/bash\necho ip=192.0.2.7 >\"$FIRECRAB_MICROMANAGER_HOME/runtime/manager-ready\"\nexec sleep 600\n",
+        );
+        let tunnels = root.join("tunnels");
+        let ssh = root.join("ssh");
+        write_executable(
+            &ssh,
+            &format!(
+                "#!/bin/bash\ncase \" $* \" in *' -N '*) echo tunnel >>{}; exec sleep 600;; esac\ncat >/dev/null\n",
+                shell_quote(&tunnels)
+            ),
+        );
+        let curl = root.join("curl");
+        write_executable(&curl, "#!/bin/bash\nexit 0\n");
+        // The installed CLI serves port forwards beside the tunnel.
+        fs::create_dir_all(&layout.install_dir).unwrap();
+        write_executable(&layout.cli_path(), "#!/bin/bash\nexec sleep 600\n");
+        let script = render_wrapper(&layout, &helper, &runtime.join("key"), &paths)
+            .replace("/usr/bin/ssh", &ssh.to_string_lossy())
+            .replace("/usr/bin/curl", &curl.to_string_lossy());
+        write_executable(&paths.wrapper, &script);
+
+        let mut wrapper = ProcessCommand::new("/bin/bash")
+            .arg(&paths.wrapper)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let first = wait_for("the first ready marker", || read_marker(&paths.ready));
+        signal(&first["tunnel_pid"], "-KILL");
+        let second = wait_for("a reconnected tunnel", || {
+            read_marker(&paths.ready).filter(|marker| marker["tunnel_pid"] != first["tunnel_pid"])
+        });
+
+        assert_eq!(second["vm_pid"], first["vm_pid"], "the VM keeps running");
+        assert_eq!(fs::read_to_string(&tunnels).unwrap().lines().count(), 2);
+        assert!(
+            wrapper.try_wait().unwrap().is_none(),
+            "the wrapper keeps supervising"
+        );
+
+        signal(&wrapper.id().to_string(), "-TERM");
+        wait_for("the wrapper to stop", || wrapper.try_wait().unwrap());
+        let vm_alive = ProcessCommand::new("/bin/kill")
+            .args(["-0", &first["vm_pid"]])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(!vm_alive, "stopping the wrapper stops the VM");
+    }
+
+    #[test]
+    fn start_names_what_is_missing_instead_of_a_launchctl_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = DaemonPaths {
+            plist: directory.path().join("agent.plist"),
+            wrapper: directory.path().join("daemon.sh"),
+            ready: directory.path().join("ready"),
+            manager_ready: directory.path().join("manager-ready"),
+            log: directory.path().join("daemon.log"),
+            platform: directory.path().join("host-platform.json"),
+        };
+        let Err(Error::NotInstalled(missing)) = require_installed(&paths) else {
+            panic!("a missing plist must be reported");
+        };
+        assert_eq!(missing, paths.plist);
+        assert!(
+            Error::NotInstalled(missing)
+                .to_string()
+                .contains("run `firecrab service install`")
+        );
+
+        fs::write(&paths.plist, b"plist").unwrap();
+        fs::write(&paths.wrapper, b"wrapper").unwrap();
+        assert!(require_installed(&paths).is_ok());
     }
 
     #[test]

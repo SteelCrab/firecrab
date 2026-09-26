@@ -57,6 +57,8 @@ The default binary directory is `~/.local/bin`, and `FIRECRAB_INSTALL_DIR` overr
 6. Register and start the launchd resident VM plus the key-only SSH localhost API tunnel.
 
 A clean install downloads about 306 MiB and normally takes minutes rather than seconds.
+On a terminal, `install` and `reinstall` first list each pending artifact's mirror, digest, and size and ask before downloading; `--yes` skips the question, and a script or CI run never sees it.
+An interrupted download resumes from `downloads/<artifact>.partial` on the next run.
 
 ```sh
 firecrab service status
@@ -76,6 +78,7 @@ Running VMs' TCP port forwards are also served on `127.0.0.1:<hostPort>` through
 Interactive processes such as Terminal can also reach every forward at the management VM address that `service status` prints, which is the only path for UDP forwards.
 A host port another Mac process already holds is skipped and logged once in `runtime/daemon.log`, and port 5523 always belongs to the API.
 The relay restarts on its own after a crash without touching the VM; installs from before the relay pick it up with `firecrab service reinstall`.
+A dropped API tunnel (sleep, a network stall) reconnects without restarting the VM, so running microVMs survive it; after five failed reconnects the agent restarts both.
 `--purge` is deliberately destructive and refuses unsafe paths, symlinks, and roots whose final component is not `micromanager`.
 
 ## Validate and boot
@@ -112,6 +115,7 @@ A provisioning schema change replaces only the OS disk; the ext4 data disk is de
 ## Validation and troubleshooting
 
 `doctor` checks host capability, while `validate` checks the prepared kernel, initrd, OS/data separation, resources, and VZ configuration.
+If the guest finishes provisioning but its VM does not power off within two minutes, `install` stops the provisioning VM and continues from the recorded markers.
 A successful install additionally records these guest gates in `runtime/provisioned`:
 
 - Debian 13 and systemd completed EFI first boot.

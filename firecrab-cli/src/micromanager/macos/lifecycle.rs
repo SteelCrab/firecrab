@@ -121,9 +121,15 @@ pub fn install_from(
     Ok(())
 }
 
+/// Checked before the service is unregistered, so an unsafe path stops the
+/// purge while the management VM is still running.
+pub fn validate_purge(layout: &Layout) -> Result<(), Error> {
+    Ok(managed_home::validate_purge(&layout.managed_home)?)
+}
+
 pub fn uninstall_at(layout: &Layout, purge: bool) -> Result<(), Error> {
     if purge {
-        managed_home::validate_purge(&layout.managed_home)?;
+        validate_purge(layout)?;
     }
     remove_binary(&layout.cli_path())?;
     remove_binary(&layout.helper_path())?;

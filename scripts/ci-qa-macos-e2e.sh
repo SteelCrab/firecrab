@@ -17,6 +17,9 @@ API=${FIRECRAB_API:-http://127.0.0.1:5523}
 API=${API%/}
 export FIRECRAB_API=$API
 PHASE=${1:-all}
+# Guests boot three virtualization layers deep (VZ -> KVM -> Firecracker), where
+# fedora's first-boot sshd outlasts the default QA waits.
+export FIRECRAB_QA_WAIT_FACTOR=${FIRECRAB_QA_WAIT_FACTOR:-3}
 
 case "$PHASE" in
     gate | api | nginx | guest | all) ;;

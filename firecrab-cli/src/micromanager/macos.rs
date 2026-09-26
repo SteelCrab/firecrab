@@ -5,13 +5,22 @@ mod provision;
 
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
+use std::process::{Child, Command as ProcessCommand, ExitStatus};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use super::{Command, report};
 
 const HELPER_NAME: &str = "firecrab-micromanager-macos";
 const HELPER_ENV: &str = "FIRECRAB_MICROMANAGER_HELPER";
+/// The guest powers itself off once its script ends. A shutdown that hangs
+/// must not hang `install` with it: once the guest reports it is done, the
+/// helper gets this long to see the VM stop, then is asked, then made, to.
+const PROVISION_POWEROFF_GRACE: Duration = Duration::from_secs(120);
+const PROVISION_STOP_GRACE: Duration = Duration::from_secs(30);
+const PROVISION_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -223,27 +232,103 @@ fn ensure_guest_provisioned(
         report!("[PASS] guest: Debian provisioning (preserved)");
         return Ok(result);
     }
+    // A stale "complete" would start the power-off clock before the guest boots.
+    let phase = prepared.provision_marker.with_file_name("provision.phase");
+    match fs::remove_file(&phase) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(lifecycle::Error::Io {
+                action: "clear prior provisioning phase",
+                path: phase,
+                source,
+            }
+            .into());
+        }
+    }
 
     report!("[BOOT] Debian EFI provisioning VM");
     let helper = layout.helper_path();
-    let status = ProcessCommand::new(&helper)
+    let mut child = ProcessCommand::new(&helper)
         .arg("provision")
         .env("FIRECRAB_MICROMANAGER_HOME", &layout.managed_home)
-        .status()
+        .spawn()
         .map_err(|source| Error::ProvisionHelper {
-            path: helper,
+            path: helper.clone(),
             source,
         })?;
-    if !status.success() {
-        return Err(Error::ProvisionExit(status));
+    let run = wait_for_provisioning(
+        &mut child,
+        || provision::guest_finished(prepared),
+        PROVISION_POWEROFF_GRACE,
+        PROVISION_STOP_GRACE,
+    )
+    .map_err(|source| Error::ProvisionHelper {
+        path: helper,
+        source,
+    })?;
+    match run {
+        ProvisionRun::Exited(status) if !status.success() => {
+            return Err(Error::ProvisionExit(status));
+        }
+        ProvisionRun::Exited(_) => {}
+        ProvisionRun::Stopped => report!(
+            "[WARNING] guest: provisioning finished but the VM did not power off within {}s; stopped it",
+            PROVISION_POWEROFF_GRACE.as_secs()
+        ),
     }
+    // A stopped run still has to have left the success marker behind.
     let result = provision::guest_result(prepared)?.ok_or(Error::MissingProvisionMarker)?;
     report!("[PASS] guest: Debian provisioning");
     Ok(result)
 }
 
+#[derive(Debug)]
+enum ProvisionRun {
+    Exited(ExitStatus),
+    /// The guest finished its script but never powered off, so the helper was stopped.
+    Stopped,
+}
+
+fn wait_for_provisioning(
+    child: &mut Child,
+    guest_finished: impl Fn() -> bool,
+    poweroff_grace: Duration,
+    stop_grace: Duration,
+) -> io::Result<ProvisionRun> {
+    let mut finished_at = None;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(ProvisionRun::Exited(status));
+        }
+        match finished_at {
+            None if guest_finished() => finished_at = Some(Instant::now()),
+            Some(at) if Instant::now().duration_since(at) >= poweroff_grace => break,
+            _ => {}
+        }
+        thread::sleep(PROVISION_POLL);
+    }
+    // The helper turns SIGTERM into a VZ stop request; SIGKILL ends it outright.
+    let _ = ProcessCommand::new("/bin/kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status();
+    let asked = Instant::now();
+    while asked.elapsed() < stop_grace {
+        if child.try_wait()?.is_some() {
+            return Ok(ProvisionRun::Stopped);
+        }
+        thread::sleep(PROVISION_POLL);
+    }
+    let _ = child.kill();
+    child.wait()?;
+    Ok(ProvisionRun::Stopped)
+}
+
 fn run_uninstall(purge: bool) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    if purge {
+        lifecycle::validate_purge(&layout)?;
+    }
     daemon::uninstall(&layout)?;
     lifecycle::uninstall_at(&layout, purge)?;
     report!("microManager uninstalled");
@@ -381,6 +466,52 @@ mod tests {
 
         let code = run_with_helper(&helper, &Command::Doctor { json: false }).unwrap();
         assert_eq!(code, 7);
+    }
+
+    fn provisioning(script: &str) -> Child {
+        ProcessCommand::new("/bin/sh")
+            .args(["-c", script])
+            .spawn()
+            .unwrap()
+    }
+
+    const SHORT: Duration = Duration::from_millis(300);
+
+    #[test]
+    fn a_helper_that_exits_is_reported_as_is() {
+        let mut child = provisioning("exit 3");
+        let run = wait_for_provisioning(&mut child, || true, SHORT, SHORT).unwrap();
+        assert!(matches!(run, ProvisionRun::Exited(status) if status.code() == Some(3)));
+    }
+
+    #[test]
+    fn a_running_guest_is_never_stopped_before_it_finishes() {
+        // Stands in for a guest that is still provisioning: it exits on its own.
+        let mut child = provisioning("sleep 1; exit 0");
+        let run = wait_for_provisioning(&mut child, || false, SHORT, SHORT).unwrap();
+        assert!(matches!(run, ProvisionRun::Exited(status) if status.success()));
+    }
+
+    #[test]
+    fn a_finished_guest_that_never_powers_off_is_asked_to_stop() {
+        let mut child = provisioning("exec sleep 600");
+        let started = Instant::now();
+        let run =
+            wait_for_provisioning(&mut child, || true, SHORT, Duration::from_secs(30)).unwrap();
+        assert!(matches!(run, ProvisionRun::Stopped));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "SIGTERM ended it well before the kill deadline"
+        );
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn a_helper_that_ignores_the_stop_request_is_killed() {
+        let mut child = provisioning("trap '' TERM; while :; do sleep 1; done");
+        let run = wait_for_provisioning(&mut child, || true, SHORT, SHORT).unwrap();
+        assert!(matches!(run, ProvisionRun::Stopped));
+        assert!(child.try_wait().unwrap().is_some());
     }
 
     #[test]

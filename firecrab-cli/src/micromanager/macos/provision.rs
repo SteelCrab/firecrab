@@ -160,6 +160,15 @@ pub fn prepare(
     })
 }
 
+/// The guest script's last act before it powers off: the `complete` phase, or
+/// a failure marker from its exit trap.
+pub fn guest_finished(prepared: &PreparedLayout) -> bool {
+    let runtime_file = |name| prepared.provision_marker.with_file_name(name);
+    runtime_file("provision.failed").is_file()
+        || fs::read_to_string(runtime_file("provision.phase"))
+            .is_ok_and(|phase| phase.trim() == "complete")
+}
+
 pub fn guest_result(prepared: &PreparedLayout) -> Result<Option<String>, Error> {
     let failed = prepared.provision_marker.with_file_name("provision.failed");
     if failed.is_file() {
@@ -525,6 +534,9 @@ apt-get update
 phase apt-install
 apt-get install -y ca-certificates curl sudo tar findutils xz-utils gzip zstd lz4 lzop \
   nftables dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat openssh-server
+# firecrab-net-helper runs its own dnsmasq per bridge; the packaged unit only
+# fails at boot fighting systemd-resolved for port 53 and leaves the guest degraded.
+systemctl mask --now dnsmasq.service
 
 phase data-disk
 if ! blkid /dev/vdb >/dev/null 2>&1; then
@@ -852,6 +864,12 @@ mod tests {
             .expect("getty.target mask");
         let kernel = provision.find("\nphase kernel\n").expect("kernel phase");
         assert!(console < mask && mask < kernel);
+        // firecrab-net-helper owns DHCP/DNS; the packaged unit only fails on port 53.
+        let installed = provision.find("\nphase apt-install\n").expect("apt phase");
+        let dnsmasq = provision
+            .find("\nsystemctl mask --now dnsmasq.service\n")
+            .expect("packaged dnsmasq unit masked");
+        assert!(installed < dnsmasq);
         assert!(
             provision.contains("e2fsprogs fakeroot "),
             "Debian guest apt-get must install fakeroot next to e2fsprogs; OCI import packs ext4 via fakeroot"
@@ -876,6 +894,28 @@ mod tests {
         fs::write(directory.path().join("sentinel"), b"keep").unwrap();
         prepare_sparse_disk(&disk, 1024 * 1024).unwrap();
         assert_eq!(fs::metadata(&disk).unwrap().len(), 1024 * 1024);
+    }
+
+    #[test]
+    fn the_guest_is_finished_once_it_completes_or_fails() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = directory.path();
+        let prepared = PreparedLayout {
+            os_disk: runtime.join("debian-system.raw"),
+            data_disk: runtime.join("firecrab-data.raw"),
+            seed_iso: runtime.join("cloud-init-seed.iso"),
+            efi_variable_store: runtime.join("efi-variable-store"),
+            provision_marker: runtime.join("provisioned"),
+            ssh_private_key: runtime.join("manager_ed25519"),
+        };
+        assert!(!guest_finished(&prepared), "nothing has run yet");
+        fs::write(runtime.join("provision.phase"), "nested-firecracker\n").unwrap();
+        assert!(!guest_finished(&prepared), "still provisioning");
+        fs::write(runtime.join("provision.phase"), "complete\n").unwrap();
+        assert!(guest_finished(&prepared));
+        fs::write(runtime.join("provision.phase"), "apt-install\n").unwrap();
+        fs::write(runtime.join("provision.failed"), "100\n").unwrap();
+        assert!(guest_finished(&prepared), "a failure also ends the script");
     }
 
     #[test]

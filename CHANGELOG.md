@@ -34,6 +34,10 @@ Entries land here as work merges, and move under the next version heading when t
 - On macOS, the microManager daemon also serves running VMs' TCP port
   forwards on `127.0.0.1:<hostPort>` over the management SSH connection;
   UDP forwards stay reachable at the management VM address ([#266]).
+- `firecrab service install` and `reinstall` list each pending download's
+  mirror, digest, and size on a terminal and ask first (`--yes` skips it),
+  then draw a progress gauge; an interrupted download resumes on the next
+  run ([#266]).
 
 ### Changed
 
@@ -48,6 +52,12 @@ Entries land here as work merges, and move under the next version heading when t
 - The macOS management guest installs `fakeroot`, and a missing binary is
   reported as such, so OCI import can pack ext4 without a false missing-tree
   error ([#266]).
+- On macOS, a dropped API tunnel reconnects instead of restarting the
+  management VM and every microVM in it; an `uninstall --purge` refused for an
+  unsafe path no longer stops the service first; `install` no longer hangs when
+  the provisioning guest never powers off; the management guest no longer boots
+  degraded by the packaged `dnsmasq.service`; and status output no longer
+  panics when stdout is non-blocking ([#266]).
 
 ### Improved
 

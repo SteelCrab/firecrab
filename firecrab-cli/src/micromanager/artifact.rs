@@ -99,6 +99,7 @@ fn fetch(
         path: directory.to_path_buf(),
         source,
     })?;
+    remove_abandoned_staging(directory);
     let mut cached_specs = Vec::with_capacity(specs.len());
     for spec in specs {
         cached_specs.push(cached(&directory.join(spec.filename), spec)?);
@@ -149,9 +150,13 @@ fn fetch(
 
 fn confirmed(input: &mut dyn BufRead) -> Result<bool, Error> {
     let mut answer = String::new();
-    input
+    let read = input
         .read_line(&mut answer)
         .map_err(|source| io_error("read download confirmation", Path::new("<stdin>"), source))?;
+    if read == 0 {
+        // Ctrl-D echoes no newline, so the next line would land after the prompt.
+        report!("");
+    }
     Ok(matches!(
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
@@ -379,8 +384,9 @@ const RETRY_DELAY: Duration = if cfg!(test) {
     Duration::from_secs(3)
 };
 
-/// Stages into a temporary file so an interrupted download never lands under the
-/// artifact's real name, where the next run would treat it as complete.
+/// Stages under `<filename>.partial` so an interrupted download never lands
+/// under the artifact's real name, where the next run would treat it as
+/// complete, and so that next run (after Ctrl-C or a crash) resumes it.
 fn download_one(
     client: &reqwest::blocking::Client,
     spec: &ArtifactSpec,
@@ -388,29 +394,55 @@ fn download_one(
     destination: &Path,
     show_progress: bool,
 ) -> Result<(), Error> {
-    let mut staged = tempfile::NamedTempFile::new_in(directory)
-        .map_err(|source| io_error("create partial artifact", directory, source))?;
+    let partial = directory.join(format!("{}.partial", spec.filename));
+    let mut file = open_partial(&partial)?;
     let mut attempt = 1;
-    while let Err(error) = resume(client, spec, staged.as_file_mut(), show_progress) {
+    while let Err(error) = resume(client, spec, &mut file, show_progress) {
         if attempt == ATTEMPTS || !retryable(&error) {
+            if file.metadata().is_ok_and(|metadata| metadata.len() == 0) {
+                let _ = fs::remove_file(&partial);
+            }
             return Err(error);
         }
         report!("[RETRY] {}: {error}", spec.label);
         attempt += 1;
         thread::sleep(RETRY_DELAY * attempt);
     }
-    staged
-        .flush()
-        .map_err(|source| io_error("flush artifact", staged.path(), source))?;
-    staged
-        .as_file()
-        .sync_all()
-        .map_err(|source| io_error("sync artifact", staged.path(), source))?;
-    verify(staged.path(), spec.algorithm, spec.digest)?;
-    staged
-        .persist(destination)
-        .map_err(|error| io_error("publish artifact", destination, error.error))?;
-    Ok(())
+    file.sync_all()
+        .map_err(|source| io_error("sync artifact", &partial, source))?;
+    drop(file);
+    if let Err(error) = verify(&partial, spec.algorithm, spec.digest) {
+        // Complete bytes with the wrong digest cannot be resumed into the right ones.
+        let _ = fs::remove_file(&partial);
+        return Err(error);
+    }
+    fs::rename(&partial, destination)
+        .map_err(|source| io_error("publish artifact", destination, source))
+}
+
+fn open_partial(path: &Path) -> Result<File, Error> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(path)
+        .map_err(|source| io_error("open partial artifact", path, source))
+}
+
+/// Releases before `.partial` staged into randomly named `.tmp*` files, which
+/// an interrupted run left behind for good. Best effort: nothing reads them.
+fn remove_abandoned_staging(directory: &Path) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let abandoned = entry.file_name().to_string_lossy().starts_with(".tmp")
+            && entry.file_type().is_ok_and(|kind| kind.is_file());
+        if abandoned {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Continues from whatever an earlier attempt already wrote. A server that
@@ -806,6 +838,62 @@ mod tests {
             matches!(error, Error::HttpStatus { status, .. } if status == StatusCode::NOT_FOUND)
         );
         assert!(!directory.path().join("abc.bin").exists());
+        assert!(
+            !directory.path().join("abc.bin.partial").exists(),
+            "an empty partial is not kept"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_run_resumes_from_its_partial_file() {
+        let (url, server) = serve(vec![
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef",
+        ]);
+        let directory = tempfile::tempdir().expect("temp dir");
+        let partial = directory.path().join("abc.bin.partial");
+        fs::write(&partial, b"abc").expect("an earlier run's bytes");
+        fetch_quietly(&[remote_spec(url)], directory.path()).expect("the partial is completed");
+
+        let requests = server.join().expect("server finishes");
+        assert!(
+            requests[0].contains("range: bytes=3-"),
+            "the next run resumes: {}",
+            requests[0]
+        );
+        assert_eq!(
+            fs::read(directory.path().join("abc.bin")).expect("published"),
+            b"abcdef"
+        );
+        assert!(!partial.exists(), "publishing consumes the partial");
+    }
+
+    #[test]
+    fn a_complete_partial_with_the_wrong_digest_is_discarded() {
+        let (url, server) = serve(vec![
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nContent-Range: bytes 3-5/6\r\nConnection: close\r\n\r\ndef",
+        ]);
+        let directory = tempfile::tempdir().expect("temp dir");
+        let partial = directory.path().join("abc.bin.partial");
+        fs::write(&partial, b"abx").expect("corrupt earlier bytes");
+        let error =
+            fetch_quietly(&[remote_spec(url)], directory.path()).expect_err("abxdef is not abcdef");
+
+        server.join().expect("server finishes");
+        assert!(matches!(error, Error::Checksum { .. }));
+        assert!(!partial.exists(), "the next run starts over");
+        assert!(!directory.path().join("abc.bin").exists());
+    }
+
+    #[test]
+    fn staging_files_abandoned_by_older_releases_are_removed() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        write_abc(directory.path());
+        let abandoned = directory.path().join(".tmpJXayJV");
+        fs::write(&abandoned, b"half a download").expect("abandoned staging");
+        fetch_quietly(&[spec(HashAlgorithm::Sha256, ABC_SHA256)], directory.path())
+            .expect("cached artifact is reused");
+        assert!(!abandoned.exists());
+        assert!(directory.path().join("abc.bin").is_file());
     }
 
     #[test]
