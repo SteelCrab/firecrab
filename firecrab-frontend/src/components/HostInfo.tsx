@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
-import type { HostStatusResponse, NetworkInfoResponse } from "../bindings";
+import type { HostOs, HostPlatformResponse, HostStatusResponse, NetworkInfoResponse } from "../bindings";
 import { getHostStatus, getNetworkInfo } from "../api/client";
 import { useI18n } from "../i18n";
 
 const POLL_MILLIS = 2000;
 
-/** Read-only view of the host's network config and live resource status. */
+const OS_ICONS: Record<HostOs, string> = {
+  linux: "/tux.svg",
+  macos: "/apple.svg",
+  windows: "/windows.svg",
+};
+
+/** Read-only view of the host machine, its network config, and live resource status. */
 export default function HostInfo() {
   const { locale, t } = useI18n();
   const [network, setNetwork] = useState<NetworkInfoResponse | null>(null);
@@ -34,8 +40,9 @@ export default function HostInfo() {
   }, []);
 
   return (
-    <section className="panel">
+    <section className="panel host-info">
       <h2 className="panel-title">{t("Host", "호스트 정보")}</h2>
+      {status?.platform && <HostPlatform platform={status.platform} />}
       {network ? (
         <dl className="detail-fields mono">
           <dt>bridge</dt>
@@ -69,6 +76,36 @@ export default function HostInfo() {
         <div className="empty">{t("Loading…", "불러오는 중…")}</div>
       )}
     </section>
+  );
+}
+
+/** Which machine this is, and the Linux Firecrab runs on inside it. */
+function HostPlatform({ platform }: { platform: HostPlatformResponse }) {
+  const { t } = useI18n();
+  const details = [platform.architecture, platform.virtualization].filter(Boolean).join(" · ");
+  return (
+    <>
+      <div className="host-platform">
+        <img src={OS_ICONS[platform.os]} alt="" className="host-platform-icon" aria-hidden="true" />
+        <div>
+          <div className="host-platform-name">
+            {platform.name}
+            {platform.version && <span className="host-platform-version"> {platform.version}</span>}
+          </div>
+          <div className="host-platform-details mono">{details}</div>
+        </div>
+      </div>
+      <dl className="detail-fields mono">
+        {platform.virtualization && (
+          <>
+            <dt>{t("firecrab runs on", "firecrab 실행 환경")}</dt>
+            <dd>{platform.system}</dd>
+          </>
+        )}
+        <dt>kernel</dt>
+        <dd>{platform.kernel}</dd>
+      </dl>
+    </>
   );
 }
 

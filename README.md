@@ -59,8 +59,16 @@ in the [installation guide](public-docs/installation.md).
 ### Install the remote CLI binary
 
 The standalone `firecrab` client manages a remote Linux host from Linux, Apple
-silicon macOS, or x86_64/ARM64 Windows. It does not install Firecracker or local host
-services.
+silicon macOS, or x86_64/ARM64 Windows. The macOS archive installation only installs
+the CLI and its helper. On a runtime-supported Apple silicon Mac, run
+`firecrab service install` to provision a pinned Debian management VM, run Firecrab
+and Firecracker through nested KVM, and register the resident launchd service that
+exposes the managed dashboard on localhost. The full path has been validated on Apple M5 with macOS
+26.6.2; other M3-or-later configurations remain gated by `firecrab service doctor` and
+end-to-end installation evidence. See [microManager on macOS](public-docs/micromanager-macos.md).
+On Windows, the same `firecrab service install` imports a pinned Debian WSL2
+distribution, runs Firecrab and Firecracker inside it through nested KVM, and keeps it
+resident with a per-user scheduled task. See [microManager on Windows](public-docs/micromanager-windows.md).
 
 On Linux or macOS, download and verify the release installer before executing it:
 

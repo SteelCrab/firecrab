@@ -13,7 +13,7 @@ Pass `--libc gnu` or `--libc musl` to override.
 | [Requirements](#requirements) | Linux host prerequisites |
 | [Check the host](#check-the-host) | Read-only readiness check |
 | [Install](#install) | Full Linux host installation |
-| [CLI-only installation](#cli-only-installation) | Linux, macOS, and Windows remote client |
+| [CLI-only installation](#cli-only-installation) | Remote clients and the Apple silicon macOS managed VM |
 | [Common options](#common-options) | Full host installer flags |
 | [Default paths](#default-paths) | Full host filesystem layout |
 | [Check the result](#check-the-result) | Service and API verification |
@@ -102,12 +102,14 @@ Import one afterwards with [OCI import](oci.md) or the dashboard Images page.
 ## CLI-only installation
 
 `firecrab` is a standalone remote client for Linux, macOS, and Windows.
-The CLI-only installers require no root access, Rust toolchain, Firecracker, or local host services.
-After installation, save and verify a remote endpoint with the [CLI host profiles](firecrab-cli.md#host-profiles).
+The Apple silicon macOS archive also carries the signed Virtualization.framework helper used by `firecrab service install`.
+The user-level installers require no root access or Rust toolchain.
+Remote usage needs no local Firecracker services; macOS local usage provisions them inside managed Debian.
+After installation, either configure a [remote host profile](firecrab-cli.md#host-profiles) or follow [microManager on macOS](micromanager-macos.md).
 
 ### Linux and macOS
 
-The POSIX installer detects Linux or macOS and x86_64 or ARM64, verifies `SHA256SUMS`, and installs to `~/.local/bin`.
+The POSIX installer supports Linux x86_64 and ARM64, and macOS Apple silicon only; it verifies `SHA256SUMS` and installs to `~/.local/bin`.
 Download the installer and the separately published release checksum, verify the installer, and only then execute it.
 
 ```sh
@@ -122,7 +124,26 @@ fi
 sh install-cli.sh
 ```
 
-Remove the client with the same installer. Saved host profiles are retained by default; add `--purge` to also remove `~/.firecrab/config.toml`.
+On Apple silicon macOS, provision and start the complete local service after the client archive is installed.
+
+```sh
+firecrab service doctor
+firecrab service install
+firecrab service status
+# http://127.0.0.1:5523/
+```
+
+The service install downloads about 306 MiB, verifies pinned checksums, provisions Debian, boots the nested Firecracker E2E gate, and registers a launchd agent.
+
+Remove a macOS local service before removing its client binaries; omit `--purge` to retain managed VM data.
+
+```sh
+firecrab service uninstall
+# or: firecrab service uninstall --purge
+```
+
+Remove the client with the same installer.
+Saved host profiles are retained by default; add `--purge` to also remove `~/.firecrab/config.toml`.
 
 ```sh
 sh install-cli.sh --uninstall
@@ -153,6 +174,7 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 
 It installs `firecrab.exe` under `%LOCALAPPDATA%\Programs\firecrab\bin` and adds that directory to the user `PATH`.
 Open a new terminal after the first installation.
+To run Firecrab on this Windows host instead of only managing a remote one, continue with [microManager on Windows](micromanager-windows.md).
 
 Pin a client archive by passing `-Version` to the downloaded installer.
 

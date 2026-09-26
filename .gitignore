@@ -4,10 +4,15 @@
 /firecracker-config.json
 /firecracker-console.log
 
-# Rust
+# Rust / Swift
 target/
+.build/
 lcov.info
 doc-coverage.txt
+
+# Python
+__pycache__/
+*.pyc
 
 # Frontend build output / dependencies
 firecrab-frontend/dist/

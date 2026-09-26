@@ -21,8 +21,23 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Apple silicon macOS releases include an entitlement-signed `microManager`
+  helper exposed through `firecrab service`. Install pins and verifies Debian 13,
+  Firecracker v1.17.0, and Firecrab v0.2.2 artifacts; provisions separate OS and
+  persistent data disks; requires usable nested KVM and a real Firecracker workload
+  boot; and starts a launchd-resident VM with a key-only localhost API tunnel.
+  Reinstall and ordinary uninstall preserve managed data, while explicit
+  `uninstall --purge` removes it. The complete path is validated on Apple M5 with
+  macOS 26.6.2; other M3-or-later hosts remain runtime and E2E gated ([#266]).
 - Public documentation lists the shared Linux, macOS, and Windows QA work
   list ([#266]).
+- On macOS, the microManager daemon also serves running VMs' TCP port
+  forwards on `127.0.0.1:<hostPort>` over the management SSH connection;
+  UDP forwards stay reachable at the management VM address ([#266]).
+- `firecrab service install` and `reinstall` list each pending download's
+  mirror, digest, and size on a terminal and ask first (`--yes` skips it),
+  then draw a progress gauge; an interrupted download resumes on the next
+  run ([#266]).
 
 ### Changed
 
@@ -34,7 +49,15 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
-- None.
+- The macOS management guest installs `fakeroot`, and a missing binary is
+  reported as such, so OCI import can pack ext4 without a false missing-tree
+  error ([#266]).
+- On macOS, a dropped API tunnel reconnects instead of restarting the
+  management VM and every microVM in it; an `uninstall --purge` refused for an
+  unsafe path no longer stops the service first; `install` no longer hangs when
+  the provisioning guest never powers off; the management guest no longer boots
+  degraded by the packaged `dnsmasq.service`; and status output no longer
+  panics when stdout is non-blocking ([#266]).
 
 ### Improved
 

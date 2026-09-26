@@ -35,7 +35,8 @@ Native release CI runs `cargo test` and `cargo build` for these targets:
 - `host add/list/use/show/remove`
 - serialized profile mutation and unknown-key rejection
 - `--api` and `--host` precedence
-- Linux-only host administration commands
+- Linux-only native host administration commands
+- Apple silicon macOS `service` install/start/stop/status/reinstall/uninstall commands
 - cross-platform raw terminal restoration
 - SHA-256 release verification
 - replacement without following an existing installer symlink
