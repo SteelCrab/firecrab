@@ -11,6 +11,7 @@ import type { Locale } from "./i18n";
  */
 export const VIEWS = [
   { id: "vms", labels: { en: "MicroVM", ko: "MicroVM" } },
+  { id: "pools", labels: { en: "Pools", ko: "풀" } },
   { id: "networks", labels: { en: "Networks", ko: "네트워크" } },
   { id: "storages", labels: { en: "Storage", ko: "스토리지" } },
   { id: "images", labels: { en: "Images", ko: "이미지" } },

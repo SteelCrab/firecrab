@@ -9,6 +9,7 @@ pub mod micro_storages;
 pub mod microregistry;
 pub mod network;
 pub mod oci;
+pub mod pools;
 pub mod shells;
 pub mod storage;
 pub mod update;

@@ -44,6 +44,7 @@ npm run dev --prefix firecrab-frontend
 | --- | --- |
 | MicroVM | List at `#/vms`. Create at `#/vms/new` |
 | Terminal | Serial console |
+| Pools | Warm MicroVM pools and their leases at `#/pools` |
 | Networks | MicroNetworks at `#/networks`. IPv6 is a create-time select |
 | Storage | MicroStorage pools |
 | Images | M2Image inventory, OCI Import, and MicroRegistry |
@@ -93,6 +94,15 @@ npm run dev --prefix firecrab-frontend
 - Disk: grow only
 - Per-VM `env`: editable while `running`; save restarts the guest service; stored in plaintext
 - Image without `/etc/firecrab/services.d/app`: ignores runtime env (`hasGuestService` on `GET /api/images`)
+
+## Pools
+
+- Route: `#/pools`
+- Create: name, image, network, vCPU, RAM, disk, `minReady`, `maxSize`, lease TTL
+- List: pinned image version, ready against `minReady`, leased, members against `maxSize`
+- `Acquire` leases one ready VM; `Delete` is refused while a lease is active
+- Select a pool for its members by state, the last member failure, sizing edits, and leases
+- An active lease links to the VM's terminal; `Release` gives the VM back to be deleted and replaced
 
 ## Networks
 

@@ -3,6 +3,7 @@ import type {
   AssignVmStorageRequest,
   CreateMicroNetworkRequest,
   CreateMicroStorageRequest,
+  CreatePoolRequest,
   CreateShellRequest,
   CreateShellRevisionRequest,
   CreateVmRequest,
@@ -22,6 +23,8 @@ import type {
   MicroStorageDetailResponse,
   MicroStorageResponse,
   NetworkInfoResponse,
+  PoolLeaseResponse,
+  PoolResponse,
   SshHostKeyResponse,
   ShellDetailResponse,
   ShellResponse,
@@ -31,6 +34,7 @@ import type {
   UpdateCheckResponse,
   UpdateImageKernelRequest,
   UpdateMicroNetworkRequest,
+  UpdatePoolRequest,
   UpdateStartResponse,
   UpdateVmShellsRequest,
   UpdateVmPortForwardsRequest,
@@ -392,6 +396,48 @@ export async function deleteVm(id: string): Promise<void> {
   if (!response.ok) {
     throw await fail(response);
   }
+}
+
+export function listPools(): Promise<PoolResponse[]> {
+  return fetchJson("/api/pools");
+}
+
+export function createPool(request: CreatePoolRequest): Promise<PoolResponse> {
+  return fetchJson("/api/pools", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export function updatePool(id: string, request: UpdatePoolRequest): Promise<PoolResponse> {
+  return fetchJson(`/api/pools/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+/** Flags the pool for deletion; refused (409) while a lease is active. */
+export function deletePool(id: string): Promise<PoolResponse> {
+  return fetchJson(`/api/pools/${id}`, { method: "DELETE" });
+}
+
+/** Leases one ready member. Retrying with the same key returns the same lease. */
+export function acquirePoolLease(id: string, idempotencyKey?: string): Promise<PoolLeaseResponse> {
+  return fetchJson(`/api/pools/${id}/acquire`, {
+    method: "POST",
+    headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
+  });
+}
+
+export function listPoolLeases(id: string): Promise<PoolLeaseResponse[]> {
+  return fetchJson(`/api/pools/${id}/leases`);
+}
+
+/** Ends the lease; its VM is deleted and replaced, never reused. */
+export function releasePoolLease(id: string, leaseId: string): Promise<PoolLeaseResponse> {
+  return fetchJson(`/api/pools/${id}/leases/${leaseId}`, { method: "DELETE" });
 }
 
 export function listMicroNetworks(): Promise<MicroNetworkResponse[]> {

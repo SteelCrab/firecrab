@@ -18,10 +18,19 @@ interface ImageRow {
 interface NetworkRow {
   id: string;
   name: string;
+  subnetCidr?: string;
   ipv6Cidr?: string | null;
   ipv6Gateway?: string | null;
   ipv6AddressMode?: string | null;
   ipv6Egress?: string | null;
+}
+
+interface PoolSummary {
+  id: string;
+  name: string;
+  deleting: boolean;
+  minReady: number;
+  members: number;
 }
 
 interface CatalogImageRow {
@@ -245,5 +254,59 @@ export class ApiCleanup {
       if (!wanted.has(row.name)) continue;
       await this.deleteNetwork(row.id);
     }
+  }
+
+  /** IPv4-only MicroNetwork. Caller picks a CIDR that does not overlap. */
+  async createMicroNetwork(
+    name: string,
+    subnetCidr: string,
+  ): Promise<{ id: string; name: string; subnetCidr: string }> {
+    const { status, json } = await this.request("POST", "/api/micro-networks", {
+      name,
+      subnetCidr,
+    });
+    const row = (json ?? {}) as { id?: unknown; name?: unknown; subnetCidr?: unknown };
+    if (
+      status >= 400 ||
+      typeof row.id !== "string" ||
+      typeof row.name !== "string" ||
+      typeof row.subnetCidr !== "string"
+    ) {
+      throw new Error(`POST /api/micro-networks ${status}: ${JSON.stringify(json)}`);
+    }
+    return { id: row.id, name: row.name, subnetCidr: row.subnetCidr };
+  }
+
+  async listPools(): Promise<PoolSummary[]> {
+    const { status, json } = await this.request("GET", "/api/pools");
+    if (status >= 400 || !Array.isArray(json)) {
+      throw new Error(`GET /api/pools ${status}: ${JSON.stringify(json)}`);
+    }
+    const pools: PoolSummary[] = [];
+    for (const item of json) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as {
+        id?: unknown;
+        name?: unknown;
+        deleting?: unknown;
+        minReady?: unknown;
+        members?: unknown;
+      };
+      if (typeof row.id !== "string" || typeof row.name !== "string") continue;
+      pools.push({
+        id: row.id,
+        name: row.name,
+        deleting: row.deleting === true,
+        minReady: typeof row.minReady === "number" ? row.minReady : Number.NaN,
+        members: Array.isArray(row.members) ? row.members.length : 0,
+      });
+    }
+    return pools;
+  }
+
+  async deletePool(id: string): Promise<void> {
+    const { status, json } = await this.request("DELETE", `/api/pools/${id}`);
+    if (status === 404 || (status >= 200 && status < 300)) return;
+    throw new Error(`DELETE /api/pools/${id} ${status}: ${JSON.stringify(json)}`);
   }
 }

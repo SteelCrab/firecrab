@@ -88,6 +88,27 @@ npm run test:ipv6 --prefix firecrab-e2e
 - Needs a helper the API process can connect to (`/run/firecrab/net-helper.sock`)
 - systemd `firecrab-api` runs as user `firecrab`; a debug helper that recreates the socket as `root:pista` makes create return 500
 
+Warm MicroVM pools ([#291](https://github.com/SteelCrab/firecrab/issues/291)), form only:
+
+```sh
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm run test:pools --prefix firecrab-e2e
+```
+
+- Expect **1 passed, 1 skipped** — the flag is set and the form test already ran
+- This spec does not boot a guest
+
+Create `pool-e2e` (`minReady` 0), acquire when no ready member exists, and delete the row:
+
+```sh
+./scripts/dev-net-helper.sh    # terminal session 1
+npm run test:pools --prefix firecrab-e2e
+```
+
+- Expect **2 passed**
+- Still does not boot a MicroVM (`minReady` 0; acquire fails closed)
+- `afterAll` deletes `pool-e2e`, network `172.31.91.0/24`, and the imported alias this spec created
+- Needs a helper the API process can connect to (`/run/firecrab/net-helper.sock`)
+
 OCI DHCP boot (busybox `udhcpc`, nginx-stable path), form only:
 
 ```sh

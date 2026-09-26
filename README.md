@@ -294,8 +294,8 @@ python3 scripts/check-changelog.py
 ```
 
 `cargo clippy` runs with `-D warnings` — one warning fails CI, no baseline to drift.
-`npm test --prefix firecrab-e2e` runs all 4 spec files (OCI import, MicroRegistry
-register, MicroNetwork IPv6, OCI DHCP boot) together; per-suite pass/skip counts,
+`npm test --prefix firecrab-e2e` runs all 5 spec files (OCI import, MicroRegistry
+register, MicroNetwork IPv6, OCI DHCP boot, pools) together; per-suite pass/skip counts,
 environment needs, and the register spec's known leftover-catalog-row gotcha (L3
 `microregistry_local` has no DELETE yet, so a stale row fails its `beforeAll`) are in
 [firecrab-e2e/README.md](firecrab-e2e/README.md). Full pre-PR gate list — shellcheck,

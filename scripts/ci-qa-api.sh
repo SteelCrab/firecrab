@@ -14,6 +14,7 @@
 #       V1-V13     ci-qa-guest.sh on Ubuntu with /dev/kvm
 #       C1 C2 C4   guest boot / image import
 #       X5         no custom OCI alias
+#       P1-P6, X7, and C6 run in ci-qa-guest.sh because this script does not install an image
 # N4: IPv6 SLAAC POST; HTTP 400 → SKIP with body, do not fail.
 # Prefix qa-ci-; IPv4 172.31.201.0/24. Never name a network "ci".
 set -euo pipefail

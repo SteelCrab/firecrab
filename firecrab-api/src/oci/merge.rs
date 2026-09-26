@@ -9,7 +9,9 @@
 use super::*;
 
 use std::collections::{BTreeMap, HashSet};
-use std::ffi::{CString, OsString};
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
+use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
@@ -1052,46 +1054,61 @@ fn path_depth(path: &Path) -> usize {
 
 /// Renames the finished tree into place without replacing an existing path.
 fn publish_tree(partial: &Path, destination: &Path) -> Result<(), ResolveError> {
-    let source = CString::new(partial.as_os_str().as_bytes()).map_err(|error| {
-        merge_io(
-            "encode partial path",
-            partial.to_owned(),
-            io::Error::new(io::ErrorKind::InvalidInput, error),
-        )
-    })?;
-    let target = CString::new(destination.as_os_str().as_bytes()).map_err(|error| {
-        merge_io(
-            "encode destination path",
+    #[cfg(target_os = "linux")]
+    {
+        let source = CString::new(partial.as_os_str().as_bytes()).map_err(|error| {
+            merge_io(
+                "encode partial path",
+                partial.to_owned(),
+                io::Error::new(io::ErrorKind::InvalidInput, error),
+            )
+        })?;
+        let target = CString::new(destination.as_os_str().as_bytes()).map_err(|error| {
+            merge_io(
+                "encode destination path",
+                destination.to_owned(),
+                io::Error::new(io::ErrorKind::InvalidInput, error),
+            )
+        })?;
+        // libc does not expose renameat2 on every Linux libc (notably musl), but
+        // Firecrab's release architectures all provide the kernel syscall.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                libc::AT_FDCWD,
+                source.as_ptr(),
+                libc::AT_FDCWD,
+                target.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            return Err(ResolveError::MergeDestinationExists {
+                path: destination.to_owned(),
+            });
+        }
+        return Err(merge_io(
+            "publish partial tree",
             destination.to_owned(),
-            io::Error::new(io::ErrorKind::InvalidInput, error),
-        )
-    })?;
-    // libc does not expose renameat2 on every Linux libc (notably musl), but
-    // Firecrab's release architectures all provide the kernel syscall.
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            source.as_ptr(),
-            libc::AT_FDCWD,
-            target.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        return Ok(());
+            error,
+        ));
     }
-    let error = io::Error::last_os_error();
-    if error.kind() == io::ErrorKind::AlreadyExists {
-        return Err(ResolveError::MergeDestinationExists {
-            path: destination.to_owned(),
-        });
+    #[cfg(not(target_os = "linux"))]
+    {
+        // renameat2 is Linux-only. A plain rename would replace an existing
+        // destination, which this function must not do.
+        if destination.exists() {
+            return Err(ResolveError::MergeDestinationExists {
+                path: destination.to_owned(),
+            });
+        }
+        fs::rename(partial, destination)
+            .map_err(|error| merge_io("publish partial tree", destination.to_owned(), error))
     }
-    Err(merge_io(
-        "publish partial tree",
-        destination.to_owned(),
-        error,
-    ))
 }
 
 /// Wraps a filesystem failure with the merge operation that hit it.

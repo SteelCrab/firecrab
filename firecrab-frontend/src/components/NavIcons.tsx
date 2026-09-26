@@ -20,6 +20,15 @@ export default function NavIcon({ id, className }: { id: NavIconId; className?: 
           <rect x="18.5" y="10.4" width="4" height="3.2" rx="1" />
         </svg>
       );
+    // Three stacked chips — a pool of interchangeable MicroVMs.
+    case "pools":
+      return (
+        <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+          <rect x="3" y="3" width="18" height="5" rx="1.5" />
+          <rect x="3" y="9.5" width="18" height="5" rx="1.5" />
+          <rect x="3" y="16" width="18" height="5" rx="1.5" />
+        </svg>
+      );
     // Three linked nodes — subnets and bridges as a small mesh.
     case "networks":
       return (

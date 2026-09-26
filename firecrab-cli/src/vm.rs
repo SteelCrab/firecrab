@@ -324,6 +324,7 @@ mod tests {
         VmResponse {
             id: id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             name: "web-1".to_owned(),
+            purpose: firecrab_api_types::VmPurpose::Instance,
             state: VmState::Running,
             template: "alpine-3.24.1".to_owned(),
             template_version: "3.24.1".to_owned(),

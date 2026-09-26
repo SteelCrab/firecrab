@@ -19,6 +19,7 @@ mod network_policy;
 mod oci;
 mod package;
 mod persistence;
+mod pool;
 mod process_metrics;
 mod rootfs;
 mod server;
@@ -104,6 +105,9 @@ async fn run() -> Result<(), StartupError> {
     // Fetch the shared bootstrap builder source now, in the background, so
     // the request that needs it doesn't have to — see spawn_warmup.
     microboot::spawn_warmup(state.clone());
+    // Warm pools (#291): members left over from a previous run died with it,
+    // so the first pass replaces them; later passes keep minReady topped up.
+    pool::spawn_reconciler(state.clone());
     let app = build_router(state, &config);
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
