@@ -233,6 +233,56 @@ jobs:
               sys.exit(1)
           PY
 
+  e2e-dashboard:
+    name: Browser E2E (dashboard, no guest boot)
+    # Playwright specs tagged @dashboard fake the API or console they need, so
+    # they run without KVM or the net helper. Guest-boot halves stay manual.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            firecrab-frontend/package-lock.json
+            firecrab-e2e/package-lock.json
+
+      - name: Install dashboard and E2E dependencies
+        run: |
+          npm ci --prefix firecrab-frontend
+          npm ci --prefix firecrab-e2e
+          npx --prefix firecrab-e2e playwright install --with-deps chromium
+
+      - name: Build the API Playwright starts
+        run: cargo build -p firecrab-api
+
+      - name: Playwright @dashboard specs
+        run: npm --prefix firecrab-e2e run test:dashboard
+
+      - name: Playwright traces (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-dashboard-results
+          path: firecrab-e2e/test-results
+          retention-days: 7
+
   install:
     name: Installer (shellcheck, --check, doctor, install/uninstall)
     # GitHub Ubuntu exposes /dev/kvm on typical x86_64 hosted runners. Nested

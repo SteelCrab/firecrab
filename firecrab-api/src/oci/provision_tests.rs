@@ -1354,6 +1354,31 @@ fn console_and_agetty_wrapper_gate_the_session_banner_on_a_tmpfs_marker() {
     }
 }
 
+/// #303: a respawned console tells the host the previous login session ended.
+/// The marker comes before the human banner: the host closes attached viewers
+/// at the marker, so they never see a "starting a new one" line meant for the
+/// next session.
+#[test]
+fn every_console_entry_point_emits_the_session_ended_marker_before_the_banner() {
+    for script in [
+        provision::console_script(),
+        provision::agetty_wrapper_script("/usr/sbin/agetty"),
+        provision::serial_console_script(),
+    ] {
+        let guard = script
+            .find("if [ -f /run/firecrab-console-active ]")
+            .unwrap_or_else(|| panic!("no first-attach guard in:\n{script}"));
+        let marker = script
+            .find(crate::console_session::session_ended_marker_printf!())
+            .unwrap_or_else(|| panic!("no session-ended marker in:\n{script}"));
+        let banner = script
+            .find("session ended")
+            .unwrap_or_else(|| panic!("no session-ended banner in:\n{script}"));
+        assert!(guard < marker, "marker must be guarded: {script}");
+        assert!(marker < banner, "marker must precede the banner: {script}");
+    }
+}
+
 /// Run the whole merge → activation → ext4 → specialization path. A native
 /// inittab must survive VM starts, and metrics/readiness must not be registered
 /// a second time by the catalog specialization helpers.

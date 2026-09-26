@@ -49,6 +49,15 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- `exit` in the web terminal or `firecrab vm console` ends the session instead of
+  silently logging root back in. The guest marks the ended session on its serial
+  console, the API closes the console socket with code `4000` (`session_ended`),
+  the CLI prints `guest session ended` and exits `0`, and the dashboard offers a
+  new session instead of reconnecting ([#303]).
+- Catalog Alpine VMs start again after a stop. VM start no longer mistakes the
+  `/etc/firecrab` directory the SSH service creates for an OCI import and
+  overwrites the template's inittab; VMs already hit by this must be recreated
+  ([#306]).
 - The macOS management guest installs `fakeroot`, and a missing binary is
   reported as such, so OCI import can pack ext4 without a false missing-tree
   error ([#266]).
@@ -462,6 +471,8 @@ network helper.
 [#269]: https://github.com/SteelCrab/firecrab/pull/269
 [#270]: https://github.com/SteelCrab/firecrab/pull/270
 [#272]: https://github.com/SteelCrab/firecrab/pull/272
+[#303]: https://github.com/SteelCrab/firecrab/issues/303
+[#306]: https://github.com/SteelCrab/firecrab/issues/306
 [88ba35d]: https://github.com/SteelCrab/firecrab/commit/88ba35d
 [729bb47]: https://github.com/SteelCrab/firecrab/commit/729bb47
 [1ffba72]: https://github.com/SteelCrab/firecrab/commit/1ffba72

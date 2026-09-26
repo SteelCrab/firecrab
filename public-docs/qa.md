@@ -156,6 +156,7 @@ Missing proxy configuration is a failure in the required E2E suite.
 | V12 | delete running | `DELETE` while `running` → not allowed | stop first |
 | V13 | delete stopped | `DELETE /api/vms/{id}` → 204, GET → 404 | confirm list |
 | V14 | no network | `POST /api/vms` without `microNetworkId` → 400 | no row |
+| V15 | console session end | `exit` in the guest shell closes `/ws/vms/{id}/console` with `4000` `session_ended`; VM stays `running` | with V7 |
 
 CPU, RAM, disk, and egress edits only in `created` / `stopped` / `error`.
 Env may change in `running`.
@@ -192,6 +193,7 @@ Shared on every OS once the API is up.
 | --- | --- | --- | --- |
 | C1 | `firecrab vm list\|create\|start\|stop\|delete` | same rules as V* | leftover `[]` |
 | C2 | `firecrab vm console` | attach then detach | with C1 |
+| C2b | `firecrab vm console` then `exit` | prints `guest session ended`, exits 0; VM stays `running` | with C1 |
 | C3 | `firecrab network list\|create\|delete` | same as N* | leftover `[]` |
 | C4 | `firecrab image list\|inspect\|import\|import-status` | same as I5–I6 | delete imported alias |
 | C5 | `firecrab host add\|list\|use\|show\|remove` | local `~/.firecrab` | `host remove` |
@@ -217,7 +219,8 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | `scripts/ci-qa-api.sh` | G4 G5 H1 H2 N1–N5 S1–S3 L1–L3 I1 I8 I9 V14 C3 C5 X1–X4 X6 |
 | `scripts/ci-qa-nginx.sh` | NGX1–NGX9 including V8a–V8d SSH |
 | `scripts/ci-qa-ssh.sh` | V8a–V8d (called from guest boot and nginx) |
-| `scripts/ci-qa-guest.sh` | I5 I6 V1 V2 V6 V7 V8 V9 V11 V12 V13 N6 C1 C2 C4 X5; expanded rows run for the first OCI reference, API guest flow for the remaining `alpine:3.21` `ubuntu:24.04` `fedora:42` references |
+| `scripts/ci-qa-guest.sh` | I5 I6 V1 V2 V6 V7 V8 V9 V11 V12 V13 V15 N6 C1 C2 C2b C4 X5; expanded rows run for the first OCI reference, API guest flow for the remaining `alpine:3.21` `ubuntu:24.04` `fedora:42` references |
+| `firecrab-e2e` `test:dashboard` | dashboard rows that fake the API and console (`@dashboard`), including V15 in the web terminal |
 | GitHub-hosted macOS | Swift/Rust checks, signed helper, and diagnostic JSON; no runtime E2E |
 | GitHub-hosted Windows | Rust clippy/tests and diagnostic JSON; no runtime E2E |
 | Windows host manual run | `ci-qa-windows-e2e.ps1`; fresh install, then the API/nginx/guest scripts inside the managed distribution |

@@ -195,8 +195,8 @@ firecrab vm terminal VM_ID
 
 The initial stream includes up to 256 KiB of boot backlog, followed by live ttyS0 output. The CLI
 puts a local TTY in raw mode, so Ctrl+C and other control bytes reach the guest. Type Ctrl+] to
-detach without stopping the VM. Terminal settings are restored on normal exit, VM shutdown, and
-connection errors. An `http://` API base maps to `ws://`; `https://` maps to `wss://`. If the VM is
+detach without stopping the VM. `exit` in the guest shell prints `guest session ended` and exits
+`0`; the VM keeps running. Terminal settings are restored on exit, VM shutdown, and errors. An `http://` API base maps to `ws://`; `https://` maps to `wss://`. If the VM is
 not running, the command exits `1` and preserves the API's HTTP status and JSON error body.
 
 OCI import runs in the API background. Inspect first to confirm the host architecture and derived

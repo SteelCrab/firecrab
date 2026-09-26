@@ -1,6 +1,7 @@
 mod artifacts;
 mod bootstrap;
 mod console;
+mod console_session;
 mod error;
 mod extract;
 mod firecracker;

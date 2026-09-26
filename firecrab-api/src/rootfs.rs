@@ -322,6 +322,9 @@ pub fn specialize_guest(
     // Rewrite the console wrapper on every start so MOTD/fastfetch appear
     // without requiring a re-import.
     patch_oci_console(rootfs);
+    // Catalog templates bake a bare autologin getty into the image; hook the
+    // session-ended marker (#303) in on every start instead of a repackage.
+    patch_template_console(rootfs);
     install_ipv6_sysctl(rootfs);
     install_guest_toolbox_commands(rootfs);
     remove_injected_systemctl(rootfs);
@@ -403,13 +406,16 @@ fn patch_oci_console(rootfs: &Path) {
             return;
         };
         if output.stdout != b"busybox\n" {
+            refresh_native_serial_console(rootfs);
             return;
         }
     }
-    if !guest_path_exists(rootfs, "/etc/firecrab") {
+    // The toolbox, not `/etc/firecrab`, marks an OCI disk: every start's SSH
+    // install creates `/etc/firecrab/services.d` on catalog templates too, and
+    // the inittab below would point their init at a busybox they lack.
+    if !is_oci_disk(rootfs) {
         return;
     }
-    let _ = run_debugfs(rootfs, "mkdir /etc/firecrab");
     let agetty = crate::oci::provision::first_present(
         crate::oci::provision::GUEST_AGETTY_CANDIDATES,
         |path| guest_path_exists(rootfs, path),
@@ -449,6 +455,121 @@ fn patch_oci_console(rootfs: &Path) {
             crate::oci::provision::GUEST_AGETTY_WRAPPER,
             "0100755",
         );
+    }
+}
+
+/// Whether the disk came from an OCI import, which always installs the guest
+/// toolbox its injected console runs on.
+fn is_oci_disk(rootfs: &Path) -> bool {
+    guest_path_exists(rootfs, crate::oci::provision::GUEST_TOOLBOX)
+}
+
+/// Guest path of the session-boundary helper a template's serial getty runs
+/// before every start (#223, #303).
+const TEMPLATE_CONSOLE_SESSION_PATH: &str = "/usr/local/sbin/firecrab-console-session";
+
+/// Session-boundary helper for templates whose `ttyS0` is a plain respawned
+/// `agetty --autologin` (the OCI consoles carry the same prelude inline).
+/// Silent on the first getty start of a boot; after that, marks the ended
+/// session for the host, then shows the banner to whoever attaches next.
+/// With arguments it `exec`s them, so an inittab line can wrap the getty.
+const TEMPLATE_CONSOLE_SESSION_SCRIPT: &str = concat!(
+    r#"#!/bin/sh
+# Firecrab serial-console session boundary (issues #223, #303).
+# /run is tmpfs, so the flag only exists once a login session on this boot
+# has ended and the getty is starting again.
+if [ -f /run/firecrab-console-active ]; then
+  printf '"#,
+    crate::console_session::session_ended_marker_printf!(),
+    r#"\n=== session ended — starting a new one ===\n\n' >/dev/ttyS0 2>/dev/null
+fi
+touch /run/firecrab-console-active 2>/dev/null
+[ "$#" -eq 0 ] || exec "$@"
+"#
+);
+
+/// systemd drop-in directory the ubuntu and rocky templates configure their
+/// root autologin in.
+const SERIAL_GETTY_DROPIN_DIR: &str = "/etc/systemd/system/serial-getty@ttyS0.service.d";
+
+/// Drop-in that runs [`TEMPLATE_CONSOLE_SESSION_SCRIPT`] before every
+/// `serial-getty@ttyS0` (re)start.
+const SERIAL_GETTY_SESSION_DROPIN: &str = concat!(
+    "# Firecrab serial-console session boundary (issues #223, #303).\n",
+    "[Service]\n",
+    "ExecStartPre=-/bin/sh /usr/local/sbin/firecrab-console-session\n",
+);
+
+/// Hooks the session-boundary helper into a catalog template's serial getty:
+/// the busybox inittab line on alpine, the `serial-getty@ttyS0` drop-in on
+/// systemd templates. OCI disks carry their own console.
+fn patch_template_console(rootfs: &Path) {
+    if is_oci_disk(rootfs) {
+        return;
+    }
+    let wrapped_inittab = run_debugfs(rootfs, "cat /etc/inittab")
+        .ok()
+        .and_then(|output| wrap_inittab_serial_console(&String::from_utf8_lossy(&output.stdout)));
+    let systemd_getty = guest_path_exists(rootfs, SERIAL_GETTY_DROPIN_DIR);
+    let already_wrapped = guest_path_exists(rootfs, TEMPLATE_CONSOLE_SESSION_PATH);
+    if wrapped_inittab.is_none() && !systemd_getty && !already_wrapped {
+        return;
+    }
+
+    for dir in ["/usr", "/usr/local", "/usr/local/sbin"] {
+        let _ = run_debugfs(rootfs, &format!("mkdir {dir}"));
+    }
+    if write_into_image(
+        rootfs,
+        TEMPLATE_CONSOLE_SESSION_PATH,
+        TEMPLATE_CONSOLE_SESSION_SCRIPT.as_bytes(),
+    )
+    .is_err()
+    {
+        return;
+    }
+    set_guest_file_mode(rootfs, TEMPLATE_CONSOLE_SESSION_PATH, "0100755");
+    if let Some(inittab) = wrapped_inittab {
+        let _ = write_into_image(rootfs, "/etc/inittab", inittab.as_bytes());
+    }
+    if systemd_getty {
+        let _ = write_into_image(
+            rootfs,
+            &format!("{SERIAL_GETTY_DROPIN_DIR}/firecrab-session.conf"),
+            SERIAL_GETTY_SESSION_DROPIN.as_bytes(),
+        );
+    }
+}
+
+/// Routes every active `ttyS0::respawn:` inittab entry through
+/// [`TEMPLATE_CONSOLE_SESSION_PATH`]. `None` when nothing needs wrapping.
+fn wrap_inittab_serial_console(inittab: &str) -> Option<String> {
+    let wrapper = format!("/bin/sh {TEMPLATE_CONSOLE_SESSION_PATH} ");
+    let mut changed = false;
+    let lines: Vec<String> = inittab
+        .split_inclusive('\n')
+        .map(|line| match line.strip_prefix("ttyS0::respawn:") {
+            Some(command) if !command.starts_with(&wrapper) => {
+                changed = true;
+                format!("ttyS0::respawn:{wrapper}{command}")
+            }
+            _ => line.to_owned(),
+        })
+        .collect();
+    changed.then(|| lines.concat())
+}
+
+/// Rewrites the `rc.serial` console a systemd or OpenRC OCI disk got at import,
+/// so existing disks pick up console changes such as the session-ended marker
+/// (#303) without a re-import.
+fn refresh_native_serial_console(rootfs: &Path) {
+    let path = crate::oci::provision::GUEST_SERIAL_SCRIPT;
+    if !guest_path_exists(rootfs, path) {
+        return;
+    }
+    let script = crate::oci::provision::serial_console_script();
+    if write_into_image(rootfs, path, script.as_bytes()).is_ok() {
+        set_guest_file_mode(rootfs, path, "0100755");
     }
 }
 
@@ -1458,6 +1579,7 @@ mod tests {
         let rootfs = directory.path().join("rootfs.ext4");
         real_rootfs_with_guest_dirs(&rootfs);
         run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        write_into_image(&rootfs, crate::oci::provision::GUEST_TOOLBOX, b"busybox").unwrap();
 
         specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
@@ -1469,6 +1591,206 @@ mod tests {
         let console = debugfs_cat(&rootfs, "/etc/firecrab/rc.console");
         assert!(console.contains("cat /etc/motd"), "{console}");
         assert!(console.contains("fastfetch"), "{console}");
+    }
+
+    const ALPINE_INITTAB: &str = "::sysinit:/sbin/openrc sysinit\n\
+        # Put a getty on the serial port\n\
+        #ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100\n\
+        ttyS0::respawn:/sbin/agetty --autologin root --noclear ttyS0 vt100\n\
+        ::shutdown:/sbin/openrc shutdown\n";
+
+    #[test]
+    fn wrap_inittab_routes_the_serial_getty_through_the_session_helper() {
+        let wrapped = wrap_inittab_serial_console(ALPINE_INITTAB).unwrap();
+
+        assert!(
+            wrapped.contains(&format!(
+                "\nttyS0::respawn:/bin/sh {TEMPLATE_CONSOLE_SESSION_PATH} \
+                 /sbin/agetty --autologin root --noclear ttyS0 vt100\n"
+            )),
+            "{wrapped}"
+        );
+        assert!(
+            wrapped.contains("\n#ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100\n"),
+            "comments stay as they are: {wrapped}"
+        );
+        assert!(wrapped.starts_with("::sysinit:/sbin/openrc sysinit\n"));
+        assert!(wrapped.ends_with("::shutdown:/sbin/openrc shutdown\n"));
+    }
+
+    #[test]
+    fn wrap_inittab_leaves_an_already_wrapped_or_getty_less_table_alone() {
+        let wrapped = wrap_inittab_serial_console(ALPINE_INITTAB).unwrap();
+
+        assert_eq!(wrap_inittab_serial_console(&wrapped), None);
+        assert_eq!(
+            wrap_inittab_serial_console("::sysinit:/sbin/openrc sysinit\n"),
+            None
+        );
+    }
+
+    /// Runs the helper with its guest paths pointed into `dir`.
+    fn run_console_session_helper(dir: &Path, args: &[&str]) -> std::process::Output {
+        let flag = dir.join("console-active");
+        let tty = dir.join("tty");
+        let script = TEMPLATE_CONSOLE_SESSION_SCRIPT
+            .replace("/run/firecrab-console-active", flag.to_str().unwrap())
+            .replace("/dev/ttyS0", tty.to_str().unwrap());
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .arg("firecrab-console-session")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_console_session_helper_marks_only_a_respawned_session() {
+        let directory = tempdir().unwrap();
+        let tty = directory.path().join("tty");
+
+        run_console_session_helper(directory.path(), &[]);
+        assert!(!tty.exists(), "the first getty start of a boot is silent");
+
+        run_console_session_helper(directory.path(), &[]);
+        let written = fs::read(&tty).unwrap();
+        assert!(
+            written.starts_with(crate::console_session::SESSION_ENDED_MARKER),
+            "{written:?}"
+        );
+        assert!(String::from_utf8_lossy(&written).contains("session ended"));
+    }
+
+    #[test]
+    fn the_console_session_helper_execs_the_getty_it_wraps() {
+        let directory = tempdir().unwrap();
+
+        let output = run_console_session_helper(directory.path(), &["echo", "getty started"]);
+
+        assert_eq!(output.stdout, b"getty started\n");
+    }
+
+    #[test]
+    fn specialize_guest_wraps_a_busybox_template_serial_getty() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        write_into_image(&rootfs, "/etc/inittab", ALPINE_INITTAB.as_bytes()).unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        assert_eq!(
+            debugfs_cat(&rootfs, "/etc/inittab"),
+            wrap_inittab_serial_console(ALPINE_INITTAB).unwrap(),
+            "wrapped once, however many times the VM starts"
+        );
+        assert_eq!(
+            debugfs_cat(&rootfs, TEMPLATE_CONSOLE_SESSION_PATH),
+            TEMPLATE_CONSOLE_SESSION_SCRIPT
+        );
+    }
+
+    /// Every start's SSH install leaves `/etc/firecrab/services.d` on catalog
+    /// disks too. The next start must still treat the disk as a template: an
+    /// OCI inittab points init at `/etc/firecrab/busybox`, which a template
+    /// does not have, so the guest never boots.
+    #[test]
+    fn specialize_guest_keeps_a_template_inittab_once_ssh_created_etc_firecrab() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        write_into_image(&rootfs, "/etc/inittab", ALPINE_INITTAB.as_bytes()).unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/firecrab/services.d").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let inittab = debugfs_cat(&rootfs, "/etc/inittab");
+        assert!(
+            !inittab.contains(crate::oci::provision::GUEST_TOOLBOX),
+            "a template must not get the OCI console: {inittab}"
+        );
+        assert_eq!(
+            inittab,
+            wrap_inittab_serial_console(ALPINE_INITTAB).unwrap()
+        );
+    }
+
+    #[test]
+    fn specialize_guest_hooks_a_systemd_template_serial_getty() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        for dir in [
+            "/etc/systemd",
+            "/etc/systemd/system",
+            SERIAL_GETTY_DROPIN_DIR,
+        ] {
+            run_debugfs(&rootfs, &format!("mkdir {dir}")).unwrap();
+        }
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let dropin = debugfs_cat(
+            &rootfs,
+            &format!("{SERIAL_GETTY_DROPIN_DIR}/firecrab-session.conf"),
+        );
+        assert!(
+            dropin.contains(&format!(
+                "ExecStartPre=-/bin/sh {TEMPLATE_CONSOLE_SESSION_PATH}\n"
+            )),
+            "{dropin}"
+        );
+        assert_eq!(
+            debugfs_cat(&rootfs, TEMPLATE_CONSOLE_SESSION_PATH),
+            TEMPLATE_CONSOLE_SESSION_SCRIPT
+        );
+    }
+
+    #[test]
+    fn specialize_guest_skips_the_session_helper_without_a_serial_getty() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        assert!(!guest_path_exists(&rootfs, TEMPLATE_CONSOLE_SESSION_PATH));
+    }
+
+    /// #303: import writes a native init's `rc.serial` once, so an existing
+    /// disk only gets the session-ended marker if every start rewrites it.
+    #[test]
+    fn specialize_guest_refreshes_a_native_init_serial_console() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        write_into_image(
+            &rootfs,
+            crate::oci::provision::INIT_SYSTEM_PATH,
+            b"systemd\n",
+        )
+        .unwrap();
+        write_into_image(
+            &rootfs,
+            crate::oci::provision::GUEST_SERIAL_SCRIPT,
+            b"#!/bin/sh\nold console\n",
+        )
+        .unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        assert_eq!(
+            debugfs_cat(&rootfs, crate::oci::provision::GUEST_SERIAL_SCRIPT),
+            crate::oci::provision::serial_console_script()
+        );
+        assert!(
+            !guest_path_exists(&rootfs, "/etc/inittab"),
+            "a native init keeps its own console, never a Firecrab inittab"
+        );
     }
 
     #[test]
@@ -1552,6 +1874,7 @@ mod tests {
         let rootfs = directory.path().join("rootfs.ext4");
         real_rootfs_with_guest_dirs(&rootfs);
         run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        write_into_image(&rootfs, crate::oci::provision::GUEST_TOOLBOX, b"busybox").unwrap();
         run_debugfs(&rootfs, "mkdir /usr").unwrap();
         run_debugfs(&rootfs, "mkdir /usr/sbin").unwrap();
         run_debugfs(&rootfs, "mkdir /bin").unwrap();

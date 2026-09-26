@@ -37,7 +37,7 @@ const GUEST_BOOT_SCRIPT: &str = "/etc/firecrab/rc.boot";
 /// Console wrapper used when the image has no agetty (MOTD + ash).
 const GUEST_CONSOLE_SCRIPT: &str = "/etc/firecrab/rc.console";
 /// Serial console a native init respawns; BusyBox init uses the inittab instead.
-const GUEST_SERIAL_SCRIPT: &str = "/etc/firecrab/rc.serial";
+pub(crate) const GUEST_SERIAL_SCRIPT: &str = "/etc/firecrab/rc.serial";
 /// util-linux getty, in the usual usr-merge locations.
 pub(crate) const GUEST_AGETTY_CANDIDATES: &[&str] = &["/sbin/agetty", "/usr/sbin/agetty"];
 /// Login shell for the serial console.
@@ -993,11 +993,17 @@ pub(crate) const GUEST_AGETTY_WRAPPER: &str = "/etc/firecrab/rc.agetty";
 /// `respawn` and agetty's `--autologin` both re-enter silently, so `exit`
 /// otherwise looks like it did nothing. `/run` is tmpfs — a genuine reboot
 /// always starts clean, so this only fires when the guest shell actually exited.
-const SESSION_BANNER_PRELUDE: &str = r#"if [ -f /run/firecrab-console-active ]; then
-  printf '\n=== session ended — starting a new one ===\n\n'
+/// The session-ended marker goes first so the host closes attached viewers
+/// before the banner meant for the next session (issue #303).
+const SESSION_BANNER_PRELUDE: &str = concat!(
+    r#"if [ -f /run/firecrab-console-active ]; then
+  printf '"#,
+    crate::console_session::session_ended_marker_printf!(),
+    r#"\n=== session ended — starting a new one ===\n\n'
 fi
 $BB touch /run/firecrab-console-active
-"#;
+"#
+);
 
 /// Interactive console: MOTD, fastfetch when present, then ash.
 pub(crate) fn console_script() -> String {
