@@ -179,6 +179,18 @@ operation goes through `firecrab-api`.
 | `firecrab vm stop ID [--json]` | `POST /api/vms/{id}/stop` |
 | `firecrab vm delete ID [--json]` | `DELETE /api/vms/{id}` |
 | `firecrab vm console ID` (`terminal` alias) | `GET /ws/vms/{id}/console` WebSocket upgrade |
+| `firecrab pool list [--json]` | `GET /api/pools` |
+| `firecrab pool create --name NAME --template ALIAS --network UUID --min-ready N --max-size N [--lease-ttl SECONDS] [--cpu N] [--ram MIB] [--disk-gb GIB] [--egress internet\|isolated] [--storage-root ID] [--json]` | `POST /api/pools` |
+| `firecrab pool show POOL [--json]` | `GET /api/pools/{id}` |
+| `firecrab pool update POOL [--min-ready N] [--max-size N] [--lease-ttl SECONDS] [--json]` | `PATCH /api/pools/{id}` |
+| `firecrab pool delete POOL [--json]` | `DELETE /api/pools/{id}` |
+| `firecrab pool acquire POOL [--idempotency-key KEY] [--json]` | `POST /api/pools/{id}/acquire` |
+| `firecrab pool leases POOL [--json]` | `GET /api/pools/{id}/leases` |
+| `firecrab pool release POOL LEASE_ID [--json]` | `DELETE /api/pools/{id}/leases/{leaseId}` |
+
+`POOL` is a pool UUID or name. `pool acquire --idempotency-key KEY` makes a retry return the same
+lease instead of a second VM; the printed lease names the `firecrab vm console` command for its VM.
+See [API: Pools](api.md#pools) for sizing, TTL, and release rules.
 
 `vm create` defaults to one vCPU, 512 MiB RAM, and a 2 GiB disk. Override them with `--cpu N`,
 `--ram MIB`, and `--disk-gb GIB`. `--egress internet|isolated` selects the VM's outbound posture,
@@ -211,18 +223,6 @@ firecrab image import-status nginx-1.27
 `import` exits after the API accepts the job and prints the alias to poll. `import-status` exits `1`
 when the job has failed and includes the last non-empty log line in the error. See
 [OCI images](oci.md) for pipeline and registry authentication details.
-
-Create the dependencies in image → network → VM order:
-
-```sh
-firecrab image list
-firecrab network create --name app --subnet-cidr 172.31.20.0/24
-# Copy the network id from the result.
-firecrab vm create \
-  --name app-1 \
-  --template alpine-3.24.1 \
-  --network NETWORK_ID
-```
 
 The API base uses the [Host profiles](#host-profiles) selection order.
 Global flags may appear before or after a subcommand:

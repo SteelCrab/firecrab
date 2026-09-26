@@ -333,23 +333,32 @@ pub fn sigkill(pid: u32) {
 /// fork and the prctl call: a re-parented child then refuses to start rather
 /// than becoming an untracked MicroVM.
 fn terminate_with_parent(command: &mut Command) {
-    // SAFETY: reads this process's PID before the child is forked.
-    let parent_pid = unsafe { libc::getpid() };
-    // SAFETY: `pre_exec` runs the closure only in the child between fork and
-    // exec. The closure uses only Linux process-control syscalls and reports
-    // failure back through `spawn`, before Firecracker receives user input.
-    unsafe {
-        command.pre_exec(move || {
-            // SAFETY: both libc calls are async-signal-safe process-control
-            // syscalls and this is the only code run in the post-fork child.
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            if libc::getppid() != parent_pid {
-                return Err(io::Error::from_raw_os_error(libc::ESRCH));
-            }
-            Ok(())
-        });
+    // Darwin has no `PR_SET_PDEATHSIG`. The API does not run guests there;
+    // unit tests only need the child to stay alive with this process.
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = command;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: reads this process's PID before the child is forked.
+        let parent_pid = unsafe { libc::getpid() };
+        // SAFETY: `pre_exec` runs the closure only in the child between fork and
+        // exec. The closure uses only Linux process-control syscalls and reports
+        // failure back through `spawn`, before Firecracker receives user input.
+        unsafe {
+            command.pre_exec(move || {
+                // SAFETY: both libc calls are async-signal-safe process-control
+                // syscalls and this is the only code run in the post-fork child.
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::getppid() != parent_pid {
+                    return Err(io::Error::from_raw_os_error(libc::ESRCH));
+                }
+                Ok(())
+            });
+        }
     }
 }
 

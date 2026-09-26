@@ -29,7 +29,7 @@ pub struct Lease {
     pub mac: MacAddr,
 }
 
-/// What a VM record represents. Only `Builder` VMs are hidden from the
+/// What a VM record represents. `Builder` and `Pool` VMs are hidden from the
 /// dashboard's normal list — everything else about their lifecycle (start,
 /// console, stop, delete) is identical to a user-created instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -41,6 +41,9 @@ pub enum VmPurpose {
     /// A short-lived VM driving an image job (`handlers::bootstrap`) — never
     /// shown in `list_vms`; its own session endpoint reports on it instead.
     Builder,
+    /// A warm pool member (`crate::pool`) — not in `list_vms`, and refused by
+    /// every mutating VM route: only its pool starts, stops, or deletes it.
+    Pool,
 }
 
 impl VmPurpose {
@@ -48,6 +51,7 @@ impl VmPurpose {
         match self {
             VmPurpose::Instance => "instance",
             VmPurpose::Builder => "builder",
+            VmPurpose::Pool => "pool",
         }
     }
 }

@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom};
+#[cfg(target_os = "linux")]
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1010,13 +1011,26 @@ pub(crate) enum CopyMode {
 /// inside them. A template under `FIRECRAB_IMAGE_ROOT` and a disk under
 /// `data/vms` on separate mounts fail here with `EXDEV`.
 fn ficlone(source: &File, destination: &File) -> io::Result<()> {
-    // SAFETY: both descriptors stay open across the call, and FICLONE takes
-    // the source descriptor by value rather than writing through a pointer.
-    let result = unsafe { libc::ioctl(destination.as_raw_fd(), libc::FICLONE, source.as_raw_fd()) };
-    if result == -1 {
-        return Err(io::Error::last_os_error());
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: both descriptors stay open across the call, and FICLONE takes
+        // the source descriptor by value rather than writing through a pointer.
+        let result =
+            unsafe { libc::ioctl(destination.as_raw_fd(), libc::FICLONE, source.as_raw_fd()) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        return Ok(());
     }
-    Ok(())
+    #[cfg(not(target_os = "linux"))]
+    {
+        // macOS has no FICLONE. Callers already fall back to a byte copy.
+        let _ = (source, destination);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "reflink is unavailable",
+        ))
+    }
 }
 
 /// Fills `destination` with `source`'s contents, sharing blocks copy-on-write

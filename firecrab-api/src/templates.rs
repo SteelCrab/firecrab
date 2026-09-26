@@ -6,10 +6,15 @@
 
 use std::collections::HashMap;
 use std::env;
+#[cfg(target_os = "macos")]
+use std::ffi::CStr;
+#[cfg(target_os = "linux")]
 use std::ffi::CString;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::fd::FromRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -29,12 +34,16 @@ use crate::m2image_manifest;
 const REGISTRATIONS_FILE: &str = ".templates.json";
 
 /// `openat2` `RESOLVE_*` flag: reject crossing a mount point.
+#[cfg(target_os = "linux")]
 const RESOLVE_NO_XDEV: u64 = 0x01;
 /// `openat2` `RESOLVE_*` flag: reject magic-link procfs-style resolution.
+#[cfg(target_os = "linux")]
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 /// `openat2` `RESOLVE_*` flag: reject any symlink in the path.
+#[cfg(target_os = "linux")]
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 /// `openat2` `RESOLVE_*` flag: keep resolution confined beneath the dirfd.
+#[cfg(target_os = "linux")]
 const RESOLVE_BENEATH: u64 = 0x08;
 
 /// Failure modes for building or reading from a [`TemplateRegistry`].
@@ -860,6 +869,7 @@ fn open_image_root(path: &Path) -> io::Result<File> {
 }
 
 /// Argument struct for the raw `openat2(2)` syscall.
+#[cfg(target_os = "linux")]
 #[repr(C)]
 struct OpenHow {
     /// `open(2)`-style flags.
@@ -875,30 +885,62 @@ struct OpenHow {
 /// path can't escape the image root even via a symlink.
 fn open_beneath(root: &File, path: &Path) -> Result<File, TemplateError> {
     validate_relative_path(path)?;
-    let bytes = path.as_os_str().as_encoded_bytes();
-    let c_path = CString::new(bytes).map_err(|_| TemplateError::InvalidPath)?;
-    let how = OpenHow {
-        flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW) as u64,
-        mode: 0,
-        resolve: RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV,
-    };
+    #[cfg(target_os = "linux")]
+    {
+        let bytes = path.as_os_str().as_encoded_bytes();
+        let c_path = CString::new(bytes).map_err(|_| TemplateError::InvalidPath)?;
+        let how = OpenHow {
+            flags: (libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW) as u64,
+            mode: 0,
+            resolve: RESOLVE_BENEATH
+                | RESOLVE_NO_SYMLINKS
+                | RESOLVE_NO_MAGICLINKS
+                | RESOLVE_NO_XDEV,
+        };
 
-    // SAFETY: pointers reference initialized values for the duration of the syscall.
-    let fd = unsafe {
-        libc::syscall(
-            libc::SYS_openat2,
-            root.as_raw_fd(),
-            c_path.as_ptr(),
-            &how,
-            std::mem::size_of::<OpenHow>(),
-        )
-    };
-    if fd < 0 {
-        return Err(TemplateError::Io(io::Error::last_os_error()));
+        // SAFETY: pointers reference initialized values for the duration of the syscall.
+        let fd = unsafe {
+            libc::syscall(
+                libc::SYS_openat2,
+                root.as_raw_fd(),
+                c_path.as_ptr(),
+                &how,
+                std::mem::size_of::<OpenHow>(),
+            )
+        };
+        if fd < 0 {
+            return Err(TemplateError::Io(io::Error::last_os_error()));
+        }
+
+        // SAFETY: openat2 returned a new owned descriptor on success.
+        return Ok(unsafe { File::from_raw_fd(fd as i32) });
     }
-
-    // SAFETY: openat2 returned a new owned descriptor on success.
-    Ok(unsafe { File::from_raw_fd(fd as i32) })
+    #[cfg(target_os = "macos")]
+    {
+        // `openat2` is Linux-only. `..` is already rejected; `F_GETPATH` plus
+        // `O_NOFOLLOW` opens the same regular file unit tests use.
+        let mut buffer = [0i8; 1024];
+        // SAFETY: `buffer` is MAXPATHLEN bytes, which is what F_GETPATH writes.
+        let rc = unsafe { libc::fcntl(root.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) };
+        if rc == -1 {
+            return Err(TemplateError::Io(io::Error::last_os_error()));
+        }
+        let root_path = unsafe { CStr::from_ptr(buffer.as_ptr()) };
+        let root_path = root_path.to_str().map_err(|_| TemplateError::InvalidPath)?;
+        return OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(Path::new(root_path).join(path))
+            .map_err(TemplateError::Io);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (root, path);
+        Err(TemplateError::Io(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "openat2 is unavailable",
+        )))
+    }
 }
 
 /// What a kernel artifact's header says about it.

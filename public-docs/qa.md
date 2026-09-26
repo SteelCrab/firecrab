@@ -22,6 +22,7 @@ Env, shells, kernels, storage assignment, port forwards, and Docker Hub are API 
 - [Shells](#shells)
 - [Images, kernels, OCI](#images-kernels-oci)
 - [MicroVM](#microvm)
+- [Pools](#pools)
 - [nginx scenario (NGX)](#nginx-scenario-ngx)
 - [CLI](#cli)
 - [Cleanup](#cleanup)
@@ -160,6 +161,23 @@ Missing proxy configuration is a failure in the required E2E suite.
 CPU, RAM, disk, and egress edits only in `created` / `stopped` / `error`.
 Env may change in `running`.
 
+## Pools
+
+Needs a network (N1) and an installed template (I3 or I6).
+`minReady` 0 does not boot a guest.
+
+| ID | Work | Add | Delete / cleanup |
+| --- | --- | --- | --- |
+| P1 | create idle | `POST /api/pools` name `qa-pool`, template, cpu, ram, diskGb, `microNetworkId`, `minReady` 0, `maxSize` 1, `leaseTtlSeconds` 600 → 201; `templateVersion` is pinned | after P5 |
+| P2 | list and detail | `GET /api/pools` and `GET /{id}` | with P1 |
+| P3 | resize | `PATCH` `minReady`, `maxSize`, `leaseTtlSeconds` | with P1 |
+| P4 | acquire empty | `POST /{id}/acquire` → 409 `pool_exhausted` | no lease row |
+| P5 | delete idle | `DELETE` → 202 `deleting: true`, then GET → 404 | leftover empty |
+| P6 | warm lease | `minReady` 1 boots one member; acquire → 201; `PUT` or `DELETE /api/vms/{id}` → 409 `pool_owned`; release deletes that VM and its disk | replacement VM id differs |
+
+P6 boots a guest.
+Run it with V7, not in the API-only pass.
+
 ## nginx scenario (NGX)
 
 One OCI guest that must hit env, DNAT, and the Shell repository together.
@@ -209,6 +227,7 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | X4 | `GET /api/shells` has no `qa-*` |
 | X5 | custom OCI alias gone; catalog fixtures only if you chose to keep them |
 | X6 | Docker Hub not left with a QA secret |
+| X7 | GET /api/pools has no qa-* |
 
 ## CI map
 
@@ -224,7 +243,7 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | Native M3+ manual run | `ci-qa-macos-e2e.sh`; fresh install plus API/nginx/guest E2E; capability failure is fatal |
 | microManager PR report | `micromanager-pr-report.py`; comments both hosted jobs' results, log tails, and the manual E2E commands on PRs that touch them |
 
-Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1.
+Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1 P1–P6.
 
 ## Related
 

@@ -14,6 +14,7 @@
 - [Other endpoints](#other-endpoints)
 - [Images and kernels](#images-and-kernels)
 - [MicroNetwork](#micronetwork)
+- [Pools](#pools)
 - [MicroRegistry](#microregistry)
 - [Docker Hub login](#docker-hub-login)
 - [VM states](#vm-states)
@@ -267,6 +268,57 @@ IPv6:
 - `uplink`: default-route iface
 - `interfaces`: dashboard picker from `/sys/class/net`, omits `lo`, `fct*`, `mnb*`
 - Bad or missing name: `400` `validation_failed` on field `uplink`
+
+## Pools
+
+A pool keeps booted, never-used VMs ready to lease. A released or expired member is stopped,
+deleted, and replaced; its disk is never handed to another caller. Pools are host-local.
+
+| Method | Path | Job |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/pools` | List or create pools |
+| `GET`, `PATCH`, `DELETE` | `/api/pools/{id}` | Read, resize, or delete a pool |
+| `POST` | `/api/pools/{id}/acquire` | Lease one ready VM |
+| `GET` | `/api/pools/{id}/leases` | List leases, newest first |
+| `GET`, `DELETE` | `/api/pools/{id}/leases/{leaseId}` | Read or release a lease |
+
+`POST /api/pools`:
+
+- `name` (1–40 characters), `template`, `cpu`, `ram`, `diskGb`, `microNetworkId`
+- optional `egressPolicy`, `storageRoot`
+- `minReady` (0 to `maxSize`), `maxSize` (1–32), `leaseTtlSeconds` (60–604800)
+- The VM spec is validated like `POST /api/vms`
+- The pool pins the image version `template` resolves to at creation; image and spec stay fixed
+
+`PATCH /api/pools/{id}` changes `minReady`, `maxSize`, and `leaseTtlSeconds`. A new TTL applies to
+later leases. Lowering a limit drains the newest unleased members.
+
+Acquire:
+
+- `201` with the lease, including its `vm` (address, hostname, state)
+- `Idempotency-Key` header (1–255 visible ASCII characters): a retry returns the original lease
+  with `200`. Keys are per pool and kept until 24 hours after the lease ends
+- `409 pool_exhausted` when no member is ready. The pool keeps booting replacements up to
+  `maxSize`; retry with the same key
+- `409 pool_deleting` once the pool is being deleted
+
+Release (`DELETE /api/pools/{id}/leases/{leaseId}`) returns the ended lease; a repeat returns it
+unchanged.
+
+Members:
+
+- `provisioning` → `ready` → `leased` → `draining` → deleted
+- Hidden from `GET /api/vms`. `GET /api/vms/{id}`, the console, and the SSH key work for a leased VM
+- `PUT`/`DELETE /api/vms/{id}`, start, stop, storage, shells, and port forwards answer
+  `409 pool_owned` for a member
+- `maxSize` counts every member, draining ones included
+- A lease ends as `expired` when its TTL passes or its VM stops. Restarting the API stops every
+  guest, so leases and warm members do not survive it yet (#123)
+- `lastError` names the most recent member that failed to create or boot; the pool waits 30
+  seconds before trying again
+
+`DELETE /api/pools/{id}` answers `409 pool_in_use` while a lease is active. Otherwise it returns
+`202` with `deleting: true`, and the pool disappears once its members are deleted.
 
 ## MicroRegistry
 

@@ -297,15 +297,39 @@ pub async fn create_vm(
         .templates
         .resolve_alias(&req.template)
         .ok_or_else(|| AppError::internal(request_id.0))?;
+    let response = insert_vm(
+        &state,
+        request_id,
+        Uuid::new_v4(),
+        req,
+        &template,
+        crate::model::VmPurpose::Instance,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// Persists a VM validated by [`validate_create`] from an exact template
+/// version: record, shell pins, port forwards, SSH key, and its address.
+/// Everything written is undone if a later step fails. Pools (#291) call
+/// this with their pinned version and a pre-assigned id.
+pub(crate) async fn insert_vm(
+    state: &AppState,
+    request_id: RequestId,
+    id: Uuid,
+    req: CreateVmRequest,
+    template: &crate::templates::TemplateVersion,
+    purpose: crate::model::VmPurpose,
+) -> Result<VmResponse, AppError> {
     let storage_root = req
         .storage_root
         .clone()
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| state.storage.default_id().to_owned());
     let vm = VmRecord {
-        id: Uuid::new_v4(),
+        id,
         name: req.name,
-        purpose: crate::model::VmPurpose::Instance,
+        purpose,
         template: template.name.clone(),
         template_version: template.version.clone(),
         template_kernel_sha256: template.kernel.sha256().to_owned(),
@@ -414,7 +438,7 @@ pub async fn create_vm(
     // see Store::active_lease's doc comment. The subnet it comes from is the
     // VM's MicroNetwork, so a VM can never hold an address its own bridge
     // doesn't route.
-    let subnet = match resolve_subnet(&state, vm.micro_network_id, request_id.0).await {
+    let subnet = match resolve_subnet(state, vm.micro_network_id, request_id.0).await {
         Ok(subnet) => subnet,
         Err(error) => {
             let store = state.store.clone();
@@ -451,7 +475,7 @@ pub async fn create_vm(
     // snapshot on every start regardless, and the console-sentinel
     // readiness check at that point is what actually surfaces a genuinely
     // missing reservation, not this one.
-    if let Err(error) = sync_dhcp_leases(&state).await {
+    if let Err(error) = sync_dhcp_leases(state).await {
         tracing::warn!(request_id = %request_id.0, vm_id = %vm.id, error, "dhcp sync failed after create");
     }
 
@@ -466,14 +490,14 @@ pub async fn create_vm(
         env_len,
         "vm created"
     );
-    let response = vm_response(&state, &vm, Some(&lease));
+    let response = vm_response(state, &vm, Some(&lease));
     state
         .vms
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(vm.id, vm);
 
-    Ok((StatusCode::CREATED, Json(response)))
+    Ok(response)
 }
 
 /// Replaces pinned shell revisions for a VM that has no live process.
@@ -2089,7 +2113,7 @@ fn is_valid_ram_mib(ram: u32) -> bool {
     (MIN_RAM_MIB..=MAX_RAM_MIB).contains(&ram) && ram.is_power_of_two()
 }
 
-fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
+pub(crate) fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     if req.shell_ids.len() > crate::shells::MAX_SHELLS_PER_VM {
         fields.insert(

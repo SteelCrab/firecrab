@@ -21,6 +21,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Warm MicroVM pools keep booted, never-used VMs ready to lease. A pool pins an
+  image version and VM spec, keeps `minReady` members booted within `maxSize`,
+  and deletes and replaces every released or expired member instead of reusing
+  its disk. Acquire is atomic and idempotent through `Idempotency-Key`, pool
+  members refuse direct VM mutations, and pools are available over REST
+  (`/api/pools`), `firecrab pool`, and the dashboard ([#291]).
 - Apple silicon macOS releases include an entitlement-signed `microManager`
   helper exposed through `firecrab service`. Install pins and verifies Debian 13,
   Firecracker v1.17.0, and Firecrab v0.2.2 artifacts; provisions separate OS and
@@ -462,6 +468,7 @@ network helper.
 [#269]: https://github.com/SteelCrab/firecrab/pull/269
 [#270]: https://github.com/SteelCrab/firecrab/pull/270
 [#272]: https://github.com/SteelCrab/firecrab/pull/272
+[#291]: https://github.com/SteelCrab/firecrab/issues/291
 [88ba35d]: https://github.com/SteelCrab/firecrab/commit/88ba35d
 [729bb47]: https://github.com/SteelCrab/firecrab/commit/729bb47
 [1ffba72]: https://github.com/SteelCrab/firecrab/commit/1ffba72
