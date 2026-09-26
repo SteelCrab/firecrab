@@ -242,6 +242,35 @@ if [ "$FIRST_REFERENCE" = 1 ]; then
   echo "PASS V9/$TEMPLATE (console WebSocket)"
   echo "PASS C2/$TEMPLATE (CLI console attach/detach)"
 
+  # V15/C2b (#303): `exit` ends the session. stdin stays open for the whole
+  # wait, so only the API's session_ended close can end the CLI; an EOF or
+  # Ctrl+] detach would print "console detached" instead.
+  CONSOLE_ERROR=$(mktemp)
+  if ! timeout 90 "$CLI_BIN" --api "$API" vm console "$VM" >/dev/null 2>"$CONSOLE_ERROR" \
+      < <(printf '\r'; sleep 2; printf 'exit\r'; sleep 120); then
+    cat "$CONSOLE_ERROR" >&2
+    rm -f "$CONSOLE_ERROR"
+    CONSOLE_ERROR=
+    echo "V15/C2b CLI console did not end on guest exit" >&2
+    exit 1
+  fi
+  if ! grep -q 'guest session ended' "$CONSOLE_ERROR"; then
+    cat "$CONSOLE_ERROR" >&2
+    rm -f "$CONSOLE_ERROR"
+    CONSOLE_ERROR=
+    echo "V15/C2b CLI console ended without the session_ended close" >&2
+    exit 1
+  fi
+  rm -f "$CONSOLE_ERROR"
+  CONSOLE_ERROR=
+  state=$(curl -fsS "$API/api/vms/$VM" | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')
+  [ "$state" = running ] || {
+    echo "V15 VM left running state after guest exit (state=$state)" >&2
+    exit 1
+  }
+  echo "PASS V15/$TEMPLATE (guest exit closes the console with session_ended)"
+  echo "PASS C2b/$TEMPLATE (CLI console ends on guest exit)"
+
   running_delete_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
     -X DELETE "$API/api/vms/$VM")
   [ "$running_delete_code" = 409 ] || {

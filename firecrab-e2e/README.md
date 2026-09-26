@@ -6,6 +6,8 @@ Isolated Playwright suite.
 - [#108](https://github.com/SteelCrab/firecrab/issues/108) MicroRegistry register
 - [#146](https://github.com/SteelCrab/firecrab/issues/146) MicroNetwork IPv6
 - OCI DHCP boot (busybox `udhcpc`, same path as nginx-stable)
+- [#303](https://github.com/SteelCrab/firecrab/issues/303) console session end: `exit` stops the web terminal at "Session ended"
+- `npm run test:dashboard` runs only `@dashboard` specs, which fake the API or console and need no KVM (CI job `e2e-dashboard`)
 - Local OCI registry fixture only — no Docker Hub
 - Playwright is a test-only dependency of this package, not of `firecrab-frontend`
 
