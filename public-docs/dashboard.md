@@ -60,6 +60,9 @@ npm run dev --prefix firecrab-frontend
 6. Start
 7. Open Terminal after `running`
 
+- `exit` in the terminal ends the session: the status shows `Session ended` and the page stops
+  reconnecting. `New session` attaches to the new shell the guest starts; the VM keeps running
+
 - Three ways to the same SSH panel: the console SSH tab, `SSH` in VM detail, and
   `⋯` → `SSH connect` in the VM list, which opens it as a dialog
 - Row actions (`Terminal`, `SSH connect`, `start` / `stop` / `delete`) sit behind the row's

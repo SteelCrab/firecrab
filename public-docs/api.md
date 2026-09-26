@@ -52,6 +52,10 @@ cargo run -p firecrab-api
 | `PUT` | `/api/vms/{id}/storage` | Assign storage |
 | `GET` | `/ws/vms/{id}/console` | Open the serial console |
 
+The console socket closes when the VM stops. When the guest's login session ends (`exit`), it
+closes with code `4000` (`session_ended`) instead. The VM keeps running; opening the socket again
+attaches to the new shell the guest starts.
+
 ## Create a VM
 
 Create a MicroNetwork first.
@@ -99,7 +103,8 @@ The response has status `201` and includes the VM UUID.
 
 The host file `/etc/firecrab/api.env` is operator API settings; see [Installation](installation.md).
 The guest directory `/etc/firecrab` is injected when an OCI image is imported.
-Catalog templates (Alpine, Ubuntu, Rocky) do not use this tree.
+Catalog templates (Alpine, Ubuntu, Rocky) only get `services.d/sshd` from it, so VM start treats
+a disk as an OCI import only when `/etc/firecrab/busybox` is present.
 
 | Guest path | Role |
 | --- | --- |

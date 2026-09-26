@@ -1384,6 +1384,15 @@ pub struct VmLogResponse {
     pub truncated: bool,
 }
 
+/// Close code `/ws/vms/{id}/console` sends when the guest's serial login
+/// session ended (`exit`), as opposed to the VM stopping or the connection
+/// dropping. Clients end the session instead of reattaching to the shell the
+/// guest respawns. RFC 6455 private-use range.
+pub const CONSOLE_SESSION_ENDED_CLOSE_CODE: u16 = 4000;
+
+/// Close reason sent with [`CONSOLE_SESSION_ENDED_CLOSE_CODE`].
+pub const CONSOLE_SESSION_ENDED_CLOSE_REASON: &str = "session_ended";
+
 /// JSON error body wrapper: `{"error": {...}}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
