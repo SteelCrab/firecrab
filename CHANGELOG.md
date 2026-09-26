@@ -31,6 +31,9 @@ Entries land here as work merges, and move under the next version heading when t
   macOS 26.6.2; other M3-or-later hosts remain runtime and E2E gated ([#266]).
 - Public documentation lists the shared Linux, macOS, and Windows QA work
   list ([#266]).
+- On macOS, the microManager daemon also serves running VMs' TCP port
+  forwards on `127.0.0.1:<hostPort>` over the management SSH connection;
+  UDP forwards stay reachable at the management VM address ([#266]).
 
 ### Changed
 

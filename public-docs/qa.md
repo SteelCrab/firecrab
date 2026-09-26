@@ -180,7 +180,8 @@ CI script: `scripts/ci-qa-nginx.sh`.
 | NGX9 | V11 stop, V13 delete VM, X5 delete alias, delete shell and network | leftover empty |
 
 On macOS the API and port-forward live behind the management VM. The suite
-runs NGX5 inside that VM and proxies NGX6–NGX8 SSH through it; these rows are
+runs NGX5 inside that VM and again on the Mac's `127.0.0.1` through the
+microManager relay, and proxies NGX6–NGX8 SSH through it; these rows are
 required rather than warnings.
 
 ## CLI

@@ -72,6 +72,10 @@ Each start pushes the macOS version into the guest's `/etc/firecrab/host-platfor
 Ordinary uninstall retains the 0600 management SSH private key with the other managed data; use `--purge` to remove it.
 The API remains loopback-only inside Debian and reaches macOS through a key-only SSH tunnel.
 The launchd `io.firecrab.micromanager` agent restarts the management VM and tunnel after a process crash.
+Running VMs' TCP port forwards are also served on `127.0.0.1:<hostPort>` through one management `ssh -L` per forward, since macOS local network privacy blocks the launchd agent from the VM's NAT address.
+Interactive processes such as Terminal can also reach every forward at the management VM address that `service status` prints, which is the only path for UDP forwards.
+A host port another Mac process already holds is skipped and logged once in `runtime/daemon.log`, and port 5523 always belongs to the API.
+The relay restarts on its own after a crash without touching the VM; installs from before the relay pick it up with `firecrab service reinstall`.
 `--purge` is deliberately destructive and refuses unsafe paths, symlinks, and roots whose final component is not `micromanager`.
 
 ## Validate and boot
@@ -121,7 +125,7 @@ Use these files when a stage fails:
 runtime/guest-provision.log   apt, disk, kernel, Firecracker, and Firecrab install
 runtime/provision.phase       last first-boot phase
 runtime/vm-console.log        normal direct-kernel boot console
-runtime/daemon.log            launchd wrapper and SSH tunnel
+runtime/daemon.log            launchd wrapper, SSH tunnel, and port-forward relay
 runtime/daemon-ready          VM PID, tunnel PID, and guest IP
 ```
 

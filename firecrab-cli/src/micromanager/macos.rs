@@ -1,4 +1,5 @@
 mod daemon;
+mod forward;
 mod lifecycle;
 mod provision;
 
@@ -24,6 +25,8 @@ pub enum Error {
     Daemon(#[from] daemon::Error),
     #[error(transparent)]
     Provision(#[from] provision::Error),
+    #[error(transparent)]
+    Forward(#[from] forward::Error),
     #[error("could not launch EFI provisioning helper {path}: {source}")]
     ProvisionHelper {
         path: PathBuf,
@@ -52,6 +55,15 @@ pub fn run(command: Command) -> Result<i32, Error> {
         Command::Start => run_start(),
         Command::Stop => run_stop(),
         Command::Status => run_status(),
+        Command::ForwardPorts {
+            manager,
+            key,
+            known_hosts,
+        } => Ok(forward::run(forward::Manager {
+            ip: manager,
+            key,
+            known_hosts,
+        })?),
         helper_command => {
             let helper = helper_path(
                 std::env::var_os(HELPER_ENV),
@@ -306,8 +318,9 @@ fn command_arguments(command: &Command) -> Vec<OsString> {
         | Command::Uninstall { .. }
         | Command::Start
         | Command::Stop
-        | Command::Status => {
-            unreachable!("lifecycle commands do not invoke the native helper")
+        | Command::Status
+        | Command::ForwardPorts { .. } => {
+            unreachable!("lifecycle and relay commands do not invoke the native helper")
         }
         Command::Doctor { json } => {
             let mut arguments = vec![OsString::from("doctor")];

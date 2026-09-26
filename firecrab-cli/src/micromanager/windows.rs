@@ -33,6 +33,8 @@ pub enum Error {
     NotInstalled,
     #[error("could not run wsl.exe: {0}")]
     Console(#[source] std::io::Error),
+    #[error("`firecrab service {0}` is only used by the macOS microManager daemon")]
+    MacosOnly(&'static str),
 }
 
 pub fn run(command: Command) -> Result<i32, Error> {
@@ -50,6 +52,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             run_validate(provision::host()?, &lifecycle::Layout::from_process_env()?)
         }
         Command::Run => run_foreground(),
+        Command::ForwardPorts { .. } => Err(Error::MacosOnly("forward-ports")),
     }
 }
 

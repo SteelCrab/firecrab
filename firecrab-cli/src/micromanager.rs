@@ -102,6 +102,18 @@ pub enum Command {
     Validate,
     /// Run the managed Debian VM in the foreground with its console attached.
     Run,
+    /// Serve running VMs' TCP port forwards on 127.0.0.1; run by the macOS daemon.
+    #[command(hide = true)]
+    ForwardPorts {
+        /// Management VM address that DNATs the forwarded host ports.
+        manager: std::net::IpAddr,
+        /// Management SSH private key.
+        #[arg(long)]
+        key: std::path::PathBuf,
+        /// Management SSH known_hosts file.
+        #[arg(long)]
+        known_hosts: std::path::PathBuf,
+    },
 }
 
 #[cfg(test)]

@@ -294,6 +294,7 @@ fn render_wrapper(
     paths: &DaemonPaths,
 ) -> String {
     let root = shell_quote(&layout.managed_home);
+    let cli = shell_quote(&layout.cli_path());
     let helper = shell_quote(helper);
     let key = shell_quote(ssh_private_key);
     let ready = shell_quote(&paths.ready);
@@ -308,6 +309,7 @@ fn render_wrapper(
         r#"#!/bin/bash
 set -Eeuo pipefail
 root={root}
+cli={cli}
 helper={helper}
 key={key}
 ready={ready}
@@ -317,10 +319,15 @@ known_hosts={known_hosts}
 platform={platform}
 vm_pid=
 tunnel_pid=
+relay_pid=
 cleanup() {{
   trap - EXIT INT TERM
   set +e
   rm -f "$ready"
+  if [ -n "$relay_pid" ] && kill -0 "$relay_pid" 2>/dev/null; then
+    kill -TERM "$relay_pid" 2>/dev/null
+    wait "$relay_pid" 2>/dev/null
+  fi
   if [ -n "$tunnel_pid" ] && kill -0 "$tunnel_pid" 2>/dev/null; then
     kill -TERM "$tunnel_pid" 2>/dev/null
     wait "$tunnel_pid" 2>/dev/null
@@ -370,6 +377,10 @@ if [ -f "$platform" ]; then
     -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known_hosts" \
     "root@$ip" {platform_write} <"$platform" || true
 fi
+# Serves running VMs' TCP port forwards on 127.0.0.1. A crash restarts only the
+# relay; the VM and its workloads keep running.
+"$cli" service forward-ports --key "$key" --known-hosts "$known_hosts" "$ip" &
+relay_pid=$!
 {{
   echo "vm_pid=$vm_pid"
   echo "tunnel_pid=$tunnel_pid"
@@ -387,6 +398,12 @@ while :; do
     wait "$tunnel_pid" 2>/dev/null
     rm -f "$ready"
     exit 1
+  fi
+  if ! kill -0 "$relay_pid" 2>/dev/null; then
+    wait "$relay_pid" 2>/dev/null
+    sleep 5
+    "$cli" service forward-ports --key "$key" --known-hosts "$known_hosts" "$ip" &
+    relay_pid=$!
   fi
   sleep 1
 done
@@ -504,6 +521,11 @@ mod tests {
         );
         assert!(script.contains("ExitOnForwardFailure=yes"));
         assert!(script.contains("127.0.0.1:5523:127.0.0.1:5523"));
+        assert!(script.contains("cli='/tmp/firecrab bin/firecrab'"));
+        assert!(script.contains(
+            "\"$cli\" service forward-ports --key \"$key\" --known-hosts \"$known_hosts\" \"$ip\" &"
+        ));
+        assert!(script.contains("kill -TERM \"$relay_pid\""));
         assert!(script.contains("systemctl poweroff"));
         assert!(script.contains("kill -KILL"));
         assert!(script.contains("'/tmp/firecrab state/micromanager'"));

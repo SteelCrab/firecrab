@@ -294,6 +294,21 @@ for _ in $(seq 1 $((30 * WAIT_FACTOR))); do
 done
 [ "$http_ok" = 1 ] || fail V4 "management VM port-forward :${HOST_PORT} did not return 200"
 pass "V4 live curl :${HOST_PORT}"
+if [ "$(uname -s)" = Darwin ]; then
+    # microManager relays running VMs' TCP forwards onto the Mac's loopback.
+    http_ok=0
+    for _ in $(seq 1 $((15 * WAIT_FACTOR))); do
+        pf=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 \
+            "http://127.0.0.1:${HOST_PORT}/" || true)
+        if [ "$pf" = 200 ]; then
+            http_ok=1
+            break
+        fi
+        sleep 2
+    done
+    [ "$http_ok" = 1 ] || fail V4 "macOS loopback port-forward :${HOST_PORT} did not return 200"
+    pass "V4 macOS loopback curl :${HOST_PORT}"
+fi
 
 KEY=$(mktemp)
 chmod 600 "$KEY"
