@@ -629,8 +629,41 @@ while True:
             assert_eq!(vm.state, VmState::Running);
             assert_eq!(vm.purpose, crate::model::VmPurpose::Pool);
         }
+        assert_eq!(converged.members.len(), 2);
+        let ordinary =
+            crate::handlers::vms::test_support::record("ordinary-instance", Uuid::new_v4());
+        state
+            .vms
+            .lock()
+            .unwrap()
+            .insert(ordinary.id, ordinary.clone());
+
         let Json(listed) = crate::handlers::vms::list_vms(State(state.clone())).await;
-        assert!(listed.is_empty(), "pool members stay out of the VM list");
+        let member_ids: Vec<Uuid> = converged
+            .members
+            .iter()
+            .map(|member| member.vm_id)
+            .collect();
+        assert!(
+            listed.iter().any(|vm| {
+                vm.id == ordinary.id && vm.purpose == firecrab_api_types::VmPurpose::Instance
+            }),
+            "an ordinary instance stays on the VM list"
+        );
+        assert!(
+            member_ids.iter().all(|id| {
+                listed
+                    .iter()
+                    .any(|vm| vm.id == *id && vm.purpose == firecrab_api_types::VmPurpose::Pool)
+            }),
+            "pool members are listed with purpose pool"
+        );
+        assert!(
+            listed
+                .iter()
+                .all(|vm| { vm.id == ordinary.id || member_ids.contains(&vm.id) }),
+            "the list is the ordinary instance plus the pool members"
+        );
     }
 
     #[tokio::test]

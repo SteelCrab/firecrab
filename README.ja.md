@@ -243,8 +243,8 @@ python3 scripts/check-changelog.py
 ```
 
 `cargo clippy` は `-D warnings` 付きで実行されます — ベースラインなしで、警告1件でも CI が
-失敗します。`npm test --prefix firecrab-e2e` は 4 つの spec ファイル(OCI import、
-MicroRegistry register、MicroNetwork IPv6、OCI DHCP boot)をまとめて実行します。spec ごとの
+失敗します。`npm test --prefix firecrab-e2e` は 5 つの spec ファイル(OCI import、
+MicroRegistry register、MicroNetwork IPv6、OCI DHCP boot、pools)をまとめて実行します。spec ごとの
 pass/skip 数、必要な環境、register spec の既知の leftover-catalog-row 問題(L3
 `microregistry_local` にはまだ DELETE がなく、前回実行の残留行が `beforeAll` を失敗させる)は
 [firecrab-e2e/README.md](firecrab-e2e/README.md) にあります。PR 前の完全なチェック一覧

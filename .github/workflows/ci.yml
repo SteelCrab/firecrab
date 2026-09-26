@@ -391,6 +391,7 @@ jobs:
         # The first reference additionally runs N6/V2/V6/V9/V12 and C1/C2/C4;
         # a pre-existing first alias is preserved and its unperformed import is
         # reported as WARNING rather than a false PASS.
+        # The first reference also runs P1-P6, C6, and X7.
         run: scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42
 
       - name: Dashboard, MicroNetwork, and create-VM API smoke

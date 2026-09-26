@@ -162,6 +162,7 @@ function Row({
         <button type="button" className="link-button" onClick={() => onOpenDetail(vm.id)}>
           {vm.name}
         </button>
+        {vm.purpose === "pool" && <span className="state-badge">{t("pool", "풀")}</span>}
       </td>
       <td>
         <span className={`state-badge ${vm.state}`}>{vm.state}</span>
@@ -234,7 +235,7 @@ function Row({
                   {t("SSH connect", "SSH 연결")}
                 </button>
               </li>
-              {availableActions(vm.state).map((action) => (
+              {availableActions(vm.state, vm.purpose).map((action) => (
                 <li key={action} role="none">
                   <button
                     type="button"

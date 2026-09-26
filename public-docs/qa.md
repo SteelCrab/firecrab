@@ -177,6 +177,7 @@ Needs a network (N1) and an installed template (I3 or I6).
 
 P6 boots a guest.
 Run it with V7, not in the API-only pass.
+CI runs P1–P6, C6, and X7 on the first OCI reference in `scripts/ci-qa-guest.sh`, after that guest boots and before the image delete.
 
 ## nginx scenario (NGX)
 
@@ -213,6 +214,7 @@ Shared on every OS once the API is up.
 | C3 | `firecrab network list\|create\|delete` | same as N* | leftover `[]` |
 | C4 | `firecrab image list\|inspect\|import\|import-status` | same as I5–I6 | delete imported alias |
 | C5 | `firecrab host add\|list\|use\|show\|remove` | local `~/.firecrab` | `host remove` |
+| C6 | `firecrab pool show\|update` | on the idle pool | cleaned up with P5 |
 
 Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 `doctor`, `info`, `status`, `update --check|--apply`, systemd `service start|stop|restart|enable|disable`.
@@ -236,14 +238,14 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 | `scripts/ci-qa-api.sh` | G4 G5 H1 H2 N1–N5 S1–S3 L1–L3 I1 I8 I9 V14 C3 C5 X1–X4 X6 |
 | `scripts/ci-qa-nginx.sh` | NGX1–NGX9 including V8a–V8d SSH |
 | `scripts/ci-qa-ssh.sh` | V8a–V8d (called from guest boot and nginx) |
-| `scripts/ci-qa-guest.sh` | I5 I6 V1 V2 V6 V7 V8 V9 V11 V12 V13 N6 C1 C2 C4 X5; expanded rows run for the first OCI reference, API guest flow for the remaining `alpine:3.21` `ubuntu:24.04` `fedora:42` references |
+| `scripts/ci-qa-guest.sh` | I5 I6 V1 V2 V6 V7 V8 V9 V11 V12 V13 N6 C1 C2 C4 X5 P1–P6 C6 X7; expanded rows run for the first OCI reference, API guest flow for the remaining `alpine:3.21` `ubuntu:24.04` `fedora:42` references |
 | GitHub-hosted macOS | Swift/Rust checks, signed helper, and diagnostic JSON; no runtime E2E |
 | GitHub-hosted Windows | Rust clippy/tests and diagnostic JSON; no runtime E2E |
 | Windows host manual run | `ci-qa-windows-e2e.ps1`; fresh install, then the API/nginx/guest scripts inside the managed distribution |
 | Native M3+ manual run | `ci-qa-macos-e2e.sh`; fresh install plus API/nginx/guest E2E; capability failure is fatal |
 | microManager PR report | `micromanager-pr-report.py`; comments both hosted jobs' results, log tails, and the manual E2E commands on PRs that touch them |
 
-Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1 P1–P6.
+Not in GitHub Ubuntu CI: I2 I3 I4 I7 I10 U1.
 
 ## Related
 

@@ -1062,7 +1062,9 @@ export default function Images() {
       } catch (error) {
         const apiError = error instanceof ApiClientError ? error : null;
         if (apiError?.apiError?.code !== "in_use") throw error;
-        const users = (await listVms()).filter((vm) => vm.template === alias);
+        const users = (await listVms()).filter(
+          (vm) => vm.template === alias && vm.purpose !== "pool",
+        );
         if (users.length === 0) throw error;
         const lines = users.map((vm) => `· ${vm.name} [${vm.state}]`).join("\n");
         if (!window.confirm(`'${alias}' 이미지를 쓰는 VM ${users.length}개가 있습니다.\n웹에서 해당 VM을 지운 뒤 이미지를 삭제할까요?\n\n${lines}`)) {

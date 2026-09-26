@@ -308,9 +308,9 @@ unchanged.
 Members:
 
 - `provisioning` → `ready` → `leased` → `draining` → deleted
-- Hidden from `GET /api/vms`. `GET /api/vms/{id}`, the console, and the SSH key work for a leased VM
-- `PUT`/`DELETE /api/vms/{id}`, start, stop, storage, shells, and port forwards answer
-  `409 pool_owned` for a member
+- Members are listed on `GET /api/vms` with `purpose` `pool`.
+- `GET /api/vms/{id}`, the console, and the SSH key still work for a member.
+- `PUT`/`DELETE /api/vms/{id}`, start, stop, storage, shells, and port forwards answer `409 pool_owned` for a member.
 - `maxSize` counts every member, draining ones included
 - A lease ends as `expired` when its TTL passes or its VM stops. Restarting the API stops every
   guest, so leases and warm members do not survive it yet (#123)

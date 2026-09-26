@@ -10,7 +10,9 @@ use axum::http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderValue,
 };
 use axum::response::IntoResponse;
-use firecrab_api_types::{SshHostKeyCheckResponse, SshHostKeyResponse, VmLogResponse, VmResponse};
+use firecrab_api_types::{
+    SshHostKeyCheckResponse, SshHostKeyResponse, VmLogResponse, VmPurpose, VmResponse,
+};
 use firecrab_helper_protocol::network::{
     DhcpLeaseEntry, Ipv6AddressMode, MicroNetworkSpec, VmPolicySpec,
 };
@@ -2010,9 +2012,15 @@ fn sorted_responses(
     vms: &HashMap<Uuid, VmRecord>,
     leases: &HashMap<Uuid, Lease>,
 ) -> Vec<VmResponse> {
+    // Instances and pool members. Builder VMs stay on the image-job session.
     let mut records: Vec<&VmRecord> = vms
         .values()
-        .filter(|vm| vm.purpose == crate::model::VmPurpose::Instance)
+        .filter(|vm| {
+            matches!(
+                vm.purpose,
+                crate::model::VmPurpose::Instance | crate::model::VmPurpose::Pool
+            )
+        })
         .collect();
     records.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
     records
@@ -2046,6 +2054,11 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
     VmResponse {
         id: vm.id,
         name: vm.name.clone(),
+        purpose: match vm.purpose {
+            crate::model::VmPurpose::Instance => VmPurpose::Instance,
+            crate::model::VmPurpose::Builder => VmPurpose::Builder,
+            crate::model::VmPurpose::Pool => VmPurpose::Pool,
+        },
         state: vm.state,
         template: vm.template.clone(),
         template_version: vm.template_version.clone(),

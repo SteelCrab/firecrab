@@ -149,7 +149,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   };
 
   const startEditing = () => {
-    if (!vm) return;
+    if (!vm || vm.purpose === "pool") return;
     setEditCpu(String(vm.cpu));
     setEditRam(String(vm.ram));
     setEditDisk(String(vm.diskGb));
@@ -172,7 +172,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   };
 
   const handleSave = async () => {
-    if (!vm) return;
+    if (!vm || vm.purpose === "pool") return;
     // Incomplete rows must block the save, not be silently dropped — the
     // row stays in the editor so the user can fix or explicitly remove it.
     const incompleteIndex = editPortForwards.findIndex(
@@ -227,7 +227,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
         env,
       });
       // Shells and storage cannot change while Firecracker is live.
-      if (isEditableState(vm.state)) {
+      if (isEditableState(vm.state, vm.purpose)) {
         if (editStorageRoot && editStorageRoot !== vm.storageRoot) {
           updated = await assignVmStorage(vm.id, { storageRoot: editStorageRoot });
         }
@@ -235,7 +235,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
       }
       // Port forwards re-apply nft while running; do not fold this into the
       // stopped-only block above or a live add is persisted nowhere.
-      if (isPortEditableState(vm.state)) {
+      if (isPortEditableState(vm.state, vm.purpose)) {
         updated = await updateVmPortForwards(vm.id, { portForwards: editPortForwards });
       }
 
@@ -334,7 +334,10 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
     <div className="console-overlay">
       <div className="console-panel">
         <div className="console-bar">
-          <span className="console-title">{t(`VM details — ${vm?.name ?? vmId}`, `VM 상세 — ${vm?.name ?? vmId}`)}</span>
+          <span className="console-title">
+            {t(`VM details — ${vm?.name ?? vmId}`, `VM 상세 — ${vm?.name ?? vmId}`)}
+            {vm?.purpose === "pool" && <span className="state-badge">{t("pool", "풀")}</span>}
+          </span>
           {vm && <span className={`state-badge ${vm.state}`}>{vm.state}</span>}
           <button className="btn console-close" onClick={onClose}>
             ✕
@@ -347,7 +350,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               <dd>{vm.template}</dd>
               <dt>cpu</dt>
               <dd>
-                {editing && isEditableState(vm.state) ? (
+                {editing && isEditableState(vm.state, vm.purpose) ? (
                   <input
                     className="detail-edit-input"
                     type="number"
@@ -362,7 +365,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>ram</dt>
               <dd>
-                {editing && isEditableState(vm.state) ? (
+                {editing && isEditableState(vm.state, vm.purpose) ? (
                   <RamStepper id="vm-edit-ram" value={editRam} onChange={setEditRam} />
                 ) : (
                   `${vm.ram} MiB`
@@ -370,7 +373,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>disk</dt>
               <dd>
-                {editing && isEditableState(vm.state) ? (
+                {editing && isEditableState(vm.state, vm.purpose) ? (
                   <input
                     className="detail-edit-input"
                     type="number"
@@ -387,7 +390,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               <dd>{microNetworkLabel}</dd>
               <dt>MicroStorage</dt>
               <dd>
-                {editing && isEditableState(vm.state) && storageRoots.length > 0 ? (
+                {editing && isEditableState(vm.state, vm.purpose) && storageRoots.length > 0 ? (
                   <select
                     className="detail-edit-input"
                     value={editStorageRoot}
@@ -406,7 +409,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>{t("Egress", "외부 통신")}</dt>
               <dd>
-                {editing && isEditableState(vm.state) ? (
+                {editing && isEditableState(vm.state, vm.purpose) ? (
                   <select
                     className="detail-edit-input"
                     value={editEgressPolicy}
@@ -424,7 +427,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>{t("Shells", "Shell")}</dt>
               <dd>
-                {editing && isEditableState(vm.state) ? (
+                {editing && isEditableState(vm.state, vm.purpose) ? (
                   <div className="detail-shell-check">
                     <ShellCheckboxList
                       shells={catalogShells}
@@ -451,7 +454,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>ports</dt>
               <dd>
-                {editing ? (
+                {editing && isPortEditableState(vm.state, vm.purpose) ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                     {editPortForwards.map((pf, idx) => (
                       <div key={idx} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
@@ -527,7 +530,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>env</dt>
               <dd>
-                {editing ? (
+                {editing && isEnvEditableState(vm.state, vm.purpose) ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                     {editEnvRows.map((row, idx) => (
                       <div key={idx} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
@@ -593,7 +596,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                     )}
                   </div>
                 )}
-                {vm?.state === "running" && (
+                {vm.state === "running" && isEnvEditableState(vm.state, vm.purpose) && (
                   <div style={{ fontSize: "0.75rem", color: "var(--muted, #888)", marginTop: "0.35rem" }}>
                     {t(
                       "Saving restarts the guest service so the new env takes effect.",
@@ -679,7 +682,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
                 <ConsoleSshTab vm={vm} />
               </section>
             )}
-            {isEnvEditableState(vm.state) && (
+            {isEnvEditableState(vm.state, vm.purpose) && (
               <div className="detail-edit-actions">
                 {editing ? (
                   <>

@@ -1,6 +1,8 @@
-import type { VmState } from "./bindings";
+import type { VmResponse, VmState } from "./bindings";
 
 export type VmAction = "start" | "stop" | "delete";
+
+type VmPurpose = NonNullable<VmResponse["purpose"]>;
 
 /** RAM is restricted to powers of two, matching how cloud instance sizes
  * are usually picked (and the server's own validation). */
@@ -22,8 +24,10 @@ export function stepRamValue(current: number, direction: 1 | -1): number {
   return [...options].reverse().find((option) => option < current) ?? options[0];
 }
 
-/** Lifecycle actions the API accepts for a VM in `state`; everything else 409s. */
-export function availableActions(state: VmState): VmAction[] {
+/** Lifecycle actions the API accepts for a VM in `state`; everything else 409s.
+ * A pool member has none — only its pool may start, stop, or delete it. */
+export function availableActions(state: VmState, purpose?: VmPurpose): VmAction[] {
+  if (purpose === "pool") return [];
   switch (state) {
     case "created":
     case "stopped":
@@ -38,17 +42,23 @@ export function availableActions(state: VmState): VmAction[] {
 }
 
 /** cpu/ram/disk edits only take effect on the next start, so they're only
- * accepted while no Firecracker process is live for this VM. */
-export function isEditableState(state: VmState): boolean {
+ * accepted while no Firecracker process is live for this VM.
+ * Pool members stay read-only here. */
+export function isEditableState(state: VmState, purpose?: VmPurpose): boolean {
+  if (purpose === "pool") return false;
   return state === "created" || state === "stopped" || state === "error";
 }
 
-/** Env can be replaced while running; the guest service is restarted. */
-export function isEnvEditableState(state: VmState): boolean {
-  return isEditableState(state) || state === "running";
+/** Env can be replaced while running; the guest service is restarted.
+ * Pool members stay read-only even while running. */
+export function isEnvEditableState(state: VmState, purpose?: VmPurpose): boolean {
+  if (purpose === "pool") return false;
+  return isEditableState(state, purpose) || state === "running";
 }
 
-/** Port forwards apply live via nft, including on a running VM. */
-export function isPortEditableState(state: VmState): boolean {
-  return isEditableState(state) || state === "running";
+/** Port forwards apply live via nft, including on a running VM.
+ * Pool members stay read-only even while running. */
+export function isPortEditableState(state: VmState, purpose?: VmPurpose): boolean {
+  if (purpose === "pool") return false;
+  return isEditableState(state, purpose) || state === "running";
 }
