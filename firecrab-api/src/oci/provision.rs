@@ -45,7 +45,7 @@ pub(crate) const GUEST_BASH_CANDIDATES: &[&str] = &["/bin/bash", "/usr/bin/bash"
 /// Welcome banner shown on the injected console (same text as catalog VMs).
 const GUEST_MOTD: &str = "/etc/motd";
 /// Lease hook busybox `udhcpc` calls to apply an address.
-const GUEST_DHCP_SCRIPT: &str = "/etc/firecrab/dhcp.script";
+pub(crate) const GUEST_DHCP_SCRIPT: &str = "/etc/firecrab/dhcp.script";
 /// Directory a later stage drops the image's translated entrypoint into.
 const GUEST_SERVICES: &str = "/etc/firecrab/services.d";
 /// Mount points a container tree may not carry.
@@ -1033,7 +1033,7 @@ exec $BB sh
 
 /// Serial console for a native init (systemd or OpenRC), which has no inittab
 /// entry for it. The same console as the fallback: agetty autologin when the
-/// guest has agetty (looked up at boot, since first-boot packages may add it),
+/// guest has agetty and login (looked up at boot, since packages may add them),
 /// otherwise MOTD and ash. The init service runs it with no terminal, so it
 /// binds `ttyS0` itself. systemd and supervise-daemon start it as a session
 /// leader, so opening `ttyS0` also makes it the controlling terminal. `setsid`
@@ -1045,8 +1045,9 @@ pub(crate) fn serial_console_script() -> String {
 # Firecrab serial console under a native init (public-docs/oci.md).
 BB={GUEST_TOOLBOX}
 exec </dev/ttyS0 >/dev/ttyS0 2>&1
+{LOGIN_PROGRAM_LOOKUP}
 for agetty in {agetty}; do
-  [ -x "$agetty" ] || continue
+  [ -x "$agetty" ] && [ -x "$login_program" ] || continue
 {SESSION_BANNER_PRELUDE}  exec "$agetty" {AGETTY_ARGS}
 done
 exec $BB sh {GUEST_CONSOLE_SCRIPT}
@@ -1055,9 +1056,13 @@ exec $BB sh {GUEST_CONSOLE_SCRIPT}
     )
 }
 
+// Slim images can ship agetty without login (for example Fedora's container
+// image). Such agetty exits immediately and init respawns it forever.
+const LOGIN_PROGRAM_LOOKUP: &str = r#"login_program=/bin/login
+[ -x "$login_program" ] || login_program=/usr/bin/login"#;
+
 /// agetty's arguments for the root autologin console on `ttyS0`.
-const AGETTY_ARGS: &str =
-    "--autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux";
+const AGETTY_ARGS: &str = "--autologin root --login-program \"$login_program\" --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux";
 
 /// Wraps `agetty --autologin` so `exit` has a visible effect (issue #223).
 /// A bare respawn is invisible — `--autologin` re-enters with no prompt and
@@ -1069,6 +1074,8 @@ pub(crate) fn agetty_wrapper_script(agetty: &str) -> String {
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab injected agetty wrapper (public-docs/oci.md).
 BB={GUEST_TOOLBOX}
+{LOGIN_PROGRAM_LOOKUP}
+[ -x "$login_program" ] || exec "$BB" sh {GUEST_CONSOLE_SCRIPT}
 {SESSION_BANNER_PRELUDE}exec {agetty} {AGETTY_ARGS}
 "#
     )
@@ -1078,7 +1085,7 @@ BB={GUEST_TOOLBOX}
 ///
 /// The lease arrives in the environment, not in arguments. `mask` is a prefix
 /// length in busybox, unlike the dotted `subnet` beside it.
-fn dhcp_script() -> String {
+pub(crate) fn dhcp_script() -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
 # Firecrab guest DHCP hook for an imported OCI image (public-docs/oci.md).
@@ -1086,11 +1093,13 @@ BB={GUEST_TOOLBOX}
 
 case "$1" in
   deconfig)
-    $BB ip addr flush dev "$interface" 2>/dev/null
+    $BB ip -4 addr flush dev "$interface" 2>/dev/null
     $BB ip link set "$interface" up 2>/dev/null
     ;;
   bound|renew)
-    $BB ip addr flush dev "$interface" 2>/dev/null
+    # udhcpc owns IPv4 only. Flushing IPv6 also removes the link-local
+    # address required for SLAAC and neighbor discovery on dual-stack VMs.
+    $BB ip -4 addr flush dev "$interface" 2>/dev/null
     $BB ip addr add "$ip/${{mask:-24}}" dev "$interface" 2>/dev/null
     $BB ip link set "$interface" up 2>/dev/null
     for gateway in $router; do

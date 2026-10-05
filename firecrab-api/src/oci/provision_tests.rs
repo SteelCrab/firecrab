@@ -505,7 +505,7 @@ async fn an_image_with_agetty_and_bash_uses_the_serial_getty() {
         String::from_utf8(read_guest(&tree, provision::GUEST_AGETTY_WRAPPER)).expect("wrapper");
     assert!(
         wrapper.contains(
-            "exec /usr/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
+            "exec /usr/sbin/agetty --autologin root --login-program \"$login_program\" --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
         ),
         "{wrapper}"
     );
@@ -1246,7 +1246,7 @@ fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
 /// wrapper rejects any attempt to put a dpkg transaction under a deadline.
 #[test]
 fn apt_install_bounds_downloads_but_finishes_interrupted_configuration() {
-    for fail_download in [false, true] {
+    for failed_stage in ["", "update", "download", "configure"] {
         let directory = tempdir().unwrap();
         let root = directory.path();
         let write_tool = |name: &str, body: &str| {
@@ -1270,9 +1270,9 @@ esac
             r#"
 echo "apt $*" >> "$TEST_LOG"
 case " $* " in
-  *" --download-only "*) [ "$FAIL_DOWNLOAD" != 1 ] ;;
-  *" --no-download "*) touch "$TEST_INSTALLED" ;;
-  *" update "*) exit 0 ;;
+  *" --download-only "*) [ "$FAILED_STAGE" != download ] ;;
+  *" --no-download "*) [ "$FAILED_STAGE" != configure ] && touch "$TEST_INSTALLED" ;;
+  *" update "*) [ "$FAILED_STAGE" != update ] ;;
   *) exit 98 ;;
 esac
 "#,
@@ -1291,14 +1291,18 @@ esac
         }
         script = script
             .replace("/etc/firecrab/base-packages.ok", stamp.to_str().unwrap())
-            .replace("/dev/console", root.join("console").to_str().unwrap());
+            // Device writes accumulate; append to the file that stands in for it.
+            .replace(
+                ">/dev/console",
+                &format!(">>{}", root.join("console").display()),
+            );
         let run = || {
             std::process::Command::new("sh")
                 .args(["-c", &script])
                 .env("BB", root.join("bb"))
                 .env("TEST_LOG", &log)
                 .env("TEST_INSTALLED", &installed)
-                .env("FAIL_DOWNLOAD", if fail_download { "1" } else { "0" })
+                .env("FAILED_STAGE", failed_stage)
                 .output()
                 .unwrap()
         };
@@ -1306,20 +1310,113 @@ esac
         assert!(output.status.success(), "{output:?}");
         let commands = std::fs::read_to_string(&log).unwrap();
         assert!(commands.starts_with("recover\n"), "{commands}");
-        assert!(commands.contains("timeout 25 "), "{commands}");
-        assert!(commands.contains("timeout 120 "), "{commands}");
-        assert_eq!(installed.exists(), !fail_download, "{commands}");
-        assert_eq!(stamp.exists(), !fail_download, "{commands}");
-        if fail_download {
+        assert_eq!(
+            commands.matches("timeout 600 ").count(),
+            if failed_stage == "update" { 1 } else { 2 },
+            "{commands}"
+        );
+        assert!(commands.contains("Acquire::ForceIPv4=true"), "{commands}");
+        assert!(
+            commands.contains("APT::Update::Error-Mode=any"),
+            "{commands}"
+        );
+        assert!(commands.contains("Acquire::Languages=none"), "{commands}");
+        assert_eq!(installed.exists(), failed_stage.is_empty(), "{commands}");
+        assert_eq!(stamp.exists(), failed_stage.is_empty(), "{commands}");
+        if !failed_stage.is_empty() {
             assert!(
                 std::fs::read_to_string(root.join("console"))
                     .unwrap()
                     .contains("FIRECRAB_PACKAGES_FAILED")
             );
+            assert!(
+                std::fs::read_to_string(root.join("console"))
+                    .unwrap()
+                    .contains(&format!("FIRECRAB_APT_FAILED stage={failed_stage} exit=1"))
+            );
+            if failed_stage != "configure" {
+                assert!(!commands.contains("--no-download"), "{commands}");
+            }
         } else {
             assert!(commands.contains("--fix-broken --no-install-recommends --no-download"));
             assert!(run().status.success());
             assert_eq!(std::fs::read_to_string(&log).unwrap(), commands);
+        }
+    }
+}
+
+#[test]
+fn dnf_recovers_metadata_once_and_never_stamps_a_failed_install() {
+    for failure in ["none", "first", "always", "clean"] {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        for (name, body) in [
+            ("bb", "exec \"$@\""),
+            (
+                "dnf",
+                r#"
+echo "$*" >> "$TEST_LOG"
+case "$1" in
+  clean) [ "$FAILURE" != clean ] ;;
+  install)
+    n=$(cat "$TEST_COUNT" 2>/dev/null || echo 0)
+    n=$((n+1)); echo "$n" > "$TEST_COUNT"
+    [ "$FAILURE" != always ] && { [ "$FAILURE" = none ] || [ "$n" -gt 1 ]; }
+    ;;
+  *) exit 99 ;;
+esac
+"#,
+            ),
+        ] {
+            let path = root.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let stamp = root.join("stamp");
+        let script = provision::BASE_PACKAGE_INSTALL
+            .replace(
+                "/usr/bin/apt-get",
+                root.join("missing-apt").to_str().unwrap(),
+            )
+            .replace("/usr/bin/dnf", root.join("dnf").to_str().unwrap())
+            .replace("/etc/firecrab/base-packages.ok", stamp.to_str().unwrap())
+            .replace(
+                ">/dev/console",
+                &format!(">>{}", root.join("console").display()),
+            );
+        let output = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .env("BB", root.join("bb"))
+            .env("TEST_LOG", root.join("log"))
+            .env("TEST_COUNT", root.join("count"))
+            .env("FAILURE", failure)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let log = std::fs::read_to_string(root.join("log")).unwrap();
+        assert_eq!(stamp.exists(), matches!(failure, "none" | "first"), "{log}");
+        assert_eq!(
+            log.lines()
+                .filter(|line| line.starts_with("install "))
+                .count(),
+            if matches!(failure, "none" | "clean") {
+                1
+            } else {
+                2
+            },
+            "{log}"
+        );
+        if failure != "none" {
+            assert!(log.contains("clean metadata"), "{log}");
+            let console = std::fs::read_to_string(root.join("console")).unwrap();
+            assert!(console.contains("FIRECRAB_DNF_RETRY"), "{console}");
+            assert_eq!(
+                console.contains("FIRECRAB_PACKAGES_FAILED"),
+                matches!(failure, "always" | "clean")
+            );
+        }
+        if matches!(failure, "first" | "always") {
+            assert!(log.contains("--setopt=zchunk=False"), "{log}");
         }
     }
 }
@@ -1376,6 +1473,66 @@ fn every_console_entry_point_emits_the_session_ended_marker_before_the_banner() 
             .unwrap_or_else(|| panic!("no session-ended banner in:\n{script}"));
         assert!(guard < marker, "marker must be guarded: {script}");
         assert!(marker < banner, "marker must precede the banner: {script}");
+    }
+}
+
+#[test]
+fn serial_consoles_fall_back_without_login_and_select_an_existing_login_program() {
+    for native in [false, true] {
+        for login in [None, Some("login_bin"), Some("login_usr")] {
+            let directory = tempdir().unwrap();
+            let root = directory.path();
+            for (name, body) in [
+                ("busybox", "exec \"$@\""),
+                ("agetty", "printf 'GETTY %s\\n' \"$*\""),
+                ("console", "echo CONSOLE_READY"),
+            ] {
+                let path = root.join(name);
+                std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            if let Some(name) = login {
+                let path = root.join(name);
+                std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let mut script = if native {
+                provision::serial_console_script()
+            } else {
+                provision::agetty_wrapper_script("/usr/sbin/agetty")
+            };
+            script = script.replace("exec </dev/ttyS0 >/dev/ttyS0 2>&1\n", "");
+            for (guest, name) in [
+                ("/usr/bin/login", "login_usr"),
+                ("/bin/login", "login_bin"),
+                ("/usr/sbin/agetty", "agetty"),
+                ("/sbin/agetty", "agetty"),
+                (provision::GUEST_TOOLBOX, "busybox"),
+                ("/etc/firecrab/rc.console", "console"),
+                ("/run/firecrab-console-active", "marker"),
+            ] {
+                script = script.replace(guest, root.join(name).to_str().unwrap());
+            }
+            let output = std::process::Command::new("sh")
+                .args(["-c", &script])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            if let Some(name) = login {
+                assert!(
+                    stdout.contains("GETTY --autologin root --login-program"),
+                    "{stdout}"
+                );
+                assert!(
+                    stdout.contains(root.join(name).to_str().unwrap()),
+                    "{stdout}"
+                );
+                assert!(!stdout.contains("CONSOLE_READY"), "{stdout}");
+            } else {
+                assert_eq!(stdout, "CONSOLE_READY\n");
+            }
+        }
     }
 }
 

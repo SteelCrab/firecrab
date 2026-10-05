@@ -325,6 +325,7 @@ pub fn specialize_guest(
     // Catalog templates bake a bare autologin getty into the image; hook the
     // session-ended marker (#303) in on every start instead of a repackage.
     patch_template_console(rootfs);
+    patch_oci_dhcp_hook(rootfs);
     install_ipv6_sysctl(rootfs);
     install_guest_toolbox_commands(rootfs);
     remove_injected_systemctl(rootfs);
@@ -569,6 +570,22 @@ fn refresh_native_serial_console(rootfs: &Path) {
     }
     let script = crate::oci::provision::serial_console_script();
     if write_into_image(rootfs, path, script.as_bytes()).is_ok() {
+        set_guest_file_mode(rootfs, path, "0100755");
+    }
+}
+
+/// Refresh the managed DHCP hook on existing OCI disks too, including those
+/// whose native init runs rc.boot. Ordinary templates have no injected hook.
+fn patch_oci_dhcp_hook(rootfs: &Path) {
+    let path = crate::oci::provision::GUEST_DHCP_SCRIPT;
+    if guest_path_exists(rootfs, path)
+        && write_into_image(
+            rootfs,
+            path,
+            crate::oci::provision::dhcp_script().as_bytes(),
+        )
+        .is_ok()
+    {
         set_guest_file_mode(rootfs, path, "0100755");
     }
 }
@@ -1828,6 +1845,39 @@ mod tests {
         specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
         assert!(!guest_path_exists(&rootfs, "/usr/local/bin/systemctl"));
+    }
+
+    #[test]
+    fn specialize_guest_upgrades_old_oci_dhcp_hooks_and_preserves_native_init() {
+        for init in ["busybox", "systemd"] {
+            let directory = tempdir().unwrap();
+            let rootfs = directory.path().join("rootfs.ext4");
+            real_rootfs_with_guest_dirs(&rootfs);
+            run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+            write_into_image(
+                &rootfs,
+                crate::oci::provision::INIT_SYSTEM_PATH,
+                format!("{init}\n").as_bytes(),
+            )
+            .unwrap();
+            write_into_image(&rootfs, "/etc/firecrab/rc.boot", b"native boot runtime\n").unwrap();
+            let hook = crate::oci::provision::GUEST_DHCP_SCRIPT;
+            write_into_image(&rootfs, hook, b"#!/bin/sh\nip addr flush dev eth0\n").unwrap();
+
+            specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+            let updated = debugfs_cat(&rootfs, hook);
+            assert!(updated.contains("ip -4 addr flush"), "{init}: {updated}");
+            assert!(!updated.contains("ip addr flush"), "{init}: {updated}");
+            let metadata = run_debugfs(&rootfs, &format!("stat {hook}")).unwrap();
+            assert!(String::from_utf8_lossy(&metadata.stdout).contains("0755"));
+            if init == "systemd" {
+                assert_eq!(
+                    debugfs_cat(&rootfs, "/etc/firecrab/rc.boot"),
+                    "native boot runtime\n"
+                );
+            }
+        }
     }
 
     #[test]
