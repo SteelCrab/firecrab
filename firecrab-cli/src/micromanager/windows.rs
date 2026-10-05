@@ -3,12 +3,12 @@
 //! Commands and their output follow the macOS backend line for line, so the
 //! same `[PASS]`/`[FAILED]` reading works on both hosts.
 
-mod daemon;
+pub(super) mod daemon;
 mod dev;
 mod doctor;
-mod lifecycle;
+pub(super) mod lifecycle;
 mod provision;
-mod wsl;
+pub(super) mod wsl;
 
 use super::{Command, debug};
 use doctor::Status;
@@ -20,6 +20,11 @@ pub enum Error {
     NotReady,
     #[error("could not render the capability report: {0}")]
     Render(#[from] serde_json::Error),
+    #[error(transparent)]
+    Settings(#[from] super::settings::Error),
+    #[cfg(target_os = "windows")]
+    #[error(transparent)]
+    Controller(#[from] super::controller::Error),
     #[error(transparent)]
     Lifecycle(#[from] lifecycle::Error),
     #[error(transparent)]
@@ -55,6 +60,15 @@ pub fn run(command: Command) -> Result<i32, Error> {
         Command::Validate => {
             run_validate(provision::host()?, &lifecycle::Layout::from_process_env()?)
         }
+        Command::Settings { json, set } => Ok(super::settings::run(
+            &lifecycle::Layout::from_process_env()?.managed_home,
+            json,
+            &set,
+        )?),
+        #[cfg(target_os = "windows")]
+        Command::Controller { home } => Ok(super::controller::run(&home)?),
+        #[cfg(not(target_os = "windows"))]
+        Command::Controller { .. } => Err(Error::MacosOnly("controller")),
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::Shell { command } => run_shell(&command),
         Command::ForwardPorts { .. } => Err(Error::MacosOnly("forward-ports")),
@@ -85,6 +99,8 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     }
     let host = provision::host()?;
     let layout = lifecycle::Layout::from_process_env()?;
+    #[cfg(target_os = "windows")]
+    let _host_work = super::controller::HostWork::begin(&layout.managed_home)?;
     lifecycle::prepare(&layout)?;
     // Before the service stops, so declining the download leaves it running.
     let artifacts = provision::download_all(host, &layout.downloads(), assume_yes)?;
@@ -126,6 +142,15 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
 }
 
 fn run_start() -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    {
+        let layout = lifecycle::Layout::from_process_env()?;
+        if super::controller::configured(&layout.managed_home) {
+            super::controller::start(&layout.managed_home)?;
+            println!("[PASS] microManager: running (automatic wake enabled)");
+            return Ok(0);
+        }
+    }
     let status = daemon::start()?;
     print_daemon_status(&status);
     Ok(i32::from(!status.success()))
@@ -146,6 +171,8 @@ fn run_dev(
         )?)
     };
     let layout = lifecycle::Layout::from_process_env()?;
+    #[cfg(target_os = "windows")]
+    let _host_work = super::controller::HostWork::begin(&layout.managed_home)?;
     if !layout.runtime().join("microManager-task.xml").is_file()
         || daemon::task_state() == daemon::TaskState::Missing
         || !wsl::contains(&wsl::distributions(), DISTRO_NAME)
@@ -174,12 +201,28 @@ fn run_dev(
 }
 
 fn run_stop() -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    {
+        let layout = lifecycle::Layout::from_process_env()?;
+        if super::controller::active(&layout.managed_home) {
+            super::controller::stop(&layout.managed_home)?;
+            println!("[PASS] microManager: manually stopped (automatic wake blocked)");
+            return Ok(0);
+        }
+    }
     daemon::stop()?;
     println!("[PASS] task_scheduler: stopped");
     Ok(0)
 }
 
 fn run_status() -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    {
+        let layout = lifecycle::Layout::from_process_env()?;
+        if super::controller::active(&layout.managed_home) {
+            return Ok(super::controller::print_status(&layout.managed_home)?);
+        }
+    }
     let status = daemon::status();
     print_daemon_status(&status);
     Ok(i32::from(!status.success()))
@@ -369,6 +412,15 @@ fn run_validate(host: &provision::Host, layout: &lifecycle::Layout) -> Result<i3
 /// A root shell in the managed distribution, or one command run there as
 /// root. The distribution keeps running while it is open.
 fn run_shell(command: &[String]) -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    let _lease = {
+        let home = lifecycle::Layout::from_process_env()?.managed_home;
+        if super::controller::active(&home) {
+            Some(super::controller::hold(&home)?)
+        } else {
+            None
+        }
+    };
     if !wsl::contains(&wsl::distributions(), DISTRO_NAME) {
         return Err(Error::NotInstalled);
     }
@@ -395,6 +447,8 @@ fn shell_arguments(command: &[String]) -> Vec<String> {
 /// Without `--purge` the distribution stays registered, so its Firecrab data
 /// and the managed home survive for the next install, as on macOS.
 fn run_uninstall(layout: &lifecycle::Layout, purge: bool) -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
+    super::controller::uninstall(&layout.managed_home)?;
     if purge {
         lifecycle::validate_purge(layout)?;
     }

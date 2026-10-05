@@ -6,6 +6,7 @@ pub mod images;
 pub mod kernels;
 pub mod micro_networks;
 pub mod micro_storages;
+pub mod micromanager;
 pub mod microregistry;
 pub mod network;
 pub mod oci;

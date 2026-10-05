@@ -1,7 +1,7 @@
-mod daemon;
+pub(super) mod daemon;
 mod dev;
 mod forward;
-mod lifecycle;
+pub(super) mod lifecycle;
 mod provision;
 
 use std::ffi::OsString;
@@ -51,6 +51,10 @@ pub enum Error {
     MissingProvisionMarker,
     #[error("could not render the debug report: {0}")]
     Render(#[from] serde_json::Error),
+    #[error(transparent)]
+    Settings(#[from] super::settings::Error),
+    #[error(transparent)]
+    Controller(#[from] super::controller::Error),
     #[error("the management VM is not running; run `firecrab service start` first")]
     ShellNotRunning,
     #[error("the management SSH key is missing from {0}; run `firecrab service reinstall`")]
@@ -75,6 +79,12 @@ pub fn run(command: Command) -> Result<i32, Error> {
         Command::Start => run_start(),
         Command::Stop => run_stop(),
         Command::Status => run_status(),
+        Command::Settings { json, set } => Ok(super::settings::run(
+            &lifecycle::Layout::from_process_env()?.managed_home,
+            json,
+            &set,
+        )?),
+        Command::Controller { home } => Ok(super::controller::run(&home)?),
         Command::Debug { json, logs, tail } => run_debug(debug::Options::new(json, logs, tail)),
         Command::Dev {
             source,
@@ -166,6 +176,11 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
 
 fn run_start() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    if super::controller::configured(&layout.managed_home) {
+        super::controller::start(&layout.managed_home)?;
+        report!("[PASS] microManager: running (automatic wake enabled)");
+        return Ok(0);
+    }
     let paths = daemon::paths(&layout)?;
     if paths.plist.is_file() && paths.wrapper.is_file() {
         provision::require_guest_provisioned(&layout.managed_home)?;
@@ -186,6 +201,7 @@ fn run_dev(source: Option<&Path>, release: bool, restore: bool, yes: bool) -> Re
     };
     let layout = lifecycle::Layout::from_process_env()?;
     let paths = daemon::paths(&layout)?;
+    let _host_work = super::controller::HostWork::begin(&layout.managed_home)?;
     if !paths.wrapper.is_file() || !paths.plist.is_file() {
         if restore {
             return Err(daemon::Error::NotInstalled(paths.wrapper).into());
@@ -222,6 +238,11 @@ fn run_dev(source: Option<&Path>, release: bool, restore: bool, yes: bool) -> Re
 
 fn run_stop() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    if super::controller::active(&layout.managed_home) {
+        super::controller::stop(&layout.managed_home)?;
+        report!("[PASS] microManager: manually stopped (automatic wake blocked)");
+        return Ok(0);
+    }
     daemon::stop(&layout)?;
     report!("[PASS] launchd: stopped");
     Ok(0)
@@ -229,6 +250,9 @@ fn run_stop() -> Result<i32, Error> {
 
 fn run_status() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    if super::controller::active(&layout.managed_home) {
+        return Ok(super::controller::print_status(&layout.managed_home)?);
+    }
     let status = daemon::status(&layout)?;
     print_daemon_status(&status);
     print_log_paths(&layout);
@@ -358,6 +382,11 @@ fn run_shell(command: &[String]) -> Result<i32, Error> {
     use std::io::IsTerminal;
 
     let layout = lifecycle::Layout::from_process_env()?;
+    let _lease = if super::controller::active(&layout.managed_home) {
+        Some(super::controller::hold(&layout.managed_home)?)
+    } else {
+        None
+    };
     let paths = daemon::paths(&layout)?;
     let status = daemon::status(&layout)?;
     let guest_marker = fs::read_to_string(&paths.manager_ready).unwrap_or_default();
@@ -643,6 +672,7 @@ fn run_uninstall(purge: bool) -> Result<i32, Error> {
     if purge {
         lifecycle::validate_purge(&layout)?;
     }
+    super::controller::uninstall(&layout.managed_home)?;
     daemon::uninstall(&layout)?;
     lifecycle::uninstall_at(&layout, purge)?;
     report!("microManager uninstalled");
@@ -723,6 +753,9 @@ fn command_arguments(command: &Command) -> Vec<OsString> {
         | Command::Shell { .. }
         | Command::ForwardPorts { .. } => {
             unreachable!("lifecycle and relay commands do not invoke the native helper")
+        }
+        Command::Settings { .. } | Command::Controller { .. } => {
+            unreachable!("host controller commands do not invoke the native helper")
         }
         Command::Doctor { json } => {
             let mut arguments = vec![OsString::from("doctor")];

@@ -289,6 +289,15 @@ impl ImageInstallTracker {
         jobs.get(alias)
             .is_some_and(|job| job.status == ImageInstallStatus::Running)
     }
+
+    /// Includes detached jobs whose initiating HTTP request already returned.
+    pub fn any_running(&self) -> bool {
+        self.jobs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .any(|job| job.status == ImageInstallStatus::Running)
+    }
 }
 
 impl ImageInstallJob {

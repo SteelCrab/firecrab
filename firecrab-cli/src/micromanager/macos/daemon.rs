@@ -82,12 +82,34 @@ pub fn install(
     fs::create_dir_all(runtime)
         .map_err(|source| io_error("create daemon runtime directory", runtime, source))?;
 
-    write_atomic(
-        &paths.wrapper,
-        render_wrapper(layout, helper, ssh_private_key, &paths).as_bytes(),
-        0o700,
-    )?;
-    write_atomic(&paths.plist, render_plist(&paths).as_bytes(), 0o600)?;
+    let mut wrapper = render_wrapper(layout, helper, ssh_private_key, &paths);
+    let mut plist = render_plist(&paths);
+    if layout.managed_home.join("runtime/controlled").is_file() {
+        let settings = super::super::settings::Store::new(&layout.managed_home)
+            .load()
+            .map_err(|error| {
+                io_error(
+                    "read settings",
+                    &layout.managed_home,
+                    io::Error::other(error),
+                )
+            })?
+            .settings;
+        wrapper = wrapper.replace("127.0.0.1:5523:127.0.0.1:5523", "127.0.0.1:5524:127.0.0.1:5523")
+            .replace("http://127.0.0.1:5523/api/host", "http://127.0.0.1:5524/api/host")
+            .replace("FIRECRAB_MICROMANAGER_HOME=\"$root\"", &format!("FIRECRAB_MICROMANAGER_CPU={} FIRECRAB_MICROMANAGER_MEMORY_MIB={} FIRECRAB_MICROMANAGER_HOME=\"$root\"", settings.cpu, settings.memory_mib));
+        plist = plist
+            .replace(
+                "<key>RunAtLoad</key><true/>",
+                "<key>RunAtLoad</key><false/>",
+            )
+            .replace(
+                "<key>KeepAlive</key><true/>",
+                "<key>KeepAlive</key><false/>",
+            );
+    }
+    write_atomic(&paths.wrapper, wrapper.as_bytes(), 0o700)?;
+    write_atomic(&paths.plist, plist.as_bytes(), 0o600)?;
     Ok(paths)
 }
 
@@ -119,6 +141,13 @@ pub fn start(layout: &Layout) -> Result<Status, Error> {
         ],
         false,
     )?;
+    if layout.managed_home.join("runtime/controlled").is_file() {
+        launchctl(
+            "kickstart",
+            &[&format!("{}/{}", domain(layout)?, LABEL)],
+            false,
+        )?;
+    }
     wait_ready(layout, Duration::from_secs(180))
 }
 
@@ -155,7 +184,7 @@ pub fn status(layout: &Layout) -> Result<Status, Error> {
         None
     };
     let ready = detail.is_some();
-    let api_reachable = api_reachable();
+    let api_reachable = api_reachable(layout);
     Ok(Status {
         loaded,
         ready,
@@ -336,11 +365,16 @@ fn domain(_layout: &Layout) -> Result<String, Error> {
     ))
 }
 
-fn api_reachable() -> bool {
+fn api_reachable(layout: &Layout) -> bool {
+    let url = if layout.managed_home.join("runtime/controlled").is_file() {
+        "http://127.0.0.1:5524/api/host"
+    } else {
+        API_URL
+    };
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
-        .and_then(|client| client.get(API_URL).send())
+        .and_then(|client| client.get(url).send())
         .is_ok_and(|response| response.status().is_success())
 }
 

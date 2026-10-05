@@ -218,6 +218,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route(
+            "/api/micromanager/activity",
+            get(handlers::micromanager::activity),
+        )
         // GET and POST share one path, matching this router's existing shape
         // for "read this resource / start work on it" pairs such as
         // `/api/images/{alias}/install`.

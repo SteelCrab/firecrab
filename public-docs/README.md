@@ -23,6 +23,7 @@ Each page covers one topic.
 | Headless host CLI | [firecrab CLI](firecrab-cli.md) |
 | Managed Debian VM on macOS | [microManager on macOS](micromanager-macos.md) |
 | Managed Debian VM on Windows | [microManager on Windows](micromanager-windows.md) |
+| microManager settings and automatic idle shutdown | [Settings and Sleepy](micromanager-settings.md) |
 | Browser UI | [Dashboard](dashboard.md) |
 | REST and WebSocket endpoints | [API](api.md) |
 | Bridges, DHCP, NAT, and policy | [Networking](networking.md) |

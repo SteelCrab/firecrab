@@ -50,6 +50,7 @@ Update scope:   POST /api/update → U1 only
 - [ ] **A17 — Distribution dependencies:** check and install dependencies on Debian 12, Fedora, Arch, and openSUSE Tumbleweed.
 - [ ] **A18 — Development deployment contract:** run shared guest build/deploy/rollback regression checks; record live `service dev` validation separately.
 - [ ] **A19 — QA runner contracts:** verify guest failure/cleanup, native Windows phase aggregation, and browser mode/API guards without a VM.
+- [ ] **A20 — microManager settings and Sleepy:** validate settings save/discard and terminal restoration in a PTY; separately run `scripts/test-micromanager-sleepy.ps1 -CliPath ./firecrab.exe` on native Windows/WSL2 for actual idle shutdown, automatic wake, workload inhibition, and manual stop. See [settings and Sleepy](micromanager-settings.md). macOS runtime validation requires a native Mac.
 
 Run workspace gates on Linux from the repository root.
 The IDs show which checklist items each command covers:

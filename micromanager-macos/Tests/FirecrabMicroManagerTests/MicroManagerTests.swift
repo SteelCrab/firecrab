@@ -82,6 +82,22 @@ func managedHomeEnvironmentOverrideWins() {
 }
 
 @Test
+func managerResourceSettingsReachTheNativeVM() {
+    let options = VMOptions.managedDefaults(environment: [
+        "FIRECRAB_MICROMANAGER_CPU": "4",
+        "FIRECRAB_MICROMANAGER_MEMORY_MIB": "8192"
+    ])
+    #expect(options.cpuCount == 4)
+    #expect(options.memorySizeMiB == 8192)
+    let invalid = VMOptions.managedDefaults(environment: [
+        "FIRECRAB_MICROMANAGER_CPU": "invalid",
+        "FIRECRAB_MICROMANAGER_MEMORY_MIB": "-1"
+    ])
+    #expect(invalid.cpuCount == 0)
+    #expect(invalid.memorySizeMiB == 0)
+}
+
+@Test
 func validateReportsEveryManagedSettingWithoutArguments() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
