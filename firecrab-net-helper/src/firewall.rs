@@ -113,6 +113,9 @@ pub enum FirewallError {
         /// `nft`'s stderr output.
         stderr: String,
     },
+    /// WSL could not reserve an explicitly forwarded localhost TCP port.
+    #[error("failed to prepare WSL localhost forwarding")]
+    WslForward(#[from] std::io::Error),
 }
 
 /// Single-writer actor: every `nft` write goes through one mutex, so
@@ -147,6 +150,8 @@ struct FirewallState {
     /// Last `EnsureFirewall` network set, so `ApplyVmPolicy` can resolve
     /// the same per-network uplink without a protocol change.
     networks: Vec<MicroNetworkSpec>,
+    /// Socket listeners share the policy's reconciliation and stop lifetime.
+    relays: crate::wsl_forward::PortRelays,
 }
 
 impl FirewallActor {
@@ -218,6 +223,8 @@ pub async fn ensure_firewall(
         return Ok(());
     }
 
+    let relays = state.relays.prepare(&vm_policies).await?;
+
     let mut ruleset = render_reconciled_ruleset(
         base_ruleset.as_str(),
         &default_uplink,
@@ -240,6 +247,7 @@ pub async fn ensure_firewall(
     state.applied_vms = desired_vms;
     state.applied_ruleset = Some(base_ruleset);
     state.kernel_snapshot = Some(kernel_snapshot);
+    state.relays.commit(relays).await;
     Ok(())
 }
 
@@ -297,10 +305,12 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
         let mut ruleset =
             render_reconciled_ruleset(&base, &default_uplink, &state.networks, &policies);
         ruleset.push_str(&render_stale_l2_removal(&list_tables().await?, &policies));
+        let relays = state.relays.prepare(&policies).await?;
         state.kernel_snapshot = None;
         run_nft(&ruleset).await?;
         state.kernel_snapshot = Some(read_owned_snapshot().await?);
         state.applied_ruleset = Some(base);
+        state.relays.commit(relays).await;
         return Ok(());
     }
 
@@ -313,8 +323,17 @@ pub async fn apply_vm_policy(actor: &FirewallActor, policy: VmPolicy) -> Result<
         None => render_vm_policy_for_network(&uplink, &policy, internet),
     };
     state.kernel_snapshot = None;
+    let policies: Vec<_> = state
+        .applied_vms
+        .values()
+        .filter(|(_, previous)| previous.vm_id != policy.vm_id)
+        .map(|(_, previous)| previous.clone())
+        .chain(std::iter::once(policy.clone()))
+        .collect();
+    let relays = state.relays.prepare(&policies).await?;
     run_nft(&ruleset).await?;
     state.applied_vms.insert(policy.vm_id, (uplink, policy));
+    state.relays.commit(relays).await;
     Ok(())
 }
 
@@ -328,6 +347,13 @@ pub async fn remove_vm_policy(actor: &FirewallActor, vm_id: Uuid) -> Result<(), 
     state.kernel_snapshot = None;
     run_nft(&render_vm_policy_removal(vm_id, policy.ipv4, policy.ipv6)).await?;
     state.applied_vms.remove(&vm_id);
+    let policies: Vec<_> = state
+        .applied_vms
+        .values()
+        .map(|(_, policy)| policy.clone())
+        .collect();
+    let relays = state.relays.prepare(&policies).await?;
+    state.relays.commit(relays).await;
     Ok(())
 }
 
@@ -341,6 +367,8 @@ pub async fn remove_firewall(actor: &FirewallActor) -> Result<(), FirewallError>
     state.applied_ruleset = None;
     state.kernel_snapshot = None;
     state.networks.clear();
+    let relays = state.relays.prepare(&[]).await?;
+    state.relays.commit(relays).await;
     Ok(())
 }
 

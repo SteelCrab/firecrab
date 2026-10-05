@@ -29,6 +29,8 @@ mod self_update;
 mod tap;
 /// Per-VM systemd units that run the VM shim.
 mod vm_unit;
+/// WSL2 TCP listeners for Windows localhost forwarding.
+mod wsl_forward;
 
 use firecrab_helper_protocol::PROTOCOL_VERSION;
 use firecrab_helper_protocol::framing::{read_frame, write_frame};
