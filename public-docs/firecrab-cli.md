@@ -251,8 +251,8 @@ With no flag, `update` behaves as `--check`.
 | Flag | Effect |
 | --- | --- |
 | `--check` | Report only; no download. Exit 0 whether or not an update exists, 1 if the check itself failed |
-| `--apply` | Download the host bundle, verify SHA-256, and hand the swap to `firecrab-helper` |
-| `--json` | Emit `UpdateCheckResponse`, the same body `GET /api/update` returns |
+| `--apply` | Download the host bundle, verify SHA-256, and hand the swap to `firecrab-helper`, showing each stage with a gauge and the overall percent |
+| `--json` | Emit `UpdateCheckResponse`, the same body `GET /api/update` returns, release notes included |
 
 `--json` prints a report even when the check fails, with `latest` absent and `error` filled in.
 

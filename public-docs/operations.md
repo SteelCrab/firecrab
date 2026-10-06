@@ -84,7 +84,8 @@ sudo firecrab update --apply
 
 `--check` is read-only and needs no privilege; it is also what runs with no flag at all.
 `--apply` needs root or the `firecrab` service account, because the binary swap goes through the network helper's socket.
-The dashboard's bottom-left indicator runs the same two steps.
+`--apply` prints a line for each stage (check, download, verify, apply, restart) with a gauge and the overall percent; off a terminal it prints one plain line per stage.
+The dashboard's bottom-left indicator runs the same two steps: its dialog lists what the release changes, then shows a gauge, the percent, and the stage until the API is back on the new version.
 
 The apply replaces binaries and the dashboard, then restarts both services.
 The helper writes only into the install layout it derives from its own units, and rejects any other; a host installed with a non-default `PREFIX` needs `install.sh` re-run once so both units carry it.

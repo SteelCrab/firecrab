@@ -198,6 +198,9 @@ pass G5
 http GET /api/update
 expect H1 200
 json_get 'd.get("current")' >/dev/null
+http GET /api/update/progress
+expect H1 200
+json_get 'd.get("phase") + str(d["percent"])' >/dev/null
 pass H1
 
 http GET /api/network

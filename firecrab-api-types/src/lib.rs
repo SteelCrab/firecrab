@@ -1006,6 +1006,99 @@ pub struct UpdateCheckResponse {
     /// unparsable tag). `None` on a successful check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What the newest release changed, as Markdown: the changelog section of
+    /// its GitHub release notes, cut to a bounded length. Treat it as
+    /// untrusted text. `None` when there is no `latest` or the release has no
+    /// notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// The newest release's page on GitHub, always an `https://` URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_url: Option<String>,
+}
+
+/// Where a `firecrab update --apply` run stands.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdatePhase {
+    /// No update has been started, or its record is gone.
+    Idle,
+    /// Looking up the newest release.
+    Checking,
+    /// Fetching the host bundle.
+    Downloading,
+    /// Comparing the bundle's SHA-256 with the one the release lists.
+    Verifying,
+    /// `firecrab-helper` is replacing the installed binaries.
+    Applying,
+    /// The helper accepted the bundle and is restarting the services.
+    Restarting,
+    /// The API that answers runs the new version.
+    Done,
+    /// The run stopped; `error` says why.
+    Failed,
+}
+
+impl UpdatePhase {
+    /// A run in this phase still has something to do.
+    pub fn is_running(self) -> bool {
+        matches!(
+            self,
+            Self::Checking
+                | Self::Downloading
+                | Self::Verifying
+                | Self::Applying
+                | Self::Restarting
+        )
+    }
+}
+
+/// `GET /api/update/progress`, and the record the updater keeps for it. One
+/// type for both so the CLI's record and the API's answer cannot drift.
+///
+/// The record lives in a file rather than in the API's memory because the last
+/// step of an update restarts the API itself.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProgressResponse {
+    pub phase: UpdatePhase,
+    /// Overall progress from 0 to 100, not the current stage's.
+    pub percent: u8,
+    /// Version being installed, without a leading `v`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Bundle bytes received so far, while downloading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloaded_bytes: Option<u64>,
+    /// Size of the bundle, when the server said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    /// Why the run failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// PID of the updater that wrote the record, matching the `pid` that
+    /// `POST /api/update` answered, so a caller can tell this run from an
+    /// earlier one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// When the record was last written, in milliseconds since the Unix epoch.
+    pub updated_at_ms: u64,
+}
+
+impl UpdateProgressResponse {
+    /// The answer when no update has run.
+    pub fn idle() -> Self {
+        Self {
+            phase: UpdatePhase::Idle,
+            percent: 0,
+            target: None,
+            downloaded_bytes: None,
+            total_bytes: None,
+            error: None,
+            pid: None,
+            updated_at_ms: 0,
+        }
+    }
 }
 
 /// `POST /api/update`: the detached updater was launched, nothing more.
@@ -2256,6 +2349,8 @@ mod tests {
             latest: Some("0.1.2".to_owned()),
             update_available: true,
             error: None,
+            notes: None,
+            release_url: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert_eq!(
@@ -2275,6 +2370,8 @@ mod tests {
             latest: None,
             update_available: false,
             error: Some("unreachable: connection refused".to_owned()),
+            notes: None,
+            release_url: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(
@@ -2286,6 +2383,72 @@ mod tests {
             serde_json::from_str::<UpdateCheckResponse>(&json).unwrap(),
             response
         );
+    }
+
+    #[test]
+    fn update_check_response_carries_release_notes_in_camel_case() {
+        let response = UpdateCheckResponse {
+            current: "0.3.0".to_owned(),
+            latest: Some("0.3.1".to_owned()),
+            update_available: true,
+            error: None,
+            notes: Some("### Added\n\n- `service shell`".to_owned()),
+            release_url: Some(
+                "https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1".to_owned(),
+            ),
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["notes"], "### Added\n\n- `service shell`");
+        assert_eq!(
+            json["releaseUrl"],
+            "https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1"
+        );
+        assert_eq!(
+            serde_json::from_value::<UpdateCheckResponse>(json).unwrap(),
+            response
+        );
+        // An older updater's output has neither field.
+        let old: UpdateCheckResponse =
+            serde_json::from_str("{\"current\":\"0.3.0\",\"updateAvailable\":false}").unwrap();
+        assert_eq!(old.notes, None);
+        assert_eq!(old.release_url, None);
+    }
+
+    #[test]
+    fn update_progress_serializes_camel_case_and_omits_what_is_unknown() {
+        let record = UpdateProgressResponse {
+            phase: UpdatePhase::Downloading,
+            percent: 47,
+            target: Some("0.3.1".to_owned()),
+            downloaded_bytes: Some(5_242_880),
+            total_bytes: Some(11_178_942),
+            error: None,
+            pid: Some(4242),
+            updated_at_ms: 1_791_000_000_000,
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(
+            json,
+            "{\"phase\":\"downloading\",\"percent\":47,\"target\":\"0.3.1\",\"downloadedBytes\":5242880,\"totalBytes\":11178942,\"pid\":4242,\"updatedAtMs\":1791000000000}"
+        );
+        assert_eq!(
+            serde_json::from_str::<UpdateProgressResponse>(&json).unwrap(),
+            record
+        );
+
+        let idle = serde_json::to_string(&UpdateProgressResponse::idle()).unwrap();
+        assert_eq!(idle, "{\"phase\":\"idle\",\"percent\":0,\"updatedAtMs\":0}");
+    }
+
+    #[test]
+    fn only_the_phases_between_start_and_end_are_running() {
+        use UpdatePhase::*;
+        for phase in [Checking, Downloading, Verifying, Applying, Restarting] {
+            assert!(phase.is_running(), "{phase:?}");
+        }
+        for phase in [Idle, Done, Failed] {
+            assert!(!phase.is_running(), "{phase:?}");
+        }
     }
 
     #[test]

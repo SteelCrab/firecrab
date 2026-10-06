@@ -143,7 +143,7 @@ A17 required tools: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G6h — Windows:** shell exit leaves API/helper active and the host API responsive.
 - [ ] **H1 — Update status:** read-only status check succeeds.
 - [ ] **H2 — Host network:** an uplink is present; loopback and internal helper interfaces are absent from the picker.
-- [ ] **U1 — Update apply (optional separate run):** apply update; host recovers and API returns 200.
+- [ ] **U1 — Update apply (optional separate run):** apply update; host recovers and API returns 200. The dashboard dialog lists the release notes, then shows a gauge, the percent, and the stage until the new API answers.
 
 Hosted macOS and Windows runners do build, unit, and diagnostic checks.
 Runtime E2E needs a native M3-or-later Mac or a Windows host with WSL2, and doctor must report ready.
@@ -184,6 +184,7 @@ curl -i "$API/api/host"             # G4: 200
 curl -i "$API/"                    # G4: HTML 200
 curl -i "$API/api/no-such-route"    # G5: JSON 404 with requestId
 curl -i "$API/api/update"           # H1: read-only check
+curl -i "$API/api/update/progress"  # H1: idle, or the last run
 curl -i "$API/api/network"          # H2: uplink list
 ```
 
