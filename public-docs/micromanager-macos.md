@@ -114,7 +114,7 @@ scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
 The default binary directory is `~/.local/bin`, and `FIRECRAB_INSTALL_DIR` overrides it.
 `install` performs the complete managed-host gate before returning success:
 
-1. Download the pinned Debian 13 ARM64 archive and Firecracker v1.17.0, plus the latest Firecrab release's guest assets, which are verified against that release's `SHA256SUMS`.
+1. Download the pinned Debian 13 ARM64 archive and Firecracker v1.17.0, plus the latest Firecrab release's guest assets, which are verified against that release's `SHA256SUMS`; when GitHub cannot be reached, the release recorded by the last install is used.
 2. Verify every SHA-512 or SHA-256 digest before atomically publishing an artifact.
 3. Extract the 3 GiB GPT OS disk and create a separate 16 GiB sparse persistent data disk.
 4. EFI-boot Debian with a cloud-init seed and install Firecracker, Firecrab, OpenSSH, and systemd units.

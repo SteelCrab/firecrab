@@ -21,6 +21,8 @@ use super::report;
 const LATEST_API: &str = "https://api.github.com/repos/SteelCrab/firecrab/releases/latest";
 const RELEASES: &str = "https://github.com/SteelCrab/firecrab/releases";
 const SUMS: &str = "SHA256SUMS";
+/// Next to the recorded digests, the tag of the release they belong to.
+const TAG: &str = "RELEASE";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The release's guest installer, and the name it is kept under in the
@@ -34,7 +36,7 @@ pub enum Error {
     Fetch { url: String, detail: String },
     #[error("the latest Firecrab release is tagged {0:?}, not vMAJOR.MINOR.PATCH")]
     UnexpectedTag(String),
-    #[error("release {tag} publishes no SHA-256 for {asset}")]
+    #[error("release {tag} does not list exactly one SHA-256 for {asset}")]
     Unlisted { tag: String, asset: String },
     #[error("could not record {path}: {source}")]
     Record {
@@ -57,6 +59,46 @@ impl Release {
         let release = Self::resolve(LATEST_API, RELEASES)?;
         report!("[PASS] Firecrab release: {} is the latest", release.tag);
         Ok(release)
+    }
+
+    /// The latest release; when GitHub cannot be reached, the one an earlier run
+    /// recorded in `directory`, so a host whose downloads are cached can still
+    /// install offline.
+    pub fn latest_or_recorded(directory: &Path) -> Result<Self, Error> {
+        Self::or_recorded(Self::latest(), directory, RELEASES)
+    }
+
+    /// Only a lookup that could not fetch falls back: a reply that arrived but
+    /// is wrong, such as an unexpected tag, stands as the error it is.
+    fn or_recorded(
+        lookup: Result<Self, Error>,
+        directory: &Path,
+        base: &str,
+    ) -> Result<Self, Error> {
+        let Err(error @ Error::Fetch { .. }) = lookup else {
+            return lookup;
+        };
+        let Some(release) = Self::recorded(directory, base) else {
+            return Err(error);
+        };
+        report!(
+            "[WARNING] Firecrab release: {error}; using {} recorded by the last install",
+            release.tag
+        );
+        Ok(release)
+    }
+
+    fn recorded(directory: &Path, base: &str) -> Option<Self> {
+        let tag = fs::read_to_string(directory.join(TAG))
+            .ok()?
+            .trim()
+            .to_owned();
+        let sums = fs::read_to_string(directory.join(SUMS)).ok()?;
+        is_release_tag(&tag).then(|| Self {
+            tag,
+            base: base.to_owned(),
+            sums,
+        })
     }
 
     fn resolve(api_url: &str, base: &str) -> Result<Self, Error> {
@@ -114,11 +156,16 @@ impl Release {
         self.artifact("Firecrab guest installer", INSTALLER_ASSET, INSTALLER_FILE)
     }
 
-    /// Keeps the digests the downloads were verified against, so they can be
-    /// re-hashed later without asking GitHub which release was the latest.
+    /// Keeps the digests the downloads were verified against, and the release
+    /// they belong to, so they can be re-hashed or installed again later
+    /// without asking GitHub which release was the latest.
     pub fn record(&self, directory: &Path) -> Result<(), Error> {
-        let path = directory.join(SUMS);
-        fs::write(&path, &self.sums).map_err(|source| Error::Record { path, source })
+        let write = |name: &str, contents: &str| {
+            let path = directory.join(name);
+            fs::write(&path, contents).map_err(|source| Error::Record { path, source })
+        };
+        write(SUMS, &self.sums)?;
+        write(TAG, &self.tag)
     }
 }
 
@@ -171,14 +218,17 @@ pub fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
 
 /// The digest `sha256sum` wrote for `asset`: a name that may carry a `*`
 /// (binary mode) or `./` prefix, which is how the release workflow writes them.
+/// An asset listed twice with different digests has none to trust.
 fn listed_digest(sums: &str, asset: &str) -> Option<String> {
-    sums.lines().find_map(|line| {
+    let mut digests = sums.lines().filter_map(|line| {
         let (digest, name) = line.split_once(char::is_whitespace)?;
         let name = name.trim_start();
         let name = name.strip_prefix('*').unwrap_or(name);
         let name = name.strip_prefix("./").unwrap_or(name);
         (name == asset && is_sha256(digest)).then(|| digest.to_ascii_lowercase())
-    })
+    });
+    let first = digests.next()?;
+    digests.all(|digest| digest == first).then_some(first)
 }
 
 fn is_sha256(digest: &str) -> bool {
@@ -233,6 +283,14 @@ mod tests {
             tag: "v0.3.1".to_owned(),
             base: "https://example.invalid/releases".to_owned(),
             sums: sums.to_owned(),
+        }
+    }
+
+    fn release_at(tag: &str, base: &str) -> Release {
+        Release {
+            tag: tag.to_owned(),
+            base: base.to_owned(),
+            sums: sums(),
         }
     }
 
@@ -402,6 +460,88 @@ mod tests {
     }
 
     #[test]
+    fn an_asset_listed_twice_needs_one_digest() {
+        let other = "0f9605ac600bcd6e1387d688bddb503f91e1be76a72e1942731a4ec7efbe2759";
+        let same = format!("{INSTALLER_SHA256}  ./install.sh\n{INSTALLER_SHA256} *install.sh\n");
+        assert_eq!(
+            listed_digest(&same, "install.sh").as_deref(),
+            Some(INSTALLER_SHA256)
+        );
+        let conflicting = format!("{INSTALLER_SHA256}  ./install.sh\n{other}  install.sh\n");
+        assert_eq!(listed_digest(&conflicting, "install.sh"), None);
+        // An entry that is not a digest at all is ignored, as for a single entry.
+        let junk = format!("abc123  install.sh\n{INSTALLER_SHA256}  ./install.sh\n");
+        assert_eq!(
+            listed_digest(&junk, "install.sh").as_deref(),
+            Some(INSTALLER_SHA256)
+        );
+        assert!(matches!(
+            release(&conflicting).installer(),
+            Err(Error::Unlisted { .. })
+        ));
+    }
+
+    #[test]
+    fn an_unreachable_github_falls_back_to_the_recorded_release() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let base = "https://example.invalid/releases";
+        release_at("v0.3.0", base)
+            .record(directory.path())
+            .expect("the record is written");
+
+        let release = Release::or_recorded(
+            Release::resolve("http://127.0.0.1:1/api", base),
+            directory.path(),
+            base,
+        )
+        .expect("the recorded release stands in");
+        assert_eq!(release.tag(), "v0.3.0");
+        let installer = release
+            .installer()
+            .expect("its digests are the recorded ones");
+        assert_eq!(installer.digest, INSTALLER_SHA256);
+        assert_eq!(installer.url, format!("{base}/download/v0.3.0/install.sh"));
+    }
+
+    #[test]
+    fn without_a_usable_record_the_failed_lookup_stands() {
+        let base = "https://example.invalid/releases";
+        let unreachable = || Release::resolve("http://127.0.0.1:1/api", base);
+
+        let empty = tempfile::tempdir().expect("temp dir");
+        let error = Release::or_recorded(unreachable(), empty.path(), base)
+            .expect_err("nothing was recorded");
+        assert!(matches!(error, Error::Fetch { .. }), "{error}");
+
+        // A record whose tag could end up in a URL is not trusted either.
+        let tampered = tempfile::tempdir().expect("temp dir");
+        fs::write(tampered.path().join(SUMS), sums()).expect("digests");
+        fs::write(tampered.path().join(TAG), "../../evil").expect("tag");
+        let error = Release::or_recorded(unreachable(), tampered.path(), base)
+            .expect_err("the tag is not a release tag");
+        assert!(matches!(error, Error::Fetch { .. }), "{error}");
+    }
+
+    #[test]
+    fn a_reply_that_is_wrong_is_not_replaced_by_the_record() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let (server, handle) = serve(vec![("/api", r#"{"tag_name":"nightly"}"#.to_owned())]);
+        let base = format!("{server}/releases");
+        release_at("v0.3.0", &base)
+            .record(directory.path())
+            .expect("the record is written");
+
+        let error = Release::or_recorded(
+            Release::resolve(&format!("{server}/api"), &base),
+            directory.path(),
+            &base,
+        )
+        .expect_err("GitHub answered, and what it said is not a release tag");
+        handle.join().expect("server finishes");
+        assert!(matches!(error, Error::UnexpectedTag(tag) if tag == "nightly"));
+    }
+
+    #[test]
     fn a_digest_that_is_not_sha256_is_never_trusted() {
         let release = release("abc123  ./install.sh\n");
         assert!(matches!(release.installer(), Err(Error::Unlisted { .. })));
@@ -420,5 +560,8 @@ mod tests {
             Some(INSTALLER_SHA256)
         );
         assert_eq!(recorded_digest(directory.path(), "missing"), None);
+        let again = Release::recorded(directory.path(), "https://example.invalid/releases")
+            .expect("the tag and digests were recorded together");
+        assert_eq!(again.tag(), "v0.3.1");
     }
 }

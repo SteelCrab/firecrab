@@ -107,7 +107,7 @@ fn firecrab_artifacts(release: &Release) -> Result<[ArtifactSpec; 2], release::E
 
 pub fn download_all(managed_home: &Path, assume_yes: bool) -> Result<DownloadedArtifacts, Error> {
     let directory = managed_home.join("downloads");
-    let release = Release::latest()?;
+    let release = Release::latest_or_recorded(&directory)?;
     let [debian, firecracker] = PINNED;
     let [host, installer] = firecrab_artifacts(&release)?;
     let artifacts = [debian, firecracker, host, installer];

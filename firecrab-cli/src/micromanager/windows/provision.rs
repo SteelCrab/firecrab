@@ -169,7 +169,7 @@ fn firecrab_artifacts(host: &Host, release: &Release) -> Result<[ArtifactSpec; 2
 }
 
 pub fn download_all(host: &Host, directory: &Path, assume_yes: bool) -> Result<Downloaded, Error> {
-    let release = Release::latest()?;
+    let release = Release::latest_or_recorded(directory)?;
     let [debian, firecracker] = host.pinned.clone();
     let [bundle, installer] = firecrab_artifacts(host, &release)?;
     let artifacts = [debian, firecracker, bundle, installer];
