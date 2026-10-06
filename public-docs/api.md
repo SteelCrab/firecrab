@@ -54,7 +54,10 @@ cargo run -p firecrab-api
 
 The console socket closes when the VM stops. When the guest's login session ends (`exit`), it
 closes with code `4000` (`session_ended`) instead. The VM keeps running; opening the socket again
-attaches to the new shell the guest starts.
+attaches to the new shell the guest starts and replays only that login session's output.
+Reconnecting before logout keeps the current session's history. Complete terminal queries
+are omitted from replay; live queries are forwarded normally. The full transcript remains
+available through `GET /api/vms/{id}/log`.
 
 ## Create a VM
 
