@@ -43,21 +43,21 @@ pub(crate) struct SessionEndScanner {
 }
 
 impl SessionEndScanner {
-    /// Removes every marker from the backlog replayed on attach: those
-    /// sessions ended before this viewer arrived, so they must not end its
-    /// session. A trailing partial marker is held for the first live chunk.
+    /// Replays only the current login session. Earlier sessions can contain
+    /// echoed terminal replies and shell errors; replaying them on every new
+    /// session makes those failures look live again. The full console log
+    /// remains available separately. A trailing partial marker is held for
+    /// the first live chunk.
     pub(crate) fn backlog(&mut self, backlog: &[u8]) -> Vec<u8> {
-        let mut replay = Vec::with_capacity(backlog.len());
-        let mut rest = backlog;
-        while let Some(position) = find_marker(rest) {
-            replay.extend_from_slice(&rest[..position]);
-            rest = &rest[position + SESSION_ENDED_MARKER.len()..];
-        }
+        let start = backlog
+            .windows(SESSION_ENDED_MARKER.len())
+            .rposition(|window| window == SESSION_ENDED_MARKER)
+            .map_or(0, |position| position + SESSION_ENDED_MARKER.len());
+        let rest = &backlog[start..];
         let (visible, held) = rest.split_at(rest.len() - partial_marker_len(rest));
-        replay.extend_from_slice(visible);
         self.flushed_prefix = 0;
         self.held = held.to_vec();
-        replay
+        visible.to_vec()
     }
 
     /// Scans one live chunk. Bytes that could still start a marker are held
@@ -210,14 +210,59 @@ mod tests {
     }
 
     #[test]
-    fn markers_in_the_backlog_are_stripped_and_do_not_end_the_session() {
+    fn ended_sessions_are_not_replayed_and_do_not_close_the_new_session() {
         let mut scanner = SessionEndScanner::default();
 
         let replay = scanner.backlog(&marked(b"old session\r\n", b"new session\r\n"));
         let live = scanner.push(b"typing");
 
-        assert_eq!(replay, b"old session\r\nnew session\r\n");
+        assert_eq!(replay, b"new session\r\n");
         assert_eq!(live, ScannedOutput::Output(b"typing".to_vec()));
+    }
+
+    #[test]
+    fn repeated_attachments_do_not_replay_old_cursor_replies_or_shell_errors() {
+        let current = "=== session ended — starting a new one ===\r\nroot# ".as_bytes();
+        let history = [
+            b"boot\r\n".as_slice(),
+            SESSION_ENDED_MARKER,
+            b";1R;145R;1R;145R\r\n-bash: syntax error near unexpected token `;'\r\n",
+            SESSION_ENDED_MARKER,
+            current,
+        ]
+        .concat();
+
+        for _ in 0..3 {
+            let mut scanner = SessionEndScanner::default();
+            assert_eq!(scanner.backlog(&history), current);
+            assert_eq!(
+                scanner.push(b"typing"),
+                ScannedOutput::Output(b"typing".to_vec())
+            );
+        }
+    }
+
+    #[test]
+    fn reconnecting_to_the_same_login_session_keeps_its_history() {
+        let mut scanner = SessionEndScanner::default();
+        let history = b"root# echo hello\r\nhello\r\nroot# ";
+        assert_eq!(scanner.backlog(history), history);
+    }
+
+    #[test]
+    fn the_current_session_still_ends_when_a_trailing_partial_marker_finishes() {
+        let mut scanner = SessionEndScanner::default();
+        let (head, tail) = SESSION_ENDED_MARKER.split_at(8);
+        let history = [
+            b"old".as_slice(),
+            SESSION_ENDED_MARKER,
+            b"root# logout\r\n",
+            head,
+        ]
+        .concat();
+
+        assert_eq!(scanner.backlog(&history), b"root# logout\r\n");
+        assert_eq!(scanner.push(tail), ScannedOutput::SessionEnded(Vec::new()));
     }
 
     #[test]

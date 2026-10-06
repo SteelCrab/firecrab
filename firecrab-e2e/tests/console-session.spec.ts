@@ -78,43 +78,45 @@ async function mockVm(page: Page): Promise<void> {
 }
 
 test.describe("terminal session end @dashboard", () => {
-  test("a guest exit stops at Session ended and New session attaches again", async ({ page }) => {
-    await mockVm(page);
-    let connections = 0;
-    await page.routeWebSocket(`**/ws/vms/${MOCK_VM_ID}/console`, (ws) => {
-      connections += 1;
-      ws.send(
-        connections === 1
-          ? "fc-mock login: root (automatic login)\r\nfc-mock:~# "
-          : "\r\n=== session ended — starting a new one ===\r\n\r\nfc-mock:~# ",
-      );
-      let typed = "";
-      ws.onMessage((message) => {
-        typed += typeof message === "string" ? message : message.toString("utf8");
-        if (typed.includes("exit\r")) {
-          ws.close({ code: SESSION_ENDED_CLOSE_CODE, reason: "session_ended" });
-        }
+  for (const command of ["exit", "logout"]) {
+    test(`a guest ${command} stops at Session ended and New session attaches again`, async ({ page }) => {
+      await mockVm(page);
+      let connections = 0;
+      await page.routeWebSocket(`**/ws/vms/${MOCK_VM_ID}/console`, (ws) => {
+        connections += 1;
+        ws.send(
+          connections === 1
+            ? "fc-mock login: root (automatic login)\r\nfc-mock:~# "
+            : "\r\n=== session ended — starting a new one ===\r\n\r\nfc-mock:~# ",
+        );
+        let typed = "";
+        ws.onMessage((message) => {
+          typed += typeof message === "string" ? message : message.toString("utf8");
+          if (typed.includes(`${command}\r`)) {
+            ws.close({ code: SESSION_ENDED_CLOSE_CODE, reason: "session_ended" });
+          }
+        });
       });
+
+      await openEnglish(page, `/#/console/${MOCK_VM_ID}`);
+      await expect(consoleStatus(page)).toHaveText(/Connected/);
+
+      await typeInTerminal(page, command);
+
+      await expect(consoleStatus(page)).toHaveText(/Session ended/);
+      await expect(page.locator(".console-page .xterm-rows")).toContainText("Guest session ended");
+      // Longer than the first reconnect backoff: the page must stay detached.
+      await page.waitForTimeout(2500);
+      expect(connections).toBe(1);
+
+      await page.getByRole("button", { name: "New session" }).click();
+      await expect(consoleStatus(page)).toHaveText(/Connected/);
+      expect(connections).toBe(2);
+      await expect(page.locator(".console-page .xterm-rows")).toContainText(
+        "session ended — starting a new one",
+      );
     });
-
-    await openEnglish(page, `/#/console/${MOCK_VM_ID}`);
-    await expect(consoleStatus(page)).toHaveText(/Connected/);
-
-    await typeInTerminal(page, "exit");
-
-    await expect(consoleStatus(page)).toHaveText(/Session ended/);
-    await expect(page.locator(".console-page .xterm-rows")).toContainText("Guest session ended");
-    // Longer than the first reconnect backoff: the page must stay detached.
-    await page.waitForTimeout(2500);
-    expect(connections).toBe(1);
-
-    await page.getByRole("button", { name: "New session" }).click();
-    await expect(consoleStatus(page)).toHaveText(/Connected/);
-    expect(connections).toBe(2);
-    await expect(page.locator(".console-page .xterm-rows")).toContainText(
-      "session ended — starting a new one",
-    );
-  });
+  }
 
   test("any other close still reconnects on its own", async ({ page }) => {
     await mockVm(page);
@@ -177,6 +179,8 @@ test.describe("terminal session end in a booted guest", () => {
     await expect(page.locator(".console-page .xterm-rows")).toContainText(/~ #/, {
       timeout: 30_000,
     });
+    await typeInTerminal(page, "printf ';1R;145R;1R;145R\\n'");
+    await expect(page.locator(".console-page .xterm-rows")).toContainText(";1R;145R;1R;145R");
     await typeInTerminal(page, "exit");
 
     await expect(consoleStatus(page)).toHaveText(/Session ended/, { timeout: 30_000 });
@@ -189,6 +193,9 @@ test.describe("terminal session end in a booted guest", () => {
       /session ended — starting a new one[\s\S]*~ #/,
       { timeout: 30_000 },
     );
+    await expect(page.locator(".console-page .xterm-rows")).not.toContainText(";1R;145R;1R;145R");
+    const log = (await request("GET", `/api/vms/${vmId}/log`)) as { consoleLog: string };
+    expect(log.consoleLog).toContain(";1R;145R;1R;145R");
     await typeInTerminal(page, "printf 'FIRECRAB_REATTACH_%s\\n' READY");
     await expect(page.locator(".console-page .xterm-rows")).toContainText(
       "FIRECRAB_REATTACH_READY",

@@ -72,7 +72,7 @@ where
     let (backlog, mut output) = console.subscribe();
     let mut scanner = SessionEndScanner::default();
 
-    let replay = scanner.backlog(&backlog);
+    let replay = crate::console_replay::without_terminal_queries(&scanner.backlog(&backlog));
     if !replay.is_empty() && sink.send(Message::Binary(replay.into())).await.is_err() {
         return;
     }
@@ -247,7 +247,7 @@ mod tests {
         let console = process.console.clone();
         console.push_output(
             &[
-                b"old\r\n".as_slice(),
+                b";1R;145R\r\n-bash: syntax error near unexpected token `;'\r\n".as_slice(),
                 crate::console_session::SESSION_ENDED_MARKER,
                 b"new\r\n",
             ]
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(
             sent,
             vec![
-                Message::Binary(b"old\r\nnew\r\n".to_vec().into()),
+                Message::Binary(b"new\r\n".to_vec().into()),
                 Message::Binary(b"typing".to_vec().into()),
                 Message::Close(None),
             ]
@@ -290,6 +290,33 @@ mod tests {
                 Message::Binary(b"prompt# ".to_vec().into()),
                 Message::Binary(b"\x1b".to_vec().into()),
                 Message::Close(None),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn past_terminal_queries_are_removed_but_live_queries_still_reach_the_viewer() {
+        let (_exit_tx, process) = live_process();
+        let console = process.console.clone();
+        console.push_output(b"old logout\r\n\x1b[6n\x1bP+q6E616D65\x1b\\root# ");
+
+        let sent = bridge_until_closed(process, async {
+            console.push_output(
+                &[
+                    b"\x1b[6nlogout\r\n".as_slice(),
+                    crate::console_session::SESSION_ENDED_MARKER,
+                ]
+                .concat(),
+            );
+        })
+        .await;
+
+        assert_eq!(
+            sent,
+            vec![
+                Message::Binary(b"old logout\r\nroot# ".to_vec().into()),
+                Message::Binary(b"\x1b[6nlogout\r\n".to_vec().into()),
+                expected_session_ended_close(),
             ]
         );
     }
