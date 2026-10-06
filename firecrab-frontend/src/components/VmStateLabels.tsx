@@ -1,6 +1,5 @@
 import type { VmResponse, VmState } from "../bindings";
 import { useI18n } from "../i18n";
-import ReconciliationStatus from "./ReconciliationStatus";
 import StatusLabel from "./StatusLabel";
 
 const LABELS: Record<VmState, [string, string]> = {
@@ -45,7 +44,6 @@ export default function VmStateLabels({ vm }: { vm: VmResponse }) {
       >
         VM
       </StatusLabel>
-      <ReconciliationStatus result={vm.reconciliation} state={vm.state} />
     </div>
   );
 }

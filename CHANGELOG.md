@@ -27,7 +27,8 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
-- None.
+- The dashboard's VM list shows only a VM's own state: the API label next to it
+  is gone, and the API's reconciliation result for a VM stays in its detail view.
 
 ### Deprecated
 
@@ -35,9 +36,7 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
-- The dashboard's API label shows Connected in green for a running VM that has no
-  startup reconciliation result, such as one started after the API did, instead of
-  a gray label with nothing to read; a VM that is not running stays gray.
+- None.
 
 ### Improved
 
