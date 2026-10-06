@@ -133,7 +133,7 @@ firecrab service status
 # http://127.0.0.1:5523/
 ```
 
-The service install downloads about 306 MiB, verifies checksums, provisions Debian, boots the nested Firecracker E2E gate, and registers a launchd agent.
+The service install downloads about 306 MiB, verifies checksums, provisions Debian, boots the nested Firecracker E2E gate, and registers a launchd agent. Later releases reach the guest with `firecrab service update --apply`.
 
 Remove a macOS local service before removing its client binaries; omit `--purge` to retain managed VM data.
 

@@ -114,10 +114,17 @@ The nested workload boots Debian's own kernel from `linux-image-amd64` or `linux
 firecrab service status
 firecrab service stop
 firecrab service start
+firecrab service update             # compare the guest's Firecrab with the latest release
+firecrab service update --apply     # install the latest release in the guest
 firecrab service reinstall          # provision the distribution again, preserve data
 firecrab service uninstall          # remove the scheduled task, preserve the distribution and data
 firecrab service uninstall --purge  # also unregister the distribution and delete managed data
 ```
+
+`service update` reads the guest's Firecrab version and compares it with the latest GitHub release; `firecrab update` is the Linux-host equivalent.
+`--apply` downloads that release's `install.sh`, verifies it against the release's `SHA256SUMS`, and runs it in the guest, which also migrates unit files that `firecrab update --apply` leaves alone.
+A guest that is already at the latest release is left alone, and `install` never changes a guest that is already provisioned.
+`firecrab-api` and `firecrab-helper` restart, so stop running MicroVMs first if the guest runs a release before v0.3.1, whose VMs are children of the API.
 
 The dashboard and API are available at `http://127.0.0.1:5523/` while status is healthy.
 The API stays loopback-only inside Debian and reaches Windows through WSL localhost forwarding, so no SSH tunnel is involved.

@@ -76,6 +76,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Points at `service update`, which updates the guest where Firecrab runs on this host.
+    #[cfg(not(target_os = "linux"))]
+    #[command(hide = true)]
+    Update,
     /// Manage MicroVMs through the host API.
     Vm {
         #[command(subcommand)]
@@ -129,6 +133,13 @@ fn run(cli: Cli) -> i32 {
         }
         #[cfg(target_os = "linux")]
         Command::Update { check, apply, json } => run_update(check, apply, json),
+        #[cfg(not(target_os = "linux"))]
+        Command::Update => {
+            eprintln!(
+                "`firecrab update` updates a Linux host; run `firecrab service update` to update the managed guest"
+            );
+            2
+        }
         Command::Vm { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             vm::run(client, command)
         }),
@@ -603,6 +614,15 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn update_points_at_service_update_off_linux() {
+        let cli = Cli::try_parse_from(["firecrab", "update"]).unwrap();
+        assert_eq!(run(cli), 2);
+        let service = Cli::try_parse_from(["firecrab", "service", "update"]).unwrap();
+        assert!(matches!(service.command, Command::Service { .. }));
     }
 
     #[test]

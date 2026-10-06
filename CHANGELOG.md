@@ -23,7 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- None.
+- `firecrab service update` on macOS and Windows compares the Firecrab in the
+  managed guest with the latest release, and `--apply` runs that release's
+  installer there after verifying it against the release's `SHA256SUMS`. It is
+  the counterpart of the Linux-only `firecrab update`, which now points to it on
+  these hosts, and unlike `update --apply` it also migrates unit files.
 
 ### Changed
 

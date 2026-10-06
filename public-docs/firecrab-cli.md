@@ -238,7 +238,7 @@ fields and request IDs remain visible.
 
 ## update
 
-This Linux-only host command compares the build with the newest GitHub Release tag and optionally installs it.
+This Linux-only host command compares the build with the newest GitHub Release tag and optionally installs it; on macOS and Windows, `firecrab service update` does this for the managed guest.
 
 ```sh
 firecrab update --check

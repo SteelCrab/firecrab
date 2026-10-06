@@ -10,6 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::super::artifact::{self, ArtifactSpec, HashAlgorithm};
+use super::super::guest_update;
 use super::super::release::{self, Release};
 use super::lifecycle::Layout;
 use super::wsl::{self, DISTRO_NAME};
@@ -28,7 +29,7 @@ pub struct Host {
     /// Debian's rootfs and Firecracker stay pinned; Firecrab comes from the latest release.
     pinned: [ArtifactSpec; 2],
     /// The host bundle's name in a Firecrab release, which it keeps once downloaded.
-    firecrab_bundle: &'static str,
+    pub(super) firecrab_bundle: &'static str,
     firecrab_label: &'static str,
     /// `install.sh` places this helper; it turns Debian's vmlinuz into what
     /// Firecracker boots on this architecture.
@@ -155,15 +156,22 @@ pub struct Downloaded {
     pub firecrab_version: String,
 }
 
+/// The latest Firecrab release's host bundle and guest installer.
+fn firecrab_artifacts(host: &Host, release: &Release) -> Result<[ArtifactSpec; 2], release::Error> {
+    Ok([
+        release.artifact(
+            host.firecrab_label,
+            host.firecrab_bundle,
+            host.firecrab_bundle,
+        )?,
+        release.installer()?,
+    ])
+}
+
 pub fn download_all(host: &Host, directory: &Path, assume_yes: bool) -> Result<Downloaded, Error> {
     let release = Release::latest()?;
     let [debian, firecracker] = host.pinned.clone();
-    let bundle = release.artifact(
-        host.firecrab_label,
-        host.firecrab_bundle,
-        host.firecrab_bundle,
-    )?;
-    let installer = release.installer()?;
+    let [bundle, installer] = firecrab_artifacts(host, &release)?;
     let artifacts = [debian, firecracker, bundle, installer];
     artifact::fetch_all(&artifacts, directory, assume_yes)?;
     release.record(directory)?;
@@ -175,6 +183,31 @@ pub fn download_all(host: &Host, directory: &Path, assume_yes: bool) -> Result<D
         installer: directory.join(&*installer.filename),
         firecrab_version: release.tag().to_owned(),
     })
+}
+
+/// Downloads `release` alone, for a guest that is already provisioned.
+pub fn download_firecrab(
+    host: &Host,
+    release: &Release,
+    directory: &Path,
+    assume_yes: bool,
+) -> Result<(), Error> {
+    artifact::fetch_all(&firecrab_artifacts(host, release)?, directory, assume_yes)?;
+    release.record(directory)?;
+    Ok(())
+}
+
+/// Writes the script `service update` runs in the guest. `share` is the managed
+/// home as the guest sees it; the returned path is the script's.
+pub fn write_update_script(layout: &Layout, share: &str) -> Result<String, Error> {
+    write_script(
+        &layout.provision().join(guest_update::GUEST_SCRIPT_FILE),
+        &guest_update::guest_script(),
+    )?;
+    Ok(format!(
+        "{share}/provision/{}",
+        guest_update::GUEST_SCRIPT_FILE
+    ))
 }
 
 /// Re-hashes every cached artifact without touching the network. Firecrab's

@@ -5,6 +5,7 @@
 mod artifact;
 mod debug;
 mod dev;
+mod guest_update;
 mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -114,6 +115,18 @@ pub enum Command {
         /// Number of lines from each log (requires --logs; maximum 1000).
         #[arg(long, requires = "logs", value_parser = clap::value_parser!(u16).range(1..=1000))]
         tail: Option<u16>,
+    },
+    /// Check the managed guest's Firecrab against the latest release, and optionally update it.
+    Update {
+        /// Only report whether a newer release exists (the default).
+        #[arg(long)]
+        check: bool,
+        /// Run the latest release's installer in the managed guest.
+        #[arg(long, conflicts_with = "check")]
+        apply: bool,
+        /// Skip the download confirmation prompt (implied when not attached to a TTY).
+        #[arg(short, long, requires = "apply")]
+        yes: bool,
     },
     /// Build local API/net-helper sources inside the management VM and restart them.
     Dev {
@@ -274,6 +287,32 @@ mod tests {
     fn run_still_opens_the_shell_on_windows() {
         let cli = TestCli::try_parse_from(["test", "run"]).unwrap();
         assert!(matches!(cli.command, Command::Shell { ref command } if command.is_empty()));
+    }
+
+    #[test]
+    fn update_checks_unless_told_to_apply() {
+        let cli = TestCli::try_parse_from(["test", "update"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Update {
+                check: false,
+                apply: false,
+                yes: false
+            }
+        ));
+        let cli = TestCli::try_parse_from(["test", "update", "--apply", "--yes"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Update {
+                apply: true,
+                yes: true,
+                ..
+            }
+        ));
+        assert!(TestCli::try_parse_from(["test", "update", "--check"]).is_ok());
+        // Checking never downloads, and applying is explicit, so these make no sense.
+        assert!(TestCli::try_parse_from(["test", "update", "--check", "--apply"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "update", "--yes"]).is_err());
     }
 
     #[test]

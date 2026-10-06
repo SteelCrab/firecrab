@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use super::super::artifact::{self, ArtifactSpec, HashAlgorithm};
+use super::super::guest_update;
 use super::super::release::{self, Release};
 use super::super::report;
 
@@ -92,16 +93,23 @@ pub enum Error {
     GuestProvision(String),
 }
 
+/// The latest Firecrab release's host bundle and guest installer.
+fn firecrab_artifacts(release: &Release) -> Result<[ArtifactSpec; 2], release::Error> {
+    Ok([
+        release.artifact(
+            "Firecrab ARM64 GNU host bundle",
+            FIRECRAB_HOST_ASSET,
+            FIRECRAB_HOST_ASSET,
+        )?,
+        release.installer()?,
+    ])
+}
+
 pub fn download_all(managed_home: &Path, assume_yes: bool) -> Result<DownloadedArtifacts, Error> {
     let directory = managed_home.join("downloads");
     let release = Release::latest()?;
     let [debian, firecracker] = PINNED;
-    let host = release.artifact(
-        "Firecrab ARM64 GNU host bundle",
-        FIRECRAB_HOST_ASSET,
-        FIRECRAB_HOST_ASSET,
-    )?;
-    let installer = release.installer()?;
+    let [host, installer] = firecrab_artifacts(&release)?;
     let artifacts = [debian, firecracker, host, installer];
     artifact::fetch_all(&artifacts, &directory, assume_yes)?;
     release.record(&directory)?;
@@ -113,6 +121,34 @@ pub fn download_all(managed_home: &Path, assume_yes: bool) -> Result<DownloadedA
         firecrab_installer: directory.join(&*installer.filename),
         firecrab_version: release.tag().to_owned(),
     })
+}
+
+/// Downloads `release` alone, for a guest that is already provisioned.
+pub fn download_firecrab(
+    release: &Release,
+    managed_home: &Path,
+    assume_yes: bool,
+) -> Result<(), Error> {
+    let directory = managed_home.join("downloads");
+    artifact::fetch_all(&firecrab_artifacts(release)?, &directory, assume_yes)?;
+    release.record(&directory)?;
+    Ok(())
+}
+
+/// Writes the script `service update` runs in the guest, where the managed home
+/// is mounted at `/mnt/firecrab`. Returns its path as the guest sees it.
+pub fn write_update_script(managed_home: &Path) -> Result<String, Error> {
+    write_private(
+        &managed_home
+            .join("provision")
+            .join(guest_update::GUEST_SCRIPT_FILE),
+        guest_update::guest_script().as_bytes(),
+        0o700,
+    )?;
+    Ok(format!(
+        "/mnt/firecrab/provision/{}",
+        guest_update::GUEST_SCRIPT_FILE
+    ))
 }
 
 pub fn prepare(
@@ -909,6 +945,71 @@ mod tests {
         assert!(nested.contains("FIRECRAB_NESTED_WORKLOAD_OK"));
         assert!(nested.contains("</dev/null"));
         assert!(nested.contains("test \"$rc\" -eq 0"));
+    }
+
+    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    /// A release whose two files are listed with the digest of `abc`, so a
+    /// cached `abc` counts as already downloaded.
+    fn release_of_abc() -> Release {
+        Release::fixture(
+            "v0.3.1",
+            "https://example.invalid/releases",
+            &format!(
+                "{ABC_SHA256}  ./{FIRECRAB_HOST_ASSET}\n{ABC_SHA256}  ./{}\n",
+                release::INSTALLER_ASSET
+            ),
+        )
+    }
+
+    #[test]
+    fn the_latest_release_supplies_the_host_bundle_and_installer() {
+        let [host, installer] = firecrab_artifacts(&release_of_abc()).expect("both are listed");
+        assert_eq!(host.filename, FIRECRAB_HOST_ASSET);
+        assert_eq!(
+            host.url,
+            format!("https://example.invalid/releases/download/v0.3.1/{FIRECRAB_HOST_ASSET}")
+        );
+        assert_eq!(installer.filename, release::INSTALLER_FILE);
+        assert_eq!(
+            installer.url,
+            "https://example.invalid/releases/download/v0.3.1/install.sh"
+        );
+        assert_eq!(host.digest, ABC_SHA256);
+        assert_eq!(installer.digest, ABC_SHA256);
+    }
+
+    #[test]
+    fn updating_downloads_only_the_release_and_records_its_digests() {
+        let home = tempfile::tempdir().unwrap();
+        let downloads = home.path().join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        for name in [FIRECRAB_HOST_ASSET, release::INSTALLER_FILE] {
+            fs::write(downloads.join(name), b"abc").unwrap();
+        }
+        download_firecrab(&release_of_abc(), home.path(), true)
+            .expect("cached files that match the release need no network");
+        let recorded = fs::read_to_string(downloads.join("SHA256SUMS")).unwrap();
+        assert!(recorded.contains(ABC_SHA256), "{recorded}");
+        // Debian and Firecracker are not part of an update.
+        assert!(!downloads.join(DEBIAN_ARCHIVE).exists());
+    }
+
+    #[test]
+    fn the_update_script_is_private_and_found_through_the_guest_mount() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join("provision")).unwrap();
+        let guest_path = write_update_script(home.path()).unwrap();
+        assert_eq!(guest_path, "/mnt/firecrab/provision/guest-update.sh");
+        let written = home.path().join("provision/guest-update.sh");
+        assert_eq!(
+            fs::read_to_string(&written).unwrap(),
+            guest_update::guest_script()
+        );
+        assert_eq!(
+            fs::metadata(&written).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     #[test]

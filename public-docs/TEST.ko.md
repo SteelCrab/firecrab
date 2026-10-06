@@ -144,6 +144,7 @@ A17 필수 도구: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **H1 — 업데이트 상태:** 읽기 전용 상태 확인 성공.
 - [ ] **H2 — 호스트 네트워크:** uplink가 있으며 loopback·내부 helper 인터페이스는 선택 목록에 없다.
 - [ ] **U1 — 업데이트 적용(별도 선택 실행):** 적용 후 호스트가 복구되고 API가 200을 반환한다.
+- [ ] **U2 — macOS/Windows(별도 선택 실행):** `service update`는 게스트의 Firecrab을 최신 릴리스와 비교하고, `--apply`는 그 릴리스의 설치 스크립트를 게스트에서 실행한다. API/helper가 active이고 호스트 API가 200을 반환한다.
 
 호스팅 macOS·Windows 러너는 빌드·단위 테스트·진단만 수행한다.
 런타임 E2E는 M3 이상 네이티브 Mac 또는 WSL2가 있는 Windows 호스트에서 준비 상태를 확인한 뒤 수행한다.
@@ -166,6 +167,10 @@ firecrab service shell -- id -un                                     # root
 firecrab service shell -- printf '[%s]\n' "it's here" 'a b' '$HOME'   # [it's here] [a b] [$HOME]
 firecrab service shell -- sh -c 'exit 7'; echo $?                    # 7
 firecrab service shell                                               # root 로그인, `exit`로 종료
+
+# U2: 네이티브 macOS 또는 Windows 호스트
+firecrab service update                                              # 설치된 Firecrab과 최신 릴리스
+firecrab service update --apply                                      # 별도 실행: 최신 릴리스 설치
 ```
 
 Windows G6a–G6h: WSL2 microManager가 설치된 호스트에서 `cargo test -p firecrab-cli --test windows_service_shell -- --ignored --test-threads=1`을 실행한다. 기본 셸 검사는 stdin으로 수행하며 터미널 키보드·크기 변경·Ctrl-C는 별도 대화형 검사다.
