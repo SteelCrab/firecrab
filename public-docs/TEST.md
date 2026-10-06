@@ -144,6 +144,7 @@ A17 required tools: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **H1 — Update status:** read-only status check succeeds.
 - [ ] **H2 — Host network:** an uplink is present; loopback and internal helper interfaces are absent from the picker.
 - [ ] **U1 — Update apply (optional separate run):** apply update; host recovers and API returns 200.
+- [ ] **U2 — macOS/Windows (optional separate run):** `service update` compares the guest's Firecrab with the latest release; `--apply` runs that release's installer in the guest, leaves API/helper active, and the host API returns 200.
 
 Hosted macOS and Windows runners do build, unit, and diagnostic checks.
 Runtime E2E needs a native M3-or-later Mac or a Windows host with WSL2, and doctor must report ready.
@@ -166,6 +167,10 @@ firecrab service shell -- id -un                                     # root
 firecrab service shell -- printf '[%s]\n' "it's here" 'a b' '$HOME'   # [it's here] [a b] [$HOME]
 firecrab service shell -- sh -c 'exit 7'; echo $?                    # 7
 firecrab service shell                                               # root login; `exit` leaves
+
+# U2: native macOS or Windows host
+firecrab service update                                              # installed and latest Firecrab
+firecrab service update --apply                                      # separate run: installs the latest release
 ```
 
 Windows G6a–G6h: `cargo test -p firecrab-cli --test windows_service_shell -- --ignored --test-threads=1` on an installed WSL2 microManager host. The default-shell checks use redirected stdin; terminal keyboard/resize/Ctrl-C require a separate interactive pass.

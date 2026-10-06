@@ -10,7 +10,8 @@ mod lifecycle;
 mod provision;
 mod wsl;
 
-use super::{Command, debug};
+use super::release::{self, Release};
+use super::{Command, debug, guest_update};
 use doctor::Status;
 use wsl::DISTRO_NAME;
 
@@ -24,6 +25,8 @@ pub enum Error {
     Lifecycle(#[from] lifecycle::Error),
     #[error(transparent)]
     Provision(#[from] provision::Error),
+    #[error(transparent)]
+    Release(#[from] release::Error),
     #[error(transparent)]
     Daemon(#[from] daemon::Error),
     #[error(transparent)]
@@ -57,6 +60,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::Shell { command } => run_shell(&command),
+        Command::Update { apply, yes, .. } => run_update(apply, yes),
         Command::ForwardPorts { .. } => Err(Error::MacosOnly("forward-ports")),
         Command::Dev {
             source,
@@ -379,6 +383,53 @@ fn run_shell(command: &[String]) -> Result<i32, Error> {
     Ok(status.code().unwrap_or(1))
 }
 
+/// Updates the Firecrab in the managed distribution, which is where it runs on Windows.
+fn run_update(apply: bool, yes: bool) -> Result<i32, Error> {
+    let layout = lifecycle::Layout::from_process_env()?;
+    if !wsl::contains(&wsl::distributions(), DISTRO_NAME) {
+        return Err(Error::NotInstalled);
+    }
+    let guest = ManagedGuest {
+        layout: &layout,
+        host: provision::host()?,
+        share: wsl::guest_path(&layout.managed_home)?,
+    };
+    guest_update::run(&guest, &Release::latest()?, apply, yes)
+}
+
+struct ManagedGuest<'a> {
+    layout: &'a lifecycle::Layout,
+    host: &'a provision::Host,
+    /// The managed home as the distribution sees it under `/mnt`.
+    share: String,
+}
+
+impl guest_update::Guest for ManagedGuest<'_> {
+    type Error = Error;
+
+    fn installed_version(&self) -> Option<String> {
+        wsl::root_shell("firecrab --version")
+            .ok()
+            .and_then(|output| guest_update::version_of(&output))
+    }
+
+    fn download(&self, release: &Release, assume_yes: bool) -> Result<(), Error> {
+        Ok(provision::download_firecrab(
+            self.host,
+            release,
+            &self.layout.downloads(),
+            assume_yes,
+        )?)
+    }
+
+    fn run_installer(&self) -> Result<i32, Error> {
+        let script = provision::write_update_script(self.layout, &self.share)?;
+        let output = wsl::run(&["-d", DISTRO_NAME, "-u", "root", "--exec", "bash", &script])?;
+        print!("{output}");
+        Ok(0)
+    }
+}
+
 /// `wsl.exe` arguments for [`run_shell`]. A command runs through `--exec`, so
 /// each argument reaches it unchanged instead of being re-parsed by a shell.
 fn shell_arguments(command: &[String]) -> Vec<String> {
@@ -598,6 +649,120 @@ mod tests {
             1,
             "nothing is downloaded"
         );
+    }
+
+    const SHARE: &str = "/mnt/c/Users/dev/AppData/Local/Firecrab/micromanager";
+    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    const VERSION_QUERY: &str =
+        "wsl.exe -d firecrab-debian -u root --exec sh -c firecrab --version";
+    const INSTALL: &str = "wsl.exe -d firecrab-debian -u root --exec bash /mnt/c/Users/dev/AppData/Local/Firecrab/micromanager/provision/guest-update.sh";
+
+    /// A release whose files are already cached, so nothing is downloaded.
+    fn cached_release(layout: &lifecycle::Layout, host: &provision::Host) -> Release {
+        for name in [host.firecrab_bundle, release::INSTALLER_FILE] {
+            std::fs::write(layout.downloads().join(name), b"abc").expect("cached download");
+        }
+        Release::fixture(
+            "v0.3.1",
+            "https://example.invalid/releases",
+            &format!(
+                "{ABC_SHA256}  ./{}\n{ABC_SHA256}  ./{}\n",
+                host.firecrab_bundle,
+                release::INSTALLER_ASSET
+            ),
+        )
+    }
+
+    #[test]
+    fn update_checks_the_installed_version_and_changes_nothing() {
+        let (_directory, layout) = layout();
+        let host = provision::host().expect("this host is supported");
+        let release = cached_release(&layout, host);
+        let wsl = fake::answer(|line| match line {
+            VERSION_QUERY => Ok("firecrab 0.2.2\n".into()),
+            other => panic!("unexpected {other}"),
+        });
+        let guest = ManagedGuest {
+            layout: &layout,
+            host,
+            share: SHARE.to_owned(),
+        };
+        assert_eq!(
+            guest_update::run(&guest, &release, false, false).expect("checked"),
+            0
+        );
+        assert_eq!(wsl.calls(), [VERSION_QUERY]);
+        assert!(!layout.provision().join("guest-update.sh").exists());
+    }
+
+    #[test]
+    fn update_runs_the_verified_installer_in_the_distribution() {
+        let (_directory, layout) = layout();
+        let host = provision::host().expect("this host is supported");
+        let release = cached_release(&layout, host);
+        let wsl = fake::answer(|line| match line {
+            VERSION_QUERY => Ok("firecrab 0.2.2\n".into()),
+            INSTALL => Ok("firecrab 0.3.1\n".into()),
+            other => panic!("unexpected {other}"),
+        });
+        let guest = ManagedGuest {
+            layout: &layout,
+            host,
+            share: SHARE.to_owned(),
+        };
+        assert_eq!(
+            guest_update::run(&guest, &release, true, true).expect("updated"),
+            0
+        );
+        assert_eq!(wsl.calls(), [VERSION_QUERY, INSTALL]);
+        assert_eq!(
+            std::fs::read_to_string(layout.provision().join("guest-update.sh")).unwrap(),
+            guest_update::guest_script()
+        );
+        // What the downloads were verified against stays for `service validate`.
+        assert!(layout.downloads().join("SHA256SUMS").is_file());
+    }
+
+    #[test]
+    fn a_guest_that_is_current_is_not_touched() {
+        let (_directory, layout) = layout();
+        let host = provision::host().expect("this host is supported");
+        let release = cached_release(&layout, host);
+        let wsl = fake::answer(|line| match line {
+            VERSION_QUERY => Ok("firecrab 0.3.1\n".into()),
+            other => panic!("unexpected {other}"),
+        });
+        let guest = ManagedGuest {
+            layout: &layout,
+            host,
+            share: SHARE.to_owned(),
+        };
+        assert_eq!(
+            guest_update::run(&guest, &release, true, true).expect("nothing to do"),
+            0
+        );
+        assert_eq!(wsl.calls(), [VERSION_QUERY]);
+    }
+
+    #[test]
+    fn a_failing_installer_is_an_error_with_its_output() {
+        let (_directory, layout) = layout();
+        let host = provision::host().expect("this host is supported");
+        let release = cached_release(&layout, host);
+        let _wsl = fake::answer(|line| match line {
+            VERSION_QUERY => Ok("firecrab 0.2.2\n".into()),
+            INSTALL => Err("install.sh: checksum mismatch".into()),
+            other => panic!("unexpected {other}"),
+        });
+        let guest = ManagedGuest {
+            layout: &layout,
+            host,
+            share: SHARE.to_owned(),
+        };
+        let error =
+            guest_update::run(&guest, &release, true, true).expect_err("the installer failed");
+        assert!(matches!(error, Error::Wsl(_)));
+        assert!(error.to_string().contains("checksum mismatch"), "{error}");
     }
 
     #[test]

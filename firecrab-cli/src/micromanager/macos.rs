@@ -8,11 +8,12 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command as ProcessCommand, ExitStatus};
+use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Command, debug, report};
+use super::release::{self, Release};
+use super::{Command, debug, guest_update, report};
 
 const HELPER_NAME: &str = "firecrab-micromanager-macos";
 const HELPER_ENV: &str = "FIRECRAB_MICROMANAGER_HELPER";
@@ -35,6 +36,8 @@ pub enum Error {
     Daemon(#[from] daemon::Error),
     #[error(transparent)]
     Provision(#[from] provision::Error),
+    #[error(transparent)]
+    Release(#[from] release::Error),
     #[error(transparent)]
     Forward(#[from] forward::Error),
     #[error(transparent)]
@@ -83,6 +86,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             yes,
         } => run_dev(source.as_deref(), release, restore, yes),
         Command::Shell { command } => run_shell(&command),
+        Command::Update { apply, yes, .. } => run_update(apply, yes),
         Command::ForwardPorts {
             manager,
             key,
@@ -355,19 +359,32 @@ fn host_capability(layout: &lifecycle::Layout) -> debug::Capability {
 /// A root shell in the management VM over its key-only SSH, or one command
 /// run there as root.
 fn run_shell(command: &[String]) -> Result<i32, Error> {
-    use std::io::IsTerminal;
-
     let layout = lifecycle::Layout::from_process_env()?;
-    let paths = daemon::paths(&layout)?;
-    let status = daemon::status(&layout)?;
+    let ip = running_guest_ip(&layout)?;
+    shell_at(&layout, ip, command)
+}
+
+/// The management VM's address, once the VM is running.
+fn running_guest_ip(layout: &lifecycle::Layout) -> Result<std::net::IpAddr, Error> {
+    let paths = daemon::paths(layout)?;
+    let status = daemon::status(layout)?;
     let guest_marker = fs::read_to_string(&paths.manager_ready).unwrap_or_default();
-    let ip = status
+    status
         .detail
         .as_deref()
         .and_then(manager_ip)
         .or_else(|| manager_ip(&guest_marker))
         .filter(|_| status.loaded)
-        .ok_or(Error::ShellNotRunning)?;
+        .ok_or(Error::ShellNotRunning)
+}
+
+fn shell_at(
+    layout: &lifecycle::Layout,
+    ip: std::net::IpAddr,
+    command: &[String],
+) -> Result<i32, Error> {
+    use std::io::IsTerminal;
+
     let runtime = layout.managed_home.join("runtime");
     if !runtime.join("manager_ed25519").is_file() {
         return Err(Error::ShellCredentials(runtime));
@@ -378,6 +395,65 @@ fn run_shell(command: &[String]) -> Result<i32, Error> {
         .status()
         .map_err(Error::ShellSsh)?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// What one command prints as root in the management VM, if it succeeds. It
+/// connects as `service shell` does, which `guest_command` cannot while the
+/// managed home's path has a space in it: ssh splits `UserKnownHostsFile` there.
+fn shell_stdout(
+    layout: &lifecycle::Layout,
+    ip: std::net::IpAddr,
+    command: &[String],
+) -> Option<String> {
+    let runtime = layout.managed_home.join("runtime");
+    let output = ProcessCommand::new("/usr/bin/ssh")
+        .args(shell_arguments(&runtime, ip, command, false))
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Updates the Firecrab in the management VM, which is where it runs on macOS.
+fn run_update(apply: bool, yes: bool) -> Result<i32, Error> {
+    let layout = lifecycle::Layout::from_process_env()?;
+    let ip = running_guest_ip(&layout)?;
+    let release = Release::latest()?;
+    guest_update::run(&ManagedGuest { layout, ip }, &release, apply, yes)
+}
+
+struct ManagedGuest {
+    layout: lifecycle::Layout,
+    ip: std::net::IpAddr,
+}
+
+impl guest_update::Guest for ManagedGuest {
+    type Error = Error;
+
+    fn installed_version(&self) -> Option<String> {
+        shell_stdout(
+            &self.layout,
+            self.ip,
+            &["firecrab".to_owned(), "--version".to_owned()],
+        )
+        .and_then(|output| guest_update::version_of(&output))
+    }
+
+    fn download(&self, release: &Release, assume_yes: bool) -> Result<(), Error> {
+        Ok(provision::download_firecrab(
+            release,
+            &self.layout.managed_home,
+            assume_yes,
+        )?)
+    }
+
+    fn run_installer(&self) -> Result<i32, Error> {
+        let script = provision::write_update_script(&self.layout.managed_home)?;
+        shell_at(&self.layout, self.ip, &["bash".to_owned(), script])
+    }
 }
 
 /// `ssh` arguments for [`run_shell`]. ssh joins everything after the host
@@ -720,6 +796,7 @@ fn command_arguments(command: &Command) -> Vec<OsString> {
         | Command::Status
         | Command::Debug { .. }
         | Command::Dev { .. }
+        | Command::Update { .. }
         | Command::Shell { .. }
         | Command::ForwardPorts { .. } => {
             unreachable!("lifecycle and relay commands do not invoke the native helper")

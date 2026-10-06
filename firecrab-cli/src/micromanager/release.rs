@@ -121,6 +121,16 @@ impl Release {
         &self.tag
     }
 
+    /// A release built from known parts, so a test never asks GitHub.
+    #[cfg(test)]
+    pub fn fixture(tag: &str, base: &str, sums: &str) -> Self {
+        Self {
+            tag: tag.to_owned(),
+            base: base.to_owned(),
+            sums: sums.to_owned(),
+        }
+    }
+
     /// `asset` of this release, stored as `filename` once downloaded and
     /// verified against the digest the release lists for it.
     pub fn artifact(
@@ -184,14 +194,26 @@ fn asset_url(base: &str, tag: &str, asset: &str) -> String {
 /// `vMAJOR.MINOR.PATCH` and nothing else, because the tag becomes part of a
 /// download URL.
 fn is_release_tag(tag: &str) -> bool {
-    let Some(version) = tag.strip_prefix('v') else {
-        return false;
+    tag.strip_prefix('v')
+        .is_some_and(|version| parse_version(version).is_some())
+}
+
+/// `MAJOR.MINOR.PATCH` as numbers that compare correctly (`0.3.10` is newer
+/// than `0.3.9`), without a `v` and without any pre-release or build suffix.
+pub fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let number = |part: &str| {
+        part.bytes()
+            .all(|byte| byte.is_ascii_digit())
+            .then(|| part.parse().ok())
+            .flatten()
     };
-    let parts: Vec<&str> = version.split('.').collect();
-    parts.len() == 3
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    let mut parts = version.split('.');
+    let parsed = (
+        number(parts.next()?)?,
+        number(parts.next()?)?,
+        number(parts.next()?)?,
+    );
+    parts.next().is_none().then_some(parsed)
 }
 
 /// The digest `sha256sum` wrote for `asset`: a name that may carry a `*`
@@ -354,6 +376,26 @@ mod tests {
             .expect_err("the tag would escape the release path");
         handle.join().expect("server finishes");
         assert!(matches!(error, Error::UnexpectedTag(tag) if tag == "v1.0.0/../x"));
+    }
+
+    #[test]
+    fn versions_compare_as_numbers() {
+        assert_eq!(parse_version("0.3.1"), Some((0, 3, 1)));
+        assert!(parse_version("0.3.10") > parse_version("0.3.9"));
+        assert!(parse_version("0.10.0") > parse_version("0.9.9"));
+        for version in [
+            "",
+            "0.3",
+            "0.3.1.2",
+            "0.3.x",
+            "0.3.1-rc1",
+            "+1.2.3",
+            "v0.3.1",
+            "0..1",
+            "-1.0.0",
+        ] {
+            assert_eq!(parse_version(version), None, "{version:?}");
+        }
     }
 
     #[test]

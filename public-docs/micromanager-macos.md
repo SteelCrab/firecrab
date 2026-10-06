@@ -129,10 +129,17 @@ An interrupted download resumes from `downloads/<artifact>.partial` on the next 
 firecrab service status
 firecrab service stop
 firecrab service start
+firecrab service update             # compare the guest's Firecrab with the latest release
+firecrab service update --apply     # install the latest release in the guest
 firecrab service reinstall          # replace binaries/OS when needed, preserve data
 firecrab service uninstall          # stop daemon and remove binaries, preserve data
 firecrab service uninstall --purge  # also delete managed OS and persistent data
 ```
+
+`service update` reads the guest's Firecrab version and compares it with the latest GitHub release; `firecrab update` is the Linux-host equivalent.
+`--apply` downloads that release's `install.sh`, verifies it against the release's `SHA256SUMS`, and runs it in the guest, which also migrates unit files that `firecrab update --apply` leaves alone.
+A guest that is already at the latest release is left alone, and `install` never changes a guest that is already provisioned.
+`firecrab-api` and `firecrab-helper` restart, so stop running MicroVMs first if the guest runs a release before v0.3.1, whose VMs are children of the API.
 
 The dashboard and API are available at `http://127.0.0.1:5523/` while status is healthy.
 Each start pushes the macOS version into the guest's `/etc/firecrab/host-platform.json`, so the dashboard's Host view names macOS, not the Debian VM.
