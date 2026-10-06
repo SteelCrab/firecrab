@@ -80,7 +80,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Improved
 
-- None.
+- The `firecrab-helper` service logs through `tracing`. A connection from an
+  unauthorized UID, an unreadable peer credential, a request read timeout, and a
+  failed response write now appear in `journalctl -u firecrab-helper`.
+  `RUST_LOG=firecrab_helper=debug` raises the level; the default is
+  `firecrab_helper=info` ([#305]).
 
 ## [0.3.0] - 2026-09-29
 
@@ -570,6 +574,7 @@ network helper.
 [#295]: https://github.com/SteelCrab/firecrab/pull/295
 [#297]: https://github.com/SteelCrab/firecrab/pull/297
 [#303]: https://github.com/SteelCrab/firecrab/issues/303
+[#305]: https://github.com/SteelCrab/firecrab/issues/305
 [#306]: https://github.com/SteelCrab/firecrab/issues/306
 [#312]: https://github.com/SteelCrab/firecrab/pull/312
 [#123]: https://github.com/SteelCrab/firecrab/issues/123
