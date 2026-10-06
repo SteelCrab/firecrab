@@ -67,9 +67,9 @@ The host requires Store WSL2 and usable nested `/dev/kvm`; native ARM64 installa
    running MicroVMs' TCP forwards also bind loopback sockets for WSL to expose
    at the same Windows localhost ports; stopping a VM removes its sockets.
 
-**Windows Preview:** the pinned Firecrab v0.2.2 guest cannot start MicroVMs on WSL2 yet.
+**Windows Preview:** guests older than v0.3.0 cannot start MicroVMs on WSL2; `service install` provisions the latest release, which has the fixes but is not validated on Windows yet.
 The dashboard, API, images, and networks work. `service dev` builds the current
-checkout's helper with WSL2 fixes; release installation still needs a newer bundle pin.
+checkout's helper with the same fixes.
 Managed files live under `%LOCALAPPDATA%\Firecrab\micromanager`.
 See [microManager on Windows](micromanager-windows.md) for lifecycle and shared WSL2 state.
 

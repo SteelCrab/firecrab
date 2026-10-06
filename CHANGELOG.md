@@ -27,7 +27,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
-- None.
+- On macOS and Windows, `service install` and `reinstall` provision the latest
+  Firecrab release instead of the v0.2.2 pinned in the CLI. The release's
+  installer and host bundle are verified against its `SHA256SUMS`; Debian and
+  Firecracker stay pinned. On Windows, `service validate` re-hashes the Firecrab
+  downloads against the digests recorded at install. `install` does not change
+  a guest that is already provisioned.
 
 ### Deprecated
 

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -5,58 +6,39 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
 use super::super::artifact::{self, ArtifactSpec, HashAlgorithm};
+use super::super::release::{self, Release};
 use super::super::report;
 
 pub const DEBIAN_BUILD: &str = "20260914-2601";
 pub const DEBIAN_ARCHIVE: &str = "debian-13-generic-arm64-20260914-2601.tar.xz";
 pub const FIRECRACKER_VERSION: &str = "v1.17.0";
-pub const FIRECRAB_VERSION: &str = "v0.2.2";
 
 const DEBIAN_URL: &str = "https://cloud.debian.org/images/cloud/trixie/20260914-2601/debian-13-generic-arm64-20260914-2601.tar.xz";
 const DEBIAN_SHA512: &str = "7bacdeb825f81b7eb5fcd35330ce7160ed60413adfa61f37cff3c4028fdc61dbd444e046c58934cd0494192f53fa2cbcfcca1e8e1d337755b34c6c90dc72f62b";
 const FIRECRACKER_URL: &str = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.17.0/firecracker-v1.17.0-aarch64.tgz";
 const FIRECRACKER_SHA256: &str = "e351ebe4f7a16b5873bbd51005d2e6767103cff4d5ebc829df2d3f95a93e2256";
-const FIRECRAB_HOST_URL: &str = "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/firecrab-host-aarch64-gnu.tar.gz";
-const FIRECRAB_HOST_SHA256: &str =
-    "2e995ed27d8c19848baaf38c8bf8a2d5d126ab90776738d91790524a8564e982";
-const FIRECRAB_INSTALL_URL: &str =
-    "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/install.sh";
-const FIRECRAB_INSTALL_SHA256: &str =
-    "af2fb56b92dff1559cdaa449aa025808e0990437c16ccc0bb2b4d558ef50dacb";
+const FIRECRAB_HOST_ASSET: &str = "firecrab-host-aarch64-gnu.tar.gz";
 const DEBIAN_RAW_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const DATA_DISK_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const PROVISION_SCHEMA: u32 = 5;
 const EXTRACT_ARM64_IMAGE: &str =
     include_str!("../../../../scripts/firecracker-menual/extract-arm64-image");
 
-const ARTIFACTS: [ArtifactSpec; 4] = [
+/// The artifacts that stay pinned. Firecrab itself comes from the latest release.
+const PINNED: [ArtifactSpec; 2] = [
     ArtifactSpec {
         label: "Debian 13 ARM64 management image",
-        filename: DEBIAN_ARCHIVE,
-        url: DEBIAN_URL,
+        filename: Cow::Borrowed(DEBIAN_ARCHIVE),
+        url: Cow::Borrowed(DEBIAN_URL),
         algorithm: HashAlgorithm::Sha512,
-        digest: DEBIAN_SHA512,
+        digest: Cow::Borrowed(DEBIAN_SHA512),
     },
     ArtifactSpec {
         label: "Firecracker ARM64 release",
-        filename: "firecracker-v1.17.0-aarch64.tgz",
-        url: FIRECRACKER_URL,
+        filename: Cow::Borrowed("firecracker-v1.17.0-aarch64.tgz"),
+        url: Cow::Borrowed(FIRECRACKER_URL),
         algorithm: HashAlgorithm::Sha256,
-        digest: FIRECRACKER_SHA256,
-    },
-    ArtifactSpec {
-        label: "Firecrab ARM64 GNU host bundle",
-        filename: "firecrab-host-aarch64-gnu.tar.gz",
-        url: FIRECRAB_HOST_URL,
-        algorithm: HashAlgorithm::Sha256,
-        digest: FIRECRAB_HOST_SHA256,
-    },
-    ArtifactSpec {
-        label: "Firecrab guest installer",
-        filename: "install-firecrab-v0.2.2.sh",
-        url: FIRECRAB_INSTALL_URL,
-        algorithm: HashAlgorithm::Sha256,
-        digest: FIRECRAB_INSTALL_SHA256,
+        digest: Cow::Borrowed(FIRECRACKER_SHA256),
     },
 ];
 
@@ -66,6 +48,8 @@ pub struct DownloadedArtifacts {
     pub firecracker_archive: PathBuf,
     pub firecrab_host_archive: PathBuf,
     pub firecrab_installer: PathBuf,
+    /// The Firecrab release the host bundle and installer belong to.
+    pub firecrab_version: String,
 }
 
 #[derive(Clone, Debug)]
@@ -88,6 +72,8 @@ pub enum Error {
     },
     #[error(transparent)]
     Artifact(#[from] artifact::Error),
+    #[error(transparent)]
+    Release(#[from] release::Error),
     #[error("could not {action} {path}: {source}")]
     Io {
         action: &'static str,
@@ -108,12 +94,24 @@ pub enum Error {
 
 pub fn download_all(managed_home: &Path, assume_yes: bool) -> Result<DownloadedArtifacts, Error> {
     let directory = managed_home.join("downloads");
-    artifact::fetch_all(&ARTIFACTS, &directory, assume_yes)?;
+    let release = Release::latest()?;
+    let [debian, firecracker] = PINNED;
+    let host = release.artifact(
+        "Firecrab ARM64 GNU host bundle",
+        FIRECRAB_HOST_ASSET,
+        FIRECRAB_HOST_ASSET,
+    )?;
+    let installer = release.installer()?;
+    let artifacts = [debian, firecracker, host, installer];
+    artifact::fetch_all(&artifacts, &directory, assume_yes)?;
+    release.record(&directory)?;
+    let [debian, firecracker, host, installer] = &artifacts;
     Ok(DownloadedArtifacts {
-        debian_archive: directory.join(ARTIFACTS[0].filename),
-        firecracker_archive: directory.join(ARTIFACTS[1].filename),
-        firecrab_host_archive: directory.join(ARTIFACTS[2].filename),
-        firecrab_installer: directory.join(ARTIFACTS[3].filename),
+        debian_archive: directory.join(&*debian.filename),
+        firecracker_archive: directory.join(&*firecracker.filename),
+        firecrab_host_archive: directory.join(&*host.filename),
+        firecrab_installer: directory.join(&*installer.filename),
+        firecrab_version: release.tag().to_owned(),
     })
 }
 
@@ -610,7 +608,7 @@ if [ -n "$jailer" ]; then install -m 0755 "$jailer" /usr/local/bin/jailer; fi
 rm -rf "$tmp"
 
 phase firecrab
-bash "$share/downloads/install-firecrab-{firecrab}.sh" --no-deps
+bash "$share/downloads/{installer}" --no-deps
 (systemctl is-active --quiet firecrab-helper || systemctl is-active --quiet firecrab-net-helper)
 systemctl is-active --quiet firecrab-api
 
@@ -680,7 +678,7 @@ phase complete
 exit 0
 "#,
         firecracker = FIRECRACKER_VERSION,
-        firecrab = FIRECRAB_VERSION,
+        installer = release::INSTALLER_FILE,
         schema = PROVISION_SCHEMA,
     )
 }
@@ -905,6 +903,7 @@ mod tests {
         assert!(provision.contains("nested-firecracker-e2e.sh"));
         assert!(provision.contains("nested_firecracker=passed"));
         assert!(provision.contains(&format!("schema={PROVISION_SCHEMA}")));
+        assert!(provision.contains("bash \"$share/downloads/install-firecrab.sh\" --no-deps"));
 
         let nested = nested_firecracker_e2e_script();
         assert!(nested.contains("FIRECRAB_NESTED_WORKLOAD_OK"));
@@ -1016,8 +1015,7 @@ mod tests {
     fn pinned_artifacts_use_immutable_versions_and_valid_digest_lengths() {
         assert!(DEBIAN_URL.contains(DEBIAN_BUILD));
         assert!(FIRECRACKER_URL.contains(FIRECRACKER_VERSION));
-        assert!(FIRECRAB_HOST_URL.contains(FIRECRAB_VERSION));
-        for artifact in ARTIFACTS {
+        for artifact in PINNED {
             assert!(artifact.url.starts_with("https://"));
             let expected_length = match artifact.algorithm {
                 HashAlgorithm::Sha256 => 64,

@@ -11,8 +11,8 @@ That lab nests one level deeper than a real Windows host, so its timings are not
 The launcher requires an x86_64 or ARM64 Windows host with WSL 2 from the Microsoft Store (`wsl --version` must answer).
 WSL2 must expose `/dev/kvm`, which needs hardware virtualization and nested virtualization for the WSL2 utility VM.
 No administrator rights are needed; the lab ran every command from a non-elevated session.
-The managed distribution and every pinned artifact match the architecture of `firecrab.exe`.
-ARM64 artifacts are pinned and verified, but no ARM64 Windows host has run the install end to end yet.
+The managed distribution and every downloaded artifact match the architecture of `firecrab.exe`.
+ARM64 artifacts are verified, but no ARM64 Windows host has run the install end to end yet.
 
 Run the capability check before installing.
 
@@ -100,7 +100,7 @@ firecrab service install
 
 `install` performs the complete managed-host gate before returning success:
 
-1. Download the pinned Debian 13 WSL rootfs 1.26.0.0, Firecracker v1.17.0, and Firecrab v0.2.2 guest assets.
+1. Download the pinned Debian 13 WSL rootfs 1.26.0.0 and Firecracker v1.17.0, plus the latest Firecrab release's guest assets, which are verified against that release's `SHA256SUMS`.
 2. Verify every SHA-256 digest before atomically publishing an artifact, resuming interrupted downloads.
 3. Import the `firecrab-debian` distribution with `wsl --import`; the user's own distributions are never touched.
 4. Install the guest packages, Firecracker, and Firecrab with `install.sh --no-deps` under the distribution's systemd.
@@ -179,8 +179,8 @@ Do not create `/dev/kvm` by hand: a regular file there blocks the real device no
 ## Known limitation
 
 The stock WSL2 kernel has no nftables `bridge` family, and it already listens on `10.255.255.254:53` on `lo`.
-The pinned Firecrab v0.2.2 net-helper needs the first for per-VM L2 rules and collides with the second in dnsmasq, so on WSL2 the API, images, and networks work but no MicroVM starts.
-A source-built net-helper keeps L2 rules in per-VM `netdev` tables and dnsmasq off `lo`, enabling workload boot on WSL2.
+The net-helper in Firecrab releases before v0.3.0 needs the first for per-VM L2 rules and collides with the second in dnsmasq, so with such a guest the API, images, and networks work on WSL2 but no MicroVM starts.
+From v0.3.0 the net-helper keeps L2 rules in per-VM `netdev` tables and dnsmasq off `lo`. `service install` now provisions the latest release, but that path has not been validated on Windows; a source-built net-helper, which has the same fixes, enabled workload boot on WSL2.
 `service dev` deploys those fixes from the current checkout; `--restore`
 returns to the installed binaries and their release limitations.
 The [2026-10-03 source QA snapshot](qa.md#windows-source-validation-2026-10-03) records API/nginx/browser passes and remaining Ubuntu/Fedora SSH failures.

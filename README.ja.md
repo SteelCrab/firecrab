@@ -138,7 +138,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Windows の制約:** 現在固定されている v0.2.2 ゲストでは、標準 WSL2 で API・イメージ・ネットワークは使えますが、MicroVM を起動できません。net-helper の修正を含む新しいゲストリリースが必要で、ローカル nginx VM も対象です。Windows CLI から対応するリモート Linux ホストを管理することはできます。
+**Windows の制約:** v0.3.0 より前のゲストは、net-helper が必要とする nftables の `bridge` ファミリーが WSL2 にないため、標準 WSL2 で MicroVM を起動できません。microManager は現在、修正を含む最新リリースをインストールしますが、この経路は Windows ではまだ検証されていません。Windows CLI から対応するリモート Linux ホストを管理することはできます。
 
 </details>
 
@@ -179,7 +179,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Windows の制約:** 現在固定されている v0.2.2 ゲストでは、標準 WSL2 で API・イメージ・ネットワークは使えますが、MicroVM を起動できません。net-helper の修正を含む新しいゲストリリースが必要で、ローカル nginx VM も対象です。Windows CLI から対応するリモート Linux ホストを管理することはできます。
+**Windows の制約:** v0.3.0 より前のゲストは、net-helper が必要とする nftables の `bridge` ファミリーが WSL2 にないため、標準 WSL2 で MicroVM を起動できません。microManager は現在、修正を含む最新リリースをインストールしますが、この経路は Windows ではまだ検証されていません。Windows CLI から対応するリモート Linux ホストを管理することはできます。
 
 正常なら `http://127.0.0.1:5523/` を開きます。MicroNetwork を作成し、インストール済みイメージを選んで VM を作成・起動し、`running` になったら Terminal を開きます。リモートホストには [CLI ホストプロファイル](public-docs/firecrab-cli.md#host-profiles)を設定してください。
 

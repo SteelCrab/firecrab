@@ -138,7 +138,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
+**Windows limitation:** guests older than v0.3.0 cannot start MicroVMs on stock WSL2, because WSL2 lacks the nftables `bridge` family their net-helper needs. microManager now installs the latest release, which includes the net-helper fix, but that path has not been validated on Windows yet. The Windows CLI can still manage a supported remote Linux host.
 
 </details>
 
@@ -179,7 +179,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
+**Windows limitation:** guests older than v0.3.0 cannot start MicroVMs on stock WSL2, because WSL2 lacks the nftables `bridge` family their net-helper needs. microManager now installs the latest release, which includes the net-helper fix, but that path has not been validated on Windows yet. The Windows CLI can still manage a supported remote Linux host.
 
 When healthy, open `http://127.0.0.1:5523/`. Create a MicroNetwork, choose an installed image, create and start a VM, then open Terminal after `running`. For a remote host, configure a [CLI host profile](public-docs/firecrab-cli.md#host-profiles).
 

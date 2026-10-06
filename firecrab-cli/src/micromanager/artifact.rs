@@ -1,5 +1,6 @@
-//! Pinned artifact download and verification shared by every microManager host.
+//! Artifact download and verification shared by every microManager host.
 
+use std::borrow::Cow;
 use std::fs::{self, File};
 use std::io::{self, BufRead, IsTerminal, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -28,13 +29,15 @@ pub enum HashAlgorithm {
     Sha512,
 }
 
-#[derive(Clone, Copy, Debug)]
+/// A pinned artifact borrows its strings from the source; one resolved from a
+/// published release at run time owns them.
+#[derive(Clone, Debug)]
 pub struct ArtifactSpec {
     pub label: &'static str,
-    pub filename: &'static str,
-    pub url: &'static str,
+    pub filename: Cow<'static, str>,
+    pub url: Cow<'static, str>,
     pub algorithm: HashAlgorithm,
-    pub digest: &'static str,
+    pub digest: Cow<'static, str>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +66,10 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    /// Only Windows re-hashes downloads it has no pinned digest for.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[error("no SHA-256 was recorded for {0}")]
+    Unrecorded(String),
     #[error("checksum mismatch for {path}: expected {expected}, got {actual}")]
     Checksum {
         path: PathBuf,
@@ -102,7 +109,7 @@ fn fetch(
     remove_abandoned_staging(directory);
     let mut cached_specs = Vec::with_capacity(specs.len());
     for spec in specs {
-        cached_specs.push(cached(&directory.join(spec.filename), spec)?);
+        cached_specs.push(cached(&directory.join(&*spec.filename), spec)?);
     }
     let pending: Vec<&ArtifactSpec> = specs
         .iter()
@@ -117,7 +124,7 @@ fn fetch(
         let client = client.insert(build_client()?);
         let sized: Vec<(&ArtifactSpec, Option<u64>)> = pending
             .iter()
-            .map(|spec| (*spec, probe_content_length(client, spec.url)))
+            .map(|spec| (*spec, probe_content_length(client, &spec.url)))
             .collect();
         report!("{}", render_plan(&sized));
         crate::micromanager::print_report(format_args!("> "));
@@ -140,7 +147,7 @@ fn fetch(
             client,
             spec,
             directory,
-            &directory.join(spec.filename),
+            &directory.join(&*spec.filename),
             show_progress,
         )?;
         report!("[PASS] {}: verified", spec.label);
@@ -307,13 +314,17 @@ fn copy_with_progress(
             Err(source) => {
                 break Err(io_error(
                     "read download stream",
-                    Path::new(spec.url),
+                    Path::new(&*spec.url),
                     source,
                 ));
             }
         };
         if let Err(source) = file.write_all(&buffer[..read]) {
-            break Err(io_error("write artifact", Path::new(spec.filename), source));
+            break Err(io_error(
+                "write artifact",
+                Path::new(&*spec.filename),
+                source,
+            ));
         }
         received += read as u64;
         if show_progress && last_render.elapsed() >= GAUGE_INTERVAL {
@@ -350,7 +361,7 @@ fn cached(destination: &Path, spec: &ArtifactSpec) -> Result<bool, Error> {
     if !destination.is_file() {
         return Ok(false);
     }
-    match verify(destination, spec.algorithm, spec.digest) {
+    match verify(destination, spec.algorithm, &spec.digest) {
         Ok(()) => Ok(true),
         Err(Error::Checksum { .. }) => {
             fs::remove_file(destination)
@@ -411,7 +422,7 @@ fn download_one(
     file.sync_all()
         .map_err(|source| io_error("sync artifact", &partial, source))?;
     drop(file);
-    if let Err(error) = verify(&partial, spec.algorithm, spec.digest) {
+    if let Err(error) = verify(&partial, spec.algorithm, &spec.digest) {
         // Complete bytes with the wrong digest cannot be resumed into the right ones.
         let _ = fs::remove_file(&partial);
         return Err(error);
@@ -453,10 +464,14 @@ fn resume(
     file: &mut File,
     show_progress: bool,
 ) -> Result<(), Error> {
-    let written = file
-        .seek(SeekFrom::End(0))
-        .map_err(|source| io_error("inspect partial artifact", Path::new(spec.filename), source))?;
-    let mut request = client.get(spec.url);
+    let written = file.seek(SeekFrom::End(0)).map_err(|source| {
+        io_error(
+            "inspect partial artifact",
+            Path::new(&*spec.filename),
+            source,
+        )
+    })?;
+    let mut request = client.get(&*spec.url);
     if written > 0 {
         request = request.header(RANGE, format!("bytes={written}-"));
     }
@@ -471,7 +486,9 @@ fn resume(
         status if status.is_success() => {
             file.set_len(0)
                 .and_then(|()| file.seek(SeekFrom::Start(0)).map(drop))
-                .map_err(|source| io_error("restart artifact", Path::new(spec.filename), source))?;
+                .map_err(|source| {
+                    io_error("restart artifact", Path::new(&*spec.filename), source)
+                })?;
             0
         }
         status => {
@@ -499,7 +516,10 @@ fn retryable(error: &Error) -> bool {
     match error {
         Error::HttpStatus { status, .. } => status.is_server_error(),
         Error::Request { .. } | Error::Io { .. } => true,
-        Error::CreateDirectory { .. } | Error::Checksum { .. } | Error::Declined => false,
+        Error::CreateDirectory { .. }
+        | Error::Unrecorded(_)
+        | Error::Checksum { .. }
+        | Error::Declined => false,
     }
 }
 
@@ -545,10 +565,10 @@ mod tests {
     fn spec(algorithm: HashAlgorithm, digest: &'static str) -> ArtifactSpec {
         ArtifactSpec {
             label: "test artifact",
-            filename: "abc.bin",
-            url: "https://example.invalid/abc.bin",
+            filename: Cow::Borrowed("abc.bin"),
+            url: Cow::Borrowed("https://example.invalid/abc.bin"),
             algorithm,
-            digest,
+            digest: Cow::Borrowed(digest),
         }
     }
 
@@ -778,7 +798,7 @@ mod tests {
 
     fn remote_spec(url: &'static str) -> ArtifactSpec {
         ArtifactSpec {
-            url,
+            url: Cow::Borrowed(url),
             ..spec(HashAlgorithm::Sha256, ABCDEF_SHA256)
         }
     }
