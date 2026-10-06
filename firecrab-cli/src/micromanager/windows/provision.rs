@@ -156,7 +156,7 @@ pub struct Downloaded {
 }
 
 pub fn download_all(host: &Host, directory: &Path, assume_yes: bool) -> Result<Downloaded, Error> {
-    let release = Release::latest()?;
+    let release = Release::latest_or_recorded(directory)?;
     let [debian, firecracker] = host.pinned.clone();
     let bundle = release.artifact(
         host.firecrab_label,

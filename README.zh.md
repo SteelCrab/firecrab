@@ -138,7 +138,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Windows 限制：** v0.3.0 之前的来宾发行版在标准 WSL2 中无法启动 MicroVM，因为 WSL2 缺少其 net-helper 所需的 nftables `bridge` 系列。microManager 现在安装包含该修复的最新发行版，但此路径尚未在 Windows 上验证。Windows CLI 仍可管理受支持的远程 Linux 主机。
+**Windows 限制：** v0.3.0 之前的来宾发行版在标准 WSL2 中无法启动 MicroVM，因为 WSL2 缺少其 net-helper 所需的 nftables `bridge` 系列。新配置的来宾会获得包含该修复的最新发行版，但此路径尚未在 Windows 上验证，且 `service install` 不会更改已配置的来宾。Windows CLI 仍可管理受支持的远程 Linux 主机。
 
 </details>
 
@@ -179,7 +179,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Windows 限制：** v0.3.0 之前的来宾发行版在标准 WSL2 中无法启动 MicroVM，因为 WSL2 缺少其 net-helper 所需的 nftables `bridge` 系列。microManager 现在安装包含该修复的最新发行版，但此路径尚未在 Windows 上验证。Windows CLI 仍可管理受支持的远程 Linux 主机。
+**Windows 限制：** v0.3.0 之前的来宾发行版在标准 WSL2 中无法启动 MicroVM，因为 WSL2 缺少其 net-helper 所需的 nftables `bridge` 系列。新配置的来宾会获得包含该修复的最新发行版，但此路径尚未在 Windows 上验证，且 `service install` 不会更改已配置的来宾。Windows CLI 仍可管理受支持的远程 Linux 主机。
 
 状态正常时打开 `http://127.0.0.1:5523/`。创建 MicroNetwork，选择已安装镜像，创建并启动 VM，待状态为 `running` 后打开终端。远程主机请配置 [CLI 主机配置](public-docs/firecrab-cli.md#host-profiles)。
 

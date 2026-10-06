@@ -27,12 +27,14 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
-- On macOS and Windows, `service install` and `reinstall` provision the latest
-  Firecrab release instead of the v0.2.2 pinned in the CLI. The release's
-  installer and host bundle are verified against its `SHA256SUMS`; Debian and
-  Firecracker stay pinned. On Windows, `service validate` re-hashes the Firecrab
-  downloads against the digests recorded at install. `install` does not change
-  a guest that is already provisioned.
+- On macOS and Windows, a newly provisioned guest gets the latest Firecrab
+  release instead of the v0.2.2 pinned in the CLI. The release's installer and
+  host bundle are verified against its `SHA256SUMS`, and when GitHub cannot be
+  reached the release recorded by the last install is used; Debian and
+  Firecracker stay pinned. `install` does not change a guest that is already
+  provisioned, and `reinstall` keeps a valid guest on macOS and provisions it
+  again on Windows. On Windows, `service validate` re-hashes the Firecrab
+  downloads against the digests recorded at install ([#372]).
 
 ### Deprecated
 
@@ -641,6 +643,7 @@ network helper.
 [#359]: https://github.com/SteelCrab/firecrab/pull/359
 [#360]: https://github.com/SteelCrab/firecrab/pull/360
 [#368]: https://github.com/SteelCrab/firecrab/pull/368
+[#372]: https://github.com/SteelCrab/firecrab/pull/372
 [#123]: https://github.com/SteelCrab/firecrab/issues/123
 [88ba35d]: https://github.com/SteelCrab/firecrab/commit/88ba35d
 [34193f5]: https://github.com/SteelCrab/firecrab/commit/34193f5
