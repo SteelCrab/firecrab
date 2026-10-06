@@ -116,7 +116,7 @@ fn resolve_static_root(configured: Option<String>) -> Option<PathBuf> {
     None
 }
 
-fn bind_addr_or_default(configured: Option<String>) -> String {
+pub(crate) fn bind_addr_or_default(configured: Option<String>) -> String {
     configured.unwrap_or_else(|| "127.0.0.1:5523".to_owned())
 }
 
@@ -218,6 +218,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route("/api/info", get(handlers::info::get_info))
         // GET and POST share one path, matching this router's existing shape
         // for "read this resource / start work on it" pairs such as
         // `/api/images/{alias}/install`.

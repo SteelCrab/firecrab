@@ -220,7 +220,7 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 | Kernels | `/api/kernels`, `/{version}/install`, `/{version}` |
 | OCI | `/api/oci/inspect`, `POST /api/oci/import`, `GET /api/oci/import/{alias}` |
 | MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}`, `GET`/`PUT`/`DELETE /docker-hub` (Docker Hub login; secret write-only) |
-| Host | `/api/host` and `/api/network` |
+| Host | `/api/host`, `/api/network`, and `/api/info` |
 
 ## Host
 
@@ -245,6 +245,22 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 - `architecture` spells ARM64 as `arm64` on every host.
 - Disk figures come from the filesystem that holds, or will hold, the VM directory.
 - APIs before this field omit `platform`.
+
+`GET /api/info` reports this build and where it is installed, the same fields `firecrab info --json` prints; the dashboard's Firecrab panel shows them.
+
+```json
+{
+  "version": "0.3.1",
+  "prefix": "/usr/local",
+  "datadir": "/var/lib/firecrab",
+  "confdir": "/etc/firecrab",
+  "unitdir": "/etc/systemd/system",
+  "apiBase": "http://127.0.0.1:5523"
+}
+```
+
+- `version` is the running API's, and `apiBase` is the address it listens on.
+- The paths come from the API's own environment, with `install.sh`'s defaults when a variable is unset.
 
 ## Images and kernels
 

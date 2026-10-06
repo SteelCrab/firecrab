@@ -2,7 +2,7 @@
 # Shared QA work list from public-docs/qa.md against a live API (:5523).
 # IDs match the cross-platform QA sheet (G/H/N/S/L/I/V/C/X).
 #
-# RUN:  G4 G5 H1 H2 N1-N5 S1-S3 L1-L3 I1 I8(GET) I9 V14
+# RUN:  G4 G5 H1 H2 H3 N1-N5 S1-S3 L1-L3 I1 I8(GET) I9 V14
 #       C3 C5 when `firecrab` is on PATH; X1-X4 X6
 # SKIP: G1  Linux install job (doctor / install / status)
 #       G2  GitHub macOS hosted: build only; E2E is self-hosted Mac
@@ -215,6 +215,11 @@ for name in d.get("interfaces") or []:
         sys.exit(1)
 ' || fail H2 "uplink/interfaces check failed"
 pass H2
+
+http GET /api/info
+expect H3 200
+json_get 'd["version"] + d["datadir"]' >/dev/null
+pass H3
 
 http POST /api/micro-networks \
     "{\"name\":\"${PREFIX}net\",\"subnetCidr\":\"${SUBNET}\",\"internetEnabled\":true}"

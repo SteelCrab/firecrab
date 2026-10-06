@@ -989,6 +989,54 @@ pub struct HostPlatformResponse {
     pub kernel: String,
 }
 
+/// `GET /api/info`, and the `--json` output of `firecrab info`: this build and
+/// where it is installed. One type for both so the CLI's report and the API's
+/// answer cannot drift, and `install.sh`'s defaults are written down once.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FirecrabInfo {
+    /// `CARGO_PKG_VERSION` of the binary that answered, not of another one.
+    pub version: String,
+    /// From `$PREFIX`, or `install.sh`'s default.
+    pub prefix: String,
+    /// From `$DATADIR`, or `install.sh`'s default.
+    pub datadir: String,
+    /// From `$CONFDIR`, or `install.sh`'s default.
+    pub confdir: String,
+    /// From `$UNITDIR`, or `install.sh`'s default.
+    pub unitdir: String,
+    /// The API's base URL: the endpoint the CLI resolved, or the address the
+    /// API itself listens on.
+    pub api_base: String,
+}
+
+impl FirecrabInfo {
+    /// Reads the install layout from the environment, falling back to
+    /// `install.sh`'s own defaults (`PREFIX=/usr/local`, `DATADIR=/var/lib/firecrab`,
+    /// `CONFDIR=/etc/firecrab`, `UNITDIR=/etc/systemd/system`).
+    pub fn from_env(version: &str, api_base: &str) -> Self {
+        Self::from_lookup(version, api_base, |name| std::env::var(name).ok())
+    }
+
+    /// [`from_env`](Self::from_env) over any source of variables, so the
+    /// defaults can be tested without touching the process environment.
+    pub fn from_lookup(
+        version: &str,
+        api_base: &str,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Self {
+        let value = |name: &str, default: &str| lookup(name).unwrap_or_else(|| default.to_owned());
+        Self {
+            version: version.to_owned(),
+            prefix: value("PREFIX", "/usr/local"),
+            datadir: value("DATADIR", "/var/lib/firecrab"),
+            confdir: value("CONFDIR", "/etc/firecrab"),
+            unitdir: value("UNITDIR", "/etc/systemd/system"),
+            api_base: api_base.to_owned(),
+        }
+    }
+}
+
 /// `GET /api/update`, and the `--json` output of `firecrab update --check`.
 /// One type for both so the CLI's report and the API's answer cannot drift.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2286,6 +2334,39 @@ mod tests {
             serde_json::from_str::<UpdateCheckResponse>(&json).unwrap(),
             response
         );
+    }
+
+    #[test]
+    fn firecrab_info_defaults_are_install_shs() {
+        let info = FirecrabInfo::from_lookup("0.3.1", "http://127.0.0.1:5523", |_| None);
+        assert_eq!(info.version, "0.3.1");
+        assert_eq!(info.prefix, "/usr/local");
+        assert_eq!(info.datadir, "/var/lib/firecrab");
+        assert_eq!(info.confdir, "/etc/firecrab");
+        assert_eq!(info.unitdir, "/etc/systemd/system");
+        assert_eq!(info.api_base, "http://127.0.0.1:5523");
+    }
+
+    #[test]
+    fn firecrab_info_reads_what_the_environment_sets() {
+        let info = FirecrabInfo::from_lookup("0.3.1", "http://127.0.0.1:5523", |name| match name {
+            "PREFIX" => Some("/opt/fc".to_owned()),
+            "DATADIR" => Some("/srv/fc".to_owned()),
+            _ => None,
+        });
+        assert_eq!(info.prefix, "/opt/fc");
+        assert_eq!(info.datadir, "/srv/fc");
+        assert_eq!(info.confdir, "/etc/firecrab");
+    }
+
+    #[test]
+    fn firecrab_info_serializes_camel_case_like_firecrab_info_json() {
+        let info = FirecrabInfo::from_lookup("0.3.1", "http://127.0.0.1:5523", |_| None);
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["version"], "0.3.1");
+        assert_eq!(json["apiBase"], "http://127.0.0.1:5523");
+        assert_eq!(json.as_object().unwrap().len(), 6);
+        assert_eq!(serde_json::from_value::<FirecrabInfo>(json).unwrap(), info);
     }
 
     #[test]

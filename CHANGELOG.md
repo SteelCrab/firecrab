@@ -23,7 +23,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- None.
+- The dashboard's Host tab has a Firecrab panel with the version and what
+  `firecrab info` prints: the install prefix, data, config and unit
+  directories, and the address the API listens on. `GET /api/info` serves the
+  same fields, and `firecrab info --json` now shares their type.
 
 ### Changed
 

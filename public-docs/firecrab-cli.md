@@ -101,7 +101,7 @@ firecrab info
 firecrab info --json
 ```
 
-- Fields: `version`, `prefix`, `datadir`, `confdir`, `unitdir`, `apiBase`.
+- Fields: `version`, `prefix`, `datadir`, `confdir`, `unitdir`, `apiBase`; the dashboard's Host tab shows the same ones from `GET /api/info`.
 - Path defaults mirror `install.sh`: `PREFIX=/usr/local`, `DATADIR=/var/lib/firecrab`, `CONFDIR=/etc/firecrab`, `UNITDIR=/etc/systemd/system`, each overridable by the same-named environment variable.
 - `apiBase` uses the same endpoint selection order as [Host profiles](#host-profiles).
 
