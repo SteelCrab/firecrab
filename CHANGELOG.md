@@ -35,7 +35,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
-- None.
+- The dashboard's API label shows Connected in green for a running VM that has no
+  startup reconciliation result, such as one started after the API did, instead of
+  a gray label with nothing to read; a VM that is not running stays gray.
 
 ### Improved
 

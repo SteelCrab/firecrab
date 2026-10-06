@@ -103,6 +103,8 @@ npm run dev --prefix firecrab-frontend
   Dates use `YYYY-MM-DD HH:mm:ss` with the viewer's UTC offset.
   This is the latest startup or explicit network retry snapshot, not live health; an accepted new VM start
   clears the old result. VMs not checked at startup or by a network retry have no result.
+  A running VM with no result was started by the running API, which controls it directly, so API shows
+  Connected in green; a VM that is not running with no result stays gray.
 - While `running`, list / detail / terminal show guest OS CPU percent and memory used (MemTotal − MemAvailable) when the Firecrab Metrics Agent is in the guest (systemd on Ubuntu/Rocky, OpenRC on Alpine)
 - Detail and terminal: sparklines from recent samples
 - Agent missing: values stay `null`, start still succeeds

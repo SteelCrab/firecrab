@@ -1009,7 +1009,7 @@ a.options-menu-item {
 .vm-table .vm-state-cell { width: 5.8rem; }
 .vm-state-labels { display: inline-flex; align-items: center; gap: 0.65rem; }
 .state-label { display: inline-block; padding: 0.2rem 0; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 700; line-height: 1.2; letter-spacing: 0.04em; color: var(--dim); cursor: help; border-radius: 2px; }
-.vm-status-label.running, .api-status-label.reconnected { color: var(--ready); }
+.vm-status-label.running, .api-status-label.reconnected, .api-status-label.connected { color: var(--ready); }
 .vm-status-label.starting, .vm-status-label.stopping, .api-status-label.mismatched, .api-status-label.interrupted { color: var(--amber); }
 .vm-status-label.error, .api-status-label.networkFailed { color: var(--error); }
 
@@ -1042,7 +1042,7 @@ a.options-menu-item {
   font-size: 0.7rem;
   color: var(--shell);
 }
-.reconciliation-badge.reconnected { color: var(--ready); }
+.reconciliation-badge.reconnected, .reconciliation-badge.connected { color: var(--ready); }
 .reconciliation-badge.networkFailed { color: var(--error); }
 .reconciliation-badge.mismatched, .reconciliation-badge.interrupted { color: var(--amber); }
 .vm-api-status { margin-bottom: 1.25rem; padding-bottom: 1rem; border-bottom: 1px solid var(--line); }

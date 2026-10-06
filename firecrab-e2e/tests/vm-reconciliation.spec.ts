@@ -35,7 +35,7 @@ const API_COLORS: Record<VmReconciliationOutcome, string> = {
 function fixture(index: number, outcome?: VmReconciliationOutcome): MockVm {
   return {
     id: `12312312-3123-4123-8123-${String(index).padStart(12, "0")}`,
-    name: outcome ? `vm-${outcome}` : `vm-unchecked-${index}`,
+    name: outcome ? `vm-${outcome}` : `vm-connected-${index}`,
     state: outcome === "interrupted"
       ? "error"
       : outcome === "gone" || outcome === "exited" || outcome === "mismatched"
@@ -98,7 +98,7 @@ test.describe("VM startup reconciliation @dashboard", () => {
   for (const locale of ["en", "ko"] as const) {
     test(`list and detail show all six results in ${locale}`, async ({ page }, testInfo) => {
       const vms = CASES.map(([outcome], index) => fixture(index + 1, outcome));
-      vms.push(fixture(7), { ...fixture(8), reconciliation: null });
+      vms.push(fixture(7), { ...fixture(8), name: "vm-unchecked-8", state: "stopped", reconciliation: null });
       await openDashboard(page, locale, vms);
 
       for (const [outcome, english, korean] of CASES) {
@@ -139,16 +139,24 @@ test.describe("VM startup reconciliation @dashboard", () => {
         await page.keyboard.press("Escape");
         await expect(tooltip).toHaveCount(0);
       }
-      for (const id of [7, 8]) {
-        const row = page.locator(".vm-table tbody tr").filter({ hasText: `vm-unchecked-${id}` });
-        await expect(row.locator(".api-status-label")).toHaveAttribute("data-outcome", "unchecked");
-        await expect(row.locator(".api-status-label")).toHaveCSS("color", "rgba(91, 102, 115, 0.55)");
-        await expect(row.locator(".api-status-label")).toHaveAccessibleName(/No reconciliation result|확인 결과 없음/);
-        await row.locator(".api-status-label").hover();
-        await expect(page.getByRole("tooltip")).toContainText(locale === "ko" ? "확인 결과 없음" : "No reconciliation result");
-        await expect(page.getByRole("tooltip").locator("time")).toHaveCount(0);
-        await page.keyboard.press("Escape");
-      }
+      // Started by the running API, so there is nothing to reconcile and it is connected.
+      const connected = page.locator(".vm-table tbody tr").filter({ hasText: "vm-connected-7" });
+      await expect(connected.locator(".api-status-label")).toHaveAttribute("data-outcome", "connected");
+      await expect(connected.locator(".api-status-label")).toHaveCSS("color", API_COLORS.reconnected);
+      await expect(connected.locator(".api-status-label")).toHaveAccessibleName(/Connected|연결됨/);
+      await connected.locator(".api-status-label").hover();
+      await expect(page.getByRole("tooltip")).toContainText(locale === "ko" ? "연결됨" : "Connected");
+      await expect(page.getByRole("tooltip").locator("time")).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      // A VM that is not running has no result and nothing to infer.
+      const unchecked = page.locator(".vm-table tbody tr").filter({ hasText: "vm-unchecked-8" });
+      await expect(unchecked.locator(".api-status-label")).toHaveAttribute("data-outcome", "unchecked");
+      await expect(unchecked.locator(".api-status-label")).toHaveCSS("color", "rgba(91, 102, 115, 0.55)");
+      await expect(unchecked.locator(".api-status-label")).toHaveAccessibleName(/No reconciliation result|확인 결과 없음/);
+      await unchecked.locator(".api-status-label").hover();
+      await expect(page.getByRole("tooltip")).toContainText(locale === "ko" ? "확인 결과 없음" : "No reconciliation result");
+      await expect(page.getByRole("tooltip").locator("time")).toHaveCount(0);
+      await page.keyboard.press("Escape");
       await page.screenshot({ path: testInfo.outputPath(`list-${locale}.png`), fullPage: true });
 
       for (const [outcome, english, korean] of CASES) {
@@ -179,7 +187,13 @@ test.describe("VM startup reconciliation @dashboard", () => {
         await page.locator(".console-close").click();
       }
 
-      await page.getByRole("button", { name: "vm-unchecked-7", exact: true }).click();
+      await page.getByRole("button", { name: "vm-connected-7", exact: true }).click();
+      await expect(page.locator(".detail-body")).toBeVisible();
+      await expect(page.locator(".reconciliation-detail .reconciliation-badge")).toHaveText(locale === "ko" ? "연결됨" : "Connected");
+      await expect(page.locator(".reconciliation-detail time")).toHaveCount(0);
+      await page.locator(".console-close").click();
+
+      await page.getByRole("button", { name: "vm-unchecked-8", exact: true }).click();
       await expect(page.locator(".detail-body")).toBeVisible();
       await expect(page.locator(".reconciliation-detail")).toHaveCount(0);
     });

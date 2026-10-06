@@ -45,7 +45,7 @@ export default function VmStateLabels({ vm }: { vm: VmResponse }) {
       >
         VM
       </StatusLabel>
-      <ReconciliationStatus result={vm.reconciliation} />
+      <ReconciliationStatus result={vm.reconciliation} state={vm.state} />
     </div>
   );
 }

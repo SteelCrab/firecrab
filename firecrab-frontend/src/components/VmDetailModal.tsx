@@ -27,6 +27,7 @@ import {
   updateVmShells,
 } from "../api/client";
 import { isEditableState, isEnvEditableState, isPortEditableState } from "../model";
+import { apiStatus } from "../lib/apiStatus";
 import { isValidPort } from "../lib/portForward";
 import { copyText, logDownloadFilename } from "../lib/textExport";
 import ConsoleSshTab from "./ConsoleSshTab";
@@ -360,10 +361,10 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
         </div>
         {vm ? (
           <div className="detail-body">
-            {vm.reconciliation && (
+            {apiStatus(vm.reconciliation, vm.state) !== "unchecked" && (
               <section className="vm-api-status" aria-label="API-STATUS">
                 <h3>API-STATUS</h3>
-                <ReconciliationStatus result={vm.reconciliation} details />
+                <ReconciliationStatus result={vm.reconciliation} state={vm.state} details />
               </section>
             )}
             <dl className="detail-fields mono">

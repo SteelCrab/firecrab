@@ -1,8 +1,10 @@
-import type { VmReconciliation, VmReconciliationOutcome } from "../bindings";
+import type { VmReconciliation, VmState } from "../bindings";
 import { useI18n } from "../i18n";
+import { apiStatus, type ApiStatus } from "../lib/apiStatus";
 import StatusLabel from "./StatusLabel";
 
-const LABELS: Record<VmReconciliationOutcome, [string, string]> = {
+const LABELS: Record<Exclude<ApiStatus, "unchecked">, [string, string]> = {
+  connected: ["Connected", "연결됨"],
   reconnected: ["Reconnected", "재연결 성공"],
   gone: ["VM not found", "VM 없음"],
   mismatched: ["Connection mismatch", "연결 불일치"],
@@ -11,7 +13,11 @@ const LABELS: Record<VmReconciliationOutcome, [string, string]> = {
   exited: ["Exited while API offline", "API 중단 중 종료"],
 };
 
-const DESCRIPTIONS: Record<VmReconciliationOutcome, [string, string]> = {
+const DESCRIPTIONS: Record<Exclude<ApiStatus, "unchecked">, [string, string]> = {
+  connected: [
+    "The running API started this VM and controls it directly, so no startup check was needed.",
+    "실행 중인 API가 이 VM을 직접 시작해 제어하고 있어 시작 시 확인이 필요하지 않았습니다.",
+  ],
   reconnected: [
     "The API reconnected to the surviving VM. Any pending stop was resumed.",
     "API가 계속 실행 중이던 VM에 다시 연결했습니다. 진행 중이던 종료 작업이 있으면 이어서 처리했습니다.",
@@ -40,14 +46,17 @@ const DESCRIPTIONS: Record<VmReconciliationOutcome, [string, string]> = {
 
 export default function ReconciliationStatus({
   result,
+  state,
   details = false,
 }: {
   result?: VmReconciliation | null;
+  state: VmState;
   details?: boolean;
 }) {
   const { t } = useI18n();
-  const label = result ? t(...LABELS[result.outcome]) : t("No reconciliation result", "확인 결과 없음");
-  const description = result ? t(...DESCRIPTIONS[result.outcome]) : "";
+  const status = apiStatus(result, state);
+  const label = status === "unchecked" ? t("No reconciliation result", "확인 결과 없음") : t(...LABELS[status]);
+  const description = status === "unchecked" ? "" : t(...DESCRIPTIONS[status]);
   const checked = result ? new Date(result.checkedAtMs) : null;
   const time = checked?.toLocaleString("sv-SE", {
     year: "numeric",
@@ -62,7 +71,7 @@ export default function ReconciliationStatus({
   const heading = t("API-STATUS · Firecrab API · VM reconciliation", "API-STATUS · Firecrab API · VM 재조정");
   const badge = (
     <span
-      className={`reconciliation-badge ${result?.outcome ?? "unchecked"}`}
+      className={`reconciliation-badge ${status}`}
       aria-label={`${heading}: ${label}`}
     >
       {label}
@@ -98,12 +107,12 @@ export default function ReconciliationStatus({
     </div>
   );
 
-  if (details) return result ? content : null;
+  if (details) return status === "unchecked" ? null : content;
   return (
     <StatusLabel
-      className={`api-status-label ${result?.outcome ?? "unchecked"}`}
+      className={`api-status-label ${status}`}
       accessibleLabel={`${heading}: ${label}`}
-      outcome={result?.outcome ?? "unchecked"}
+      outcome={status}
       tooltip={<><h3>API-STATUS</h3>{content}</>}
     >
       API
