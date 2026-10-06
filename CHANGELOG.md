@@ -8,6 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.3.1](#031---2026-10-06) | 2026-10-06 | [#123], [#314], [#315], [#318], [#324], [#330], [#331], [#332], [#333], [#343], [#351], [#358], [#359], [#360], [#368] |
 | [0.3.0](#030---2026-09-29) | 2026-09-29 | [#210], [#266], [#287], [#290], [#294], [#295], [#297], [#312] |
 | [0.2.2](#022---2026-09-15) | 2026-09-15 | [#269], [#270], [#272], [88ba35d], [729bb47] |
 | [0.2.1](#021---2026-09-14) | 2026-09-14 | [#262], [#263], [#264], [#265] |
@@ -19,6 +20,31 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+### Added
+
+- None.
+
+### Changed
+
+- None.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- None.
+
+### Improved
+
+- None.
+
+## [0.3.1] - 2026-10-06
+
+firecrab runs every MicroVM in its own systemd unit with host resource ceilings and startup
+recovery, adds `service shell` and `service dev`, and fixes console replay and OCI import issues.
 
 ### Added
 
@@ -36,7 +62,17 @@ Entries land here as work merges, and move under the next version heading when t
   VM and API status labels ([#123]).
 - `firecrab service shell` opens a root shell in the managed Debian guest on
   macOS and Windows, and `firecrab service shell -- <command>` runs one command
-  there. On Windows, `service run` remains an alias.
+  there. On Windows, `service run` remains an alias ([#343]).
+- `firecrab service dev` builds the checkout's API and helper inside the managed
+  Debian guest on macOS and WSL2 and switches both services to the new binaries;
+  a failed build leaves the running services untouched, and `--restore` returns
+  to the installed ones. It replaces the macOS foreground `service run`
+  ([#332], [#351]).
+- `DELETE /api/microregistry/local/{alias}` releases a host-local image
+  registration while protecting active jobs, other architectures, installed
+  images, and staged packages ([#333]).
+- On Windows, TCP port forwards of MicroVMs are relayed to `localhost`
+  ([#358], [#359], [#360]).
 
 ### Changed
 
@@ -45,7 +81,6 @@ Entries land here as work merges, and move under the next version heading when t
   release installers, update bundles, socket settings, and status JSON remain
   compatible. CLI status/doctor and macOS/Windows guest control accept either
   installed service name; lifetime QA checks migration with a running VM ([#123]).
-
 - Each MicroVM now runs under a per-VM `firecrab-vm` shim (`firecrab-api vm-shim`)
   that owns Firecracker, writes `console.log`, and records the exit status in
   `exit.json`. The API controls the VM through the shim's socket.
@@ -62,6 +97,7 @@ Entries land here as work merges, and move under the next version heading when t
   stop no longer fails on the previous unit's name; a VM left `stopping` by an
   API restart is killed if it ignores SIGTERM; and `$` in a VM's paths reaches
   its unit unexpanded ([#123]).
+- `tower-http` is updated to 0.7.1 ([#318]).
 
 ### Deprecated
 
@@ -76,11 +112,24 @@ Entries land here as work merges, and move under the next version heading when t
   helper cache, DHCP file/process drift at the same lease revision, and TAP/
   bridge/forwarding drift. Recovery makes three attempts; lifetime QA checks
   guest ping, SSH and forwarded HTTP across restart and injected failures ([#123]).
-- None.
+- `exit` or `logout` in a reattached serial console no longer receives replayed
+  terminal queries: replay omits complete queries and starts after the last guest
+  session boundary, while the full transcript stays in the log API ([#368]).
+- A custom image registered in the host-local MicroRegistry can be installed
+  again after its template is deleted ([#333]).
+- On macOS, `service stop` waits for the management VM to exit, force-stops it
+  after 20 seconds, and reports a timeout after 40; the management VM keeps a
+  stable MAC address across boots ([#330], [#331]).
+- Guest SSH initialization uses explicit utility paths, so OCI guests start
+  key-only root SSH with a minimal `PATH` ([#324]).
+- OCI imports read RPM headers from Fedora SQLite databases, retry registry
+  connection failures within the inspection deadline, bound guest package
+  installation retries, and keep dual-stack DHCP ([#358], [#359], [#360]).
 
 ### Improved
 
-- None.
+- Contributor guide, READMEs, architecture diagrams, and PR-body guidance are
+  simplified and updated for the per-VM shim and VM lifetime ([#314], [#315]).
 
 ## [0.3.0] - 2026-09-29
 
@@ -515,7 +564,8 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.3.0...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.3.1...main
+[0.3.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1
 [0.3.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.0
 [0.2.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.2
 [0.2.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.1
@@ -572,6 +622,20 @@ network helper.
 [#303]: https://github.com/SteelCrab/firecrab/issues/303
 [#306]: https://github.com/SteelCrab/firecrab/issues/306
 [#312]: https://github.com/SteelCrab/firecrab/pull/312
+[#314]: https://github.com/SteelCrab/firecrab/pull/314
+[#315]: https://github.com/SteelCrab/firecrab/pull/315
+[#318]: https://github.com/SteelCrab/firecrab/pull/318
+[#324]: https://github.com/SteelCrab/firecrab/pull/324
+[#330]: https://github.com/SteelCrab/firecrab/pull/330
+[#331]: https://github.com/SteelCrab/firecrab/pull/331
+[#332]: https://github.com/SteelCrab/firecrab/pull/332
+[#333]: https://github.com/SteelCrab/firecrab/pull/333
+[#343]: https://github.com/SteelCrab/firecrab/pull/343
+[#351]: https://github.com/SteelCrab/firecrab/pull/351
+[#358]: https://github.com/SteelCrab/firecrab/pull/358
+[#359]: https://github.com/SteelCrab/firecrab/pull/359
+[#360]: https://github.com/SteelCrab/firecrab/pull/360
+[#368]: https://github.com/SteelCrab/firecrab/pull/368
 [#123]: https://github.com/SteelCrab/firecrab/issues/123
 [88ba35d]: https://github.com/SteelCrab/firecrab/commit/88ba35d
 [34193f5]: https://github.com/SteelCrab/firecrab/commit/34193f5
