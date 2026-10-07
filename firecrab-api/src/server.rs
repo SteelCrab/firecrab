@@ -226,6 +226,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::update::get_update_check).post(handlers::update::start_update),
         )
         .route(
+            "/api/update/progress",
+            get(handlers::update::get_update_progress),
+        )
+        .route(
             "/api/microregistry",
             get(handlers::microregistry::list_microregistry),
         )

@@ -9,4 +9,8 @@ export type UpdateCheckResponse = {
   updateAvailable: boolean;
   /** One-line reason there is no `latest`; omitted on a successful check. */
   error?: string;
+  /** What the newest release changed, as Markdown, cut to a bounded length. Untrusted text. */
+  notes?: string;
+  /** The newest release's page on GitHub, always `https://`. */
+  releaseUrl?: string;
 };

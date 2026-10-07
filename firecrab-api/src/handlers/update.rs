@@ -1,16 +1,18 @@
-//! `GET /api/update` (a cached release check) and `POST /api/update` (fire the
-//! detached updater).
+//! `GET /api/update` (a cached release check), `POST /api/update` (fire the
+//! detached updater) and `GET /api/update/progress` (how far that updater got).
 //!
-//! Both shell out to the `firecrab` CLI rather than re-implementing the check
-//! here: the CLI is the one place that knows the release naming rules, and
-//! running it as a child keeps this handler out of the download path entirely.
+//! The check and the apply shell out to the `firecrab` CLI rather than
+//! re-implementing them here: the CLI is the one place that knows the release
+//! naming rules, and running it as a child keeps this handler out of the
+//! download path entirely.
 //!
-//! There is deliberately **no** job-status tracker for the apply. Trackers like
-//! `ImageInstallTracker` live in this process's memory, and the last step of a
-//! self-update is restarting this very process — any in-memory progress would
-//! be destroyed before anyone could read it. The real completion signal is "the
-//! API came back and `GET /api/update` reports a higher `current`", which the
-//! dashboard already observes.
+//! There is deliberately **no** in-memory job tracker for the apply. Trackers
+//! like `ImageInstallTracker` live in this process's memory, and the last step
+//! of a self-update is restarting this very process — any in-memory progress
+//! would be destroyed before anyone could read it. The updater instead keeps a
+//! record file (`--progress-file`), which outlives the restart, and the API
+//! that answers afterwards settles what the record cannot know: that a process
+//! running the target version means the update is done.
 
 use std::ffi::OsString;
 use std::io;
@@ -21,7 +23,10 @@ use std::time::{Duration, Instant};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Extension, Json};
-use firecrab_api_types::{UpdateCheckResponse, UpdateStartResponse};
+use firecrab_api_types::{
+    UpdateCheckResponse, UpdatePhase, UpdateProgressResponse, UpdateStartResponse,
+};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use uuid::Uuid;
 
@@ -88,6 +93,8 @@ fn fallback_report(error: String) -> UpdateCheckResponse {
         latest: None,
         update_available: false,
         error: Some(error),
+        notes: None,
+        release_url: None,
     }
 }
 
@@ -169,17 +176,28 @@ pub async fn get_update_check(State(state): State<AppState>) -> Json<UpdateCheck
     Json(cached_check(&state, &cli).await)
 }
 
+/// Where the updater keeps its progress record: `$DATADIR/updates/progress.json`,
+/// with the `DATADIR` this API's unit sets, else `install.sh`'s default.
+fn progress_file() -> PathBuf {
+    PathBuf::from(std::env::var("DATADIR").unwrap_or_else(|_| "/var/lib/firecrab".to_owned()))
+        .join("updates")
+        .join("progress.json")
+}
+
 /// Spawns `firecrab update --apply --json` fully detached and returns its pid.
 ///
 /// `process_group(0)` puts the child in its own group so it survives the API's
 /// own restart, which the helper triggers a few seconds later; all three stdio
-/// handles are null because nothing here ever reads them.
+/// handles are null because nothing here ever reads them. Its progress comes
+/// back through `progress_file` instead.
 fn start_update_inner(
     cli: &Path,
     request_id: Uuid,
+    progress_file: &Path,
 ) -> Result<(StatusCode, Json<UpdateStartResponse>), AppError> {
     let child = Command::new(cli)
-        .args(["update", "--apply", "--json"])
+        .args(["update", "--apply", "--json", "--progress-file"])
+        .arg(progress_file)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -201,7 +219,105 @@ pub async fn start_update(
     State(_state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<(StatusCode, Json<UpdateStartResponse>), AppError> {
-    start_update_inner(&resolve_cli_binary(), request_id.0)
+    start_update_inner(&resolve_cli_binary(), request_id.0, &progress_file())
+}
+
+/// A record is a few hundred bytes; a file much larger than that is not one.
+const RECORD_LIMIT: u64 = 16 * 1024;
+/// A run that has not written anything for this long is not going to finish.
+/// Matches how long the dashboard waits for a restart before it says so.
+const STALE_AFTER: Duration = Duration::from_secs(10 * 60);
+
+async fn read_record(path: &Path) -> Option<UpdateProgressResponse> {
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut bytes = Vec::new();
+    file.take(RECORD_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .ok()?;
+    if bytes.len() as u64 > RECORD_LIMIT {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Whether `pid` is a process that is still running, per `/proc/<pid>/stat`.
+/// A zombie is not: the updater is a child this API never waits for itself.
+fn process_alive(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next().map(str::to_owned))
+        })
+        .is_some_and(|state| state != "Z" && state != "X")
+}
+
+/// What `record` means now.
+///
+/// The updater cannot report the last step itself: restarting the API takes
+/// the updater down with it. So a run that is still going when a process
+/// running its target version answers is done. A run that stopped on its
+/// own, or that went quiet, failed. Only the stages before the helper takes
+/// over can fail by the updater dying, because from then on the helper
+/// finishes the swap whether the updater lives or not.
+fn settle(
+    record: UpdateProgressResponse,
+    current: &str,
+    now_ms: u64,
+    alive: impl Fn(u32) -> bool,
+) -> UpdateProgressResponse {
+    if !record.phase.is_running() {
+        return record;
+    }
+    if record.target.as_deref() == Some(current) {
+        return UpdateProgressResponse {
+            phase: UpdatePhase::Done,
+            percent: 100,
+            error: None,
+            ..record
+        };
+    }
+    let stale = now_ms.saturating_sub(record.updated_at_ms) > STALE_AFTER.as_millis() as u64;
+    let before_the_helper = matches!(
+        record.phase,
+        UpdatePhase::Checking | UpdatePhase::Downloading | UpdatePhase::Verifying
+    );
+    let gone = before_the_helper && record.pid.is_some_and(|pid| !alive(pid));
+    if stale || gone {
+        return UpdateProgressResponse {
+            phase: UpdatePhase::Failed,
+            error: Some(if stale {
+                "the update stopped making progress; see `journalctl -u firecrab-api -u firecrab-helper`"
+                    .to_owned()
+            } else {
+                "the updater stopped before it finished; see `journalctl -u firecrab-api`"
+                    .to_owned()
+            }),
+            ..record
+        };
+    }
+    record
+}
+
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+/// `GET /api/update/progress`: where the latest update run stands, or `idle`
+/// when none has run.
+pub async fn get_update_progress() -> Json<UpdateProgressResponse> {
+    Json(match read_record(&progress_file()).await {
+        Some(record) => settle(
+            record,
+            env!("CARGO_PKG_VERSION"),
+            unix_millis(),
+            process_alive,
+        ),
+        None => UpdateProgressResponse::idle(),
+    })
 }
 
 #[cfg(test)]
@@ -459,7 +575,8 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
 
         let (status, Json(response)) =
-            start_update_inner(&path, uuid::Uuid::nil()).expect("spawn should succeed");
+            start_update_inner(&path, uuid::Uuid::nil(), &dir.path().join("progress.json"))
+                .expect("spawn should succeed");
         assert_eq!(status, StatusCode::ACCEPTED);
         assert!(
             response.pid > 0,
@@ -471,7 +588,12 @@ mod tests {
     #[tokio::test]
     async fn start_update_reports_a_missing_binary_as_an_internal_error() {
         assert!(
-            start_update_inner(std::path::Path::new("/no/such/binary"), uuid::Uuid::nil()).is_err()
+            start_update_inner(
+                std::path::Path::new("/no/such/binary"),
+                uuid::Uuid::nil(),
+                std::path::Path::new("/tmp/progress.json")
+            )
+            .is_err()
         );
     }
 
@@ -508,5 +630,181 @@ mod tests {
             ),
             PathBuf::from("/opt/fc/bin/firecrab")
         );
+    }
+
+    fn record(phase: UpdatePhase) -> UpdateProgressResponse {
+        UpdateProgressResponse {
+            phase,
+            percent: 40,
+            target: Some("0.3.1".to_owned()),
+            downloaded_bytes: None,
+            total_bytes: None,
+            error: None,
+            pid: Some(4242),
+            updated_at_ms: 1_000_000,
+        }
+    }
+
+    const NOW: u64 = 1_000_000 + 5_000;
+
+    #[test]
+    fn a_finished_record_is_served_as_it_is() {
+        for phase in [UpdatePhase::Idle, UpdatePhase::Done, UpdatePhase::Failed] {
+            let mut finished = record(phase);
+            finished.target = Some("0.9.9".to_owned());
+            assert_eq!(settle(finished.clone(), "0.3.0", NOW, |_| false), finished);
+        }
+    }
+
+    #[test]
+    fn a_run_is_done_once_the_api_that_answers_runs_its_target() {
+        for phase in [
+            UpdatePhase::Checking,
+            UpdatePhase::Downloading,
+            UpdatePhase::Applying,
+            UpdatePhase::Restarting,
+        ] {
+            let settled = settle(record(phase), "0.3.1", NOW, |_| false);
+            assert_eq!(settled.phase, UpdatePhase::Done, "{phase:?}");
+            assert_eq!(settled.percent, 100);
+            assert_eq!(settled.target.as_deref(), Some("0.3.1"));
+        }
+    }
+
+    #[test]
+    fn a_run_whose_updater_died_before_the_helper_took_over_failed() {
+        for phase in [
+            UpdatePhase::Checking,
+            UpdatePhase::Downloading,
+            UpdatePhase::Verifying,
+        ] {
+            let settled = settle(record(phase), "0.3.0", NOW, |_| false);
+            assert_eq!(settled.phase, UpdatePhase::Failed, "{phase:?}");
+            assert_eq!(settled.percent, 40, "it keeps where it got to");
+            assert!(
+                settled.error.as_deref().unwrap().contains("stopped before"),
+                "{:?}",
+                settled.error
+            );
+            // The same run with its updater alive is just running.
+            assert_eq!(settle(record(phase), "0.3.0", NOW, |_| true), record(phase));
+        }
+    }
+
+    #[test]
+    fn the_helper_finishes_a_swap_whether_or_not_the_updater_lives() {
+        // The API is about to restart and take the updater with it; a poll in
+        // that moment must not call the update failed.
+        for phase in [UpdatePhase::Applying, UpdatePhase::Restarting] {
+            assert_eq!(
+                settle(record(phase), "0.3.0", NOW, |_| false),
+                record(phase)
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_that_went_quiet_failed() {
+        let later = 1_000_000 + STALE_AFTER.as_millis() as u64 + 1;
+        for phase in [UpdatePhase::Downloading, UpdatePhase::Restarting] {
+            let settled = settle(record(phase), "0.3.0", later, |_| true);
+            assert_eq!(settled.phase, UpdatePhase::Failed, "{phase:?}");
+            assert!(
+                settled
+                    .error
+                    .as_deref()
+                    .unwrap()
+                    .contains("stopped making progress")
+            );
+        }
+        let just_in_time = 1_000_000 + STALE_AFTER.as_millis() as u64;
+        assert_eq!(
+            settle(
+                record(UpdatePhase::Downloading),
+                "0.3.0",
+                just_in_time,
+                |_| true
+            )
+            .phase,
+            UpdatePhase::Downloading
+        );
+    }
+
+    #[test]
+    fn a_record_without_a_pid_is_judged_by_its_age_alone() {
+        let mut anonymous = record(UpdatePhase::Downloading);
+        anonymous.pid = None;
+        assert_eq!(
+            settle(anonymous.clone(), "0.3.0", NOW, |_| false),
+            anonymous
+        );
+    }
+
+    #[tokio::test]
+    async fn the_record_is_read_from_its_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("progress.json");
+        assert_eq!(read_record(&path).await, None, "no file, no record");
+
+        let written = record(UpdatePhase::Downloading);
+        fs::write(&path, serde_json::to_vec(&written).unwrap()).unwrap();
+        assert_eq!(read_record(&path).await, Some(written));
+
+        fs::write(&path, b"not json").unwrap();
+        assert_eq!(read_record(&path).await, None);
+
+        // A file far past any record is not read to the end.
+        fs::write(&path, vec![b' '; RECORD_LIMIT as usize + 1]).unwrap();
+        assert_eq!(read_record(&path).await, None);
+    }
+
+    #[test]
+    fn this_process_is_alive_and_a_reaped_one_is_not() {
+        assert!(process_alive(std::process::id()));
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!process_alive(pid));
+    }
+
+    #[tokio::test]
+    async fn the_updater_is_told_where_to_keep_its_record() {
+        let dir = tempdir().unwrap();
+        let arguments = dir.path().join("arguments");
+        let path = dir.path().join("recorder");
+        fs::write(
+            &path,
+            format!("#!/bin/sh\necho \"$@\" > {}\n", arguments.display()),
+        )
+        .expect("write stub");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+
+        let progress = dir.path().join("updates/progress.json");
+        let (status, _) = start_update_inner(&path, uuid::Uuid::nil(), &progress).unwrap();
+        assert_eq!(status, StatusCode::ACCEPTED);
+        for _ in 0..100 {
+            if arguments.exists() && fs::metadata(&arguments).unwrap().len() > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            fs::read_to_string(&arguments).unwrap().trim(),
+            format!(
+                "update --apply --json --progress-file {}",
+                progress.display()
+            )
+        );
+    }
+
+    #[test]
+    fn the_record_lives_under_the_data_directory() {
+        // The default, as the unit's DATADIR is unset in the test process.
+        if std::env::var_os("DATADIR").is_none() {
+            assert_eq!(
+                progress_file(),
+                PathBuf::from("/var/lib/firecrab/updates/progress.json")
+            );
+        }
     }
 }

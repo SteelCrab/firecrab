@@ -12,6 +12,9 @@ pub mod bundle;
 /// GitHub Releases lookup and version comparison.
 pub mod check;
 
+/// The stage lines, gauge and record file of an `--apply` run.
+pub mod progress;
+
 /// Unix-socket client that sends `ApplySelfUpdate` to `firecrab-helper`.
 pub mod helper;
 
@@ -81,8 +84,10 @@ pub enum UpdateError {
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
-use firecrab_api_types::UpdateCheckResponse;
+use firecrab_api_types::{UpdateCheckResponse, UpdatePhase};
 use firecrab_helper_protocol::network::InstallLayout;
+
+use progress::{Progress, format_bytes};
 
 /// A completed release check: the shared wire report plus the raw tag the
 /// download URL needs (`report.latest` has its `v` stripped for display, and
@@ -147,15 +152,19 @@ pub fn run_check() -> CheckOutcome {
         latest: None,
         update_available: false,
         error: None,
+        notes: None,
+        release_url: None,
     };
 
-    let tag = match check::fetch_latest_tag(&check::release_api_url(&bundle::release_repo())) {
-        Ok(tag) => tag,
-        Err(error) => {
-            report.error = Some(error.to_string());
-            return CheckOutcome { report, tag: None };
-        }
-    };
+    let release =
+        match check::fetch_latest_release(&check::release_api_url(&bundle::release_repo())) {
+            Ok(release) => release,
+            Err(error) => {
+                report.error = Some(error.to_string());
+                return CheckOutcome { report, tag: None };
+            }
+        };
+    let tag = release.tag_name;
     let Some(latest) = check::parse_version(&tag) else {
         report.error = Some(format!("unrecognized release tag {tag}"));
         return CheckOutcome { report, tag: None };
@@ -167,6 +176,8 @@ pub fn run_check() -> CheckOutcome {
 
     report.latest = Some(check::strip_v(&tag).to_owned());
     report.update_available = check::is_newer(latest, current);
+    report.notes = release.body.as_deref().and_then(check::release_notes);
+    report.release_url = release.html_url.as_deref().and_then(check::release_page);
     CheckOutcome {
         report,
         tag: Some(tag),
@@ -207,21 +218,39 @@ pub fn print_check_json(report: &UpdateCheckResponse) {
 }
 
 /// Downloads the matching host bundle, verifies it against the release's
-/// `SHA256SUMS`, and hands the swap to `firecrab-helper`.
+/// `SHA256SUMS`, and hands the swap to `firecrab-helper`, telling `progress`
+/// how far along it is. A failure is recorded there before it is returned.
 ///
 /// This function never writes to `$LIBDIR`, `$PREFIX/bin` or `$SHAREDIR`, and
 /// never calls `systemctl` — that is the whole point of the privilege split.
-pub fn run_apply(outcome: &CheckOutcome) -> Result<ApplyOutcome, UpdateError> {
+pub fn run_apply(
+    outcome: &CheckOutcome,
+    progress: &mut Progress,
+) -> Result<ApplyOutcome, UpdateError> {
+    progress.begin(outcome.report.latest.as_deref());
+    let result = apply(outcome, progress);
+    if let Err(error) = &result {
+        progress.failed(&error.to_string());
+    }
+    result
+}
+
+fn apply(outcome: &CheckOutcome, progress: &mut Progress) -> Result<ApplyOutcome, UpdateError> {
     if let Some(error) = &outcome.report.error {
         return Err(UpdateError::Check(error.clone()));
     }
     if !outcome.report.update_available {
+        progress.up_to_date();
         return Ok(ApplyOutcome::AlreadyCurrent);
     }
     let tag = outcome
         .tag
         .as_deref()
         .ok_or_else(|| UpdateError::Check("no release tag to download".to_owned()))?;
+    let latest = outcome.report.latest.as_deref().unwrap_or(tag);
+
+    progress.stage(UpdatePhase::Checking, "looking up the newest release");
+    progress.stage_done(&format!("{} → {latest}", outcome.report.current));
 
     let arch = bundle::host_arch()?;
     let libc = bundle::host_libc(None)?;
@@ -246,17 +275,29 @@ pub fn run_apply(outcome: &CheckOutcome) -> Result<ApplyOutcome, UpdateError> {
 
     let tarball = staging.join(&asset);
     let sums = staging.join("SHA256SUMS");
-    for (url, dest) in [
-        (bundle::asset_url(&base, tag, &asset), tarball.clone()),
-        (bundle::asset_url(&base, tag, "SHA256SUMS"), sums.clone()),
-    ] {
-        if let Err(error) = bundle::download_to(&url, &dest) {
-            cleanup(&staging);
-            return Err(error);
-        }
-        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o640));
+    // The few hundred bytes of checksums first, so a release that lists no
+    // checksums fails before the bundle is fetched, and the bundle's progress
+    // is the whole of the download stage.
+    progress.stage(UpdatePhase::Downloading, &asset);
+    let downloaded = bundle::download_to(&bundle::asset_url(&base, tag, "SHA256SUMS"), &sums)
+        .and_then(|()| {
+            bundle::download_with_progress(
+                &bundle::asset_url(&base, tag, &asset),
+                &tarball,
+                &mut |received, total| progress.downloaded(received, total),
+            )
+        });
+    if let Err(error) = downloaded {
+        cleanup(&staging);
+        return Err(error);
     }
+    for dest in [&sums, &tarball] {
+        let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o640));
+    }
+    let size = std::fs::metadata(&tarball).map_or(0, |metadata| metadata.len());
+    progress.stage_done(&format_bytes(size));
 
+    progress.stage(UpdatePhase::Verifying, "SHA-256 of the bundle");
     let sums_text = std::fs::read_to_string(&sums).unwrap_or_default();
     let Some(expected) = bundle::expected_sha256(&sums_text, &asset) else {
         cleanup(&staging);
@@ -281,7 +322,12 @@ pub fn run_apply(outcome: &CheckOutcome) -> Result<ApplyOutcome, UpdateError> {
             actual,
         });
     }
+    progress.stage_done("matches SHA256SUMS");
 
+    progress.stage(
+        UpdatePhase::Applying,
+        "handing the bundle to firecrab-helper",
+    );
     let result = helper::send_apply_self_update(
         &helper::helper_socket_path(),
         &tarball,
@@ -292,14 +338,17 @@ pub fn run_apply(outcome: &CheckOutcome) -> Result<ApplyOutcome, UpdateError> {
         cleanup(&staging);
         return Err(error);
     }
+    progress.stage_done("firecrab-helper replaced the installed binaries");
+
+    // From here the helper restarts this process's own service, so nothing
+    // after it can be relied on to run: this is the last thing recorded.
+    progress.stage(UpdatePhase::Restarting, "restarting the services");
+    progress.stage_done("firecrab-api and firecrab-helper are restarting now");
+
     // On success the helper owns the staging directory's cleanup: it removes
     // the bundle and the directory itself after the swap.
     Ok(ApplyOutcome::Applied {
-        version: outcome
-            .report
-            .latest
-            .clone()
-            .unwrap_or_else(|| tag.to_owned()),
+        version: latest.to_owned(),
     })
 }
 
@@ -394,6 +443,8 @@ mod tests {
             latest: Some("0.1.2".to_owned()),
             update_available: true,
             error: None,
+            notes: None,
+            release_url: None,
         };
         let text = format_check_human(&report);
         assert!(text.starts_with("firecrab 0.1.1\n"), "{text}");
@@ -408,6 +459,8 @@ mod tests {
             latest: Some("0.1.1".to_owned()),
             update_available: false,
             error: None,
+            notes: None,
+            release_url: None,
         };
         assert!(format_check_human(&current).contains("up to date"));
 
@@ -416,6 +469,8 @@ mod tests {
             latest: None,
             update_available: false,
             error: Some("unreachable: refused".to_owned()),
+            notes: None,
+            release_url: None,
         };
         let text = format_check_human(&failed);
         assert!(
@@ -451,10 +506,15 @@ mod tests {
                 latest: None,
                 update_available: false,
                 error: Some("unreachable: refused".to_owned()),
+                notes: None,
+                release_url: None,
             },
             tag: None,
         };
-        assert!(matches!(run_apply(&failed), Err(UpdateError::Check(_))));
+        assert!(matches!(
+            run_apply(&failed, &mut Progress::silent()),
+            Err(UpdateError::Check(_))
+        ));
 
         let current = CheckOutcome {
             report: UpdateCheckResponse {
@@ -462,12 +522,72 @@ mod tests {
                 latest: Some("0.1.1".to_owned()),
                 update_available: false,
                 error: None,
+                notes: None,
+                release_url: None,
             },
             tag: Some("v0.1.1".to_owned()),
         };
         assert!(matches!(
-            run_apply(&current),
+            run_apply(&current, &mut Progress::silent()),
             Ok(ApplyOutcome::AlreadyCurrent)
         ));
+    }
+
+    fn recorded(path: &std::path::Path) -> firecrab_api_types::UpdateProgressResponse {
+        serde_json::from_slice(&std::fs::read(path).expect("record exists")).expect("record parses")
+    }
+
+    #[test]
+    fn a_failed_check_leaves_a_failed_record_for_the_dashboard() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("progress.json");
+        let failed = CheckOutcome {
+            report: UpdateCheckResponse {
+                current: "0.1.1".to_owned(),
+                latest: None,
+                update_available: false,
+                error: Some("unreachable: refused".to_owned()),
+                notes: None,
+                release_url: None,
+            },
+            tag: None,
+        };
+        let mut progress = Progress::new(None, Some(path.clone()));
+        assert!(run_apply(&failed, &mut progress).is_err());
+
+        let record = recorded(&path);
+        assert_eq!(record.phase, UpdatePhase::Failed);
+        assert_eq!(
+            record.error.as_deref(),
+            Some("release check failed: unreachable: refused")
+        );
+        assert_eq!(record.pid, Some(std::process::id()));
+    }
+
+    #[test]
+    fn a_host_that_is_current_leaves_a_finished_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("progress.json");
+        let current = CheckOutcome {
+            report: UpdateCheckResponse {
+                current: "0.1.1".to_owned(),
+                latest: Some("0.1.1".to_owned()),
+                update_available: false,
+                error: None,
+                notes: None,
+                release_url: None,
+            },
+            tag: Some("v0.1.1".to_owned()),
+        };
+        let mut progress = Progress::new(None, Some(path.clone()));
+        assert!(matches!(
+            run_apply(&current, &mut progress),
+            Ok(ApplyOutcome::AlreadyCurrent)
+        ));
+
+        let record = recorded(&path);
+        assert_eq!(record.phase, UpdatePhase::Done);
+        assert_eq!(record.percent, 100);
+        assert_eq!(record.target.as_deref(), Some("0.1.1"));
     }
 }

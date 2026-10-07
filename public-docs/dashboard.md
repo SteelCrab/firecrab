@@ -49,6 +49,7 @@ npm run dev --prefix firecrab-frontend
 | Images | M2Image inventory, OCI Import, and MicroRegistry |
 | Kernels | Digest-pinned kernel installation and lifecycle |
 | Host | Host OS with its icon, then health and capacity |
+| Update | The nav's **Update** button opens a dialog with the release notes; the run shows a gauge, the percent, and its stage |
 
 ## VM workflow
 

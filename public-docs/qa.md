@@ -62,7 +62,7 @@ Windows `firecrab service` drives the managed WSL2 distribution the same way.
 
 | ID | Work | Add | Delete / cleanup |
 | --- | --- | --- | --- |
-| H1 | `GET /api/update` | check only | do not `POST` unless U1 |
+| H1 | `GET /api/update`, `GET /api/update/progress` | check only | do not `POST` unless U1 |
 | H2 | `GET /api/network` | uplink present; no `lo` / `fct*` / `mnb*` in picker | none |
 | U1 | `POST /api/update` | optional dedicated run | host comes back; API 200 |
 

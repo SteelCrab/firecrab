@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { UpdateCheckResponse } from "../bindings";
-import { getUpdateCheck, startUpdate } from "../api/client";
+import { useCallback, useEffect, useState } from "react";
+import type { UpdateCheckResponse, UpdatePhase, UpdateProgressResponse } from "../bindings";
+import { getUpdateCheck, getUpdateProgress } from "../api/client";
 import { useI18n } from "../i18n";
+import UpdateDialog from "./UpdateDialog";
 
 /**
  * Idle poll interval. GitHub's unauthenticated rate limit is 60/hour per IP and
@@ -9,34 +10,21 @@ import { useI18n } from "../i18n";
  * calls an hour however many tabs are open.
  */
 const POLL_MILLIS = 15 * 60 * 1000;
-/** While the host is restarting, poll fast enough to notice it coming back. */
-const RESTART_POLL_MILLIS = 3000;
-/**
- * How long "waiting for restart" may last before the indicator says so.
- *
- * There is no completion callback to wait for — `POST /api/update` is
- * fire-and-forget by design (the process that would report progress is the one
- * being replaced) and its child's stdout goes to /dev/null. So the only
- * completion signal is the version changing, and the only failure signal is
- * that never happening. Ten minutes is twice the helper's own `APPLY_TIMEOUT`
- * (300s in `firecrab-cli/src/update/helper.rs`) plus room for the download that
- * precedes it, which comfortably covers a real run while still bounding how
- * long an operator stares at a spinner that is never going to resolve.
- */
-const RESTART_TIMEOUT_MILLIS = 10 * 60 * 1000;
+
+/** The phases of a run that has not ended. */
+const RUNNING: UpdatePhase[] = ["checking", "downloading", "verifying", "applying", "restarting"];
 
 /**
  * Bottom-of-the-nav update indicator. Renders nothing at all in the common
  * case — no update, or a check that could not reach GitHub — so a background
- * widget never clutters the shell.
+ * widget never clutters the shell. Its button opens the update dialog, which
+ * shows what the release changes and then follows the update.
  */
 export default function UpdateIndicator() {
   const { t } = useI18n();
   const [check, setCheck] = useState<UpdateCheckResponse | null>(null);
-  const [restarting, setRestarting] = useState(false);
-  const [finished, setFinished] = useState(false);
-  const [stalled, setStalled] = useState(false);
-  const versionAtClick = useRef<string | null>(null);
+  // Open on the release notes, or following a run that was already going.
+  const [dialog, setDialog] = useState<{ adopt?: UpdateProgressResponse } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,118 +32,56 @@ export default function UpdateIndicator() {
     const tick = async () => {
       try {
         const next = await getUpdateCheck();
-        if (cancelled) return;
-        // The one reliable completion signal: the API came back reporting a
-        // different version than the one that was running when we clicked.
-        // Still checked after a stall, so a slow update that eventually lands
-        // is reported as the success it is.
-        if (versionAtClick.current !== null && next.current !== versionAtClick.current) {
-          setFinished(true);
-          setRestarting(false);
-          setStalled(false);
-        }
-        setCheck(next);
+        if (!cancelled) setCheck(next);
       } catch {
-        // During a restart the API is down and `fail()` in api/client.ts has
-        // already normalized 502/503/504 and fetch failures into transport
-        // errors. Swallowing them here is the whole retry policy — no extra
-        // backoff logic needed.
+        // Keep the last answer; the next tick tries again.
       }
     };
 
     void tick();
-    const interval = setInterval(tick, restarting ? RESTART_POLL_MILLIS : POLL_MILLIS);
-    // Bound the wait. Without this the indicator sits on "waiting for restart"
-    // forever whenever the apply failed — a refused uid, a checksum mismatch,
-    // an older helper — because none of those ever change `current`, and the
-    // CLI's own output was discarded by the handler that spawned it.
-    const stall = restarting
-      ? setTimeout(() => {
-          if (cancelled) return;
-          setRestarting(false);
-          setStalled(true);
-        }, RESTART_TIMEOUT_MILLIS)
-      : undefined;
-
+    const interval = setInterval(tick, POLL_MILLIS);
     return () => {
       cancelled = true;
       clearInterval(interval);
-      if (stall !== undefined) clearTimeout(stall);
     };
-  }, [restarting]);
-
-  const applyUpdate = useCallback(async () => {
-    versionAtClick.current = check?.current ?? null;
-    setStalled(false);
-    setRestarting(true);
-    try {
-      await startUpdate();
-    } catch {
-      // A 202 that never arrives is not fatal: the updater may already have
-      // taken the API down. The poll above decides what really happened.
-    }
-  }, [check]);
-
-  const dismissStall = useCallback(() => {
-    versionAtClick.current = null;
-    setStalled(false);
   }, []);
 
-  if (finished) {
-    return (
-      <div className="update-indicator">
-        <button
-          type="button"
-          className="update-indicator-action"
-          onClick={() => window.location.reload()}
-        >
-          {t("Update complete — reload", "업데이트 완료 — 새로고침")}
-        </button>
-      </div>
-    );
-  }
+  // A page opened, or reloaded, in the middle of an update follows it.
+  useEffect(() => {
+    let cancelled = false;
+    getUpdateProgress()
+      .then((record) => {
+        if (!cancelled && RUNNING.includes(record.phase)) setDialog({ adopt: record });
+      })
+      .catch(() => {
+        // No answer means no run to follow.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  if (restarting) {
-    return (
-      <div className="update-indicator">
-        <span className="update-indicator-label">
-          {t("Updating… waiting for restart", "업데이트 중… 재시작을 기다리는 중")}
-        </span>
-      </div>
-    );
-  }
-
-  if (stalled) {
-    return (
-      <div className="update-indicator update-indicator-stalled">
-        <span className="update-indicator-label">
-          {t("Update not confirmed", "업데이트 확인 안 됨")}
-        </span>
-        <code className="update-indicator-hint">
-          journalctl -u firecrab-api -u firecrab-helper
-        </code>
-        <button type="button" className="update-indicator-action" onClick={dismissStall}>
-          {t("Dismiss", "닫기")}
-        </button>
-      </div>
-    );
-  }
-
-  if (!check || check.error || !check.updateAvailable) return null;
+  const close = useCallback(() => setDialog(null), []);
 
   // `updateAvailable` is only ever true when the API resolved a `latest`, but
   // the type still allows it to be absent — fall back rather than render
   // "vundefined".
-  const latest = check.latest ?? "?";
+  const available = check && !check.error && check.updateAvailable;
+  const latest = check?.latest ?? "?";
 
   return (
-    <div className="update-indicator">
-      <span className="update-indicator-label">
-        {t(`Update available v${latest}`, `업데이트 가능 v${latest}`)}
-      </span>
-      <button type="button" className="update-indicator-action" onClick={() => void applyUpdate()}>
-        {t("Update", "업데이트")}
-      </button>
-    </div>
+    <>
+      {available && !dialog && (
+        <div className="update-indicator">
+          <span className="update-indicator-label">
+            {t(`Update available v${latest}`, `업데이트 가능 v${latest}`)}
+          </span>
+          <button type="button" className="update-indicator-action" onClick={() => setDialog({})}>
+            {t("Update", "업데이트")}
+          </button>
+        </div>
+      )}
+      {dialog && <UpdateDialog check={check} adopt={dialog.adopt} onClose={close} />}
+    </>
   );
 }

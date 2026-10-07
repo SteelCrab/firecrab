@@ -23,7 +23,15 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- None.
+- Updating from the dashboard opens a dialog that shows what the new release
+  changes, then a gauge with the overall percent and the stage (check,
+  download, verify, apply, restart) until the API is back on the new version.
+  A run that fails says why in the dialog instead of leaving it waiting for ten
+  minutes. `firecrab update --apply` shows the same stages with a gauge and the
+  percent. `GET /api/update` carries the release's `notes` and `releaseUrl`,
+  and `GET /api/update/progress` reports the run, which the updater records in
+  `$DATADIR/updates/progress.json` so it survives the restart that ends an
+  update.
 
 ### Changed
 

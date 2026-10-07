@@ -3,7 +3,7 @@
 //! re-implemented rather than shelled out to so `firecrab update` needs no
 //! bash payload on the host.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
@@ -108,6 +108,16 @@ pub fn expected_sha256(sums_text: &str, asset_name: &str) -> Option<String> {
 
 /// Streams `url` into `dest`, removing a partial file if anything fails.
 pub fn download_to(url: &str, dest: &Path) -> Result<(), UpdateError> {
+    download_with_progress(url, dest, &mut |_, _| {})
+}
+
+/// [`download_to`], calling `on_progress` with the bytes received so far and
+/// the total the server announced, after every chunk.
+pub fn download_with_progress(
+    url: &str,
+    dest: &Path,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<(), UpdateError> {
     let fail = |detail: String| UpdateError::Download {
         url: url.to_owned(),
         detail,
@@ -122,8 +132,24 @@ pub fn download_to(url: &str, dest: &Path) -> Result<(), UpdateError> {
     if !status.is_success() {
         return Err(fail(format!("HTTP {}", status.as_u16())));
     }
+    let total = response.content_length();
     let mut file = std::fs::File::create(dest).map_err(|e| fail(e.to_string()))?;
-    if let Err(error) = response.copy_to(&mut file) {
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut received = 0_u64;
+    let copied = loop {
+        let read = match response.read(&mut buffer) {
+            Ok(0) => break Ok(()),
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => break Err(error),
+        };
+        if let Err(error) = file.write_all(&buffer[..read]) {
+            break Err(error);
+        }
+        received += read as u64;
+        on_progress(received, total);
+    };
+    if let Err(error) = copied {
         drop(file);
         let _ = std::fs::remove_file(dest);
         return Err(fail(error.to_string()));
@@ -376,6 +402,37 @@ d6a32738d876fc3bd42d42560afaacb6e1e2674434a5f514f89a491eed292c6b  ./install.sh
             stream.flush().expect("flush response");
         });
         (format!("http://{addr}"), handle)
+    }
+
+    #[test]
+    fn download_with_progress_reports_every_chunk_up_to_the_announced_total() {
+        let body: &[u8] = b"firecrab-bundle-bytes";
+        let (base, handle) = serve_once(body);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("bundle.tar.gz");
+        let mut seen = Vec::new();
+        download_with_progress(
+            &format!("{base}/bundle.tar.gz"),
+            &dest,
+            &mut |done, total| {
+                seen.push((done, total));
+            },
+        )
+        .expect("download succeeds");
+        handle.join().expect("server thread panicked");
+
+        let total = Some(body.len() as u64);
+        assert!(!seen.is_empty());
+        assert!(
+            seen.iter().all(|(_, announced)| *announced == total),
+            "{seen:?}"
+        );
+        assert!(
+            seen.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "{seen:?}"
+        );
+        assert_eq!(seen.last().map(|(done, _)| *done), Some(body.len() as u64));
+        assert_eq!(std::fs::read(&dest).expect("read"), body);
     }
 
     #[test]

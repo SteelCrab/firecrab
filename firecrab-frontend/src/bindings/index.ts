@@ -51,6 +51,8 @@ export * from "./StartupStepRun";
 export * from "./StorageDeviceResponse";
 export * from "./StorageRootResponse";
 export * from "./UpdateCheckResponse";
+export * from "./UpdatePhase";
+export * from "./UpdateProgressResponse";
 export * from "./UpdateMicroNetworkRequest";
 export * from "./UpdateImageKernelRequest";
 export * from "./UpdateStartResponse";

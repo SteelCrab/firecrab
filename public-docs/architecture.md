@@ -208,7 +208,7 @@ On Windows, `~` means `%USERPROFILE%`; `FIRECRAB_CONFIG_DIR` overrides the profi
 6. `firecrab update --check` (also the default with no flag) compares the latest GitHub release tag without downloading a bundle or requiring elevated privileges.
 7. `sudo firecrab update --apply` downloads the host bundle, verifies SHA-256, and stages it under `$DATADIR/updates/<uuid>`. The CLI does not write installation directories or call systemctl.
 8. It sends one `ApplySelfUpdate` request. The helper re-verifies the checksum using its own file descriptor and writes only to installation paths derived from its service units.
-9. The helper replaces binaries/dashboard and restarts both services. Unit files are preserved; rerun `install.sh` when release notes require unit changes. The dashboard update indicator uses the equivalent `GET /api/update` and `POST /api/update` flow.
+9. The helper replaces binaries/dashboard and restarts both services. Unit files are preserved; rerun `install.sh` when release notes require unit changes. The dashboard update indicator opens a dialog with the release notes from `GET /api/update`, starts the same run with `POST /api/update`, and follows it through `GET /api/update/progress`.
    Running VMs keep running through the update: each shim stays on the previous binary until its VM restarts, and the restarted API re-adopts it, or stops through the helper a shim whose protocol it no longer speaks.
 
 See [CLI](firecrab-cli.md) and [Operations](operations.md) for commands and failure handling.
