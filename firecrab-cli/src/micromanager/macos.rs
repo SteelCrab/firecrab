@@ -149,7 +149,7 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         artifacts.debian_archive.display(),
         provision::FIRECRACKER_VERSION,
         artifacts.firecracker_archive.display(),
-        provision::FIRECRAB_VERSION,
+        artifacts.firecrab_version,
         artifacts.firecrab_host_archive.display(),
         artifacts.firecrab_installer.display(),
         prepared.os_disk.display(),

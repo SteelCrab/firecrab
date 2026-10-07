@@ -138,7 +138,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-**Windows 제약:** 현재 고정된 v0.2.2 게스트는 기본 WSL2에서 API·이미지·네트워크는 지원하지만 MicroVM을 시작하지 못합니다. net-helper 수정이 반영된 새 게스트 릴리스가 필요하며, 로컬 nginx VM 실행도 영향을 받습니다. Windows CLI로 지원되는 원격 Linux 호스트를 관리할 수는 있습니다.
+**Windows 제약:** v0.3.0 이전 게스트는 net-helper가 필요로 하는 nftables `bridge` 패밀리가 WSL2에 없어 기본 WSL2에서 MicroVM을 시작하지 못합니다. 새로 프로비저닝하는 게스트는 수정이 반영된 최신 릴리스를 받지만, 이 경로는 아직 Windows에서 검증되지 않았으며 `service install`은 이미 프로비저닝된 게스트를 바꾸지 않습니다. Windows CLI로 지원되는 원격 Linux 호스트를 관리할 수는 있습니다.
 
 </details>
 
@@ -179,7 +179,7 @@ firecrab service debug --logs --tail 100
 firecrab service stop
 ```
 
-**Windows 제약:** 현재 고정된 v0.2.2 게스트는 기본 WSL2에서 API·이미지·네트워크는 지원하지만 MicroVM을 시작하지 못합니다. net-helper 수정이 반영된 새 게스트 릴리스가 필요하며, 로컬 nginx VM 실행도 영향을 받습니다. Windows CLI로 지원되는 원격 Linux 호스트를 관리할 수는 있습니다.
+**Windows 제약:** v0.3.0 이전 게스트는 net-helper가 필요로 하는 nftables `bridge` 패밀리가 WSL2에 없어 기본 WSL2에서 MicroVM을 시작하지 못합니다. 새로 프로비저닝하는 게스트는 수정이 반영된 최신 릴리스를 받지만, 이 경로는 아직 Windows에서 검증되지 않았으며 `service install`은 이미 프로비저닝된 게스트를 바꾸지 않습니다. Windows CLI로 지원되는 원격 Linux 호스트를 관리할 수는 있습니다.
 
 정상 상태이면 `http://127.0.0.1:5523/`을 여세요. MicroNetwork를 만들고 설치된 이미지를 선택해 VM을 생성·시작한 뒤, `running` 상태에서 터미널을 엽니다. 원격 호스트는 [CLI 호스트 프로필](public-docs/firecrab-cli.md#host-profiles)을 설정하세요.
 

@@ -602,7 +602,7 @@ Expanded guest checks run on the first OCI reference.
 The current CI workflow runs Linux API/nginx/public-image guest QA and complete Chromium E2E; ARM64 KVM runtime has no registered job.
 Linux CI retains logs, JSON/JUnit results, and failure traces for 14 days.
 The [Windows source validation snapshot](qa.md#windows-source-validation-2026-10-03) records 9 browser passes, the existing B5 skip, and separate Ubuntu/Fedora SSH failures.
-That result does not establish a passing Windows `all` run or stock pinned-release runtime.
+That result does not establish a passing Windows `all` run or stock-release runtime.
 
 ## Related
 

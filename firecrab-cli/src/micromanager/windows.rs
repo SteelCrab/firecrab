@@ -114,7 +114,7 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         artifacts.debian_rootfs.display(),
         provision::FIRECRACKER_VERSION,
         artifacts.firecracker.display(),
-        provision::FIRECRAB_VERSION,
+        artifacts.firecrab_version,
         artifacts.firecrab_host.display(),
         artifacts.installer.display(),
         layout.provision_marker().display(),

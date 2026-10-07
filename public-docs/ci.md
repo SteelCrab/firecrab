@@ -125,7 +125,7 @@ The runner stages QA under `/root/firecrab-qa/<run-id>`, normalizes shell CRLF e
 Each run retains `run.log`, `summary.json`, and any browser results in `browser-results.tar.gz` on Windows.
 The summary reports `RUNNING` until completion and records unrun phases as `WARNING` after a failed prerequisite.
 Resource cleanup does not uninstall QA dependencies or undo manual lab configuration changes.
-The [Windows guide](micromanager-windows.md#known-limitation) explains why stock pinned-release runtime results differ from source results.
+The [Windows guide](micromanager-windows.md#known-limitation) explains why source-built QA results do not establish stock-release runtime behavior.
 
 ## macOS runtime E2E
 
