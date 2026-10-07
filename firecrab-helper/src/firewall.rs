@@ -1032,10 +1032,12 @@ async fn ensure_iptables_compat(bridges: &[String], egress: &[(String, String)])
     }
 }
 
-/// Removes iptables FORWARD ACCEPT rules for a bridge that is being torn down.
+/// Removes the iptables rules [`ensure_iptables_compat`] added for a bridge
+/// that is being torn down: its FORWARD ACCEPT rules and the NAT MASQUERADE
+/// rules of the `networks` (CIDRs such as `172.31.77.0/24`) it served.
 /// Best-effort; silently ignores errors (rule already absent, iptables not
 /// available). Also drops host INPUT holes for that bridge.
-pub async fn remove_iptables_forward_for_bridge(bridge: &str) {
+pub async fn remove_iptables_forward_for_bridge(bridge: &str, networks: &[String]) {
     for dir in ["-i", "-o"] {
         let _ = Command::new("iptables")
             .args(["-D", "FORWARD", dir, bridge, "-j", "ACCEPT"])
@@ -1044,7 +1046,63 @@ pub async fn remove_iptables_forward_for_bridge(bridge: &str) {
             .status()
             .await;
     }
+    remove_iptables_nat_for_networks(networks).await;
     crate::host_acl::remove_bridge(bridge).await;
+}
+
+/// Deletes the iptables NAT MASQUERADE rules [`ensure_iptables_compat`] added
+/// for `networks`, whichever uplink each one names. A rule is ours only when
+/// its source is exactly one of these networks, so a host rule for any other
+/// subnet (Docker's, say) is never touched. Best-effort, like the rest of the
+/// iptables shim.
+async fn remove_iptables_nat_for_networks(networks: &[String]) {
+    if networks.is_empty() {
+        return;
+    }
+    let Ok(listing) = Command::new("iptables")
+        .args(["-t", "nat", "-S", "POSTROUTING"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+    else {
+        return;
+    };
+    if !listing.status.success() {
+        return;
+    }
+    for rule in masquerade_rules_for(&String::from_utf8_lossy(&listing.stdout), networks) {
+        let _ = Command::new("iptables")
+            .args(["-t", "nat", "-D", "POSTROUTING"])
+            .args(&rule)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+}
+
+/// The argument lists (after `-A POSTROUTING`) of every MASQUERADE rule in an
+/// `iptables -S POSTROUTING` listing whose source is one of `networks`.
+fn masquerade_rules_for(listing: &str, networks: &[String]) -> Vec<Vec<String>> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            if words.next()? != "-A" || words.next()? != "POSTROUTING" {
+                return None;
+            }
+            let rule: Vec<String> = words.map(str::to_owned).collect();
+            let source = rule
+                .windows(2)
+                .find(|pair| pair[0] == "-s")
+                .map(|pair| pair[1].as_str())?;
+            let masquerades = rule
+                .windows(2)
+                .any(|pair| pair[0] == "-j" && pair[1] == "MASQUERADE");
+            (masquerades && networks.iter().any(|network| network == source)).then_some(rule)
+        })
+        .collect()
 }
 
 /// Applies `ruleset` as a single atomic transaction: `nft -f -` accepts the
@@ -1930,6 +1988,41 @@ mod tests {
             ],
         )
         .await;
+    }
+
+    const NAT_LISTING: &str = "-P POSTROUTING ACCEPT\n\
+        -A POSTROUTING -s 172.31.77.0/24 -o eth0 -j MASQUERADE\n\
+        -A POSTROUTING -s 172.31.78.0/24 -o eth0 -j MASQUERADE\n\
+        -A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE\n\
+        -A POSTROUTING -s 172.31.77.0/24 -o eth1 -j MASQUERADE\n\
+        -A POSTROUTING -s 172.31.79.0/24 -o eth0 -j RETURN\n";
+
+    #[test]
+    fn masquerade_cleanup_matches_only_the_given_networks_and_the_masquerade_target() {
+        let rules = masquerade_rules_for(NAT_LISTING, &["172.31.77.0/24".to_owned()]);
+        // Both uplinks of the one network, nothing else: not another subnet,
+        // not Docker's rule, not a different target.
+        assert_eq!(
+            rules,
+            vec![
+                vec!["-s", "172.31.77.0/24", "-o", "eth0", "-j", "MASQUERADE"],
+                vec!["-s", "172.31.77.0/24", "-o", "eth1", "-j", "MASQUERADE"],
+            ]
+        );
+    }
+
+    #[test]
+    fn masquerade_cleanup_takes_every_network_it_is_given() {
+        let networks = ["172.31.77.0/24".to_owned(), "172.31.78.0/24".to_owned()];
+        assert_eq!(masquerade_rules_for(NAT_LISTING, &networks).len(), 3);
+    }
+
+    #[test]
+    fn masquerade_cleanup_does_not_match_a_longer_or_shorter_prefix() {
+        assert!(masquerade_rules_for(NAT_LISTING, &["172.31.77.0/16".to_owned()]).is_empty());
+        assert!(masquerade_rules_for(NAT_LISTING, &["172.31.77.0/25".to_owned()]).is_empty());
+        assert!(masquerade_rules_for(NAT_LISTING, &[]).is_empty());
+        assert!(masquerade_rules_for("", &["172.31.77.0/24".to_owned()]).is_empty());
     }
 
     #[tokio::test]

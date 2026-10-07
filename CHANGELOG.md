@@ -23,7 +23,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- None.
+- `install.sh` records, on the first install, whether it granted the `kvm` group an ACL on
+  `/dev/kvm` and whether IPv4/IPv6 forwarding was off, in `/etc/firecrab/host-baseline.env`,
+  so an uninstall can put back exactly that.
 
 ### Changed
 
@@ -35,7 +37,19 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
-- None.
+- `firecrab service uninstall` and `install.sh --uninstall` stop running MicroVMs before they
+  remove the services. A VM's unit outlives the API on purpose, so its shim and Firecracker
+  process used to keep running after an uninstall, and after `--purge` they ran on with their
+  disks deleted.
+- Uninstall removes `extract-vmlinux` and `extract-arm64-image`, so `/usr/local/lib/firecrab`
+  goes with the rest of the install instead of staying behind holding those two scripts.
+- Deleting a MicroNetwork, and uninstalling, remove the iptables NAT MASQUERADE rules for its
+  subnet. They used to stay on the host until a reboot.
+- `firecrab-helper --teardown`, and so uninstall, also deletes the UFW rules that name a
+  Firecrab bridge, including the route rule that carries the uplink and was never deleted.
+- Uninstall restores what the installer recorded: the `/dev/kvm` ACL it added, and IPv4/IPv6
+  forwarding on a host that had it off. Forwarding stays on while another bridge or container
+  network exists, and a host installed before the record existed keeps both until a reboot.
 
 ### Improved
 
