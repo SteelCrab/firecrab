@@ -27,6 +27,7 @@ Update scope:   POST /api/update → U1 only
 - [nginx combined scenario](#nginx-combined-scenario)
 - [CLI](#cli)
 - [Browser E2E](#browser-e2e-every-playwright-case)
+- [Uninstall](#uninstall)
 - [Cleanup and CI coverage](#cleanup-and-ci-coverage)
 
 ## Automated checks and prerequisites
@@ -538,6 +539,30 @@ Windows `all` requires gate/setup, then collects API → nginx → guest → bro
 The guest script also checks later image references after a failed reference.
 The Windows transcript, summary, and browser archive are retained under `target/qa/windows/<run-id>` or `-ResultsDir`.
 For macOS browser commands and management SSH settings, see the [E2E guide](../firecrab-e2e/README.md).
+
+## Uninstall
+
+On a disposable Linux host with UFW active, one MicroNetwork, and one running MicroVM, compare the host after the uninstall with the host before the install.
+
+- [ ] **UN1:** `firecrab service uninstall` or `./install.sh --uninstall` stops the VM first; no `firecracker` or `firecrab-api` process and no `firecrab-*` unit remains.
+- [ ] **UN2:** `/usr/local/lib/firecrab` and `/usr/local/bin/firecrab` are gone.
+- [ ] **UN3:** no `mnb*`, `fct*`, or `fcbr0` link, no firecrab nftables table, and no MASQUERADE rule for a MicroNetwork subnet.
+- [ ] **UN4:** `ufw status numbered` names no firecrab bridge and keeps the rules that were there before.
+- [ ] **UN5:** `/etc/firecrab/host-baseline.env` is gone, `getfacl -p /dev/kvm` matches the host before the install, and forwarding is restored unless another bridge or container network exists.
+- [ ] **UN6:** without `--purge` the data and config stay and a reinstall finds the networks and VMs `stopped`; with `--purge` they are gone.
+- [ ] **UN7:** a second uninstall changes nothing and exits `0`.
+
+```sh
+sudo firecrab service uninstall            # or: sudo ./install.sh --uninstall
+pgrep -x firecracker || echo none          # UN1
+pgrep -x firecrab-api || echo none
+systemctl list-units --all --plain --no-legend 'firecrab-*' | grep . || echo none
+ls /usr/local/lib/firecrab 2>&1 | head -1  # UN2: No such file or directory
+ip -br link | grep -E '^(mnb|fct|fcbr)' || echo none                        # UN3
+sudo iptables -t nat -S POSTROUTING | grep MASQUERADE || echo none
+sudo ufw status numbered | grep -E 'mnb[0-9a-f]{12}' || echo none          # UN4
+getfacl -p /dev/kvm; sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding # UN5
+```
 
 ## Cleanup and CI coverage
 

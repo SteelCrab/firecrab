@@ -27,6 +27,7 @@ API 기본 주소:  http://127.0.0.1:5523
 - [nginx 통합 시나리오](#nginx-통합-시나리오)
 - [CLI](#cli)
 - [브라우저 E2E](#브라우저-e2e-playwright의-모든-케이스)
+- [제거](#제거)
 - [정리 및 CI 범위](#정리-및-ci-범위)
 
 ## 자동 점검 및 준비
@@ -538,6 +539,30 @@ Windows `all`은 gate/setup 성공 후 API → nginx → guest → browser 결�
 게스트 스크립트도 앞선 이미지 실패 후 나머지 참조를 검사한다.
 Windows 로그·요약·브라우저 archive는 `target/qa/windows/<run-id>` 또는 `-ResultsDir`에 보관한다.
 macOS 브라우저 명령과 관리 VM SSH 설정은 [E2E 안내](../firecrab-e2e/README.md)를 참고한다.
+
+## 제거
+
+UFW가 켜져 있고 MicroNetwork 하나와 실행 중인 MicroVM 하나가 있는 일회용 Linux 호스트에서, 제거 뒤의 호스트를 설치 전의 호스트와 비교한다.
+
+- [ ] **UN1:** `firecrab service uninstall` 또는 `./install.sh --uninstall`이 VM을 먼저 멈춘다. `firecracker`·`firecrab-api` 프로세스와 `firecrab-*` unit이 남지 않는다.
+- [ ] **UN2:** `/usr/local/lib/firecrab`과 `/usr/local/bin/firecrab`이 없다.
+- [ ] **UN3:** `mnb*`·`fct*`·`fcbr0` 링크, firecrab nftables 테이블, MicroNetwork 서브넷의 MASQUERADE 규칙이 없다.
+- [ ] **UN4:** `ufw status numbered`에 firecrab 브리지 이름이 없고, 이전부터 있던 규칙은 그대로다.
+- [ ] **UN5:** `/etc/firecrab/host-baseline.env`가 없고, `getfacl -p /dev/kvm`이 설치 전과 같으며, 다른 브리지나 컨테이너 네트워크가 없으면 포워딩이 복원된다.
+- [ ] **UN6:** `--purge` 없이는 데이터와 설정이 남고 재설치하면 네트워크와 VM이 `stopped`로 보인다. `--purge`면 모두 없다.
+- [ ] **UN7:** 두 번째 제거는 아무것도 바꾸지 않고 `0`으로 끝난다.
+
+```sh
+sudo firecrab service uninstall            # 또는: sudo ./install.sh --uninstall
+pgrep -x firecracker || echo none          # UN1
+pgrep -x firecrab-api || echo none
+systemctl list-units --all --plain --no-legend 'firecrab-*' | grep . || echo none
+ls /usr/local/lib/firecrab 2>&1 | head -1  # UN2: No such file or directory
+ip -br link | grep -E '^(mnb|fct|fcbr)' || echo none                        # UN3
+sudo iptables -t nat -S POSTROUTING | grep MASQUERADE || echo none
+sudo ufw status numbered | grep -E 'mnb[0-9a-f]{12}' || echo none          # UN4
+getfacl -p /dev/kvm; sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding # UN5
+```
 
 ## 정리 및 CI 범위
 

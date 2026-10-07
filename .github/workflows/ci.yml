@@ -580,13 +580,38 @@ jobs:
 
       - name: Uninstall keeps data, purge removes it
         run: |
+          # A MicroVM unit still running at uninstall time has to go with it. The
+          # uninstaller goes by the unit name alone, so a sleep stands in for a VM.
+          vm_unit=firecrab-vm-00000000000000000000000000000001.service
+          sudo systemd-run --unit="$vm_unit" --collect --quiet sleep 600
+          systemctl is-active --quiet "$vm_unit"
           sudo ./install.sh --uninstall
           if systemctl is-active --quiet firecrab-api; then
             echo 'FAILED: firecrab-api is still active after uninstall'
             exit 1
           fi
+          if systemctl is-active --quiet "$vm_unit"; then
+            echo 'FAILED: a MicroVM unit is still running after uninstall'
+            exit 1
+          fi
           test ! -e /etc/systemd/system/firecrab-api.service
           test ! -e /usr/local/bin/firecrab
+          # The whole library directory goes, kernel extract scripts included.
+          test ! -e /usr/local/lib/firecrab
+          # The MicroNetwork created above leaves no device or NAT rule behind.
+          # Captured first: under `pipefail`, `grep -q` ending the pipe early can
+          # turn a match into a failed condition.
+          links=$(ip -br link)
+          if grep -Eq '^(mnb|fct|fcbr)' <<<"$links"; then
+            echo 'FAILED: a firecrab network device survived the uninstall'
+            exit 1
+          fi
+          nat=$(sudo iptables -t nat -S POSTROUTING)
+          if grep -Eq -- '-s 172\.31\.0\.0/24 .*MASQUERADE' <<<"$nat"; then
+            echo 'FAILED: the MicroNetwork NAT rule survived the uninstall'
+            exit 1
+          fi
+          test ! -e /etc/firecrab/host-baseline.env
           test -d /var/lib/firecrab
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab

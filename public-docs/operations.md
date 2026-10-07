@@ -100,6 +100,19 @@ Both paths preserve VM data and `api.env`.
 
 Check both services and run the doctor after an upgrade.
 
+## Uninstall
+
+`./install.sh --uninstall` and `firecrab service uninstall` do the same on a Linux host, in this order:
+
+1. Stop every running MicroVM (`firecrab-vm-*` unit). A VM's unit outlives the API on purpose, so nothing else would stop it.
+2. Stop and remove the services, then run the helper's teardown: bridges, TAP devices, nftables tables, iptables forward and NAT rules, and UFW rules that firecrab created.
+3. Remove the binaries, the kernel extract scripts, the dashboard, and the license files; the library directory goes with them.
+4. Put back what the installer recorded in `/etc/firecrab/host-baseline.env`: the `/dev/kvm` ACL it added, and IPv4/IPv6 forwarding on a host that had it off. Forwarding stays on, with a note, while another bridge or container network exists.
+
+Left alone on purpose: Firecracker, the `firecrab` account and group (and its `kvm` membership), and, without `--purge`, `/etc/firecrab` and `/var/lib/firecrab`.
+A host installed before the record existed has none to restore, so it keeps the ACL and forwarding as they are until a reboot.
+The checks are [UN1–UN7](TEST.md#uninstall).
+
 ## CI boot check
 
 The scheduled workflow boots each supported image on KVM hosts.

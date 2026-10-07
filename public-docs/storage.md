@@ -148,7 +148,7 @@ Only that VM's `d/` and `r/` artifact directories move to the selected storage r
 ## Upgrade, uninstall, and backup
 
 A normal `./install.sh` upgrade preserves the SQLite database, VM artifacts, installed images, and `api.env`.
-`./install.sh --uninstall` also preserves those files.
+`./install.sh --uninstall` also preserves those files, after stopping every running VM.
 `./install.sh --uninstall --purge` removes the configured data directory and therefore deletes the database and default-root VM disks.
 
 Stop `firecrab-api` before taking an offline backup.
