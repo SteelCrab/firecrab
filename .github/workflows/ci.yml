@@ -425,9 +425,9 @@ jobs:
       - name: Doctor after install
         # Runtime host path must be clean. Run from the unit WorkingDirectory
         # so the checkout's data/firecrab.db is not counted as a second DB.
-        # Images are intentionally absent (install.sh never fetches one), so
-        # the only acceptable FAIL is the images check. sudo so nft/ufw are
-        # not SKIP'd.
+        # Images are intentionally absent (install.sh never fetches one), which
+        # doctor reports as a SKIP and not a failure. sudo so nft/ufw are not
+        # SKIP'd.
         run: |
           set +e
           out=$(sudo env DATADIR=/var/lib/firecrab \
@@ -435,19 +435,15 @@ jobs:
           code=$?
           set -e
           printf '%s\n' "$out"
-          if [ "$code" -eq 0 ]; then
-            echo "$out" | grep -q 'all checks passed'
-            exit 0
-          fi
-          unexpected=$(printf '%s\n' "$out" | grep '^\[FAIL\]' | grep -v '^\[FAIL\] images:' || true)
-          if [ -n "$unexpected" ]; then
-            echo "doctor reported unexpected failures:"
-            printf '%s\n' "$unexpected"
+          # Nothing may fail ...
+          if printf '%s\n' "$out" | grep -q '^\[FAIL\]'; then
+            echo "doctor reported failures:"
+            printf '%s\n' "$out" | grep '^\[FAIL\]'
             exit 1
           fi
-          # At least one image FAIL, and nothing else.
-          printf '%s\n' "$out" | grep -q '^\[FAIL\] images:'
-          test "$code" -eq 1
+          test "$code" -eq 0
+          # ... and a host with no guest image says so, so the hint is not lost.
+          printf '%s\n' "$out" | grep -q '^\[SKIP\] images: no guest image installed yet'
 
       - name: QA work list (API, no guest boot)
         # Shared QA IDs from public-docs/qa.md: see scripts/ci-qa-api.sh.

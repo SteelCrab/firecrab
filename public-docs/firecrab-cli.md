@@ -76,7 +76,7 @@ Runs 13 checks in a fixed order and prints one summary line, then a `[FAIL]`/`[S
 | `helper_socket` | the net-helper socket exists and the API account can reach it |
 | `ufw` | UFW, if active, allows DHCP, DNS, and forwarding on every firecrab bridge |
 | `data_root` | exactly one `firecrab.db` is reachable from `DATADIR` or the working directory |
-| `images` | the default template artifacts exist under an image root |
+| `images` | an image root holds a guest image: a built-in template or an imported rootfs. None yet is a SKIP, since an install fetches none |
 | `image_install_tools` | `tar` and `zstd` are installed for dashboard template installs |
 | `selinux_domain` | no firecrab service is confined to systemd's own `init_t` domain |
 | `registry_egress` | the API account can reach the image registry |
