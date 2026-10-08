@@ -89,20 +89,18 @@ npm run dev --prefix firecrab-frontend
 - Terminal Network group: ipv4, ipv6 (`—` when the network is IPv4-only), mac, egress, network id
 - List poll: 3 seconds
 - Detail header: `NAME`, full `ID`, and `VM-STATUS`; start progress and logs below.
-- The list's State cell has two bold text labels: VM for lifecycle state, API for
-  Firecrab API's latest VM reconciliation result. Green means running/reconnected,
-  amber means starting/stopping or a reconciliation warning, red means an error,
-  and gray means inactive or no result. Hover or keyboard focus opens a visible
-  information tooltip: VM includes its name, UUID, lifecycle state, and description;
-  API includes Firecrab API's service name, result, check time, and diagnostics.
-  Tooltips stay open while hovered, fit the viewport, and dismiss with Escape.
-  Reconciliation results are reconnected, VM not found, connection mismatch,
-  network recovery failed, startup interrupted, or exited while the API was offline.
-  Detail's `API-STATUS` section identifies Firecrab API (`firecrab-api`), then
-  shows the result, information, diagnostics, and check time in English or Korean.
+- The list's State cell has one bold text label, VM, for lifecycle state. Green means
+  running, amber means starting/stopping, red means an error, and gray means inactive.
+  Hover or keyboard focus opens a visible information tooltip with the VM's name, UUID,
+  lifecycle state, and description. Tooltips stay open while hovered, fit the viewport,
+  and dismiss with Escape.
+  Detail's `API-STATUS` section appears when Firecrab API (`firecrab-api`) recorded a VM
+  reconciliation result: reconnected, VM not found, connection mismatch, network recovery
+  failed, startup interrupted, or exited while the API was offline. It shows the result,
+  information, diagnostics, and check time in English or Korean.
   Dates use `YYYY-MM-DD HH:mm:ss` with the viewer's UTC offset.
   This is the latest startup or explicit network retry snapshot, not live health; an accepted new VM start
-  clears the old result. VMs not checked at startup or by a network retry have no result.
+  clears the old result. VMs not checked at startup or by a network retry have no result and no section.
 - While `running`, list / detail / terminal show guest OS CPU percent and memory used (MemTotal − MemAvailable) when the Firecrab Metrics Agent is in the guest (systemd on Ubuntu/Rocky, OpenRC on Alpine)
 - Detail and terminal: sparklines from recent samples
 - Agent missing: values stay `null`, start still succeeds

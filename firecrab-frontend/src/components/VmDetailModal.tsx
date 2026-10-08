@@ -363,7 +363,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
             {vm.reconciliation && (
               <section className="vm-api-status" aria-label="API-STATUS">
                 <h3>API-STATUS</h3>
-                <ReconciliationStatus result={vm.reconciliation} details />
+                <ReconciliationStatus result={vm.reconciliation} />
               </section>
             )}
             <dl className="detail-fields mono">

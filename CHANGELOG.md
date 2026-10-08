@@ -27,7 +27,8 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
-- None.
+- The dashboard's VM list shows only a VM's own state: the API label next to it
+  is gone, and the API's reconciliation result for a VM stays in its detail view.
 
 ### Deprecated
 
