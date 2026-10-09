@@ -60,8 +60,8 @@ struct VMOptions: Equatable, Sendable {
             initialRamdiskURL: systemDirectory.appendingPathComponent("initrd.img"),
             osDiskURL: systemDirectory.appendingPathComponent("debian-system.raw"),
             dataDiskURL: dataDirectory.appendingPathComponent("firecrab-data.raw"),
-            cpuCount: 2,
-            memorySizeMiB: 4096,
+            cpuCount: environment["FIRECRAB_MICROMANAGER_CPU"].map { Int($0) ?? 0 } ?? 2,
+            memorySizeMiB: environment["FIRECRAB_MICROMANAGER_MEMORY_MIB"].map { UInt64($0) ?? 0 } ?? 4096,
             commandLine: commandLine(managedHomeURL: managedHomeURL)
         )
     }

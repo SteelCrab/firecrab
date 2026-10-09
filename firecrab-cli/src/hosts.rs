@@ -85,6 +85,10 @@ pub struct SelectedHost {
 /// Configuration and host-selection failures.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// An activated local microManager has an invalid endpoint marker.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[error("invalid local microManager configuration: {0}")]
+    LocalConfiguration(String),
     /// No supported home-directory variable is available.
     #[error("cannot locate the user home directory; set HOME, USERPROFILE, or FIRECRAB_CONFIG_DIR")]
     NoHomeDirectory,
@@ -494,10 +498,13 @@ fn selection_for_show_at(
             url: normalize_url(&environment)?,
         });
     }
-    Ok(selected_at(path, global_host)?.unwrap_or(SelectedHost {
-        name: None,
-        url: crate::api_client::DEFAULT_API_BASE.to_owned(),
-    }))
+    match selected_at(path, global_host)? {
+        Some(host) => Ok(host),
+        None => Ok(SelectedHost {
+            name: None,
+            url: crate::api_client::default_api_base()?,
+        }),
+    }
 }
 
 /// Resolves `host show` without requiring a config directory for direct endpoints.
@@ -527,7 +534,7 @@ fn selection_for_show(
         Ok(path) => selection_for_show_at(&path, None, None, global_host),
         Err(Error::NoHomeDirectory) if global_host.is_none() => Ok(SelectedHost {
             name: None,
-            url: crate::api_client::DEFAULT_API_BASE.to_owned(),
+            url: crate::api_client::default_api_base()?,
         }),
         Err(error) => Err(error),
     }

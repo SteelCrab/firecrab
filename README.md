@@ -185,6 +185,8 @@ firecrab service stop
 
 When healthy, open `http://127.0.0.1:5523/`. Create a MicroNetwork, choose an installed image, create and start a VM, then open Terminal after `running`. For a remote host, configure a [CLI host profile](public-docs/firecrab-cli.md#host-profiles).
 
+On Windows and macOS, `firecrab service settings` opens the microManager settings editor. Enable Sleepy to shut down an idle management VM and wake it automatically for work requests. After the first save, run `firecrab service start` to activate the resident controller. See [settings and Sleepy](public-docs/micromanager-settings.md) for resource limits and activation requirements.
+
 </details>
 
 ## Run from source

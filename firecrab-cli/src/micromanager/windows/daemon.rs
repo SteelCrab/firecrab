@@ -84,7 +84,16 @@ pub fn install(layout: &Layout) -> Result<PathBuf, Error> {
 }
 
 fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
-    let definition = layout.runtime().join("microManager-task.xml");
+    register_named(layout, TASK_NAME, "microManager-task.xml", task)
+}
+
+pub fn register_named(
+    layout: &Layout,
+    name: &str,
+    filename: &str,
+    task: &str,
+) -> Result<PathBuf, Error> {
+    let definition = layout.runtime().join(filename);
     fs::write(&definition, utf16_with_bom(task)).map_err(|source| Error::Io {
         action: "write the scheduled task definition",
         path: definition.clone(),
@@ -93,12 +102,27 @@ fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
     schtasks(&[
         "/Create",
         "/TN",
-        TASK_NAME,
+        name,
         "/XML",
         &definition.to_string_lossy(),
         "/F",
     ])?;
     Ok(definition)
+}
+
+/// The controller owns all automatic starts. The guest holder has no triggers.
+pub fn install_controlled(layout: &Layout) -> Result<(), Error> {
+    let user = user_id(
+        std::env::var("USERNAME").ok(),
+        std::env::var("USERDOMAIN").ok(),
+    )?;
+    let launcher = launcher_in(std::env::var_os("ProgramFiles").map(PathBuf::from));
+    let task = render_task(&user, &launcher);
+    let start = task.find("  <Triggers>").expect("triggers");
+    let end = task.find("  </Triggers>").expect("triggers") + "  </Triggers>".len();
+    let task = format!("{}  <Triggers />{}", &task[..start], &task[end..]);
+    register(layout, &task)?;
+    Ok(())
 }
 
 pub fn uninstall(layout: &Layout) -> Result<(), Error> {
@@ -276,10 +300,18 @@ fn parse_units(text: &str) -> (bool, Option<String>) {
 }
 
 fn api_reachable() -> bool {
+    let controlled = Layout::from_process_env()
+        .ok()
+        .is_some_and(|layout| layout.runtime().join("controlled").is_file());
+    let url = if controlled {
+        "http://127.0.0.1:5524/api/host"
+    } else {
+        API_URL
+    };
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
-        .and_then(|client| client.get(API_URL).send())
+        .and_then(|client| client.get(url).send())
         .is_ok_and(|response| response.status().is_success())
 }
 

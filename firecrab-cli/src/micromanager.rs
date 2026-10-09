@@ -3,12 +3,17 @@
 //! Each host has its own backend module; everything they share lives beside them.
 
 mod artifact;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod controller;
 mod debug;
 mod dev;
 mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
 mod managed_home;
+mod settings;
+mod settings_tui;
+mod sleepy;
 // Everything but the `wsl.exe` and `schtasks.exe` calls is plain Rust, so the
 // Windows backend also builds and runs its tests on the Linux CI runner.
 #[cfg(any(target_os = "windows", test))]
@@ -24,6 +29,18 @@ use clap::Subcommand;
 pub use macos::run;
 #[cfg(target_os = "windows")]
 pub use windows::run;
+
+/// Use the activated controller port, preserving the old port until settings
+/// are applied. Explicit API flags and saved remote hosts take precedence.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub fn local_api_base() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    let home = windows::lifecycle::Layout::from_process_env().map(|layout| layout.managed_home);
+    #[cfg(target_os = "macos")]
+    let home = macos::lifecycle::Layout::from_process_env().map(|layout| layout.managed_home);
+    let Ok(home) = home else { return Ok(None) };
+    controller::local_api_base(&home).map_err(|error| error.to_string())
+}
 
 /// `println!` panics if the write returns an error, and on some terminal
 /// multiplexers a burst of output (a progress bar redraw, then this line)
@@ -102,6 +119,21 @@ pub enum Command {
     },
     /// Show and validate the managed Debian VM configuration.
     Validate,
+    /// Edit microManager settings in a terminal (no workload management).
+    Settings {
+        /// Print saved settings without starting the management VM.
+        #[arg(long, conflicts_with = "set")]
+        json: bool,
+        /// Save one or more settings, e.g. --set sleepy=true --set idle_minutes=10.
+        #[arg(long, value_name = "KEY=VALUE")]
+        set: Vec<String>,
+    },
+    /// Host-side API proxy; launched by the resident controller service.
+    #[command(hide = true)]
+    Controller {
+        #[arg(long)]
+        home: std::path::PathBuf,
+    },
     /// Diagnose the managed VM without changing its state.
     Debug {
         /// Emit a machine-readable diagnostic report.

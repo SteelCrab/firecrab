@@ -53,6 +53,11 @@ jobs:
       - name: cargo test -p firecrab-cli
         run: cargo test -p firecrab-cli --locked
 
+      - name: microManager settings terminal interaction
+        run: |
+          test_binary=$(cargo test -p firecrab-cli --no-run --message-format=json | python3 -c 'import json,sys; entries=[json.loads(line) for line in sys.stdin]; print(next(item["executable"] for item in entries if item.get("reason") == "compiler-artifact" and item.get("profile", {}).get("test") and item.get("target", {}).get("name") == "firecrab" and item.get("executable")))')
+          python3 scripts/test-micromanager-settings.py --test-binary "$test_binary"
+
       - name: Shared source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
 
