@@ -239,6 +239,14 @@ Success requires launchd readiness, the local API, and a live SSH check of the
 guest API and network helper. Failed checks return a nonzero exit code and point
 to `service debug --logs`.
 
+When `start`, `stop`, or `dev` encounters a launchd, VM-readiness, SSH, or localhost
+API failure, the CLI suggests `firecrab service repair`, then retrying the command.
+Unhealthy `status` and `debug` reports include this advice when the installation
+is complete. `debug --json` keeps advice inside its JSON fields. New installations
+still get `install` guidance; missing assets and incomplete provisioning need
+their own recovery. Checkout/compiler errors do not suggest repair. The CLI
+does not run repair automatically, and a failed repair points to diagnostics.
+
 The command downloads nothing and keeps the installed binaries, OS/data disks,
 provisioning assets, SSH key, known host keys, and guest development overrides.
 Restarting the management VM stops running MicroVMs. `start` uses the existing

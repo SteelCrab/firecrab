@@ -17,6 +17,8 @@ use super::{Command, debug, report};
 
 const HELPER_NAME: &str = "firecrab-micromanager-macos";
 const HELPER_ENV: &str = "FIRECRAB_MICROMANAGER_HELPER";
+const REPAIR_HINT: &str = "Recovery: run `firecrab service repair`, then retry the command.";
+const INSTALL_HINT: &str = "Recovery: run `firecrab service install`.";
 /// The guest powers itself off once its script ends. A shutdown that hangs
 /// must not hang `install` with it: once the guest reports it is done, the
 /// helper gets this long to see the VM stop, then is asked, then made, to.
@@ -68,6 +70,37 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+}
+
+impl Error {
+    /// Keep service recovery advice separate from installation and source errors.
+    pub fn recovery_hint(&self) -> Option<&'static str> {
+        match self {
+            Self::Daemon(daemon::Error::NotInstalled(_)) => {
+                let installed = lifecycle::Layout::from_process_env()
+                    .is_ok_and(|layout| repair::validate(&layout).is_ok());
+                Some(if installed { REPAIR_HINT } else { INSTALL_HINT })
+            }
+            Self::Daemon(
+                daemon::Error::Launchctl { .. }
+                | daemon::Error::ReadyTimeout(_)
+                | daemon::Error::StopTimeout(_)
+                | daemon::Error::InvalidMarker(_)
+                | daemon::Error::Io {
+                    action:
+                        "read daemon marker" | "query launchd service" | "query stopped launchd service",
+                    ..
+                },
+            )
+            | Self::Dev(
+                dev::Error::GuestNotReady
+                | dev::Error::GuestSshUnavailable { .. }
+                | dev::Error::GuestSshInterrupted(_)
+                | dev::Error::LocalApiUnavailable,
+            ) => Some(REPAIR_HINT),
+            _ => None,
+        }
+    }
 }
 
 pub fn run(command: Command) -> Result<i32, Error> {
@@ -175,14 +208,14 @@ fn run_start() -> Result<i32, Error> {
         provision::require_guest_provisioned(&layout.managed_home)?;
     }
     let status = daemon::start(&layout)?;
-    print_daemon_status(&status);
+    print_daemon_status(&status, &layout);
     Ok(i32::from(!status.success()))
 }
 
 fn run_repair() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
     let status = repair::run(&layout)?;
-    print_daemon_status(&status);
+    print_daemon_status(&status, &layout);
     report!("[PASS] management SSH and guest services: ready");
     report!("microManager repaired (installed binaries and managed disks preserved)");
     Ok(0)
@@ -243,13 +276,14 @@ fn run_stop() -> Result<i32, Error> {
 fn run_status() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
     let status = daemon::status(&layout)?;
-    print_daemon_status(&status);
+    print_daemon_status(&status, &layout);
     print_log_paths(&layout);
     Ok(i32::from(!status.success()))
 }
 
 fn run_debug(options: debug::Options) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
+    let repair_available = repair::validate(&layout).is_ok();
     let mut report = debug::DebugReport::new(
         "macos",
         &layout.managed_home,
@@ -266,9 +300,14 @@ fn run_debug(options: debug::Options) -> Result<i32, Error> {
             let installed = daemon::paths(&layout)
                 .is_ok_and(|paths| paths.plist.is_file() && paths.wrapper.is_file());
             report.service = if !installed {
-                debug::Probe::fail(
-                    "managed launchd files are missing; run `firecrab service install`",
-                )
+                debug::Probe::fail(format!(
+                    "managed launchd files are missing; {}",
+                    if repair_available {
+                        REPAIR_HINT
+                    } else {
+                        INSTALL_HINT
+                    }
+                ))
             } else if status.loaded {
                 debug::Probe::pass("launchd agent loaded")
             } else {
@@ -319,6 +358,14 @@ fn run_debug(options: debug::Options) -> Result<i32, Error> {
             report.service = debug::Probe::unavailable(error.to_string());
             report.guest = debug::Probe::unavailable("service status unavailable");
             report.api = debug::Probe::unavailable("service status unavailable");
+        }
+    }
+    if repair_available {
+        for probe in [&mut report.service, &mut report.guest, &mut report.api] {
+            if probe.state != "pass" && !probe.detail.contains(REPAIR_HINT) {
+                probe.detail.push_str("; ");
+                probe.detail.push_str(REPAIR_HINT);
+            }
         }
     }
     if let Err(error) = provision::require_guest_provisioned(&layout.managed_home) {
@@ -390,7 +437,11 @@ fn run_shell(command: &[String]) -> Result<i32, Error> {
         .args(shell_arguments(&runtime, ip, command, tty))
         .status()
         .map_err(Error::ShellSsh)?;
-    Ok(status.code().unwrap_or(1))
+    let code = status.code().unwrap_or(1);
+    if code == 255 {
+        eprintln!("{REPAIR_HINT}");
+    }
+    Ok(code)
 }
 
 /// `ssh` arguments for [`run_shell`]. ssh joins everything after the host
@@ -507,7 +558,7 @@ fn print_log_paths(layout: &lifecycle::Layout) {
     );
 }
 
-fn print_daemon_status(status: &daemon::Status) {
+fn print_daemon_status(status: &daemon::Status, layout: &lifecycle::Layout) {
     report!(
         "[{}] launchd: {}",
         if status.loaded { "PASS" } else { "FAILED" },
@@ -541,6 +592,9 @@ fn print_daemon_status(status: &daemon::Status) {
             "unreachable"
         }
     );
+    if !status.success() && repair::validate(layout).is_ok() {
+        report!("{REPAIR_HINT}");
+    }
 }
 
 fn ensure_guest_provisioned(
@@ -754,6 +808,43 @@ mod tests {
     use super::*;
     use clap::Parser;
 
+    #[test]
+    fn service_runtime_failures_recommend_repair() {
+        for error in [
+            Error::Daemon(daemon::Error::ReadyTimeout(180)),
+            Error::Daemon(daemon::Error::StopTimeout(40)),
+            Error::Daemon(daemon::Error::Launchctl {
+                action: "bootstrap",
+                detail: "Input/output error".to_string(),
+            }),
+            Error::Daemon(daemon::Error::InvalidMarker("missing IP".to_string())),
+            Error::Dev(dev::Error::GuestNotReady),
+            Error::Dev(dev::Error::GuestSshUnavailable {
+                ip: "192.0.2.7".parse().unwrap(),
+                detail: "kex_exchange_identification: read: Connection reset by peer".to_string(),
+            }),
+            Error::Dev(dev::Error::GuestSshInterrupted("source upload")),
+            Error::Dev(dev::Error::LocalApiUnavailable),
+        ] {
+            assert_eq!(error.recovery_hint(), Some(REPAIR_HINT), "{error}");
+        }
+    }
+
+    #[test]
+    fn source_provisioning_and_repair_failures_keep_their_own_guidance() {
+        for error in [
+            Error::Dev(dev::Error::Checkout {
+                path: PathBuf::from("/missing"),
+                detail: "not a checkout".to_string(),
+            }),
+            Error::Dev(dev::Error::Command("guest development build/deployment")),
+            Error::Provision(provision::Error::GuestProvision("incomplete".to_string())),
+            Error::ShellCredentials(PathBuf::from("/missing")),
+            Error::Repair(repair::Error::Unhealthy("SSH unavailable".to_string())),
+        ] {
+            assert_eq!(error.recovery_hint(), None, "{error}");
+        }
+    }
     fn shell_ip() -> std::net::IpAddr {
         "192.0.2.7".parse().unwrap()
     }

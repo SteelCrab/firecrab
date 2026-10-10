@@ -27,6 +27,8 @@ Entries land here as work merges, and move under the next version heading when t
   restarts the existing management VM without downloading or reinstalling assets.
   It preserves installed binaries, managed disks, and SSH credentials, and checks
   the local API and live guest services before reporting success.
+  Service startup, SSH, and API failures suggest the repair command; unhealthy
+  status and debug reports include the same recovery advice.
 
 ### Changed
 

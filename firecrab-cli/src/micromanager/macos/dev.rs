@@ -76,7 +76,11 @@ fn run_ssh(
         .status()
         .map_err(|source| io_error(action, source))?;
     if !status.success() {
-        return Err(Error::Command(action));
+        return Err(if status.code() == Some(255) {
+            Error::GuestSshInterrupted(action)
+        } else {
+            Error::Command(action)
+        });
     }
     Ok(())
 }

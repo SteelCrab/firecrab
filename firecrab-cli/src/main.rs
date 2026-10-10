@@ -150,6 +150,10 @@ fn run(cli: Cli) -> i32 {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("{error}");
+                #[cfg(target_os = "macos")]
+                if let Some(hint) = error.recovery_hint() {
+                    eprintln!("{hint}");
+                }
                 1
             }
         },

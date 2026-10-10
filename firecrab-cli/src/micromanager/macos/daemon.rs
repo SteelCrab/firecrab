@@ -61,7 +61,7 @@ pub enum Error {
     StopTimeout(u64),
     #[error("invalid manager-ready marker: {0}")]
     InvalidMarker(String),
-    #[error("microManager is not installed ({0} is missing); run `firecrab service install`")]
+    #[error("microManager service registration is missing ({0})")]
     NotInstalled(PathBuf),
 }
 
@@ -800,11 +800,6 @@ mod tests {
             panic!("a missing plist must be reported");
         };
         assert_eq!(missing, paths.plist);
-        assert!(
-            Error::NotInstalled(missing)
-                .to_string()
-                .contains("run `firecrab service install`")
-        );
 
         fs::write(&paths.plist, b"plist").unwrap();
         fs::write(&paths.wrapper, b"wrapper").unwrap();

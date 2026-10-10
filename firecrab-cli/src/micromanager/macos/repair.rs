@@ -43,7 +43,7 @@ pub fn run(layout: &Layout) -> Result<daemon::Status, Error> {
 }
 
 /// Reject an incomplete installation before stopping a currently running service.
-fn validate(layout: &Layout) -> Result<(), Error> {
+pub(super) fn validate(layout: &Layout) -> Result<(), Error> {
     managed_home::reject_symlink_components(&layout.managed_home)?;
     for path in [
         layout.cli_path(),

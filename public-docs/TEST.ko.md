@@ -143,6 +143,7 @@ A17 필수 도구: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G6g — Windows:** 없는 명령은 오류를 내며 실패하고 후속 셸은 정상 실행된다.
 - [ ] **G6h — Windows:** 셸 종료 후 API/helper가 active이고 호스트 API가 응답한다.
 - [ ] **G7 — macOS 복구:** `service repair`는 다운로드 없이 서비스와 localhost API를 복구한다. 설치 바이너리, 디스크, SSH 키, 개발 실행 설정을 보존한다. 없거나 손상된 데몬 스크립트와 launchd plist도 복구한다. 필수 설치 파일이 없으면 서비스를 멈추기 전에 실패한다. SSH, 게스트 서비스, API가 정상 상태가 아니면 0이 아닌 종료 코드를 반환한다.
+- [ ] **G7a — macOS 복구 안내:** 서비스 실행 오류는 `firecrab service repair`를 제안한다. 복구를 자동 실행하지 않는다. 설치가 완료됐는데 서비스 등록 파일이 없으면 repair를 안내한다. 새 호스트에는 install을 안내한다. 소스·컴파일 오류는 기존 오류를 유지한다. `debug --json`은 JSON 형식을 유지하고 필드 안에 복구 안내를 넣는다.
 - [ ] **H1 — 업데이트 상태:** 읽기 전용 상태 확인 성공.
 - [ ] **H2 — 호스트 네트워크:** uplink가 있으며 loopback·내부 helper 인터페이스는 선택 목록에 없다.
 - [ ] **U1 — 업데이트 적용(별도 선택 실행):** 적용 후 호스트가 복구되고 API가 200을 반환한다.
