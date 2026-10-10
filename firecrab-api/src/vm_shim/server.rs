@@ -1025,8 +1025,10 @@ threading.Thread(target=_burst, daemon=True).start()
         write_request(&mut client, &ShimRequest::Terminate)
             .await
             .unwrap();
+        let reported = exited(&mut client).await;
         let (_directory, exit) = finish_exit(running).await;
 
+        assert_eq!(reported, exit.status);
         assert!(exit.stop_requested);
         assert!(recorded_stop_request(&runtime));
     }
