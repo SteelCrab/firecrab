@@ -44,6 +44,9 @@ pub enum Error {
         "management VM SSH at {ip} is not ready: {detail}; inspect `firecrab service debug --logs` before retrying (source upload was not attempted)"
     )]
     GuestSshUnavailable { ip: IpAddr, detail: String },
+    #[cfg(target_os = "macos")]
+    #[error("management SSH failed during {0}; inspect `firecrab service debug --logs`")]
+    GuestSshInterrupted(&'static str),
     #[error(
         "guest services are ready but the localhost API is unavailable; inspect `firecrab service debug --logs`"
     )]

@@ -21,7 +21,7 @@
 use std::fs;
 use std::process::Stdio;
 
-use firecrab_helper_protocol::network::MicroNetworkSpec;
+use firecrab_helper_protocol::network::{MICRO_NETWORK_BRIDGE_PREFIX, MicroNetworkSpec};
 use tokio::process::Command;
 
 /// Which userspace frontend owns policy, if any.
@@ -119,6 +119,9 @@ pub async fn remove_bridge(bridge: &str) {
             ],
         )
         .await;
+        // The route rule names the uplink too, so it cannot be deleted from
+        // the bridge name alone; find it in the numbered listing instead.
+        delete_ufw_rules_on(|interface| interface == bridge).await;
     }
     if firewalld_is_running().await {
         let _ = run_tool(
@@ -137,6 +140,56 @@ pub async fn remove_bridge(bridge: &str) {
         )
         .await;
     }
+}
+
+/// Drops every UFW rule that still names a Firecrab bridge, including those of
+/// bridges that no longer exist (a route rule outlives its network when the
+/// network was deleted while UFW could not be written to). Run by `--teardown`.
+pub async fn remove_stale_ufw_rules() {
+    if ufw_is_enabled() {
+        delete_ufw_rules_on(is_firecrab_bridge).await;
+    }
+}
+
+/// The default bridge, or a MicroNetwork bridge (`mnb` + 12 hex digits).
+fn is_firecrab_bridge(name: &str) -> bool {
+    name == crate::bridge::BRIDGE_NAME
+        || name
+            .strip_prefix(MICRO_NETWORK_BRIDGE_PREFIX)
+            .is_some_and(|hex| hex.len() == 12 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
+/// Deletes every numbered UFW rule that names an interface `wanted` accepts.
+async fn delete_ufw_rules_on(wanted: impl Fn(&str) -> bool) {
+    // `ufw status` is translated, so ask for the C locale; the rule text we
+    // match is an interface name, which is not translated either way.
+    let Some(listing) = output_tool_env("ufw", &["status", "numbered"], &[("LC_ALL", "C")]).await
+    else {
+        return;
+    };
+    for number in ufw_rules_on(&listing, wanted) {
+        let _ = run_tool("ufw", &["--force", "delete", &number.to_string()]).await;
+    }
+}
+
+/// Numbers of the rules in a `ufw status numbered` listing that apply `on
+/// <interface>` for an interface `wanted` accepts, highest first: deleting a
+/// rule renumbers every rule after it, so the lower numbers stay valid.
+fn ufw_rules_on(listing: &str, wanted: impl Fn(&str) -> bool) -> Vec<u32> {
+    let mut numbers: Vec<u32> = listing
+        .lines()
+        .filter_map(|line| {
+            let (number, rule) = line.trim_start().strip_prefix('[')?.split_once(']')?;
+            let number: u32 = number.trim().parse().ok()?;
+            let words: Vec<&str> = rule.split_whitespace().collect();
+            words
+                .windows(2)
+                .any(|pair| pair[0] == "on" && wanted(pair[1]))
+                .then_some(number)
+        })
+        .collect();
+    numbers.sort_unstable_by(|a, b| b.cmp(a));
+    numbers
 }
 
 fn ufw_is_enabled() -> bool {
@@ -461,9 +514,14 @@ async fn run_tool(bin: &str, args: &[&str]) -> bool {
 }
 
 async fn output_tool(bin: &str, args: &[&str]) -> Option<String> {
+    output_tool_env(bin, args, &[]).await
+}
+
+async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Option<String> {
     for path in tool_search_order(bin) {
         let Ok(output) = Command::new(&path)
             .args(args)
+            .envs(envs.iter().copied())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output()
@@ -484,6 +542,56 @@ async fn output_tool(bin: &str, args: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const UFW_LISTING: &str = "Status: active\n\n\
+         \x20    To                         Action      From\n\
+         \x20    --                         ------      ----\n\
+        [ 1] 22/tcp                     ALLOW IN    Anywhere\n\
+        [ 2] 67/udp on mnb0f8450ea2318  ALLOW IN    Anywhere\n\
+        [ 3] 53 on mnb0f8450ea2318      ALLOW IN    Anywhere\n\
+        [ 4] Anywhere on eth0           ALLOW FWD   Anywhere on mnb0f8450ea2318\n\
+        [ 5] 53 (v6) on mnb0f8450ea2318 ALLOW IN    Anywhere (v6)\n\
+        [ 6] Anywhere on eth0           ALLOW FWD   Anywhere on mnb34a9c59a5f1b\n\
+        [ 7] 80/tcp                     ALLOW IN    Anywhere\n\
+        [10] Anywhere on docker0        ALLOW FWD   Anywhere on eth0\n";
+
+    #[test]
+    fn ufw_rules_naming_a_bridge_are_found_highest_number_first() {
+        // The allow rules, their IPv6 twin, and the route rule that carries the uplink.
+        assert_eq!(
+            ufw_rules_on(UFW_LISTING, |name| name == "mnb0f8450ea2318"),
+            vec![5, 4, 3, 2]
+        );
+    }
+
+    #[test]
+    fn ufw_rules_of_other_interfaces_and_ports_are_left_alone() {
+        let found = ufw_rules_on(UFW_LISTING, is_firecrab_bridge);
+        assert_eq!(found, vec![6, 5, 4, 3, 2]);
+        // 1 and 7 name no interface; 10 is Docker's.
+        assert!(![1, 7, 10].iter().any(|number| found.contains(number)));
+        assert!(ufw_rules_on("Status: inactive\n", is_firecrab_bridge).is_empty());
+        assert!(ufw_rules_on("", is_firecrab_bridge).is_empty());
+    }
+
+    #[test]
+    fn only_firecrab_bridge_names_count_as_firecrab_bridges() {
+        assert!(is_firecrab_bridge("fcbr0"));
+        assert!(is_firecrab_bridge("mnb0f8450ea2318"));
+        // Not ours: too short, too long, not hex, another prefix, a TAP.
+        for name in [
+            "mnb",
+            "mnb0f8450ea231",
+            "mnb0f8450ea23188",
+            "mnbzzzzzzzzzzzz",
+            "br-0f8450ea2318",
+            "fct0f8450ea2318",
+            "eth0",
+            "docker0",
+        ] {
+            assert!(!is_firecrab_bridge(name), "{name}");
+        }
+    }
 
     #[test]
     fn ufw_conf_is_enabled_reads_the_enabled_line() {

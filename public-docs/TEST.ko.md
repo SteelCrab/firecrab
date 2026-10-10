@@ -27,6 +27,7 @@ API 기본 주소:  http://127.0.0.1:5523
 - [nginx 통합 시나리오](#nginx-통합-시나리오)
 - [CLI](#cli)
 - [브라우저 E2E](#브라우저-e2e-playwright의-모든-케이스)
+- [제거](#제거)
 - [정리 및 CI 범위](#정리-및-ci-범위)
 
 ## 자동 점검 및 준비
@@ -141,6 +142,8 @@ A17 필수 도구: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G6f — Windows:** 명령 stdin의 한글과 줄이 유지되고 EOF로 명령이 종료된다.
 - [ ] **G6g — Windows:** 없는 명령은 오류를 내며 실패하고 후속 셸은 정상 실행된다.
 - [ ] **G6h — Windows:** 셸 종료 후 API/helper가 active이고 호스트 API가 응답한다.
+- [ ] **G7 — macOS 복구:** `service repair`는 다운로드 없이 서비스와 localhost API를 복구한다. 설치 바이너리, 디스크, SSH 키, 개발 실행 설정을 보존한다. 없거나 손상된 데몬 스크립트와 launchd plist도 복구한다. 필수 설치 파일이 없으면 서비스를 멈추기 전에 실패한다. SSH, 게스트 서비스, API가 정상 상태가 아니면 0이 아닌 종료 코드를 반환한다.
+- [ ] **G7a — macOS 복구 안내:** 서비스 실행 오류는 `firecrab service repair`를 제안한다. 복구를 자동 실행하지 않는다. 설치가 완료됐는데 서비스 등록 파일이 없으면 repair를 안내한다. 새 호스트에는 install을 안내한다. 소스·컴파일 오류는 기존 오류를 유지한다. `debug --json`은 JSON 형식을 유지하고 필드 안에 복구 안내를 넣는다.
 - [ ] **H1 — 업데이트 상태:** 읽기 전용 상태 확인 성공.
 - [ ] **H2 — 호스트 네트워크:** uplink가 있으며 loopback·내부 helper 인터페이스는 선택 목록에 없다.
 - [ ] **H3 — Firecrab 정보:** API가 버전과 설치 경로를 알려 주고, Host 탭의 Firecrab 패널이 이를 표시한다.
@@ -170,6 +173,28 @@ firecrab service shell                                               # root 로�
 ```
 
 Windows G6a–G6h: WSL2 microManager가 설치된 호스트에서 `cargo test -p firecrab-cli --test windows_service_shell -- --ignored --test-threads=1`을 실행한다. 기본 셸 검사는 stdin으로 수행하며 터미널 키보드·크기 변경·Ctrl-C는 별도 대화형 검사다.
+
+G7은 설치된 Mac에서 실행한다. 실행 중인 MicroVM을 멈출 수 있을 때 진행한다.
+
+```sh
+cargo build -p firecrab-cli --locked
+./target/debug/firecrab service stop
+./target/debug/firecrab service repair
+./target/debug/firecrab service status
+./target/debug/firecrab service shell -- systemctl is-active firecrab-api
+curl -fsS http://127.0.0.1:5523/api/host
+```
+
+G7/G7a 오류 재현과 복구는 `scripts/ci-qa-macos-e2e.sh repair`로 반복 검사한다.
+파일 보존과 원상 복구를 확인하고 실행 로그와 결과를 저장한다.
+준비 조건과 검사 항목은 [repair QA](micromanager-repair-qa.md)에 정리한다.
+
+종료 코드 0, 정상 게스트 서비스, HTTP 200을 확인한다. 실행 전후에 설치
+바이너리와 SSH 키의 체크섬을 비교한다. 디스크 파일의 식별값도 비교한다.
+부팅은 디스크 내용을 바꾸지만 디스크 파일을 교체하면 안 된다. VM을 멈춘
+상태에서 plist와 데몬 스크립트를 백업 이름으로 옮긴다. `repair`를 다시 실행하고
+두 파일이 생성되는지 확인한다. 복구가 끝날 때까지 백업을 보존한다. 단위 테스트는
+사용자의 launchd 서비스를 바꾸지 않고 설치 파일 누락과 파일 보존을 확인한다.
 
 ```text
 런타임 조건: doctor → ready: true
@@ -540,6 +565,30 @@ Windows `all`은 gate/setup 성공 후 API → nginx → guest → browser 결�
 게스트 스크립트도 앞선 이미지 실패 후 나머지 참조를 검사한다.
 Windows 로그·요약·브라우저 archive는 `target/qa/windows/<run-id>` 또는 `-ResultsDir`에 보관한다.
 macOS 브라우저 명령과 관리 VM SSH 설정은 [E2E 안내](../firecrab-e2e/README.md)를 참고한다.
+
+## 제거
+
+UFW가 켜져 있고 MicroNetwork 하나와 실행 중인 MicroVM 하나가 있는 일회용 Linux 호스트에서, 제거 뒤의 호스트를 설치 전의 호스트와 비교한다.
+
+- [ ] **UN1:** `firecrab service uninstall` 또는 `./install.sh --uninstall`이 VM을 먼저 멈춘다. `firecracker`·`firecrab-api` 프로세스와 `firecrab-*` unit이 남지 않는다.
+- [ ] **UN2:** `/usr/local/lib/firecrab`과 `/usr/local/bin/firecrab`이 없다.
+- [ ] **UN3:** `mnb*`·`fct*`·`fcbr0` 링크, firecrab nftables 테이블, MicroNetwork 서브넷의 MASQUERADE 규칙이 없다.
+- [ ] **UN4:** `ufw status numbered`에 firecrab 브리지 이름이 없고, 이전부터 있던 규칙은 그대로다.
+- [ ] **UN5:** `/etc/firecrab/host-baseline.env`가 없고, `getfacl -p /dev/kvm`이 설치 전과 같으며, 다른 브리지나 컨테이너 네트워크가 없으면 포워딩이 복원된다.
+- [ ] **UN6:** `--purge` 없이는 데이터와 설정이 남고 재설치하면 네트워크와 VM이 `stopped`로 보인다. `--purge`면 모두 없다.
+- [ ] **UN7:** 두 번째 제거는 아무것도 바꾸지 않고 `0`으로 끝난다.
+
+```sh
+sudo firecrab service uninstall            # 또는: sudo ./install.sh --uninstall
+pgrep -x firecracker || echo none          # UN1
+pgrep -x firecrab-api || echo none
+systemctl list-units --all --plain --no-legend 'firecrab-*' | grep . || echo none
+ls /usr/local/lib/firecrab 2>&1 | head -1  # UN2: No such file or directory
+ip -br link | grep -E '^(mnb|fct|fcbr)' || echo none                        # UN3
+sudo iptables -t nat -S POSTROUTING | grep MASQUERADE || echo none
+sudo ufw status numbered | grep -E 'mnb[0-9a-f]{12}' || echo none          # UN4
+getfacl -p /dev/kvm; sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding # UN5
+```
 
 ## 정리 및 CI 범위
 

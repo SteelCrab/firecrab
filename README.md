@@ -26,6 +26,8 @@
 
 ![Firecrab demo](assets/dashboard/firecrab-demo.gif)
 
+[DeepWiki](https://deepwiki.com/SteelCrab/firecrab)
+
 ## Overview
 
 <details>

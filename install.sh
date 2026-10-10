@@ -43,6 +43,8 @@ MODE=install
 INSTALL_DEPS=1
 WITH_FRONTEND=1
 PURGE=0
+# Set by ensure_account when it grants the /dev/kvm ACL, so --uninstall can take it back.
+KVM_ACL_ADDED=0
 BIN_DIR=
 DASHBOARD_DIR=
 RELEASE_VERSION=
@@ -570,6 +572,7 @@ ensure_account() {
             if ! getfacl -p /dev/kvm 2>/dev/null | grep -qx 'group:kvm:rw-'; then
                 step "granting the kvm group ACL access to /dev/kvm"
                 $SUDO setfacl -m g:kvm:rw /dev/kvm
+                KVM_ACL_ADDED=1
             fi
         else
             warn "setfacl not found — skipping the /dev/kvm ACL fixup (install the 'acl' package if VMs fail with a KVM permission error)"
@@ -584,6 +587,29 @@ ensure_directories() {
             "$DATADIR" "$DATADIR/data" "$DATADIR/images" "$DATADIR/updates"
     $SUDO install -d -o root -g "$FIRECRAB_GROUP" -m 0750 "$CONFDIR"
     log "directories ready under $DATADIR, $CONFDIR"
+}
+
+# What this host looked like before firecrab changed it, so --uninstall can put
+# back what the installer and the helper changed and nothing else. Written once:
+# a re-install must not record values the helper has already switched on.
+record_host_baseline() {
+    local file="$CONFDIR/host-baseline.env" content
+    [ -f "$file" ] && return 0
+    content="# written by install.sh; --uninstall restores what is listed here"$'\n'
+    if [ "$KVM_ACL_ADDED" -eq 1 ]; then
+        content+="kvm_acl=added"$'\n'
+    fi
+    # A helper that already ran has turned forwarding on, so those values are no
+    # longer the host's own.
+    if ! systemctl is-active --quiet firecrab-helper.service firecrab-net-helper.service 2>/dev/null; then
+        content+="ip_forward=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)"$'\n'
+        if [ -r /proc/sys/net/ipv6/conf/all/forwarding ]; then
+            content+="ipv6_forwarding=$(cat /proc/sys/net/ipv6/conf/all/forwarding)"$'\n'
+        fi
+    fi
+    printf '%s' "$content" | $SUDO tee "$file" >/dev/null
+    $SUDO chown root:"$FIRECRAB_GROUP" "$file"
+    $SUDO chmod 0640 "$file"
 }
 
 # Keep the same release attribution available after the archive is unpacked.
@@ -904,6 +930,7 @@ do_install() {
     resolve_payload
     ensure_account
     ensure_directories
+    record_host_baseline
     install_compliance
     install_binaries
     label_selinux_binaries
@@ -921,9 +948,86 @@ do_install() {
     fi
 }
 
+# Each MicroVM runs in its own transient unit, which is meant to outlive the API
+# so that restarting the API never kills a guest. Stopping the API therefore
+# leaves every shim and its firecracker process running with nothing to manage
+# them, so the VMs are stopped first, while the helper can still clean up after
+# them.
+stop_vm_units() {
+    local units
+    units=$(systemctl list-units --all --plain --no-legend --no-pager 'firecrab-vm-*.service' 2>/dev/null \
+        | awk '{print $1}') || true
+    [ -n "$units" ] || return 0
+    step "stopping $(printf '%s\n' "$units" | wc -l | tr -d ' ') MicroVM unit(s)"
+    # shellcheck disable=SC2086  # one word per unit
+    $SUDO systemctl stop $units \
+        || warn "some MicroVM units did not stop — their firecracker processes may keep running"
+    # A failed transient unit is not collected on its own.
+    # shellcheck disable=SC2086
+    $SUDO systemctl reset-failed $units 2>/dev/null || true
+}
+
+# Whether something besides firecrab's own (already removed) networks may rely on
+# IP forwarding: a bridge or a veth is left. When `ip` cannot tell, assume so.
+others_may_route() {
+    local kind out
+    for kind in bridge veth; do
+        out=$(ip -o link show type "$kind" 2>/dev/null) || return 0
+        [ -z "$out" ] || return 0
+    done
+    return 1
+}
+
+# Puts back what record_host_baseline recorded: the /dev/kvm ACL the installer
+# added, and IP forwarding where the host had it off and still has it on. A host
+# installed before the record existed is left exactly as it is.
+restore_host_baseline() {
+    local file="$CONFDIR/host-baseline.env" content spec key was
+    local -a to_disable=()
+    content=$($SUDO cat "$file" 2>/dev/null) || return 0
+
+    if printf '%s\n' "$content" | grep -qx 'kvm_acl=added' \
+        && have getfacl && getfacl -p /dev/kvm 2>/dev/null | grep -qx 'group:kvm:rw-'; then
+        if $SUDO setfacl -x g:kvm /dev/kvm; then
+            # `setfacl -x` leaves a bare mask behind; with nothing else named in
+            # the ACL take it all off. An entry another tool added is kept.
+            if ! getfacl -p /dev/kvm 2>/dev/null | grep -Eq '^(user|group):[^:]+:'; then
+                $SUDO setfacl -b /dev/kvm
+            fi
+            log "removed the kvm group ACL the installer added to /dev/kvm"
+        else
+            warn "could not remove the kvm group ACL from /dev/kvm — it resets at reboot"
+        fi
+    fi
+
+    for spec in ip_forward:net.ipv4.ip_forward ipv6_forwarding:net.ipv6.conf.all.forwarding; do
+        was=$(printf '%s\n' "$content" | sed -n "s/^${spec%%:*}=//p" | head -n 1)
+        key=${spec#*:}
+        if [ "$was" = 0 ] && [ "$(sysctl -n "$key" 2>/dev/null)" = 1 ]; then
+            to_disable+=("$key")
+        fi
+    done
+    if [ "${#to_disable[@]}" -gt 0 ]; then
+        if others_may_route; then
+            warn "left ${to_disable[*]} on: other bridges or containers are present (resets at reboot)"
+        else
+            for key in "${to_disable[@]}"; do
+                if $SUDO sysctl -qw "$key=0"; then
+                    log "restored $key=0"
+                else
+                    warn "could not restore $key=0"
+                fi
+            done
+        fi
+    fi
+    # The next install records the host as it is then.
+    $SUDO rm -f "$file"
+}
+
 # Removes what this script installed; data only with --purge.
 do_uninstall() {
     require_sudo_ticket
+    stop_vm_units
     for unit in firecrab-api.service firecrab-helper.service firecrab-net-helper.service; do
         $SUDO systemctl disable --now "$unit" 2>/dev/null || true
         $SUDO rm -f "$UNITDIR/$unit"
@@ -940,7 +1044,8 @@ do_uninstall() {
             || warn "network teardown failed — bridges/nftables tables may remain until reboot"
     fi
 
-    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-helper" "$LIBDIR/firecrab-net-helper"
+    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-helper" "$LIBDIR/firecrab-net-helper" \
+        "$LIBDIR/extract-vmlinux" "$LIBDIR/extract-arm64-image"
     $SUDO rm -f "$PREFIX/bin/firecrab"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rm -f "$SHAREDIR/LICENSE" "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \
@@ -955,6 +1060,9 @@ do_uninstall() {
         $SUDO semanage fcontext -d "${LIBDIR}(/.*)?" 2>/dev/null || true
     fi
     log "binaries and dashboard removed"
+
+    # Before the purge below: the record lives in $CONFDIR.
+    restore_host_baseline
 
     # Left alone on purpose: the account, the config and the data directory.
     if [ "$PURGE" -eq 1 ]; then

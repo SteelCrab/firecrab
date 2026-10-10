@@ -18,6 +18,7 @@ use crate::shell::CommandRunner;
 pub mod deps;
 pub mod env;
 pub mod firecracker;
+pub mod host_state;
 pub mod layout;
 pub mod output;
 pub mod payload;

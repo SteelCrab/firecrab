@@ -8,7 +8,7 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.3.1](#031---2026-10-06) | 2026-10-06 | [#123], [#314], [#315], [#318], [#324], [#330], [#331], [#332], [#333], [#343], [#351], [#358], [#359], [#360], [#368] |
+| [0.3.1](#031---2026-10-06) | 2026-10-06 | [#123], [#314], [#315], [#318], [#324], [#330], [#331], [#332], [#333], [#343], [#351], [#358], [#359], [#360], [#368], [#378] |
 | [0.3.0](#030---2026-09-29) | 2026-09-29 | [#210], [#266], [#287], [#290], [#294], [#295], [#297], [#312] |
 | [0.2.2](#022---2026-09-15) | 2026-09-15 | [#269], [#270], [#272], [88ba35d], [729bb47] |
 | [0.2.1](#021---2026-09-14) | 2026-09-14 | [#262], [#263], [#264], [#265] |
@@ -27,6 +27,15 @@ Entries land here as work merges, and move under the next version heading when t
   `firecrab info` prints: the install prefix, data, config and unit
   directories, and the address the API listens on. `GET /api/info` serves the
   same fields, and `firecrab info --json` now shares their type.
+
+- macOS `firecrab service repair` rebuilds the resident service registration and
+  restarts the existing management VM without downloading or reinstalling assets.
+  It preserves installed binaries, managed disks, and SSH credentials, and checks
+  the local API and live guest services before reporting success.
+  Service startup, SSH, and API failures suggest the repair command; unhealthy
+  status and debug reports include the same recovery advice.
+  An idle-runtime macOS E2E phase checks recovery, injected SSH/API failures,
+  preserved assets, and restoration, retaining logs and JSON QA evidence.
 
 ### Changed
 
@@ -47,7 +56,8 @@ Entries land here as work merges, and move under the next version heading when t
 ## [0.3.1] - 2026-10-06
 
 firecrab runs every MicroVM in its own systemd unit with host resource ceilings and startup
-recovery, adds `service shell` and `service dev`, and fixes console replay and OCI import issues.
+recovery, adds `service shell` and `service dev`, and fixes console replay, OCI import issues, and
+the files, processes, and firewall rules an uninstall used to leave behind.
 
 ### Added
 
@@ -76,6 +86,9 @@ recovery, adds `service shell` and `service dev`, and fixes console replay and O
   images, and staged packages ([#333]).
 - On Windows, TCP port forwards of MicroVMs are relayed to `localhost`
   ([#358], [#359], [#360]).
+- `install.sh` records, on the first install, whether it granted the `kvm` group an ACL on
+  `/dev/kvm` and whether IPv4/IPv6 forwarding was off, in `/etc/firecrab/host-baseline.env`,
+  so an uninstall can put back exactly that ([#378]).
 
 ### Changed
 
@@ -128,6 +141,22 @@ recovery, adds `service shell` and `service dev`, and fixes console replay and O
 - OCI imports read RPM headers from Fedora SQLite databases, retry registry
   connection failures within the inspection deadline, bound guest package
   installation retries, and keep dual-stack DHCP ([#358], [#359], [#360]).
+- `firecrab service uninstall` and `install.sh --uninstall` stop running MicroVMs before they
+  remove the services. A VM's unit outlives the API on purpose, so its shim and Firecracker
+  process used to keep running after an uninstall, and after `--purge` they ran on with their
+  disks deleted ([#378]).
+- Uninstall removes `extract-vmlinux` and `extract-arm64-image`, so `/usr/local/lib/firecrab`
+  goes with the rest of the install instead of staying behind holding those two scripts
+  ([#378]).
+- Deleting a MicroNetwork, and uninstalling, remove the iptables NAT MASQUERADE rules for its
+  subnet. They used to stay on the host until a reboot ([#378]).
+- `firecrab-helper --teardown`, and so uninstall, also deletes the UFW rules that name a
+  Firecrab bridge, including the route rule that carries the uplink and was never deleted
+  ([#378]).
+- Uninstall restores what the installer recorded: the `/dev/kvm` ACL it added, and IPv4/IPv6
+  forwarding on a host that had it off. Forwarding stays on while another bridge or container
+  network exists, and a host installed before the record existed keeps both until a reboot
+  ([#378]).
 
 ### Improved
 
@@ -639,6 +668,7 @@ network helper.
 [#359]: https://github.com/SteelCrab/firecrab/pull/359
 [#360]: https://github.com/SteelCrab/firecrab/pull/360
 [#368]: https://github.com/SteelCrab/firecrab/pull/368
+[#378]: https://github.com/SteelCrab/firecrab/pull/378
 [#123]: https://github.com/SteelCrab/firecrab/issues/123
 [88ba35d]: https://github.com/SteelCrab/firecrab/commit/88ba35d
 [34193f5]: https://github.com/SteelCrab/firecrab/commit/34193f5
