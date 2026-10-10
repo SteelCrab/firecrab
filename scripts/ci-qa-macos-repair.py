@@ -155,7 +155,7 @@ class QA:
 
     def gate(self):
         require(self.home.is_absolute() and self.install.is_absolute(), "managed paths must be absolute")
-        for path in (self.home, self.install, self.plist.parent()):
+        for path in (self.home, self.install, self.plist.parent):
             require(not any(parent.is_symlink() for parent in [path, *path.parents]),
                     f"refusing a symlinked managed/registration path: {path}")
         source = Path(__file__).resolve().parents[1]

@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -63,6 +64,48 @@ class RepairQA(unittest.TestCase):
         (self.home / "system/debian-system.raw").write_text("bootwrite\n")
         (self.home / "runtime/known_hosts").write_text("preserved\nnew host\n")
         qa.assert_preserved(baseline, qa.snapshot(self.home, self.install))
+
+    def test_real_gate_snapshots_and_backs_up_idle_registration(self):
+        self.assets()
+        runner = qa.QA("cli", self.home, self.install, self.root / "results")
+        self.addCleanup(runner.log.close)
+        runner.plist = self.root / "LaunchAgents/service.plist"
+        runner.plist.parent.mkdir()
+        runner.plist.write_text("original plist")
+        runner.wrapper.write_text("original wrapper")
+
+        def command(args, **_kwargs):
+            if args[0] == "/bin/launchctl":
+                return SimpleNamespace(stdout=str(runner.wrapper))
+            return SimpleNamespace(stdout="revision\n" if args[-1] == "HEAD" else "")
+
+        with patch.object(runner, "run", side_effect=command), \
+                patch.object(runner, "service") as service, patch.object(runner, "api", return_value=[]), \
+                patch.object(runner, "config_digest", return_value="guest config"):
+            runner.gate()
+        service.assert_called_once_with("status")
+        self.assertFalse(runner.mutated)
+        self.assertEqual(runner.summary["revision"], "revision")
+        self.assertFalse(runner.summary["dirty"])
+        self.assertEqual(runner.config_before, "guest config")
+        self.assertEqual(runner.files_before, qa.snapshot(self.home, self.install))
+        self.assertEqual(len(runner.backups), 2)
+        for original, backup in runner.backups.items():
+            self.assertEqual(original.read_bytes(), backup.read_bytes())
+
+    def test_real_gate_rejects_active_vm_before_registration_backup(self):
+        runner = qa.QA("cli", self.home, self.install, self.root / "results")
+        self.addCleanup(runner.log.close)
+        runner.plist = self.root / "LaunchAgents/service.plist"
+        with patch.object(runner, "run", return_value=SimpleNamespace(stdout="")), \
+                patch.object(runner, "api", return_value=[{"id": "vm", "state": "running"}]), \
+                patch.object(runner, "service") as service:
+            with self.assertRaisesRegex(qa.QAError, "stop workloads first"):
+                runner.gate()
+        service.assert_not_called()
+        self.assertFalse(runner.mutated)
+        self.assertEqual(runner.backups, {})
+        self.assertFalse((runner.results / "registration-backup").exists())
 
     def test_failed_gate_never_stops_or_restores_service(self):
         runner = qa.QA("cli", self.home, self.install, self.root / "results")
