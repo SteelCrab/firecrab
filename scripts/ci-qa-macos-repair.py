@@ -66,6 +66,8 @@ def snapshot(home, install):
         disks.append(home / "runtime/efi-variable-store")
     for path in immutable + disks:
         require(path.is_file() and not path.is_symlink(), f"missing or symlinked asset: {path}")
+    known_hosts = home / "runtime/known_hosts"
+    require(not known_hosts.is_symlink(), f"symlinked SSH host pins: {known_hosts}")
     return {
         "hashes": {str(path): digest(path) for path in immutable},
         "disks": {str(path): file_identity(path) for path in disks},
@@ -73,7 +75,7 @@ def snapshot(home, install):
             str(path.relative_to(home)): file_identity(path) + [path.stat().st_mtime_ns]
             for path in (home / "downloads").rglob("*") if path.is_file()
         },
-        "known_hosts": set((home / "runtime/known_hosts").read_text().splitlines()),
+        "known_hosts": set(known_hosts.read_text().splitlines()) if known_hosts.exists() else set(),
     }
 
 

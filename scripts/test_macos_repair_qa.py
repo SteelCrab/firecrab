@@ -65,6 +65,19 @@ class RepairQA(unittest.TestCase):
         (self.home / "runtime/known_hosts").write_text("preserved\nnew host\n")
         qa.assert_preserved(baseline, qa.snapshot(self.home, self.install))
 
+    def test_missing_optional_host_pins_are_allowed_and_symlinks_rejected(self):
+        self.assets()
+        known_hosts = self.home / "runtime/known_hosts"
+        known_hosts.unlink()
+        baseline = qa.snapshot(self.home, self.install)
+        self.assertEqual(baseline["known_hosts"], set())
+        known_hosts.write_text("new pinned host\n")
+        qa.assert_preserved(baseline, qa.snapshot(self.home, self.install))
+        known_hosts.unlink()
+        known_hosts.symlink_to(self.home / "runtime/manager_ed25519")
+        with self.assertRaisesRegex(qa.QAError, "symlinked SSH host pins"):
+            qa.snapshot(self.home, self.install)
+
     def test_real_gate_snapshots_and_backs_up_idle_registration(self):
         self.assets()
         runner = qa.QA("cli", self.home, self.install, self.root / "results")
