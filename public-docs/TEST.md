@@ -184,6 +184,10 @@ cargo build -p firecrab-cli --locked
 curl -fsS http://127.0.0.1:5523/api/host
 ```
 
+For repeatable G7/G7a failure injection, preservation checks, restoration, and
+retained evidence, run `scripts/ci-qa-macos-e2e.sh repair`.
+See [repair QA](micromanager-repair-qa.md) for its prerequisites and checks.
+
 Require exit 0, live guest units, and HTTP 200. Record installed binary/SSH key
 checksums and disk file identities before and after; boot changes disk contents,
 but must not replace the disk files. With a stopped VM, move the plist and wrapper

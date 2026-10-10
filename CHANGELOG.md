@@ -29,6 +29,8 @@ Entries land here as work merges, and move under the next version heading when t
   the local API and live guest services before reporting success.
   Service startup, SSH, and API failures suggest the repair command; unhealthy
   status and debug reports include the same recovery advice.
+  An idle-runtime macOS E2E phase checks recovery, injected SSH/API failures,
+  preserved assets, and restoration, retaining logs and JSON QA evidence.
 
 ### Changed
 

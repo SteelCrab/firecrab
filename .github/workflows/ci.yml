@@ -59,6 +59,9 @@ jobs:
       - name: Guest QA failure and cleanup contract
         run: python3 scripts/test-ci-qa-guest.py
 
+      - name: macOS repair QA guard and restoration contract
+        run: python3 -m unittest scripts/test_macos_repair_qa.py
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 

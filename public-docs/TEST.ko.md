@@ -184,6 +184,10 @@ cargo build -p firecrab-cli --locked
 curl -fsS http://127.0.0.1:5523/api/host
 ```
 
+G7/G7a 오류 재현과 복구는 `scripts/ci-qa-macos-e2e.sh repair`로 반복 검사한다.
+파일 보존과 원상 복구를 확인하고 실행 로그와 결과를 저장한다.
+준비 조건과 검사 항목은 [repair QA](micromanager-repair-qa.md)에 정리한다.
+
 종료 코드 0, 정상 게스트 서비스, HTTP 200을 확인한다. 실행 전후에 설치
 바이너리와 SSH 키의 체크섬을 비교한다. 디스크 파일의 식별값도 비교한다.
 부팅은 디스크 내용을 바꾸지만 디스크 파일을 교체하면 안 된다. VM을 멈춘

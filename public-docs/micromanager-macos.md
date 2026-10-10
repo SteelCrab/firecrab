@@ -247,6 +247,10 @@ still get `install` guidance; missing assets and incomplete provisioning need
 their own recovery. Checkout/compiler errors do not suggest repair. The CLI
 does not run repair automatically, and a failed repair points to diagnostics.
 
+Run the repeatable [repair E2E and QA](micromanager-repair-qa.md) on an idle
+installation with `scripts/ci-qa-macos-e2e.sh repair`. It retains logs, results,
+and registration backups, and restores injected failures before returning.
+
 The command downloads nothing and keeps the installed binaries, OS/data disks,
 provisioning assets, SSH key, known host keys, and guest development overrides.
 Restarting the management VM stops running MicroVMs. `start` uses the existing
