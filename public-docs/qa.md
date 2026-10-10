@@ -7,8 +7,7 @@ Mark every row `PASS`, `FAILED`, or `WARNING`; `WARNING` is skip or leftover, no
 
 Flow for every resource: **add → use or mutate → delete → leftover empty**.
 Prefix names with `qa-` and use a dedicated subnet per run.
-Do not apply `POST /api/update` unless that row is in scope.
-Do not delete catalog images you did not install in this run.
+Do not apply `POST /api/update` unless that row is in scope, and do not delete catalog images you did not install in this run.
 
 CLI and curl are equivalent for shared resource commands.
 Env, shells, kernels, storage assignment, port forwards, and Docker Hub are API or dashboard only.
@@ -64,6 +63,7 @@ Windows `firecrab service` drives the managed WSL2 distribution the same way.
 | --- | --- | --- | --- |
 | H1 | `GET /api/update` | check only | do not `POST` unless U1 |
 | H2 | `GET /api/network` | uplink present; no `lo` / `fct*` / `mnb*` in picker | none |
+| H3 | `GET /api/info` | version and install paths; [mocked Host panel tests](../firecrab-e2e/README.md#run) | none |
 | U1 | `POST /api/update` | optional dedicated run | host comes back; API 200 |
 
 ## MicroNetwork
@@ -244,7 +244,7 @@ Linux-only (skip on macOS/Windows CLI, or run inside the management guest):
 
 | Script | Runs |
 | --- | --- |
-| `scripts/ci-qa-api.sh` | G4 G5 H1 H2 N1–N5 S1–S3 L1–L3 I1 I8 I9 V14 C3 C5 X1–X4 X6 |
+| `scripts/ci-qa-api.sh` | G4 G5 H1 H2 H3 N1–N5 S1–S3 L1–L3 I1 I8 I9 V14 C3 C5 X1–X4 X6 |
 | `scripts/ci-qa-nginx.sh` | NGX1–NGX9 including V8a–V8d SSH |
 | `scripts/ci-qa-ssh.sh` | V8a–V8d (called from guest boot and nginx) |
 | `scripts/ci-qa-lifetime.sh` | R1–R7 (including R4b–R4e) X7; root commands use `sudo` on Linux, direct execution in root WSL, or management VM SSH on macOS |

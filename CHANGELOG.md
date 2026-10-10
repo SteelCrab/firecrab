@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- The dashboard's Host tab has a Firecrab panel with the version and what
+  `firecrab info` prints: the install prefix, data, config and unit
+  directories, and the address the API listens on. `GET /api/info` serves the
+  same fields, and `firecrab info --json` now shares their type.
+
 - macOS `firecrab service repair` rebuilds the resident service registration and
   restarts the existing management VM without downloading or reinstalling assets.
   It preserves installed binaries, managed disks, and SSH credentials, and checks

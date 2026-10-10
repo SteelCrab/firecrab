@@ -12,6 +12,7 @@ export * from "./CreateShellRevisionRequest";
 export * from "./CreateVmRequest";
 export * from "./EgressPolicy";
 export * from "./ErrorResponse";
+export * from "./FirecrabInfo";
 export * from "./HostOs";
 export * from "./HostPlatformResponse";
 export * from "./HostStatusResponse";

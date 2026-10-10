@@ -682,12 +682,13 @@ jobs:
           elif command -v pacman >/dev/null; then
             retry pacman -Sy --noconfirm --needed bash ca-certificates curl git
           elif command -v zypper >/dev/null; then
-            # Tumbleweed's oss snapshot is replaced while the container
-            # still has the previous repomd. A stale appdata-icons.tar.gz
-            # hash then makes `zypper install git` fail even after retries
-            # unless metadata is discarded first. Its CDN also rejects some
-            # plain HTTP object requests, so switch every repo to HTTPS first.
-            sed -i 's#^baseurl=http://#baseurl=https://#' /etc/zypp/repos.d/*.repo
+            # Read metadata and packages from the same origin: redirected
+            # mirrors can lag behind repomd.xml and return 404 even after a
+            # forced refresh. Keep HTTPS for every repository.
+            sed -i \
+              -e 's#^baseurl=http://#baseurl=https://#' \
+              -e 's#//download\.opensuse\.org/#//downloadcontent.opensuse.org/#g' \
+              /etc/zypp/repos.d/*.repo
             retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends bash ca-certificates curl git'
           fi
         shell: sh -e {0}

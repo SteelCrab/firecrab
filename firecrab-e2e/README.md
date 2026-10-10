@@ -51,6 +51,18 @@ npm run install-browsers --prefix firecrab-e2e
 
 ## Run
 
+Host Firecrab panel only (H3, Linux/macOS/Windows):
+
+```sh
+npm run test:host --prefix firecrab-e2e
+```
+
+Expect **2 passed**: info fields/panel placement and API-unavailable messaging.
+This command starts only Vite and mocks all API responses. It needs no running
+API, management VM, or Docker. It fails if port 8080 is already occupied instead
+of reusing another checkout's frontend. Stop Vite before this command.
+Verify the real `/api/info` response separately for complete H3 runtime QA.
+
 Inspect and import only:
 
 ```sh

@@ -146,6 +146,7 @@ A17 필수 도구: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G7a — macOS 복구 안내:** 서비스 실행 오류는 `firecrab service repair`를 제안한다. 복구를 자동 실행하지 않는다. 설치가 완료됐는데 서비스 등록 파일이 없으면 repair를 안내한다. 새 호스트에는 install을 안내한다. 소스·컴파일 오류는 기존 오류를 유지한다. `debug --json`은 JSON 형식을 유지하고 필드 안에 복구 안내를 넣는다.
 - [ ] **H1 — 업데이트 상태:** 읽기 전용 상태 확인 성공.
 - [ ] **H2 — 호스트 네트워크:** uplink가 있으며 loopback·내부 helper 인터페이스는 선택 목록에 없다.
+- [ ] **H3 — Firecrab 정보:** API가 버전과 설치 경로를 알려 주고, Host 탭의 Firecrab 패널이 이를 표시한다.
 - [ ] **U1 — 업데이트 적용(별도 선택 실행):** 적용 후 호스트가 복구되고 API가 200을 반환한다.
 
 호스팅 macOS·Windows 러너는 빌드·단위 테스트·진단만 수행한다.
@@ -210,6 +211,7 @@ curl -i "$API/"                    # G4: HTML 200
 curl -i "$API/api/no-such-route"    # G5: requestId가 포함된 JSON 404
 curl -i "$API/api/update"           # H1: 읽기 전용 확인
 curl -i "$API/api/network"          # H2: uplink 목록
+curl -i "$API/api/info"             # H3: 버전과 설치 경로
 ```
 
 ## MicroNetwork
@@ -613,7 +615,7 @@ curl -fsS "$API/api/shells"
 CI 스크립트 범위:
 
 ```text
-scripts/ci-qa-api.sh: G4–G5 H1–H2 N1–N5 S1–S3 L1–L3 I1 I8–I9 V14 C3 C5 X1–X4 X6
+scripts/ci-qa-api.sh: G4–G5 H1–H3 N1–N5 S1–S3 L1–L3 I1 I8–I9 V14 C3 C5 X1–X4 X6
 scripts/ci-qa-nginx.sh: V8a–V8d를 포함한 NGX1–NGX9
 scripts/ci-qa-ssh.sh: 게스트·nginx 실행 중 V8a–V8d
 scripts/ci-qa-guest.sh: I5–I6 V1–V2 V6–V9 V11–V13 N6 C1–C2 C4 X5

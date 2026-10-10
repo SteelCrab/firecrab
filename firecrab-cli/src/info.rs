@@ -1,35 +1,15 @@
-use serde::Serialize;
+use firecrab_api_types::FirecrabInfo;
 
-/// Matches install.sh's PREFIX=/usr/local, LIBDIR/SHAREDIR derive from it,
-/// DATADIR=/var/lib/firecrab, CONFDIR=/etc/firecrab, UNITDIR=/etc/systemd/system.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InfoReport {
-    /// `CARGO_PKG_VERSION` of this binary, not a running service's version.
-    pub version: String,
-    /// From `$PREFIX`, or install.sh's default.
-    pub prefix: String,
-    /// From `$DATADIR`, or install.sh's default.
-    pub datadir: String,
-    /// From `$CONFDIR`, or install.sh's default.
-    pub confdir: String,
-    /// From `$UNITDIR`, or install.sh's default.
-    pub unitdir: String,
-    /// Resolved by [`crate::api_client::resolve_api_base`]; not re-derived here.
-    pub api_base: String,
-}
+/// What `firecrab info` reports: the same type `GET /api/info` answers with, so
+/// the dashboard's Firecrab panel and this command show the same fields.
+/// `version` is this binary's, not a running service's, and `api_base` is
+/// resolved by [`crate::api_client::resolve_api_base`].
+pub type InfoReport = FirecrabInfo;
 
 /// Reads `PREFIX`/`DATADIR`/`CONFDIR`/`UNITDIR` from the environment,
 /// falling back to install.sh's own defaults when unset.
 pub fn collect(api_base: &str) -> InfoReport {
-    InfoReport {
-        version: env!("CARGO_PKG_VERSION").to_owned(),
-        prefix: std::env::var("PREFIX").unwrap_or_else(|_| "/usr/local".to_owned()),
-        datadir: std::env::var("DATADIR").unwrap_or_else(|_| "/var/lib/firecrab".to_owned()),
-        confdir: std::env::var("CONFDIR").unwrap_or_else(|_| "/etc/firecrab".to_owned()),
-        unitdir: std::env::var("UNITDIR").unwrap_or_else(|_| "/etc/systemd/system".to_owned()),
-        api_base: api_base.to_owned(),
-    }
+    FirecrabInfo::from_env(env!("CARGO_PKG_VERSION"), api_base)
 }
 
 /// Builds the plain-text rendering as a `String` — split out from

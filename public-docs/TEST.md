@@ -146,6 +146,7 @@ A17 required tools: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G7a — macOS recovery advice:** service runtime failures suggest `firecrab service repair` without running it. Lost registration in a completed installation suggests repair; a new host suggests install. Source/compiler failures keep their own errors, and `debug --json` stays valid JSON with advice inside its fields.
 - [ ] **H1 — Update status:** read-only status check succeeds.
 - [ ] **H2 — Host network:** an uplink is present; loopback and internal helper interfaces are absent from the picker.
+- [ ] **H3 — Firecrab info:** the API reports its version and install paths, and the Host tab's Firecrab panel shows them.
 - [ ] **U1 — Update apply (optional separate run):** apply update; host recovers and API returns 200.
 
 Hosted macOS and Windows runners do build, unit, and diagnostic checks.
@@ -210,6 +211,7 @@ curl -i "$API/"                    # G4: HTML 200
 curl -i "$API/api/no-such-route"    # G5: JSON 404 with requestId
 curl -i "$API/api/update"           # H1: read-only check
 curl -i "$API/api/network"          # H2: uplink list
+curl -i "$API/api/info"             # H3: version and install paths
 ```
 
 ## MicroNetwork
@@ -613,7 +615,7 @@ curl -fsS "$API/api/shells"
 CI script coverage:
 
 ```text
-scripts/ci-qa-api.sh: G4–G5 H1–H2 N1–N5 S1–S3 L1–L3 I1 I8–I9 V14 C3 C5 X1–X4 X6
+scripts/ci-qa-api.sh: G4–G5 H1–H3 N1–N5 S1–S3 L1–L3 I1 I8–I9 V14 C3 C5 X1–X4 X6
 scripts/ci-qa-nginx.sh: NGX1–NGX9, including V8a–V8d
 scripts/ci-qa-ssh.sh: V8a–V8d from guest and nginx runs
 scripts/ci-qa-guest.sh: I5–I6 V1–V2 V6–V9 V11–V13 N6 C1–C2 C4 X5
