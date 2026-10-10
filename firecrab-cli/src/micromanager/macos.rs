@@ -3,6 +3,7 @@ mod dev;
 mod forward;
 mod lifecycle;
 mod provision;
+mod repair;
 
 use std::ffi::OsString;
 use std::fs;
@@ -35,6 +36,8 @@ pub enum Error {
     Daemon(#[from] daemon::Error),
     #[error(transparent)]
     Provision(#[from] provision::Error),
+    #[error(transparent)]
+    Repair(#[from] repair::Error),
     #[error(transparent)]
     Forward(#[from] forward::Error),
     #[error(transparent)]
@@ -71,6 +74,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
     match command {
         Command::Install { yes } => run_install(false, yes),
         Command::Reinstall { yes } => run_install(true, yes),
+        Command::Repair => run_repair(),
         Command::Uninstall { purge } => run_uninstall(purge),
         Command::Start => run_start(),
         Command::Stop => run_stop(),
@@ -173,6 +177,15 @@ fn run_start() -> Result<i32, Error> {
     let status = daemon::start(&layout)?;
     print_daemon_status(&status);
     Ok(i32::from(!status.success()))
+}
+
+fn run_repair() -> Result<i32, Error> {
+    let layout = lifecycle::Layout::from_process_env()?;
+    let status = repair::run(&layout)?;
+    print_daemon_status(&status);
+    report!("[PASS] management SSH and guest services: ready");
+    report!("microManager repaired (installed binaries and managed disks preserved)");
+    Ok(0)
 }
 
 fn run_dev(source: Option<&Path>, release: bool, restore: bool, yes: bool) -> Result<i32, Error> {
@@ -712,6 +725,7 @@ fn helper_path(override_path: Option<OsString>, current_exe: Option<&Path>) -> P
 
 fn command_arguments(command: &Command) -> Vec<OsString> {
     match command {
+        Command::Repair => unreachable!("repair is handled by the CLI"),
         Command::Install { .. }
         | Command::Reinstall { .. }
         | Command::Uninstall { .. }

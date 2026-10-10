@@ -142,6 +142,7 @@ A17 필수 도구: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G6f — Windows:** 명령 stdin의 한글과 줄이 유지되고 EOF로 명령이 종료된다.
 - [ ] **G6g — Windows:** 없는 명령은 오류를 내며 실패하고 후속 셸은 정상 실행된다.
 - [ ] **G6h — Windows:** 셸 종료 후 API/helper가 active이고 호스트 API가 응답한다.
+- [ ] **G7 — macOS 복구:** `service repair`는 다운로드 없이 서비스와 localhost API를 복구한다. 설치 바이너리, 디스크, SSH 키, 개발 실행 설정을 보존한다. 없거나 손상된 데몬 스크립트와 launchd plist도 복구한다. 필수 설치 파일이 없으면 서비스를 멈추기 전에 실패한다. SSH, 게스트 서비스, API가 정상 상태가 아니면 0이 아닌 종료 코드를 반환한다.
 - [ ] **H1 — 업데이트 상태:** 읽기 전용 상태 확인 성공.
 - [ ] **H2 — 호스트 네트워크:** uplink가 있으며 loopback·내부 helper 인터페이스는 선택 목록에 없다.
 - [ ] **U1 — 업데이트 적용(별도 선택 실행):** 적용 후 호스트가 복구되고 API가 200을 반환한다.
@@ -170,6 +171,24 @@ firecrab service shell                                               # root 로�
 ```
 
 Windows G6a–G6h: WSL2 microManager가 설치된 호스트에서 `cargo test -p firecrab-cli --test windows_service_shell -- --ignored --test-threads=1`을 실행한다. 기본 셸 검사는 stdin으로 수행하며 터미널 키보드·크기 변경·Ctrl-C는 별도 대화형 검사다.
+
+G7은 설치된 Mac에서 실행한다. 실행 중인 MicroVM을 멈출 수 있을 때 진행한다.
+
+```sh
+cargo build -p firecrab-cli --locked
+./target/debug/firecrab service stop
+./target/debug/firecrab service repair
+./target/debug/firecrab service status
+./target/debug/firecrab service shell -- systemctl is-active firecrab-api
+curl -fsS http://127.0.0.1:5523/api/host
+```
+
+종료 코드 0, 정상 게스트 서비스, HTTP 200을 확인한다. 실행 전후에 설치
+바이너리와 SSH 키의 체크섬을 비교한다. 디스크 파일의 식별값도 비교한다.
+부팅은 디스크 내용을 바꾸지만 디스크 파일을 교체하면 안 된다. VM을 멈춘
+상태에서 plist와 데몬 스크립트를 백업 이름으로 옮긴다. `repair`를 다시 실행하고
+두 파일이 생성되는지 확인한다. 복구가 끝날 때까지 백업을 보존한다. 단위 테스트는
+사용자의 launchd 서비스를 바꾸지 않고 설치 파일 누락과 파일 보존을 확인한다.
 
 ```text
 런타임 조건: doctor → ready: true

@@ -129,6 +129,7 @@ An interrupted download resumes from `downloads/<artifact>.partial` on the next 
 firecrab service status
 firecrab service stop
 firecrab service start
+firecrab service repair             # rebuild service registration and restart the existing VM
 firecrab service reinstall          # replace binaries/OS when needed, preserve data
 firecrab service uninstall          # stop daemon and remove binaries, preserve data
 firecrab service uninstall --purge  # also delete managed OS and persistent data
@@ -198,7 +199,7 @@ For a hands-on look, `firecrab service shell` opens a root shell in the manageme
 
 If `service start` reports that guest provisioning stopped at a phase such as `firecrab`, the API inside Debian is not ready; starting the launchd agent again cannot finish the installation. Run `firecrab service reinstall` from a checkout with the signed helper beside the CLI. Reinstall rebuilds an incomplete Debian OS disk and keeps `data/firecrab-data.raw`. After it succeeds, check `firecrab service status` and `curl -fsS http://127.0.0.1:5523/api/host`. A VM process left running after `service stop` can keep both disk images busy; inspect running `firecrab-micromanager-macos` processes before retrying and preserve the data disk when recovering them.
 
-If `ssh` to the management VM fails with `kex_exchange_identification: read: Connection reset by peer`, the guest's sshd is blocking the Mac under `PerSourcePenalties` (up to 600 seconds after crashed or unauthenticated sessions); wait, or run `firecrab service stop` and `service start`.
+If `ssh` to the management VM fails with `kex_exchange_identification: read: Connection reset by peer`, collect `firecrab service debug --logs` first. The reset alone does not identify the cause. One possible cause is sshd's `PerSourcePenalties` (up to 600 seconds after crashed or unauthenticated sessions). Try `firecrab service repair` to restart the existing VM and rebuild its host service registration and SSH tunnel.
 If `runtime/vm-console.log` shows `Internal error: Oops`, `Kernel panic`, or `EXT4-fs error`, the guest kernel failed under nested load: restart the service, and after ext4 errors stop it, keep a clone of the data disk (`cp -c data/firecrab-data.raw data/firecrab-data.raw.bak`), repair it with Homebrew `e2fsck -fy`, and run `firecrab service reinstall`.
 
 If the guest finishes provisioning but its VM does not power off within two minutes, `install` stops the provisioning VM and continues from the recorded markers.
@@ -221,6 +222,30 @@ runtime/daemon-ready          VM PID, tunnel PID, and guest IP
 
 The validated M5 run measured about 41 seconds for the first artifact download, 1 minute 48 seconds for a schema-changing cached reinstall including nested E2E, about 5 seconds for daemon start, and about 4 seconds for orderly stop.
 Performance and sleep/wake evidence for other supported Mac models still needs to be published before broad compatibility claims.
+
+## Repair an existing installation
+
+```sh
+firecrab service repair
+firecrab service status
+curl -fsS http://127.0.0.1:5523/api/host
+```
+
+`repair` checks the installed CLI/helper, OS/data disks, SSH key, and completed
+guest provisioning before stopping anything. It then stops the management VM,
+recreates `runtime/daemon.sh` and the launchd plist, and starts the VM and SSH
+tunnel. A deleted plist can be recovered even while its launchd job is loaded.
+Success requires launchd readiness, the local API, and a live SSH check of the
+guest API and network helper. Failed checks return a nonzero exit code and point
+to `service debug --logs`.
+
+The command downloads nothing and keeps the installed binaries, OS/data disks,
+provisioning assets, SSH key, known host keys, and guest development overrides.
+Restarting the management VM stops running MicroVMs. `start` uses the existing
+service registration; `repair` rebuilds it. Missing binaries, an incomplete
+installation, and disk filesystem damage need separate recovery; `repair` does
+not re-provision or run a filesystem repair tool. Use `reinstall` when installed
+assets or guest provisioning need replacement.
 
 ## Related
 

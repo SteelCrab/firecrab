@@ -71,6 +71,16 @@ pub fn install(
     ssh_private_key: &Path,
 ) -> Result<DaemonPaths, Error> {
     let paths = paths(layout)?;
+    install_at(layout, helper, ssh_private_key, &paths)?;
+    Ok(paths)
+}
+
+fn install_at(
+    layout: &Layout,
+    helper: &Path,
+    ssh_private_key: &Path,
+    paths: &DaemonPaths,
+) -> Result<(), Error> {
     let parent = paths.plist.parent().ok_or_else(|| Error::Io {
         action: "resolve LaunchAgents directory",
         path: paths.plist.clone(),
@@ -84,11 +94,10 @@ pub fn install(
 
     write_atomic(
         &paths.wrapper,
-        render_wrapper(layout, helper, ssh_private_key, &paths).as_bytes(),
+        render_wrapper(layout, helper, ssh_private_key, paths).as_bytes(),
         0o700,
     )?;
-    write_atomic(&paths.plist, render_plist(&paths).as_bytes(), 0o600)?;
-    Ok(paths)
+    write_atomic(&paths.plist, render_plist(paths).as_bytes(), 0o600)
 }
 
 pub fn uninstall(layout: &Layout) -> Result<(), Error> {
@@ -230,11 +239,8 @@ fn stop_if_loaded(layout: &Layout) -> Result<(), Error> {
         .status
         .success();
     if loaded {
-        launchctl(
-            "bootout",
-            &[domain.as_str(), paths.plist.to_string_lossy().as_ref()],
-            false,
-        )?;
+        // The registered job can outlive a deleted or damaged plist.
+        launchctl("bootout", &[&service], false)?;
     }
     let started = Instant::now();
     loop {
@@ -577,6 +583,59 @@ fn io_error(action: &'static str, path: &Path, source: io::Error) -> Error {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn repairing_registration_preserves_installed_binaries_disks_and_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let layout = Layout {
+            install_dir: root.join("bin"),
+            managed_home: root.join("micromanager"),
+        };
+        let paths = DaemonPaths {
+            plist: root.join("LaunchAgents/agent.plist"),
+            wrapper: layout.managed_home.join("runtime/daemon.sh"),
+            ready: layout.managed_home.join("runtime/daemon-ready"),
+            manager_ready: layout.managed_home.join("runtime/manager-ready"),
+            log: layout.managed_home.join("runtime/daemon.log"),
+            platform: layout.managed_home.join("runtime/host-platform.json"),
+        };
+        let key = layout.managed_home.join("runtime/manager_ed25519");
+        let preserved = [
+            layout.cli_path(),
+            layout.helper_path(),
+            layout.managed_home.join("system/debian-system.raw"),
+            layout.managed_home.join("data/firecrab-data.raw"),
+            key.clone(),
+            layout.managed_home.join("runtime/known_hosts"),
+            layout.managed_home.join("runtime/provisioned"),
+        ];
+        for path in &preserved {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"preserved").unwrap();
+        }
+        // Recover both a damaged wrapper and a completely missing plist.
+        fs::write(&paths.wrapper, b"broken").unwrap();
+        install_at(&layout, &layout.helper_path(), &key, &paths).unwrap();
+        assert!(fs::read_to_string(&paths.plist).unwrap().contains(LABEL));
+        assert!(
+            fs::read_to_string(&paths.wrapper)
+                .unwrap()
+                .starts_with("#!/bin/bash\n")
+        );
+        assert_eq!(
+            fs::metadata(&paths.wrapper).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&paths.plist).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        for path in preserved {
+            assert_eq!(fs::read(path).unwrap(), b"preserved");
+        }
+        assert!(!layout.managed_home.join("downloads").exists());
+    }
 
     #[test]
     fn wrapper_supervises_vm_tunnel_and_escalating_shutdown() {
