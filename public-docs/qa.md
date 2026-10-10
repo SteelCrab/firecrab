@@ -63,7 +63,7 @@ Windows `firecrab service` drives the managed WSL2 distribution the same way.
 | --- | --- | --- | --- |
 | H1 | `GET /api/update` | check only | do not `POST` unless U1 |
 | H2 | `GET /api/network` | uplink present; no `lo` / `fct*` / `mnb*` in picker | none |
-| H3 | `GET /api/info` | version and install paths | none |
+| H3 | `GET /api/info` | version and install paths; [mocked Host panel tests](../firecrab-e2e/README.md#run) | none |
 | U1 | `POST /api/update` | optional dedicated run | host comes back; API 200 |
 
 ## MicroNetwork

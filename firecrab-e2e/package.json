@@ -14,7 +14,8 @@
     "test:console": "playwright test tests/console-session.spec.ts",
     "test:dashboard": "FIRECRAB_E2E_SKIP_GUEST_BOOT=1 playwright test --grep @dashboard",
     "test:headed": "playwright test --headed",
-    "install-browsers": "playwright install chromium"
+    "install-browsers": "playwright install chromium",
+    "test:host": "playwright test --config playwright.host-firecrab.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
