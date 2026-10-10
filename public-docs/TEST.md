@@ -142,6 +142,8 @@ A17 required tools: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G6f — Windows:** command stdin preserves Unicode and lines; EOF terminates the command.
 - [ ] **G6g — Windows:** a missing command fails visibly; a subsequent shell succeeds.
 - [ ] **G6h — Windows:** shell exit leaves API/helper active and the host API responsive.
+- [ ] **G7 — macOS repair:** `service repair` restores the service and localhost API without downloads or replacing installed binaries, disks, SSH keys, or development overrides. It also recovers a missing/damaged daemon wrapper or launchd plist. Missing installation assets fail before the service stops; unhealthy SSH/guest services/API fail with a nonzero exit code.
+- [ ] **G7a — macOS recovery advice:** service runtime failures suggest `firecrab service repair` without running it. Lost registration in a completed installation suggests repair; a new host suggests install. Source/compiler failures keep their own errors, and `debug --json` stays valid JSON with advice inside its fields.
 - [ ] **H1 — Update status:** read-only status check succeeds.
 - [ ] **H2 — Host network:** an uplink is present; loopback and internal helper interfaces are absent from the picker.
 - [ ] **U1 — Update apply (optional separate run):** apply update; host recovers and API returns 200.
@@ -170,6 +172,28 @@ firecrab service shell                                               # root logi
 ```
 
 Windows G6a–G6h: `cargo test -p firecrab-cli --test windows_service_shell -- --ignored --test-threads=1` on an installed WSL2 microManager host. The default-shell checks use redirected stdin; terminal keyboard/resize/Ctrl-C require a separate interactive pass.
+
+For G7, run these commands on an installed Mac when no MicroVM needs to stay running:
+
+```sh
+cargo build -p firecrab-cli --locked
+./target/debug/firecrab service stop
+./target/debug/firecrab service repair
+./target/debug/firecrab service status
+./target/debug/firecrab service shell -- systemctl is-active firecrab-api
+curl -fsS http://127.0.0.1:5523/api/host
+```
+
+For repeatable G7/G7a failure injection, preservation checks, restoration, and
+retained evidence, run `scripts/ci-qa-macos-e2e.sh repair`.
+See [repair QA](micromanager-repair-qa.md) for its prerequisites and checks.
+
+Require exit 0, live guest units, and HTTP 200. Record installed binary/SSH key
+checksums and disk file identities before and after; boot changes disk contents,
+but must not replace the disk files. With a stopped VM, move the plist and wrapper
+to backup names, repeat `repair`, and require both files to be recreated. Keep
+those backups until recovery succeeds. Unit fixtures cover missing installation
+assets and preservation without touching the user's launchd service.
 
 ```text
 Runtime gate: doctor → ready: true

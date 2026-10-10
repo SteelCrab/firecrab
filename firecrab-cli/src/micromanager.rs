@@ -82,6 +82,9 @@ pub enum Command {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Rebuild the macOS service registration and restart the existing management VM.
+    #[cfg(target_os = "macos")]
+    Repair,
     /// Remove microManager and optionally all managed VM data.
     Uninstall {
         /// Also delete the managed Debian VM and its persistent data.
@@ -240,6 +243,15 @@ mod tests {
         assert!(TestCli::try_parse_from(["test", "debug", "--tail", "50"]).is_err());
         assert!(TestCli::try_parse_from(["test", "debug", "--logs", "--tail", "0"]).is_err());
         assert!(TestCli::try_parse_from(["test", "debug", "--logs", "--tail", "1001"]).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn repair_requires_no_install_or_download_options() {
+        let repair = TestCli::try_parse_from(["test", "repair"]).unwrap();
+        assert!(matches!(repair.command, Command::Repair));
+        assert!(TestCli::try_parse_from(["test", "repair", "--yes"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "repair", "--purge"]).is_err());
     }
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]

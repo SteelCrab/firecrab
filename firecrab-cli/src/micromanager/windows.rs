@@ -44,6 +44,8 @@ pub fn run(command: Command) -> Result<i32, Error> {
     match command {
         Command::Install { yes } => run_install(false, yes),
         Command::Reinstall { yes } => run_install(true, yes),
+        #[cfg(target_os = "macos")]
+        Command::Repair => Err(Error::MacosOnly("repair")),
         Command::Uninstall { purge } => {
             run_uninstall(&lifecycle::Layout::from_process_env()?, purge)
         }
