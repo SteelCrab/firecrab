@@ -103,7 +103,7 @@ jobs:
             firecrab-api firecrab-helper firecrab-net-helper firecrab
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: firecrab-${{ matrix.target }}
           path: firecrab-${{ matrix.target }}.tar.gz
@@ -224,7 +224,7 @@ jobs:
           Compress-Archive -Path package/* -DestinationPath "${{ matrix.asset }}"
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: firecrab-cli-${{ matrix.target }}
           path: ${{ matrix.asset }}
@@ -249,7 +249,7 @@ jobs:
         working-directory: firecrab-frontend
 
       - name: Upload dashboard
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: firecrab-dashboard
           path: firecrab-frontend/dist
@@ -341,7 +341,7 @@ jobs:
         run: bash scripts/test-host-release-compliance.sh
 
       - name: Upload compliance artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: firecrab-license-compliance
           path: dist/compliance
@@ -405,7 +405,7 @@ jobs:
           done
 
       - name: Upload host bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v6
         with:
           name: firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}
           path: firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz
