@@ -282,6 +282,11 @@ class QA:
                     self.summary["restoration"] = "PASS"
                 except Exception as restore_error:
                     self.summary["restoration"] = f"FAILED: {restore_error}"
+                    try:
+                        self.service("stop", timeout=60)
+                        self.summary["cleanup"] = "PASS: stopped after failed restoration"
+                    except Exception as stop_error:
+                        self.summary["cleanup"] = f"FAILED: {stop_error}"
         finally:
             if hasattr(self, "files_before"):
                 try:

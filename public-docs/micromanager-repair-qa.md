@@ -71,7 +71,9 @@ Logs contain hashes, not SSH private keys or guest unit contents.
 The test resumes a paused tunnel and restores a modified ready marker in `finally`.
 After a later failure, it restores the original registration and restarts the
 service. A restoration failure is recorded separately and never hides the test
-failure. The final file-preservation audit runs even when recovery fails.
+failure. If the restored service cannot start, the test stops it to prevent
+repeated failed boots and records cleanup separately. The final file-preservation
+audit runs even when recovery fails.
 Backups remain available for inspection.
 
 The Python guard/restoration contract runs in GitHub CI without virtualization:

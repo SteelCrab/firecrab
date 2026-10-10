@@ -172,10 +172,12 @@ class RepairQA(unittest.TestCase):
                 with patch.object(runner, "gate", side_effect=gate), \
                         patch.object(runner, "restart", side_effect=fail), \
                         patch.object(runner, "restore", side_effect=qa.QAError("recovery failed")), \
-                        redirect_stdout(io.StringIO()):
+                        patch.object(runner, "service") as service, redirect_stdout(io.StringIO()):
                     self.assertEqual(runner.execute(), 1)
                 self.assertEqual(runner.summary["error"], "runtime failed")
                 self.assertIn("recovery failed", runner.summary["restoration"])
+                service.assert_called_once_with("stop", timeout=60)
+                self.assertTrue(runner.summary["cleanup"].startswith("PASS"))
                 expected = "FAILED" if changed else "PASS"
                 self.assertTrue(runner.summary["preservation"].startswith(expected))
                 for name in ("preservation-before.json", "preservation-after.json"):
