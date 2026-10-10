@@ -153,6 +153,36 @@ class RepairQA(unittest.TestCase):
         self.assertEqual(runner.summary["restoration"], "PASS")
         self.assertEqual(runner.summary["status"], "FAILED")
 
+    def test_failed_runtime_records_preservation_even_when_recovery_fails(self):
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                self.assets()
+                runner = qa.QA("cli", self.home, self.install, self.root / f"results-{changed}")
+
+                def gate():
+                    runner.files_before = qa.snapshot(self.home, self.install)
+                    runner.record_snapshot("preservation-before.json", runner.files_before)
+
+                def fail():
+                    runner.mutated = True
+                    if changed:
+                        (self.install / "firecrab").write_text("unexpected replacement")
+                    raise qa.QAError("runtime failed")
+
+                with patch.object(runner, "gate", side_effect=gate), \
+                        patch.object(runner, "restart", side_effect=fail), \
+                        patch.object(runner, "restore", side_effect=qa.QAError("recovery failed")), \
+                        redirect_stdout(io.StringIO()):
+                    self.assertEqual(runner.execute(), 1)
+                self.assertEqual(runner.summary["error"], "runtime failed")
+                self.assertIn("recovery failed", runner.summary["restoration"])
+                expected = "FAILED" if changed else "PASS"
+                self.assertTrue(runner.summary["preservation"].startswith(expected))
+                for name in ("preservation-before.json", "preservation-after.json"):
+                    evidence = json.loads((runner.results / name).read_text())
+                    self.assertNotIn("preserved", evidence["known_hosts"])
+                    self.assertEqual(len(evidence["known_hosts"][0]), 64)
+
     def test_interrupted_qa_still_restores_the_service(self):
         runner = qa.QA("cli", self.home, self.install, self.root / "results")
 

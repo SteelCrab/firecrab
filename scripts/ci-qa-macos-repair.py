@@ -155,6 +155,13 @@ class QA:
             self.config_before = current
         require(current == self.config_before, "guest service configuration/development overrides changed")
 
+    def record_snapshot(self, name, files):
+        evidence = dict(files)
+        evidence["known_hosts"] = sorted(
+            hashlib.sha256(line.encode()).hexdigest() for line in files["known_hosts"]
+        )
+        (self.results / name).write_text(json.dumps(evidence, indent=2) + "\n")
+
     def gate(self):
         require(self.home.is_absolute() and self.install.is_absolute(), "managed paths must be absolute")
         for path in (self.home, self.install, self.plist.parent):
@@ -173,6 +180,7 @@ class QA:
                        log_output=False)
         require(str(self.wrapper) in job.stdout, "loaded launchd job belongs to another managed home")
         self.files_before = snapshot(self.home, self.install)
+        self.record_snapshot("preservation-before.json", self.files_before)
         self.catalogs_before = self.catalogs()
         backup = self.results / "registration-backup"
         backup.mkdir(mode=0o700)
@@ -275,6 +283,16 @@ class QA:
                 except Exception as restore_error:
                     self.summary["restoration"] = f"FAILED: {restore_error}"
         finally:
+            if hasattr(self, "files_before"):
+                try:
+                    files_after = snapshot(self.home, self.install)
+                    self.record_snapshot("preservation-after.json", files_after)
+                    assert_preserved(self.files_before, files_after)
+                    self.summary["preservation"] = "PASS"
+                except Exception as error:
+                    self.summary["preservation"] = f"FAILED: {error}"
+                    if self.summary["status"] == "PASS":
+                        self.summary.update(status="FAILED", error=str(error))
             self.log.close()
             (self.results / "summary.json").write_text(json.dumps(self.summary, indent=2) + "\n")
         print(f"{self.summary['status']}: evidence at {self.results}", flush=True)

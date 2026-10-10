@@ -62,6 +62,7 @@ Results default to `target/qa/macos-repair/<timestamp>/`:
 ```text
 run.log                exact commands, output, and exit codes
 summary.json           platform, source revision/dirty state, checks, and warnings
+preservation-*.json    before/after hashes and file identities, including failed runs
 registration-backup/   original launchd plist and daemon wrapper
 ```
 
@@ -70,7 +71,8 @@ Logs contain hashes, not SSH private keys or guest unit contents.
 The test resumes a paused tunnel and restores a modified ready marker in `finally`.
 After a later failure, it restores the original registration and restarts the
 service. A restoration failure is recorded separately and never hides the test
-failure. Backups remain available for inspection.
+failure. The final file-preservation audit runs even when recovery fails.
+Backups remain available for inspection.
 
 The Python guard/restoration contract runs in GitHub CI without virtualization:
 
