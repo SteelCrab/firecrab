@@ -52,6 +52,14 @@ cargo run -p firecrab-api
 | `PUT` | `/api/vms/{id}/storage` | Assign storage |
 | `GET` | `/ws/vms/{id}/console` | Open the serial console |
 
+Stop flushes guest writes and requests an orderly poweroff over SSH using the VM's
+operator key and pinned host key. It waits up to 30 seconds for the VM to exit,
+then falls back to the bounded SIGTERM/SIGKILL sequence. This works on ARM64 and
+x86_64 with BusyBox, OpenRC, and systemd guests. The host needs the OpenSSH client
+(installed by `install.sh`). A guest with unavailable SSH or a stalled shutdown
+is forcibly stopped; its unsaved writes may be lost. Stop is exempt from the
+ordinary REST request deadline so shutdown can finish.
+
 The console socket closes when the VM stops. When the guest's login session ends (`exit`), it
 closes with code `4000` (`session_ended`) instead. The VM keeps running; opening the socket again
 attaches to the new shell the guest starts and replays only that login session's output.

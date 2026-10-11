@@ -150,6 +150,13 @@ impl ApiClient {
         let resp = self
             .client
             .post(self.url(path))
+            .timeout(
+                if path.starts_with("/api/vms/") && path.ends_with("/stop") {
+                    Duration::from_secs(120)
+                } else {
+                    DEFAULT_REQUEST_TIMEOUT
+                },
+            )
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)

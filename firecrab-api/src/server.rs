@@ -202,7 +202,6 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
                 .delete(handlers::vms::delete_vm),
         )
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
-        .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route(
             "/api/vms/{id}/ssh-key",
@@ -365,6 +364,9 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // it partway and skip recording its results instead of answering the
     // documented `204`/`503`.
     let recovery = Router::new()
+        // Guest shutdown has its own deadline and may exceed the REST
+        // deadline. Cancelling here would leave the VM stuck in stopping.
+        .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
         .route(
             "/api/network/reconcile",
             post(handlers::network::reconcile_network),
@@ -789,10 +791,11 @@ mod tests {
     fn send(
         app: &Router,
         method: Method,
-        path: &'static str,
+        path: &str,
     ) -> tokio::task::JoinHandle<axum::http::StatusCode> {
         use tower::ServiceExt;
         let app = app.clone();
+        let path = path.to_owned();
         tokio::spawn(async move {
             app.oneshot(
                 Request::builder()
@@ -842,6 +845,32 @@ mod tests {
             "recovery must answer its documented result, not a 504"
         );
         assert!(calls.lock().unwrap().contains(&"ensure_firewall"));
+    }
+
+    #[tokio::test]
+    async fn vm_stop_finishes_after_the_ordinary_rest_deadline() {
+        use crate::handlers::vms::test_support::{record, seed_vm};
+        use axum::http::StatusCode;
+
+        let directory = tempfile::tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("slow-stop", Uuid::new_v4());
+        vm.state = crate::model::VmState::Running;
+        seed_vm(&state, &vm);
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        config.request_timeout = Duration::from_millis(20);
+        let app = build_router(state.clone(), &config);
+
+        let network_lock = state.network_mutations.lock().await;
+        let stop = send(&app, Method::POST, &format!("/api/vms/{}/stop", vm.id));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(!stop.is_finished(), "stop must survive the REST deadline");
+        drop(network_lock);
+        assert_eq!(stop.await.unwrap(), StatusCode::OK);
+        assert_eq!(
+            state.store.load_all().unwrap()[&vm.id].state,
+            crate::model::VmState::Stopped
+        );
     }
 
     #[tokio::test]

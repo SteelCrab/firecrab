@@ -480,10 +480,52 @@ pub fn sigkill(pid: u32) {
     }
 }
 
-/// Stops a registered VM: SIGTERM through its shim, then SIGKILL through it,
-/// then SIGKILL to Firecracker directly when the shim does not confirm the
-/// exit, waiting up to `grace` after each step for the exit monitor.
-pub(crate) async fn stop_registered(id: Uuid, process: VmProcess, grace: Duration) {
+/// Waits for guest shutdown before the bounded SIGTERM/SIGKILL fallback.
+/// Guest shutdown gets six grace periods (30 seconds with runtime defaults).
+pub(crate) async fn stop_registered(
+    state: AppState,
+    id: Uuid,
+    process: VmProcess,
+    grace: Duration,
+) {
+    stop_with_guest_shutdown(
+        id,
+        process,
+        grace,
+        crate::guest_ssh::shutdown::poweroff(&state, id),
+    )
+    .await;
+}
+
+async fn stop_with_guest_shutdown(
+    id: Uuid,
+    process: VmProcess,
+    grace: Duration,
+    shutdown: impl std::future::Future<Output = Result<(), String>>,
+) {
+    let mut guest_exit = process.exited.clone();
+    let guest = async {
+        tokio::select! {
+            result = shutdown => result?,
+            result = guest_exit.wait_for(|done| *done) => {
+                return result.map(|_| ()).map_err(|error| error.to_string());
+            }
+        }
+        guest_exit
+            .wait_for(|done| *done)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    };
+    match tokio::time::timeout(grace.saturating_mul(6), guest).await {
+        Ok(Ok(())) => return,
+        Ok(Err(error)) => {
+            tracing::warn!(vm_id = %id, %error, "guest shutdown failed; forcing VM stop")
+        }
+        Err(_) => {
+            tracing::warn!(vm_id = %id, "guest shutdown timed out; forcing VM stop; guest writes may be lost")
+        }
+    }
     let VmProcess {
         pid,
         control,
@@ -1015,6 +1057,88 @@ mod tests {
     use super::*;
     use crate::model::VmState;
     use core::assert_matches;
+
+    fn stop_process() -> (
+        VmProcess,
+        watch::Sender<bool>,
+        mpsc::Receiver<crate::vm_shim::protocol::ShimRequest>,
+    ) {
+        let (done, exited) = watch::channel(false);
+        let (control, requests) = ShimControl::for_test();
+        (
+            VmProcess {
+                pid: i32::MAX as u32,
+                exited,
+                console: Arc::new(ConsoleBroker::new()),
+                control,
+            },
+            done,
+            requests,
+        )
+    }
+
+    #[tokio::test]
+    async fn stop_waits_for_guest_exit_without_signalling_the_vmm() {
+        let (process, done, mut requests) = stop_process();
+        let (requested, request) = tokio::sync::oneshot::channel();
+        let stop = tokio::spawn(stop_with_guest_shutdown(
+            Uuid::new_v4(),
+            process,
+            Duration::from_secs(1),
+            async move {
+                requested.send(()).unwrap();
+                Ok(())
+            },
+        ));
+        request.await.unwrap();
+        assert!(!stop.is_finished(), "SSH completion is not VM exit");
+        assert!(
+            requests.try_recv().is_err(),
+            "guest must finish before any signal"
+        );
+        done.send(true).unwrap();
+        stop.await.unwrap();
+        assert!(
+            requests.try_recv().is_err(),
+            "normal shutdown must not signal the VMM"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unresponsive_guest_times_out_then_escalates_through_the_shim() {
+        use crate::vm_shim::protocol::ShimRequest;
+        let (process, done, mut requests) = stop_process();
+        let stop = tokio::spawn(stop_with_guest_shutdown(
+            Uuid::new_v4(),
+            process,
+            Duration::from_secs(1),
+            std::future::pending(),
+        ));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(5)).await;
+        assert!(requests.try_recv().is_err());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(requests.recv().await, Some(ShimRequest::Terminate));
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(requests.recv().await, Some(ShimRequest::Kill));
+        done.send(true).unwrap();
+        stop.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_guest_request_keeps_the_force_stop_fallback() {
+        use crate::vm_shim::protocol::ShimRequest;
+        let (process, done, mut requests) = stop_process();
+        let stop = tokio::spawn(stop_with_guest_shutdown(
+            Uuid::new_v4(),
+            process,
+            Duration::from_secs(1),
+            async { Err("no guest SSH".into()) },
+        ));
+        assert_eq!(requests.recv().await, Some(ShimRequest::Terminate));
+        done.send(true).unwrap();
+        stop.await.unwrap();
+    }
 
     fn record(cpu: u8, ram: u32) -> VmRecord {
         VmRecord {

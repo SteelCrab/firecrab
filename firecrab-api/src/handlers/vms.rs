@@ -977,8 +977,8 @@ async fn finish_start(
     }
 }
 
-/// Stops the VM synchronously: claim `stopping`, SIGTERM the process,
-/// escalate to SIGKILL after the grace period, then record `stopped`.
+/// Stops the VM synchronously: claim `stopping`, wait for guest shutdown,
+/// then use bounded force-stop fallbacks if the guest does not exit.
 pub async fn stop_vm(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -998,7 +998,7 @@ pub async fn stop_vm(
         .get(&id)
         .cloned();
     if let Some(process) = entry {
-        firecracker::stop_registered(id, process, state.runtime.stop_grace).await;
+        firecracker::stop_registered(state.clone(), id, process, state.runtime.stop_grace).await;
     }
 
     // Only a running VM can reach Stopping (see VmState::can_transition), so

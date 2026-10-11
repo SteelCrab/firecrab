@@ -14,6 +14,7 @@
 mod install;
 pub mod keys;
 pub mod service;
+pub(crate) mod shutdown;
 pub mod verify;
 
 pub use install::install_on_guest;

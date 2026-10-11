@@ -240,6 +240,11 @@ pkg_name() {
         apk:e2fsprogs) echo "e2fsprogs-extra" ;;
         *:e2fsprogs)  echo "e2fsprogs" ;;
         *:curl)       echo "curl" ;;
+        apt-get:openssh-client) echo "openssh-client" ;;
+        dnf:openssh-client) echo "openssh-clients" ;;
+        zypper:openssh-client) echo "openssh-clients" ;;
+        apk:openssh-client) echo "openssh-client-default" ;;
+        *:openssh-client) echo "openssh" ;;
         # scripts/install-firecracker.sh needs find and tar; a minimal
         # openSUSE or Debian install has neither.
         *:findutils)  echo "findutils" ;;
@@ -382,6 +387,8 @@ ensure_runtime_deps() {
             || warn "SELinux is on but semanage is missing; the services will be confined to init_t"
     fi
     ensure mkfs.ext4 e2fsprogs || failed=1
+    ensure ssh openssh-client || failed=1
+    ensure ssh-keygen openssh-client || failed=1
     ensure curl curl     || failed=1
     ensure find findutils || failed=1
     ensure tar tar       || failed=1

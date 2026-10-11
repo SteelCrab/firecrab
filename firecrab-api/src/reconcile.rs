@@ -220,7 +220,12 @@ pub(crate) async fn reconcile(state: &AppState) -> ReconcileReport {
                 .cloned();
             if let Some(process) = registered {
                 let grace = state.runtime.stop_grace;
-                tokio::spawn(firecracker::stop_registered(vm.id, process, grace));
+                tokio::spawn(firecracker::stop_registered(
+                    state.clone(),
+                    vm.id,
+                    process,
+                    grace,
+                ));
             }
         }
     }
