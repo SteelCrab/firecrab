@@ -488,11 +488,12 @@ pub(crate) async fn stop_registered(
     process: VmProcess,
     grace: Duration,
 ) {
+    let console = Arc::clone(&process.console);
     stop_with_guest_shutdown(
         id,
         process,
         grace,
-        crate::guest_ssh::shutdown::poweroff(&state, id),
+        crate::guest_ssh::shutdown::poweroff(&state, id, &console),
     )
     .await;
 }

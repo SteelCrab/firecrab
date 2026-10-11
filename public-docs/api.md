@@ -34,7 +34,7 @@ cargo run -p firecrab-api
 - JSON requests use `Content-Type: application/json`.
 - Request bodies are limited to 64 KiB.
 - Every response has `X-Request-Id`.
-- REST requests have a 10 second deadline, except `POST /api/network/reconcile`.
+- REST requests have a 10 second deadline, except VM stop and network reconcile.
 - Invalid paths return a JSON error.
 
 ## VM endpoints
@@ -56,9 +56,13 @@ Stop flushes guest writes and requests an orderly poweroff over SSH using the VM
 operator key and pinned host key. It waits up to 30 seconds for the VM to exit,
 then falls back to the bounded SIGTERM/SIGKILL sequence. This works on ARM64 and
 x86_64 with BusyBox, OpenRC, and systemd guests. The host needs the OpenSSH client
-(installed by `install.sh`). A guest with unavailable SSH or a stalled shutdown
-is forcibly stopped; its unsaved writes may be lost. Stop is exempt from the
-ordinary REST request deadline so shutdown can finish.
+(installed by `install.sh`). If SSH is unavailable, stop interrupts the serial
+console's foreground program, confirms the autologin root shell, and requests
+guest sync and poweroff there. This also covers first boot before SSH packages
+are installed. Only a guest with neither working control path or a stalled
+shutdown is forcibly stopped; its unsaved writes may be lost. An accepted stop
+continues if the client disconnects. Stop is exempt from the ordinary REST
+request deadline so shutdown can finish.
 
 The console socket closes when the VM stops. When the guest's login session ends (`exit`), it
 closes with code `4000` (`session_ended`) instead. The VM keeps running; opening the socket again

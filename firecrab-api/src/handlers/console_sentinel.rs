@@ -57,9 +57,12 @@ pub(crate) async fn wait_for_completion_with_sentinel(
 /// can't be mistaken for the real result.
 pub(crate) fn find_sentinel(buffer: &[u8], sentinel: &str) -> Option<i32> {
     let text = String::from_utf8_lossy(buffer);
-    text.lines().rev().find_map(|line| {
-        let (_, rest) = line.split_once(sentinel)?;
-        rest.trim_start_matches(':').trim().parse().ok()
+    text.split_inclusive('\n').rev().find_map(|line| {
+        if !line.ends_with('\n') {
+            return None;
+        }
+        let (_, rest) = line.rsplit_once(sentinel)?;
+        rest.strip_prefix(':')?.trim().parse().ok()
     })
 }
 
@@ -91,6 +94,30 @@ mod tests {
         assert_eq!(
             find_sentinel(b"Reading package lists...\n", TEST_SENTINEL),
             None
+        );
+    }
+
+    #[test]
+    fn split_exit_code_is_not_parsed_until_its_line_is_complete() {
+        assert_eq!(find_sentinel(b"FIRECRAB_TEST_DONE:1", TEST_SENTINEL), None);
+        assert_eq!(
+            find_sentinel(b"FIRECRAB_TEST_DONE:127", TEST_SENTINEL),
+            None
+        );
+        assert_eq!(
+            find_sentinel(b"FIRECRAB_TEST_DONE:127\r\n", TEST_SENTINEL),
+            Some(127)
+        );
+    }
+
+    #[test]
+    fn actual_result_after_a_carriage_return_wins_over_command_echo() {
+        assert_eq!(
+            find_sentinel(
+                b"echo FIRECRAB_TEST_DONE:$?\rFIRECRAB_TEST_DONE:0\r\n",
+                TEST_SENTINEL
+            ),
+            Some(0)
         );
     }
 

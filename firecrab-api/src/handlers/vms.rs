@@ -986,8 +986,23 @@ pub async fn stop_vm(
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
     let (claimed, previous) = claim_transition(&state, id, VmState::Stopping, request_id.0)?;
-    if let Err(error) = persist_update(&state, &claimed, request_id.0).await {
-        set_memory_state(&state, id, previous);
+
+    // A browser, proxy, or CLI can disconnect during guest shutdown. The
+    // accepted stop must finish even when its response is no longer awaited.
+    tokio::spawn(async move { finish_stop(&state, id, claimed, previous, request_id).await })
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+}
+
+async fn finish_stop(
+    state: &AppState,
+    id: Uuid,
+    claimed: VmRecord,
+    previous: VmState,
+    request_id: RequestId,
+) -> Result<Json<VmResponse>, AppError> {
+    if let Err(error) = persist_update(state, &claimed, request_id.0).await {
+        set_memory_state(state, id, previous);
         return Err(error);
     }
 
@@ -1005,7 +1020,7 @@ pub async fn stop_vm(
     // setup_vm_network always ran for it — tear its TAP/policy back down.
     // The underlying lease is untouched; it's freed only by a successful
     // delete, so a later start reuses the same IP/MAC.
-    teardown_vm_network(&state, id).await;
+    teardown_vm_network(state, id).await;
 
     // The exit monitor normally lands the record on stopped; cover the
     // process-less and raced cases by finishing the transition ourselves.
@@ -1022,9 +1037,9 @@ pub async fn stop_vm(
         }
         vm.clone()
     };
-    persist_update(&state, &stopped, request_id.0).await?;
+    persist_update(state, &stopped, request_id.0).await?;
     tracing::info!(request_id = %request_id.0, vm_id = %id, "vm stopped");
-    let lease = lease_for(&state, id).await;
+    let lease = lease_for(state, id).await;
     Ok(Json(vm_response(&state, &stopped, lease.as_ref())))
 }
 
@@ -3972,6 +3987,42 @@ while True:
 
         assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
         assert_eq!(memory_state(&state, vm.id), Some(VmState::Created));
+    }
+
+    #[tokio::test]
+    async fn accepted_stop_finishes_after_the_caller_disconnects() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("cancelled-stop", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+
+        // Hold cleanup until the request has durably accepted the stop.
+        let network_lock = state.network_mutations.lock().await;
+        let request = tokio::spawn(stop_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while db_state(&state, vm.id) != Some(VmState::Stopping) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        drop(network_lock);
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while db_state(&state, vm.id) != Some(VmState::Stopped) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("disconnect must not leave an accepted stop unfinished");
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Stopped));
     }
 
     #[tokio::test]

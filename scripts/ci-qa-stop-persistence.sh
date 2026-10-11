@@ -4,6 +4,8 @@
 # Usage: FIRECRAB_CLI=target/release/firecrab bash scripts/ci-qa-stop-persistence.sh ubuntu-resolute
 # FIRECRAB_QA_VM_ID can select an already prepared disposable VM named qa-*.
 # That VM is left running; only resources created by this script are deleted.
+# FIRECRAB_QA_TRANSPORT=serial tests first boot without waiting for guest SSH.
+# FIRECRAB_QA_OFFLINE=1 disables the disposable guest's network after boot.
 set -euo pipefail
 
 API=${FIRECRAB_API:-http://127.0.0.1:5523}
@@ -11,6 +13,13 @@ API=${API%/}
 CLI=${FIRECRAB_CLI:-firecrab}
 TEMPLATE=${1:-ubuntu-26.04}
 SUBNET=${FIRECRAB_QA_SUBNET:-172.30.97.0/24}
+TRANSPORT=${FIRECRAB_QA_TRANSPORT:-ssh}
+OFFLINE=${FIRECRAB_QA_OFFLINE:-0}
+if [ "$OFFLINE" = 1 ] && [ "$TRANSPORT" != serial ]; then
+    printf 'Offline guest test requires serial transport\n' >&2
+    exit 1
+fi
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 WORK=$(mktemp -d)
 VM=${FIRECRAB_QA_VM_ID:-}
 OWN_VM=0
@@ -63,23 +72,53 @@ start() {
 }
 if [ "$(http GET "/api/vms/$VM" | field state)" != running ]; then start cli; fi
 IP=$(http GET "/api/vms/$VM" | field ipv4)
-http GET "/api/vms/$VM/ssh-key" > "$WORK/key"
-chmod 600 "$WORK/key"
-PUBLIC=$(http GET "/api/vms/$VM/ssh-host-key" | field publicKey)
-printf '%s %s\n' "$IP" "$PUBLIC" > "$WORK/known_hosts"
+if [ "$TRANSPORT" != serial ]; then
+    http GET "/api/vms/$VM/ssh-key" > "$WORK/key"
+    chmod 600 "$WORK/key"
+    PUBLIC=$(http GET "/api/vms/$VM/ssh-host-key" | field publicKey)
+    printf '%s %s\n' "$IP" "$PUBLIC" > "$WORK/known_hosts"
+fi
 guest() {
+    if [ "$TRANSPORT" = serial ]; then
+        python3 "$SCRIPT_DIR/ci-qa-console-command.py" "$CLI" "$API" "$VM" "$1"
+        return
+    fi
     ssh -F /dev/null -T -i "$WORK/key" -o IdentitiesOnly=yes -o BatchMode=yes \
         -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$WORK/known_hosts" \
         -o GlobalKnownHostsFile=/dev/null -o ConnectTimeout=3 "root@$IP" "$@"
 }
 ready() {
     for _ in $(seq 1 "${FIRECRAB_QA_SSH_ATTEMPTS:-180}"); do
-        if guest true >/dev/null 2>&1; then return; fi
+        if guest true >/dev/null 2>&1; then
+            if [ "$OFFLINE" = 1 ]; then
+                guest 'if [ -x /etc/firecrab/busybox ]; then /etc/firecrab/busybox ip link set eth0 down; else ip link set eth0 down; fi' >/dev/null
+            fi
+            return
+        fi
         sleep 1
     done
-    printf 'Guest SSH did not become ready\n' >&2
+    printf 'Guest control did not become ready\n' >&2
     exit 1
 }
+
+if [ "$TRANSPORT" = serial ]; then
+    ready
+    guest "printf '%s\\n' 'persist-disconnect-$VM' > /root/qa-disconnect.txt"
+    # Close the request before the two-second SSH attempt has finished.
+    curl -sS --max-time 0.2 -X POST -H "Origin: $API" \
+        "$API/api/vms/$VM/stop" >/dev/null 2>&1 || true
+    for _ in $(seq 1 75); do
+        [ "$(http GET "/api/vms/$VM" | field state)" = stopped ] && break
+        sleep 1
+    done
+    [ "$(http GET "/api/vms/$VM" | field state)" = stopped ] || {
+        printf 'Cancelled request left VM in stopping\n' >&2; exit 1;
+    }
+    start cli
+    ready
+    [ "$(guest 'cat /root/qa-disconnect.txt')" = "persist-disconnect-$VM" ]
+    printf 'PASS disconnected stop finished and retained the unsynced file\n'
+fi
 
 for cycle in 1 2 3; do
     for mode in cli web-api; do
@@ -106,3 +145,7 @@ for cycle in 1 2 3; do
     done
 done
 printf 'PASS all six files survived all subsequent stop/start cycles\n'
+if [ "$TRANSPORT" = serial ]; then
+    [ "$(guest 'cat /root/qa-disconnect.txt')" = "persist-disconnect-$VM" ]
+    printf 'PASS disconnected-stop file survived all subsequent cycles\n'
+fi
