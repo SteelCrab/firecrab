@@ -63,6 +63,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- `firecrab doctor` no longer fails its images check on a host that runs only
+  imported or some of the built-in images, or that has none yet. An install
+  fetches no guest image, so the check passes when any guest rootfs is
+  installed and skips, with a hint to use the Images page, when there is none.
+  CI used to require that failure after every install.
 - macOS service repair prints all six stages. Service start and repair report
   VM/API readiness and elapsed time every ten seconds while waiting. Shutdown
   waits also report launchd/VM state. Local VM/API startup uses a ten-second

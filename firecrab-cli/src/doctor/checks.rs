@@ -773,11 +773,29 @@ fn datadir_private(datadir: &str) -> bool {
     path.exists() && fs::read_dir(path).is_err()
 }
 
-/// Finds an image root holding the default template set and reports which
-/// artifacts are missing. A root that exists but can't be traversed (e.g. a
-/// service-account-owned `DATADIR`) degrades to `Skip`, not `Fail` — see
-/// [`datadir_private`]. `digest` additionally prints a short sha256 per
-/// artifact to stderr, for confirming exactly which build is installed.
+/// Whether `root` holds a guest image a VM can boot from: a built-in
+/// template's artifacts, or any rootfs under `rootfs/`, which is where an
+/// installed catalog template and an OCI import both put theirs. This is the
+/// test `install.sh`'s `images_present` makes too.
+fn holds_image(root: &Path, artifacts: &[&str]) -> bool {
+    artifacts.iter().any(|art| root.join(art).is_file())
+        || fs::read_dir(root.join("rootfs")).is_ok_and(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .any(|entry| entry.path().extension().is_some_and(|ext| ext == "ext4"))
+        })
+}
+
+/// Reports whether an image root holds a guest image.
+///
+/// A fresh install has none, on purpose: `install.sh` never fetches one, and
+/// an image comes from the dashboard's Images page or an OCI import. So an
+/// image root without an image is a `Skip`, never a `Fail`, and any installed
+/// image passes whether or not it is one of the built-in templates. A root that
+/// exists but can't be traversed (e.g. a service-account-owned `DATADIR`)
+/// also degrades to `Skip` — see [`datadir_private`]. `digest` additionally
+/// prints a short sha256 per built-in template artifact present, for
+/// confirming exactly which build is installed.
 pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
     let roots = resolve_image_roots(env);
     let artifacts = template_artifacts();
@@ -799,102 +817,37 @@ pub fn check_images(env: &DoctorEnv, digest: bool) -> Vec<CheckResult> {
                 "looked at FIRECRAB_IMAGE_ROOT, ./images, {}/images",
                 env.datadir
             )),
-            Some(
-                "./install.sh   # or build with scripts/firecracker-menual/install-alpine-rootfs.sh",
-            ),
+            Some("./install.sh   # creates it; or set FIRECRAB_IMAGE_ROOT"),
         )];
     }
 
-    let mut root: Option<PathBuf> = None;
-    'outer: for candidate in &roots {
-        for art in &artifacts {
-            if candidate.join(art).is_file() {
-                root = Some(candidate.clone());
-                break 'outer;
-            }
+    let Some(root) = roots.iter().find(|root| holds_image(root, &artifacts)) else {
+        if datadir_private(&env.datadir) {
+            return vec![CheckResult::skip(
+                format!("images: {} is private to the service account", env.datadir),
+                Some(&format!(
+                    "the current user cannot inspect {}/images; accessible roots had no images",
+                    env.datadir
+                )),
+                Some("sudo firecrab doctor   # inspect installed image contents"),
+            )];
         }
-    }
-
-    let root = match root {
-        Some(r) => r,
-        None => {
-            let any_ext4_root = roots.iter().find(|c| {
-                fs::read_dir(c.join("rootfs"))
-                    .map(|it| {
-                        it.filter_map(Result::ok)
-                            .any(|e| e.path().extension().is_some_and(|x| x == "ext4"))
-                    })
-                    .unwrap_or(false)
-            });
-            match any_ext4_root {
-                Some(r) => r.clone(),
-                None => {
-                    if datadir_private(&env.datadir) {
-                        return vec![CheckResult::skip(
-                            format!("images: {} is private to the service account", env.datadir),
-                            Some(&format!(
-                                "the current user cannot inspect {}/images; accessible roots had no images",
-                                env.datadir
-                            )),
-                            Some("sudo firecrab doctor   # inspect installed image contents"),
-                        )];
-                    }
-                    let roots_str = roots
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    return vec![CheckResult::fail(
-                        format!("images: no guest rootfs found under {roots_str}"),
-                        None,
-                        Some(&format!(
-                            "./install.sh  or copy images into {}/images",
-                            env.datadir
-                        )),
-                    )];
-                }
-            }
-        }
-    };
-
-    let mut missing = Vec::new();
-    let mut present = 0u32;
-    for art in &artifacts {
-        if root.join(art).is_file() {
-            present += 1;
-        } else {
-            missing.push(*art);
-        }
-    }
-
-    if present == 0 {
-        return vec![CheckResult::fail(
-            format!(
-                "images: image root {} has none of the default template artifacts",
-                root.display()
-            ),
-            None,
-            Some(&format!("build or copy templates into {}", root.display())),
-        )];
-    }
-
-    if !missing.is_empty() {
+        let roots_str = roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
         return vec![CheckResult::skip(
-            format!(
-                "images: some default templates missing under {}",
-                root.display()
-            ),
-            Some(&format!("missing: {}", missing.join(" "))),
-            Some(&format!(
-                "build the missing image(s), copy into {}, restart firecrab-api",
-                root.display()
-            )),
+            format!("images: no guest image installed yet under {roots_str}"),
+            None,
+            Some("install one from the dashboard Images page, or import an OCI image"),
         )];
-    }
+    };
 
     if digest {
         let digests: Vec<String> = artifacts
             .iter()
+            .filter(|art| root.join(art).is_file())
             .map(|art| format!("{art}={}", short_digest(&root.join(art))))
             .collect();
         eprintln!("images: {}", digests.join(" "));
@@ -1475,8 +1428,10 @@ mod tests {
         assert_eq!(results[0].status, Status::Pass);
     }
 
+    /// Installing one template from the dashboard leaves the others absent,
+    /// which is a healthy host and not something to nag about.
     #[test]
-    fn images_skip_when_some_artifacts_missing() {
+    fn images_pass_when_only_some_default_templates_are_installed() {
         let dir = tempdir().unwrap();
         let images = dir.path().join("images");
         let artifacts = template_artifacts();
@@ -1490,7 +1445,8 @@ mod tests {
             ..DoctorEnv::default()
         };
         let results = check_images(&env, false);
-        assert_eq!(results[0].status, Status::Skip);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
     }
 
     #[test]
@@ -2054,27 +2010,27 @@ mod tests {
         assert!(results[0].title.contains("too tight"));
     }
 
+    /// An OCI import registers `rootfs/<alias>.ext4`, not a built-in template's
+    /// files. A host that runs only imported images is healthy.
     #[test]
-    fn images_fail_via_any_ext4_fallback_when_none_of_default_artifacts_present() {
+    fn images_pass_with_only_an_imported_rootfs() {
         let dir = tempdir().unwrap();
         let images = dir.path().join("images");
         fs::create_dir_all(images.join("rootfs")).unwrap();
-        fs::write(images.join("rootfs/custom.ext4"), b"x").unwrap();
+        fs::write(images.join("rootfs/ubuntu-nginx-latest.ext4"), b"x").unwrap();
         let env = DoctorEnv {
             image_root: Some(images.display().to_string()),
             ..DoctorEnv::default()
         };
         let results = check_images(&env, false);
-        assert_eq!(results[0].status, Status::Fail);
-        assert!(
-            results[0]
-                .title
-                .contains("none of the default template artifacts")
-        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
     }
 
+    /// `install.sh` never fetches an image, so right after an install there is
+    /// none. That is a fresh host to be told how to add one to, not a failure.
     #[test]
-    fn images_fail_when_no_ext4_and_root_has_unrelated_files() {
+    fn images_skip_when_the_root_has_no_guest_image() {
         let dir = tempdir().unwrap();
         let images = dir.path().join("images");
         fs::create_dir_all(images.join("rootfs")).unwrap();
@@ -2085,8 +2041,48 @@ mod tests {
             ..DoctorEnv::default()
         };
         let results = check_images(&env, false);
-        assert_eq!(results[0].status, Status::Fail);
-        assert!(results[0].title.contains("no guest rootfs found"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, Status::Skip, "{results:?}");
+        assert!(results[0].title.contains("no guest image installed yet"));
+        assert!(
+            results[0]
+                .fix
+                .as_deref()
+                .is_some_and(|fix| fix.contains("Images page"))
+        );
+    }
+
+    #[test]
+    fn images_skip_for_an_empty_image_root() {
+        let dir = tempdir().unwrap();
+        let images = dir.path().join("images");
+        fs::create_dir_all(&images).unwrap();
+        let env = DoctorEnv {
+            image_root: Some(images.display().to_string()),
+            datadir: dir.path().join("nonexistent-datadir").display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_images(&env, false);
+        assert_eq!(results[0].status, Status::Skip, "{results:?}");
+    }
+
+    /// The root that holds an image wins over an earlier one that does not.
+    #[test]
+    fn images_pass_when_a_later_root_holds_the_image() {
+        let dir = tempdir().unwrap();
+        let empty = dir.path().join("empty-images");
+        fs::create_dir_all(&empty).unwrap();
+        let datadir = dir.path().join("data");
+        let installed = datadir.join("images");
+        fs::create_dir_all(installed.join("rootfs")).unwrap();
+        fs::write(installed.join("rootfs/custom.ext4"), b"x").unwrap();
+        let env = DoctorEnv {
+            image_root: Some(empty.display().to_string()),
+            datadir: datadir.display().to_string(),
+            ..DoctorEnv::default()
+        };
+        let results = check_images(&env, false);
+        assert_eq!(results[0].status, Status::Pass, "{results:?}");
     }
 
     #[test]
