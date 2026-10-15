@@ -27,6 +27,7 @@ API 기본 주소:  http://127.0.0.1:5523
 - [nginx 통합 시나리오](#nginx-통합-시나리오)
 - [CLI](#cli)
 - [브라우저 E2E](#브라우저-e2e-playwright의-모든-케이스)
+- [제거](#제거)
 - [정리 및 CI 범위](#정리-및-ci-범위)
 
 ## 자동 점검 및 준비
@@ -141,9 +142,18 @@ A17 필수 도구: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G6f — Windows:** 명령 stdin의 한글과 줄이 유지되고 EOF로 명령이 종료된다.
 - [ ] **G6g — Windows:** 없는 명령은 오류를 내며 실패하고 후속 셸은 정상 실행된다.
 - [ ] **G6h — Windows:** 셸 종료 후 API/helper가 active이고 호스트 API가 응답한다.
+- [ ] **G7 — macOS 복구:** `service repair`는 다운로드 없이 서비스와 localhost API를 복구한다. 설치 바이너리, 데이터 디스크, SSH 키, 개발 실행 설정을 보존한다. OS 이미지를 백업하고 복사본을 검사한다. 복구 뒤 읽기 전용 재검사를 통과한 경우에만 OS 이미지를 교체한다. 없거나 손상된 데몬 스크립트와 launchd plist도 복구한다. 필수 설치 파일이 없으면 서비스를 멈추기 전에 실패한다. OS 복구는 시리얼 콘솔을 사용한다. 마지막 검사는 이번 부팅의 게스트 보고와 실제 API 응답을 확인한다. 게스트 보고나 API가 정상 상태가 아니면 0이 아닌 종료 코드를 반환한다.
+- [ ] **G7a — macOS 복구 안내:** 서비스 실행 오류는 `firecrab service repair`를 제안한다. 복구를 자동 실행하지 않는다. 설치가 완료됐는데 서비스 등록 파일이 없으면 repair를 안내한다. 새 호스트에는 install을 안내한다. 소스·컴파일 오류는 기존 오류를 유지한다. `debug --json`은 JSON 형식을 유지하고 필드 안에 복구 안내를 넣는다.
+- [ ] **G7b — macOS 복구 진행 표시:** repair는 검증·중지와 helper 정리·OS 백업과 복구·등록·시작·게스트 부팅과 API 검사 단계를 작업 전에 출력한다. VM/API 준비와 중지 대기는 10초마다 경과 시간과 현재 상태를 출력한다. 로컬 VM/API 준비 제한은 10초이다. 중지 제한은 40초를 유지한다. 정상 상태 검사와 실패 종료 코드는 유지한다.
+- [ ] **G7c — macOS OS 파일시스템 복구:** 작은 테스트 디스크의 연결되지 않은 inode 오류를 고친다. 복구 뒤 읽기 전용 재검사를 통과한다. 정상 디스크는 원본 inode를 유지한다. 실패와 시간 초과에서는 원본, 백업, 데이터 디스크, SSH 설정을 유지한다. 별도 복구 검사 제한은 120초이다.
+- [ ] **G7d — macOS helper 정리:** 사용자, 실행 파일, 관리 홈이 일치하는 helper만 정리한다. 다른 관리 홈의 helper는 유지한다. 관리 홈별 잠금으로 VM 동시 실행과 OS 교체를 막는다.
+- [ ] **G7e — 누락된 Debian OS 파일:** 체크섬이 일치하는 `lost+found` 파일이나 검증된 읽기 전용 캐시에서 OS 실행 경로의 파일과 기본 서비스 정의를 복원한다. 심볼릭 링크와 패키지 기록은 패키지 버전이 일치할 때만 복원한다. 기존 파일·`/etc` 설정·앱 데이터와 원본 OS·데이터·SSH·참조 이미지를 보존한다. 재검사 실패는 OS 교체 전에 차단한다. 두 번째 복구는 파일을 복원하지 않는다. 복구한 OS 복사본에서 SSH, dbus, 네트워크 서비스, API 준비를 10초 안에 확인한다.
+- [ ] **G7f — macOS SSH 경로:** `Application Support` 경로를 OpenSSH가 하나의 호스트 키 파일 경로로 해석한다. 실제 `ssh -G`와 데몬 연결 복구 테스트로 확인한다. shell, dev, 포트 전달도 같은 경로 처리를 사용한다. repair의 마지막 검사는 SSH 명령 없이 이번 부팅의 게스트 보고를 확인한다. 필드 누락·비활성·중복·주소 불일치를 거부한다. 기존 호스트 키를 보존하고 변경된 키는 거부한다.
+- [ ] **G8 — Windows 복구:** `service repair`는 없거나 손상된 예약 작업과 XML을 다시 만들고 설치된 API/helper를 재시작한다. 이전 helper 이름도 지원하며 실제 게스트 서비스와 Windows localhost API를 확인한다. WSL 디스크·설치 완료 정보·바이너리·데이터·개발 실행 설정을 보존한다. 다운로드·프로비저닝·재가져오기·전체 WSL 종료를 수행하지 않는다. 필수 디스크·설치 완료 정보·예약 작업 등록 조건이 없으면 중지 전에 실패한다. 중지·등록·게스트 재시작·준비 대기·최종 상태 검사 실패는 0이 아닌 종료 코드를 반환한다. 준비 대기는 start와 같은 5분 제한을 유지한다.
 - [ ] **H1 — 업데이트 상태:** 읽기 전용 상태 확인 성공.
 - [ ] **H2 — 호스트 네트워크:** uplink가 있으며 loopback·내부 helper 인터페이스는 선택 목록에 없다.
-- [ ] **U1 — 업데이트 적용(별도 선택 실행):** 적용 후 호스트가 복구되고 API가 200을 반환한다.
+- [ ] **H3 — Firecrab 정보:** API가 버전·설치 경로·Firecracker 버전·API/helper 서비스 상태를 알려 준다. Host 탭에서 표시와 상태 갱신을 확인한다. 조회 실패 시 이전 실행 상태를 표시하지 않는다.
+- [ ] **U1 — 업데이트 적용(별도 선택 실행):** 적용 후 호스트가 복구되고 API가 200을 반환한다. 대시보드 팝업이 릴리스 노트를 보여 주고, 새 API가 응답할 때까지 게이지·퍼센트·단계를 표시한다.
 
 호스팅 macOS·Windows 러너는 빌드·단위 테스트·진단만 수행한다.
 런타임 E2E는 M3 이상 네이티브 Mac 또는 WSL2가 있는 Windows 호스트에서 준비 상태를 확인한 뒤 수행한다.
@@ -170,6 +180,28 @@ firecrab service shell                                               # root 로�
 
 Windows G6a–G6h: WSL2 microManager가 설치된 호스트에서 `cargo test -p firecrab-cli --test windows_service_shell -- --ignored --test-threads=1`을 실행한다. 기본 셸 검사는 stdin으로 수행하며 터미널 키보드·크기 변경·Ctrl-C는 별도 대화형 검사다.
 
+G7은 설치된 Mac에서 실행한다. 실행 중인 MicroVM을 멈출 수 있을 때 진행한다.
+
+```sh
+cargo build -p firecrab-cli --locked
+./target/debug/firecrab service stop
+./target/debug/firecrab service repair
+./target/debug/firecrab service status
+./target/debug/firecrab service shell -- systemctl is-active firecrab-api
+curl -fsS http://127.0.0.1:5523/api/host
+```
+
+G7/G7a 오류 재현과 복구는 `scripts/ci-qa-macos-e2e.sh repair`로 반복 검사한다.
+파일 보존과 원상 복구를 확인하고 실행 로그와 결과를 저장한다.
+준비 조건과 검사 항목은 [repair QA](micromanager-repair-qa.md)에 정리한다.
+
+종료 코드 0, 정상 게스트 서비스, HTTP 200을 확인한다. 실행 전후에 설치
+바이너리와 SSH 키의 체크섬을 비교한다. 디스크 파일의 식별값도 비교한다.
+부팅은 디스크 내용을 바꾸지만 디스크 파일을 교체하면 안 된다. VM을 멈춘
+상태에서 plist와 데몬 스크립트를 백업 이름으로 옮긴다. `repair`를 다시 실행하고
+두 파일이 생성되는지 확인한다. 복구가 끝날 때까지 백업을 보존한다. 단위 테스트는
+사용자의 launchd 서비스를 바꾸지 않고 설치 파일 누락과 파일 보존을 확인한다.
+
 ```text
 런타임 조건: doctor → ready: true
 느린 게스트: FIRECRAB_QA_WAIT_FACTOR
@@ -184,7 +216,9 @@ curl -i "$API/api/host"             # G4: 200
 curl -i "$API/"                    # G4: HTML 200
 curl -i "$API/api/no-such-route"    # G5: requestId가 포함된 JSON 404
 curl -i "$API/api/update"           # H1: 읽기 전용 확인
+curl -i "$API/api/update/progress"  # H1: idle 또는 마지막 실행
 curl -i "$API/api/network"          # H2: uplink 목록
+curl -i "$API/api/info"             # H3: 버전과 설치 경로
 ```
 
 ## MicroNetwork
@@ -539,6 +573,30 @@ Windows `all`은 gate/setup 성공 후 API → nginx → guest → browser 결�
 Windows 로그·요약·브라우저 archive는 `target/qa/windows/<run-id>` 또는 `-ResultsDir`에 보관한다.
 macOS 브라우저 명령과 관리 VM SSH 설정은 [E2E 안내](../firecrab-e2e/README.md)를 참고한다.
 
+## 제거
+
+UFW가 켜져 있고 MicroNetwork 하나와 실행 중인 MicroVM 하나가 있는 일회용 Linux 호스트에서, 제거 뒤의 호스트를 설치 전의 호스트와 비교한다.
+
+- [ ] **UN1:** `firecrab service uninstall` 또는 `./install.sh --uninstall`이 VM을 먼저 멈춘다. `firecracker`·`firecrab-api` 프로세스와 `firecrab-*` unit이 남지 않는다.
+- [ ] **UN2:** `/usr/local/lib/firecrab`과 `/usr/local/bin/firecrab`이 없다.
+- [ ] **UN3:** `mnb*`·`fct*`·`fcbr0` 링크, firecrab nftables 테이블, MicroNetwork 서브넷의 MASQUERADE 규칙이 없다.
+- [ ] **UN4:** `ufw status numbered`에 firecrab 브리지 이름이 없고, 이전부터 있던 규칙은 그대로다.
+- [ ] **UN5:** `/etc/firecrab/host-baseline.env`가 없고, `getfacl -p /dev/kvm`이 설치 전과 같으며, 다른 브리지나 컨테이너 네트워크가 없으면 포워딩이 복원된다.
+- [ ] **UN6:** `--purge` 없이는 데이터와 설정이 남고 재설치하면 네트워크와 VM이 `stopped`로 보인다. `--purge`면 모두 없다.
+- [ ] **UN7:** 두 번째 제거는 아무것도 바꾸지 않고 `0`으로 끝난다.
+
+```sh
+sudo firecrab service uninstall            # 또는: sudo ./install.sh --uninstall
+pgrep -x firecracker || echo none          # UN1
+pgrep -x firecrab-api || echo none
+systemctl list-units --all --plain --no-legend 'firecrab-*' | grep . || echo none
+ls /usr/local/lib/firecrab 2>&1 | head -1  # UN2: No such file or directory
+ip -br link | grep -E '^(mnb|fct|fcbr)' || echo none                        # UN3
+sudo iptables -t nat -S POSTROUTING | grep MASQUERADE || echo none
+sudo ufw status numbered | grep -E 'mnb[0-9a-f]{12}' || echo none          # UN4
+getfacl -p /dev/kvm; sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding # UN5
+```
+
 ## 정리 및 CI 범위
 
 - [ ] **X1:** QA VM이 남지 않는다.
@@ -564,7 +622,7 @@ curl -fsS "$API/api/shells"
 CI 스크립트 범위:
 
 ```text
-scripts/ci-qa-api.sh: G4–G5 H1–H2 N1–N5 S1–S3 L1–L3 I1 I8–I9 V14 C3 C5 X1–X4 X6
+scripts/ci-qa-api.sh: G4–G5 H1–H3 N1–N5 S1–S3 L1–L3 I1 I8–I9 V14 C3 C5 X1–X4 X6
 scripts/ci-qa-nginx.sh: V8a–V8d를 포함한 NGX1–NGX9
 scripts/ci-qa-ssh.sh: 게스트·nginx 실행 중 V8a–V8d
 scripts/ci-qa-guest.sh: I5–I6 V1–V2 V6–V9 V11–V13 N6 C1–C2 C4 X5

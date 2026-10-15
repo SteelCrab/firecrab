@@ -27,6 +27,7 @@ Update scope:   POST /api/update → U1 only
 - [nginx combined scenario](#nginx-combined-scenario)
 - [CLI](#cli)
 - [Browser E2E](#browser-e2e-every-playwright-case)
+- [Uninstall](#uninstall)
 - [Cleanup and CI coverage](#cleanup-and-ci-coverage)
 
 ## Automated checks and prerequisites
@@ -141,9 +142,18 @@ A17 required tools: ip nft dnsmasq mkfs.ext4 firecracker sha256sum
 - [ ] **G6f — Windows:** command stdin preserves Unicode and lines; EOF terminates the command.
 - [ ] **G6g — Windows:** a missing command fails visibly; a subsequent shell succeeds.
 - [ ] **G6h — Windows:** shell exit leaves API/helper active and the host API responsive.
+- [ ] **G7 — macOS repair:** `service repair` restores the service and localhost API without downloads or replacing installed binaries, the data disk, SSH keys, or development overrides. It backs up the OS image, checks a detached copy, and installs only a repair that passes a second read-only check. It also recovers a missing/damaged daemon wrapper or launchd plist. Missing installation assets fail before the service stops; an invalid current-boot guest report or unreachable API fails with a nonzero exit code. Repair uses the serial console for OS recovery and the guest's virtiofs boot report for final service checks.
+- [ ] **G7a — macOS recovery advice:** service runtime failures suggest `firecrab service repair` without running it. Lost registration in a completed installation suggests repair; a new host suggests install. Source/compiler failures keep their own errors, and `debug --json` stays valid JSON with advice inside its fields.
+- [ ] **G7b — macOS repair progress:** repair prints validation, shutdown/helper cleanup, OS backup/repair, registration, startup, and guest-boot/API-check stages before each operation. Pending VM/API and shutdown waits report elapsed time and current state every ten seconds. Local VM/API readiness times out after ten seconds; shutdown keeps its forty-second deadline. Health checks and failure exit codes stay unchanged.
+- [ ] **G7c — macOS OS filesystem repair:** a tiny unattached-inode fixture is corrected and passes a second read-only check. Clean checks keep the original OS inode. Failed checks and timeouts keep the original, backup, data disk, and SSH assets. Offline checks use a separate 120-second deadline.
+- [ ] **G7d — macOS helper cleanup:** stale helpers are matched by owner, executable, and managed home. Helpers for another home survive. A per-home lock prevents simultaneous management VMs and OS commit.
+- [ ] **G7e — missing Debian OS files:** restore missing packaged OS files in binary/library trees (including service definitions) from checksum-matched `lost+found` files or the authenticated read-only cache. Restore symlinks and missing package manifests only for matching package versions. Preserve existing files, `/etc` configuration, application data, original OS/data/SSH/reference assets, and reject failed verification before commit. A second repair restores zero files. Boot a repaired OS copy and require live SSH, dbus/network services, and guest API readiness within ten seconds.
+- [ ] **G7f — macOS SSH paths:** default `Application Support` paths remain one OpenSSH known-hosts path. Check the real `ssh -G` parser, wrapper tunnel/reconnect, shell, dev, and port-forward arguments. Repair verifies the current-boot guest report without an SSH command; missing, inactive, duplicate, or mismatched fields fail. Retain existing host pins and reject a changed host key.
+- [ ] **G8 — Windows repair:** `service repair` recreates a missing/damaged scheduled task and its XML, restarts the installed API/helper (including the legacy helper name), and requires live guest services plus the Windows localhost API. Preserve the WSL disk, provisioning marker, binaries, data, and development overrides; perform no downloads, provisioning, reimport, or global WSL shutdown. Missing disk/provisioning/registration prerequisites fail before stopping. Failed shutdown, registration, guest restart, readiness, or final health checks return nonzero. Readiness retains the five-minute start deadline.
 - [ ] **H1 — Update status:** read-only status check succeeds.
 - [ ] **H2 — Host network:** an uplink is present; loopback and internal helper interfaces are absent from the picker.
-- [ ] **U1 — Update apply (optional separate run):** apply update; host recovers and API returns 200.
+- [ ] **H3 — Firecrab info:** the API reports build/install info, the Firecracker version, and API/helper states. The Host panel shows and refreshes them; an API outage must not retain stale active states.
+- [ ] **U1 — Update apply (optional separate run):** apply update; host recovers and API returns 200. The dashboard dialog lists the release notes, then shows a gauge, the percent, and the stage until the new API answers.
 
 Hosted macOS and Windows runners do build, unit, and diagnostic checks.
 Runtime E2E needs a native M3-or-later Mac or a Windows host with WSL2, and doctor must report ready.
@@ -170,6 +180,28 @@ firecrab service shell                                               # root logi
 
 Windows G6a–G6h: `cargo test -p firecrab-cli --test windows_service_shell -- --ignored --test-threads=1` on an installed WSL2 microManager host. The default-shell checks use redirected stdin; terminal keyboard/resize/Ctrl-C require a separate interactive pass.
 
+For G7, run these commands on an installed Mac when no MicroVM needs to stay running:
+
+```sh
+cargo build -p firecrab-cli --locked
+./target/debug/firecrab service stop
+./target/debug/firecrab service repair
+./target/debug/firecrab service status
+./target/debug/firecrab service shell -- systemctl is-active firecrab-api
+curl -fsS http://127.0.0.1:5523/api/host
+```
+
+For repeatable G7/G7a failure injection, preservation checks, restoration, and
+retained evidence, run `scripts/ci-qa-macos-e2e.sh repair`.
+See [repair QA](micromanager-repair-qa.md) for its prerequisites and checks.
+
+Require exit 0, live guest units, and HTTP 200. Record installed binary/SSH key
+checksums and disk file identities before and after; boot changes disk contents,
+but must not replace the disk files. With a stopped VM, move the plist and wrapper
+to backup names, repeat `repair`, and require both files to be recreated. Keep
+those backups until recovery succeeds. Unit fixtures cover missing installation
+assets and preservation without touching the user's launchd service.
+
 ```text
 Runtime gate: doctor → ready: true
 Slow guest:   FIRECRAB_QA_WAIT_FACTOR
@@ -184,7 +216,9 @@ curl -i "$API/api/host"             # G4: 200
 curl -i "$API/"                    # G4: HTML 200
 curl -i "$API/api/no-such-route"    # G5: JSON 404 with requestId
 curl -i "$API/api/update"           # H1: read-only check
+curl -i "$API/api/update/progress"  # H1: idle, or the last run
 curl -i "$API/api/network"          # H2: uplink list
+curl -i "$API/api/info"             # H3: version and install paths
 ```
 
 ## MicroNetwork
@@ -539,6 +573,30 @@ The guest script also checks later image references after a failed reference.
 The Windows transcript, summary, and browser archive are retained under `target/qa/windows/<run-id>` or `-ResultsDir`.
 For macOS browser commands and management SSH settings, see the [E2E guide](../firecrab-e2e/README.md).
 
+## Uninstall
+
+On a disposable Linux host with UFW active, one MicroNetwork, and one running MicroVM, compare the host after the uninstall with the host before the install.
+
+- [ ] **UN1:** `firecrab service uninstall` or `./install.sh --uninstall` stops the VM first; no `firecracker` or `firecrab-api` process and no `firecrab-*` unit remains.
+- [ ] **UN2:** `/usr/local/lib/firecrab` and `/usr/local/bin/firecrab` are gone.
+- [ ] **UN3:** no `mnb*`, `fct*`, or `fcbr0` link, no firecrab nftables table, and no MASQUERADE rule for a MicroNetwork subnet.
+- [ ] **UN4:** `ufw status numbered` names no firecrab bridge and keeps the rules that were there before.
+- [ ] **UN5:** `/etc/firecrab/host-baseline.env` is gone, `getfacl -p /dev/kvm` matches the host before the install, and forwarding is restored unless another bridge or container network exists.
+- [ ] **UN6:** without `--purge` the data and config stay and a reinstall finds the networks and VMs `stopped`; with `--purge` they are gone.
+- [ ] **UN7:** a second uninstall changes nothing and exits `0`.
+
+```sh
+sudo firecrab service uninstall            # or: sudo ./install.sh --uninstall
+pgrep -x firecracker || echo none          # UN1
+pgrep -x firecrab-api || echo none
+systemctl list-units --all --plain --no-legend 'firecrab-*' | grep . || echo none
+ls /usr/local/lib/firecrab 2>&1 | head -1  # UN2: No such file or directory
+ip -br link | grep -E '^(mnb|fct|fcbr)' || echo none                        # UN3
+sudo iptables -t nat -S POSTROUTING | grep MASQUERADE || echo none
+sudo ufw status numbered | grep -E 'mnb[0-9a-f]{12}' || echo none          # UN4
+getfacl -p /dev/kvm; sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding # UN5
+```
+
 ## Cleanup and CI coverage
 
 - [ ] **X1:** no QA VM remains.
@@ -564,7 +622,7 @@ curl -fsS "$API/api/shells"
 CI script coverage:
 
 ```text
-scripts/ci-qa-api.sh: G4–G5 H1–H2 N1–N5 S1–S3 L1–L3 I1 I8–I9 V14 C3 C5 X1–X4 X6
+scripts/ci-qa-api.sh: G4–G5 H1–H3 N1–N5 S1–S3 L1–L3 I1 I8–I9 V14 C3 C5 X1–X4 X6
 scripts/ci-qa-nginx.sh: NGX1–NGX9, including V8a–V8d
 scripts/ci-qa-ssh.sh: V8a–V8d from guest and nginx runs
 scripts/ci-qa-guest.sh: I5–I6 V1–V2 V6–V9 V11–V13 N6 C1–C2 C4 X5

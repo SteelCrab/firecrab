@@ -130,12 +130,17 @@ The [Windows guide](micromanager-windows.md#known-limitation) explains why stock
 ## macOS runtime E2E
 
 Use a native M3-or-later Mac with nested virtualization and the signed helper.
-`scripts/ci-qa-macos-e2e.sh` provides `gate`, `shell`, `browser`, `api`, `nginx`, `guest`, `lifetime`, and `all` phases.
+`scripts/ci-qa-macos-e2e.sh` provides `gate`, `shell`, `repair`, `browser`, `api`, `nginx`, `guest`, `lifetime`, and `all` phases.
 The gate requires isolated `FIRECRAB_INSTALL_DIR` and `FIRECRAB_MICROMANAGER_HOME` paths.
 For source services, deploy with `service dev` and use the browser command in the [E2E guide](../firecrab-e2e/README.md).
 Chromium runs on macOS; the registry and workload IPv6 SSH use the Debian management VM through SSH.
 Missing required management SSH configuration is a failure.
 The script defaults `FIRECRAB_QA_WAIT_FACTOR` to 3 for nginx/SSH waits.
+The [repair phase](micromanager-repair-qa.md) checks G7/G7a on an idle installed
+runtime, including missing registration, SSH/API failure advice, recovery, and
+file preservation. `all` runs it after the shell phase and refreshes management
+SSH settings afterward. Python guard/restoration tests run on hosted Linux CI;
+native runtime evidence remains a separate Mac check.
 
 ## Results and evidence
 

@@ -22,10 +22,10 @@ use super::wsl::{self, DISTRO_NAME};
 
 pub const TASK_NAME: &str = r"Firecrab\microManager";
 pub const API_URL: &str = "http://127.0.0.1:5523/api/host";
-const HELPER_SETUP: &str = "helper=firecrab-helper; if [ \"$(systemctl show --property=LoadState --value firecrab-helper.service)\" = not-found ]; then helper=firecrab-net-helper; fi";
+pub(super) const HELPER_SETUP: &str = "helper=firecrab-helper; if [ \"$(systemctl show --property=LoadState --value firecrab-helper.service)\" = not-found ]; then helper=firecrab-net-helper; fi";
 const UNITS: [&str; 2] = ["firecrab-api", "firecrab-helper"];
 /// A cold start waits for `kvm_intel`, systemd, and the API in turn.
-const READY_TIMEOUT: Duration = Duration::from_secs(300);
+pub(super) const READY_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -72,6 +72,11 @@ impl Status {
 /// Registers (or replaces) the task. It is written to `runtime/` first because
 /// `schtasks /Create /XML` only reads definitions from a file.
 pub fn install(layout: &Layout) -> Result<PathBuf, Error> {
+    register(layout, &task_definition()?)
+}
+
+/// Resolve registration prerequisites before repair stops a running service.
+pub(super) fn task_definition() -> Result<String, Error> {
     let user = user_id(
         std::env::var("USERNAME").ok(),
         std::env::var("USERDOMAIN").ok(),
@@ -80,10 +85,10 @@ pub fn install(layout: &Layout) -> Result<PathBuf, Error> {
     if !launcher.is_file() {
         return Err(Error::MissingLauncher(launcher));
     }
-    register(layout, &render_task(&user, &launcher))
+    Ok(render_task(&user, &launcher))
 }
 
-fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
+pub(super) fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
     let definition = layout.runtime().join("microManager-task.xml");
     fs::write(&definition, utf16_with_bom(task)).map_err(|source| Error::Io {
         action: "write the scheduled task definition",
@@ -276,6 +281,10 @@ fn parse_units(text: &str) -> (bool, Option<String>) {
 }
 
 fn api_reachable() -> bool {
+    #[cfg(test)]
+    if let Some(reachable) = wsl::fake::api_response() {
+        return reachable;
+    }
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()

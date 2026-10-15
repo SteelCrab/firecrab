@@ -1,22 +1,26 @@
 #!/bin/bash
-# Shared by macOS (SSH) and Windows (WSL stdin) service dev.
+# Shared by macOS (SSH) and Windows (WSL stdin) service dev and its controls.
 set -Eeuo pipefail
-profile=${1:?build profile is required}
-channel=${2:?Rust toolchain is required}
-archive_name=${3:?source archive name is required}
+profile=${1:?build profile or service action is required}
 root=/var/lib/firecrab/dev
 bin_root=/usr/local/lib/firecrab-dev
 unit_root=/etc/systemd/system
-case "$profile" in debug|release|restore) ;; *) echo 'invalid build profile' >&2; exit 1 ;; esac
-case "$archive_name" in incoming-*.tar) ;; *) echo 'invalid source archive name' >&2; exit 1 ;; esac
-[[ "$archive_name" != */* ]]
-[[ "$channel" =~ ^[a-zA-Z0-9.-]+$ ]]
+case "$profile" in
+  debug|release|restore)
+    channel=${2:?Rust toolchain is required}
+    archive_name=${3:?source archive name is required}
+    case "$archive_name" in incoming-*.tar) ;; *) echo 'invalid source archive name' >&2; exit 1 ;; esac
+    [[ "$archive_name" != */* ]]
+    [[ "$channel" =~ ^[a-zA-Z0-9.-]+$ ]]
+    ;;
+  start|stop|restart) ;;
+  *) echo 'invalid build profile or service action' >&2; exit 1 ;;
+esac
 
 install -d -m 0700 "$root"
-install -d -m 0755 "$bin_root"
 exec 9>"$root/deploy.lock"
 if ! flock -n 9; then
-  rm -f "$root/$archive_name"
+  if [ -n "${archive_name:-}" ]; then rm -f "$root/$archive_name"; fi
   echo 'another service dev build/deployment is in progress' >&2
   exit 1
 fi
@@ -26,6 +30,38 @@ if [ "$(systemctl show --property=LoadState --value firecrab-helper.service)" = 
   helper_unit=firecrab-net-helper
 fi
 
+case "$profile" in
+  start|stop|restart)
+    if [ "$profile" != start ]; then
+      systemctl stop firecrab-api
+      systemctl stop "$helper_unit"
+    fi
+    if [ "$profile" = stop ]; then
+      echo '[PASS] guest: API + helper stopped'
+      exit 0
+    fi
+    systemctl start "$helper_unit"
+    for _ in $(seq 1 30); do
+      [ -S /run/firecrab/net-helper.sock ] && break
+      sleep 1
+    done
+    test -S /run/firecrab/net-helper.sock
+    systemctl start firecrab-api
+    for _ in $(seq 1 60); do
+      if systemctl is-active --quiet "$helper_unit" && systemctl is-active --quiet firecrab-api \
+        && curl -fs --max-time 2 http://127.0.0.1:5523/api/host >/dev/null; then
+        echo "[PASS] guest: API + helper $profile complete"
+        exit 0
+      fi
+      sleep 1
+    done
+    journalctl --no-pager -n 30 -u firecrab-api -u "$helper_unit" >&2
+    echo 'guest services did not become ready' >&2
+    exit 1
+    ;;
+esac
+
+install -d -m 0755 "$bin_root"
 backup=$(mktemp -d "$root/rollback.XXXXXX")
 deploying=0
 binaries=

@@ -46,6 +46,8 @@ case "$name" in
       exit 0
     fi
     echo "$*" >>"$TEST_ROOT/events"
+    if [ "$*" = 'stop firecrab-api' ] && [ "${STOP_FAIL:-0}" = 1 ]; then exit 44; fi
+    if [ "$1" = start ] && [ "$2" != firecrab-api ] && [ "${HELPER_START_FAIL:-0}" = 1 ]; then exit 45; fi
     if [ "$*" = 'start firecrab-api' ] && [ "${START_FAIL:-0}" = 1 ] \
       && [ -f "$TEST_ROOT/units/firecrab-api.service.d/90-firecrab-dev.conf" ]; then exit 43; fi
     ;;
@@ -105,7 +107,10 @@ class GuestDevelopmentTest(unittest.TestCase):
         environment = os.environ.copy()
         environment.update(TEST_ROOT=str(self.root), PATH=str(self.commands) + ":" + environment["PATH"])
         environment.update({key: str(value) for key, value in flags.items()})
-        return subprocess.run([shell, str(self.script), profile, "1.97.1", self.archive.name],
+        args = [shell, str(self.script), profile]
+        if profile not in ["start", "stop", "restart"]:
+            args.extend(["1.97.1", self.archive.name])
+        return subprocess.run(args,
                               env=environment, text=True, capture_output=True, timeout=10)
 
     def override(self, unit="firecrab-api"):
@@ -256,6 +261,72 @@ class GuestDevelopmentTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("in progress", result.stderr)
         self.assertFalse((self.root / "events").exists())
+
+    def test_controls_preserve_deployment_and_do_not_build(self):
+        for legacy in [0, 1]:
+            helper = "firecrab-net-helper" if legacy else "firecrab-helper"
+            override = self.override(helper)
+            override.parent.mkdir(parents=True, exist_ok=True)
+            override.write_text("development helper override\n")
+            self.override().parent.mkdir(parents=True, exist_ok=True)
+            self.override().write_text("development API override\n")
+            previous = self.binaries / "previous"
+            previous.mkdir(parents=True, exist_ok=True)
+            pointer = self.binaries / "bin"
+            if not pointer.exists():
+                pointer.symlink_to(previous)
+            for action, expected in [
+                ("start", [f"start {helper}", "start firecrab-api"]),
+                ("stop", ["stop firecrab-api", f"stop {helper}"]),
+                ("restart", ["stop firecrab-api", f"stop {helper}", f"start {helper}", "start firecrab-api"]),
+            ]:
+                with self.subTest(legacy=legacy, action=action):
+                    events = self.root / "events"
+                    events.unlink(missing_ok=True)
+                    result = self.run_guest(action, LEGACY_HELPER=legacy, BUILD_FAIL=1)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    changes = [line for line in events.read_text().splitlines()
+                               if line.startswith(("start ", "stop "))]
+                    self.assertEqual(changes, expected)
+                    self.assertIn("[PASS]", result.stdout)
+                    self.assertEqual(override.read_text(), "development helper override\n")
+                    self.assertEqual(self.override().read_text(), "development API override\n")
+                    self.assertEqual(pointer.resolve(), previous.resolve())
+                    self.assertFalse((self.root / "rustup-events").exists())
+                    self.assertTrue(self.archive.exists())
+
+    def test_controls_share_the_deployment_lock(self):
+        for action in ["start", "stop", "restart"]:
+            with self.subTest(action=action):
+                result = self.run_guest(action, LOCK_FAIL=1)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("in progress", result.stderr)
+                self.assertFalse((self.root / "events").exists())
+                self.assertTrue(self.archive.exists())
+
+    def test_failed_stop_does_not_stop_the_helper_or_start_services(self):
+        for action in ["stop", "restart"]:
+            with self.subTest(action=action):
+                (self.root / "events").unlink(missing_ok=True)
+                result = self.run_guest(action, STOP_FAIL=1)
+                self.assertEqual(result.returncode, 44)
+                self.assertEqual((self.root / "events").read_text(), "stop firecrab-api\n")
+                self.assertNotIn("[PASS]", result.stdout)
+
+    def test_failed_helper_start_does_not_start_the_api(self):
+        result = self.run_guest("start", HELPER_START_FAIL=1)
+        self.assertEqual(result.returncode, 45)
+        self.assertEqual((self.root / "events").read_text(), "start firecrab-helper\n")
+        self.assertNotIn("[PASS]", result.stdout)
+
+    def test_start_and_restart_report_an_unhealthy_api(self):
+        for action in ["start", "restart"]:
+            with self.subTest(action=action):
+                result = self.run_guest(action, HEALTH_FAIL=1)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("guest services did not become ready", result.stderr)
+                self.assertNotIn("[PASS]", result.stdout)
+                self.assertFalse(self.override().exists())
 
 
 if __name__ == "__main__":

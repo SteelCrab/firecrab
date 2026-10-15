@@ -9,6 +9,7 @@ Commands:
   validate         Show and validate the managed VM configuration
   provision        EFI boot the Debian image and run first-boot provisioning
   run              Boot the managed VM and attach its serial console
+  repair-os <copy> [--reference <image>] Check filesystem and restore missing OS files
 
 Environment:
   FIRECRAB_MICROMANAGER_HOME  Override the managed configuration root
@@ -43,6 +44,24 @@ struct FirecrabMicroManager {
                     print(HostCapabilities.renderHuman(report))
                 }
                 exit(report.ready ? 0 : 1)
+            case "repair-os":
+                let vmArguments = Array(arguments.dropFirst())
+                if vmArguments == ["--help"] || vmArguments == ["-h"] {
+                    print(usage)
+                    return
+                }
+                guard (vmArguments.count == 1 || vmArguments.count == 3),
+                    vmArguments[0].hasPrefix("/"),
+                    vmArguments.count == 1 || (vmArguments[1] == "--reference" && vmArguments[2].hasPrefix("/"))
+                else {
+                    throw MicroManagerError.argument("repair-os requires an absolute private OS copy path")
+                }
+                let result = try await repairOS(options: VMOptions.managedDefaults(),
+                    disk: URL(fileURLWithPath: vmArguments[0]),
+                    reference: vmArguments.count == 3 ? URL(fileURLWithPath: vmArguments[2]) : nil)
+                let data = try JSONEncoder().encode(result)
+                print(String(decoding: data, as: UTF8.self))
+                exit(result.verified ? 0 : 1)
             case "validate", "provision", "run":
                 let vmArguments = Array(arguments.dropFirst())
                 if vmArguments == ["--help"] || vmArguments == ["-h"] {
@@ -58,11 +77,15 @@ struct FirecrabMicroManager {
                     print(HostCapabilities.renderChecks(checks))
                     exit(checks.contains { $0.status == .fail } ? 1 : 0)
                 } else if command == "provision" {
+                    let lock = try VMRunLock(home: options.managedHomeURL)
+                    defer { lock.close() }
                     let configuration = try ManagementVMConfiguration.makeProvisioning(
                         options: options
                     )
                     try await runManagementVM(configuration: configuration)
                 } else {
+                    let lock = try VMRunLock(home: options.managedHomeURL)
+                    defer { lock.close() }
                     let configuration = try ManagementVMConfiguration.make(options: options)
                     try await runManagementVM(configuration: configuration)
                 }

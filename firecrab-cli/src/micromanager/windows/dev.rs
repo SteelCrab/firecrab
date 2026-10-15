@@ -5,9 +5,28 @@ use super::{
     wsl::{self, DISTRO_NAME},
 };
 use crate::micromanager::{
+    DevCommand,
     dev::{Checkout, guest_script, io_error},
     report,
 };
+
+pub fn control(command: DevCommand) -> Result<(), Error> {
+    wsl::run_with_input(
+        &[
+            "-d",
+            DISTRO_NAME,
+            "-u",
+            "root",
+            "--exec",
+            "bash",
+            "-s",
+            "--",
+            command.as_str(),
+        ],
+        guest_script()?,
+    )?;
+    Ok(())
+}
 
 pub fn deploy(checkout: Option<&Checkout>, release: bool) -> Result<(), Error> {
     // Probe systemd and the installed units, not whether the previous API works.

@@ -238,7 +238,7 @@ curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/instal
 | `--libc gnu` or `--libc musl` | Force glibc or musl instead of auto-detect |
 | `--bin-dir DIR` | Install local binaries instead of the release |
 | `--dashboard-dir DIR` | Install this built dashboard |
-| `--uninstall` | Remove services but keep data |
+| `--uninstall` | Stop VMs, remove services and files, keep data ([details](operations.md#uninstall)) |
 | `--uninstall --purge` | Also delete VM data |
 
 `--purge` is destructive.

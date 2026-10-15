@@ -187,7 +187,10 @@ pub async fn delete_micro_network_bridge(
         Err(rtnetlink::Error::NetlinkError(message)) if message.raw_code() == -libc::ENODEV => None,
         Err(error) => return Err(BridgeError::Netlink(error)),
     };
+    // The addresses go with the link, and the NAT rules are keyed on them.
+    let mut networks = Vec::new();
     if let Some(link) = link {
+        networks = link_ipv4_networks(&handle, link.header.index).await;
         handle
             .link()
             .del(link.header.index)
@@ -195,8 +198,34 @@ pub async fn delete_micro_network_bridge(
             .await
             .map_err(BridgeError::Netlink)?;
     }
-    crate::firewall::remove_iptables_forward_for_bridge(&name).await;
+    crate::firewall::remove_iptables_forward_for_bridge(&name, &networks).await;
     Ok(())
+}
+
+/// The IPv4 networks (`172.31.77.0/24`) configured on one link: what the
+/// iptables NAT rules for a MicroNetwork are keyed on. Read before the link is
+/// deleted; a link that is already gone has none.
+async fn link_ipv4_networks(handle: &Handle, index: u32) -> Vec<String> {
+    let mut addresses = handle
+        .address()
+        .get()
+        .set_link_index_filter(index)
+        .execute();
+    let mut networks = Vec::new();
+    while let Ok(Some(address)) = addresses.try_next().await {
+        if let Some(ip) = ipv4_address(&address) {
+            networks.push(network_cidr(ip, address.header.prefix_len));
+        }
+    }
+    networks.sort();
+    networks.dedup();
+    networks
+}
+
+/// `172.31.77.1` with prefix 24 as `172.31.77.0/24`.
+fn network_cidr(address: Ipv4Addr, prefix: u8) -> String {
+    let network = Ipv4Addr::from(ipv4_to_u32(address) & prefix_mask(prefix));
+    format!("{network}/{prefix}")
 }
 
 /// Deletes every Firecrab-owned network interface still on the host: the
@@ -218,7 +247,9 @@ pub async fn teardown_all(actor: &BridgeActor) -> Result<(), BridgeError> {
 trait TeardownNetwork {
     async fn list_links(&mut self) -> Result<Vec<(u32, Vec<LinkAttribute>)>, rtnetlink::Error>;
     async fn delete_link(&mut self, index: u32) -> Result<(), rtnetlink::Error>;
-    async fn remove_forward_rules(&mut self, name: &str);
+    /// IPv4 networks configured on a link, read before it is deleted.
+    async fn ipv4_networks(&mut self, index: u32) -> Vec<String>;
+    async fn remove_forward_rules(&mut self, name: &str, networks: &[String]);
 }
 
 struct HostTeardownNetwork(Handle);
@@ -237,8 +268,12 @@ impl TeardownNetwork for HostTeardownNetwork {
         self.0.link().del(index).execute().await
     }
 
-    async fn remove_forward_rules(&mut self, name: &str) {
-        crate::firewall::remove_iptables_forward_for_bridge(name).await;
+    async fn ipv4_networks(&mut self, index: u32) -> Vec<String> {
+        link_ipv4_networks(&self.0, index).await
+    }
+
+    async fn remove_forward_rules(&mut self, name: &str, networks: &[String]) {
+        crate::firewall::remove_iptables_forward_for_bridge(name, networks).await;
     }
 }
 
@@ -247,13 +282,20 @@ impl TeardownNetwork for HostTeardownNetwork {
 async fn teardown_with(network: &mut impl TeardownNetwork) -> Result<(), BridgeError> {
     let seen = network.list_links().await.map_err(BridgeError::Netlink)?;
     for (index, name) in owned_links(&seen) {
+        let is_bridge = name == BRIDGE_NAME || name.starts_with(MICRO_NETWORK_BRIDGE_PREFIX);
+        // The addresses go with the link, and the NAT rules are keyed on them.
+        let networks = if is_bridge {
+            network.ipv4_networks(index).await
+        } else {
+            Vec::new()
+        };
         match network.delete_link(index).await {
             Ok(()) => {}
             Err(error) if is_enodev(&error) => {}
             Err(error) => return Err(BridgeError::Netlink(error)),
         }
-        if name == BRIDGE_NAME || name.starts_with(MICRO_NETWORK_BRIDGE_PREFIX) {
-            network.remove_forward_rules(&name).await;
+        if is_bridge {
+            network.remove_forward_rules(&name, &networks).await;
         }
     }
     Ok(())
@@ -905,8 +947,9 @@ mod tests {
     #[derive(Debug, PartialEq)]
     enum TeardownCall {
         List,
+        Networks(u32),
         Delete(u32),
-        RemoveForwardRules(String),
+        RemoveForwardRules(String, Vec<String>),
     }
 
     #[derive(Default)]
@@ -914,6 +957,8 @@ mod tests {
         links: Vec<(u32, Vec<LinkAttribute>)>,
         list_error: Option<rtnetlink::Error>,
         delete_error: Option<(u32, rtnetlink::Error)>,
+        /// What each link's addresses are, by index; a deleted link has none.
+        networks: Vec<(u32, Vec<String>)>,
         calls: Vec<TeardownCall>,
     }
 
@@ -951,9 +996,20 @@ mod tests {
             Ok(())
         }
 
-        async fn remove_forward_rules(&mut self, name: &str) {
-            self.calls
-                .push(TeardownCall::RemoveForwardRules(name.to_owned()));
+        async fn ipv4_networks(&mut self, index: u32) -> Vec<String> {
+            self.calls.push(TeardownCall::Networks(index));
+            self.networks
+                .iter()
+                .find(|(known, _)| *known == index)
+                .map(|(_, networks)| networks.clone())
+                .unwrap_or_default()
+        }
+
+        async fn remove_forward_rules(&mut self, name: &str, networks: &[String]) {
+            self.calls.push(TeardownCall::RemoveForwardRules(
+                name.to_owned(),
+                networks.to_vec(),
+            ));
         }
     }
 
@@ -990,10 +1046,12 @@ mod tests {
             network.calls,
             vec![
                 List,
+                Networks(2),
                 Delete(2),
-                RemoveForwardRules(BRIDGE_NAME.to_owned()),
+                RemoveForwardRules(BRIDGE_NAME.to_owned(), vec![]),
+                Networks(4),
                 Delete(4),
-                RemoveForwardRules("mnbdead".to_owned()),
+                RemoveForwardRules("mnbdead".to_owned(), vec![]),
                 Delete(5),
             ]
         );
@@ -1020,8 +1078,9 @@ mod tests {
             network.calls,
             vec![
                 List,
+                Networks(2),
                 Delete(2),
-                RemoveForwardRules("mnbdead".to_owned()),
+                RemoveForwardRules("mnbdead".to_owned(), vec![]),
                 Delete(3)
             ]
         );
@@ -1039,7 +1098,11 @@ mod tests {
         );
         assert_eq!(
             network.calls,
-            vec![TeardownCall::List, TeardownCall::Delete(2)]
+            vec![
+                TeardownCall::List,
+                TeardownCall::Networks(2),
+                TeardownCall::Delete(2)
+            ]
         );
     }
 
@@ -1053,5 +1116,42 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(network.calls, vec![TeardownCall::List]);
+    }
+
+    #[tokio::test]
+    async fn teardown_hands_the_networks_read_before_deletion_to_the_rule_cleanup() {
+        use TeardownCall::*;
+        let mut network =
+            FakeTeardownNetwork::with_links(&[(2, "mnbaaaaaaaaaaaa"), (3, "fctcafe")]);
+        network.networks = vec![(2, vec!["172.31.77.0/24".to_owned()])];
+        let result = teardown_with(&mut network).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            network.calls,
+            vec![
+                List,
+                Networks(2),
+                Delete(2),
+                RemoveForwardRules(
+                    "mnbaaaaaaaaaaaa".to_owned(),
+                    vec!["172.31.77.0/24".to_owned()]
+                ),
+                Delete(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gateway_address_names_its_network() {
+        assert_eq!(
+            network_cidr(Ipv4Addr::new(172, 31, 77, 1), 24),
+            "172.31.77.0/24"
+        );
+        assert_eq!(
+            network_cidr(Ipv4Addr::new(172, 30, 0, 1), 16),
+            "172.30.0.0/16"
+        );
+        assert_eq!(network_cidr(Ipv4Addr::new(10, 1, 2, 3), 32), "10.1.2.3/32");
+        assert_eq!(network_cidr(Ipv4Addr::new(10, 1, 2, 3), 0), "0.0.0.0/0");
     }
 }

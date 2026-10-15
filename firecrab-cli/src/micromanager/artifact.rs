@@ -20,7 +20,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Each host pins with the digests its upstreams publish, so one backend alone
 /// does not have to use every algorithm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum HashAlgorithm {
     Sha256,
     /// Debian's cloud images publish only SHA-512; Windows never pins one.
@@ -29,12 +30,12 @@ pub enum HashAlgorithm {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct ArtifactSpec {
+pub struct ArtifactSpec<'a> {
     pub label: &'static str,
-    pub filename: &'static str,
-    pub url: &'static str,
+    pub filename: &'a str,
+    pub url: &'a str,
     pub algorithm: HashAlgorithm,
-    pub digest: &'static str,
+    pub digest: &'a str,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -542,7 +543,7 @@ mod tests {
     const ABCDEF_SHA256: &str = "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721";
     const WRONG_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
-    fn spec(algorithm: HashAlgorithm, digest: &'static str) -> ArtifactSpec {
+    fn spec(algorithm: HashAlgorithm, digest: &'static str) -> ArtifactSpec<'static> {
         ArtifactSpec {
             label: "test artifact",
             filename: "abc.bin",
@@ -776,7 +777,7 @@ mod tests {
         (Box::leak(url.into_boxed_str()), handle)
     }
 
-    fn remote_spec(url: &'static str) -> ArtifactSpec {
+    fn remote_spec(url: &'static str) -> ArtifactSpec<'static> {
         ArtifactSpec {
             url,
             ..spec(HashAlgorithm::Sha256, ABCDEF_SHA256)

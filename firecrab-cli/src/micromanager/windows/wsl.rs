@@ -95,7 +95,7 @@ fn execute(program: &str, args: &[&str]) -> std::io::Result<Output> {
 /// backend's orchestration runs under test on any host without touching WSL.
 #[cfg(test)]
 pub mod fake {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     use super::Output;
 
@@ -106,6 +106,7 @@ pub mod fake {
     thread_local! {
         static HANDLER: RefCell<Option<Handler>> = const { RefCell::new(None) };
         static CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static API_RESPONSE: Cell<Option<bool>> = const { Cell::new(None) };
     }
 
     /// Answers every call on this thread until the guard drops. The handler
@@ -114,12 +115,19 @@ pub mod fake {
     pub fn answer(handler: impl FnMut(&str) -> Reply + 'static) -> Guard {
         HANDLER.with(|slot| *slot.borrow_mut() = Some(Box::new(handler)));
         CALLS.with(|calls| calls.borrow_mut().clear());
+        API_RESPONSE.with(|response| response.set(None));
         Guard
     }
 
     pub struct Guard;
 
     impl Guard {
+        /// Override the host HTTP readiness probe on this test thread only.
+        pub fn with_api_response(self, reachable: bool) -> Self {
+            API_RESPONSE.with(|response| response.set(Some(reachable)));
+            self
+        }
+
         /// Every command line answered so far, in order.
         pub fn calls(&self) -> Vec<String> {
             CALLS.with(|calls| calls.borrow().clone())
@@ -128,8 +136,13 @@ pub mod fake {
 
     impl Drop for Guard {
         fn drop(&mut self) {
+            API_RESPONSE.with(|response| response.set(None));
             HANDLER.with(|slot| *slot.borrow_mut() = None);
         }
+    }
+
+    pub fn api_response() -> Option<bool> {
+        API_RESPONSE.with(Cell::get)
     }
 
     pub(super) fn reply(program: &str, args: &[&str]) -> Option<Output> {

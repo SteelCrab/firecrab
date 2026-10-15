@@ -84,7 +84,8 @@ sudo firecrab update --apply
 
 `--check` is read-only and needs no privilege; it is also what runs with no flag at all.
 `--apply` needs root or the `firecrab` service account, because the binary swap goes through the network helper's socket.
-The dashboard's bottom-left indicator runs the same two steps.
+`--apply` prints a line for each stage (check, download, verify, apply, restart) with a gauge and the overall percent; off a terminal it prints one plain line per stage.
+The dashboard's bottom-left indicator runs the same two steps: its dialog lists what the release changes, then shows a gauge, the percent, and the stage until the API is back on the new version.
 
 The apply replaces binaries and the dashboard, then restarts both services.
 The helper writes only into the install layout it derives from its own units, and rejects any other; a host installed with a non-default `PREFIX` needs `install.sh` re-run once so both units carry it.
@@ -99,6 +100,19 @@ curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/instal
 Both paths preserve VM data and `api.env`.
 
 Check both services and run the doctor after an upgrade.
+
+## Uninstall
+
+`./install.sh --uninstall` and `firecrab service uninstall` do the same on a Linux host, in this order:
+
+1. Stop every running MicroVM (`firecrab-vm-*` unit). A VM's unit outlives the API on purpose, so nothing else would stop it.
+2. Stop and remove the services, then run the helper's teardown: bridges, TAP devices, nftables tables, iptables forward and NAT rules, and UFW rules that firecrab created.
+3. Remove the binaries, the kernel extract scripts, the dashboard, and the license files; the library directory goes with them.
+4. Put back what the installer recorded in `/etc/firecrab/host-baseline.env`: the `/dev/kvm` ACL it added, and IPv4/IPv6 forwarding on a host that had it off. Forwarding stays on, with a note, while another bridge or container network exists.
+
+Left alone on purpose: Firecracker, the `firecrab` account and group (and its `kvm` membership), and, without `--purge`, `/etc/firecrab` and `/var/lib/firecrab`.
+A host installed before the record existed has none to restore, so it keeps the ACL and forwarding as they are until a reboot.
+The checks are [UN1–UN7](TEST.md#uninstall).
 
 ## CI boot check
 

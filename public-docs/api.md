@@ -12,6 +12,7 @@
 - [VM fields](#vm-fields)
 - [Guest `/etc/firecrab`](#guest-etcfirecrab)
 - [Other endpoints](#other-endpoints)
+- [Update](#update)
 - [Images and kernels](#images-and-kernels)
 - [MicroNetwork](#micronetwork)
 - [MicroRegistry](#microregistry)
@@ -220,7 +221,8 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 | Kernels | `/api/kernels`, `/{version}/install`, `/{version}` |
 | OCI | `/api/oci/inspect`, `POST /api/oci/import`, `GET /api/oci/import/{alias}` |
 | MicroRegistry | `/api/microregistry`, `POST /register`, `GET /register/{alias}`, `GET`/`PUT`/`DELETE /docker-hub` (Docker Hub login; secret write-only) |
-| Host | `/api/host` and `/api/network` |
+| Host | `/api/host`, `/api/network`, and `/api/info` |
+| Update | `/api/update` (`GET` check, `POST` start) and `GET /api/update/progress` |
 
 ## Host
 
@@ -245,6 +247,78 @@ Catalog guests keep the agent and Shell repository under `/usr/local/sbin` and `
 - `architecture` spells ARM64 as `arm64` on every host.
 - Disk figures come from the filesystem that holds, or will hold, the VM directory.
 - APIs before this field omit `platform`.
+
+`GET /api/info` reports this build, its installation paths, the Firecracker version, and live service states. The dashboard's Firecrab panel shows them. The six installation fields remain the same as `firecrab info --json`.
+
+```json
+{
+  "version": "0.3.1",
+  "prefix": "/usr/local",
+  "datadir": "/var/lib/firecrab",
+  "confdir": "/etc/firecrab",
+  "unitdir": "/etc/systemd/system",
+  "apiBase": "http://127.0.0.1:5523",
+  "firecrackerVersion": "v1.17.0",
+  "apiService": "active",
+  "netHelperService": "active",
+  "helperUnit": "firecrab-helper.service"
+}
+```
+
+- `version` is the running API's, and `apiBase` is the address it listens on.
+- The paths come from the API's own environment, with `install.sh`'s defaults when a variable is unset.
+- `firecrackerVersion` comes from the configured VM runtime binary's `--version`; unavailable, failing, or timed-out probes return `null`.
+- `apiService` and `netHelperService` report systemd `ActiveState`, or `unknown` when unavailable. `helperUnit` identifies the canonical or legacy helper unit queried.
+- Each runtime probe has a two-second deadline. A failed probe does not hide the build or installation fields. CLI `firecrab info --json` keeps its original six-field shape.
+
+## Update
+
+`GET /api/update` compares this build with the newest GitHub release, cached for 30 minutes.
+
+```json
+{
+  "current": "0.3.0",
+  "latest": "0.3.1",
+  "updateAvailable": true,
+  "notes": "Summary line.\n\n### Added\n\n- …",
+  "releaseUrl": "https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1"
+}
+```
+
+- A failed check has `error` and no `latest`.
+- `notes` is the Changelog section of the release notes, as Markdown cut to 16,000 characters. It is text from GitHub: show it as text, never as HTML.
+- `releaseUrl` is always an `https://` URL. Both fields are omitted when there is no release or it has no notes, and by APIs before them.
+
+`POST /api/update` starts `firecrab update --apply` detached and answers `202` with `{ "current", "pid" }`.
+`GET /api/update/progress` says how far that run got; `idle` means none has run.
+
+```json
+{
+  "phase": "downloading",
+  "percent": 47,
+  "target": "0.3.1",
+  "downloadedBytes": 5242880,
+  "totalBytes": 11178942,
+  "pid": 4242,
+  "updatedAtMs": 1791000000000
+}
+```
+
+| Phase | Meaning | `percent` while in it |
+| --- | --- | --- |
+| `idle` | No run recorded | 0 |
+| `checking` | Looking up the release | 0 |
+| `downloading` | Fetching the host bundle; `downloadedBytes` and `totalBytes` count it | 5 to 80 |
+| `verifying` | Comparing its SHA-256 with `SHA256SUMS` | 80 |
+| `applying` | `firecrab-helper` replacing the binaries | 85 |
+| `restarting` | The services are restarting | 97 to 99 |
+| `done` | The API that answers runs `target` | 100 |
+| `failed` | `error` says why; `percent` is where it stopped | as reached |
+
+- `percent` is overall progress, not the stage's. A run is not `done` before the new API says so, so it never reads 100 early.
+- The updater keeps the record in `$DATADIR/updates/progress.json` (its hidden `--progress-file`), so it survives the API restart that ends an update.
+- `pid` is the updater's. It matches the `pid` of the `POST` that started the run, so a client can tell this run from an earlier one.
+- A run still going when a process running `target` answers is `done`. One whose updater died before the helper took over, or that wrote nothing for 10 minutes, is `failed`.
 
 ## Images and kernels
 

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { ApiCleanup } from "../src/api.js";
+import { openDashboard } from "../src/navigation.mjs";
 import { apiUrl, NETWORK_READY, SKIP_GUEST_BOOT } from "../src/constants.js";
 import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
 
@@ -32,7 +33,7 @@ async function openEnglish(page: Page, hash: string): Promise<void> {
   await page.addInitScript(() => {
     localStorage.setItem("firecrab.locale", "en");
   });
-  await page.goto(hash);
+  await openDashboard(page, hash);
 }
 
 function consoleStatus(page: Page) {

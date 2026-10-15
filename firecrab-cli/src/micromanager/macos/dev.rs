@@ -5,9 +5,20 @@ use std::process::{Command, Stdio};
 use super::lifecycle::Layout;
 pub use crate::micromanager::dev::{Checkout, Error};
 use crate::micromanager::{
+    DevCommand,
     dev::{guest_script, io_error},
     report,
 };
+
+pub fn control(layout: &Layout, ip: IpAddr, command: DevCommand) -> Result<(), Error> {
+    run_ssh(
+        layout,
+        ip,
+        &format!("bash -s -- {}", command.as_str()),
+        guest_script()?,
+        "guest service control",
+    )
+}
 
 pub fn deploy(
     layout: &Layout,
@@ -76,7 +87,11 @@ fn run_ssh(
         .status()
         .map_err(|source| io_error(action, source))?;
     if !status.success() {
-        return Err(Error::Command(action));
+        return Err(if status.code() == Some(255) {
+            Error::GuestSshInterrupted(action)
+        } else {
+            Error::Command(action)
+        });
     }
     Ok(())
 }
@@ -95,10 +110,7 @@ fn ssh_command(layout: &Layout, ip: IpAddr, command: &str) -> Command {
             "ServerAliveCountMax=3",
         ])
         .arg("-o")
-        .arg(format!(
-            "UserKnownHostsFile={}",
-            runtime.join("known_hosts").display()
-        ))
+        .arg(super::known_hosts_option(&runtime.join("known_hosts")))
         .arg(format!("root@{ip}"))
         .arg(command);
     ssh

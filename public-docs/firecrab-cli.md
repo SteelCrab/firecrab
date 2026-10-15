@@ -101,7 +101,7 @@ firecrab info
 firecrab info --json
 ```
 
-- Fields: `version`, `prefix`, `datadir`, `confdir`, `unitdir`, `apiBase`.
+- Fields: `version`, `prefix`, `datadir`, `confdir`, `unitdir`, `apiBase`; the dashboard's Host tab shows the same ones from `GET /api/info`.
 - Path defaults mirror `install.sh`: `PREFIX=/usr/local`, `DATADIR=/var/lib/firecrab`, `CONFDIR=/etc/firecrab`, `UNITDIR=/etc/systemd/system`, each overridable by the same-named environment variable.
 - `apiBase` uses the same endpoint selection order as [Host profiles](#host-profiles).
 
@@ -251,8 +251,8 @@ With no flag, `update` behaves as `--check`.
 | Flag | Effect |
 | --- | --- |
 | `--check` | Report only; no download. Exit 0 whether or not an update exists, 1 if the check itself failed |
-| `--apply` | Download the host bundle, verify SHA-256, and hand the swap to `firecrab-helper` |
-| `--json` | Emit `UpdateCheckResponse`, the same body `GET /api/update` returns |
+| `--apply` | Download the host bundle, verify SHA-256, and hand the swap to `firecrab-helper`, showing each stage with a gauge and the overall percent |
+| `--json` | Emit `UpdateCheckResponse`, the same body `GET /api/update` returns, release notes included |
 
 `--json` prints a report even when the check fails, with `latest` absent and `error` filled in.
 

@@ -1,0 +1,76 @@
+# Release inputs for explicit `service install` and `service reinstall`.
+# The CLI embeds this file and saves a validated copy after provisioning.
+schema_version = 1
+
+[debian]
+version = 13
+suite = "trixie"
+
+[firecracker]
+version = "v1.17.0"
+
+[firecracker.aarch64]
+filename = "firecracker-v1.17.0-aarch64.tgz"
+url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.17.0/firecracker-v1.17.0-aarch64.tgz"
+algorithm = "sha256"
+digest = "e351ebe4f7a16b5873bbd51005d2e6767103cff4d5ebc829df2d3f95a93e2256"
+
+[firecracker.x86_64]
+filename = "firecracker-v1.17.0-x86_64.tgz"
+url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.17.0/firecracker-v1.17.0-x86_64.tgz"
+algorithm = "sha256"
+digest = "06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558"
+
+[firecrab]
+version = "v0.2.2"
+
+[firecrab.installer]
+filename = "install-firecrab-v0.2.2.sh"
+url = "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/install.sh"
+algorithm = "sha256"
+digest = "af2fb56b92dff1559cdaa449aa025808e0990437c16ccc0bb2b4d558ef50dacb"
+
+[firecrab.aarch64]
+filename = "firecrab-host-aarch64-gnu.tar.gz"
+url = "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/firecrab-host-aarch64-gnu.tar.gz"
+algorithm = "sha256"
+digest = "2e995ed27d8c19848baaf38c8bf8a2d5d126ab90776738d91790524a8564e982"
+
+[firecrab.x86_64]
+filename = "firecrab-host-x86_64-gnu.tar.gz"
+url = "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/firecrab-host-x86_64-gnu.tar.gz"
+algorithm = "sha256"
+digest = "ad59b359ccc6d4f28ca6927339b6157b7684b9d734ded79c639a546d709b5315"
+
+[macos]
+image_build = "20260914-2601"
+kernel_version = "6.12.111+deb13-arm64"
+
+[macos.image]
+filename = "debian-13-generic-arm64-20260914-2601.tar.xz"
+url = "https://cloud.debian.org/images/cloud/trixie/20260914-2601/debian-13-generic-arm64-20260914-2601.tar.xz"
+algorithm = "sha512"
+digest = "7bacdeb825f81b7eb5fcd35330ce7160ed60413adfa61f37cff3c4028fdc61dbd444e046c58934cd0494192f53fa2cbcfcca1e8e1d337755b34c6c90dc72f62b"
+
+[windows]
+rootfs_version = "1.26.0.0"
+
+# These kernels boot the nested Firecracker verification workload.
+# WSL itself continues to use Microsoft's shared kernel.
+[windows.x86_64]
+kernel_version = "6.12.111+deb13-amd64"
+
+[windows.x86_64.image]
+filename = "Debian_WSL_AMD64_v1.26.0.0.wsl"
+url = "https://salsa.debian.org/debian/WSL/-/jobs/9606244/artifacts/raw/Debian_WSL_AMD64_v1.26.0.0.wsl"
+algorithm = "sha256"
+digest = "5ec7dc68216e75d1d4d4761474e99d8461a98d316537110314b137122a879e0f"
+
+[windows.aarch64]
+kernel_version = "6.12.111+deb13-arm64"
+
+[windows.aarch64.image]
+filename = "Debian_WSL_ARM64_v1.26.0.0.wsl"
+url = "https://salsa.debian.org/debian/WSL/-/jobs/9606244/artifacts/raw/Debian_WSL_ARM64_v1.26.0.0.wsl"
+algorithm = "sha256"
+digest = "09120df4fadc36fb2a0f7298e197785e6f599f12aaf95d43cba07a8ac7fb316b"

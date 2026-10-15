@@ -7,6 +7,7 @@ import CreateVm from "./components/CreateVm";
 import VmTable from "./components/VmTable";
 import Console from "./components/Console";
 import VmDetailModal from "./components/VmDetailModal";
+import FirecrabPanel from "./components/FirecrabPanel";
 import HostInfo from "./components/HostInfo";
 import Images from "./components/Images";
 import Kernels from "./components/Kernels";
@@ -236,7 +237,12 @@ export default function App() {
         {view === "images" && <Images />}
         {view === "kernels" && <Kernels />}
         {view === "shells" && <Shells />}
-        {view === "host" && <HostInfo />}
+        {view === "host" && (
+          <>
+            <HostInfo />
+            <FirecrabPanel />
+          </>
+        )}
       </div>
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
     </Shell>

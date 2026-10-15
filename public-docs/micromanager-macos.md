@@ -79,11 +79,18 @@ is not required; inspect guest logs with `service debug --logs`.
 ./target/debug/firecrab service dev --source /path/to/firecrab # Select checkout
 ./target/debug/firecrab service dev --release                 # Optimized local build
 ./target/debug/firecrab service dev --yes                     # Skip download prompt
+./target/debug/firecrab service dev start                     # Start guest API + helper
+./target/debug/firecrab service dev stop                      # Stop guest API + helper
+./target/debug/firecrab service dev restart                   # Restart guest API + helper
 ./target/debug/firecrab service debug --logs --tail 100       # Inspect logs
 ./target/debug/firecrab service shell                         # Root shell in the guest
 ./target/debug/firecrab service dev --restore                 # Return to installed binaries
 ./target/debug/firecrab service dev --help                    # List options
 ```
+
+`dev start`, `stop`, and `restart` require a running management VM and preserve
+microManager, deployed binaries, and development overrides. They do not rebuild
+sources and cannot be combined with build or restore options.
 
 `dev` builds local sources in debug mode; `--release` optimizes the same sources.
 `--restore` returns to the packaged API/helper from `service install` or the latest
@@ -112,14 +119,15 @@ scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
 ```
 
 The default binary directory is `~/.local/bin`, and `FIRECRAB_INSTALL_DIR` overrides it.
+`install` and `reinstall` select the bundled [TOML release manifest](micromanager-manifest.md); existing installations keep their current files until either command migrates them.
 `install` performs the complete managed-host gate before returning success:
 
 1. Download the pinned Debian 13 ARM64 archive, Firecracker v1.17.0, and Firecrab v0.2.2 guest assets.
 2. Verify every SHA-512 or SHA-256 digest before atomically publishing an artifact.
 3. Extract the 3 GiB GPT OS disk and create a separate 16 GiB sparse persistent data disk.
-4. EFI-boot Debian with a cloud-init seed and install Firecracker, Firecrab, OpenSSH, and systemd units.
+4. EFI-boot Debian with a cloud-init seed and install the manifest's kernel, Firecracker, Firecrab, OpenSSH, and systemd units.
 5. Require usable guest `/dev/kvm` and boot a real nested Firecracker busybox workload to its serial success marker.
-6. Register and start the launchd resident VM plus the key-only SSH localhost API tunnel.
+6. Register and start the launchd resident VM plus the key-only SSH localhost API tunnel; verify the selected boot kernel and save the installed TOML.
 
 A clean install downloads about 306 MiB and normally takes minutes rather than seconds.
 On a terminal, `install` and `reinstall` first list each pending artifact's mirror, digest, and size and ask before downloading; `--yes` skips the question, and a script or CI run never sees it.
@@ -129,7 +137,8 @@ An interrupted download resumes from `downloads/<artifact>.partial` on the next 
 firecrab service status
 firecrab service stop
 firecrab service start
-firecrab service reinstall          # replace binaries/OS when needed, preserve data
+firecrab service repair             # rebuild service registration and restart the existing VM
+firecrab service reinstall          # remove installation state, rebuild from TOML, preserve data
 firecrab service uninstall          # stop daemon and remove binaries, preserve data
 firecrab service uninstall --purge  # also delete managed OS and persistent data
 ```
@@ -179,7 +188,7 @@ The launcher enables nested virtualization explicitly and uses VZ NAT for the ou
 Use `service start` for the resident API and `service dev` to rebuild the guest API and network helper from local source.
 The guest publishes its DHCP address through a private virtiofs marker, and the daemon establishes the localhost SSH tunnel only after Firecrab API, net-helper, and SSH are active.
 Stop requests guest `systemctl poweroff`, then escalates from helper TERM to KILL after 30 seconds.
-A provisioning schema change replaces only the OS disk; the ext4 data disk is detected by label and never reformatted on reinstall.
+A provisioning schema change or TOML migration replaces only the OS disk; the ext4 data disk is detected by label and never reformatted on reinstall.
 
 ## Validation and troubleshooting
 
@@ -198,7 +207,7 @@ For a hands-on look, `firecrab service shell` opens a root shell in the manageme
 
 If `service start` reports that guest provisioning stopped at a phase such as `firecrab`, the API inside Debian is not ready; starting the launchd agent again cannot finish the installation. Run `firecrab service reinstall` from a checkout with the signed helper beside the CLI. Reinstall rebuilds an incomplete Debian OS disk and keeps `data/firecrab-data.raw`. After it succeeds, check `firecrab service status` and `curl -fsS http://127.0.0.1:5523/api/host`. A VM process left running after `service stop` can keep both disk images busy; inspect running `firecrab-micromanager-macos` processes before retrying and preserve the data disk when recovering them.
 
-If `ssh` to the management VM fails with `kex_exchange_identification: read: Connection reset by peer`, the guest's sshd is blocking the Mac under `PerSourcePenalties` (up to 600 seconds after crashed or unauthenticated sessions); wait, or run `firecrab service stop` and `service start`.
+If `ssh` to the management VM fails with `kex_exchange_identification: read: Connection reset by peer`, collect `firecrab service debug --logs` first. The reset alone does not identify the cause. One possible cause is sshd's `PerSourcePenalties` (up to 600 seconds after crashed or unauthenticated sessions). Try `firecrab service repair` to restart the existing VM and rebuild its host service registration and SSH tunnel.
 If `runtime/vm-console.log` shows `Internal error: Oops`, `Kernel panic`, or `EXT4-fs error`, the guest kernel failed under nested load: restart the service, and after ext4 errors stop it, keep a clone of the data disk (`cp -c data/firecrab-data.raw data/firecrab-data.raw.bak`), repair it with Homebrew `e2fsck -fy`, and run `firecrab service reinstall`.
 
 If the guest finishes provisioning but its VM does not power off within two minutes, `install` stops the provisioning VM and continues from the recorded markers.
@@ -221,6 +230,66 @@ runtime/daemon-ready          VM PID, tunnel PID, and guest IP
 
 The validated M5 run measured about 41 seconds for the first artifact download, 1 minute 48 seconds for a schema-changing cached reinstall including nested E2E, about 5 seconds for daemon start, and about 4 seconds for orderly stop.
 Performance and sleep/wake evidence for other supported Mac models still needs to be published before broad compatibility claims.
+
+## Repair an existing installation
+
+```sh
+firecrab service repair
+firecrab service status
+curl -fsS http://127.0.0.1:5523/api/host
+```
+
+`repair` checks the installed CLI/helper, OS/data disks, SSH key, and completed
+guest provisioning and an OS-repair-capable signed helper before stopping anything.
+It stops the VM and any remaining helpers owned by this user and managed home.
+It backs up the OS disk and checks a copy in an initramfs VM before the root is
+mounted. The data disk, host directory share, and network are not attached.
+The pinned cached Debian image, when available, is verified and attached
+read-only to restore missing Debian files in binary/library trees (including
+service definitions and generators), plus package lists and checksums.
+Regular files must match installed package checksums; symlinks and manifests
+require matching package versions. Matching `lost+found` files can also be restored.
+Existing files, `/etc` configuration, `/usr/local`, and application data stay unchanged. A missing cache produces
+an explicit filesystem-only warning. Failed verification retains the original.
+Only a repair that passes a final read-only filesystem check replaces the OS
+image. A clean check with no restored files keeps the original OS image. Repair then recreates
+`runtime/daemon.sh` and the launchd plist and starts the VM and SSH tunnel. A deleted plist can be recovered even while its launchd job is loaded.
+OS recovery runs over the serial console. Success requires launchd readiness,
+the live local API, and a current-boot guest report published through virtiofs.
+Repair verifies the report's schema, address, API, and network-helper state
+without another SSH command. Failed checks return a nonzero exit code and point
+to `service debug --logs`.
+
+The CLI prints `[REPAIR 1/6]` through `[REPAIR 6/6]` before validation,
+shutdown/helper cleanup, OS backup/repair, registration, startup, and guest boot/API
+checks. Offline filesystem checks have a separate 120-second deadline. During readiness and
+shutdown waits it prints elapsed time and launchd/VM/API state every ten seconds.
+The local VM/API startup readiness deadline is ten seconds. This also applies
+when `install`, `dev`, or `repair` starts the VM. If the VM/API is not ready,
+the command returns a nonzero exit code.
+The startup line gives the VM console log path; inspect it with
+`service debug --logs` when boot remains blocked.
+
+When `start`, `stop`, or `dev` encounters a launchd, VM-readiness, SSH, or localhost
+API failure, the CLI suggests `firecrab service repair`, then retrying the command.
+Unhealthy `status` and `debug` reports include this advice when the installation
+is complete. `debug --json` keeps advice inside its JSON fields. New installations
+still get `install` guidance; missing assets and incomplete provisioning need
+their own recovery. Checkout/compiler errors do not suggest repair. The CLI
+does not run repair automatically, and a failed repair points to diagnostics.
+
+Run the repeatable [repair E2E and QA](micromanager-repair-qa.md) on an idle
+installation with `scripts/ci-qa-macos-e2e.sh repair`. It retains logs, results,
+and registration backups, and restores injected failures before returning.
+
+The command downloads nothing and keeps installed binaries, the data disk,
+provisioning assets, SSH keys, and guest development overrides. Backups and
+failed-check logs are retained under `runtime/repairs/os-*/`; clean-check copies
+are removed. A failed filesystem check never installs an unverified image.
+Restarting the management VM stops running MicroVMs. `start` uses the existing
+registration; `repair` rebuilds it. Missing binaries or incomplete provisioning
+still need their own recovery. A checkout uses its signed sibling helper for
+OS checks when present; build it with `scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos` before repair.
 
 ## Related
 

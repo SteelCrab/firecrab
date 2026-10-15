@@ -230,6 +230,9 @@ fn print_failure(error: &dyn std::error::Error) -> ExitCode {
 async fn teardown() -> Result<(), TeardownError> {
     firewall::remove_firewall(&firewall::FirewallActor::new()).await?;
     bridge::teardown_all(&bridge::BridgeActor::new()).await?;
+    // Best-effort: UFW rules for bridges that were deleted earlier are no
+    // longer reachable through a link, so sweep for them by name.
+    host_acl::remove_stale_ufw_rules().await;
     Ok(())
 }
 

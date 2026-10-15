@@ -154,10 +154,7 @@ impl Relays {
             .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
             .args(["-o", "StrictHostKeyChecking=accept-new"])
             .arg("-o")
-            .arg(format!(
-                "UserKnownHostsFile={}",
-                self.manager.known_hosts.display()
-            ))
+            .arg(super::known_hosts_option(&self.manager.known_hosts))
             .args(["-o", "ExitOnForwardFailure=yes", "-o", "LogLevel=ERROR"])
             .args([
                 "-o",
@@ -250,7 +247,7 @@ mod tests {
         let joined = arguments.join(" ");
         assert_eq!(command.get_program(), "/usr/bin/ssh");
         assert!(joined.contains("-i /tmp/fc state/manager_ed25519"));
-        assert!(joined.contains("UserKnownHostsFile=/tmp/fc state/known_hosts"));
+        assert!(joined.contains("UserKnownHostsFile=\"/tmp/fc state/known_hosts\""));
         assert!(joined.contains("ExitOnForwardFailure=yes"));
         assert!(
             joined.ends_with("-T -L 127.0.0.1:8080:127.0.0.1:8080 root@192.0.2.7 cat >/dev/null")
