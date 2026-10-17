@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub(super) mod dashboard;
+pub(super) mod session;
 
 pub(super) const GUEST_SCRIPT: &str =
     include_str!("../../../scripts/micromanager/dev-macos-guest.sh");
@@ -22,6 +23,7 @@ const SOURCE_INPUTS: &[&str] = &[
     "firecrab-helper",
     "scripts/firecracker-menual",
     "scripts/micromanager/dev-macos-guest.sh",
+    "scripts/micromanager/dev-session.sh",
     "assets/firecrab-motd",
     "packaging/m2images.json",
 ];

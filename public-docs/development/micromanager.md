@@ -51,6 +51,11 @@ After a successful build, deployment switches the two systemd executable overrid
 It starts the source dashboard in the background at `http://localhost:8080`.
 The command returns only after the dashboard and its API proxy answer successfully.
 A build failure leaves services running; an ordinary deployment failure restores previous executables.
+Ctrl+C or a lost development-command connection cancels that command's guest build
+and compiler descendants. Cleanup releases its deployment lock before another build
+can proceed. Cancelling compilation preserves the running API/helper. Cancelling
+activation restores the previous executables. Compiler caches remain available for
+the next build. Do not delete `deploy.lock` to bypass a running deployment.
 Before uploading, starting, or deploying, macOS checks the guest's writable OS/data mounts and critical OS executables.
 The shared macOS/WSL deployment script repeats these checks after compilation and before reporting success.
 An HTTP response from `/api/host` alone does not establish that the guest filesystem is healthy.
@@ -90,8 +95,6 @@ Dashboard logs are stored at `runtime/dev-dashboard.log` in the managed home.
 The installed release dashboard remains available through the API's port 5523.
 Vite proxies `/api` and `/ws` to `127.0.0.1:5523` through the macOS SSH tunnel or WSL localhost forwarding.
 Use `localhost` for the configured browser origin.
-`service dev` and `service dev start` print the API URL and the separate frontend command.
-They do not start Vite; port 8080 is available only while the frontend command runs.
 
 ## macOS disk I/O
 

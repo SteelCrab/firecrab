@@ -114,6 +114,7 @@ done
 finish() {
   rc=$?
   trap - EXIT
+  trap '' INT TERM HUP PIPE
   set +e
   if [ "$rc" -ne 0 ] && ! check_filesystems; then
     echo '[FAIL] guest OS filesystem is unhealthy; stop retrying the build and run firecrab service repair' >&2
@@ -199,7 +200,8 @@ if [ "$profile" != restore ]; then
   export CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG:-1}
   flags=(--locked --target "$target" -p firecrab-api -p firecrab-helper)
   if [ "$profile" = release ]; then flags+=(--release); fi
-  rustup run "$channel" cargo build "${flags[@]}"
+  # Compilers must not retain the deployment lock after their owning shell exits.
+  rustup run "$channel" cargo build "${flags[@]}" 9>&-
 
   # Compilation writes to the data disk. Check the OS disk again before staging
   # executables or stopping the running services.
