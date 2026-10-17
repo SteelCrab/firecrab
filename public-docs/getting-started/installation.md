@@ -93,6 +93,7 @@ After installing the CLI, set a [host profile](../reference/cli.md#host-profiles
 | `--version TAG` | Pin the release |
 | `--libc gnu` / `--libc musl` | Override libc detection |
 | `--no-deps` / `--no-frontend` | Skip packages / dashboard |
+| `--with-pipe` | Install Nginx and the verified cloudflared connector; configure [Pipe routes](../guides/pipe.md) separately |
 | `--bin-dir DIR` | Install locally built binaries |
 | `--dashboard-dir DIR` | Install locally built dashboard assets |
 | `--uninstall` | Remove services and binaries; retain data |

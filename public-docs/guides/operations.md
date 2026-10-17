@@ -12,6 +12,10 @@ The API manages VMs and the helper manages host networking.
 
 The helper should start before the API.
 
+An explicitly configured [Pipe](pipe.md) also runs `firecrab-ingress.service` (Nginx) and optionally `firecrab-tunnel.service` (cloudflared).
+These units keep running across API/helper restarts.
+Stopping the host or management VM interrupts traffic.
+
 ## Status and logs
 
 ```sh

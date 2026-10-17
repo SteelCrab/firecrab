@@ -72,7 +72,12 @@ fn vm_units_in(listing: &str) -> Vec<String> {
 /// 고아가 된다.
 pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> Result<(), Error> {
     stop_vm_units(privileged);
-    for unit in UNITS.into_iter().rev().chain([LEGACY_HELPER_UNIT]) {
+    // Stop the independently owned traffic path only during explicit removal.
+    for unit in [crate::pipe::TUNNEL_UNIT, crate::pipe::INGRESS_UNIT]
+        .into_iter()
+        .chain(UNITS.into_iter().rev())
+        .chain([LEGACY_HELPER_UNIT])
+    {
         // 이미 없거나 비활성이면 실패가 정상이므로 결과를 보지 않는다.
         let _ = privileged.run("systemctl", &["disable", "--now", unit]);
         let path = env.unit_path(unit).to_string_lossy().into_owned();
@@ -80,6 +85,12 @@ pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> 
     }
     privileged.run_ok(STEP, "systemctl", &["daemon-reload"])?;
     output::log("units removed");
+    // Only the binaries installed by pipe install; external executables stay.
+    privileged.run_ok(
+        STEP,
+        "rm",
+        &["-rf", &env.libdir.join("pipe").to_string_lossy()],
+    )?;
 
     // SIGTERM은 helper의 소켓 루프만 멈춘다 — helper가 만든 브리지, TAP,
     // nftables 테이블은 재부팅 전까지 남는다. 바이너리가 아직 디스크에 있는

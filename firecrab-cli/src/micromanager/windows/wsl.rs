@@ -33,7 +33,10 @@ pub fn run(args: &[&str]) -> Result<String, Error> {
 }
 
 /// Stream binary input and live build output without PowerShell text conversion.
-pub fn run_with_input(args: &[&str], input: std::fs::File) -> Result<(), Error> {
+pub fn run_with_input(
+    args: &[&str],
+    input: crate::micromanager::dev::session::Input,
+) -> Result<(), Error> {
     #[cfg(test)]
     if let Some(output) = fake::reply("wsl.exe", args) {
         if output.success {
@@ -44,10 +47,8 @@ pub fn run_with_input(args: &[&str], input: std::fs::File) -> Result<(), Error> 
             detail: failure_detail(&output.stderr, &output.stdout),
         });
     }
-    let status = ProcessCommand::new("wsl.exe")
-        .args(args)
-        .stdin(std::process::Stdio::from(input))
-        .status()
+    let status = input
+        .status(ProcessCommand::new("wsl.exe").args(args))
         .map_err(|source| Error::Spawn {
             program: "wsl.exe".to_string(),
             source,

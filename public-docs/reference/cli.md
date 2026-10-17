@@ -107,6 +107,24 @@ See [OCI images](../guides/oci.md) for registry access and import limits.
 Use the [macOS](../getting-started/macos.md#service-commands) or [Windows](../getting-started/windows.md#service-commands) command table for managed services.
 Use [service dev](../development/micromanager.md) to deploy source-built API/helper binaries.
 
+## Pipe ingress and tunnel
+
+`pipe` manages Nginx routing and the optional Cloudflare Tunnel connector.
+It operates on the local Linux host or the managed macOS/Windows guest.
+It does not select a remote API through `--host`.
+
+```sh
+firecrab pipe install
+firecrab pipe render --config pipe.json
+firecrab pipe apply --config pipe.json
+firecrab pipe status
+firecrab pipe disable
+```
+
+On Linux, install/apply/disable require root.
+On macOS and Windows, run them without host sudo.
+See [Pipe ingress and tunnel](../guides/pipe.md) for Nginx installation, manifest fields, dashboard controls, and reload behavior.
+
 ## Linux host diagnostics
 
 These commands inspect the Linux machine where the CLI runs.

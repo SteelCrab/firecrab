@@ -541,6 +541,34 @@ fn running_guest_ip(layout: &lifecycle::Layout) -> Result<std::net::IpAddr, Erro
         .ok_or(Error::ShellNotRunning)
 }
 
+/// Non-interactive private input for native commands that operate in Linux.
+pub(crate) fn run_guest_command(
+    command: &[String],
+    input: Option<std::fs::File>,
+) -> Result<i32, Error> {
+    let layout = lifecycle::Layout::from_process_env()?;
+    let ip = running_guest_ip(&layout)?;
+    let runtime = layout.managed_home.join("runtime");
+    if !runtime.join("manager_ed25519").is_file() {
+        return Err(Error::ShellCredentials(runtime));
+    }
+    let stdin = input
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(std::process::Stdio::null);
+    let settings = ssh::load(&layout.managed_home)?;
+    let status = ProcessCommand::new("/usr/bin/ssh")
+        .args(ssh::arguments(&runtime, &settings, ssh::Session::Command))
+        .args(shell_arguments(&runtime, ip, command, false))
+        .stdin(stdin)
+        .status()
+        .map_err(Error::ShellSsh)?;
+    let code = status.code().unwrap_or(1);
+    if code == 255 {
+        eprintln!("{REPAIR_HINT}");
+    }
+    Ok(code)
+}
+
 /// OpenSSH parses an `-o` value again and expands percent tokens, even
 /// when the entire value is passed as one process argument.
 fn known_hosts_option(path: &Path) -> OsString {

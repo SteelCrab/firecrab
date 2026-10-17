@@ -38,6 +38,7 @@ pub fn render_unit(template: &str, env: &ServiceEnv, uid: &str) -> String {
         .replace("@SHAREDIR@", &env.sharedir.to_string_lossy())
         .replace("@DATADIR@", &env.datadir.to_string_lossy())
         .replace("@CONFDIR@", &env.confdir.to_string_lossy())
+        .replace("@UNITDIR@", &env.unitdir.to_string_lossy())
         .replace("@PREFIX@", &env.prefix.to_string_lossy())
         .replace("@FIRECRAB_USER@", &env.user)
         .replace("@FIRECRAB_GROUP@", &env.group)

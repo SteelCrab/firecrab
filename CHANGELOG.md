@@ -39,6 +39,16 @@ Entries land here as work merges, and move under the next version heading when t
   the VM while SSH reconnects. Runtime edits preserve installation fingerprints
   and survive explicit install/reinstall; existing TOML files keep working.
 
+- `firecrab pipe install/render/apply/status/disable` manages independent Nginx
+  PipeIngress and cloudflared PipeTunnel systemd units. Nginx routes domains and
+  path prefixes, distributes requests across app addresses, and gracefully reloads
+  while keeping in-flight requests. Failed application restores the previous config.
+  The dashboard's Pipe page edits routes, applies configuration, shows live service
+  states, stops the pipe, and accepts optional tunnel credentials without returning
+  saved secrets. API controls run through the authenticated helper. Native CLI
+  commands forward to the managed Linux guest. `install.sh --with-pipe` adds the
+  OS Nginx package and verified cloudflared binary. See [Service data plane](public-docs/guides/pipe.md).
+
 - The dashboard's Host tab has a Firecrab panel with the version and what
   `firecrab info` prints: the install prefix, data, config and unit
   directories, and the address the API listens on. `GET /api/info` serves the

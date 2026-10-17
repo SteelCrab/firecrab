@@ -90,7 +90,7 @@ async function fail(response: Response): Promise<ApiClientError> {
   }
 }
 
-async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
+export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(input, init);

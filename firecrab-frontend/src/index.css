@@ -2081,3 +2081,37 @@ table.image-table .image-package-url a:hover {
   .update-stage.is-active .update-stage-mark { animation: none; }
   .gauge-fill { transition: none; }
 }
+
+/* Pipe uses the existing panels, tables and field tokens. */
+.pipe-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-top: 1rem; }
+.pipe-unsaved { padding: .75rem 1rem; margin-bottom: 1rem; border: 1px solid var(--error); border-radius: 8px; background: color-mix(in srgb, var(--error) 5%, var(--bg-panel)); color: var(--error); font-size: .85rem; line-height: 1.5; }
+.pipe-description { margin: 0 0 1rem; color: var(--ink); font-size: .85rem; line-height: 1.6; }
+.cloudflare-help { margin-top: 1rem; }
+.cloudflare-help summary { cursor: pointer; padding-block: .4rem; }
+.cloudflare-help ol { padding-left: 1.4rem; line-height: 1.7; }
+.cloudflare-help p { line-height: 1.6; overflow-wrap: anywhere; }
+.cloudflare-connect .field > span:first-child { color: var(--shell); font-family: var(--font-mono); font-size: .75rem; }
+.pipe-controls .field { min-width: min(100%, 15rem); }
+.pipe-controls .field > span { color: var(--shell); font-family: var(--font-mono); font-size: .75rem; }
+.pipe-route-form { margin-bottom: 1rem; }
+.pipe-route-form .pipe-targets { grid-column: span 2; }
+.pipe-app-picker { min-width: 0; margin: 0; padding: 0; border: 0; }
+.pipe-app-picker legend { padding: 0; margin-bottom: .35rem; color: var(--shell); font: .72rem var(--font-mono); letter-spacing: .1em; }
+.pipe-app-list { max-height: 18rem; overflow-y: auto; border: 1px solid var(--line); border-radius: 3px; }
+.field .pipe-app-option { display: flex; gap: .65rem; padding: .65rem .75rem; margin: 0; align-items: start; text-transform: none; letter-spacing: normal; cursor: pointer; }
+.pipe-app-option + .pipe-app-option { border-top: 1px solid var(--line); }
+.pipe-app-option:hover { background: var(--bg); }
+.pipe-app-option:has(input:disabled) { cursor: default; }
+.pipe-app-option input[type="checkbox"] { width: 1rem; height: 1rem; padding: 0; margin: .1rem 0 0; flex: none; accent-color: var(--shell); }
+.pipe-app-option > span { display: grid; min-width: 0; gap: .25rem; }
+.pipe-app-name { font-size: .8rem; color: var(--ink); overflow-wrap: anywhere; }
+.pipe-app-address, .pipe-app-reason { font-size: .72rem; color: var(--dim); overflow-wrap: anywhere; }
+.pipe-tunnel-fields > .pipe-app-picker { grid-column: 1 / -1; }
+.pipe-route-table { min-width: 38rem; }
+.pipe-status-table { min-width: 0; }
+.pipe-addresses { white-space: nowrap; }
+.pipe-row-actions { display: flex; gap: .35rem; }
+.pipe-tunnel-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 1rem; margin-top: 1rem; }
+.pipe-credentials { min-height: 7rem; resize: vertical; width: 100%; padding: .55rem .65rem; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 3px; font-family: var(--font-mono); }
+@media (max-width: 1000px) { .pipe-route-form .pipe-targets { grid-column: 1 / -1; } }
+@media (max-width: 560px) { .pipe-tunnel-fields { grid-template-columns: minmax(0, 1fr); } .pipe-controls .field { width: 100%; } }

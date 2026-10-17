@@ -481,6 +481,25 @@ fn shell_arguments(command: &[String]) -> Vec<String> {
     arguments
 }
 
+/// Non-interactive stdin transport; PowerShell never converts credential bytes.
+pub(crate) fn run_guest_command(
+    command: &[String],
+    input: Option<std::fs::File>,
+) -> Result<i32, Error> {
+    if !wsl::contains(&wsl::distributions(), DISTRO_NAME) {
+        return Err(Error::NotInstalled);
+    }
+    let stdin = input
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(std::process::Stdio::null);
+    let status = std::process::Command::new("wsl.exe")
+        .args(shell_arguments(command))
+        .stdin(stdin)
+        .status()
+        .map_err(Error::Console)?;
+    Ok(status.code().unwrap_or(1))
+}
+
 /// Without `--purge` the distribution stays registered, so its Firecrab data
 /// and the managed home survive for the next install, as on macOS.
 fn run_uninstall(layout: &lifecycle::Layout, purge: bool) -> Result<i32, Error> {

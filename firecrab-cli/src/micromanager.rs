@@ -30,8 +30,12 @@ use clap::Subcommand;
 
 #[cfg(target_os = "macos")]
 pub use macos::run;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::run_guest_command;
 #[cfg(target_os = "windows")]
 pub use windows::run;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::run_guest_command;
 
 /// `println!` panics if the write returns an error, and on some terminal
 /// multiplexers a burst of output (a progress bar redraw, then this line)

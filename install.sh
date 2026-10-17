@@ -42,6 +42,7 @@ FIRECRAB_RELEASE_TAG="@FIRECRAB_RELEASE_TAG@"
 MODE=install
 INSTALL_DEPS=1
 WITH_FRONTEND=1
+WITH_PIPE=0
 PURGE=0
 # Set by ensure_account when it grants the /dev/kvm ACL, so --uninstall can take it back.
 KVM_ACL_ADDED=0
@@ -86,6 +87,7 @@ Usage: ./install.sh [OPTIONS]
   --deps-only         install the dependencies, then stop (no host changes)
   --no-deps           never install packages, only report gaps
   --no-frontend       do not install the dashboard
+  --with-pipe         install Nginx and the verified cloudflared connector with Firecrab
   --version VER       GitHub Release tag (default: latest, or the baked-in tag)
   --libc gnu|musl     host libc (default: detect; gnu = glibc)
   --bin-dir DIR       install these local binaries instead of the release
@@ -152,6 +154,7 @@ while [ $# -gt 0 ]; do
         --deps-only) MODE=deps ;;
         --no-deps) INSTALL_DEPS=0 ;;
         --no-frontend) WITH_FRONTEND=0 ;;
+        --with-pipe) WITH_PIPE=1 ;;
         --version)
             [ $# -ge 2 ] || die "--version needs a tag (for example v0.1.0)"
             RELEASE_VERSION=$2
@@ -211,6 +214,10 @@ cleanup_payload() {
     fi
 }
 trap cleanup_payload EXIT
+
+if [ "$WITH_PIPE" = 1 ] && [ "$MODE" != install ] && [ "$MODE" != check ]; then
+    die "--with-pipe is supported with installation or --check"
+fi
 
 # --- package manager -------------------------------------------------------
 
@@ -774,6 +781,7 @@ install_units() {
             -e "s|@SHAREDIR@|$SHAREDIR|g" \
             -e "s|@DATADIR@|$DATADIR|g" \
             -e "s|@CONFDIR@|$CONFDIR|g" \
+            -e "s|@UNITDIR@|$UNITDIR|g" \
             -e "s|@PREFIX@|$PREFIX|g" \
             -e "s|@FIRECRAB_USER@|$FIRECRAB_USER|g" \
             -e "s|@FIRECRAB_GROUP@|$FIRECRAB_GROUP|g" \
@@ -847,6 +855,15 @@ do_check() {
         gaps=1
     fi
     ensure_runtime_deps || gaps=1
+    if [ "$WITH_PIPE" = 1 ]; then
+        have nginx || [ -x /usr/sbin/nginx ] || { warn "missing nginx"; gaps=1; }
+        if [ -x "$LIBDIR/pipe/cloudflared" ]; then
+            log "pipe engine present: $LIBDIR/pipe/cloudflared"
+        else
+            warn "missing pipe engine: $LIBDIR/pipe/cloudflared (installed with --with-pipe)"
+            gaps=1
+        fi
+    fi
     ensure_firecracker || gaps=1
     report_payload || gaps=1
     check_kvm || gaps=1
@@ -936,6 +953,14 @@ do_install() {
     label_selinux_binaries
     install_config
     install_units
+    if [ "$WITH_PIPE" = 1 ]; then
+        if ! have nginx && [ ! -x /usr/sbin/nginx ]; then
+            [ "$INSTALL_DEPS" = 1 ] || die "nginx is required with --with-pipe"
+            pkg_install nginx
+        fi
+        $SUDO env PREFIX="$PREFIX" FIRECRAB_LIBDIR="$LIBDIR" DATADIR="$DATADIR" \
+            CONFDIR="$CONFDIR" UNITDIR="$UNITDIR" "$PREFIX/bin/firecrab" pipe install
+    fi
     # Guest images are not part of the host install — import one afterwards
     # with POST /api/oci/import or the dashboard Images page.
     start_units || die "installed, but a unit did not come up"
@@ -1028,12 +1053,13 @@ restore_host_baseline() {
 do_uninstall() {
     require_sudo_ticket
     stop_vm_units
-    for unit in firecrab-api.service firecrab-helper.service firecrab-net-helper.service; do
+    for unit in firecrab-tunnel.service firecrab-ingress.service firecrab-api.service firecrab-helper.service firecrab-net-helper.service; do
         $SUDO systemctl disable --now "$unit" 2>/dev/null || true
         $SUDO rm -f "$UNITDIR/$unit"
     done
     $SUDO systemctl daemon-reload
     log "units removed"
+    $SUDO rm -rf "$LIBDIR/pipe"
 
     # SIGTERM (above) only stops the helper's socket loop — it never deletes
     # the bridges, TAP devices or nftables tables it created, only a reboot

@@ -33,6 +33,8 @@ export default function NavIcon({ id, className }: { id: NavIconId; className?: 
         </svg>
       );
     // Disk canister — M2Image/rootfs volumes.
+    case "pipe":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true"><path d="M3 12h7m4-7h7m-7 14h7M10 12l4-7m-4 7l4 7" /><circle cx="3" cy="12" r="2" /><circle cx="21" cy="5" r="2" /><circle cx="21" cy="19" r="2" /></svg>;
     case "storages":
       return (
         <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">

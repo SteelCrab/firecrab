@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::net::IpAddr;
 use std::process::{Command, Stdio};
 
@@ -6,7 +5,7 @@ use super::lifecycle::Layout;
 pub use crate::micromanager::dev::{Checkout, Error};
 use crate::micromanager::{
     DevCommand,
-    dev::{guest_script, io_error},
+    dev::{guest_script, io_error, session},
     report,
 };
 
@@ -15,7 +14,7 @@ pub fn control(layout: &Layout, ip: IpAddr, command: DevCommand) -> Result<(), E
         layout,
         ip,
         &format!("bash -s -- {}", command.as_str()),
-        guest_script()?,
+        session::Input::File(guest_script()?),
         "guest service control",
     )
 }
@@ -57,7 +56,7 @@ pub fn deploy(
                 &format!(
                     "install -d -m 0700 /var/lib/firecrab/dev && umask 077 && cat > /var/lib/firecrab/dev/{archive_name}"
                 ),
-                archive,
+                session::Input::File(archive),
                 "source upload",
             )?;
             (
@@ -70,12 +69,15 @@ pub fn deploy(
     // Send the embedded script independently of the snapshot so an installed CLI
     // can run from any checkout directory and restore without source files.
     let script = guest_script()?;
-    report!("[GUEST] {profile}: API + helper");
+    report!("[GUEST] {profile}: API + helper + CLI");
     run_ssh(
         layout,
         ip,
-        &format!("bash -s -- {profile} {channel} {archive_name}"),
-        script,
+        &format!(
+            "bash -c '{}' -- {profile} {channel} {archive_name}",
+            session::runner().replace('\'', "'\\''")
+        ),
+        session::Input::Session(script),
         "guest development build/deployment",
     )
 }
@@ -84,12 +86,11 @@ fn run_ssh(
     layout: &Layout,
     ip: IpAddr,
     command: &str,
-    stdin: File,
+    stdin: session::Input,
     action: &'static str,
 ) -> Result<(), Error> {
-    let status = ssh_command(layout, ip, command)?
-        .stdin(Stdio::from(stdin))
-        .status()
+    let status = stdin
+        .status(&mut ssh_command(layout, ip, command)?)
         .map_err(|source| io_error(action, source))?;
     if !status.success() {
         return Err(if status.code() == Some(74) {

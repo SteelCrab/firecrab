@@ -15,6 +15,7 @@ base64 = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 firecrab-api-types = { path = "../firecrab-api-types" }
+firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 fs2 = "0.4"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }
@@ -33,7 +34,6 @@ reflink-copy = "0.1.30"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 nix = { version = "0.30", features = ["user"] }
 
 [dev-dependencies]

@@ -23,6 +23,7 @@ mod firewall;
 mod host_acl;
 /// NAT/uplink detection, split out of `firewall`.
 mod nat;
+mod pipe;
 /// Applying a downloaded host bundle (`ApplySelfUpdate`).
 mod self_update;
 /// Per-VM TAP device lifecycle.
@@ -331,8 +332,9 @@ async fn serve(
 /// What the connection loop must do *after* the response frame is flushed.
 /// Returned by [`dispatch`] rather than performed inside it, so a request that
 /// restarts this very process cannot run before its answer is on the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum AfterResponse {
+    Pipe(Box<firecrab_helper_protocol::pipe::Snapshot>),
     /// Normal: keep serving requests on this connection.
     Continue,
     /// A self-update was applied; restart both units as the last action.
@@ -399,15 +401,17 @@ async fn respond_to(
             supported: PROTOCOL_VERSION,
         })
     };
-    let after = match &result {
-        Ok(after) => *after,
-        Err(_) => AfterResponse::Continue,
+    let (result, after, pipe) = match result {
+        Ok(AfterResponse::Pipe(snapshot)) => (Ok(()), AfterResponse::Continue, Some(*snapshot)),
+        Ok(after) => (Ok(()), after, None),
+        Err(error) => (Err(error), AfterResponse::Continue, None),
     };
     (
         NetworkResponseEnvelope {
+            pipe,
             version: PROTOCOL_VERSION,
             request_id: envelope.request_id,
-            result: result.map(|_| ()),
+            result,
         },
         after,
     )
@@ -590,6 +594,9 @@ async fn dispatch(
     peer: &vm_unit::Peer,
 ) -> Result<AfterResponse, HelperFailure> {
     match request {
+        NetworkRequest::Pipe { request } => pipe::run(request)
+            .await
+            .map(|snapshot| AfterResponse::Pipe(Box::new(snapshot))),
         NetworkRequest::EnsureBridge => bridge::ensure_bridge(&config.bridge, config.bridge_mtu)
             .await
             .map(|()| AfterResponse::Continue)

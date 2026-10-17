@@ -12,6 +12,7 @@ mod info;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod micromanager;
 mod network;
+mod pipe;
 #[cfg(target_os = "linux")]
 mod service;
 #[cfg(target_os = "linux")]
@@ -39,6 +40,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Configure the independent ingress and Cloudflare Tunnel services.
+    Pipe {
+        #[command(subcommand)]
+        command: pipe::Command,
+    },
     /// Diagnose host readiness for firecrab (KVM, nft, dnsmasq, UFW, ...).
     #[cfg(target_os = "linux")]
     Doctor {
@@ -121,6 +127,13 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Pipe { command } => match pipe::run(command) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                1
+            }
+        },
         #[cfg(target_os = "linux")]
         Command::Doctor { digest, json } => run_doctor(digest, json),
         #[cfg(target_os = "linux")]

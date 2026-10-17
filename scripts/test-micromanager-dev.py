@@ -1,18 +1,37 @@
 #!/usr/bin/env python3
 """Exercise the guest build/deploy transaction without a VM, root, or network."""
 import os
+import fcntl
 from pathlib import Path
 import shlex
+import signal
 import socket
 import subprocess
 import tarfile
 import tempfile
 import unittest
+import time
 
 GUEST_SCRIPT = Path(__file__).parent / "micromanager/dev-macos-guest.sh"
+SESSION_SCRIPT = Path(__file__).parent / "micromanager/dev-session.sh"
 STUB = r'''#!/bin/bash
 set -eu
 name=${0##*/}
+block_command() {
+  exec python3 - <<'PY'
+import fcntl, os, subprocess
+from pathlib import Path
+try:
+    fcntl.fcntl(9, fcntl.F_GETFD)
+    inherited_lock = True
+except OSError:
+    inherited_lock = False
+child = subprocess.Popen(["sleep", "60"])
+Path(os.environ["TEST_ROOT"], "blocked").write_text(
+    f"{os.getpid()} {child.pid} {os.getpgrp()} {int(inherited_lock)}")
+child.wait()
+PY
+}
 case "$name" in
   chmod|rm|install)
     if [ "$1" = --version ]; then exit 0; fi
@@ -39,6 +58,7 @@ case "$name" in
     [ "$1" = run ] || exit 0
     if [ "$3" = rustc ]; then [ "${TOOLCHAIN_MISSING:-0}" = 0 ]; exit; fi
     [ "${BUILD_FAIL:-0}" = 0 ] || exit 42
+    if [ "${BLOCK_BUILD:-0}" = 1 ]; then block_command; fi
     test "$(cat "$TEST_ROOT/cache/source/firecrab-api/src/main.rs")" = 'edited local source'
     fragment="$TEST_ROOT/cache/source/firecrab-api/src/oci/guest/install-packages.sh"
     if [ -f "$fragment" ]; then cp "$fragment" "$TEST_ROOT/compiled-fragment"; fi
@@ -51,7 +71,7 @@ case "$name" in
     done
     [ "$target" = "${GUEST_ARCH:-aarch64}-unknown-linux-gnu" ]
     mkdir -p "$CARGO_TARGET_DIR/$target/$profile"
-    for unit in firecrab-api firecrab-helper; do
+    for unit in firecrab-api firecrab-helper firecrab; do
       printf '#!/bin/bash\necho built-from-source\n' >"$CARGO_TARGET_DIR/$target/$profile/$unit"
     done
     if [ "${DISK_FAIL_AFTER_BUILD:-0}" = 1 ]; then
@@ -64,6 +84,8 @@ case "$name" in
       exit 0
     fi
     echo "$*" >>"$TEST_ROOT/events"
+    if [ "$1" = stop ] && [ "$2" = firecrab-api ] \
+      && [ "${BLOCK_ACTIVATE:-0}" = 1 ] && [ ! -f "$TEST_ROOT/blocked" ]; then block_command; fi
     if [ "$*" = 'stop firecrab-api' ] && [ "${STOP_FAIL:-0}" = 1 ]; then exit 44; fi
     if [ "$1" = start ] && [ "$2" != firecrab-api ] && [ "${HELPER_START_FAIL:-0}" = 1 ]; then exit 45; fi
     if [ "$*" = 'start firecrab-api' ] && [ "${START_FAIL:-0}" = 1 ] \
@@ -136,6 +158,118 @@ class GuestDevelopmentTest(unittest.TestCase):
 
     def override(self, unit="firecrab-api"):
         return self.units / (unit + ".service.d/90-firecrab-dev.conf")
+
+    def start_session(self, **flags):
+        # Use a real inherited-file-description lock on Linux and macOS.
+        flock = self.commands / "flock"
+        flock.unlink()
+        flock.write_text("#!/usr/bin/env python3\nimport fcntl\nfcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)\n")
+        flock.chmod(0o755)
+        environment = os.environ.copy()
+        environment.update(TEST_ROOT=str(self.root), PATH=str(self.commands) + ":" + environment["PATH"])
+        environment.update({key: str(value) for key, value in flags.items()})
+        output = open(self.root / "session.stdout", "w+")
+        errors = open(self.root / "session.stderr", "w+")
+        self.addCleanup(output.close)
+        self.addCleanup(errors.close)
+        process = subprocess.Popen(
+            ["bash", "-c", SESSION_SCRIPT.read_text(), "--", "debug", "1.97.1", self.archive.name],
+            stdin=subprocess.PIPE, stdout=output, stderr=errors, env=environment, start_new_session=True)
+
+        def cleanup():
+            if not process.stdin.closed:
+                process.stdin.close()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                marker = self.root / "blocked"
+                if marker.exists():
+                    group = int(marker.read_text().split()[2])
+                    try:
+                        os.killpg(group, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.kill()
+                process.wait(timeout=5)
+        self.addCleanup(cleanup)
+        process.stdin.write(self.script.read_bytes() + b"\0")
+        process.stdin.flush()
+        return process
+
+    def wait_for_blocked_command(self, process):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            marker = self.root / "blocked"
+            if marker.exists() and len(marker.read_text().split()) == 4:
+                return [int(value) for value in marker.read_text().split()]
+            self.assertIsNone(process.poll(), (self.root / "session.stderr").read_text())
+            time.sleep(0.01)
+        self.fail("development command did not reach the cancellation point")
+
+    def test_caller_disconnect_stops_compilers_releases_lock_and_allows_retry(self):
+        archive = self.archive.read_bytes()
+        unrelated = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        self.addCleanup(unrelated.wait)
+        self.addCleanup(unrelated.terminate)
+        process = self.start_session(BLOCK_BUILD=1)
+        compiler, descendant, group, inherited_lock = self.wait_for_blocked_command(process)
+        self.assertEqual(inherited_lock, 0, "compiler inherited deployment lock")
+        self.assertNotEqual(group, os.getpgrp())
+        with open(self.cache / "deploy.lock", "w") as lock:
+            with self.assertRaises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=5), 130)
+        self.assertFalse((self.root / "events").exists())
+        self.assertFalse(self.override().exists())
+        self.assertIsNone(unrelated.poll())
+        for pid in [compiler, descendant]:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail(f"cancelled process {pid} is still alive")
+        self.archive.write_bytes(archive)
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_caller_disconnect_during_activation_restores_previous_services(self):
+        previous = self.binaries / "previous"
+        previous.mkdir(parents=True)
+        (self.binaries / "bin").symlink_to(previous)
+        self.override().parent.mkdir(parents=True)
+        self.override().write_text("previous override\n")
+        process = self.start_session(BLOCK_ACTIVATE=1)
+        self.wait_for_blocked_command(process)
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=5), 130)
+        self.assertEqual((self.binaries / "bin").resolve(), previous.resolve())
+        self.assertEqual(self.override().read_text(), "previous override\n")
+        self.assertTrue((self.root / "events").read_text().endswith("start firecrab-api\n"))
+
+    def test_live_caller_can_finish_without_stdin_eof(self):
+        process = self.start_session()
+        self.assertEqual(process.wait(timeout=10), 0, (self.root / "session.stderr").read_text())
+        self.assertFalse(process.stdin.closed)
+        self.assertNotIn("[CANCEL]", (self.root / "session.stderr").read_text())
+
+    def test_transport_signals_cancel_only_the_active_deployment(self):
+        archive = self.archive.read_bytes()
+        for shutdown in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
+            with self.subTest(signal=shutdown):
+                self.archive.write_bytes(archive)
+                (self.root / "blocked").unlink(missing_ok=True)
+                process = self.start_session(BLOCK_BUILD=1)
+                self.wait_for_blocked_command(process)
+                process.send_signal(shutdown)
+                self.assertEqual(process.wait(timeout=5), 130)
+                self.assertFalse((self.root / "events").exists())
+                with open(self.cache / "deploy.lock", "w") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_read_only_os_rejects_start_restart_and_build_even_with_healthy_api(self):
         self.mounts.write_text("/dev/os / ext4 ro,relatime 0 0\n")
