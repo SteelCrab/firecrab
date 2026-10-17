@@ -11,6 +11,7 @@ mod image;
 mod info;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod micromanager;
+mod microservice;
 mod network;
 #[cfg(target_os = "linux")]
 mod service;
@@ -39,6 +40,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage desired MicroService configurations through the host API.
+    Microservice {
+        #[command(subcommand)]
+        command: microservice::Command,
+    },
     /// Diagnose host readiness for firecrab (KVM, nft, dnsmasq, UFW, ...).
     #[cfg(target_os = "linux")]
     Doctor {
@@ -121,6 +127,11 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Microservice { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                microservice::run(client, command)
+            })
+        }
         #[cfg(target_os = "linux")]
         Command::Doctor { digest, json } => run_doctor(digest, json),
         #[cfg(target_os = "linux")]

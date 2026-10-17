@@ -8,6 +8,14 @@ export type NavIconId = Exclude<ViewId, "shells">;
 
 export default function NavIcon({ id, className }: { id: NavIconId; className?: string }) {
   switch (id) {
+    case "services":
+      return (
+        <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+          <rect x="3" y="3" width="18" height="4" rx="1" />
+          <rect x="3" y="10" width="18" height="4" rx="1" />
+          <rect x="3" y="17" width="18" height="4" rx="1" />
+        </svg>
+      );
     // Compute instance: a chip with four pins — MicroVMs are the workload
     // running on virtualized "hardware".
     case "vms":

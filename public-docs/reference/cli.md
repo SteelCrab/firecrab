@@ -49,6 +49,7 @@ The config stores only endpoints; unknown TOML keys block profile changes.
 | Resource | Commands |
 | --- | --- |
 | VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
+| MicroService | `microservice list`, `get ID`, `create --file JSON`, `update ID --file JSON`, `delete ID`, `deploy ID --host-port PORT`, `status ID`, `stop ID`; see [MicroService](../guides/microservices.md) |
 | Console | `vm console ID` (`terminal` alias) |
 | Network | `network list`, `create`, `delete ID` |
 | Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |

@@ -105,6 +105,10 @@ pub struct AppState {
     pub templates: Arc<TemplateRegistry>,
     /// SQLite-backed durable storage.
     pub(crate) store: Store,
+    /// Short configuration/operation claims; never held while booting a guest.
+    pub(crate) service_mutations: Arc<AsyncMutex<()>>,
+    /// One image/VM deployment at a time bounds replica surge on one host.
+    pub(crate) service_deploy_permits: Arc<Semaphore>,
     /// Live VM id -> its running Firecracker process handle.
     pub(crate) processes: Arc<Mutex<HashMap<Uuid, VmProcess>>>,
     /// Environment-derived runtime settings.
@@ -169,6 +173,8 @@ impl AppState {
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            service_mutations: Arc::new(AsyncMutex::new(())),
+            service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),
             reconciliation: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(runtime),

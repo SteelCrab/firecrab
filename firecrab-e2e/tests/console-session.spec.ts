@@ -188,13 +188,25 @@ test.describe("terminal session end in a booted guest", () => {
     await expect(consoleStatus(secondViewer)).toHaveText(/Session ended/, { timeout: 30_000 });
     expect((await api.getVm(vmId))?.state).toBe("running");
 
+    // xterm renders only the visible rows. The guest MOTD and live app output
+    // can scroll the respawn banner away before the first DOM assertion.
+    // Check the actual new socket's replay, including bytes outside the viewport.
+    const newSessionFrames: Buffer[] = [];
+    page.on("websocket", (socket) => {
+      if (new URL(socket.url()).pathname !== `/ws/vms/${vmId}/console`) return;
+      socket.on("framereceived", ({ payload }) => {
+        newSessionFrames.push(typeof payload === "string" ? Buffer.from(payload) : payload);
+      });
+    });
     await page.getByRole("button", { name: "New session" }).click();
     await expect(consoleStatus(page)).toHaveText(/Connected/);
-    await expect(page.locator(".console-page .xterm-rows")).toContainText(
-      /session ended — starting a new one[\s\S]*~ #/,
-      { timeout: 30_000 },
-    );
-    await expect(page.locator(".console-page .xterm-rows")).not.toContainText(";1R;145R;1R;145R");
+    await expect.poll(() => Buffer.concat(newSessionFrames).toString("utf8"), {
+      timeout: 30_000,
+    }).toMatch(/session ended — starting a new one[\s\S]*~ #/);
+    expect(Buffer.concat(newSessionFrames).toString("utf8")).not.toContain(";1R;145R;1R;145R");
+    await expect(page.locator(".console-page .xterm-rows")).toContainText(/~ #/, {
+      timeout: 30_000,
+    });
     const log = (await request("GET", `/api/vms/${vmId}/log`)) as { consoleLog: string };
     expect(log.consoleLog).toContain(";1R;145R;1R;145R");
     await typeInTerminal(page, "printf 'FIRECRAB_REATTACH_%s\\n' READY");

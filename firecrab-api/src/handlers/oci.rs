@@ -113,7 +113,10 @@ pub async fn start_oci_import(
 /// A read failure is logged and answered as "no login": an anonymous pull is
 /// still worth attempting, so a broken credential row never makes every
 /// public image unreachable.
-async fn stored_credential(state: &AppState, request_id: RequestId) -> Option<RegistryCredential> {
+pub(crate) async fn stored_credential(
+    state: &AppState,
+    request_id: RequestId,
+) -> Option<RegistryCredential> {
     let store = state.store.clone();
     match tokio::task::spawn_blocking(move || store.docker_hub_credential()).await {
         Ok(Ok(stored)) => stored.map(RegistryCredential::from),

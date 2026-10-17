@@ -126,6 +126,8 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 
 | Resource | Paths |
 | --- | --- |
+| MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
+| MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |
@@ -135,6 +137,8 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Registry | `/api/microregistry`, `/register`, `/register/{alias}`, `/local/{alias}`, `/docker-hub` |
 | Host | `/api/host`, `/api/network`, `/api/info` |
 | Update | GET / POST `/api/update`, GET `/api/update/progress` |
+
+See [MicroService](../guides/microservices.md) for configuration fields, validation, and deployment behavior.
 
 ## Host
 

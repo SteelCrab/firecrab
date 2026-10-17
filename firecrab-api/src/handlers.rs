@@ -6,6 +6,7 @@ pub mod images;
 pub mod info;
 pub mod kernels;
 pub mod micro_networks;
+pub mod micro_services;
 pub mod micro_storages;
 pub mod microregistry;
 pub mod network;

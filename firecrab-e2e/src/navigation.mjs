@@ -6,6 +6,7 @@
  */
 export async function openDashboard(page, hash) {
   let networkChanged = false;
+  let documentLoaded = false;
   const failed = (request) => {
     if (["document", "script"].includes(request.resourceType()) &&
         request.failure()?.errorText === "net::ERR_NETWORK_CHANGED") {
@@ -17,7 +18,12 @@ export async function openDashboard(page, hash) {
     for (let attempt = 0; ; attempt += 1) {
       networkChanged = false;
       try {
-        await page.goto(hash);
+        if (documentLoaded) {
+          await page.reload();
+        } else {
+          await page.goto(hash);
+          documentLoaded = true;
+        }
         await page.waitForFunction(
           () => (document.getElementById("root")?.childElementCount ?? 0) > 0,
           null,

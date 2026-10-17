@@ -13,6 +13,7 @@ import Images from "./components/Images";
 import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
+import MicroServices from "./components/MicroServices";
 import Shell from "./components/Shell";
 import Shells from "./components/Shells";
 import { newVmHash, useAppRoute, viewHash } from "./navigation";
@@ -233,6 +234,7 @@ export default function App() {
         {/* Each page mounts only while selected, so its own polling stops
             the moment you navigate away. */}
         {view === "networks" && <MicroNetworks />}
+        {view === "services" && <MicroServices />}
         {view === "storages" && <MicroStorages />}
         {view === "images" && <Images />}
         {view === "kernels" && <Kernels />}

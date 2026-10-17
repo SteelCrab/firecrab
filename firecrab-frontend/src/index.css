@@ -754,6 +754,33 @@ a.btn {
 /* 좁은 셸에서 표만 가로로 스크롤되고 페이지는 그대로 */
 .table-scroll { overflow-x: auto; }
 
+.service-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.8rem 0; }
+.service-full { grid-column: 1 / -1; }
+.service-wide { grid-column: span 2; }
+.service-image { max-width: 24rem; overflow-wrap: anywhere; }
+.service-runtime-header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.service-digest { font-family: var(--font-mono); font-size: 0.75rem; overflow-wrap: anywhere; color: var(--shell); }
+.service-deploy-log { max-height: 18rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 0.8rem; padding: 0.85rem; border: 1px solid var(--line); }
+table.service-table { min-width: 48rem; }
+.service-variables { min-width: 0; margin: 0; padding: 0.85rem; border: 1px solid var(--line); border-radius: 3px; }
+.service-variables legend { font-family: var(--font-mono); font-size: 0.8rem; color: var(--shell); }
+.service-variable-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 0.6rem; align-items: end; margin-bottom: 0.6rem; }
+@media (max-width: 700px) {
+  table.service-table { display: block; min-width: 0; }
+  .service-table thead { display: none; }
+  .service-table tbody, .service-table tr { display: block; }
+  .service-table tr { padding: 0.6rem 0; border-bottom: 1px solid var(--line); }
+  .service-table td { display: grid; grid-template-columns: 5rem minmax(0, 1fr); gap: 0.5rem; padding: 0.4rem 0; border: 0; overflow-wrap: anywhere; }
+  .service-table td::before { content: attr(data-label); color: var(--shell); font-family: var(--font-mono); font-size: 0.72rem; font-weight: 400; }
+  .service-table td.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; }
+  .service-table td.actions::before { display: none; }
+}
+@media (max-width: 560px) {
+  .service-wide { grid-column: 1 / -1; }
+  .service-variable-row { grid-template-columns: minmax(0, 1fr); }
+  .service-variable-row .btn { justify-self: start; }
+}
+
 /* 페이지 안에 한 단계 들여 놓는 상세 블록 (모달의 .detail-body 대체) */
 .subpanel {
   margin-top: 1.25rem;

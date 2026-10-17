@@ -17,6 +17,8 @@ use uuid::Uuid;
 use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
+mod micro_services;
+
 /// Default SQLite database path, relative to the process's working directory.
 const DB_FILE: &str = "data/firecrab.db";
 /// File name of the legacy JSON store, imported once on first open.
@@ -460,6 +462,8 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    #[error("MicroService name {name} is already registered")]
+    DuplicateMicroServiceName { name: String },
     /// Couldn't create the database's parent directory.
     #[error("failed to create VM data directory {path}: {source}")]
     CreateDirectory {
@@ -679,6 +683,8 @@ impl Store {
         migrate_uplink_column(&conn)?;
         migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
+        conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
+        conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;

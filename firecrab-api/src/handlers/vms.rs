@@ -898,10 +898,8 @@ pub async fn start_vm_request(
 /// config, spawn Firecracker, wait for its API, then record `running`.
 /// Any failure lands the record on `error` with no process left behind.
 ///
-/// This test-only helper preserves direct lifecycle assertions; the public
-/// HTTP route uses [`start_vm_request`] so a normal boot cannot exceed the
-/// general REST request timeout.
-#[cfg(test)]
+/// Service deployment jobs await the result internally. The public VM route
+/// uses [`start_vm_request`] to acknowledge a boot without a REST timeout.
 pub async fn start_vm(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
