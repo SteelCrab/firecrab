@@ -56,7 +56,7 @@ impl sleepy::Backend for Backend {
         self.stop_native()
     }
 }
-pub fn prepare(home: &Path, _settings: &Settings, _resources_changed: bool) -> Result<(), String> {
+pub fn prepare(home: &Path, settings: &Settings, resources_changed: bool) -> Result<(), String> {
     let layout = layout(home)?;
     if !super::active(home) {
         let status = daemon::status(&layout).map_err(|e| e.to_string())?;
@@ -65,6 +65,11 @@ pub fn prepare(home: &Path, _settings: &Settings, _resources_changed: bool) -> R
         }
         super::require_idle(5523).map_err(|e| e.to_string())?;
         daemon::stop(&layout).map_err(|e| e.to_string())?;
+    }
+    if resources_changed {
+        settings
+            .update_saved_resources(home)
+            .map_err(|e| e.to_string())?;
     }
     fs::write(home.join("runtime/controlled"), b"1\n").map_err(|e| e.to_string())?;
     daemon::install(

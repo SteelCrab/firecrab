@@ -5,7 +5,7 @@
 //! `TemplateRegistry` under an alias no `/api/images` consumer ever
 //! surfaces, purely so the existing `create_vm` disk-provisioning and
 //! artifact-verification machinery works unchanged. See
-//! `public-docs/images.md`.
+//! `public-docs/guides/images.md`.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};

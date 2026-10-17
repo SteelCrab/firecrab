@@ -5,6 +5,8 @@ use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+pub(super) mod dashboard;
+
 pub(super) const GUEST_SCRIPT: &str =
     include_str!("../../../scripts/micromanager/dev-macos-guest.sh");
 // Include the workspace manifests and compile-time resources, not the whole
@@ -23,9 +25,16 @@ const SOURCE_INPUTS: &[&str] = &[
     "assets/firecrab-motd",
     "packaging/m2images.json",
 ];
+// Older checkouts predate the manifest and remain valid development sources.
+const OPTIONAL_SOURCE_INPUTS: &[&str] = &["packaging/micromanager.toml"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Dashboard(#[from] dashboard::Error),
+    #[cfg(target_os = "macos")]
+    #[error(transparent)]
+    Manifest(#[from] super::manifest::Error),
     #[error("invalid Firecrab checkout {path}: {detail}")]
     Checkout { path: PathBuf, detail: String },
     #[error("could not {action}: {source}")]
@@ -44,6 +53,12 @@ pub enum Error {
         "management VM SSH at {ip} is not ready: {detail}; inspect `firecrab service debug --logs` before retrying (source upload was not attempted)"
     )]
     GuestSshUnavailable { ip: IpAddr, detail: String },
+    #[cfg(target_os = "macos")]
+    #[error("management VM filesystem is unhealthy: {0}; inspect `firecrab service debug --logs`")]
+    GuestFilesystemUnhealthy(String),
+    #[cfg(target_os = "macos")]
+    #[error("management SSH failed during {0}; inspect `firecrab service debug --logs`")]
+    GuestSshInterrupted(&'static str),
     #[error(
         "guest services are ready but the localhost API is unavailable; inspect `firecrab service debug --logs`"
     )]
@@ -82,6 +97,11 @@ impl Checkout {
                 "--exclude=.env.*",
             ])
             .args(SOURCE_INPUTS)
+            .args(
+                OPTIONAL_SOURCE_INPUTS
+                    .iter()
+                    .filter(|input| root.join(input).exists()),
+            )
             .env("COPYFILE_DISABLE", "1")
             .status()
             .map_err(|source| io_error("archive checkout sources", source))?;
@@ -97,7 +117,11 @@ impl Checkout {
 }
 
 fn validate_checkout(root: &Path) -> Result<String, Error> {
-    for input in SOURCE_INPUTS {
+    for input in SOURCE_INPUTS.iter().chain(
+        OPTIONAL_SOURCE_INPUTS
+            .iter()
+            .filter(|input| root.join(input).exists()),
+    ) {
         let path = root.join(input);
         let metadata = fs::symlink_metadata(&path)
             .map_err(|error| checkout_error(root, format!("{input}: {error}")))?;
@@ -215,6 +239,22 @@ members = ["firecrab-api", "firecrab-api-types", "firecrab-cli", "firecrab-helpe
         )
         .unwrap();
         directory
+    }
+
+    #[test]
+    fn legacy_sources_work_without_toml_and_new_sources_include_it_in_the_archive() {
+        let directory = checkout_fixture();
+        Checkout::prepare(directory.path()).unwrap();
+        let manifest = directory.path().join("packaging/micromanager.toml");
+        fs::write(&manifest, "schema_version = 1\n").unwrap();
+        let checkout = Checkout::prepare(directory.path()).unwrap();
+        let output = Command::new(tar_program())
+            .args(["-xOf", "-", "packaging/micromanager.toml"])
+            .stdin(Stdio::from(checkout.archive.reopen().unwrap()))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"schema_version = 1\n");
     }
 
     #[test]

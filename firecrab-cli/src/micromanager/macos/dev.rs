@@ -5,9 +5,20 @@ use std::process::{Command, Stdio};
 use super::lifecycle::Layout;
 pub use crate::micromanager::dev::{Checkout, Error};
 use crate::micromanager::{
+    DevCommand,
     dev::{guest_script, io_error},
     report,
 };
+
+pub fn control(layout: &Layout, ip: IpAddr, command: DevCommand) -> Result<(), Error> {
+    run_ssh(
+        layout,
+        ip,
+        &format!("bash -s -- {}", command.as_str()),
+        guest_script()?,
+        "guest service control",
+    )
+}
 
 pub fn deploy(
     layout: &Layout,
@@ -17,11 +28,16 @@ pub fn deploy(
 ) -> Result<(), Error> {
     // A guest marker is written before the host tunnel succeeds and can survive
     // a failed boot. Verify the live SSH connection before uploading the snapshot.
-    let output = ssh_command(layout, ip, "true")
-        .stdin(Stdio::null())
+    let output = ssh_command(layout, ip, "bash -s -- check")?
+        .stdin(Stdio::from(guest_script()?))
         .output()
         .map_err(|source| io_error("probe management SSH", source))?;
     if !output.status.success() {
+        if output.status.code() == Some(74) {
+            return Err(Error::GuestFilesystemUnhealthy(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
         return Err(Error::GuestSshUnavailable {
             ip,
             detail: String::from_utf8_lossy(&output.stderr).trim().to_string(),
@@ -71,35 +87,38 @@ fn run_ssh(
     stdin: File,
     action: &'static str,
 ) -> Result<(), Error> {
-    let status = ssh_command(layout, ip, command)
+    let status = ssh_command(layout, ip, command)?
         .stdin(Stdio::from(stdin))
         .status()
         .map_err(|source| io_error(action, source))?;
     if !status.success() {
-        return Err(Error::Command(action));
+        return Err(if status.code() == Some(74) {
+            Error::GuestFilesystemUnhealthy(action.to_string())
+        } else if status.code() == Some(255) {
+            Error::GuestSshInterrupted(action)
+        } else {
+            Error::Command(action)
+        });
     }
     Ok(())
 }
 
-fn ssh_command(layout: &Layout, ip: IpAddr, command: &str) -> Command {
+fn ssh_command(layout: &Layout, ip: IpAddr, command: &str) -> Result<Command, Error> {
     let runtime = layout.managed_home.join("runtime");
+    let settings = super::ssh::load(&layout.managed_home)?;
     let mut ssh = Command::new("/usr/bin/ssh");
     ssh.arg("-i")
         .arg(runtime.join("manager_ed25519"))
-        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"])
-        .args(["-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no"])
-        .args([
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "ServerAliveCountMax=3",
-        ])
-        .arg("-o")
-        .arg(format!(
-            "UserKnownHostsFile={}",
-            runtime.join("known_hosts").display()
+        .args(["-o", "BatchMode=yes"])
+        .args(super::ssh::arguments(
+            &runtime,
+            &settings,
+            super::ssh::Session::Command,
         ))
+        .args(["-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no"])
+        .arg("-o")
+        .arg(super::known_hosts_option(&runtime.join("known_hosts")))
         .arg(format!("root@{ip}"))
         .arg(command);
-    ssh
+    Ok(ssh)
 }

@@ -1009,9 +1009,9 @@ a.options-menu-item {
 .vm-table .vm-state-cell { width: 5.8rem; }
 .vm-state-labels { display: inline-flex; align-items: center; gap: 0.65rem; }
 .state-label { display: inline-block; padding: 0.2rem 0; font-family: var(--font-mono); font-size: 0.75rem; font-weight: 700; line-height: 1.2; letter-spacing: 0.04em; color: var(--dim); cursor: help; border-radius: 2px; }
-.vm-status-label.running, .api-status-label.reconnected { color: var(--ready); }
-.vm-status-label.starting, .vm-status-label.stopping, .api-status-label.mismatched, .api-status-label.interrupted { color: var(--amber); }
-.vm-status-label.error, .api-status-label.networkFailed { color: var(--error); }
+.vm-status-label.running { color: var(--ready); }
+.vm-status-label.starting, .vm-status-label.stopping { color: var(--amber); }
+.vm-status-label.error { color: var(--error); }
 
 .status-tooltip {
   position: fixed;
@@ -1032,8 +1032,6 @@ a.options-menu-item {
 .status-tooltip dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.5rem 0.85rem; margin: 0; }
 .status-tooltip dt { color: var(--shell); font-family: var(--font-mono); font-size: 0.7rem; }
 .status-tooltip dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.status-tooltip .api-status-service code { display: block; margin-left: 0; }
-.status-tooltip .reconciliation-detail .reconciliation-badge { font-size: 0.8rem; }
 
 .reconciliation-badge {
   display: block;
@@ -1967,6 +1965,18 @@ table.image-table .image-package-url a:hover {
 .host-platform-name { font-size: 1.05rem; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 .host-platform-version { font-weight: 400; color: var(--shell); }
 .host-platform-details { font-size: 0.78rem; color: var(--shell); overflow-wrap: anywhere; }
+.manager-resources { border-top: 1px solid var(--line); margin-top: 1.5rem; padding-top: 1.2rem; }
+.manager-resources-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+.manager-resources-heading h3 { margin: 0; font-size: 1rem; }
+.manager-resource-state { color: var(--shell); font-size: 0.75rem; }
+.manager-resource-note { color: var(--shell); font-size: 0.8rem; line-height: 1.6; overflow-wrap: anywhere; }
+.manager-resource-scope { color: var(--ink); border-left: 2px solid var(--ember); padding-left: 0.8rem; }
+.manager-resource-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+.manager-resource-actions { display: flex; flex-wrap: wrap; gap: 0.65rem; grid-column: 1 / -1; }
+@media (max-width: 560px) {
+  .manager-resource-grid { grid-template-columns: minmax(0, 1fr); }
+  .manager-resource-actions .btn { flex: 1 1 auto; }
+}
 
 .detail-edit-input {
   font-family: var(--font-mono);
@@ -1990,4 +2000,84 @@ table.image-table .image-package-url a:hover {
 }
 .vm-table tbody tr {
   cursor: default;
+}
+
+/* The update dialog: what the release changes, then the run's gauge and stages. */
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(23, 27, 34, 0.55);
+}
+.update-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: calc(100vh - 3rem);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-panel);
+  color: var(--ink);
+  box-shadow: 0 1.5rem 3rem rgba(23, 27, 34, 0.35);
+}
+.update-dialog-head { padding: 1rem 1.25rem 0.8rem; border-bottom: 1px solid var(--line); }
+.update-dialog-title { margin: 0; font-family: var(--font-mono); font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+.update-dialog-versions { margin: 0.35rem 0 0; font-size: 0.75rem; color: var(--shell); }
+.update-dialog-body { flex: 1 1 auto; min-height: 0; padding: 1rem 1.25rem; overflow: auto; }
+.update-dialog-section { margin: 0 0 0.6rem; font-family: var(--font-mono); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--shell); }
+.update-dialog-empty { margin: 0; color: var(--shell); font-size: 0.85rem; }
+.update-dialog-link { display: inline-block; margin-top: 0.75rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--ember); }
+.update-dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid var(--line);
+}
+.update-dialog-hint { font-family: var(--font-mono); font-size: 0.72rem; color: var(--shell); }
+
+.release-notes {
+  max-height: 46vh;
+  overflow: auto;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.release-notes h4 { margin: 0.9rem 0 0.35rem; font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.04em; color: var(--ink); }
+.release-notes h4:first-child { margin-top: 0; }
+.release-notes p { margin: 0 0 0.6rem; }
+.release-notes ul { margin: 0 0 0.6rem; padding-left: 1.2rem; }
+.release-notes li { margin: 0 0 0.35rem; }
+.release-notes code { font-family: var(--font-mono); font-size: 0.76rem; padding: 0.05rem 0.25rem; border-radius: 2px; background: rgba(23, 27, 34, 0.07); }
+.release-notes pre { margin: 0 0 0.6rem; padding: 0.5rem 0.65rem; overflow: auto; border-radius: 3px; background: rgba(23, 27, 34, 0.07); }
+.release-notes pre code { padding: 0; background: none; }
+.release-notes a { color: var(--ember); }
+
+.gauge { display: flex; align-items: center; gap: 0.75rem; }
+.gauge-track { flex: 1 1 auto; height: 0.8rem; border: 1px solid var(--line); border-radius: 2px; background: var(--bg); overflow: hidden; }
+.gauge-fill { height: 100%; background: var(--ember-fill); transition: width 0.4s ease; }
+.gauge-fill.is-failed { background: var(--error); }
+.gauge-percent { min-width: 3.2rem; text-align: right; font-family: var(--font-mono); font-size: 0.9rem; font-weight: 700; }
+
+.update-status { margin: 0.75rem 0 0; font-family: var(--font-mono); font-size: 0.78rem; color: var(--shell); overflow-wrap: anywhere; }
+.update-status.is-failed { color: var(--error); }
+.update-stages { margin: 1rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.4rem; }
+.update-stage { display: flex; align-items: baseline; gap: 0.6rem; font-family: var(--font-mono); font-size: 0.78rem; color: var(--dim); }
+.update-stage-mark { width: 1rem; text-align: center; }
+.update-stage.is-done { color: var(--ready); }
+.update-stage.is-active { color: var(--ink); font-weight: 700; }
+.update-stage.is-active .update-stage-mark { animation: pulse 1s ease-in-out infinite; }
+.update-stage.is-failed { color: var(--error); font-weight: 700; }
+@media (prefers-reduced-motion: reduce) {
+  .update-stage.is-active .update-stage-mark { animation: none; }
+  .gauge-fill { transition: none; }
 }

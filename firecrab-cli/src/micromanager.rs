@@ -11,9 +11,17 @@ mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
 mod managed_home;
+mod manifest;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod os_repair;
+mod resource;
+mod resource_server;
+mod runtime;
 mod settings;
 mod settings_tui;
 mod sleepy;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod snapshot;
 // Everything but the `wsl.exe` and `schtasks.exe` calls is plain Rust, so the
 // Windows backend also builds and runs its tests on the Linux CI runner.
 #[cfg(any(target_os = "windows", test))]
@@ -87,6 +95,21 @@ fn write_retrying_transient_errors(writer: &mut impl Write, mut bytes: &[u8]) {
 /// VM. Common lifecycle verbs share one definition; platform tools are gated.
 #[derive(Subcommand)]
 pub enum Command {
+    /// Show or change management VM CPU, RAM, disk, and networking.
+    #[command(name = "resorce", visible_alias = "resource")]
+    Resource {
+        #[command(flatten)]
+        options: resource::Options,
+    },
+    /// Native, loopback-only resource control used by the Host screen.
+    #[command(hide = true)]
+    ResourceServer {
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
+    },
+    /// Detached apply worker; survives the managed service restart.
+    #[command(hide = true)]
+    ResourceApply { id: String },
     /// Install microManager and provision the managed Debian VM.
     Install {
         /// Skip the download confirmation prompt (implied when not attached to a TTY).
@@ -99,6 +122,11 @@ pub enum Command {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Repair the resident service using the existing managed VM and installed binaries.
+    ///
+    /// Windows requires PowerShell running as Administrator for offline disk repair.
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
+    Repair,
     /// Remove microManager and optionally all managed VM data.
     Uninstall {
         /// Also delete the managed Debian VM and its persistent data.
@@ -146,8 +174,11 @@ pub enum Command {
         #[arg(long, requires = "logs", value_parser = clap::value_parser!(u16).range(1..=1000))]
         tail: Option<u16>,
     },
-    /// Build local API/net-helper sources inside the management VM and restart them.
+    /// Build/deploy guest services and start the source dashboard on localhost:8080.
+    #[command(args_conflicts_with_subcommands = true)]
     Dev {
+        #[command(subcommand)]
+        command: Option<DevCommand>,
         /// Checkout root (defaults to the current directory).
         #[arg(long, conflicts_with = "restore")]
         source: Option<std::path::PathBuf>,
@@ -181,6 +212,26 @@ pub enum Command {
         #[arg(long)]
         known_hosts: std::path::PathBuf,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Subcommand)]
+pub enum DevCommand {
+    /// Start the deployed API/helper and dashboard without rebuilding or booting the VM.
+    Start,
+    /// Stop the API/helper and development dashboard while keeping microManager running.
+    Stop,
+    /// Restart the deployed API/helper and dashboard without rebuilding or rebooting the VM.
+    Restart,
+}
+
+impl DevCommand {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -274,6 +325,14 @@ mod tests {
         assert!(TestCli::try_parse_from(["test", "debug", "--logs", "--tail", "1001"]).is_err());
     }
 
+    #[test]
+    fn repair_requires_no_install_or_download_options() {
+        let repair = TestCli::try_parse_from(["test", "repair"]).unwrap();
+        assert!(matches!(repair.command, Command::Repair));
+        assert!(TestCli::try_parse_from(["test", "repair", "--yes"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "repair", "--purge"]).is_err());
+    }
+
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn shell_opens_a_console_or_runs_one_command() {
@@ -338,5 +397,33 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn dev_controls_are_separate_from_build_and_restore_options() {
+        let cli = TestCli::try_parse_from(["test", "dev"]).unwrap();
+        assert!(matches!(cli.command, Command::Dev { command: None, .. }));
+
+        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+            let cli = TestCli::try_parse_from(["test", "dev", command.as_str()]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Dev { command: Some(parsed), .. } if parsed == command
+            ));
+            for options in [
+                &["--source", "."][..],
+                &["--release"][..],
+                &["--restore"][..],
+                &["--yes"][..],
+            ] {
+                let mut args = vec!["test", "dev"];
+                args.extend_from_slice(options);
+                args.push(command.as_str());
+                assert!(TestCli::try_parse_from(args).is_err());
+                let mut args = vec!["test", "dev", command.as_str()];
+                args.extend_from_slice(options);
+                assert!(TestCli::try_parse_from(args).is_err());
+            }
+        }
     }
 }

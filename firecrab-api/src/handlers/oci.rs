@@ -1,4 +1,4 @@
-//! OCI inspect and import (`public-docs/oci.md`).
+//! OCI inspect and import (`public-docs/guides/oci.md`).
 //!
 //! `GET /api/oci/inspect` is metadata-only: it resolves a reference to the
 //! manifest this host would pull so a wrong-architecture image is caught

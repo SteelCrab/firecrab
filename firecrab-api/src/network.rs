@@ -110,7 +110,7 @@ impl NetworkClient {
     }
 
     /// Idempotently ensures a MicroNetwork's own bridge exists, gated at
-    /// `gateway`/`prefix` (`public-docs/networking.md`).
+    /// `gateway`/`prefix` (`public-docs/guides/networking.md`).
     pub async fn ensure_micro_network_bridge(
         &self,
         micro_network_id: Uuid,

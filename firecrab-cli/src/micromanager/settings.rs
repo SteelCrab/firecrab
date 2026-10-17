@@ -38,12 +38,29 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Path(#[from] managed_home::Error),
+    #[error(transparent)]
+    Resource(#[from] super::resource::Error),
     #[error("{0}")]
     Invalid(String),
     #[error("Settings changed in another process; reopen the editor before saving")]
     Conflict,
 }
 impl Settings {
+    #[cfg(any(target_os = "macos", test))]
+    pub fn update_saved_resources(&self, home: &Path) -> Result<(), Error> {
+        let _lock = super::resource::lock(home)?;
+        let path = home.join("resources.json");
+        let Some(mut resources) =
+            super::resource::read::<firecrab_api_types::ManagerResources>(&path)?
+        else {
+            return Ok(());
+        };
+        resources.cpu = u32::from(self.cpu);
+        resources.memory_mib = u64::from(self.memory_mib);
+        super::resource::write(&path, &resources)?;
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), Error> {
         let error = if self.schema != 1 {
             Some("Unsupported settings schema")
@@ -232,6 +249,36 @@ pub fn merge_wsl(text: &str, settings: &Settings) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resource_updates_preserve_saved_disk_and_network_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = Settings {
+            cpu: 4,
+            memory_mib: 8192,
+            ..Settings::default()
+        };
+        settings.update_saved_resources(dir.path()).unwrap();
+        let path = dir.path().join("resources.json");
+        assert!(!path.exists());
+        let resources = firecrab_api_types::ManagerResources {
+            cpu: 2,
+            memory_mib: 4096,
+            disk_gib: 128,
+            network_mode: firecrab_api_types::ManagerNetworkMode::Bridged,
+            network_interface: Some("en0".into()),
+        };
+        super::super::resource::write(&path, &resources).unwrap();
+        settings.update_saved_resources(dir.path()).unwrap();
+        let updated = super::super::resource::read::<firecrab_api_types::ManagerResources>(&path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.cpu, 4);
+        assert_eq!(updated.memory_mib, 8192);
+        assert_eq!(updated.disk_gib, resources.disk_gib);
+        assert_eq!(updated.network_mode, resources.network_mode);
+        assert_eq!(updated.network_interface, resources.network_interface);
+    }
+
     #[test]
     fn wsl_resource_merge_preserves_other_distributions_settings() {
         let input = "\u{feff}# comment\r\n[wsl2]\r\nnetworkingMode=mirrored\r\nmemory=2GB\r\n[experimental]\r\nautoMemoryReclaim=gradual\r\n";

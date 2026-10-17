@@ -1,6 +1,5 @@
 import type { VmReconciliation, VmReconciliationOutcome } from "../bindings";
 import { useI18n } from "../i18n";
-import StatusLabel from "./StatusLabel";
 
 const LABELS: Record<VmReconciliationOutcome, [string, string]> = {
   reconnected: ["Reconnected", "재연결 성공"],
@@ -38,18 +37,15 @@ const DESCRIPTIONS: Record<VmReconciliationOutcome, [string, string]> = {
   ],
 };
 
-export default function ReconciliationStatus({
-  result,
-  details = false,
-}: {
-  result?: VmReconciliation | null;
-  details?: boolean;
-}) {
+/**
+ * What the API recorded about a VM at its last startup or network retry. Only
+ * the VM's detail shows it: the list stays to the VM's own state.
+ */
+export default function ReconciliationStatus({ result }: { result: VmReconciliation }) {
   const { t } = useI18n();
-  const label = result ? t(...LABELS[result.outcome]) : t("No reconciliation result", "확인 결과 없음");
-  const description = result ? t(...DESCRIPTIONS[result.outcome]) : "";
-  const checked = result ? new Date(result.checkedAtMs) : null;
-  const time = checked?.toLocaleString("sv-SE", {
+  const label = t(...LABELS[result.outcome]);
+  const checked = new Date(result.checkedAtMs);
+  const time = checked.toLocaleString("sv-SE", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -58,55 +54,34 @@ export default function ReconciliationStatus({
     second: "2-digit",
     hourCycle: "h23",
     timeZoneName: "longOffset",
-  }).replace("GMT", "UTC") ?? "";
+  }).replace("GMT", "UTC");
   const heading = t("API-STATUS · Firecrab API · VM reconciliation", "API-STATUS · Firecrab API · VM 재조정");
-  const badge = (
-    <span
-      className={`reconciliation-badge ${result?.outcome ?? "unchecked"}`}
-      aria-label={`${heading}: ${label}`}
-    >
-      {label}
-    </span>
-  );
 
-  const content = (
+  return (
     <div className="reconciliation-detail">
       <dl className="api-status-fields">
         <dt>API</dt>
         <dd className="api-status-service">Firecrab API <code>firecrab-api</code></dd>
         <dt>{t("Status", "상태")}</dt>
-        <dd>{badge}</dd>
+        <dd>
+          <span className={`reconciliation-badge ${result.outcome}`} aria-label={`${heading}: ${label}`}>
+            {label}
+          </span>
+        </dd>
         <dt>{t("Info", "정보")}</dt>
         <dd>
-          <p>{description || t(
-            "Results are recorded for VMs left active at API startup and cleared when a new VM start is accepted.",
-            "API 시작 시 활성 상태였던 VM의 확인 결과를 기록하며, 새로운 VM 시작이 수락되면 이전 결과를 지웁니다.",
-          )}</p>
-          {result && (
-            <p className="reconciliation-note">
-              {t(
-                "Latest API VM lifecycle check, including operator network recovery.",
-                "최근 API 시작 또는 운영자의 네트워크 복구 시 기록한 VM 상태 확인 결과입니다.",
-              )}
-            </p>
-          )}
-          {result?.detail && <p className="reconciliation-diagnostic">{result.detail}</p>}
+          <p>{t(...DESCRIPTIONS[result.outcome])}</p>
+          <p className="reconciliation-note">
+            {t(
+              "Latest API VM lifecycle check, including operator network recovery.",
+              "최근 API 시작 또는 운영자의 네트워크 복구 시 기록한 VM 상태 확인 결과입니다.",
+            )}
+          </p>
+          {result.detail && <p className="reconciliation-diagnostic">{result.detail}</p>}
         </dd>
         <dt>{t("Checked at", "확인 시각")}</dt>
-        <dd>{checked ? <time dateTime={checked.toISOString()}>{time}</time> : "—"}</dd>
+        <dd><time dateTime={checked.toISOString()}>{time}</time></dd>
       </dl>
     </div>
-  );
-
-  if (details) return result ? content : null;
-  return (
-    <StatusLabel
-      className={`api-status-label ${result?.outcome ?? "unchecked"}`}
-      accessibleLabel={`${heading}: ${label}`}
-      outcome={result?.outcome ?? "unchecked"}
-      tooltip={<><h3>API-STATUS</h3>{content}</>}
-    >
-      API
-    </StatusLabel>
   );
 }

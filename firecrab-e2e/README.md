@@ -51,6 +51,18 @@ npm run install-browsers --prefix firecrab-e2e
 
 ## Run
 
+Host Firecrab panel only (H3, Linux/macOS/Windows):
+
+```sh
+npm run test:host --prefix firecrab-e2e
+```
+
+Expect **6 passed**: info and runtime fields/panel placement, unavailable messaging, missing runtime tools, older API compatibility, service-state refresh/outage recovery, and stalled request handling.
+This command starts only Vite and mocks all API responses. It needs no running
+API, management VM, or Docker. It fails if port 8080 is already occupied instead
+of reusing another checkout's frontend. Stop Vite before this command.
+Verify the real `/api/info` response separately for complete H3 runtime QA.
+
 Inspect and import only:
 
 ```sh
@@ -91,7 +103,7 @@ The browser, Vite, and registry run inside `firecrab-debian`; Windows `node_modu
 The runner reuses the managed API with `FIRECRAB_E2E_REUSE_SERVER=1` and keeps guest boot enabled.
 Workload IPv4 forwarding and direct IPv6 SSH use WSL routes without a management SSH proxy.
 Use the separate `nginx` phase to verify the forwarded HTTP port from native Windows.
-See [CI runtime commands](../public-docs/ci.md#windows-runtime-e2e) for all phases and options.
+See [CI runtime commands](../public-docs/development/ci.md#windows-runtime-e2e) for all phases and options.
 
 MicroRegistry register ([#108](https://github.com/SteelCrab/firecrab/issues/108)), skip guest boot:
 
@@ -207,16 +219,16 @@ Windows staging uses `/root/firecrab-qa/<run-id>` and retains a transcript, phas
 Linux installer CI uploads these results and shared QA logs for 14 days, even on failure.
 Cleanup removes suite-owned VMs, networks, imported aliases, staged packages, and local catalog registrations.
 
-The [2026-10-03 Windows source run](../public-docs/qa.md#windows-source-validation-2026-10-03) passed 9 cases with the single existing skip, including real boot and IPv4/IPv6 SSH.
+The [2026-10-03 Windows source run](../public-docs/development/validation-history.md#windows-source-validation-2026-10-03) passed 9 cases with the single existing skip, including real boot and IPv4/IPv6 SSH.
 This was Linux Chromium inside WSL on an x86_64 QEMU Windows host.
 Public-image Ubuntu/Fedora SSH QA failed separately; the browser result does not establish a passing `-Phase all` run.
-The [2026-10-04 continuation](../public-docs/micromanager-windows.md#source-qa-continuation-2026-10-04) passed that source snapshot’s 13-case suite: **12 passed, 1 existing explicit skip, 0 failed**, with one worker and zero retries. Console reattachment and IPv4/IPv6 SSH authentication passed. Public-image Alpine/Ubuntu/Fedora guest QA also passed separately; Windows `-Phase all` was not rerun.
+The [2026-10-04 continuation](../public-docs/development/validation-history.md#windows-source-qa-continuation-2026-10-04) passed that source snapshot’s 13-case suite: **12 passed, 1 existing explicit skip, 0 failed**, with one worker and zero retries. Console reattachment and IPv4/IPv6 SSH authentication passed. Public-image Alpine/Ubuntu/Fedora guest QA also passed separately; Windows `-Phase all` was not rerun.
 The Windows runner now completes the remaining test phases after failures and reports an aggregate failure.
-See the [CI guide](../public-docs/ci.md) for automated job coverage.
+See the [CI guide](../public-docs/development/ci.md) for automated job coverage.
 
 ## Related
 
-- [OCI images](../public-docs/oci.md)
-- [Dashboard](../public-docs/dashboard.md)
-- [Networking](../public-docs/networking.md)
-- [API](../public-docs/api.md)
+- [OCI images](../public-docs/guides/oci.md)
+- [Dashboard](../public-docs/guides/dashboard.md)
+- [Networking](../public-docs/guides/networking.md)
+- [API](../public-docs/reference/api.md)

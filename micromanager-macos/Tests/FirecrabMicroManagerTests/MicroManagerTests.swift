@@ -1,6 +1,18 @@
 import Foundation
 import Testing
+import Virtualization
 @testable import FirecrabMicroManager
+
+@Test
+func linuxWritableDisksUseHostCachingAndDurableGuestFlushes() throws {
+    let disk = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try Data(repeating: 0, count: 4096).write(to: disk)
+    defer { try? FileManager.default.removeItem(at: disk) }
+    let attachment = try ManagementVMConfiguration.writableDisk(disk)
+    #expect(attachment.cachingMode == .cached)
+    #expect(attachment.synchronizationMode == .full)
+    #expect(!attachment.isReadOnly)
+}
 
 @Test
 func supportedInputsAreReadyButKeepEndToEndGatesVisible() {

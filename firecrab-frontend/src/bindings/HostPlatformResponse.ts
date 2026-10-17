@@ -2,6 +2,7 @@
 import type { HostOs } from "./HostOs";
 
 export type HostPlatformResponse = {
+  controllerId?: string;
   os: HostOs;
   /** "macOS", "Windows 11", or the Linux distribution's pretty name. */
   name: string;

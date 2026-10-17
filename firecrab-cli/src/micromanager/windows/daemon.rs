@@ -2,8 +2,9 @@
 //!
 //! WSL stops a distribution about 15 seconds after its last client exits, even
 //! with systemd running inside, so something has to hold it open. A per-user
-//! scheduled task runs `wslg.exe -- sleep infinity`: no console window, no
-//! administrator rights. The task starts at logon and re-fires every minute,
+//! scheduled task runs the native resource controller in a hidden window.
+//! It owns a windowless `wsl.exe --exec sleep infinity` holder. No administrator
+//! rights are needed. The task starts at logon and re-fires every minute,
 //! and `IgnoreNew` makes that a no-op while the holder runs. Together they play
 //! the part of launchd's `RunAtLoad` and `KeepAlive` on macOS.
 
@@ -13,22 +14,26 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use firecrab_api_types::HostOs;
 
 use super::super::host_platform::{self, HOST_PLATFORM_DESCRIPTOR_PATH};
+use super::super::{manifest, runtime::Runtime};
 use super::doctor;
 use super::lifecycle::Layout;
 use super::wsl::{self, DISTRO_NAME};
 
 pub const TASK_NAME: &str = r"Firecrab\microManager";
 pub const API_URL: &str = "http://127.0.0.1:5523/api/host";
-const HELPER_SETUP: &str = "helper=firecrab-helper; if [ \"$(systemctl show --property=LoadState --value firecrab-helper.service)\" = not-found ]; then helper=firecrab-net-helper; fi";
+pub(super) const HELPER_SETUP: &str = "helper=firecrab-helper; if [ \"$(systemctl show --property=LoadState --value firecrab-helper.service)\" = not-found ]; then helper=firecrab-net-helper; fi";
 const UNITS: [&str; 2] = ["firecrab-api", "firecrab-helper"];
 /// A cold start waits for `kvm_intel`, systemd, and the API in turn.
-const READY_TIMEOUT: Duration = Duration::from_secs(300);
+pub(super) const READY_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Manifest(#[from] manifest::Error),
     #[error(transparent)]
     Wsl(#[from] wsl::Error),
     #[error("could not {action} {path}: {source}")]
@@ -72,6 +77,16 @@ impl Status {
 /// Registers (or replaces) the task. It is written to `runtime/` first because
 /// `schtasks /Create /XML` only reads definitions from a file.
 pub fn install(layout: &Layout) -> Result<PathBuf, Error> {
+    install_with_runtime(layout, &Runtime::load(&layout.managed_home)?)
+}
+
+pub fn install_with_runtime(layout: &Layout, settings: &Runtime) -> Result<PathBuf, Error> {
+    register(layout, &task_definition(layout, settings)?)
+}
+
+/// Resolve registration prerequisites before repair stops a running service.
+pub(super) fn task_definition(layout: &Layout, settings: &Runtime) -> Result<String, Error> {
+    settings.validate()?;
     let user = user_id(
         std::env::var("USERNAME").ok(),
         std::env::var("USERDOMAIN").ok(),
@@ -80,10 +95,25 @@ pub fn install(layout: &Layout) -> Result<PathBuf, Error> {
     if !launcher.is_file() {
         return Err(Error::MissingLauncher(launcher));
     }
-    register(layout, &render_task(&user, &launcher))
+    let cli = std::env::current_exe().map_err(|source| Error::Io {
+        action: "resolve the native resource controller",
+        path: layout.managed_home.clone(),
+        source,
+    })?;
+    let task = render_resource_task(&user, &cli, &layout.managed_home, settings);
+    Ok(if layout.runtime().join("controlled").is_file() {
+        without_triggers(&task)
+    } else {
+        task
+    })
 }
 
-fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
+pub(super) fn register(layout: &Layout, task: &str) -> Result<PathBuf, Error> {
+    super::super::resource::controller_id(&layout.managed_home).map_err(|error| Error::Io {
+        action: "initialize resource controller identity",
+        path: layout.managed_home.clone(),
+        source: io::Error::other(error.to_string()),
+    })?;
     register_named(layout, TASK_NAME, "microManager-task.xml", task)
 }
 
@@ -112,17 +142,19 @@ pub fn register_named(
 
 /// The controller owns all automatic starts. The guest holder has no triggers.
 pub fn install_controlled(layout: &Layout) -> Result<(), Error> {
-    let user = user_id(
-        std::env::var("USERNAME").ok(),
-        std::env::var("USERDOMAIN").ok(),
-    )?;
-    let launcher = launcher_in(std::env::var_os("ProgramFiles").map(PathBuf::from));
-    let task = render_task(&user, &launcher);
-    let start = task.find("  <Triggers>").expect("triggers");
-    let end = task.find("  </Triggers>").expect("triggers") + "  </Triggers>".len();
-    let task = format!("{}  <Triggers />{}", &task[..start], &task[end..]);
+    let settings = Runtime::load(&layout.managed_home)?;
+    let task = without_triggers(&task_definition(layout, &settings)?);
     register(layout, &task)?;
     Ok(())
+}
+
+fn without_triggers(task: &str) -> String {
+    if task.contains("  <Triggers />") {
+        return task.to_owned();
+    }
+    let start = task.find("  <Triggers>").expect("triggers");
+    let end = task.find("  </Triggers>").expect("triggers") + "  </Triggers>".len();
+    format!("{}  <Triggers />{}", &task[..start], &task[end..])
 }
 
 pub fn uninstall(layout: &Layout) -> Result<(), Error> {
@@ -171,8 +203,20 @@ fn publish_host_platform() {
         Some(version) => format!("WSL2 {version}"),
         None => "WSL2".to_string(),
     };
-    let descriptor =
-        host_platform::descriptor_json(HostOs::Windows, name, &version, &virtualization);
+    let controller_id = Layout::from_process_env().ok().and_then(|layout| {
+        super::super::resource::read::<String>(
+            &layout.runtime().join("resource-controller-id.json"),
+        )
+        .ok()
+        .flatten()
+    });
+    let descriptor = host_platform::descriptor_with_controller(
+        HostOs::Windows,
+        name,
+        &version,
+        &virtualization,
+        controller_id,
+    );
     let script = format!(
         "mkdir -p /etc/firecrab && printf '%s\\n' {} > {HOST_PLATFORM_DESCRIPTOR_PATH}",
         wsl::shell_quote(&descriptor)
@@ -300,6 +344,10 @@ fn parse_units(text: &str) -> (bool, Option<String>) {
 }
 
 fn api_reachable() -> bool {
+    #[cfg(test)]
+    if let Some(reachable) = wsl::fake::api_response() {
+        return reachable;
+    }
     let controlled = Layout::from_process_env()
         .ok()
         .is_some_and(|layout| layout.runtime().join("controlled").is_file());
@@ -339,7 +387,7 @@ fn launcher_in(program_files: Option<PathBuf>) -> PathBuf {
         .join("wslg.exe")
 }
 
-fn render_task(user: &str, launcher: &Path) -> String {
+fn render_task(user: &str, launcher: &Path, arguments: &str, settings: &Runtime) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -352,7 +400,7 @@ fn render_task(user: &str, launcher: &Path) -> String {
       <UserId>{user}</UserId>
     </LogonTrigger>
     <TimeTrigger>
-      <Enabled>true</Enabled>
+      <Enabled>{auto_restart}</Enabled>
       <StartBoundary>2000-01-01T00:00:00</StartBoundary>
       <Repetition>
         <Interval>PT1M</Interval>
@@ -378,15 +426,33 @@ fn render_task(user: &str, launcher: &Path) -> String {
   <Actions Context="Author">
     <Exec>
       <Command>{launcher}</Command>
-      <Arguments>-d {distro} -u root -- sleep infinity</Arguments>
+      <Arguments>{arguments}</Arguments>
     </Exec>
   </Actions>
 </Task>
 "#,
+        auto_restart = settings.auto_restart,
         distro = DISTRO_NAME,
         user = xml_escape(user),
         launcher = xml_escape(&launcher.to_string_lossy()),
+        arguments = xml_escape(arguments),
     )
+}
+
+fn render_resource_task(user: &str, cli: &Path, home: &Path, settings: &Runtime) -> String {
+    let windows = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let launcher = windows.join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let cli = cli.to_string_lossy().replace('\'', "''");
+    let home = home.to_string_lossy().replace('\'', "''");
+    let command = format!("& '{cli}' service resource-server --home '{home}'");
+    let bytes: Vec<_> = command.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let arguments = format!(
+        "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand {}",
+        STANDARD.encode(bytes)
+    );
+    render_task(user, &launcher, &arguments, settings)
 }
 
 /// The XML declares UTF-16, so the bytes on disk must match it.
@@ -411,11 +477,79 @@ fn xml_escape(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn resource_command(task: &str) -> String {
+        let encoded = task
+            .split_once("-EncodedCommand ")
+            .unwrap()
+            .1
+            .split_once("</Arguments>")
+            .unwrap()
+            .0;
+        assert!(!encoded.contains('%'));
+        let bytes = STANDARD.decode(encoded).unwrap();
+        let units: Vec<_> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        String::from_utf16(&units).unwrap()
+    }
+
+    #[test]
+    fn resource_controller_owns_the_holder_and_preserves_custom_managed_home() {
+        let task = render_resource_task(
+            "LAB\\dev",
+            Path::new("C:\\Apps\\firecrab.exe"),
+            Path::new("C:\\User Data\\micromanager"),
+            &Runtime::default(),
+        );
+        assert!(task.contains("-WindowStyle Hidden"));
+        assert_eq!(
+            resource_command(&task),
+            "& 'C:\\Apps\\firecrab.exe' service resource-server --home 'C:\\User Data\\micromanager'"
+        );
+        assert!(task.contains("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"));
+    }
+
+    #[test]
+    fn controlled_task_keeps_resource_management_without_automatic_wake() {
+        let task = without_triggers(&render_resource_task(
+            "dev",
+            Path::new("C:\\Apps\\firecrab.exe"),
+            Path::new("D:\\User Data\\micromanager"),
+            &Runtime::default(),
+        ));
+        assert!(task.contains("<Triggers />"));
+        assert!(!task.contains("<LogonTrigger>"));
+        assert!(!task.contains("<TimeTrigger>"));
+        assert_eq!(
+            resource_command(&task),
+            "& 'C:\\Apps\\firecrab.exe' service resource-server --home 'D:\\User Data\\micromanager'"
+        );
+        assert!(settings_enabled(&task));
+        assert_eq!(without_triggers(&task), task);
+    }
+
+    #[test]
+    fn resource_task_preserves_percent_unicode_and_quoted_paths() {
+        let task = render_resource_task(
+            "dev",
+            Path::new("C:\\Apps%PATH%\\🦀's.exe"),
+            Path::new("D:\\User Data\\한글%TEMP%\\it's"),
+            &Runtime::default(),
+        );
+        assert_eq!(
+            resource_command(&task),
+            "& 'C:\\Apps%PATH%\\🦀''s.exe' service resource-server --home 'D:\\User Data\\한글%TEMP%\\it''s'"
+        );
+    }
+
     #[test]
     fn the_task_holds_the_managed_distribution_open() {
         let task = render_task(
             "LAB\\dev & co",
             Path::new("C:\\Program Files\\WSL\\wslg.exe"),
+            "-d firecrab-debian -u root -- sleep infinity",
+            &Runtime::default(),
         );
         assert!(task.contains("<UserId>LAB\\dev &amp; co</UserId>"));
         assert!(task.contains("<Command>C:\\Program Files\\WSL\\wslg.exe</Command>"));
@@ -427,6 +561,37 @@ mod tests {
         assert!(task.contains("<Interval>PT1M</Interval>"));
         assert!(task.contains("<RunLevel>LeastPrivilege</RunLevel>"));
         assert!(task.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+    }
+
+    #[test]
+    fn disabling_auto_restart_keeps_manual_and_logon_start_available() {
+        let settings = Runtime {
+            auto_restart: false,
+            ..Runtime::default()
+        };
+        let task = render_resource_task(
+            "dev",
+            Path::new("C:\\Apps\\firecrab.exe"),
+            Path::new("C:\\User Data\\micromanager"),
+            &settings,
+        );
+        let time = task
+            .split_once("<TimeTrigger>")
+            .unwrap()
+            .1
+            .split_once("</TimeTrigger>")
+            .unwrap()
+            .0;
+        let logon = task
+            .split_once("<LogonTrigger>")
+            .unwrap()
+            .1
+            .split_once("</LogonTrigger>")
+            .unwrap()
+            .0;
+        assert!(time.contains("<Enabled>false</Enabled>"));
+        assert!(logon.contains("<Enabled>true</Enabled>"));
+        assert!(settings_enabled(&task));
     }
 
     use super::super::wsl::fake;

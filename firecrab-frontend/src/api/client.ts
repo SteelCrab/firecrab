@@ -28,9 +28,11 @@ import type {
   ShellRevisionResponse,
   StorageDeviceResponse,
   StorageRootResponse,
+  FirecrabInfoResponse,
   UpdateCheckResponse,
   UpdateImageKernelRequest,
   UpdateMicroNetworkRequest,
+  UpdateProgressResponse,
   UpdateStartResponse,
   UpdateVmShellsRequest,
   UpdateVmPortForwardsRequest,
@@ -188,6 +190,11 @@ export function getHostStatus(): Promise<HostStatusResponse> {
   return fetchJson("/api/host");
 }
 
+/** Build, install paths, Firecracker version, and live service state (GET /api/info). */
+export function getFirecrabInfo(signal?: AbortSignal): Promise<FirecrabInfoResponse> {
+  return fetchJson("/api/info", { signal });
+}
+
 /** Newest release vs. this build (`GET /api/update`), cached 30 minutes by the API. */
 export function getUpdateCheck(): Promise<UpdateCheckResponse> {
   return fetchJson("/api/update");
@@ -196,6 +203,11 @@ export function getUpdateCheck(): Promise<UpdateCheckResponse> {
 /** Launch the detached updater (`POST /api/update`); answers 202 immediately. */
 export function startUpdate(): Promise<UpdateStartResponse> {
   return fetchJson("/api/update", { method: "POST" });
+}
+
+/** How far the latest update run got (`GET /api/update/progress`); `idle` when none has run. */
+export function getUpdateProgress(): Promise<UpdateProgressResponse> {
+  return fetchJson("/api/update/progress");
 }
 
 /** Template registry aliases available for create (`GET /api/images`). */

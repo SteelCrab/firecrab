@@ -19,6 +19,12 @@ pub enum Error {
     Failed { command: String, detail: String },
     #[error("{0} is not on a drive WSL can reach through /mnt")]
     UnmappablePath(PathBuf),
+    #[error("cannot write repair log {path}: {source}")]
+    Log {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// Runs `wsl.exe` and returns its stdout, failing on a non-zero exit.
@@ -70,6 +76,27 @@ pub fn run_program(program: &str, args: &[&str]) -> Result<String, Error> {
     Ok(decode_console(&output.stdout))
 }
 
+/// Keep both fsck streams even when the rescue command fails or times out.
+pub(super) fn run_logged(args: &[&str], stdout: &Path, stderr: &Path) -> Result<String, Error> {
+    let output = execute("wsl.exe", args).map_err(|source| Error::Spawn {
+        program: "wsl.exe".into(),
+        source,
+    })?;
+    for (path, bytes) in [(stdout, &output.stdout), (stderr, &output.stderr)] {
+        std::fs::write(path, bytes).map_err(|source| Error::Log {
+            path: path.into(),
+            source,
+        })?;
+    }
+    if !output.success {
+        return Err(Error::Failed {
+            command: "WSL offline filesystem check".into(),
+            detail: failure_detail(&output.stderr, &output.stdout),
+        });
+    }
+    Ok(decode_console(&output.stdout))
+}
+
 /// What the backend needs from a finished process.
 struct Output {
     success: bool,
@@ -83,7 +110,16 @@ fn execute(program: &str, args: &[&str]) -> std::io::Result<Output> {
     if let Some(output) = fake::reply(program, args) {
         return Ok(output);
     }
-    let output = ProcessCommand::new(program).args(args).output()?;
+    let mut command = ProcessCommand::new(program);
+    command.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // The resource controller has no visible console. Captured probes
+        // must not create a new window on every browser poll.
+        command.creation_flags(0x08000000);
+    }
+    let output = command.output()?;
     Ok(Output {
         success: output.status.success(),
         stdout: output.stdout,
@@ -95,7 +131,8 @@ fn execute(program: &str, args: &[&str]) -> std::io::Result<Output> {
 /// backend's orchestration runs under test on any host without touching WSL.
 #[cfg(test)]
 pub mod fake {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
+    use std::path::{Path, PathBuf};
 
     use super::Output;
 
@@ -106,6 +143,8 @@ pub mod fake {
     thread_local! {
         static HANDLER: RefCell<Option<Handler>> = const { RefCell::new(None) };
         static CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static API_RESPONSE: Cell<Option<bool>> = const { Cell::new(None) };
+        static CONFIG_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     }
 
     /// Answers every call on this thread until the guard drops. The handler
@@ -114,12 +153,26 @@ pub mod fake {
     pub fn answer(handler: impl FnMut(&str) -> Reply + 'static) -> Guard {
         HANDLER.with(|slot| *slot.borrow_mut() = Some(Box::new(handler)));
         CALLS.with(|calls| calls.borrow_mut().clear());
+        API_RESPONSE.with(|response| response.set(None));
+        CONFIG_PATH.with(|path| *path.borrow_mut() = None);
         Guard
     }
 
     pub struct Guard;
 
     impl Guard {
+        /// Keep WSL configuration writes inside this test's temporary home.
+        pub fn with_config(self, path: &Path) -> Self {
+            CONFIG_PATH.with(|slot| *slot.borrow_mut() = Some(path.to_owned()));
+            self
+        }
+
+        /// Override the host HTTP readiness probe on this test thread only.
+        pub fn with_api_response(self, reachable: bool) -> Self {
+            API_RESPONSE.with(|response| response.set(Some(reachable)));
+            self
+        }
+
         /// Every command line answered so far, in order.
         pub fn calls(&self) -> Vec<String> {
             CALLS.with(|calls| calls.borrow().clone())
@@ -128,8 +181,18 @@ pub mod fake {
 
     impl Drop for Guard {
         fn drop(&mut self) {
+            API_RESPONSE.with(|response| response.set(None));
+            CONFIG_PATH.with(|path| *path.borrow_mut() = None);
             HANDLER.with(|slot| *slot.borrow_mut() = None);
         }
+    }
+
+    pub fn config_path() -> Option<PathBuf> {
+        CONFIG_PATH.with(|path| path.borrow().clone())
+    }
+
+    pub fn api_response() -> Option<bool> {
+        API_RESPONSE.with(Cell::get)
     }
 
     pub(super) fn reply(program: &str, args: &[&str]) -> Option<Output> {

@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.0-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.1-informational"></a>
 </p>
 
 ```text
@@ -59,7 +59,7 @@
 
 ## 아키텍처
 
-[상세 아키텍처](public-docs/architecture.md): OS별 microManager 구성, VM 시작, 이미지·커널 공급, 게스트 기능, CLI·업데이트 흐름.
+[상세 아키텍처](public-docs/reference/architecture.md): OS별 microManager 구성, VM 시작, 이미지·커널 공급, 게스트 기능, CLI·업데이트 흐름.
 
 ### Firecrab 한눈에
 
@@ -93,7 +93,7 @@ Linux x86_64 또는 ARM64, 사용 가능한 `/dev/kvm`, 네트워크, `sudo` 권
 curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
-진단·제거 옵션은 [설치 가이드](public-docs/installation.md)에 있습니다. Linux에서 원격 CLI만 설치하려면 아래의 체크섬 검증을 포함한 `install-cli.sh` 절차를 사용하세요. GNU/musl을 자동 선택하며 기본 경로는 `~/.local/bin`입니다.
+진단·제거 옵션은 [설치 가이드](public-docs/getting-started/installation.md)에 있습니다. Linux에서 원격 CLI만 설치하려면 아래의 체크섬 검증을 포함한 `install-cli.sh` 절차를 사용하세요. GNU/musl을 자동 선택하며 기본 경로는 `~/.local/bin`입니다.
 
 ### macOS
 
@@ -117,7 +117,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-CLI 설치만으로는 관리 VM이 설치되지 않습니다. microManager는 `Virtualization.framework`, 별도 영속 데이터 디스크, 상주 launchd 서비스를 사용합니다. [macOS 가이드](public-docs/micromanager-macos.md)를 참고하세요.
+CLI 설치만으로는 관리 VM이 설치되지 않습니다. microManager는 `Virtualization.framework`, 별도 영속 데이터 디스크, 상주 launchd 서비스를 사용합니다. [macOS 가이드](public-docs/getting-started/macos.md)를 참고하세요.
 
 ### Windows
 
@@ -131,7 +131,7 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 & ./install-cli.ps1
 ```
 
-`firecrab`이 아직 `PATH`에 없다면 새 PowerShell을 연 뒤 지원 여부 확인과 설치를 실행하세요. ARM64 설치는 아직 전체 검증되지 않았습니다. [Windows 가이드](public-docs/micromanager-windows.md)를 참고하세요.
+`firecrab`이 아직 `PATH`에 없다면 새 PowerShell을 연 뒤 지원 여부 확인과 설치를 실행하세요. ARM64 설치는 아직 전체 검증되지 않았습니다. [Windows 가이드](public-docs/getting-started/windows.md)를 참고하세요.
 
 ```powershell
 firecrab service doctor
@@ -181,7 +181,7 @@ firecrab service stop
 
 **Windows 제약:** 현재 고정된 v0.2.2 게스트는 기본 WSL2에서 API·이미지·네트워크는 지원하지만 MicroVM을 시작하지 못합니다. net-helper 수정이 반영된 새 게스트 릴리스가 필요하며, 로컬 nginx VM 실행도 영향을 받습니다. Windows CLI로 지원되는 원격 Linux 호스트를 관리할 수는 있습니다.
 
-정상 상태이면 `http://127.0.0.1:5523/`을 여세요. MicroNetwork를 만들고 설치된 이미지를 선택해 VM을 생성·시작한 뒤, `running` 상태에서 터미널을 엽니다. 원격 호스트는 [CLI 호스트 프로필](public-docs/firecrab-cli.md#host-profiles)을 설정하세요.
+정상 상태이면 `http://127.0.0.1:5523/`을 여세요. MicroNetwork를 만들고 설치된 이미지를 선택해 VM을 생성·시작한 뒤, `running` 상태에서 터미널을 엽니다. 원격 호스트는 [CLI 호스트 프로필](public-docs/reference/cli.md#host-profiles)을 설정하세요.
 
 </details>
 
@@ -190,7 +190,7 @@ firecrab service stop
 <details>
 <summary>Linux API·대시보드 / macOS·Windows CLI</summary>
 
-저장소 루트에서 지정된 [Rust 도구 체인](rust-toolchain.toml), Node.js 22 이상, npm을 사용하세요. 실제 VM 실행에는 Linux KVM과 [호스트 준비 조건](public-docs/installation.md)이 필요합니다.
+저장소 루트에서 지정된 [Rust 도구 체인](rust-toolchain.toml), Node.js 22 이상, npm을 사용하세요. 실제 VM 실행에는 Linux KVM과 [호스트 준비 조건](public-docs/getting-started/installation.md)이 필요합니다.
 
 ### Linux
 
@@ -276,7 +276,7 @@ npm run install-browsers --prefix firecrab-e2e
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
 ```
 
-PowerShell에서는 `npm test --prefix firecrab-e2e` 전에 `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"`을 설정하세요. 게스트 부팅을 생략하므로 KVM이나 nginx HTTP 동작을 검증하지 않습니다. 실제 게스트 실행과 모든 설치 검사 항목은 [한국어 체크리스트](public-docs/TEST.ko.md), [영어 체크리스트](public-docs/TEST.md), [E2E 가이드](firecrab-e2e/README.md)에 있습니다.
+PowerShell에서는 `npm test --prefix firecrab-e2e` 전에 `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"`을 설정하세요. 게스트 부팅을 생략하므로 KVM이나 nginx HTTP 동작을 검증하지 않습니다. 실제 게스트 실행과 모든 설치 검사 항목은 [한국어 체크리스트](public-docs/development/testing.ko.md), [영어 체크리스트](public-docs/development/testing.md), [E2E 가이드](firecrab-e2e/README.md)에 있습니다.
 
 </details>
 
@@ -325,7 +325,7 @@ curl -I http://FIRECRAB_HOST_IP:8081/
 curl -I http://127.0.0.1:8081/
 ```
 
-OCI import는 `/etc/firecrab/busybox`를 PID 1로 사용하는 부팅 가능한 rootfs를 만들고 nginx 엔트리포인트를 서비스로 실행합니다. `EXPOSE 80`만으로 호스트 포트가 연결되지는 않습니다. [OCI 이미지](public-docs/oci.md)와 [네트워크 가이드](public-docs/networking.md)를 참고하세요.
+OCI import는 `/etc/firecrab/busybox`를 PID 1로 사용하는 부팅 가능한 rootfs를 만들고 nginx 엔트리포인트를 서비스로 실행합니다. `EXPOSE 80`만으로 호스트 포트가 연결되지는 않습니다. [OCI 이미지](public-docs/guides/oci.md)와 [네트워크 가이드](public-docs/guides/networking.md)를 참고하세요.
 
 예제 VM 중지:
 
@@ -373,8 +373,8 @@ import합니다. import는 백그라운드 작업이며 진행 상황·오류·�
 
 ![M2Image 목록 화면](assets/dashboard/images.png)
 
-[이미지 가이드](public-docs/images.md), [OCI 이미지 가이드](public-docs/oci.md),
-[API 가이드](public-docs/api.md)를 참고하세요.
+[이미지 가이드](public-docs/guides/images.md), [OCI 이미지 가이드](public-docs/guides/oci.md),
+[API 가이드](public-docs/reference/api.md)를 참고하세요.
 
 </details>
 

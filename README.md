@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.0-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.1-informational"></a>
 </p>
 
 ```text
@@ -25,6 +25,8 @@
 </p>
 
 ![Firecrab demo](assets/dashboard/firecrab-demo.gif)
+
+[DeepWiki](https://deepwiki.com/SteelCrab/firecrab)
 
 ## Overview
 
@@ -59,7 +61,7 @@ Run Firecracker microVMs on one Linux host you control, managed through a browse
 
 ## Architecture
 
-[Detailed architecture](public-docs/architecture.md): OS-specific microManager layers, VM startup, image/kernel supply, guest features, and CLI updates.
+[Detailed architecture](public-docs/reference/architecture.md): OS-specific microManager layers, VM startup, image/kernel supply, guest features, and CLI updates.
 
 ### Firecrab at a glance
 
@@ -93,7 +95,7 @@ Requires Linux x86_64 or ARM64, usable `/dev/kvm`, network access, and a regular
 curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
-Installer diagnostics and uninstall options are in the [installation guide](public-docs/installation.md). To install only the remote CLI on Linux, use the verified `install-cli.sh` procedure below; it selects GNU or musl and installs to `~/.local/bin`.
+Installer diagnostics and uninstall options are in the [installation guide](public-docs/getting-started/installation.md). To install only the remote CLI on Linux, use the verified `install-cli.sh` procedure below; it selects GNU or musl and installs to `~/.local/bin`.
 
 ### macOS
 
@@ -117,7 +119,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-The CLI installer alone does not install the VM. microManager uses `Virtualization.framework`, a separate persistent data disk, and a resident launchd service. See [microManager on macOS](public-docs/micromanager-macos.md).
+The CLI installer alone does not install the VM. microManager uses `Virtualization.framework`, a separate persistent data disk, and a resident launchd service. See [microManager on macOS](public-docs/getting-started/macos.md).
 
 ### Windows
 
@@ -131,7 +133,7 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 & ./install-cli.ps1
 ```
 
-Open a new PowerShell session if `firecrab` is not yet on `PATH`, then run the capability check and install. ARM64 installation has not been validated end to end. See [microManager on Windows](public-docs/micromanager-windows.md).
+Open a new PowerShell session if `firecrab` is not yet on `PATH`, then run the capability check and install. ARM64 installation has not been validated end to end. See [microManager on Windows](public-docs/getting-started/windows.md).
 
 ```powershell
 firecrab service doctor
@@ -181,9 +183,9 @@ firecrab service stop
 
 **Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
 
-When healthy, open `http://127.0.0.1:5523/`. Create a MicroNetwork, choose an installed image, create and start a VM, then open Terminal after `running`. For a remote host, configure a [CLI host profile](public-docs/firecrab-cli.md#host-profiles).
+When healthy, open `http://127.0.0.1:5523/`. Create a MicroNetwork, choose an installed image, create and start a VM, then open Terminal after `running`. For a remote host, configure a [CLI host profile](public-docs/reference/cli.md#host-profiles).
 
-On Windows and macOS, `firecrab service settings` opens the microManager settings editor. Enable Sleepy to shut down an idle management VM and wake it automatically for work requests. After the first save, run `firecrab service start` to activate the resident controller. See [settings and Sleepy](public-docs/micromanager-settings.md) for resource limits and activation requirements.
+On Windows and macOS, `firecrab service settings` opens the microManager settings editor. Enable Sleepy to shut down an idle management VM and wake it automatically for work requests. After the first save, run `firecrab service start` to activate the resident controller. See [settings and Sleepy](public-docs/guides/micromanager-settings.md) for resource limits and activation requirements.
 
 </details>
 
@@ -192,7 +194,7 @@ On Windows and macOS, `firecrab service settings` opens the microManager setting
 <details>
 <summary>Linux API and dashboard / macOS and Windows CLI</summary>
 
-From the repository root, use the pinned [Rust toolchain](rust-toolchain.toml), Node.js 22+, and npm. Full VM execution also needs Linux KVM and the [host prerequisites](public-docs/installation.md).
+From the repository root, use the pinned [Rust toolchain](rust-toolchain.toml), Node.js 22+, and npm. Full VM execution also needs Linux KVM and the [host prerequisites](public-docs/getting-started/installation.md).
 
 ### Linux
 
@@ -278,7 +280,7 @@ npm run install-browsers --prefix firecrab-e2e
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
 ```
 
-In PowerShell, set `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"` before `npm test --prefix firecrab-e2e`. This skips guest boot, so it does not validate KVM or nginx HTTP. Guest execution and all installer checks are covered in [TEST.md](public-docs/TEST.md), [한국어 체크리스트](public-docs/TEST.ko.md), and the [E2E guide](firecrab-e2e/README.md).
+In PowerShell, set `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"` before `npm test --prefix firecrab-e2e`. This skips guest boot, so it does not validate KVM or nginx HTTP. Guest execution and all installer checks are covered in [TEST.md](public-docs/development/testing.md), [한국어 체크리스트](public-docs/development/testing.ko.md), and the [E2E guide](firecrab-e2e/README.md).
 
 Windows source runtime E2E (requires WSL2 nested KVM):
 
@@ -288,7 +290,7 @@ cargo build -p firecrab-cli --locked
 ```
 
 This runs Chromium inside managed WSL with real guest boot enabled.
-See the [CI guide](public-docs/ci.md) for all phases and the [Windows source QA continuation](public-docs/micromanager-windows.md#source-qa-continuation-2026-10-04) for guest/browser passes and validation limits.
+See the [CI guide](public-docs/development/ci.md) for all phases and the [Windows source QA continuation](public-docs/development/validation-history.md#windows-source-qa-continuation-2026-10-04) for guest/browser passes and validation limits.
 
 </details>
 
@@ -337,7 +339,7 @@ curl -I http://FIRECRAB_HOST_IP:8081/
 curl -I http://127.0.0.1:8081/
 ```
 
-OCI import builds a bootable rootfs with `/etc/firecrab/busybox` as PID 1 and runs nginx’s entrypoint as a service. `EXPOSE 80` does not create a host port forward. See [OCI images](public-docs/oci.md) and [networking](public-docs/networking.md).
+OCI import builds a bootable rootfs with `/etc/firecrab/busybox` as PID 1 and runs nginx’s entrypoint as a service. `EXPOSE 80` does not create a host port forward. See [OCI images](public-docs/guides/oci.md) and [networking](public-docs/guides/networking.md).
 
 To stop the example VM:
 
@@ -389,8 +391,8 @@ progress, errors, and the resulting alias.
 
 ![M2Image list](assets/dashboard/images.png)
 
-See the [image guide](public-docs/images.md), the [OCI image guide](public-docs/oci.md),
-and the [API guide](public-docs/api.md).
+See the [image guide](public-docs/guides/images.md), the [OCI image guide](public-docs/guides/oci.md),
+and the [API guide](public-docs/reference/api.md).
 
 </details>
 

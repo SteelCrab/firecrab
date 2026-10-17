@@ -83,10 +83,11 @@ pub fn start(home: &Path) -> Result<(), Error> {
             || old.api_port != settings.api_port
     });
     use sha2::Digest;
-    let revision = format!(
-        "{:x}",
-        sha2::Sha256::digest(fs::read(std::env::current_exe()?)?)
-    );
+    let runtime = super::runtime::Runtime::load(home).map_err(|e| Error::Native(e.to_string()))?;
+    let mut revision = sha2::Sha256::new();
+    revision.update(fs::read(std::env::current_exe()?)?);
+    revision.update(serde_json::to_vec(&runtime).map_err(|e| Error::Native(e.to_string()))?);
+    let revision = format!("{:x}", revision.finalize());
     let revision_changed = fs::read_to_string(home.join("runtime/controller-revision"))
         .ok()
         .as_deref()

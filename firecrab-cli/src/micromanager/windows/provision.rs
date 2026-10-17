@@ -9,9 +9,11 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::super::artifact::{self, ArtifactSpec, HashAlgorithm};
+use super::super::manifest::{self, Manifest};
 use super::lifecycle::Layout;
 use super::wsl::{self, DISTRO_NAME};
 
+// Frozen pins validate legacy installations. Explicit installs use the TOML.
 pub const DEBIAN_ROOTFS_VERSION: &str = "1.26.0.0";
 pub const FIRECRACKER_VERSION: &str = "v1.17.0";
 pub const FIRECRAB_VERSION: &str = "v0.2.2";
@@ -19,7 +21,7 @@ pub const FIRECRAB_VERSION: &str = "v0.2.2";
 /// Bumped whenever the guest steps change, so an older marker forces a re-run.
 const PROVISION_SCHEMA: u32 = 1;
 
-const INSTALLER: ArtifactSpec = ArtifactSpec {
+const INSTALLER: ArtifactSpec<'static> = ArtifactSpec {
     label: "Firecrab guest installer",
     filename: "install-firecrab-v0.2.2.sh",
     url: "https://github.com/SteelCrab/firecrab/releases/download/v0.2.2/install.sh",
@@ -28,11 +30,18 @@ const INSTALLER: ArtifactSpec = ArtifactSpec {
 };
 
 /// Everything that differs between x86_64 and ARM64 Windows hosts.
-pub struct Host {
+#[derive(Clone)]
+pub struct Host<'a> {
     pub architecture: &'static str,
     /// Suffix of Debian's `linux-image-*` metapackage.
     debian_architecture: &'static str,
-    artifacts: [ArtifactSpec; 4],
+    artifacts: [ArtifactSpec<'a>; 4],
+    pub rootfs_version: &'a str,
+    pub firecracker_version: &'a str,
+    pub firecrab_version: &'a str,
+    pub kernel_version: Option<&'a str>,
+    distribution: Option<(u32, &'a str)>,
+    manifest_id: Option<String>,
     /// `install.sh` places this helper; it turns Debian's vmlinuz into what
     /// Firecracker boots on this architecture.
     kernel_extractor: &'static str,
@@ -43,8 +52,14 @@ pub struct Host {
 
 /// Microsoft's WSL manifest points `wsl --install -d Debian` at these Debian
 /// builds, so the managed distribution is the same image users already get.
-const X86_64: Host = Host {
+static X86_64: Host<'static> = Host {
     architecture: "x86_64",
+    rootfs_version: DEBIAN_ROOTFS_VERSION,
+    firecracker_version: FIRECRACKER_VERSION,
+    firecrab_version: FIRECRAB_VERSION,
+    kernel_version: None,
+    distribution: None,
+    manifest_id: None,
     debian_architecture: "amd64",
     artifacts: [
         ArtifactSpec {
@@ -78,8 +93,14 @@ const X86_64: Host = Host {
     workload_exit: "reboot -f",
 };
 
-const ARM64: Host = Host {
+static ARM64: Host<'static> = Host {
     architecture: "aarch64",
+    rootfs_version: DEBIAN_ROOTFS_VERSION,
+    firecracker_version: FIRECRACKER_VERSION,
+    firecrab_version: FIRECRAB_VERSION,
+    kernel_version: None,
+    distribution: None,
+    manifest_id: None,
     debian_architecture: "arm64",
     artifacts: [
         ArtifactSpec {
@@ -120,6 +141,8 @@ pub enum Error {
     #[error(transparent)]
     Artifact(#[from] artifact::Error),
     #[error(transparent)]
+    Manifest(#[from] manifest::Error),
+    #[error(transparent)]
     Wsl(#[from] wsl::Error),
     #[error("could not {action} {path}: {source}")]
     Io {
@@ -135,16 +158,51 @@ pub enum Error {
 }
 
 /// The pinned artifacts for the architecture this CLI was built for.
-pub fn host() -> Result<&'static Host, Error> {
+pub fn host() -> Result<&'static Host<'static>, Error> {
     host_for(std::env::consts::ARCH).ok_or(Error::UnsupportedArchitecture(std::env::consts::ARCH))
 }
 
-fn host_for(architecture: &str) -> Option<&'static Host> {
+fn host_for(architecture: &str) -> Option<&'static Host<'static>> {
     match architecture {
         "x86_64" => Some(&X86_64),
         "aarch64" => Some(&ARM64),
         _ => None,
     }
+}
+
+pub fn host_from_manifest<'a>(
+    manifest: &'a Manifest,
+    architecture: &'static str,
+) -> Result<Host<'a>, Error> {
+    let mut host: Host<'a> = host_for(architecture)
+        .ok_or(Error::UnsupportedArchitecture(architecture))?
+        .clone();
+    let (image, firecracker, firecrab) = match architecture {
+        "x86_64" => (
+            &manifest.windows.x86_64,
+            &manifest.firecracker.x86_64,
+            &manifest.firecrab.x86_64,
+        ),
+        "aarch64" => (
+            &manifest.windows.aarch64,
+            &manifest.firecracker.aarch64,
+            &manifest.firecrab.aarch64,
+        ),
+        _ => unreachable!("architecture checked above"),
+    };
+    host.artifacts = [
+        image.image.spec("Debian WSL rootfs"),
+        firecracker.spec("Firecracker release"),
+        firecrab.spec("Firecrab GNU host bundle"),
+        manifest.firecrab.installer.spec("Firecrab guest installer"),
+    ];
+    host.rootfs_version = &manifest.windows.rootfs_version;
+    host.firecracker_version = &manifest.firecracker.version;
+    host.firecrab_version = &manifest.firecrab.version;
+    host.kernel_version = Some(&image.kernel_version);
+    host.distribution = Some((manifest.debian.version, &manifest.debian.suite));
+    host.manifest_id = Some(manifest.fingerprint()?);
+    Ok(host)
 }
 
 pub struct Downloaded {
@@ -212,9 +270,23 @@ fn provision(layout: &Layout, host: &Host, force: bool, share: &str) -> Result<S
     // A failed run is retried rather than reported again, as on macOS.
     remove_if_present(&failure_marker(layout))?;
     if !force && let Some(result) = guest_result(layout)? {
-        println!("[PASS] guest: Firecrab provisioning (preserved)");
-        return Ok(result);
+        let matches = host.manifest_id.as_deref().is_none_or(|id| {
+            manifest::marker_value_matches(&result, "manifest", id)
+                && host.kernel_version.is_some_and(|kernel| {
+                    manifest::marker_value_matches(&result, "workload_kernel", kernel)
+                })
+        });
+        if matches {
+            println!("[PASS] guest: Firecrab provisioning (preserved)");
+            return Ok(result);
+        }
     }
+    let directory = layout.provision();
+    fs::create_dir_all(&directory).map_err(|source| Error::Io {
+        action: "create provisioning directory",
+        path: directory,
+        source,
+    })?;
     write_script(
         &layout.provision().join("guest-provision.sh"),
         &guest_provision_script(host, share),
@@ -337,6 +409,8 @@ finish() {{
 }}
 trap finish EXIT
 
+{check_distribution}
+
 phase kvm
 # kvm_intel loads about 25 s into a cold WSL2 boot.
 for _ in $(seq 1 120); do
@@ -352,13 +426,14 @@ phase apt-update
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 phase apt-install
+{clean_guest_installation}
 apt-get install -y ca-certificates curl sudo tar findutils xz-utils gzip zstd lz4 lzop \
   nftables dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat \
-  binutils initramfs-tools linux-image-{debian_architecture}
+  binutils initramfs-tools {kernel_package}
 
 phase firecracker
 tmp=$(mktemp -d)
-tar -xzf "$share/downloads/firecracker-{firecracker}-{architecture}.tgz" -C "$tmp"
+tar -xzf "$share/downloads/{firecracker_archive}" -C "$tmp"
 fc=$(find "$tmp" -type f -name 'firecracker-{firecracker}-{architecture}' -print -quit)
 jailer=$(find "$tmp" -type f -name 'jailer-{firecracker}-{architecture}' -print -quit)
 test -n "$fc"
@@ -367,7 +442,7 @@ if [ -n "$jailer" ]; then install -m 0755 "$jailer" /usr/local/bin/jailer; fi
 rm -rf "$tmp"
 
 phase firecrab
-bash "$share/downloads/install-firecrab-{firecrab}.sh" --no-deps
+bash "$share/downloads/{installer}" --no-deps
 (systemctl is-active --quiet firecrab-helper || systemctl is-active --quiet firecrab-net-helper)
 systemctl is-active --quiet firecrab-api
 
@@ -377,7 +452,9 @@ bash "$share/provision/nested-firecracker-e2e.sh"
 phase verify
 {{
   echo 'schema={schema}'
+  {manifest_marker}
   echo "kernel=$(uname -r)"
+  {workload_kernel_marker}
   echo "debian=$(. /etc/os-release; echo "$PRETTY_NAME")"
   if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
     echo 'kvm=usable'
@@ -392,10 +469,34 @@ phase complete
 exit 0
 "#,
         share = wsl::shell_quote(share),
-        debian_architecture = host.debian_architecture,
+        check_distribution = host.distribution.map(|(version, suite)| format!(
+            "phase distribution\n. /etc/os-release\ntest \"$ID\" = debian\ntest \"$VERSION_ID\" = '{version}'\ntest \"$VERSION_CODENAME\" = '{suite}'"
+        )).unwrap_or_default(),
+        kernel_package = match host.kernel_version {
+            Some(version) => format!("linux-image-{version}"),
+            None => format!("linux-image-{}", host.debian_architecture),
+        },
         architecture = host.architecture,
-        firecracker = FIRECRACKER_VERSION,
-        firecrab = FIRECRAB_VERSION,
+        clean_guest_installation = if host.manifest_id.is_some() {
+            r#"for unit in firecrab-api firecrab-helper firecrab-net-helper; do
+  rm -f "/etc/systemd/system/$unit.service.d/90-firecrab-dev.conf"
+done
+systemctl daemon-reload"#
+        } else {
+            ""
+        },
+        firecracker = host.firecracker_version,
+        firecracker_archive = host.artifacts[1].filename,
+        installer = host.artifacts[3].filename,
+        manifest_marker = host
+            .manifest_id
+            .as_ref()
+            .map(|id| format!("echo 'manifest={id}'"))
+            .unwrap_or_default(),
+        workload_kernel_marker = host
+            .kernel_version
+            .map(|version| format!("echo 'workload_kernel={version}'"))
+            .unwrap_or_default(),
         schema = PROVISION_SCHEMA,
     )
 }
@@ -423,7 +524,7 @@ INIT
 chmod 0755 "$work/rootfs/sbin/init"
 truncate -s 128M "$work/rootfs.ext4"
 mkfs.ext4 -q -F -d "$work/rootfs" "$work/rootfs.ext4"
-vmlinuz=$(ls -1 /boot/vmlinuz-* | sort -V | tail -n 1)
+{select_kernel}
 kver=${{vmlinuz#/boot/vmlinuz-}}
 test -f "/boot/initrd.img-$kver"
 /usr/local/lib/firecrab/{kernel_extractor} "$vmlinuz" >"$work/kernel"
@@ -462,6 +563,10 @@ echo passed >"$work/result"
 "#,
         workload_exit = host.workload_exit,
         kernel_extractor = host.kernel_extractor,
+        select_kernel = match host.kernel_version {
+            Some(version) => format!("vmlinuz=/boot/vmlinuz-{version}"),
+            None => "vmlinuz=$(ls -1 /boot/vmlinuz-* | sort -V | tail -n 1)".to_string(),
+        },
         boot_args = host.boot_args,
     )
 }
@@ -689,6 +794,136 @@ mod tests {
             "{detail}"
         );
         assert!(detail.contains("guest-provision.log"), "{detail}");
+    }
+
+    #[test]
+    fn explicit_toml_install_reprovisions_a_legacy_marker_once_without_reimport() {
+        for architecture in ["x86_64", "aarch64"] {
+            let (_directory, layout) = layout();
+            fs::write(layout.provision_marker(), passing_marker()).unwrap();
+            let disk = layout.distro().join("ext4.vhdx");
+            fs::write(&disk, b"keep distribution").unwrap();
+            let manifest = Manifest::bundled().unwrap();
+            let host = host_from_manifest(&manifest, architecture).unwrap();
+            let marker = format!(
+                "{}manifest={}\nworkload_kernel={}\n",
+                passing_marker(),
+                manifest.fingerprint().unwrap(),
+                host.kernel_version.unwrap()
+            );
+            let wsl = guest(&layout, Ok(marker.clone()));
+            let result = provision(&layout, &host, false, SHARE).unwrap();
+            manifest
+                .verify_provisioned(&result, "workload_kernel", host.kernel_version.unwrap())
+                .unwrap();
+            assert_eq!(wsl.calls().len(), 1);
+            assert_eq!(fs::read(&disk).unwrap(), b"keep distribution");
+            assert!(!layout.managed_home.join(manifest::FILE_NAME).exists());
+            drop(wsl);
+            manifest.save(&layout.managed_home).unwrap();
+            let untouched =
+                fake::answer(|line| panic!("the migrated guest must be preserved: {line}"));
+            assert_eq!(provision(&layout, &host, false, SHARE).unwrap(), marker);
+            assert!(untouched.calls().is_empty());
+            assert_eq!(fs::read(&disk).unwrap(), b"keep distribution");
+            drop(untouched);
+            super::super::super::managed_home::clear_installation_state(&layout.managed_home)
+                .unwrap();
+            assert!(!layout.provision_marker().exists());
+            assert!(!layout.provision().exists());
+            assert!(!layout.managed_home.join(manifest::FILE_NAME).exists());
+            let wsl = guest(&layout, Ok(marker.clone()));
+            assert_eq!(provision(&layout, &host, true, SHARE).unwrap(), marker);
+            assert_eq!(wsl.calls().len(), 1);
+            assert_eq!(fs::read(&disk).unwrap(), b"keep distribution");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toml_provisioning_removes_old_development_overrides_and_preserves_user_configuration() {
+        let manifest = Manifest::bundled().unwrap();
+        let host = host_from_manifest(&manifest, "x86_64").unwrap();
+        let script = guest_provision_script(&host, SHARE);
+        let cleanup = script
+            .split_once("\nphase apt-install\n")
+            .unwrap()
+            .1
+            .split_once("\napt-get install ")
+            .unwrap()
+            .0;
+        let cleanup = cleanup.replace("/etc/systemd/system", "${FIRECRAB_TEST_UNIT_ROOT}");
+        let root = tempfile::tempdir().unwrap();
+        for unit in ["firecrab-api", "firecrab-helper", "firecrab-net-helper"] {
+            let directory = root.path().join(format!("{unit}.service.d"));
+            fs::create_dir(&directory).unwrap();
+            fs::write(
+                directory.join("90-firecrab-dev.conf"),
+                b"old development binary",
+            )
+            .unwrap();
+            fs::write(directory.join("10-user.conf"), b"keep user config").unwrap();
+        }
+        let output = std::process::Command::new("bash")
+            .args(["-c", &format!("set -eu\nsystemctl() {{ :; }}\n{cleanup}")])
+            .env("FIRECRAB_TEST_UNIT_ROOT", root.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for unit in ["firecrab-api", "firecrab-helper", "firecrab-net-helper"] {
+            let directory = root.path().join(format!("{unit}.service.d"));
+            assert!(!directory.join("90-firecrab-dev.conf").exists());
+            assert_eq!(
+                fs::read(directory.join("10-user.conf")).unwrap(),
+                b"keep user config"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn toml_guest_scripts_are_valid_bash_and_select_debian_not_wsl_kernels() {
+        let manifest = Manifest::bundled().unwrap();
+        for architecture in ["x86_64", "aarch64"] {
+            let host = host_from_manifest(&manifest, architecture).unwrap();
+            let directory = tempfile::tempdir().unwrap();
+            for (name, script) in [
+                ("provision.sh", guest_provision_script(&host, SHARE)),
+                ("nested.sh", nested_firecracker_e2e_script(&host)),
+            ] {
+                let path = directory.path().join(name);
+                fs::write(&path, &script).unwrap();
+                assert!(
+                    std::process::Command::new("bash")
+                        .arg("-n")
+                        .arg(path)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            let script = nested_firecracker_e2e_script(&host);
+            let selection = script
+                .split_once("\nvmlinuz=")
+                .unwrap()
+                .1
+                .split_once("\ntest -f")
+                .unwrap()
+                .0;
+            let output = std::process::Command::new("bash")
+                .args(["-c", &format!("vmlinuz={selection}\nprintf '%s' \"$kver\"")])
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                host.kernel_version.unwrap()
+            );
+        }
     }
 
     #[test]

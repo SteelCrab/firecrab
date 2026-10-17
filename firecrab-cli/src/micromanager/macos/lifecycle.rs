@@ -307,6 +307,23 @@ mod tests {
         let (_directory, cli, helper, layout) = fixture();
         install_from(&cli, &helper, &layout, false).unwrap();
         fs::write(layout.managed_home.join("data/delete-me"), b"data").unwrap();
+        for relative in ["runtime", "provision"] {
+            fs::create_dir_all(layout.managed_home.join(relative)).unwrap();
+        }
+        super::super::super::manifest::Manifest::bundled()
+            .unwrap()
+            .save(&layout.managed_home)
+            .unwrap();
+        fs::write(
+            layout.managed_home.join("provision/legacy-install.sh"),
+            b"legacy installer",
+        )
+        .unwrap();
+        fs::write(
+            layout.managed_home.join("runtime/provisioned"),
+            b"legacy marker",
+        )
+        .unwrap();
         uninstall_at(&layout, true).unwrap();
         assert!(!layout.managed_home.exists());
 

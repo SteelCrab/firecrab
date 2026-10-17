@@ -69,7 +69,7 @@ const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16, \
     purpose = ?17, env = ?18 WHERE id = ?1";
 
-/// Schema for the `micro_networks` table (`public-docs/networking.md`).
+/// Schema for the `micro_networks` table (`public-docs/guides/networking.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
 /// is the bridge name, which the helper derives from `id`.
 const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_networks (
@@ -91,7 +91,7 @@ const INSERT_MICRO_NETWORK_SQL: &str = "INSERT INTO micro_networks \
     (id, name, subnet_cidr, internet_enabled, uplink, ipv6_cidr, ipv6_address_mode) \
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
 
-/// MicroStorage pools (`public-docs/storage.md`).
+/// MicroStorage pools (`public-docs/guides/storage.md`).
 const CREATE_MICRO_STORAGES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_storages (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -273,7 +273,7 @@ fn migrate_storage_root_column(conn: &Connection) -> Result<(), PersistenceError
 }
 
 /// Disk generation + last runtime ids for the artifact layout
-/// (`public-docs/storage.md`).
+/// (`public-docs/guides/storage.md`).
 fn migrate_disk_generation_columns(conn: &Connection) -> Result<(), PersistenceError> {
     for (name, sql) in [
         (

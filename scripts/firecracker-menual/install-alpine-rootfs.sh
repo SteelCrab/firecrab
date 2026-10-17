@@ -27,7 +27,7 @@ sbom_generator="${repo_dir}/scripts/m2image_sbom.py"
 # manager in a temporary chroot, then creates ext4 directly with mkfs.ext4 -d.
 # No Docker daemon or OCI runtime is involved.
 # linux-virt: Alpine's own officially-maintained cloud/virt kernel package
-# (public-docs/images.md) — replaces the self-built vanilla kernel
+# (public-docs/guides/images.md) — replaces the self-built vanilla kernel
 # every template used to share. Unlike Ubuntu's linux-image-generic,
 # virtio_blk/ext4 are modules here rather than builtin, so the initramfs-virt
 # Alpine builds alongside it (mkinitfs) has to ship as the VM's initrd too —
@@ -242,7 +242,7 @@ EOF_IFACES
 # Prints a fixed sentinel line to /dev/console (Firecracker's captured
 # stdout) once DHCP + DNS are confirmed working — the signal firecrab-api's
 # start pipeline waits on in place of a guest agent event
-# (public-docs/networking.md; guest agent/vsock is out of this
+# (public-docs/guides/networking.md; guest agent/vsock is out of this
 # project's competition scope).
 cat >"${staging}/etc/init.d/firecrab-network-ready" <<'EOF_SENTINEL'
 #!/sbin/openrc-run

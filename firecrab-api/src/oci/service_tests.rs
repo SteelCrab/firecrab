@@ -141,7 +141,7 @@ fn quotes_in_arguments_stay_inside_the_script() {
 fn sample_service_script() -> String {
     format!(
         "#!{toolbox} sh\n\
-         # Firecrab service for the imported image entrypoint (public-docs/oci.md).\n\
+         # Firecrab service for the imported image entrypoint (public-docs/guides/oci.md).\n\
          cd '/opt/app'\n\
          export PATH='/usr/bin'\n\
          export APP_ENV='prod'\n\

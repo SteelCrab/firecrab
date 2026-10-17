@@ -1,7 +1,7 @@
 //! NAT/uplink handling: detects the host's own default-route interface and
 //! renders the postrouting/masquerade chain that lets VM traffic egress
 //! through it. Split out of `firewall.rs`
-//! (`public-docs/networking.md`) as an organizational
+//! (`public-docs/guides/networking.md`) as an organizational
 //! separation only — same `FirewallError` type, and `firewall.rs`'s
 //! `render_apply_ruleset` still splices this module's output into the same
 //! single atomic `nft -f -` transaction as before.
@@ -66,7 +66,7 @@ pub(crate) fn uplink_exists(name: &str) -> bool {
 /// prefixes that actually need translating: a Unique Local prefix is not
 /// routable off-host, so it is masqueraded through the same shared chain,
 /// while a global prefix contributes no pair at all and reaches the wire
-/// with the VM's own address intact (`public-docs/networking.md`).
+/// with the VM's own address intact (`public-docs/guides/networking.md`).
 pub(crate) fn render_postrouting_chain(
     vm_subnets: &[String],
     egress: &[(String, String)],
