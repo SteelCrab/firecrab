@@ -5,6 +5,7 @@ use axum::{
     http::HeaderMap,
     routing::{get, post},
 };
+use base64::Engine;
 use std::collections::HashMap;
 
 async fn serve(app: Router) -> (String, tokio::task::JoinHandle<()>) {
@@ -148,7 +149,10 @@ async fn ecr_passwords_report_unsupported_repository_discovery() {
 #[tokio::test]
 async fn harbor_registry_lists_authorized_repositories_without_prefixing_the_username() {
     let app = Router::new().route("/api/v2.0/repositories", get(|headers: HeaderMap, Query(query): Query<HashMap<String, String>>| async move {
-        assert_eq!(headers["authorization"], "Basic b2N0b2NhdDpwcml2YXRlLXRva2Vu");
+        let authorization = headers["authorization"].to_str().unwrap();
+        let encoded = authorization.strip_prefix("Basic ").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD.decode(encoded).unwrap();
+        assert_eq!(decoded, b"octocat:private-token");
         assert_eq!(query["page"], "1");
         assert_eq!(query["page_size"], "100");
         ([("x-total-count", "101")], Json(serde_json::json!([{"name":"firecrab/harbor-nginx"},{"name":"team/nested/app"}])))
