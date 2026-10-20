@@ -461,6 +461,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // same concurrency pool, body limit, CORS and origin checks as other REST.
     let inspection = Router::new()
         .route("/api/oci/inspect", get(handlers::oci::inspect_oci_image))
+        .route(
+            "/api/pipe/registries/{registry}/repositories",
+            get(handlers::registries::repositories),
+        )
         .route("/api/pipe/registry-tags", get(handlers::registries::tags))
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
@@ -1311,6 +1315,25 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+        for uri in [
+            "/api/pipe/registries/untrusted.invalid/repositories?namespace=team",
+            "/api/pipe/registries/docker.io/repositories?namespace=library",
+            "/api/pipe/registries/registry-1.docker.io/repositories?namespace=library",
+            "/api/pipe/registries/ghcr.io/repositories?namespace=..%2Fteam",
+            "/api/pipe/registries/docker.io/repositories?namespace=team&page=0",
+            "/api/pipe/registries/docker.io/repositories?namespace=team&page=10001",
+        ] {
+            let (status, _) = get(&app, uri).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        }
+        let (status, body) = get(&app, "/api/pipe/registries/public.ecr.aws/repositories").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({
+                "repositories": [], "nextPage": null, "listingSupported": false,
+            })
+        );
     }
 }
 

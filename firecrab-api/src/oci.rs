@@ -2149,6 +2149,7 @@ pub(crate) mod service;
 mod service_tests;
 
 pub mod registries;
+pub mod registry_catalog;
 #[cfg(test)]
 pub(crate) mod registry_fixture;
 mod transport;

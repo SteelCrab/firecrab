@@ -1,8 +1,8 @@
-//! Pipe connections to Docker Hub, GHCR and Amazon ECR, with OCI image pull jobs.
+//! Pipe connections to external registries, with OCI image pull jobs.
 use crate::{
     error::AppError,
     extract::ValidatedJson,
-    oci::{self, ImageReference, RegistryCredential, registries},
+    oci::{self, ImageReference, RegistryCredential, registries, registry_catalog},
     server::RequestId,
     state::AppState,
 };
@@ -49,16 +49,43 @@ fn provider(registry: &str) -> Option<&'static str> {
 
 fn reference(value: &str, id: RequestId) -> Result<ImageReference, AppError> {
     let reference = ImageReference::parse(value).map_err(|error| invalid(error.to_string(), id))?;
-    if provider(&reference.registry).is_none() {
-        return Err(invalid(
-            "Use a Docker Hub, ghcr.io or Amazon ECR image reference",
-            id,
-        ));
-    }
     if !reference.version.is_immutable() && !registries::valid_tag(reference.version.as_str()) {
         return Err(invalid("Invalid image tag", id));
     }
     Ok(reference)
+}
+
+fn valid_harbor_host(registry: &str) -> bool {
+    if registry.is_empty()
+        || registry.len() > 255
+        || !registry.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b':' | b'[' | b']')
+        })
+    {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(&format!("https://{registry}/")) else {
+        return false;
+    };
+    url.host_str().is_some()
+        && url.port() != Some(0)
+        && (registry.contains('.') || registry.contains(':') || registry == "localhost")
+}
+
+async fn registered_reference(
+    state: &AppState,
+    value: &str,
+    id: RequestId,
+) -> Result<(ImageReference, Option<RegistryCredential>), AppError> {
+    let reference = reference(value, id)?;
+    let credential = super::oci::stored_credential_for(state, &reference.registry, id).await;
+    if provider(&reference.registry).is_none() && credential.is_none() {
+        return Err(invalid(
+            "Add this Harbor registry before querying or pulling its images",
+            id,
+        ));
+    }
+    Ok((reference, credential))
 }
 
 #[derive(Serialize)]
@@ -69,7 +96,7 @@ pub struct Connection {
 }
 fn connection(credential: RegistryCredential) -> Connection {
     Connection {
-        provider: provider(&credential.registry).unwrap_or("unknown"),
+        provider: provider(&credential.registry).unwrap_or("harbor"),
         registry: if credential.registry == "registry-1.docker.io" {
             "docker.io".into()
         } else {
@@ -95,6 +122,7 @@ pub async fn list(
 pub struct Login {
     username: String,
     secret: String,
+    provider: Option<String>,
 }
 pub async fn save(
     State(state): State<AppState>,
@@ -103,11 +131,17 @@ pub async fn save(
     ValidatedJson(body): ValidatedJson<Login>,
 ) -> Result<Json<Connection>, AppError> {
     let registry = registry.trim().to_ascii_lowercase();
-    let Some(kind) = provider(&registry) else {
-        return Err(invalid(
-            "Use docker.io, ghcr.io or an Amazon ECR registry hostname",
-            id,
-        ));
+    let kind = match provider(&registry) {
+        Some(kind) => kind,
+        None if body.provider.as_deref() == Some("harbor") && valid_harbor_host(&registry) => {
+            "harbor"
+        }
+        None => {
+            return Err(invalid(
+                "Choose Harbor and provide its registry hostname",
+                id,
+            ));
+        }
     };
     let username = if kind == "ecr" {
         "AWS"
@@ -144,7 +178,7 @@ pub async fn delete(
     Path(registry): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let registry = registry.trim().to_ascii_lowercase();
-    if provider(&registry).is_none() {
+    if provider(&registry).is_none() && !valid_harbor_host(&registry) {
         return Err(invalid("Unknown registry", id));
     }
     tokio::task::spawn_blocking(move || state.store.delete_registry_credential(&registry))
@@ -152,6 +186,54 @@ pub async fn delete(
         .map_err(|_| AppError::internal(id.0))?
         .map_err(|_| AppError::internal(id.0))?;
     Ok(Json(serde_json::json!({"deleted": true})))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoriesQuery {
+    namespace: Option<String>,
+    page: Option<u32>,
+}
+
+pub async fn repositories(
+    State(state): State<AppState>,
+    Extension(id): Extension<RequestId>,
+    Path(registry): Path<String>,
+    Query(query): Query<RepositoriesQuery>,
+) -> Result<Json<registry_catalog::RegistryRepositories>, AppError> {
+    let registry = registry.trim().to_ascii_lowercase();
+    let page = query.page.unwrap_or(1);
+    if !(1..=10000).contains(&page) {
+        return Err(invalid("Invalid repository page", id));
+    }
+    let credential = super::oci::stored_credential_for(&state, &registry, id).await;
+    let kind = match provider(&registry) {
+        Some(kind) => kind,
+        None if valid_harbor_host(&registry) && credential.is_some() => "harbor",
+        None => return Err(invalid("Unknown registry", id)),
+    };
+    let namespace = if kind == "dockerHub" {
+        credential
+            .as_ref()
+            .ok_or_else(|| invalid("Add a Docker Hub login", id))?
+            .username
+            .as_str()
+    } else {
+        query
+            .namespace
+            .as_deref()
+            .or_else(|| credential.as_ref().map(|value| value.username.as_str()))
+            .unwrap_or("")
+    }
+    .trim()
+    .to_owned();
+    if !matches!(kind, "ecr" | "harbor") && !registry_catalog::valid_namespace(&namespace) {
+        return Err(invalid("Provide an account or organization name", id));
+    }
+    registry_catalog::repositories(&registry, &namespace, page, credential)
+        .await
+        .map(Json)
+        .map_err(|error| invalid(error.to_string(), id))
 }
 
 #[derive(Deserialize)]
@@ -165,7 +247,7 @@ pub async fn tags(
     Extension(id): Extension<RequestId>,
     Query(query): Query<TagsQuery>,
 ) -> Result<Json<registries::RegistryTags>, AppError> {
-    let reference = reference(&query.reference, id)?;
+    let (reference, credential) = registered_reference(&state, &query.reference, id).await?;
     if query
         .last
         .as_deref()
@@ -173,7 +255,6 @@ pub async fn tags(
     {
         return Err(invalid("Invalid tag cursor", id));
     }
-    let credential = super::oci::stored_credential_for(&state, &reference.registry, id).await;
     registries::tags(&reference, query.last.as_deref(), credential)
         .await
         .map(Json)
@@ -201,8 +282,7 @@ pub async fn transfer(
     Extension(id): Extension<RequestId>,
     ValidatedJson(Transfer::Pull { reference: value }): ValidatedJson<Transfer>,
 ) -> Result<(StatusCode, Json<ImageInstallResponse>), AppError> {
-    let reference = reference(&value, id)?;
-    let credential = super::oci::stored_credential_for(&state, &reference.registry, id).await;
+    let (reference, credential) = registered_reference(&state, &value, id).await?;
     let permit = state
         .registry_transfer_permits
         .clone()
@@ -310,7 +390,6 @@ mod tests {
             assert!(provider(host).is_none(), "{host}");
         }
         for value in [
-            "quay.io/team/app",
             "ghcr.io/team/app:tag?query",
             "ghcr.io/team/app:tag#fragment",
             "https://ghcr.io/team/app",
@@ -324,6 +403,65 @@ mod tests {
 mod credential_tests {
     use super::*;
     use crate::templates::TemplateRegistry;
+
+    #[tokio::test]
+    async fn harbor_registry_requires_registration_and_keeps_its_login_write_only() {
+        let root = tempfile::tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(root.path(), std::iter::empty()).unwrap();
+        let state = AppState::with_db_file(templates, root.path().join("state.db"))
+            .await
+            .unwrap();
+        let id = RequestId(uuid::Uuid::nil());
+        assert!(
+            registered_reference(&state, "harbor.example.com/firecrab/nginx:latest", id)
+                .await
+                .is_err()
+        );
+        let Json(saved) = save(
+            State(state.clone()),
+            Extension(id),
+            Path("harbor.example.com".into()),
+            ValidatedJson(Login {
+                provider: Some("harbor".into()),
+                username: "reader".into(),
+                secret: "harbor-secret".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        let json = serde_json::to_value(saved).unwrap();
+        assert_eq!(json["provider"], "harbor");
+        assert!(!json.to_string().contains("harbor-secret"));
+        let (_, login) =
+            registered_reference(&state, "harbor.example.com/firecrab/nginx:latest", id)
+                .await
+                .unwrap();
+        assert_eq!(login.unwrap().username, "reader");
+        let Json(rows) = list(State(state.clone()), Extension(id)).await.unwrap();
+        assert_eq!(rows[0].provider, "harbor");
+        let Json(_) = delete(
+            State(state.clone()),
+            Extension(id),
+            Path("harbor.example.com".into()),
+        )
+        .await
+        .unwrap();
+        assert!(
+            registered_reference(&state, "harbor.example.com/firecrab/nginx:latest", id)
+                .await
+                .is_err()
+        );
+        for registry in [
+            "https://harbor.example.com",
+            "harbor.example.com/path",
+            "user@harbor.example.com",
+            "harbor.example.com:0",
+            "harbor.example.com\\evil",
+            "harbor.example.com\n",
+        ] {
+            assert!(!valid_harbor_host(registry), "{registry}");
+        }
+    }
 
     #[tokio::test]
     async fn saves_write_only_provider_logins_and_uses_them_for_oci_import() {
@@ -343,6 +481,7 @@ mod credential_tests {
                 Extension(id),
                 Path(registry.into()),
                 ValidatedJson(Login {
+                    provider: None,
                     username: username.into(),
                     secret: secret.into(),
                 }),
@@ -400,6 +539,7 @@ mod credential_tests {
                 Extension(id),
                 Path("ghcr.io".into()),
                 ValidatedJson(Login {
+                    provider: None,
                     username: "octocat".into(),
                     secret: "  \n ".into()
                 })
@@ -438,6 +578,7 @@ mod credential_tests {
                 Extension(id),
                 Path(host.into()),
                 ValidatedJson(Login {
+                    provider: None,
                     username: " octocat ".into(),
                     secret: " dckr_pat_secret ".into(),
                 }),
