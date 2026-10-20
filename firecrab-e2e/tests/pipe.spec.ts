@@ -205,7 +205,7 @@ async function open(page: Page, options: { card?: PipeCardId | null; unavailable
   await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en");
   const card = options.card === undefined ? "route" : options.card;
   await page.goto(card ? `/#/pipe/${card}` : "/#/pipe");
-  return { get snapshot() { return snapshot; }, firecrabSaves, firecrabDeletes, namedConnections, zoneRequests, get namedDisconnects() { return namedDisconnects; }, writes, actions, quickSaves, quickDeletes, quickActions, finishConnection, unavailable: () => { unavailable = true; }, setVms: (next: VmResponse[]) => { vms = next; }, failVms: () => { vmsUnavailable = true; }, publishQuickUrl: (id = QUICK_ID) => { snapshot.quickTunnels!.find(value => value.id === id)!.publicUrl = QUICK_URL; }, failTunnel: (id = QUICK_ID) => { const unit = snapshot.quickTunnels!.find(value => value.id === id)!.unit; unit.activeState = "failed"; unit.subState = "failed"; unit.mainPid = 0; } };
+  return { get snapshot() { return snapshot; }, firecrabSaves, firecrabDeletes, namedConnections, zoneRequests, get namedDisconnects() { return namedDisconnects; }, writes, actions, quickSaves, quickDeletes, quickActions, finishConnection, unavailable: () => { unavailable = true; }, setVms: (next: VmResponse[]) => { vms = next; }, failVms: () => { vmsUnavailable = true; }, recoverVms: () => { vmsUnavailable = false; }, publishQuickUrl: (id = QUICK_ID) => { snapshot.quickTunnels!.find(value => value.id === id)!.publicUrl = QUICK_URL; }, failTunnel: (id = QUICK_ID) => { const unit = snapshot.quickTunnels!.find(value => value.id === id)!.unit; unit.activeState = "failed"; unit.subState = "failed"; unit.mainPid = 0; } };
 }
 
 test.describe("Pipe cards @dashboard", () => {
@@ -1097,5 +1097,35 @@ test.describe("Public address → Nginx → VM apps @dashboard", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await panel.screenshot({ path: info.outputPath("public-nginx-token-mobile-ko.png") });
     await expect(page.getByLabel("서브도메인", { exact: true })).toHaveCount(0);
+  });
+});
+
+test.describe("API connection recovery @dashboard", () => {
+  test("clears the connection error after polling succeeds without reloading the page", async ({ page }) => {
+    const mock = await open(page, { card: null, vmsUnavailable: true });
+    const banner = page.locator(".banner.error").filter({ has: page.getByRole("button", { name: "✕", exact: true }) });
+    await expect(banner).toContainText("VM list unavailable");
+    mock.recoverVms();
+    await expect(banner).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Pipe", exact: true })).toBeVisible();
+  });
+
+  test("preserves a failed VM action after the next successful poll", async ({ page }) => {
+    let polls = 0;
+    await open(page, { card: null });
+    await page.route("**/api/vms", async route => {
+      polls++;
+      await route.fulfill({ json: appVms });
+    });
+    await page.route("**/api/vms/web-a/stop", route => route.fulfill({ status: 409, json: { error: { message: "This VM cannot be stopped right now" } } }));
+    await page.getByRole("button", { name: "MicroVM", exact: true }).click();
+    const row = page.getByRole("row").filter({ has: page.getByText("web-a", { exact: true }) });
+    await row.getByRole("button", { name: "Actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "stop", exact: true }).click();
+    const banner = page.locator(".banner.error").filter({ has: page.getByRole("button", { name: "✕", exact: true }) });
+    await expect(banner).toContainText("This VM cannot be stopped right now");
+    const before = polls;
+    await expect.poll(() => polls).toBeGreaterThan(before);
+    await expect(banner).toContainText("This VM cannot be stopped right now");
   });
 });
