@@ -142,12 +142,26 @@ pub(crate) async fn stored_credential_for(
         return stored_credential(state, request_id).await;
     }
     let store = state.store.clone();
-    let registry = registry.to_owned();
-    tokio::task::spawn_blocking(move || store.registry_credential(&registry))
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .flatten()
+    let registry = registry.to_ascii_lowercase();
+    match tokio::task::spawn_blocking(move || store.registry_credential(&registry)).await {
+        Ok(Ok(stored)) => stored,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                request_id = %request_id.0,
+                %error,
+                "failed to read the stored registry credential; continuing anonymously"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                request_id = %request_id.0,
+                %error,
+                "registry credential lookup did not finish; continuing anonymously"
+            );
+            None
+        }
+    }
 }
 
 /// `GET /api/oci/import/{alias}` — latest import snapshot, including idle.

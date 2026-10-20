@@ -40,7 +40,8 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
   const [job, setJob] = useState<ImageInstallResponse | null>(null);
   const inFlight = useRef(false);
   const disabled = loading || busy || activeJob !== null;
-  const dirty = editor && (!!host || !!username || !!secret);
+  const [initial, setInitial] = useState({ host: "", username: "" });
+  const dirty = editor && (!!secret || host !== initial.host || username !== initial.username);
 
   useEffect(() => { onUnsavedChange(dirty); return () => onUnsavedChange(false); }, [dirty, onUnsavedChange]);
   useEffect(() => {
@@ -90,7 +91,9 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
   }
   function resetEditor() { setEditor(false); setHost(""); setUsername(""); setSecret(""); }
   function edit(connection?: RegistryConnection) {
-    setProvider(connection?.provider ?? "ghcr"); setHost(connection?.registry ?? ""); setUsername(connection?.username ?? ""); setSecret(""); setEditor(true);
+    const host = connection?.registry ?? "";
+    const username = connection?.username ?? "";
+    setProvider(connection?.provider ?? "ghcr"); setHost(host); setUsername(username); setInitial({ host, username }); setSecret(""); setEditor(true);
   }
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -133,7 +136,7 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
     {!loading && connections.length > 0 && <div className="table-scroll"><table className="vm-table registry-table"><thead><tr><th>{t("Registry", "레지스트리")}</th><th>{t("Account", "계정")}</th><th className="actions">{t("Actions", "작업")}</th></tr></thead><tbody>{connections.map(connection => <tr key={connection.registry}><td className="registry-reference">{connection.registry}</td><td>{connection.username}</td><td className="actions"><div className="pipe-row-actions"><button className="btn" disabled={disabled || editor} onClick={() => edit(connection)}>{t("Update token", "토큰 갱신")}</button><button className="btn danger" disabled={disabled} onClick={() => void perform(async () => { await deleteRegistry(connection.registry); setConnections(current => current.filter(value => value.registry !== connection.registry)); if (registry === connection.registry) setRegistry("ghcr.io"); setNotice(t("Registry login removed.", "레지스트리 인증을 삭제했다.")); })}>{t("Remove", "삭제")}</button></div></td></tr>)}</tbody></table></div>}
     {!loading && connections.length === 0 && <p className="registry-help">{t("No saved logins. Public images can be pulled without a login. Save a login to pull private images.", "저장한 인증이 없다. 공개 이미지는 인증 없이 가져올 수 있다. 비공개 이미지를 가져오려면 인증을 저장한다.")}</p>}
     <h3>{t("Pull an image", "이미지 가져오기")}</h3>
-    <form className="registry-form" onSubmit={event => { event.preventDefault(); void transfer({ action: "pull", reference: `${registry}/${repository.trim()}${tag.startsWith("sha256:") ? "@" : ":"}${tag.trim()}` }); }}>
+    <form className="registry-form" onSubmit={event => { event.preventDefault(); const version = tag.trim(); void transfer({ action: "pull", reference: `${registry}/${repository.trim()}${version.startsWith("sha256:") ? "@" : ":"}${version}` }); }}>
       <label className="field"><span>{t("Source registry", "원본 레지스트리")}</span><select value={registry} disabled={disabled} onChange={event => { setRegistry(event.target.value); setTags([]); setNextLast(null); }}>{registries.map(host => <option key={host} value={host}>{host === "docker.io" ? "Docker Hub (docker.io)" : host}</option>)}</select></label>
       <label className="field"><span>{t("Repository", "저장소")}</span><input placeholder={registry === "docker.io" ? "nginx or owner/image" : "owner/image"} value={repository} disabled={disabled} onChange={event => { setRepository(event.target.value); setTags([]); setNextLast(null); }} required /></label>
       <label className="field"><span>{t("Tag or digest", "태그 또는 다이제스트")}</span><input list="registry-tags" value={tag} disabled={disabled} onChange={event => setTag(event.target.value)} required /><datalist id="registry-tags">{tags.map(tag => <option key={tag} value={tag} />)}</datalist></label>

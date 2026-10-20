@@ -1301,7 +1301,11 @@ impl RegistrySession {
             return Ok(stored.clone().expect("token is present"));
         }
         let token_url = token_request(challenge, &self.base).ok_or_else(|| {
-            ResolveError::Authentication("registry rejected credentials; renew the login token (ECR tokens expire after 12 hours)".into())
+            ResolveError::Authentication(if self.basic.is_some() {
+                "registry rejected credentials; renew the login token (ECR tokens expire after 12 hours)".into()
+            } else {
+                "registry requires a login; save credentials for this registry".into()
+            })
         })?;
         let token_url = reqwest::Url::parse(&token_url)
             .map_err(|_| ResolveError::Authentication("invalid token URL".into()))?;

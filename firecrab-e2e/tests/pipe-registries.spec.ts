@@ -131,7 +131,8 @@ test.describe("Pipe registries @dashboard", () => {
     await panel.getByRole("button", { name: "List tags" }).click();
     await expect(panel.getByLabel("Tag or digest")).toHaveValue("v1");
     await panel.getByRole("button", { name: "More tags" }).click();
-    expect(mock.tagsPage).toBe(2);
+    await expect.poll(() => mock.tagsPage).toBe(2);
+    await expect(panel.locator('#registry-tags option[value="v2"]')).toHaveCount(1);
     await panel.getByRole("button", { name: "Pull image", exact: true }).click();
     await expect(panel.getByText("Image pull completed.")).toBeVisible();
     expect(mock.transfers).toEqual([{ action: "pull", reference: "ghcr.io/team/app:v1" }]);
