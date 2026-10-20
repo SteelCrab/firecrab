@@ -2215,3 +2215,24 @@ table.image-table .image-package-url a:hover {
 
 .pipe-registries h3 { margin: 1.25rem 0 .65rem; font-size: .9rem; font-weight: 600; }
 .registry-help { color: var(--shell); font-size: .8rem; line-height: 1.6; overflow-wrap: anywhere; }
+.registry-browser-actions { margin-block: .75rem; flex-wrap: wrap; }
+.registry-image-tags h4 { margin: 1.25rem 0 .5rem; font-size: .85rem; }
+.registry-catalog { width: 100%; }
+.registry-catalog-scroll { max-height: 22rem; margin-block: .75rem; }
+.registry-catalog .registry-reference { min-width: 0; white-space: normal; }
+.registry-catalog tr[aria-selected="true"] { background: color-mix(in srgb, var(--ready) 8%, var(--bg-panel)); }
+.registry-tag-list { display: flex; flex-wrap: wrap; gap: .45rem; max-height: 12rem; overflow: auto; padding-block: .25rem; }
+.registry-tag-list .btn { overflow-wrap: anywhere; white-space: normal; max-width: 100%; }
+.registry-tag-list .btn[aria-pressed="true"] { color: var(--ink); border-color: var(--ready); background: color-mix(in srgb, var(--ready) 8%, var(--bg-panel)); }
+.registry-selected code { overflow-wrap: anywhere; }
+.pipe-registries > .panel-title { flex-wrap: wrap; gap: .75rem; }
+@media (max-width: 560px) {
+  .registry-connections { min-width: 0; }
+  .registry-connections thead { display: none; }
+  .registry-connections tbody { display: block; }
+  .registry-connections tr { display: grid; gap: .65rem; padding-block: 1rem; border-bottom: 1px solid var(--line); }
+  .registry-connections td { padding: 0; border: 0; white-space: normal; }
+  .registry-connections .registry-reference { min-width: 0; max-width: none; font-weight: 600; }
+  .registry-connections .registry-account::before { content: attr(data-label) ": "; color: var(--shell); }
+  .registry-connections .pipe-row-actions { justify-content: flex-start; flex-wrap: wrap; }
+}
