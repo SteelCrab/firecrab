@@ -1,73 +1,71 @@
 # Pipe Registry
 
-The **Pipe Registry** card connects Pipe to Docker Hub, GitHub Container Registry
-(GHCR), Amazon ECR private registries, and `public.ecr.aws`. It pulls OCI
-container images to this host. No Docker daemon or AWS CLI is required on the
-API host. Pipe Registry does not push images.
+Pipe Registry connects to Docker Hub, GitHub Container Registry (GHCR), Amazon
+ECR, and Harbor. It pulls OCI container images to the API host without a Docker
+daemon. Image uploads are managed by the source registry.
 
-1. Select **Add registry**. For Docker Hub, enter the Docker Hub username and a
-   personal access token with repository read access. Pipe shares this login with
-   the existing Docker Hub settings. For GHCR, enter the GitHub username and a
-   personal access token (classic) with `read:packages`. Authorize organization SSO when
-   required.
-2. For ECR, enter the registry hostname, such as
-   `123456789012.dkr.ecr.ap-northeast-2.amazonaws.com`. Paste the output of
-   `aws ecr get-login-password --region ap-northeast-2`. Pipe uses username `AWS`.
-   Tokens expire after 12 hours. Use **Update token** to renew them. Public ECR
-   uses `aws ecr-public get-login-password --region us-east-1`.
-3. Select a source registry and enter its repository, such as `team/app`.
-   For Docker Hub official images, enter `nginx` or `library/nginx`. The API also
-   accepts shorthand references such as `nginx:alpine` and the explicit
-   `docker.io/library/nginx:alpine` reference.
-   **List tags** lists tags in pages of 100; **More tags** loads the next page.
-   Select a tag or enter a `sha256:…` manifest digest. **Pull image** downloads
-   and verifies the selected platform's config and layers on this host.
-   Public images can be pulled without a saved login.
-4. Under **Local OCI images**, select **Import as M2Image** to convert a pulled original image into a bootable
-   VM template. This uses its pinned digest and the existing OCI import pipeline.
-   Its platform and guest compatibility requirements still apply.
+1. Select **Add registry** and choose the provider.
+   - Docker Hub: enter your username and a personal access token with repository
+     read access. This login is shared with the existing Docker Hub settings.
+   - GHCR: enter your GitHub username and a personal access token (classic) with
+     `read:packages`. Authorize organization SSO if required.
+   - Harbor: enter the registry hostname and optional port, a Harbor username or
+     robot account, and its password or token. The account must have repository
+     listing and pull access. Use the hostname only, without a URL scheme or path.
+     Remote Harbor connections require HTTPS. Loopback development registries,
+     such as `127.0.0.1:18080`, use HTTP.
+   - ECR: enter the registry hostname and the output of
+     `aws ecr get-login-password --region REGION`. Pipe uses username `AWS`.
+     Tokens expire after 12 hours. Select **Update token** to renew them.
+2. Saving a login automatically loads its repository list. **View images** opens
+   the list for another saved registry. Docker Hub and GHCR use the saved account
+   namespace. Harbor lists all repositories that the saved account can access
+   across its projects. Docker Hub lists only the saved user’s repositories.
+   A Docker Hub login is required. Official images are not used as a fallback.
+3. Pipe selects the first repository and loads its tags automatically. Select
+   another repository to load its tags. **More images** and **More tags** load
+   further pages. **Refresh repositories** refreshes the repository list.
+4. Select a tag and then **Pull image**. Pulling stays disabled while the tag
+   lookup is running or has failed. Failed lookups can be retried. Repository,
+   tag, and digest text fields are not shown. Changing the source registry clears
+   the previous selection.
 
-Pulls run as background jobs. The card polls their status and retains its
-current job ID across browser reloads. Jobs stop if the API process stops;
-completed images remain on disk. Refresh the local image list after an
-interrupted job and retry as needed. Two pulls may run at once. A retry reuses
-verified local blobs.
+ECR login passwords cannot call the signed AWS `DescribeRepositories` API.
+Automatic ECR repository discovery requires an AWS IAM integration, which is
+not currently available. Pipe shows this limitation without a manual repository
+input.
 
-A pull keeps the selected platform's config and compressed layers. It does not
-keep other platforms of a multi-platform index, signatures, or attestations.
-Only images pulled through this card appear in this local inventory. This inventory is separate from
-M2Image packages and the MicroRegistry catalog. Converting an OCI image does not
-change the retained original.
+Pulls run as background jobs. Pipe polls the status and retains the transfer ID
+across browser reloads. Jobs stop if the API process stops; downloaded images
+remain on disk. Two pulls may run at once. A retry reuses verified local blobs.
+The Registry screen does not show a local OCI image inventory or conversion panel.
 
-Login tokens are write-only in API responses. They are stored in the same
-owner-only SQLite database as the existing Docker Hub login. Removing a login
-retains local images. Credentials are scoped to their exact registry; HTTPS is
-required for external registries. Pulls verify SHA-256 content digests.
+A pull retains the selected platform's config and compressed layers. It does not
+retain other platforms, signatures, or attestations. These retained images are
+separate from M2Image packages and the MicroRegistry catalog.
+
+Credentials are write-only in API responses. They are stored in the owner-only
+SQLite database. Removing a login retains downloaded images. Credentials are
+scoped to their exact registry, including its port. A custom Harbor hostname must
+be registered before Pipe accepts its tag queries or pull requests. Pulls verify
+SHA-256 content digests.
 
 | Endpoint | Action |
 | --- | --- |
-| `GET /api/pipe/registries` | Saved registry hostnames, providers, and usernames; no tokens |
-| `PUT /api/pipe/registries/{registry}` | Save or rotate `{username, secret}` for Docker Hub, GHCR or ECR |
+| `GET /api/pipe/registries` | Saved registry hosts, providers, and usernames; no secrets |
+| `PUT /api/pipe/registries/{registry}` | Save `{username, secret}`; include `provider: "harbor"` for a custom Harbor host |
 | `DELETE /api/pipe/registries/{registry}` | Remove one saved login |
+| `GET /api/pipe/registries/{registry}/repositories?page=…` | Repository names, `nextPage`, and `listingSupported`; Docker Hub uses the saved username |
 | `GET /api/pipe/registry-tags?reference=…&last=…` | One tag page and optional `nextLast` cursor |
-| `GET /api/pipe/registry-images` | Original OCI images retained on this host |
 | `POST /api/pipe/registry-transfers` | Start `{action: "pull", reference}`; returns 202 |
-| `GET /api/pipe/registry-transfers/{id}` | Transfer snapshot; ID is the POST response's `alias` |
+| `GET /api/pipe/registry-transfers/{id}` | Transfer status; ID is the POST response's `alias` |
+| `GET /api/pipe/registry-images` | Retained OCI image metadata for API clients |
 
-The existing `/api/oci/inspect` and `/api/oci/import` endpoints also use these
-saved registry logins. MicroService deployment uses the matching registry login
-as well. Docker Hub logins saved or removed through Pipe use the same credential
-as `/api/microregistry/docker-hub`. The list includes an existing Docker Hub login
-as `docker.io` without exposing its token. The API also accepts the registry
-alias `registry-1.docker.io` without creating a second login.
-See the [Docker Hub token documentation](https://docs.docker.com/security/access-tokens/),
-[GHCR authentication documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
-and [ECR authentication documentation](https://docs.aws.amazon.com/AmazonECR/latest/userguide/registry_auth.html)
-for account permissions and token issuance.
+Harbor discovery uses its `/api/v2.0/repositories` API. Tag lookups and pulls use
+its OCI Distribution API and registry token service. Catalog pagination does not
+follow provider-supplied URLs with saved credentials.
 
 Run the isolated dashboard tests with `npm run test:pipe --prefix firecrab-e2e`.
-They start their own Vite server on port 8096 and use API fixtures. Backend
-registry tests use loopback HTTP registries with Basic and Bearer authentication;
-they cover tag paging, pulls, token-service checks, saved credentials, and API
-origin protection. Live Docker Hub/GHCR/ECR account pulls require operator-supplied
-credentials and are not part of these fixture tests.
+They use their own Vite server on port 8096 and API fixtures. Backend tests use
+loopback registries and catalog services. Live integration checks require a
+running registry and credentials.
