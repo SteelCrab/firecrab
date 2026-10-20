@@ -36,9 +36,9 @@ export default function PipeAppPicker({ id, label, apps, selected, preserved = [
 
   return <fieldset className="field pipe-app-picker pipe-targets" disabled={disabled} aria-describedby={`${id}-help`}>
     <legend>{label}</legend>
-    {loading ? <p className="poll-note" role="status">{t("Loading VMs…", "VM 목록을 불러오는 중이다.")}</p>
-      : unavailable ? <p className="field-error" role="status">{t("VMs are unavailable. Restore the API connection to select apps.", "VM 목록을 확인할 수 없다. API 연결이 복구되면 앱을 선택한다.")}</p>
-      : !apps.length ? <p className="poll-note">{t("No VMs. Create and start a VM to select an app.", "선택할 VM이 없다. VM을 만든 뒤 시작한다.")}</p> : null}
+    {loading ? <p className="poll-note" role="status">{t("Loading VMs…", "VM 조회 중…")}</p>
+      : unavailable ? <p className="field-error" role="status">{t("VMs are unavailable.", "VM 조회 실패")}</p>
+      : !apps.length ? <p className="poll-note">{t("No VMs.", "VM이 없다.")}</p> : null}
     {choices.length > 0 && <div className="pipe-app-list">
       {choices.map(app => {
         const checked = app.address !== null && selected.includes(app.address);
@@ -51,7 +51,7 @@ export default function PipeAppPicker({ id, label, apps, selected, preserved = [
         </label>;
       })}
     </div>}
-    <span className="poll-note" id={`${id}-help`}>{t("Select registered TCP app ports. Multiple apps share requests. Missing ports can be added in the VM's TCP port forwarding settings.", "등록된 TCP 앱 포트를 선택한다. 여러 앱으로 요청을 분산한다. 포트가 없으면 VM의 TCP 포트포워딩 설정에 추가한다.")}</span>
-    {selected.length > 0 && !canUsePipeApps(apps, selected, preserved) && <span className="field-error">{t("A selected VM stopped or its address changed. Select a running app again.", "선택한 VM이 중지되었거나 주소가 바뀌었다. 실행 중인 앱을 다시 선택한다.")}</span>}
+    <span className="poll-note" id={`${id}-help`}>{t("Ports: VM → TCP port forwarding", "포트 추가: VM → TCP 포트포워딩")}</span>
+    {selected.length > 0 && !canUsePipeApps(apps, selected, preserved) && <span className="field-error">{t("Select a running app again.", "실행 중인 앱을 다시 선택한다.")}</span>}
   </fieldset>;
 }

@@ -84,16 +84,15 @@ export default function PipeCards({ snapshot, error }: Props) {
   }
 
   const cards: Card[] = [
-    { id: "route", title: "Route", description: t("Nginx status and domain/path routing to VM apps", "Nginx 상태와 도메인·경로별 요청 전달"), ...(unknown ?? route()) },
-    { id: "registry", title: "Pipe Registry", description: t("Pull images from external container registries", "외부 컨테이너 레지스트리에서 이미지 가져오기"), ...registry() },
-    { id: "firecrab-tunnel", title: "Firecrab Tunnel", description: t("Connect apps or routes to a fixed address with a token", "토큰으로 앱 또는 라우트를 고정 주소에 연결"), ...(unknown ?? firecrab()) },
-    { id: "quick-tunnel", title: "Cloudflare Quick Tunnel", description: t("Publish apps or routes on temporary URLs", "앱 또는 라우트를 임시 주소로 공개"), ...(unknown ?? quick()) },
-    { id: "named-tunnel", title: "Cloudflare Named Tunnel", description: t("Publish route domains through your Cloudflare domain", "내 Cloudflare 도메인으로 라우트 공개"), ...(unknown ?? named()) },
+    { id: "route", title: "Route", description: t("Domain · path", "도메인 · 경로"), ...(unknown ?? route()) },
+    { id: "registry", title: "Pipe Registry", description: t("Image pull", "이미지 가져오기"), ...registry() },
+    { id: "firecrab-tunnel", title: "Firecrab Tunnel", description: t("Fixed address", "고정 주소"), ...(unknown ?? firecrab()) },
+    { id: "quick-tunnel", title: "Cloudflare Quick Tunnel", description: t("Temporary URL", "임시 주소"), ...(unknown ?? quick()) },
+    { id: "named-tunnel", title: "Cloudflare Named Tunnel", description: t("Custom domain", "사용자 도메인"), ...(unknown ?? named()) },
   ];
 
   return <section className="panel" aria-label="Pipe">
-    <h2 className="panel-title"><span>Pipe</span><span className="poll-note">{t("Firecrab integrations", "Firecrab 연동 서비스")}</span></h2>
-    <p className="pipe-description">{t("Open a card to use that service.", "카드를 눌러 서비스를 연다.")}</p>
+    <h2 className="panel-title"><span>Pipe</span></h2>
     {error && <div className="banner error" role="alert">{error}</div>}
     <ul className="pipe-cards">
       {cards.map(card => <li key={card.id}>

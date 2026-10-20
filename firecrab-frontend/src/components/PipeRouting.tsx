@@ -93,8 +93,7 @@ export default function PipeRouting({ snapshot, busy, apps, vmsLoading, vmsUnava
   const changing = ["activating", "deactivating", "reloading"].includes(state);
   const ready = !!saved && snapshot.nginxAvailable && status?.loadState === "loaded";
   return <section className="panel" aria-label="Route">
-    <h2 className="panel-title"><span>Route</span><span className="poll-note">{t("Nginx routing and load balancing", "Nginx 요청 전달과 요청 분산")}</span></h2>
-    <p className="pipe-description">{t("Public domain or tunnel URL → Nginx → VM apps. Nginx routes requests by domain and path and distributes them between selected apps.", "공개 도메인 또는 터널 주소 → Nginx → VM 앱. Nginx가 도메인과 경로에 따라 요청을 전달하고 선택한 앱으로 분산한다.")}</p>
+    <h2 className="panel-title"><span>Route</span></h2>
     {error && <div className="banner error" role="alert">{error}</div>}
     {notice && <div className="banner info" role="status">{notice}</div>}
     <div className="table-scroll pipe-status-scroll"><table className="vm-table pipe-status-table"><thead><tr><th>{t("Service", "서비스")}</th><th>{t("State", "상태")}</th><th>PID</th><th className="actions">{t("Actions", "작업")}</th></tr></thead><tbody>
@@ -112,7 +111,6 @@ export default function PipeRouting({ snapshot, busy, apps, vmsLoading, vmsUnava
       {listenInput !== null && <tr className="pipe-nginx-editor-row"><td colSpan={4}>
         <form id="pipe-listen-editor" className="pipe-nginx-editor" aria-labelledby="pipe-nginx-title" onSubmit={save}>
           <h3 id="pipe-nginx-title">{t("Nginx settings", "Nginx 설정")}</h3>
-          <p className="pipe-description">{t("Set the address where Nginx receives requests inside the management VM.", "관리 VM 안에서 Nginx가 요청을 받을 주소를 설정한다.")}</p>
           <div className="pipe-controls">
             <label className="field"><span>{t("Listen address", "수신 주소")}</span><input aria-label={t("Listen address", "수신 주소")} value={listenInput} disabled={busy} onChange={event => setListenInput(event.target.value)} autoFocus /></label>
             <button className="btn primary" type="submit" disabled={saveDisabled}>{busy ? t("Saving…", "저장 중…") : t("Save", "저장")}</button>
@@ -128,8 +126,6 @@ export default function PipeRouting({ snapshot, busy, apps, vmsLoading, vmsUnava
         {!editorOpen && dirty && <button className="btn primary" type="button" disabled={saveDisabled} onClick={() => void save()}>{busy ? t("Saving…", "저장 중…") : t("Save", "저장")}</button>}
         <button className="btn" type="button" disabled={busy || editorOpen} aria-expanded={editorOpen} aria-controls="pipe-route-editor" onClick={() => setEditing("new")}>{t("Add route", "라우트 추가")}</button>
       </span></h3>
-      <p className="pipe-description">{t("Routes send requests to apps based on the domain and URL path. Select multiple apps to distribute requests between them.", "도메인과 URL 경로에 따라 요청을 앱으로 전달한다. 앱을 여러 개 선택하면 요청을 나누어 처리한다.")}</p>
-      <p className="pipe-domain-note">{t("For a public domain, enter the full hostname, such as my-app.firecrab.dev. Direct access requires DNS and HTTPS to reach Nginx. Use a tunnel card in Pipe to connect a private Nginx listener.", "공개 도메인은 my-app.firecrab.dev처럼 전체 이름을 입력한다. 직접 접속에는 Nginx로 이어지는 DNS와 HTTPS 설정이 필요하다. 내부 Nginx는 Pipe의 Tunnel 카드에서 공개할 수 있다.")}</p>
       {editorOpen && <form id="pipe-route-editor" className="create-grid pipe-route-form" onSubmit={save}>
         <div className="field"><label htmlFor="pipe-domain">{t("Domain", "도메인")}</label><input id="pipe-domain" placeholder="app.example.com" value={host} onChange={event => setHost(event.target.value)} required disabled={busy} autoFocus /></div>
         <div className="field"><label htmlFor="pipe-path">{t("Path prefix", "경로 시작")}</label><input id="pipe-path" placeholder="/api" value={path} onChange={event => setPath(event.target.value)} required pattern="/.*" disabled={busy} /></div>
@@ -138,7 +134,7 @@ export default function PipeRouting({ snapshot, busy, apps, vmsLoading, vmsUnava
       </form>}
       {draft.routes.length > 0 ? <div className="table-scroll"><table className="vm-table pipe-route-table"><thead><tr><th>{t("Domain", "도메인")}</th><th>{t("Path", "경로")}</th><th>{t("App addresses", "앱 주소")}</th><th>{t("Actions", "작업")}</th></tr></thead><tbody>
         {draft.routes.map((route, index) => <tr key={`${index}:${route.host}:${route.pathPrefix}`}><td>{route.host}</td><td>{route.pathPrefix}</td><td className="pipe-addresses">{route.upstreams.map(address => <div key={address}>{address}</div>)}</td><td><div className="pipe-row-actions"><button className="btn" type="button" disabled={busy} onClick={() => edit(route, index)}>{t("Edit", "수정")}</button><button className="btn" type="button" disabled={busy} onClick={() => { change({ ...draft, routes: draft.routes.filter((_, row) => row !== index) }); clearEditor(); }}>{t("Remove", "제거")}</button></div></td></tr>)}
-      </tbody></table></div> : <div className="empty">{t("No routes. Add a domain, path and app addresses.", "라우트가 없다. 도메인, 경로, 앱 주소를 추가한다.")}</div>}
+      </tbody></table></div> : <div className="empty">{t("No routes.", "등록한 라우트가 없다.")}</div>}
     </section>
   </section>;
 }

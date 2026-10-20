@@ -322,7 +322,7 @@ test.describe("Pipe dashboard @dashboard", () => {
     await panel.getByRole("button", { name: "Add fixed address" }).click();
     await expect(panel.getByLabel("Quick Tunnel", { exact: true })).toHaveCount(0);
     await expect(panel.getByLabel("Subdomain", { exact: true })).toHaveCount(0);
-    await expect(panel.getByRole("link", { name: "Get a token from the dashboard", exact: true })).toHaveAttribute("href", "https://firecrab.dev/dashboard/");
+    await expect(panel.getByRole("link", { name: "Get token", exact: true })).toHaveAttribute("href", "https://firecrab.dev/dashboard/");
     await expect(panel.getByLabel("Connection token", { exact: true })).toHaveAttribute("type", "password");
     await panel.getByLabel("Connection token", { exact: true }).fill(CONNECTION_TOKEN);
     await expect(panel.getByLabel("Connection target").locator("option")).toHaveText(["VM apps", "Nginx routes"]);
@@ -806,10 +806,10 @@ test.describe("Pipe dashboard @dashboard", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     const mock = await open(page, { locale: "ko" });
     const routes = page.getByRole("region", { name: "라우트", exact: true });
-    await expect(routes).toContainText("도메인과 URL 경로에 따라 요청을 앱으로 전달한다.");
+    await expect(routes).not.toContainText("도메인과 URL 경로에 따라 요청을 앱으로 전달한다.");
     await routes.getByRole("button", { name: "제거", exact: true }).click();
     await expect(routes.getByRole("status")).toHaveCount(0);
-    await expect(routes.getByText("라우트가 없다. 도메인, 경로, 앱 주소를 추가한다.", { exact: true })).toBeVisible();
+    await expect(routes.getByText("등록한 라우트가 없다.", { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await routes.screenshot({ path: info.outputPath("pipe-unsaved-mobile-ko.png") });
     await routes.getByRole("button", { name: "저장", exact: true }).click();

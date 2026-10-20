@@ -87,7 +87,7 @@ export default function CloudflareConnect({ config, snapshot, busy, apps, vmsLoa
       <img className="panel-brand-icon" src="/cloudflare.svg" alt="" width={28} height={28} />Cloudflare Quick Tunnel
     </span><button className="btn" type="button" disabled={busy || !!editor || !snapshot || tunnels.length >= 16} aria-expanded={!!editor} aria-controls="quick-tunnel-editor"
       onClick={() => { setEditor({ id: null, name: "", kind: "apps", addresses: [], host: "" }); setError(null); setNotice(null); }}>{t("Add tunnel", "터널 추가")}</button></h2>
-    <p className="pipe-description">{t("Publish VM apps or saved Nginx routes through temporary public URLs. Each tunnel has its own URL and service controls. Restarting a tunnel changes its URL.", "VM 앱이나 저장된 Nginx 라우트를 임시 주소로 공개한다. 터널마다 주소와 실행 상태를 따로 관리한다. 터널을 재시작하면 주소가 바뀐다.")}</p>
+    <p className="pipe-description">{t("Restarting changes the URL.", "재시작하면 주소가 바뀐다.")}</p>
     {error && <div className="banner error" role="alert">{error}</div>}
     {notice && <div className="banner info" role="status">{notice}</div>}
     {editor && <form id="quick-tunnel-editor" className="create-grid quick-tunnel-form" onSubmit={event => { event.preventDefault(); save(); }}>
@@ -102,18 +102,18 @@ export default function CloudflareConnect({ config, snapshot, busy, apps, vmsLoa
             {hosts.map(host => <option key={host} value={host}>{host}</option>)}
             {editor.host && !hosts.includes(editor.host) && <option value={editor.host}>{editor.host}</option>}
           </select>
-          <span className="poll-note">{t("Publishes all saved paths for this domain. Route changes update the tunnel's destinations without changing its URL.", "이 도메인에 저장된 모든 경로를 공개한다. 라우트를 수정하면 같은 임시 주소에서 변경된 앱으로 요청을 전달한다.")}</span>
+          <span className="poll-note">{t("Publishes all paths.", "모든 경로 공개")}</span>
           {!!editor.host && hosts.includes(editor.host) && <span className="quick-tunnel-paths">{config.routes.filter(route => route.host === editor.host).map(route => route.pathPrefix).join(", ")}</span>}
           {!hosts.length && <span className="field-error">{t("Save a route before selecting Nginx routes.", "Nginx 라우트를 선택하려면 먼저 라우트를 저장한다.")}</span>}
         </div>}
-      {migrating && <p className="poll-note quick-tunnel-submit">{t("Saving moves this existing tunnel into the list management mode. Its temporary URL changes once.", "저장하면 기존 터널을 목록 관리 방식으로 전환한다. 임시 주소가 한 번 바뀐다.")}</p>}
+      {migrating && <p className="poll-note quick-tunnel-submit">{t("Saving changes the URL.", "저장하면 주소가 바뀐다.")}</p>}
       <div className="pipe-controls quick-tunnel-submit"><button className="btn primary" type="submit" disabled={saveDisabled}>
         {busy ? t("Saving…", "저장 중…") : editor.id ? t("Save", "저장") : t("Create temporary URL", "임시 주소 만들기")}
       </button><button className="btn" type="button" disabled={busy} onClick={() => setEditor(null)}>{t("Cancel", "취소")}</button></div>
     </form>}
-    {tunnels.length >= 16 && <p className="poll-note">{t("You can keep up to 16 Quick Tunnels.", "Quick Tunnel은 최대 16개까지 저장한다.")}</p>}
-    {!snapshot ? <p className="poll-note">{t("Loading tunnels…", "터널 목록을 불러오는 중이다.")}</p>
-      : tunnels.length === 0 ? <div className="empty">{t("No Quick Tunnels. Add a tunnel to publish apps or Nginx routes.", "Quick Tunnel이 없다. 터널을 추가해 앱이나 Nginx 라우트를 공개한다.")}</div>
+    {tunnels.length >= 16 && <p className="poll-note">{t("Maximum 16 tunnels.", "최대 16개")}</p>}
+    {!snapshot ? <p className="poll-note">{t("Loading tunnels…", "터널 조회 중…")}</p>
+      : tunnels.length === 0 ? <div className="empty">{t("No Quick Tunnels.", "등록한 Quick Tunnel이 없다.")}</div>
         : <div className="table-scroll"><table className="vm-table quick-tunnel-table"><thead><tr>
           <th>{t("Name", "이름")}</th><th>{t("Target", "공개 대상")}</th><th>{t("Public URL", "공개 주소")}</th><th>{t("State", "상태")}</th><th className="actions">{t("Actions", "작업")}</th>
         </tr></thead><tbody>{tunnels.map(tunnel => {
