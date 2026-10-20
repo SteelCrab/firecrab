@@ -96,10 +96,22 @@ the protected manifest. View saved routes in the Pipe dashboard.
 
 ## Dashboard
 
-Select **Pipe** in the existing dashboard menu. The page uses the dashboard's
-shared panels, form fields, tables, service badges, colors, fonts, and navigation.
+Select **Pipe** in the existing dashboard menu. The page lists five service
+cards. Each card shows a short summary and the service's current state:
 
-Open **⋯** in the Nginx row and select **Edit** to expand **Nginx settings**
+| Card | Use |
+| --- | --- |
+| **Route** | Nginx service state and domain/path routes to VM apps |
+| **Pipe Registry** | Container registry logins and image pulls |
+| **Firecrab Tunnel** | Fixed addresses issued with a dashboard token |
+| **Cloudflare Quick Tunnel** | Temporary public URLs |
+| **Cloudflare Named Tunnel** | Stable public addresses on an owned Cloudflare domain |
+
+Select a card to open that service. Its controls are available only on the
+card's page, such as `#/pipe/route`. Select **← Pipe** to return to the cards.
+Leaving a card with unsaved changes asks for confirmation. Leaving discards them.
+
+Open the **Route** card. Open **⋯** in the Nginx row and select **Edit** to expand **Nginx settings**
 directly below that row. Its listen address, **Save**, and **Cancel** are grouped
 inside the editor. Select **Save** to apply or **Cancel** to discard the address
 change. Either action closes the editor. Cancelling preserves pending route edits.
@@ -109,7 +121,9 @@ The listen address stays hidden when the editor is closed.
 2. Enter the domain and path, then select one or more registered TCP app ports.
 3. Select **Save** once to validate and apply the route. The editor closes on success.
 
-Use each service row's **⋯** menu for **Start**, **Stop**, and **Restart**. These
+Use the **⋯** menu of the Nginx row on the **Route** card, or of the
+Cloudflare Tunnel row on the **Cloudflare Named Tunnel** card, for **Start**,
+**Stop**, and **Restart**. These
 controls use the saved configuration. They do not save unfinished address, route,
 or tunnel changes. The page reports that the request was accepted, then polls the
 unit state. A start or restart may take a few seconds.
@@ -136,13 +150,13 @@ Open [the connection dashboard](https://firecrab.dev/dashboard/) to issue a toke
 Under **Firecrab Tunnel → Add fixed address**, paste it and select
 **VM apps** or saved **Nginx routes** in **Connection target**. There is no
 subdomain input or separate Quick Tunnel input in Firecrab Tunnel. Use the
-**Cloudflare Quick Tunnel** panel to create and manage temporary connectors.
+**Cloudflare Quick Tunnel** card to create and manage temporary connectors.
 
 The public address is assigned by the token service. Appending a saved path uses
 that route group; if it has `/api` but no `/`, the base address can return 404.
-Saved legacy Quick Tunnels remain available in their Cloudflare panel. See
+Saved legacy Quick Tunnels remain available on the Cloudflare Quick Tunnel card. See
 [Firecrab Tunnel](firecrab-tunnel.md) for issuance, revocation and continuity.
-The **Cloudflare Tunnel** panel also connects an owned Cloudflare domain using
+The **Cloudflare Named Tunnel** card connects an owned Cloudflare domain using
 a scoped API token and a saved Nginx route. It creates DNS and retains a stable
 public address. Its connector runs alongside the existing Quick Tunnels.
 Existing named tunnel manifests remain compatible with the CLI.
@@ -242,3 +256,8 @@ HTTPS requests. These local tests do not claim that external connection.
 References: [Nginx reload](https://nginx.org/en/docs/control.html),
 [Nginx upstreams](https://nginx.org/en/docs/http/ngx_http_upstream_module.html),
 and [locally managed Cloudflare tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/local-management/).
+
+## Pipe Registry
+
+The **Pipe Registry** card pulls OCI images from Docker Hub, GHCR and Amazon ECR.
+See [Pipe Registry](pipe-registry.md) for logins, transfers, and its API.

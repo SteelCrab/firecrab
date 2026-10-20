@@ -2110,6 +2110,17 @@ table.image-table .image-package-url a:hover {
 }
 
 /* Pipe uses the existing panels, tables and field tokens. */
+.pipe-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr)); gap: 1rem; margin: 0; padding: 0; list-style: none; }
+.pipe-card { display: flex; flex-direction: column; gap: .5rem; height: 100%; box-sizing: border-box; padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg-panel); color: var(--ink); text-decoration: none; transition: border-color .15s ease, background-color .15s ease; }
+.pipe-card:hover { border-color: var(--shell); background: var(--bg); }
+.pipe-card-head { display: flex; align-items: center; gap: .6rem; }
+.pipe-card-icon { width: 1.75rem; height: 1.75rem; flex: none; object-fit: contain; border-radius: 4px; color: var(--ember); }
+.pipe-card-title { font-size: .95rem; font-weight: 600; }
+.pipe-card-description { flex: 1; color: var(--shell); font-size: .82rem; line-height: 1.5; }
+.pipe-back a { color: var(--ember); font: .8rem var(--font-mono); letter-spacing: .08em; text-decoration: none; }
+.pipe-back a:hover { text-decoration: underline; }
+.pipe-subsection { margin-top: 2rem; }
+@media (prefers-reduced-motion: reduce) { .pipe-card { transition: none; } }
 .quick-tunnel-form { margin-top: 1rem; }
 .quick-tunnel-url { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
 .quick-tunnel-url > a { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; font: .85rem var(--font-mono); }
@@ -2190,3 +2201,17 @@ table.image-table .image-package-url a:hover {
 .named-tunnel-addresses .pipe-url > a { font: .85rem var(--font-mono); }
 
 .pipe-domain-note { margin: 0 0 1rem; color: var(--ink); font-size: .8rem; line-height: 1.6; }
+
+/* Registry connections share Pipe's fields and table controls. */
+.registry-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin: 16px 0; }
+.registry-wide { grid-column: 1 / -1; }
+.registry-form .field { min-width: 0; }
+.registry-form .field > span { color: var(--shell); font-family: var(--font-mono); font-size: .75rem; }
+.registry-form .pipe-row-actions { flex-wrap: wrap; }
+.registry-table { min-width: 44rem; }
+.registry-reference { overflow-wrap: anywhere; min-width: 16rem; max-width: 420px; }
+.registry-reference small { display: block; font-size: 11px; opacity: .65; margin-top: 4px; }
+.registry-log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 12px; }
+
+.pipe-registries h3 { margin: 1.25rem 0 .65rem; font-size: .9rem; font-weight: 600; }
+.registry-help { color: var(--shell); font-size: .8rem; line-height: 1.6; overflow-wrap: anywhere; }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { connectCloudflare, disconnectCloudflare, getCloudflareZones, type CloudflareZone, type PipeConfig, type PipeSnapshot } from "../api/pipe";
+import { connectCloudflare, controlPipeService, disconnectCloudflare, getCloudflareZones, type CloudflareZone, type PipeConfig, type PipeServiceAction, type PipeSnapshot } from "../api/pipe";
 import { useI18n } from "../i18n";
 import PipeCopyButton from "./PipeCopyButton";
+import PipeServiceMenu from "./PipeServiceMenu";
 
 interface Props {
   config: PipeConfig;
@@ -19,17 +20,21 @@ export default function NamedCloudflareTunnel({ config, snapshot, busy, onBusy, 
   const [zoneId, setZoneId] = useState("");
   const [host, setHost] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const active = useRef(false);
   const zone = zones.find(value => value.id === zoneId);
   const hosts = [...new Set(config.routes.map(route => route.host))].filter(host => zone && (host === zone.name || host.endsWith("." + zone.name)));
   const configured = config.tunnel;
   const urls = configured?.hostname ? [configured.hostname] : configured ? [...new Set(config.routes.map(route => route.host))] : [];
-  const state = snapshot?.units.find(unit => unit.unit === "firecrab-tunnel.service")?.activeState;
+  const unit = snapshot?.units.find(unit => unit.unit === "firecrab-tunnel.service");
+  const state = unit?.activeState;
+  const changing = ["activating", "deactivating", "reloading"].includes(state ?? "");
+  const ready = !!snapshot?.cloudflaredAvailable && unit?.loadState === "loaded";
   const changed = !configured && !!token;
   useEffect(() => { onUnsavedChange(changed); return () => onUnsavedChange(false); }, [changed, onUnsavedChange]);
 
-  function clear() { setToken(""); setZones([]); setZoneId(""); setHost(""); setError(null); }
+  function clear() { setToken(""); setZones([]); setZoneId(""); setHost(""); setError(null); setNotice(null); }
   async function load() {
     if (active.current || busy || !token.trim()) return;
     active.current = true; onBusy(true); setLoading(true); setError(null);
@@ -44,6 +49,20 @@ export default function NamedCloudflareTunnel({ config, snapshot, busy, onBusy, 
     catch (failure) { setError((failure as Error).message); }
     finally { active.current = false; onBusy(false); }
   }
+  async function control(action: PipeServiceAction) {
+    if (active.current || busy) return;
+    active.current = true; onBusy(true); setError(null); setNotice(null);
+    try {
+      onConnected(await controlPipeService("tunnel", action));
+      const messages = {
+        start: t("Cloudflare Tunnel start requested.", "Cloudflare Tunnel 시작을 요청했다."),
+        stop: t("Cloudflare Tunnel stop requested.", "Cloudflare Tunnel 중지를 요청했다."),
+        restart: t("Cloudflare Tunnel restart requested.", "Cloudflare Tunnel 재시작을 요청했다."),
+      };
+      setNotice(messages[action]);
+    } catch (failure) { setError((failure as Error).message); }
+    finally { active.current = false; onBusy(false); }
+  }
   async function disconnect() {
     if (active.current || busy) return;
     active.current = true; onBusy(true); setError(null);
@@ -51,11 +70,22 @@ export default function NamedCloudflareTunnel({ config, snapshot, busy, onBusy, 
     catch (failure) { setError((failure as Error).message); }
     finally { active.current = false; onBusy(false); }
   }
-  return <section className="panel cloudflare-connect" aria-label="Cloudflare Tunnel">
-    <h2 className="panel-title"><span className="panel-title-with-icon"><img className="panel-brand-icon" src="/cloudflare.svg" alt="" width={28} height={28} />Cloudflare Tunnel</span></h2>
+  return <section className="panel cloudflare-connect" aria-label="Cloudflare Named Tunnel">
+    <h2 className="panel-title"><span className="panel-title-with-icon"><img className="panel-brand-icon" src="/cloudflare.svg" alt="" width={28} height={28} />Cloudflare Named Tunnel</span></h2>
     <p className="pipe-description">{t("Connect an existing domain to Nginx through Cloudflare. Select a saved route domain to publish its paths. The public address stays the same when this tunnel restarts.", "기존 도메인을 Cloudflare를 통해 Nginx에 연결한다. 저장된 라우트 도메인을 선택하면 해당 경로를 공개한다. 재시작해도 공개 주소를 유지한다.")}</p>
     {error && <div className="banner error" role="alert">{error}</div>}
+    {notice && <div className="banner info" role="status">{notice}</div>}
     {configured ? <>
+      <div className="table-scroll pipe-status-scroll"><table className="vm-table pipe-status-table"><thead><tr><th>{t("Service", "서비스")}</th><th>{t("State", "상태")}</th><th>PID</th><th className="actions">{t("Actions", "작업")}</th></tr></thead><tbody><tr>
+        <td>Cloudflare Tunnel</td>
+        <td><span className={`state-badge${state === "active" ? " running" : state === "failed" ? " error" : ""}`}>{unit ? state : t("Unavailable", "확인 불가")}</span></td>
+        <td>{unit?.mainPid || "—"}</td>
+        <td className="actions"><PipeServiceMenu label={t("Cloudflare Tunnel actions", "Cloudflare Tunnel 작업")} disabled={busy || !snapshot || changing} items={[
+          { label: t("Start", "시작"), disabled: !ready || state === "active", onSelect: () => void control("start") },
+          { label: t("Stop", "중지"), disabled: unit?.loadState !== "loaded" || !["active", "failed"].includes(state ?? ""), danger: true, onSelect: () => void control("stop") },
+          { label: t("Restart", "재시작"), disabled: !ready, onSelect: () => void control("restart") },
+        ]} /></td>
+      </tr></tbody></table></div>
       <div className="named-tunnel-addresses">{urls.map(host => <div className="pipe-url" key={host}><a href={"https://" + host} target="_blank" rel="noreferrer">{"https://" + host}</a><PipeCopyButton url={"https://" + host} onError={setError} /></div>)}</div>
       <p className="poll-note">{state === "active" ? t("Connector running. Check the public address after DNS becomes available.", "연결 프로그램이 실행 중이다. DNS가 반영되면 공개 주소로 확인한다.") : t("The connector is stopped or unavailable. Use its service actions above to start it.", "연결 프로그램이 중지되었거나 확인되지 않는다. 위 서비스 표의 작업 메뉴에서 시작한다.")}</p>
       <div className="pipe-controls"><button className="btn danger" type="button" disabled={busy} onClick={() => void disconnect()}>{t("Disconnect", "연결 해제")}</button></div>

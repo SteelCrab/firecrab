@@ -242,6 +242,23 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::pipe::inspect).put(handlers::pipe::apply),
         )
         .route("/api/pipe/disable", post(handlers::pipe::disable))
+        .route("/api/pipe/registries", get(handlers::registries::list))
+        .route(
+            "/api/pipe/registries/{registry}",
+            axum::routing::put(handlers::registries::save).delete(handlers::registries::delete),
+        )
+        .route(
+            "/api/pipe/registry-images",
+            get(handlers::registries::images),
+        )
+        .route(
+            "/api/pipe/registry-transfers",
+            post(handlers::registries::transfer),
+        )
+        .route(
+            "/api/pipe/registry-transfers/{id}",
+            get(handlers::registries::job),
+        )
         // GET and POST share one path, matching this router's existing shape
         // for "read this resource / start work on it" pairs such as
         // `/api/images/{alias}/install`.
@@ -444,6 +461,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // same concurrency pool, body limit, CORS and origin checks as other REST.
     let inspection = Router::new()
         .route("/api/oci/inspect", get(handlers::oci::inspect_oci_image))
+        .route("/api/pipe/registry-tags", get(handlers::registries::tags))
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -1245,6 +1263,54 @@ mod tests {
             preflight.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
             Some(&HeaderValue::from_static("http://localhost:8080"))
         );
+    }
+    #[tokio::test]
+    async fn registry_routes_keep_origin_protection_and_never_return_login_secrets() {
+        use axum::http::StatusCode;
+        use tower::ServiceExt;
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
+                .unwrap();
+        let app = build_router(test_state(dir.path()).await, &config);
+        for (origin, status) in [
+            ("https://untrusted.invalid", StatusCode::FORBIDDEN),
+            ("http://localhost:8080", StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/api/pipe/registries/ghcr.io")
+                        .header("origin", origin)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"username":"octocat","secret":"test-token"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let body = axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains("test-token"));
+        }
+        let (status, body) = get(&app, "/api/pipe/registries").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("octocat"));
+        assert!(!body.contains("test-token"));
+        let (status, body) = get(&app, "/api/pipe/registry-images").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "[]");
+        let (status, _) = get(
+            &app,
+            "/api/pipe/registry-tags?reference=untrusted.invalid/team/app:v1",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }
 

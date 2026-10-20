@@ -199,7 +199,7 @@ export default function App() {
     return <Console vmId={route.vmId} onClose={closeConsole} />;
   }
 
-  const view = route.kind === "vm-new" ? "vms" : route.view;
+  const view = route.kind === "vm-new" ? "vms" : route.kind === "pipe-card" ? "pipe" : route.view;
 
   return (
     <Shell view={view} onSelectView={selectView}>
@@ -241,7 +241,7 @@ export default function App() {
             the moment you navigate away. */}
         {view === "networks" && <MicroNetworks />}
         {view === "services" && <MicroServices />}
-        {view === "pipe" && <Pipe vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />}
+        {view === "pipe" && <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />}
         {view === "storages" && <MicroStorages />}
         {view === "images" && <Images />}
         {view === "kernels" && <Kernels />}
