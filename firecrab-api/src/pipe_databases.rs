@@ -389,7 +389,8 @@ impl DatabaseConnection {
         let pairs: Vec<(String, String)> = match self {
             Self::Postgres(c) => sqlx::query_as("SELECT table_schema::text, table_name::text FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema') ORDER BY table_schema, table_name LIMIT 501")
                 .persistent(false).fetch_all(c).await?,
-            Self::Mysql(c) => sqlx::query_as("SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME LIMIT 501")
+            // Normalize metadata to nonbinary text before decoding it as String.
+            Self::Mysql(c) => sqlx::query_as("SELECT CAST(TABLE_SCHEMA AS CHAR CHARACTER SET utf8mb4), CAST(TABLE_NAME AS CHAR CHARACTER SET utf8mb4) FROM information_schema.tables WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME LIMIT 501")
                 .persistent(false).fetch_all(c).await?,
         };
         let truncated = pairs.len() > MAX_TABLES;
@@ -408,7 +409,7 @@ impl DatabaseConnection {
         let fields: Vec<(String, String)> = match self {
             Self::Postgres(c) => sqlx::query_as("SELECT column_name::text, data_type::text FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position LIMIT 129")
                 .bind(&request.schema).bind(&request.table).persistent(false).fetch_all(c).await?,
-            Self::Mysql(c) => sqlx::query_as("SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.columns WHERE TABLE_SCHEMA = DATABASE() AND TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION LIMIT 129")
+            Self::Mysql(c) => sqlx::query_as("SELECT CAST(COLUMN_NAME AS CHAR CHARACTER SET utf8mb4), CAST(DATA_TYPE AS CHAR CHARACTER SET utf8mb4) FROM information_schema.columns WHERE TABLE_SCHEMA = DATABASE() AND TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION LIMIT 129")
                 .bind(&request.schema).bind(&request.table).persistent(false).fetch_all(c).await?,
         };
         if fields.is_empty() {
