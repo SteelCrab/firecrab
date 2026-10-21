@@ -1,6 +1,6 @@
 //! IP address and MAC allocation management (IPAM): hands out unique
 //! IPv4/MAC leases from a MicroNetwork's subnet
-//! (`public-docs/networking.md`) — backed by SQLite so allocation
+//! (`public-docs/guides/networking.md`) — backed by SQLite so allocation
 //! is atomic under concurrent VM creation.
 
 use std::collections::HashSet;
@@ -74,7 +74,7 @@ pub struct SubnetSpec {
     pub prefix: u8,
     /// The network's IPv6 plan, when it is dual-stack. IPv4 stays mandatory
     /// — this is a second family, never a replacement
-    /// (`public-docs/networking.md`).
+    /// (`public-docs/guides/networking.md`).
     pub ipv6: Option<MicroNetworkIpv6Spec>,
 }
 
@@ -498,7 +498,7 @@ pub fn ipv6_egress_mode(ipv6: &MicroNetworkIpv6Spec) -> firecrab_api_types::Ipv6
 /// then a 16-bit subnet id). Deterministic in both inputs, so a network keeps
 /// the same prefix across restarts and two networks on one host — or the same
 /// network on two hosts — never share one. ULA scope is what makes this
-/// egress through NAT66 (`public-docs/networking.md`).
+/// egress through NAT66 (`public-docs/guides/networking.md`).
 pub fn auto_ula_prefix(host_id: &str, micro_network_id: Uuid) -> MicroNetworkIpv6Spec {
     let global_id = Sha256::digest(host_id.as_bytes());
     let subnet_id = Sha256::digest(micro_network_id.as_bytes());

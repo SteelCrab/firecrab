@@ -78,7 +78,19 @@ def main():
     (output / "corruption-check.log").write_text(check.stdout + check.stderr)
     if check.returncode != 4 or "Unattached inode" not in check.stdout + check.stderr:
         raise RuntimeError("fixture did not produce the expected unattached-inode failure")
-    for name, source in [("clean", filesystem), ("corrupt", corrupt)]:
+    directory_corrupt = output / "directory-corrupt.ext4"
+    shutil.copyfile(filesystem, directory_corrupt)
+    run([str(args.e2fsprogs / "debugfs"), "-w", "-R", "mkdir /broken", str(directory_corrupt)])
+    # Zero the first directory entry's record length so a read-only check aborts.
+    run([str(args.e2fsprogs / "debugfs"), "-w", "-R",
+         "zap_block -f /broken -o 4 -l 2 -p 0 0", str(directory_corrupt)])
+    check = subprocess.run([str(args.e2fsprogs / "e2fsck"), "-f", "-n", str(directory_corrupt)],
+                           capture_output=True, text=True)
+    (output / "directory-corruption-check.log").write_text(check.stdout + check.stderr)
+    if check.returncode != 12 or "directory corrupted" not in check.stdout + check.stderr:
+        raise RuntimeError("fixture did not produce the expected aborted directory check")
+    for name, source in [("clean", filesystem), ("corrupt", corrupt),
+                         ("directory-corrupt", directory_corrupt)]:
         home = output / name
         for directory in ["system", "data", "runtime/repairs/test"]:
             (home / directory).mkdir(parents=True, mode=0o700)

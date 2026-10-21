@@ -90,7 +90,7 @@ pub(super) fn install_oci_service(
 fn render_service(process: &OciProcessConfig, argv: &[&str]) -> String {
     let mut script = format!(
         "#!{GUEST_TOOLBOX} sh\n\
-         # Firecrab service for the imported image entrypoint (public-docs/oci.md).\n\
+         # Firecrab service for the imported image entrypoint (public-docs/guides/oci.md).\n\
          # This is not PID 1. The injected init keeps DHCP and the readiness sentinel.\n"
     );
     if !process.working_dir.is_empty() {

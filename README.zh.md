@@ -59,7 +59,7 @@
 
 ## 架构
 
-[详细架构](public-docs/architecture.md)：各操作系统的 microManager 层、VM 启动、镜像与内核供应、来宾功能及 CLI 更新流程。
+[详细架构](public-docs/reference/architecture.md)：各操作系统的 microManager 层、VM 启动、镜像与内核供应、来宾功能及 CLI 更新流程。
 
 ### Firecrab 概览
 
@@ -93,7 +93,7 @@ Linux、Apple、Debian 标志来自 simple-icons（CC0），齿轮图标来自 L
 curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
-诊断与卸载选项见[安装指南](public-docs/installation.md)。如果只在 Linux 安装远程 CLI，请使用下面包含校验和验证的 `install-cli.sh` 流程；它自动选择 GNU/musl，默认安装到 `~/.local/bin`。
+诊断与卸载选项见[安装指南](public-docs/getting-started/installation.md)。如果只在 Linux 安装远程 CLI，请使用下面包含校验和验证的 `install-cli.sh` 流程；它自动选择 GNU/musl，默认安装到 `~/.local/bin`。
 
 ### macOS
 
@@ -117,7 +117,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-单独安装 CLI 不会创建管理 VM。microManager 使用 `Virtualization.framework`、独立的持久数据磁盘和常驻 launchd 服务。详见 [macOS 指南](public-docs/micromanager-macos.md)。
+单独安装 CLI 不会创建管理 VM。microManager 使用 `Virtualization.framework`、独立的持久数据磁盘和常驻 launchd 服务。详见 [macOS 指南](public-docs/getting-started/macos.md)。
 
 ### Windows
 
@@ -131,7 +131,7 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 & ./install-cli.ps1
 ```
 
-如果 `firecrab` 尚未加入 `PATH`，请打开新的 PowerShell，然后检查能力并安装。ARM64 安装尚未完成端到端验证。详见 [Windows 指南](public-docs/micromanager-windows.md)。
+如果 `firecrab` 尚未加入 `PATH`，请打开新的 PowerShell，然后检查能力并安装。ARM64 安装尚未完成端到端验证。详见 [Windows 指南](public-docs/getting-started/windows.md)。
 
 ```powershell
 firecrab service doctor
@@ -181,7 +181,7 @@ firecrab service stop
 
 **Windows 限制：** 当前固定的 v0.2.2 来宾在标准 WSL2 中支持 API、镜像与网络，但无法启动 MicroVM。需要包含 net-helper 修复的新来宾发行版；本地 nginx VM 也受影响。Windows CLI 仍可管理受支持的远程 Linux 主机。
 
-状态正常时打开 `http://127.0.0.1:5523/`。创建 MicroNetwork，选择已安装镜像，创建并启动 VM，待状态为 `running` 后打开终端。远程主机请配置 [CLI 主机配置](public-docs/firecrab-cli.md#host-profiles)。
+状态正常时打开 `http://127.0.0.1:5523/`。创建 MicroNetwork，选择已安装镜像，创建并启动 VM，待状态为 `running` 后打开终端。远程主机请配置 [CLI 主机配置](public-docs/reference/cli.md#host-profiles)。
 
 </details>
 
@@ -190,7 +190,7 @@ firecrab service stop
 <details>
 <summary>Linux API 与仪表盘 / macOS 与 Windows CLI</summary>
 
-在仓库根目录使用指定的 [Rust 工具链](rust-toolchain.toml)、Node.js 22 以上和 npm。实际运行 VM 还需要 Linux KVM 及[主机前置条件](public-docs/installation.md)。
+在仓库根目录使用指定的 [Rust 工具链](rust-toolchain.toml)、Node.js 22 以上和 npm。实际运行 VM 还需要 Linux KVM 及[主机前置条件](public-docs/getting-started/installation.md)。
 
 ### Linux
 
@@ -276,7 +276,7 @@ npm run install-browsers --prefix firecrab-e2e
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
 ```
 
-PowerShell 中在 `npm test --prefix firecrab-e2e` 前设置 `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"`。这会跳过来宾启动，不验证 KVM 或 nginx HTTP。实际来宾运行及全部安装检查详见 [TEST.md](public-docs/TEST.md)、[韩语检查清单](public-docs/TEST.ko.md)和 [E2E 指南](firecrab-e2e/README.md)。
+PowerShell 中在 `npm test --prefix firecrab-e2e` 前设置 `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"`。这会跳过来宾启动，不验证 KVM 或 nginx HTTP。实际来宾运行及全部安装检查详见 [TEST.md](public-docs/development/testing.md)、[韩语检查清单](public-docs/development/testing.ko.md)和 [E2E 指南](firecrab-e2e/README.md)。
 
 </details>
 
@@ -325,7 +325,7 @@ curl -I http://FIRECRAB_HOST_IP:8081/
 curl -I http://127.0.0.1:8081/
 ```
 
-OCI import 创建以 `/etc/firecrab/busybox` 为 PID 1 的可启动 rootfs，并将 nginx 入口点作为服务运行。`EXPOSE 80` 不会自动创建主机端口转发。详见 [OCI 镜像](public-docs/oci.md)与[网络指南](public-docs/networking.md)。
+OCI import 创建以 `/etc/firecrab/busybox` 为 PID 1 的可启动 rootfs，并将 nginx 入口点作为服务运行。`EXPOSE 80` 不会自动创建主机端口转发。详见 [OCI 镜像](public-docs/guides/oci.md)与[网络指南](public-docs/guides/networking.md)。
 
 停止示例 VM：
 
@@ -376,9 +376,9 @@ ID；可通过 **阻止互联网/启用互联网** 改变整个网络经 NAT 的
 
 ![M2Image 列表](assets/dashboard/images.png)
 
-请求格式、生命周期语义和错误 envelope 见 [API 指南](public-docs/api.md)。镜像包与浏览器引导
-流程见[镜像指南](public-docs/images.md)。OCI 检查与导入见
-[OCI 镜像指南](public-docs/oci.md)。
+请求格式、生命周期语义和错误 envelope 见 [API 指南](public-docs/reference/api.md)。镜像包与浏览器引导
+流程见[镜像指南](public-docs/guides/images.md)。OCI 检查与导入见
+[OCI 镜像指南](public-docs/guides/oci.md)。
 
 </details>
 

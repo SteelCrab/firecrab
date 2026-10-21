@@ -34,12 +34,12 @@ jobs:
         # rust-toolchain.toml pins the channel and clippy/rustfmt/llvm-tools.
         run: rustup show
 
-      - name: Install dnsmasq, fakeroot
+      - name: Install dnsmasq, fakeroot and Nginx
         # firecrab-helper's dhcp.rs tests shell out to the real
         # `dnsmasq --test` to validate generated configs, and oci::ext4's
         # tests pack a root-owned image via real `fakeroot` (issue #250) —
         # neither preinstalled on the runner image.
-        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot
+        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot nginx
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -65,8 +65,29 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: cargo test + coverage
-        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Unit and Pipe systemd tests + coverage
+        run: |
+          source <(cargo llvm-cov show-env --sh)
+          cargo llvm-cov clean --workspace
+          cargo test --workspace --locked
+          cargo build -p firecrab-cli -p firecrab-api -p firecrab-helper --locked
+          bin="$CARGO_LLVM_COV_TARGET_DIR/debug"
+          # The API runs as nobody; its helper runs in a systemd sandbox that
+          # hides /home. Collect their profiles outside the runner's checkout.
+          profiles=$(mktemp -d /var/tmp/firecrab-coverage.XXXXXX)
+          chmod 1777 "$profiles"
+          trap 'sudo rm -rf "$profiles"' EXIT
+          export LLVM_PROFILE_FILE="$profiles/firecrab-%p-%m.profraw"
+          sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
+          # A second install verifies the cached executable and digest record.
+          sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
+          cloudflared=/var/lib/firecrab-pipe-qa/pipe/cloudflared
+          python3 scripts/test-pipe-runtime.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-cli.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx --cloudflared "$cloudflared"
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper"
+          cp "$profiles"/*.profraw "$CARGO_LLVM_COV_TARGET_DIR/"
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
@@ -129,11 +150,14 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show
 
-      - name: Windows CLI clippy and tests
-        run: |
-          cargo clippy -p firecrab-cli --all-targets -- -D warnings
-          cargo test -p firecrab-cli --locked
-          cargo build -p firecrab-cli --locked
+      - name: Windows CLI clippy
+        run: cargo clippy -p firecrab-cli --all-targets -- -D warnings
+
+      - name: Windows CLI tests
+        run: cargo test -p firecrab-cli --locked
+
+      - name: Windows CLI build
+        run: cargo build -p firecrab-cli --locked
 
       - name: Windows QA runner contract (PowerShell 5.1)
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-ci-qa-windows.ps1
@@ -449,7 +473,7 @@ jobs:
           printf '%s\n' "$out" | grep -q '^\[SKIP\] images: no guest image installed yet'
 
       - name: QA work list (API, no guest boot)
-        # Shared QA IDs from public-docs/qa.md: see scripts/ci-qa-api.sh.
+        # Shared QA IDs from public-docs/development/qa.md: see scripts/ci-qa-api.sh.
         # Leaves the later "ci" / 172.31.0.0/24 smoke network contract unchanged.
         run: |
           mkdir -p target/qa
@@ -510,7 +534,7 @@ jobs:
 
       - name: QA VM lifetime
         timeout-minutes: 30
-        # R1–R7 and X7 from public-docs/qa.md; restarts the installed API.
+        # R1–R7 and X7 from public-docs/development/qa.md; restarts the installed API.
         env:
           FIRECRAB_QA_HELPER_UPGRADE: "1"
         run: scripts/ci-qa-lifetime.sh alpine:3.21
@@ -721,5 +745,7 @@ jobs:
           cache-dependency-path: firecrab-frontend/package-lock.json
 
       - run: npm ci
+      - name: Development dashboard lifecycle with real Vite
+        run: node ../scripts/test-dev-dashboard.mjs
       - run: npm run lint
       - run: npm run build

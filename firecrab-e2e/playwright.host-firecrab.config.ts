@@ -1,7 +1,7 @@
 import { defineConfig } from "@playwright/test";
 import baseConfig from "./playwright.config";
 
-// Both Host panel tests intercept every API request. Only Vite is needed.
+// Host panel tests intercept every API request. Only Vite is needed.
 const servers = Array.isArray(baseConfig.webServer) ? baseConfig.webServer : [];
 const frontend = servers.filter((server) => server.command === "npm run dev");
 if (frontend.length !== 1) {
@@ -10,6 +10,6 @@ if (frontend.length !== 1) {
 
 export default defineConfig({
   ...baseConfig,
-  testMatch: "host-firecrab.spec.ts",
+  testMatch: ["host-firecrab.spec.ts", "manager-resources.spec.ts"],
   webServer: frontend.map((server) => ({ ...server, reuseExistingServer: false })),
 });

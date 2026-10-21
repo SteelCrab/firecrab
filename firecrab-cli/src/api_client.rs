@@ -157,7 +157,6 @@ impl ApiClient {
 
     /// Sends `body` as JSON with `PUT` and deserializes any successful 2xx
     /// response body.
-    #[cfg(test)]
     pub fn put<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
     where
         B: Serialize + ?Sized,

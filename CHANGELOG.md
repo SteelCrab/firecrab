@@ -33,6 +33,22 @@ Entries land here as work merges, and move under the next version heading when t
   `$DATADIR/updates/progress.json` so it survives the restart that ends an
   update.
 
+- The installed MicroManager `micromanager.toml` accepts runtime policy settings.
+  macOS and Windows can disable automatic host-job relaunch. macOS also supports
+  SSH connection reuse, keepalives, configurable tunnel retries, and retaining
+  the VM while SSH reconnects. Runtime edits preserve installation fingerprints
+  and survive explicit install/reinstall; existing TOML files keep working.
+
+- `firecrab pipe install/render/apply/status/disable` manages independent Nginx
+  PipeIngress and cloudflared PipeTunnel systemd units. Nginx routes domains and
+  path prefixes, distributes requests across app addresses, and gracefully reloads
+  while keeping in-flight requests. Failed application restores the previous config.
+  The dashboard's Pipe page edits routes, applies configuration, shows live service
+  states, stops the pipe, and accepts optional tunnel credentials without returning
+  saved secrets. API controls run through the authenticated helper. Native CLI
+  commands forward to the managed Linux guest. `install.sh --with-pipe` adds the
+  OS Nginx package and verified cloudflared binary. See [Service data plane](public-docs/guides/pipe.md).
+
 - The dashboard's Host tab has a Firecrab panel with the version and what
   `firecrab info` prints: the install prefix, data, config and unit
   directories, and the address the API listens on. `GET /api/info` serves the
@@ -55,7 +71,8 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
-- None.
+- The dashboard's VM list shows only a VM's own state: the API label next to it
+  is gone, and the API's reconciliation result for a VM stays in its detail view.
 
 ### Deprecated
 
@@ -68,6 +85,12 @@ Entries land here as work merges, and move under the next version heading when t
   fetches no guest image, so the check passes when any guest rootfs is
   installed and skips, with a hint to use the Images page, when there is none.
   CI used to require that failure after every install.
+- macOS and Windows `service dev` starts the source dashboard on
+  `http://localhost:8080`, checks its API proxy, and keeps it running after the
+  command exits. Development start/stop/restart commands control the dashboard
+  with the guest services. Port conflicts and frontend startup failures fail
+  the command instead of reporting an API-only success.
+
 - macOS service repair prints all six stages. Service start and repair report
   VM/API readiness and elapsed time every ten seconds while waiting. Shutdown
   waits also report launchd/VM state. Local VM/API startup uses a ten-second
@@ -382,9 +405,9 @@ provisioning, compliance artifacts, and release validation.
   preview, clipboard copy commands, and host fingerprint verification ([#186]).
 - VM table row actions are reorganized into a kebab dropdown menu with direct
   SSH connect ([#186]).
-- [`public-docs/dashboard.md`](public-docs/dashboard.md),
-  [`public-docs/api.md`](public-docs/api.md), and
-  [`public-docs/oci.md`](public-docs/oci.md) document the SSH connect panel,
+- [`public-docs/guides/dashboard.md`](public-docs/guides/dashboard.md),
+  [`public-docs/reference/api.md`](public-docs/reference/api.md), and
+  [`public-docs/guides/oci.md`](public-docs/guides/oci.md) document the SSH connect panel,
   endpoints, and guest sshd service ([#186]).
 - Host release archives include `LICENSE`, `THIRD_PARTY_NOTICES.txt`, the
   license inventory, and the GPL-2.0 text required by `extract-vmlinux`;
@@ -453,7 +476,7 @@ provisioning, compliance artifacts, and release validation.
   downloaded POSIX or PowerShell installer ([#254]).
 - Networking, API, and dashboard docs cover IPv6 create-time choice, NAT66 vs
   direct egress, and guest sysctl ([#178]).
-- [`public-docs/ci.md`](public-docs/ci.md) documents the Clippy gate ([#198]).
+- [`public-docs/development/ci.md`](public-docs/development/ci.md) documents the Clippy gate ([#198]).
 
 ## [0.1.2] - 2026-08-21
 
@@ -464,9 +487,9 @@ place, and OCI import provisions its own kernel instead of borrowing a guest ima
 
 - OCI import pairs a digest-pinned MicroRegistry kernel, cached at `.oci/kernel/<arch>/` ([#145]).
 - `FIRECRAB_OCI_KERNEL_PATH` names a host copy of that kernel ([#145]).
-- [`public-docs/oci.md`](public-docs/oci.md) gains a contents table and an import architecture diagram ([#145]).
+- [`public-docs/guides/oci.md`](public-docs/guides/oci.md) gains a contents table and an import architecture diagram ([#145]).
 - `firecrab-cli` workspace crate ships `firecrab doctor`/`info`/`status` ([#152], [#152-comment]).
-- [`public-docs/firecrab-cli.md`](public-docs/firecrab-cli.md) documents the CLI's architecture and all three subcommands ([#152]).
+- [`public-docs/reference/cli.md`](public-docs/reference/cli.md) documents the CLI's architecture and all three subcommands ([#152]).
 - Left nav rail gets solid SVG icons matched to each feature (MicroVM, Networks, Storage, Images, Host), replacing Unicode glyphs ([#165]).
 - `firecrab update --check` compares the installed version with the newest GitHub Release, with human-readable and JSON output ([#163], [#171]).
 - `firecrab update --apply` verifies the matching host bundle and delegates an atomic privileged swap to `firecrab-net-helper` ([#163], [#171]).

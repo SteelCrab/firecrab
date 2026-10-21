@@ -15,7 +15,8 @@
     "test:dashboard": "FIRECRAB_E2E_SKIP_GUEST_BOOT=1 playwright test --grep @dashboard",
     "test:headed": "playwright test --headed",
     "install-browsers": "playwright install chromium",
-    "test:host": "playwright test --config playwright.host-firecrab.config.ts"
+    "test:host": "playwright test --config playwright.host-firecrab.config.ts",
+    "test:services": "playwright test --config playwright.micro-services.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

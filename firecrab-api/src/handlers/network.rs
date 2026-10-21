@@ -1,5 +1,5 @@
 //! Host/network info and explicit network recovery for the dashboard's status panel (see
-//! `public-docs/networking.md`). The subnet/bridge
+//! `public-docs/guides/networking.md`). The subnet/bridge
 //! come from the first MicroNetwork when any exist — prefer
 //! `GET /api/micro-networks` for the full set. Host status is a live
 //! snapshot read straight from `/proc` and `df`.

@@ -35,7 +35,7 @@ pub fn run(layout: &Layout) -> Result<daemon::Status, Error> {
     report!("[REPAIR 2/6] stop the resident service and management VM");
     daemon::stop(layout)?;
     report!("[REPAIR 3/6] back up, repair the OS filesystem, and restore missing OS files");
-    filesystem::repair(layout, &helper)?;
+    let snapshots = filesystem::repair(layout, &helper)?;
     report!("[REPAIR 4/6] rebuild the launchd plist and daemon wrapper");
     daemon::install(layout, &layout.helper_path(), &key)?;
     report!("[REPAIR 5/6] start the management VM and wait for the API");
@@ -51,6 +51,7 @@ pub fn run(layout: &Layout) -> Result<daemon::Status, Error> {
     let marker = fs::read_to_string(&path)
         .map_err(|error| Error::Unhealthy(format!("cannot read guest boot report: {error}")))?;
     verify_guest_boot_report(&marker, ip)?;
+    snapshots.commit();
     Ok(status)
 }
 

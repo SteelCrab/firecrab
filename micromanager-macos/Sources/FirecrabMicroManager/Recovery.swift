@@ -53,7 +53,8 @@ struct OSRepairResult: Codable, Equatable {
 
     var verified: Bool {
         let checked = check_exit == 0 && repair_exit == nil
-            || (1...7).contains(check_exit) && repair_exit.map { (0...3).contains($0) } == true
+            || ((1...7).contains(check_exit) || check_exit == 12)
+                && repair_exit.map { (0...3).contains($0) } == true
         return checked && verify_exit == 0 && restored_files >= 0
             && changed == (repair_exit != nil || restored_files > 0)
     }
@@ -158,10 +159,11 @@ final class OSRepairConsole {
     var command: String {
         // premount stops before the OS root is mounted. Require another
         // read-only check after both filesystem and packaged-file repairs.
+        // A read-only check can abort on directory corruption with 4 | 8 (12).
         let check = "stty -echo; repair=-1; restored=0; "
             + "if [ ! -b /dev/vda1 ] || grep -qE '^/dev/(vda|root)|^[^ ]+ /root ' /proc/mounts; then check=8; verify=8; "
             + "else /sbin/fsck.ext4 -f -n /dev/vda1; check=$?; "
-            + "if [ \"$check\" -gt 0 ] && [ \"$check\" -le 7 ]; then "
+            + "if { [ \"$check\" -gt 0 ] && [ \"$check\" -le 7 ]; } || [ \"$check\" -eq 12 ]; then "
             + "/sbin/fsck.ext4 -f -y /dev/vda1; repair=$?; "
             + "if [ \"$repair\" -le 3 ]; then /sbin/fsck.ext4 -f -n /dev/vda1; verify=$?; else verify=$repair; fi; "
             + "else verify=$check; fi; fi;\n"

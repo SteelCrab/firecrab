@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared QA work list from public-docs/qa.md against a live API (:5523).
+# Shared QA work list from public-docs/development/qa.md against a live API (:5523).
 # IDs match the cross-platform QA sheet (G/H/N/S/L/I/V/C/X).
 #
 # RUN:  G4 G5 H1 H2 H3 N1-N5 S1-S3 L1-L3 I1 I8(GET) I9 V14

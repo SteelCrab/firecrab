@@ -1,17 +1,15 @@
 //! Check a private OS copy in an initramfs VM and install only verified repairs.
 use std::fs::{self, File, OpenOptions};
 use std::io;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fs2::FileExt;
-use serde::{Deserialize, Serialize};
-
-use super::super::{managed_home, report};
+use super::super::{managed_home, os_repair::CheckResult, report, snapshot};
 use super::{lifecycle::Layout, provision};
+use fs2::FileExt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -24,32 +22,13 @@ pub enum Error {
     )]
     Helper(PathBuf),
     #[error(
-        "OS filesystem repair failed: {detail}; no unverified disk was installed; backup/logs: {directory}"
+        "OS filesystem repair failed: {detail}; no unverified disk was installed; backup: {directory}; logs: {logs}"
     )]
-    Recovery { directory: PathBuf, detail: String },
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct CheckResult {
-    check_exit: i32,
-    repair_exit: Option<i32>,
-    verify_exit: i32,
-    changed: bool,
-    #[serde(default)]
-    restored_files: u64,
-}
-
-impl CheckResult {
-    fn verified(&self) -> bool {
-        let checked = (self.check_exit == 0 && self.repair_exit.is_none())
-            || ((1..=7).contains(&self.check_exit)
-                && self
-                    .repair_exit
-                    .is_some_and(|status| (0..=3).contains(&status)));
-        checked
-            && self.verify_exit == 0
-            && self.changed == (self.repair_exit.is_some() || self.restored_files > 0)
-    }
+    Recovery {
+        directory: PathBuf,
+        logs: PathBuf,
+        detail: String,
+    },
 }
 
 pub fn require_helper(helper: &Path) -> Result<(), Error> {
@@ -84,26 +63,16 @@ fn unused(path: &Path) -> io::Result<()> {
     )))
 }
 
-fn copy_image(source: &Path, destination: &Path) -> io::Result<()> {
-    fs::copy(source, destination)?;
-    fs::set_permissions(destination, fs::Permissions::from_mode(0o600))?;
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(destination)?
-        .sync_all()
-}
-
 fn check_copy(
     helper: &Path,
     layout: &Layout,
     working: &Path,
-    directory: &Path,
+    logs: &Path,
     reference: Option<&Path>,
     timeout: Duration,
 ) -> io::Result<CheckResult> {
-    let stdout = File::create(directory.join("result.json"))?;
-    let stderr = File::create(directory.join("console.log"))?;
+    let stdout = File::create(logs.join("result.json"))?;
+    let stderr = File::create(logs.join("console.log"))?;
     let mut command = Command::new(helper);
     command.arg("repair-os").arg(working);
     if let Some(reference) = reference {
@@ -135,32 +104,37 @@ fn check_copy(
                 "[WAIT] OS filesystem: {}s/{}s; console: {}",
                 elapsed.as_secs(),
                 timeout.as_secs(),
-                directory.join("console.log").display()
+                logs.join("console.log").display()
             );
             next_report = elapsed + Duration::from_secs(10);
         }
         thread::sleep(Duration::from_millis(100));
     };
-    if !status.success() {
+    let result = serde_json::from_slice::<CheckResult>(&fs::read(logs.join("result.json"))?);
+    if !status.success() || result.as_ref().is_ok_and(|result| !result.verified()) {
+        let detail = match &result {
+            Ok(result) => format!(
+                "check_exit={}, repair_exit={:?}, verify_exit={}",
+                result.check_exit, result.repair_exit, result.verify_exit
+            ),
+            Err(error) => format!("invalid repair result: {error}"),
+        };
         return Err(io::Error::other(format!(
-            "offline repair helper exited with {status}"
+            "offline repair helper did not verify the filesystem ({status}); {detail}"
         )));
     }
-    let result: CheckResult = serde_json::from_slice(&fs::read(directory.join("result.json"))?)
-        .map_err(io::Error::other)?;
-    if !result.verified() {
-        return Err(io::Error::other(
-            "filesystem repair did not pass the final read-only check",
-        ));
-    }
-    Ok(result)
+    result.map_err(io::Error::other)
 }
 
-pub fn repair(layout: &Layout, helper: &Path) -> Result<(), Error> {
+pub fn repair(layout: &Layout, helper: &Path) -> Result<snapshot::Repair, Error> {
     repair_with_timeout(layout, helper, Duration::from_secs(120))
 }
 
-fn repair_with_timeout(layout: &Layout, helper: &Path, timeout: Duration) -> Result<(), Error> {
+fn repair_with_timeout(
+    layout: &Layout,
+    helper: &Path,
+    timeout: Duration,
+) -> Result<snapshot::Repair, Error> {
     let os_disk = layout.managed_home.join("system/debian-system.raw");
     let data_disk = layout.managed_home.join("data/firecrab-data.raw");
     let lock_path = layout.managed_home.join("runtime/vm.lock");
@@ -185,19 +159,16 @@ fn repair_with_timeout(layout: &Layout, helper: &Path, timeout: Duration) -> Res
     unused(&os_disk)?;
     unused(&data_disk)?;
     let repairs = layout.managed_home.join("runtime/repairs");
-    managed_home::reject_symlink_components(&repairs)?;
-    fs::create_dir_all(&repairs)?;
-    fs::set_permissions(&repairs, fs::Permissions::from_mode(0o700))?;
-    let directory = tempfile::Builder::new()
-        .prefix("os-")
-        .tempdir_in(&repairs)?
-        .keep();
+    let retention = snapshot::Repair::begin(&repairs, "os-")?;
+    let directory = retention.directory().to_path_buf();
+    let logs = retention.logs().to_path_buf();
     let backup = directory.join("debian-system.before.raw");
     let working = directory.join("debian-system.repaired.raw");
     let attempt = || -> io::Result<Option<u64>> {
         report!("[BACKUP] OS disk: {}", backup.display());
-        copy_image(&os_disk, &backup)?;
-        copy_image(&backup, &working)?;
+        let backup_snapshot = snapshot::create(&os_disk, &backup)?;
+        let working_snapshot = snapshot::create(&backup, &working)?;
+        retention.record(&backup_snapshot, &working_snapshot)?;
         let staged = fs::metadata(&working)?;
         let reference = directory.join("debian-system.reference.raw");
         report!("[CHECK] cached Debian image for missing OS files");
@@ -210,7 +181,7 @@ fn repair_with_timeout(layout: &Layout, helper: &Path, timeout: Duration) -> Res
             helper,
             layout,
             &working,
-            &directory,
+            &logs,
             cached.then_some(reference.as_path()),
             timeout,
         )?;
@@ -273,24 +244,27 @@ fn repair_with_timeout(layout: &Layout, helper: &Path, timeout: Duration) -> Res
             );
         }
         Ok(None) => {
-            fs::remove_dir_all(&directory)?;
             report!(
                 "[PASS] OS filesystem and available packaged files clean; original disk preserved"
             );
+            return Ok(retention.discard()?);
         }
         Err(error) => {
+            let _ = fs::write(logs.join("error.log"), error.to_string());
             return Err(Error::Recovery {
                 directory,
+                logs,
                 detail: error.to_string(),
             });
         }
     }
-    Ok(())
+    Ok(retention)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     fn fixture(script: &str) -> (tempfile::TempDir, Layout, PathBuf) {
         let root = tempfile::tempdir().unwrap();
@@ -375,6 +349,62 @@ echo '{"check_exit":0,"repair_exit":null,"verify_exit":0,"changed":true,"restore
             fs::read(layout.managed_home.join("data/firecrab-data.raw")).unwrap(),
             b"original"
         );
+    }
+
+    #[test]
+    fn aborted_read_only_check_requires_successful_repair_verification_and_helper_exit() {
+        for (repair_exit, verify_exit, helper_exit, verified) in [
+            (Some(1), 0, 0, true),
+            (None, 0, 0, false),
+            (Some(4), 0, 0, false),
+            (Some(1), 4, 0, false),
+            (Some(1), 0, 1, false),
+        ] {
+            let result = serde_json::json!({
+                "check_exit": 12,
+                "repair_exit": repair_exit,
+                "verify_exit": verify_exit,
+                "changed": repair_exit.is_some(),
+            });
+            let script = format!("printf repaired >\"$2\"\necho '{result}'\nexit {helper_exit}");
+            let (_root, layout, helper) = fixture(&script);
+            let outcome = repair(&layout, &helper);
+            assert_eq!(outcome.is_ok(), verified, "{result}");
+            if let Err(error) = outcome {
+                let message = error.to_string();
+                assert!(message.contains("check_exit=12"), "{message}");
+                assert!(
+                    message.contains(&format!("verify_exit={verify_exit}")),
+                    "{message}"
+                );
+            }
+            assert_eq!(
+                fs::read(layout.managed_home.join("system/debian-system.raw")).unwrap(),
+                if verified { b"repaired" } else { b"original" }
+            );
+            for file in ["data/firecrab-data.raw", "runtime/manager_ed25519"] {
+                assert_eq!(
+                    fs::read(layout.managed_home.join(file)).unwrap(),
+                    b"original"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unrelated_check_failures_are_rejected_even_with_clean_verification() {
+        for check_exit in [-1, 8, 9, 10, 11, 13, 16, 32, 128, 255] {
+            assert!(
+                !CheckResult {
+                    check_exit,
+                    repair_exit: Some(1),
+                    verify_exit: 0,
+                    changed: true,
+                    restored_files: 0,
+                }
+                .verified()
+            );
+        }
     }
 
     #[test]

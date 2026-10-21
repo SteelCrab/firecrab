@@ -59,7 +59,7 @@ Jalankan microVM Firecracker pada satu host Linux yang Anda kelola melalui dashb
 
 ## Arsitektur
 
-[Arsitektur terperinci](public-docs/architecture.md): lapisan microManager per OS, startup VM, pasokan image/kernel, fitur guest, dan pembaruan CLI.
+[Arsitektur terperinci](public-docs/reference/architecture.md): lapisan microManager per OS, startup VM, pasokan image/kernel, fitur guest, dan pembaruan CLI.
 
 ### Sekilas Firecrab
 
@@ -93,7 +93,7 @@ Memerlukan Linux x86_64 atau ARM64, `/dev/kvm` yang dapat digunakan, jaringan, d
 curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
-Opsi diagnosis dan penghapusan ada di [panduan instalasi](public-docs/installation.md). Untuk memasang CLI jarak jauh saja di Linux, gunakan prosedur `install-cli.sh` dengan verifikasi checksum di bawah; GNU/musl dipilih otomatis dan lokasi default adalah `~/.local/bin`.
+Opsi diagnosis dan penghapusan ada di [panduan instalasi](public-docs/getting-started/installation.md). Untuk memasang CLI jarak jauh saja di Linux, gunakan prosedur `install-cli.sh` dengan verifikasi checksum di bawah; GNU/musl dipilih otomatis dan lokasi default adalah `~/.local/bin`.
 
 ### macOS
 
@@ -117,7 +117,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-Penginstal CLI saja tidak memasang VM terkelola. microManager menggunakan `Virtualization.framework`, disk data persisten terpisah, dan layanan launchd yang menetap. Lihat [panduan macOS](public-docs/micromanager-macos.md).
+Penginstal CLI saja tidak memasang VM terkelola. microManager menggunakan `Virtualization.framework`, disk data persisten terpisah, dan layanan launchd yang menetap. Lihat [panduan macOS](public-docs/getting-started/macos.md).
 
 ### Windows
 
@@ -131,7 +131,7 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 & ./install-cli.ps1
 ```
 
-Buka sesi PowerShell baru jika `firecrab` belum ada di `PATH`, lalu periksa kemampuan dan jalankan instalasi. Instalasi ARM64 belum divalidasi dari awal hingga akhir. Lihat [panduan Windows](public-docs/micromanager-windows.md).
+Buka sesi PowerShell baru jika `firecrab` belum ada di `PATH`, lalu periksa kemampuan dan jalankan instalasi. Instalasi ARM64 belum divalidasi dari awal hingga akhir. Lihat [panduan Windows](public-docs/getting-started/windows.md).
 
 ```powershell
 firecrab service doctor
@@ -181,7 +181,7 @@ firecrab service stop
 
 **Batasan Windows:** guest v0.2.2 yang saat ini dipatok mendukung API, image, dan jaringan, tetapi tidak dapat memulai MicroVM pada WSL2 standar. Perbaikan net-helper memerlukan rilis guest baru yang dipatok; VM nginx lokal juga terdampak. CLI Windows tetap dapat mengelola host Linux jarak jauh yang didukung.
 
-Saat sehat, buka `http://127.0.0.1:5523/`. Buat MicroNetwork, pilih image terpasang, buat dan mulai VM, lalu buka Terminal setelah `running`. Untuk host jarak jauh, atur [profil host CLI](public-docs/firecrab-cli.md#host-profiles).
+Saat sehat, buka `http://127.0.0.1:5523/`. Buat MicroNetwork, pilih image terpasang, buat dan mulai VM, lalu buka Terminal setelah `running`. Untuk host jarak jauh, atur [profil host CLI](public-docs/reference/cli.md#host-profiles).
 
 </details>
 
@@ -190,7 +190,7 @@ Saat sehat, buka `http://127.0.0.1:5523/`. Buat MicroNetwork, pilih image terpas
 <details>
 <summary>API dan dashboard Linux / CLI macOS dan Windows</summary>
 
-Dari root repositori, gunakan [toolchain Rust](rust-toolchain.toml) yang dipatok, Node.js 22+, dan npm. Eksekusi VM juga memerlukan Linux KVM dan [prasyarat host](public-docs/installation.md).
+Dari root repositori, gunakan [toolchain Rust](rust-toolchain.toml) yang dipatok, Node.js 22+, dan npm. Eksekusi VM juga memerlukan Linux KVM dan [prasyarat host](public-docs/getting-started/installation.md).
 
 ### Linux
 
@@ -276,7 +276,7 @@ npm run install-browsers --prefix firecrab-e2e
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
 ```
 
-Di PowerShell, atur `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"` sebelum `npm test --prefix firecrab-e2e`. Boot guest dilewati, sehingga KVM maupun HTTP nginx tidak divalidasi. Eksekusi guest dan seluruh pemeriksaan penginstal ada di [TEST.md](public-docs/TEST.md), [daftar periksa Korea](public-docs/TEST.ko.md), dan [panduan E2E](firecrab-e2e/README.md).
+Di PowerShell, atur `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"` sebelum `npm test --prefix firecrab-e2e`. Boot guest dilewati, sehingga KVM maupun HTTP nginx tidak divalidasi. Eksekusi guest dan seluruh pemeriksaan penginstal ada di [TEST.md](public-docs/development/testing.md), [daftar periksa Korea](public-docs/development/testing.ko.md), dan [panduan E2E](firecrab-e2e/README.md).
 
 </details>
 
@@ -325,7 +325,7 @@ curl -I http://FIRECRAB_HOST_IP:8081/
 curl -I http://127.0.0.1:8081/
 ```
 
-OCI import membangun rootfs yang dapat di-boot dengan `/etc/firecrab/busybox` sebagai PID 1, lalu menjalankan entrypoint nginx sebagai layanan. `EXPOSE 80` tidak membuat port forward host. Lihat [image OCI](public-docs/oci.md) dan [jaringan](public-docs/networking.md).
+OCI import membangun rootfs yang dapat di-boot dengan `/etc/firecrab/busybox` sebagai PID 1, lalu menjalankan entrypoint nginx sebagai layanan. `EXPOSE 80` tidak membuat port forward host. Lihat [image OCI](public-docs/guides/oci.md) dan [jaringan](public-docs/guides/networking.md).
 
 Untuk menghentikan VM contoh:
 
@@ -377,8 +377,8 @@ dengan indikator progres, laporan error, dan alias yang dihasilkan.
 
 ![Daftar M2Image](assets/dashboard/images.png)
 
-Lihat [panduan image](public-docs/images.md), [panduan image OCI](public-docs/oci.md),
-dan [panduan API](public-docs/api.md).
+Lihat [panduan image](public-docs/guides/images.md), [panduan image OCI](public-docs/guides/oci.md),
+dan [panduan API](public-docs/reference/api.md).
 
 </details>
 

@@ -18,6 +18,8 @@ use std::time::Duration;
 use firecrab_api_types::{PortForward, PortProtocol, VmState};
 use serde::Deserialize;
 
+use crate::micromanager::runtime::Ssh;
+
 const VMS_URL: &str = "http://127.0.0.1:5523/api/vms";
 /// The API tunnel already owns this loopback port.
 const API_PORT: u16 = 5523;
@@ -25,6 +27,10 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Manifest(#[from] crate::micromanager::manifest::Error),
+    #[error("management SSH key must be inside its runtime directory")]
+    CredentialsPath,
     #[error("could not build the port-forward API client: {0}")]
     Client(#[source] reqwest::Error),
 }
@@ -46,11 +52,17 @@ pub struct Manager {
 }
 
 pub fn run(manager: Manager) -> Result<i32, Error> {
+    let home = manager
+        .key
+        .parent()
+        .and_then(|path| path.parent())
+        .ok_or(Error::CredentialsPath)?;
+    let settings = super::ssh::load(home)?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(Error::Client)?;
-    let mut relays = Relays::new(PathBuf::from("/usr/bin/ssh"), manager);
+    let mut relays = Relays::new(PathBuf::from("/usr/bin/ssh"), manager, settings);
     let mut last_error = None;
     loop {
         match wanted_ports(&client) {
@@ -87,6 +99,7 @@ fn loopback_ports(vms: &[Vm]) -> BTreeSet<u16> {
 }
 
 struct Relays {
+    settings: Ssh,
     ssh: PathBuf,
     manager: Manager,
     active: HashMap<u16, Child>,
@@ -96,8 +109,9 @@ struct Relays {
 }
 
 impl Relays {
-    fn new(ssh: PathBuf, manager: Manager) -> Self {
+    fn new(ssh: PathBuf, manager: Manager, settings: Ssh) -> Self {
         Self {
+            settings,
             ssh,
             manager,
             active: HashMap::new(),
@@ -149,19 +163,21 @@ impl Relays {
     fn forward(&self, port: u16) -> ProcessCommand {
         let mut command = ProcessCommand::new(&self.ssh);
         command
+            .args(super::ssh::arguments(
+                self.manager
+                    .key
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new(".")),
+                &self.settings,
+                super::ssh::Session::Forward,
+            ))
             .arg("-i")
             .arg(&self.manager.key)
-            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
+            .args(["-o", "BatchMode=yes"])
             .args(["-o", "StrictHostKeyChecking=accept-new"])
             .arg("-o")
             .arg(super::known_hosts_option(&self.manager.known_hosts))
             .args(["-o", "ExitOnForwardFailure=yes", "-o", "LogLevel=ERROR"])
-            .args([
-                "-o",
-                "ServerAliveInterval=15",
-                "-o",
-                "ServerAliveCountMax=3",
-            ])
             .args(["-T", "-L"])
             .arg(format!("127.0.0.1:{port}:127.0.0.1:{port}"))
             .arg(format!("root@{}", self.manager.ip))
@@ -238,7 +254,7 @@ mod tests {
 
     #[test]
     fn each_forward_is_a_loopback_only_ssh_local_forward() {
-        let relays = Relays::new(PathBuf::from("/usr/bin/ssh"), manager());
+        let relays = Relays::new(PathBuf::from("/usr/bin/ssh"), manager(), Ssh::default());
         let command = relays.forward(8080);
         let arguments: Vec<_> = command
             .get_args()
@@ -263,7 +279,7 @@ mod tests {
         let busy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let busy_port = busy.local_addr().unwrap().port();
         let port = free_port();
-        let mut relays = Relays::new(ssh, manager());
+        let mut relays = Relays::new(ssh, manager(), Ssh::default());
         let wanted = BTreeSet::from([busy_port, port]);
 
         sync_until_active(&mut relays, &wanted, port);

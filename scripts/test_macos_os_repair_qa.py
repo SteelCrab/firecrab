@@ -86,7 +86,7 @@ class OsRepairQA(unittest.TestCase):
         self.assertEqual(qa.validate_helper_result(json.dumps(repaired), 0)["restored_files"], 1)
 
     def test_repair_exit_codes_zero_through_three_are_accepted(self):
-        for check_exit in range(1, 8):
+        for check_exit in (*range(1, 8), 12):
             for code in range(4):
                 with self.subTest(check_exit=check_exit, repair_exit=code):
                     output = json.dumps({
@@ -107,7 +107,7 @@ class OsRepairQA(unittest.TestCase):
             ({"changed": True}, "changed must report"),
             ({"extra": 1}, "fields differ"),
             ({"check_exit": True}, "check_exit"),
-            ({"check_exit": 8}, "check_exit"),
+            *(({"check_exit": code}, "check_exit") for code in (8, 9, 10, 11, 13, 16, 32, 128)),
             ({"restored_files": -1}, "nonnegative integer"),
             ({"restored_files": True}, "nonnegative integer"),
         ):
@@ -120,9 +120,10 @@ class OsRepairQA(unittest.TestCase):
             qa.validate_helper_result(json.dumps(clean) + "\nextra\n", 0)
 
     def test_uncorrected_check_failure_cannot_claim_clean(self):
-        result = {"check_exit": 4, "repair_exit": None, "verify_exit": 0, "changed": False}
-        with self.assertRaisesRegex(qa.QAError, "requires a repair exit"):
-            qa.validate_helper_result(json.dumps(result), 0)
+        for check_exit in (4, 12):
+            result = {"check_exit": check_exit, "repair_exit": None, "verify_exit": 0, "changed": False}
+            with self.subTest(check_exit=check_exit), self.assertRaisesRegex(qa.QAError, "requires a repair exit"):
+                qa.validate_helper_result(json.dumps(result), 0)
 
     def test_restored_files_contract_rejects_inconsistent_results(self):
         cases = [

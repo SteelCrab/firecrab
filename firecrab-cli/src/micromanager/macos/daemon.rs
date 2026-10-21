@@ -9,12 +9,13 @@ use std::time::{Duration, Instant};
 use firecrab_api_types::HostOs;
 
 use super::super::host_platform::{self, HOST_PLATFORM_DESCRIPTOR_PATH};
-use super::super::report;
+use super::super::{manifest, report, runtime::Runtime};
 use super::lifecycle::Layout;
 
 const LABEL: &str = "io.firecrab.micromanager";
 const API_URL: &str = "http://127.0.0.1:5523/api/host";
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+const READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug)]
 pub struct DaemonPaths {
@@ -43,6 +44,8 @@ impl Status {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Manifest(#[from] manifest::Error),
     #[error("HOME is not set; launchd service installation needs a user home")]
     MissingHome,
     #[error("the loaded microManager service belongs to another managed home; refusing to stop it")]
@@ -76,8 +79,22 @@ pub fn install(
     helper: &Path,
     ssh_private_key: &Path,
 ) -> Result<DaemonPaths, Error> {
+    install_with_runtime(
+        layout,
+        helper,
+        ssh_private_key,
+        &Runtime::load(&layout.managed_home)?,
+    )
+}
+
+pub fn install_with_runtime(
+    layout: &Layout,
+    helper: &Path,
+    ssh_private_key: &Path,
+    runtime: &Runtime,
+) -> Result<DaemonPaths, Error> {
     let paths = paths(layout)?;
-    install_at(layout, helper, ssh_private_key, &paths)?;
+    install_at(layout, helper, ssh_private_key, &paths, runtime)?;
     Ok(paths)
 }
 
@@ -86,6 +103,7 @@ fn install_at(
     helper: &Path,
     ssh_private_key: &Path,
     paths: &DaemonPaths,
+    settings: &Runtime,
 ) -> Result<(), Error> {
     let parent = paths.plist.parent().ok_or_else(|| Error::Io {
         action: "resolve LaunchAgents directory",
@@ -98,12 +116,17 @@ fn install_at(
     fs::create_dir_all(runtime)
         .map_err(|source| io_error("create daemon runtime directory", runtime, source))?;
 
+    super::ssh::prepare(runtime, &settings.ssh)?;
     write_atomic(
         &paths.wrapper,
-        render_wrapper(layout, helper, ssh_private_key, paths).as_bytes(),
+        render_wrapper(layout, helper, ssh_private_key, paths, settings).as_bytes(),
         0o700,
     )?;
-    write_atomic(&paths.plist, render_plist(paths).as_bytes(), 0o600)
+    write_atomic(
+        &paths.plist,
+        render_plist(paths, settings).as_bytes(),
+        0o600,
+    )
 }
 
 pub fn uninstall(layout: &Layout) -> Result<(), Error> {
@@ -120,9 +143,21 @@ pub fn uninstall(layout: &Layout) -> Result<(), Error> {
 }
 
 pub fn start(layout: &Layout) -> Result<Status, Error> {
+    start_with_runtime(layout, &Runtime::load(&layout.managed_home)?)
+}
+
+pub fn start_with_runtime(layout: &Layout, settings: &Runtime) -> Result<Status, Error> {
+    settings.validate()?;
     let paths = paths(layout)?;
     require_installed(&paths)?;
     stop_if_loaded(layout)?;
+    install_at(
+        layout,
+        &layout.helper_path(),
+        &layout.managed_home.join("runtime/manager_ed25519"),
+        &paths,
+        settings,
+    )?;
     write_host_platform(&paths)?;
     let _ = fs::remove_file(&paths.ready);
     let _ = fs::remove_file(&paths.manager_ready);
@@ -135,7 +170,7 @@ pub fn start(layout: &Layout) -> Result<Status, Error> {
         ],
         false,
     )?;
-    let timeout = Duration::from_secs(10);
+    let timeout = READY_TIMEOUT;
     report!(
         "[WAIT] VM/API readiness (up to {}s); console: {}",
         timeout.as_secs(),
@@ -227,11 +262,17 @@ fn write_host_platform(paths: &DaemonPaths) -> Result<(), Error> {
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
         .unwrap_or_default();
-    let descriptor = host_platform::descriptor_json(
+    let controller_id = paths
+        .platform
+        .parent()
+        .and_then(Path::parent)
+        .and_then(|home| super::super::resource::controller_id(home).ok());
+    let descriptor = host_platform::descriptor_with_controller(
         HostOs::Macos,
         "macOS",
         &version,
         "Virtualization.framework",
+        controller_id,
     );
     write_atomic(&paths.platform, format!("{descriptor}\n").as_bytes(), 0o600)
 }
@@ -416,7 +457,20 @@ fn render_wrapper(
     helper: &Path,
     ssh_private_key: &Path,
     paths: &DaemonPaths,
+    settings: &Runtime,
 ) -> String {
+    let ssh_options = |session| {
+        super::ssh::arguments(&layout.managed_home.join("runtime"), &settings.ssh, session)
+            .iter()
+            .map(|arg| shell_quote(Path::new(arg)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let command_ssh_options = ssh_options(super::ssh::Session::Command);
+    let tunnel_ssh_options = ssh_options(super::ssh::Session::Tunnel);
+    let reconnect_attempts = settings.ssh.reconnect_attempts;
+    let reconnect_delay = settings.ssh.reconnect_delay_secs;
+    let restart_vm = settings.ssh.restart_vm_on_failure;
     let root = shell_quote(&layout.managed_home);
     let cli = shell_quote(&layout.cli_path());
     let helper = shell_quote(helper);
@@ -445,14 +499,21 @@ console={console}
 known_hosts={known_hosts}
 known_hosts_option={known_hosts_option}
 platform={platform}
+command_ssh_options=({command_ssh_options})
+tunnel_ssh_options=({tunnel_ssh_options})
 vm_process="$root/runtime/vm-process"
 vm_pid=
 tunnel_pid=
 relay_pid=
+resource_pid=
 cleanup() {{
   trap - EXIT INT TERM
   set +e
   rm -f "$ready"
+  if [ -n "$resource_pid" ] && kill -0 "$resource_pid" 2>/dev/null; then
+    kill -TERM "$resource_pid" 2>/dev/null
+    wait "$resource_pid" 2>/dev/null
+  fi
   if [ -n "$relay_pid" ] && kill -0 "$relay_pid" 2>/dev/null; then
     kill -TERM "$relay_pid" 2>/dev/null
     wait "$relay_pid" 2>/dev/null
@@ -464,7 +525,7 @@ cleanup() {{
   if [ -n "$vm_pid" ] && kill -0 "$vm_pid" 2>/dev/null; then
     ip=$(sed -n 's/^ip=//p' "$manager_ready" 2>/dev/null)
     if [ -n "$ip" ]; then
-      /usr/bin/ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=3 \
+      /usr/bin/ssh -i "$key" -o ConnectTimeout=3 -o BatchMode=yes "${{command_ssh_options[@]}}" \
         -o StrictHostKeyChecking=accept-new -o "$known_hosts_option" \
         "root@$ip" systemctl poweroff >/dev/null 2>&1 || true
     fi
@@ -482,6 +543,9 @@ cleanup() {{
 }}
 trap cleanup EXIT INT TERM
 rm -f "$ready" "$manager_ready"
+FIRECRAB_MICROMANAGER_HOME="$root" FIRECRAB_MICROMANAGER_HELPER="$helper" \
+  "$cli" service resource-server --home "$root" &
+resource_pid=$!
 FIRECRAB_MICROMANAGER_HOME="$root" "$helper" run >>"$console" 2>&1 &
 vm_pid=$!
 printf 'vm_pid=%s\n' "$vm_pid" >"$vm_process.tmp"
@@ -495,9 +559,9 @@ test -f "$manager_ready"
 ip=$(sed -n 's/^ip=//p' "$manager_ready")
 test -n "$ip"
 open_tunnel() {{
-  /usr/bin/ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 \
+  /usr/bin/ssh -i "$key" -o BatchMode=yes "${{tunnel_ssh_options[@]}}" \
     -o StrictHostKeyChecking=accept-new -o "$known_hosts_option" \
-    -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes \
     -N -L 127.0.0.1:5523:127.0.0.1:5523 "root@$ip" &
   tunnel_pid=$!
   for _ in $(seq 1 60); do
@@ -516,10 +580,18 @@ publish_ready() {{
     echo "ip=$ip"
   }} >"$ready"
 }}
-open_tunnel
+reconnects=0
+until open_tunnel; do
+  wait "$tunnel_pid" 2>/dev/null || true
+  kill -0 "$vm_pid" 2>/dev/null || exit 1
+  reconnects=$((reconnects + 1))
+  if [ "$reconnects" -gt {reconnect_attempts} ] && {restart_vm}; then exit 1; fi
+  echo "Initial API tunnel unavailable; retrying ($reconnects)"
+  sleep {reconnect_delay}
+done
 # Tells the guest's API which Mac it serves; failing to only costs the Host view.
 if [ -f "$platform" ]; then
-  /usr/bin/ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 \
+  /usr/bin/ssh -i "$key" -o BatchMode=yes "${{command_ssh_options[@]}}" \
     -o StrictHostKeyChecking=accept-new -o "$known_hosts_option" \
     "root@$ip" {platform_write} <"$platform" || true
 fi
@@ -544,13 +616,17 @@ while :; do
     wait "$tunnel_pid" 2>/dev/null
     rm -f "$ready"
     reconnects=$((reconnects + 1))
-    [ "$reconnects" -le 5 ] || exit 1
-    echo "API tunnel exited; reconnecting ($reconnects/5)"
+    if [ "$reconnects" -gt {reconnect_attempts} ]; then
+      if {restart_vm}; then exit 1; fi
+      echo "API tunnel reconnect limit reached; VM restart disabled"
+      reconnects=0
+    fi
+    echo "API tunnel exited; reconnecting ($reconnects/{reconnect_attempts})"
     if open_tunnel; then
       reconnects=0
       publish_ready
     else
-      sleep 5
+      sleep {reconnect_delay}
     fi
   fi
   if ! kill -0 "$relay_pid" 2>/dev/null; then
@@ -559,13 +635,20 @@ while :; do
     "$cli" service forward-ports --key "$key" --known-hosts "$known_hosts" "$ip" &
     relay_pid=$!
   fi
+  if ! kill -0 "$resource_pid" 2>/dev/null; then
+    wait "$resource_pid" 2>/dev/null
+    sleep 5
+    FIRECRAB_MICROMANAGER_HOME="$root" FIRECRAB_MICROMANAGER_HELPER="$helper" \
+      "$cli" service resource-server --home "$root" &
+    resource_pid=$!
+  fi
   sleep 1
 done
 "#
     )
 }
 
-fn render_plist(paths: &DaemonPaths) -> String {
+fn render_plist(paths: &DaemonPaths, settings: &Runtime) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -575,7 +658,7 @@ fn render_plist(paths: &DaemonPaths) -> String {
   <key>ProgramArguments</key>
   <array><string>/bin/bash</string><string>{wrapper}</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><{auto_restart}/>
   <key>ThrottleInterval</key><integer>5</integer>
   <key>ExitTimeOut</key><integer>45</integer>
   <key>ProcessType</key><string>Background</string>
@@ -584,6 +667,7 @@ fn render_plist(paths: &DaemonPaths) -> String {
 </dict>
 </plist>
 "#,
+        auto_restart = settings.auto_restart,
         label = LABEL,
         wrapper = xml_escape(&paths.wrapper.to_string_lossy()),
         log = xml_escape(&paths.log.to_string_lossy()),
@@ -773,7 +857,14 @@ mod tests {
         }
         // Recover both a damaged wrapper and a completely missing plist.
         fs::write(&paths.wrapper, b"broken").unwrap();
-        install_at(&layout, &layout.helper_path(), &key, &paths).unwrap();
+        install_at(
+            &layout,
+            &layout.helper_path(),
+            &key,
+            &paths,
+            &Runtime::default(),
+        )
+        .unwrap();
         assert!(fs::read_to_string(&paths.plist).unwrap().contains(LABEL));
         assert!(
             fs::read_to_string(&paths.wrapper)
@@ -813,6 +904,7 @@ mod tests {
             &layout.install_dir.join("firecrab-micromanager-macos"),
             &layout.managed_home.join("runtime/manager_ed25519"),
             &paths,
+            &Runtime::default(),
         );
         assert!(script.contains("ExitOnForwardFailure=yes"));
         assert!(script.contains("127.0.0.1:5523:127.0.0.1:5523"));
@@ -866,6 +958,28 @@ mod tests {
     /// kills the tunnel the way a sleep or network stall would.
     #[test]
     fn a_dropped_tunnel_reconnects_without_restarting_the_vm() {
+        reconnect_after_failure(Runtime::default(), 0);
+    }
+
+    #[test]
+    fn exhausted_ssh_retries_can_leave_the_vm_running_and_reconnect_later() {
+        let mut settings = Runtime::default();
+        settings.ssh.restart_vm_on_failure = false;
+        settings.ssh.reconnect_attempts = 0;
+        settings.ssh.reconnect_delay_secs = 1;
+        reconnect_after_failure(settings, 2);
+    }
+
+    #[test]
+    fn an_initial_ssh_failure_can_retry_without_stopping_the_vm() {
+        let mut settings = Runtime::default();
+        settings.ssh.restart_vm_on_failure = false;
+        settings.ssh.reconnect_attempts = 0;
+        settings.ssh.reconnect_delay_secs = 1;
+        reconnect_after_failure(settings, 1);
+    }
+
+    fn reconnect_after_failure(settings: Runtime, failure_at: usize) {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         let layout = Layout {
@@ -888,21 +1002,31 @@ mod tests {
             "#!/bin/bash\necho ip=192.0.2.7 >\"$FIRECRAB_MICROMANAGER_HOME/runtime/manager-ready\"\nexec sleep 600\n",
         );
         let tunnels = root.join("tunnels");
+        let live_tunnel = root.join("live-tunnel");
         let ssh = root.join("ssh");
         write_executable(
             &ssh,
             &format!(
-                "#!/bin/bash\nactual=$(/usr/bin/ssh -G \"$@\" 2>/dev/null | sed -n 's/^userknownhostsfile //p')\ntest \"$actual\" = {} || exit 1\ncase \" $* \" in *' -N '*) echo tunnel >>{}; exec sleep 600;; esac\ncat >/dev/null\n",
+                "#!/bin/bash\nactual=$(/usr/bin/ssh -G \"$@\" 2>/dev/null | sed -n 's/^userknownhostsfile //p')\ntest \"$actual\" = {} || exit 1\ncase \" $* \" in *' -N '*) echo tunnel >>{}; count=$(wc -l <{}); if [ \"$count\" -eq {} ]; then exit 1; fi; echo $$ >{}; exec sleep 600;; esac\ncat >/dev/null\n",
                 shell_quote(&runtime.join("known_hosts")),
-                shell_quote(&tunnels)
+                shell_quote(&tunnels),
+                shell_quote(&tunnels),
+                failure_at,
+                shell_quote(&live_tunnel),
             ),
         );
         let curl = root.join("curl");
-        write_executable(&curl, "#!/bin/bash\nexit 0\n");
+        write_executable(
+            &curl,
+            &format!(
+                "#!/bin/bash\npid=$(cat {} 2>/dev/null)\ntest -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null\n",
+                shell_quote(&live_tunnel)
+            ),
+        );
         // The installed CLI serves port forwards beside the tunnel.
         fs::create_dir_all(&layout.install_dir).unwrap();
         write_executable(&layout.cli_path(), "#!/bin/bash\nexec sleep 600\n");
-        let script = render_wrapper(&layout, &helper, &runtime.join("key"), &paths)
+        let script = render_wrapper(&layout, &helper, &runtime.join("key"), &paths, &settings)
             .replace("/usr/bin/ssh", &ssh.to_string_lossy())
             .replace("/usr/bin/curl", &curl.to_string_lossy());
         write_executable(&paths.wrapper, &script);
@@ -916,16 +1040,25 @@ mod tests {
             .unwrap();
         let first = wait_for("the first ready marker", || read_marker(&paths.ready));
         wait_for("the first tunnel invocation", || {
-            (fs::read_to_string(&tunnels).ok()?.lines().count() == 1).then_some(())
+            (fs::read_to_string(&tunnels).ok()?.lines().count()
+                == if failure_at == 1 { 2 } else { 1 })
+            .then_some(())
         });
         signal(&first["tunnel_pid"], "-KILL");
         let second = wait_for("a reconnected tunnel", || {
-            read_marker(&paths.ready).filter(|marker| marker["tunnel_pid"] != first["tunnel_pid"])
+            read_marker(&paths.ready).filter(|marker| {
+                marker["tunnel_pid"] != first["tunnel_pid"]
+                    && fs::read_to_string(&tunnels).is_ok_and(|text| {
+                        text.lines().count() == if failure_at > 0 { 3 } else { 2 }
+                    })
+            })
         });
 
         assert_eq!(second["vm_pid"], first["vm_pid"], "the VM keeps running");
         wait_for("the second tunnel invocation", || {
-            (fs::read_to_string(&tunnels).ok()?.lines().count() == 2).then_some(())
+            (fs::read_to_string(&tunnels).ok()?.lines().count()
+                == if failure_at > 0 { 3 } else { 2 })
+            .then_some(())
         });
         assert!(
             wrapper.try_wait().unwrap().is_none(),
@@ -974,12 +1107,19 @@ mod tests {
             log: PathBuf::from("/tmp/daemon.log"),
             platform: PathBuf::from("/tmp/host-platform.json"),
         };
-        let plist = render_plist(&paths);
+        let plist = render_plist(&paths, &Runtime::default());
         assert!(plist.contains(LABEL));
         assert!(plist.contains("<key>RunAtLoad</key><true/>"));
         assert!(plist.contains("<key>KeepAlive</key><true/>"));
         assert!(plist.contains("<key>ExitTimeOut</key><integer>45</integer>"));
         assert!(plist.contains("<key>ProcessType</key><string>Background</string>"));
+        let manual = Runtime {
+            auto_restart: false,
+            ..Runtime::default()
+        };
+        let plist = render_plist(&paths, &manual);
+        assert!(plist.contains("<key>KeepAlive</key><false/>"));
+        assert!(plist.contains("<key>RunAtLoad</key><true/>"));
     }
 
     #[test]

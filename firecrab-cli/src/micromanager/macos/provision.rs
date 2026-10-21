@@ -544,12 +544,18 @@ fn prepare_guest_payload(provision: &Path, manifest: &Manifest) -> Result<(), Er
 fn guest_provision_script(manifest: &Manifest) -> Result<String, Error> {
     Ok(format!(
         r#"#!/bin/bash
-set -Eeuxo pipefail
+set -Eeuo pipefail
 share=/mnt/firecrab
 log=/var/log/firecrab-provision.log
-exec >>"$log" 2>&1
 mkdir -p "$share"
 mountpoint -q "$share" || mount -t virtiofs firecrab "$share"
+saved_umask=$(umask)
+umask 077
+exec 3>&1 4>&2
+exec > >(tee -a "$log" "$share/runtime/guest-provision.log") 2>&1
+log_pid=$!
+umask "$saved_umask"
+set -x
 failed="$share/runtime/provision.failed"
 ready="$share/runtime/provisioned"
 phase_file="$share/runtime/provision.phase"
@@ -559,7 +565,9 @@ finish() {{
   rc=$?
   set +e
   if [ "$rc" -ne 0 ]; then echo "$rc" >"$failed"; fi
-  cp -f "$log" "$share/runtime/guest-provision.log"
+  # Drain the live log before shutdown so its final error is preserved.
+  exec 1>&3 2>&4
+  wait "$log_pid"
   sync
   systemctl poweroff --no-block || poweroff -f
 }}
@@ -986,6 +994,67 @@ mod tests {
                     .unwrap()
                     .success()
             );
+        }
+    }
+
+    #[test]
+    fn guest_logs_are_visible_before_exit_and_drained_on_success_or_failure() {
+        let script = guest_provision_script(&Manifest::bundled().unwrap()).unwrap();
+        let setup = script
+            .split("\nphase distribution\n")
+            .next()
+            .unwrap()
+            .replace("share=/mnt/firecrab", "share=\"$FIRECRAB_TEST_SHARE\"")
+            .replace(
+                "log=/var/log/firecrab-provision.log",
+                "log=\"$FIRECRAB_TEST_LOG\"",
+            );
+        for status in [0, 7] {
+            let root = tempfile::tempdir().unwrap();
+            let share = root.path().join("shared");
+            fs::create_dir_all(share.join("runtime")).unwrap();
+            let test = format!(
+                r#"mountpoint() {{ return 0; }}
+sync() {{ :; }}
+systemctl() {{ :; }}
+initial_umask=$(umask)
+{setup}
+test "$(umask)" = "$initial_umask"
+phase firecrab
+printf 'LIVE_PROVISION_OUTPUT\n'
+for _ in {{1..100}}; do
+  grep -qx 'LIVE_PROVISION_OUTPUT' "$share/runtime/guest-provision.log" 2>/dev/null && break
+  sleep 0.01
+done
+grep -qx 'LIVE_PROVISION_OUTPUT' "$share/runtime/guest-provision.log"
+printf 'LAST_PROVISION_ERROR\n' >&2
+exit {status}
+"#
+            );
+            let output = ProcessCommand::new("bash")
+                .args(["-c", &test])
+                .env("FIRECRAB_TEST_SHARE", &share)
+                .env("FIRECRAB_TEST_LOG", root.path().join("guest.log"))
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let log = fs::read_to_string(share.join("runtime/guest-provision.log")).unwrap();
+            assert_eq!(
+                fs::metadata(share.join("runtime/guest-provision.log"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert!(log.lines().any(|line| line == "LIVE_PROVISION_OUTPUT"));
+            assert!(log.lines().any(|line| line == "LAST_PROVISION_ERROR"));
+            assert_eq!(share.join("runtime/provision.failed").exists(), status != 0);
         }
     }
 

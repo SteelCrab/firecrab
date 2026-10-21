@@ -1,0 +1,25 @@
+[Unit]
+Description=Firecrab PipeTunnel (cloudflared)
+After=network-online.target firecrab-ingress.service
+Wants=network-online.target firecrab-ingress.service
+
+[Service]
+Type=notify
+DynamicUser=yes
+LoadCredential=credentials.json:@CONFDIR@/pipe/secrets/tunnel-credentials.json
+LoadCredential=tunnel.json:@CONFDIR@/pipe/tunnel.json
+ExecStart=@CLOUDFLARED@ --no-autoupdate --config %d/tunnel.json tunnel run
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

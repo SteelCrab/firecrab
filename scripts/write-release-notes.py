@@ -42,7 +42,7 @@ def _strip_version_heading(block: str) -> str:
 def _absolute_repo_links(block: str, repo: str, tag: str) -> str:
     """Point in-repo markdown links at this tag's tree.
 
-    A release page is not a tree page, so `](public-docs/oci.md)` 404s there.
+    A release page is not a tree page, so `](public-docs/guides/oci.md)` 404s there.
     """
     base = f"https://github.com/{repo}/blob/{tag}"
     return re.sub(

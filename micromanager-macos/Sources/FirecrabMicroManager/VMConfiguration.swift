@@ -74,6 +74,15 @@ private func fileURL(_ path: String) -> URL {
 }
 
 enum ManagementVMConfiguration {
+    // Linux virtio disks need explicit host caching to avoid the filesystem
+    // corruption reported with automatic mode. Keep guest flushes durable.
+    // https://github.com/lima-vm/lima/pull/2026
+    static func writableDisk(_ url: URL) throws -> VZDiskImageStorageDeviceAttachment {
+        try VZDiskImageStorageDeviceAttachment(
+            url: url, readOnly: false, cachingMode: .cached, synchronizationMode: .full
+        )
+    }
+
     static func makeProvisioning(
         options: VMOptions,
         consoleInput: FileHandle = .standardInput,
@@ -112,14 +121,8 @@ enum ManagementVMConfiguration {
             )
         }
 
-        let osAttachment = try VZDiskImageStorageDeviceAttachment(
-            url: options.osDiskURL,
-            readOnly: false
-        )
-        let dataAttachment = try VZDiskImageStorageDeviceAttachment(
-            url: options.dataDiskURL,
-            readOnly: false
-        )
+        let osAttachment = try writableDisk(options.osDiskURL)
+        let dataAttachment = try writableDisk(options.dataDiskURL)
         let seedAttachment = try VZDiskImageStorageDeviceAttachment(
             url: seedURL,
             readOnly: true
@@ -277,17 +280,12 @@ enum ManagementVMConfiguration {
         bootLoader.initialRamdiskURL = options.initialRamdiskURL
         bootLoader.commandLine = options.commandLine
 
-        let osAttachment = try VZDiskImageStorageDeviceAttachment(
-            url: options.osDiskURL,
-            readOnly: false
-        )
+        let osAttachment = try writableDisk(options.osDiskURL)
         var storage: [VZStorageDeviceConfiguration] = [
             VZVirtioBlockDeviceConfiguration(attachment: osAttachment),
         ]
         if !repairingOS {
-            let dataAttachment = try VZDiskImageStorageDeviceAttachment(
-                url: options.dataDiskURL, readOnly: false
-            )
+            let dataAttachment = try writableDisk(options.dataDiskURL)
             storage.append(VZVirtioBlockDeviceConfiguration(attachment: dataAttachment))
         }
 
@@ -348,7 +346,15 @@ enum ManagementVMConfiguration {
         // on every start can leave the Mac routing that IP to the previous VM NIC.
         let network = VZVirtioNetworkDeviceConfiguration()
         network.macAddress = address
-        network.attachment = VZNATNetworkDeviceAttachment()
+        if let allocation = try ManagerAllocation.read(home: managedHomeURL), allocation.networkMode == "bridged" {
+            try allocation.validate()
+            guard let interface = VZBridgedNetworkInterface.networkInterfaces.first(where: {
+                $0.identifier == allocation.networkInterface
+            }) else { throw MicroManagerError.argument("bridged interface is unavailable") }
+            network.attachment = VZBridgedNetworkDeviceAttachment(interface: interface)
+        } else {
+            network.attachment = VZNATNetworkDeviceAttachment()
+        }
         return network
     }
 }

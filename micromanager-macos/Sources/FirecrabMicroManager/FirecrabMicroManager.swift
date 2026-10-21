@@ -9,6 +9,8 @@ Commands:
   validate         Show and validate the managed VM configuration
   provision        EFI boot the Debian image and run first-boot provisioning
   run              Boot the managed VM and attach its serial console
+  resource-host    Report physical host capacity as JSON
+  validate-resources <json> Validate an allocation without changing it
   repair-os <copy> [--reference <image>] Check filesystem and restore missing OS files
 
 Environment:
@@ -27,6 +29,14 @@ struct FirecrabMicroManager {
 
         do {
             switch command {
+            case "resource-host":
+                guard arguments.count == 1 else { throw MicroManagerError.argument("resource-host accepts no options") }
+                let data = try resourceHostReport(home: VMOptions.managedDefaults().managedHomeURL)
+                print(String(decoding: data, as: UTF8.self))
+            case "validate-resources":
+                guard arguments.count == 2 else { throw MicroManagerError.argument("validate-resources requires a JSON path") }
+                let data = try Data(contentsOf: URL(fileURLWithPath: arguments[1]))
+                try JSONDecoder().decode(ManagerAllocation.self, from: data).validate()
             case "help", "--help", "-h":
                 print(usage)
             case "doctor":
@@ -71,7 +81,7 @@ struct FirecrabMicroManager {
                 guard vmArguments.isEmpty else {
                     throw MicroManagerError.argument("\(command) does not accept options")
                 }
-                let options = VMOptions.managedDefaults()
+                let options = try VMOptions.configured()
                 if command == "validate" {
                     let checks = ManagementVMConfiguration.inspect(options: options)
                     print(HostCapabilities.renderChecks(checks))
@@ -87,6 +97,7 @@ struct FirecrabMicroManager {
                     let lock = try VMRunLock(home: options.managedHomeURL)
                     defer { lock.close() }
                     let configuration = try ManagementVMConfiguration.make(options: options)
+                    try options.publishActiveResources()
                     try await runManagementVM(configuration: configuration)
                 }
             default:

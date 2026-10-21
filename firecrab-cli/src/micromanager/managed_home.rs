@@ -86,6 +86,10 @@ pub fn reject_symlink_components(path: &Path) -> Result<(), Error> {
     let mut normal_component_count = 0;
     for component in path.components() {
         current.push(component.as_os_str());
+        // A Windows prefix such as `\\?\C:` needs its root separator first.
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
         if matches!(component, Component::Normal(_)) {
             normal_component_count += 1;
         }
@@ -198,6 +202,23 @@ mod tests {
     }
 
     #[test]
+    fn a_canonical_managed_home_is_checked_and_purged() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("state/micromanager");
+        fs::create_dir_all(home.join("data")).unwrap();
+        fs::write(home.join("data/disk.raw"), b"data").unwrap();
+        // On Windows, canonicalize returns a verbatim path such as `\\?\C:\...`.
+        let home = fs::canonicalize(home).unwrap();
+
+        reject_symlink_components(&home.join("data/disk.raw")).unwrap();
+        reject_symlink_components(&home.join("runtime/not-created-yet")).unwrap();
+        validate_purge(&home).unwrap();
+        purge(&home).unwrap();
+        assert!(!home.exists());
+        purge(&home).unwrap();
+    }
+
+    #[test]
     fn unsafe_roots_are_refused() {
         for path in [
             "/tmp",
@@ -230,10 +251,11 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let directory = tempfile::tempdir().expect("temp dir");
-        let real_parent = directory.path().join("real");
+        let canonical_parent = fs::canonicalize(directory.path()).unwrap();
+        let real_parent = canonical_parent.join("real");
         let real_managed_home = real_parent.join("micromanager");
         fs::create_dir_all(&real_managed_home).expect("managed home");
-        let linked_parent = directory.path().join("linked");
+        let linked_parent = canonical_parent.join("linked");
         symlink(&real_parent, &linked_parent).expect("symlink");
 
         assert!(matches!(

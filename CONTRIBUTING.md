@@ -72,7 +72,7 @@ scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
 ```
 
 For service commands and development options, see the
-[macOS guide](public-docs/micromanager-macos.md#develop-from-a-checkout).
+[macOS guide](public-docs/development/micromanager.md#macos).
 
 **Windows PowerShell:**
 
@@ -82,13 +82,15 @@ cargo build -p firecrab-cli --locked
 ```
 
 `service dev` installs microManager when missing, builds the local API and network
-helper inside WSL2, and restarts them. See the
-[Windows guide](public-docs/micromanager-windows.md#develop-from-a-checkout)
+helper inside WSL2, and restarts them. On macOS and Windows it also starts the
+source dashboard at `http://localhost:8080`; Node.js and npm are required.
+The command verifies both the dashboard and its API connection before returning. See the
+[Windows guide](public-docs/development/micromanager.md#windows)
 for build, restore, and frontend options.
 
 ## Tests
 
-Run workspace checks on Linux; use the [native CLI checks](public-docs/ci.md#local-checks) on Windows and macOS:
+Run workspace checks on Linux; use the [native CLI checks](public-docs/development/ci.md#local-checks) on Windows and macOS:
 
 ```sh
 cargo fmt --all -- --check
@@ -117,7 +119,7 @@ FIRECRAB_MICROMANAGER_HOME="$HOME/Library/Application Support/Firecrab/micromana
   scripts/ci-qa-macos-e2e.sh lifetime                                # macOS
 ```
 
-For platform scenarios, manual steps, expected results, and cleanup, see the [English TEST guide](public-docs/TEST.md) or [Korean TEST guide](public-docs/TEST.ko.md).
+For platform scenarios, manual steps, expected results, and cleanup, see the [English TEST guide](public-docs/development/testing.md) or [Korean TEST guide](public-docs/development/testing.ko.md).
 Windows source runtime checks use `.\scripts\ci-qa-windows-e2e.ps1 -Phase all -Cli .\target\debug\firecrab.exe -Source .` from PowerShell.
 `all` collects every test phase after the runtime gate and fails overall if any phase fails; use `-Phase browser` for only browser/guest boot.
 The [E2E guide](firecrab-e2e/README.md) describes where browsers and fixtures run on each platform.
@@ -156,7 +158,7 @@ Use the commit subject format for the title (`type(scope): description`). Write 
 
 ## Docs
 
-- `public-docs/troubleshooting.md`: VM units that outlive the API
+- `public-docs/guides/troubleshooting.md`: VM units that outlive the API
 
 ## Validation
 
@@ -196,7 +198,7 @@ One short paragraph on scope: what is deliberately left out, follow-up work, and
 
 - Keep each bullet to one change a user or operator can see: a behavior, an API field, a command, or a file.
 - Validation always has the three parts in this order: Test, E2E, QA. Each lists the exact commands that ran, then one `Notes:` line.
-- Write `Notes: none` when every check passed. Otherwise note only the exceptions: a skipped or partial [TEST](public-docs/TEST.md) item as WARNING and a failed one as FAILED, each with its ID and what happened.
+- Write `Notes: none` when every check passed. Otherwise note only the exceptions: a skipped or partial [TEST](public-docs/development/testing.md) item as WARNING and a failed one as FAILED, each with its ID and what happened.
 - A part that did not run keeps its heading and says why in `Notes:`. Name the platform when it is not obvious from the commands (Linux, macOS microManager, Windows, GitHub CI).
 - Link issues and related PRs on the `Related:` line. A stacked PR names the PR it is based on and the merge order.
 - Do not add generated-by or tool attribution lines.
@@ -211,7 +213,7 @@ Prefer one problem per issue. Report sensitive security problems privately to th
 ## CI
 
 The [CI workflow](https://github.com/SteelCrab/firecrab/blob/main/.github/workflows/ci.yml) runs Rust, frontend, documentation, installer, and available automated scenario checks.
-See [CI and runtime E2E](public-docs/ci.md) for exact job coverage, local checks, source/release options, and evidence requirements.
+See [CI and runtime E2E](public-docs/development/ci.md) for exact job coverage, local checks, source/release options, and evidence requirements.
 
 GitHub-hosted macOS and Windows CI cannot provide nested virtualization, so direct microVM runtime validation requires manual steps.
 Depending on the contribution, contributors may post their manual test results in a PR comment.

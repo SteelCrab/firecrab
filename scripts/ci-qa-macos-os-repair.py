@@ -384,9 +384,10 @@ def validate_helper_result(stdout, helper_exit, expect_restored_files=None):
     result.setdefault("restored_files", 0)
     for name in ("check_exit", "verify_exit"):
         value = result[name]
-        maximum = 7 if name == "check_exit" else 255
-        require(type(value) is int and 0 <= value <= maximum,
+        require(type(value) is int and 0 <= value <= 255,
                 f"{name} must be an integer exit status")
+    require(result["check_exit"] in (*range(8), 12),
+            "check_exit must be 0 through 7 or 12 (aborted with uncorrected errors)")
     require(type(result["restored_files"]) is int and result["restored_files"] >= 0,
             "restored_files must be a nonnegative integer")
     repair_exit = result["repair_exit"]

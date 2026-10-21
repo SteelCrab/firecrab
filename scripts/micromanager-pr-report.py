@@ -61,7 +61,8 @@ MACOS = Platform(
         "micromanager-macos/",
         "scripts/build-micromanager-macos.sh",
         "scripts/ci-qa-macos-e2e.sh",
-        "public-docs/micromanager-macos.md",
+        "public-docs/getting-started/macos.md",
+        "public-docs/development/macos-repair.md",
     ),
     local=(
         "swift test --package-path micromanager-macos"
@@ -95,7 +96,7 @@ WINDOWS = Platform(
         "scripts/ci-qa-windows-e2e.ps1",
         "scripts/test-ci-qa-windows.ps1",
         "scripts/micromanager/create-windows-lab.py",
-        "public-docs/micromanager-windows.md",
+        "public-docs/getting-started/windows.md",
     ),
     local=(
         "cargo clippy -p firecrab-cli --all-targets -- -D warnings",
@@ -121,6 +122,7 @@ PLATFORMS = (MACOS, WINDOWS)
 def is_shared(path: str) -> bool:
     """`micromanager.rs` and the modules beside the platform directories."""
     if path in (
+        "public-docs/development/micromanager.md",
         "scripts/micromanager/dev-macos-guest.sh",
         "scripts/test-micromanager-dev.py",
         "scripts/ci-qa-api.sh",

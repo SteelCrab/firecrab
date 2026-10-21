@@ -5,6 +5,38 @@ profile=${1:?build profile or service action is required}
 root=/var/lib/firecrab/dev
 bin_root=/usr/local/lib/firecrab-dev
 unit_root=/etc/systemd/system
+os_root=/
+phase=preflight
+trap 'echo "[FAIL] guest development phase=$phase exit=$?" >&2' ERR
+
+# Query the visible mount, including bind mounts that hide another mount at the
+# same path. /proc/mounts can contain both entries in an unspecified order.
+check_filesystems() {
+  local path existing flags
+  for path in "$os_root" "$root" "$bin_root" "$unit_root"; do
+    existing=$path
+    while [ ! -d "$existing" ] && [ "$existing" != / ]; do
+      existing=${existing%/*}
+      existing=${existing:-/}
+    done
+    if ! flags=$(findmnt --first-only --noheadings --output OPTIONS --target "$existing"); then
+      echo "[FAIL] cannot inspect guest filesystem for $path" >&2
+      return 74
+    fi
+    if [[ ",$flags," != *,rw,* ]] || [ ! -w "$existing" ]; then
+      echo "[FAIL] guest filesystem for $path is not writable (checked=$existing, options=$flags)" >&2
+      return 74
+    fi
+  done
+  local tool
+  for tool in bash chmod rm install; do
+    if ! "$tool" --version >/dev/null; then
+      echo "[FAIL] guest OS cannot execute $tool; check filesystem errors with firecrab service debug --logs" >&2
+      return 74
+    fi
+  done
+}
+
 case "$profile" in
   debug|release|restore)
     channel=${2:?Rust toolchain is required}
@@ -13,9 +45,14 @@ case "$profile" in
     [[ "$archive_name" != */* ]]
     [[ "$channel" =~ ^[a-zA-Z0-9.-]+$ ]]
     ;;
-  start|stop|restart) ;;
+  start|stop|restart|check) ;;
   *) echo 'invalid build profile or service action' >&2; exit 1 ;;
 esac
+
+if [ "$profile" != stop ]; then
+  check_filesystems || exit 74
+fi
+if [ "$profile" = check ]; then exit 0; fi
 
 install -d -m 0700 "$root"
 exec 9>"$root/deploy.lock"
@@ -50,6 +87,7 @@ case "$profile" in
     for _ in $(seq 1 60); do
       if systemctl is-active --quiet "$helper_unit" && systemctl is-active --quiet firecrab-api \
         && curl -fs --max-time 2 http://127.0.0.1:5523/api/host >/dev/null; then
+        check_filesystems || exit 74
         echo "[PASS] guest: API + helper $profile complete"
         exit 0
       fi
@@ -76,7 +114,13 @@ done
 finish() {
   rc=$?
   trap - EXIT
+  trap '' INT TERM HUP PIPE
   set +e
+  if [ "$rc" -ne 0 ] && ! check_filesystems; then
+    echo '[FAIL] guest OS filesystem is unhealthy; stop retrying the build and run firecrab service repair' >&2
+    echo "[PRESERVE] deployment backup: $backup; source archive: $root/$archive_name" >&2
+    exit 74
+  fi
   if [ "$rc" -ne 0 ] && [ "$deploying" -eq 1 ]; then
     echo '[ROLLBACK] restoring previous guest executables' >&2
     systemctl stop firecrab-api "$helper_unit"
@@ -98,8 +142,9 @@ finish() {
     systemctl start "$helper_unit"
     systemctl start firecrab-api
   fi
-  rm -f "$root/$archive_name" "$bin_root/bin.next"
-  rm -rf "$backup"
+  if ! rm -f "$root/$archive_name" "$bin_root/bin.next" || ! rm -rf "$backup"; then
+    echo '[WARN] guest deployment cleanup failed; inspect filesystem errors with firecrab service debug --logs' >&2
+  fi
   if [ "$rc" -ne 0 ] && [ -n "$binaries" ]; then rm -rf "$binaries"; fi
   exit "$rc"
 }
@@ -108,13 +153,15 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ "$profile" != restore ]; then
+  phase=build
   case "$(uname -m)" in
     aarch64) target=aarch64-unknown-linux-gnu ;;
     x86_64) target=x86_64-unknown-linux-gnu ;;
     *) echo 'Linux ARM64 or x86_64 guest required' >&2; exit 1 ;;
   esac
   echo '[BUILD] preparing Debian compiler and pinned Rust toolchain'
-  if ! command -v cc >/dev/null || ! command -v pkg-config >/dev/null || ! command -v cmake >/dev/null; then
+  if ! command -v cc >/dev/null || ! command -v pkg-config >/dev/null || ! command -v cmake >/dev/null \
+    || ! command -v objcopy >/dev/null; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
     apt-get install -y build-essential pkg-config cmake ca-certificates curl
@@ -138,7 +185,9 @@ if [ "$profile" != restore ]; then
   # local files cannot linger in the next build. Never copy host target artifacts.
   rm -rf "$root/source"
   install -d -m 0700 "$root/source"
-  tar -xf "$root/$archive_name" -C "$root/source"
+  # An older checkout can have source mtimes before another checkout's cached
+  # build. Use extraction times so Cargo rebuilds the uploaded workspace crates.
+  tar -xmf "$root/$archive_name" -C "$root/source"
   # Windows Git checkouts may use CRLF; include_str! also embeds guest fragments.
   # Avoid GNU-only sed -i and \r syntax so the deployment contract runs with
   # macOS BSD tools too. Writing back preserves each staged file's permissions.
@@ -152,14 +201,42 @@ if [ "$profile" != restore ]; then
   export CARGO_TARGET_DIR="$root/target"
   export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-2}
   export CARGO_PROFILE_DEV_DEBUG=${CARGO_PROFILE_DEV_DEBUG:-1}
-  flags=(--locked --target "$target" -p firecrab-api -p firecrab-helper)
+  flags=(--locked --target "$target" -p firecrab-api -p firecrab-helper -p firecrab-cli)
   if [ "$profile" = release ]; then flags+=(--release); fi
-  rustup run "$channel" cargo build "${flags[@]}"
+  # Compilers must not retain the deployment lock after their owning shell exits.
+  rustup run "$channel" cargo build "${flags[@]}" 9>&-
 
+  # Compilation writes to the data disk. Check the OS disk again before staging
+  # executables or stopping the running services.
+  check_filesystems || exit 74
+
+  phase=stage
+  # The OS disk holds the running build for rollback while the new one is
+  # staged. A build directory other than the running one was left by an
+  # interrupted deployment; the lock guarantees no other deployment owns it.
+  for stale in "$bin_root"/build.*; do
+    if [ -d "$stale" ] && [ "$stale" != "$previous_bin" ]; then rm -rf "$stale"; fi
+  done
+  # Debug executables are mostly DWARF. Compressing it on the data disk keeps
+  # backtrace file:line output and roughly halves what the OS disk must hold.
+  compressed=$(mktemp -d "$backup/stage.XXXXXX")
+  for binary in firecrab-api firecrab-helper firecrab; do
+    objcopy --compress-debug-sections=zlib \
+      "$CARGO_TARGET_DIR/$target/$profile/$binary" "$compressed/$binary"
+  done
+  # Fail before touching the OS disk instead of with a partial install.
+  need_kib=$(du -sk "$compressed" | cut -f1)
+  free_kib=$(df -Pk "$bin_root" | awk 'NR == 2 { print $4 }')
+  reserve_kib=$((64 * 1024))
+  if [ $((need_kib + reserve_kib)) -gt "$free_kib" ]; then
+    echo "[FAIL] guest OS disk has $((free_kib / 1024)) MiB free; staging needs $((need_kib / 1024)) MiB plus $((reserve_kib / 1024)) MiB reserve" >&2
+    echo '[HINT] free space: firecrab service shell -- sh -c "journalctl --vacuum-size=64M; apt-get clean; apt-get autoremove --purge -y"' >&2
+    exit 1
+  fi
   binaries=$(mktemp -d "$bin_root/build.XXXXXX")
   chmod 0755 "$binaries"
-  for binary in firecrab-api firecrab-helper; do
-    install -m 0755 "$CARGO_TARGET_DIR/$target/$profile/$binary" "$binaries/$binary"
+  for binary in firecrab-api firecrab-helper firecrab; do
+    install -m 0755 "$compressed/$binary" "$binaries/$binary"
   done
   # The API resolves these runtime tools next to its executable. The source
   # snapshot is root-only, so its compile-time fallback path is not accessible.
@@ -169,8 +246,9 @@ if [ "$profile" != restore ]; then
 fi
 
 # The packaged binaries, service accounts, permissions and working directories
-# remain installed. Only ExecStart changes, with a rollback if readiness fails.
+# remain installed. Helper write access also covers pipe config and unit files.
 deploying=1
+phase=activate
 systemctl stop firecrab-api "$helper_unit"
 if [ "$profile" = restore ]; then
   for unit in firecrab-api firecrab-helper firecrab-net-helper; do
@@ -188,6 +266,10 @@ else
     if [ "$unit" = "$helper_unit" ]; then binary=firecrab-helper; fi
     printf '[Service]\nExecStart=\nExecStart=%s/bin/%s\n' "$bin_root" "$binary" \
       >"$unit_root/$unit.service.d/90-firecrab-dev.conf"
+    if [ "$unit" = "$helper_unit" ]; then
+      printf 'ReadWritePaths=-/etc/firecrab -%s\n' "$unit_root" \
+        >>"$unit_root/$unit.service.d/90-firecrab-dev.conf"
+    fi
   done
 fi
 systemctl daemon-reload
@@ -198,9 +280,11 @@ for _ in $(seq 1 30); do
 done
 test -S /run/firecrab/net-helper.sock
 systemctl start firecrab-api
+phase=verify
 for _ in $(seq 1 60); do
   if systemctl is-active --quiet "$helper_unit" && systemctl is-active --quiet firecrab-api \
     && curl -fs --max-time 2 http://127.0.0.1:5523/api/host >/dev/null; then
+    check_filesystems || exit 74
     deploying=0
     if [ "$profile" = restore ]; then rm -f "$bin_root/bin"; fi
     case "$previous_bin" in

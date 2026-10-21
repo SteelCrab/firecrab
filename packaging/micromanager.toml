@@ -2,6 +2,22 @@
 # The CLI embeds this file and saves a validated copy after provisioning.
 schema_version = 1
 
+# Editable in <managed-home>/micromanager.toml. Applied on the next service start.
+[runtime]
+auto_restart = true
+
+# macOS only: Windows executes guest commands through WSL, without SSH.
+[runtime.ssh]
+connect_timeout_secs = 10
+keepalive_interval_secs = 15
+keepalive_count_max = 3
+reconnect_attempts = 5
+reconnect_delay_secs = 5
+restart_vm_on_failure = true
+reuse_connections = true
+# Seconds after the last command; 0 keeps an idle command connection indefinitely.
+persist_secs = 60
+
 [debian]
 version = 13
 suite = "trixie"

@@ -519,7 +519,7 @@ fn subnet_cidrs6(micro_networks: &[MicroNetworkSpec]) -> Vec<String> {
 /// The IPv6 prefixes that need NAT66, as `(prefix, oifname)` pairs. Only a
 /// Unique Local prefix qualifies: a global prefix is routable as-is, so
 /// translating it would hide the very addresses the network was given
-/// (`public-docs/networking.md`). A network with the internet switched off
+/// (`public-docs/guides/networking.md`). A network with the internet switched off
 /// contributes no pair either, same as [`egress_pairs`].
 fn egress_pairs6(
     default_uplink: &str,

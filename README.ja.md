@@ -59,7 +59,7 @@
 
 ## アーキテクチャ
 
-[詳細アーキテクチャ](public-docs/architecture.md): OS 別の microManager 構成、VM 起動、イメージ・カーネル供給、ゲスト機能、CLI・更新フロー。
+[詳細アーキテクチャ](public-docs/reference/architecture.md): OS 別の microManager 構成、VM 起動、イメージ・カーネル供給、ゲスト機能、CLI・更新フロー。
 
 ### Firecrab の概要
 
@@ -93,7 +93,7 @@ Linux x86_64 または ARM64、使用可能な `/dev/kvm`、ネットワーク�
 curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
-診断とアンインストールのオプションは[インストールガイド](public-docs/installation.md)を参照してください。Linux にリモート CLI だけを入れる場合は、下記のチェックサム確認を含む `install-cli.sh` 手順を使います。GNU/musl を自動選択し、既定では `~/.local/bin` にインストールします。
+診断とアンインストールのオプションは[インストールガイド](public-docs/getting-started/installation.md)を参照してください。Linux にリモート CLI だけを入れる場合は、下記のチェックサム確認を含む `install-cli.sh` 手順を使います。GNU/musl を自動選択し、既定では `~/.local/bin` にインストールします。
 
 ### macOS
 
@@ -117,7 +117,7 @@ firecrab service doctor
 firecrab service install
 ```
 
-CLI のインストールだけでは管理 VM は作成されません。microManager は `Virtualization.framework`、独立した永続データディスク、常駐 launchd サービスを使います。[macOS ガイド](public-docs/micromanager-macos.md)を参照してください。
+CLI のインストールだけでは管理 VM は作成されません。microManager は `Virtualization.framework`、独立した永続データディスク、常駐 launchd サービスを使います。[macOS ガイド](public-docs/getting-started/macos.md)を参照してください。
 
 ### Windows
 
@@ -131,7 +131,7 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 & ./install-cli.ps1
 ```
 
-`firecrab` がまだ `PATH` にない場合は新しい PowerShell を開き、対応状況の確認とインストールを実行してください。ARM64 のインストールは全体の検証が未完了です。[Windows ガイド](public-docs/micromanager-windows.md)を参照してください。
+`firecrab` がまだ `PATH` にない場合は新しい PowerShell を開き、対応状況の確認とインストールを実行してください。ARM64 のインストールは全体の検証が未完了です。[Windows ガイド](public-docs/getting-started/windows.md)を参照してください。
 
 ```powershell
 firecrab service doctor
@@ -181,7 +181,7 @@ firecrab service stop
 
 **Windows の制約:** 現在固定されている v0.2.2 ゲストでは、標準 WSL2 で API・イメージ・ネットワークは使えますが、MicroVM を起動できません。net-helper の修正を含む新しいゲストリリースが必要で、ローカル nginx VM も対象です。Windows CLI から対応するリモート Linux ホストを管理することはできます。
 
-正常なら `http://127.0.0.1:5523/` を開きます。MicroNetwork を作成し、インストール済みイメージを選んで VM を作成・起動し、`running` になったら Terminal を開きます。リモートホストには [CLI ホストプロファイル](public-docs/firecrab-cli.md#host-profiles)を設定してください。
+正常なら `http://127.0.0.1:5523/` を開きます。MicroNetwork を作成し、インストール済みイメージを選んで VM を作成・起動し、`running` になったら Terminal を開きます。リモートホストには [CLI ホストプロファイル](public-docs/reference/cli.md#host-profiles)を設定してください。
 
 </details>
 
@@ -190,7 +190,7 @@ firecrab service stop
 <details>
 <summary>Linux API・ダッシュボード / macOS・Windows CLI</summary>
 
-リポジトリルートで指定された [Rust ツールチェーン](rust-toolchain.toml)、Node.js 22 以降、npm を使います。実際の VM 実行には Linux KVM と[ホストの前提条件](public-docs/installation.md)も必要です。
+リポジトリルートで指定された [Rust ツールチェーン](rust-toolchain.toml)、Node.js 22 以降、npm を使います。実際の VM 実行には Linux KVM と[ホストの前提条件](public-docs/getting-started/installation.md)も必要です。
 
 ### Linux
 
@@ -276,7 +276,7 @@ npm run install-browsers --prefix firecrab-e2e
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
 ```
 
-PowerShell では `npm test --prefix firecrab-e2e` の前に `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"` を設定します。ゲスト起動を省略するため、KVM や nginx HTTP は検証しません。ゲスト実行と全インストールチェックは [TEST.md](public-docs/TEST.md)、[韓国語チェックリスト](public-docs/TEST.ko.md)、[E2E ガイド](firecrab-e2e/README.md)を参照してください。
+PowerShell では `npm test --prefix firecrab-e2e` の前に `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"` を設定します。ゲスト起動を省略するため、KVM や nginx HTTP は検証しません。ゲスト実行と全インストールチェックは [TEST.md](public-docs/development/testing.md)、[韓国語チェックリスト](public-docs/development/testing.ko.md)、[E2E ガイド](firecrab-e2e/README.md)を参照してください。
 
 </details>
 
@@ -325,7 +325,7 @@ curl -I http://FIRECRAB_HOST_IP:8081/
 curl -I http://127.0.0.1:8081/
 ```
 
-OCI import は `/etc/firecrab/busybox` を PID 1 とする起動可能な rootfs を作成し、nginx のエントリーポイントをサービスとして実行します。`EXPOSE 80` だけではホストポート転送は作成されません。[OCI イメージ](public-docs/oci.md)と[ネットワーク](public-docs/networking.md)を参照してください。
+OCI import は `/etc/firecrab/busybox` を PID 1 とする起動可能な rootfs を作成し、nginx のエントリーポイントをサービスとして実行します。`EXPOSE 80` だけではホストポート転送は作成されません。[OCI イメージ](public-docs/guides/oci.md)と[ネットワーク](public-docs/guides/networking.md)を参照してください。
 
 例の VM を停止するには:
 
@@ -381,9 +381,9 @@ firecrab vm stop VM_ID
 
 ![M2Image の一覧](assets/dashboard/images.png)
 
-リクエスト形式、ライフサイクルの意味、エラー envelope は[API ガイド](public-docs/api.md)を、
-イメージパッケージとブラウザ主導のブートストラップは[イメージガイド](public-docs/images.md)を、
-OCI の inspect と import は [OCI イメージガイド](public-docs/oci.md) を参照してください。
+リクエスト形式、ライフサイクルの意味、エラー envelope は[API ガイド](public-docs/reference/api.md)を、
+イメージパッケージとブラウザ主導のブートストラップは[イメージガイド](public-docs/guides/images.md)を、
+OCI の inspect と import は [OCI イメージガイド](public-docs/guides/oci.md) を参照してください。
 
 </details>
 

@@ -10,6 +10,13 @@ mod host_platform;
 mod macos;
 mod managed_home;
 mod manifest;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod os_repair;
+mod resource;
+mod resource_server;
+mod runtime;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod snapshot;
 // Everything but the `wsl.exe` and `schtasks.exe` calls is plain Rust, so the
 // Windows backend also builds and runs its tests on the Linux CI runner.
 #[cfg(any(target_os = "windows", test))]
@@ -23,8 +30,12 @@ use clap::Subcommand;
 
 #[cfg(target_os = "macos")]
 pub use macos::run;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::run_guest_command;
 #[cfg(target_os = "windows")]
 pub use windows::run;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::run_guest_command;
 
 /// `println!` panics if the write returns an error, and on some terminal
 /// multiplexers a burst of output (a progress bar redraw, then this line)
@@ -71,6 +82,21 @@ fn write_retrying_transient_errors(writer: &mut impl Write, mut bytes: &[u8]) {
 /// VM. Common lifecycle verbs share one definition; platform tools are gated.
 #[derive(Subcommand)]
 pub enum Command {
+    /// Show or change management VM CPU, RAM, disk, and networking.
+    #[command(name = "resorce", visible_alias = "resource")]
+    Resource {
+        #[command(flatten)]
+        options: resource::Options,
+    },
+    /// Native, loopback-only resource control used by the Host screen.
+    #[command(hide = true)]
+    ResourceServer {
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
+    },
+    /// Detached apply worker; survives the managed service restart.
+    #[command(hide = true)]
+    ResourceApply { id: String },
     /// Install microManager and provision the managed Debian VM.
     Install {
         /// Skip the download confirmation prompt (implied when not attached to a TTY).
@@ -84,6 +110,8 @@ pub enum Command {
         yes: bool,
     },
     /// Repair the resident service using the existing managed VM and installed binaries.
+    ///
+    /// Windows requires PowerShell running as Administrator for offline disk repair.
     #[cfg(any(target_os = "macos", target_os = "windows", test))]
     Repair,
     /// Remove microManager and optionally all managed VM data.
@@ -118,7 +146,7 @@ pub enum Command {
         #[arg(long, requires = "logs", value_parser = clap::value_parser!(u16).range(1..=1000))]
         tail: Option<u16>,
     },
-    /// Build and deploy local sources, or control the guest API and helper.
+    /// Build/deploy guest services and start the source dashboard on localhost:8080.
     #[command(args_conflicts_with_subcommands = true)]
     Dev {
         #[command(subcommand)]
@@ -160,11 +188,11 @@ pub enum Command {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Subcommand)]
 pub enum DevCommand {
-    /// Start the deployed API and helper without rebuilding or starting microManager.
+    /// Start the deployed API/helper and dashboard without rebuilding or booting the VM.
     Start,
-    /// Stop the API and helper while keeping microManager running.
+    /// Stop the API/helper and development dashboard while keeping microManager running.
     Stop,
-    /// Restart the deployed API and helper without rebuilding or restarting microManager.
+    /// Restart the deployed API/helper and dashboard without rebuilding or rebooting the VM.
     Restart,
 }
 

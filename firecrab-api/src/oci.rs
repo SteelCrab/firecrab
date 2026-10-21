@@ -1,4 +1,4 @@
-//! OCI registry access for image import (`public-docs/images.md`).
+//! OCI registry access for image import (`public-docs/guides/images.md`).
 
 use std::collections::HashMap;
 use std::fmt;

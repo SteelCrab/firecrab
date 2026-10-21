@@ -106,6 +106,26 @@ func recoveryReferenceRejectsAliasesAndRequiresThePrivateDirectory() throws {
     #expect(throws: MicroManagerError.self) { try recoveryReference(options, disk: working, reference: options.osDiskURL) }
 }
 
+@Test(arguments: [1, 2, 3, 4, 5, 6, 7, 12])
+func failedReadOnlyChecksRequireSuccessfulRepairAndVerification(check: Int) {
+    for repair in 0...3 {
+        #expect(OSRepairResult(check_exit: check, repair_exit: repair,
+            verify_exit: 0, changed: true).verified)
+    }
+    #expect(!OSRepairResult(check_exit: check, repair_exit: nil,
+        verify_exit: 0, changed: false).verified)
+    #expect(!OSRepairResult(check_exit: check, repair_exit: 4,
+        verify_exit: 0, changed: true).verified)
+    #expect(!OSRepairResult(check_exit: check, repair_exit: 1,
+        verify_exit: 4, changed: true).verified)
+}
+
+@Test(arguments: [-1, 8, 9, 10, 11, 13, 16, 32, 128, 255])
+func unrelatedCheckFailuresCannotClaimSuccessfulRecovery(check: Int) {
+    #expect(!OSRepairResult(check_exit: check, repair_exit: 1,
+        verify_exit: 0, changed: true).verified)
+}
+
 @Test @MainActor
 func missingFilesCanChangeACleanFilesystemButStillRequireVerification() {
     let pipe = Pipe()
