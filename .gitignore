@@ -4,10 +4,15 @@
 /firecracker-config.json
 /firecracker-console.log
 
-# Rust
+# Rust / Swift
 target/
+.build/
 lcov.info
 doc-coverage.txt
+
+# Python
+__pycache__/
+*.pyc
 
 # Frontend build output / dependencies
 firecrab-frontend/dist/
@@ -42,3 +47,9 @@ id_ed25519*
 # Local design notes and project records are never published.
 /docs/
 .zed/
+
+# Log
+logs
+
+# MacOS
+.DS_Store

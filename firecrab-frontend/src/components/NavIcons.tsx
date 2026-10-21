@@ -1,15 +1,21 @@
 import type { ViewId } from "../navigation";
 
 /**
- * One hand-drawn solid icon per nav destination (24x24, `fill: currentColor`
- * so it tracks the button's text color through hover/active states exactly
- * like the glyph it replaces). `shells` keeps its own bash.png brand mark in
- * `Shell.tsx` and has no entry here.
+ * One icon per nav destination. `shells` keeps its own bash.png brand mark in
+ * `Shell.tsx` and has no entry here; `kernels` uses the official Tux asset.
  */
 export type NavIconId = Exclude<ViewId, "shells">;
 
 export default function NavIcon({ id, className }: { id: NavIconId; className?: string }) {
   switch (id) {
+    case "services":
+      return (
+        <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+          <rect x="3" y="3" width="18" height="4" rx="1" />
+          <rect x="3" y="10" width="18" height="4" rx="1" />
+          <rect x="3" y="17" width="18" height="4" rx="1" />
+        </svg>
+      );
     // Compute instance: a chip with four pins — MicroVMs are the workload
     // running on virtualized "hardware".
     case "vms":
@@ -35,6 +41,8 @@ export default function NavIcon({ id, className }: { id: NavIconId; className?: 
         </svg>
       );
     // Disk canister — M2Image/rootfs volumes.
+    case "pipe":
+      return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className} aria-hidden="true"><path d="M3 12h7m4-7h7m-7 14h7M10 12l4-7m-4 7l4 7" /><circle cx="3" cy="12" r="2" /><circle cx="21" cy="5" r="2" /><circle cx="21" cy="19" r="2" /></svg>;
     case "storages":
       return (
         <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
@@ -53,6 +61,18 @@ export default function NavIcon({ id, className }: { id: NavIconId; className?: 
           <circle cx="8" cy="9.5" r="1.8" />
           <path d="M5 17l4.5-5.5L13 15l2.5-3L19 17z" />
         </svg>
+      );
+    // Official Tux mascot — independently managed Linux kernels.
+    case "kernels":
+      return (
+        <img
+          src="/tux.svg"
+          alt=""
+          className={className}
+          width={18}
+          height={18}
+          aria-hidden="true"
+        />
       );
     // Desktop + stand — this host machine, as distinct from the VMs it runs.
     case "host":

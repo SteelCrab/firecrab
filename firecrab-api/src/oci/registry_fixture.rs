@@ -110,8 +110,11 @@ impl LocalOciRegistry {
     }
 
     /// Stops the listener and deletes scratch blobs. Also run from [`Drop`].
-    pub(crate) fn shutdown(&mut self) {
+    pub(crate) async fn shutdown(&mut self) {
         self.task.abort();
+        // `abort` only schedules cancellation. Awaiting the handle makes the
+        // listener drop before callers probe the port or the scratch tree.
+        let _ = (&mut self.task).await;
         if let Some(scratch) = self.scratch.take() {
             let _ = scratch.close();
         }
@@ -120,7 +123,10 @@ impl LocalOciRegistry {
 
 impl Drop for LocalOciRegistry {
     fn drop(&mut self) {
-        self.shutdown();
+        self.task.abort();
+        if let Some(scratch) = self.scratch.take() {
+            let _ = scratch.close();
+        }
     }
 }
 
@@ -358,12 +364,18 @@ async fn dropping_the_fixture_stops_the_listener_and_deletes_scratch() {
         .to_owned();
     assert!(scratch.join("manifest.json").exists());
 
-    registry.shutdown();
+    registry.shutdown().await;
 
-    assert!(
-        tokio::net::TcpStream::connect(&address).await.is_err(),
-        "listener must not survive shutdown"
-    );
+    // The port closes soon, not instantly: abort() only schedules the serve
+    // task's cancellation, and a parallel test forking a subprocess holds an
+    // inherited copy of the listening socket until that child execs.
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        while tokio::net::TcpStream::connect(&address).await.is_ok() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "listener must not survive shutdown");
     assert!(
         !scratch.exists(),
         "scratch blobs must be deleted on shutdown, including after failure"

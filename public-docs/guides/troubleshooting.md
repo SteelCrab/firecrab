@@ -1,0 +1,185 @@
+# Troubleshooting
+
+Start with the read-only host doctor.
+
+```sh
+./install.sh --doctor
+```
+Use `firecrab doctor` on an installed host.
+
+## Basic status
+
+```sh
+systemctl status firecrab-helper firecrab-api
+journalctl -u firecrab-api -n 100 --no-pager
+journalctl -u firecrab-helper -n 100 --no-pager
+ls -l /dev/kvm /run/firecrab/net-helper.sock
+df -h
+```
+
+## Dashboard cannot reach the API
+
+Check the API directly.
+
+```sh
+curl -i http://127.0.0.1:5523/api/vms
+```
+
+Use `http://localhost:8080` for Vite development — `127.0.0.1:8080` is a
+different browser origin. Check for old processes on ports `5523` and `8080`.
+
+## Data appears empty
+
+Run the development API from the repository root; default data paths use the
+current working directory. The host doctor reports multiple database locations.
+
+## VM start fails immediately
+
+Check KVM access.
+
+```sh
+ls -l /dev/kvm
+id -nG
+```
+
+The API user must be in the `kvm` group.
+A new group membership needs a new login session.
+
+## VM keeps running after the API stops
+
+Each VM runs in a `firecrab-vm-<simple id>.service` unit and survives `firecrab-api` restarts by design.
+The next API start re-adopts it and logs the outcome.
+
+```sh
+systemctl list-units --all --plain 'firecrab-vm-*'
+journalctl -u firecrab-api -b | grep 'startup reconciliation finished'
+journalctl -u 'firecrab-vm-*' -b
+```
+
+`VM unit runs no VM this API tracks; leaving it running` names a unit the API did not re-adopt; check it, then stop it with `sudo systemctl stop <unit>`.
+A start that fails with `the network helper could not start the VM's unit` names the rejected path: the API binary beside the helper and the Firecracker binary must be root-owned and not writable by group or others.
+A unit's memory and CPU ceilings are set from the VM's RAM and vCPUs each time it starts: `systemctl show -p MemoryMax -p CPUQuotaPerSecUSec firecrab-vm-<simple id>.service` prints them. A VM started before the upgrade that added them has none until its next start.
+
+## Network helper is unavailable
+
+The API and helper must use the same socket, by default `/run/firecrab/net-helper.sock`.
+Start the development helper with `./scripts/dev-net-helper.sh`, or check the installed one.
+
+```sh
+systemctl status firecrab-helper
+ls -l /run/firecrab/net-helper.sock
+```
+
+## VM stays in `starting`
+
+Open the VM details and read the active start step; check the API and console logs.
+Then check disk space and latency during disk preparation.
+
+```sh
+df -h
+iostat -xz 1
+```
+
+Use separate MicroStorage pools when one disk is saturated.
+
+## Guest has no IPv4 address
+
+Inspect the network and host bridge.
+
+```sh
+curl -s http://127.0.0.1:5523/api/micro-networks/<id>
+ip -br link show type bridge
+sudo ss -lunp | grep ':67'
+```
+
+Read the helper log for dnsmasq errors and the guest log for `FIRECRAB_NETWORK_FAILED`.
+The host firewall can block DHCP on `mnb*` bridges. Restart
+`firecrab-helper` after an upgrade. An imported image has no `ping`;
+use `/etc/firecrab/busybox ping 1.1.1.1` or restart for PATH tools.
+
+## Guest PID 1
+
+Use `readlink -f /proc/1/exe` inside the guest to identify its running init.
+OCI imports preserve supported systemd/OpenRC and otherwise use BusyBox.
+Older templates retain their import-time behavior; see [Guest runtime](../reference/guest-runtime.md#init-and-boot).
+
+## Internet access fails
+
+Check both policy levels.
+
+- The MicroNetwork needs `internetEnabled: true`.
+- The VM needs `egressPolicy: internet`.
+- The host needs a default route.
+- The host firewall must allow forwarding.
+
+```sh
+sudo nft list table inet firecrab
+```
+
+## OCI pull fails
+
+`401` is a bad login; `429` is the spent anonymous quota — save a token, see [OCI](oci.md).
+`Permission denied (os error 13)` is this host refusing `connect(2)`, not the network.
+`sudo firecrab doctor` tests egress as the API account and names the layer; usually SELinux, below.
+
+## SELinux confines the services to `init_t`
+
+`init_t` is systemd's own domain; the services must transition out of it.
+While confined there, `nft list table inet firecrab` is also empty.
+
+```sh
+ps -eZ | grep -E 'firecrab-(api|net-he)'          # want unconfined_service_t
+sudo ausearch -m avc -ts recent | audit2allow -a
+```
+
+`$PREFIX/lib/firecrab` is labelled `lib_t`, and the transition rule only fires
+for `bin_t`. Installing with `install.sh` relabels it; on an older install:
+
+```sh
+sudo semanage fcontext -a -t bin_t '/usr/local/lib/firecrab(/.*)?'
+sudo restorecon -R /usr/local/lib/firecrab
+sudo systemctl restart firecrab-helper firecrab-api
+```
+
+`sudo setenforce 0` confirms the diagnosis in one command; put it back to `1`.
+A unit sandbox (`systemctl show firecrab-api -p IPAddressDeny`) or a firewall rule
+on the API account gives the same `EACCES` when SELinux is not the cause.
+
+## Image download returns `503`
+
+Unset or set `FIRECRAB_IMAGE_BASE_URL` to a package base (not `none`/`-`).
+The package URL is `<base>/<alias>.tar.zst`. Restart the API after changing it.
+
+## Image install has a permission error
+
+The API user must be able to write `FIRECRAB_IMAGE_ROOT`.
+
+```sh
+namei -l /var/lib/firecrab/images
+```
+
+## Bootstrap fails
+
+Read the bootstrap job log first. Common causes are network failure, low memory,
+chroot DNS, and tool mismatch.
+Rocky 9.8 downloads a pinned Container-Base tarball; that URL must be reachable.
+Only one bootstrap job can run at a time.
+
+## Terminal disconnects
+
+The VM must have an active Firecracker process, and the proxy must forward
+WebSocket upgrades for `/ws`. Check the browser network panel and API log.
+
+## Delete returns `409`
+
+The resource is active or still in use: stop a VM before deleting it, and remove
+VMs before deleting their network, storage pool, or image.
+Use the response `requestId` to find the server log.
+
+## Related
+
+- [API](../reference/api.md)
+- [firecrab CLI](../reference/cli.md)
+- [Networking](networking.md)
+- [Storage](storage.md)
+- [Images](images.md)

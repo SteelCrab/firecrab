@@ -16,7 +16,8 @@ pub const GUEST_SSHD_DROPIN: &str = "/etc/ssh/sshd_config.d/50-firecrab.conf";
 pub fn sshd_service_script() -> String {
     r#"#!/etc/firecrab/busybox sh
 # Firecrab: start sshd with key-only root login (issue #181).
-mkdir -p /run/sshd /root/.ssh
+BB=/etc/firecrab/busybox
+$BB mkdir -p /run/sshd /root/.ssh
 if [ ! -x /usr/sbin/sshd ]; then
   echo "FIRECRAB_SSHD skipped: no /usr/sbin/sshd" >/dev/console
   exit 0
@@ -26,13 +27,13 @@ fi
 # home directory it does not own.
 for dir in /var/lib/empty /var/empty /run/sshd; do
   [ -d "$dir" ] || continue
-  chown 0:0 "$dir" 2>/dev/null
-  chmod go-w "$dir" 2>/dev/null
+  $BB chown 0:0 "$dir" 2>/dev/null
+  $BB chmod go-w "$dir" 2>/dev/null
 done
-chown 0:0 /root /root/.ssh /root/.ssh/authorized_keys 2>/dev/null
-chmod 700 /root/.ssh
-chmod 600 /root/.ssh/authorized_keys 2>/dev/null
-ssh-keygen -A >/dev/null 2>&1
+$BB chown 0:0 /root /root/.ssh /root/.ssh/authorized_keys 2>/dev/null
+$BB chmod 700 /root/.ssh
+$BB chmod 600 /root/.ssh/authorized_keys 2>/dev/null
+/usr/bin/ssh-keygen -A >/dev/null 2>&1
 exec /usr/sbin/sshd -D -e \
   -f /etc/ssh/sshd_config.d/50-firecrab.conf \
   -o PermitRootLogin=prohibit-password \

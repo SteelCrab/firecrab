@@ -16,7 +16,7 @@ pub use firecrab_api_types::{StartupStep, StartupStepOutcome, StartupStepRun};
 pub use firecrab_helper_protocol::network::MacAddr;
 
 /// An active IPv4 + MAC assignment for one VM, drawn from the shared bridge
-/// subnet (see `firecrab-net-helper/src/bridge.rs`).
+/// subnet (see `firecrab-helper/src/bridge.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Lease {
     /// The VM this lease belongs to.
