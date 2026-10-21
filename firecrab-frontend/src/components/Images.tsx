@@ -130,9 +130,9 @@ function keepNewestJobSnapshot<T extends ImageInstallResponse>(
 }
 
 /**
- * 클릭하면 열리는 최소 드롭다운 메뉴. 바깥 클릭 또는 Esc로 닫힌다.
- * 이 프로젝트에 다른 드롭다운 패턴이 없어 이 자리 전용으로 최소 구현했다 —
- * 범용화해서 다른 화면에 재사용할 계획은 없다.
+ * Minimal dropdown menu that opens on click and closes on outside click or Esc.
+ * The project has no other dropdown pattern, so this implementation is specific
+ * to this location. There are no plans to generalize it for other screens.
  */
 function OptionsMenu({
   items,
@@ -186,7 +186,7 @@ function OptionsMenu({
   );
 }
 
-/** 선택한 로컬 이미지의 상세 정보를 표 아래에 표시한다. */
+/** Show details of the selected local image below the table. */
 function computeMenuItems(
   image: ImageResponse,
   ctx: {
@@ -742,8 +742,8 @@ export default function Images() {
       .catch((error) => setUsedByError((error as Error).message));
   }, []);
 
-  // MicroNetworks의 `getMicroNetwork(selectedId)`와 같은 패턴 —
-  // 목록 자체엔 없는, 선택 시점의 최신 사용처만 별도로 가져온다.
+  // Follow the same pattern as MicroNetworks' `getMicroNetwork(selectedId)`:
+  // fetch current usage separately on selection because the list does not include it.
   useEffect(() => {
     if (!selectedAlias) {
       setUsedByVms(null);

@@ -1,35 +1,35 @@
-//! install.sh `record_host_baseline` / `restore_host_baseline`: 설치와 helper가 바꾼
-//! 호스트 상태 중 우리가 바꾼 것만 되돌린다.
+//! install.sh `record_host_baseline` / `restore_host_baseline`: restore only
+//! the host state changed by the installer and helper.
 //!
-//! install.sh는 처음 설치할 때 `$CONFDIR/host-baseline.env`에 설치 직전 값을
-//! 적는다. 기록이 없는 설치(이 기능 이전)는 무엇이 우리 것인지 알 수 없으므로
-//! 건드리지 않는다. Rust 설치기가 구현되면 같은 파일을 써야 한다.
+//! On the first installation, install.sh records the previous values in
+//! `$CONFDIR/host-baseline.env`. Leave installations without a record (from before
+//! this feature) untouched because their changes cannot be identified. The Rust installer must use the same file.
 
 use super::env::ServiceEnv;
 use super::output;
 use super::privileged::Privileged;
 use crate::shell::CommandRunner;
 
-/// `$CONFDIR` 아래 기록 파일 이름. install.sh와 같아야 한다.
+/// Baseline file name under `$CONFDIR`. Must match install.sh.
 pub const BASELINE_FILE: &str = "host-baseline.env";
 
 const KVM_DEVICE: &str = "/dev/kvm";
 const IPV4_FORWARDING: &str = "net.ipv4.ip_forward";
 const IPV6_FORWARDING: &str = "net.ipv6.conf.all.forwarding";
 
-/// 설치 직전 호스트 상태. 값이 없으면 그 항목은 기록되지 않은 것이다.
+/// Host state before installation. An absent value means the setting was not recorded.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Baseline {
-    /// 설치가 `/dev/kvm`에 `g:kvm:rw` ACL을 새로 붙였다.
+    /// The installer added the `g:kvm:rw` ACL to `/dev/kvm`.
     pub kvm_acl_added: bool,
-    /// 설치 직전 `net.ipv4.ip_forward`.
+    /// `net.ipv4.ip_forward` before installation.
     pub ip_forward: Option<bool>,
-    /// 설치 직전 `net.ipv6.conf.all.forwarding`.
+    /// `net.ipv6.conf.all.forwarding` before installation.
     pub ipv6_forwarding: Option<bool>,
 }
 
 impl Baseline {
-    /// `key=value` 줄만 읽는다. 주석과 모르는 키는 무시한다.
+    /// Read only `key=value` lines. Ignore comments and unknown keys.
     pub fn parse(text: &str) -> Self {
         let mut baseline = Self::default();
         for line in text.lines() {
@@ -52,14 +52,14 @@ impl Baseline {
     }
 }
 
-/// 기록이 있으면 그 기록에 있는 것만 되돌리고 기록 파일을 지운다.
+/// If a baseline exists, restore only its recorded settings and remove the file.
 pub fn restore(privileged: &Privileged<'_>, env: &ServiceEnv) {
     let path = env
         .confdir
         .join(BASELINE_FILE)
         .to_string_lossy()
         .into_owned();
-    // root 소유 0640이라 sudo로 읽는다.
+    // Read with sudo because the file is owned by root with mode 0640.
     let Some(text) = privileged
         .run("cat", &[&path])
         .ok()
@@ -73,11 +73,11 @@ pub fn restore(privileged: &Privileged<'_>, env: &ServiceEnv) {
         remove_kvm_acl(privileged);
     }
     restore_forwarding(privileged, &baseline);
-    // 다음 설치가 그때의 호스트 상태를 새로 기록하도록.
+    // Let the next installation record the host state as it exists then.
     let _ = privileged.run("rm", &["-f", &path]);
 }
 
-/// 설치기가 붙인 ACL만 뗀다. 이미 없으면 할 일이 없다.
+/// Remove only the ACL added by the installer. Do nothing if it is already absent.
 fn remove_kvm_acl(privileged: &Privileged<'_>) {
     let present = privileged
         .runner()
@@ -115,8 +115,8 @@ fn remove_kvm_acl(privileged: &Privileged<'_>) {
     }
 }
 
-/// `getfacl` 출력에 `user:<이름>:` 또는 `group:<이름>:` 항목이 있는가. 소유자·
-/// 소유 그룹을 뜻하는 `user::`/`group::`은 세지 않는다.
+/// Check `getfacl` output for `user:<name>:` or `group:<name>:` entries.
+/// Exclude `user::`/`group::`, which refer to the owner and owning group.
 fn has_named_entry(listing: &str) -> bool {
     listing.lines().any(|line| {
         let line = line.trim();
@@ -126,7 +126,7 @@ fn has_named_entry(listing: &str) -> bool {
     })
 }
 
-/// 설치 전에 꺼져 있던 포워딩을, 아직 켜져 있고 다른 누가 쓰지 않을 때만 끈다.
+/// Disable forwarding that was off before installation only if it is still on and no one else uses it.
 fn restore_forwarding(privileged: &Privileged<'_>, baseline: &Baseline) {
     let runner = privileged.runner();
     let to_disable: Vec<&str> = [
@@ -140,8 +140,8 @@ fn restore_forwarding(privileged: &Privileged<'_>, baseline: &Baseline) {
     if to_disable.is_empty() {
         return;
     }
-    // Docker·libvirt·CNI 같은 쪽이 같은 설정에 기대고 있을 수 있다. 우리 브리지는
-    // 이미 걷혔으니, 브리지나 veth가 남아 있으면 끄지 않는다.
+    // Docker, libvirt, or CNI may depend on the same setting. Our bridges are
+    // already removed, so keep forwarding on if any bridge or veth remains.
     if others_may_route(runner) {
         output::warn(&format!(
             "left {} on: other bridges or containers are present (resets at reboot)",
@@ -171,7 +171,7 @@ fn is_on(runner: &dyn CommandRunner, key: &str) -> bool {
         .is_some_and(|out| String::from_utf8_lossy(&out.stdout).trim() == "1")
 }
 
-/// `ip`로 확인하지 못하면 안전한 쪽(다른 누가 쓴다)으로 본다.
+/// If `ip` cannot determine usage, assume another service uses it to avoid disrupting that service.
 fn others_may_route(runner: &dyn CommandRunner) -> bool {
     ["bridge", "veth"].into_iter().any(|kind| {
         match runner.run("ip", &["-o", "link", "show", "type", kind]) {

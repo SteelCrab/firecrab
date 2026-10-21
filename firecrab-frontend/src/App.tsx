@@ -63,7 +63,7 @@ function reduce(state: Dashboard, msg: Msg): Dashboard {
       return { ...state, vms: msg.vms, loaded: true, consecutiveFailures: 0,
         banner: state.banner?.source === "poll" ? null : state.banner };
     case "refreshFailed":
-      // Always flip `loaded` so the list panel is not stuck on "불러오는 중…"
+      // Always flip `loaded` so the list panel is not stuck on "Loading…"
       // after the first failed poll (common right after `npm run dev` while
       // the API is still starting, or when the proxy flaps once).
       return {

@@ -1,7 +1,7 @@
-//! `firecrab service` — install.sh의 설치/삭제와 systemd 제어를 Rust로.
+//! `firecrab service` — install.sh installation, removal, and systemd control in Rust.
 //!
-//! 설치·재설치는 번들에 포함한 install.sh를 재사용한다. 서비스 제어와
-//! 삭제는 [`privileged::Privileged`]를 거쳐 실행한다.
+//! Installation and reinstallation reuse install.sh from the release bundle.
+//! Service control and removal run through [`privileged::Privileged`].
 #![allow(dead_code)]
 
 use std::path::PathBuf;
