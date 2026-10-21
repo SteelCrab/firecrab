@@ -59,6 +59,9 @@ jobs:
       - name: Guest QA failure and cleanup contract
         run: python3 scripts/test-ci-qa-guest.py
 
+      - name: Database QA guards and cleanup contract
+        run: python3 scripts/test-pipe-databases-qa.py
+
       - name: macOS repair QA guard and restoration contract
         run: python3 -m unittest scripts/test_macos_repair_qa.py scripts/test_macos_os_repair_qa.py scripts/test_macos_os_files.py
 
@@ -326,12 +329,65 @@ jobs:
       - name: Playwright @dashboard specs
         run: npm --prefix firecrab-e2e run test:dashboard
 
+      - name: PIPE database E2E types
+        run: npm run typecheck:pipe --prefix firecrab-e2e
+
       - name: Playwright traces (on failure)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-dashboard-results
           path: firecrab-e2e/test-results
+          retention-days: 7
+
+  pipe-databases:
+    name: PIPE databases (real API, PostgreSQL, MySQL, TLS and browser)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+      - name: Install Rust and database clients
+        run: |
+          rustup show
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client default-mysql-client openssl
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            firecrab-frontend/package-lock.json
+            firecrab-e2e/package-lock.json
+      - name: Build API and dashboard
+        run: |
+          cargo build -p firecrab-api --locked
+          npm ci --prefix firecrab-frontend
+          npm ci --prefix firecrab-e2e
+          npm run build --prefix firecrab-frontend
+          npm run typecheck:pipe --prefix firecrab-e2e
+          npx --prefix firecrab-e2e playwright install --with-deps chromium
+      - name: Real database and desktop/mobile QA
+        run: bash scripts/ci-qa-pipe-databases.sh --browser
+      - name: Retain QA report and browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipe-databases-qa
+          path: |
+            target/qa/pipe-databases.json
+            target/qa/pipe-databases.api.log
+            firecrab-e2e/test-results/pipe-live-*
           retention-days: 7
 
   install:
@@ -363,7 +419,7 @@ jobs:
 
       - name: shellcheck
         run: |
-          shellcheck install.sh scripts/ci-qa-helper-upgrade.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
+          shellcheck install.sh scripts/ci-qa-helper-upgrade.sh scripts/ci-qa-pipe-databases.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
             scripts/build-micromanager-macos.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/ci-qa-api.sh \
