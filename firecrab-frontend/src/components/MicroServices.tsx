@@ -195,11 +195,11 @@ function VariableRows({ kind, rows, setRows, disabled }: {
   return (
     <fieldset className="service-variables service-full" disabled={disabled}>
       <legend>{secret ? t("Secret references", "시크릿 참조") : t("Environment variables", "환경 변수")}</legend>
-      {secret && <p className="poll-note">{t("Enter a CrabSecrets ID for each variable. Store sensitive values in CrabSecrets.", "변수마다 CrabSecrets ID를 입력한다. 민감한 값은 CrabSecrets에 저장한다.")}</p>}
+      {secret && <p className="poll-note">{t("Enter a PipeSecrets ID for each variable. Manage sensitive values in Secrets.", "변수마다 PipeSecrets ID를 입력한다. 민감한 값은 Secrets에서 관리한다.")}</p>}
       {rows.map((row, index) => (
         <div className="service-variable-row" key={index}>
           <div className="field"><label htmlFor={`service-${kind}-key-${index}`}>{t("Variable", "변수")}</label><input id={`service-${kind}-key-${index}`} value={row.key} maxLength={256} autoComplete="off" onChange={(event) => setRows(rows.map((pair, i) => i === index ? { ...pair, key: event.target.value } : pair))} required /></div>
-          <div className="field"><label htmlFor={`service-${kind}-value-${index}`}>{secret ? "CrabSecrets ID" : t("Value", "값")}</label><input id={`service-${kind}-value-${index}`} value={row.value} maxLength={secret ? 36 : 4096} autoComplete="off" onChange={(event) => setRows(rows.map((pair, i) => i === index ? { ...pair, value: event.target.value } : pair))} required={secret} /></div>
+          <div className="field"><label htmlFor={`service-${kind}-value-${index}`}>{secret ? "PipeSecrets ID" : t("Value", "값")}</label><input id={`service-${kind}-value-${index}`} value={row.value} maxLength={secret ? 36 : 4096} autoComplete="off" onChange={(event) => setRows(rows.map((pair, i) => i === index ? { ...pair, value: event.target.value } : pair))} required={secret} /></div>
           <button type="button" className="btn danger" aria-label={t(`Remove ${kind} row ${index + 1}`, `${kind} ${index + 1}행 삭제`)} onClick={() => setRows(rows.filter((_, i) => i !== index))}>{t("Remove", "삭제")}</button>
         </div>
       ))}

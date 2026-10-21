@@ -19,6 +19,44 @@
 }
 
 * { box-sizing: border-box; }
+
+/* PipeSecrets follows the console's existing panel and form styles. */
+.secrets-panel { min-width: 0; }
+.secrets-badge { display: inline-block; padding: .25rem .5rem; border: 1px solid var(--line); border-radius: 3px; color: var(--shell); font: .72rem var(--font-mono); }
+.secrets-tabs, .secrets-toolbar, .secrets-upload, .secrets-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.secrets-tabs { border-bottom: 1px solid var(--line); padding-bottom: 1rem; margin: 1rem 0; }
+.secrets-tabs button span { margin-left: .5rem; opacity: .75; }
+.secrets-toolbar { margin: 1rem 0; }
+.secrets-toolbar .secrets-search { flex: 1; min-width: 10rem; }
+.secrets-upload { padding: .85rem; background: var(--bg); border: 1px solid var(--line); margin-bottom: 1rem; }
+.secrets-upload select { flex: 1; min-width: 10rem; max-width: 100%; }
+.secrets-description { display: block; color: var(--shell); font-size: .72rem; margin-top: .3rem; overflow-wrap: anywhere; }
+.secrets-value { display: flex; align-items: flex-start; gap: .5rem; }
+.secrets-value-text { min-width: 8ch; max-width: 16rem; max-height: 8rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.secrets-notice { color: var(--ready); }
+.secrets-connections { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 1rem; }
+.secrets-connection { display: flex; flex-direction: column; justify-content: space-between; gap: 1rem; border: 1px solid var(--line); padding: 1rem; border-radius: 4px; min-width: 0; }
+.secrets-connection h3 { margin: .8rem 0 .4rem; }
+.secrets-connection p { font-size: .8rem; overflow-wrap: anywhere; }
+.secrets-form { max-width: 48rem; }
+.secrets-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.secrets-field { display: grid; gap: .4rem; margin: 1rem 0; }
+.secrets-field input, .secrets-field textarea, .secrets-field select, .secrets-search, .secrets-upload select { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 3px; padding: .6rem .7rem; background: var(--bg-panel); color: var(--ink); font: .82rem var(--font-mono); }
+.secrets-field textarea { resize: vertical; }
+.secrets-masked-input { -webkit-text-security: disc; }
+.secrets-checkbox { display: flex; align-items: center; gap: .5rem; font-size: .85rem; margin: .75rem 0; }
+.secrets-changes { margin: 1rem 0; max-height: 24rem; overflow-y: auto; border: 1px solid var(--line); }
+.secrets-change { display: flex; align-items: center; gap: .75rem; padding: .8rem; border-bottom: 1px solid var(--line); font-size: .85rem; }
+.secrets-change:last-child { border-bottom: 0; }
+.secrets-change code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.secrets-change-add { color: var(--ready); }
+.secrets-change-update { color: var(--amber); }
+.secrets-change-unchanged { color: var(--shell); }
+@media (max-width: 640px) {
+  .secrets-table { min-width: 50rem; }
+  .secrets-toolbar .secrets-search { flex-basis: 100%; }
+  .secrets-change { flex-wrap: wrap; }
+}
 html { color-scheme: light; }
 
 body {

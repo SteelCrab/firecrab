@@ -107,6 +107,8 @@ pub struct AppState {
     pub templates: Arc<TemplateRegistry>,
     /// SQLite-backed durable storage.
     pub(crate) store: Store,
+    /// Encrypted, host-local PipeSecrets vault; opened lazily on first use.
+    pub(crate) secrets: Arc<crate::secrets::Vault>,
     /// Short configuration/operation claims; never held while booting a guest.
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
     /// One image/VM deployment at a time bounds replica surge on one host.
@@ -158,6 +160,9 @@ impl AppState {
         templates: TemplateRegistry,
         db_file: PathBuf,
     ) -> Result<Self, PersistenceError> {
+        let secrets = Arc::new(crate::secrets::Vault::new(
+            db_file.with_extension("secrets"),
+        ));
         let (store, vms) = tokio::task::spawn_blocking(move || {
             let store = Store::open(&db_file)?;
             // Live states from the previous run stay as they are: the VM
@@ -176,6 +181,7 @@ impl AppState {
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            secrets,
             service_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),

@@ -14,6 +14,7 @@ export const VIEWS = [
   { id: "services", labels: { en: "MicroService", ko: "MicroService" } },
   { id: "networks", labels: { en: "Networks", ko: "네트워크" } },
   { id: "pipe", labels: { en: "Pipe", ko: "Pipe" } },
+  { id: "secrets", labels: { en: "Secrets", ko: "Secrets" } },
   { id: "storages", labels: { en: "Storage", ko: "스토리지" } },
   { id: "images", labels: { en: "Images", ko: "이미지" } },
   { id: "kernels", labels: { en: "Kernels", ko: "커널" } },

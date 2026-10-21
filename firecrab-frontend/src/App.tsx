@@ -16,6 +16,7 @@ import MicroStorages from "./components/MicroStorages";
 import MicroServices from "./components/MicroServices";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
+import Secrets from "./components/Secrets";
 import Shells from "./components/Shells";
 import { newVmHash, useAppRoute, viewHash } from "./navigation";
 import { useI18n } from "./i18n";
@@ -117,10 +118,12 @@ export default function App() {
   // server-synced. The serial console is a full-page hash route instead.
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [pipeHasUnsavedChanges, setPipeHasUnsavedChanges] = useState(false);
-  const confirmLeave = useCallback(() => !pipeHasUnsavedChanges || window.confirm(t(
-    "Pipe changes have not been saved. Leave without saving?",
-    "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
-  )), [pipeHasUnsavedChanges, t]);
+  const [secretsHasUnsavedChanges, setSecretsHasUnsavedChanges] = useState(false);
+  const confirmLeave = useCallback(() => !(pipeHasUnsavedChanges || secretsHasUnsavedChanges) || window.confirm(
+    secretsHasUnsavedChanges
+      ? t("Secrets changes have not been saved or are still processing. Leave this page?", "Secrets 변경을 저장하지 않았거나 처리 중이다. 이동할까요?")
+      : t("Pipe changes have not been saved. Leave without saving?", "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?"),
+  ), [pipeHasUnsavedChanges, secretsHasUnsavedChanges, t]);
   const { route, selectView, closeConsole } = useAppRoute(confirmLeave);
 
   const runRefresh = useCallback(() => {
@@ -241,6 +244,7 @@ export default function App() {
             the moment you navigate away. */}
         {view === "networks" && <MicroNetworks />}
         {view === "services" && <MicroServices />}
+        {view === "secrets" && <Secrets onUnsavedChange={setSecretsHasUnsavedChanges} />}
         {view === "pipe" && <Pipe vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />}
         {view === "storages" && <MicroStorages />}
         {view === "images" && <Images />}

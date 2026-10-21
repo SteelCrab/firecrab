@@ -187,7 +187,7 @@ fn deployment_fields(
     if !spec.secrets.is_empty() {
         fields.insert(
             "secrets".into(),
-            "CrabSecrets injection is not available yet; secret references cannot be deployed"
+            "PipeSecrets injection is not available yet; secret references cannot be deployed"
                 .into(),
         );
     }
