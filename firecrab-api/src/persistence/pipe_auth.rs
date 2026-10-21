@@ -3,6 +3,7 @@ use super::*;
 use crate::pipe_auth::{Provider, SavedAuth};
 
 impl Store {
+    /// Decode saved provider credentials, rejecting malformed documents and provider mismatches.
     pub fn pipe_auths(&self) -> Result<Vec<SavedAuth>, PersistenceError> {
         let conn = self.lock();
         let mut statement = conn
@@ -28,6 +29,7 @@ impl Store {
         .collect()
     }
 
+    /// Atomically replace one provider credential without modifying other providers.
     pub fn put_pipe_auth(&self, auth: &SavedAuth) -> Result<(), PersistenceError> {
         let provider = auth.connection().provider;
         let raw = serde_json::to_string(auth).map_err(|_| PersistenceError::CorruptRecord {
@@ -42,6 +44,7 @@ impl Store {
         Ok(())
     }
 
+    /// Remove the selected provider credential; an already absent connection also succeeds.
     pub fn delete_pipe_auth(&self, provider: Provider) -> Result<(), PersistenceError> {
         self.lock().execute(
             "DELETE FROM pipe_auth_credentials WHERE provider = ?1",

@@ -10,13 +10,17 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, time::Duration};
 
+/// External account providers whose credentials can be reused by Pipe services.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
+    /// AWS signing credentials for a private ECR registry.
     Aws,
+    /// GitHub classic personal access token for GHCR.
     Github,
 }
 impl Provider {
+    /// Stable provider key used by URL paths and credential database rows.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Aws => "aws",
@@ -25,27 +29,40 @@ impl Provider {
     }
 }
 
+/// Public connection metadata; no credential values are serialized into this view.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
+    /// Provider that verified the account credentials.
     pub provider: Provider,
+    /// Verified GitHub login or twelve-digit AWS account ID.
     pub account: String,
+    /// Exact registry hostname covered by this connection.
     pub registry: String,
+    /// Selected AWS region, or `None` for GitHub.
     pub region: Option<String>,
+    /// Pipe service identifiers that can reuse this connection.
     pub services: [&'static str; 1],
 }
 
-// These types intentionally have no Debug implementation: they contain secrets.
+/// AWS signing material and the region used for ECR requests.
+///
+/// Contains secrets, so it deliberately omits `Debug` and must stay out of API responses.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AwsCredentials {
+    /// IAM access key ID identifying the principal that signs each request.
     pub access_key_id: String,
+    /// Secret key used to derive the SigV4 signing key.
     pub secret_access_key: String,
+    /// Temporary session token, or an empty string for long-lived access keys.
     #[serde(default)]
     pub session_token: String,
+    /// Region used for the signing scope and ECR endpoint hostname.
     pub region: String,
 }
 
+/// Provider-specific credential document submitted when connecting or rotating an account.
 #[derive(Deserialize)]
 #[serde(
     tag = "provider",
@@ -54,18 +71,26 @@ pub struct AwsCredentials {
     deny_unknown_fields
 )]
 pub enum Login {
+    /// Verify a classic PAT and its package access against the GitHub account API.
     Github {
+        /// Secret token submitted to GitHub to establish the account identity.
         token: String,
     },
+    /// Verify AWS signing credentials by requesting an ECR authorization token.
     Aws {
+        /// IAM access key ID identifying the signing principal.
         access_key_id: String,
+        /// Secret key used for the SigV4 request signature.
         secret_access_key: String,
+        /// Optional token accompanying temporary AWS credentials.
         #[serde(default)]
         session_token: String,
+        /// AWS region whose ECR API verifies the credentials.
         region: String,
     },
 }
 impl Login {
+    /// Provider selected by the credential document, checked against the URL path.
     pub fn provider(&self) -> Provider {
         match self {
             Self::Github { .. } => Provider::Github,
@@ -74,6 +99,9 @@ impl Login {
     }
 }
 
+/// Verified provider credentials persisted in the private credential database.
+///
+/// Public responses must use [`Self::connection`] instead of serializing this value.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(
     tag = "provider",
@@ -81,16 +109,23 @@ impl Login {
     rename_all_fields = "camelCase"
 )]
 pub enum SavedAuth {
+    /// GitHub identity and the classic PAT that authenticated it.
     Github {
+        /// Verified login used for registry authentication and catalog ownership.
         username: String,
+        /// Secret PAT retained for subsequent GHCR requests.
         token: String,
     },
+    /// AWS account identity and credentials used to obtain fresh ECR logins.
     Aws {
+        /// Account ID derived from the verified ECR proxy endpoint.
         account_id: String,
+        /// Signing material and region retained for ECR metadata and token requests.
         credentials: AwsCredentials,
     },
 }
 impl SavedAuth {
+    /// Project a stored credential into the secret-free dashboard connection view.
     pub fn connection(&self) -> Connection {
         match self {
             Self::Github { username, .. } => Connection {
@@ -113,6 +148,9 @@ impl SavedAuth {
         }
     }
 
+    /// Return a login scoped to this account's exact registry hostname.
+    ///
+    /// AWS exchanges the saved keys for a fresh ECR password and rejects an account change.
     pub async fn registry_credential(&self) -> Result<RegistryCredential, &'static str> {
         match self {
             Self::Github { username, token } => Ok(RegistryCredential {
@@ -137,6 +175,7 @@ impl SavedAuth {
     }
 }
 
+/// Build a bounded HTTPS client that never follows credential-bearing redirects.
 fn client() -> Result<Client, &'static str> {
     Client::builder()
         .https_only(true)
@@ -148,6 +187,7 @@ fn client() -> Result<Client, &'static str> {
         .map_err(|_| "Could not create authentication client")
 }
 
+/// Verify submitted credentials and return the identity and secrets suitable for storage.
 pub async fn connect(login: Login) -> Result<SavedAuth, &'static str> {
     match login {
         Login::Github { token } => {
@@ -184,6 +224,7 @@ pub async fn connect(login: Login) -> Result<SavedAuth, &'static str> {
     }
 }
 
+/// Reject empty, oversized, or non-graphic ASCII secrets before constructing HTTP headers.
 fn validate_secret(value: &str, max: usize) -> Result<(), &'static str> {
     if value.is_empty() || value.len() > max || !value.bytes().all(|byte| byte.is_ascii_graphic()) {
         return Err("Provide a valid credential without spaces or control characters");
@@ -191,6 +232,7 @@ fn validate_secret(value: &str, max: usize) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Validate signing keys, the optional session token, and the region hostname component.
 fn validate_aws(credentials: &AwsCredentials) -> Result<(), &'static str> {
     if !(16..=128).contains(&credentials.access_key_id.len())
         || !credentials
@@ -224,6 +266,7 @@ fn validate_aws(credentials: &AwsCredentials) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Select the AWS DNS suffix, including the separate China region suffix.
 fn aws_domain(region: &str) -> &'static str {
     if region.starts_with("cn-") {
         "amazonaws.com.cn"
@@ -231,13 +274,16 @@ fn aws_domain(region: &str) -> &'static str {
         "amazonaws.com"
     }
 }
+/// Construct the regional ECR control-plane hostname used by signed metadata requests.
 fn ecr_api_host(region: &str) -> String {
     format!("api.ecr.{region}.{}", aws_domain(region))
 }
+/// Construct the private registry hostname for one verified AWS account and region.
 fn ecr_registry(account: &str, region: &str) -> String {
     format!("{account}.dkr.ecr.{region}.{}", aws_domain(region))
 }
 
+/// Verify the GitHub account identity and classic PAT package scope at the given endpoint.
 async fn github_auth(
     client: &Client,
     token: &str,
@@ -264,8 +310,10 @@ async fn github_auth(
     {
         return Err("Use a GitHub personal access token (classic) with read:packages permission.");
     }
+    /// Account identity returned by the GitHub user endpoint.
     #[derive(Deserialize)]
     struct User {
+        /// Login name used for GHCR authentication and the default package namespace.
         login: String,
     }
     let user: User = response_json(response).await?;
@@ -278,6 +326,7 @@ async fn github_auth(
     })
 }
 
+/// Decode a provider response with a 128 KiB limit and errors that omit response contents.
 async fn response_json<T: DeserializeOwned>(mut response: Response) -> Result<T, &'static str> {
     let mut body = Vec::new();
     while let Some(chunk) = response
@@ -352,6 +401,7 @@ fn ecr_headers(
     headers
 }
 
+/// Exchange AWS signing credentials for a login restricted to the returned ECR registry.
 async fn ecr_credential(
     client: &Client,
     credentials: &AwsCredentials,
@@ -375,15 +425,20 @@ async fn ecr_credential(
             "AWS ECR rejected the credentials. Check ecr:GetAuthorizationToken permission and session expiry.",
         );
     }
+    /// One ECR authorization result with its registry endpoint.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Authorization {
+        /// Base64-encoded `AWS:password` login issued by ECR.
         authorization_token: String,
+        /// HTTPS registry endpoint checked against the requested account region.
         proxy_endpoint: String,
     }
+    /// Response body from the ECR authorization-token operation.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Tokens {
+        /// Registry-specific authorization results returned by AWS.
         authorization_data: Vec<Authorization>,
     }
     let tokens: Tokens = response_json(response).await?;
@@ -438,6 +493,7 @@ pub async fn aws_repositories(
     .await
 }
 
+/// Fetch one signed ECR catalog page and validate its account, names, and opaque cursor.
 async fn ecr_repositories(
     client: &Client,
     credentials: &AwsCredentials,
@@ -477,16 +533,22 @@ async fn ecr_repositories(
             "AWS ECR repository discovery failed. Check ecr:DescribeRepositories permission and session expiry.",
         );
     }
+    /// Repository identity returned by the ECR catalog API.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Repository {
+        /// Owning AWS account, required to match the saved connection.
         registry_id: String,
+        /// Repository path within that account's private registry.
         repository_name: String,
     }
+    /// One ECR catalog page and its provider-issued continuation token.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Repositories {
+        /// Repository identities checked before being returned to the dashboard.
         repositories: Vec<Repository>,
+        /// Opaque AWS cursor forwarded only to subsequent ECR catalog requests.
         next_token: Option<String>,
     }
     let result: Repositories = response_json(response).await?;

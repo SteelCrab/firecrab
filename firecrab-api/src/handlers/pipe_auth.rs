@@ -12,10 +12,12 @@ use axum::{
     http::StatusCode,
 };
 
+/// Report a provider authentication failure without exposing credential values or upstream bodies.
 pub(crate) fn auth_error(message: &'static str, id: RequestId) -> AppError {
     AppError::new(StatusCode::BAD_REQUEST, "pipe_auth_failed", message, id.0)
 }
 
+/// Read private provider credentials off the async runtime and hide database error details.
 pub(crate) async fn saved(state: &AppState, id: RequestId) -> Result<Vec<SavedAuth>, AppError> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || store.pipe_auths())
@@ -24,6 +26,7 @@ pub(crate) async fn saved(state: &AppState, id: RequestId) -> Result<Vec<SavedAu
         .map_err(|_| AppError::internal(id.0))
 }
 
+/// List connected providers as metadata without serializing their stored secrets.
 pub async fn list(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -37,6 +40,7 @@ pub async fn list(
     ))
 }
 
+/// Verify a matching provider credential before atomically replacing its stored connection.
 pub async fn save(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -57,6 +61,7 @@ pub async fn save(
     Ok(Json(connection))
 }
 
+/// Disconnect one provider while retaining other accounts and independently saved registry logins.
 pub async fn delete(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,

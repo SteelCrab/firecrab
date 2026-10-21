@@ -95,6 +95,7 @@ pub struct Connection {
     registry: String,
     username: String,
     provider: &'static str,
+    /// Shared Pipe Auth provider, or `None` when this registry uses a direct login.
     #[serde(rename = "authProvider", skip_serializing_if = "Option::is_none")]
     auth_provider: Option<crate::pipe_auth::Provider>,
 }
@@ -239,6 +240,7 @@ pub struct RepositoriesQuery {
     namespace: Option<String>,
     /// One-based catalog page, defaulting to the first page.
     page: Option<u32>,
+    /// Opaque ECR continuation token, valid only with an AWS Pipe Auth connection.
     cursor: Option<String>,
 }
 
