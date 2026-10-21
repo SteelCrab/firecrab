@@ -46,6 +46,7 @@ async fn bounded<T>(
     }
 }
 
+/// List saved connection metadata without returning credentials or CA bundles.
 pub async fn list(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -88,6 +89,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(settings.summary)))
 }
 
+/// Authenticate an unsaved connection without writing a persistence record.
 pub async fn test(
     Extension(request_id): Extension<RequestId>,
     ValidatedJson(input): ValidatedJson<DatabaseInput>,
@@ -107,6 +109,7 @@ pub async fn test(
     ))
 }
 
+/// Validate a route identifier and load its saved input, or return HTTP 404.
 async fn load(state: AppState, request_id: Uuid, id: String) -> Result<DatabaseRecord, AppError> {
     let id = parse_id(&id, request_id)?;
     database(request_id, move || state.store.pipe_database(id))
@@ -114,6 +117,7 @@ async fn load(state: AppState, request_id: Uuid, id: String) -> Result<DatabaseR
         .ok_or_else(|| AppError::not_found(request_id))
 }
 
+/// Open a saved connection and list its accessible base tables.
 pub async fn tables(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -134,6 +138,7 @@ pub async fn tables(
     .map(Json)
 }
 
+/// Validate pagination and return one bounded page from a selected table.
 pub async fn preview(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -158,6 +163,7 @@ pub async fn preview(
     .map(Json)
 }
 
+/// Delete saved connection input without connecting to or changing the source DB.
 pub async fn delete(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
