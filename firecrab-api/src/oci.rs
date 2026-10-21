@@ -1,4 +1,4 @@
-//! OCI registry access for image import (`public-docs/images.md`).
+//! OCI registry access for image import (`public-docs/guides/images.md`).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -1221,7 +1221,7 @@ impl RegistrySession {
         })
     }
 
-    async fn send_once(
+    async fn send_request(
         &self,
         url: &str,
         accept: Option<&str>,
@@ -1238,9 +1238,7 @@ impl RegistrySession {
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        request.send().await.map_err(|error| {
-            ResolveError::Transport(format!("GET {url}: {}", format_error_chain(&error)))
-        })
+        transport::get(request, url).await
     }
 
     async fn get(
@@ -1251,7 +1249,7 @@ impl RegistrySession {
     ) -> Result<reqwest::Response, ResolveError> {
         let attempted = self.token.lock().await.clone();
         let response = self
-            .send_once(url, accept, attempted.as_deref(), timeout)
+            .send_request(url, accept, attempted.as_deref(), timeout)
             .await?;
         if response.status() != reqwest::StatusCode::UNAUTHORIZED {
             return Ok(response);
@@ -1276,9 +1274,7 @@ impl RegistrySession {
             if let Some(basic) = &self.basic {
                 token_request = token_request.basic_auth(&basic.username, Some(&basic.secret));
             }
-            let response = token_request.send().await.map_err(|error| {
-                ResolveError::Transport(format!("GET {token_url}: {}", format_error_chain(&error)))
-            })?;
+            let response = transport::get(token_request, &token_url).await?;
             if !response.status().is_success() {
                 return Err(ResolveError::Authentication(format!(
                     "token endpoint answered {}",
@@ -1298,7 +1294,9 @@ impl RegistrySession {
         };
         drop(stored);
 
-        let response = self.send_once(url, accept, Some(&token), timeout).await?;
+        let response = self
+            .send_request(url, accept, Some(&token), timeout)
+            .await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(ResolveError::Authentication(
                 "registry rejected the issued bearer token".to_owned(),
@@ -2079,6 +2077,8 @@ pub(crate) mod provision;
 #[cfg(test)]
 mod provision_tests;
 
+mod compliance;
+
 mod ext4;
 
 #[cfg(test)]
@@ -2111,6 +2111,7 @@ mod service_tests;
 
 #[cfg(test)]
 pub(crate) mod registry_fixture;
+mod transport;
 
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2550,7 +2551,7 @@ impl ProvisionedRootfs {
         &self.path
     }
 
-    /// Digest of the toolbox program installed as the guest's PID 1.
+    /// Digest of the toolbox supplying utilities and the fallback PID 1.
     pub fn toolbox_digest(&self) -> &Sha256Digest {
         &self.toolbox
     }
@@ -2590,7 +2591,7 @@ impl OciExt4Image {
         self.free_bytes
     }
 
-    /// Digest of the toolbox program the provisioned tree will boot.
+    /// Digest of the toolbox program installed in the provisioned tree.
     #[cfg(test)]
     pub fn toolbox_digest(&self) -> &Sha256Digest {
         &self.toolbox
@@ -3139,10 +3140,9 @@ pub async fn ensure_guest_fastfetch(image_root: &Path) -> Option<FastfetchProgra
 
 /// Installs a bootable Firecrab guest runtime into a merged OCI tree.
 ///
-/// A container tree has no PID 1, no DHCP client, and nothing that reports
-/// readiness, so it cannot boot as a MicroVM. This stage adds an init, a
-/// DHCP client, the readiness sentinel, and the metrics agent, editing the
-/// merged tree in place. The merged handle is consumed because injection is
+/// Detects systemd or OpenRC and registers native services, falling back to
+/// BusyBox PID 1 when neither is usable. Adds DHCP, the readiness sentinel,
+/// and the metrics agent, editing the merged tree in place. The merged handle is consumed because injection is
 /// not repeatable, and a failure restores exactly the paths it touched.
 pub async fn provision_merged_rootfs(
     rootfs: MergedRootfs,
@@ -3274,7 +3274,7 @@ async fn import_oci_image(
         tracker, templates, reference, alias, image_root, &scratch, credential,
     )
     .await;
-    if let Err(error) = tokio::fs::remove_dir_all(&scratch).await
+    if let Err(error) = remove_import_scratch(&scratch).await
         && error.kind() != io::ErrorKind::NotFound
     {
         tracing::warn!(
@@ -3288,7 +3288,7 @@ async fn import_oci_image(
 }
 
 async fn reset_import_scratch(scratch: &Path) -> Result<(), ResolveError> {
-    match tokio::fs::remove_dir_all(scratch).await {
+    match remove_import_scratch(scratch).await {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
@@ -3298,6 +3298,49 @@ async fn reset_import_scratch(scratch: &Path) -> Result<(), ResolveError> {
     tokio::fs::create_dir_all(scratch)
         .await
         .map_err(|error| cache_io("create import scratch", scratch.to_owned(), error))
+}
+
+/// Removes a scratch tree, tolerating directories a merged layer stamped
+/// owner-non-writable (Fedora's `/usr/bin`, `/usr/lib*`, `/root`, `/afs`, ...
+/// ship 555/550 by design — see `apply_directory_metadata`). `remove_dir_all`
+/// cannot unlink entries under those without a chmod pass first, which left
+/// every retry wedged on the previous attempt's leftovers.
+async fn remove_import_scratch(scratch: &Path) -> io::Result<()> {
+    let path = scratch.to_owned();
+    tokio::task::spawn_blocking(move || {
+        make_tree_removable(&path)?;
+        std::fs::remove_dir_all(&path)
+    })
+    .await
+    .unwrap_or_else(|error| Err(io::Error::other(format!("removal task failed: {error}"))))
+}
+
+/// Recursively grants the owner write+execute on every directory under
+/// `path` (including `path` itself) so a subsequent removal can unlink
+/// everything beneath it. Missing paths are not an error — the caller's
+/// removal call handles that the same way it always has.
+fn make_tree_removable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o700 != 0o700 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o700))?;
+    }
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            make_tree_removable(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 async fn import_oci_image_in_scratch(
@@ -3335,6 +3378,40 @@ async fn import_oci_image_in_scratch(
     tracker.append_log(alias, "merging layers");
     let merged = merge_validated_layers(&validated, &scratch.join("rootfs")).await?;
 
+    tracker.append_log(alias, "detecting OCI package database");
+    let sbom = match compliance::generate_spdx(
+        merged.path(),
+        alias,
+        reference.version.as_str(),
+        cached.resolved.architecture,
+    ) {
+        Ok(Some(document)) => {
+            tracker.append_log(
+                alias,
+                format!(
+                    "generated SPDX SBOM from {} ({} packages)",
+                    document.package_manager, document.package_count
+                ),
+            );
+            Some(document)
+        }
+        Ok(None) => {
+            let warning =
+                "warning: no apk/dpkg/rpm package database detected; importing without an SBOM";
+            tracker.append_log(alias, warning);
+            tracing::warn!(alias, "{warning}");
+            None
+        }
+        Err(error) => {
+            tracker.append_log(
+                alias,
+                format!("warning: OCI SBOM generation failed: {error}; importing without an SBOM"),
+            );
+            tracing::warn!(alias, error = %error, "OCI SBOM generation failed; continuing import");
+            None
+        }
+    };
+
     tracker.append_log(alias, "provisioning guest runtime");
     let options = GuestRuntimeOptions {
         image_root,
@@ -3354,9 +3431,44 @@ async fn import_oci_image_in_scratch(
     tracker.append_log(alias, "pairing host kernel");
     let bootable = pair_ext4_with_host_kernel(ext4, image_root).await?;
 
-    tracker.append_log(alias, "naming and registering template");
+    tracker.append_log(alias, "naming template");
     let named = name_oci_image(bootable, reference, templates)?;
-    register_named_oci_image(named, templates)?;
+
+    let compliance_path = if let Some(document) = sbom.as_ref() {
+        match compliance::write_spdx_bundle(
+            image_root,
+            alias,
+            cached.resolved.architecture,
+            document,
+        ) {
+            Ok(path) => {
+                tracker.append_log(alias, format!("attached SPDX SBOM at {}", path.display()));
+                Some(path)
+            }
+            Err(error) => {
+                tracker.append_log(
+                    alias,
+                    format!("warning: could not persist OCI SBOM: {error}; continuing import"),
+                );
+                tracing::warn!(
+                    alias,
+                    error = %error,
+                    "could not persist OCI SBOM; continuing import"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    tracker.append_log(alias, "registering template");
+    if let Err(error) = register_named_oci_image(named, templates) {
+        if compliance_path.is_some() {
+            compliance::remove_bundle(image_root, alias, cached.resolved.architecture);
+        }
+        return Err(error);
+    }
     Ok(())
 }
 
@@ -4437,7 +4549,7 @@ mod tests {
         let session = RegistrySession::new(&reference, false, None).unwrap();
 
         let error = session
-            .send_once("http://127.0.0.1:1/v2/", None, None, None)
+            .send_request("http://127.0.0.1:1/v2/", None, None, None)
             .await
             .expect_err("a secure registry session must reject HTTP before connecting");
 
@@ -4794,5 +4906,87 @@ mod tests {
                 "{input} must not parse"
             );
         }
+    }
+
+    /// A hardened image can merge in directories a lower layer stamped
+    /// owner-non-writable (Fedora's `/usr/bin`-style 555 trees). Reusing a
+    /// scratch directory for the next import must chmod its way through
+    /// those before it can unlink them, not wedge on the first entry.
+    #[tokio::test]
+    async fn reset_import_scratch_recreates_trees_with_owner_non_writable_directories() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create scratch fixture root");
+        let scratch = root.path().join("scratch");
+        let locked = scratch.join("usr/bin");
+        std::fs::create_dir_all(&locked).expect("create locked subtree");
+        std::fs::write(locked.join("payload"), b"merged layer file").expect("write locked file");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))
+            .expect("lock down subtree like a hardened image ships it");
+
+        reset_import_scratch(&scratch)
+            .await
+            .expect("reset scratch despite owner-non-writable directories");
+
+        assert!(scratch.is_dir(), "scratch must exist after reset");
+        assert_eq!(
+            std::fs::read_dir(&scratch).unwrap().count(),
+            0,
+            "reset must leave an empty scratch tree"
+        );
+    }
+
+    /// The very first import for an alias has nothing to clean up yet.
+    #[tokio::test]
+    async fn reset_import_scratch_creates_a_fresh_tree_when_none_exists() {
+        let root = tempfile::tempdir().expect("create scratch fixture root");
+        let scratch = root.path().join("never-created").join("scratch");
+
+        reset_import_scratch(&scratch)
+            .await
+            .expect("create scratch when nothing previously existed");
+
+        assert!(scratch.is_dir());
+    }
+
+    /// A `symlink_metadata` failure that is not "missing" — for example, a
+    /// parent directory whose traversal bit was stripped — must propagate
+    /// instead of being swallowed the way a genuinely missing path is.
+    #[test]
+    fn make_tree_removable_propagates_errors_other_than_not_found() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create fixture root");
+        let blocked = root.path().join("blocked");
+        std::fs::create_dir(&blocked).expect("create blocked directory");
+        let target = blocked.join("child");
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000))
+            .expect("strip traversal permission from blocked directory");
+
+        let result = make_tree_removable(&target);
+
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o755))
+            .expect("restore traversal permission so the fixture can be cleaned up");
+        let error = result.expect_err("stat through a non-traversable directory must fail");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    /// The scratch path itself is always a directory in production, but the
+    /// recursive chmod must not mistreat a stray non-directory left in its
+    /// place by, e.g., a prior partial write.
+    #[test]
+    fn make_tree_removable_ignores_non_directory_paths() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("create fixture root");
+        let file_path = root.path().join("not-a-directory");
+        std::fs::write(&file_path, b"stray file").expect("write fixture file");
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o644))
+            .expect("set fixture file mode");
+
+        make_tree_removable(&file_path).expect("non-directory paths are left alone");
+
+        let mode = std::fs::metadata(&file_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o644, "must not chmod a non-directory");
     }
 }

@@ -30,7 +30,7 @@ unpacked="$work/unpacked"
 mkdir -p "$bins" "$dashboard" "$compliance" "$unpacked"
 
 write_elf64 "$bins/firecrab-api" 62
-write_elf64 "$bins/firecrab-net-helper" 62
+write_elf64 "$bins/firecrab-helper" 62
 write_elf64 "$bins/firecrab" 62
 printf '<html></html>\n' >"$dashboard/index.html"
 printf 'third-party notices\n' >"$compliance/THIRD_PARTY_NOTICES.txt"
@@ -55,6 +55,12 @@ for need in \
 done
 
 tar -xzf "$bundle" -C "$unpacked"
+test -f "$unpacked/firecrab-helper" && test ! -L "$unpacked/firecrab-helper"
+test -f "$unpacked/firecrab-net-helper" && test ! -L "$unpacked/firecrab-net-helper"
+cmp "$unpacked/firecrab-helper" "$unpacked/firecrab-net-helper"
+grep -q 'ExecStart=@LIBDIR@/firecrab-net-helper' "$unpacked/systemd/firecrab-net-helper.service"
+grep -q 'Wants=firecrab-net-helper.service' "$unpacked/systemd/firecrab-api.service"
+
 cmp "$ROOT/LICENSE" "$unpacked/LICENSE"
 cmp "$ROOT/licenses/GPL-2.0-only.txt" "$unpacked/licenses/GPL-2.0-only.txt"
 cmp "$compliance/THIRD_PARTY_NOTICES.txt" "$unpacked/THIRD_PARTY_NOTICES.txt"

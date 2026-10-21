@@ -8,6 +8,8 @@ use serde::de::DeserializeOwned;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Short timeout used only by the host status probe.
 const HOST_STATUS_TIMEOUT: Duration = Duration::from_secs(3);
+/// Registry authentication and manifest retries have a 60s API deadline.
+const OCI_INSPECT_TIMEOUT: Duration = Duration::from_secs(65);
 
 /// Matches firecrab-api's own default (`bind_addr_or_default` in
 /// firecrab-api/src/server.rs) — the API listens on 127.0.0.1:5523 unless
@@ -116,6 +118,11 @@ impl ApiClient {
             .client
             .get(self.url(path))
             .query(query)
+            .timeout(if path == "/api/oci/inspect" {
+                OCI_INSPECT_TIMEOUT
+            } else {
+                DEFAULT_REQUEST_TIMEOUT
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -148,6 +155,22 @@ impl ApiClient {
         Self::decode_json(resp)
     }
 
+    /// Sends `body` as JSON with `PUT` and deserializes any successful 2xx
+    /// response body.
+    pub fn put<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
+    where
+        B: Serialize + ?Sized,
+        T: DeserializeOwned,
+    {
+        let resp = self
+            .client
+            .put(self.url(path))
+            .json(body)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(resp)
+    }
+
     /// Sends a `DELETE` request to an API path. Any 2xx response, including
     /// the API's usual `204 No Content`, is successful.
     pub fn delete(&self, path: &str) -> Result<(), ApiError> {
@@ -157,6 +180,21 @@ impl ApiClient {
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::ensure_success(resp).map(|_| ())
+    }
+
+    /// Sends `GET` and returns the raw successful body. Used for attachments
+    /// such as `GET /api/vms/{id}/ssh-key` that are not JSON.
+    #[cfg(test)]
+    pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>, ApiError> {
+        let resp = self
+            .client
+            .get(self.url(path))
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::ensure_success(resp)?
+            .bytes()
+            .map(|bytes| bytes.to_vec())
+            .map_err(|e| ApiError::Unreachable(format!("bad response body: {e}")))
     }
 
     /// Joins the resolved origin and an absolute API path.
@@ -231,6 +269,15 @@ mod tests {
         content_type: Option<&str>,
         body: &str,
     ) -> (String, Receiver<CapturedRequest>, JoinHandle<()>) {
+        serve_once_after(status, content_type, body, Duration::ZERO)
+    }
+
+    fn serve_once_after(
+        status: &str,
+        content_type: Option<&str>,
+        body: &str,
+        delay: Duration,
+    ) -> (String, Receiver<CapturedRequest>, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let response_body = body.as_bytes().to_vec();
@@ -241,6 +288,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request(&mut stream);
             tx.send(request).unwrap();
+            thread::sleep(delay);
 
             let mut headers = format!(
                 "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -419,6 +467,21 @@ url = "https://prod.example:5523/"
     }
 
     #[test]
+    fn registry_inspection_can_outlast_the_normal_cli_deadline() {
+        let (base, _requests, server) = serve_once_after(
+            "200 OK",
+            Some("application/json"),
+            r#"{"value":"inspected"}"#,
+            DEFAULT_REQUEST_TIMEOUT + Duration::from_secs(1),
+        );
+        let response: FixtureResponse = ApiClient::new(base)
+            .get_query("/api/oci/inspect", &[("reference", "alpine:3.21")])
+            .unwrap();
+        assert_eq!(response.value, "inspected");
+        server.join().unwrap();
+    }
+
+    #[test]
     fn post_sends_path_and_json_body_and_accepts_created() {
         let (base, requests, server) = serve_once(
             "201 Created",
@@ -470,6 +533,48 @@ url = "https://prod.example:5523/"
         let request = requests.recv().unwrap();
         assert_eq!(request.method, "DELETE");
         assert_eq!(request.path, "/api/micro-networks/123");
+        assert!(request.body.is_empty());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn put_sends_path_and_json_body() {
+        let (base, requests, server) =
+            serve_once("200 OK", Some("application/json"), r#"{"value":"updated"}"#);
+        let client = ApiClient::new(base);
+        let body = FixtureRequest {
+            name: "example",
+            count: 3,
+        };
+
+        let response: FixtureResponse = client.put("/api/vms/123", &body).unwrap();
+
+        assert_eq!(response.value, "updated");
+        let request = requests.recv().unwrap();
+        assert_eq!(request.method, "PUT");
+        assert_eq!(request.path, "/api/vms/123");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&request.body).unwrap(),
+            serde_json::json!({"name": "example", "count": 3})
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn get_bytes_returns_the_raw_body() {
+        let (base, requests, server) = serve_once(
+            "200 OK",
+            Some("application/x-pem-file"),
+            "-----BEGIN KEY-----\n",
+        );
+        let client = ApiClient::new(base);
+
+        let body = client.get_bytes("/api/vms/123/ssh-key").unwrap();
+
+        assert_eq!(body, b"-----BEGIN KEY-----\n");
+        let request = requests.recv().unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/api/vms/123/ssh-key");
         assert!(request.body.is_empty());
         server.join().unwrap();
     }

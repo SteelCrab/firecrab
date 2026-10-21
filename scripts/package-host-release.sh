@@ -27,14 +27,14 @@ case "$arch" in
 esac
 
 [ -x "$bin_dir/firecrab-api" ] || { printf 'missing %s\n' "$bin_dir/firecrab-api" >&2; exit 1; }
-[ -x "$bin_dir/firecrab-net-helper" ] || { printf 'missing %s\n' "$bin_dir/firecrab-net-helper" >&2; exit 1; }
+[ -x "$bin_dir/firecrab-helper" ] || { printf 'missing %s\n' "$bin_dir/firecrab-helper" >&2; exit 1; }
 [ -x "$bin_dir/firecrab" ] || { printf 'missing %s\n' "$bin_dir/firecrab" >&2; exit 1; }
 if ! firecrab_assert_binary_arch "$bin_dir/firecrab-api" "$arch"; then
     printf '%s is not a %s ELF (wrong architecture)\n' "$bin_dir/firecrab-api" "$arch" >&2
     exit 1
 fi
-if ! firecrab_assert_binary_arch "$bin_dir/firecrab-net-helper" "$arch"; then
-    printf '%s is not a %s ELF (wrong architecture)\n' "$bin_dir/firecrab-net-helper" "$arch" >&2
+if ! firecrab_assert_binary_arch "$bin_dir/firecrab-helper" "$arch"; then
+    printf '%s is not a %s ELF (wrong architecture)\n' "$bin_dir/firecrab-helper" "$arch" >&2
     exit 1
 fi
 if ! firecrab_assert_binary_arch "$bin_dir/firecrab" "$arch"; then
@@ -64,7 +64,10 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/systemd" "$stage/dashboard" "$stage/licenses"
 
 install -m 0755 "$bin_dir/firecrab-api" "$stage/firecrab-api"
-install -m 0755 "$bin_dir/firecrab-net-helper" "$stage/firecrab-net-helper"
+install -m 0755 "$bin_dir/firecrab-helper" "$stage/firecrab-helper"
+# Older installers and running helpers require this regular-file member.
+# Their self-update extractor deliberately rejects symlinks and hardlinks.
+install -m 0755 "$bin_dir/firecrab-helper" "$stage/firecrab-net-helper"
 install -m 0755 "$bin_dir/firecrab" "$stage/firecrab"
 install -m 0755 "$root/scripts/firecracker-menual/extract-vmlinux" "$stage/extract-vmlinux"
 install -m 0755 "$root/scripts/firecracker-menual/extract-arm64-image" "$stage/extract-arm64-image"
@@ -75,11 +78,17 @@ if [ -n "$compliance_dir" ]; then
     install -m 0644 "$compliance_dir/release-license-inventory.json" "$stage/release-license-inventory.json"
 fi
 cp "$root/packaging/systemd/"*.service "$stage/systemd/"
+# A pre-rename installer only installs the legacy unit. Its API dependency
+# must use that name too; current installers render it back to the new name.
+sed -e 's/firecrab-helper/firecrab-net-helper/g' -e '/^Alias=/d' \
+    "$root/packaging/systemd/firecrab-helper.service" \
+    > "$stage/systemd/firecrab-net-helper.service"
+sed -i 's/firecrab-helper/firecrab-net-helper/g' "$stage/systemd/firecrab-api.service"
 cp -a "$dashboard_dir/." "$stage/dashboard/"
 
 mkdir -p "$(dirname -- "$output")"
 members=(
-    firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image
+    firecrab-api firecrab-helper firecrab-net-helper extract-vmlinux extract-arm64-image
     firecrab systemd dashboard LICENSE licenses
 )
 if [ -n "$compliance_dir" ]; then

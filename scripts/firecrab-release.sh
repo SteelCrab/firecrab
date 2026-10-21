@@ -161,14 +161,20 @@ firecrab_payload_mode() {
 # otherwise the already-installed copy. Missing on both sides is an error.
 firecrab_resolve_binary() {
     local name=$1 src_dir=$2 dest_dir=$3
-    if [ -n "$src_dir" ] && [ -x "$src_dir/$name" ]; then
-        printf '%s\n' "$src_dir/$name"
-        return 0
-    fi
-    if [ -x "$dest_dir/$name" ]; then
-        printf '%s\n' "$dest_dir/$name"
-        return 0
-    fi
+    local dir
+    # Prefer either source name to an installed copy. This also accepts
+    # bundles and --bin-dir payloads produced before the helper rename.
+    for dir in "$src_dir" "$dest_dir"; do
+        [ -n "$dir" ] || continue
+        if [ -x "$dir/$name" ]; then
+            printf '%s\n' "$dir/$name"
+            return 0
+        fi
+        if [ "$name" = firecrab-helper ] && [ -x "$dir/firecrab-net-helper" ]; then
+            printf '%s\n' "$dir/firecrab-net-helper"
+            return 0
+        fi
+    done
     return 1
 }
 

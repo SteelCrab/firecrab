@@ -26,6 +26,13 @@ try {
         throw "unexpected Windows asset: $asset"
     }
 
+    $env:FIRECRAB_CLI_ARCH = "ARM64"
+    $armAsset = & $installer -PrintAsset
+    if ($armAsset -ne "firecrab-cli-aarch64-windows.zip") {
+        throw "unexpected Windows ARM64 asset: $armAsset"
+    }
+    $env:FIRECRAB_CLI_ARCH = "x86_64"
+
     $url = & $installer -Version "1.2.3" -PrintUrl
     $expected = "https://github.com/SteelCrab/firecrab/releases/download/v1.2.3/firecrab-cli-x86_64-windows.zip"
     if ($url -ne $expected) {

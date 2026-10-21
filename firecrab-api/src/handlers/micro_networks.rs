@@ -1,4 +1,4 @@
-//! MicroNetwork CRUD (`public-docs/networking.md`) — a named CIDR
+//! MicroNetwork CRUD (`public-docs/guides/networking.md`) — a named CIDR
 //! reservation that also provisions a real bridge on the host and is wired
 //! into the network services VMs need: its own dnsmasq range, its own NAT
 //! rule, and a default deny on traffic routed to any other network. VRF
@@ -351,7 +351,7 @@ async fn overlapping_network(
 /// IPv4-only network it has always got. Naming either an `ipv6Cidr` or an
 /// `ipv6AddressMode` turns it on; the prefix then defaults to a per-host
 /// Unique Local `/64` derived from this network's own id and the mode to
-/// SLAAC (`public-docs/networking.md`).
+/// SLAAC (`public-docs/guides/networking.md`).
 fn resolve_ipv6_plan(req: &CreateMicroNetworkRequest, id: Uuid) -> Option<MicroNetworkIpv6Spec> {
     if req.ipv6_cidr.is_none() && req.ipv6_address_mode.is_none() {
         return None;

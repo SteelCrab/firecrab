@@ -325,6 +325,7 @@ mod tests {
             id: id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             name: "web-1".to_owned(),
             state: VmState::Running,
+            reconciliation: None,
             template: "alpine-3.24.1".to_owned(),
             template_version: "3.24.1".to_owned(),
             cpu: 2,

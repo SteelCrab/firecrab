@@ -19,11 +19,13 @@ python3 scripts/check-doc-links.py
 
 Native release CI runs `cargo test` and `cargo build` for these targets:
 
+- `x86_64-unknown-linux-gnu`
 - `x86_64-unknown-linux-musl`
+- `aarch64-unknown-linux-gnu`
 - `aarch64-unknown-linux-musl`
-- `x86_64-apple-darwin`
 - `aarch64-apple-darwin`
 - `x86_64-pc-windows-msvc`
+- `aarch64-pc-windows-msvc`
 
 ## Keyword checklist
 
@@ -33,7 +35,8 @@ Native release CI runs `cargo test` and `cargo build` for these targets:
 - `host add/list/use/show/remove`
 - serialized profile mutation and unknown-key rejection
 - `--api` and `--host` precedence
-- Linux-only host administration commands
+- Linux-only native host administration commands
+- Apple silicon macOS `service` install/start/stop/status/reinstall/uninstall commands
 - cross-platform raw terminal restoration
 - SHA-256 release verification
 - replacement without following an existing installer symlink
@@ -44,7 +47,7 @@ Native release CI runs `cargo test` and `cargo build` for these targets:
 ### Terminal session 1 — Linux host, root required
 
 ```sh
-sudo systemctl status firecrab-api firecrab-net-helper
+sudo systemctl status firecrab-api firecrab-helper
 curl -fsS http://127.0.0.1:5523/api/host
 ```
 

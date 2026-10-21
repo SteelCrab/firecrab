@@ -44,6 +44,7 @@ $rawArchitecture = if ($env:FIRECRAB_CLI_ARCH) {
 }
 $architecture = switch -Regex ($rawArchitecture) {
     "^(X64|x86_64|amd64)$" { "x86_64"; break }
+    "^(Arm64|aarch64)$" { "aarch64"; break }
     default { throw "unsupported Windows client architecture: $rawArchitecture" }
 }
 

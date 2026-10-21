@@ -34,7 +34,7 @@ CHANGELOG = dedent(
     ### Added
 
     - Host install from a GitHub Release ([#12]).
-    - [`public-docs/oci.md`](public-docs/oci.md) documents OCI import.
+    - [`public-docs/guides/oci.md`](public-docs/guides/oci.md) documents OCI import.
 
     ### Changed
 
@@ -172,7 +172,7 @@ class WriteReleaseNotesTests(unittest.TestCase):
         self.assertIn("[#12]: https://github.com/SteelCrab/firecrab/issues/12", body)
 
     def test_repository_paths_become_absolute_links(self) -> None:
-        # A release page is not a tree page, so "public-docs/oci.md" 404s.
+        # A release page is not a tree page, so "public-docs/guides/oci.md" 404s.
         body = notes.build_notes(
             tag="v0.1.1",
             changelog_text=CHANGELOG,
@@ -180,10 +180,10 @@ class WriteReleaseNotesTests(unittest.TestCase):
             repo="SteelCrab/firecrab",
         )
         self.assertIn(
-            "](https://github.com/SteelCrab/firecrab/blob/v0.1.1/public-docs/oci.md)",
+            "](https://github.com/SteelCrab/firecrab/blob/v0.1.1/public-docs/guides/oci.md)",
             body,
         )
-        self.assertNotIn("](public-docs/oci.md)", body)
+        self.assertNotIn("](public-docs/guides/oci.md)", body)
 
     def test_skips_bot_contributors(self) -> None:
         names = notes.filter_contributors(["SteelCrab", "dependabot[bot]", "github-actions[bot]"])

@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::shell::CommandRunner;
 
 use super::Error;
-use super::env::{ServiceEnv, UNITS};
+use super::env::{LEGACY_HELPER_UNIT, ServiceEnv, UNITS};
 use super::output;
 use super::payload::Payload;
 use super::privileged::Privileged;
@@ -27,15 +27,23 @@ const SETTLE: Duration = Duration::from_secs(1);
 
 /// install.sh `install_units`의 sed 치환.
 pub fn render_unit(template: &str, env: &ServiceEnv, uid: &str) -> String {
-    template
+    let normalized = template
+        .lines()
+        .filter(|line| !line.starts_with("Alias="))
+        .map(|line| line.replace("firecrab-net-helper", "firecrab-helper"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    normalized
         .replace("@LIBDIR@", &env.libdir.to_string_lossy())
         .replace("@SHAREDIR@", &env.sharedir.to_string_lossy())
         .replace("@DATADIR@", &env.datadir.to_string_lossy())
         .replace("@CONFDIR@", &env.confdir.to_string_lossy())
+        .replace("@UNITDIR@", &env.unitdir.to_string_lossy())
         .replace("@PREFIX@", &env.prefix.to_string_lossy())
         .replace("@FIRECRAB_USER@", &env.user)
         .replace("@FIRECRAB_GROUP@", &env.group)
         .replace("@FIRECRAB_UID@", uid)
+        + "\n"
 }
 
 /// 템플릿을 이 호스트의 경로·계정으로 렌더해 `$UNITDIR`에 쓰고 daemon-reload.
@@ -56,15 +64,34 @@ pub fn install_units(
     }
     let uid = String::from_utf8_lossy(&uid_out.stdout).trim().to_owned();
 
+    let mut rendered_units = Vec::new();
     for unit in UNITS {
-        let source = payload.units.join(unit);
+        let mut source = payload.units.join(unit);
+        if unit == UNITS[0] && !source.is_file() {
+            source = payload.units.join(LEGACY_HELPER_UNIT);
+        }
         let template = std::fs::read_to_string(&source).map_err(|e| {
             Error::step(
                 STEP_UNITS,
                 format!("could not read {}: {e}", source.display()),
             )
         })?;
-        let rendered = render_unit(&template, env, &uid);
+        let mut rendered = render_unit(&template, env, &uid);
+        if unit == UNITS[0] {
+            rendered.push_str("Alias=firecrab-net-helper.service\n");
+        }
+        rendered_units.push((unit, rendered));
+    }
+    let legacy = env.unit_path(LEGACY_HELPER_UNIT);
+    if legacy.is_file() && !legacy.is_symlink() {
+        privileged.run_ok(
+            STEP_UNITS,
+            "systemctl",
+            &["disable", "--now", LEGACY_HELPER_UNIT],
+        )?;
+        privileged.run_ok(STEP_UNITS, "rm", &["-f", &legacy.to_string_lossy()])?;
+    }
+    for (unit, rendered) in rendered_units {
         privileged.write_file(
             STEP_UNITS,
             &env.unit_path(unit),
@@ -72,6 +99,11 @@ pub fn install_units(
             "0644",
         )?;
     }
+    privileged.run_ok(
+        STEP_UNITS,
+        "ln",
+        &["-sfn", UNITS[0], &legacy.to_string_lossy()],
+    )?;
     privileged.run_ok(STEP_UNITS, "systemctl", &["daemon-reload"])?;
     output::log(&format!("units installed to {}", env.unitdir.display()));
     Ok(())
@@ -79,11 +111,37 @@ pub fn install_units(
 
 /// 두 유닛 파일이 모두 `$UNITDIR`에 있어야 서비스 제어가 의미를 갖는다.
 pub fn require_installed(env: &ServiceEnv) -> Result<(), Error> {
-    if UNITS.iter().all(|unit| env.unit_path(unit).is_file()) {
+    if env.unit_path(UNITS[1]).is_file()
+        && (env.unit_path(UNITS[0]).is_file() || env.unit_path(LEGACY_HELPER_UNIT).is_file())
+    {
         Ok(())
     } else {
         Err(Error::NotInstalled)
     }
+}
+
+/// Use an existing legacy service when the canonical unit is not installed.
+pub(crate) fn helper_unit(runner: &dyn CommandRunner) -> &'static str {
+    let load = |unit| {
+        runner
+            .run(
+                "systemctl",
+                &["show", "--property=LoadState", "--value", unit],
+            )
+            .ok()
+            .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    if load(UNITS[0]).as_deref() == Some("not-found")
+        && load(LEGACY_HELPER_UNIT).as_deref() == Some("loaded")
+    {
+        LEGACY_HELPER_UNIT
+    } else {
+        UNITS[0]
+    }
+}
+
+fn control_units(privileged: &Privileged<'_>) -> [&'static str; 2] {
+    [helper_unit(privileged.runner()), UNITS[1]]
 }
 
 /// `systemctl is-active <unit>`, systemctl 자체가 없으면 `"unknown"`.
@@ -97,7 +155,7 @@ pub fn is_active(runner: &dyn CommandRunner, unit: &str) -> String {
 /// 부팅 시 활성화.
 pub fn enable(privileged: &Privileged<'_>) -> Result<(), Error> {
     let mut args = vec!["enable"];
-    args.extend(UNITS);
+    args.extend(control_units(privileged));
     privileged
         .run_ok(STEP_UNITS, "systemctl", &args)
         .map(|_| ())
@@ -106,7 +164,7 @@ pub fn enable(privileged: &Privileged<'_>) -> Result<(), Error> {
 /// 부팅 시 비활성화.
 pub fn disable(privileged: &Privileged<'_>) -> Result<(), Error> {
     let mut args = vec!["disable"];
-    args.extend(UNITS);
+    args.extend(control_units(privileged));
     privileged
         .run_ok(STEP_UNITS, "systemctl", &args)
         .map(|_| ())
@@ -152,7 +210,7 @@ fn confirm_active_with(
 ) -> Result<(), Error> {
     std::thread::sleep(settle);
     let mut failed = Vec::new();
-    for unit in UNITS {
+    for unit in control_units(privileged) {
         if is_active(privileged.runner(), unit) == "active" {
             output::log(&format!("{unit} is running"));
         } else {
@@ -188,7 +246,7 @@ fn confirm_active(privileged: &Privileged<'_>, probe: &dyn Fn() -> bool) -> Resu
 /// 부팅 순서대로 시작한 뒤 실제로 떴는지 확인한다.
 pub fn start(privileged: &Privileged<'_>, probe: &dyn Fn() -> bool) -> Result<(), Error> {
     let mut args = vec!["start"];
-    args.extend(UNITS);
+    args.extend(control_units(privileged));
     privileged.run_ok(STEP_START, "systemctl", &args)?;
     confirm_active(privileged, probe)
 }
@@ -200,7 +258,7 @@ pub fn enable_and_start(
 ) -> Result<(), Error> {
     enable(privileged)?;
     let mut args = vec!["restart"];
-    args.extend(UNITS);
+    args.extend(control_units(privileged));
     privileged.run_ok(STEP_START, "systemctl", &args)?;
     confirm_active(privileged, probe)
 }
@@ -208,9 +266,9 @@ pub fn enable_and_start(
 /// 역순으로 정지한다 — API가 helper보다 먼저 내려가야 한다.
 pub fn stop(privileged: &Privileged<'_>) -> Result<(), Error> {
     let mut args = vec!["stop"];
-    args.extend(UNITS.iter().rev().copied());
+    args.extend(control_units(privileged).into_iter().rev());
     privileged.run_ok(STEP_STOP, "systemctl", &args)?;
-    for unit in UNITS {
+    for unit in control_units(privileged) {
         let state = is_active(privileged.runner(), unit);
         if state == "active" {
             return Err(Error::step(STEP_STOP, format!("{unit} is still active")));
@@ -278,6 +336,9 @@ Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
         for unit in UNITS {
             std::fs::write(units_dir.join(unit), TEMPLATE).unwrap();
         }
+        std::fs::rename(units_dir.join(UNITS[0]), units_dir.join(LEGACY_HELPER_UNIT)).unwrap();
+        std::fs::create_dir_all(&env.unitdir).unwrap();
+        std::fs::write(env.unit_path(LEGACY_HELPER_UNIT), b"[Unit]\n").unwrap();
         let payload = Payload {
             bin: root.to_path_buf(),
             units: units_dir,
@@ -294,6 +355,19 @@ Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
         fake.set("id", &["-u", "firecrab"], 0, "900\n", "");
         install_units(&Privileged::with_sudo(&fake, true), &env, &payload).unwrap();
         let calls = fake.calls();
+        let stop = calls
+            .iter()
+            .position(|call| call == "sudo systemctl disable --now firecrab-net-helper.service")
+            .unwrap();
+        let alias = calls
+            .iter()
+            .position(|call| call.starts_with("sudo ln -sfn firecrab-helper.service "))
+            .unwrap();
+        let reload = calls
+            .iter()
+            .position(|call| call == "sudo systemctl daemon-reload")
+            .unwrap();
+        assert!(stop < alias && alias < reload, "{calls:?}");
         for unit in UNITS {
             let path = env.unit_path(unit);
             assert!(
@@ -344,14 +418,13 @@ Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
         assert!(
             calls
                 .iter()
-                .any(|c| c
-                    == "sudo systemctl start firecrab-net-helper.service firecrab-api.service"),
+                .any(|c| c == "sudo systemctl start firecrab-helper.service firecrab-api.service"),
             "{calls:?}"
         );
         assert!(
-            calls.iter().any(
-                |c| c == "sudo systemctl stop firecrab-api.service firecrab-net-helper.service"
-            ),
+            calls
+                .iter()
+                .any(|c| c == "sudo systemctl stop firecrab-api.service firecrab-helper.service"),
             "{calls:?}"
         );
     }
@@ -368,7 +441,7 @@ Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
         );
         fake.set(
             "systemctl",
-            &["is-active", "firecrab-net-helper.service"],
+            &["is-active", "firecrab-helper.service"],
             0,
             "active\n",
             "",
@@ -411,10 +484,13 @@ Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
         enable(&privileged).unwrap();
         disable(&privileged).unwrap();
         assert_eq!(
-            fake.calls(),
+            fake.calls()
+                .into_iter()
+                .filter(|call| call.starts_with("sudo "))
+                .collect::<Vec<_>>(),
             vec![
-                "sudo systemctl enable firecrab-net-helper.service firecrab-api.service",
-                "sudo systemctl disable firecrab-net-helper.service firecrab-api.service",
+                "sudo systemctl enable firecrab-helper.service firecrab-api.service",
+                "sudo systemctl disable firecrab-helper.service firecrab-api.service",
             ]
         );
     }
@@ -430,7 +506,7 @@ Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
             "",
         );
         assert_eq!(is_active(&fake, "firecrab-api.service"), "active");
-        assert_eq!(is_active(&fake, "firecrab-net-helper.service"), "unknown");
+        assert_eq!(is_active(&fake, "firecrab-helper.service"), "unknown");
     }
 
     #[test]
@@ -456,5 +532,49 @@ Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
         args.extend(UNITS);
         privileged.run_ok(STEP_START, "systemctl", &args)?;
         confirm_active_with(privileged, probe, settle, 3, Duration::from_millis(1))
+    }
+    #[test]
+    fn legacy_service_control_works_but_a_loaded_canonical_unit_is_never_hidden() {
+        let mut fake = FakeCommandRunner::permissive();
+        fake.set(
+            "systemctl",
+            &["show", "--property=LoadState", "--value", UNITS[0]],
+            0,
+            "not-found\n",
+            "",
+        );
+        fake.set(
+            "systemctl",
+            &[
+                "show",
+                "--property=LoadState",
+                "--value",
+                LEGACY_HELPER_UNIT,
+            ],
+            0,
+            "loaded\n",
+            "",
+        );
+        assert_eq!(helper_unit(&fake), LEGACY_HELPER_UNIT);
+        enable(&Privileged::with_sudo(&fake, true)).unwrap();
+        assert!(
+            fake.calls().iter().any(|call| call
+                == "sudo systemctl enable firecrab-net-helper.service firecrab-api.service")
+        );
+        fake.set(
+            "systemctl",
+            &["show", "--property=LoadState", "--value", UNITS[0]],
+            0,
+            "loaded\n",
+            "",
+        );
+        assert_eq!(helper_unit(&fake), UNITS[0]);
+        let dir = tempfile::tempdir().unwrap();
+        let env = env_for(dir.path());
+        std::fs::create_dir_all(&env.unitdir).unwrap();
+        for name in [UNITS[1], LEGACY_HELPER_UNIT] {
+            std::fs::write(env.unit_path(name), b"[Unit]\n").unwrap();
+        }
+        require_installed(&env).unwrap();
     }
 }

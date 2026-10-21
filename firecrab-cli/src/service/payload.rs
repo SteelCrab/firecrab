@@ -11,7 +11,7 @@ use super::Error;
 const STEP: &str = "payload";
 
 /// 번들과 `--bin-dir` 양쪽에서 반드시 있어야 하는 바이너리.
-pub const BUNDLE_BINARIES: [&str; 3] = ["firecrab-api", "firecrab-net-helper", "firecrab"];
+pub const BUNDLE_BINARIES: [&str; 3] = ["firecrab-api", "firecrab-helper", "firecrab"];
 
 /// API가 런타임에 커널을 변환할 때 쓰는 셸 스크립트.
 pub const EXTRACT_HELPERS: [&str; 2] = ["extract-vmlinux", "extract-arm64-image"];
@@ -39,14 +39,20 @@ pub fn elf_arch(path: &Path) -> Option<&'static str> {
 /// 실행 비트를 무조건 다시 세팅하므로, 원본의 실행 비트 유무는 이후 설치
 /// 성공 여부에 영향을 주지 않는다.
 pub fn resolve_binary(name: &str, src_dir: Option<&Path>, dest_dir: &Path) -> Option<PathBuf> {
-    if let Some(src) = src_dir {
-        let candidate = src.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
+    for dir in src_dir.into_iter().chain(std::iter::once(dest_dir)) {
+        let names = if name == "firecrab-helper" {
+            vec![name, "firecrab-net-helper"]
+        } else {
+            vec![name]
+        };
+        for candidate in names {
+            let path = dir.join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
         }
     }
-    let installed = dest_dir.join(name);
-    installed.is_file().then_some(installed)
+    None
 }
 
 /// `start`에서 위로 올라가며 firecrab 체크아웃 루트를 찾는다
@@ -73,13 +79,8 @@ pub fn find_checkout(start: &Path) -> Option<PathBuf> {
 /// 단계가 `install -m 0755`로 실행 비트를 다시 세팅한다.
 pub fn verify_bundle_members(root: &Path, arch: &str) -> Result<(), Error> {
     for name in BUNDLE_BINARIES {
-        let path = root.join(name);
-        if !path.is_file() {
-            return Err(Error::step(
-                STEP,
-                format!("release bundle is missing {name}"),
-            ));
-        }
+        let path = resolve_binary(name, None, root)
+            .ok_or_else(|| Error::step(STEP, format!("release bundle is missing {name}")))?;
         match elf_arch(&path) {
             Some(found) if found == arch => {}
             _ => {
@@ -163,11 +164,11 @@ impl Payload {
             ));
         }
         for name in BUNDLE_BINARIES {
-            if !bin_dir.join(name).is_file() {
+            if resolve_binary(name, None, bin_dir).is_none() {
                 return Err(Error::step_fix(
                     STEP,
                     format!("no {name} in {}", bin_dir.display()),
-                    "cargo build --release -p firecrab-api -p firecrab-net-helper -p firecrab-cli",
+                    "cargo build --release -p firecrab-api -p firecrab-helper -p firecrab-cli",
                 ));
             }
         }
@@ -438,7 +439,7 @@ mod tests {
         std::fs::write(root.join("licenses/GPL-2.0-only.txt"), b"x").unwrap();
         write_elf(&root.join("firecrab-api"), 62);
         let err = verify_bundle_members(root, "x86_64").unwrap_err();
-        assert!(format!("{err}").contains("firecrab-net-helper"), "{err}");
+        assert!(format!("{err}").contains("firecrab-helper"), "{err}");
     }
 
     #[test]
@@ -457,5 +458,24 @@ mod tests {
         }
         let err = verify_bundle_members(root, "x86_64").unwrap_err();
         assert!(format!("{err}").contains("x86_64"), "{err}");
+    }
+    #[test]
+    fn a_legacy_source_helper_wins_over_the_installed_canonical_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("source");
+        let dest = dir.path().join("installed");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(src.join("firecrab-net-helper"), b"new").unwrap();
+        std::fs::write(dest.join("firecrab-helper"), b"old").unwrap();
+        assert_eq!(
+            resolve_binary("firecrab-helper", Some(&src), &dest),
+            Some(src.join("firecrab-net-helper"))
+        );
+        std::fs::write(src.join("firecrab-helper"), b"newest").unwrap();
+        assert_eq!(
+            resolve_binary("firecrab-helper", Some(&src), &dest),
+            Some(src.join("firecrab-helper"))
+        );
     }
 }

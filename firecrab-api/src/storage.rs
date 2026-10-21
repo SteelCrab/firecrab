@@ -392,7 +392,9 @@ fn available_and_total_gib(path: &Path) -> Option<(u64, u64)> {
     Some((total / GIB, avail / GIB))
 }
 
-fn nearest_existing(path: &Path) -> PathBuf {
+/// The closest ancestor of `path` that exists, for sizing a directory that
+/// has not been created yet.
+pub(crate) fn nearest_existing(path: &Path) -> PathBuf {
     let mut current = path.to_path_buf();
     loop {
         if current.exists() {

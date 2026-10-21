@@ -136,6 +136,12 @@ pub(crate) fn install(rootfs: &Path) -> Result<(), RootfsError> {
     write_into_image(rootfs, BIN_PATH, AGENT_SCRIPT.as_bytes())?;
     set_guest_file_mode(rootfs, BIN_PATH, "0100755");
 
+    // OCI activation has already registered exactly one metrics service, or
+    // arranged for BusyBox rc.boot to launch it. Refresh only the payload.
+    if guest_path_exists(rootfs, crate::oci::provision::INIT_SYSTEM_PATH) {
+        return Ok(());
+    }
+
     if guest_path_exists(rootfs, "/etc/systemd/system") {
         write_into_image(rootfs, UNIT_PATH, SYSTEMD_UNIT.as_bytes())?;
         // systemd only honors *symlinks* under multi-user.target.wants
