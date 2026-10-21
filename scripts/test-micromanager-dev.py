@@ -50,7 +50,17 @@ case "$name" in
     echo "$flags"
     ;;
   uname) echo "${GUEST_ARCH:-aarch64}" ;;
-  cc|pkg-config|cmake|journalctl|sleep) exit 0 ;;
+  cc|musl-gcc|pkg-config|cmake|journalctl|sleep) exit 0 ;;
+  objcopy)
+    if [ "$1" = --version ]; then exit 0; fi
+    echo "$*" >>"$TEST_ROOT/objcopy-events"
+    [ "$1" = --compress-debug-sections=zlib ] && [ "$#" = 3 ]
+    exec /bin/cp "$2" "$3"
+    ;;
+  df)
+    echo 'Filesystem 1024-blocks Used Available Capacity Mounted on'
+    echo "/dev/os 2900000 0 ${OS_FREE_KIB:-1048576} 0% /"
+    ;;
   flock) [ "${LOCK_FAIL:-0}" = 0 ] ;;
   curl) [ "${HEALTH_FAIL:-0}" = 0 ] ;;
   rustup)
@@ -112,7 +122,7 @@ class GuestDevelopmentTest(unittest.TestCase):
         stub = self.commands / "stub"
         stub.write_text(STUB)
         stub.chmod(0o755)
-        for name in ["findmnt", "chmod", "rm", "install", "uname", "cc", "pkg-config", "cmake", "journalctl", "sleep", "flock", "curl", "rustup", "systemctl"]:
+        for name in ["findmnt", "chmod", "rm", "install", "uname", "cc", "musl-gcc", "pkg-config", "cmake", "objcopy", "df", "journalctl", "sleep", "flock", "curl", "rustup", "systemctl"]:
             (self.commands / name).symlink_to(stub)
         # Linux mv -T replaces a symlink rather than following its directory.
         mv = self.commands / "mv"
@@ -142,10 +152,13 @@ class GuestDevelopmentTest(unittest.TestCase):
         tools.mkdir(parents=True)
         for tool in ["extract-vmlinux", "extract-arm64-image"]:
             (tools / tool).write_text("#!/bin/sh\necho runtime-tool\n")
+        ingress_builder = tools.parent / "build-ingress.sh"
+        ingress_builder.write_text('#!/bin/bash\nset -eu\nmkdir -p "$1/ingress"\nprintf "#!/bin/sh\\nexit 0\\n" >"$1/firecrab-ingress"\nchmod +x "$1/firecrab-ingress"\nprintf "fixture" >"$1/ingress/LICENSE.nginx"\n')
         self.archive = self.cache / "incoming-test.tar"
         with tarfile.open(self.archive, "w") as archive:
             archive.add(source, arcname="firecrab-api/src/main.rs")
             archive.add(tools, arcname="scripts/firecracker-menual")
+            archive.add(ingress_builder, arcname="scripts/build-ingress.sh")
 
     def run_guest(self, profile="debug", shell="bash", **flags):
         environment = os.environ.copy()
@@ -312,6 +325,29 @@ class GuestDevelopmentTest(unittest.TestCase):
         self.assertFalse((self.root / "events").exists())
         self.assertFalse(self.override().exists())
 
+    def test_low_os_disk_space_fails_before_staging_or_stopping_services(self):
+        result = self.run_guest(OS_FREE_KIB=1024)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[FAIL] guest OS disk has 1 MiB free", result.stderr)
+        self.assertIn("[HINT]", result.stderr)
+        self.assertFalse((self.root / "events").exists())
+        self.assertFalse(self.override().exists())
+        self.assertEqual(list(self.binaries.glob("build.*")), [])
+
+    def test_staging_compresses_debug_sections_and_removes_interrupted_builds(self):
+        running = self.binaries / "build.running"
+        running.mkdir(parents=True)
+        (self.binaries / "bin").symlink_to(running)
+        interrupted = self.binaries / "build.interrupted"
+        interrupted.mkdir()
+        result = self.run_guest(HEALTH_FAIL=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(interrupted.exists())
+        self.assertEqual((self.binaries / "bin").resolve(), running.resolve())
+        calls = (self.root / "objcopy-events").read_text().splitlines()
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(call.startswith("--compress-debug-sections=zlib ") for call in calls))
+
     def test_unreadable_system_executable_is_reported_as_os_failure(self):
         chmod = self.commands / "chmod"
         chmod.unlink()
@@ -378,7 +414,20 @@ class GuestDevelopmentTest(unittest.TestCase):
                 self.assertIn("ExecStart=" + str(self.binaries) + "/bin/firecrab-api", self.override().read_text())
                 self.assertIn("built-from-source", (self.binaries / "bin/firecrab-helper").read_text())
                 self.assertIn("runtime-tool", (self.binaries / "bin/extract-arm64-image").read_text())
+                if profile == "debug":
+                    self.assertTrue((self.binaries / "bin/firecrab-ingress").is_file())
+                    self.assertIn("Environment=FIRECRAB_INGRESS_BINARY=" + str(self.binaries) + "/bin/firecrab-ingress", self.override("firecrab-helper").read_text())
                 self.assertFalse(self.archive.exists())
+
+    def test_restore_keeps_the_engine_of_a_configured_ingress(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ingress = self.units / "firecrab-ingress.service"
+        ingress.write_text(f"[Service]\nExecStart={self.binaries}/bin/firecrab-ingress -p /run/firecrab-ingress/\n")
+        restored = self.run_guest(profile="restore")
+        self.assertEqual(restored.returncode, 0, restored.stderr)
+        self.assertFalse(self.override().exists())
+        self.assertTrue((self.binaries / "bin/firecrab-ingress").is_file())
 
     def test_debug_deploy_works_with_system_bash(self):
         result = self.run_guest(shell="/bin/bash")

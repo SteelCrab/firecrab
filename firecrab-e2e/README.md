@@ -31,11 +31,15 @@ Isolated Playwright suite.
 5. Assert `FIRECRAB_NETWORK_READY` and `FIRECRAB_OCI_E2E_READY` on the console
 6. Networks: IPv6 select defaults to Off; create IPv4-only and auto-ULA dual-stack networks
 7. OCI DHCP: import fixture → create network → VM with `80:18888/tcp` → start → `FIRECRAB_NETWORK_READY` and an IPv4 on the detail panel
-8. MicroRegistry: register a custom image → delete its installed template → reinstall the local package → boot that image
+8. MicroRegistry API: register a custom image → delete its installed template → reinstall the local package through the API → boot that image
+9. Pipe Registry: the card shows the API login count; save and remove a fake ECR login without exposing its secret
 
 - `FIRECRAB_E2E_SKIP_GUEST_BOOT=1`: skip guest-boot half
 - Inspect and import still run
-- Full suite: **17 cases, including 1 existing explicit skip**; import/form-only mode also skips guest boot checks
+- The default `npm test` discovers every spec under `tests/`, including mocked
+  dashboard specs and live API cases B18/B19. The total changes as specs are added.
+- `npm run test:pipe --prefix firecrab-e2e` runs only the mocked Pipe and M2Image
+  specs. It excludes `pipe-registries-live.spec.ts` and never sends B19 to the API.
 - The failed-register-job case is always skipped because no real dashboard/API failure trigger exists
 
 ## Setup

@@ -36,8 +36,10 @@ VM apps and saved Nginx routes. The operator must deploy that service.
 
 - Linux with systemd 247 or later. On macOS/Windows, a running managed Linux guest.
 - Matching Firecrab API, helper, and CLI builds for dashboard controls.
-- Nginx installed by the host's package manager. The CLI searches `/usr/sbin/nginx`,
-  `/usr/bin/nginx`, then PATH. `apply --nginx` accepts an external executable.
+- The bundled `firecrab-ingress` engine, built from pinned Nginx and PCRE2 sources
+  and installed in `$FIRECRAB_LIBDIR` (default `/usr/local/lib/firecrab`).
+  No OS Nginx package or compiler is required. `apply --nginx` remains an explicit
+  override for operators who manage their own engine.
 - Reachable app ports. Existing VM port forwards can provide loopback upstreams
   such as `127.0.0.1:18081`.
 - For temporary public access, a reachable Cloudflare Quick Tunnel connection.
@@ -51,23 +53,50 @@ Cloudflare. Direct public HTTPS and MicroNetwork listeners are subsequent work.
 ## Install and configure
 
 ```sh
-# Linux example. Other distributions use their own Nginx package.
-sudo apt-get install nginx
+# Linux: the normal host install already includes firecrab-ingress.
+# Install the optional Cloudflare connector when using tunnels:
 sudo firecrab pipe install
 
-# macOS/Windows: install Nginx in the managed guest first, then run:
+# macOS/Windows: the host bundle in the managed guest includes the engine.
 firecrab pipe install
 ```
 
-`pipe install` requires an installed Nginx and downloads the pinned cloudflared
+`pipe install` checks the bundled ingress engine and downloads the pinned cloudflared
 release. It verifies SHA-256 before replacing the executable and skips unchanged
 verified downloads. Installing does not start Firecrab traffic units or apply
-routes. `install.sh --with-pipe` also installs the OS Nginx package.
+routes. `install.sh --with-pipe` also installs the connector during host setup.
 
 Cloudflared versions and release digests are in
 [pipe-engines.json](../../packaging/pipe-engines.json). Run `pipe install` explicitly
-to update the connector. Manage Nginx updates through the OS package manager.
+to update the connector. Firecrab host releases update the bundled ingress engine.
 Firecrab uses its own Nginx config and unit. It does not edit the host's nginx.conf.
+
+### Building the bundled engine
+
+Release builds run `scripts/build-ingress.sh OUTPUT_DIR` on each Linux architecture
+with `musl-tools`, a C toolchain, Python 3 and curl. The source versions and SHA-256
+digests are pinned in `packaging/ingress-sources.json`. Nginx and PCRE2 are linked
+statically with musl; the build rejects a dynamic executable. HTTPS terminates at
+the tunnel, so OpenSSL is not included. Compression is left to the application.
+The engine retains the rewrite, map, proxy and upstream modules used by Pipe.
+
+The host bundle includes `firecrab-ingress` and an `ingress/` attribution directory
+with upstream licenses and source identities. Source installs must build these
+beside the API, helper and CLI before running `install.sh --bin-dir`.
+`firecrab service install` on Linux invokes the same host installer.
+Routes remain in `$CONFDIR/pipe` across engine replacement. An engine update
+replaces the on-disk executable; an already-running master keeps its old version
+until an explicit ingress restart. Plan that restart when updating the engine.
+
+For an existing installation whose old self-update helper does not know about the
+ingress bundle, rerun the new host installer once to install the engine and notices.
+Applying routes then switches the unit to the private engine; switching an active
+unit from an external nginx requires the existing disable/apply procedure.
+
+Source development builds and stages the same private engine. Restoring the
+release API/helper preserves a source engine still referenced by the ingress unit,
+so Pipe can continue running independently. Disable and apply with the release CLI
+to move that unit back to the release engine.
 
 Copy [the manifest example](../../packaging/pipe.example.json). Set the hostnames,
 app addresses, and optional tunnel UUID and credentials file. Relative credential
@@ -96,10 +125,23 @@ the protected manifest. View saved routes in the Pipe dashboard.
 
 ## Dashboard
 
-Select **Pipe** in the existing dashboard menu. The page uses the dashboard's
-shared panels, form fields, tables, service badges, colors, fonts, and navigation.
+Select **Pipe** in the existing dashboard menu. The page lists six service
+cards. Each card shows a short summary and the service's current state:
 
-Open **⋯** in the Nginx row and select **Edit** to expand **Nginx settings**
+| Card | Use |
+| --- | --- |
+| **Route** | Nginx service state and domain/path routes to VM apps |
+| **Pipe Registry** | Container registry logins and image pulls |
+| **Database** | Saved database connections and read-only table browsing |
+| **Firecrab Tunnel** | Fixed addresses issued with a dashboard token |
+| **Cloudflare Quick Tunnel** | Temporary public URLs |
+| **Cloudflare Named Tunnel** | Stable public addresses on an owned Cloudflare domain |
+
+Select a card to open that service. Its controls are available only on the
+card's page, such as `#/pipe/route`. Select **← Pipe** to return to the cards.
+Leaving a card with unsaved changes asks for confirmation. Leaving discards them.
+
+Open the **Route** card. Open **⋯** in the Nginx row and select **Edit** to expand **Nginx settings**
 directly below that row. Its listen address, **Save**, and **Cancel** are grouped
 inside the editor. Select **Save** to apply or **Cancel** to discard the address
 change. Either action closes the editor. Cancelling preserves pending route edits.
@@ -109,7 +151,9 @@ The listen address stays hidden when the editor is closed.
 2. Enter the domain and path, then select one or more registered TCP app ports.
 3. Select **Save** once to validate and apply the route. The editor closes on success.
 
-Use each service row's **⋯** menu for **Start**, **Stop**, and **Restart**. These
+Use the **⋯** menu of the Nginx row on the **Route** card, or of the
+Cloudflare Tunnel row on the **Cloudflare Named Tunnel** card, for **Start**,
+**Stop**, and **Restart**. These
 controls use the saved configuration. They do not save unfinished address, route,
 or tunnel changes. The page reports that the request was accepted, then polls the
 unit state. A start or restart may take a few seconds.
@@ -136,13 +180,13 @@ Open [the connection dashboard](https://console.firecrab.dev/) to issue a token.
 Under **Firecrab Tunnel → Add fixed address**, paste it and select
 **VM apps** or saved **Nginx routes** in **Connection target**. There is no
 subdomain input or separate Quick Tunnel input in Firecrab Tunnel. Use the
-**Cloudflare Quick Tunnel** panel to create and manage temporary connectors.
+**Cloudflare Quick Tunnel** card to create and manage temporary connectors.
 
 The public address is assigned by the token service. Appending a saved path uses
 that route group; if it has `/api` but no `/`, the base address can return 404.
-Saved legacy Quick Tunnels remain available in their Cloudflare panel. See
+Saved legacy Quick Tunnels remain available on the Cloudflare Quick Tunnel card. See
 [Firecrab Tunnel](firecrab-tunnel.md) for issuance, revocation and continuity.
-The **Cloudflare Tunnel** panel also connects an owned Cloudflare domain using
+The **Cloudflare Named Tunnel** card connects an owned Cloudflare domain using
 a scoped API token and a saved Nginx route. It creates DNS and retains a stable
 public address. Its connector runs alongside the existing Quick Tunnels.
 Existing named tunnel manifests remain compatible with the CLI.
@@ -166,7 +210,7 @@ Manifests and dashboard requests are limited to 48 KiB for the helper's bounded 
 
 ## Database connections
 
-In **Pipe → Databases**, select **Add database**. Enter a connection name and
+Open the **Database** card (`#/pipe/database`) and select **Add database**. Enter a connection name and
 choose **Local DB URI**, **Supabase**, or **Amazon RDS**. Paste a database URI:
 
 ```text
@@ -313,3 +357,8 @@ HTTPS requests. These local tests do not claim that external connection.
 References: [Nginx reload](https://nginx.org/en/docs/control.html),
 [Nginx upstreams](https://nginx.org/en/docs/http/ngx_http_upstream_module.html),
 and [locally managed Cloudflare tunnels](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/local-management/).
+
+## Pipe Registry
+
+The **Pipe Registry** card pulls OCI images from Docker Hub, GHCR and Amazon ECR.
+See [Pipe Registry](pipe-registry.md) for logins, transfers, and its API.

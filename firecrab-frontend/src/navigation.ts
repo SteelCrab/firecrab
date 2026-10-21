@@ -109,6 +109,15 @@ export function newVmHash(): string {
   return `#/${NEW_VM_PATH}`;
 }
 
+/** Pipe service cards. `#/pipe` lists them; `#/pipe/<id>` opens one. */
+export const PIPE_CARDS = ["route", "registry", "database", "firecrab-tunnel", "quick-tunnel", "named-tunnel"] as const;
+export type PipeCardId = (typeof PIPE_CARDS)[number];
+const PIPE_CARD_RE = /^pipe\/([^/?#]+)$/;
+
+export function pipeCardHash(card: PipeCardId): string {
+  return `#/pipe/${card}`;
+}
+
 /**
  * Shell views live under `#/vms` etc.; the terminal is a separate full-page
  * route (`#/console/<id>`) so it never shares the modal overlay layout that
@@ -117,7 +126,8 @@ export function newVmHash(): string {
 export type AppRoute =
   | { kind: "shell"; view: ViewId }
   | { kind: "console"; vmId: string }
-  | { kind: "vm-new" };
+  | { kind: "vm-new" }
+  | { kind: "pipe-card"; card: PipeCardId };
 
 export function parseAppRoute(hash: string = window.location.hash): AppRoute {
   const path = stripHash(hash);
@@ -130,6 +140,8 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
     }
   }
   if (path === NEW_VM_PATH) return { kind: "vm-new" };
+  const card = path.match(PIPE_CARD_RE)?.[1];
+  if (PIPE_CARDS.some(id => id === card)) return { kind: "pipe-card", card: card as PipeCardId };
   return { kind: "shell", view: parseViewId(path) ?? DEFAULT_VIEW };
 }
 
@@ -229,6 +241,6 @@ export function useAppRoute(confirmLeave?: () => boolean): {
 export function useHashView(): [ViewId, (view: ViewId) => void] {
   const { route, selectView } = useAppRoute();
   // Console and `#/vms/new` still highlight MicroVM; `selectView("vms")` is the list.
-  const view = route.kind === "shell" ? route.view : DEFAULT_VIEW;
+  const view = route.kind === "shell" ? route.view : route.kind === "pipe-card" ? "pipe" : DEFAULT_VIEW;
   return [view, selectView];
 }

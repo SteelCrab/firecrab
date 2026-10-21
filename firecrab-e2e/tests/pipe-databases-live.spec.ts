@@ -9,7 +9,7 @@ test("connects, reads and removes a real database through the dashboard", async 
   // Update checks are unrelated to DB access and would contact GitHub.
   await page.route("**/api/update", route => route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } }));
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
-  await page.goto("/#/pipe");
+  await page.goto("/#/pipe/database");
   const panel = page.getByRole("region", { name: "Databases", exact: true });
   await panel.getByRole("button", { name: "Add database", exact: true }).click();
   await panel.getByLabel("Connection name", { exact: true }).fill(name);

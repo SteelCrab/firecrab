@@ -29,7 +29,7 @@ export function defaultInteractiveTerminalOptions(
 /**
  * Point the hidden xterm textarea at the page language so the OS IME
  * (Hangul, Kana, Pinyin, …) attaches. Skip window shortcuts while a
- * composition is in progress so Escape does not cancel 한글 mid-syllable
+ * composition is in progress so Escape does not cancel Hangul mid-syllable
  * and then also leave terminal-only mode.
  */
 export function enableTerminalIme(term: Terminal, container: HTMLElement): void {

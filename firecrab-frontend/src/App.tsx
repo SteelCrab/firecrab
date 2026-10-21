@@ -32,6 +32,7 @@ const SLOW_POLL_AFTER = 3;
 interface BannerState {
   kind: "error" | "info";
   text: string;
+  source: "poll" | "action";
 }
 
 interface Dashboard {
@@ -67,17 +68,24 @@ function reduce(state: Dashboard, msg: Msg): Dashboard {
   switch (msg.type) {
     case "refreshed": {
       const kept = msg.vms.some((vm) => vm.id === state.selectedVmId);
-      return { ...state, vms: msg.vms, loaded: true, consecutiveFailures: 0, selectedVmId: kept ? state.selectedVmId : null };
+      return {
+        ...state,
+        vms: msg.vms,
+        loaded: true,
+        consecutiveFailures: 0,
+        selectedVmId: kept ? state.selectedVmId : null,
+        banner: state.banner?.source === "poll" ? null : state.banner,
+      };
     }
     case "refreshFailed":
-      // Always flip `loaded` so the list panel is not stuck on "불러오는 중…"
+      // Always flip `loaded` so the list panel is not stuck on "Loading…"
       // after the first failed poll (common right after `npm run dev` while
       // the API is still starting, or when the proxy flaps once).
       return {
         ...state,
         loaded: true,
         consecutiveFailures: state.consecutiveFailures + 1,
-        banner: { kind: "error", text: msg.message },
+        banner: { kind: "error", text: msg.message, source: "poll" },
       };
     case "actionStarted": {
       const busy = new Set(state.busy);
@@ -94,18 +102,18 @@ function reduce(state: Dashboard, msg: Msg): Dashboard {
     case "actionFailed": {
       const busy = new Set(state.busy);
       busy.delete(msg.id);
-      return { ...state, busy, banner: { kind: "error", text: msg.message } };
+      return { ...state, busy, banner: { kind: "error", text: msg.message, source: "action" } };
     }
     case "created":
       return {
         ...state,
-        banner: { kind: "info", text: msg.message },
+        banner: { kind: "info", text: msg.message, source: "action" },
         vms: upsert(state.vms, msg.vm),
         // Land on the new VM so its start progress is in view.
         selectedVmId: msg.vm.id,
       };
     case "error":
-      return { ...state, banner: { kind: "error", text: msg.message } };
+      return { ...state, banner: { kind: "error", text: msg.message, source: "action" } };
     case "dismissBanner":
       return { ...state, banner: null };
     case "select":
@@ -229,7 +237,7 @@ export default function App() {
     return <Console vmId={route.vmId} onClose={closeConsole} />;
   }
 
-  const view = route.kind === "vm-new" ? "vms" : route.view;
+  const view = route.kind === "vm-new" ? "vms" : route.kind === "pipe-card" ? "pipe" : route.view;
 
   return (
     <HostStatusProvider>
@@ -262,7 +270,7 @@ export default function App() {
       {view === "services" && <MicroServices />}
       {view === "pipe" && (
         <Screen view="pipe">
-          <Pipe vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
+          <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
         </Screen>
       )}
       {view === "storages" && <MicroStorages />}

@@ -135,6 +135,9 @@ pub struct AppState {
     pub(crate) bootstraps: crate::bootstrap::BootstrapTracker,
     /// Async OCI import jobs (`POST /api/oci/import`).
     pub(crate) oci_imports: ImageInstallTracker,
+    /// Original OCI transfers run separately from M2Image conversion.
+    pub(crate) registry_transfers: ImageInstallTracker,
+    pub(crate) registry_transfer_permits: Arc<Semaphore>,
     /// Async MicroRegistry register jobs (`POST /api/microregistry/register`).
     pub(crate) microregistry_registers: ImageInstallTracker,
     /// Previous `/proc` jiffy samples used to derive host-process CPU %.
@@ -190,6 +193,8 @@ impl AppState {
             kernel_installs: ImageInstallTracker::from_env(),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
             oci_imports: ImageInstallTracker::default(),
+            registry_transfers: ImageInstallTracker::default(),
+            registry_transfer_permits: Arc::new(Semaphore::new(2)),
             microregistry_registers: ImageInstallTracker::default(),
             process_metrics: Arc::new(Mutex::new(ProcessMetricsTracker::default())),
             update_check: Arc::new(AsyncMutex::new(None)),

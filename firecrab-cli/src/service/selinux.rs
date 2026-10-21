@@ -1,8 +1,8 @@
 //! install.sh `selinux_active` / `label_selinux_binaries`.
 //!
-//! `$PREFIX/lib/firecrab`는 기본 정책에서 `lib_t`이고, 서비스를 `init_t`에서
-//! 꺼내주는 규칙은 `bin_t` 실행 파일에만 적용된다. 라벨이 없으면 API가
-//! `init_t`에 남아 레지스트리로의 아웃바운드 HTTPS가 전부 거부된다.
+//! The default policy labels `$PREFIX/lib/firecrab` as `lib_t`. Rules that move
+//! services out of `init_t` apply only to `bin_t` executables. Without that label,
+//! the API stays in `init_t` and all outbound HTTPS requests to registries are denied.
 
 use crate::shell::CommandRunner;
 
@@ -11,8 +11,8 @@ use super::output;
 use super::pkg::have;
 use super::privileged::Privileged;
 
-/// SELinux가 로드되어 있는가. Permissive도 참 — 라벨이 틀리면 enforcing으로
-/// 되돌리는 순간 설치가 깨진다.
+/// Check whether SELinux is loaded. Include Permissive mode because incorrect
+/// labels would break the installation as soon as Enforcing mode is restored.
 pub fn selinux_active(runner: &dyn CommandRunner) -> bool {
     if !have(runner, "getenforce") {
         return false;
@@ -30,7 +30,7 @@ fn pattern(env: &ServiceEnv) -> String {
     format!("{}(/.*)?", env.libdir.display())
 }
 
-/// `$LIBDIR`에 `bin_t` 파일 컨텍스트를 기록하고 적용한다. 실패는 경고로 끝난다.
+/// Record and apply the `bin_t` file context to `$LIBDIR`. Report failures as warnings.
 pub fn label_binaries(privileged: &Privileged<'_>, env: &ServiceEnv) {
     if !selinux_active(privileged.runner()) {
         return;
@@ -74,8 +74,8 @@ pub fn label_binaries(privileged: &Privileged<'_>, env: &ServiceEnv) {
     output::log(&format!("SELinux: {} labelled bin_t", env.libdir.display()));
 }
 
-/// 삭제 시 파일 컨텍스트 규칙을 걷어낸다. 규칙이 디렉터리보다 오래 살아남으면
-/// 다음에 그 경로에 설치되는 것이 조용히 재라벨된다.
+/// Remove the file context rule on uninstall. If the rule outlives the directory,
+/// anything later installed at that path would be silently relabeled.
 pub fn unlabel_binaries(privileged: &Privileged<'_>, env: &ServiceEnv) {
     if !have(privileged.runner(), "semanage") {
         return;

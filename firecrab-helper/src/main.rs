@@ -1310,6 +1310,11 @@ mod tests {
                 ("firecrab-api", b"api" as &[u8]),
                 ("firecrab-helper", b"helper"),
                 ("firecrab", b"cli"),
+                ("firecrab-ingress", b"ingress"),
+                ("ingress/LICENSE.nginx", b"nginx license"),
+                ("ingress/LICENSE.pcre2", b"pcre2 license"),
+                ("ingress/LICENSE.musl", b"musl license"),
+                ("ingress/sources.json", b"{}"),
             ] {
                 let mut header = tar::Header::new_gnu();
                 header.set_size(bytes.len() as u64);

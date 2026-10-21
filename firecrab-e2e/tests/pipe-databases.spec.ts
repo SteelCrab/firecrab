@@ -79,7 +79,7 @@ async function open(page: Page, options: Options = {}) {
     return route.fulfill({ status: 404 });
   });
   await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en");
-  await page.goto("/#/pipe");
+  await page.goto("/#/pipe/database");
   return { creates, checks, previews, removes, release, get tableReads() { return tableReads; }, recover: () => { unavailable = false; }, recoverPreview: () => { previewFailure = false; }, failPreview: () => { previewFailure = true; }, recoverTables: () => { tableFailure = false; }, failTables: () => { tableFailure = true; }, recoverDelete: () => { deleteFailure = false; } };
 }
 
@@ -213,7 +213,7 @@ test.describe("PIPE databases @dashboard", () => {
     let dialogs = 0;
     page.on("dialog", async dialog => { dialogs++; await dialog.dismiss(); });
     await page.getByRole("button", { name: "MicroVM", exact: true }).click();
-    await expect(page).toHaveURL(/#\/pipe$/);
+    await expect(page).toHaveURL(/#\/pipe\/database$/);
     await expect(panel.getByLabel("Connection name", { exact: true })).toHaveValue("Unfinished DB");
     expect(dialogs).toBe(1);
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
