@@ -36,10 +36,11 @@ test.describe("Pipe registries against the API", () => {
   });
   test.afterEach(removeLogin);
 
-  test("B18 lists the Registry card with the API login count and opens the registry panel", async ({ page }) => {
+  test("B18 lists the Auth and Registry cards with the API login count and opens the registry panel", async ({ page }) => {
     const { rows } = await connections();
     const pipe = await openCards(page);
-    await expect(pipe.getByRole("listitem")).toHaveCount(5);
+    await expect(pipe.getByRole("listitem")).toHaveCount(6);
+    await expect(pipe.getByRole("link", { name: "Pipe Auth", exact: true })).toBeVisible();
     const card = pipe.getByRole("link", { name: "Pipe Registry", exact: true });
     await expect(card).toContainText(cardStatus(rows.length));
     await card.click();

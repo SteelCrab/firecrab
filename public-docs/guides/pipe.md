@@ -130,11 +130,12 @@ the protected manifest. View saved routes in the Pipe dashboard.
 
 ## Dashboard
 
-Select **Pipe** in the existing dashboard menu. The page lists five service
+Select **Pipe** in the existing dashboard menu. The page lists six service
 cards. Each card shows a short summary and the service's current state:
 
 | Card | Use |
 | --- | --- |
+| **Pipe Auth** | Shared AWS and GitHub account authentication |
 | **Route** | Nginx service state and domain/path routes to VM apps |
 | **Pipe Registry** | Container registry logins and image pulls |
 | **Firecrab Tunnel** | Fixed addresses issued with a dashboard token |
