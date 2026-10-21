@@ -64,9 +64,11 @@ Back up an unused template before replacing it with a fresh import.
 
 ## Registry login
 
-Save a Docker Hub personal access token through **MicroRegistry** or the [login API](../reference/api.md#docker-hub-login).
-The host uses it for the requested image and toolbox pulls.
-The secret is write-only; other registries remain anonymous.
+Save a matching registry login through [Pipe Registry](pipe-registry.md).
+OCI inspection and import use the saved Docker Hub, GHCR, ECR, or Harbor login
+for that exact registry. Docker Hub logins also remain shared with MicroRegistry
+and its [login API](../reference/api.md#docker-hub-login).
+Secrets are write-only in API responses.
 For socket permission errors, inspect the [host diagnostics](troubleshooting.md#oci-pull-fails).
 
 ## Related

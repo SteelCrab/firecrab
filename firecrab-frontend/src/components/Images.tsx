@@ -20,6 +20,7 @@ import {
   updateImageKernel,
 } from "../api/client";
 import { logDownloadFilename } from "../lib/textExport";
+import { getRegistryImages, pinnedRegistryReference, type RegistryImage } from "../api/registries";
 import Banner from "./Banner";
 import LogExportActions from "./LogExportActions";
 import { useI18n } from "../i18n";
@@ -378,6 +379,95 @@ function jobStatusClass(status: ImageInstallResponse["status"]): string {
   return "";
 }
 
+function registryImageName(image: RegistryImage): string {
+  const [name, digest] = image.reference.slice(image.reference.indexOf("/") + 1).split("@");
+  return digest ? `${name}@${digest.slice(0, "sha256:".length + 12)}` : name;
+}
+
+function registryProviderName(image: RegistryImage): string {
+  const host = image.reference.split("/")[0];
+  if (host === "docker.io" || host === "registry-1.docker.io") return "Docker Hub";
+  if (host === "ghcr.io") return "GHCR";
+  if (host === "public.ecr.aws" || /^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(host)) return "ECR";
+  return "Harbor";
+}
+
+function PulledImageRow({ image, onBuilt }: {
+  image: RegistryImage;
+  onBuilt: (alias: string) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [job, setJob] = useState<ImageInstallResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [generation, setGeneration] = useState(0);
+  const running = starting || job?.status === "running";
+
+  useEffect(() => {
+    if (!image.templateAlias) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const next = await getOciImport(image.templateAlias);
+        if (cancelled) return;
+        setJob(current => keepNewestJobSnapshot(current, next));
+        if (next.status === "running") {
+          timer = setTimeout(poll, 500);
+        } else if (next.status === "succeeded") {
+          await onBuilt(next.alias);
+        } else if (next.status === "failed") {
+          setError(lastLogLine(next.log, t("Image build failed.", "이미지 빌드에 실패했다.")));
+        }
+      } catch (failure) {
+        if (!cancelled) {
+          setError(apiErrorText(failure));
+          timer = setTimeout(poll, 2_000);
+        }
+      }
+    }
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [image.templateAlias, generation, onBuilt, t]);
+
+  async function build() {
+    if (running || !image.templateAlias) return;
+    setStarting(true);
+    setError(null);
+    try {
+      const started = await startOciImport({ reference: pinnedRegistryReference(image) });
+      setJob(started);
+      setGeneration(value => value + 1);
+    } catch (failure) {
+      if (failure instanceof ApiClientError && failure.apiError?.code === "import_in_progress") {
+        setGeneration(value => value + 1);
+      } else {
+        setError(apiErrorText(failure));
+      }
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  return <>
+    <tr className="pulled-image-row">
+      <td className="mono" title={image.reference}><div>{registryImageName(image)}</div><small className="pulled-image-source">{image.architecture} · {formatRootfsSize(image.sizeBytes)}</small></td>
+      <td className="image-registry" data-label={t("Registry", "레지스트리")} title={image.reference.split("/")[0]}>{registryProviderName(image)}</td>
+      <td className="mono" data-label={t("Minimum disk", "최소 디스크")}>—</td>
+      <td className="state-cell">
+        <span className={`state-badge${running ? " starting" : job?.status === "failed" ? " error" : ""}`}>
+          {running ? t("Building…", "빌드 중…") : job?.status === "failed" ? t("Build failed", "빌드 실패") : t("Build required", "빌드 필요")}
+        </span>
+        <OptionsMenu items={[{ label: t("Build M2Image", "M2Image 빌드"), disabled: running || !image.templateAlias, onClick: () => void build() }]} />
+      </td>
+    </tr>
+    {(error || (job && job.status !== "idle")) && <tr className="pulled-image-log"><td colSpan={4}>
+      {error && <p className="field-error" role="alert">{error}</p>}
+      {job && job.status !== "idle" && <ImageJobLog job={job} />}
+    </td></tr>}
+  </>;
+}
+
 /**
  * Inspect an OCI reference, then start/poll `POST/GET /api/oci/import`
  * with the same job snapshot the M2Image install path already uses.
@@ -692,10 +782,13 @@ function OciImportPanel({
   );
 }
 
+/** M2Image lists installed templates and pulled OCI sources awaiting a build. */
 export default function Images() {
   const { t } = useI18n();
   const [images, setImages] = useState<ImageResponse[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [pulledImages, setPulledImages] = useState<RegistryImage[]>([]);
+  const [pulledImagesError, setPulledImagesError] = useState<string | null>(null);
   const [kernels, setKernels] = useState<KernelResponse[]>([]);
   const [busyAlias, setBusyAlias] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -716,6 +809,15 @@ export default function Images() {
     setSelectedAlias(alias);
   }, [refreshList]);
 
+  const refreshPulledImages = useCallback(async () => {
+    try {
+      setPulledImages(await getRegistryImages());
+      setPulledImagesError(null);
+    } catch (error) {
+      setPulledImagesError((error as Error).message);
+    }
+  }, []);
+
   const refreshKernels = useCallback(async () => {
     try {
       setKernels(await listKernels());
@@ -726,8 +828,9 @@ export default function Images() {
 
   useEffect(() => {
     void refreshList();
+    void refreshPulledImages();
     void refreshKernels();
-  }, [refreshList, refreshKernels]);
+  }, [refreshList, refreshPulledImages, refreshKernels]);
 
   const selectedImage = (images ?? []).find((image) => image.alias === selectedAlias) ?? null;
 
@@ -839,22 +942,24 @@ export default function Images() {
     <div className="stack">
       {actionError && <div className="field-error">{actionError}</div>}
       <section className="panel">
-        <h2 className="panel-title">M2Image</h2>
+        <h2 className="panel-title"><span>M2Image</span><button className="btn" type="button" onClick={() => void Promise.all([refreshList(), refreshPulledImages()])}>{t("Refresh", "새로 고침")}</button></h2>
         <p className="panel-intro">
           {t(
-            "Bootable microVM images installed on this Firecrab host. Select an image to inspect its local installation, disk requirements, and VM usage.",
-            "이 Firecrab 호스트에 설치된 부팅 가능한 microVM 이미지입니다. 이미지를 선택하면 로컬 설치 상태, 디스크 요구량, 사용 중인 VM을 확인할 수 있습니다.",
+            "Manage bootable microVM images and build images pulled from Pipe Registry. Build required images become available for VM creation after building.",
+            "부팅 가능한 microVM 이미지와 Pipe Registry에서 가져온 이미지를 관리한다. 빌드가 필요한 이미지는 빌드 완료 후 VM 생성에 사용할 수 있다.",
           )}
         </p>
         {listError && <div className="field-error">{listError}</div>}
-        {images?.length === 0 && !listError && (
+        {pulledImagesError && <p className="field-error" role="alert">{t("Could not load pulled images: ", "가져온 이미지 목록을 조회하지 못했다: ")}{pulledImagesError}</p>}
+        {images?.length === 0 && pulledImages.length === 0 && !listError && !pulledImagesError && (
           <div className="empty">{t("No installed images.", "설치된 이미지가 없습니다.")}</div>
         )}
-        {(images?.length ?? 0) > 0 && (
+        {((images?.length ?? 0) > 0 || (images !== null && pulledImages.length > 0)) && (
           <table className="vm-table image-table">
             <thead>
               <tr>
                 <th>{t("Image", "이미지")}</th>
+                <th>{t("Registry", "레지스트리")}</th>
                 <th>{t("Minimum disk", "최소 디스크")}</th>
                 <th>{t("Status", "상태")}</th>
               </tr>
@@ -865,14 +970,18 @@ export default function Images() {
                 const statusLabel = image.installed
                   ? t("Installed", "설치됨")
                   : t("Not installed", "미설치");
+                const source = pulledImages.find(source => source.templateAlias === image.alias);
                 return (
                   <tr
                     key={image.alias}
                     className={selectedAlias === image.alias ? "is-selected" : undefined}
                     onClick={() => setSelectedAlias(selectedAlias === image.alias ? null : image.alias)}
                   >
-                    <td className="mono">{image.alias}</td>
-                    <td className="mono">{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</td>
+                    <td className="mono" title={image.alias}>
+                      {source ? registryImageName(source) : image.alias}
+                    </td>
+                    <td className="image-registry" data-label={t("Registry", "레지스트리")} title={source?.reference.split("/")[0]}>{source ? registryProviderName(source) : "—"}</td>
+                    <td className="mono" data-label={t("Minimum disk", "최소 디스크")}>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</td>
                     <td className="state-cell">
                       <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
                       {/* Stops the row's own onClick (select/deselect) from firing
@@ -892,6 +1001,9 @@ export default function Images() {
                   </tr>
                 );
               })}
+              {images !== null && pulledImages.filter(image => !images.some(installed => installed.installed && installed.alias === image.templateAlias)).map(image => (
+                <PulledImageRow key={image.templateAlias} image={image} onBuilt={handleOciImported} />
+              ))}
             </tbody>
           </table>
         )}
