@@ -491,6 +491,21 @@ test.describe("Pipe dashboard @dashboard", () => {
     expect(mock.actions).toHaveLength(0);
   });
 
+  for (const locale of ["en", "ko"]) test(`shows bundled ingress recovery on Route and Quick Tunnel in ${locale}`, async ({ page }) => {
+    const mock = await open(page, { missingNginx: true, quickTunnels: [webTunnel], locale });
+    const recovery = locale === "ko"
+      ? "Ingress 엔진을 복구하려면 Firecrab 호스트 번들을 다시 설치한다."
+      : "Reinstall the Firecrab host bundle to restore the ingress engine.";
+    const route = page.getByRole("region", { name: "Route", exact: true });
+    await expect(route.getByText(recovery, { exact: true })).toBeVisible();
+    await page.getByRole("navigation", { name: locale === "ko" ? "Pipe 이동" : "Pipe navigation", exact: true }).getByRole("link", { name: "Pipe", exact: true }).click();
+    await page.getByRole("link", { name: "Cloudflare Quick Tunnel", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Quick Tunnel", exact: true }).getByText(recovery, { exact: true })).toBeVisible();
+    expect(mock.writes).toHaveLength(0);
+    expect(mock.actions).toHaveLength(0);
+    expect(mock.quickSaves).toHaveLength(0);
+  });
+
   test("disables start and restart when an executable is unavailable", async ({ page }) => {
     const mock = await open(page, { configuredTunnel: true, missingNginx: true, missingConnector: true, ingressState: "inactive", tunnelState: "inactive" });
     for (const [card, name] of [["Route", "Nginx"], ["Cloudflare Named Tunnel", "Cloudflare Tunnel"]]) {

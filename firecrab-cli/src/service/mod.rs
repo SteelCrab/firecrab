@@ -1,12 +1,7 @@
 //! `firecrab service` — install.sh installation, removal, and systemd control in Rust.
 //!
-//! Each install.sh function maps to a function in this module tree. All host
-//! changes run as `sudo <cmd>` through [`privileged::Privileged`]. Read-only
-//! checks run without sudo.
-//!
-//! Task 1 defines only the command interface and error types. `Error::Sudo`,
-//! `NotInstalled`, and `Error::step_fix` are used when later tasks add the actual
-//! installation, removal, and systemd control implementations.
+//! Installation and reinstallation reuse install.sh from the release bundle.
+//! Service control and removal run through [`privileged::Privileged`].
 #![allow(dead_code)]
 
 use std::path::PathBuf;
@@ -19,6 +14,7 @@ pub mod deps;
 pub mod env;
 pub mod firecracker;
 pub mod host_state;
+mod installer;
 pub mod layout;
 pub mod output;
 pub mod payload;
@@ -163,8 +159,7 @@ pub fn run(runner: &dyn CommandRunner, command: Command) -> Result<(), Error> {
             privileged.ensure_ticket()?;
             uninstall::uninstall(&privileged, &env, purge)
         }
-        Command::Install(_) | Command::Reinstall { .. } => {
-            Err(Error::step("service", "not implemented yet"))
-        }
+        Command::Install(opts) => installer::run(opts, false, false),
+        Command::Reinstall { opts, purge } => installer::run(opts, true, purge),
     }
 }

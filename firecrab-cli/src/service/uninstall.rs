@@ -91,6 +91,16 @@ pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> 
         "rm",
         &["-rf", &env.libdir.join("pipe").to_string_lossy()],
     )?;
+    privileged.run_ok(
+        STEP,
+        "rm",
+        &["-f", &env.libdir.join("firecrab-ingress").to_string_lossy()],
+    )?;
+    privileged.run_ok(
+        STEP,
+        "rm",
+        &["-rf", &env.libdir.join("ingress").to_string_lossy()],
+    )?;
 
     // SIGTERM stops only the helper's socket loop. Its bridges, TAP devices,
     // and nftables tables remain until reboot. Run the helper's teardown while

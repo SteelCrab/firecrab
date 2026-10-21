@@ -34,12 +34,18 @@ jobs:
         # rust-toolchain.toml pins the channel and clippy/rustfmt/llvm-tools.
         run: rustup show
 
-      - name: Install dnsmasq, fakeroot and Nginx
+      - name: Install test and ingress build tools
         # firecrab-helper's dhcp.rs tests shell out to the real
         # `dnsmasq --test` to validate generated configs, and oci::ext4's
         # tests pack a root-owned image via real `fakeroot` (issue #250) —
         # neither preinstalled on the runner image.
-        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot nginx
+        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot musl-tools
+
+      - name: Build private ingress engine
+        run: ./scripts/build-ingress.sh target/ingress
+
+      - name: Verify bundled ingress installation
+        run: sudo bash scripts/test-ingress-install.sh target/ingress
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -78,14 +84,16 @@ jobs:
           chmod 1777 "$profiles"
           trap 'sudo rm -rf "$profiles"' EXIT
           export LLVM_PROFILE_FILE="$profiles/firecrab-%p-%m.profraw"
+          sudo install -d -m 0755 /var/lib/firecrab-pipe-qa
+          sudo install -m 0755 target/ingress/firecrab-ingress /var/lib/firecrab-pipe-qa/firecrab-ingress
           sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
           # A second install verifies the cached executable and digest record.
           sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
           cloudflared=/var/lib/firecrab-pipe-qa/pipe/cloudflared
-          python3 scripts/test-pipe-runtime.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx
-          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-cli.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx --cloudflared "$cloudflared"
-          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx
-          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper"
+          python3 scripts/test-pipe-runtime.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-cli.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress --cloudflared "$cloudflared"
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx target/ingress/firecrab-ingress
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper" --ingress target/ingress/firecrab-ingress
           cp "$profiles"/*.profraw "$CARGO_LLVM_COV_TARGET_DIR/"
           cargo llvm-cov report --lcov --output-path lcov.info
 
@@ -426,7 +434,10 @@ jobs:
 
       - name: Build install payload
         # CI installs from local binaries, not GitHub Releases (PRs have none).
-        run: ./scripts/ci-prepare-install-payload.sh
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          ./scripts/ci-prepare-install-payload.sh
 
       - name: Install
         id: install-service

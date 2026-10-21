@@ -119,7 +119,7 @@ export default function PipeRouting({ snapshot, busy, apps, vmsLoading, vmsUnava
         </form>
       </td></tr>}
     </tbody></table></div>
-    {snapshot && !snapshot.nginxAvailable && <p className="field-error">{t("Install Nginx on this host before applying routes.", "라우트를 적용하기 전에 이 호스트에 Nginx를 설치한다.")}</p>}
+    {snapshot && !snapshot.nginxAvailable && <p className="field-error">{t("Reinstall the Firecrab host bundle to restore the ingress engine.", "Ingress 엔진을 복구하려면 Firecrab 호스트 번들을 다시 설치한다.")}</p>}
 
     <section className="pipe-subsection" aria-label={t("Routes", "라우트")}>
       <h3 className="panel-title"><span>{t("Routes", "라우트")}</span><span className="pipe-row-actions">

@@ -122,6 +122,8 @@ def main(args):
         (binaries / "firecrab").chmod(0o755)
         library = root / "lib/pipe"
         library.mkdir(parents=True)
+        shutil.copyfile(args.nginx, library.parent / "firecrab-ingress")
+        (library.parent / "firecrab-ingress").chmod(0o755)
         connector = library / "cloudflared"
         connector.write_text("#!/usr/bin/python3\nimport signal,uuid\nprint('| https://fixture-' + uuid.uuid4().hex + '.trycloudflare.com |', flush=True)\nsignal.pause()\n")
         connector.chmod(0o755)

@@ -39,9 +39,11 @@ def main(args):
         binaries = root / "bin"; binaries.mkdir()
         for name, source in [("firecrab-api", args.api), ("firecrab-helper", args.helper), ("firecrab", str(Path(args.helper).with_name("firecrab")))]:
             shutil.copyfile(source, binaries / name); (binaries / name).chmod(0o755)
+        shutil.copyfile(args.ingress, binaries / "firecrab-ingress")
+        (binaries / "firecrab-ingress").chmod(0o755)
         working = root / "api"; working.mkdir(); os.chown(working, 65534, 65534)
         socket_path = root / "helper.sock"
-        environment = dict(os.environ, CONFDIR=str(root / "config"), UNITDIR="/run/systemd/system", FIRECRAB_NET_HELPER_SOCK=str(socket_path), FIRECRAB_NET_HELPER_ALLOWED_UID="65534", FIRECRAB_BIND_ADDR=f"127.0.0.1:{api_port}", FIRECRAB_IMAGE_ROOT=str(working / "images"), FIRECRAB_BOOTSTRAP_WARMUP="0", HOME=str(working))
+        environment = dict(os.environ, FIRECRAB_LIBDIR=str(binaries), CONFDIR=str(root / "config"), UNITDIR="/run/systemd/system", FIRECRAB_NET_HELPER_SOCK=str(socket_path), FIRECRAB_NET_HELPER_ALLOWED_UID="65534", FIRECRAB_BIND_ADDR=f"127.0.0.1:{api_port}", FIRECRAB_IMAGE_ROOT=str(working / "images"), FIRECRAB_BOOTSTRAP_WARMUP="0", HOME=str(working))
         helper_log = (root / "helper.log").open("w+")
         api_log = (root / "api.log").open("w+")
         helper_unit = root.name + "-helper.service"
@@ -166,4 +168,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--api", required=True)
     parser.add_argument("--helper", required=True)
+    parser.add_argument("--ingress", required=True)
     main(parser.parse_args())
