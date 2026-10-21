@@ -136,6 +136,8 @@ static ARM64: Host<'static> = Host {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Release(#[from] super::super::release::Error),
     #[error("microManager supports x86_64 and ARM64 Windows hosts, not {0}")]
     UnsupportedArchitecture(&'static str),
     #[error(transparent)]

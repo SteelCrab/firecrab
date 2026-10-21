@@ -117,11 +117,19 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         return Err(Error::NotReady);
     }
     let layout = lifecycle::Layout::from_process_env()?;
-    let manifest = manifest::Manifest::for_install(&layout.managed_home)?;
+    let mut manifest = manifest::Manifest::for_install(&layout.managed_home)?;
+    let release = super::release::Release::latest_or_recorded(&layout.downloads())
+        .map_err(provision::Error::from)?;
+    release
+        .apply_manifest(&mut manifest)
+        .map_err(provision::Error::from)?;
     let host = provision::host_from_manifest(&manifest, std::env::consts::ARCH)?;
     lifecycle::prepare(&layout)?;
     // Before the service stops, so declining the download leaves it running.
     let artifacts = provision::download_all(&host, &layout.downloads(), assume_yes)?;
+    release
+        .record(&layout.downloads())
+        .map_err(provision::Error::from)?;
     if reinstall {
         daemon::uninstall(&layout)?;
         managed_home::clear_installation_state(&layout.managed_home)?;

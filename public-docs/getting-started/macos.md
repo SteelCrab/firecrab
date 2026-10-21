@@ -147,3 +147,9 @@ The CLI suggests repair for runtime failures; it does not run repair automatical
 - [Repair QA and preservation checks](../development/macos-repair.md)
 - [Architecture](../reference/architecture.md)
 - [microManager on Windows](windows.md)
+
+Explicit installation selects the latest Firecrab release, verifies its installer and host bundle
+against that release's `SHA256SUMS`, and saves the selected inputs in `micromanager.toml`.
+Debian, Firecracker, kernel selection, and runtime policy retain the manifest's values.
+If GitHub cannot be reached, verified cached downloads can use the release recorded by a previous download.
+A malformed release response or digest mismatch fails installation. Ordinary service commands use the installed manifest.

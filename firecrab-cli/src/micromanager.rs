@@ -12,6 +12,8 @@ mod managed_home;
 mod manifest;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod os_repair;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod release;
 mod resource;
 mod resource_server;
 mod runtime;

@@ -37,6 +37,8 @@ pub struct PreparedLayout {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Release(#[from] super::super::release::Error),
     #[error("could not create artifact directory {path}: {source}")]
     CreateDirectory {
         path: PathBuf,

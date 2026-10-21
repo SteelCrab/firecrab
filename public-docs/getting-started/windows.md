@@ -177,3 +177,9 @@ Inspect `runtime\guest-provision.log`, `runtime\provision.phase`, and `runtime\p
 - [Windows runtime E2E](../development/ci.md#windows-runtime-e2e)
 - [Recorded validation results](../development/validation-history.md)
 - [microManager on macOS](macos.md)
+
+Explicit installation selects the latest Firecrab release, verifies its installer and host bundle
+against that release's `SHA256SUMS`, and saves the selected inputs in `micromanager.toml`.
+Debian, Firecracker, kernel selection, and runtime policy retain the manifest's values.
+If GitHub cannot be reached, verified cached downloads can use the release recorded by a previous download.
+A malformed release response or digest mismatch fails installation. Ordinary service commands use the installed manifest.

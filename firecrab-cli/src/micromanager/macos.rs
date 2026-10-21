@@ -175,8 +175,17 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         lifecycle::check_install(&cli_source, &helper_source, &layout, reinstall)?;
     }
     // Before anything changes, so declining the download leaves the host as it was.
-    let manifest = manifest::Manifest::for_install(&layout.managed_home)?;
+    let mut manifest = manifest::Manifest::for_install(&layout.managed_home)?;
+    let release =
+        super::release::Release::latest_or_recorded(&layout.managed_home.join("downloads"))
+            .map_err(provision::Error::from)?;
+    release
+        .apply_manifest(&mut manifest)
+        .map_err(provision::Error::from)?;
     let artifacts = provision::download_all(&layout.managed_home, &manifest, assume_yes)?;
+    release
+        .record(&layout.managed_home.join("downloads"))
+        .map_err(provision::Error::from)?;
     if reinstall {
         daemon::uninstall(&layout)?;
         managed_home::clear_installation_state(&layout.managed_home)?;
