@@ -2121,6 +2121,12 @@ table.image-table .image-package-url a:hover {
 .pipe-nginx-editor h3 { margin: 0; font-size: .85rem; font-weight: 600; }
 .pipe-nginx-editor .pipe-description { margin: .35rem 0 0; }
 .pipe-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-top: 1rem; }
+.pipe-database-form { display: grid; gap: .75rem; margin-block: 1rem; }
+.pipe-database-form textarea { width: 100%; min-height: 5rem; resize: vertical; padding: .6rem; color: var(--shell); background: var(--bg); border: 1px solid var(--dim); border-radius: 4px; font-family: var(--font-mono); font-size: .8rem; }
+.pipe-database-browser { margin-top: 1.25rem; border-top: 1px solid var(--dim); padding-top: 1rem; }
+.pipe-database-preview td { max-width: 24rem; overflow-wrap: anywhere; white-space: pre-wrap; vertical-align: top; }
+.pipe-database-preview th small { display: block; font-size: .65rem; font-weight: normal; color: var(--dim); }
+.pipe-database-null { color: var(--dim); font-style: italic; }
 .pipe-unsaved { padding: .75rem 1rem; margin-bottom: 1rem; border: 1px solid var(--error); border-radius: 8px; background: color-mix(in srgb, var(--error) 5%, var(--bg-panel)); color: var(--error); font-size: .85rem; line-height: 1.5; }
 .pipe-description { margin: 0 0 1rem; color: var(--ink); font-size: .85rem; line-height: 1.6; }
 .cloudflare-help { margin-top: 1rem; }
