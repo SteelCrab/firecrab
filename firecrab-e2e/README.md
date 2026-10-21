@@ -35,7 +35,10 @@ Isolated Playwright suite.
 
 - `FIRECRAB_E2E_SKIP_GUEST_BOOT=1`: skip guest-boot half
 - Inspect and import still run
-- Full suite: **19 cases, including 1 existing explicit skip**; import/form-only mode also skips guest boot checks
+- The default `npm test` discovers every spec under `tests/`, including mocked
+  dashboard specs and live API cases B18/B19. The total changes as specs are added.
+- `npm run test:pipe --prefix firecrab-e2e` runs only the mocked Pipe and M2Image
+  specs. It excludes `pipe-registries-live.spec.ts` and never sends B19 to the API.
 - The failed-register-job case is always skipped because no real dashboard/API failure trigger exists
 
 ## Setup

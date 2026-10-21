@@ -12,6 +12,7 @@ async function open(page: Page, options: {
   saved?: "ghcr" | "harbor" | "dockerHub" | "both" | "ecr";
   ecrRegistry?: string;
   failPull?: boolean;
+  pollErrorOnce?: boolean;
   running?: boolean;
   catalogError?: boolean;
   tagError?: boolean;
@@ -84,6 +85,7 @@ async function open(page: Page, options: {
     }
     if (path.startsWith("/api/pipe/registry-transfers/")) {
       polls++;
+      if (options.pollErrorOnce && polls === 1) return route.fulfill({ status: 503, json: { error: { message: "Temporary registry outage" } } });
       const running = options.running || polls === 1;
       const reference = transfers.at(-1)?.reference;
       if (!running && !options.failPull && typeof reference === "string") {
@@ -458,6 +460,26 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
     await mock.panel.getByRole("button", { name: "Retry tags", exact: true }).click();
     await expect(mock.panel.getByLabel("Tag", { exact: true })).toHaveValue("v1");
     await expect(mock.panel.getByRole("button", { name: "Pull image", exact: true })).toBeEnabled();
+  });
+
+  for (const rejectLogin of [false, true]) test(rejectLogin
+    ? "preserves a rejected login after a transfer poll recovers"
+    : "clears a transient transfer error after polling succeeds", async ({ page }) => {
+    const mock = await open(page, { saved: "harbor", pollErrorOnce: true });
+    await mock.panel.getByRole("button", { name: "Pull image", exact: true }).click();
+    await expect(mock.panel.getByRole("alert")).toContainText("Temporary registry outage");
+    if (rejectLogin) {
+      await page.route("**/api/pipe/registries/ghcr.io", route => route.fulfill({ status: 401, json: { error: { message: "The registry token was rejected" } } }));
+      await mock.panel.getByRole("button", { name: "Add registry", exact: true }).click();
+      await mock.panel.getByLabel("GitHub username", { exact: true }).fill("team");
+      await mock.panel.getByLabel("Personal access token (classic)", { exact: true }).fill("rejected-token");
+      await mock.panel.getByRole("button", { name: "Save login", exact: true }).click();
+      await expect(mock.panel.getByRole("alert")).toContainText("The registry token was rejected");
+    }
+    await expect(lastPull(mock.panel).getByText("Pulled", { exact: true })).toBeVisible();
+    if (rejectLogin) await expect(mock.panel.getByRole("alert")).toContainText("The registry token was rejected");
+    else await expect(mock.panel.getByRole("alert")).toHaveCount(0);
+    expect(mock.transfers).toHaveLength(1);
   });
 
   test("restores a running pull after reload without starting a duplicate", async ({ page }) => {

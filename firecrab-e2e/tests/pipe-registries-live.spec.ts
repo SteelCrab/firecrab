@@ -16,7 +16,8 @@ async function connections(): Promise<{ rows: Connection[]; text: string }> {
 }
 
 async function removeLogin(): Promise<void> {
-  await fetch(`${apiUrl()}/api/pipe/registries/${HOST}`, { method: "DELETE" }).catch(() => undefined);
+  const response = await fetch(`${apiUrl()}/api/pipe/registries/${HOST}`, { method: "DELETE" });
+  expect(response.ok, `cleanup DELETE ${HOST} returned ${response.status}`).toBe(true);
 }
 
 function cardStatus(count: number): string {
