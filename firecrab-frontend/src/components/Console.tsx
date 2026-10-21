@@ -124,7 +124,7 @@ interface ConsoleProps {
  * Serial console as a dedicated page (`#/console/<vmId>`), normally opened
  * in a **new browser window** from the VM list.
  *
- * Layout: toolbar + xterm surface + bottom VM detail panel. "터미널만"
+ * Layout: toolbar + xterm surface + bottom VM detail panel. "Terminal only"
  * hides chrome (bar + details) so only the terminal remains.
  */
 export default function Console({ vmId, onClose }: ConsoleProps) {

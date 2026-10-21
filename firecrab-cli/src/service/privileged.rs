@@ -1,7 +1,7 @@
-//! install.sh의 `$SUDO` 접두: root면 빈 문자열, 아니면 `sudo`.
+//! install.sh's `$SUDO` prefix: empty for root, otherwise `sudo`.
 //!
-//! 전체 프로세스를 root로 올리지 않고 변경 명령마다 `sudo`를 붙이는 이유는
-//! install.sh와 같다 — `$HOME`, SSH 키, 다운로드 캐시가 호출자의 것으로 남는다.
+//! Prefix each mutating command with `sudo` instead of running the whole process
+//! as root, as install.sh does. This preserves the caller's `$HOME`, SSH keys, and download cache.
 
 use std::io;
 use std::path::Path;

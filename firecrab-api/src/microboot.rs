@@ -248,7 +248,7 @@ pub(crate) fn spawn_warmup(state: AppState) {
 /// ELF vmlinux or a raw ARM64 Image, create a small
 /// placeholder rootfs artifact (its content is irrelevant — the guest
 /// overwrites the real disk it grows into via `mkfs.ext4 -F`, see the
-/// design doc's "스크래치 디스크" section), and register the spec.
+/// design doc's "Scratch disk" section), and register the spec.
 fn register_blocking(
     templates: &crate::templates::TemplateRegistry,
     image_root: &Path,

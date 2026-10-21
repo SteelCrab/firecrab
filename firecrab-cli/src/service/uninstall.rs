@@ -1,4 +1,4 @@
-//! install.sh `do_uninstall`: 이 설치가 만든 것만 지운다. 데이터는 `--purge`에서만.
+//! install.sh `do_uninstall`: remove only what this installation created. Delete data only with `--purge`.
 
 use super::Error;
 use super::env::{LEGACY_HELPER_UNIT, ServiceEnv, UNITS};
@@ -10,14 +10,14 @@ use super::selinux;
 
 const STEP: &str = "uninstall";
 
-/// helper가 VM마다 띄우는 transient 유닛. API가 멈춰도 VM이 살아남도록 설계돼
-/// 있어서, 따로 멈추지 않으면 uninstall 뒤에도 shim과 Firecracker가 남는다.
+/// Transient units started by the helper for each VM. VMs are designed to survive
+/// API shutdown, so their shims and Firecracker remain after uninstall unless stopped explicitly.
 const VM_UNIT_PATTERN: &str = "firecrab-vm-*.service";
 
-/// 실행 중이거나 실패 상태로 남은 `firecrab-vm-*` 유닛을 멈춘다.
+/// Stop running or failed `firecrab-vm-*` units.
 ///
-/// helper와 API가 아직 떠 있을 때 해야 TAP 정리와 종료 기록이 평소 경로를
-/// 탄다. 멈추지 못해도 uninstall은 계속한다 — 경고만 남긴다.
+/// Do this while the helper and API are still running so TAP cleanup and exit
+/// recording use their normal paths. Warn if stopping fails and continue uninstalling.
 fn stop_vm_units(privileged: &Privileged<'_>) {
     let listing = privileged.runner().run(
         "systemctl",
@@ -32,7 +32,7 @@ fn stop_vm_units(privileged: &Privileged<'_>) {
     );
     let units = match listing {
         Ok(out) if out.status.success() => vm_units_in(&String::from_utf8_lossy(&out.stdout)),
-        // systemd가 없는 호스트에는 멈출 유닛도 없다.
+        // Hosts without systemd have no units to stop.
         _ => return,
     };
     if units.is_empty() {
@@ -50,13 +50,13 @@ fn stop_vm_units(privileged: &Privileged<'_>) {
             "some MicroVM units did not stop — their firecracker processes may keep running",
         );
     }
-    // `--collect`는 실패한 transient 유닛을 치우지 못한다.
+    // `--collect` cannot remove failed transient units.
     let mut reset = vec!["reset-failed"];
     reset.extend(units.iter().map(String::as_str));
     let _ = privileged.run("systemctl", &reset);
 }
 
-/// `systemctl list-units --plain --no-legend` 출력에서 VM 유닛 이름만.
+/// Extract only VM unit names from `systemctl list-units --plain --no-legend` output.
 fn vm_units_in(listing: &str) -> Vec<String> {
     listing
         .lines()
@@ -66,10 +66,10 @@ fn vm_units_in(listing: &str) -> Vec<String> {
         .collect()
 }
 
-/// 유닛·바이너리·대시보드를 제거하고, `purge`면 데이터와 설정까지 지운다.
+/// Remove units, binaries, and the dashboard. With `purge`, also delete data and configuration.
 ///
-/// 계정은 남긴다 — 데이터 디렉터리가 그 계정 소유이고, 지우면 남은 파일이
-/// 고아가 된다.
+/// Keep the account because it owns the data directory. Removing it would leave
+/// any remaining files without an owner account.
 pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> Result<(), Error> {
     stop_vm_units(privileged);
     // Stop the independently owned traffic path only during explicit removal.
@@ -78,7 +78,7 @@ pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> 
         .chain(UNITS.into_iter().rev())
         .chain([LEGACY_HELPER_UNIT])
     {
-        // 이미 없거나 비활성이면 실패가 정상이므로 결과를 보지 않는다.
+        // Ignore failures because absent or inactive units are expected.
         let _ = privileged.run("systemctl", &["disable", "--now", unit]);
         let path = env.unit_path(unit).to_string_lossy().into_owned();
         privileged.run_ok(STEP, "rm", &["-f", &path])?;
@@ -92,9 +92,9 @@ pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> 
         &["-rf", &env.libdir.join("pipe").to_string_lossy()],
     )?;
 
-    // SIGTERM은 helper의 소켓 루프만 멈춘다 — helper가 만든 브리지, TAP,
-    // nftables 테이블은 재부팅 전까지 남는다. 바이너리가 아직 디스크에 있는
-    // 동안 자체 teardown을 돌린다.
+    // SIGTERM stops only the helper's socket loop. Its bridges, TAP devices,
+    // and nftables tables remain until reboot. Run the helper's teardown while
+    // its binary is still on disk.
     if let Some(teardown) = resolve_binary("firecrab-helper", None, &env.libdir) {
         let helper_s = teardown.to_string_lossy().into_owned();
         let ok = privileged
@@ -108,8 +108,8 @@ pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> 
         }
     }
 
-    // 설치기가 libdir에 넣는 전부: 바이너리 둘, 옛 이름 링크, 커널 추출 스크립트.
-    // 하나라도 빠지면 디렉터리가 비지 않아 아래 `rmdir`이 조용히 건너뛴다.
+    // Everything the installer puts in libdir: two binaries, the legacy name
+    // link, and kernel extraction scripts. Leaving any item behind prevents the later `rmdir`.
     let installed = BUNDLE_BINARIES[..2]
         .iter()
         .chain(&["firecrab-net-helper"])
@@ -143,8 +143,8 @@ pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> 
         .into_owned();
     privileged.run_ok(STEP, "rm", &["-f", &license, &notices, &inventory])?;
 
-    // Firecracker는 따로 설치되므로 일부러 남긴다 — 그 바이너리 옆의 업스트림
-    // 고지도 함께 남는다.
+    // Keep Firecracker because it is installed separately. Also keep the upstream
+    // notices next to its binary.
     let libdir = env.libdir.to_string_lossy().into_owned();
     let sharedir = env.sharedir.to_string_lossy().into_owned();
     let _ = privileged.run("rmdir", &["--ignore-fail-on-non-empty", &libdir, &sharedir]);
@@ -152,7 +152,7 @@ pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> 
     selinux::unlabel_binaries(privileged, env);
     output::log("binaries and dashboard removed");
 
-    // 기록 파일이 `$CONFDIR`에 있으니 purge보다 먼저.
+    // Restore before purging because the baseline file is under `$CONFDIR`.
     host_state::restore(privileged, env);
 
     if purge {
