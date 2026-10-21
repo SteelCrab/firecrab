@@ -242,6 +242,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::pipe::inspect).put(handlers::pipe::apply),
         )
         .route("/api/pipe/disable", post(handlers::pipe::disable))
+        .route(
+            "/api/pipe/databases",
+            get(handlers::pipe_databases::list).post(handlers::pipe_databases::create),
+        )
+        .route(
+            "/api/pipe/databases/test",
+            post(handlers::pipe_databases::test),
+        )
+        .route(
+            "/api/pipe/databases/{id}",
+            delete(handlers::pipe_databases::delete),
+        )
+        .route(
+            "/api/pipe/databases/{id}/tables",
+            get(handlers::pipe_databases::tables),
+        )
+        .route(
+            "/api/pipe/databases/{id}/preview",
+            post(handlers::pipe_databases::preview),
+        )
         // GET and POST share one path, matching this router's existing shape
         // for "read this resource / start work on it" pairs such as
         // `/api/images/{alias}/install`.
