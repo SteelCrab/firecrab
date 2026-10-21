@@ -238,7 +238,7 @@ real API/DB, TLS, cleanup and cloud acceptance checks.
   `FIRECRAB_TEST_MYSQL_URI`; it creates fixture tables in those databases.
 - `npm run test:pipe --prefix firecrab-e2e`: existing PIPE flows plus DB connection
   tests, table previews, pagination, failure recovery, credential clearing and
-  Korean mobile layout using API fixtures.
+  English mobile layout using API fixtures.
 - `test-pipe-runtime.py`: real Nginx domain/path boundaries, request distribution,
   passive failure exclusion, multiple isolated Quick hosts, cloned route paths,
   target update/removal, public Host/HTTPS forwarding, and in-flight reloads.

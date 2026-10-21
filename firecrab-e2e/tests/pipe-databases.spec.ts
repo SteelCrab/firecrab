@@ -380,14 +380,22 @@ test.describe("PIPE databases @dashboard", () => {
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
   });
 
-  test("supports Korean and a narrow viewport", async ({ page }, testInfo) => {
+  test("supports English connection forms in a narrow viewport", async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await open(page, { locale: "ko" });
-    const panel = page.getByRole("region", { name: "데이터베이스", exact: true });
-    await panel.getByRole("button", { name: "DB 가져오기", exact: true }).click();
-    await panel.getByLabel("DB 위치", { exact: true }).selectOption("rds");
-    await expect(panel.getByLabel("TLS", { exact: true }).getByRole("option", { name: "사용 안 함", exact: true })).toHaveCount(0);
-    await expect(panel.getByLabel("CA 인증서 (PEM, 선택)", { exact: true })).toBeVisible();
+    await open(page);
+    const panel = page.getByRole("region", { name: "Databases", exact: true });
+    await panel.getByRole("button", { name: "Add database", exact: true }).click();
+    await panel.getByLabel("Database source", { exact: true }).selectOption("rds");
+    await expect(panel.getByLabel("TLS", { exact: true }).getByRole("option", { name: "Disabled", exact: true })).toHaveCount(0);
+    await expect(panel.getByLabel("CA certificate (PEM, optional)", { exact: true })).toBeVisible();
+    const clippedControls = await panel.locator(".pipe-database-form").evaluate(form => {
+      const bounds = form.getBoundingClientRect();
+      return [...form.querySelectorAll("input, select, textarea, button")].filter(control => {
+        const rect = control.getBoundingClientRect();
+        return rect.left < bounds.left - 1 || rect.right > bounds.right + 1;
+      }).map(control => control.tagName);
+    });
+    expect(clippedControls).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await panel.screenshot({ path: testInfo.outputPath("database-form-mobile.png") });
   });
