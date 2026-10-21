@@ -176,14 +176,15 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
     }
     // Before anything changes, so declining the download leaves the host as it was.
     let mut manifest = manifest::Manifest::for_install(&layout.managed_home)?;
-    let release = super::release::Release::latest_or_recorded(&layout.downloads())
-        .map_err(provision::Error::from)?;
+    let release =
+        super::release::Release::latest_or_recorded(&layout.managed_home.join("downloads"))
+            .map_err(provision::Error::from)?;
     release
         .apply_manifest(&mut manifest)
         .map_err(provision::Error::from)?;
     let artifacts = provision::download_all(&layout.managed_home, &manifest, assume_yes)?;
     release
-        .record(&layout.downloads())
+        .record(&layout.managed_home.join("downloads"))
         .map_err(provision::Error::from)?;
     if reinstall {
         daemon::uninstall(&layout)?;

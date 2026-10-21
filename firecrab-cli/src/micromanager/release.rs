@@ -179,7 +179,7 @@ impl Release {
 }
 
 /// The digest [`Release::record`] kept for `asset`.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg(test)]
 pub fn recorded_digest(directory: &Path, asset: &str) -> Option<String> {
     listed_digest(&fs::read_to_string(directory.join(SUMS)).ok()?, asset)
 }
