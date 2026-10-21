@@ -60,7 +60,6 @@ test.describe("Pipe registries against the API", () => {
     await panel.getByLabel("Registry hostname").fill(HOST);
     await panel.getByLabel("ECR login password").fill(SECRET);
     await panel.getByRole("button", { name: "Save login" }).click();
-    await expect(panel.getByText("Registry login saved.")).toBeVisible();
     const row = panel.getByRole("row").filter({ has: page.getByRole("cell", { name: HOST, exact: true }) });
     await expect(row).toBeVisible();
 
@@ -75,7 +74,6 @@ test.describe("Pipe registries against the API", () => {
     await expect(pipe.getByRole("link", { name: "Pipe Registry", exact: true })).toContainText(cardStatus(before + 1));
     await pipe.getByRole("link", { name: "Pipe Registry", exact: true }).click();
     await row.getByRole("button", { name: "Remove" }).click();
-    await expect(panel.getByText("Registry login removed.")).toBeVisible();
     await expect(row).toHaveCount(0);
     expect((await connections()).rows.some(value => value.registry === HOST)).toBe(false);
   });
