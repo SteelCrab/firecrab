@@ -103,6 +103,7 @@ async function open(page: Page, options: { unavailable?: boolean; firecrabFailur
   const connectionGate = new Promise<void>(resolve => { finishConnection = resolve; });
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/pipe/databases") return route.fulfill({ json: [] });
     if (path === "/api/pipe/cloudflare/zones") {
       zoneRequests.push(route.request().postDataJSON().apiToken);
       if (options.zonesFailure) return route.fulfill({ status: 400, json: { error: { message: "Cloudflare rejected the API token" } } });
