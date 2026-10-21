@@ -1127,11 +1127,10 @@ test.describe("API connection recovery @dashboard", () => {
   });
 
   test("preserves a failed VM action after the next successful poll", async ({ page }) => {
-    let polls = 0;
+    let refresh = false;
     await open(page, { card: null });
     await page.route("**/api/vms", async route => {
-      polls++;
-      await route.fulfill({ json: appVms });
+      await route.fulfill({ json: appVms.map(vm => refresh && vm.id === "web-a" ? { ...vm, name: "web-a-refreshed" } : vm) });
     });
     await page.route("**/api/vms/web-a/stop", route => route.fulfill({ status: 409, json: { error: { message: "This VM cannot be stopped right now" } } }));
     await page.getByRole("button", { name: "MicroVM", exact: true }).click();
@@ -1140,8 +1139,8 @@ test.describe("API connection recovery @dashboard", () => {
     await page.getByRole("menuitem", { name: "stop", exact: true }).click();
     const banner = page.locator(".banner.error").filter({ has: page.getByRole("button", { name: "✕", exact: true }) });
     await expect(banner).toContainText("This VM cannot be stopped right now");
-    const before = polls;
-    await expect.poll(() => polls).toBeGreaterThan(before);
+    refresh = true;
+    await expect(page.getByRole("row").filter({ has: page.getByText("web-a-refreshed", { exact: true }) })).toBeVisible();
     await expect(banner).toContainText("This VM cannot be stopped right now");
   });
 });

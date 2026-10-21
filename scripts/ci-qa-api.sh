@@ -367,8 +367,8 @@ row=$(registry_row "$REG_HOST") || fail P1 "registry list shape"
 pass P1
 
 http PUT "/api/pipe/registries/${REG_HOST}" "{\"username\":\"qa-ci-user\",\"secret\":\"${REG_SECRET}\"}"
-expect P2 200
 REG_SAVED=1
+expect P2 200
 case $BODY in *"$REG_SECRET"*) fail P2 "save response returned the secret" ;; esac
 [ "$(json_get 'd["username"] + "/" + d["provider"]')" = AWS/ecr ] \
     || fail P2 "ECR login must be saved as AWS/ecr"

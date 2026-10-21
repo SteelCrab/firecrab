@@ -34,6 +34,7 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [selectedRegistry, setRegistry] = useState("");
@@ -68,12 +69,13 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
         const next = await getRegistryTransfer(activeJob!.id);
         if (cancelled) return;
         setJob({ reference: activeJob!.reference, snapshot: next });
+        setPollError(null);
         if (next.status === "running") { timer = setTimeout(poll, 1_000); return; }
         if (next.status === "succeeded") setImageVersion(value => value + 1);
         else setError(next.status === "idle" ? t("Job expired. Retry.", "작업이 만료됐다. 다시 시도한다.") : next.log.split("\n").filter(Boolean).at(-1) ?? t("Image pull failed.", "이미지 가져오기에 실패했다."));
         setActiveJob(null);
       } catch (failure) {
-        if (!cancelled) { setError((failure as Error).message); timer = setTimeout(poll, 5_000); }
+        if (!cancelled) { setPollError((failure as Error).message); timer = setTimeout(poll, 5_000); }
       }
     }
     void poll();
@@ -129,10 +131,11 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
   const providerName = (id: Provider) => PROVIDERS.find(value => value.id === id)?.short ?? id;
   const jobLabel = { idle: t("Expired", "만료"), running: t("Pulling…", "가져오는 중…"), succeeded: t("Pulled", "가져옴"), failed: t("Failed", "실패") };
   const jobTone = { idle: "", running: " starting", succeeded: " running", failed: " error" };
+  const alert = error ?? pollError;
   return <section className="panel pipe-registries" aria-label="Pipe Registry">
     <h2 className="panel-title"><span>Pipe Registry</span><button className="btn" type="button" disabled={loading || busy || !!editor} aria-expanded={!!editor && !editor.original} aria-controls="registry-login-editor" onClick={() => open()}>{t("Add registry", "레지스트리 추가")}</button></h2>
     <p className="pipe-description">{t("AWS and GitHub accounts can be connected in ", "AWS와 GitHub 계정은 ")}<a href={pipeCardHash("auth")}>Pipe Auth</a>{t(".", "에서 인증한다.")}</p>
-    {error && <div className="banner error" role="alert">{error}</div>}
+    {alert && <div className="banner error" role="alert">{alert}</div>}
     {notice && <div className="banner info" role="status">{notice}</div>}
     {editor && <RegistryForm editor={editor} busy={busy} onChange={setEditor} onSubmit={login} onCancel={() => setEditor(null)} />}
     {loading ? <p className="poll-note" role="status">{t("Loading registries…", "레지스트리 조회 중…")}</p>
