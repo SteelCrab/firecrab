@@ -16,7 +16,10 @@
     "test:headed": "playwright test --headed",
     "install-browsers": "playwright install chromium",
     "test:host": "playwright test --config playwright.host-firecrab.config.ts",
-    "test:services": "playwright test --config playwright.micro-services.config.ts"
+    "test:services": "playwright test --config playwright.micro-services.config.ts",
+    "test:secrets": "playwright test --config playwright.secrets.config.ts",
+    "test:secrets:live": "playwright test --config playwright.secrets-live.config.ts",
+    "typecheck:secrets": "node ../firecrab-frontend/node_modules/typescript/bin/tsc -p tsconfig.secrets.json"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
