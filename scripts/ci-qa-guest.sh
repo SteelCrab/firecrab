@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# QA guest boot from OCI images (public-docs/qa.md I5, I6, N6, V1, V2, V6,
+# QA guest boot from OCI images (public-docs/development/qa.md I5, I6, N6, V1, V2, V6,
 # V7, V8, V9, V11, V12, V13, C1, C2, C4, X5).
 # Default references: alpine, ubuntu, fedora from Docker Hub.
 # GitHub Ubuntu: chmod 666 /dev/kvm first (nested virt is not guaranteed).

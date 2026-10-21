@@ -1,7 +1,7 @@
 //! Per-VM writable disk management: copies a verified template rootfs into a
 //! generation-scoped file under `{vm}/disks/{generation}.ext4` on first
 //! prepare, and grows it when capacity increases. Stop/start reuses the same
-//! active generation file (`public-docs/storage.md`).
+//! active generation file (`public-docs/guides/storage.md`).
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -357,7 +357,7 @@ const IPV6_SYSCTL_PATH: &str = "/etc/sysctl.d/99-firecrab-ipv6.conf";
 /// bridge accepted. Harmless on an IPv4-only VM, which never gets a prefix
 /// to configure from in the first place.
 fn ipv6_sysctl_conf() -> String {
-    "# Managed by Firecrab. See public-docs/networking.md.\n\
+    "# Managed by Firecrab. See public-docs/guides/networking.md.\n\
      net.ipv6.conf.default.addr_gen_mode = 0\n\
      net.ipv6.conf.eth0.addr_gen_mode = 0\n\
      net.ipv6.conf.default.use_tempaddr = 0\n\
@@ -1458,7 +1458,7 @@ mod tests {
     }
 
     /// A VM whose `diskGb` was edited upward after it already had a disk
-    /// (`public-docs/storage.md`) needs the *next* `prepare_rootfs` call
+    /// (`public-docs/guides/storage.md`) needs the *next* `prepare_rootfs` call
     /// — the "reuse existing disk" path, not the "fresh copy" one — to
     /// actually grow it.
     #[test]
@@ -1838,7 +1838,7 @@ mod tests {
         write_into_image(
             &rootfs,
             "/usr/local/bin/systemctl",
-            b"#!/bin/sh\n# Firecrab systemctl (public-docs/oci.md). Not systemd.\n",
+            b"#!/bin/sh\n# Firecrab systemctl (public-docs/guides/oci.md). Not systemd.\n",
         )
         .unwrap();
 
@@ -2234,7 +2234,7 @@ mod tests {
 
     fn sample_app_service() -> String {
         "#!/bin/sh\n\
-         # Firecrab service for the imported image entrypoint (public-docs/oci.md).\n\
+         # Firecrab service for the imported image entrypoint (public-docs/guides/oci.md).\n\
          export PATH='/usr/bin'\n\
          export APP_ENV='prod'\n\
          exec '/bin/app'\n"

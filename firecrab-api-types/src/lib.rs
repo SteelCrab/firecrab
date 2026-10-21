@@ -9,6 +9,12 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod micro_services;
+pub use micro_services::{
+    DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
+    ServiceInstance, ServicePhase, ServiceRuntime,
+};
+
 /// The egress policies the API may request for a VM. New policies are added
 /// here and mirrored in `firecrab-helper`'s own (deliberately separate)
 /// `EgressPolicy`; the helper is the trust boundary and re-validates every
@@ -317,7 +323,7 @@ pub struct UpdateVmResourcesRequest {
 
 /// A named phase of `start_vm`'s pipeline, exposed only while `state ==
 /// Starting` so the dashboard can show *why* a VM hasn't reached `running`
-/// yet instead of a bare spinner (`public-docs/api.md`).
+/// yet instead of a bare spinner (`public-docs/reference/api.md`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupStep {
@@ -329,7 +335,7 @@ pub enum StartupStep {
     StartingProcess,
     /// Waiting for the guest to confirm (over its serial console) that
     /// DHCP and DNS actually came up, since there's no guest agent to ask
-    /// directly (`public-docs/networking.md`).
+    /// directly (`public-docs/guides/networking.md`).
     ConfiguringNetwork,
 }
 
@@ -351,7 +357,7 @@ pub enum StartupStepOutcome {
 /// steps take — timing them client-side would round a 2-second disk copy up
 /// to the poll interval or miss it entirely. So the server records when each
 /// step opened and closed, and the client only formats it
-/// (`public-docs/api.md`).
+/// (`public-docs/reference/api.md`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct StartupStepRun {
@@ -422,7 +428,7 @@ pub struct VmResponse {
     /// stop/start, freed only on delete).
     pub ipv4: Option<String>,
     /// Allocated IPv6 address, when this VM's MicroNetwork is dual-stack.
-    /// `null` for an IPv4-only network (`public-docs/networking.md`).
+    /// `null` for an IPv4-only network (`public-docs/guides/networking.md`).
     pub ipv6: Option<String>,
     /// Allocated MAC address, alongside `ipv4`.
     pub mac: Option<String>,
@@ -435,7 +441,7 @@ pub struct VmResponse {
     /// kept after the start finishes so the timeline stays readable.
     pub startup_timeline: Vec<StartupStepRun>,
     /// MicroNetwork this VM belongs to. Fixed at creation — its lease comes
-    /// out of that network's subnet (`public-docs/networking.md`).
+    /// out of that network's subnet (`public-docs/guides/networking.md`).
     pub micro_network_id: Uuid,
     /// Storage root id this VM's disk lives under (`{root}/vms/{id}/`).
     /// Fixed at creation so a later config change cannot orphan the files.
@@ -464,7 +470,7 @@ pub struct VmResponse {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// SHA256 fingerprint of the guest SSH host key. `null` until first start
-    /// has generated the per-VM host key (`public-docs/oci.md`).
+    /// has generated the per-VM host key (`public-docs/guides/oci.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh_host_fingerprint: Option<String>,
 }
@@ -535,7 +541,7 @@ pub struct VmUsageSample {
 }
 
 /// One selectable place a VM disk may be created — env root, default, or a
-/// MicroStorage (`public-docs/storage.md`). Clients
+/// MicroStorage (`public-docs/guides/storage.md`). Clients
 /// pick by `id` only; paths are never free-form on create.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -715,7 +721,7 @@ pub struct CreateMicroNetworkRequest {
     /// The network's IPv6 prefix, alongside — never instead of —
     /// `subnet_cidr`. Giving one turns IPv6 on for the network: a Unique
     /// Local `/64` egresses through NAT66, a global one is forwarded
-    /// untranslated (`public-docs/networking.md`). Omitted with
+    /// untranslated (`public-docs/guides/networking.md`). Omitted with
     /// `ipv6_address_mode` set, the API generates a per-host ULA `/64`.
     #[serde(default)]
     pub ipv6_cidr: Option<String>,
@@ -749,7 +755,7 @@ fn internet_enabled_default() -> bool {
 }
 
 /// A MicroNetwork — one of firecrab's own virtual networks
-/// (`public-docs/networking.md`). A named CIDR reservation backed by a real
+/// (`public-docs/guides/networking.md`). A named CIDR reservation backed by a real
 /// host bridge; routing-table separation and VM membership are follow-up work.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -765,7 +771,7 @@ pub struct MicroNetworkResponse {
     pub gateway: String,
     /// Whether its VMs may reach anything outside Firecrab. `false` is a
     /// closed network: no NAT, and nothing routed out of it
-    /// (`public-docs/networking.md`).
+    /// (`public-docs/guides/networking.md`).
     pub internet_enabled: bool,
     /// Stored host NIC for NAT, or `null` to use the host default route.
     pub uplink: Option<String>,
@@ -782,7 +788,7 @@ pub struct MicroNetworkResponse {
 }
 
 /// Response for `GET /api/network`: the host network firecrab has set up,
-/// read-only for now (see `public-docs/networking.md` — making
+/// read-only for now (see `public-docs/guides/networking.md` — making
 /// this genuinely editable needs a larger IPAM/bridge refactor).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -803,7 +809,7 @@ pub struct NetworkInfoResponse {
 /// Response for `GET /api/micro-networks/{id}`: one network broken out into
 /// the services it is actually made of, so the dashboard can show what a
 /// MicroNetwork gives a VM rather than just its name and CIDR
-/// (`public-docs/networking.md`).
+/// (`public-docs/guides/networking.md`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroNetworkDetailResponse {
@@ -949,11 +955,64 @@ pub enum HostOs {
     Windows,
 }
 
+/// Native microManager allocation. Changes take effect after an explicit apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ManagerResources {
+    pub cpu: u32,
+    pub memory_mib: u64,
+    pub disk_gib: u64,
+    pub network_mode: ManagerNetworkMode,
+    pub network_interface: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ManagerNetworkMode {
+    Nat,
+    Bridged,
+    Mirrored,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagerHostCapacity {
+    pub cpu: u32,
+    pub memory_mib: u64,
+    pub disk_available_gib: u64,
+    pub network_interfaces: Vec<String>,
+    pub network_modes: Vec<ManagerNetworkMode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagerResourceOperation {
+    pub id: String,
+    /// `applying`, `complete`, or `failed`.
+    pub state: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagerResourceStatus {
+    pub controller_id: String,
+    pub os: HostOs,
+    pub settings: ManagerResources,
+    pub current: Option<ManagerResources>,
+    pub host: ManagerHostCapacity,
+    pub pending: bool,
+    pub shared_wsl: bool,
+    pub operation: Option<ManagerResourceOperation>,
+}
+
 /// What microManager records about the machine it runs on, so the API inside
 /// its Linux VM can report it. Written to [`HOST_PLATFORM_DESCRIPTOR_PATH`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostPlatformDescriptor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_id: Option<String>,
     /// `macos` or `windows`.
     pub os: HostOs,
     /// Product name, such as `Windows 11` or `macOS`.
@@ -973,6 +1032,9 @@ pub const HOST_PLATFORM_DESCRIPTOR_PATH: &str = "/etc/firecrab/host-platform.jso
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostPlatformResponse {
+    /// Matches this API to the native resource controller; absent on older hosts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_id: Option<String>,
     /// The operating system of the machine behind the dashboard.
     pub os: HostOs,
     /// Its product name; on Linux, the distribution's `PRETTY_NAME`.
@@ -987,6 +1049,69 @@ pub struct HostPlatformResponse {
     pub system: String,
     /// That system's kernel release.
     pub kernel: String,
+}
+
+/// `GET /api/info`, and the `--json` output of `firecrab info`: this build and
+/// where it is installed. One type for both so the CLI's report and the API's
+/// answer cannot drift, and `install.sh`'s defaults are written down once.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FirecrabInfo {
+    /// `CARGO_PKG_VERSION` of the binary that answered, not of another one.
+    pub version: String,
+    /// From `$PREFIX`, or `install.sh`'s default.
+    pub prefix: String,
+    /// From `$DATADIR`, or `install.sh`'s default.
+    pub datadir: String,
+    /// From `$CONFDIR`, or `install.sh`'s default.
+    pub confdir: String,
+    /// From `$UNITDIR`, or `install.sh`'s default.
+    pub unitdir: String,
+    /// The API's base URL: the endpoint the CLI resolved, or the address the
+    /// API itself listens on.
+    pub api_base: String,
+}
+
+impl FirecrabInfo {
+    /// Reads the install layout from the environment, falling back to
+    /// `install.sh`'s own defaults (`PREFIX=/usr/local`, `DATADIR=/var/lib/firecrab`,
+    /// `CONFDIR=/etc/firecrab`, `UNITDIR=/etc/systemd/system`).
+    pub fn from_env(version: &str, api_base: &str) -> Self {
+        Self::from_lookup(version, api_base, |name| std::env::var(name).ok())
+    }
+
+    /// [`from_env`](Self::from_env) over any source of variables, so the
+    /// defaults can be tested without touching the process environment.
+    pub fn from_lookup(
+        version: &str,
+        api_base: &str,
+        lookup: impl Fn(&str) -> Option<String>,
+    ) -> Self {
+        let value = |name: &str, default: &str| lookup(name).unwrap_or_else(|| default.to_owned());
+        Self {
+            version: version.to_owned(),
+            prefix: value("PREFIX", "/usr/local"),
+            datadir: value("DATADIR", "/var/lib/firecrab"),
+            confdir: value("CONFDIR", "/etc/firecrab"),
+            unitdir: value("UNITDIR", "/etc/systemd/system"),
+            api_base: api_base.to_owned(),
+        }
+    }
+}
+
+/// GET /api/info adds runtime probes without changing the CLI's six-field report.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FirecrabInfoResponse {
+    #[serde(flatten)]
+    pub info: FirecrabInfo,
+    /// Version of the configured Firecracker binary, or null when unavailable.
+    pub firecracker_version: Option<String>,
+    /// systemd ActiveState, or "unknown" if it cannot be queried.
+    pub api_service: String,
+    pub net_helper_service: String,
+    /// Canonical or legacy helper unit actually queried.
+    pub helper_unit: String,
 }
 
 /// `GET /api/update`, and the `--json` output of `firecrab update --check`.
@@ -1006,6 +1131,99 @@ pub struct UpdateCheckResponse {
     /// unparsable tag). `None` on a successful check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// What the newest release changed, as Markdown: the changelog section of
+    /// its GitHub release notes, cut to a bounded length. Treat it as
+    /// untrusted text. `None` when there is no `latest` or the release has no
+    /// notes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+    /// The newest release's page on GitHub, always an `https://` URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_url: Option<String>,
+}
+
+/// Where a `firecrab update --apply` run stands.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdatePhase {
+    /// No update has been started, or its record is gone.
+    Idle,
+    /// Looking up the newest release.
+    Checking,
+    /// Fetching the host bundle.
+    Downloading,
+    /// Comparing the bundle's SHA-256 with the one the release lists.
+    Verifying,
+    /// `firecrab-helper` is replacing the installed binaries.
+    Applying,
+    /// The helper accepted the bundle and is restarting the services.
+    Restarting,
+    /// The API that answers runs the new version.
+    Done,
+    /// The run stopped; `error` says why.
+    Failed,
+}
+
+impl UpdatePhase {
+    /// A run in this phase still has something to do.
+    pub fn is_running(self) -> bool {
+        matches!(
+            self,
+            Self::Checking
+                | Self::Downloading
+                | Self::Verifying
+                | Self::Applying
+                | Self::Restarting
+        )
+    }
+}
+
+/// `GET /api/update/progress`, and the record the updater keeps for it. One
+/// type for both so the CLI's record and the API's answer cannot drift.
+///
+/// The record lives in a file rather than in the API's memory because the last
+/// step of an update restarts the API itself.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProgressResponse {
+    pub phase: UpdatePhase,
+    /// Overall progress from 0 to 100, not the current stage's.
+    pub percent: u8,
+    /// Version being installed, without a leading `v`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Bundle bytes received so far, while downloading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub downloaded_bytes: Option<u64>,
+    /// Size of the bundle, when the server said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    /// Why the run failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// PID of the updater that wrote the record, matching the `pid` that
+    /// `POST /api/update` answered, so a caller can tell this run from an
+    /// earlier one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// When the record was last written, in milliseconds since the Unix epoch.
+    pub updated_at_ms: u64,
+}
+
+impl UpdateProgressResponse {
+    /// The answer when no update has run.
+    pub fn idle() -> Self {
+        Self {
+            phase: UpdatePhase::Idle,
+            percent: 0,
+            target: None,
+            downloaded_bytes: None,
+            total_bytes: None,
+            error: None,
+            pid: None,
+            updated_at_ms: 0,
+        }
+    }
 }
 
 /// `POST /api/update`: the detached updater was launched, nothing more.
@@ -1020,7 +1238,7 @@ pub struct UpdateStartResponse {
 
 /// One entry from `GET /api/images` — a template registry alias the create
 /// form can offer, with digests and a disk floor. Host paths are never
-/// exposed (`public-docs/images.md`).
+/// exposed (`public-docs/guides/images.md`).
 ///
 /// Uninstalled built-in templates still appear so the dashboard can offer
 /// **official package links** (`package_url`) and kick off
@@ -1318,7 +1536,7 @@ pub enum BootstrapStatus {
 /// that mean something to an operator, mirroring [`StartupStep`]'s four —
 /// with the fine-grained detail of the longest one left to the live
 /// console instead of more enum variants
-/// (`public-docs/images.md`).
+/// (`public-docs/guides/images.md`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum BootstrapStep {
@@ -2016,6 +2234,7 @@ mod tests {
     #[test]
     fn host_platform_response_serializes_camel_case() {
         let platform = HostPlatformResponse {
+            controller_id: None,
             os: HostOs::Windows,
             name: "Windows 11".to_owned(),
             version: Some("10.0.26200.9457".to_owned()),
@@ -2256,6 +2475,8 @@ mod tests {
             latest: Some("0.1.2".to_owned()),
             update_available: true,
             error: None,
+            notes: None,
+            release_url: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert_eq!(
@@ -2275,6 +2496,8 @@ mod tests {
             latest: None,
             update_available: false,
             error: Some("unreachable: connection refused".to_owned()),
+            notes: None,
+            release_url: None,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(
@@ -2284,6 +2507,128 @@ mod tests {
         assert!(json.contains("\"error\":\"unreachable: connection refused\""));
         assert_eq!(
             serde_json::from_str::<UpdateCheckResponse>(&json).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn update_check_response_carries_release_notes_in_camel_case() {
+        let response = UpdateCheckResponse {
+            current: "0.3.0".to_owned(),
+            latest: Some("0.3.1".to_owned()),
+            update_available: true,
+            error: None,
+            notes: Some("### Added\n\n- `service shell`".to_owned()),
+            release_url: Some(
+                "https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1".to_owned(),
+            ),
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["notes"], "### Added\n\n- `service shell`");
+        assert_eq!(
+            json["releaseUrl"],
+            "https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1"
+        );
+        assert_eq!(
+            serde_json::from_value::<UpdateCheckResponse>(json).unwrap(),
+            response
+        );
+        // An older updater's output has neither field.
+        let old: UpdateCheckResponse =
+            serde_json::from_str("{\"current\":\"0.3.0\",\"updateAvailable\":false}").unwrap();
+        assert_eq!(old.notes, None);
+        assert_eq!(old.release_url, None);
+    }
+
+    #[test]
+    fn update_progress_serializes_camel_case_and_omits_what_is_unknown() {
+        let record = UpdateProgressResponse {
+            phase: UpdatePhase::Downloading,
+            percent: 47,
+            target: Some("0.3.1".to_owned()),
+            downloaded_bytes: Some(5_242_880),
+            total_bytes: Some(11_178_942),
+            error: None,
+            pid: Some(4242),
+            updated_at_ms: 1_791_000_000_000,
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(
+            json,
+            "{\"phase\":\"downloading\",\"percent\":47,\"target\":\"0.3.1\",\"downloadedBytes\":5242880,\"totalBytes\":11178942,\"pid\":4242,\"updatedAtMs\":1791000000000}"
+        );
+        assert_eq!(
+            serde_json::from_str::<UpdateProgressResponse>(&json).unwrap(),
+            record
+        );
+
+        let idle = serde_json::to_string(&UpdateProgressResponse::idle()).unwrap();
+        assert_eq!(idle, "{\"phase\":\"idle\",\"percent\":0,\"updatedAtMs\":0}");
+    }
+
+    #[test]
+    fn only_the_phases_between_start_and_end_are_running() {
+        use UpdatePhase::*;
+        for phase in [Checking, Downloading, Verifying, Applying, Restarting] {
+            assert!(phase.is_running(), "{phase:?}");
+        }
+        for phase in [Idle, Done, Failed] {
+            assert!(!phase.is_running(), "{phase:?}");
+        }
+    }
+
+    #[test]
+    fn firecrab_info_defaults_are_install_shs() {
+        let info = FirecrabInfo::from_lookup("0.3.1", "http://127.0.0.1:5523", |_| None);
+        assert_eq!(info.version, "0.3.1");
+        assert_eq!(info.prefix, "/usr/local");
+        assert_eq!(info.datadir, "/var/lib/firecrab");
+        assert_eq!(info.confdir, "/etc/firecrab");
+        assert_eq!(info.unitdir, "/etc/systemd/system");
+        assert_eq!(info.api_base, "http://127.0.0.1:5523");
+    }
+
+    #[test]
+    fn firecrab_info_reads_what_the_environment_sets() {
+        let info = FirecrabInfo::from_lookup("0.3.1", "http://127.0.0.1:5523", |name| match name {
+            "PREFIX" => Some("/opt/fc".to_owned()),
+            "DATADIR" => Some("/srv/fc".to_owned()),
+            _ => None,
+        });
+        assert_eq!(info.prefix, "/opt/fc");
+        assert_eq!(info.datadir, "/srv/fc");
+        assert_eq!(info.confdir, "/etc/firecrab");
+    }
+
+    #[test]
+    fn firecrab_info_serializes_camel_case_like_firecrab_info_json() {
+        let info = FirecrabInfo::from_lookup("0.3.1", "http://127.0.0.1:5523", |_| None);
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["version"], "0.3.1");
+        assert_eq!(json["apiBase"], "http://127.0.0.1:5523");
+        assert_eq!(json.as_object().unwrap().len(), 6);
+        assert_eq!(serde_json::from_value::<FirecrabInfo>(json).unwrap(), info);
+    }
+
+    #[test]
+    fn firecrab_info_response_keeps_cli_fields_flat_and_adds_runtime_fields() {
+        let response = FirecrabInfoResponse {
+            info: FirecrabInfo::from_lookup("0.3.1", "http://127.0.0.1:5523", |_| None),
+            firecracker_version: Some("v1.17.0".to_owned()),
+            api_service: "active".to_owned(),
+            net_helper_service: "failed".to_owned(),
+            helper_unit: "firecrab-helper.service".to_owned(),
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["version"], "0.3.1");
+        assert_eq!(json["apiBase"], "http://127.0.0.1:5523");
+        assert_eq!(json["firecrackerVersion"], "v1.17.0");
+        assert_eq!(json["apiService"], "active");
+        assert_eq!(json["netHelperService"], "failed");
+        assert_eq!(json["helperUnit"], "firecrab-helper.service");
+        assert_eq!(json.as_object().unwrap().len(), 10);
+        assert_eq!(
+            serde_json::from_value::<FirecrabInfoResponse>(json).unwrap(),
             response
         );
     }

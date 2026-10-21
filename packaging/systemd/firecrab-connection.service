@@ -1,0 +1,23 @@
+[Unit]
+Description=Firecrab public subdomain connection service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=firecrab-tunnel
+Group=firecrab-tunnel
+StateDirectory=firecrab-tunnel
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/firecrab-tunnel --database /var/lib/firecrab-tunnel/addresses.db --trust-cloudflare-proxy
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

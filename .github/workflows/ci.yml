@@ -34,12 +34,12 @@ jobs:
         # rust-toolchain.toml pins the channel and clippy/rustfmt/llvm-tools.
         run: rustup show
 
-      - name: Install dnsmasq, fakeroot
+      - name: Install dnsmasq, fakeroot and Nginx
         # firecrab-helper's dhcp.rs tests shell out to the real
         # `dnsmasq --test` to validate generated configs, and oci::ext4's
         # tests pack a root-owned image via real `fakeroot` (issue #250) —
         # neither preinstalled on the runner image.
-        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot
+        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot nginx
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -59,11 +59,35 @@ jobs:
       - name: Guest QA failure and cleanup contract
         run: python3 scripts/test-ci-qa-guest.py
 
+      - name: macOS repair QA guard and restoration contract
+        run: python3 -m unittest scripts/test_macos_repair_qa.py scripts/test_macos_os_repair_qa.py scripts/test_macos_os_files.py
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: cargo test + coverage
-        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Unit and Pipe systemd tests + coverage
+        run: |
+          source <(cargo llvm-cov show-env --sh)
+          cargo llvm-cov clean --workspace
+          cargo test --workspace --locked
+          cargo build -p firecrab-cli -p firecrab-api -p firecrab-helper --locked
+          bin="$CARGO_LLVM_COV_TARGET_DIR/debug"
+          # The API runs as nobody; its helper runs in a systemd sandbox that
+          # hides /home. Collect their profiles outside the runner's checkout.
+          profiles=$(mktemp -d /var/tmp/firecrab-coverage.XXXXXX)
+          chmod 1777 "$profiles"
+          trap 'sudo rm -rf "$profiles"' EXIT
+          export LLVM_PROFILE_FILE="$profiles/firecrab-%p-%m.profraw"
+          sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
+          # A second install verifies the cached executable and digest record.
+          sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
+          cloudflared=/var/lib/firecrab-pipe-qa/pipe/cloudflared
+          python3 scripts/test-pipe-runtime.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-cli.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx --cloudflared "$cloudflared"
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper"
+          cp "$profiles"/*.profraw "$CARGO_LLVM_COV_TARGET_DIR/"
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
@@ -126,11 +150,14 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show
 
-      - name: Windows CLI clippy and tests
-        run: |
-          cargo clippy -p firecrab-cli --all-targets -- -D warnings
-          cargo test -p firecrab-cli --locked
-          cargo build -p firecrab-cli --locked
+      - name: Windows CLI clippy
+        run: cargo clippy -p firecrab-cli --all-targets -- -D warnings
+
+      - name: Windows CLI tests
+        run: cargo test -p firecrab-cli --locked
+
+      - name: Windows CLI build
+        run: cargo build -p firecrab-cli --locked
 
       - name: Windows QA runner contract (PowerShell 5.1)
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-ci-qa-windows.ps1
@@ -450,7 +477,7 @@ jobs:
           test "$code" -eq 1
 
       - name: QA work list (API, no guest boot)
-        # Shared QA IDs from public-docs/qa.md: see scripts/ci-qa-api.sh.
+        # Shared QA IDs from public-docs/development/qa.md: see scripts/ci-qa-api.sh.
         # Leaves the later "ci" / 172.31.0.0/24 smoke network contract unchanged.
         run: |
           mkdir -p target/qa
@@ -511,7 +538,7 @@ jobs:
 
       - name: QA VM lifetime
         timeout-minutes: 30
-        # R1–R7 and X7 from public-docs/qa.md; restarts the installed API.
+        # R1–R7 and X7 from public-docs/development/qa.md; restarts the installed API.
         env:
           FIRECRAB_QA_HELPER_UPGRADE: "1"
         run: scripts/ci-qa-lifetime.sh alpine:3.21
@@ -580,13 +607,38 @@ jobs:
 
       - name: Uninstall keeps data, purge removes it
         run: |
+          # A MicroVM unit still running at uninstall time has to go with it. The
+          # uninstaller goes by the unit name alone, so a sleep stands in for a VM.
+          vm_unit=firecrab-vm-00000000000000000000000000000001.service
+          sudo systemd-run --unit="$vm_unit" --collect --quiet sleep 600
+          systemctl is-active --quiet "$vm_unit"
           sudo ./install.sh --uninstall
           if systemctl is-active --quiet firecrab-api; then
             echo 'FAILED: firecrab-api is still active after uninstall'
             exit 1
           fi
+          if systemctl is-active --quiet "$vm_unit"; then
+            echo 'FAILED: a MicroVM unit is still running after uninstall'
+            exit 1
+          fi
           test ! -e /etc/systemd/system/firecrab-api.service
           test ! -e /usr/local/bin/firecrab
+          # The whole library directory goes, kernel extract scripts included.
+          test ! -e /usr/local/lib/firecrab
+          # The MicroNetwork created above leaves no device or NAT rule behind.
+          # Captured first: under `pipefail`, `grep -q` ending the pipe early can
+          # turn a match into a failed condition.
+          links=$(ip -br link)
+          if grep -Eq '^(mnb|fct|fcbr)' <<<"$links"; then
+            echo 'FAILED: a firecrab network device survived the uninstall'
+            exit 1
+          fi
+          nat=$(sudo iptables -t nat -S POSTROUTING)
+          if grep -Eq -- '-s 172\.31\.0\.0/24 .*MASQUERADE' <<<"$nat"; then
+            echo 'FAILED: the MicroNetwork NAT rule survived the uninstall'
+            exit 1
+          fi
+          test ! -e /etc/firecrab/host-baseline.env
           test -d /var/lib/firecrab
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab
@@ -654,12 +706,13 @@ jobs:
           elif command -v pacman >/dev/null; then
             retry pacman -Sy --noconfirm --needed bash ca-certificates curl git
           elif command -v zypper >/dev/null; then
-            # Tumbleweed's oss snapshot is replaced while the container
-            # still has the previous repomd. A stale appdata-icons.tar.gz
-            # hash then makes `zypper install git` fail even after retries
-            # unless metadata is discarded first. Its CDN also rejects some
-            # plain HTTP object requests, so switch every repo to HTTPS first.
-            sed -i 's#^baseurl=http://#baseurl=https://#' /etc/zypp/repos.d/*.repo
+            # Read metadata and packages from the same origin: redirected
+            # mirrors can lag behind repomd.xml and return 404 even after a
+            # forced refresh. Keep HTTPS for every repository.
+            sed -i \
+              -e 's#^baseurl=http://#baseurl=https://#' \
+              -e 's#//download\.opensuse\.org/#//downloadcontent.opensuse.org/#g' \
+              /etc/zypp/repos.d/*.repo
             retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends bash ca-certificates curl git'
           fi
         shell: sh -e {0}
@@ -696,5 +749,7 @@ jobs:
           cache-dependency-path: firecrab-frontend/package-lock.json
 
       - run: npm ci
+      - name: Development dashboard lifecycle with real Vite
+        run: node ../scripts/test-dev-dashboard.mjs
       - run: npm run lint
       - run: npm run build

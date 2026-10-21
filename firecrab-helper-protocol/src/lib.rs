@@ -7,6 +7,8 @@
 pub mod framing;
 /// Network-helper-specific request/response payloads (bridge, TAP, firewall).
 pub mod network;
+/// Shared pipe manifest and restricted helper operations.
+pub mod pipe;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -83,3 +85,5 @@ mod tests {
         );
     }
 }
+pub mod cloudflare;
+pub mod firecrab_tunnel;

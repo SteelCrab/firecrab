@@ -1,71 +1,67 @@
-# firecrab technical documentation
+# Firecrab documentation
 
-firecrab runs Firecracker microVMs on one Linux host.
-This directory is the only public technical documentation.
+Firecrab manages Firecracker microVMs on one host.
+Linux runs the services directly; macOS and Windows use managed Debian.
 
-Guides use short English prose, and the test checklist is available in English and Korean.
-Each page covers one topic.
+## Get started
 
-## Start here
+1. [Install Firecrab](getting-started/installation.md) for your platform.
+2. Open the [dashboard](guides/dashboard.md) at `http://127.0.0.1:5523/`.
+3. Create a network, install an image, then create and start a VM.
 
-1. Read [Architecture](architecture.md).
-2. Follow [Installation](installation.md).
-3. Create a [MicroNetwork](networking.md).
-4. Create and start a VM with the [API](api.md) or [Dashboard](dashboard.md).
-
-## Guides
-
-| Topic | Document |
+| Platform | Setup |
 | --- | --- |
-| Components and data flow | [Architecture](architecture.md) |
-| Terms and resource model | [Core concepts](concepts.md) |
-| Host setup | [Installation](installation.md) |
-| Headless host CLI | [firecrab CLI](firecrab-cli.md) |
-| Managed Debian VM on macOS | [microManager on macOS](micromanager-macos.md) |
-| Managed Debian VM on Windows | [microManager on Windows](micromanager-windows.md) |
-| Browser UI | [Dashboard](dashboard.md) |
-| REST and WebSocket endpoints | [API](api.md) |
-| Bridges, DHCP, NAT, and policy | [Networking](networking.md) |
-| VM disk placement | [Storage](storage.md) |
-| Kernel and rootfs templates | [Images](images.md) |
-| Kernel lifecycle | [Kernel management](kernels.md) |
-| Release upload to R2 | [Publish to Cloudflare R2](publish.md) |
-| OCI inspect and import | [OCI images](oci.md) |
-| Services and maintenance | [Operations](operations.md) |
-| Failure checks | [Troubleshooting](troubleshooting.md) |
-| Linux, macOS, and Windows QA list | [QA work list](qa.md) |
-| Complete test checklist | [English](TEST.md) · [Korean](TEST.ko.md) |
-| CI jobs, runtime E2E, and evidence | [CI and runtime E2E](ci.md) |
+| Linux host or remote CLI | [Installation](getting-started/installation.md) |
+| Apple silicon Mac | [microManager on macOS](getting-started/macos.md) |
+| Windows with WSL2 | [microManager on Windows](getting-started/windows.md) |
 
-## Name aliases
+## Use and operate
 
-These symbolic links keep short names stable.
-
-| Alias | Target |
+| Task | Guide |
 | --- | --- |
-| [HOME.md](HOME.md) | [README.md](README.md) |
-| [install.md](install.md) | [installation.md](installation.md) |
-| [web.md](web.md) | [dashboard.md](dashboard.md) |
-| [network.md](network.md) | [networking.md](networking.md) |
-| [micro-network.md](micro-network.md) | [networking.md](networking.md) |
-| [micro-storage.md](micro-storage.md) | [storage.md](storage.md) |
-| [m2image.md](m2image.md) | [images.md](images.md) |
-| [glossary.md](glossary.md) | [concepts.md](concepts.md) |
+| Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
+| Configure and manage an app | [MicroService](guides/microservices.md) |
+| Configure subnets, internet access, and IPv6 | [Networking](guides/networking.md) |
+| Choose a disk location and back up VM data | [Storage](guides/storage.md) |
+| Set management VM CPU, RAM, disk, and networking | [microManager resources](guides/micromanager-resources.md) |
+| Install and register VM templates | [Images](guides/images.md) |
+| Import a container image | [OCI images](guides/oci.md) |
+| Install or change a guest kernel | [Kernels](guides/kernels.md) |
+| Configure services, upgrade, or uninstall | [Operations](guides/operations.md) |
+| Route domains and paths across apps | [Pipe ingress and tunnel](guides/pipe.md) |
+| Diagnose a failure | [Troubleshooting](guides/troubleshooting.md) |
 
-## Documentation rules
+## Reference
 
-- Write guides in clear English; keep the two test checklists aligned in English and Korean.
-- Put one sentence on each source line.
-- Keep guides short; the API and complete test checklists may be longer when their coverage requires it.
-- Keep section order consistent: title, body, Related.
-- Use short paragraphs and relative Markdown links.
-- Prefer symbolic links for aliases instead of copy files.
-- Keep project planning notes and bug logs out of this tree; maintain published test checklists here.
+| Topic | Reference |
+| --- | --- |
+| Resource names and terms | [Core concepts](reference/concepts.md) |
+| Components, VM startup, and recovery | [Architecture](reference/architecture.md) |
+| Commands and host profiles | [CLI](reference/cli.md) |
+| REST and WebSocket contracts | [API](reference/api.md) |
+| Guest init, environment, metrics, and SSH | [Guest runtime](reference/guest-runtime.md) |
+| OCI stages, caches, and archive safety | [OCI import pipeline](reference/oci-import.md) |
+| Managed Debian release inputs and migration | [microManager manifest](reference/micromanager-manifest.md) |
 
-Private project notes stay in local `docs/` and are not published.
+## Develop and validate
 
-Run the documentation check before a commit.
+| Task | Document |
+| --- | --- |
+| Set up a checkout | [Contributing](../CONTRIBUTING.md#run-from-source) |
+| Build Linux services on macOS or Windows | [microManager development](development/micromanager.md) |
+| Build image packages | [Image builds](development/image-builds.md) |
+| Publish the image catalog | [Cloudflare R2 publishing](development/publishing.md) |
+| Run checks and runtime E2E | [CI](development/ci.md) |
+| Choose QA scripts and report results | [QA](development/qa.md) |
+| Run the complete checklist | [English](development/testing.md) · [Korean](development/testing.ko.md) |
+| Test macOS repair | [Repair QA](development/macos-repair.md) |
+| Review past platform results | [Validation history](development/validation-history.md) |
 
-```sh
-python3 scripts/check-doc-links.py
-```
+## Keep documentation short
+
+- Put setup in `getting-started/`, tasks in `guides/`, contracts in `reference/`, and contributor work in `development/`.
+- Explain a behavior once and link to it from other pages.
+- Use short English sentences, with one sentence per source line.
+- Keep the English and Korean test cases aligned.
+- Keep planning notes and bug logs outside this tree.
+- Run `python3 scripts/check-doc-links.py` from the repository root after edits.

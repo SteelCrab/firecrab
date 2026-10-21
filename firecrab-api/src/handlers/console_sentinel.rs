@@ -1,6 +1,6 @@
 //! Wait for a fixed console sentinel with an exit code — the pattern
 //! bootstrap (and formerly guest package actions) use when there is no
-//! guest agent to ask directly (`public-docs/networking.md`).
+//! guest agent to ask directly (`public-docs/guides/networking.md`).
 
 use std::time::Duration;
 

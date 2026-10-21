@@ -7,7 +7,6 @@
 //! update` does for the host bundle. That command only exists on Linux, so the
 //! lookup is repeated here.
 
-use std::borrow::Cow;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -15,7 +14,8 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::artifact::{ArtifactSpec, HashAlgorithm};
+use super::artifact::HashAlgorithm;
+use super::manifest::{Artifact, Manifest};
 use super::report;
 
 const LATEST_API: &str = "https://api.github.com/repos/SteelCrab/firecrab/releases/latest";
@@ -125,25 +125,44 @@ impl Release {
     /// verified against the digest the release lists for it.
     pub fn artifact(
         &self,
-        label: &'static str,
+        _label: &'static str,
         asset: &str,
         filename: &'static str,
-    ) -> Result<ArtifactSpec, Error> {
+    ) -> Result<Artifact, Error> {
         let digest = listed_digest(&self.sums, asset).ok_or_else(|| Error::Unlisted {
             tag: self.tag.clone(),
             asset: asset.to_owned(),
         })?;
-        Ok(ArtifactSpec {
-            label,
-            filename: Cow::Borrowed(filename),
-            url: Cow::Owned(asset_url(&self.base, &self.tag, asset)),
+        Ok(Artifact {
+            filename: filename.to_owned(),
+            url: asset_url(&self.base, &self.tag, asset),
             algorithm: HashAlgorithm::Sha256,
-            digest: Cow::Owned(digest),
+            digest,
         })
     }
 
-    pub fn installer(&self) -> Result<ArtifactSpec, Error> {
+    pub fn installer(&self) -> Result<Artifact, Error> {
         self.artifact("Firecrab guest installer", INSTALLER_ASSET, INSTALLER_FILE)
+    }
+
+    /// Select Firecrab release inputs without changing Debian, Firecracker, or runtime policy.
+    pub fn apply_manifest(&self, manifest: &mut Manifest) -> Result<(), Error> {
+        let aarch64 = self.artifact(
+            "Firecrab ARM64 host bundle",
+            "firecrab-host-aarch64-gnu.tar.gz",
+            "firecrab-host-aarch64-gnu.tar.gz",
+        )?;
+        let x86_64 = self.artifact(
+            "Firecrab x86_64 host bundle",
+            "firecrab-host-x86_64-gnu.tar.gz",
+            "firecrab-host-x86_64-gnu.tar.gz",
+        )?;
+        let installer = self.installer()?;
+        manifest.firecrab.version = self.tag().to_owned();
+        manifest.firecrab.aarch64 = aarch64;
+        manifest.firecrab.x86_64 = x86_64;
+        manifest.firecrab.installer = installer;
+        Ok(())
     }
 
     /// Keeps the digests the downloads were verified against, and the release
@@ -330,6 +349,34 @@ mod tests {
             )
             .expect("the bundle is listed");
         assert_eq!(bundle.digest, BUNDLE_SHA256);
+    }
+
+    #[test]
+    fn release_selection_updates_only_firecrab_manifest_inputs() {
+        let mut manifest = Manifest::bundled().unwrap();
+        let original = serde_json::to_value(&manifest).unwrap();
+        let selected = release(&format!(
+            "{}\n{BUNDLE_SHA256}  firecrab-host-x86_64-gnu.tar.gz\n",
+            sums()
+        ));
+        selected.apply_manifest(&mut manifest).unwrap();
+        assert_eq!(manifest.firecrab.version, selected.tag());
+        assert_eq!(manifest.firecrab.installer.filename, INSTALLER_FILE);
+        assert_eq!(manifest.firecrab.installer.digest, INSTALLER_SHA256);
+        assert_eq!(manifest.firecrab.x86_64.digest, BUNDLE_SHA256);
+        assert!(manifest.firecrab.aarch64.url.contains(selected.tag()));
+        let updated = serde_json::to_value(&manifest).unwrap();
+        for field in ["debian", "firecracker", "macos", "windows", "runtime"] {
+            assert_eq!(updated[field], original[field], "{field}");
+        }
+    }
+
+    #[test]
+    fn an_incomplete_release_leaves_the_manifest_unchanged() {
+        let mut manifest = Manifest::bundled().unwrap();
+        let original = serde_json::to_value(&manifest).unwrap();
+        assert!(release(&sums()).apply_manifest(&mut manifest).is_err());
+        assert_eq!(serde_json::to_value(&manifest).unwrap(), original);
     }
 
     #[test]

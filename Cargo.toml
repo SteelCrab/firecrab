@@ -6,6 +6,7 @@ members = [
     "firecrab-cli",
     "firecrab-helper-protocol",
     "firecrab-helper",
+    "firecrab-tunnel",
 ]
 
 [workspace.package]

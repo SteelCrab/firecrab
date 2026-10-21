@@ -37,6 +37,21 @@ rm -rf "$cli_home"
 
 help=$("./install.sh" --help)
 
+if printf '%s\n' "$help" | grep -q -- '--with-pipe'; then
+    pass "--help documents optional pipe engines"
+else
+    fail "--help documents optional pipe engines"
+fi
+
+if ./install.sh --deps-only --with-pipe >"$cli_home-pipe-error" 2>&1; then
+    fail "--with-pipe rejects dependency-only mode"
+elif grep -q -- '--with-pipe is supported with installation or --check' "$cli_home-pipe-error"; then
+    pass "--with-pipe rejects dependency-only mode before host changes"
+else
+    fail "--with-pipe mode rejection has no clear error"
+fi
+rm -f "$cli_home-pipe-error"
+
 cli_help=$(sh ./install-cli.sh --help)
 if printf '%s\n' "$cli_help" | grep -q -- '--uninstall' \
     && printf '%s\n' "$cli_help" | grep -q -- '--purge'; then

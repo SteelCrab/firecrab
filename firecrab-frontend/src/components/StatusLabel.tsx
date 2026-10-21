@@ -9,10 +9,9 @@ interface StatusLabelProps {
   accessibleLabel: string;
   tooltip: ReactNode;
   state?: string;
-  outcome?: string;
 }
 
-export default function StatusLabel({ children, className, accessibleLabel, tooltip, state, outcome }: StatusLabelProps) {
+export default function StatusLabel({ children, className, accessibleLabel, tooltip, state }: StatusLabelProps) {
   const id = useId();
   const trigger = useRef<HTMLElement>(null);
   const panel = useRef<HTMLDivElement>(null);
@@ -113,7 +112,6 @@ export default function StatusLabel({ children, className, accessibleLabel, tool
         aria-label={accessibleLabel}
         aria-describedby={open ? id : undefined}
         data-state={state}
-        data-outcome={outcome}
         tabIndex={0}
         onMouseEnter={() => { hovered.current = true; show(); }}
         onMouseLeave={leave}

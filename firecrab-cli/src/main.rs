@@ -11,10 +11,12 @@ mod image;
 mod info;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod micromanager;
+mod microservice;
 mod network;
+mod pipe;
 #[cfg(target_os = "linux")]
 mod service;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 mod shell;
 #[cfg(target_os = "linux")]
 mod status;
@@ -39,6 +41,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Manage desired MicroService configurations through the host API.
+    Microservice {
+        #[command(subcommand)]
+        command: microservice::Command,
+    },
+    /// Configure the independent ingress and Cloudflare Tunnel services.
+    Pipe {
+        #[command(subcommand)]
+        command: pipe::Command,
+    },
     /// Diagnose host readiness for firecrab (KVM, nft, dnsmasq, UFW, ...).
     #[cfg(target_os = "linux")]
     Doctor {
@@ -75,6 +87,10 @@ enum Command {
         /// Emit the report as JSON instead of the human format.
         #[arg(long)]
         json: bool,
+        /// Keep a record of the run's progress at PATH, which the API serves as
+        /// `GET /api/update/progress`. The API's updater passes it.
+        #[arg(long, value_name = "PATH", hide = true, requires = "apply")]
+        progress_file: Option<std::path::PathBuf>,
     },
     /// Manage MicroVMs through the host API.
     Vm {
@@ -117,6 +133,18 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Microservice { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                microservice::run(client, command)
+            })
+        }
+        Command::Pipe { command } => match pipe::run(command) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                1
+            }
+        },
         #[cfg(target_os = "linux")]
         Command::Doctor { digest, json } => run_doctor(digest, json),
         #[cfg(target_os = "linux")]
@@ -128,7 +156,12 @@ fn run(cli: Cli) -> i32 {
             finish_api_command(run_status(json, api.as_deref(), host.as_deref()))
         }
         #[cfg(target_os = "linux")]
-        Command::Update { check, apply, json } => run_update(check, apply, json),
+        Command::Update {
+            check,
+            apply,
+            json,
+            progress_file,
+        } => run_update(check, apply, json, progress_file),
         Command::Vm { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
             vm::run(client, command)
         }),
@@ -150,6 +183,10 @@ fn run(cli: Cli) -> i32 {
             Ok(code) => code,
             Err(error) => {
                 eprintln!("{error}");
+                #[cfg(target_os = "macos")]
+                if let Some(hint) = error.recovery_hint() {
+                    eprintln!("{hint}");
+                }
                 1
             }
         },
@@ -249,7 +286,14 @@ fn run_status(json: bool, api: Option<&str>, host: Option<&str>) -> Result<(), h
 /// the safe one for a command that can otherwise replace every binary on the
 /// host.
 #[cfg(target_os = "linux")]
-fn run_update(check: bool, apply: bool, json: bool) -> i32 {
+fn run_update(
+    check: bool,
+    apply: bool,
+    json: bool,
+    progress_file: Option<std::path::PathBuf>,
+) -> i32 {
+    use std::io::IsTerminal;
+
     let outcome = update::run_check();
     if check || !apply {
         if json {
@@ -260,7 +304,14 @@ fn run_update(check: bool, apply: bool, json: bool) -> i32 {
         return i32::from(outcome.report.error.is_some());
     }
 
-    match update::run_apply(&outcome) {
+    // `--json` prints one document, so nothing else may go to stdout then.
+    let terminal = (!json).then(|| {
+        let stdout = std::io::stdout();
+        let live = stdout.is_terminal();
+        update::progress::Terminal::new(Box::new(stdout), live)
+    });
+    let mut progress = update::progress::Progress::new(terminal, progress_file);
+    match update::run_apply(&outcome, &mut progress) {
         Ok(update::ApplyOutcome::AlreadyCurrent) => {
             if json {
                 update::print_check_json(&outcome.report);
@@ -274,7 +325,6 @@ fn run_update(check: bool, apply: bool, json: bool) -> i32 {
                 update::print_check_json(&outcome.report);
             } else {
                 println!("firecrab {version} installed");
-                println!("  firecrab-api and firecrab-helper are restarting now");
             }
             0
         }
@@ -387,13 +437,42 @@ mod tests {
     fn cli_parses_update_flags() {
         let cli = Cli::try_parse_from(["firecrab", "update", "--apply", "--json"]).unwrap();
         match cli.command {
-            Command::Update { check, apply, json } => {
+            Command::Update {
+                check,
+                apply,
+                json,
+                progress_file,
+            } => {
                 assert!(!check);
                 assert!(apply);
                 assert!(json);
+                assert_eq!(progress_file, None);
             }
             _ => panic!("expected Update"),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_updater_the_api_spawns_can_name_a_progress_file() {
+        let cli = Cli::try_parse_from([
+            "firecrab",
+            "update",
+            "--apply",
+            "--json",
+            "--progress-file",
+            "/var/lib/firecrab/updates/progress.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Update { progress_file: Some(ref path), .. }
+                if path == std::path::Path::new("/var/lib/firecrab/updates/progress.json")
+        ));
+        // A record only makes sense for a run that installs something.
+        assert!(
+            Cli::try_parse_from(["firecrab", "update", "--progress-file", "/tmp/p.json"]).is_err()
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -405,7 +484,8 @@ mod tests {
             Command::Update {
                 check: false,
                 apply: false,
-                json: false
+                json: false,
+                progress_file: None
             }
         ));
     }
@@ -425,7 +505,7 @@ mod tests {
         // SAFETY: serialized by update::ENV_LOCK against every other
         // env-touching test in this crate.
         unsafe { std::env::set_var("FIRECRAB_RELEASE_API", "http://127.0.0.1:1/releases/latest") };
-        let code = run_update(true, false, true);
+        let code = run_update(true, false, true, None);
         unsafe { std::env::remove_var("FIRECRAB_RELEASE_API") };
         assert_eq!(code, 1, "an unreachable check must exit non-zero");
     }
@@ -436,7 +516,7 @@ mod tests {
         let _guard = update::ENV_LOCK.lock().unwrap();
         // SAFETY: serialized by update::ENV_LOCK — see the note above.
         unsafe { std::env::set_var("FIRECRAB_RELEASE_API", "http://127.0.0.1:1/releases/latest") };
-        let code = run_update(false, false, false);
+        let code = run_update(false, false, false, None);
         unsafe { std::env::remove_var("FIRECRAB_RELEASE_API") };
         assert!(code == 0 || code == 1, "unexpected exit code {code}");
     }
@@ -575,6 +655,7 @@ mod tests {
         for action in [
             "install",
             "reinstall",
+            "repair",
             "start",
             "stop",
             "status",

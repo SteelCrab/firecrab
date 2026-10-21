@@ -754,7 +754,7 @@ pub(crate) fn inittab(agetty: Option<&str>) -> String {
         None => format!("::respawn:-{GUEST_TOOLBOX} sh {GUEST_CONSOLE_SCRIPT}"),
     };
     format!(
-        "# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).\n\
+        "# Firecrab guest runtime for an imported OCI image (public-docs/guides/oci.md).\n\
          ::sysinit:{GUEST_TOOLBOX} sh {GUEST_BOOT_SCRIPT}\n\
          {console}\n\
          ::ctrlaltdel:{GUEST_TOOLBOX} poweroff -f\n\
@@ -866,7 +866,7 @@ pub(crate) fn boot_script() -> String {
 fn boot_script_for(fallback: bool) -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
-# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).
+# Firecrab guest runtime for an imported OCI image (public-docs/guides/oci.md).
 # Avoid `set -e`: one failed mount must not leave the host waiting out the full
 # readiness timeout for a sentinel that will now never be printed.
 BB={GUEST_TOOLBOX}
@@ -1009,7 +1009,7 @@ $BB touch /run/firecrab-console-active
 pub(crate) fn console_script() -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
-# Firecrab injected console (public-docs/oci.md).
+# Firecrab injected console (public-docs/guides/oci.md).
 BB={GUEST_TOOLBOX}
 PATH="/usr/local/bin:/usr/local/sbin:$PATH"
 export PATH
@@ -1042,7 +1042,7 @@ exec $BB sh
 pub(crate) fn serial_console_script() -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
-# Firecrab serial console under a native init (public-docs/oci.md).
+# Firecrab serial console under a native init (public-docs/guides/oci.md).
 BB={GUEST_TOOLBOX}
 exec </dev/ttyS0 >/dev/ttyS0 2>&1
 {LOGIN_PROGRAM_LOOKUP}
@@ -1072,7 +1072,7 @@ const AGETTY_ARGS: &str = "--autologin root --login-program \"$login_program\" -
 pub(crate) fn agetty_wrapper_script(agetty: &str) -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
-# Firecrab injected agetty wrapper (public-docs/oci.md).
+# Firecrab injected agetty wrapper (public-docs/guides/oci.md).
 BB={GUEST_TOOLBOX}
 {LOGIN_PROGRAM_LOOKUP}
 [ -x "$login_program" ] || exec "$BB" sh {GUEST_CONSOLE_SCRIPT}
@@ -1088,7 +1088,7 @@ BB={GUEST_TOOLBOX}
 pub(crate) fn dhcp_script() -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
-# Firecrab guest DHCP hook for an imported OCI image (public-docs/oci.md).
+# Firecrab guest DHCP hook for an imported OCI image (public-docs/guides/oci.md).
 BB={GUEST_TOOLBOX}
 
 case "$1" in

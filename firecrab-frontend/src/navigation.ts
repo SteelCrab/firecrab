@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Locale } from "./i18n";
 
 /**
@@ -11,7 +11,9 @@ import type { Locale } from "./i18n";
  */
 export const VIEWS = [
   { id: "vms", labels: { en: "MicroVM", ko: "MicroVM" } },
+  { id: "services", labels: { en: "MicroService", ko: "MicroService" } },
   { id: "networks", labels: { en: "Networks", ko: "네트워크" } },
+  { id: "pipe", labels: { en: "Pipe", ko: "Pipe" } },
   { id: "storages", labels: { en: "Storage", ko: "스토리지" } },
   { id: "images", labels: { en: "Images", ko: "이미지" } },
   { id: "kernels", labels: { en: "Kernels", ko: "커널" } },
@@ -125,19 +127,53 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
  * (not path routes) because the API serves the dashboard SPA — a deep path
  * would hit the server; `#/…` never leaves the client.
  */
-export function useAppRoute(): {
+export function useAppRoute(confirmLeave?: () => boolean): {
   route: AppRoute;
   selectView: (view: ViewId) => void;
   openConsole: (vmId: string) => void;
   closeConsole: () => void;
 } {
   const [route, setRoute] = useState<AppRoute>(() => parseAppRoute());
+  const currentUrl = useRef(window.location.href);
+  const historyIndex = useRef<number | null>(null);
+  const restoringHistory = useRef(false);
 
   useEffect(() => {
-    const onHashChange = () => setRoute(parseAppRoute());
+    if (historyIndex.current === null) {
+      historyIndex.current = typeof window.history.state?.firecrabRouteIndex === "number" ? window.history.state.firecrabRouteIndex : 0;
+      window.history.replaceState({ ...window.history.state, firecrabRouteIndex: historyIndex.current }, "");
+    }
+    const onHashChange = (event: HashChangeEvent) => {
+      // A later navigation may already have replaced this queued hash change.
+      if (event.newURL !== window.location.href) return;
+      if (restoringHistory.current) { restoringHistory.current = false; return; }
+      let nextIndex = window.history.state?.firecrabRouteIndex;
+      if (event.newURL === currentUrl.current) {
+        if (typeof nextIndex === "number") historyIndex.current = nextIndex;
+        return;
+      }
+      if (confirmLeave && !confirmLeave()) {
+        if (typeof nextIndex === "number" && nextIndex !== historyIndex.current) {
+          // Return to the existing entry so cancelling Back/Forward keeps history intact.
+          restoringHistory.current = true;
+          window.history.go(historyIndex.current! - nextIndex);
+        } else {
+          // Older dashboard entries have no index to navigate back to safely.
+          window.history.replaceState({ ...window.history.state, firecrabRouteIndex: historyIndex.current }, "", currentUrl.current);
+        }
+        return;
+      }
+      if (typeof nextIndex !== "number" || nextIndex === historyIndex.current) {
+        nextIndex = historyIndex.current! + 1;
+        window.history.replaceState({ ...window.history.state, firecrabRouteIndex: nextIndex }, "");
+      }
+      historyIndex.current = nextIndex;
+      currentUrl.current = event.newURL;
+      setRoute(parseAppRoute());
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
+  }, [confirmLeave]);
 
   // Empty / unknown shell hashes normalise to `#/vms`. Use `location.hash`
   // (not only replaceState) so the URL bar and any hash-dependent code see
@@ -150,23 +186,30 @@ export function useAppRoute(): {
     if (parseViewId(path) === null && parseConsoleVmId(window.location.hash) === null) {
       const next = viewHash(DEFAULT_VIEW);
       if (window.location.hash !== next) {
-        window.history.replaceState(null, "", next);
+        window.history.replaceState(window.history.state, "", next);
+        currentUrl.current = window.location.href;
         setRoute({ kind: "shell", view: DEFAULT_VIEW });
       }
     }
   }, [route]);
 
-  const selectView = useCallback((next: ViewId) => {
-    window.location.hash = viewHash(next);
+  const navigate = useCallback((hash: string) => {
+    if (window.location.hash === hash) return;
+    window.location.hash = hash;
+    window.history.replaceState({ ...window.history.state, firecrabRouteIndex: (historyIndex.current ?? 0) + 1 }, "");
   }, []);
+
+  const selectView = useCallback((next: ViewId) => {
+    navigate(viewHash(next));
+  }, [navigate]);
 
   const openConsole = useCallback((vmId: string) => {
-    window.location.hash = consoleHash(vmId);
-  }, []);
+    navigate(consoleHash(vmId));
+  }, [navigate]);
 
   const closeConsole = useCallback(() => {
-    window.location.hash = viewHash("vms");
-  }, []);
+    navigate(viewHash("vms"));
+  }, [navigate]);
 
   return { route, selectView, openConsole, closeConsole };
 }

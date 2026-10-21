@@ -23,7 +23,7 @@ sbom_output=${M2IMAGE_SBOM_OUTPUT:-}
 sbom_generator="${repo_dir}/scripts/m2image_sbom.py"
 
 # linux-image-virtual: Ubuntu's own officially-maintained kernel package
-# (public-docs/images.md) — replaces the self-built vanilla kernel every
+# (public-docs/guides/images.md) — replaces the self-built vanilla kernel every
 # template used to share, so security patches and driver support follow
 # Ubuntu's own release cadence instead of this project having to track
 # kernel.org itself.
@@ -402,7 +402,7 @@ EOF
 
   # Configure the Firecracker guest network interface via DHCP — the host's
   # net-helper/dnsmasq hands out the IPAM-allocated address by MAC
-  # reservation (public-docs/networking.md), so the guest never
+  # reservation (public-docs/guides/networking.md), so the guest never
   # hardcodes an address itself.
   install -d -m 0755 "${mount_dir}/etc/systemd/network"
   write_root_file "${mount_dir}/etc/systemd/network/10-eth0.network" <<'EOF'
@@ -456,7 +456,7 @@ EOF
 # Prints a fixed sentinel line to the serial console (ttyS0, which is
 # Firecracker's captured stdout) once DHCP + DNS are confirmed working —
 # the signal firecrab-api's start pipeline waits on in place of a guest
-# agent event (public-docs/networking.md; guest agent/vsock is
+# agent event (public-docs/guides/networking.md; guest agent/vsock is
 # out of this project's competition scope).
 install_network_ready_sentinel() {
   install -d -m 0755 "${mount_dir}/usr/local/sbin"

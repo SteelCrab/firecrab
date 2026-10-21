@@ -5,9 +5,28 @@ use super::{
     wsl::{self, DISTRO_NAME},
 };
 use crate::micromanager::{
-    dev::{Checkout, guest_script, io_error},
+    DevCommand,
+    dev::{Checkout, guest_script, io_error, session},
     report,
 };
+
+pub fn control(command: DevCommand) -> Result<(), Error> {
+    wsl::run_with_input(
+        &[
+            "-d",
+            DISTRO_NAME,
+            "-u",
+            "root",
+            "--exec",
+            "bash",
+            "-s",
+            "--",
+            command.as_str(),
+        ],
+        session::Input::File(guest_script()?),
+    )?;
+    Ok(())
+}
 
 pub fn deploy(checkout: Option<&Checkout>, release: bool) -> Result<(), Error> {
     // Probe systemd and the installed units, not whether the previous API works.
@@ -36,7 +55,7 @@ pub fn deploy(checkout: Option<&Checkout>, release: bool) -> Result<(), Error> {
                     "-c",
                     &upload,
                 ],
-                input,
+                session::Input::File(input),
             )?;
             (
                 if release { "release" } else { "debug" },
@@ -45,7 +64,7 @@ pub fn deploy(checkout: Option<&Checkout>, release: bool) -> Result<(), Error> {
         }
         None => ("restore", "unused"),
     };
-    report!("[GUEST] {profile}: API + helper");
+    report!("[GUEST] {profile}: API + helper + CLI");
     wsl::run_with_input(
         &[
             "-d",
@@ -54,13 +73,14 @@ pub fn deploy(checkout: Option<&Checkout>, release: bool) -> Result<(), Error> {
             "root",
             "--exec",
             "bash",
-            "-s",
+            "-c",
+            &session::runner(),
             "--",
             profile,
             channel,
             &archive_name,
         ],
-        guest_script()?,
+        session::Input::Session(guest_script()?),
     )?;
     Ok(())
 }
@@ -79,7 +99,8 @@ mod tests {
             let calls = wsl.calls();
             assert_eq!(calls.len(), 3);
             assert!(calls[1].contains("umask 077 && cat > /var/lib/firecrab/dev/incoming-"));
-            assert!(calls[2].contains(&format!("--exec bash -s -- {profile} 1.97.1 incoming-")));
+            assert!(calls[2].contains("--exec bash -c"));
+            assert!(calls[2].contains(&format!("-- {profile} 1.97.1 incoming-")));
         }
     }
 
@@ -106,7 +127,8 @@ mod tests {
         let calls = wsl.calls();
         assert_eq!(calls.len(), 2);
         assert!(calls[0].contains("systemctl cat"));
-        assert!(calls[1].contains("--exec bash -s -- restore unused incoming-"));
+        assert!(calls[1].contains("--exec bash -c"));
+        assert!(calls[1].contains("-- restore unused incoming-"));
         assert!(!calls.iter().any(|line| line.contains("cat >")));
     }
 
@@ -120,7 +142,7 @@ mod tests {
     #[test]
     fn guest_deployment_failure_is_reported() {
         let wsl = wsl::fake::answer(|line| {
-            if line.contains("bash -s") {
+            if line.contains("bash -c") {
                 Err("failed to restore".to_string())
             } else {
                 Ok(String::new())

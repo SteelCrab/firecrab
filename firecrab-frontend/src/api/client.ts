@@ -21,6 +21,10 @@ import type {
   MicroNetworkResponse,
   MicroStorageDetailResponse,
   MicroStorageResponse,
+  MicroServiceSpec,
+  MicroServiceResponse,
+  MicroServiceDeployment,
+  DeployMicroServiceRequest,
   NetworkInfoResponse,
   SshHostKeyResponse,
   ShellDetailResponse,
@@ -28,9 +32,11 @@ import type {
   ShellRevisionResponse,
   StorageDeviceResponse,
   StorageRootResponse,
+  FirecrabInfoResponse,
   UpdateCheckResponse,
   UpdateImageKernelRequest,
   UpdateMicroNetworkRequest,
+  UpdateProgressResponse,
   UpdateStartResponse,
   UpdateVmShellsRequest,
   UpdateVmPortForwardsRequest,
@@ -88,7 +94,7 @@ async function fail(response: Response): Promise<ApiClientError> {
   }
 }
 
-async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
+export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(input, init);
@@ -103,6 +109,46 @@ async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
 
 export function listVms(): Promise<VmResponse[]> {
   return fetchJson("/api/vms");
+}
+
+export function listMicroServices(): Promise<MicroServiceResponse[]> {
+  return fetchJson("/api/micro-services");
+}
+
+export function getServiceDeployment(id: string): Promise<MicroServiceDeployment | null> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment`);
+}
+
+export function deployMicroService(id: string, request: DeployMicroServiceRequest): Promise<MicroServiceDeployment> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function stopMicroService(id: string): Promise<MicroServiceDeployment> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/stop`, { method: "POST" });
+}
+
+export function getMicroService(id: string): Promise<MicroServiceResponse> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}`);
+}
+
+export function createMicroService(spec: MicroServiceSpec): Promise<MicroServiceResponse> {
+  return fetchJson("/api/micro-services", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec),
+  });
+}
+
+export function updateMicroService(id: string, spec: MicroServiceSpec): Promise<MicroServiceResponse> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec),
+  });
+}
+
+export async function deleteMicroService(id: string): Promise<void> {
+  const response = await fetch(`/api/micro-services/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .catch((error) => { throw ApiClientError.transport(transportDetail(error)); });
+  if (!response.ok) throw await fail(response);
 }
 
 export function getVm(id: string): Promise<VmResponse> {
@@ -188,6 +234,11 @@ export function getHostStatus(): Promise<HostStatusResponse> {
   return fetchJson("/api/host");
 }
 
+/** Build, install paths, Firecracker version, and live service state (GET /api/info). */
+export function getFirecrabInfo(signal?: AbortSignal): Promise<FirecrabInfoResponse> {
+  return fetchJson("/api/info", { signal });
+}
+
 /** Newest release vs. this build (`GET /api/update`), cached 30 minutes by the API. */
 export function getUpdateCheck(): Promise<UpdateCheckResponse> {
   return fetchJson("/api/update");
@@ -196,6 +247,11 @@ export function getUpdateCheck(): Promise<UpdateCheckResponse> {
 /** Launch the detached updater (`POST /api/update`); answers 202 immediately. */
 export function startUpdate(): Promise<UpdateStartResponse> {
   return fetchJson("/api/update", { method: "POST" });
+}
+
+/** How far the latest update run got (`GET /api/update/progress`); `idle` when none has run. */
+export function getUpdateProgress(): Promise<UpdateProgressResponse> {
+  return fetchJson("/api/update/progress");
 }
 
 /** Template registry aliases available for create (`GET /api/images`). */

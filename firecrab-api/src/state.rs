@@ -90,13 +90,15 @@ fn default_shim_launcher(_network: &NetworkClient) -> ShimLauncher {
 /// starting VM race for disk bandwidth at once makes all of them slower
 /// (seek thrashing) instead of finishing any of them sooner, which reads to
 /// dashboard users as VMs "stuck" in the disk-prep step
-/// (`public-docs/dashboard.md`).
+/// (`public-docs/guides/dashboard.md`).
 const DISK_PREP_CONCURRENCY: usize = 2;
 
 /// Shared state handed to every handler: in-memory VM cache, live process
 /// table, template registry, and runtime config.
 #[derive(Debug, Clone)]
 pub struct AppState {
+    /// Port of the bound HTTP listener, set before serving requests.
+    pub(crate) api_port: u16,
     /// In-memory cache of every VM record, mirrored to [`AppState::store`].
     pub vms: Arc<Mutex<HashMap<Uuid, VmRecord>>>,
     /// Results from startup or explicit network retry; never persisted as live health.
@@ -105,6 +107,10 @@ pub struct AppState {
     pub templates: Arc<TemplateRegistry>,
     /// SQLite-backed durable storage.
     pub(crate) store: Store,
+    /// Short configuration/operation claims; never held while booting a guest.
+    pub(crate) service_mutations: Arc<AsyncMutex<()>>,
+    /// One image/VM deployment at a time bounds replica surge on one host.
+    pub(crate) service_deploy_permits: Arc<Semaphore>,
     /// Live VM id -> its running Firecracker process handle.
     pub(crate) processes: Arc<Mutex<HashMap<Uuid, VmProcess>>>,
     /// Environment-derived runtime settings.
@@ -166,9 +172,12 @@ impl AppState {
         let network = NetworkClient::from_env();
         let runtime = RuntimeConfig::from_defaults(&storage, &network);
         Ok(AppState {
+            api_port: 5523,
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            service_mutations: Arc::new(AsyncMutex::new(())),
+            service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),
             reconciliation: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(runtime),
