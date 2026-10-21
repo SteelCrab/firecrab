@@ -11,8 +11,10 @@ use sha2::{Digest, Sha256};
 
 use super::{Connection, MAX_SECRETS, Provider, SecretError, validate_name, validate_value};
 
+/// Maximum decoded body accepted from an external provider response.
 const MAX_RESPONSE: usize = 20 * 1024 * 1024;
 
+/// Validates provider settings and required credentials without contacting the store.
 pub(crate) fn validate(connection: &Connection) -> Result<(), SecretError> {
     let settings = &connection.summary.settings;
     if connection.summary.name.trim().is_empty() || connection.summary.name.len() > 100 {
@@ -82,6 +84,7 @@ pub(crate) fn validate(connection: &Connection) -> Result<(), SecretError> {
     Ok(())
 }
 
+/// Builds a client with an eight-second request limit and redirects disabled.
 fn client() -> Result<Client, SecretError> {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -90,6 +93,7 @@ fn client() -> Result<Client, SecretError> {
         .map_err(|_| SecretError::Provider)
 }
 
+/// Accepts HTTPS or loopback HTTP URLs without embedded credentials, queries, or fragments.
 fn base_url(value: &str) -> Result<Url, SecretError> {
     let mut url = Url::parse(value).map_err(|_| SecretError::Invalid("base URL is invalid"))?;
     let loopback = url.host_str().is_some_and(|host| {
@@ -116,12 +120,14 @@ fn base_url(value: &str) -> Result<Url, SecretError> {
     Ok(url)
 }
 
+/// Resolves a provider endpoint beneath its validated base URL.
 fn endpoint(connection: &Connection, path: &str) -> Result<Url, SecretError> {
     base_url(&connection.summary.settings.base_url)?
         .join(path)
         .map_err(|_| SecretError::Provider)
 }
 
+/// Adds a saved bearer token for Infisical or an authenticating Firecrab proxy.
 fn authorized(connection: &Connection, request: RequestBuilder) -> RequestBuilder {
     match connection
         .credentials
@@ -133,12 +139,14 @@ fn authorized(connection: &Connection, request: RequestBuilder) -> RequestBuilde
     }
 }
 
+/// Encodes a JSON body and its content type consistently for provider requests.
 fn json_body(request: RequestBuilder, body: &Value) -> RequestBuilder {
     request
         .header("content-type", "application/json")
         .body(body.to_string())
 }
 
+/// Decodes bounded successful JSON without exposing raw provider error bodies.
 async fn response_json(request: RequestBuilder) -> Result<Value, SecretError> {
     let response = request.send().await.map_err(|_| SecretError::Provider)?;
     if !response.status().is_success() {
@@ -161,6 +169,7 @@ async fn response_json(request: RequestBuilder) -> Result<Value, SecretError> {
     serde_json::from_slice(&body).map_err(|_| SecretError::Provider)
 }
 
+/// Loads a bounded name/value snapshot and validates each transferable entry.
 pub(crate) async fn list(connection: &Connection) -> Result<BTreeMap<String, String>, SecretError> {
     validate(connection)?;
     let client = client()?;
@@ -181,6 +190,7 @@ pub(crate) async fn list(connection: &Connection) -> Result<BTreeMap<String, Str
     Ok(values)
 }
 
+/// Reads one Infisical scope with raw references and rejects hidden or duplicate values.
 async fn list_infisical(
     client: &Client,
     connection: &Connection,
@@ -217,6 +227,7 @@ async fn list_infisical(
     Ok(values)
 }
 
+/// Fetches bounded Firecrab metadata without using a reveal endpoint.
 async fn firecrab_summaries(
     client: &Client,
     connection: &Connection,
@@ -235,6 +246,7 @@ async fn firecrab_summaries(
     Ok(items.clone())
 }
 
+/// Resolves Firecrab metadata to explicit reveals with at most eight concurrent reads.
 async fn list_firecrab(
     client: &Client,
     connection: &Connection,
@@ -272,6 +284,7 @@ async fn list_firecrab(
     Ok(values)
 }
 
+/// Follows AWS listing pages and retrieves each SecretString within the configured scope.
 async fn list_aws(
     client: &Client,
     connection: &Connection,
@@ -334,6 +347,7 @@ async fn list_aws(
         .await
 }
 
+/// Creates or replaces one name; Firecrab replacements recheck value and version.
 pub(crate) async fn upload(
     connection: &Connection,
     name: &str,
@@ -408,6 +422,7 @@ pub(crate) async fn upload(
     Ok(())
 }
 
+/// Sends a signed regional AWS JSON request, including a session token when supplied.
 async fn aws_request(
     client: &Client,
     connection: &Connection,
@@ -455,6 +470,7 @@ async fn aws_request(
     response_json(request).await
 }
 
+/// Builds a SigV4 authorization header from sorted headers and the exact JSON payload.
 fn sign_aws(
     region: &str,
     access_key: &str,

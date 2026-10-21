@@ -22,51 +22,74 @@ use crate::secrets::{
 use crate::server::RequestId;
 use crate::state::AppState;
 
+/// Secret creation or update; omitting the value preserves it during an update.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SecretInput {
+    /// Unique local name, also used when matching external values.
     name: String,
+    /// User description; an omitted description defaults to empty.
     #[serde(default)]
     description: String,
+    /// Required for creation; an explicit empty string stores an empty value.
     value: Option<String>,
+    /// Expected current version for an update; omitted during creation.
     version: Option<u64>,
 }
 
+/// Connection creation or update with credentials supplied separately from settings.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ConnectionInput {
+    /// Unique connection name displayed in the console and import history.
     name: String,
+    /// External adapter; changing it requires creating a new connection.
     provider: Provider,
+    /// Non-credential endpoint and scope configuration.
     settings: Settings,
+    /// Supplied credential keys; omitted keys retain their stored values on update.
     #[serde(default)]
     credentials: BTreeMap<String, String>,
+    /// Expected current version for an update; omitted during creation.
     version: Option<u64>,
 }
 
+/// Request to capture an external snapshot and compare it with local values.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct PreviewInput {
+    /// Whether the captured values will be imported or uploaded.
     direction: Direction,
+    /// Selected local secret IDs for uploads; ignored for imports.
     #[serde(default)]
     secret_ids: Vec<Uuid>,
 }
 
+/// Changed names explicitly selected from a previously captured preview.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ApplyInput {
+    /// Names to apply; empty selections and unchanged rows are rejected.
     names: Vec<String>,
 }
 
+/// Public preview response with names and change types, never secret values.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Preview {
+    /// Identifier used by the single-use apply endpoint.
     id: Uuid,
+    /// External connection used to capture this snapshot.
     connection_id: Uuid,
+    /// Transfer direction shown in the console.
     direction: Direction,
+    /// Ten-minute expiry deadline in Unix milliseconds.
     expires_at: u64,
+    /// Addition, replacement, or unchanged result for each captured name.
     changes: Vec<ChangeSummary>,
 }
 
+/// Prevents caching of successful and failed Secrets responses.
 pub(crate) async fn no_store(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     response
@@ -75,6 +98,7 @@ pub(crate) async fn no_store(request: Request, next: Next) -> Response {
     response
 }
 
+/// Maps vault errors to safe HTTP responses without echoing values or provider bodies.
 fn api_error(error: SecretError, id: Uuid) -> AppError {
     match error {
         SecretError::NotFound => AppError::not_found(id),
@@ -106,6 +130,7 @@ fn api_error(error: SecretError, id: Uuid) -> AppError {
     }
 }
 
+/// Runs blocking file-lock and encryption work outside the async executor.
 async fn vault<T: Send + 'static>(
     state: &AppState,
     id: Uuid,
@@ -118,6 +143,7 @@ async fn vault<T: Send + 'static>(
         .map_err(|error| api_error(error, id))
 }
 
+/// Lists local secret metadata sorted by name, without revealing values.
 pub(crate) async fn list(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -137,6 +163,7 @@ pub(crate) async fn list(
     .map(Json)
 }
 
+/// Checks names and byte limits before an input reaches the encrypted store.
 fn validate_secret(input: &SecretInput) -> Result<(), SecretError> {
     secrets::validate_name(&input.name)?;
     if input.description.len() > 1000 {
@@ -150,6 +177,7 @@ fn validate_secret(input: &SecretInput) -> Result<(), SecretError> {
     Ok(())
 }
 
+/// Creates a unique local secret and returns only its metadata.
 pub(crate) async fn create(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -193,6 +221,7 @@ pub(crate) async fn create(
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
+/// Updates metadata and an optional value only when the supplied version matches.
 pub(crate) async fn update(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -232,6 +261,7 @@ pub(crate) async fn update(
     .map(Json)
 }
 
+/// Reveals one value and its current version after an explicit POST request.
 pub(crate) async fn reveal(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -252,6 +282,7 @@ pub(crate) async fn reveal(
     .map(Json)
 }
 
+/// Deletes a local secret unless a MicroService still references its identifier.
 pub(crate) async fn delete(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -287,6 +318,7 @@ pub(crate) async fn delete(
     .map(Json)
 }
 
+/// Lists external connection metadata without credentials, sorted by name.
 pub(crate) async fn connections(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -306,6 +338,7 @@ pub(crate) async fn connections(
     .map(Json)
 }
 
+/// Validates and encrypts a new external connection before returning its metadata.
 pub(crate) async fn create_connection(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
@@ -346,6 +379,7 @@ pub(crate) async fn create_connection(
     Ok((StatusCode::CREATED, Json(result)))
 }
 
+/// Updates a matching connection version while retaining omitted credentials.
 pub(crate) async fn update_connection(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -388,6 +422,7 @@ pub(crate) async fn update_connection(
     .map(Json)
 }
 
+/// Removes a connection and its previews while preserving imported local copies.
 pub(crate) async fn delete_connection(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -410,6 +445,7 @@ pub(crate) async fn delete_connection(
     .map(Json)
 }
 
+/// Captures transfer values in the encrypted vault and returns a value-free preview.
 pub(crate) async fn preview(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -520,6 +556,7 @@ pub(crate) async fn preview(
     Ok(Json(summary))
 }
 
+/// Classifies a captured source value against the destination's current value.
 fn change(name: &str, existing: &Option<String>, value: &str) -> ChangeSummary {
     let change = match existing {
         None => Change::Add,
@@ -532,6 +569,7 @@ fn change(name: &str, existing: &Option<String>, value: &str) -> ChangeSummary {
     }
 }
 
+/// Checks preview age, selected changes, connection version, and local identities.
 fn selected_plan(
     contents: &Contents,
     id: Uuid,
@@ -583,6 +621,7 @@ fn selected_plan(
     Ok((selected, connection.clone()))
 }
 
+/// Applies selected snapshot names once, reporting completed and failed uploads.
 pub(crate) async fn apply(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,

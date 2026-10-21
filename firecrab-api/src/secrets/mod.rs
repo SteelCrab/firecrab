@@ -14,26 +14,38 @@ use uuid::Uuid;
 
 pub(crate) mod providers;
 
+/// Vault format marker, also authenticated as additional AES-GCM data.
 const MAGIC: &[u8] = b"PIPESECRETS\x01";
+/// Maximum encrypted file size, including metadata and transfer snapshots.
 const MAX_VAULT_BYTES: u64 = 32 * 1024 * 1024;
+/// Maximum number of local secrets or values in one provider snapshot.
 pub(crate) const MAX_SECRETS: usize = 1000;
 
+/// Storage, validation, and provider failures that can be safely mapped to API errors.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SecretError {
+    /// The vault cannot be read, decoded, or durably written.
     #[error("PipeSecrets storage is unavailable")]
     Storage,
+    /// The key is missing or invalid, or the ciphertext fails authentication.
     #[error("PipeSecrets encryption key is missing or invalid")]
     Encryption,
+    /// The requested secret, connection, or transfer preview no longer exists.
     #[error("record not found")]
     NotFound,
+    /// Another record already owns the requested name.
     #[error("a record with this name already exists")]
     Duplicate,
+    /// A captured record identity, version, or remote value has changed.
     #[error("the values changed; preview the transfer again")]
     Conflict,
+    /// The transfer preview has exceeded its ten-minute lifetime.
     #[error("the transfer preview expired; preview the transfer again")]
     Expired,
+    /// A static validation message that contains no supplied secret data.
     #[error("{0}")]
     Invalid(&'static str),
+    /// An external request failed; its raw response must not reach the caller.
     #[error("external service request failed; check the connection and its permissions")]
     Provider,
 }
@@ -44,136 +56,205 @@ impl From<std::io::Error> for SecretError {
     }
 }
 
+/// External store adapter selected by a saved connection.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Provider {
+    /// Another Firecrab API exposing the PipeSecrets endpoints.
     Firecrab,
+    /// An Infisical v4 API with a project, environment, and folder scope.
     Infisical,
+    /// Regional AWS Secrets Manager using signed JSON requests.
     AwsSecretsManager,
 }
 
+/// Non-credential connection settings returned to the web console.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Settings {
+    /// Infisical or Firecrab API base URL; unused by the AWS adapter.
     #[serde(default)]
     pub base_url: String,
+    /// Infisical project identifier.
     #[serde(default)]
     pub project_id: String,
+    /// Infisical environment slug, such as staging or prod.
     #[serde(default)]
     pub environment: String,
+    /// Absolute Infisical folder path, such as `/services/api`.
     #[serde(default)]
     pub secret_path: String,
+    /// AWS region used for the service endpoint and request signature.
     #[serde(default)]
     pub region: String,
+    /// AWS name prefix used when listing secrets and validating uploads.
     #[serde(default)]
     pub prefix: String,
 }
 
+/// Public connection metadata; credentials remain in the encrypted record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConnectionSummary {
+    /// Stable local identifier used by transfer requests and source history.
     pub id: Uuid,
+    /// Unique connection name shown in the web console.
     pub name: String,
+    /// Adapter responsible for reading and writing the external store.
     pub provider: Provider,
+    /// Provider scope and endpoint settings, without credentials.
     pub settings: Settings,
+    /// Optimistic version incremented by each successful connection update.
     pub version: u64,
+    /// Last successful update time in Unix milliseconds.
     pub updated_at: u64,
 }
 
-// No Debug implementation: credentials and values must not enter logs.
+/// Encrypted connection record; intentionally omits Debug to protect credentials.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Connection {
+    /// Metadata safe to include in connection API responses.
     pub summary: ConnectionSummary,
+    /// Provider-specific authentication values, never returned to the console.
     pub credentials: BTreeMap<String, String>,
 }
 
+/// Secret metadata returned by list and save endpoints without the stored value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SecretSummary {
+    /// Stable identifier retained when an import replaces an existing value.
     pub id: Uuid,
+    /// Unique local name used to match external values during transfers.
     pub name: String,
+    /// User description retained when an import replaces the secret.
     pub description: String,
+    /// Optimistic version incremented by each successful edit or replacement.
     pub version: u64,
+    /// Initial local creation time in Unix milliseconds.
     pub created_at: u64,
+    /// Last local edit or import time in Unix milliseconds.
     pub updated_at: u64,
+    /// Most recent import source, if the secret was imported.
     pub source: Option<SecretSource>,
 }
 
+/// Import provenance retained even after the external connection is removed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SecretSource {
+    /// Local identifier of the connection used for the import.
     pub connection_id: Uuid,
+    /// Connection name captured at import time.
     pub connection_name: String,
+    /// External store adapter used for the import.
     pub provider: Provider,
+    /// Secret name in the external store.
     pub remote_key: String,
+    /// Successful import time in Unix milliseconds.
     pub imported_at: u64,
 }
 
+/// Encrypted secret record; the value is exposed only by explicit reveal requests.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Secret {
+    /// Metadata safe to return without revealing the value.
     pub summary: SecretSummary,
+    /// Stored UTF-8 value, which may be empty or contain multiple lines.
     pub value: String,
 }
 
+/// Direction of a manual, previewed transfer between local and external stores.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Direction {
+    /// Copy captured external values into PipeSecrets.
     Import,
+    /// Send selected PipeSecrets values to the external store.
     Export,
 }
 
+/// Effect of applying a captured value to its destination.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Change {
+    /// The destination has no secret with this name.
     Add,
+    /// The destination value differs and replacement needs explicit selection.
     Update,
+    /// The destination already has the captured value; applying it is disabled.
     Unchanged,
 }
 
+/// Value-free preview row sent to the web console.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChangeSummary {
+    /// Secret name shared by the source and destination.
     pub name: String,
+    /// Addition, replacement, or unchanged result for this name.
     pub change: Change,
 }
 
+/// Encrypted snapshot of one transfer value and the state required to apply it.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct PlannedValue {
+    /// Name and change type safe to display in a preview.
     pub summary: ChangeSummary,
+    /// Captured source value to copy when the preview is applied.
     pub value: String,
+    /// Captured local identity, or none when importing a new name.
     pub local_id: Option<Uuid>,
+    /// Captured local version used to reject edits made after preview.
     pub local_version: Option<u64>,
+    /// Captured remote value used to detect changes before an upload.
     pub remote_value: Option<String>,
 }
 
+/// Encrypted, single-use transfer snapshot with a ten-minute lifetime.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Plan {
+    /// Identifier used to apply selected names from this preview.
     pub id: Uuid,
+    /// Connection whose scope and credentials were used for the snapshot.
     pub connection_id: Uuid,
+    /// Connection version that must still match when the preview is applied.
     pub connection_version: u64,
+    /// Whether values move into PipeSecrets or into the external store.
     pub direction: Direction,
+    /// Snapshot creation time in Unix milliseconds, used to enforce expiry.
     pub created_at: u64,
+    /// Captured values and concurrency checks for each preview row.
     pub values: Vec<PlannedValue>,
 }
 
+/// Decrypted vault contents, held only while a locked read or write is performed.
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct Contents {
+    /// Local secret values and metadata.
     pub secrets: Vec<Secret>,
+    /// External connection settings and credentials.
     pub connections: Vec<Connection>,
+    /// Temporary captured transfers awaiting application or expiry.
     pub plans: Vec<Plan>,
 }
 
+/// Encrypted file store opened lazily by Secrets requests.
+///
 /// File locks also serialize a second API process using the same data directory.
 #[derive(Debug)]
 pub(crate) struct Vault {
+    /// Owner-only directory containing the key, ciphertext, and lock file.
     root: PathBuf,
 }
 
 impl Vault {
+    /// Records the vault directory without creating files or reading its key.
     pub(crate) fn new(root: PathBuf) -> Self {
         Self { root }
     }
 
+    /// Runs a read operation on decrypted contents under an exclusive file lock.
     pub(crate) fn read<T>(
         &self,
         operation: impl FnOnce(&Contents) -> Result<T, SecretError>,
@@ -182,6 +263,9 @@ impl Vault {
         operation(&self.load(&key)?)
     }
 
+    /// Commits a successful operation with a fresh nonce and atomic file replacement.
+    ///
+    /// Failed operations leave the previous ciphertext unchanged.
     pub(crate) fn write<T>(
         &self,
         operation: impl FnOnce(&mut Contents) -> Result<T, SecretError>,
@@ -214,6 +298,7 @@ impl Vault {
         Ok(result)
     }
 
+    /// Acquires the vault lock and loads its key, creating a key only for a new vault.
     fn open(&self) -> Result<(File, LessSafeKey), SecretError> {
         fs::create_dir_all(&self.root)?;
         if fs::symlink_metadata(&self.root)?.file_type().is_symlink() {
@@ -255,6 +340,7 @@ impl Vault {
         Ok((lock, key))
     }
 
+    /// Reads a bounded file and authenticates its contents before decoding the vault.
     fn load(&self, key: &LessSafeKey) -> Result<Contents, SecretError> {
         let mut file = match private_file().open(self.root.join("vault.bin")) {
             Ok(file) => file,
@@ -287,6 +373,7 @@ impl Vault {
     }
 }
 
+/// Opens owner-only read/write files without following a final symlink.
 fn private_file() -> OpenOptions {
     let mut options = OpenOptions::new();
     options
@@ -297,6 +384,7 @@ fn private_file() -> OpenOptions {
     options
 }
 
+/// Synchronizes a private temporary file, renames it, then synchronizes its parent.
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), SecretError> {
     let temp = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
     let result = (|| {
@@ -313,6 +401,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), SecretError> {
     result
 }
 
+/// Returns Unix milliseconds for record timestamps and preview expiry checks.
 pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -320,6 +409,7 @@ pub(crate) fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Accepts 1-512 ASCII characters from the shared provider name alphabet.
 pub(crate) fn validate_name(name: &str) -> Result<(), SecretError> {
     if name.is_empty()
         || name.len() > 512
@@ -334,6 +424,7 @@ pub(crate) fn validate_name(name: &str) -> Result<(), SecretError> {
     Ok(())
 }
 
+/// Accepts empty or multiline UTF-8 values up to 16384 bytes, without NUL bytes.
 pub(crate) fn validate_value(value: &str) -> Result<(), SecretError> {
     if value.len() > 16_384 || value.contains('\0') {
         return Err(SecretError::Invalid(
