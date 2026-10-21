@@ -87,7 +87,7 @@ Usage: ./install.sh [OPTIONS]
   --deps-only         install the dependencies, then stop (no host changes)
   --no-deps           never install packages, only report gaps
   --no-frontend       do not install the dashboard
-  --with-pipe         install Nginx and the verified cloudflared connector with Firecrab
+  --with-pipe         also install the verified cloudflared connector (ingress is bundled)
   --version VER       GitHub Release tag (default: latest, or the baked-in tag)
   --libc gnu|musl     host libc (default: detect; gnu = glibc)
   --bin-dir DIR       install these local binaries instead of the release
@@ -460,7 +460,7 @@ Tag a GitHub Release, or install local binaries:
     tar -xzf "$PAYLOAD_TMP/$tarball" -C "$PAYLOAD_TMP/root"
     PAYLOAD_ROOT=$PAYLOAD_TMP/root
     local name
-    for name in firecrab-api firecrab-helper firecrab; do
+    for name in firecrab-api firecrab-helper firecrab firecrab-ingress; do
         local member
         member=$(firecrab_resolve_binary "$name" "$PAYLOAD_ROOT" "") \
             || die "release bundle is missing $name"
@@ -468,7 +468,8 @@ Tag a GitHub Release, or install local binaries:
             || die "$tarball: $name is not a $arch binary"
     done
     for name in LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json \
-            licenses/GPL-2.0-only.txt; do
+            licenses/GPL-2.0-only.txt ingress/LICENSE.nginx ingress/LICENSE.pcre2 \
+            ingress/LICENSE.musl ingress/sources.json; do
         [ -f "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing compliance artifact $name"
     done
     log "host bundle $arch/$LIBC"
@@ -642,8 +643,18 @@ install_compliance() {
 
 # Puts the payload binaries, and the dashboard, where the units expect them.
 install_binaries() {
-    local name src
-    for name in firecrab-api firecrab-helper; do
+    local name src ingress_notices
+    # Validate the new required component before replacing any installed binary.
+    src=$(firecrab_resolve_binary firecrab-ingress "$PAYLOAD_BIN" "$LIBDIR") \
+        || die "missing firecrab-ingress; build with scripts/build-ingress.sh or install a host release"
+    ingress_notices="$PAYLOAD_BIN/ingress"
+    if [ "$src" -ef "$LIBDIR/firecrab-ingress" ]; then
+        ingress_notices="$LIBDIR/ingress"
+    fi
+    for name in LICENSE.nginx LICENSE.pcre2 LICENSE.musl sources.json; do
+        [ -f "$ingress_notices/$name" ] || die "missing ingress/$name in install payload"
+    done
+    for name in firecrab-api firecrab-helper firecrab-ingress; do
         src=$(firecrab_resolve_binary "$name" "$PAYLOAD_BIN" "$LIBDIR") \
             || die "no $name in ${PAYLOAD_BIN:-<release>} or $LIBDIR — pass it via --bin-dir or install a release"
         if [ "$src" -ef "$LIBDIR/$name" ]; then
@@ -672,6 +683,12 @@ install_binaries() {
     else
         $SUDO install -d -o root -g root -m 0755 "$PREFIX/bin"
         $SUDO install -o root -g root -m 0755 "$cli_src" "$PREFIX/bin/firecrab"
+    fi
+    if [ "$ingress_notices" != "$LIBDIR/ingress" ]; then
+        $SUDO install -d -o root -g root -m 0755 "$LIBDIR/ingress"
+        for name in LICENSE.nginx LICENSE.pcre2 LICENSE.musl sources.json; do
+            $SUDO install -o root -g root -m 0644 "$ingress_notices/$name" "$LIBDIR/ingress/$name"
+        done
     fi
     log "binaries installed to $LIBDIR (cli → $PREFIX/bin/firecrab)"
 
@@ -856,7 +873,7 @@ do_check() {
     fi
     ensure_runtime_deps || gaps=1
     if [ "$WITH_PIPE" = 1 ]; then
-        have nginx || [ -x /usr/sbin/nginx ] || { warn "missing nginx"; gaps=1; }
+        [ -x "$LIBDIR/firecrab-ingress" ] || { warn "missing bundled firecrab-ingress"; gaps=1; }
         if [ -x "$LIBDIR/pipe/cloudflared" ]; then
             log "pipe engine present: $LIBDIR/pipe/cloudflared"
         else
@@ -954,10 +971,6 @@ do_install() {
     install_config
     install_units
     if [ "$WITH_PIPE" = 1 ]; then
-        if ! have nginx && [ ! -x /usr/sbin/nginx ]; then
-            [ "$INSTALL_DEPS" = 1 ] || die "nginx is required with --with-pipe"
-            pkg_install nginx
-        fi
         $SUDO env PREFIX="$PREFIX" FIRECRAB_LIBDIR="$LIBDIR" DATADIR="$DATADIR" \
             CONFDIR="$CONFDIR" UNITDIR="$UNITDIR" "$PREFIX/bin/firecrab" pipe install
     fi
@@ -1072,7 +1085,8 @@ do_uninstall() {
 
     $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-helper" "$LIBDIR/firecrab-net-helper" \
         "$LIBDIR/extract-vmlinux" "$LIBDIR/extract-arm64-image"
-    $SUDO rm -f "$PREFIX/bin/firecrab"
+    $SUDO rm -f "$PREFIX/bin/firecrab" "$LIBDIR/firecrab-ingress"
+    $SUDO rm -rf "$LIBDIR/ingress"
     $SUDO rm -rf "$SHAREDIR/dashboard"
     $SUDO rm -f "$SHAREDIR/LICENSE" "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \
         "$SHAREDIR/release-license-inventory.json"

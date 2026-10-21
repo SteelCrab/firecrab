@@ -146,7 +146,7 @@ mod install {
             return Err("pipe install requires root; run with sudo".into());
         }
         if nginx_binary().is_none() {
-            return Err("Nginx is unavailable; install the nginx package with your Linux package manager, then run pipe install".into());
+            return Err("firecrab-ingress is unavailable; reinstall the Firecrab host bundle before running pipe install".into());
         }
         let manifest = manifest()?;
         let arch = std::env::consts::ARCH;
@@ -282,23 +282,42 @@ pub(super) fn install() -> Result<()> {
 
 #[cfg(target_os = "linux")]
 pub(super) fn nginx_binary() -> Option<PathBuf> {
-    let mut paths = vec![
-        PathBuf::from("/usr/sbin/nginx"),
-        PathBuf::from("/usr/bin/nginx"),
-    ];
-    if let Some(path) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&path).map(|path| path.join("nginx")));
-    }
-    paths.into_iter().find(|path| {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path)
-            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-    })
+    let path = std::env::var_os("FIRECRAB_INGRESS_BINARY").map_or_else(
+        || {
+            crate::service::env::ServiceEnv::from_process_env()
+                .libdir
+                .join("firecrab-ingress")
+        },
+        PathBuf::from,
+    );
+    ingress_binary(path)
+}
+
+#[cfg(target_os = "linux")]
+fn ingress_binary(path: PathBuf) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(&path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .then_some(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ingress_uses_only_the_private_host_bundle_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("firecrab-ingress");
+        assert!(ingress_binary(path.clone()).is_none());
+        std::fs::write(&path, b"engine").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(ingress_binary(path.clone()).is_none());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(ingress_binary(path.clone()), Some(path));
+    }
 
     #[test]
     fn both_architectures_use_pinned_official_assets_and_digests() {

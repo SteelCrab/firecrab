@@ -244,14 +244,14 @@ fn apply_mode_locked(
     }
     let env = ServiceEnv::from_process_env();
     let nginx_path = nginx.map(Path::to_path_buf).unwrap_or_else(|| {
-        super::engines::nginx_binary().unwrap_or_else(|| PathBuf::from("/usr/sbin/nginx"))
+        super::engines::nginx_binary().unwrap_or_else(|| env.libdir.join("firecrab-ingress"))
     });
     let cloudflared_path = cloudflared
         .map(Path::to_path_buf)
         .unwrap_or_else(|| super::engines::managed_binary(&env.libdir, "cloudflared"));
     let nginx = executable(&nginx_path).map_err(|error| {
         format!(
-            "Nginx is unavailable at {}: {error}; run pipe install or use --nginx",
+            "Ingress is unavailable at {}: {error}; reinstall the Firecrab host bundle or use --nginx",
             nginx_path.display()
         )
     })?;

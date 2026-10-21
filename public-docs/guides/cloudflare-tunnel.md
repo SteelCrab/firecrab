@@ -10,7 +10,7 @@ connector service, and its own current URL.
 
 ## Requirements
 
-- A running Firecrab Linux host or managed guest with Nginx installed.
+- A running Firecrab Linux host or managed guest with the bundled ingress engine.
 - For VM app targets, running VMs with IPv4 addresses and registered TCP ports.
 - For Nginx route targets, a saved domain/path route group.
 - Outbound access for Cloudflare Tunnel. Firecrab installs its pinned,

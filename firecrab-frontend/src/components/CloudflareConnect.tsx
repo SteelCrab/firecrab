@@ -137,6 +137,6 @@ export default function CloudflareConnect({ config, snapshot, busy, apps, vmsLoa
             ]} /></td>
           </tr>;
         })}</tbody></table></div>}
-    {snapshot && !snapshot.nginxAvailable && <p className="field-error">{t("Install Nginx on the managed host before connecting.", "연결 전에 관리 호스트에 Nginx를 설치한다.")}</p>}
+    {snapshot && !snapshot.nginxAvailable && <p className="field-error">{t("Reinstall the Firecrab host bundle to restore the ingress engine.", "Ingress 엔진을 복구하려면 Firecrab 호스트 번들을 다시 설치한다.")}</p>}
   </section>;
 }
