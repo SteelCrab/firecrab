@@ -29,6 +29,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Install or change a guest kernel | [Kernels](guides/kernels.md) |
 | Configure services, upgrade, or uninstall | [Operations](guides/operations.md) |
 | Route domains and paths across apps | [Pipe ingress and tunnel](guides/pipe.md) |
+| Connect AWS and GitHub accounts to Pipe services | [Pipe Auth](guides/pipe-auth.md) |
 | Pull images from Docker Hub, GHCR or Amazon ECR | [Pipe Registry](guides/pipe-registry.md) |
 | Diagnose a failure | [Troubleshooting](guides/troubleshooting.md) |
 
