@@ -346,6 +346,8 @@ jobs:
     timeout-minutes: 30
     env:
       CARGO_INCREMENTAL: "0"
+      # Continuous profiles survive the isolated QA API's SIGTERM/restart.
+      RUSTFLAGS: "-C llvm-args=-runtime-counter-relocation"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/cache@v6
@@ -362,6 +364,8 @@ jobs:
           rustup show
           sudo apt-get update
           sudo apt-get install -y postgresql-client default-mysql-client openssl
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
@@ -369,16 +373,28 @@ jobs:
           cache-dependency-path: |
             firecrab-frontend/package-lock.json
             firecrab-e2e/package-lock.json
-      - name: Build API and dashboard
+      - name: Build dashboard
         run: |
-          cargo build -p firecrab-api --locked
           npm ci --prefix firecrab-frontend
           npm ci --prefix firecrab-e2e
           npm run build --prefix firecrab-frontend
           npm run typecheck:pipe --prefix firecrab-e2e
           npx --prefix firecrab-e2e playwright install --with-deps chromium
-      - name: Real database and desktop/mobile QA
-        run: bash scripts/ci-qa-pipe-databases.sh --browser
+      - name: Real database and desktop/mobile QA with coverage
+        run: |
+          source <(cargo llvm-cov show-env --sh)
+          cargo llvm-cov clean --workspace
+          cargo build -p firecrab-api --locked
+          export LLVM_PROFILE_FILE="$CARGO_LLVM_COV_TARGET_DIR/pipe-databases-%p-%m%c.profraw"
+          bash scripts/ci-qa-pipe-databases.sh --api "$CARGO_LLVM_COV_TARGET_DIR/debug/firecrab-api" --browser
+          cargo llvm-cov report --lcov --output-path pipe-databases.lcov.info
+      - name: Upload database QA coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: pipe-databases.lcov.info
+          flags: pipe-databases
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Retain QA report and browser evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -387,6 +403,7 @@ jobs:
           path: |
             target/qa/pipe-databases.json
             target/qa/pipe-databases.api.log
+            pipe-databases.lcov.info
             firecrab-e2e/test-results/pipe-live-*
           retention-days: 7
 
