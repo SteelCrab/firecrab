@@ -5,6 +5,9 @@ interface VmRow {
   name: string;
   state: string;
   template: string;
+  ipv4?: string | null;
+  ipv6?: string | null;
+  portForwards?: Array<{ hostPort: number; guestPort: number; protocol: string }>;
 }
 
 interface ImageRow {
@@ -15,6 +18,10 @@ interface ImageRow {
 interface NetworkRow {
   id: string;
   name: string;
+  ipv6Cidr?: string | null;
+  ipv6Gateway?: string | null;
+  ipv6AddressMode?: string | null;
+  ipv6Egress?: string | null;
 }
 
 interface CatalogImageRow {
@@ -65,6 +72,14 @@ export class ApiCleanup {
     const { status, json } = await this.request("GET", "/api/vms");
     if (status >= 400 || !Array.isArray(json)) return [];
     return json as VmRow[];
+  }
+
+  async getVm(id: string): Promise<VmRow | null> {
+    const { status, json } = await this.request("GET", `/api/vms/${id}`);
+    if (status >= 400 || !json || typeof json !== "object") return null;
+    const row = json as VmRow;
+    if (typeof row.id !== "string" || typeof row.name !== "string") return null;
+    return row;
   }
 
   async listImages(): Promise<ImageRow[]> {
@@ -146,20 +161,11 @@ export class ApiCleanup {
     await this.request("DELETE", `/api/images/${encodeURIComponent(alias)}/package`);
   }
 
-  /**
-   * Best-effort local catalog delete. L3 is insert-only today, so this
-   * 404s until that layer grows a DELETE.
-   */
+  /** Remove this run's local registration after deleting its disk and package. */
   async deleteLocalCatalogRow(alias: string): Promise<boolean> {
     const encoded = encodeURIComponent(alias);
-    for (const pathname of [
-      `/api/microregistry/${encoded}`,
-      `/api/microregistry/local/${encoded}`,
-    ]) {
-      const { status } = await this.request("DELETE", pathname);
-      if (status === 200 || status === 204) return true;
-    }
-    return false;
+    const { status } = await this.request("DELETE", `/api/microregistry/local/${encoded}`);
+    return status === 204;
   }
 
   async stopVm(id: string): Promise<void> {
@@ -220,5 +226,15 @@ export class ApiCleanup {
     const row = networks.find((network) => network.id === createdNetworkId);
     if (!row || row.name !== networkName) return;
     await this.deleteNetwork(createdNetworkId);
+  }
+
+  /** Delete every MicroNetwork with one of the given names (best-effort). */
+  async deleteNetworksByName(names: string[]): Promise<void> {
+    const wanted = new Set(names);
+    const networks = await this.listNetworks();
+    for (const row of networks) {
+      if (!wanted.has(row.name)) continue;
+      await this.deleteNetwork(row.id);
+    }
   }
 }

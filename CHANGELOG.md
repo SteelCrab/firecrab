@@ -8,6 +8,11 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
+| [0.3.1](#031---2026-10-06) | 2026-10-06 | [#123], [#314], [#315], [#318], [#324], [#330], [#331], [#332], [#333], [#343], [#351], [#358], [#359], [#360], [#368], [#378] |
+| [0.3.0](#030---2026-09-29) | 2026-09-29 | [#210], [#266], [#287], [#290], [#294], [#295], [#297], [#312] |
+| [0.2.2](#022---2026-09-15) | 2026-09-15 | [#269], [#270], [#272], [88ba35d], [729bb47] |
+| [0.2.1](#021---2026-09-14) | 2026-09-14 | [#262], [#263], [#264], [#265] |
+| [0.2.0](#020---2026-09-03) | 2026-09-03 | [#146], [#178], [#183], [#184], [#186], [#176], [#190], [#198], [#131], [#188], [#194], [#208], [#232], [#254], [45790c3], [1ffba72], [1a44619], [73d5fe1], [76f6ef3] |
 | [0.1.2](#012---2026-08-21) | 2026-08-21 | [#145], [#147], [#151], [#152], [#158], [#163], [#165], [#171], [#174], [#175] |
 | [0.1.1](#011---2026-08-17) | 2026-08-17 | [#141], [#142], [#143] |
 | [0.1.0](#010---2026-08-16) | 2026-08-16 | First public release |
@@ -15,6 +20,327 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
+
+### Added
+
+- Updating from the dashboard opens a dialog that shows what the new release
+  changes, then a gauge with the overall percent and the stage (check,
+  download, verify, apply, restart) until the API is back on the new version.
+  A run that fails says why in the dialog instead of leaving it waiting for ten
+  minutes. `firecrab update --apply` shows the same stages with a gauge and the
+  percent. `GET /api/update` carries the release's `notes` and `releaseUrl`,
+  and `GET /api/update/progress` reports the run, which the updater records in
+  `$DATADIR/updates/progress.json` so it survives the restart that ends an
+  update.
+
+- The installed MicroManager `micromanager.toml` accepts runtime policy settings.
+  macOS and Windows can disable automatic host-job relaunch. macOS also supports
+  SSH connection reuse, keepalives, configurable tunnel retries, and retaining
+  the VM while SSH reconnects. Runtime edits preserve installation fingerprints
+  and survive explicit install/reinstall; existing TOML files keep working.
+
+- `firecrab pipe install/render/apply/status/disable` manages independent Nginx
+  PipeIngress and cloudflared PipeTunnel systemd units. Nginx routes domains and
+  path prefixes, distributes requests across app addresses, and gracefully reloads
+  while keeping in-flight requests. Failed application restores the previous config.
+  The dashboard's Pipe page edits routes, applies configuration, shows live service
+  states, stops the pipe, and accepts optional tunnel credentials without returning
+  saved secrets. API controls run through the authenticated helper. Native CLI
+  commands forward to the managed Linux guest. `install.sh --with-pipe` adds the
+  OS Nginx package and verified cloudflared binary. See [Service data plane](public-docs/guides/pipe.md).
+
+- The dashboard's Host tab has a Firecrab panel with the version and what
+  `firecrab info` prints: the install prefix, data, config and unit
+  directories, and the address the API listens on. `GET /api/info` serves the
+  same installation fields, plus the configured Firecracker version and live
+  API/helper service states. The panel refreshes every ten seconds and clears
+  stale states when the API becomes unavailable. CLI `firecrab info --json`
+  retains its six-field report.
+
+- macOS and Windows `firecrab service dev start`, `stop`, and `restart` control
+  the guest API and helper without rebuilding sources or stopping microManager.
+  They preserve the current development overrides and require a running management VM.
+- macOS `firecrab service repair` rebuilds the resident service registration and
+  restarts the existing management VM without downloading or reinstalling assets.
+  It preserves installed binaries, the data disk, and SSH credentials, and checks
+  the local API and current-boot guest report before reporting success.
+  Service startup, SSH, and API failures suggest the repair command; unhealthy
+  status and debug reports include the same recovery advice.
+  An idle-runtime macOS E2E phase checks recovery, injected SSH/API failures,
+  preserved assets, and restoration, retaining logs and JSON QA evidence.
+
+### Changed
+
+- The dashboard's VM list shows only a VM's own state: the API label next to it
+  is gone, and the API's reconciliation result for a VM stays in its detail view.
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- macOS and Windows `service dev` starts the source dashboard on
+  `http://localhost:8080`, checks its API proxy, and keeps it running after the
+  command exits. Development start/stop/restart commands control the dashboard
+  with the guest services. Port conflicts and frontend startup failures fail
+  the command instead of reporting an API-only success.
+
+- macOS service repair prints all six stages. Service start and repair report
+  VM/API readiness and elapsed time every ten seconds while waiting. Shutdown
+  waits also report launchd/VM state. Local VM/API startup uses a ten-second
+  readiness deadline; health checks stay unchanged.
+- macOS repair backs up the OS image and fixes filesystem errors on a detached
+  copy before installing a verified result. It preserves the data disk and SSH
+  assets, cleans up matching stale helpers, and locks each home against concurrent
+  management VMs. Forced VZ stop completion now allows the helper to exit.
+- macOS repair also restores missing packaged Debian OS files and package
+  manifests from the verified local image cache or checksum-matched lost+found
+  files. It preserves existing files and verifies the repaired copy before commit.
+
+- macOS SSH connections quote known-host paths inside OpenSSH options, so the
+  default `Application Support` directory remains one path. Repair completes
+  using the guest's fresh virtiofs boot report and live API instead of SSH commands.
+
+- Browser console E2E reloads initial dashboard modules once when Chromium
+  reports `ERR_NETWORK_CHANGED` after a guest bridge is created. Other failures
+  and repeated network errors remain test failures.
+
+### Improved
+
+- None.
+
+## [0.3.1] - 2026-10-06
+
+firecrab runs every MicroVM in its own systemd unit with host resource ceilings and startup
+recovery, adds `service shell` and `service dev`, and fixes console replay, OCI import issues, and
+the files, processes, and firewall rules an uninstall used to leave behind.
+
+### Added
+
+- Each MicroVM's systemd unit runs under host-side ceilings derived from its RAM
+  and vCPUs: `MemoryMax` is the guest RAM plus the larger of 256 MiB and an
+  eighth of it, and `CPUQuota` is one core per vCPU plus one. They apply from a
+  VM's next start, so a runaway Firecracker or shim cannot starve the host
+  ([#123]).
+- `POST /api/network/reconcile` retries networking for running VMs without
+  restarting their API/shim/Firecracker processes and refreshes per-VM
+  recovery diagnostics ([#123]).
+- VM list and detail responses expose per-VM API startup reconciliation outcomes,
+  timestamps, and diagnostics. The Dashboard displays them in English and Korean
+  alongside the VM lifecycle state, with hover/focus information panels for the
+  VM and API status labels ([#123]).
+- `firecrab service shell` opens a root shell in the managed Debian guest on
+  macOS and Windows, and `firecrab service shell -- <command>` runs one command
+  there. On Windows, `service run` remains an alias ([#343]).
+- `firecrab service dev` builds the checkout's API and helper inside the managed
+  Debian guest on macOS and WSL2 and switches both services to the new binaries;
+  a failed build leaves the running services untouched, and `--restore` returns
+  to the installed ones. It replaces the macOS foreground `service run`
+  ([#332], [#351]).
+- `DELETE /api/microregistry/local/{alias}` releases a host-local image
+  registration while protecting active jobs, other architectures, installed
+  images, and staged packages ([#333]).
+- On Windows, TCP port forwards of MicroVMs are relayed to `localhost`
+  ([#358], [#359], [#360]).
+- `install.sh` records, on the first install, whether it granted the `kvm` group an ACL on
+  `/dev/kvm` and whether IPv4/IPv6 forwarding was off, in `/etc/firecrab/host-baseline.env`,
+  so an uninstall can put back exactly that ([#378]).
+
+### Changed
+
+- Rename the privileged daemon and unit to `firecrab-helper`. Installer
+  reruns migrate the legacy service into an alias; old executable paths,
+  release installers, update bundles, socket settings, and status JSON remain
+  compatible. CLI status/doctor and macOS/Windows guest control accept either
+  installed service name; lifetime QA checks migration with a running VM ([#123]).
+- Each MicroVM now runs under a per-VM `firecrab-vm` shim (`firecrab-api vm-shim`)
+  that owns Firecracker, writes `console.log`, and records the exit status in
+  `exit.json`. The API controls the VM through the shim's socket.
+- API startup settles VMs left active by the previous run from evidence
+  (live shim, `exit.json`) instead of marking them all `stopped`, and
+  re-applies their networking ([#123]).
+- Each VM's shim runs in its own `firecrab-vm-<id>.service` unit started by
+  the network helper, so VMs survive API restarts and upgrades ([#123]). The
+  child-process launcher and `FIRECRAB_VM_LAUNCHER` are gone; a leftover value
+  is logged and ignored. Running the API from a checkout on Linux now goes
+  through `scripts/dev-net-helper.sh`, which stages both binaries as root.
+- A VM stopped from outside the API (`systemctl stop` of its unit, a host
+  shutdown) is recorded `stopped` rather than `error`; a start right after a
+  stop no longer fails on the previous unit's name; a VM left `stopping` by an
+  API restart is killed if it ignores SIGTERM; and `$` in a VM's paths reaches
+  its unit unexpanded ([#123]).
+- `tower-http` is updated to 0.7.1 ([#318]).
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- The API systemd unit starts even when a stopped/failed helper has removed
+  `/run/firecrab`, allowing network diagnostics and recovery retries. This unit
+  change requires existing installations to rerun `install.sh` once ([#123]).
+- API startup detects and repairs owned nft rule drift even with an unchanged
+  helper cache, DHCP file/process drift at the same lease revision, and TAP/
+  bridge/forwarding drift. Recovery makes three attempts; lifetime QA checks
+  guest ping, SSH and forwarded HTTP across restart and injected failures ([#123]).
+- `exit` or `logout` in a reattached serial console no longer receives replayed
+  terminal queries: replay omits complete queries and starts after the last guest
+  session boundary, while the full transcript stays in the log API ([#368]).
+- A custom image registered in the host-local MicroRegistry can be installed
+  again after its template is deleted ([#333]).
+- On macOS, `service stop` waits for the management VM to exit, force-stops it
+  after 20 seconds, and reports a timeout after 40; the management VM keeps a
+  stable MAC address across boots ([#330], [#331]).
+- Guest SSH initialization uses explicit utility paths, so OCI guests start
+  key-only root SSH with a minimal `PATH` ([#324]).
+- OCI imports read RPM headers from Fedora SQLite databases, retry registry
+  connection failures within the inspection deadline, bound guest package
+  installation retries, and keep dual-stack DHCP ([#358], [#359], [#360]).
+- `firecrab service uninstall` and `install.sh --uninstall` stop running MicroVMs before they
+  remove the services. A VM's unit outlives the API on purpose, so its shim and Firecracker
+  process used to keep running after an uninstall, and after `--purge` they ran on with their
+  disks deleted ([#378]).
+- Uninstall removes `extract-vmlinux` and `extract-arm64-image`, so `/usr/local/lib/firecrab`
+  goes with the rest of the install instead of staying behind holding those two scripts
+  ([#378]).
+- Deleting a MicroNetwork, and uninstalling, remove the iptables NAT MASQUERADE rules for its
+  subnet. They used to stay on the host until a reboot ([#378]).
+- `firecrab-helper --teardown`, and so uninstall, also deletes the UFW rules that name a
+  Firecrab bridge, including the route rule that carries the uplink and was never deleted
+  ([#378]).
+- Uninstall restores what the installer recorded: the `/dev/kvm` ACL it added, and IPv4/IPv6
+  forwarding on a host that had it off. Forwarding stays on while another bridge or container
+  network exists, and a host installed before the record existed keeps both until a reboot
+  ([#378]).
+
+### Improved
+
+- Contributor guide, READMEs, architecture diagrams, and PR-body guidance are
+  simplified and updated for the per-VM shim and VM lifetime ([#314], [#315]).
+
+## [0.3.0] - 2026-09-29
+
+firecrab adds microManager on macOS and Windows, SPDX SBOMs for OCI imports,
+native init support for imported guests, and host platform diagnostics.
+
+microManager still provisions verified Firecrab v0.2.2 guest artifacts. On WSL2,
+that pinned guest cannot yet start MicroVMs; the net-helper fixes below will
+reach it when a newer guest bundle is pinned.
+
+### Added
+
+- Apple silicon macOS releases include an entitlement-signed `microManager`
+  helper exposed through `firecrab service`. Install pins and verifies Debian 13,
+  Firecracker v1.17.0, and Firecrab v0.2.2 artifacts; provisions separate OS and
+  persistent data disks; requires usable nested KVM and a real Firecracker workload
+  boot; and starts a launchd-resident VM with a key-only localhost API tunnel.
+  Reinstall and ordinary uninstall preserve managed data, while explicit
+  `uninstall --purge` removes it. The complete path is validated on Apple M5 with
+  macOS 26.6.2; other M3-or-later hosts remain runtime and E2E gated ([#266]).
+- Public documentation lists the shared Linux, macOS, and Windows QA work
+  list ([#266]).
+- On macOS, the microManager daemon also serves running VMs' TCP port
+  forwards on `127.0.0.1:<hostPort>` over the management SSH connection;
+  UDP forwards stay reachable at the management VM address ([#266]).
+- `firecrab service install` and `reinstall` list each pending download's
+  mirror, digest, and size on a terminal and ask first (`--yes` skips it),
+  then draw a progress gauge; an interrupted download resumes on the next
+  run ([#266]).
+- Windows x86_64 and ARM64 CLIs can manage a Debian WSL2 distribution with a
+  per-user scheduled task, localhost API, and the same install, doctor, and
+  service commands. The x86_64 path has been validated in a Windows 11 lab;
+  ARM64 installation remains unverified on native hardware ([#295]).
+- `firecrab service debug` reports host capability, service, guest, API,
+  provisioning, and log state without starting a stopped guest. It supports
+  JSON output and bounded log excerpts on macOS and Windows ([#312]).
+- OCI imports generate SPDX SBOMs from guest package databases ([#210]).
+- The host API exposes platform information for Linux, macOS, and Windows
+  hosts ([#297]).
+
+### Changed
+
+- OCI imports preserve supported native init systems and use the BusyBox
+  fallback only when no supported native init is available ([#290]).
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- `exit` in the web terminal or `firecrab vm console` ends the session instead of
+  silently logging root back in. The guest marks the ended session on its serial
+  console, the API closes the console socket with code `4000` (`session_ended`),
+  the CLI prints `guest session ended` and exits `0`, and the dashboard offers a
+  new session instead of reconnecting ([#303]).
+- Catalog Alpine VMs start again after a stop. VM start no longer mistakes the
+  `/etc/firecrab` directory the SSH service creates for an OCI import and
+  overwrites the template's inittab; VMs already hit by this must be recreated
+  ([#306]).
+- The macOS management guest installs `fakeroot`, and a missing binary is
+  reported as such, so OCI import can pack ext4 without a false missing-tree
+  error ([#266]).
+- On macOS, a dropped API tunnel reconnects instead of restarting the
+  management VM and every microVM in it; an `uninstall --purge` refused for an
+  unsafe path no longer stops the service first; `install` no longer hangs when
+  the provisioning guest never powers off; the management guest no longer boots
+  degraded by the packaged `dnsmasq.service`; and status output no longer
+  panics when stdout is non-blocking ([#266]).
+- The net-helper keeps per-VM L2 rules in `netdev` tables and binds dnsmasq
+  only to MicroNetwork bridges, avoiding WSL2's missing nftables `bridge`
+  family and loopback DNS listener collision ([#294]).
+- Host disk usage is measured on the filesystem containing the VM directory
+  ([34193f5]).
+
+### Improved
+
+- The dashboard Host view identifies the reported host OS with its platform
+  icon ([#297]).
+
+## [0.2.2] - 2026-09-15
+
+firecrab adds standalone CLI cleanup, improves OCI package portability and
+release documentation, and hardens network teardown testing.
+
+### Added
+
+- The standalone CLI installer supports `--uninstall`. Adding `--purge` also
+  removes saved host profiles and the configuration file ([#272]).
+
+### Changed
+
+- Standalone CLI host profiles now default to `~/.firecrab/config.toml`, avoiding
+  collisions with a source checkout ([#272]).
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- The CLI documentation's Mermaid edge label now renders correctly on GitHub
+  ([#272]).
+- OCI imports no longer time out halfway through guest package configuration
+  when an apt mirror is slow or unreachable; the guest setup timeout now
+  covers the full package-manager operation ([#269]).
+- OCI-cached kernels are packaged under a portable kernel/ archive member
+  instead of exposing the internal .oci/kernel/ cache path ([88ba35d]).
+
+### Improved
+
+- Installation and CLI documentation now cover the new configuration path and
+  uninstall commands ([#272]).
+- Network bridge teardown control flow is easier to exercise with deterministic
+  tests ([#270]).
+- README test instructions now include formatting, Clippy, coverage, frontend,
+  documentation-link, and changelog checks ([729bb47]).
+
+## [0.2.1] - 2026-09-14
+
+firecrab hardens OCI import against slow mirrors and hardened base images, and
+stabilizes release and coverage CI.
 
 ### Added
 
@@ -30,11 +356,122 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
-- None.
+- OCI imports no longer freeze the guest console on an unreachable apt mirror;
+  `apt-get update`/`install` inside guest `sysinit` is bounded by a hard
+  wall-clock timeout ([#262]).
+- OCI import no longer wedges after importing a hardened image (e.g.
+  `fedora:46`) with non-writable directories or unreadable files; scratch
+  cleanup chmods before removal, and merged files guarantee owner-read so
+  `mkfs.ext4` can copy them ([#263]).
+- Release smoke tests retry Unpack tools package-manager installs to absorb
+  transient mirror hiccups ([#264]).
+- VM start tests no longer flake under coverage instrumentation; `wait_for_state`'s
+  real-time budget is widened ([#265]).
 
 ### Improved
 
 - None.
+
+## [0.2.0] - 2026-09-03
+
+firecrab adds optional IPv6 networking, managed SSH access, a cross-platform remote
+CLI, expanded host operations, and kernel lifecycle management, while hardening guest
+provisioning, compliance artifacts, and release validation.
+
+### Added
+
+- MicroNetworks accept an optional IPv6 `/64` at create time (`ipv6Cidr`,
+  `ipv6AddressMode` SLAAC or DHCPv6). Unique-local prefixes use NAT66, global
+  prefixes are forwarded untranslated, and existing IPv4-only networks stay
+  IPv4-only ([#146], [#178]).
+- The dashboard Networks create form has an IPv6 select, list column, and
+  detail panel ([#178]).
+- The serial console inspect rail is four equal cards with a bottom toggle,
+  and the network card shows the guest IPv6 address ([#183], [#184]).
+- OCI imports install OpenSSH and drop a minimal sshd service that generates
+  host keys on first boot ([#186]).
+- Every guest provisions an ed25519 operator key pair in its storage directory
+  and authorizes its public key inside the rootfs ([#186]).
+- `GET /api/vms/:id/ssh-key` exposes the operator private key, and `GET
+  /api/vms/:id/ssh-host-key` verifies the guest host-key fingerprint via
+  SHA-256 against authorized runtime state ([#186]).
+- The dashboard introduces an SSH connect panel (accessible via the VM actions
+  menu, VM detail modal, and serial console tabs) with masked private key
+  preview, clipboard copy commands, and host fingerprint verification ([#186]).
+- VM table row actions are reorganized into a kebab dropdown menu with direct
+  SSH connect ([#186]).
+- [`public-docs/guides/dashboard.md`](public-docs/guides/dashboard.md),
+  [`public-docs/reference/api.md`](public-docs/reference/api.md), and
+  [`public-docs/guides/oci.md`](public-docs/guides/oci.md) document the SSH connect panel,
+  endpoints, and guest sshd service ([#186]).
+- Host release archives include `LICENSE`, `THIRD_PARTY_NOTICES.txt`, the
+  license inventory, and the GPL-2.0 text required by `extract-vmlinux`;
+  `install.sh` installs them under `$PREFIX/share/firecrab` ([#176], [#190]).
+- M2Image packages ship SPDX 2.3 SBOMs and matching corresponding-source
+  archives, and catalog publication refuses a binary without its source
+  sibling ([#176], [#190]).
+- Host API VM, network, image, and console operations in `firecrab-cli`, plus CLI
+  service-management helpers ([1ffba72], [8bcc2af]).
+- Standalone Linux, macOS, and Windows clients manage saved API or SSH host profiles
+  under `~/firecrab/config.toml` and run remote VM, network, image, and console
+  operations ([#254]).
+- Digest-pinned kernel catalog management and per-image kernel updates in the API and
+  dashboard ([37075bf], [1a44619], [664d446]).
+
+### Changed
+
+- CI fails on any new Clippy warning instead of maintaining a warning baseline
+  ([76f6ef3]).
+- A GitHub Release is titled `firecrab v<tag>`, and its body no longer repeats that title
+  ([45790c3]).
+- The pinned Rust toolchain is 1.97.1 (`rust-toolchain.toml`) ([#131], [#188]).
+- `install.sh` rejects a prepared payload that is missing the compliance artifacts
+  ([#190]).
+- CLI releases include native Linux, macOS, and Windows archives with checksum-verified
+  user-level POSIX and PowerShell installers ([#254]).
+
+### Deprecated
+
+- None.
+
+### Fixed
+
+- Existing and newly provisioned guests recover missing network-ready units through
+  repaired symlinks and distro-specific fallbacks ([73d5fe1], [a8152a4]).
+- OCI imports install `udev` on apt-based and zypper-based images that need it for
+  systemd-based guests ([3bc13d0]).
+- Dashboard field errors use the same styling outside form fields ([3b910c9]).
+- Serial consoles print a session-ended banner before respawning a guest shell after
+  `exit`, making the new session boundary visible for both agetty and BusyBox fallback
+  consoles ([#232]).
+- Release notes credit the commits between the previous release and this tag ([45790c3]).
+- Shorthand references resolve, and in-repo document links point at the released tag
+  ([45790c3]).
+- IPv6 prefixes are allowlisted to `/64` unique-local or global, and the host
+  uplink keeps RA so the default route is not dropped ([#178]).
+- Reassigning VM storage preserves the existing operator key pair instead of
+  regenerating a mismatched key ([#186]).
+- OCI SSH daemon starts and verifies connectivity on dual-stack IPv4/IPv6 networks
+  ([#186]).
+- Fake Firecracker spawns in test suites retry on transient `ETXTBSY` ([#186]).
+- Host and M2Image packaging fail closed on missing, incompatible, or tampered
+  license and source material ([#190]).
+- `firecrab-cli` builds cleanly with zero Clippy warnings ([#194]).
+- Microboot test startup eliminates timing flakes ([#208]).
+- CLI installers reject non-HTTPS release sources; local `file://` fixtures require an
+  explicit test-only opt-in ([#254]).
+
+### Improved
+
+- README architecture guidance is condensed into a layered diagram and a shorter
+  first-time-reader flow ([677cbef], [77e7347], [4360419]).
+- CLI-only installation is documented alongside the prepared host payload flow
+  ([c27e516]).
+- CLI-only installation verifies the separately published checksum before executing a
+  downloaded POSIX or PowerShell installer ([#254]).
+- Networking, API, and dashboard docs cover IPv6 create-time choice, NAT66 vs
+  direct egress, and guest sysctl ([#178]).
+- [`public-docs/development/ci.md`](public-docs/development/ci.md) documents the Clippy gate ([#198]).
 
 ## [0.1.2] - 2026-08-21
 
@@ -45,9 +482,9 @@ place, and OCI import provisions its own kernel instead of borrowing a guest ima
 
 - OCI import pairs a digest-pinned MicroRegistry kernel, cached at `.oci/kernel/<arch>/` ([#145]).
 - `FIRECRAB_OCI_KERNEL_PATH` names a host copy of that kernel ([#145]).
-- [`public-docs/oci.md`](public-docs/oci.md) gains a contents table and an import architecture diagram ([#145]).
+- [`public-docs/guides/oci.md`](public-docs/guides/oci.md) gains a contents table and an import architecture diagram ([#145]).
 - `firecrab-cli` workspace crate ships `firecrab doctor`/`info`/`status` ([#152], [#152-comment]).
-- [`public-docs/firecrab-cli.md`](public-docs/firecrab-cli.md) documents the CLI's architecture and all three subcommands ([#152]).
+- [`public-docs/reference/cli.md`](public-docs/reference/cli.md) documents the CLI's architecture and all three subcommands ([#152]).
 - Left nav rail gets solid SVG icons matched to each feature (MicroVM, Networks, Storage, Images, Host), replacing Unicode glyphs ([#165]).
 - `firecrab update --check` compares the installed version with the newest GitHub Release, with human-readable and JSON output ([#163], [#171]).
 - `firecrab update --apply` verifies the matching host bundle and delegates an atomic privileged swap to `firecrab-net-helper` ([#163], [#171]).
@@ -216,14 +653,22 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.1.2...main
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.3.1...main
+[0.3.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1
+[0.3.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.0
+[0.2.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.2
+[0.2.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.1
+[0.2.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.0
 [0.1.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.2
 [0.1.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.1
 [0.1.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.1.0
+[#131]: https://github.com/SteelCrab/firecrab/issues/131
+[#140]: https://github.com/SteelCrab/firecrab/issues/140
 [#141]: https://github.com/SteelCrab/firecrab/issues/141
 [#142]: https://github.com/SteelCrab/firecrab/issues/142
 [#143]: https://github.com/SteelCrab/firecrab/issues/143
 [#145]: https://github.com/SteelCrab/firecrab/pull/145
+[#146]: https://github.com/SteelCrab/firecrab/issues/146
 [#147]: https://github.com/SteelCrab/firecrab/issues/147
 [#147-comment]: https://github.com/SteelCrab/firecrab/issues/147#issuecomment-5327667852
 [#151]: https://github.com/SteelCrab/firecrab/pull/153
@@ -236,6 +681,70 @@ network helper.
 [#171]: https://github.com/SteelCrab/firecrab/pull/171
 [#174]: https://github.com/SteelCrab/firecrab/issues/174
 [#175]: https://github.com/SteelCrab/firecrab/pull/175
+[#176]: https://github.com/SteelCrab/firecrab/issues/176
+[#178]: https://github.com/SteelCrab/firecrab/pull/178
+[#183]: https://github.com/SteelCrab/firecrab/issues/183
+[#184]: https://github.com/SteelCrab/firecrab/pull/184
+[#186]: https://github.com/SteelCrab/firecrab/pull/186
+[#188]: https://github.com/SteelCrab/firecrab/pull/188
+[#189]: https://github.com/SteelCrab/firecrab/pull/189
+[#190]: https://github.com/SteelCrab/firecrab/pull/190
+[#194]: https://github.com/SteelCrab/firecrab/pull/194
+[#198]: https://github.com/SteelCrab/firecrab/pull/198
+[#208]: https://github.com/SteelCrab/firecrab/pull/208
+[#210]: https://github.com/SteelCrab/firecrab/pull/210
+[#232]: https://github.com/SteelCrab/firecrab/pull/232
+[#254]: https://github.com/SteelCrab/firecrab/pull/254
+[#262]: https://github.com/SteelCrab/firecrab/pull/262
+[#263]: https://github.com/SteelCrab/firecrab/pull/263
+[#264]: https://github.com/SteelCrab/firecrab/pull/264
+[#265]: https://github.com/SteelCrab/firecrab/pull/265
+[#266]: https://github.com/SteelCrab/firecrab/issues/266
+[#269]: https://github.com/SteelCrab/firecrab/pull/269
+[#270]: https://github.com/SteelCrab/firecrab/pull/270
+[#272]: https://github.com/SteelCrab/firecrab/pull/272
+[#287]: https://github.com/SteelCrab/firecrab/pull/287
+[#290]: https://github.com/SteelCrab/firecrab/pull/290
+[#294]: https://github.com/SteelCrab/firecrab/pull/294
+[#295]: https://github.com/SteelCrab/firecrab/pull/295
+[#297]: https://github.com/SteelCrab/firecrab/pull/297
+[#303]: https://github.com/SteelCrab/firecrab/issues/303
+[#306]: https://github.com/SteelCrab/firecrab/issues/306
+[#312]: https://github.com/SteelCrab/firecrab/pull/312
+[#314]: https://github.com/SteelCrab/firecrab/pull/314
+[#315]: https://github.com/SteelCrab/firecrab/pull/315
+[#318]: https://github.com/SteelCrab/firecrab/pull/318
+[#324]: https://github.com/SteelCrab/firecrab/pull/324
+[#330]: https://github.com/SteelCrab/firecrab/pull/330
+[#331]: https://github.com/SteelCrab/firecrab/pull/331
+[#332]: https://github.com/SteelCrab/firecrab/pull/332
+[#333]: https://github.com/SteelCrab/firecrab/pull/333
+[#343]: https://github.com/SteelCrab/firecrab/pull/343
+[#351]: https://github.com/SteelCrab/firecrab/pull/351
+[#358]: https://github.com/SteelCrab/firecrab/pull/358
+[#359]: https://github.com/SteelCrab/firecrab/pull/359
+[#360]: https://github.com/SteelCrab/firecrab/pull/360
+[#368]: https://github.com/SteelCrab/firecrab/pull/368
+[#378]: https://github.com/SteelCrab/firecrab/pull/378
+[#123]: https://github.com/SteelCrab/firecrab/issues/123
+[88ba35d]: https://github.com/SteelCrab/firecrab/commit/88ba35d
+[34193f5]: https://github.com/SteelCrab/firecrab/commit/34193f5
+[729bb47]: https://github.com/SteelCrab/firecrab/commit/729bb47
+[1ffba72]: https://github.com/SteelCrab/firecrab/commit/1ffba72
+[8bcc2af]: https://github.com/SteelCrab/firecrab/commit/8bcc2af
+[37075bf]: https://github.com/SteelCrab/firecrab/commit/37075bf
+[1a44619]: https://github.com/SteelCrab/firecrab/commit/1a44619
+[664d446]: https://github.com/SteelCrab/firecrab/commit/664d446
+[73d5fe1]: https://github.com/SteelCrab/firecrab/commit/73d5fe1
+[a8152a4]: https://github.com/SteelCrab/firecrab/commit/a8152a4
+[3bc13d0]: https://github.com/SteelCrab/firecrab/commit/3bc13d0
+[3b910c9]: https://github.com/SteelCrab/firecrab/commit/3b910c9
+[76f6ef3]: https://github.com/SteelCrab/firecrab/commit/76f6ef3
+[c27e516]: https://github.com/SteelCrab/firecrab/commit/c27e516
+[677cbef]: https://github.com/SteelCrab/firecrab/commit/677cbef
+[77e7347]: https://github.com/SteelCrab/firecrab/commit/77e7347
+[4360419]: https://github.com/SteelCrab/firecrab/commit/4360419
 [2493c7d]: https://github.com/SteelCrab/firecrab/commit/2493c7d
 [7eb6740]: https://github.com/SteelCrab/firecrab/commit/7eb6740
 [322e95c]: https://github.com/SteelCrab/firecrab/commit/322e95c
+[45790c3]: https://github.com/SteelCrab/firecrab/commit/45790c3

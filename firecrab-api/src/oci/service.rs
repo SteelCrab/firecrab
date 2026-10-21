@@ -90,7 +90,7 @@ pub(super) fn install_oci_service(
 fn render_service(process: &OciProcessConfig, argv: &[&str]) -> String {
     let mut script = format!(
         "#!{GUEST_TOOLBOX} sh\n\
-         # Firecrab service for the imported image entrypoint (public-docs/oci.md).\n\
+         # Firecrab service for the imported image entrypoint (public-docs/guides/oci.md).\n\
          # This is not PID 1. The injected init keeps DHCP and the readiness sentinel.\n"
     );
     if !process.working_dir.is_empty() {
@@ -221,10 +221,10 @@ fn vm_env_insertion_index(script: &str) -> usize {
         }
         pos += line.len();
     }
-    if let Some(after_export) = last_export_end {
-        if exec_start.is_none_or(|exec| after_export <= exec) {
-            return after_export;
-        }
+    if let Some(after_export) = last_export_end
+        && exec_start.is_none_or(|exec| after_export <= exec)
+    {
+        return after_export;
     }
     exec_start.unwrap_or(script.len())
 }

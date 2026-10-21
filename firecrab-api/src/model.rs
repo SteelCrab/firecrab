@@ -16,13 +16,15 @@ pub use firecrab_api_types::{StartupStep, StartupStepOutcome, StartupStepRun};
 pub use firecrab_helper_protocol::network::MacAddr;
 
 /// An active IPv4 + MAC assignment for one VM, drawn from the shared bridge
-/// subnet (see `firecrab-net-helper/src/bridge.rs`).
+/// subnet (see `firecrab-helper/src/bridge.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Lease {
     /// The VM this lease belongs to.
     pub vm_id: Uuid,
     /// Allocated IPv4 address.
     pub ipv4: Ipv4Addr,
+    /// Allocated IPv6 address, when the VM's MicroNetwork is dual-stack.
+    pub ipv6: Option<std::net::Ipv6Addr>,
     /// Allocated MAC address.
     pub mac: MacAddr,
 }

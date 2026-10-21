@@ -25,7 +25,7 @@ jobs:
         run: rustup show
 
       - name: Install dnsmasq
-        # firecrab-net-helper's dhcp.rs tests shell out to the real
+        # firecrab-helper's dhcp.rs tests shell out to the real
         # `dnsmasq --test` to validate generated configs — not preinstalled
         # on the runner image.
         run: sudo apt-get update && sudo apt-get install -y dnsmasq
@@ -34,6 +34,9 @@ jobs:
         # Catches release-only bugs (overflow checks off, different codegen)
         # before they reach a tagged build.
         run: cargo test --workspace --release --locked
+
+      - name: CLI installer contract
+        run: bash scripts/test-install-cli-release.sh
 
   build-release:
     name: Build (${{ matrix.target }})
@@ -79,7 +82,7 @@ jobs:
       - name: cargo build --release
         run: |
           cargo build --release --locked --target ${{ matrix.target }} \
-            -p firecrab-api -p firecrab-net-helper -p firecrab-cli
+            -p firecrab-api -p firecrab-helper -p firecrab-cli
 
       - name: Verify release binaries
         run: |
@@ -88,21 +91,143 @@ jobs:
           ./scripts/verify-release-binary.sh \
             "target/${{ matrix.target }}/release/firecrab-api" "${{ matrix.arch }}" "$libc"
           ./scripts/verify-release-binary.sh \
-            "target/${{ matrix.target }}/release/firecrab-net-helper" "${{ matrix.arch }}" "$libc"
+            "target/${{ matrix.target }}/release/firecrab-helper" "${{ matrix.arch }}" "$libc"
           ./scripts/verify-release-binary.sh \
             "target/${{ matrix.target }}/release/firecrab" "${{ matrix.arch }}" "$libc"
 
       - name: Package binaries
         run: |
           cd target/${{ matrix.target }}/release
+          install -m 0755 firecrab-helper firecrab-net-helper
           tar -czvf ../../../firecrab-${{ matrix.target }}.tar.gz \
-            firecrab-api firecrab-net-helper firecrab
+            firecrab-api firecrab-helper firecrab-net-helper firecrab
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: firecrab-${{ matrix.target }}
           path: firecrab-${{ matrix.target }}.tar.gz
+
+  build-cli:
+    name: CLI (${{ matrix.target }})
+    needs: [release-test, license-compliance]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            asset: firecrab-cli-x86_64-linux-musl.tar.gz
+            musl: true
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+            asset: firecrab-cli-x86_64-linux-gnu.tar.gz
+            musl: false
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            asset: firecrab-cli-aarch64-linux-musl.tar.gz
+            musl: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            asset: firecrab-cli-aarch64-linux-gnu.tar.gz
+            musl: false
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            asset: firecrab-cli-aarch64-macos.tar.gz
+            musl: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            asset: firecrab-cli-x86_64-windows.zip
+            musl: false
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            asset: firecrab-cli-aarch64-windows.zip
+            musl: false
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download compliance material
+        uses: actions/download-artifact@v8
+        with:
+          name: firecrab-license-compliance
+          path: compliance
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install musl linker
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Test CLI
+        run: cargo test --release --locked --target ${{ matrix.target }} -p firecrab-cli
+
+      - name: Build CLI
+        run: cargo build --release --locked --target ${{ matrix.target }} -p firecrab-cli
+
+      - name: Build and sign macOS microManager helper
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: scripts/build-micromanager-macos.sh target/${{ matrix.target }}/release/firecrab-micromanager-macos
+
+      - name: Smoke CLI on Unix
+        if: runner.os != 'Windows'
+        run: ./target/${{ matrix.target }}/release/firecrab --version
+
+      - name: Smoke macOS microManager diagnostics
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          helper=target/${{ matrix.target }}/release/firecrab-micromanager-macos
+          codesign --verify --strict "$helper"
+          set +e
+          "$helper" doctor --json
+          rc=$?
+          set -e
+          test "$rc" -eq 0 -o "$rc" -eq 1
+
+      - name: Package CLI on Unix
+        if: runner.os != 'Windows'
+        run: |
+          mkdir package
+          cp target/${{ matrix.target }}/release/firecrab package/
+          cp LICENSE package/
+          cp compliance/THIRD_PARTY_NOTICES.txt package/
+          cp compliance/release-license-inventory.json package/
+          members=(firecrab LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json)
+          if [ "${{ matrix.target }}" = aarch64-apple-darwin ]; then
+            cp target/${{ matrix.target }}/release/firecrab-micromanager-macos package/
+            members+=(firecrab-micromanager-macos)
+          fi
+          tar -czf "${{ matrix.asset }}" -C package "${members[@]}"
+
+      - name: Test and smoke CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/test-install-cli.ps1
+          & "target/${{ matrix.target }}/release/firecrab.exe" --version
+
+      - name: Package CLI on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/firecrab.exe" package/
+          Copy-Item LICENSE package/
+          Copy-Item compliance/THIRD_PARTY_NOTICES.txt package/
+          Copy-Item compliance/release-license-inventory.json package/
+          Compress-Archive -Path package/* -DestinationPath "${{ matrix.asset }}"
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firecrab-cli-${{ matrix.target }}
+          path: ${{ matrix.asset }}
 
   build-dashboard:
     name: Build dashboard
@@ -111,7 +236,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -129,9 +254,101 @@ jobs:
           name: firecrab-dashboard
           path: firecrab-frontend/dist
 
+  license-compliance:
+    name: Release license compliance
+    needs: release-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: firecrab-frontend/package-lock.json
+
+      - name: Fetch dependency sources
+        run: cargo fetch --locked
+
+      - name: Install frontend runtime dependencies
+        run: npm ci --omit=dev
+        working-directory: firecrab-frontend
+
+      - name: Install M2Image compliance test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y e2fsprogs zstd shellcheck
+
+      - name: Compliance unit tests
+        run: |
+          python3 -m unittest \
+            scripts/test_release_compliance.py \
+            scripts/test_m2image_sbom.py \
+            scripts/test_m2image_compliance.py \
+            scripts/test_m2image_source_publication.py \
+            scripts/test_fetch_m2image_sources.py
+
+      - name: M2Image release compliance contracts
+        run: |
+          shellcheck \
+            install-cli.sh \
+            scripts/build-micromanager-macos.sh \
+            scripts/test-install-cli-release.sh \
+            scripts/collect-m2image-compliance.sh \
+            scripts/package-m2images.sh \
+            scripts/package-m2image-sources.sh \
+            scripts/publish-m2images-r2.sh \
+            scripts/test-m2image-package-compliance.sh \
+            scripts/test-m2image-source-package.sh \
+            scripts/test-m2image-source-publish.sh
+          bash scripts/test-m2image-package-compliance.sh
+          bash scripts/test-m2image-source-package.sh
+          bash scripts/test-m2image-source-publish.sh
+
+      - name: Generate release license inventory
+        run: |
+          set -euo pipefail
+          targets=(
+            x86_64-unknown-linux-musl
+            x86_64-unknown-linux-gnu
+            aarch64-unknown-linux-musl
+            aarch64-unknown-linux-gnu
+            aarch64-apple-darwin
+            x86_64-pc-windows-msvc
+            aarch64-pc-windows-msvc
+          )
+          metadata_args=()
+          for target in "${targets[@]}"; do
+            path="cargo-metadata-${target}.json"
+            cargo metadata --format-version=1 --locked \
+              --filter-platform "$target" > "$path"
+            metadata_args+=(--cargo-metadata "$path")
+          done
+          python3 scripts/release_compliance.py \
+            "${metadata_args[@]}" \
+            --frontend-lock firecrab-frontend/package-lock.json \
+            --frontend-root firecrab-frontend \
+            --notices-out dist/compliance/THIRD_PARTY_NOTICES.txt \
+            --inventory-out dist/compliance/release-license-inventory.json \
+            --deny-incompatible
+
+      - name: Host archive compliance contract
+        run: bash scripts/test-host-release-compliance.sh
+
+      - name: Upload compliance artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firecrab-license-compliance
+          path: dist/compliance
+
   package-host:
     name: Host bundle (${{ matrix.arch }} ${{ matrix.libc }})
-    needs: [build-release, build-dashboard]
+    needs: [build-release, build-dashboard, license-compliance]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -163,13 +380,29 @@ jobs:
           name: firecrab-dashboard
           path: dashboard
 
+      - name: Download compliance material
+        uses: actions/download-artifact@v8
+        with:
+          name: firecrab-license-compliance
+          path: compliance
+
       - name: Pack firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz
         run: |
           mkdir -p bins
           tar -xzf bins-tar/firecrab-${{ matrix.target }}.tar.gz -C bins
           ./scripts/package-host-release.sh \
             "${{ matrix.arch }}" bins dashboard \
-            "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz"
+            "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz" \
+            compliance
+
+      - name: Verify host compliance members
+        run: |
+          set -euo pipefail
+          tar -tzf "firecrab-host-${{ matrix.arch }}-${{ matrix.libc }}.tar.gz" > members.txt
+          for path in LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json \
+              licenses/GPL-2.0-only.txt extract-vmlinux; do
+            grep -qx "$path" members.txt || { echo "missing $path" >&2; exit 1; }
+          done
 
       - name: Upload host bundle
         uses: actions/upload-artifact@v7
@@ -194,15 +427,35 @@ jobs:
     steps:
       - name: Unpack tools
         # git: actions/checkout in the container. timeout(1): smoke-release-exec.sh.
+        # Retries absorb transient mirror hiccups (same helper as ci.yml's
+        # installer-deps bootstrap step).
         run: |
+          retry() {
+            n=0
+            until [ "$n" -ge 5 ]; do
+              "$@" && return 0
+              n=$((n + 1))
+              echo "retrying ($n/5): $*" >&2
+              sleep 5
+            done
+            return 1
+          }
+
           if command -v apt-get >/dev/null; then
-            apt-get update -qq && apt-get install -y -qq tar gzip git ca-certificates coreutils
+            retry apt-get update -qq && retry apt-get install -y -qq tar gzip git ca-certificates coreutils
           elif command -v dnf >/dev/null; then
-            dnf install -y -q tar gzip git ca-certificates
+            retry dnf install -y -q tar gzip git ca-certificates
           elif command -v pacman >/dev/null; then
-            pacman -Sy --noconfirm --needed tar gzip git ca-certificates
+            retry pacman -Sy --noconfirm --needed tar gzip git ca-certificates
           elif command -v zypper >/dev/null; then
-            zypper --non-interactive install --no-recommends tar gzip git ca-certificates
+            # Read metadata and packages from the same origin: redirected
+            # mirrors can lag behind repomd.xml and return 404 even after a
+            # forced refresh. Keep HTTPS for every repository.
+            sed -i \
+              -e 's#^baseurl=http://#baseurl=https://#' \
+              -e 's#//download\.opensuse\.org/#//downloadcontent.opensuse.org/#g' \
+              /etc/zypp/repos.d/*.repo
+            retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends tar gzip git ca-certificates'
           fi
         shell: sh -e {0}
 
@@ -274,6 +527,7 @@ jobs:
     name: Publish GitHub Release
     needs:
       - build-release
+      - build-cli
       - package-host
       - smoke-host-x86_64-gnu
       - smoke-host-aarch64
@@ -296,6 +550,13 @@ jobs:
           mkdir -p dist
           find artifacts -type f -name 'firecrab-host-*.tar.gz' -print
           find artifacts -type f -name 'firecrab-host-*.tar.gz' -exec cp -t dist {} +
+          find artifacts -type f \( -name 'firecrab-cli-*.tar.gz' -o -name 'firecrab-cli-*.zip' \) -print
+          find artifacts -type f \( -name 'firecrab-cli-*.tar.gz' -o -name 'firecrab-cli-*.zip' \) -exec cp -t dist {} +
+          cp artifacts/firecrab-license-compliance/THIRD_PARTY_NOTICES.txt dist/
+          cp artifacts/firecrab-license-compliance/release-license-inventory.json dist/
+          cp LICENSE dist/LICENSE
+          cp licenses/GPL-2.0-only.txt dist/GPL-2.0-only.txt
+          cp install-cli.sh install-cli.ps1 dist/
           ./scripts/bake-install-sh.sh "${GITHUB_REF_NAME}" dist/install.sh
           (cd dist && sha256sum ./* > SHA256SUMS)
           ls -l dist
@@ -303,21 +564,9 @@ jobs:
 
       - name: Release notes
         id: notes
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Credit this release only. The repo-wide contributors endpoint is
-          # all-time, so it re-lists everyone who ever landed a commit.
-          PREVIOUS=$(python3 scripts/check-changelog.py --previous "${GITHUB_REF_NAME}")
-          if [ -n "$PREVIOUS" ]; then
-            # --paginate: compare returns at most 250 commits per page.
-            gh api "repos/${{ github.repository }}/compare/${PREVIOUS}...${GITHUB_REF_NAME}?per_page=100" \
-              --paginate --jq '.commits[].author.login // empty' > /tmp/contributors.txt
-          else
-            gh api "repos/${{ github.repository }}/contributors" --paginate \
-              --jq '.[].login' > /tmp/contributors.txt
-          fi
+          printf '%s\n' SteelCrab > /tmp/contributors.txt
           python3 scripts/write-release-notes.py \
             --tag "${GITHUB_REF_NAME}" \
             --repo "${{ github.repository }}" \

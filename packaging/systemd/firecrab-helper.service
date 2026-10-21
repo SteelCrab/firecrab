@@ -1,0 +1,70 @@
+[Unit]
+Description=firecrab privileged host helper
+Documentation=https://github.com/pista/firecrab
+# Owns the bridges, TAPs, nftables tables and dnsmasq that the API asks for.
+# Must be listening before the API's startup reconcile runs, or the API only
+# logs a warning and the host side stays unprovisioned until the next VM start.
+After=network-pre.target
+Wants=network-pre.target
+Before=firecrab-api.service
+
+[Service]
+Type=simple
+# root for CAP_NET_ADMIN; the group is what makes the socket reachable — the
+# helper chmods it 0660 and takes its group from this process, so the API's
+# account must be in @FIRECRAB_GROUP@.
+User=root
+Group=@FIRECRAB_GROUP@
+RuntimeDirectory=firecrab
+RuntimeDirectoryMode=0751
+Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
+# The helper derives this host's real install layout from PREFIX and refuses
+# any ApplySelfUpdate whose `layout` field disagrees, so the caller can never
+# aim a root-owned binary swap at a directory of its choosing. Without this
+# line the helper falls back to install.sh's own /usr/local default, which is
+# correct for a default install and wrong for any other prefix — a host
+# installed with a custom PREFIX must re-run install.sh before self-updating.
+Environment=PREFIX=@PREFIX@
+Environment=FIRECRAB_LIBDIR=@LIBDIR@
+Environment=CONFDIR=@CONFDIR@
+Environment=UNITDIR=@UNITDIR@
+ExecStart=@LIBDIR@/firecrab-helper
+Restart=on-failure
+RestartSec=2
+
+# Still uid 0, but with everything it does not use taken away. Each of these is
+# load-bearing; dropping one breaks a specific operation at runtime rather than
+# at startup:
+#   NET_ADMIN         bridges and TAPs over rtnetlink, and the nftables tables
+#   NET_RAW           dnsmasq's raw DHCP sockets
+#   NET_BIND_SERVICE  dnsmasq binds 67 (DHCP) and 53 (DNS)
+#   SETUID, SETGID    dnsmasq drops to an unprivileged user after startup
+#   KILL              signalling dnsmasq once it has dropped to that user:
+#                     SIGHUP to reload, SIGTERM to stop, signal 0 to probe it.
+#                     A uid-0 process with CAP_KILL removed cannot signal a
+#                     process of another uid — the kernel checks the capability,
+#                     not the uid.
+#   CHOWN             dnsmasq hands its pid file to the user it drops to. CI
+#                     caught this one: without it the journal carries "chown of
+#                     PID file /run/firecrab/dnsmasq.pid failed: Operation not
+#                     permitted" on every start.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL CAP_CHOWN
+NoNewPrivileges=yes
+
+# Deliberately mild: this process shells out to nft/ip and supervises dnsmasq,
+# which inherit the namespace. ProtectSystem=strict would take /var with it and
+# break dnsmasq's lease file.
+#
+# ProtectSystem=full makes all of /usr read-only, which is exactly where a
+# self-update has to write. The four extra paths below are the install layout
+# `firecrab update --apply` replaces, plus $DATADIR so the staged bundle can be
+# read and its directory cleaned up afterwards. CapabilityBoundingSet is left
+# alone on purpose: those targets are root:root 0755 and this unit is uid 0, so
+# owner permissions already suffice and CAP_DAC_OVERRIDE stays dropped.
+ProtectHome=yes
+ProtectSystem=full
+ReadWritePaths=/run/firecrab @LIBDIR@ @SHAREDIR@ @PREFIX@/bin @DATADIR@ @CONFDIR@ @UNITDIR@
+
+[Install]
+WantedBy=multi-user.target
+Alias=firecrab-net-helper.service

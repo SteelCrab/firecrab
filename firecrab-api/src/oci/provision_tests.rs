@@ -255,6 +255,11 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
         "first boot should install a small package set: {boot}"
     );
     assert!(
+        boot.contains("openssh-server")
+            || boot.contains("apk add --no-cache") && boot.contains("openssh"),
+        "first boot should install openssh: {boot}"
+    );
+    assert!(
         boot.contains("/run/firecrab/$name.pid"),
         "each services.d entry must get its own pid file: {boot}"
     );
@@ -299,8 +304,21 @@ async fn injecting_a_guest_installs_an_init_the_stock_kernel_command_line_finds(
     }
     assert_eq!(guest_mode(&tree, "/tmp"), 0o1777);
     assert!(tree.join("etc/firecrab/services.d").is_dir());
+    let sshd = read_guest(&tree, crate::guest_ssh::GUEST_SSHD_SERVICE);
+    let sshd = String::from_utf8(sshd).expect("sshd service utf8");
+    assert!(sshd.contains("PermitRootLogin=prohibit-password"), "{sshd}");
+    assert_eq!(
+        guest_mode(&tree, crate::guest_ssh::GUEST_SSHD_SERVICE) & 0o111,
+        0o111
+    );
     // The image's own files are left exactly as they were.
     assert_eq!(read_guest(&tree, "/app/server"), b"binary");
+    assert!(
+        snapshot(&tree)
+            .keys()
+            .all(|path| !path.to_string_lossy().contains(".firecrab-")),
+        "successful provisioning must not leave displaced image backups"
+    );
 }
 
 #[tokio::test]
@@ -469,15 +487,31 @@ async fn an_image_with_agetty_and_bash_uses_the_serial_getty() {
         .expect("inject");
 
     let inittab = String::from_utf8(read_guest(&tree, "/etc/inittab")).expect("inittab");
+    // #223: routed through the agetty wrapper (session-ended banner on
+    // respawn), not a bare `respawn:/usr/sbin/agetty` line.
     assert!(
-        inittab.contains(
-            "ttyS0::respawn:/usr/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
-        ),
+        inittab.contains(&format!(
+            "ttyS0::respawn:{} sh {}",
+            provision::GUEST_TOOLBOX,
+            provision::GUEST_AGETTY_WRAPPER
+        )),
         "{inittab}"
     );
     assert!(
         !inittab.contains("rc.console"),
         "agetty replaces the ash wrapper: {inittab}"
+    );
+    let wrapper =
+        String::from_utf8(read_guest(&tree, provision::GUEST_AGETTY_WRAPPER)).expect("wrapper");
+    assert!(
+        wrapper.contains(
+            "exec /usr/sbin/agetty --autologin root --login-program \"$login_program\" --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
+        ),
+        "{wrapper}"
+    );
+    assert!(
+        wrapper.contains("session ended"),
+        "wrapper must print a session-boundary banner on respawn: {wrapper}"
     );
     let passwd = String::from_utf8(read_guest(&tree, "/etc/passwd")).expect("passwd");
     assert!(
@@ -654,7 +688,7 @@ async fn usr_merged_images_are_provisioned_through_their_symlinked_sbin() {
 }
 
 #[tokio::test]
-async fn a_read_only_usr_sbin_can_still_have_its_init_replaced() {
+async fn a_read_only_usr_sbin_preserves_native_systemd() {
     let directory = tempdir().expect("create fixture directory");
     let mut builder = Builder::new(Vec::new());
     append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
@@ -703,7 +737,7 @@ async fn a_read_only_usr_sbin_can_still_have_its_init_replaced() {
 
     assert_eq!(
         std::fs::read_link(tree.join("usr/sbin/init")).expect("read init link"),
-        Path::new(provision::GUEST_TOOLBOX)
+        Path::new("../lib/systemd/systemd")
     );
     assert!(
         tree.join("usr/lib/systemd/systemd").is_file(),
@@ -1048,6 +1082,70 @@ async fn a_late_failure_restores_an_image_supplied_init() {
 }
 
 #[tokio::test]
+async fn a_late_failure_restores_passwd_and_securetty_edits() {
+    let directory = tempdir().expect("create fixture directory");
+    let mut builder = Builder::new(Vec::new());
+    append_entry(&mut builder, "bin/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "bin/bash",
+        EntryType::Regular,
+        None,
+        b"bash",
+        0o755,
+    );
+    append_entry(&mut builder, "etc/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "etc/passwd",
+        EntryType::Regular,
+        None,
+        b"root:x:0:0:root:/root:/bin/sh\n",
+        0o640,
+    );
+    append_entry(
+        &mut builder,
+        "etc/securetty",
+        EntryType::Regular,
+        None,
+        b"console\n",
+        0o600,
+    );
+    append_entry(&mut builder, "usr/", EntryType::Directory, None, &[], 0o755);
+    append_entry(
+        &mut builder,
+        "usr/local",
+        EntryType::Regular,
+        None,
+        b"not a directory",
+        0o644,
+    );
+    let toolbox = toolbox(&directory, "busybox", &static_program()).await;
+    let merged = merged(&directory, "late-passwd", &finish(builder)).await;
+    let tree = merged.path().to_owned();
+    let before = snapshot(&tree);
+
+    let error = provision::inject_with_toolbox(merged, &toolbox)
+        .await
+        .expect_err("a blocked /usr/local must fail after passwd edits");
+    assert_matches!(
+        error,
+        ResolveError::GuestPathUnusable {
+            reason: GuestPathViolation::NonDirectoryAncestor { .. },
+            ..
+        }
+    );
+    assert_eq!(snapshot(&tree), before);
+    assert_eq!(
+        read_guest(&tree, "/etc/passwd"),
+        b"root:x:0:0:root:/root:/bin/sh\n"
+    );
+    assert_eq!(read_guest(&tree, "/etc/securetty"), b"console\n");
+    assert_eq!(guest_mode(&tree, "/etc/passwd"), 0o640);
+    assert_eq!(guest_mode(&tree, "/etc/securetty"), 0o600);
+}
+
+#[tokio::test]
 async fn a_directory_occupying_a_guest_file_path_is_refused() {
     let directory = tempdir().expect("create fixture directory");
     let mut builder = Builder::new(Vec::new());
@@ -1096,4 +1194,547 @@ async fn a_provisioned_tree_records_the_program_it_will_boot() {
         provisioned.toolbox_digest(),
         &Sha256Digest::of_bytes(&program)
     );
+}
+
+/// `debugfs`-audited: apt-get and zypper images ship no `systemd-udevd`
+/// (issue #225), while dnf-based Rocky already carries it and apk-based
+/// Alpine isn't systemd at all. Pull `udev` in only where it's confirmed
+/// missing and a real, separate package.
+#[test]
+fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
+    let script = provision::BASE_PACKAGE_INSTALL;
+
+    // Each branch's command may wrap onto a continuation line (apt-get's
+    // `\`), so join unindented and compare each `elif` block, not one line.
+    let joined = script.replace("\\\n", " ");
+    let block_with = |needle: &str| {
+        joined
+            .lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line contains {needle:?} in:\n{joined}"))
+    };
+
+    assert!(
+        block_with("PACKAGES=").contains("udev"),
+        "Debian/Ubuntu ship no systemd-udevd on a minimal OCI base — #225"
+    );
+    assert!(
+        block_with("zypper --non-interactive install").contains("udev"),
+        "openSUSE ships no systemd-udevd on a minimal OCI base — #225"
+    );
+
+    // Rocky/RHEL already carries systemd-udev; Alpine isn't systemd; Arch
+    // folds udev into the `systemd` package itself — adding a separate
+    // `udev` package there would 404 and break the whole install chain.
+    for needle in ["dnf install", "microdnf -y install", "yum install"] {
+        assert!(
+            !block_with(needle).contains("udev"),
+            "{needle} line must stay untouched — dnf-family already ships systemd-udev"
+        );
+    }
+    assert!(
+        !block_with("apk add").contains("udev"),
+        "Alpine is not systemd"
+    );
+    assert!(
+        !block_with("pacman -Sy").contains("udev"),
+        "Arch folds udev into the systemd package; a separate `udev` package does not exist"
+    );
+}
+
+/// Execute the generated installer against fake package tools. The timeout
+/// wrapper rejects any attempt to put a dpkg transaction under a deadline.
+#[test]
+fn apt_install_bounds_downloads_but_finishes_interrupted_configuration() {
+    for failed_stage in ["", "update", "download", "configure"] {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let write_tool = |name: &str, body: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        write_tool("dpkg", "echo recover >> \"$TEST_LOG\"; exit 1");
+        write_tool(
+            "timeout",
+            r#"
+echo "timeout $*" >> "$TEST_LOG"
+case " $* " in
+  *" --download-only "*|*" update "*) shift; exec "$@" ;;
+  *) exit 99 ;;
+esac
+"#,
+        );
+        write_tool(
+            "apt-get",
+            r#"
+echo "apt $*" >> "$TEST_LOG"
+case " $* " in
+  *" --download-only "*) [ "$FAILED_STAGE" != download ] ;;
+  *" --no-download "*) [ "$FAILED_STAGE" != configure ] && touch "$TEST_INSTALLED" ;;
+  *" update "*) [ "$FAILED_STAGE" != update ] ;;
+  *) exit 98 ;;
+esac
+"#,
+        );
+        // Only touch is needed from the toolbox on this successful apt branch.
+        write_tool("bb", "exec \"$@\"");
+        let stamp = root.join("base-packages.ok");
+        let log = root.join("commands.log");
+        let installed = root.join("installed");
+        let mut script = provision::BASE_PACKAGE_INSTALL.to_owned();
+        for name in ["apt-get", "dpkg", "timeout"] {
+            script = script.replace(
+                &format!("/usr/bin/{name}"),
+                root.join(name).to_str().unwrap(),
+            );
+        }
+        script = script
+            .replace("/etc/firecrab/base-packages.ok", stamp.to_str().unwrap())
+            // Device writes accumulate; append to the file that stands in for it.
+            .replace(
+                ">/dev/console",
+                &format!(">>{}", root.join("console").display()),
+            );
+        let run = || {
+            std::process::Command::new("sh")
+                .args(["-c", &script])
+                .env("BB", root.join("bb"))
+                .env("TEST_LOG", &log)
+                .env("TEST_INSTALLED", &installed)
+                .env("FAILED_STAGE", failed_stage)
+                .output()
+                .unwrap()
+        };
+        let output = run();
+        assert!(output.status.success(), "{output:?}");
+        let commands = std::fs::read_to_string(&log).unwrap();
+        assert!(commands.starts_with("recover\n"), "{commands}");
+        assert_eq!(
+            commands.matches("timeout 600 ").count(),
+            if failed_stage == "update" { 1 } else { 2 },
+            "{commands}"
+        );
+        assert!(commands.contains("Acquire::ForceIPv4=true"), "{commands}");
+        assert!(
+            commands.contains("APT::Update::Error-Mode=any"),
+            "{commands}"
+        );
+        assert!(commands.contains("Acquire::Languages=none"), "{commands}");
+        assert_eq!(installed.exists(), failed_stage.is_empty(), "{commands}");
+        assert_eq!(stamp.exists(), failed_stage.is_empty(), "{commands}");
+        if !failed_stage.is_empty() {
+            assert!(
+                std::fs::read_to_string(root.join("console"))
+                    .unwrap()
+                    .contains("FIRECRAB_PACKAGES_FAILED")
+            );
+            assert!(
+                std::fs::read_to_string(root.join("console"))
+                    .unwrap()
+                    .contains(&format!("FIRECRAB_APT_FAILED stage={failed_stage} exit=1"))
+            );
+            if failed_stage != "configure" {
+                assert!(!commands.contains("--no-download"), "{commands}");
+            }
+        } else {
+            assert!(commands.contains("--fix-broken --no-install-recommends --no-download"));
+            assert!(run().status.success());
+            assert_eq!(std::fs::read_to_string(&log).unwrap(), commands);
+        }
+    }
+}
+
+#[test]
+fn dnf_recovers_metadata_once_and_never_stamps_a_failed_install() {
+    for failure in ["none", "first", "always", "clean"] {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        for (name, body) in [
+            ("bb", "exec \"$@\""),
+            (
+                "dnf",
+                r#"
+echo "$*" >> "$TEST_LOG"
+case "$1" in
+  clean) [ "$FAILURE" != clean ] ;;
+  install)
+    n=$(cat "$TEST_COUNT" 2>/dev/null || echo 0)
+    n=$((n+1)); echo "$n" > "$TEST_COUNT"
+    [ "$FAILURE" != always ] && { [ "$FAILURE" = none ] || [ "$n" -gt 1 ]; }
+    ;;
+  *) exit 99 ;;
+esac
+"#,
+            ),
+        ] {
+            let path = root.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let stamp = root.join("stamp");
+        let script = provision::BASE_PACKAGE_INSTALL
+            .replace(
+                "/usr/bin/apt-get",
+                root.join("missing-apt").to_str().unwrap(),
+            )
+            .replace("/usr/bin/dnf", root.join("dnf").to_str().unwrap())
+            .replace("/etc/firecrab/base-packages.ok", stamp.to_str().unwrap())
+            .replace(
+                ">/dev/console",
+                &format!(">>{}", root.join("console").display()),
+            );
+        let output = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .env("BB", root.join("bb"))
+            .env("TEST_LOG", root.join("log"))
+            .env("TEST_COUNT", root.join("count"))
+            .env("FAILURE", failure)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let log = std::fs::read_to_string(root.join("log")).unwrap();
+        assert_eq!(stamp.exists(), matches!(failure, "none" | "first"), "{log}");
+        assert_eq!(
+            log.lines()
+                .filter(|line| line.starts_with("install "))
+                .count(),
+            if matches!(failure, "none" | "clean") {
+                1
+            } else {
+                2
+            },
+            "{log}"
+        );
+        if failure != "none" {
+            assert!(log.contains("clean metadata"), "{log}");
+            let console = std::fs::read_to_string(root.join("console")).unwrap();
+            assert!(console.contains("FIRECRAB_DNF_RETRY"), "{console}");
+            assert_eq!(
+                console.contains("FIRECRAB_PACKAGES_FAILED"),
+                matches!(failure, "always" | "clean")
+            );
+        }
+        if matches!(failure, "first" | "always") {
+            assert!(log.contains("--setopt=zchunk=False"), "{log}");
+        }
+    }
+}
+
+/// #223: `exit` must look like it did something. Both console entry points
+/// gate the banner on a tmpfs marker (`/run` is wiped every real reboot),
+/// so it only fires on an actual respawn, never on the guest's first attach.
+#[test]
+fn console_and_agetty_wrapper_gate_the_session_banner_on_a_tmpfs_marker() {
+    for script in [
+        provision::console_script(),
+        provision::agetty_wrapper_script("/usr/sbin/agetty"),
+    ] {
+        let marker_check = script
+            .find("if [ -f /run/firecrab-console-active ]")
+            .unwrap_or_else(|| panic!("no first-attach guard in:\n{script}"));
+        let banner = script
+            .find("session ended")
+            .unwrap_or_else(|| panic!("no session-ended banner in:\n{script}"));
+        let touch = script
+            .find("touch /run/firecrab-console-active")
+            .unwrap_or_else(|| panic!("marker is never (re)created in:\n{script}"));
+        assert!(
+            marker_check < banner,
+            "banner must be inside the marker-file guard, not unconditional: {script}"
+        );
+        assert!(
+            touch > banner,
+            "marker must be (re)touched after printing, so the very next \
+             respawn also sees it: {script}"
+        );
+    }
+}
+
+/// #303: a respawned console tells the host the previous login session ended.
+/// The marker comes before the human banner: the host closes attached viewers
+/// at the marker, so they never see a "starting a new one" line meant for the
+/// next session.
+#[test]
+fn every_console_entry_point_emits_the_session_ended_marker_before_the_banner() {
+    for script in [
+        provision::console_script(),
+        provision::agetty_wrapper_script("/usr/sbin/agetty"),
+        provision::serial_console_script(),
+    ] {
+        let guard = script
+            .find("if [ -f /run/firecrab-console-active ]")
+            .unwrap_or_else(|| panic!("no first-attach guard in:\n{script}"));
+        let marker = script
+            .find(crate::console_session::session_ended_marker_printf!())
+            .unwrap_or_else(|| panic!("no session-ended marker in:\n{script}"));
+        let banner = script
+            .find("session ended")
+            .unwrap_or_else(|| panic!("no session-ended banner in:\n{script}"));
+        assert!(guard < marker, "marker must be guarded: {script}");
+        assert!(marker < banner, "marker must precede the banner: {script}");
+    }
+}
+
+#[test]
+fn serial_consoles_fall_back_without_login_and_select_an_existing_login_program() {
+    for native in [false, true] {
+        for login in [None, Some("login_bin"), Some("login_usr")] {
+            let directory = tempdir().unwrap();
+            let root = directory.path();
+            for (name, body) in [
+                ("busybox", "exec \"$@\""),
+                ("agetty", "printf 'GETTY %s\\n' \"$*\""),
+                ("console", "echo CONSOLE_READY"),
+            ] {
+                let path = root.join(name);
+                std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            if let Some(name) = login {
+                let path = root.join(name);
+                std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let mut script = if native {
+                provision::serial_console_script()
+            } else {
+                provision::agetty_wrapper_script("/usr/sbin/agetty")
+            };
+            script = script.replace("exec </dev/ttyS0 >/dev/ttyS0 2>&1\n", "");
+            for (guest, name) in [
+                ("/usr/bin/login", "login_usr"),
+                ("/bin/login", "login_bin"),
+                ("/usr/sbin/agetty", "agetty"),
+                ("/sbin/agetty", "agetty"),
+                (provision::GUEST_TOOLBOX, "busybox"),
+                ("/etc/firecrab/rc.console", "console"),
+                ("/run/firecrab-console-active", "marker"),
+            ] {
+                script = script.replace(guest, root.join(name).to_str().unwrap());
+            }
+            let output = std::process::Command::new("sh")
+                .args(["-c", &script])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            if let Some(name) = login {
+                assert!(
+                    stdout.contains("GETTY --autologin root --login-program"),
+                    "{stdout}"
+                );
+                assert!(
+                    stdout.contains(root.join(name).to_str().unwrap()),
+                    "{stdout}"
+                );
+                assert!(!stdout.contains("CONSOLE_READY"), "{stdout}");
+            } else {
+                assert_eq!(stdout, "CONSOLE_READY\n");
+            }
+        }
+    }
+}
+
+/// Run the whole merge → activation → ext4 → specialization path. A native
+/// inittab must survive VM starts, and metrics/readiness must not be registered
+/// a second time by the catalog specialization helpers.
+#[tokio::test]
+async fn native_init_registration_survives_specialization() {
+    for systemd in [true, false] {
+        let directory = tempdir().unwrap();
+        let mut builder = Builder::new(Vec::new());
+        let binary = if systemd {
+            "usr/lib/systemd/systemd"
+        } else {
+            "bin/busybox"
+        };
+        append_entry(
+            &mut builder,
+            binary,
+            EntryType::Regular,
+            None,
+            b"native-init",
+            0o755,
+        );
+        append_entry(
+            &mut builder,
+            "sbin/init",
+            EntryType::Symlink,
+            Some(if systemd {
+                "/usr/lib/systemd/systemd"
+            } else {
+                "/bin/busybox"
+            }),
+            &[],
+            0o777,
+        );
+        if !systemd {
+            append_entry(
+                &mut builder,
+                "sbin/openrc-run",
+                EntryType::Regular,
+                None,
+                b"runner",
+                0o755,
+            );
+        }
+        if !systemd {
+            append_entry(
+                &mut builder,
+                "sbin/openrc",
+                EntryType::Regular,
+                None,
+                b"openrc",
+                0o755,
+            );
+        }
+        let table = b"::sysinit:/sbin/openrc sysinit\n::wait:/sbin/openrc boot\n::wait:/sbin/openrc default\n";
+        append_entry(
+            &mut builder,
+            "etc/inittab",
+            EntryType::Regular,
+            None,
+            table,
+            0o644,
+        );
+        let merged = merged(&directory, "native", &finish(builder)).await;
+        let tree = merged.path().to_owned();
+        let toolbox = toolbox(&directory, "toolbox", &static_program()).await;
+        let rootfs = provision::inject_with_toolbox(merged, &toolbox)
+            .await
+            .unwrap();
+        let process =
+            service::process_config_from_image_config(br#"{"config":{"Cmd":["/app/server"]}}"#)
+                .unwrap();
+        install_oci_service(&rootfs, &process).unwrap();
+        assert_eq!(read_guest(&tree, "/etc/inittab"), table);
+        assert_eq!(
+            std::fs::read_link(tree.join("sbin/init")).unwrap(),
+            Path::new(if systemd {
+                "/usr/lib/systemd/systemd"
+            } else {
+                "/bin/busybox"
+            })
+        );
+        let (agent, link) = if systemd {
+            (
+                "/etc/systemd/system/firecrab-agent.service",
+                "/etc/systemd/system/multi-user.target.wants/firecrab-agent.service",
+            )
+        } else {
+            (
+                "/etc/init.d/firecrab-agent",
+                "/etc/runlevels/default/firecrab-agent",
+            )
+        };
+        assert_eq!(
+            std::fs::read_link(tree.join(link.trim_start_matches('/'))).unwrap(),
+            Path::new(agent)
+        );
+        let (console, console_link) = if systemd {
+            (
+                "/etc/systemd/system/firecrab-console.service",
+                "/etc/systemd/system/multi-user.target.wants/firecrab-console.service",
+            )
+        } else {
+            (
+                "/etc/init.d/firecrab-console",
+                "/etc/runlevels/default/firecrab-console",
+            )
+        };
+        assert_eq!(
+            std::fs::read_link(tree.join(console_link.trim_start_matches('/'))).unwrap(),
+            Path::new(console)
+        );
+        let boot = read_guest(&tree, "/etc/firecrab/rc.boot");
+        assert!(String::from_utf8_lossy(&boot).contains("if [ \"false\" = true ]; then"));
+        assert!(String::from_utf8_lossy(&boot).contains("FIRECRAB_NETWORK_READY"));
+        assert!(String::from_utf8_lossy(&boot).contains("services.d/*"));
+        let disk = directory.path().join("native.ext4");
+        let output = std::process::Command::new("mkfs.ext4")
+            .args(["-q", "-F", "-d"])
+            .arg(&tree)
+            .arg(&disk)
+            .arg("32768")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for _ in 0..2 {
+            crate::rootfs::specialize_guest(&disk, Uuid::nil(), &BTreeMap::new()).unwrap();
+        }
+        for (path, expected) in [
+            ("/etc/inittab", table.to_vec()),
+            ("/etc/firecrab/rc.boot", boot),
+            (agent, read_guest(&tree, agent)),
+            (console, read_guest(&tree, console)),
+            (
+                "/etc/firecrab/rc.serial",
+                read_guest(&tree, "/etc/firecrab/rc.serial"),
+            ),
+        ] {
+            let output = crate::rootfs::run_debugfs(&disk, &format!("cat {path}")).unwrap();
+            assert_eq!(output.stdout, expected, "specialization changed {path}");
+        }
+        assert!(!crate::rootfs::guest_path_exists(
+            &disk,
+            crate::guest_agent::UNIT_PATH
+        ));
+        assert!(!crate::rootfs::guest_path_exists(
+            &disk,
+            crate::guest_agent::OPENRC_PATH
+        ));
+        assert!(!crate::rootfs::guest_path_exists(
+            &disk,
+            "/etc/init.d/firecrab-network-ready"
+        ));
+        assert!(!crate::rootfs::guest_path_exists(
+            &disk,
+            "/etc/systemd/system/firecrab-network-ready.service"
+        ));
+    }
+}
+
+#[tokio::test]
+async fn config_directories_and_broken_init_links_do_not_select_native_init() {
+    for target in ["/missing/systemd", "/usr/lib/systemd/systemd"] {
+        let directory = tempdir().unwrap();
+        let mut builder = Builder::new(Vec::new());
+        for path in ["etc/systemd/system/", "etc/init.d/"] {
+            append_entry(&mut builder, path, EntryType::Directory, None, &[], 0o755);
+        }
+        append_entry(
+            &mut builder,
+            "usr/lib/systemd/systemd",
+            EntryType::Symlink,
+            Some(target),
+            &[],
+            0o777,
+        );
+        append_entry(
+            &mut builder,
+            "sbin/openrc-run",
+            EntryType::Regular,
+            None,
+            b"runner",
+            0o755,
+        );
+        let merged = merged(&directory, "incomplete", &finish(builder)).await;
+        let tree = merged.path().to_owned();
+        let toolbox = toolbox(&directory, "toolbox", &static_program()).await;
+        provision::inject_with_toolbox(merged, &toolbox)
+            .await
+            .unwrap();
+        assert_eq!(read_guest(&tree, provision::INIT_SYSTEM_PATH), b"busybox\n");
+        assert_eq!(
+            std::fs::read_link(tree.join("sbin/init")).unwrap(),
+            Path::new(provision::GUEST_TOOLBOX)
+        );
+        // BusyBox init serves the console from its inittab.
+        assert!(!tree.join("etc/firecrab/rc.serial").exists());
+    }
 }

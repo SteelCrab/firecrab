@@ -1,7 +1,6 @@
 import type {
   ApiError,
   AssignVmStorageRequest,
-  BootstrapResponse,
   CreateMicroNetworkRequest,
   CreateMicroStorageRequest,
   CreateShellRequest,
@@ -11,6 +10,8 @@ import type {
   HostStatusResponse,
   ImageInstallResponse,
   ImageResponse,
+  KernelInstallResponse,
+  KernelResponse,
   OciImportRequest,
   OciInspectResponse,
   MicroRegistryRegisterRequest,
@@ -20,14 +21,22 @@ import type {
   MicroNetworkResponse,
   MicroStorageDetailResponse,
   MicroStorageResponse,
+  MicroServiceSpec,
+  MicroServiceResponse,
+  MicroServiceDeployment,
+  DeployMicroServiceRequest,
   NetworkInfoResponse,
+  SshHostKeyResponse,
   ShellDetailResponse,
   ShellResponse,
   ShellRevisionResponse,
   StorageDeviceResponse,
   StorageRootResponse,
+  FirecrabInfoResponse,
   UpdateCheckResponse,
+  UpdateImageKernelRequest,
   UpdateMicroNetworkRequest,
+  UpdateProgressResponse,
   UpdateStartResponse,
   UpdateVmShellsRequest,
   UpdateVmPortForwardsRequest,
@@ -85,7 +94,7 @@ async function fail(response: Response): Promise<ApiClientError> {
   }
 }
 
-async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
+export async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(input, init);
@@ -102,12 +111,95 @@ export function listVms(): Promise<VmResponse[]> {
   return fetchJson("/api/vms");
 }
 
+export function listMicroServices(): Promise<MicroServiceResponse[]> {
+  return fetchJson("/api/micro-services");
+}
+
+export function getServiceDeployment(id: string): Promise<MicroServiceDeployment | null> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment`);
+}
+
+export function deployMicroService(id: string, request: DeployMicroServiceRequest): Promise<MicroServiceDeployment> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/deployment`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function stopMicroService(id: string): Promise<MicroServiceDeployment> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}/stop`, { method: "POST" });
+}
+
+export function getMicroService(id: string): Promise<MicroServiceResponse> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}`);
+}
+
+export function createMicroService(spec: MicroServiceSpec): Promise<MicroServiceResponse> {
+  return fetchJson("/api/micro-services", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec),
+  });
+}
+
+export function updateMicroService(id: string, spec: MicroServiceSpec): Promise<MicroServiceResponse> {
+  return fetchJson(`/api/micro-services/${encodeURIComponent(id)}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec),
+  });
+}
+
+export async function deleteMicroService(id: string): Promise<void> {
+  const response = await fetch(`/api/micro-services/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .catch((error) => { throw ApiClientError.transport(transportDetail(error)); });
+  if (!response.ok) throw await fail(response);
+}
+
 export function getVm(id: string): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}`);
 }
 
 export function getVmLog(id: string): Promise<VmLogResponse> {
   return fetchJson(`/api/vms/${id}/log`);
+}
+
+export function getSshHostKey(id: string): Promise<SshHostKeyResponse> {
+  return fetchJson(`/api/vms/${id}/ssh-host-key`);
+}
+
+/** Reads the operator private key as text, for copying it to the clipboard. */
+export async function fetchSshKeyPem(id: string): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/vms/${id}/ssh-key`);
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+  return response.text();
+}
+
+/** Downloads the operator private key. Filename comes from Content-Disposition. */
+export async function downloadSshKey(id: string, fallbackName: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/vms/${id}/ssh-key`);
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) {
+    throw await fail(response);
+  }
+  const blob = await response.blob();
+  const header = response.headers.get("Content-Disposition") ?? "";
+  const match = /filename="([^"]+)"/.exec(header);
+  const filename = match?.[1] ?? `firecrab-${fallbackName}.pem`;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 export function createVm(request: CreateVmRequest): Promise<VmResponse> {
@@ -142,6 +234,11 @@ export function getHostStatus(): Promise<HostStatusResponse> {
   return fetchJson("/api/host");
 }
 
+/** Build, install paths, Firecracker version, and live service state (GET /api/info). */
+export function getFirecrabInfo(signal?: AbortSignal): Promise<FirecrabInfoResponse> {
+  return fetchJson("/api/info", { signal });
+}
+
 /** Newest release vs. this build (`GET /api/update`), cached 30 minutes by the API. */
 export function getUpdateCheck(): Promise<UpdateCheckResponse> {
   return fetchJson("/api/update");
@@ -152,9 +249,59 @@ export function startUpdate(): Promise<UpdateStartResponse> {
   return fetchJson("/api/update", { method: "POST" });
 }
 
+/** How far the latest update run got (`GET /api/update/progress`); `idle` when none has run. */
+export function getUpdateProgress(): Promise<UpdateProgressResponse> {
+  return fetchJson("/api/update/progress");
+}
+
 /** Template registry aliases available for create (`GET /api/images`). */
 export function listImages(): Promise<ImageResponse[]> {
   return fetchJson("/api/images");
+}
+
+/** Full public detail for one M2Image (`GET /api/images/{alias}`). */
+export function getImage(alias: string): Promise<ImageResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}`);
+}
+
+/** Host-architecture digest-pinned kernel catalog (`GET /api/kernels`). */
+export function listKernels(): Promise<KernelResponse[]> {
+  return fetchJson("/api/kernels");
+}
+
+/** Start a kernel package download + verification. */
+export function startKernelInstall(version: string): Promise<KernelInstallResponse> {
+  return fetchJson(`/api/kernels/${encodeURIComponent(version)}/install`, {
+    method: "POST",
+  });
+}
+
+/** Poll one kernel package job. */
+export function getKernelInstall(version: string): Promise<KernelInstallResponse> {
+  return fetchJson(`/api/kernels/${encodeURIComponent(version)}/install`);
+}
+
+/** Delete one unused installed kernel. */
+export async function deleteKernel(version: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/kernels/${encodeURIComponent(version)}`, { method: "DELETE" });
+  } catch (error) {
+    throw ApiClientError.transport(transportDetail(error));
+  }
+  if (!response.ok) throw await fail(response);
+}
+
+/** Pair an installed image with an installed managed kernel. */
+export function updateImageKernel(
+  alias: string,
+  request: UpdateImageKernelRequest,
+): Promise<ImageResponse> {
+  return fetchJson(`/api/images/${encodeURIComponent(alias)}/kernel`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
 }
 
 /** Published M2Image packages and this host's matching cache/install state. */
@@ -405,41 +552,4 @@ export function updateVmPortForwards(id: string, request: UpdateVmPortForwardsRe
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
   });
-}
-
-/** Bootstrap a distro from scratch inside a builder VM (`POST /api/images/{alias}/bootstrap`). */
-export function startBootstrap(alias: string): Promise<BootstrapResponse> {
-  return fetchJson(`/api/images/${encodeURIComponent(alias)}/bootstrap`, { method: "POST" });
-}
-
-/** Poll one bootstrap session (`GET /api/images/bootstrap/{bootstrapId}`). */
-export function getBootstrap(bootstrapId: string): Promise<BootstrapResponse> {
-  return fetchJson(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`);
-}
-
-/**
- * The bootstrap still running on this host, if any
- * (`GET /api/images/bootstrap`).
- *
- * `startBootstrap` returns the session id, but only to the page that issued
- * it — reload that page, or leave and come back, and the id is gone while
- * the build keeps going. This asks the server for it instead, which is what
- * lets the session panel and its console reappear. Resolves to `null` when
- * nothing is building.
- */
-export function getActiveBootstrap(): Promise<BootstrapResponse | null> {
-  return fetchJson(`/api/images/bootstrap`);
-}
-
-/** Cancel a bootstrap and delete its builder VM (`DELETE /api/images/bootstrap/{bootstrapId}`). */
-export async function cancelBootstrap(bootstrapId: string): Promise<void> {
-  let response: Response;
-  try {
-    response = await fetch(`/api/images/bootstrap/${encodeURIComponent(bootstrapId)}`, { method: "DELETE" });
-  } catch (error) {
-    throw ApiClientError.transport(transportDetail(error));
-  }
-  if (!response.ok) {
-    throw await fail(response);
-  }
 }

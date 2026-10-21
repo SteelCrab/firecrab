@@ -57,6 +57,48 @@ export const REGISTER_NETWORK_NAME = "register-e2e";
 /** Isolated subnet so the register spec does not share {@link NETWORK_CIDR}. */
 export const REGISTER_NETWORK_CIDR = "172.30.91.0/24";
 
+/** IPv4-only MicroNetwork created by the #146 IPv6 dashboard spec. */
+export const IPV6_E2E_V4_NAME = "ipv6-e2e-v4";
+
+/** Isolated subnet for {@link IPV6_E2E_V4_NAME}. */
+export const IPV6_E2E_V4_CIDR = "172.30.92.0/24";
+
+/** Dual-stack MicroNetwork created by the #146 IPv6 dashboard spec (auto ULA). */
+export const IPV6_E2E_V6_NAME = "ipv6-e2e-v6";
+
+/** Isolated subnet for {@link IPV6_E2E_V6_NAME}. */
+export const IPV6_E2E_V6_CIDR = "172.30.93.0/24";
+
+/** Loopback port for the OCI DHCP-boot spec. Distinct from import/register. */
+export const DHCP_REGISTRY_PORT = Number.parseInt(
+  process.env.FIRECRAB_OCI_DHCP_E2E_PORT ?? "15557",
+  10,
+);
+
+/** Deterministic reference when the DHCP-boot fixture binds {@link DHCP_REGISTRY_PORT}. */
+export const DHCP_FIXED_REFERENCE = `127.0.0.1:${DHCP_REGISTRY_PORT}/firecrab/e2e:ready`;
+
+/** Alias `POST /api/oci/import` claims for {@link DHCP_FIXED_REFERENCE}. */
+export const DHCP_FIXED_ALIAS = `127.0.0.1-${DHCP_REGISTRY_PORT}-firecrab-e2e-ready`;
+
+/** VM created by the OCI DHCP-boot spec (busybox `udhcpc`, same path as nginx-stable). */
+export const DHCP_VM_NAME = "oci-e2e-dhcp";
+
+/** Dedicated MicroNetwork for the OCI DHCP-boot spec. */
+export const DHCP_NETWORK_NAME = "oci-e2e-dhcp";
+
+/** Isolated subnet so this spec does not share {@link NETWORK_CIDR}. */
+export const DHCP_NETWORK_CIDR = "172.30.94.0/24";
+
+/** Host port forwarded to guest 80 — away from a developer's own 8888. */
+export const DHCP_HOST_PORT = 18888;
+
+/** Host port the SSH panel forwards to guest 22 — away from {@link DHCP_HOST_PORT}. */
+export const DHCP_SSH_HOST_PORT = 18022;
+
+/** Guest line when DHCP never handed an address. */
+export const NETWORK_FAILED = "FIRECRAB_NETWORK_FAILED";
+
 export const DEFAULT_API_URL = "http://127.0.0.1:5523";
 export const DEFAULT_BASE_URL = "http://localhost:8080";
 

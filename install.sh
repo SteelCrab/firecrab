@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# firecrab host installer (public-docs/installation.md).
+# firecrab host installer (public-docs/getting-started/installation.md).
 #
 # Downloads a host bundle from a GitHub Release (or installs local binaries
 # via --bin-dir), then lays out systemd units so the dashboard is served on
@@ -33,7 +33,7 @@ case "$_src" in
         ;;
 esac
 unset _src
-UNITS=(firecrab-net-helper.service firecrab-api.service)
+UNITS=(firecrab-helper.service firecrab-api.service)
 
 # Placeholder @FIRECRAB_RELEASE_TAG@ is replaced by the tag on a published
 # install.sh (v0.1.0). The repo copy keeps the placeholder and means "latest".
@@ -42,7 +42,10 @@ FIRECRAB_RELEASE_TAG="@FIRECRAB_RELEASE_TAG@"
 MODE=install
 INSTALL_DEPS=1
 WITH_FRONTEND=1
+WITH_PIPE=0
 PURGE=0
+# Set by ensure_account when it grants the /dev/kvm ACL, so --uninstall can take it back.
+KVM_ACL_ADDED=0
 BIN_DIR=
 DASHBOARD_DIR=
 RELEASE_VERSION=
@@ -53,6 +56,10 @@ PAYLOAD_BIN=
 PAYLOAD_UNITS=
 PAYLOAD_EXTRACT=
 PAYLOAD_DASHBOARD=
+PAYLOAD_LICENSE=
+PAYLOAD_THIRD_PARTY=
+PAYLOAD_INVENTORY=
+PAYLOAD_GPL=
 
 # BEGIN RELEASE_HELPERS
 if [ -f "$REPO_ROOT/scripts/firecrab-release.sh" ]; then
@@ -80,6 +87,7 @@ Usage: ./install.sh [OPTIONS]
   --deps-only         install the dependencies, then stop (no host changes)
   --no-deps           never install packages, only report gaps
   --no-frontend       do not install the dashboard
+  --with-pipe         install Nginx and the verified cloudflared connector with Firecrab
   --version VER       GitHub Release tag (default: latest, or the baked-in tag)
   --libc gnu|musl     host libc (default: detect; gnu = glibc)
   --bin-dir DIR       install these local binaries instead of the release
@@ -146,6 +154,7 @@ while [ $# -gt 0 ]; do
         --deps-only) MODE=deps ;;
         --no-deps) INSTALL_DEPS=0 ;;
         --no-frontend) WITH_FRONTEND=0 ;;
+        --with-pipe) WITH_PIPE=1 ;;
         --version)
             [ $# -ge 2 ] || die "--version needs a tag (for example v0.1.0)"
             RELEASE_VERSION=$2
@@ -205,6 +214,10 @@ cleanup_payload() {
     fi
 }
 trap cleanup_payload EXIT
+
+if [ "$WITH_PIPE" = 1 ] && [ "$MODE" != install ] && [ "$MODE" != check ]; then
+    die "--with-pipe is supported with installation or --check"
+fi
 
 # --- package manager -------------------------------------------------------
 
@@ -409,7 +422,7 @@ ensure_firecracker() {
             return 1
         fi
     fi
-    if $SUDO bash "$script"; then
+    if $SUDO env FIRECRACKER_NOTICE_DIR="$SHAREDIR/firecracker" bash "$script"; then
         rm -f "$fetched"
         have firecracker && return 0
     fi
@@ -435,7 +448,7 @@ download_host_bundle() {
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$PAYLOAD_TMP/$tarball"; then
         die "failed to download $url
 Tag a GitHub Release, or install local binaries:
-  cargo build --release -p firecrab-api -p firecrab-net-helper -p firecrab-cli
+  cargo build --release -p firecrab-api -p firecrab-helper -p firecrab-cli
   ./install.sh --bin-dir target/release --dashboard-dir firecrab-frontend/dist"
     fi
     if ! curl --proto '=https' --tlsv1.2 -fsSL "$sums_url" -o "$PAYLOAD_TMP/SHA256SUMS"; then
@@ -447,10 +460,16 @@ Tag a GitHub Release, or install local binaries:
     tar -xzf "$PAYLOAD_TMP/$tarball" -C "$PAYLOAD_TMP/root"
     PAYLOAD_ROOT=$PAYLOAD_TMP/root
     local name
-    for name in firecrab-api firecrab-net-helper firecrab; do
-        [ -x "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing $name"
-        firecrab_assert_binary_arch "$PAYLOAD_ROOT/$name" "$arch" \
+    for name in firecrab-api firecrab-helper firecrab; do
+        local member
+        member=$(firecrab_resolve_binary "$name" "$PAYLOAD_ROOT" "") \
+            || die "release bundle is missing $name"
+        firecrab_assert_binary_arch "$member" "$arch" \
             || die "$tarball: $name is not a $arch binary"
+    done
+    for name in LICENSE THIRD_PARTY_NOTICES.txt release-license-inventory.json \
+            licenses/GPL-2.0-only.txt; do
+        [ -f "$PAYLOAD_ROOT/$name" ] || die "release bundle is missing compliance artifact $name"
     done
     log "host bundle $arch/$LIBC"
 }
@@ -463,6 +482,16 @@ resolve_payload() {
         PAYLOAD_BIN=$BIN_DIR
         PAYLOAD_UNITS=$REPO_ROOT/packaging/systemd
         PAYLOAD_EXTRACT=$REPO_ROOT/scripts/firecracker-menual
+        PAYLOAD_LICENSE=$REPO_ROOT/LICENSE
+        PAYLOAD_GPL=$REPO_ROOT/licenses/GPL-2.0-only.txt
+        if [ -f "$REPO_ROOT/dist/compliance/THIRD_PARTY_NOTICES.txt" ] \
+            && [ -f "$REPO_ROOT/dist/compliance/release-license-inventory.json" ]; then
+            PAYLOAD_THIRD_PARTY=$REPO_ROOT/dist/compliance/THIRD_PARTY_NOTICES.txt
+            PAYLOAD_INVENTORY=$REPO_ROOT/dist/compliance/release-license-inventory.json
+        else
+            PAYLOAD_THIRD_PARTY=
+            PAYLOAD_INVENTORY=
+        fi
         if [ -n "$DASHBOARD_DIR" ]; then
             PAYLOAD_DASHBOARD=$DASHBOARD_DIR
         elif [ -f "$REPO_ROOT/firecrab-frontend/dist/index.html" ]; then
@@ -478,6 +507,10 @@ resolve_payload() {
     PAYLOAD_UNITS=$PAYLOAD_ROOT/systemd
     PAYLOAD_EXTRACT=$PAYLOAD_ROOT
     PAYLOAD_DASHBOARD=$PAYLOAD_ROOT/dashboard
+    PAYLOAD_LICENSE=$PAYLOAD_ROOT/LICENSE
+    PAYLOAD_THIRD_PARTY=$PAYLOAD_ROOT/THIRD_PARTY_NOTICES.txt
+    PAYLOAD_INVENTORY=$PAYLOAD_ROOT/release-license-inventory.json
+    PAYLOAD_GPL=$PAYLOAD_ROOT/licenses/GPL-2.0-only.txt
 }
 
 report_payload() {
@@ -489,7 +522,7 @@ report_payload() {
             return 1
         fi
         local name gaps=0
-        for name in firecrab-api firecrab-net-helper firecrab; do
+        for name in firecrab-api firecrab-helper firecrab; do
             if [ -x "$BIN_DIR/$name" ]; then
                 log "  $name"
             else
@@ -546,6 +579,7 @@ ensure_account() {
             if ! getfacl -p /dev/kvm 2>/dev/null | grep -qx 'group:kvm:rw-'; then
                 step "granting the kvm group ACL access to /dev/kvm"
                 $SUDO setfacl -m g:kvm:rw /dev/kvm
+                KVM_ACL_ADDED=1
             fi
         else
             warn "setfacl not found — skipping the /dev/kvm ACL fixup (install the 'acl' package if VMs fail with a KVM permission error)"
@@ -562,10 +596,54 @@ ensure_directories() {
     log "directories ready under $DATADIR, $CONFDIR"
 }
 
+# What this host looked like before firecrab changed it, so --uninstall can put
+# back what the installer and the helper changed and nothing else. Written once:
+# a re-install must not record values the helper has already switched on.
+record_host_baseline() {
+    local file="$CONFDIR/host-baseline.env" content
+    [ -f "$file" ] && return 0
+    content="# written by install.sh; --uninstall restores what is listed here"$'\n'
+    if [ "$KVM_ACL_ADDED" -eq 1 ]; then
+        content+="kvm_acl=added"$'\n'
+    fi
+    # A helper that already ran has turned forwarding on, so those values are no
+    # longer the host's own.
+    if ! systemctl is-active --quiet firecrab-helper.service firecrab-net-helper.service 2>/dev/null; then
+        content+="ip_forward=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)"$'\n'
+        if [ -r /proc/sys/net/ipv6/conf/all/forwarding ]; then
+            content+="ipv6_forwarding=$(cat /proc/sys/net/ipv6/conf/all/forwarding)"$'\n'
+        fi
+    fi
+    printf '%s' "$content" | $SUDO tee "$file" >/dev/null
+    $SUDO chown root:"$FIRECRAB_GROUP" "$file"
+    $SUDO chmod 0640 "$file"
+}
+
+# Keep the same release attribution available after the archive is unpacked.
+# Firecracker's separately installed upstream notices live below firecracker/.
+install_compliance() {
+    [ -f "$PAYLOAD_LICENSE" ] || die "missing FireCrab LICENSE in install payload"
+    [ -f "$PAYLOAD_GPL" ] || die "missing GPL-2.0 text in install payload"
+    $SUDO install -d -o root -g root -m 0755 "$SHAREDIR/licenses"
+    $SUDO install -o root -g root -m 0644 "$PAYLOAD_LICENSE" "$SHAREDIR/LICENSE"
+    $SUDO install -o root -g root -m 0644 \
+        "$PAYLOAD_GPL" "$SHAREDIR/licenses/GPL-2.0-only.txt"
+    if [ -n "$PAYLOAD_THIRD_PARTY" ] && [ -n "$PAYLOAD_INVENTORY" ]; then
+        $SUDO install -o root -g root -m 0644 \
+            "$PAYLOAD_THIRD_PARTY" "$SHAREDIR/THIRD_PARTY_NOTICES.txt"
+        $SUDO install -o root -g root -m 0644 \
+            "$PAYLOAD_INVENTORY" "$SHAREDIR/release-license-inventory.json"
+    else
+        $SUDO rm -f "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \
+            "$SHAREDIR/release-license-inventory.json"
+    fi
+    log "license and attribution material installed to $SHAREDIR"
+}
+
 # Puts the payload binaries, and the dashboard, where the units expect them.
 install_binaries() {
     local name src
-    for name in firecrab-api firecrab-net-helper; do
+    for name in firecrab-api firecrab-helper; do
         src=$(firecrab_resolve_binary "$name" "$PAYLOAD_BIN" "$LIBDIR") \
             || die "no $name in ${PAYLOAD_BIN:-<release>} or $LIBDIR — pass it via --bin-dir or install a release"
         if [ "$src" -ef "$LIBDIR/$name" ]; then
@@ -574,6 +652,8 @@ install_binaries() {
             $SUDO install -o root -g root -m 0755 "$src" "$LIBDIR/$name"
         fi
     done
+    # Keep the historical executable path usable by old units and clients.
+    $SUDO ln -sfn firecrab-helper "$LIBDIR/firecrab-net-helper"
     # extract-vmlinux and extract-arm64-image are shell scripts used at
     # runtime by the API to turn a distro vmlinuz into the kernel format
     # Firecracker boots on each architecture. Installing them next to the
@@ -616,7 +696,7 @@ install_binaries() {
 # service out of init_t into unconfined_service_t only fires for bin_t
 # executables. Without this the API stays in init_t, where an outbound HTTPS
 # connect is denied — every registry read fails with EACCES while a shell on
-# the same account reaches the registry fine (public-docs/troubleshooting.md).
+# the same account reaches the registry fine (public-docs/guides/troubleshooting.md).
 label_selinux_binaries() {
     local pattern="${LIBDIR}(/.*)?"
 
@@ -674,20 +754,45 @@ ENVFILE
 
 # Renders the unit templates with this host's paths and account.
 install_units() {
-    local uid
+    local uid source legacy="$UNITDIR/firecrab-net-helper.service"
     uid=$(id -u "$FIRECRAB_USER")
+    local unit
     for unit in "${UNITS[@]}"; do
-        sed -e "s|@LIBDIR@|$LIBDIR|g" \
+        source="$PAYLOAD_UNITS/$unit"
+        if [ "$unit" = firecrab-helper.service ] && [ ! -f "$source" ]; then
+            source="$PAYLOAD_UNITS/firecrab-net-helper.service"
+        fi
+        [ -r "$source" ] || die "missing unit template $source"
+    done
+    # Only a real old unit needs migration. An alias from a previous install
+    # already denotes the new service and must not be disabled separately.
+    if [ -f "$legacy" ] && [ ! -L "$legacy" ]; then
+        $SUDO systemctl disable --now firecrab-net-helper.service
+        $SUDO rm -f "$legacy"
+    fi
+    for unit in "${UNITS[@]}"; do
+        source="$PAYLOAD_UNITS/$unit"
+        if [ "$unit" = firecrab-helper.service ] && [ ! -f "$source" ]; then
+            source="$PAYLOAD_UNITS/firecrab-net-helper.service"
+        fi
+        sed -e 's/firecrab-net-helper/firecrab-helper/g' \
+            -e '/^Alias=/d' \
+            -e "s|@LIBDIR@|$LIBDIR|g" \
             -e "s|@SHAREDIR@|$SHAREDIR|g" \
             -e "s|@DATADIR@|$DATADIR|g" \
             -e "s|@CONFDIR@|$CONFDIR|g" \
+            -e "s|@UNITDIR@|$UNITDIR|g" \
             -e "s|@PREFIX@|$PREFIX|g" \
             -e "s|@FIRECRAB_USER@|$FIRECRAB_USER|g" \
             -e "s|@FIRECRAB_GROUP@|$FIRECRAB_GROUP|g" \
             -e "s|@FIRECRAB_UID@|$uid|g" \
-            "$PAYLOAD_UNITS/$unit" | $SUDO tee "$UNITDIR/$unit" > /dev/null
+            "$source" | $SUDO tee "$UNITDIR/$unit" > /dev/null
+        if [ "$unit" = firecrab-helper.service ]; then
+            printf 'Alias=firecrab-net-helper.service\n' | $SUDO tee -a "$UNITDIR/$unit" >/dev/null
+        fi
         $SUDO chmod 0644 "$UNITDIR/$unit"
     done
+    $SUDO ln -sfn firecrab-helper.service "$legacy"
     $SUDO systemctl daemon-reload
     log "units installed to $UNITDIR"
 }
@@ -750,6 +855,15 @@ do_check() {
         gaps=1
     fi
     ensure_runtime_deps || gaps=1
+    if [ "$WITH_PIPE" = 1 ]; then
+        have nginx || [ -x /usr/sbin/nginx ] || { warn "missing nginx"; gaps=1; }
+        if [ -x "$LIBDIR/pipe/cloudflared" ]; then
+            log "pipe engine present: $LIBDIR/pipe/cloudflared"
+        else
+            warn "missing pipe engine: $LIBDIR/pipe/cloudflared (installed with --with-pipe)"
+            gaps=1
+        fi
+    fi
     ensure_firecracker || gaps=1
     report_payload || gaps=1
     check_kvm || gaps=1
@@ -833,10 +947,20 @@ do_install() {
     resolve_payload
     ensure_account
     ensure_directories
+    record_host_baseline
+    install_compliance
     install_binaries
     label_selinux_binaries
     install_config
     install_units
+    if [ "$WITH_PIPE" = 1 ]; then
+        if ! have nginx && [ ! -x /usr/sbin/nginx ]; then
+            [ "$INSTALL_DEPS" = 1 ] || die "nginx is required with --with-pipe"
+            pkg_install nginx
+        fi
+        $SUDO env PREFIX="$PREFIX" FIRECRAB_LIBDIR="$LIBDIR" DATADIR="$DATADIR" \
+            CONFDIR="$CONFDIR" UNITDIR="$UNITDIR" "$PREFIX/bin/firecrab" pipe install
+    fi
     # Guest images are not part of the host install — import one afterwards
     # with POST /api/oci/import or the dashboard Images page.
     start_units || die "installed, but a unit did not come up"
@@ -849,27 +973,112 @@ do_install() {
     fi
 }
 
+# Each MicroVM runs in its own transient unit, which is meant to outlive the API
+# so that restarting the API never kills a guest. Stopping the API therefore
+# leaves every shim and its firecracker process running with nothing to manage
+# them, so the VMs are stopped first, while the helper can still clean up after
+# them.
+stop_vm_units() {
+    local units
+    units=$(systemctl list-units --all --plain --no-legend --no-pager 'firecrab-vm-*.service' 2>/dev/null \
+        | awk '{print $1}') || true
+    [ -n "$units" ] || return 0
+    step "stopping $(printf '%s\n' "$units" | wc -l | tr -d ' ') MicroVM unit(s)"
+    # shellcheck disable=SC2086  # one word per unit
+    $SUDO systemctl stop $units \
+        || warn "some MicroVM units did not stop — their firecracker processes may keep running"
+    # A failed transient unit is not collected on its own.
+    # shellcheck disable=SC2086
+    $SUDO systemctl reset-failed $units 2>/dev/null || true
+}
+
+# Whether something besides firecrab's own (already removed) networks may rely on
+# IP forwarding: a bridge or a veth is left. When `ip` cannot tell, assume so.
+others_may_route() {
+    local kind out
+    for kind in bridge veth; do
+        out=$(ip -o link show type "$kind" 2>/dev/null) || return 0
+        [ -z "$out" ] || return 0
+    done
+    return 1
+}
+
+# Puts back what record_host_baseline recorded: the /dev/kvm ACL the installer
+# added, and IP forwarding where the host had it off and still has it on. A host
+# installed before the record existed is left exactly as it is.
+restore_host_baseline() {
+    local file="$CONFDIR/host-baseline.env" content spec key was
+    local -a to_disable=()
+    content=$($SUDO cat "$file" 2>/dev/null) || return 0
+
+    if printf '%s\n' "$content" | grep -qx 'kvm_acl=added' \
+        && have getfacl && getfacl -p /dev/kvm 2>/dev/null | grep -qx 'group:kvm:rw-'; then
+        if $SUDO setfacl -x g:kvm /dev/kvm; then
+            # `setfacl -x` leaves a bare mask behind; with nothing else named in
+            # the ACL take it all off. An entry another tool added is kept.
+            if ! getfacl -p /dev/kvm 2>/dev/null | grep -Eq '^(user|group):[^:]+:'; then
+                $SUDO setfacl -b /dev/kvm
+            fi
+            log "removed the kvm group ACL the installer added to /dev/kvm"
+        else
+            warn "could not remove the kvm group ACL from /dev/kvm — it resets at reboot"
+        fi
+    fi
+
+    for spec in ip_forward:net.ipv4.ip_forward ipv6_forwarding:net.ipv6.conf.all.forwarding; do
+        was=$(printf '%s\n' "$content" | sed -n "s/^${spec%%:*}=//p" | head -n 1)
+        key=${spec#*:}
+        if [ "$was" = 0 ] && [ "$(sysctl -n "$key" 2>/dev/null)" = 1 ]; then
+            to_disable+=("$key")
+        fi
+    done
+    if [ "${#to_disable[@]}" -gt 0 ]; then
+        if others_may_route; then
+            warn "left ${to_disable[*]} on: other bridges or containers are present (resets at reboot)"
+        else
+            for key in "${to_disable[@]}"; do
+                if $SUDO sysctl -qw "$key=0"; then
+                    log "restored $key=0"
+                else
+                    warn "could not restore $key=0"
+                fi
+            done
+        fi
+    fi
+    # The next install records the host as it is then.
+    $SUDO rm -f "$file"
+}
+
 # Removes what this script installed; data only with --purge.
 do_uninstall() {
     require_sudo_ticket
-    for unit in "${UNITS[@]}"; do
+    stop_vm_units
+    for unit in firecrab-address-updater.service firecrab-tunnel.service firecrab-ingress.service firecrab-api.service firecrab-helper.service firecrab-net-helper.service; do
         $SUDO systemctl disable --now "$unit" 2>/dev/null || true
         $SUDO rm -f "$UNITDIR/$unit"
     done
     $SUDO systemctl daemon-reload
     log "units removed"
+    $SUDO rm -rf "$LIBDIR/pipe"
 
     # SIGTERM (above) only stops the helper's socket loop — it never deletes
     # the bridges, TAP devices or nftables tables it created, only a reboot
     # would. Run its own teardown while the binary is still on disk.
-    if [ -x "$LIBDIR/firecrab-net-helper" ]; then
-        $SUDO "$LIBDIR/firecrab-net-helper" --teardown \
+    local teardown_helper
+    if teardown_helper=$(firecrab_resolve_binary firecrab-helper "" "$LIBDIR"); then
+        $SUDO "$teardown_helper" --teardown \
             || warn "network teardown failed — bridges/nftables tables may remain until reboot"
     fi
 
-    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-net-helper"
+    $SUDO rm -f "$LIBDIR/firecrab-api" "$LIBDIR/firecrab-helper" "$LIBDIR/firecrab-net-helper" \
+        "$LIBDIR/extract-vmlinux" "$LIBDIR/extract-arm64-image"
     $SUDO rm -f "$PREFIX/bin/firecrab"
     $SUDO rm -rf "$SHAREDIR/dashboard"
+    $SUDO rm -f "$SHAREDIR/LICENSE" "$SHAREDIR/THIRD_PARTY_NOTICES.txt" \
+        "$SHAREDIR/release-license-inventory.json"
+    $SUDO rm -rf "$SHAREDIR/licenses"
+    # Firecracker is installed independently and is intentionally not removed;
+    # keep its upstream notices alongside that remaining binary.
     $SUDO rmdir --ignore-fail-on-non-empty "$LIBDIR" "$SHAREDIR" 2>/dev/null || true
     # The file-context rule outlives the directory, so leaving it behind would
     # silently relabel whatever is installed there next.
@@ -877,6 +1086,9 @@ do_uninstall() {
         $SUDO semanage fcontext -d "${LIBDIR}(/.*)?" 2>/dev/null || true
     fi
     log "binaries and dashboard removed"
+
+    # Before the purge below: the record lives in $CONFDIR.
+    restore_host_baseline
 
     # Left alone on purpose: the account, the config and the data directory.
     if [ "$PURGE" -eq 1 ]; then

@@ -18,9 +18,12 @@ rootfs_image=''
 rootfs_link=''
 rootfs_size='2G'
 rootfs_hostname='firecrab'
+m2image_alias=${M2IMAGE_ALIAS:-}
+sbom_output=${M2IMAGE_SBOM_OUTPUT:-}
+sbom_generator="${repo_dir}/scripts/m2image_sbom.py"
 
 # linux-image-virtual: Ubuntu's own officially-maintained kernel package
-# (public-docs/images.md) — replaces the self-built vanilla kernel every
+# (public-docs/guides/images.md) — replaces the self-built vanilla kernel every
 # template used to share, so security patches and driver support follow
 # Ubuntu's own release cadence instead of this project having to track
 # kernel.org itself.
@@ -399,7 +402,7 @@ EOF
 
   # Configure the Firecracker guest network interface via DHCP — the host's
   # net-helper/dnsmasq hands out the IPAM-allocated address by MAC
-  # reservation (public-docs/networking.md), so the guest never
+  # reservation (public-docs/guides/networking.md), so the guest never
   # hardcodes an address itself.
   install -d -m 0755 "${mount_dir}/etc/systemd/network"
   write_root_file "${mount_dir}/etc/systemd/network/10-eth0.network" <<'EOF'
@@ -440,7 +443,7 @@ EOF
   install -d -m 1777 "${mount_dir}/tmp"
 }
 
-# firecrab-net-helper's dnsmasq answers DNS on the bridge gateway itself
+# firecrab-helper's dnsmasq answers DNS on the bridge gateway itself
 # (172.30.0.1) for every guest on the VPC subnet, so the guest points at
 # that instead of a public resolver — matches how a NAT router's own
 # address is typically handed out as the DNS server.
@@ -453,7 +456,7 @@ EOF
 # Prints a fixed sentinel line to the serial console (ttyS0, which is
 # Firecracker's captured stdout) once DHCP + DNS are confirmed working —
 # the signal firecrab-api's start pipeline waits on in place of a guest
-# agent event (public-docs/networking.md; guest agent/vsock is
+# agent event (public-docs/guides/networking.md; guest agent/vsock is
 # out of this project's competition scope).
 install_network_ready_sentinel() {
   install -d -m 0755 "${mount_dir}/usr/local/sbin"
@@ -712,6 +715,8 @@ main() {
       "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
       "M2IMAGE_DISTRO_SERIES=${ubuntu_series_setting}" \
       "M2IMAGE_DISTRO_VERSION=${M2IMAGE_DISTRO_VERSION:-}" \
+      "M2IMAGE_ALIAS=${m2image_alias}" \
+      "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \
       "$script_path"
   fi
 
@@ -767,6 +772,25 @@ main() {
   extract_kernel
   configure_guest_dns
   verify_rootfs_content
+
+  if [ -n "$sbom_output" ]; then
+    [ -n "$m2image_alias" ] || fail 'M2IMAGE_ALIAS is required with M2IMAGE_SBOM_OUTPUT'
+    require_command python3
+    [ -f "$mount_dir/var/lib/dpkg/status" ] \
+      || fail 'Ubuntu dpkg status database missing from built staging root'
+    case "$ubuntu_arch" in
+      amd64) sbom_arch=x86_64 ;;
+      arm64) sbom_arch=aarch64 ;;
+    esac
+    python3 "$sbom_generator" \
+      --format dpkg --distribution ubuntu \
+      --image-alias "$m2image_alias" --image-version "$ubuntu_series" \
+      --architecture "$sbom_arch" \
+      --package-db "$mount_dir/var/lib/dpkg/status" --output "$sbom_output"
+    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+      chown "${SUDO_UID}:${SUDO_GID}" "$sbom_output"
+    fi
+  fi
 
   info "creating Ubuntu rootfs image: ${rootfs_image}"
   # Disable orphan_file when the host's e2fsprogs supports it so images built

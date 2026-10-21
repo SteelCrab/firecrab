@@ -1,7 +1,7 @@
 //! Per-VM writable disk management: copies a verified template rootfs into a
 //! generation-scoped file under `{vm}/disks/{generation}.ext4` on first
 //! prepare, and grows it when capacity increases. Stop/start reuses the same
-//! active generation file (`public-docs/storage.md`).
+//! active generation file (`public-docs/guides/storage.md`).
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -322,6 +322,11 @@ pub fn specialize_guest(
     // Rewrite the console wrapper on every start so MOTD/fastfetch appear
     // without requiring a re-import.
     patch_oci_console(rootfs);
+    // Catalog templates bake a bare autologin getty into the image; hook the
+    // session-ended marker (#303) in on every start instead of a repackage.
+    patch_template_console(rootfs);
+    patch_oci_dhcp_hook(rootfs);
+    install_ipv6_sysctl(rootfs);
     install_guest_toolbox_commands(rootfs);
     remove_injected_systemctl(rootfs);
     apply_vm_env(rootfs, env)?;
@@ -335,6 +340,44 @@ pub fn specialize_guest(
     // Metrics Agent: guest OS CPU/mem samples for the dashboard (own module).
     crate::guest_agent::install(rootfs)?;
     Ok(())
+}
+
+/// Guest path of the sysctl drop-in [`ipv6_sysctl_conf`] is written to.
+const IPV6_SYSCTL_PATH: &str = "/etc/sysctl.d/99-firecrab-ipv6.conf";
+
+/// The guest-side IPv6 settings a dual-stack MicroNetwork depends on.
+///
+/// The API computes and stores a VM's IPv6 address up front (EUI-64 of its
+/// MAC under SLAAC) and the host firewall pins that exact address, the same
+/// way it pins the IPv4 lease. So the guest must build the same one: modern
+/// systemd defaults to `addr_gen_mode=2` (stable-privacy), and privacy
+/// extensions would additionally source outbound traffic from a rotating
+/// temporary address — either would be dropped by L2 anti-spoofing.
+/// `accept_ra=2` keeps the router advertisement from the network's own
+/// bridge accepted. Harmless on an IPv4-only VM, which never gets a prefix
+/// to configure from in the first place.
+fn ipv6_sysctl_conf() -> String {
+    "# Managed by Firecrab. See public-docs/guides/networking.md.\n\
+     net.ipv6.conf.default.addr_gen_mode = 0\n\
+     net.ipv6.conf.eth0.addr_gen_mode = 0\n\
+     net.ipv6.conf.default.use_tempaddr = 0\n\
+     net.ipv6.conf.eth0.use_tempaddr = 0\n\
+     net.ipv6.conf.eth0.accept_ra = 2\n"
+        .to_owned()
+}
+
+/// Writes the drop-in above into the guest. Best-effort: an image without
+/// `/etc/sysctl.d` simply keeps its own defaults. A failed write is
+/// logged so an image that silently kept its own IPv6 defaults is visible.
+fn install_ipv6_sysctl(rootfs: &Path) {
+    let _ = run_debugfs(rootfs, "mkdir /etc/sysctl.d");
+    if let Err(error) = write_into_image(rootfs, IPV6_SYSCTL_PATH, ipv6_sysctl_conf().as_bytes()) {
+        tracing::warn!(
+            path = %rootfs.display(),
+            %error,
+            "failed to install IPv6 sysctl drop-in"
+        );
+    }
 }
 
 /// Copies a host fastfetch into a glibc guest. Missing loader or a failed
@@ -356,10 +399,24 @@ pub(crate) fn install_guest_fastfetch(rootfs: &Path, program: &Path) {
 
 /// Rewrites the injected busybox console on an OCI-imported disk.
 fn patch_oci_console(rootfs: &Path) {
-    if !guest_path_exists(rootfs, "/etc/firecrab") {
+    if guest_path_exists(rootfs, crate::oci::provision::INIT_SYSTEM_PATH) {
+        let Ok(output) = run_debugfs(
+            rootfs,
+            &format!("cat {}", crate::oci::provision::INIT_SYSTEM_PATH),
+        ) else {
+            return;
+        };
+        if output.stdout != b"busybox\n" {
+            refresh_native_serial_console(rootfs);
+            return;
+        }
+    }
+    // The toolbox, not `/etc/firecrab`, marks an OCI disk: every start's SSH
+    // install creates `/etc/firecrab/services.d` on catalog templates too, and
+    // the inittab below would point their init at a busybox they lack.
+    if !is_oci_disk(rootfs) {
         return;
     }
-    let _ = run_debugfs(rootfs, "mkdir /etc/firecrab");
     let agetty = crate::oci::provision::first_present(
         crate::oci::provision::GUEST_AGETTY_CANDIDATES,
         |path| guest_path_exists(rootfs, path),
@@ -388,6 +445,149 @@ fn patch_oci_console(rootfs: &Path) {
     );
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.boot", "0100755");
     set_guest_file_mode(rootfs, "/etc/firecrab/rc.console", "0100755");
+    if let Some(agetty) = agetty {
+        let _ = write_into_image(
+            rootfs,
+            crate::oci::provision::GUEST_AGETTY_WRAPPER,
+            crate::oci::provision::agetty_wrapper_script(agetty).as_bytes(),
+        );
+        set_guest_file_mode(
+            rootfs,
+            crate::oci::provision::GUEST_AGETTY_WRAPPER,
+            "0100755",
+        );
+    }
+}
+
+/// Whether the disk came from an OCI import, which always installs the guest
+/// toolbox its injected console runs on.
+fn is_oci_disk(rootfs: &Path) -> bool {
+    guest_path_exists(rootfs, crate::oci::provision::GUEST_TOOLBOX)
+}
+
+/// Guest path of the session-boundary helper a template's serial getty runs
+/// before every start (#223, #303).
+const TEMPLATE_CONSOLE_SESSION_PATH: &str = "/usr/local/sbin/firecrab-console-session";
+
+/// Session-boundary helper for templates whose `ttyS0` is a plain respawned
+/// `agetty --autologin` (the OCI consoles carry the same prelude inline).
+/// Silent on the first getty start of a boot; after that, marks the ended
+/// session for the host, then shows the banner to whoever attaches next.
+/// With arguments it `exec`s them, so an inittab line can wrap the getty.
+const TEMPLATE_CONSOLE_SESSION_SCRIPT: &str = concat!(
+    r#"#!/bin/sh
+# Firecrab serial-console session boundary (issues #223, #303).
+# /run is tmpfs, so the flag only exists once a login session on this boot
+# has ended and the getty is starting again.
+if [ -f /run/firecrab-console-active ]; then
+  printf '"#,
+    crate::console_session::session_ended_marker_printf!(),
+    r#"\n=== session ended — starting a new one ===\n\n' >/dev/ttyS0 2>/dev/null
+fi
+touch /run/firecrab-console-active 2>/dev/null
+[ "$#" -eq 0 ] || exec "$@"
+"#
+);
+
+/// systemd drop-in directory the ubuntu and rocky templates configure their
+/// root autologin in.
+const SERIAL_GETTY_DROPIN_DIR: &str = "/etc/systemd/system/serial-getty@ttyS0.service.d";
+
+/// Drop-in that runs [`TEMPLATE_CONSOLE_SESSION_SCRIPT`] before every
+/// `serial-getty@ttyS0` (re)start.
+const SERIAL_GETTY_SESSION_DROPIN: &str = concat!(
+    "# Firecrab serial-console session boundary (issues #223, #303).\n",
+    "[Service]\n",
+    "ExecStartPre=-/bin/sh /usr/local/sbin/firecrab-console-session\n",
+);
+
+/// Hooks the session-boundary helper into a catalog template's serial getty:
+/// the busybox inittab line on alpine, the `serial-getty@ttyS0` drop-in on
+/// systemd templates. OCI disks carry their own console.
+fn patch_template_console(rootfs: &Path) {
+    if is_oci_disk(rootfs) {
+        return;
+    }
+    let wrapped_inittab = run_debugfs(rootfs, "cat /etc/inittab")
+        .ok()
+        .and_then(|output| wrap_inittab_serial_console(&String::from_utf8_lossy(&output.stdout)));
+    let systemd_getty = guest_path_exists(rootfs, SERIAL_GETTY_DROPIN_DIR);
+    let already_wrapped = guest_path_exists(rootfs, TEMPLATE_CONSOLE_SESSION_PATH);
+    if wrapped_inittab.is_none() && !systemd_getty && !already_wrapped {
+        return;
+    }
+
+    for dir in ["/usr", "/usr/local", "/usr/local/sbin"] {
+        let _ = run_debugfs(rootfs, &format!("mkdir {dir}"));
+    }
+    if write_into_image(
+        rootfs,
+        TEMPLATE_CONSOLE_SESSION_PATH,
+        TEMPLATE_CONSOLE_SESSION_SCRIPT.as_bytes(),
+    )
+    .is_err()
+    {
+        return;
+    }
+    set_guest_file_mode(rootfs, TEMPLATE_CONSOLE_SESSION_PATH, "0100755");
+    if let Some(inittab) = wrapped_inittab {
+        let _ = write_into_image(rootfs, "/etc/inittab", inittab.as_bytes());
+    }
+    if systemd_getty {
+        let _ = write_into_image(
+            rootfs,
+            &format!("{SERIAL_GETTY_DROPIN_DIR}/firecrab-session.conf"),
+            SERIAL_GETTY_SESSION_DROPIN.as_bytes(),
+        );
+    }
+}
+
+/// Routes every active `ttyS0::respawn:` inittab entry through
+/// [`TEMPLATE_CONSOLE_SESSION_PATH`]. `None` when nothing needs wrapping.
+fn wrap_inittab_serial_console(inittab: &str) -> Option<String> {
+    let wrapper = format!("/bin/sh {TEMPLATE_CONSOLE_SESSION_PATH} ");
+    let mut changed = false;
+    let lines: Vec<String> = inittab
+        .split_inclusive('\n')
+        .map(|line| match line.strip_prefix("ttyS0::respawn:") {
+            Some(command) if !command.starts_with(&wrapper) => {
+                changed = true;
+                format!("ttyS0::respawn:{wrapper}{command}")
+            }
+            _ => line.to_owned(),
+        })
+        .collect();
+    changed.then(|| lines.concat())
+}
+
+/// Rewrites the `rc.serial` console a systemd or OpenRC OCI disk got at import,
+/// so existing disks pick up console changes such as the session-ended marker
+/// (#303) without a re-import.
+fn refresh_native_serial_console(rootfs: &Path) {
+    let path = crate::oci::provision::GUEST_SERIAL_SCRIPT;
+    if !guest_path_exists(rootfs, path) {
+        return;
+    }
+    let script = crate::oci::provision::serial_console_script();
+    if write_into_image(rootfs, path, script.as_bytes()).is_ok() {
+        set_guest_file_mode(rootfs, path, "0100755");
+    }
+}
+
+/// Refresh the managed DHCP hook on existing OCI disks too, including those
+/// whose native init runs rc.boot. Ordinary templates have no injected hook.
+fn patch_oci_dhcp_hook(rootfs: &Path) {
+    let path = crate::oci::provision::GUEST_DHCP_SCRIPT;
+    if guest_path_exists(rootfs, path)
+        && write_into_image(
+            rootfs,
+            path,
+            crate::oci::provision::dhcp_script().as_bytes(),
+        )
+        .is_ok()
+    {
+        set_guest_file_mode(rootfs, path, "0100755");
+    }
 }
 
 /// Puts missing `ping`/`wget`/`vi` on PATH for an already-imported OCI disk.
@@ -578,10 +778,51 @@ start() {{
     )
 }
 
-/// Replaces the guest readiness script when the template already has one.
+/// Systemd unit for the readiness oneshot, installed by
+/// [`install_network_ready_fallback`] on an image that never baked one in.
+/// Content matches `install_network_ready_sentinel` in
+/// `scripts/firecracker-menual/install-ubuntu-roofs.sh` so an image ends up
+/// wired the same regardless of which path installed it.
+const NETWORK_READY_UNIT_PATH: &str = "/etc/systemd/system/firecrab-network-ready.service";
+/// `multi-user.target.wants` symlink that actually enables
+/// [`NETWORK_READY_UNIT_PATH`] — systemd ignores a unit file that isn't also
+/// linked here.
+const NETWORK_READY_UNIT_WANTS_PATH: &str =
+    "/etc/systemd/system/multi-user.target.wants/firecrab-network-ready.service";
+/// Content for [`NETWORK_READY_UNIT_PATH`].
+const NETWORK_READY_UNIT: &str = r#"[Unit]
+Description=Firecrab network readiness sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+StandardOutput=tty
+TTYPath=/dev/console
+ExecStart=/usr/local/sbin/firecrab-network-ready.sh
+
+[Install]
+WantedBy=multi-user.target
+"#;
+/// OpenRC default-runlevel symlink [`install_network_ready_fallback`] creates
+/// to actually enable [`NETWORK_READY_OPENRC_PATH`] — writing the script
+/// alone does not start it at boot.
+const NETWORK_READY_OPENRC_RUNLEVEL_PATH: &str = "/etc/runlevels/default/firecrab-network-ready";
+
+/// Replaces the guest readiness script when the template already has one,
+/// otherwise installs one from scratch (issue #220: an image built outside
+/// `install-*-rootfs.sh`, such as `nginx-1.27`, can reach the host with
+/// neither path present — the guest then never attempts DHCP or prints a
+/// sentinel, and the host silently burns the full `network_ready_timeout`
+/// before marking the VM `error`).
 /// Ubuntu/Rocky: systemd oneshot script. Alpine: OpenRC init script.
 fn patch_network_ready_script(rootfs: &Path) -> Result<(), RootfsError> {
-    if guest_path_exists(rootfs, NETWORK_READY_SCRIPT_PATH) {
+    // New OCI imports already own DHCP/readiness through their chosen init.
+    if guest_path_exists(rootfs, crate::oci::provision::INIT_SYSTEM_PATH) {
+        return Ok(());
+    }
+    let has_systemd_script = guest_path_exists(rootfs, NETWORK_READY_SCRIPT_PATH);
+    if has_systemd_script {
         write_into_image(
             rootfs,
             NETWORK_READY_SCRIPT_PATH,
@@ -590,14 +831,146 @@ fn patch_network_ready_script(rootfs: &Path) -> Result<(), RootfsError> {
         // debugfs `write` creates regular files as 0664; the oneshot unit
         // invokes this path directly, so it must stay executable.
         set_guest_file_mode(rootfs, NETWORK_READY_SCRIPT_PATH, "0100755");
+        ensure_network_ready_unit_enabled(rootfs)?;
     }
-    if guest_path_exists(rootfs, NETWORK_READY_OPENRC_PATH) {
+    let has_openrc_script = guest_path_exists(rootfs, NETWORK_READY_OPENRC_PATH);
+    if has_openrc_script {
         write_into_image(
             rootfs,
             NETWORK_READY_OPENRC_PATH,
             network_ready_openrc().as_bytes(),
         )?;
         set_guest_file_mode(rootfs, NETWORK_READY_OPENRC_PATH, "0100755");
+        ensure_network_ready_openrc_enabled(rootfs)?;
+    }
+    if !has_systemd_script && !has_openrc_script {
+        install_network_ready_fallback(rootfs)?;
+    }
+    Ok(())
+}
+
+/// Repairs a disk whose readiness script survived on disk (e.g. from an
+/// earlier, partial provisioning pass) while its systemd unit and
+/// `multi-user.target.wants` symlink never landed — issue #224, found on two
+/// live `debian-latest` VMs where the guest never attempted DHCP because
+/// systemd had nothing telling it to run the script at all. A no-op once the
+/// unit is already there, so an image with its own pre-baked, correctly
+/// enabled unit is left untouched.
+fn ensure_network_ready_unit_enabled(rootfs: &Path) -> Result<(), RootfsError> {
+    if !guest_path_exists(rootfs, "/etc/systemd/system") {
+        return Ok(());
+    }
+    if !guest_path_exists(rootfs, NETWORK_READY_UNIT_PATH) {
+        write_into_image(
+            rootfs,
+            NETWORK_READY_UNIT_PATH,
+            NETWORK_READY_UNIT.as_bytes(),
+        )?;
+    }
+    if guest_path_exists(rootfs, "/etc/systemd/system/multi-user.target.wants")
+        && !guest_path_exists(rootfs, NETWORK_READY_UNIT_WANTS_PATH)
+    {
+        ensure_symlink(
+            rootfs,
+            NETWORK_READY_UNIT_WANTS_PATH,
+            NETWORK_READY_UNIT_PATH,
+        )?;
+    }
+    Ok(())
+}
+
+/// OpenRC counterpart of [`ensure_network_ready_unit_enabled`].
+fn ensure_network_ready_openrc_enabled(rootfs: &Path) -> Result<(), RootfsError> {
+    if guest_path_exists(rootfs, "/etc/runlevels/default")
+        && !guest_path_exists(rootfs, NETWORK_READY_OPENRC_RUNLEVEL_PATH)
+    {
+        ensure_symlink(
+            rootfs,
+            NETWORK_READY_OPENRC_RUNLEVEL_PATH,
+            NETWORK_READY_OPENRC_PATH,
+        )?;
+    }
+    Ok(())
+}
+
+/// Installs the readiness oneshot on an image that shipped with neither the
+/// systemd script nor the OpenRC one — mirrors
+/// [`crate::guest_agent::install`]'s systemd-or-OpenRC branching and its
+/// "nothing we can write into offline" no-op when `/usr/local` itself is
+/// missing.
+fn install_network_ready_fallback(rootfs: &Path) -> Result<(), RootfsError> {
+    if !ensure_bin_dir(rootfs)? {
+        return Ok(());
+    }
+    write_into_image(
+        rootfs,
+        NETWORK_READY_SCRIPT_PATH,
+        network_ready_script().as_bytes(),
+    )?;
+    set_guest_file_mode(rootfs, NETWORK_READY_SCRIPT_PATH, "0100755");
+
+    if guest_path_exists(rootfs, "/etc/systemd/system") {
+        write_into_image(
+            rootfs,
+            NETWORK_READY_UNIT_PATH,
+            NETWORK_READY_UNIT.as_bytes(),
+        )?;
+        // systemd only honors *symlinks* under multi-user.target.wants.
+        if guest_path_exists(rootfs, "/etc/systemd/system/multi-user.target.wants") {
+            ensure_symlink(
+                rootfs,
+                NETWORK_READY_UNIT_WANTS_PATH,
+                NETWORK_READY_UNIT_PATH,
+            )?;
+        }
+    }
+    if guest_path_exists(rootfs, "/etc/init.d") {
+        write_into_image(
+            rootfs,
+            NETWORK_READY_OPENRC_PATH,
+            network_ready_openrc().as_bytes(),
+        )?;
+        set_guest_file_mode(rootfs, NETWORK_READY_OPENRC_PATH, "0100755");
+        if guest_path_exists(rootfs, "/etc/runlevels/default") {
+            ensure_symlink(
+                rootfs,
+                NETWORK_READY_OPENRC_RUNLEVEL_PATH,
+                NETWORK_READY_OPENRC_PATH,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Ensures `/usr/local/sbin` exists so the readiness script can be
+/// installed. Alpine templates ship `/usr/local` without `sbin`.
+fn ensure_bin_dir(rootfs: &Path) -> Result<bool, RootfsError> {
+    if guest_path_exists(rootfs, "/usr/local/sbin") {
+        return Ok(true);
+    }
+    if !guest_path_exists(rootfs, "/usr/local") {
+        return Ok(false);
+    }
+    let _ = run_debugfs(rootfs, "mkdir /usr/local/sbin");
+    if !guest_path_exists(rootfs, "/usr/local/sbin") {
+        return Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: "debugfs failed to create /usr/local/sbin for network-ready fallback".into(),
+        });
+    }
+    Ok(true)
+}
+
+/// Creates `link` → `target` inside the image and verifies the link exists.
+/// debugfs may exit 0 even when the command failed, so we check positively.
+fn ensure_symlink(rootfs: &Path, link: &str, target: &str) -> Result<(), RootfsError> {
+    remove_from_image(rootfs, link);
+    let _ = run_debugfs(rootfs, &format!("symlink {link} {target}"));
+    if !guest_path_exists(rootfs, link) {
+        return Err(RootfsError::Specialize {
+            path: rootfs.to_owned(),
+            detail: format!("debugfs failed to create symlink {link} → {target}"),
+        });
     }
     Ok(())
 }
@@ -841,6 +1214,21 @@ mod tests {
     use super::*;
     use core::assert_matches;
 
+    #[test]
+    fn the_guest_ipv6_sysctl_pins_the_address_the_api_stored() {
+        let conf = ipv6_sysctl_conf();
+        // EUI-64 (addr_gen_mode 0), not systemd's stable-privacy default:
+        // anything else produces an address the firewall never pinned, and
+        // the guest's IPv6 traffic would be dropped at L2.
+        assert!(conf.contains("net.ipv6.conf.default.addr_gen_mode = 0"));
+        assert!(conf.contains("net.ipv6.conf.eth0.addr_gen_mode = 0"));
+        // Privacy extensions would source outbound traffic from a rotating
+        // temporary address, which is likewise not the leased one.
+        assert!(conf.contains("net.ipv6.conf.eth0.use_tempaddr = 0"));
+        // The gateway advertises the prefix and the default route.
+        assert!(conf.contains("net.ipv6.conf.eth0.accept_ra = 2"));
+    }
+
     fn template_file(directory: &Path, content: &[u8]) -> File {
         let path = directory.join("template.ext4");
         fs::write(&path, content).unwrap();
@@ -1070,7 +1458,7 @@ mod tests {
     }
 
     /// A VM whose `diskGb` was edited upward after it already had a disk
-    /// (`public-docs/storage.md`) needs the *next* `prepare_rootfs` call
+    /// (`public-docs/guides/storage.md`) needs the *next* `prepare_rootfs` call
     /// — the "reuse existing disk" path, not the "fresh copy" one — to
     /// actually grow it.
     #[test]
@@ -1208,6 +1596,7 @@ mod tests {
         let rootfs = directory.path().join("rootfs.ext4");
         real_rootfs_with_guest_dirs(&rootfs);
         run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        write_into_image(&rootfs, crate::oci::provision::GUEST_TOOLBOX, b"busybox").unwrap();
 
         specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
@@ -1219,6 +1608,206 @@ mod tests {
         let console = debugfs_cat(&rootfs, "/etc/firecrab/rc.console");
         assert!(console.contains("cat /etc/motd"), "{console}");
         assert!(console.contains("fastfetch"), "{console}");
+    }
+
+    const ALPINE_INITTAB: &str = "::sysinit:/sbin/openrc sysinit\n\
+        # Put a getty on the serial port\n\
+        #ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100\n\
+        ttyS0::respawn:/sbin/agetty --autologin root --noclear ttyS0 vt100\n\
+        ::shutdown:/sbin/openrc shutdown\n";
+
+    #[test]
+    fn wrap_inittab_routes_the_serial_getty_through_the_session_helper() {
+        let wrapped = wrap_inittab_serial_console(ALPINE_INITTAB).unwrap();
+
+        assert!(
+            wrapped.contains(&format!(
+                "\nttyS0::respawn:/bin/sh {TEMPLATE_CONSOLE_SESSION_PATH} \
+                 /sbin/agetty --autologin root --noclear ttyS0 vt100\n"
+            )),
+            "{wrapped}"
+        );
+        assert!(
+            wrapped.contains("\n#ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100\n"),
+            "comments stay as they are: {wrapped}"
+        );
+        assert!(wrapped.starts_with("::sysinit:/sbin/openrc sysinit\n"));
+        assert!(wrapped.ends_with("::shutdown:/sbin/openrc shutdown\n"));
+    }
+
+    #[test]
+    fn wrap_inittab_leaves_an_already_wrapped_or_getty_less_table_alone() {
+        let wrapped = wrap_inittab_serial_console(ALPINE_INITTAB).unwrap();
+
+        assert_eq!(wrap_inittab_serial_console(&wrapped), None);
+        assert_eq!(
+            wrap_inittab_serial_console("::sysinit:/sbin/openrc sysinit\n"),
+            None
+        );
+    }
+
+    /// Runs the helper with its guest paths pointed into `dir`.
+    fn run_console_session_helper(dir: &Path, args: &[&str]) -> std::process::Output {
+        let flag = dir.join("console-active");
+        let tty = dir.join("tty");
+        let script = TEMPLATE_CONSOLE_SESSION_SCRIPT
+            .replace("/run/firecrab-console-active", flag.to_str().unwrap())
+            .replace("/dev/ttyS0", tty.to_str().unwrap());
+        Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .arg("firecrab-console-session")
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_console_session_helper_marks_only_a_respawned_session() {
+        let directory = tempdir().unwrap();
+        let tty = directory.path().join("tty");
+
+        run_console_session_helper(directory.path(), &[]);
+        assert!(!tty.exists(), "the first getty start of a boot is silent");
+
+        run_console_session_helper(directory.path(), &[]);
+        let written = fs::read(&tty).unwrap();
+        assert!(
+            written.starts_with(crate::console_session::SESSION_ENDED_MARKER),
+            "{written:?}"
+        );
+        assert!(String::from_utf8_lossy(&written).contains("session ended"));
+    }
+
+    #[test]
+    fn the_console_session_helper_execs_the_getty_it_wraps() {
+        let directory = tempdir().unwrap();
+
+        let output = run_console_session_helper(directory.path(), &["echo", "getty started"]);
+
+        assert_eq!(output.stdout, b"getty started\n");
+    }
+
+    #[test]
+    fn specialize_guest_wraps_a_busybox_template_serial_getty() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        write_into_image(&rootfs, "/etc/inittab", ALPINE_INITTAB.as_bytes()).unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        assert_eq!(
+            debugfs_cat(&rootfs, "/etc/inittab"),
+            wrap_inittab_serial_console(ALPINE_INITTAB).unwrap(),
+            "wrapped once, however many times the VM starts"
+        );
+        assert_eq!(
+            debugfs_cat(&rootfs, TEMPLATE_CONSOLE_SESSION_PATH),
+            TEMPLATE_CONSOLE_SESSION_SCRIPT
+        );
+    }
+
+    /// Every start's SSH install leaves `/etc/firecrab/services.d` on catalog
+    /// disks too. The next start must still treat the disk as a template: an
+    /// OCI inittab points init at `/etc/firecrab/busybox`, which a template
+    /// does not have, so the guest never boots.
+    #[test]
+    fn specialize_guest_keeps_a_template_inittab_once_ssh_created_etc_firecrab() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        write_into_image(&rootfs, "/etc/inittab", ALPINE_INITTAB.as_bytes()).unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/firecrab/services.d").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let inittab = debugfs_cat(&rootfs, "/etc/inittab");
+        assert!(
+            !inittab.contains(crate::oci::provision::GUEST_TOOLBOX),
+            "a template must not get the OCI console: {inittab}"
+        );
+        assert_eq!(
+            inittab,
+            wrap_inittab_serial_console(ALPINE_INITTAB).unwrap()
+        );
+    }
+
+    #[test]
+    fn specialize_guest_hooks_a_systemd_template_serial_getty() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        for dir in [
+            "/etc/systemd",
+            "/etc/systemd/system",
+            SERIAL_GETTY_DROPIN_DIR,
+        ] {
+            run_debugfs(&rootfs, &format!("mkdir {dir}")).unwrap();
+        }
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let dropin = debugfs_cat(
+            &rootfs,
+            &format!("{SERIAL_GETTY_DROPIN_DIR}/firecrab-session.conf"),
+        );
+        assert!(
+            dropin.contains(&format!(
+                "ExecStartPre=-/bin/sh {TEMPLATE_CONSOLE_SESSION_PATH}\n"
+            )),
+            "{dropin}"
+        );
+        assert_eq!(
+            debugfs_cat(&rootfs, TEMPLATE_CONSOLE_SESSION_PATH),
+            TEMPLATE_CONSOLE_SESSION_SCRIPT
+        );
+    }
+
+    #[test]
+    fn specialize_guest_skips_the_session_helper_without_a_serial_getty() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        assert!(!guest_path_exists(&rootfs, TEMPLATE_CONSOLE_SESSION_PATH));
+    }
+
+    /// #303: import writes a native init's `rc.serial` once, so an existing
+    /// disk only gets the session-ended marker if every start rewrites it.
+    #[test]
+    fn specialize_guest_refreshes_a_native_init_serial_console() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        write_into_image(
+            &rootfs,
+            crate::oci::provision::INIT_SYSTEM_PATH,
+            b"systemd\n",
+        )
+        .unwrap();
+        write_into_image(
+            &rootfs,
+            crate::oci::provision::GUEST_SERIAL_SCRIPT,
+            b"#!/bin/sh\nold console\n",
+        )
+        .unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        assert_eq!(
+            debugfs_cat(&rootfs, crate::oci::provision::GUEST_SERIAL_SCRIPT),
+            crate::oci::provision::serial_console_script()
+        );
+        assert!(
+            !guest_path_exists(&rootfs, "/etc/inittab"),
+            "a native init keeps its own console, never a Firecrab inittab"
+        );
     }
 
     #[test]
@@ -1249,13 +1838,46 @@ mod tests {
         write_into_image(
             &rootfs,
             "/usr/local/bin/systemctl",
-            b"#!/bin/sh\n# Firecrab systemctl (public-docs/oci.md). Not systemd.\n",
+            b"#!/bin/sh\n# Firecrab systemctl (public-docs/guides/oci.md). Not systemd.\n",
         )
         .unwrap();
 
         specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
         assert!(!guest_path_exists(&rootfs, "/usr/local/bin/systemctl"));
+    }
+
+    #[test]
+    fn specialize_guest_upgrades_old_oci_dhcp_hooks_and_preserves_native_init() {
+        for init in ["busybox", "systemd"] {
+            let directory = tempdir().unwrap();
+            let rootfs = directory.path().join("rootfs.ext4");
+            real_rootfs_with_guest_dirs(&rootfs);
+            run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+            write_into_image(
+                &rootfs,
+                crate::oci::provision::INIT_SYSTEM_PATH,
+                format!("{init}\n").as_bytes(),
+            )
+            .unwrap();
+            write_into_image(&rootfs, "/etc/firecrab/rc.boot", b"native boot runtime\n").unwrap();
+            let hook = crate::oci::provision::GUEST_DHCP_SCRIPT;
+            write_into_image(&rootfs, hook, b"#!/bin/sh\nip addr flush dev eth0\n").unwrap();
+
+            specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+            let updated = debugfs_cat(&rootfs, hook);
+            assert!(updated.contains("ip -4 addr flush"), "{init}: {updated}");
+            assert!(!updated.contains("ip addr flush"), "{init}: {updated}");
+            let metadata = run_debugfs(&rootfs, &format!("stat {hook}")).unwrap();
+            assert!(String::from_utf8_lossy(&metadata.stdout).contains("0755"));
+            if init == "systemd" {
+                assert_eq!(
+                    debugfs_cat(&rootfs, "/etc/firecrab/rc.boot"),
+                    "native boot runtime\n"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1302,6 +1924,7 @@ mod tests {
         let rootfs = directory.path().join("rootfs.ext4");
         real_rootfs_with_guest_dirs(&rootfs);
         run_debugfs(&rootfs, "mkdir /etc/firecrab").unwrap();
+        write_into_image(&rootfs, crate::oci::provision::GUEST_TOOLBOX, b"busybox").unwrap();
         run_debugfs(&rootfs, "mkdir /usr").unwrap();
         run_debugfs(&rootfs, "mkdir /usr/sbin").unwrap();
         run_debugfs(&rootfs, "mkdir /bin").unwrap();
@@ -1312,9 +1935,24 @@ mod tests {
         specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
 
         let inittab = debugfs_cat(&rootfs, "/etc/inittab");
+        // #223: routed through the agetty wrapper (session-ended banner on
+        // respawn), not a bare `respawn:/usr/sbin/agetty` line.
         assert!(
-            inittab.contains("ttyS0::respawn:/usr/sbin/agetty"),
+            inittab.contains(&format!(
+                "ttyS0::respawn:{} sh {}",
+                crate::oci::provision::GUEST_TOOLBOX,
+                crate::oci::provision::GUEST_AGETTY_WRAPPER
+            )),
             "{inittab}"
+        );
+        let wrapper = debugfs_cat(&rootfs, crate::oci::provision::GUEST_AGETTY_WRAPPER);
+        assert!(
+            wrapper.contains("exec /usr/sbin/agetty --autologin root"),
+            "{wrapper}"
+        );
+        assert!(
+            wrapper.contains("session ended"),
+            "wrapper must print a session-boundary banner on respawn: {wrapper}"
         );
         let passwd = debugfs_cat(&rootfs, "/etc/passwd");
         assert!(
@@ -1423,9 +2061,180 @@ mod tests {
         specialize_guest(&rootfs, id, &BTreeMap::new()).unwrap();
     }
 
+    /// Mirrors the OpenRC seed-and-rewrite coverage below (Ubuntu templates
+    /// historically enabled systemd-resolved's stub without installing the
+    /// package — this rewrite is how an already-baked image picks up the
+    /// `getent`-then-`dig@gateway` fallback without a re-import).
+    #[test]
+    fn specialize_guest_patches_an_existing_systemd_network_ready_script() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        write_into_image(
+            &rootfs,
+            NETWORK_READY_SCRIPT_PATH,
+            b"#!/bin/sh\necho stale placeholder\n",
+        )
+        .unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let script = debugfs_cat(&rootfs, NETWORK_READY_SCRIPT_PATH);
+        assert!(
+            script.contains("FIRECRAB_NETWORK_READY"),
+            "stale script must be rewritten, not left in place: {script}"
+        );
+        assert!(!script.contains("stale placeholder"), "{script}");
+        // Patching an existing script must not also install the fallback
+        // unit — the image's own pre-baked unit is the one that runs it.
+        assert!(!guest_path_exists(&rootfs, NETWORK_READY_UNIT_PATH));
+    }
+
+    /// #224: two live `debian-latest` VM disks had the readiness script on
+    /// disk (from an earlier, partial provisioning pass) but no
+    /// `multi-user.target.wants` symlink — systemd never started it, so the
+    /// guest never attempted DHCP. `patch_network_ready_script` must repair
+    /// a missing unit/symlink even when the script already exists, not just
+    /// rewrite the script's content.
+    #[test]
+    fn specialize_guest_repairs_a_stale_disks_missing_network_ready_unit() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system/multi-user.target.wants").unwrap();
+        write_into_image(
+            &rootfs,
+            NETWORK_READY_SCRIPT_PATH,
+            b"#!/bin/sh\necho stale placeholder\n",
+        )
+        .unwrap();
+        // The unit file and its enablement symlink are both absent — the
+        // exact state found on the two affected VM disks.
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let unit = debugfs_cat(&rootfs, NETWORK_READY_UNIT_PATH);
+        assert!(
+            unit.contains("ExecStart=/usr/local/sbin/firecrab-network-ready.sh"),
+            "{unit}"
+        );
+        assert!(
+            guest_path_exists(&rootfs, NETWORK_READY_UNIT_WANTS_PATH),
+            "unit must be (re)enabled, not just (re)written"
+        );
+    }
+
+    /// Repairing must stay a no-op once the unit is already correctly
+    /// enabled — it must not, say, replace a real image's own unit content.
+    #[test]
+    fn specialize_guest_does_not_disturb_an_already_enabled_network_ready_unit() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system/multi-user.target.wants").unwrap();
+        write_into_image(
+            &rootfs,
+            NETWORK_READY_SCRIPT_PATH,
+            b"#!/bin/sh\necho stale placeholder\n",
+        )
+        .unwrap();
+        write_into_image(
+            &rootfs,
+            NETWORK_READY_UNIT_PATH,
+            b"[Unit]\nDescription=the image's own unit\n",
+        )
+        .unwrap();
+        ensure_symlink(
+            &rootfs,
+            NETWORK_READY_UNIT_WANTS_PATH,
+            NETWORK_READY_UNIT_PATH,
+        )
+        .unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let unit = debugfs_cat(&rootfs, NETWORK_READY_UNIT_PATH);
+        assert!(
+            unit.contains("the image's own unit"),
+            "an already-enabled unit must not be overwritten: {unit}"
+        );
+    }
+
+    /// #220: `nginx-1.27` was never built through `install-*-rootfs.sh`, so
+    /// it shipped with neither the readiness script nor its systemd unit —
+    /// the host then burned the full `network_ready_timeout` (180s) waiting
+    /// for a sentinel the guest had no way to print. An image that has
+    /// `/usr/local/sbin` and `/etc/systemd/system` but never baked in either
+    /// readiness path must get one installed from scratch.
+    #[test]
+    fn specialize_guest_installs_a_systemd_network_ready_fallback_when_the_image_shipped_none() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/systemd/system/multi-user.target.wants").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let script = debugfs_cat(&rootfs, NETWORK_READY_SCRIPT_PATH);
+        assert!(script.contains("FIRECRAB_NETWORK_READY"), "{script}");
+        assert!(script.contains("FIRECRAB_NETWORK_FAILED"), "{script}");
+        let unit = debugfs_cat(&rootfs, NETWORK_READY_UNIT_PATH);
+        assert!(
+            unit.contains("ExecStart=/usr/local/sbin/firecrab-network-ready.sh"),
+            "{unit}"
+        );
+        assert!(unit.contains("WantedBy=multi-user.target"), "{unit}");
+        assert!(
+            guest_path_exists(&rootfs, NETWORK_READY_UNIT_WANTS_PATH),
+            "unit must be enabled, not just written"
+        );
+    }
+
+    /// Same gap on an OpenRC (Alpine-style) image: no `/etc/init.d` script,
+    /// no runlevel symlink.
+    #[test]
+    fn specialize_guest_installs_an_openrc_network_ready_fallback_when_the_image_shipped_none() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        run_debugfs(&rootfs, "mkdir /usr").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local").unwrap();
+        run_debugfs(&rootfs, "mkdir /usr/local/sbin").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/init.d").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/runlevels").unwrap();
+        run_debugfs(&rootfs, "mkdir /etc/runlevels/default").unwrap();
+
+        specialize_guest(&rootfs, Uuid::new_v4(), &BTreeMap::new()).unwrap();
+
+        let script = debugfs_cat(&rootfs, NETWORK_READY_OPENRC_PATH);
+        assert!(script.contains("openrc-run"), "{script}");
+        assert!(
+            guest_path_exists(&rootfs, NETWORK_READY_OPENRC_RUNLEVEL_PATH),
+            "service must be enabled in the default runlevel, not just written"
+        );
+    }
+
     fn sample_app_service() -> String {
         "#!/bin/sh\n\
-         # Firecrab service for the imported image entrypoint (public-docs/oci.md).\n\
+         # Firecrab service for the imported image entrypoint (public-docs/guides/oci.md).\n\
          export PATH='/usr/bin'\n\
          export APP_ENV='prod'\n\
          exec '/bin/app'\n"

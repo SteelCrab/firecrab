@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the public English documentation."""
+"""Validate public documentation and its bilingual test checklist."""
 
 import re
 import sys
@@ -11,8 +11,14 @@ PUBLIC_DOCS = REPO / "public-docs"
 # compress sentences: a contents table, one-fact lines, and a diagram all cost
 # lines that a reader gets back.
 MAX_LINES = 300
-# API is the contract page and may list guest paths in full.
-LINE_LIMIT_EXEMPT = frozenset({"api.md"})
+# API is the contract page; the complete test checklists also need room for
+# every case and the commands needed to run them.
+LINE_LIMIT_EXEMPT = frozenset({
+    "reference/api.md",
+    "development/testing.md",
+    "development/testing.ko.md",
+})
+KOREAN_ALLOWED = frozenset({"development/testing.ko.md"})
 
 LINK_RE = re.compile(r"\]\(\s*<?([^)>\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 PUBLIC_PATH_RE = re.compile(r"public-docs/[\w./-]+\.(?:md|py|sh)")
@@ -26,7 +32,7 @@ SOURCE_GLOBS = [
     "firecrab-api/src/**/*.rs",
     "firecrab-api-types/src/**/*.rs",
     "firecrab-helper-protocol/src/**/*.rs",
-    "firecrab-net-helper/src/**/*.rs",
+    "firecrab-helper/src/**/*.rs",
     "firecrab-frontend/src/**/*.ts",
     "firecrab-frontend/src/**/*.tsx",
     "scripts/**/*.sh",
@@ -47,6 +53,7 @@ def check_public_docs() -> list[str]:
 
     for doc in sorted(PUBLIC_DOCS.rglob("*.md")):
         relative = doc.relative_to(REPO)
+        public_path = doc.relative_to(PUBLIC_DOCS).as_posix()
 
         if doc.is_symlink():
             target = doc.resolve()
@@ -59,12 +66,15 @@ def check_public_docs() -> list[str]:
         text = doc.read_text(encoding="utf-8")
         lines = text.splitlines()
 
-        if doc.name not in LINE_LIMIT_EXEMPT and len(lines) > MAX_LINES:
+        if public_path not in LINE_LIMIT_EXEMPT and len(lines) > MAX_LINES:
             problems.append(f"{relative}: {len(lines)} lines exceeds {MAX_LINES}")
 
         for line_number, line in enumerate(lines, start=1):
-            if KOREAN_RE.search(line):
-                problems.append(f"{relative}:{line_number}: Korean text is not public documentation")
+            if public_path not in KOREAN_ALLOWED and KOREAN_RE.search(line):
+                problems.append(
+                    f"{relative}:{line_number}: Korean text is only allowed in "
+                    "development/testing.ko.md"
+                )
 
         in_fenced_code = False
         for line_number, line in enumerate(lines, start=1):
@@ -123,8 +133,8 @@ def main() -> int:
         return 1
 
     print(
-        "Public documentation is English, linked, and at most "
-        f"{MAX_LINES} lines per file (except {', '.join(sorted(LINE_LIMIT_EXEMPT))})."
+        "Public documentation links and language rules pass; files are at most "
+        f"{MAX_LINES} lines except {', '.join(sorted(LINE_LIMIT_EXEMPT))}."
     )
     return 0
 

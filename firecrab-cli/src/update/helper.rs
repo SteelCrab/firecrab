@@ -1,4 +1,4 @@
-//! The `firecrab-net-helper` client used by `firecrab update --apply`.
+//! The `firecrab-helper` client used by `firecrab update --apply`.
 //!
 //! `firecrab-helper-protocol`'s framing is async-only, so this is the one part
 //! of the CLI that spins up a tokio runtime; everything else stays synchronous.
