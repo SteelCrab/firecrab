@@ -29,6 +29,10 @@ test("connects, reads and removes a real database through the dashboard", async 
     await expect(panel.getByRole("cell", { name: "한글", exact: true })).toBeVisible();
     await expect(panel.getByRole("cell", { name: "<script>text</script>", exact: true })).toBeVisible();
     await expect(panel.locator(".pipe-database-preview tbody tr")).toHaveCount(3);
+    const longValue = panel.locator(".pipe-database-cell").filter({ hasText: /^x{2048}$/ });
+    await expect(longValue).toHaveCount(1);
+    expect(await longValue.evaluate(element => element.clientHeight)).toBeLessThanOrEqual(160);
+    expect(await longValue.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
     await expect(panel.locator(".pipe-database-preview script")).toHaveCount(0);
     await expect(panel.getByRole("button", { name: "Next rows", exact: true })).toBeDisabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

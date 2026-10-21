@@ -170,7 +170,7 @@ export default function PipeDatabases({ onUnsavedChange }: Props) {
       {preview && <>
         <p className="pipe-description">{t("Read-only preview: up to 50 rows, 2048 characters per cell. Binary values use hex. Row order can change between requests.", "읽기 전용 미리보기: 최대 50행, 셀당 2048자를 표시한다. 바이너리 값은 16진수로 표시한다. 조회할 때 행 순서가 달라질 수 있다.")}</p>
         {preview.rows.length ? <div className="table-scroll"><table className="vm-table pipe-database-preview"><thead><tr>{preview.columns.map(column => <th key={column.name} title={column.dataType}>{column.name}<small>{column.dataType}</small></th>)}</tr></thead>
-          <tbody>{preview.rows.map((row, index) => <tr key={index}>{row.map((value, cell) => <td key={preview.columns[cell].name}>{value === null ? <span className="pipe-database-null">NULL</span> : value}</td>)}</tr>)}</tbody></table></div>
+          <tbody>{preview.rows.map((row, index) => <tr key={index}>{row.map((value, cell) => <td key={preview.columns[cell].name}><div className="pipe-database-cell" tabIndex={value !== null && value.length > 160 ? 0 : undefined}>{value === null ? <span className="pipe-database-null">NULL</span> : value}</div></td>)}</tr>)}</tbody></table></div>
           : <p className="empty">{t("This table has no rows on this page.", "이 페이지에 데이터가 없다.")}</p>}
         <div className="pipe-controls">
           <button className="btn" type="button" disabled={busy || !previousOffsets.length} onClick={() => { if (selectedTable !== null) void readTable(selectedTable, previousOffsets.at(-1)!, previousOffsets.slice(0, -1)); }}>{t("Previous rows", "이전 행")}</button>
