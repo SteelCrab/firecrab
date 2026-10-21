@@ -297,11 +297,15 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
     ]),
   );
 
-  await vmPanel(page).getByRole("tab", { name: /^Overview/ }).click();
-  await expect(vmPanel(page).getByRole("button", { name: /Download key|키 다운로드/ })).toBeVisible();
-  await expect(vmPanel(page).getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
   // The detail is a side panel, not a modal: nothing covers the list.
-  await expect(page.locator(".console-overlay")).toHaveCount(0);
+  await expect(page.locator(".ssh-overlay")).toHaveCount(0);
+  // Its SSH button opens the same dialog as the row menu below.
+  await vmPanel(page).getByRole("button", { name: "SSH", exact: true }).click();
+  const panelSsh = page.getByRole("dialog", { name: new RegExp(`SSH — ${DHCP_VM_NAME}`) });
+  await expect(panelSsh.getByRole("button", { name: /Download |다운로드/ })).toBeVisible();
+  await expect(panelSsh.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
+  await panelSsh.getByRole("button", { name: /^(Close|닫기)$/ }).click();
+  await expect(panelSsh).toHaveCount(0);
 
   // SSH from the VM list: Actions → SSH connect opens a dialog with the panel.
   await openEnglish(page, "/#/vms");

@@ -6,6 +6,8 @@ import './index.css'
 import './styles/frame.css'
 import './styles/detail.css'
 import './styles/vm.css'
+import './styles/ssh.css'
+import './styles/console.css'
 import App from './App.tsx'
 import { I18nProvider } from "./i18n.tsx"
 

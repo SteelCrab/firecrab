@@ -20,19 +20,20 @@ interface VmDetailPanelProps {
   vm: VmResponse;
   busy: boolean;
   onAction: (id: string, action: VmAction) => void;
+  /** Opens the SSH dialog for this VM. */
+  onOpenSsh: () => void;
 }
 
 /**
  * MicroVM detail in the side panel (spec §8.2). Mount it keyed by VM id:
  * choosing another VM starts again on the overview with no section in edit.
  */
-export default function VmDetailPanel({ vm: listed, busy, onAction }: VmDetailPanelProps) {
+export default function VmDetailPanel({ vm: listed, busy, onAction, onOpenSsh }: VmDetailPanelProps) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("overview");
   const transitioning = listed.state === "starting" || listed.state === "stopping";
   const detail = useVmDetail(listed.id, { fast: transitioning, withLog: tab === "logs" });
   const vm = detail.vm ?? listed;
-  const [sshOpen, setSshOpen] = useState(false);
   const edit = useSectionEdit(vm, detail.setVm, detail.reloadShells);
   const envCount = Object.keys(vm.env ?? {}).length;
 
@@ -58,10 +59,7 @@ export default function VmDetailPanel({ vm: listed, busy, onAction }: VmDetailPa
             vm={vm}
             busy={busy}
             onAction={onAction}
-            onSsh={() => {
-              setTab("overview");
-              setSshOpen(true);
-            }}
+            onSsh={onOpenSsh}
           />
         </div>
       </div>
@@ -88,8 +86,6 @@ export default function VmDetailPanel({ vm: listed, busy, onAction }: VmDetailPa
             vm={vm}
             detail={detail}
             edit={edit}
-            sshOpen={sshOpen}
-            onToggleSsh={() => setSshOpen((open) => !open)}
             onShowLog={() => setTab("logs")}
           />
         )}

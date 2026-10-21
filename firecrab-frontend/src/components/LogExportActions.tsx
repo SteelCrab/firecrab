@@ -11,7 +11,7 @@ interface LogExportActionsProps {
   filename: string;
   disabled?: boolean;
   className?: string;
-  /** Extra class on the small buttons (console bar uses `console-bar-btn`). */
+  /** Extra class on the small buttons, e.g. `btn sm`. */
   buttonClassName?: string;
   copyLabel?: string;
   downloadLabel?: string;

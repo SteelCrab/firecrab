@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Ellipsis, Loader2, Play, Square, SquareTerminal, X } from "lucide-react";
+import { Ellipsis, Loader2, Play, Square, SquareTerminal } from "lucide-react";
 import type { VmResponse, VmState } from "../../bindings";
 import { useI18n } from "../../i18n";
 import type { VmAction } from "../../model";
 import { VM_STATE_LABELS, availableActions } from "../../model";
 import { consolePageUrl } from "../../navigation";
-import ConsoleSshTab from "../ConsoleSshTab";
 import Sparkline from "../ui/Sparkline";
 import StatusBadge from "../ui/StatusBadge";
 import { startupFailure, startupStepLabel } from "./startup";
@@ -17,6 +16,8 @@ interface VmListProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onAction: (id: string, action: VmAction) => void;
+  /** Opens the SSH dialog for `vm`. */
+  onOpenSsh: (vm: VmResponse) => void;
 }
 
 const DESCRIPTIONS: Record<VmState, [string, string]> = {
@@ -29,20 +30,16 @@ const DESCRIPTIONS: Record<VmState, [string, string]> = {
 };
 
 /** MicroVM table (spec §8.1): one selectable row per VM, row actions on hover or selection. */
-export default function VmList({ vms, busy, selectedId, onSelect, onAction }: VmListProps) {
+export default function VmList({ vms, busy, selectedId, onSelect, onAction, onOpenSsh }: VmListProps) {
   const { t } = useI18n();
   /** Row whose actions menu is open — only ever one. */
   const [menu, setMenu] = useState<{ id: string; top: number; right: number } | null>(null);
-  /** VM whose SSH dialog is open. */
-  const [sshVm, setSshVm] = useState<VmResponse | null>(null);
   const tbody = useRef<HTMLTableSectionElement>(null);
 
-  // Esc closes the menu first, then the dialog, so one key never does both.
   useEffect(() => {
+    if (!menu) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (menu) setMenu(null);
-      else setSshVm(null);
+      if (event.key === "Escape") setMenu(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -65,8 +62,6 @@ export default function VmList({ vms, busy, selectedId, onSelect, onAction }: Vm
     tbody.current?.querySelector<HTMLElement>('tr[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
   }, [selectedId]);
 
-  // A row that disappears (deleted elsewhere) must not leave a dialog behind.
-  const openSshVm = sshVm ? (vms.find((vm) => vm.id === sshVm.id) ?? null) : null;
 
   return (
     <>
@@ -106,7 +101,7 @@ export default function VmList({ vms, busy, selectedId, onSelect, onAction }: Vm
               onCloseMenu={() => setMenu(null)}
               onOpenSsh={() => {
                 setMenu(null);
-                setSshVm(vm);
+                onOpenSsh(vm);
               }}
               onAction={onAction}
             />
@@ -114,25 +109,6 @@ export default function VmList({ vms, busy, selectedId, onSelect, onAction }: Vm
         </tbody>
       </table>
 
-      {openSshVm && (
-        <div className="console-overlay" role="presentation" onClick={() => setSshVm(null)}>
-          <div
-            className="console-panel"
-            role="dialog"
-            aria-modal="true"
-            aria-label={t(`SSH — ${openSshVm.name}`, `SSH — ${openSshVm.name}`)}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="console-bar">
-              <span className="console-title">{t(`SSH — ${openSshVm.name}`, `SSH — ${openSshVm.name}`)}</span>
-              <button type="button" className="icon-btn console-close" onClick={() => setSshVm(null)} aria-label={t("Close", "닫기")} title={t("Close", "닫기")}>
-                <X aria-hidden="true" />
-              </button>
-            </div>
-            <ConsoleSshTab vm={openSshVm} />
-          </div>
-        </div>
-      )}
     </>
   );
 }

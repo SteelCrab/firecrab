@@ -7,6 +7,7 @@ import type { VmAction } from "../../model";
 import { newVmHash } from "../../navigation";
 import Screen from "../layout/Screen";
 import { useScreenStatus } from "../layout/screenStatus";
+import SshDialog from "../ssh/SshDialog";
 import VmDetailPanel from "./VmDetailPanel";
 import VmList from "./VmList";
 import VmSummary from "./VmSummary";
@@ -30,6 +31,9 @@ export default function VmScreen({ vms, loaded, busy, selectedVmId, onSelectVm, 
   const [query, setQuery] = useState("");
   const visible = filterVms(vms, filter, query);
   const selected = vms.find((vm) => vm.id === selectedVmId) ?? null;
+  const [sshVmId, setSshVmId] = useState<string | null>(null);
+  const sshVm = vms.find((vm) => vm.id === sshVmId) ?? null;
+  const closeSsh = useCallback(() => setSshVmId(null), []);
 
   const select = useCallback((id: string) => {
     onSelectVm(id);
@@ -81,7 +85,7 @@ export default function VmScreen({ vms, loaded, busy, selectedVmId, onSelectVm, 
         </a>
       )}
       toolbar={toolbar}
-      detail={selected ? <VmDetailPanel key={selected.id} vm={selected} busy={busy.has(selected.id)} onAction={onAction} /> : null}
+      detail={selected ? <VmDetailPanel key={selected.id} vm={selected} busy={busy.has(selected.id)} onAction={onAction} onOpenSsh={() => setSshVmId(selected.id)} /> : null}
       detailLabel={t("MicroVM detail", "MicroVM 상세")}
       detailKind={<><Cpu aria-hidden="true" />MicroVM</>}
       onCloseDetail={() => onSelectVm(null)}
@@ -99,9 +103,10 @@ export default function VmScreen({ vms, loaded, busy, selectedVmId, onSelectVm, 
         <div className="empty-state">{t("No MicroVMs match the filter.", "조건에 맞는 MicroVM이 없습니다.")}</div>
       ) : (
         <div className="vm-list-scroll">
-          <VmList vms={visible} busy={busy} selectedId={selectedVmId} onSelect={select} onAction={onAction} />
+          <VmList vms={visible} busy={busy} selectedId={selectedVmId} onSelect={select} onAction={onAction} onOpenSsh={(vm) => setSshVmId(vm.id)} />
         </div>
       )}
+      {sshVm && <SshDialog vm={sshVm} onClose={closeSsh} />}
     </Screen>
   );
 }

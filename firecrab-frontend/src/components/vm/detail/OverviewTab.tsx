@@ -1,16 +1,13 @@
 import { useEffect, useState } from "react";
 import { Check, CircleAlert, Loader2, Minus, SquareTerminal, X } from "lucide-react";
 import type { StartupStep, StartupStepRun, VmResponse } from "../../../bindings";
-import { downloadSshKey, fetchSshKeyPem } from "../../../api/client";
 import { useI18n } from "../../../i18n";
-import { copyText } from "../../../lib/textExport";
-import ConsoleSshTab from "../../ConsoleSshTab";
 import RamStepper from "../../RamStepper";
 import ReconciliationStatus from "../../ReconciliationStatus";
 import ShellCheckboxList from "../../ShellCheckboxList";
-import Sparkline from "../../ui/Sparkline";
 import { STARTUP_STEPS, clockTime, duration, startupFailure, startupFailureDetail, startupStepLabel } from "../startup";
-import { HIGH_USAGE_PERCENT, formatMib, formatPercent, usageSeries, vmSpec } from "../vmFormat";
+import { vmSpec } from "../vmFormat";
+import VmUsage from "../VmUsage";
 import { DetailProp, DetailSection } from "../../ui/DetailSection";
 import { EditActions, EditButton, EditableProp, FieldError } from "./parts";
 import type { SectionEdit } from "./useSectionEdit";
@@ -20,12 +17,10 @@ interface OverviewTabProps {
   vm: VmResponse;
   detail: VmDetailData;
   edit: SectionEdit;
-  sshOpen: boolean;
-  onToggleSsh: () => void;
   onShowLog: () => void;
 }
 
-export default function OverviewTab({ vm, detail, edit, sshOpen, onToggleSsh, onShowLog }: OverviewTabProps) {
+export default function OverviewTab({ vm, detail, edit, onShowLog }: OverviewTabProps) {
   const { t } = useI18n();
   const failure = vm.state === "error" ? startupFailure(vm) : null;
   const draft = edit.draft;
@@ -58,7 +53,7 @@ export default function OverviewTab({ vm, detail, edit, sshOpen, onToggleSsh, on
       )}
 
       <DetailSection title={t("Resource usage", "리소스 사용량")}>
-        <Usage vm={vm} />
+        <VmUsage vm={vm} />
       </DetailSection>
 
       <DetailSection title={t("Properties", "속성")}>
@@ -154,39 +149,8 @@ export default function OverviewTab({ vm, detail, edit, sshOpen, onToggleSsh, on
         <Timeline currentIndex={currentIndex} timeline={vm.startupTimeline} />
       </DetailSection>
 
-      <Ssh vm={vm} open={sshOpen} onToggle={onToggleSsh} />
+      <Ssh vm={vm} />
     </>
-  );
-}
-
-function Usage({ vm }: { vm: VmResponse }) {
-  const { t } = useI18n();
-  if (vm.state !== "running") {
-    return <p className="detail-note">{t("CPU and memory use show while the VM runs.", "VM이 실행 중일 때 CPU와 메모리 사용량이 보입니다.")}</p>;
-  }
-  const cpu = usageSeries(vm.usageHistory, (sample) => sample.cpuUsagePercent);
-  const memory = usageSeries(vm.usageHistory, (sample) => sample.memoryUsedPercent);
-  if (cpu.length === 0 && vm.cpuUsagePercent == null) {
-    return <p className="detail-note">{t("Waiting for Guest Agent… (restart the VM if this persists)", "게스트 에이전트 대기 중… (계속되면 VM을 재시작해 주세요)")}</p>;
-  }
-  const cpuHot = (vm.cpuUsagePercent ?? 0) >= HIGH_USAGE_PERCENT;
-  const memoryHot = (vm.memoryUsedPercent ?? 0) >= HIGH_USAGE_PERCENT;
-  return (
-    <div className="vm-usage-cards">
-      <div className="vm-usage-card">
-        <div className="vm-usage-card-label">CPU</div>
-        <div className="vm-usage-card-value">{vm.cpuUsagePercent == null ? "—" : formatPercent(vm.cpuUsagePercent)}</div>
-        <Sparkline values={cpu} width={160} height={36} area tone={cpuHot ? "warn" : "accent"} />
-      </div>
-      <div className="vm-usage-card">
-        <div className="vm-usage-card-label">{t("Memory", "메모리")}</div>
-        <div className="vm-usage-card-value">
-          {vm.memoryUsedMib == null ? "—" : formatMib(vm.memoryUsedMib)}
-          {vm.memoryUsedMib != null && <small> / {formatMib(vm.memoryTotalMib ?? vm.ram)}</small>}
-        </div>
-        <Sparkline values={memory} width={160} height={36} area tone={memoryHot ? "warn" : "neutral"} />
-      </div>
-    </div>
   );
 }
 
@@ -227,13 +191,9 @@ function Timeline({ currentIndex, timeline }: { currentIndex: number; timeline: 
   );
 }
 
-function Ssh({ vm, open, onToggle }: { vm: VmResponse; open: boolean; onToggle: () => void }) {
+/** The guest's host key at a glance; the key and commands are in the SSH dialog. */
+function Ssh({ vm }: { vm: VmResponse }) {
   const { t } = useI18n();
-  const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const fail = (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught));
-
   return (
     <DetailSection title="SSH">
       <dl className="props">
@@ -243,45 +203,6 @@ function Ssh({ vm, open, onToggle }: { vm: VmResponse; open: boolean; onToggle: 
             : <span className="muted">{t("Host fingerprint after first start", "호스트 지문은 첫 시작 후")}</span>}
         </DetailProp>
       </dl>
-      <div className="detail-sec-buttons">
-        <button
-          type="button"
-          className="btn sm"
-          disabled={busy}
-          onClick={() => {
-            setError(null);
-            setBusy(true);
-            downloadSshKey(vm.id, vm.name).catch(fail).finally(() => setBusy(false));
-          }}
-        >
-          {busy ? t("Downloading…", "받는 중…") : t("Download key", "키 다운로드")}
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          disabled={busy}
-          title={t("Copy the private key text", "개인 키 본문을 클립보드로 복사")}
-          onClick={() => {
-            setError(null);
-            setBusy(true);
-            fetchSshKeyPem(vm.id)
-              .then(copyText)
-              .then((ok) => {
-                setCopied(ok);
-                setTimeout(() => setCopied(false), 2_000);
-              })
-              .catch(fail)
-              .finally(() => setBusy(false));
-          }}
-        >
-          {copied ? t("Key copied", "키 복사됨") : t("Copy key", "키 복사")}
-        </button>
-        <button type="button" className="btn sm ghost" aria-expanded={open} onClick={onToggle}>
-          {open ? t("Hide SSH commands", "SSH 명령 접기") : t("SSH commands", "SSH 명령")}
-        </button>
-      </div>
-      {error && <div className="field-error">{error}</div>}
-      {open && <div className="detail-ssh-panel"><ConsoleSshTab vm={vm} /></div>}
     </DetailSection>
   );
 }

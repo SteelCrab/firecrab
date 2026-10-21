@@ -74,7 +74,6 @@
   color: var(--text-2);
   font: 11.5px/1.7 var(--mono);
 }
-.detail-body .detail-ssh-panel { margin-top: 12px; }
 
 /* Existing page sections (forms, runtime) shown inside the panel lose their card frame. */
 .detail-embed { padding-top: 4px; }

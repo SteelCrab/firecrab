@@ -344,7 +344,7 @@ function ImageJobLog({ job }: { job: ImageInstallResponse }) {
         <LogExportActions
           text={job.log}
           filename={logDownloadFilename("m2image-oci", job.alias)}
-          buttonClassName="btn console-bar-btn"
+          buttonClassName="btn sm"
           disabled={!job.log}
         />
       </div>
