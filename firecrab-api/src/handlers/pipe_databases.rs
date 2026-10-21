@@ -169,3 +169,7 @@ pub async fn delete(
     }
     Ok(Json(serde_json::json!({ "deleted": true })))
 }
+
+#[cfg(test)]
+#[path = "pipe_databases_tests.rs"]
+mod tests;
