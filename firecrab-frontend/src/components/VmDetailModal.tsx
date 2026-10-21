@@ -14,6 +14,8 @@ import type {
 import {
   ApiClientError,
   assignVmStorage,
+  downloadSshKey,
+  fetchSshKeyPem,
   getVm,
   getVmLog,
   listImages,
@@ -26,11 +28,13 @@ import {
 } from "../api/client";
 import { isEditableState, isEnvEditableState, isPortEditableState } from "../model";
 import { isValidPort } from "../lib/portForward";
-import { logDownloadFilename } from "../lib/textExport";
+import { copyText, logDownloadFilename } from "../lib/textExport";
+import ConsoleSshTab from "./ConsoleSshTab";
 import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
 import ShellCheckboxList from "./ShellCheckboxList";
 import UsageCharts from "./UsageCharts";
+import ReconciliationStatus from "./ReconciliationStatus";
 import { useI18n } from "../i18n";
 
 const STARTUP_STEPS: StartupStep[] = [
@@ -48,7 +52,7 @@ const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
 };
 
 // Derived client-side from the polled `startupStep` value — no dedicated
-// backend log field. See public-docs/dashboard.md for why.
+// backend log field. See public-docs/guides/dashboard.md for why.
 const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
   preparingDisk: "Preparing disk (copying rootfs template)…",
   generatingConfig: "Disk ready → generating Firecracker configuration…",
@@ -92,6 +96,11 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
   const [images, setImages] = useState<ImageResponse[]>([]);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<ApiClientError | null>(null);
+  const [sshKeyBusy, setSshKeyBusy] = useState(false);
+  /** SSH commands are long; they stay folded until asked for. */
+  const [sshOpen, setSshOpen] = useState(false);
+  const [sshKeyCopied, setSshKeyCopied] = useState(false);
+  const [sshKeyError, setSshKeyError] = useState<string | null>(null);
   const [microNetworks, setMicroNetworks] = useState<MicroNetworkResponse[]>([]);
   const [storageRoots, setStorageRoots] = useState<StorageRootResponse[]>([]);
 
@@ -324,16 +333,39 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
 
   return (
     <div className="console-overlay">
-      <div className="console-panel">
-        <div className="console-bar">
-          <span className="console-title">{t(`VM details — ${vm?.name ?? vmId}`, `VM 상세 — ${vm?.name ?? vmId}`)}</span>
-          {vm && <span className={`state-badge ${vm.state}`}>{vm.state}</span>}
-          <button className="btn console-close" onClick={onClose}>
+      <div
+        className="console-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t(`VM — ${vm?.name ?? vmId}`, `VM — ${vm?.name ?? vmId}`)}
+      >
+        <div className="console-bar vm-detail-bar">
+          <dl className="vm-detail-heading">
+            <div className="vm-detail-name">
+              <dt>NAME</dt>
+              <dd>{vm?.name ?? "—"}</dd>
+            </div>
+            <div className="vm-detail-id">
+              <dt>ID</dt>
+              <dd>{vm?.id ?? vmId}</dd>
+            </div>
+            <div className="vm-detail-state">
+              <dt>VM-STATUS</dt>
+              <dd>{vm ? <span className={`state-badge ${vm.state}`}>{vm.state}</span> : "—"}</dd>
+            </div>
+          </dl>
+          <button className="btn console-close" onClick={onClose} aria-label={t("Close", "닫기")} title={t("Close", "닫기")}>
             ✕
           </button>
         </div>
         {vm ? (
           <div className="detail-body">
+            {vm.reconciliation && (
+              <section className="vm-api-status" aria-label="API-STATUS">
+                <h3>API-STATUS</h3>
+                <ReconciliationStatus result={vm.reconciliation} />
+              </section>
+            )}
             <dl className="detail-fields mono">
               <dt>image</dt>
               <dd>{vm.template}</dd>
@@ -596,6 +628,69 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               </dd>
               <dt>ip</dt>
               <dd>{vm.ipv4 ?? "—"}</dd>
+              <dt>ipv6</dt>
+              <dd>{vm.ipv6 ?? "—"}</dd>
+              <dt>ssh</dt>
+              <dd>
+                <button
+                  type="button"
+                  className="btn small secondary"
+                  disabled={sshKeyBusy}
+                  onClick={() => {
+                    setSshKeyError(null);
+                    setSshKeyBusy(true);
+                    downloadSshKey(vm.id, vm.name)
+                      .catch((error: unknown) => {
+                        setSshKeyError(error instanceof Error ? error.message : String(error));
+                      })
+                      .finally(() => setSshKeyBusy(false));
+                  }}
+                >
+                  {sshKeyBusy
+                    ? t("Downloading…", "받는 중…")
+                    : t("Download key", "키 다운로드")}
+                </button>
+                <button
+                  type="button"
+                  className="btn small secondary"
+                  disabled={sshKeyBusy}
+                  title={t("Copy the private key text", "개인 키 본문을 클립보드로 복사")}
+                  onClick={() => {
+                    setSshKeyError(null);
+                    setSshKeyBusy(true);
+                    fetchSshKeyPem(vm.id)
+                      .then(copyText)
+                      .then((copied) => {
+                        setSshKeyCopied(copied);
+                        setTimeout(() => setSshKeyCopied(false), 2_000);
+                      })
+                      .catch((error: unknown) => {
+                        setSshKeyError(error instanceof Error ? error.message : String(error));
+                      })
+                      .finally(() => setSshKeyBusy(false));
+                  }}
+                >
+                  {sshKeyCopied ? t("Key copied", "키 복사됨") : t("Copy key", "키 복사")}
+                </button>
+                <button
+                  type="button"
+                  className="btn small secondary"
+                  aria-expanded={sshOpen}
+                  onClick={() => setSshOpen((open) => !open)}
+                >
+                  {sshOpen ? t("Hide SSH", "SSH 접기") : t("SSH", "SSH")}
+                </button>
+                {vm.sshHostFingerprint ? (
+                  <div className="mono" style={{ marginTop: "0.35rem", fontSize: "0.75rem" }}>
+                    {vm.sshHostFingerprint}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: "0.75rem", color: "var(--muted, #888)", marginTop: "0.35rem" }}>
+                    {t("Host fingerprint after first start", "호스트 지문은 첫 시작 후")}
+                  </div>
+                )}
+                {sshKeyError ? <div className="field-error">{sshKeyError}</div> : null}
+              </dd>
               <dt>mac</dt>
               <dd>{vm.mac ?? "—"}</dd>
               <dt>hostname</dt>
@@ -603,6 +698,11 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
               <dt>id</dt>
               <dd title={vm.id}>{vm.id}</dd>
             </dl>
+            {sshOpen && (
+              <section className="panel detail-ssh-panel" aria-label="SSH">
+                <ConsoleSshTab vm={vm} />
+              </section>
+            )}
             {isEnvEditableState(vm.state) && (
               <div className="detail-edit-actions">
                 {editing ? (
@@ -682,7 +782,7 @@ function clockTime(epochMillis: number): string {
 
 /**
  * The start pipeline as a row of timed steps, like a CI build log
- * (`public-docs/api.md`). Durations come from the
+ * (`public-docs/reference/api.md`). Durations come from the
  * server's own timestamps — polling is far too coarse to time a 2-second
  * disk copy — and only the still-running step ticks locally.
  */

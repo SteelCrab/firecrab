@@ -489,6 +489,53 @@ async fn public_alias_collides(state: &AppState, alias: &str) -> bool {
     }
 }
 
+/// Remove a local catalog registration so its alias can be registered again.
+pub async fn delete_local_registration(
+    State(state): State<AppState>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
+    AliasPath(alias): AliasPath<String>,
+) -> Result<StatusCode, AppError> {
+    // Share the register job's per-alias gate: a register must not publish a
+    // new row while its removal is in flight.
+    state
+        .microregistry_registers
+        .begin_with(&alias, "removing local registration")
+        .map_err(|_| {
+            AppError::conflict(
+                "register_in_progress",
+                "a register operation is already running for this image",
+                request_id.0,
+            )
+        })?;
+    let store = state.store.clone();
+    let alias_for_task = alias.clone();
+    let removed = tokio::task::spawn_blocking(move || {
+        store.delete_microregistry_local(&alias_for_task, Architecture::HOST.as_str())
+    })
+    .await;
+    match removed {
+        Ok(Ok(true)) => {
+            state
+                .microregistry_registers
+                .finish_ok_with(&alias, "local registration removed");
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(Ok(false)) => {
+            state
+                .microregistry_registers
+                .finish_err_with(&alias, "local registration not found");
+            Err(AppError::not_found(request_id.0))
+        }
+        error => {
+            tracing::error!(request_id = %request_id.0, ?error, "failed to remove local MicroRegistry row");
+            state
+                .microregistry_registers
+                .finish_err_with(&alias, "local registration removal failed");
+            Err(AppError::internal(request_id.0))
+        }
+    }
+}
+
 /// `GET /api/microregistry/register/{alias}` — latest snapshot, including idle.
 pub async fn get_microregistry_register(
     State(state): State<AppState>,
@@ -645,6 +692,105 @@ mod tests {
             snapshot = state.microregistry_registers.snapshot(alias);
         }
         snapshot
+    }
+
+    #[tokio::test]
+    async fn removing_a_local_registration_releases_its_alias_for_another_register() {
+        let root = tempdir().unwrap();
+        let state = empty_state(root.path()).await;
+        let alias = "custom-remove";
+        install_custom(&state, alias);
+        let (status, _) = start_microregistry_register(
+            State(state.clone()),
+            Extension(request_id()),
+            register_body(alias, "1"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(
+            wait_for_status(&state, alias, ImageInstallStatus::Succeeded)
+                .await
+                .status,
+            ImageInstallStatus::Succeeded
+        );
+
+        let status = delete_local_registration(
+            State(state.clone()),
+            Extension(request_id()),
+            Path(alias.to_owned()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert!(
+            state
+                .store
+                .microregistry_local(alias, Architecture::HOST.as_str())
+                .unwrap()
+                .is_none()
+        );
+        assert!(state.templates.resolve_alias(alias).is_some());
+        assert!(image_install::staged_package_exists(root.path(), alias));
+
+        let error = delete_local_registration(
+            State(state.clone()),
+            Extension(request_id()),
+            Path(alias.to_owned()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error_json(error).await.0, StatusCode::NOT_FOUND);
+        let (status, _) = start_microregistry_register(
+            State(state.clone()),
+            Extension(request_id()),
+            register_body(alias, "2"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(
+            wait_for_status(&state, alias, ImageInstallStatus::Succeeded)
+                .await
+                .status,
+            ImageInstallStatus::Succeeded
+        );
+        assert_eq!(
+            state
+                .store
+                .microregistry_local(alias, Architecture::HOST.as_str())
+                .unwrap()
+                .unwrap()
+                .version,
+            "2"
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_a_registration_refuses_an_active_register_job() {
+        let root = tempdir().unwrap();
+        let state = empty_state(root.path()).await;
+        state
+            .microregistry_registers
+            .begin("custom-running")
+            .unwrap();
+        let error = delete_local_registration(
+            State(state.clone()),
+            Extension(request_id()),
+            Path("custom-running".to_owned()),
+        )
+        .await
+        .unwrap_err();
+        let (status, body) = error_json(error).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "register_in_progress");
+        assert_eq!(
+            state
+                .microregistry_registers
+                .snapshot("custom-running")
+                .status,
+            ImageInstallStatus::Running
+        );
     }
 
     fn elf_machine_fixture(machine: u16) -> Vec<u8> {

@@ -1,8 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { REGISTRY_PORT, REPO_ROOT } from "./constants.js";
+import { managerSshArgs, shellQuote } from "./manager.js";
 
 export interface RegistryAnnouncement {
   reference: string;
@@ -43,13 +45,19 @@ function firstStdoutLine(child: ChildProcess, timeoutMs: number): Promise<string
       cleanup();
       reject(new Error(`oci-e2e-registry.py exited ${code} before announcing`));
     };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
     const cleanup = () => {
       clearTimeout(timer);
       stdout.off("data", onData);
       child.off("exit", onExit);
+      child.off("error", onError);
     };
     stdout.on("data", onData);
     child.once("exit", onExit);
+    child.once("error", onError);
   });
 }
 
@@ -74,22 +82,30 @@ export async function startLocalOciRegistry(
   port = REGISTRY_PORT,
 ): Promise<LocalOciRegistry> {
   const script = path.join(REPO_ROOT, "scripts/oci-e2e-registry.py");
-  const child = spawn("python3", [script, "--port", String(port)], {
+  const manager = managerSshArgs();
+  // The API's loopback and Linux SSH runtime live inside the management VM.
+  // Keep stdin open so closing the SSH session also stops the remote fixture.
+  const loader = "import json,sys; exec(compile(json.loads(sys.stdin.readline()), 'oci-e2e-registry.py', 'exec'))";
+  const remoteCommand = `python3 -u -c ${shellQuote(loader)} --port ${port} --exit-on-stdin-close`;
+  const source = manager ? await readFile(script, "utf8") : null;
+  const child = spawn(manager ? "ssh" : "python3", manager
+    ? [...manager, remoteCommand]
+    : [script, "--port", String(port)], {
     cwd: REPO_ROOT,
     env: { ...process.env, FIRECRAB_OCI_E2E_PORT: String(port) },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [manager ? "pipe" : "ignore", "pipe", "pipe"],
   });
+  if (source) child.stdin?.write(`${JSON.stringify(source)}\n`);
   const stderr: string[] = [];
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr.push(chunk.toString("utf8"));
   });
-  child.on("error", (error) => {
-    throw new Error(`failed to spawn oci-e2e-registry.py: ${error.message}`);
-  });
 
   let announcement: RegistryAnnouncement;
   try {
-    const line = await firstStdoutLine(child, 10_000);
+    // The fixture assembles OpenSSH and its shared libraries before announcing.
+    // Nested Windows/WSL hosts can need more than ten seconds for that disk I/O.
+    const line = await firstStdoutLine(child, 60_000);
     announcement = JSON.parse(line) as RegistryAnnouncement;
   } catch (error) {
     await terminate(child);
@@ -99,7 +115,12 @@ export async function startLocalOciRegistry(
     );
   }
 
-  if (!announcement.reference || !announcement.alias || !announcement.ready) {
+  if (
+    !announcement.reference ||
+    !announcement.alias ||
+    !announcement.ready ||
+    !announcement.architecture
+  ) {
     await terminate(child);
     throw new Error(`registry announcement missing fields: ${JSON.stringify(announcement)}`);
   }
@@ -107,6 +128,13 @@ export async function startLocalOciRegistry(
   return {
     announcement,
     async stop() {
+      if (manager) {
+        child.stdin?.end();
+        const deadline = Date.now() + 2000;
+        while (child.exitCode === null && !child.signalCode && Date.now() < deadline) {
+          await delay(50);
+        }
+      }
       await terminate(child);
     },
   };

@@ -1,0 +1,27 @@
+[Unit]
+Description=Firecrab Quick Tunnel (cloudflared)
+After=network-online.target firecrab-ingress.service
+Wants=network-online.target firecrab-ingress.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=quick-tunnel.json:@CONFDIR@/pipe/quick-tunnel.json
+ExecStart=@CLOUDFLARED@ --no-autoupdate --config %d/quick-tunnel.json tunnel --url http://@LISTEN@ --http-host-header @QUICK_HOST@
+Restart=on-failure
+# Provisioning is rate limited per public IP. Give it time to recover.
+RestartSec=60
+RestartSteps=4
+RestartMaxDelaySec=15min
+TimeoutStartSec=60
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

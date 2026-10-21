@@ -6,14 +6,22 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
-use firecrab_api_types::{VmLogResponse, VmResponse};
-use firecrab_helper_protocol::network::{DhcpLeaseEntry, MicroNetworkSpec, VmPolicySpec};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderValue,
+};
+use axum::response::IntoResponse;
+use firecrab_api_types::{SshHostKeyCheckResponse, SshHostKeyResponse, VmLogResponse, VmResponse};
+use firecrab_helper_protocol::network::{
+    DhcpLeaseEntry, Ipv6AddressMode, MicroNetworkSpec, VmPolicySpec,
+};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
-use crate::firecracker::{self, FirecrackerProcess, VmNetwork, VmProcess};
+#[cfg(test)]
+use crate::firecracker::VmProcess;
+use crate::firecracker::{self, FirecrackerProcess, VmNetwork};
 use crate::ipam::{IpamError, SubnetSpec};
 use crate::model::{
     CreateVmRequest, Lease, StartupStep, StartupStepOutcome, StartupStepRun,
@@ -132,6 +140,123 @@ fn read_console_log(
         console_log: String::from_utf8_lossy(&buffer).into_owned(),
         truncated,
     }
+}
+
+/// `GET /api/vms/{id}/ssh-key` — operator private key as an attachment.
+pub async fn download_ssh_key(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let (name, storage_root) = {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match vms.get(&id) {
+            Some(vm) => (vm.name.clone(), vm.storage_root.clone()),
+            None => return Err(AppError::not_found(request_id.0)),
+        }
+    };
+    let vms_dir = state.vms_dir_for(&storage_root);
+    let private = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, id);
+    let private = crate::guest_ssh::VmSshPaths::from_artifacts(&private).operator_private;
+    let body = tokio::task::spawn_blocking(move || std::fs::read(&private))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|_| AppError::not_found(request_id.0))?;
+    let filename = crate::guest_ssh::pem_filename(&name);
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-pem-file"),
+    );
+    let disposition = format!("attachment; filename=\"{filename}\"");
+    if let Ok(value) = HeaderValue::from_str(&disposition) {
+        headers.insert(CONTENT_DISPOSITION, value);
+    }
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok((headers, body))
+}
+
+/// `GET /api/vms/{id}/ssh-host-key` — guest host public key after first start.
+pub async fn get_ssh_host_key(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<SshHostKeyResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let storage_root = {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match vms.get(&id) {
+            Some(vm) => vm.storage_root.clone(),
+            None => return Err(AppError::not_found(request_id.0)),
+        }
+    };
+    let vms_dir = state.vms_dir_for(&storage_root);
+    let paths = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, id);
+    let ssh = crate::guest_ssh::VmSshPaths::from_artifacts(&paths);
+    let fingerprint = crate::guest_ssh::host_fingerprint(&paths)
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+    let public_key = tokio::task::spawn_blocking(move || std::fs::read_to_string(ssh.host_public))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|_| AppError::not_found(request_id.0))?;
+    Ok(Json(SshHostKeyResponse {
+        fingerprint,
+        public_key,
+    }))
+}
+
+/// `GET /api/vms/{id}/ssh-host-key/check` — what the guest answers with now.
+///
+/// The scan runs on the Firecrab host, which is where the documented
+/// `ssh-keyscan … | ssh-keygen -lf -` command was always meant to run, so the
+/// dashboard reads a verdict instead of asking the operator to paste one back.
+/// A VM with no host key yet is answered without scanning anything.
+pub async fn check_ssh_host_key(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+) -> Result<Json<SshHostKeyCheckResponse>, AppError> {
+    let id = parse_id(&id, request_id.0)?;
+    let storage_root = {
+        let vms = state
+            .vms
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match vms.get(&id) {
+            Some(vm) => vm.storage_root.clone(),
+            None => return Err(AppError::not_found(request_id.0)),
+        }
+    };
+    let vms_dir = state.vms_dir_for(&storage_root);
+    let paths = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, id);
+    let expected = crate::guest_ssh::host_fingerprint(&paths);
+    let address = lease_for(&state, id)
+        .await
+        .map(|lease| lease.ipv4.to_string());
+
+    let scan = if expected.is_some()
+        && let Some(address) = address.clone()
+    {
+        tokio::task::spawn_blocking(move || crate::guest_ssh::verify::keyscan(&address))
+            .await
+            .map_err(|_| AppError::internal(request_id.0))?
+    } else {
+        // Nothing to compare against, so no packet leaves the host.
+        Ok(String::new())
+    };
+
+    Ok(Json(crate::guest_ssh::verify::decide(
+        expected.as_deref(),
+        address.as_deref(),
+        scan,
+    )))
 }
 
 /// `POST /api/vms`. Thin wrapper over [`create_vm`] that exists only to
@@ -260,6 +385,30 @@ pub async fn create_vm(
                 AppError::internal(request_id.0)
             }
         });
+    }
+
+    let vms_dir = state.vms_dir_for(&vm.storage_root);
+    let ssh_paths = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, vm.id);
+    if let Err(error) = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        ssh_paths
+            .ensure_directories()
+            .map_err(|error| error.to_string())?;
+        crate::guest_ssh::ensure_operator_key(&ssh_paths).map_err(|error| error.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id.0))?
+    {
+        tracing::error!(request_id = %request_id.0, vm_id = %vm.id, %error, "failed to generate operator SSH key");
+        let store = state.store.clone();
+        let vm_id = vm.id;
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = store.clear_vm_shells(vm_id);
+            let _ = store.clear_vm_port_forwards(vm_id);
+            store.delete(vm_id)
+        })
+        .await;
+        return Err(AppError::internal(request_id.0));
     }
 
     // Allocated up front (not on first start) so it persists across every
@@ -448,20 +597,20 @@ pub async fn update_vm_port_forwards(
             break;
         }
     }
-    if !fields.contains_key("portForwards") {
-        if let Ok(all_pfs) = state.store.list_all_port_forwards() {
-            for (owner_id, existing_pf) in all_pfs {
-                if owner_id != id
-                    && req.port_forwards.iter().any(|pf| {
-                        pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
-                    })
-                {
-                    fields.insert(
-                        "portForwards".to_owned(),
-                        "one or more host ports are already in use by another VM".to_owned(),
-                    );
-                    break;
-                }
+    if !fields.contains_key("portForwards")
+        && let Ok(all_pfs) = state.store.list_all_port_forwards()
+    {
+        for (owner_id, existing_pf) in all_pfs {
+            if owner_id != id
+                && req.port_forwards.iter().any(|pf| {
+                    pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
+                })
+            {
+                fields.insert(
+                    "portForwards".to_owned(),
+                    "one or more host ports are already in use by another VM".to_owned(),
+                );
+                break;
             }
         }
     }
@@ -523,40 +672,31 @@ pub async fn update_vm_port_forwards(
             }
         })?;
 
-    if is_active {
-        if let Some(lease) = state.store.active_lease(id).ok().flatten() {
-            let port_forwards_specs = req
-                .port_forwards
-                .iter()
-                .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
-                    host_port: pf.host_port,
-                    guest_port: pf.guest_port,
-                    protocol: pf.protocol.to_string(),
-                })
-                .collect();
-            if let Err(error) = state
-                .network
-                .apply_vm_policy(
-                    id,
-                    lease.ipv4,
-                    lease.mac,
-                    record.egress_policy,
-                    false,
-                    port_forwards_specs,
-                )
-                .await
-            {
-                tracing::error!(
-                    request_id = %request_id.0, %error,
-                    "failed to apply updated port forwards; rolling back the persisted rules"
-                );
-                let store = state.store.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    store.set_vm_port_forwards(id, &previous_forwards)
-                })
-                .await;
-                return Err(AppError::internal(request_id.0));
-            }
+    if is_active && let Some(lease) = state.store.active_lease(id).ok().flatten() {
+        let port_forwards_specs = req
+            .port_forwards
+            .iter()
+            .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
+                host_port: pf.host_port,
+                guest_port: pf.guest_port,
+                protocol: pf.protocol.to_string(),
+            })
+            .collect();
+        if let Err(error) = state
+            .network
+            .apply_vm_policy(&lease, record.egress_policy, false, port_forwards_specs)
+            .await
+        {
+            tracing::error!(
+                request_id = %request_id.0, %error,
+                "failed to apply updated port forwards; rolling back the persisted rules"
+            );
+            let store = state.store.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                store.set_vm_port_forwards(id, &previous_forwards)
+            })
+            .await;
+            return Err(AppError::internal(request_id.0));
         }
     }
 
@@ -701,10 +841,10 @@ fn validate_update(
             format!("must be at most {MAX_DISK_GB} GiB"),
         );
     }
-    if let Some(env) = &req.env {
-        if let Some(message) = validate_vm_env(env) {
-            fields.insert("env".to_owned(), message);
-        }
+    if let Some(env) = &req.env
+        && let Some(message) = validate_vm_env(env)
+    {
+        fields.insert("env".to_owned(), message);
     }
     fields
 }
@@ -725,6 +865,11 @@ async fn claim_start(
         return Err(error);
     }
 
+    state
+        .reconciliation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&id);
     Ok((id, claimed))
 }
 
@@ -753,10 +898,8 @@ pub async fn start_vm_request(
 /// config, spawn Firecracker, wait for its API, then record `running`.
 /// Any failure lands the record on `error` with no process left behind.
 ///
-/// This test-only helper preserves direct lifecycle assertions; the public
-/// HTTP route uses [`start_vm_request`] so a normal boot cannot exceed the
-/// general REST request timeout.
-#[cfg(test)]
+/// Service deployment jobs await the result internally. The public VM route
+/// uses [`start_vm_request`] to acknowledge a boot without a REST timeout.
 pub async fn start_vm(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -812,7 +955,7 @@ async fn finish_start(
                 "vm running"
             );
             let lease = lease_for(state, id).await;
-            Ok(Json(vm_response(&state, &running, lease.as_ref())))
+            Ok(Json(vm_response(state, &running, lease.as_ref())))
         }
         // The guest exited before we could record running; the exit monitor
         // already landed the record on its terminal state.
@@ -827,7 +970,7 @@ async fn finish_start(
                 return Err(AppError::not_found(request_id.0));
             };
             let lease = lease_for(state, id).await;
-            Ok(Json(vm_response(&state, &record, lease.as_ref())))
+            Ok(Json(vm_response(state, &record, lease.as_ref())))
         }
     }
 }
@@ -852,18 +995,8 @@ pub async fn stop_vm(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&id)
         .cloned();
-    if let Some(VmProcess {
-        pid, mut exited, ..
-    }) = entry
-    {
-        firecracker::sigterm(pid);
-        if tokio::time::timeout(state.runtime.stop_grace, exited.changed())
-            .await
-            .is_err()
-        {
-            firecracker::sigkill(pid);
-            let _ = tokio::time::timeout(state.runtime.stop_grace, exited.changed()).await;
-        }
+    if let Some(process) = entry {
+        firecracker::stop_registered(id, process, state.runtime.stop_grace).await;
     }
 
     // Only a running VM can reach Stopping (see VmState::can_transition), so
@@ -965,6 +1098,11 @@ pub async fn delete_vm(
             .insert(id, removed);
         return Err(AppError::internal(request_id.0));
     }
+    state
+        .reconciliation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&id);
     // Best-effort, same reasoning as create_vm's sync call: this VM's
     // reservation just needs to eventually disappear from dnsmasq, not
     // synchronously with this response.
@@ -1139,6 +1277,8 @@ async fn finish_run_start(
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
         rootfs::specialize_guest(&rootfs, record.id, &record.env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        crate::guest_ssh::install_on_guest(&rootfs, &paths)
+            .map_err(|error| format!("guest SSH install failed: {error}"))?;
         if let Some(ref program) = guest_fastfetch {
             rootfs::install_guest_fastfetch(&rootfs, program.path());
         }
@@ -1201,11 +1341,11 @@ async fn finish_run_start(
     let paths = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, vm.id);
     let runtime = paths.runtime(runtime_id);
     let process = firecracker::spawn_vm(
-        &state.runtime.firecracker_binary,
+        &state.runtime,
         &runtime,
         vm.id,
         enable_pci,
-        state.runtime.ready_timeout,
+        crate::resource_limits::ResourceLimits::for_vm(vm.ram, vm.cpu),
         Arc::clone(&state.process_metrics),
     )
     .await
@@ -1220,13 +1360,14 @@ async fn finish_run_start(
     // The guest scripts bring their own interface up manually instead
     // (`handlers::bootstrap`'s pushed script); this only skips the host's
     // passive wait, not networking itself.
-    if !is_microboot {
-        // Not registered with register_and_watch yet, so `process` dropping
-        // on an early return here still kills it (spawn_vm's Command sets
-        // kill_on_drop) — no separate cleanup needed on this path.
-        wait_for_network_ready(process.console(), state.runtime.network_ready_timeout)
-            .await
-            .map_err(|error| format!("network readiness check failed: {error}"))?;
+    if !is_microboot
+        && let Err(error) =
+            wait_for_network_ready(process.console(), state.runtime.network_ready_timeout).await
+    {
+        // Not registered with register_and_watch yet: kill it and wait, so
+        // the failed start leaves no guest behind.
+        process.abort(state.runtime.stop_grace).await;
+        return Err(format!("network readiness check failed: {error}"));
     }
 
     Ok(process)
@@ -1238,7 +1379,7 @@ async fn finish_run_start(
 const NETWORK_SENTINEL_SCAN_CAP: usize = 4096;
 
 /// Waits for the guest's boot-time network-readiness unit to report over
-/// its serial console (`public-docs/networking.md` — the
+/// its serial console (`public-docs/guides/networking.md` — the
 /// substitute this project uses for a guest-agent event, which is out of
 /// scope). `FIRECRAB_NETWORK_READY` succeeds; `FIRECRAB_NETWORK_FAILED`,
 /// the console closing, or the timeout all fail the start outright — a
@@ -1434,7 +1575,7 @@ async fn rotate_conflicted_lease(
         .ok_or_else(|| {
             format!("no MicroNetwork with id {micro_network_id} exists for vm {vm_id}")
         })?;
-    let subnet = SubnetSpec::parse(network.id, &network.subnet_cidr).ok_or_else(|| {
+    let subnet = SubnetSpec::from_micro_network(&network).ok_or_else(|| {
         format!(
             "MicroNetwork {} has an unparseable subnet {:?}",
             network.id, network.subnet_cidr
@@ -1501,14 +1642,7 @@ async fn setup_vm_network(
 
     if let Err(error) = state
         .network
-        .apply_vm_policy(
-            vm_id,
-            lease.ipv4,
-            lease.mac,
-            egress_policy,
-            false,
-            port_forwards,
-        )
+        .apply_vm_policy(&lease, egress_policy, false, port_forwards)
         .await
     {
         // A failed apply_vm_policy leaves nothing installed (nft applies a
@@ -1592,20 +1726,41 @@ pub(crate) async fn sync_dhcp_leases(state: &AppState) -> Result<(), String> {
     .map_err(|error| format!("dhcp lease snapshot task failed: {error}"))?
     .map_err(|error| format!("dhcp lease snapshot failed: {error}"))?;
 
-    let entries = leases
-        .into_iter()
-        .map(|lease| DhcpLeaseEntry {
-            vm_id: lease.vm_id,
-            ipv4: lease.ipv4,
-            mac: lease.mac,
-        })
-        .collect();
+    let micro_networks = micro_network_specs(state).await?;
+    let entries = dhcp_lease_entries(&leases, &micro_networks);
 
     state
         .network
-        .sync_dhcp_leases(revision, entries, micro_network_specs(state).await?)
+        .sync_dhcp_leases(revision, entries, micro_networks)
         .await
         .map_err(|error| format!("dhcp sync failed: {error}"))
+}
+
+/// The reservation snapshot dnsmasq is handed. A v6 address is included only
+/// for a network that actually hands addresses out over DHCPv6 — under SLAAC
+/// the guest builds the same address itself from the router advertisement, and
+/// a reservation in a range that allocates nothing would describe an
+/// assignment dnsmasq never makes.
+fn dhcp_lease_entries(
+    leases: &[Lease],
+    micro_networks: &[MicroNetworkSpec],
+) -> Vec<DhcpLeaseEntry> {
+    leases
+        .iter()
+        .map(|lease| {
+            let dhcpv6 = micro_networks
+                .iter()
+                .find(|network| network.contains(lease.ipv4))
+                .and_then(|network| network.ipv6.as_ref())
+                .is_some_and(|ipv6| ipv6.address_mode == Ipv6AddressMode::Dhcpv6);
+            DhcpLeaseEntry {
+                vm_id: lease.vm_id,
+                ipv4: lease.ipv4,
+                ipv6: lease.ipv6.filter(|_| dhcpv6),
+                mac: lease.mac,
+            }
+        })
+        .collect()
 }
 
 /// Builds the complete host-firewall policy snapshot for VMs whose network
@@ -1653,6 +1808,7 @@ pub(crate) async fn active_vm_policy_specs(state: &AppState) -> Result<Vec<VmPol
         policies.push(VmPolicySpec {
             vm_id,
             ipv4: lease.ipv4,
+            ipv6: lease.ipv6,
             mac: lease.mac,
             egress_policy: egress_policy.id().to_owned(),
             allow_host_ssh: false,
@@ -1675,7 +1831,7 @@ pub(crate) async fn micro_network_specs(state: &AppState) -> Result<Vec<MicroNet
     networks
         .into_iter()
         .map(|network| {
-            SubnetSpec::parse(network.id, &network.subnet_cidr)
+            SubnetSpec::from_micro_network(&network)
                 .map(|subnet| subnet.helper_spec(network.internet_enabled, network.uplink))
                 .ok_or_else(|| {
                     format!(
@@ -1713,7 +1869,7 @@ async fn resolve_subnet(
             )
         })?;
 
-    SubnetSpec::parse(network.id, &network.subnet_cidr).ok_or_else(|| {
+    SubnetSpec::from_micro_network(&network).ok_or_else(|| {
         tracing::error!(
             request_id = %request_id,
             micro_network_id = %network.id,
@@ -1809,16 +1965,19 @@ async fn fail_start_with(
     reason: Option<String>,
 ) -> AppError {
     finish_startup_timeline(state, id, StartupStepOutcome::Failed, reason);
-    let pid = state
+    let process = state
         .processes
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&id)
-        .map(|process| process.pid);
+        .map(|process| (process.pid, process.control.clone()));
     if let Some(record) = set_memory_state(state, id, VmState::Error) {
         let _ = persist_update(state, &record, request_id).await;
     }
-    if let Some(pid) = pid {
+    if let Some((pid, control)) = process {
+        control.kill();
+        // Not through the shim alone: a failed start must not leave a guest
+        // running if the shim is what failed.
         firecracker::sigkill(pid);
     }
     AppError::internal(request_id)
@@ -1868,6 +2027,12 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         id: vm.id,
         name: vm.name.clone(),
         state: vm.state,
+        reconciliation: state
+            .reconciliation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&vm.id)
+            .cloned(),
         template: vm.template.clone(),
         template_version: vm.template_version.clone(),
         cpu: vm.cpu,
@@ -1877,6 +2042,9 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         startup_timeline: vm.startup_timeline.clone(),
         egress_policy: vm.egress_policy,
         ipv4: lease.map(|lease| lease.ipv4.to_string()),
+        ipv6: lease
+            .and_then(|lease| lease.ipv6)
+            .map(|ipv6| ipv6.to_string()),
         mac: lease.map(|lease| lease.mac.to_string()),
         hostname: firecrab_helper_protocol::network::guest_hostname(vm.id),
         micro_network_id: vm.micro_network_id,
@@ -1889,6 +2057,11 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         shell_refs,
         port_forwards,
         env: vm.env.clone(),
+        ssh_host_fingerprint: {
+            let vms_dir = state.vms_dir_for(&vm.storage_root);
+            let paths = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, vm.id);
+            crate::guest_ssh::host_fingerprint(&paths)
+        },
     }
 }
 
@@ -2002,7 +2175,7 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             "storageRoot".to_owned(),
             "is not a registered storage root".to_owned(),
         );
-    } else if fields.get("diskGb").is_none() {
+    } else if !fields.contains_key("diskGb") {
         // Only probe free space once diskGb itself is in range — otherwise
         // the capacity message would hide a simpler validation error.
         let need_bytes = u64::from(req.disk_gb) * 1024 * 1024 * 1024;
@@ -2048,18 +2221,18 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
                 break;
             }
         }
-        if !fields.contains_key("portForwards") {
-            if let Ok(all_pfs) = state.store.list_all_port_forwards() {
-                for (_, existing_pf) in all_pfs {
-                    if req.port_forwards.iter().any(|pf| {
-                        pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
-                    }) {
-                        fields.insert(
-                            "portForwards".to_owned(),
-                            "one or more host ports are already in use by another VM".to_owned(),
-                        );
-                        break;
-                    }
+        if !fields.contains_key("portForwards")
+            && let Ok(all_pfs) = state.store.list_all_port_forwards()
+        {
+            for (_, existing_pf) in all_pfs {
+                if req.port_forwards.iter().any(|pf| {
+                    pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
+                }) {
+                    fields.insert(
+                        "portForwards".to_owned(),
+                        "one or more host ports are already in use by another VM".to_owned(),
+                    );
+                    break;
                 }
             }
         }
@@ -2225,6 +2398,17 @@ pub async fn assign_vm_storage(
         return Err(AppError::validation(fields, request_id.0));
     }
 
+    let new_paths = crate::artifacts::VmArtifactPaths::for_vm(&state.vms_dir_for(target), id);
+    let old_ssh = old_paths.clone();
+    let new_ssh = new_paths.clone();
+    tokio::task::spawn_blocking(move || crate::guest_ssh::relocate_ssh_artifacts(&old_ssh, &new_ssh))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|error| {
+            tracing::error!(request_id = %request_id.0, vm_id = %id, %error, "failed to move SSH artifacts");
+            AppError::internal(request_id.0)
+        })?;
+
     let updated = {
         let mut vms = state
             .vms
@@ -2246,6 +2430,12 @@ pub async fn assign_vm_storage(
         {
             vm.storage_root = previous_root;
         }
+        let old_ssh = old_paths;
+        let new_ssh = new_paths;
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::guest_ssh::relocate_ssh_artifacts(&new_ssh, &old_ssh)
+        })
+        .await;
         return Err(error);
     }
     tracing::info!(
@@ -2364,7 +2554,7 @@ pub(crate) mod test_support {
         let socket_path = root.join(format!("net-helper-{}.sock", Uuid::new_v4()));
         crate::network::test_support::spawn_always_ok_helper(&socket_path);
 
-        AppState::with_db_file(templates, root.join("data/firecrab.db"))
+        let state = AppState::with_db_file(templates, root.join("data/firecrab.db"))
             .await
             .unwrap()
             .with_test_runtime(RuntimeConfig {
@@ -2373,8 +2563,13 @@ pub(crate) mod test_support {
                 ready_timeout: Duration::from_secs(5),
                 stop_grace: Duration::from_millis(500),
                 network_ready_timeout: Duration::from_millis(300),
+                shim: crate::firecracker::ShimLauncher::InProcess,
             })
-            .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path))
+            .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+        // As `main` does before serving, so tests that reopen state against
+        // the same directory see a restart.
+        crate::reconcile::reconcile(&state).await;
+        state
     }
 
     pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
@@ -2394,6 +2589,7 @@ mod tests {
     use std::time::Duration;
 
     use axum::response::IntoResponse;
+    use firecrab_api_types::{SshHostKeyCheckStatus, VmReconciliation, VmReconciliationOutcome};
     use tempfile::tempdir;
 
     use std::path::PathBuf;
@@ -2523,6 +2719,38 @@ mod tests {
         assert!(!validate_create(&at_ceiling, &state).contains_key("diskGb"));
     }
 
+    #[tokio::test]
+    async fn validate_create_rejects_a_host_port_already_used_by_another_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let owner = record("owner", Uuid::new_v4());
+        seed_vm(&state, &owner);
+        state
+            .store
+            .set_vm_port_forwards(
+                owner.id,
+                &[firecrab_api_types::PortForward {
+                    host_port: 8080,
+                    guest_port: 80,
+                    protocol: firecrab_api_types::PortProtocol::Tcp,
+                }],
+            )
+            .unwrap();
+
+        let mut req = create_request_on("new-vm", Uuid::from_u128(1));
+        req.port_forwards = vec![firecrab_api_types::PortForward {
+            host_port: 8080,
+            guest_port: 90,
+            protocol: firecrab_api_types::PortProtocol::Tcp,
+        }];
+        let fields = validate_create(&req, &state);
+        assert_eq!(
+            fields.get("portForwards").map(String::as_str),
+            Some("one or more host ports are already in use by another VM"),
+            "{fields:?}"
+        );
+    }
+
     #[test]
     fn lists_vms_sorted_by_name_then_id() {
         let low = Uuid::from_u128(1);
@@ -2592,7 +2820,13 @@ mod tests {
     }
 
     async fn wait_for_state(state: &AppState, id: Uuid, want: VmState) {
-        for _ in 0..100 {
+        // 30s, not the 3s this budget used to be: the background start/stop
+        // task this polls for spawns a real subprocess, and under coverage
+        // instrumentation plus a full parallel `cargo test` run that can take
+        // much longer than in a normal build without ever indicating a real
+        // regression (see e8c1ab9's identical fix for `start_vm`'s own
+        // deadline).
+        for _ in 0..1000 {
             if memory_state(state, id) == Some(want) {
                 return;
             }
@@ -2612,6 +2846,95 @@ mod tests {
 
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].id, vm.id);
+        assert_eq!(body[0].reconciliation, None);
+    }
+
+    #[tokio::test]
+    async fn a_new_start_clears_the_startup_result_only_after_it_is_accepted() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("restarted", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+        let result = VmReconciliation {
+            outcome: VmReconciliationOutcome::Reconnected,
+            checked_at_ms: 1_700_000_000_000,
+            detail: None,
+        };
+        state
+            .reconciliation
+            .lock()
+            .unwrap()
+            .insert(vm.id, result.clone());
+
+        let rejected = claim_start(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(rejected.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(
+            state.reconciliation.lock().unwrap().get(&vm.id),
+            Some(&result)
+        );
+
+        set_memory_state(&state, vm.id, VmState::Stopped);
+        claim_start(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert!(!state.reconciliation.lock().unwrap().contains_key(&vm.id));
+        let Json(response) = get_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.state, VmState::Starting);
+        assert_eq!(response.reconciliation, None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_claim_keeps_the_previous_reconciliation_result() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("unpersisted-start", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let result = VmReconciliation {
+            outcome: VmReconciliationOutcome::Gone,
+            checked_at_ms: 1_700_000_000_000,
+            detail: None,
+        };
+        state
+            .reconciliation
+            .lock()
+            .unwrap()
+            .insert(vm.id, result.clone());
+        state.store.delete(vm.id).unwrap();
+
+        let error = claim_start(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Created));
+        assert_eq!(
+            state.reconciliation.lock().unwrap().get(&vm.id),
+            Some(&result)
+        );
     }
 
     #[tokio::test]
@@ -2962,19 +3285,68 @@ while True:
         vm.template = crate::microboot::MICROBOOT_ALIAS.to_owned();
         seed_vm(&state, &vm);
 
-        let Json(started) = tokio::time::timeout(
-            Duration::from_secs(2),
-            start_vm(
-                State(state.clone()),
-                Extension(RequestId(Uuid::new_v4())),
-                axum::extract::Path(vm.id.to_string()),
-            ),
+        // `network_ready_timeout` is already 300 ms in this fixture, so a
+        // regression still fails quickly. Do not cap the whole start path:
+        // rootfs specialization under coverage instrumentation can exceed a
+        // wall-clock deadline even when the MicroBoot wait is correctly skipped.
+        let Json(started) = start_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
         )
         .await
-        .expect("start_vm should not hang waiting on a network-ready sentinel that never arrives")
         .unwrap();
 
         assert_eq!(started.state, VmState::Running);
+    }
+
+    #[tokio::test]
+    async fn stop_kills_the_vmm_directly_when_its_shim_does_not_answer() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(root, SERVE_LOOP);
+        let state = test_state_with_binary(root, binary).await;
+        let mut vm = record("stuck-shim", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+        // Stands in for a Firecracker whose shim no longer answers.
+        let mut vmm = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let (_exited_tx, exited) = tokio::sync::watch::channel(false);
+        let (control, requests) = crate::vm_shim::client::ShimControl::for_test();
+        drop(requests);
+        state.processes.lock().unwrap().insert(
+            vm.id,
+            VmProcess {
+                pid: vmm.id(),
+                exited,
+                console: std::sync::Arc::new(crate::console::ConsoleBroker::new()),
+                control,
+            },
+        );
+
+        let _ = stop_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = vmm.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = vmm.kill();
+                panic!("stop left the VMM running after its shim stopped answering");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
     }
 
     #[tokio::test]
@@ -3443,6 +3815,44 @@ while True:
     }
 
     #[tokio::test]
+    async fn update_port_forwards_rejects_a_host_port_owned_by_another_vm() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let owner = record("owner", Uuid::new_v4());
+        seed_vm(&state, &owner);
+        state
+            .store
+            .set_vm_port_forwards(
+                owner.id,
+                &[firecrab_api_types::PortForward {
+                    host_port: 8080,
+                    guest_port: 80,
+                    protocol: firecrab_api_types::PortProtocol::Tcp,
+                }],
+            )
+            .unwrap();
+
+        let other = record("other", Uuid::new_v4());
+        seed_vm(&state, &other);
+
+        let error = update_vm_port_forwards(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(other.id.to_string()),
+            ValidatedJson(firecrab_api_types::UpdateVmPortForwardsRequest {
+                port_forwards: vec![firecrab_api_types::PortForward {
+                    host_port: 8080,
+                    guest_port: 90,
+                    protocol: firecrab_api_types::PortProtocol::Tcp,
+                }],
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn start_rotates_past_orphaned_firewall_ips_without_replacing_them() {
         use firecrab_helper_protocol::network::NetworkRequest;
 
@@ -3483,14 +3893,25 @@ while True:
         let replacement = state.store.active_lease(vm.id).unwrap().unwrap();
         assert_eq!(replacement.ipv4, Ipv4Addr::new(172, 30, 0, 4));
 
-        let requests = requests.lock().unwrap();
-        let policy_ips: Vec<Ipv4Addr> = requests
-            .iter()
-            .filter_map(|request| match request {
-                NetworkRequest::ApplyVmPolicy { ipv4, .. } => Some(*ipv4),
-                _ => None,
-            })
-            .collect();
+        // Scoped: the guard must not survive into the `stop_vm` await below.
+        let (policy_ips, synced_replacement_lease) = {
+            let requests = requests.lock().unwrap();
+            let policy_ips: Vec<Ipv4Addr> = requests
+                .iter()
+                .filter_map(|request| match request {
+                    NetworkRequest::ApplyVmPolicy { ipv4, .. } => Some(*ipv4),
+                    _ => None,
+                })
+                .collect();
+            let synced = requests.iter().any(|request| {
+                matches!(
+                    request,
+                    NetworkRequest::SyncDhcpLeases { leases, .. }
+                        if leases.iter().any(|lease| lease.vm_id == vm.id && lease.ipv4 == replacement.ipv4)
+                )
+            });
+            (policy_ips, synced)
+        };
         assert_eq!(
             policy_ips,
             vec![
@@ -3499,14 +3920,7 @@ while True:
                 Ipv4Addr::new(172, 30, 0, 4),
             ]
         );
-        assert!(requests.iter().any(|request| {
-            matches!(
-                request,
-                NetworkRequest::SyncDhcpLeases { leases, .. }
-                    if leases.iter().any(|lease| lease.vm_id == vm.id && lease.ipv4 == replacement.ipv4)
-            )
-        }));
-        drop(requests);
+        assert!(synced_replacement_lease);
 
         let Json(stopped) = stop_vm(
             State(state.clone()),
@@ -3564,6 +3978,14 @@ while True:
         let state = test_state(directory.path()).await;
         let vm = record("condemned", Uuid::new_v4());
         seed_vm(&state, &vm);
+        state.reconciliation.lock().unwrap().insert(
+            vm.id,
+            VmReconciliation {
+                outcome: VmReconciliationOutcome::Gone,
+                checked_at_ms: 1_700_000_000_000,
+                detail: None,
+            },
+        );
         let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id);
         paths.ensure_directories().unwrap();
         let generation = Uuid::new_v4();
@@ -3580,6 +4002,7 @@ while True:
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(state.vms.lock().unwrap().is_empty());
         assert!(state.store.load_all().unwrap().is_empty());
+        assert!(state.reconciliation.lock().unwrap().is_empty());
         assert!(!paths.dir.exists());
 
         let error = get_vm(
@@ -3630,6 +4053,41 @@ while True:
             policy < tap && tap < dhcp,
             "unexpected network calls: {calls:?}"
         );
+    }
+
+    /// The other half of the lease lifecycle: a lease outlives every stop,
+    /// crash and disappearance, and a delete is what frees it.
+    #[tokio::test]
+    async fn deleting_a_vm_frees_its_address_for_the_next_one() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("leaving", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let leased = state
+            .store
+            .active_lease(vm.id)
+            .unwrap()
+            .expect("seeded VMs are leased");
+
+        let status = delete_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(state.store.active_lease(vm.id).unwrap(), None);
+        // Addresses go out lowest-free first, so the freed one is next.
+        let next = state
+            .store
+            .allocate_lease(
+                Uuid::new_v4(),
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+            )
+            .unwrap();
+        assert_eq!(next.ipv4, leased.ipv4);
     }
 
     /// A delete that can't clear the artifact tree must not half-remove the
@@ -3736,7 +4194,9 @@ while True:
         firecracker::sigkill(pid);
 
         wait_for_state(&state, vm.id, VmState::Error).await;
-        assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+        // The exit monitor tears the network down before it persists, so a
+        // persisted row also means the helper calls below are all recorded.
+        wait_for_db_state(&state, vm.id, VmState::Error).await;
         assert!(state.processes.lock().unwrap().is_empty());
 
         let calls = log.lock().unwrap().clone();
@@ -3809,6 +4269,8 @@ while True:
                 subnet_cidr: "172.30.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
             }),
         )
         .await
@@ -3857,6 +4319,85 @@ while True:
             state.vms_dir_for(&reassigned.storage_root),
             pool.join("vms")
         );
+    }
+
+    #[tokio::test]
+    async fn assign_vm_storage_preserves_the_operator_key() {
+        let directory = tempdir().unwrap();
+        let pool = directory.path().join("assigned-pool");
+        let state = test_state(directory.path()).await;
+        let net = seed_network(&state).await;
+        let pool_id = seed_pool(&state, "assigned-pool", &pool).await;
+
+        let (_, Json(created)) = create_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            ValidatedJson(create_request_on("move-key", net)),
+        )
+        .await
+        .unwrap();
+
+        let first = download_ssh_key(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(created.id.to_string()),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        assert_eq!(
+            first.headers().get(axum::http::header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
+        let first_bytes = axum::body::to_bytes(first.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            first_bytes.starts_with(b"-----BEGIN"),
+            "operator key should be a PEM: {}",
+            String::from_utf8_lossy(&first_bytes)
+        );
+
+        let Json(_) = assign_vm_storage(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(created.id.to_string()),
+            ValidatedJson(firecrab_api_types::AssignVmStorageRequest {
+                storage_root: pool_id,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let second = download_ssh_key(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(created.id.to_string()),
+        )
+        .await
+        .unwrap()
+        .into_response();
+        let second_bytes = axum::body::to_bytes(second.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(first_bytes, second_bytes);
+    }
+
+    #[tokio::test]
+    async fn download_ssh_key_unknown_vm_is_not_found() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let error = match download_ssh_key(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        {
+            Ok(_) => panic!("unknown VM must not yield a key"),
+            Err(error) => error,
+        };
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     /// Seeds a MicroStorage pool and returns its id, for the assign tests
@@ -4119,6 +4660,8 @@ while True:
                 subnet_cidr: "172.31.0.0/24".to_owned(),
                 internet_enabled: true,
                 uplink: None,
+                ipv6_cidr: None,
+                ipv6_address_mode: Default::default(),
             }),
         )
         .await
@@ -4732,5 +5275,53 @@ while True:
             fields.get("env").is_some_and(|msg| msg.contains("POSIX")),
             "{fields:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn ssh_host_key_check_reports_no_host_key_before_first_start() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("fresh", Uuid::new_v4());
+        seed_vm(&state, &vm);
+
+        let Json(check) = check_ssh_host_key(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .expect("check");
+
+        assert_eq!(check.status, SshHostKeyCheckStatus::NoHostKey);
+        assert_eq!(check.expected, None);
+        assert_eq!(check.observed, None);
+    }
+
+    #[tokio::test]
+    async fn ssh_host_key_check_returns_not_found_for_an_unknown_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let err = check_ssh_host_key(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(Uuid::new_v4().to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn ssh_host_key_check_rejects_a_malformed_id() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let err = check_ssh_host_key(
+            State(state),
+            Extension(RequestId(Uuid::new_v4())),
+            Path("not-a-uuid".to_owned()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.into_response().status(), StatusCode::BAD_REQUEST);
     }
 }

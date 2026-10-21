@@ -252,48 +252,44 @@ fn catalog_pair_skips_kernels_that_need_an_initrd() {
 
 /// A base URL nothing listens on, so the fetch fails without a fixture server.
 const UNREACHABLE_BASE_URL: &str = "http://127.0.0.1:1";
-/// The architecture this build pins a kernel for, on either host.
-const PINNED_ARCHITECTURE: Architecture = Architecture::X86_64;
+/// Architectures that must always carry a dedicated compiled kernel pin.
+const PINNED_ARCHITECTURES: [Architecture; 2] = [Architecture::X86_64, Architecture::Aarch64];
 
 #[tokio::test]
 async fn resolution_falls_back_to_an_installed_catalog_kernel_when_the_registry_is_unreachable() {
-    let directory = tempfile::tempdir().expect("create fixture directory");
-    let image_root = directory.path();
-    let catalog = boot::catalog_kernel_pair(PINNED_ARCHITECTURE).expect("catalog pair");
-    write_file(
-        &image_root.join(&catalog.kernel),
-        &kernel_bytes_for(PINNED_ARCHITECTURE),
-    );
+    for architecture in PINNED_ARCHITECTURES {
+        let directory = tempfile::tempdir().expect("create fixture directory");
+        let image_root = directory.path();
+        let catalog = boot::catalog_kernel_pair(architecture).expect("catalog pair");
+        write_file(
+            &image_root.join(&catalog.kernel),
+            &kernel_bytes_for(architecture),
+        );
 
-    let pair = boot::resolve_kernel_pair(
-        image_root,
-        PINNED_ARCHITECTURE,
-        None,
-        Some(UNREACHABLE_BASE_URL),
-    )
-    .await
-    .expect("an installed catalog kernel keeps this host importing");
+        let pair =
+            boot::resolve_kernel_pair(image_root, architecture, None, Some(UNREACHABLE_BASE_URL))
+                .await
+                .expect("an installed catalog kernel keeps this host importing");
 
-    assert_eq!(pair, catalog);
+        assert_eq!(pair, catalog);
+    }
 }
 
 #[tokio::test]
 async fn resolution_reports_the_registry_failure_when_no_catalog_kernel_is_installed() {
-    let directory = tempfile::tempdir().expect("create fixture directory");
-    let image_root = directory.path();
+    for architecture in PINNED_ARCHITECTURES {
+        let directory = tempfile::tempdir().expect("create fixture directory");
+        let image_root = directory.path();
 
-    let error = boot::resolve_kernel_pair(
-        image_root,
-        PINNED_ARCHITECTURE,
-        None,
-        Some(UNREACHABLE_BASE_URL),
-    )
-    .await
-    .expect_err("nothing can supply a kernel");
+        let error =
+            boot::resolve_kernel_pair(image_root, architecture, None, Some(UNREACHABLE_BASE_URL))
+                .await
+                .expect_err("nothing can supply a kernel");
 
-    assert_matches!(
-        error,
-        ResolveError::KernelDownloadFailed { .. },
-        "the registry failure is more actionable than a missing catalog kernel, got {error}"
-    );
+        assert_matches!(
+            error,
+            ResolveError::KernelDownloadFailed { .. },
+            "the registry failure is more actionable than a missing catalog kernel, got {error}"
+        );
+    }
 }

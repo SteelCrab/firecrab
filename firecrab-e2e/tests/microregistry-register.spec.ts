@@ -24,16 +24,10 @@ import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js
  * FIRECRAB_OCI_REGISTER_E2E_PORT=15556). Cleanup always stops it and deletes
  * any VM, imported template, staged package, or catalog row this file created.
  *
- * Product blockers (not faked; neighbouring assertions stay intact):
- *   - Failed-job / no-catalog-row: no dashboard or HTTP trigger for an L5
- *     kernel miss. The test exists and is skipped, not asserted as a pass.
- *   - Delete-template then Download/Install from the local row: consume is
- *     known_spec-only, so a custom OCI alias cannot be reinstalled. The
- *     boot test drives that path and fails loudly when the row is not
- *     downloadable — it does not boot the original import instead.
- *   - Guest boot from that reinstalled image: gated by
- *     FIRECRAB_E2E_SKIP_GUEST_BOOT; never weakened to a no-boot pass.
- *   - L3 has no DELETE for microregistry_local; leftover rows poison a rerun.
+ * Reinstall consumes the registered local package after deleting the import,
+ * then boots the restored image. FIRECRAB_E2E_SKIP_GUEST_BOOT disables that
+ * scenario. Failed register jobs require host-artifact manipulation and have
+ * API unit coverage; that browser scenario is explicitly skipped.
  */
 test.describe.configure({ mode: "serial" });
 
@@ -85,7 +79,7 @@ test.beforeAll(async () => {
   const leftover = (await api.listMicroregistry()).some((row) => row.alias === alias());
   if (leftover) {
     throw new Error(
-      `local catalog still has ${alias()} after cleanup. L3 microregistry_local is insert-only; a leftover row poisons the next register. Owning layer: L3.`,
+      `local catalog still has ${alias()} after deleting this suite's registration`,
     );
   }
 });
@@ -145,14 +139,12 @@ test("registers the installed image and refuses a second register with 409", asy
   const accepted = await posted;
   if (accepted.status() === 409) {
     throw new Error(
-      `register 409 for ${alias()} on the first submit — leftover local catalog row (L3 has no DELETE)`,
+      `register 409 for ${alias()} on the first submit — leftover local catalog row`,
     );
   }
   expect(accepted.status()).toBe(202);
 
-  // L1 still polls GET /api/microregistry/jobs/{jobId}; L2 serves
-  // GET /api/microregistry/register/{alias} and the 202 body has no jobId.
-  // Wait on the L2 snapshot so a broken handoff fails here, not in the badge.
+  // Check the server's terminal result as well as the rendered catalog row.
   await expect
     .poll(async () => (await api.getRegister(alias()))?.status ?? "", { timeout: 180_000 })
     .toMatch(/^(succeeded|failed)$/);
@@ -171,8 +163,7 @@ test("registers the installed image and refuses a second register with 409", asy
   const listed = (await api.listMicroregistry()).filter((row) => row.alias === alias());
   expect(listed).toEqual([{ alias: alias(), version: REGISTER_VERSION }]);
 
-  // Form stays disabled after Register (L1/L2 poll mismatch). The 409 is the
-  // L2/L3 contract, so the second POST goes through the API helper.
+  // Check the server's collision guard even if the form prevents resubmission.
   const second = await api.startRegister(alias(), REGISTER_VERSION);
   expect(second.status).toBe(409);
   expect(conflictCode(second.json)).toBe("alias_collision");
@@ -183,13 +174,12 @@ test("registers the installed image and refuses a second register with 409", asy
 
 test("a failed register job leaves no current catalog row", async () => {
   // Not gated by FIRECRAB_E2E_SKIP_GUEST_BOOT — that flag only skips guest boot.
-  // When L1 exposes a real failure trigger (L5 kernel miss on an installed
-  // image), drive it here, wait for GET /api/microregistry/register/{alias}
-  // to be failed, and assert GET /api/microregistry has no current row for
-  // that alias. Do not mock, overwrite kernel bytes, or use alpine known_spec.
+  // Kernel rejection and failed-job cleanup have API unit coverage. The
+  // dashboard cannot cause a post-accept failure without tampering with a
+  // host artifact, so this browser scenario stays explicitly skipped.
   test.skip(
     true,
-    "L5+L1 product blocker: no dashboard or HTTP trigger for a failed register job. POST /api/microregistry/register 404s for an uninstalled alias (no job); this tree's job only inserts a catalog row and has no kernel-miss path. Not mocked.",
+    "No dashboard or HTTP action triggers a post-accept register failure; kernel rejection and cleanup are covered by API unit tests.",
   );
 });
 
@@ -205,6 +195,7 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
   const imageRow = page.locator("table.image-table tbody tr", { hasText: alias() });
   await expect(imageRow).toBeVisible();
   await imageRow.locator("button.options-menu-trigger").click();
+  page.once("dialog", (dialog) => dialog.accept());
   await imageRow.getByRole("button", { name: "Delete" }).click();
   await expect(imageRow).toHaveCount(0, { timeout: 15_000 });
   await expect
@@ -221,11 +212,20 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
   await expect(action).toBeVisible();
   if (!entry?.downloadable || (await action.isDisabled())) {
     throw new Error(
-      `cannot reinstall ${alias()} from the local catalog row after template delete (downloadable=${String(entry?.downloadable)}, packageStaged=${String(entry?.packageStaged)}). consume is known_spec-only and this tree's register writes an empty package/sha256. Owning layer: consume / L4. Not replaced by booting the original import.`,
+      `cannot reinstall ${alias()} from the local catalog row after template delete (downloadable=${String(entry?.downloadable)}, packageStaged=${String(entry?.packageStaged)}).`,
     );
   }
 
+  const installRequest = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === "POST" &&
+      url.pathname === `/api/images/${alias()}/install`;
+  });
   await action.click();
+  const installed = await installRequest;
+  if (!installed.ok()) {
+    throw new Error(`local catalog reinstall HTTP ${installed.status()}: ${await installed.text()}`);
+  }
   await expect(catalogRow.locator(".state-badge")).toHaveText(/Installed|Download failed|Unsupported/, {
     timeout: 180_000,
   });
@@ -279,11 +279,13 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
 
   const row = page.locator("table.vm-table tbody tr", { hasText: REGISTER_VM_NAME });
   await expect(row).toBeVisible();
-  await row.getByRole("button", { name: "start" }).click();
-  await expect(row.locator(".state-badge")).toHaveText(/running|error/, { timeout: 240_000 });
-  if ((await row.locator(".state-badge").textContent()) !== "running") {
+  // Row actions live behind the Actions toggle now.
+  await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
+  await row.getByRole("menuitem", { name: "start", exact: true }).click();
+  await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
+  if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
     await row.locator("button.link-button").click();
-    await expect(page.locator(".console-title")).toBeVisible();
+    await expect(page.locator(".vm-detail-heading")).toBeVisible();
     await expect
       .poll(async () => (await page.locator("pre.detail-log").textContent())?.trim() ?? "", {
         timeout: 10_000,

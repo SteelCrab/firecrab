@@ -117,12 +117,35 @@ def extract_notes(text: str, tag: str) -> str:
     raise ChangelogError(f"CHANGELOG.md has no heading for {version}")
 
 
+def previous_version(text: str, tag: str) -> str | None:
+    """Return the tag of the release listed directly below `tag`.
+
+    Release notes credit whoever worked on that release, so the contributor
+    range starts here. `None` means `tag` is the oldest release documented,
+    which has no predecessor to compare against.
+    """
+    version = tag[1:] if tag.startswith("v") else tag
+    releases = _split_releases(text)
+    for index, (found, _date, _block) in enumerate(releases):
+        if found != version:
+            continue
+        if index + 1 >= len(releases):
+            return None
+        return f"v{releases[index + 1][0]}"
+    raise ChangelogError(f"CHANGELOG.md has no heading for {version}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--extract",
         metavar="TAG",
         help="print the CHANGELOG section for a git tag (e.g. v0.1.0)",
+    )
+    parser.add_argument(
+        "--previous",
+        metavar="TAG",
+        help="print the tag released before TAG; prints nothing for the oldest",
     )
     args = parser.parse_args(argv)
 
@@ -132,12 +155,18 @@ def main(argv: list[str] | None = None) -> int:
         print(error)
         return 1
 
-    if args.extract:
+    if args.extract or args.previous:
         if not CHANGELOG.is_file():
             print(f"{CHANGELOG}: missing CHANGELOG.md")
             return 1
+        changelog_text = CHANGELOG.read_text(encoding="utf-8")
         try:
-            sys.stdout.write(extract_notes(CHANGELOG.read_text(encoding="utf-8"), args.extract))
+            if args.extract:
+                sys.stdout.write(extract_notes(changelog_text, args.extract))
+            else:
+                earlier = previous_version(changelog_text, args.previous)
+                if earlier:
+                    print(earlier)
         except ChangelogError as error:
             print(error)
             return 1

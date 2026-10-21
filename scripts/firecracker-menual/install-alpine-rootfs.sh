@@ -18,19 +18,26 @@ extract_arm64_image="${script_dir}/extract-arm64-image"
 build_dir="${repo_dir}/build/alpine-rootfs"
 rootfs_size='512M'
 rootfs_hostname='firecrab'
+m2image_alias=${M2IMAGE_ALIAS:-}
+sbom_output=${M2IMAGE_SBOM_OUTPUT:-}
+sbom_generator="${repo_dir}/scripts/m2image_sbom.py"
 
 # Like the Ubuntu builder, this script expands the official base archive into
 # a staging directory, installs packages with the distribution's own package
 # manager in a temporary chroot, then creates ext4 directly with mkfs.ext4 -d.
 # No Docker daemon or OCI runtime is involved.
 # linux-virt: Alpine's own officially-maintained cloud/virt kernel package
-# (public-docs/images.md) — replaces the self-built vanilla kernel
+# (public-docs/guides/images.md) — replaces the self-built vanilla kernel
 # every template used to share. Unlike Ubuntu's linux-image-generic,
 # virtio_blk/ext4 are modules here rather than builtin, so the initramfs-virt
 # Alpine builds alongside it (mkinitfs) has to ship as the VM's initrd too —
 # without it the kernel can never reach /dev/vda to mount the real root.
 # bash: Shell repository scripts often use #!/bin/bash (same as Ubuntu).
-rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt'
+# spdx-licenses-text: Alpine's normal runtime packages intentionally omit most
+# license files. Keep the distribution-packaged SPDX License List text corpus
+# in the image so release packaging can recover a complete canonical license
+# bundle without fetching mutable web content or inventing license text.
+rootfs_packages='alpine-baselayout busybox bash openrc agetty iproute2-minimal iputils-ping dhcpcd openssh-server ca-certificates curl procps linux-virt spdx-licenses-text'
 
 info() {
   printf '[INFO] %s\n' "$1"
@@ -215,7 +222,7 @@ cat >"${staging}/etc/fstab" <<'EOF_FSTAB'
 /dev/vda / ext4 defaults 0 1
 EOF_FSTAB
 
-# firecrab-net-helper's dnsmasq answers DNS on the bridge gateway itself
+# firecrab-helper's dnsmasq answers DNS on the bridge gateway itself
 # (172.30.0.1) for every guest on the VPC subnet — dhcpcd overwrites this
 # from the DHCP-provided options once it runs, so this is really just the
 # pre-DHCP fallback value.
@@ -235,7 +242,7 @@ EOF_IFACES
 # Prints a fixed sentinel line to /dev/console (Firecracker's captured
 # stdout) once DHCP + DNS are confirmed working — the signal firecrab-api's
 # start pipeline waits on in place of a guest agent event
-# (public-docs/networking.md; guest agent/vsock is out of this
+# (public-docs/guides/networking.md; guest agent/vsock is out of this
 # project's competition scope).
 cat >"${staging}/etc/init.d/firecrab-network-ready" <<'EOF_SENTINEL'
 #!/sbin/openrc-run
@@ -432,6 +439,8 @@ main() {
       "M2IMAGE_ARCH=${M2IMAGE_ARCH:-}" \
       "M2IMAGE_DISTRO_SERIES=${alpine_series}" \
       "M2IMAGE_DISTRO_VERSION=${alpine_version_setting}" \
+      "M2IMAGE_ALIAS=${m2image_alias}" \
+      "M2IMAGE_SBOM_OUTPUT=${sbom_output}" \
       "FIRECRAB_SSH_PUBLIC_KEY=${FIRECRAB_SSH_PUBLIC_KEY:-}" \
       "$script_path"
   fi
@@ -488,6 +497,21 @@ main() {
     "$mount_dir" "$archive_path" "$ssh_public_key" "$kernel_artifact_dir" "$artifact_dir" \
     "$alpine_branch" "$alpine_version" "$alpine_arch" "$rootfs_hostname" "$rootfs_size" \
     "$rootfs_packages" "$initrd_image_name"
+
+  if [ -n "$sbom_output" ]; then
+    [ -n "$m2image_alias" ] || fail 'M2IMAGE_ALIAS is required with M2IMAGE_SBOM_OUTPUT'
+    require_command python3
+    [ -f "$mount_dir/lib/apk/db/installed" ] \
+      || fail 'Alpine package database missing from built staging root'
+    python3 "$sbom_generator" \
+      --format alpine --distribution alpine \
+      --image-alias "$m2image_alias" --image-version "$alpine_version" \
+      --architecture "$alpine_arch" \
+      --package-db "$mount_dir/lib/apk/db/installed" --output "$sbom_output"
+    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+      chown "${SUDO_UID}:${SUDO_GID}" "$sbom_output"
+    fi
+  fi
 
   extract_kernel
   restore_output_ownership

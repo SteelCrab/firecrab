@@ -27,10 +27,11 @@ Options:
   --dry-run                   Validate and print uploads without changing R2
   -h, --help                  Show this help
 
-The publisher requires every manifest alias for x86_64 and aarch64. Packages
-are uploaded first and catalog.json last, so consumers never see a partial
-release. Configure rclone's S3 provider as Cloudflare for large images.
-Wrangler supports only files up to 315 MB and is intended as a fallback.
+The publisher requires every manifest alias for x86_64 and aarch64, including
+its exact corresponding-source sibling archive. Source archives and M2Images
+are uploaded before catalog.json, so consumers never discover a release whose
+source bytes are absent. Configure rclone's S3 provider as Cloudflare for large
+artifacts. Wrangler supports only files up to 315 MB and is a fallback.
 EOF
 }
 
@@ -87,6 +88,8 @@ for architecture in "${architectures[@]}"; do
   (cd "${dist_dir}/${architecture}" && sha256sum -c SHA256SUMS)
 done
 
+# Catalog construction is a fail-closed completeness check: it now requires the
+# binary and source sibling for every alias/architecture and binds both hashes.
 catalog_tmp=$(mktemp "${dist_dir}/.catalog.XXXXXX")
 trap 'rm -f -- "$catalog_tmp"' EXIT
 python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" catalog \
@@ -133,6 +136,12 @@ upload() {
 
 for alias in "${aliases[@]}"; do
   for architecture in "${architectures[@]}"; do
+    source_package="${dist_dir}/${architecture}/${alias}.sources.tar.zst"
+    source_key=$(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" \
+      source-registry-key "$alias" "$architecture")
+    info "uploading exact source ${alias}/${architecture} -> r2://${bucket}/${source_key}"
+    upload "$source_package" "$source_key" application/zstd
+
     package="${dist_dir}/${architecture}/${alias}.tar.zst"
     key=$(python3 "${script_dir}/m2image-manifest.py" --manifest "$manifest" \
       registry-key "$alias" "$architecture")

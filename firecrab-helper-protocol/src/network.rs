@@ -1,5 +1,6 @@
 use std::fmt;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -17,7 +18,7 @@ use crate::PROTOCOL_VERSION;
 pub const TAP_PREFIX: &str = "fct";
 
 /// The deterministic TAP interface name for a VM. Both `firecrab-api` (to
-/// reference it in the Firecracker config) and `firecrab-net-helper` (to
+/// reference it in the Firecracker config) and `firecrab-helper` (to
 /// create/attach/delete the real device, and to name nftables objects)
 /// derive the same name from the same `vm_id` — the API never gets to pass
 /// the helper an arbitrary interface name.
@@ -111,16 +112,26 @@ impl<'de> Deserialize<'de> for MacAddr {
     }
 }
 
+/// What `StartVmUnit::memory_max_mib` may ask for. Sanity bounds, not policy:
+/// no guest runs in less than its smallest RAM, and the top is far beyond any
+/// host this runs on.
+pub const UNIT_MEMORY_MAX_MIB: RangeInclusive<u32> = 128..=1_048_576;
+
+/// What `StartVmUnit::cpu_quota_percent` may ask for: one core to 64 cores.
+pub const UNIT_CPU_QUOTA_PERCENT: RangeInclusive<u32> = 100..=6_400;
+
 /// The complete privileged surface. Interface names, CIDRs, or nftables text
 /// are deliberately absent: the helper derives all of those from its own
 /// root-owned configuration and the VM UUID.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum NetworkRequest {
+    /// Fixed pipe controls; no arbitrary command or host paths.
+    Pipe { request: crate::pipe::Operation },
     /// Idempotently ensure the shared bridge/subnet/gateway exist.
     EnsureBridge,
     /// Idempotently ensure a MicroNetwork's own bridge/subnet/gateway exist
-    /// (`public-docs/networking.md`). The interface name is derived from
+    /// (`public-docs/guides/networking.md`). The interface name is derived from
     /// `micro_network_id` (see [`micro_network_bridge_name`]), never taken
     /// as a string from the API — only the numeric gateway/prefix, which
     /// carry no shell/nftables injection surface, cross the boundary
@@ -133,6 +144,10 @@ pub enum NetworkRequest {
         gateway: Ipv4Addr,
         /// CIDR prefix length of the MicroNetwork's subnet.
         prefix: u8,
+        /// The network's IPv6 plan, or `None` for an IPv4-only network
+        /// (also what an older API, which has no v6 concept, sends).
+        #[serde(default)]
+        ipv6: Option<MicroNetworkIpv6Spec>,
     },
     /// Removes a MicroNetwork's bridge; a no-op if it's already gone.
     RemoveMicroNetworkBridge {
@@ -172,6 +187,10 @@ pub enum NetworkRequest {
         vm_id: Uuid,
         /// The VM's allocated IPv4 address.
         ipv4: Ipv4Addr,
+        /// The VM's allocated IPv6 address, when its MicroNetwork is
+        /// dual-stack. Absent means IPv4-only, as before this field existed.
+        #[serde(default)]
+        ipv6: Option<Ipv6Addr>,
         /// The VM's Firecracker guest MAC.
         mac: MacAddr,
         /// ID resolved against the helper's allowlist; never a raw CIDR.
@@ -200,6 +219,40 @@ pub enum NetworkRequest {
         /// Every MicroNetwork that currently exists, so dnsmasq can serve
         /// each one's bridge. Empty means no Firecrab DHCP interfaces.
         micro_networks: Vec<MicroNetworkSpec>,
+    },
+    /// Run a VM's shim in its own transient systemd unit
+    /// (`firecrab-vm-<uuid>.service`) so the VM outlives the API process.
+    ///
+    /// The helper takes the program from the connecting API's own executable
+    /// and the unit's uid/gid from its peer credentials; it never runs a path
+    /// from this request with more privilege than the API already has. The
+    /// runtime directory must be the API's own private directory.
+    StartVmUnit {
+        /// The VM; also names the unit.
+        vm_id: Uuid,
+        /// The start's runtime directory, absolute.
+        runtime_dir: PathBuf,
+        /// Firecracker binary, absolute; run as the API's own user.
+        firecracker: PathBuf,
+        /// Whether Firecracker gets `--enable-pci`.
+        #[serde(default)]
+        enable_pci: bool,
+        /// The shim's SIGTERM-to-SIGKILL grace.
+        stop_grace_ms: u64,
+        /// Ceiling on the unit's memory in MiB (`MemoryMax`). `None` leaves
+        /// it unlimited, as an API from before limits existed sends.
+        #[serde(default)]
+        memory_max_mib: Option<u32>,
+        /// Ceiling on the unit's CPU time as a percentage of one core
+        /// (`CPUQuota`; 200 is two cores' worth). `None` leaves it unlimited.
+        #[serde(default)]
+        cpu_quota_percent: Option<u32>,
+    },
+    /// Stop a VM's unit (and so its shim and Firecracker); a no-op when the
+    /// unit does not exist.
+    StopVmUnit {
+        /// The VM whose unit to stop.
+        vm_id: Uuid,
     },
     /// Install an already-downloaded host bundle over this host's binaries and
     /// restart both services (`firecrab update --apply`).
@@ -253,6 +306,11 @@ pub struct MicroNetworkSpec {
     /// Firecrab-owned `fct*`/`mnb*` name; the helper is the trust boundary.
     #[serde(default)]
     pub uplink: Option<String>,
+    /// This network's IPv6 plan, alongside — never instead of — its IPv4
+    /// subnet. `None` (absent on the wire, which is all an older API can
+    /// send) keeps the network IPv4-only.
+    #[serde(default)]
+    pub ipv6: Option<MicroNetworkIpv6Spec>,
 }
 
 /// Serde default for [`MicroNetworkSpec::internet_enabled`].
@@ -295,6 +353,104 @@ impl MicroNetworkSpec {
     }
 }
 
+/// How guests in a dual-stack MicroNetwork get their IPv6 address.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Ipv6AddressMode {
+    /// Router advertisements only: the guest builds its own address as the
+    /// EUI-64 of its MAC (see [`slaac_address`]), which is exactly the
+    /// address the API stored for it.
+    #[default]
+    Slaac,
+    /// Stateful DHCPv6: the address comes from a per-VM reservation, the
+    /// same way the IPv4 address does.
+    Dhcpv6,
+}
+
+impl fmt::Display for Ipv6AddressMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Slaac => write!(f, "slaac"),
+            Self::Dhcpv6 => write!(f, "dhcpv6"),
+        }
+    }
+}
+
+/// A MicroNetwork's IPv6 plan. Like its IPv4 counterpart in
+/// [`MicroNetworkSpec`], the prefix is derived from `gateway`/`prefix`
+/// rather than sent as text, so nothing spliceable crosses the boundary.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MicroNetworkIpv6Spec {
+    /// The bridge's own IPv6 address, which guests use as their router.
+    pub gateway: Ipv6Addr,
+    /// CIDR prefix length of the network's IPv6 prefix.
+    pub prefix: u8,
+    /// How guests obtain an address inside that prefix.
+    #[serde(default)]
+    pub address_mode: Ipv6AddressMode,
+}
+
+impl MicroNetworkIpv6Spec {
+    /// Prefix (base) address of this network's IPv6 block.
+    pub fn network_address(&self) -> Ipv6Addr {
+        Ipv6Addr::from(u128::from(self.gateway) & self.mask())
+    }
+
+    /// The block in `<prefix>/<length>` CIDR notation, built from typed
+    /// values rather than any caller-supplied text.
+    pub fn subnet_cidr(&self) -> String {
+        format!("{}/{}", self.network_address(), self.prefix)
+    }
+
+    /// Whether `address` sits inside this network's prefix.
+    pub fn contains(&self, address: Ipv6Addr) -> bool {
+        (u128::from(address) & self.mask()) == u128::from(self.network_address())
+    }
+
+    /// Whether two IPv6 plans share any address, the v6 counterpart of
+    /// [`crate::network::MicroNetworkSpec`]'s IPv4 overlap check.
+    pub fn overlaps(&self, other: &Self) -> bool {
+        self.contains(other.network_address()) || other.contains(self.network_address())
+    }
+
+    /// Whether this prefix is a Unique Local Address block (`fc00::/7`).
+    /// ULA space is not routable off-host, so it egresses through NAT66;
+    /// a global prefix is forwarded untranslated instead. The egress mode
+    /// follows from the prefix's scope — there is no separate toggle.
+    pub fn is_unique_local(&self) -> bool {
+        (self.network_address().octets()[0] & 0xfe) == 0xfc
+    }
+
+    /// Whether this prefix can back a MicroNetwork: Unique Local (`fc00::/7`)
+    /// or global unicast (`2000::/3`). Other reserved ranges — link-local,
+    /// multicast, deprecated site-local, discard-only, NAT64 — cannot.
+    pub fn is_routable_scope(&self) -> bool {
+        self.is_unique_local() || Self::is_global_unicast(self.network_address())
+    }
+
+    fn is_global_unicast(addr: Ipv6Addr) -> bool {
+        addr.segments()[0] & 0xe000 == 0x2000
+    }
+
+    fn mask(&self) -> u128 {
+        u128::MAX
+            .checked_shl(128 - u32::from(self.prefix.min(128)))
+            .unwrap_or(0)
+    }
+}
+
+/// The address a SLAAC guest configures for itself: `prefix`'s network bits
+/// followed by the EUI-64 interface identifier of `mac` (the MAC split
+/// around `ff:fe` with its U/L bit flipped). The API stores this so the
+/// firewall can pin it the way it pins the IPv4 lease, instead of waiting to
+/// learn whatever address the guest happens to pick.
+pub fn slaac_address(prefix: Ipv6Addr, mac: MacAddr) -> Ipv6Addr {
+    let [a, b, c, d, e, f] = mac.0;
+    let interface_id = u64::from_be_bytes([a ^ 0x02, b, c, 0xff, 0xfe, d, e, f]);
+    let network = u128::from(prefix) & (u128::MAX << 64);
+    Ipv6Addr::from(network | u128::from(interface_id))
+}
+
 /// One inbound port forwarding rule specification for [`NetworkRequest::ApplyVmPolicy`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PortForwardSpec {
@@ -316,6 +472,9 @@ pub struct VmPolicySpec {
     pub vm_id: Uuid,
     /// The VM's allocated IPv4 address.
     pub ipv4: Ipv4Addr,
+    /// The VM's allocated IPv6 address, when its MicroNetwork is dual-stack.
+    #[serde(default)]
+    pub ipv6: Option<Ipv6Addr>,
     /// The VM's Firecracker guest MAC.
     pub mac: MacAddr,
     /// ID resolved against the helper's allowlist; never a raw CIDR.
@@ -336,6 +495,11 @@ pub struct DhcpLeaseEntry {
     pub vm_id: Uuid,
     /// Its allocated IPv4 address.
     pub ipv4: Ipv4Addr,
+    /// Its allocated IPv6 address, when its MicroNetwork is dual-stack.
+    /// Only DHCPv6 networks need it in a reservation; a SLAAC guest derives
+    /// the same address itself from its MAC (see [`slaac_address`]).
+    #[serde(default)]
+    pub ipv6: Option<Ipv6Addr>,
     /// Its Firecracker guest MAC.
     pub mac: MacAddr,
 }
@@ -346,7 +510,7 @@ pub struct DhcpLeaseEntry {
 /// The (unprivileged) CLI resolves these exactly the way `firecrab info` does
 /// and sends them here, but the helper does **not** write where they point: it
 /// re-derives the same three paths from its own `PREFIX`/`FIRECRAB_LIBDIR`
-/// (exported by `packaging/systemd/firecrab-net-helper.service`) and rejects
+/// (exported by `packaging/systemd/firecrab-helper.service`) and rejects
 /// the request unless the two agree byte-for-byte. So this field is a
 /// "do we both mean the same host?" cross-check, not a destination — a caller
 /// that made it past the socket's uid allowlist still cannot point a
@@ -355,7 +519,7 @@ pub struct DhcpLeaseEntry {
 pub struct InstallLayout {
     /// Receives the `firecrab` CLI (`$PREFIX/bin`).
     pub bindir: PathBuf,
-    /// Receives `firecrab-api` and `firecrab-net-helper` (`$LIBDIR`).
+    /// Receives `firecrab-api` and `firecrab-helper` (`$LIBDIR`).
     pub libdir: PathBuf,
     /// Receives the dashboard assets under `dashboard/` (`$SHAREDIR`).
     pub sharedir: PathBuf,
@@ -437,6 +601,9 @@ pub struct NetworkResponseEnvelope {
     pub request_id: Uuid,
     /// Outcome of processing the request.
     pub result: Result<(), HelperFailure>,
+    /// Optional data for pipe inspection; absent in older responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe: Option<crate::pipe::Snapshot>,
 }
 
 #[cfg(test)]
@@ -539,6 +706,7 @@ mod tests {
             leases: vec![DhcpLeaseEntry {
                 vm_id: Uuid::nil(),
                 ipv4: "172.30.0.5".parse().unwrap(),
+                ipv6: None,
                 mac: "02:fc:00:00:00:05".parse().unwrap(),
             }],
             micro_networks: vec![MicroNetworkSpec {
@@ -547,6 +715,7 @@ mod tests {
                 prefix: 24,
                 internet_enabled: true,
                 uplink: None,
+                ipv6: None,
             }],
         };
         let json = serde_json::to_value(&request).unwrap();
@@ -566,6 +735,7 @@ mod tests {
             prefix: 24,
             internet_enabled: true,
             uplink: None,
+            ipv6: None,
         };
         assert_eq!(
             spec.network_address(),
@@ -626,6 +796,7 @@ mod tests {
             micro_network_id: Uuid::nil(),
             gateway: "172.31.0.1".parse().unwrap(),
             prefix: 24,
+            ipv6: None,
         };
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["operation"], "ensure_micro_network_bridge");
@@ -639,6 +810,7 @@ mod tests {
     #[test]
     fn response_result_round_trips() {
         let failure = NetworkResponseEnvelope {
+            pipe: None,
             version: PROTOCOL_VERSION,
             request_id: Uuid::nil(),
             result: Err(HelperFailure::UnsupportedVersion { supported: 1 }),
@@ -700,6 +872,7 @@ mod tests {
             },
         ] {
             let envelope = NetworkResponseEnvelope {
+                pipe: None,
                 version: PROTOCOL_VERSION,
                 request_id: Uuid::nil(),
                 result: Err(failure.clone()),
@@ -718,6 +891,154 @@ mod tests {
     }
 
     #[test]
+    fn a_spec_without_ipv6_stays_ipv4_only() {
+        // An API built before dual-stack existed sends no v6 fields; the
+        // helper must keep rendering exactly today's IPv4-only host state.
+        let spec: MicroNetworkSpec = serde_json::from_value(serde_json::json!({
+            "micro_network_id": Uuid::nil(),
+            "gateway": "172.31.0.1",
+            "prefix": 24,
+        }))
+        .expect("a spec without ipv6 must still deserialize");
+        assert_eq!(spec.ipv6, None);
+    }
+
+    #[test]
+    fn micro_network_ipv6_spec_derives_its_prefix_from_gateway_and_length() {
+        let spec = MicroNetworkIpv6Spec {
+            gateway: "fd00:1234:5678:9abc::1".parse().unwrap(),
+            prefix: 64,
+            address_mode: Ipv6AddressMode::Slaac,
+        };
+        assert_eq!(
+            spec.network_address(),
+            "fd00:1234:5678:9abc::".parse::<Ipv6Addr>().unwrap()
+        );
+        assert_eq!(spec.subnet_cidr(), "fd00:1234:5678:9abc::/64");
+        assert!(spec.contains("fd00:1234:5678:9abc::42".parse().unwrap()));
+        assert!(!spec.contains("fd00:1234:5678:9abd::42".parse().unwrap()));
+    }
+
+    #[test]
+    fn egress_mode_follows_the_prefix_scope() {
+        // ULA (fc00::/7) is not routable off-host, so it needs NAT66; a GUA
+        // is publicly routable and must be forwarded untranslated.
+        let ula = MicroNetworkIpv6Spec {
+            gateway: "fd00::1".parse().unwrap(),
+            prefix: 64,
+            address_mode: Ipv6AddressMode::Slaac,
+        };
+        assert!(ula.is_unique_local());
+
+        let gua = MicroNetworkIpv6Spec {
+            gateway: "2001:db8:1::1".parse().unwrap(),
+            prefix: 64,
+            address_mode: Ipv6AddressMode::Slaac,
+        };
+        assert!(!gua.is_unique_local());
+        assert!(ula.is_routable_scope());
+        assert!(gua.is_routable_scope());
+
+        for gateway in ["fec0::1", "100::1", "64:ff9b::1", "fe80::1", "::1", "::"] {
+            let reserved = MicroNetworkIpv6Spec {
+                gateway: gateway.parse().unwrap(),
+                prefix: 64,
+                address_mode: Ipv6AddressMode::Slaac,
+            };
+            assert!(
+                !reserved.is_routable_scope(),
+                "{gateway} is not unique-local or global unicast"
+            );
+        }
+    }
+
+    #[test]
+    fn slaac_address_is_the_eui64_of_the_guest_mac() {
+        // EUI-64: split the MAC around ff:fe and flip the U/L bit, so the
+        // address the API stores is the one the guest configures itself.
+        let mac: MacAddr = "02:fc:0a:1b:2c:3d".parse().unwrap();
+        let prefix: Ipv6Addr = "fd00:1234:5678:9abc::".parse().unwrap();
+        assert_eq!(
+            slaac_address(prefix, mac),
+            "fd00:1234:5678:9abc:fc:aff:fe1b:2c3d"
+                .parse::<Ipv6Addr>()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn ipv6_address_modes_use_their_wire_names() {
+        assert_eq!(
+            serde_json::to_value(Ipv6AddressMode::Slaac).unwrap(),
+            serde_json::json!("slaac")
+        );
+        assert_eq!(
+            serde_json::to_value(Ipv6AddressMode::Dhcpv6).unwrap(),
+            serde_json::json!("dhcpv6")
+        );
+        assert_eq!(Ipv6AddressMode::default(), Ipv6AddressMode::Slaac);
+    }
+
+    #[test]
+    fn vm_policies_and_leases_carry_an_optional_ipv6() {
+        let policy = VmPolicySpec {
+            vm_id: Uuid::nil(),
+            ipv4: "172.31.0.5".parse().unwrap(),
+            ipv6: Some("fd00::5".parse().unwrap()),
+            mac: "02:fc:00:00:00:05".parse().unwrap(),
+            egress_policy: "internet".to_owned(),
+            allow_host_ssh: false,
+            port_forwards: Vec::new(),
+        };
+        let json = serde_json::to_value(&policy).unwrap();
+        assert_eq!(json["ipv6"], "fd00::5");
+        assert_eq!(
+            serde_json::from_value::<VmPolicySpec>(json).unwrap(),
+            policy
+        );
+
+        // An older API omits the field entirely.
+        let legacy: VmPolicySpec = serde_json::from_value(serde_json::json!({
+            "vm_id": Uuid::nil(),
+            "ipv4": "172.31.0.5",
+            "mac": "02:fc:00:00:00:05",
+            "egress_policy": "internet",
+            "allow_host_ssh": false,
+        }))
+        .expect("a policy without ipv6 must still deserialize");
+        assert_eq!(legacy.ipv6, None);
+
+        let lease: DhcpLeaseEntry = serde_json::from_value(serde_json::json!({
+            "vm_id": Uuid::nil(),
+            "ipv4": "172.31.0.5",
+            "mac": "02:fc:00:00:00:05",
+        }))
+        .expect("a lease without ipv6 must still deserialize");
+        assert_eq!(lease.ipv6, None);
+    }
+
+    #[test]
+    fn ensure_micro_network_bridge_carries_the_ipv6_gateway() {
+        let request = NetworkRequest::EnsureMicroNetworkBridge {
+            micro_network_id: Uuid::nil(),
+            gateway: "172.31.0.1".parse().unwrap(),
+            prefix: 24,
+            ipv6: Some(MicroNetworkIpv6Spec {
+                gateway: "fd00::1".parse().unwrap(),
+                prefix: 64,
+                address_mode: Ipv6AddressMode::Dhcpv6,
+            }),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["ipv6"]["gateway"], "fd00::1");
+        assert_eq!(json["ipv6"]["address_mode"], "dhcpv6");
+        assert_eq!(
+            serde_json::from_value::<NetworkRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
     fn protocol_version_is_unchanged_by_the_self_update_request() {
         // Adding a request variant is additive: existing fields are
         // untouched, so an older peer keeps parsing every request it already
@@ -725,5 +1046,47 @@ mod tests {
         // not-yet-restarted helper and get UnsupportedVersion for the few
         // seconds between the swap and the restart. Do not bump.
         assert_eq!(PROTOCOL_VERSION, 2);
+    }
+
+    #[test]
+    fn a_start_vm_unit_request_without_limits_decodes_as_unlimited() {
+        // What an API from before the limits existed sends.
+        let json = serde_json::json!({
+            "operation": "start_vm_unit",
+            "vm_id": "00000000-0000-0000-0000-000000001234",
+            "runtime_dir": "/run/firecrab/vms/1234",
+            "firecracker": "/usr/local/bin/firecracker",
+            "stop_grace_ms": 5000,
+        });
+        let NetworkRequest::StartVmUnit {
+            memory_max_mib,
+            cpu_quota_percent,
+            ..
+        } = serde_json::from_value(json).unwrap()
+        else {
+            panic!("expected a StartVmUnit request");
+        };
+        assert_eq!(memory_max_mib, None);
+        assert_eq!(cpu_quota_percent, None);
+    }
+
+    #[test]
+    fn start_vm_unit_limits_round_trip_through_json() {
+        let request = NetworkRequest::StartVmUnit {
+            vm_id: Uuid::from_u128(0x1234),
+            runtime_dir: PathBuf::from("/run/firecrab/vms/1234"),
+            firecracker: PathBuf::from("/usr/local/bin/firecracker"),
+            enable_pci: false,
+            stop_grace_ms: 5000,
+            memory_max_mib: Some(768),
+            cpu_quota_percent: Some(200),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["memory_max_mib"], 768);
+        assert_eq!(json["cpu_quota_percent"], 200);
+        assert_eq!(
+            serde_json::from_value::<NetworkRequest>(json).unwrap(),
+            request
+        );
     }
 }

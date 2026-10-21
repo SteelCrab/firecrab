@@ -5,7 +5,7 @@
 //! pass [`crate::image_install::is_safe_archive_member`].
 
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -14,6 +14,7 @@ use crate::image_install::{
     ImageInstallTracker, clear_staged_package_origin, is_safe_archive_member, package_name,
     staged_package_path, write_staged_package_origin,
 };
+use crate::persistence::LocalCatalogEntry;
 use crate::templates::{TemplateRegistry, TemplateSpec, TemplateVersion};
 use firecrab_api_types::PackageOrigin;
 
@@ -99,20 +100,67 @@ pub async fn pack_registered_template(
 pub fn read_packed_template_spec(archive: &Path) -> Result<TemplateSpec, String> {
     let file =
         File::open(archive).map_err(|error| format!("open {}: {error}", archive.display()))?;
-    let decoder = zstd::stream::read::Decoder::new(file)
-        .map_err(|error| format!("zstd decoder {}: {error}", archive.display()))?;
+    read_template_spec(file)
+}
+
+/// A local catalog row pins both the compressed bytes and the template identity.
+/// Read from the same open file after hashing, before extracting any artifacts.
+pub(crate) fn read_local_template_spec(
+    image_root: &Path,
+    entry: &LocalCatalogEntry,
+) -> Result<TemplateSpec, String> {
+    if entry.package != package_name(&entry.alias) {
+        return Err("local package filename does not match its alias".to_owned());
+    }
+    let archive = staged_package_path(image_root, &entry.alias);
+    let mut file =
+        File::open(&archive).map_err(|error| format!("open {}: {error}", archive.display()))?;
+    let mut hasher = HashingWriter::new(io::sink());
+    io::copy(&mut file, &mut hasher).map_err(|error| format!("hash local package: {error}"))?;
+    if hasher.finalize().1 != entry.sha256 {
+        return Err("local package SHA-256 does not match its catalog registration".to_owned());
+    }
+    file.rewind()
+        .map_err(|error| format!("rewind local package: {error}"))?;
+    let spec = read_template_spec(file)?;
+    if spec.alias != entry.alias || spec.version != entry.version {
+        return Err(
+            "local template alias or version does not match its catalog registration".to_owned(),
+        );
+    }
+    for path in [&spec.kernel, &spec.rootfs]
+        .into_iter()
+        .chain(spec.initrd.iter())
+    {
+        if !is_safe_archive_member(&path.to_string_lossy()) {
+            return Err(format!(
+                "unsafe local template artifact path: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(spec)
+}
+
+fn read_template_spec(file: File) -> Result<TemplateSpec, String> {
+    let decoder =
+        zstd::stream::read::Decoder::new(file).map_err(|error| format!("zstd decoder: {error}"))?;
     let mut tar = tar::Archive::new(decoder);
     for entry in tar
         .entries()
         .map_err(|error| format!("tar entries: {error}"))?
     {
-        let mut entry = entry.map_err(|error| format!("tar entry: {error}"))?;
+        let entry = entry.map_err(|error| format!("tar entry: {error}"))?;
         let name = entry
             .path()
             .map_err(|error| format!("tar member path: {error}"))?;
         let name = name.to_string_lossy().replace('\\', "/");
         if name == TEMPLATE_SPEC_MEMBER {
-            return serde_json::from_reader(&mut entry)
+            const MAX_SPEC_BYTES: u64 = 64 * 1024;
+            if !entry.header().entry_type().is_file() || entry.size() > MAX_SPEC_BYTES {
+                return Err("template metadata must be a regular file of at most 64 KiB".to_owned());
+            }
+            return serde_json::from_reader(entry.take(MAX_SPEC_BYTES))
                 .map_err(|error| format!("parse {TEMPLATE_SPEC_MEMBER}: {error}"));
         }
     }
@@ -162,12 +210,12 @@ fn pack_spec_blocking(
     image_root: &Path,
     spec: &TemplateSpec,
 ) -> Result<PackedPackage, String> {
-    let kernel = archive_member_name(&spec.kernel, "kernel/")?;
-    let rootfs = archive_member_name(&spec.rootfs, "rootfs/")?;
-    let initrd = spec
+    let kernel_member = kernel_archive_member(&spec.kernel)?;
+    let rootfs_member = archive_member_name(&spec.rootfs, "rootfs/")?;
+    let initrd_member = spec
         .initrd
         .as_ref()
-        .map(|path| archive_member_name(path, "kernel/"))
+        .map(|path| kernel_archive_member(path))
         .transpose()?;
     if !is_safe_archive_member(TEMPLATE_SPEC_MEMBER) {
         return Err(format!(
@@ -181,16 +229,23 @@ fn pack_spec_blocking(
     );
     tracker.append_log(&spec.alias, "[packer:source] complete");
 
+    // The shipped spec must name the members the archive actually contains —
+    // a consumer only ever sees this package, never this host's internal
+    // `.oci/kernel/` cache layout the source path may have come from.
+    let mut shipped_spec = spec.clone();
+    shipped_spec.kernel = PathBuf::from(&kernel_member);
+    shipped_spec.initrd = initrd_member.clone().map(PathBuf::from);
+
     let dest = staged_package_path(image_root, &spec.alias);
     let building_path = building_package_path(image_root, &spec.alias);
     let (building, file) = BuildingFile::create(building_path)?;
     let sha256 = write_archive(
         tracker,
         image_root,
-        spec,
-        &kernel,
-        initrd.as_deref(),
-        &rootfs,
+        &shipped_spec,
+        (spec.kernel.as_path(), kernel_member.as_str()),
+        spec.initrd.as_deref().zip(initrd_member.as_deref()),
+        (spec.rootfs.as_path(), rootfs_member.as_str()),
         file,
     )?;
     building.publish(&dest)?;
@@ -215,9 +270,9 @@ fn write_archive(
     tracker: &ImageInstallTracker,
     image_root: &Path,
     spec: &TemplateSpec,
-    kernel: &str,
-    initrd: Option<&str>,
-    rootfs: &str,
+    kernel: (&Path, &str),
+    initrd: Option<(&Path, &str)>,
+    rootfs: (&Path, &str),
     file: File,
 ) -> Result<String, String> {
     let hasher = HashingWriter::new(file);
@@ -226,15 +281,21 @@ fn write_archive(
     let mut builder = tar::Builder::new(encoder);
 
     append_template_spec(&mut builder, spec)?;
-    tracker.append_log(&spec.alias, format!("[packer:kernel] packing {kernel}"));
-    append_regular_file(&mut builder, image_root, kernel)?;
-    if let Some(initrd) = initrd {
-        tracker.append_log(&spec.alias, format!("[packer:kernel] packing {initrd}"));
-        append_regular_file(&mut builder, image_root, initrd)?;
+    tracker.append_log(&spec.alias, format!("[packer:kernel] packing {}", kernel.1));
+    append_regular_file(&mut builder, image_root, kernel.0, kernel.1)?;
+    if let Some((initrd_source, initrd_member)) = initrd {
+        tracker.append_log(
+            &spec.alias,
+            format!("[packer:kernel] packing {initrd_member}"),
+        );
+        append_regular_file(&mut builder, image_root, initrd_source, initrd_member)?;
     }
     tracker.append_log(&spec.alias, "[packer:kernel] complete");
-    tracker.append_log(&spec.alias, format!("[packer:rootfs] streaming {rootfs}"));
-    append_regular_file(&mut builder, image_root, rootfs)?;
+    tracker.append_log(
+        &spec.alias,
+        format!("[packer:rootfs] streaming {}", rootfs.1),
+    );
+    append_regular_file(&mut builder, image_root, rootfs.0, rootfs.1)?;
     tracker.append_log(&spec.alias, "[packer:rootfs] complete");
 
     let encoder = builder
@@ -268,20 +329,41 @@ fn append_template_spec<W: Write>(
 fn append_regular_file<W: Write>(
     builder: &mut tar::Builder<W>,
     image_root: &Path,
+    source: &Path,
     member: &str,
 ) -> Result<(), String> {
-    let path = image_root.join(member);
+    let path = image_root.join(source);
     let mut file =
         File::open(&path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let metadata = file
         .metadata()
         .map_err(|error| format!("stat {}: {error}", path.display()))?;
     if !metadata.is_file() {
-        return Err(format!("template artifact is not a regular file: {member}"));
+        return Err(format!(
+            "template artifact is not a regular file: {}",
+            path.display()
+        ));
     }
     builder
         .append_file(member, &mut file)
         .map_err(|error| format!("append {member}: {error}"))
+}
+
+/// OCI-imported images share their kernel through the `.oci/kernel/` cache
+/// (`crate::oci::kernel`) rather than a per-template `kernel/` path. Flatten
+/// a cache hit to a plain `kernel/<file>` archive member so register
+/// produces an ordinary, portable package: the existing install path
+/// already understands `kernel/<file>`, and [`is_safe_archive_member`]'s
+/// allowlist stays untouched.
+fn kernel_archive_member(path: &Path) -> Result<String, String> {
+    if let Ok(cached) = path.strip_prefix(".oci/kernel") {
+        let name = cached
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("`{}` has no utf-8 file name", path.display()))?;
+        return Ok(format!("kernel/{name}"));
+    }
+    archive_member_name(path, "kernel/")
 }
 
 fn archive_member_name(path: &Path, required_prefix: &str) -> Result<String, String> {
@@ -395,6 +477,20 @@ mod tests {
             kernel: PathBuf::from("kernel/vmlinux-ubuntu-26.04-x86_64"),
             initrd: None,
             rootfs: PathBuf::from("rootfs/nginx-1.27.ext4"),
+            boot_args: "console=ttyS0 root=/dev/vda rw".to_owned(),
+        }
+    }
+
+    /// Shaped like an OCI-imported image's installed template: the kernel is
+    /// a shared cache hit under `.oci/kernel/` (`oci/kernel.rs`), not a
+    /// plain `kernel/` path a directly-installed M2Image would have.
+    fn oci_imported_spec(version: &str) -> TemplateSpec {
+        TemplateSpec {
+            alias: "127.0.0.1-15556-firecrab-e2e-ready".to_owned(),
+            version: version.to_owned(),
+            kernel: PathBuf::from(".oci/kernel/x86_64/vmlinux-7.2.2-x86_64"),
+            initrd: None,
+            rootfs: PathBuf::from("rootfs/127.0.0.1-15556-firecrab-e2e-ready.ext4"),
             boot_args: "console=ttyS0 root=/dev/vda rw".to_owned(),
         }
     }
@@ -556,6 +652,40 @@ mod tests {
         assert_eq!(
             packed_spec.rootfs,
             PathBuf::from("rootfs/alpine-rootfs-3.24.1-x86_64.ext4")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oci_cached_kernel_is_flattened_into_a_plain_kernel_member() {
+        let directory = tempdir().unwrap();
+        let spec = oci_imported_spec("1");
+        let templates = register_layout(directory.path(), &spec);
+        let tracker = ImageInstallTracker::disabled();
+        pack_registered_template(&tracker, &templates, &spec.alias, &spec.version)
+            .await
+            .unwrap();
+
+        let archive = staged_package_path(templates.image_root_path(), &spec.alias);
+        let members = list_packed_members(&archive).unwrap();
+        for member in &members {
+            assert!(is_safe_archive_member(member), "{member}");
+            assert!(
+                !member.starts_with(".oci"),
+                "archive must not leak the internal .oci/ cache path, got `{member}`"
+            );
+        }
+        assert!(
+            members
+                .iter()
+                .any(|member| member == "kernel/vmlinux-7.2.2-x86_64"),
+            "expected the .oci/kernel/ cache hit flattened to a plain kernel/ member, got {members:?}"
+        );
+
+        let packed_spec = read_packed_template_spec(&archive).unwrap();
+        assert_eq!(
+            packed_spec.kernel,
+            PathBuf::from("kernel/vmlinux-7.2.2-x86_64"),
+            "the shipped spec must name the member the archive actually contains"
         );
     }
 

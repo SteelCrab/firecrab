@@ -6,11 +6,14 @@ import type { StartupStep } from "./StartupStep";
 import type { StartupStepRun } from "./StartupStepRun";
 import type { VmState } from "./VmState";
 import type { VmUsageSample } from "./VmUsageSample";
+import type { VmReconciliation } from "./VmReconciliation";
 
 export type VmResponse = {
   id: string;
   name: string;
   state: VmState;
+  /** Latest API startup/network retry check, absent with an older API. */
+  reconciliation?: VmReconciliation | null;
   template: string;
   templateVersion: string;
   cpu: number;
@@ -20,6 +23,7 @@ export type VmResponse = {
   startupTimeline: Array<StartupStepRun>;
   egressPolicy: EgressPolicy;
   ipv4: string | null;
+  ipv6: string | null;
   mac: string | null;
   hostname: string;
   microNetworkId: string;
@@ -43,4 +47,6 @@ export type VmResponse = {
   portForwards?: Array<PortForward>;
   /** Per-VM environment. Empty is valid. Stored and applied in plaintext. */
   env?: { [key: string]: string };
+  /** SHA256 fingerprint of the guest SSH host key; null until first start. */
+  sshHostFingerprint?: string | null;
 };

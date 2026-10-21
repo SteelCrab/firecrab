@@ -669,11 +669,20 @@ fn extract_non_directory_entries(
         }
         if entry_type.is_file() {
             let destination = root.join(&path);
-            fs::set_permissions(
-                &destination,
-                fs::Permissions::from_mode(mode & HOST_SAFE_MODE_MASK),
-            )
-            .map_err(|error| merge_io("set merged file permissions", destination, error))?;
+            // Distro images ship some files (Fedora's /etc/gshadow) with no
+            // owner-read bit at all. `run_mkfs` reads every file's bytes
+            // through `fakeroot` — which fakes `stat()`/`chown()` results but
+            // never bypasses the kernel's real DAC read check — as the same
+            // unprivileged host user that extracted them, so a literal 0
+            // there makes the file unreadable even to its own owner and
+            // fails the ext4 build. That same build already normalizes every
+            // inode's on-disk owner to root:root (issue #250) before mkfs
+            // runs, and real root ignores its own DAC bits regardless of
+            // what they say, so forcing owner-read here changes nothing a
+            // root-owned file's guest security depends on.
+            let host_mode = (mode & HOST_SAFE_MODE_MASK) | 0o400;
+            fs::set_permissions(&destination, fs::Permissions::from_mode(host_mode))
+                .map_err(|error| merge_io("set merged file permissions", destination, error))?;
         }
     }
     Ok(())

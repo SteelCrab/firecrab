@@ -125,7 +125,7 @@ npm run build --prefix firecrab-frontend
 
 ## Related
 
-- [Dashboard](dashboard.md)
-- [API](api.md)
-- [Installation](installation.md)
-- [Operations](operations.md)
+- [Dashboard](guides/dashboard.md)
+- [API](reference/api.md)
+- [Installation](getting-started/installation.md)
+- [Operations](guides/operations.md)

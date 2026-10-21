@@ -122,8 +122,8 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 mkdir -p "$scratch/src" "$scratch/dst"
 printf 'src\n' >"$scratch/src/firecrab-api"
-printf 'old\n' >"$scratch/dst/firecrab-net-helper"
-chmod +x "$scratch/src/firecrab-api" "$scratch/dst/firecrab-net-helper"
+printf 'old\n' >"$scratch/dst/firecrab-helper"
+chmod +x "$scratch/src/firecrab-api" "$scratch/dst/firecrab-helper"
 
 expect_eq \
     "$(firecrab_resolve_binary firecrab-api "$scratch/src" "$scratch/dst")" \
@@ -131,8 +131,8 @@ expect_eq \
     "prefer --bin-dir when the file exists"
 
 expect_eq \
-    "$(firecrab_resolve_binary firecrab-net-helper "$scratch/src" "$scratch/dst")" \
-    "$scratch/dst/firecrab-net-helper" \
+    "$(firecrab_resolve_binary firecrab-helper "$scratch/src" "$scratch/dst")" \
+    "$scratch/dst/firecrab-helper" \
     "keep installed binary when --bin-dir omits it"
 
 expect_fail "missing both sides is an error" \
@@ -197,4 +197,17 @@ if [ "$failed" -ne 0 ]; then
     exit 1
 fi
 printf 'all tests passed\n'
+
+helper_compat=$(mktemp -d)
+mkdir -p "$helper_compat/source" "$helper_compat/installed"
+printf '#!/bin/sh\n' > "$helper_compat/source/firecrab-net-helper"
+printf '#!/bin/sh\n' > "$helper_compat/installed/firecrab-helper"
+chmod +x "$helper_compat/source/firecrab-net-helper" "$helper_compat/installed/firecrab-helper"
+if [ "$(firecrab_resolve_binary firecrab-helper "$helper_compat/source" "$helper_compat/installed")" = "$helper_compat/source/firecrab-net-helper" ]; then
+    pass "legacy source helper takes priority over an installed canonical helper"
+else
+    fail "legacy source helper takes priority over an installed canonical helper"
+fi
+rm -rf "$helper_compat"
+
 exit 0

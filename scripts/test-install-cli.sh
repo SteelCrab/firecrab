@@ -9,7 +9,62 @@ failed=0
 pass() { printf 'ok  %s\n' "$*"; }
 fail() { printf 'not ok  %s\n' "$*" >&2; failed=1; }
 
+cli_home=$(mktemp -d)
+mkdir -p "$cli_home/bin" "$cli_home/.firecrab"
+printf 'binary\n' >"$cli_home/bin/firecrab"
+printf 'helper\n' >"$cli_home/bin/firecrab-micromanager-macos"
+printf 'current_host = "lab"\n' >"$cli_home/.firecrab/config.toml"
+HOME="$cli_home" sh ./install-cli.sh --install-dir "$cli_home/bin" --uninstall >/dev/null
+if [ ! -e "$cli_home/bin/firecrab" ] \
+    && [ ! -e "$cli_home/bin/firecrab-micromanager-macos" ] \
+    && [ -e "$cli_home/.firecrab/config.toml" ]; then
+    pass "install-cli.sh --uninstall removes binaries and keeps config"
+else
+    fail "install-cli.sh --uninstall removes binaries and keeps config"
+fi
+
+printf 'binary\n' >"$cli_home/bin/firecrab"
+printf 'helper\n' >"$cli_home/bin/firecrab-micromanager-macos"
+HOME="$cli_home" sh ./install-cli.sh --install-dir "$cli_home/bin" --uninstall --purge >/dev/null
+if [ ! -e "$cli_home/bin/firecrab" ] \
+    && [ ! -e "$cli_home/bin/firecrab-micromanager-macos" ] \
+    && [ ! -e "$cli_home/.firecrab/config.toml" ]; then
+    pass "install-cli.sh --uninstall --purge removes binaries and config"
+else
+    fail "install-cli.sh --uninstall --purge removes binaries and config"
+fi
+rm -rf "$cli_home"
+
 help=$("./install.sh" --help)
+
+if printf '%s\n' "$help" | grep -q -- '--with-pipe'; then
+    pass "--help documents optional pipe engines"
+else
+    fail "--help documents optional pipe engines"
+fi
+
+if ./install.sh --deps-only --with-pipe >"$cli_home-pipe-error" 2>&1; then
+    fail "--with-pipe rejects dependency-only mode"
+elif grep -q -- '--with-pipe is supported with installation or --check' "$cli_home-pipe-error"; then
+    pass "--with-pipe rejects dependency-only mode before host changes"
+else
+    fail "--with-pipe mode rejection has no clear error"
+fi
+rm -f "$cli_home-pipe-error"
+
+cli_help=$(sh ./install-cli.sh --help)
+if printf '%s\n' "$cli_help" | grep -q -- '--uninstall' \
+    && printf '%s\n' "$cli_help" | grep -q -- '--purge'; then
+    pass "CLI installer help documents uninstall and purge"
+else
+    fail "CLI installer help documents uninstall and purge"
+fi
+
+if sh ./install-cli.sh --purge >/dev/null 2>&1; then
+    fail "install-cli.sh rejects --purge without --uninstall"
+else
+    pass "install-cli.sh rejects --purge without --uninstall"
+fi
 
 if printf '%s\n' "$help" | grep -q -- '--bin-dir'; then
     pass "--help mentions --bin-dir"
@@ -155,7 +210,7 @@ fi
 
 # curl | bash has no stdin tty. The installer must prompt on /dev/tty,
 # not tell the operator to run `sudo -v` themselves.
-if [ "$(id -u)" -ne 0 ] && command -v script >/dev/null 2>&1; then
+if [ "$(uname -s)" = Linux ] && [ "$(id -u)" -ne 0 ] && command -v script >/dev/null 2>&1; then
     fake=$(mktemp -d)
     cat >"$fake/sudo" <<'EOF'
 #!/bin/bash
@@ -194,6 +249,15 @@ else
 fi
 rm -f "$piped_out" "$piped_err"
 
+# FireCrab installs the upstream Firecracker binary from its official release
+# archive. That installer must preserve the exact LICENSE/NOTICE/THIRD-PARTY
+# files shipped beside the binary and reject an incomplete release archive.
+if bash "$ROOT/scripts/test-install-firecracker.sh"; then
+    pass "Firecracker release notices are preserved"
+else
+    fail "Firecracker release notices are preserved"
+fi
+
 # --- host tarball layout ----------------------------------------------------
 
 write_elf64() {
@@ -214,15 +278,15 @@ PY
 
 fake=$(mktemp -d)
 write_elf64 "$fake/firecrab-api" 62
-write_elf64 "$fake/firecrab-net-helper" 62
+write_elf64 "$fake/firecrab-helper" 62
 write_elf64 "$fake/firecrab" 62
 mkdir -p "$fake/dist"
 printf '<html></html>\n' >"$fake/dist/index.html"
 "$ROOT/scripts/package-host-release.sh" x86_64 "$fake" "$fake/dist" "$fake/firecrab-host-x86_64.tar.gz" >/dev/null
 members=$(tar -tzf "$fake/firecrab-host-x86_64.tar.gz")
-for need in firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image \
+for need in firecrab-api firecrab-helper extract-vmlinux extract-arm64-image \
             firecrab dashboard/index.html systemd/firecrab-api.service \
-            systemd/firecrab-net-helper.service; do
+            systemd/firecrab-helper.service; do
     if printf '%s\n' "$members" | grep -qx -- "$need"; then
         pass "host tarball contains $need"
     else
@@ -231,7 +295,7 @@ for need in firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image
 done
 wrong=$(mktemp -d)
 write_elf64 "$wrong/firecrab-api" 183
-write_elf64 "$wrong/firecrab-net-helper" 183
+write_elf64 "$wrong/firecrab-helper" 183
 write_elf64 "$wrong/firecrab" 183
 mkdir -p "$wrong/dist"
 printf '<html></html>\n' >"$wrong/dist/index.html"

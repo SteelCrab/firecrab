@@ -1,5 +1,5 @@
 //! Wire protocol shared between `firecrab-api` and the privileged
-//! `firecrab-net-helper`/other helper daemons: framed request/response
+//! `firecrab-helper`/other helper daemons: framed request/response
 //! envelopes carried over a Unix socket, versioned so mismatched builds
 //! fail fast instead of misparsing each other's messages.
 
@@ -7,6 +7,8 @@
 pub mod framing;
 /// Network-helper-specific request/response payloads (bridge, TAP, firewall).
 pub mod network;
+/// Shared pipe manifest and restricted helper operations.
+pub mod pipe;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -83,3 +85,5 @@ mod tests {
         );
     }
 }
+pub mod cloudflare;
+pub mod firecrab_tunnel;

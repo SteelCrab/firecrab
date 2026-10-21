@@ -146,11 +146,13 @@ test("creates a VM from the imported image and asserts the guest service started
 
   const row = page.locator("table.vm-table tbody tr", { hasText: VM_NAME });
   await expect(row).toBeVisible();
-  await row.getByRole("button", { name: "start" }).click();
-  await expect(row.locator(".state-badge")).toHaveText(/running|error/, { timeout: 240_000 });
-  if ((await row.locator(".state-badge").textContent()) !== "running") {
+  // Row actions live behind the Actions toggle now.
+  await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
+  await row.getByRole("menuitem", { name: "start", exact: true }).click();
+  await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
+  if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
     await row.locator("button.link-button").click();
-    await expect(page.locator(".console-title")).toBeVisible();
+    await expect(page.locator(".vm-detail-heading")).toBeVisible();
     await expect
       .poll(async () => (await page.locator("pre.detail-log").textContent())?.trim() ?? "", {
         timeout: 10_000,
