@@ -18,6 +18,7 @@ use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
 mod micro_services;
+mod pipe_auth;
 mod registries;
 
 /// Default SQLite database path, relative to the process's working directory.
@@ -693,6 +694,13 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS registry_credentials (
             registry TEXT PRIMARY KEY, username TEXT NOT NULL, secret TEXT NOT NULL
         ) STRICT",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pipe_auth_credentials (
+                provider TEXT PRIMARY KEY CHECK (provider IN ('aws', 'github')),
+                credential TEXT NOT NULL
+            ) STRICT",
             [],
         )?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;

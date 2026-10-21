@@ -80,7 +80,7 @@ async fn registered_reference(
     id: RequestId,
 ) -> Result<(ImageReference, Option<RegistryCredential>), AppError> {
     let reference = reference(value, id)?;
-    let credential = super::oci::stored_credential_for(state, &reference.registry, id).await;
+    let credential = super::oci::stored_credential_for(state, &reference.registry, id).await?;
     if provider(&reference.registry).is_none() && credential.is_none() {
         return Err(invalid(
             "Add this Harbor registry before querying or pulling its images",
@@ -95,6 +95,8 @@ pub struct Connection {
     registry: String,
     username: String,
     provider: &'static str,
+    #[serde(rename = "authProvider", skip_serializing_if = "Option::is_none")]
+    auth_provider: Option<crate::pipe_auth::Provider>,
 }
 fn connection(credential: RegistryCredential) -> Connection {
     Connection {
@@ -105,6 +107,7 @@ fn connection(credential: RegistryCredential) -> Connection {
             credential.registry
         },
         username: credential.username,
+        auth_provider: None,
     }
 }
 
@@ -112,11 +115,28 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
 ) -> Result<Json<Vec<Connection>>, AppError> {
+    let auths = super::pipe_auth::saved(&state, id).await?;
     let rows = tokio::task::spawn_blocking(move || state.store.registry_credentials())
         .await
         .map_err(|_| AppError::internal(id.0))?
         .map_err(|_| AppError::internal(id.0))?;
-    Ok(Json(rows.into_iter().map(connection).collect()))
+    let mut connections: Vec<_> = rows.into_iter().map(connection).collect();
+    for auth in auths {
+        let auth = auth.connection();
+        connections.retain(|connection| connection.registry != auth.registry);
+        connections.push(Connection {
+            username: if auth.provider == crate::pipe_auth::Provider::Aws {
+                "AWS".into()
+            } else {
+                auth.account
+            },
+            provider: provider(&auth.registry).unwrap_or("harbor"),
+            registry: auth.registry,
+            auth_provider: Some(auth.provider),
+        });
+    }
+    connections.sort_by(|a, b| a.registry.cmp(&b.registry));
+    Ok(Json(connections))
 }
 
 #[derive(Deserialize)]
@@ -133,6 +153,7 @@ pub async fn save(
     ValidatedJson(body): ValidatedJson<Login>,
 ) -> Result<Json<Connection>, AppError> {
     let registry = registry.trim().to_ascii_lowercase();
+    require_direct_login(&state, &registry, id).await?;
     let kind = match provider(&registry) {
         Some(kind) => kind,
         None if body.provider.as_deref() == Some("harbor") && valid_harbor_host(&registry) => {
@@ -183,11 +204,31 @@ pub async fn delete(
     if provider(&registry).is_none() && !valid_harbor_host(&registry) {
         return Err(invalid("Unknown registry", id));
     }
+    require_direct_login(&state, &registry, id).await?;
     tokio::task::spawn_blocking(move || state.store.delete_registry_credential(&registry))
         .await
         .map_err(|_| AppError::internal(id.0))?
         .map_err(|_| AppError::internal(id.0))?;
     Ok(Json(serde_json::json!({"deleted": true})))
+}
+
+async fn require_direct_login(
+    state: &AppState,
+    registry: &str,
+    id: RequestId,
+) -> Result<(), AppError> {
+    if super::pipe_auth::saved(state, id)
+        .await?
+        .iter()
+        .any(|auth| auth.connection().registry == registry)
+    {
+        return Err(AppError::conflict(
+            "pipe_auth_managed",
+            "Manage this registry in Pipe Auth",
+            id.0,
+        ));
+    }
+    Ok(())
 }
 
 /// Pagination and the optional GitHub account or organization override.
@@ -198,6 +239,7 @@ pub struct RepositoriesQuery {
     namespace: Option<String>,
     /// One-based catalog page, defaulting to the first page.
     page: Option<u32>,
+    cursor: Option<String>,
 }
 
 /// Return a provider catalog page after validating the host, account and page number.
@@ -212,7 +254,28 @@ pub async fn repositories(
     if !(1..=10000).contains(&page) {
         return Err(invalid("Invalid repository page", id));
     }
-    let credential = super::oci::stored_credential_for(&state, &registry, id).await;
+    for auth in super::pipe_auth::saved(&state, id).await? {
+        if auth.connection().registry == registry
+            && let crate::pipe_auth::SavedAuth::Aws {
+                account_id,
+                credentials,
+            } = auth
+        {
+            return crate::pipe_auth::aws_repositories(
+                &credentials,
+                &account_id,
+                page,
+                query.cursor.as_deref(),
+            )
+            .await
+            .map(Json)
+            .map_err(|message| super::pipe_auth::auth_error(message, id));
+        }
+    }
+    if query.cursor.is_some() {
+        return Err(invalid("Repository cursors require AWS Pipe Auth", id));
+    }
+    let credential = super::oci::stored_credential_for(&state, &registry, id).await?;
     let kind = match provider(&registry) {
         Some(kind) => kind,
         None if valid_harbor_host(&registry) && credential.is_some() => "harbor",
@@ -559,18 +622,21 @@ mod credential_tests {
         assert_eq!(rows.len(), 2);
         let login = super::super::oci::stored_credential_for(&state, ecr, id)
             .await
+            .unwrap()
             .unwrap();
         assert_eq!(login.username, "AWS");
         assert_eq!(login.secret, "ecr_secret");
         assert!(!format!("{login:?}").contains("ecr_secret"));
         let login = super::super::oci::stored_credential_for(&state, "ghcr.io", id)
             .await
+            .unwrap()
             .unwrap();
         assert_eq!(login.username, "octocat");
         assert_eq!(login.secret, "ghp_secret");
         assert!(
             super::super::oci::stored_credential_for(&state, "untrusted.invalid", id)
                 .await
+                .unwrap()
                 .is_none()
         );
         let _ = delete(State(state.clone()), Extension(id), Path("ghcr.io".into()))
@@ -579,11 +645,13 @@ mod credential_tests {
         assert!(
             super::super::oci::stored_credential_for(&state, "ghcr.io", id)
                 .await
+                .unwrap()
                 .is_none()
         );
         assert!(
             super::super::oci::stored_credential_for(&state, ecr, id)
                 .await
+                .unwrap()
                 .is_some()
         );
     }
@@ -661,6 +729,7 @@ mod credential_tests {
             for host in ["docker.io", "registry-1.docker.io"] {
                 let login = super::super::oci::stored_credential_for(&state, host, id)
                     .await
+                    .unwrap()
                     .unwrap();
                 assert_eq!(login.secret, "dckr_pat_secret");
             }
@@ -676,6 +745,7 @@ mod credential_tests {
         assert!(
             super::super::oci::stored_credential_for(&state, "registry-1.docker.io", id)
                 .await
+                .unwrap()
                 .is_none()
         );
     }

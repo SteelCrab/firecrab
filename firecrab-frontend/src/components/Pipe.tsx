@@ -8,6 +8,7 @@ import type { VmResponse } from "../bindings";
 import { pipeApps } from "../pipeApps";
 import { viewHash, type PipeCardId } from "../navigation";
 import PipeCards from "./PipeCards";
+import PipeAuth from "./PipeAuth";
 import PipeRegistries from "./PipeRegistries";
 import PipeRouting from "./PipeRouting";
 
@@ -82,6 +83,7 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   return <div className="stack">
     <nav className="pipe-back" aria-label={t("Pipe navigation", "Pipe 이동")}><a href={viewHash("pipe")}><span aria-hidden="true">← </span>Pipe</a></nav>
     {error && <div className="banner error" role="alert">{error}</div>}
+    {card === "auth" && <PipeAuth onUnsavedChange={setDirty} />}
     {card === "route" && <PipeRouting {...shared} {...appProps} onSnapshot={onSnapshot} />}
     {card === "registry" && <PipeRegistries onUnsavedChange={setDirty} />}
     {card === "firecrab-tunnel" && <FirecrabTunnel {...shared} {...appProps} onConnected={onSnapshot} />}

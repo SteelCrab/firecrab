@@ -133,7 +133,7 @@ export default function RegistryBrowser({ registry, imageVersion, disabled, pull
     if (!catalog?.nextPage || loading) return;
     setLoading(true); setError(null);
     try {
-      const page = await getRegistryRepositories(registry, catalog.nextPage);
+      const page = await getRegistryRepositories(registry, catalog.nextPage, catalog.nextCursor);
       setCatalog({ ...page, repositories: [...new Set([...catalog.repositories, ...page.repositories])] });
     } catch (failure) {
       setError((failure as Error).message);
