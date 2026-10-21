@@ -77,6 +77,18 @@ scoped to their exact registry, including its port. A custom Harbor hostname mus
 be registered before Pipe accepts its tag queries or pull requests. Pulls verify
 SHA-256 content digests.
 
+## Screenshots
+
+Saved accounts, ECR repositories, and the selected tag's pull status:
+
+![Pipe Registry](../../assets/dashboard/pipe-registry.png)
+
+Installed M2Images and pulled sources waiting for a build:
+
+![M2Image inventory](../../assets/dashboard/images.png)
+
+## API
+
 | Endpoint | Action |
 | --- | --- |
 | `GET /api/pipe/registries` | Saved registry hosts, providers, usernames, and optional ECR `accountName`; no secrets |
