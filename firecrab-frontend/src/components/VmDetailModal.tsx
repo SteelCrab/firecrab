@@ -34,6 +34,7 @@ import LogExportActions from "./LogExportActions";
 import RamStepper from "./RamStepper";
 import ShellCheckboxList from "./ShellCheckboxList";
 import UsageCharts from "./UsageCharts";
+import ReconciliationStatus from "./ReconciliationStatus";
 import { useI18n } from "../i18n";
 
 const STARTUP_STEPS: StartupStep[] = [
@@ -51,7 +52,7 @@ const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
 };
 
 // Derived client-side from the polled `startupStep` value — no dedicated
-// backend log field. See public-docs/dashboard.md for why.
+// backend log field. See public-docs/guides/dashboard.md for why.
 const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
   preparingDisk: "Preparing disk (copying rootfs template)…",
   generatingConfig: "Disk ready → generating Firecracker configuration…",
@@ -332,16 +333,39 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
 
   return (
     <div className="console-overlay">
-      <div className="console-panel">
-        <div className="console-bar">
-          <span className="console-title">{t(`VM details — ${vm?.name ?? vmId}`, `VM 상세 — ${vm?.name ?? vmId}`)}</span>
-          {vm && <span className={`state-badge ${vm.state}`}>{vm.state}</span>}
-          <button className="btn console-close" onClick={onClose}>
+      <div
+        className="console-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t(`VM — ${vm?.name ?? vmId}`, `VM — ${vm?.name ?? vmId}`)}
+      >
+        <div className="console-bar vm-detail-bar">
+          <dl className="vm-detail-heading">
+            <div className="vm-detail-name">
+              <dt>NAME</dt>
+              <dd>{vm?.name ?? "—"}</dd>
+            </div>
+            <div className="vm-detail-id">
+              <dt>ID</dt>
+              <dd>{vm?.id ?? vmId}</dd>
+            </div>
+            <div className="vm-detail-state">
+              <dt>VM-STATUS</dt>
+              <dd>{vm ? <span className={`state-badge ${vm.state}`}>{vm.state}</span> : "—"}</dd>
+            </div>
+          </dl>
+          <button className="btn console-close" onClick={onClose} aria-label={t("Close", "닫기")} title={t("Close", "닫기")}>
             ✕
           </button>
         </div>
         {vm ? (
           <div className="detail-body">
+            {vm.reconciliation && (
+              <section className="vm-api-status" aria-label="API-STATUS">
+                <h3>API-STATUS</h3>
+                <ReconciliationStatus result={vm.reconciliation} />
+              </section>
+            )}
             <dl className="detail-fields mono">
               <dt>image</dt>
               <dd>{vm.template}</dd>
@@ -758,7 +782,7 @@ function clockTime(epochMillis: number): string {
 
 /**
  * The start pipeline as a row of timed steps, like a CI build log
- * (`public-docs/api.md`). Durations come from the
+ * (`public-docs/reference/api.md`). Durations come from the
  * server's own timestamps — polling is far too coarse to time a 2-second
  * disk copy — and only the still-running step ticks locally.
  */

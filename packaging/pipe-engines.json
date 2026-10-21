@@ -1,0 +1,15 @@
+{
+  "cloudflared": {
+    "version": "2026.10.0",
+    "assets": {
+      "x86_64": {
+        "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-amd64",
+        "sha256": "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db"
+      },
+      "aarch64": {
+        "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-arm64",
+        "sha256": "e6422b9d4f72d3194bc5a38676f13667c06666523217b842a877d72a80b5ac08"
+      }
+    }
+  }
+}

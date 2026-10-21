@@ -6,11 +6,14 @@ import type { StartupStep } from "./StartupStep";
 import type { StartupStepRun } from "./StartupStepRun";
 import type { VmState } from "./VmState";
 import type { VmUsageSample } from "./VmUsageSample";
+import type { VmReconciliation } from "./VmReconciliation";
 
 export type VmResponse = {
   id: string;
   name: string;
   state: VmState;
+  /** Latest API startup/network retry check, absent with an older API. */
+  reconciliation?: VmReconciliation | null;
   template: string;
   templateVersion: string;
   cpu: number;

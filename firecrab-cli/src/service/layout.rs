@@ -218,7 +218,7 @@ pub fn install_binaries(
     payload: &Payload,
     with_frontend: bool,
 ) -> Result<(), Error> {
-    for name in ["firecrab-api", "firecrab-net-helper"] {
+    for name in ["firecrab-api", "firecrab-helper"] {
         let src = resolve_binary(name, Some(&payload.bin), &env.libdir).ok_or_else(|| {
             Error::step_fix(
                 STEP_BINARIES,
@@ -237,6 +237,13 @@ pub fn install_binaries(
             privileged.install_file(STEP_BINARIES, &src, &dest, "root", "root", "0755")?;
         }
     }
+
+    let legacy = env.libdir.join("firecrab-net-helper");
+    privileged.run_ok(
+        STEP_BINARIES,
+        "ln",
+        &["-sfn", "firecrab-helper", &legacy.to_string_lossy()],
+    )?;
 
     // The API turns a distro vmlinuz into the format Firecracker boots with
     // these; installing them next to the binary means it never needs the checkout.
@@ -440,7 +447,7 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
         for name in [
             "firecrab-api",
-            "firecrab-net-helper",
+            "firecrab-helper",
             "firecrab",
             "extract-vmlinux",
             "extract-arm64-image",
@@ -504,7 +511,7 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
         for name in [
             "firecrab-api",
-            "firecrab-net-helper",
+            "firecrab-helper",
             "firecrab",
             "extract-vmlinux",
             "extract-arm64-image",

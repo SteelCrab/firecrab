@@ -8,6 +8,8 @@ use serde::de::DeserializeOwned;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Short timeout used only by the host status probe.
 const HOST_STATUS_TIMEOUT: Duration = Duration::from_secs(3);
+/// Registry authentication and manifest retries have a 60s API deadline.
+const OCI_INSPECT_TIMEOUT: Duration = Duration::from_secs(65);
 
 /// Matches firecrab-api's own default (`bind_addr_or_default` in
 /// firecrab-api/src/server.rs) — the API listens on 127.0.0.1:5523 unless
@@ -35,18 +37,23 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-/// `--api` flag > `FIRECRAB_API` env > `DEFAULT_API_BASE`. Trailing slash
-/// stripped so callers can always do `format!("{base}/api/host")`.
-pub fn resolve_api_base(flag: Option<&str>) -> String {
-    if let Some(f) = flag {
-        return f.trim_end_matches('/').to_owned();
+/// Resolves `--api` > `FIRECRAB_API` > `--host` > current host > loopback.
+pub fn resolve_api_base(
+    flag: Option<&str>,
+    requested_host: Option<&str>,
+) -> Result<String, crate::hosts::Error> {
+    if let Some(flag) = flag {
+        return crate::hosts::normalize_url(flag);
     }
-    if let Ok(env_val) = std::env::var("FIRECRAB_API")
-        && !env_val.is_empty()
+    if let Ok(environment) = std::env::var("FIRECRAB_API")
+        && !environment.is_empty()
     {
-        return env_val.trim_end_matches('/').to_owned();
+        return crate::hosts::normalize_url(&environment);
     }
-    DEFAULT_API_BASE.to_owned()
+    let selected = crate::hosts::selected(requested_host)?;
+    Ok(selected
+        .map(|host| host.url)
+        .unwrap_or_else(|| DEFAULT_API_BASE.to_owned()))
 }
 
 /// Thin blocking HTTP client for firecrab-api, used by `status`/other
@@ -111,6 +118,11 @@ impl ApiClient {
             .client
             .get(self.url(path))
             .query(query)
+            .timeout(if path == "/api/oci/inspect" {
+                OCI_INSPECT_TIMEOUT
+            } else {
+                DEFAULT_REQUEST_TIMEOUT
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -143,6 +155,22 @@ impl ApiClient {
         Self::decode_json(resp)
     }
 
+    /// Sends `body` as JSON with `PUT` and deserializes any successful 2xx
+    /// response body.
+    pub fn put<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
+    where
+        B: Serialize + ?Sized,
+        T: DeserializeOwned,
+    {
+        let resp = self
+            .client
+            .put(self.url(path))
+            .json(body)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(resp)
+    }
+
     /// Sends a `DELETE` request to an API path. Any 2xx response, including
     /// the API's usual `204 No Content`, is successful.
     pub fn delete(&self, path: &str) -> Result<(), ApiError> {
@@ -152,6 +180,21 @@ impl ApiClient {
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::ensure_success(resp).map(|_| ())
+    }
+
+    /// Sends `GET` and returns the raw successful body. Used for attachments
+    /// such as `GET /api/vms/{id}/ssh-key` that are not JSON.
+    #[cfg(test)]
+    pub fn get_bytes(&self, path: &str) -> Result<Vec<u8>, ApiError> {
+        let resp = self
+            .client
+            .get(self.url(path))
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::ensure_success(resp)?
+            .bytes()
+            .map(|bytes| bytes.to_vec())
+            .map_err(|e| ApiError::Unreachable(format!("bad response body: {e}")))
     }
 
     /// Joins the resolved origin and an absolute API path.
@@ -226,6 +269,15 @@ mod tests {
         content_type: Option<&str>,
         body: &str,
     ) -> (String, Receiver<CapturedRequest>, JoinHandle<()>) {
+        serve_once_after(status, content_type, body, Duration::ZERO)
+    }
+
+    fn serve_once_after(
+        status: &str,
+        content_type: Option<&str>,
+        body: &str,
+        delay: Duration,
+    ) -> (String, Receiver<CapturedRequest>, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let response_body = body.as_bytes().to_vec();
@@ -236,6 +288,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request(&mut stream);
             tx.send(request).unwrap();
+            thread::sleep(delay);
 
             let mut headers = format!(
                 "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -294,7 +347,7 @@ mod tests {
     #[test]
     fn resolve_api_base_prefers_flag() {
         assert_eq!(
-            resolve_api_base(Some("http://example.test:9000/")),
+            resolve_api_base(Some("http://example.test:9000/"), Some("ignored")).unwrap(),
             "http://example.test:9000"
         );
     }
@@ -302,10 +355,13 @@ mod tests {
     #[test]
     fn resolve_api_base_falls_back_to_default() {
         let _guard = ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
         // SAFETY: serialized by ENV_LOCK against the other test in this
         // file that touches FIRECRAB_API; no other test reads it.
         unsafe { std::env::remove_var("FIRECRAB_API") };
-        assert_eq!(resolve_api_base(None), DEFAULT_API_BASE);
+        unsafe { std::env::set_var("FIRECRAB_CONFIG_DIR", directory.path()) };
+        assert_eq!(resolve_api_base(None, None).unwrap(), DEFAULT_API_BASE);
+        unsafe { std::env::remove_var("FIRECRAB_CONFIG_DIR") };
     }
 
     #[test]
@@ -313,9 +369,44 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         // SAFETY: serialized by ENV_LOCK — see the note above.
         unsafe { std::env::set_var("FIRECRAB_API", "http://env-example.test:1234/") };
-        let result = resolve_api_base(None);
+        let result = resolve_api_base(None, Some("ignored")).unwrap();
         unsafe { std::env::remove_var("FIRECRAB_API") };
         assert_eq!(result, "http://env-example.test:1234");
+    }
+
+    #[test]
+    fn resolve_api_base_reads_an_explicit_and_current_saved_host() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory.path().join("config.toml"),
+            r#"
+current_host = "lab"
+
+[hosts.lab]
+url = "http://lab.example:5523"
+
+[hosts.prod]
+url = "https://prod.example:5523/"
+"#,
+        )
+        .unwrap();
+        // SAFETY: ENV_LOCK serializes every environment-changing test here.
+        unsafe {
+            std::env::remove_var("FIRECRAB_API");
+            std::env::set_var("FIRECRAB_CONFIG_DIR", directory.path());
+        }
+
+        assert_eq!(
+            resolve_api_base(None, Some("prod")).unwrap(),
+            "https://prod.example:5523"
+        );
+        assert_eq!(
+            resolve_api_base(None, None).unwrap(),
+            "http://lab.example:5523"
+        );
+
+        unsafe { std::env::remove_var("FIRECRAB_CONFIG_DIR") };
     }
 
     #[test]
@@ -376,6 +467,21 @@ mod tests {
     }
 
     #[test]
+    fn registry_inspection_can_outlast_the_normal_cli_deadline() {
+        let (base, _requests, server) = serve_once_after(
+            "200 OK",
+            Some("application/json"),
+            r#"{"value":"inspected"}"#,
+            DEFAULT_REQUEST_TIMEOUT + Duration::from_secs(1),
+        );
+        let response: FixtureResponse = ApiClient::new(base)
+            .get_query("/api/oci/inspect", &[("reference", "alpine:3.21")])
+            .unwrap();
+        assert_eq!(response.value, "inspected");
+        server.join().unwrap();
+    }
+
+    #[test]
     fn post_sends_path_and_json_body_and_accepts_created() {
         let (base, requests, server) = serve_once(
             "201 Created",
@@ -427,6 +533,48 @@ mod tests {
         let request = requests.recv().unwrap();
         assert_eq!(request.method, "DELETE");
         assert_eq!(request.path, "/api/micro-networks/123");
+        assert!(request.body.is_empty());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn put_sends_path_and_json_body() {
+        let (base, requests, server) =
+            serve_once("200 OK", Some("application/json"), r#"{"value":"updated"}"#);
+        let client = ApiClient::new(base);
+        let body = FixtureRequest {
+            name: "example",
+            count: 3,
+        };
+
+        let response: FixtureResponse = client.put("/api/vms/123", &body).unwrap();
+
+        assert_eq!(response.value, "updated");
+        let request = requests.recv().unwrap();
+        assert_eq!(request.method, "PUT");
+        assert_eq!(request.path, "/api/vms/123");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&request.body).unwrap(),
+            serde_json::json!({"name": "example", "count": 3})
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn get_bytes_returns_the_raw_body() {
+        let (base, requests, server) = serve_once(
+            "200 OK",
+            Some("application/x-pem-file"),
+            "-----BEGIN KEY-----\n",
+        );
+        let client = ApiClient::new(base);
+
+        let body = client.get_bytes("/api/vms/123/ssh-key").unwrap();
+
+        assert_eq!(body, b"-----BEGIN KEY-----\n");
+        let request = requests.recv().unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/api/vms/123/ssh-key");
         assert!(request.body.is_empty());
         server.join().unwrap();
     }

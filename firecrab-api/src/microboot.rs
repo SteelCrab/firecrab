@@ -5,7 +5,7 @@
 //! `TemplateRegistry` under an alias no `/api/images` consumer ever
 //! surfaces, purely so the existing `create_vm` disk-provisioning and
 //! artifact-verification machinery works unchanged. See
-//! `public-docs/images.md`.
+//! `public-docs/guides/images.md`.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -299,7 +299,7 @@ fn create_placeholder_rootfs(rootfs_dest: &Path) -> Result<(), String> {
     // overwrites this completely — only its structure has to be valid.
     std::process::Command::new("mkfs.ext4")
         .args(["-q", "-F"])
-        .arg(&rootfs_dest)
+        .arg(rootfs_dest)
         .arg("16M")
         .status()
         .map_err(|error| format!("run mkfs.ext4 for {}: {error}", rootfs_dest.display()))

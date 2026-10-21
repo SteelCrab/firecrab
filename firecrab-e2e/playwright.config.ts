@@ -12,6 +12,12 @@ const skipGuestBoot =
 const reuseExistingServer =
   process.env.FIRECRAB_E2E_REUSE_SERVER === "1" ||
   process.env.FIRECRAB_E2E_REUSE_SERVER === "true";
+const requireGuestBoot = ["1", "true", "yes"].includes(
+  process.env.FIRECRAB_E2E_REQUIRE_GUEST_BOOT ?? "",
+);
+if (requireGuestBoot && skipGuestBoot) {
+  throw new Error("Guest boot is required for this run; remove FIRECRAB_E2E_SKIP_GUEST_BOOT");
+}
 const inCi = Boolean(process.env.CI) || Boolean(process.env.GITHUB_ACTIONS);
 const baseURL = (process.env.FIRECRAB_E2E_BASE_URL ?? "http://localhost:8080").replace(
   /\/$/,
@@ -46,7 +52,11 @@ export default defineConfig({
   forbidOnly: inCi,
   timeout: skipGuestBoot ? 240_000 : 420_000,
   expect: { timeout: 15_000 },
-  reporter: [["list"]],
+  reporter: [
+    ["list"],
+    ["json", { outputFile: "test-results/results.json" }],
+    ["junit", { outputFile: "test-results/junit.xml" }],
+  ],
   use: {
     baseURL,
     trace: "retain-on-failure",

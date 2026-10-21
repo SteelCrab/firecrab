@@ -6,7 +6,7 @@
 //! then dump the result out of the builder VM's disk and package it as
 //! `{alias}.tar.zst` for the existing `image_install.rs` pipeline to pick
 //! up unchanged. See
-//! `public-docs/images.md`.
+//! `public-docs/guides/images.md`.
 
 use std::time::Duration;
 
@@ -316,8 +316,8 @@ fn bootstrap_disk_gb(target_alias: &str) -> u16 {
 /// registered (a no-op after the first call — see `crate::microboot`'s own
 /// doc comment), and returns its alias for `CreateVmRequest.template`. No
 /// longer depends on any template being installed: this is what closes the
-/// bootstrap boundary `public-docs/images.md`
-/// left open (`public-docs/images.md`).
+/// bootstrap boundary `public-docs/guides/images.md`
+/// left open (`public-docs/guides/images.md`).
 ///
 /// `ensure_registered`'s failure detail is a dynamic `String` (a download or
 /// filesystem error), while `AppError::unavailable` takes a `&'static str`
@@ -970,6 +970,7 @@ mod tests {
                 pid: 0,
                 exited: exited_rx,
                 console: console.clone(),
+                control: crate::vm_shim::client::ShimControl::for_test().0,
             },
         );
         console
@@ -1000,6 +1001,7 @@ mod tests {
     /// against by also requiring non-empty stdout — so a test fixture that
     /// used unrecognizable bytes here would fail for a different reason
     /// than the one it's meant to test.
+    #[cfg(target_arch = "x86_64")]
     const FAKE_ELF64_HEADER: &[u8] = &[
         0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x02, 0x00, 0x3e, 0x00, 0x01, 0x00, 0x00, 0x00, 0x60, 0xa7, 0x49, 0x03, 0x00, 0x00,

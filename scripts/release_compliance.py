@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-HOST_ROOTS = {"firecrab-api", "firecrab-net-helper", "firecrab-cli"}
+HOST_ROOTS = {"firecrab-api", "firecrab-helper", "firecrab-cli"}
 NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "AUTHORS")
 
 # Keep the mechanical release gate deliberately small and fail closed. These are
@@ -38,7 +38,10 @@ ALLOWED_LICENSE_IDS = {
     "Zlib",
 }
 ALLOWED_LICENSE_EXCEPTIONS = {"LLVM-exception"}
-LEGACY_LICENSE_EXPRESSIONS = {"MIT/Apache-2.0": "MIT OR Apache-2.0"}
+LEGACY_LICENSE_EXPRESSIONS = {
+    "Apache-2.0/MIT": "Apache-2.0 OR MIT",
+    "MIT/Apache-2.0": "MIT OR Apache-2.0",
+}
 _LICENSE_TOKEN_RE = re.compile(
     r"\s*(\(|\)|AND\b|OR\b|WITH\b|[A-Za-z0-9][A-Za-z0-9.+-]*)",
     re.IGNORECASE,

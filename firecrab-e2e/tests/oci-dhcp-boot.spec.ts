@@ -22,6 +22,7 @@ import {
   SKIP_GUEST_BOOT,
 } from "../src/constants.js";
 import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
+import { managerProxyArgs } from "../src/manager.js";
 
 /**
  * OCI guest dual-stack DHCP + SSH boot — the nginx-stable dashboard path
@@ -87,6 +88,14 @@ async function authenticateWithDownloadedKey(vmId: string, ipv6: string): Promis
   const keyPath = path.join(scratch, `firecrab-${DHCP_VM_NAME}.pem`);
   try {
     await writeFile(keyPath, privateKey, { encoding: "utf8", mode: 0o600 });
+    // DHCP readiness precedes sshd startup (including additional host-key
+    // generation). Prove that the guest presents its injected host key before
+    // starting the separate port-forward and IPv6 authentication assertions.
+    await expect.poll(async () => {
+      const response = await fetch(`${apiUrl()}/api/vms/${vmId}/ssh-host-key/check`);
+      if (!response.ok) return `HTTP ${response.status}`;
+      return ((await response.json()) as { status: string }).status;
+    }, { timeout: 180_000, intervals: [1_000] }).toBe("match");
     const authenticate = async (label: string, targetArgs: string[]): Promise<void> => {
       let lastError = "ssh did not run";
       let authenticatedOutput: string | null = null;
@@ -138,7 +147,7 @@ async function authenticateWithDownloadedKey(vmId: string, ipv6: string): Promis
       String(DHCP_SSH_HOST_PORT),
       "root@127.0.0.1",
     ]);
-    await authenticate("IPv6 direct", ["-6", `root@${ipv6}`]);
+    await authenticate("IPv6", [...managerProxyArgs(), "-6", `root@${ipv6}`]);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -247,10 +256,10 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await row.getByRole("menuitem", { name: "start" }).click();
-  await expect(row.locator(".state-badge")).toHaveText(/running|error/, { timeout: 240_000 });
-  if ((await row.locator(".state-badge").textContent()) !== "running") {
+  await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
+  if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
     await row.locator("button.link-button").click();
-    await expect(page.locator(".console-title")).toBeVisible();
+    await expect(page.locator(".vm-detail-heading")).toBeVisible();
     const logText = (await page.locator("pre.detail-log").textContent()) ?? "";
     const banner = (await page.locator(".banner").textContent().catch(() => "")) ?? "";
     throw new Error(

@@ -211,6 +211,9 @@ fn requires_pci_transport_for_arch(name: &str, architecture: &str) -> bool {
         && architecture != "aarch64"
 }
 
+/// `(name, version)` -> the resolved, verified template it names.
+type VersionMap = HashMap<(String, String), Arc<TemplateVersion>>;
+
 /// Registry of verified template versions, resolved by alias or by exact
 /// `(name, version)`. Alias maps are behind locks so a successful image
 /// install can register a newly downloaded template without restarting.
@@ -223,10 +226,10 @@ pub struct TemplateRegistry {
     /// alias -> `(name, version)` it currently resolves to.
     aliases: Arc<Mutex<HashMap<String, (String, String)>>>,
     /// `(name, version)` -> the resolved, verified template.
-    versions: Arc<Mutex<HashMap<(String, String), Arc<TemplateVersion>>>>,
+    versions: Arc<Mutex<VersionMap>>,
     /// Caches `open_verified`'s full-file hash by (device, inode), so many
     /// VMs starting at once against the same untouched multi-GB template
-    /// don't each independently re-read and re-hash it (`public-docs/api.md`'s
+    /// don't each independently re-read and re-hash it (`public-docs/reference/api.md`'s
     /// "stuck at disk prep with many VMs" bug). Invalidated by length or
     /// mtime moving, which any real content change updates.
     verify_cache: Arc<Mutex<HashMap<(u64, u64), CachedHash>>>,
@@ -1886,7 +1889,7 @@ mod tests {
     /// Many VMs starting at once each call `open_verified` for the same
     /// template; this proves that doesn't fail the 2nd+ time (the naive
     /// bug would be a stale/poisoned cache making repeats worse, not just
-    /// slower — see `public-docs/api.md`).
+    /// slower — see `public-docs/reference/api.md`).
     #[test]
     fn open_verified_succeeds_repeatedly_for_an_unchanged_artifact() {
         let directory = tempdir().unwrap();

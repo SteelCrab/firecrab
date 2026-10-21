@@ -19,7 +19,9 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
-use crate::firecracker::{self, FirecrackerProcess, VmNetwork, VmProcess};
+#[cfg(test)]
+use crate::firecracker::VmProcess;
+use crate::firecracker::{self, FirecrackerProcess, VmNetwork};
 use crate::ipam::{IpamError, SubnetSpec};
 use crate::model::{
     CreateVmRequest, Lease, StartupStep, StartupStepOutcome, StartupStepRun,
@@ -595,20 +597,20 @@ pub async fn update_vm_port_forwards(
             break;
         }
     }
-    if !fields.contains_key("portForwards") {
-        if let Ok(all_pfs) = state.store.list_all_port_forwards() {
-            for (owner_id, existing_pf) in all_pfs {
-                if owner_id != id
-                    && req.port_forwards.iter().any(|pf| {
-                        pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
-                    })
-                {
-                    fields.insert(
-                        "portForwards".to_owned(),
-                        "one or more host ports are already in use by another VM".to_owned(),
-                    );
-                    break;
-                }
+    if !fields.contains_key("portForwards")
+        && let Ok(all_pfs) = state.store.list_all_port_forwards()
+    {
+        for (owner_id, existing_pf) in all_pfs {
+            if owner_id != id
+                && req.port_forwards.iter().any(|pf| {
+                    pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
+                })
+            {
+                fields.insert(
+                    "portForwards".to_owned(),
+                    "one or more host ports are already in use by another VM".to_owned(),
+                );
+                break;
             }
         }
     }
@@ -670,33 +672,31 @@ pub async fn update_vm_port_forwards(
             }
         })?;
 
-    if is_active {
-        if let Some(lease) = state.store.active_lease(id).ok().flatten() {
-            let port_forwards_specs = req
-                .port_forwards
-                .iter()
-                .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
-                    host_port: pf.host_port,
-                    guest_port: pf.guest_port,
-                    protocol: pf.protocol.to_string(),
-                })
-                .collect();
-            if let Err(error) = state
-                .network
-                .apply_vm_policy(&lease, record.egress_policy, false, port_forwards_specs)
-                .await
-            {
-                tracing::error!(
-                    request_id = %request_id.0, %error,
-                    "failed to apply updated port forwards; rolling back the persisted rules"
-                );
-                let store = state.store.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    store.set_vm_port_forwards(id, &previous_forwards)
-                })
-                .await;
-                return Err(AppError::internal(request_id.0));
-            }
+    if is_active && let Some(lease) = state.store.active_lease(id).ok().flatten() {
+        let port_forwards_specs = req
+            .port_forwards
+            .iter()
+            .map(|pf| firecrab_helper_protocol::network::PortForwardSpec {
+                host_port: pf.host_port,
+                guest_port: pf.guest_port,
+                protocol: pf.protocol.to_string(),
+            })
+            .collect();
+        if let Err(error) = state
+            .network
+            .apply_vm_policy(&lease, record.egress_policy, false, port_forwards_specs)
+            .await
+        {
+            tracing::error!(
+                request_id = %request_id.0, %error,
+                "failed to apply updated port forwards; rolling back the persisted rules"
+            );
+            let store = state.store.clone();
+            let _ = tokio::task::spawn_blocking(move || {
+                store.set_vm_port_forwards(id, &previous_forwards)
+            })
+            .await;
+            return Err(AppError::internal(request_id.0));
         }
     }
 
@@ -841,10 +841,10 @@ fn validate_update(
             format!("must be at most {MAX_DISK_GB} GiB"),
         );
     }
-    if let Some(env) = &req.env {
-        if let Some(message) = validate_vm_env(env) {
-            fields.insert("env".to_owned(), message);
-        }
+    if let Some(env) = &req.env
+        && let Some(message) = validate_vm_env(env)
+    {
+        fields.insert("env".to_owned(), message);
     }
     fields
 }
@@ -865,6 +865,11 @@ async fn claim_start(
         return Err(error);
     }
 
+    state
+        .reconciliation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&id);
     Ok((id, claimed))
 }
 
@@ -893,10 +898,8 @@ pub async fn start_vm_request(
 /// config, spawn Firecracker, wait for its API, then record `running`.
 /// Any failure lands the record on `error` with no process left behind.
 ///
-/// This test-only helper preserves direct lifecycle assertions; the public
-/// HTTP route uses [`start_vm_request`] so a normal boot cannot exceed the
-/// general REST request timeout.
-#[cfg(test)]
+/// Service deployment jobs await the result internally. The public VM route
+/// uses [`start_vm_request`] to acknowledge a boot without a REST timeout.
 pub async fn start_vm(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -952,7 +955,7 @@ async fn finish_start(
                 "vm running"
             );
             let lease = lease_for(state, id).await;
-            Ok(Json(vm_response(&state, &running, lease.as_ref())))
+            Ok(Json(vm_response(state, &running, lease.as_ref())))
         }
         // The guest exited before we could record running; the exit monitor
         // already landed the record on its terminal state.
@@ -967,7 +970,7 @@ async fn finish_start(
                 return Err(AppError::not_found(request_id.0));
             };
             let lease = lease_for(state, id).await;
-            Ok(Json(vm_response(&state, &record, lease.as_ref())))
+            Ok(Json(vm_response(state, &record, lease.as_ref())))
         }
     }
 }
@@ -992,18 +995,8 @@ pub async fn stop_vm(
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&id)
         .cloned();
-    if let Some(VmProcess {
-        pid, mut exited, ..
-    }) = entry
-    {
-        firecracker::sigterm(pid);
-        if tokio::time::timeout(state.runtime.stop_grace, exited.changed())
-            .await
-            .is_err()
-        {
-            firecracker::sigkill(pid);
-            let _ = tokio::time::timeout(state.runtime.stop_grace, exited.changed()).await;
-        }
+    if let Some(process) = entry {
+        firecracker::stop_registered(id, process, state.runtime.stop_grace).await;
     }
 
     // Only a running VM can reach Stopping (see VmState::can_transition), so
@@ -1105,6 +1098,11 @@ pub async fn delete_vm(
             .insert(id, removed);
         return Err(AppError::internal(request_id.0));
     }
+    state
+        .reconciliation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&id);
     // Best-effort, same reasoning as create_vm's sync call: this VM's
     // reservation just needs to eventually disappear from dnsmasq, not
     // synchronously with this response.
@@ -1343,11 +1341,11 @@ async fn finish_run_start(
     let paths = crate::artifacts::VmArtifactPaths::for_vm(&vms_dir, vm.id);
     let runtime = paths.runtime(runtime_id);
     let process = firecracker::spawn_vm(
-        &state.runtime.firecracker_binary,
+        &state.runtime,
         &runtime,
         vm.id,
         enable_pci,
-        state.runtime.ready_timeout,
+        crate::resource_limits::ResourceLimits::for_vm(vm.ram, vm.cpu),
         Arc::clone(&state.process_metrics),
     )
     .await
@@ -1362,13 +1360,14 @@ async fn finish_run_start(
     // The guest scripts bring their own interface up manually instead
     // (`handlers::bootstrap`'s pushed script); this only skips the host's
     // passive wait, not networking itself.
-    if !is_microboot {
-        // Not registered with register_and_watch yet, so `process` dropping
-        // on an early return here still kills it (spawn_vm's Command sets
-        // kill_on_drop) — no separate cleanup needed on this path.
-        wait_for_network_ready(process.console(), state.runtime.network_ready_timeout)
-            .await
-            .map_err(|error| format!("network readiness check failed: {error}"))?;
+    if !is_microboot
+        && let Err(error) =
+            wait_for_network_ready(process.console(), state.runtime.network_ready_timeout).await
+    {
+        // Not registered with register_and_watch yet: kill it and wait, so
+        // the failed start leaves no guest behind.
+        process.abort(state.runtime.stop_grace).await;
+        return Err(format!("network readiness check failed: {error}"));
     }
 
     Ok(process)
@@ -1380,7 +1379,7 @@ async fn finish_run_start(
 const NETWORK_SENTINEL_SCAN_CAP: usize = 4096;
 
 /// Waits for the guest's boot-time network-readiness unit to report over
-/// its serial console (`public-docs/networking.md` — the
+/// its serial console (`public-docs/guides/networking.md` — the
 /// substitute this project uses for a guest-agent event, which is out of
 /// scope). `FIRECRAB_NETWORK_READY` succeeds; `FIRECRAB_NETWORK_FAILED`,
 /// the console closing, or the timeout all fail the start outright — a
@@ -1966,16 +1965,19 @@ async fn fail_start_with(
     reason: Option<String>,
 ) -> AppError {
     finish_startup_timeline(state, id, StartupStepOutcome::Failed, reason);
-    let pid = state
+    let process = state
         .processes
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&id)
-        .map(|process| process.pid);
+        .map(|process| (process.pid, process.control.clone()));
     if let Some(record) = set_memory_state(state, id, VmState::Error) {
         let _ = persist_update(state, &record, request_id).await;
     }
-    if let Some(pid) = pid {
+    if let Some((pid, control)) = process {
+        control.kill();
+        // Not through the shim alone: a failed start must not leave a guest
+        // running if the shim is what failed.
         firecracker::sigkill(pid);
     }
     AppError::internal(request_id)
@@ -2025,6 +2027,12 @@ pub(crate) fn vm_response(state: &AppState, vm: &VmRecord, lease: Option<&Lease>
         id: vm.id,
         name: vm.name.clone(),
         state: vm.state,
+        reconciliation: state
+            .reconciliation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&vm.id)
+            .cloned(),
         template: vm.template.clone(),
         template_version: vm.template_version.clone(),
         cpu: vm.cpu,
@@ -2167,7 +2175,7 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
             "storageRoot".to_owned(),
             "is not a registered storage root".to_owned(),
         );
-    } else if fields.get("diskGb").is_none() {
+    } else if !fields.contains_key("diskGb") {
         // Only probe free space once diskGb itself is in range — otherwise
         // the capacity message would hide a simpler validation error.
         let need_bytes = u64::from(req.disk_gb) * 1024 * 1024 * 1024;
@@ -2213,18 +2221,18 @@ fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, 
                 break;
             }
         }
-        if !fields.contains_key("portForwards") {
-            if let Ok(all_pfs) = state.store.list_all_port_forwards() {
-                for (_, existing_pf) in all_pfs {
-                    if req.port_forwards.iter().any(|pf| {
-                        pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
-                    }) {
-                        fields.insert(
-                            "portForwards".to_owned(),
-                            "one or more host ports are already in use by another VM".to_owned(),
-                        );
-                        break;
-                    }
+        if !fields.contains_key("portForwards")
+            && let Ok(all_pfs) = state.store.list_all_port_forwards()
+        {
+            for (_, existing_pf) in all_pfs {
+                if req.port_forwards.iter().any(|pf| {
+                    pf.host_port == existing_pf.host_port && pf.protocol == existing_pf.protocol
+                }) {
+                    fields.insert(
+                        "portForwards".to_owned(),
+                        "one or more host ports are already in use by another VM".to_owned(),
+                    );
+                    break;
                 }
             }
         }
@@ -2546,7 +2554,7 @@ pub(crate) mod test_support {
         let socket_path = root.join(format!("net-helper-{}.sock", Uuid::new_v4()));
         crate::network::test_support::spawn_always_ok_helper(&socket_path);
 
-        AppState::with_db_file(templates, root.join("data/firecrab.db"))
+        let state = AppState::with_db_file(templates, root.join("data/firecrab.db"))
             .await
             .unwrap()
             .with_test_runtime(RuntimeConfig {
@@ -2555,8 +2563,13 @@ pub(crate) mod test_support {
                 ready_timeout: Duration::from_secs(5),
                 stop_grace: Duration::from_millis(500),
                 network_ready_timeout: Duration::from_millis(300),
+                shim: crate::firecracker::ShimLauncher::InProcess,
             })
-            .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path))
+            .with_test_network(crate::network::NetworkClient::with_socket_path(socket_path));
+        // As `main` does before serving, so tests that reopen state against
+        // the same directory see a restart.
+        crate::reconcile::reconcile(&state).await;
+        state
     }
 
     pub(crate) fn seed_vm(state: &AppState, vm: &VmRecord) {
@@ -2576,7 +2589,7 @@ mod tests {
     use std::time::Duration;
 
     use axum::response::IntoResponse;
-    use firecrab_api_types::SshHostKeyCheckStatus;
+    use firecrab_api_types::{SshHostKeyCheckStatus, VmReconciliation, VmReconciliationOutcome};
     use tempfile::tempdir;
 
     use std::path::PathBuf;
@@ -2807,7 +2820,13 @@ mod tests {
     }
 
     async fn wait_for_state(state: &AppState, id: Uuid, want: VmState) {
-        for _ in 0..100 {
+        // 30s, not the 3s this budget used to be: the background start/stop
+        // task this polls for spawns a real subprocess, and under coverage
+        // instrumentation plus a full parallel `cargo test` run that can take
+        // much longer than in a normal build without ever indicating a real
+        // regression (see e8c1ab9's identical fix for `start_vm`'s own
+        // deadline).
+        for _ in 0..1000 {
             if memory_state(state, id) == Some(want) {
                 return;
             }
@@ -2827,6 +2846,95 @@ mod tests {
 
         assert_eq!(body.len(), 1);
         assert_eq!(body[0].id, vm.id);
+        assert_eq!(body[0].reconciliation, None);
+    }
+
+    #[tokio::test]
+    async fn a_new_start_clears_the_startup_result_only_after_it_is_accepted() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let mut vm = record("restarted", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+        let result = VmReconciliation {
+            outcome: VmReconciliationOutcome::Reconnected,
+            checked_at_ms: 1_700_000_000_000,
+            detail: None,
+        };
+        state
+            .reconciliation
+            .lock()
+            .unwrap()
+            .insert(vm.id, result.clone());
+
+        let rejected = claim_start(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(rejected.into_response().status(), StatusCode::CONFLICT);
+        assert_eq!(
+            state.reconciliation.lock().unwrap().get(&vm.id),
+            Some(&result)
+        );
+
+        set_memory_state(&state, vm.id, VmState::Stopped);
+        claim_start(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert!(!state.reconciliation.lock().unwrap().contains_key(&vm.id));
+        let Json(response) = get_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.state, VmState::Starting);
+        assert_eq!(response.reconciliation, None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_start_claim_keeps_the_previous_reconciliation_result() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("unpersisted-start", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let result = VmReconciliation {
+            outcome: VmReconciliationOutcome::Gone,
+            checked_at_ms: 1_700_000_000_000,
+            detail: None,
+        };
+        state
+            .reconciliation
+            .lock()
+            .unwrap()
+            .insert(vm.id, result.clone());
+        state.store.delete(vm.id).unwrap();
+
+        let error = claim_start(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(memory_state(&state, vm.id), Some(VmState::Created));
+        assert_eq!(
+            state.reconciliation.lock().unwrap().get(&vm.id),
+            Some(&result)
+        );
     }
 
     #[tokio::test]
@@ -3190,6 +3298,55 @@ while True:
         .unwrap();
 
         assert_eq!(started.state, VmState::Running);
+    }
+
+    #[tokio::test]
+    async fn stop_kills_the_vmm_directly_when_its_shim_does_not_answer() {
+        let directory = short_tempdir();
+        let root = directory.path();
+        let binary = fake_firecracker(root, SERVE_LOOP);
+        let state = test_state_with_binary(root, binary).await;
+        let mut vm = record("stuck-shim", Uuid::new_v4());
+        vm.state = VmState::Running;
+        seed_vm(&state, &vm);
+        // Stands in for a Firecracker whose shim no longer answers.
+        let mut vmm = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let (_exited_tx, exited) = tokio::sync::watch::channel(false);
+        let (control, requests) = crate::vm_shim::client::ShimControl::for_test();
+        drop(requests);
+        state.processes.lock().unwrap().insert(
+            vm.id,
+            VmProcess {
+                pid: vmm.id(),
+                exited,
+                console: std::sync::Arc::new(crate::console::ConsoleBroker::new()),
+                control,
+            },
+        );
+
+        let _ = stop_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = vmm.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() > deadline {
+                let _ = vmm.kill();
+                panic!("stop left the VMM running after its shim stopped answering");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
     }
 
     #[tokio::test]
@@ -3736,14 +3893,25 @@ while True:
         let replacement = state.store.active_lease(vm.id).unwrap().unwrap();
         assert_eq!(replacement.ipv4, Ipv4Addr::new(172, 30, 0, 4));
 
-        let requests = requests.lock().unwrap();
-        let policy_ips: Vec<Ipv4Addr> = requests
-            .iter()
-            .filter_map(|request| match request {
-                NetworkRequest::ApplyVmPolicy { ipv4, .. } => Some(*ipv4),
-                _ => None,
-            })
-            .collect();
+        // Scoped: the guard must not survive into the `stop_vm` await below.
+        let (policy_ips, synced_replacement_lease) = {
+            let requests = requests.lock().unwrap();
+            let policy_ips: Vec<Ipv4Addr> = requests
+                .iter()
+                .filter_map(|request| match request {
+                    NetworkRequest::ApplyVmPolicy { ipv4, .. } => Some(*ipv4),
+                    _ => None,
+                })
+                .collect();
+            let synced = requests.iter().any(|request| {
+                matches!(
+                    request,
+                    NetworkRequest::SyncDhcpLeases { leases, .. }
+                        if leases.iter().any(|lease| lease.vm_id == vm.id && lease.ipv4 == replacement.ipv4)
+                )
+            });
+            (policy_ips, synced)
+        };
         assert_eq!(
             policy_ips,
             vec![
@@ -3752,14 +3920,7 @@ while True:
                 Ipv4Addr::new(172, 30, 0, 4),
             ]
         );
-        assert!(requests.iter().any(|request| {
-            matches!(
-                request,
-                NetworkRequest::SyncDhcpLeases { leases, .. }
-                    if leases.iter().any(|lease| lease.vm_id == vm.id && lease.ipv4 == replacement.ipv4)
-            )
-        }));
-        drop(requests);
+        assert!(synced_replacement_lease);
 
         let Json(stopped) = stop_vm(
             State(state.clone()),
@@ -3817,6 +3978,14 @@ while True:
         let state = test_state(directory.path()).await;
         let vm = record("condemned", Uuid::new_v4());
         seed_vm(&state, &vm);
+        state.reconciliation.lock().unwrap().insert(
+            vm.id,
+            VmReconciliation {
+                outcome: VmReconciliationOutcome::Gone,
+                checked_at_ms: 1_700_000_000_000,
+                detail: None,
+            },
+        );
         let paths = crate::artifacts::VmArtifactPaths::for_vm(&state.runtime.vms_dir, vm.id);
         paths.ensure_directories().unwrap();
         let generation = Uuid::new_v4();
@@ -3833,6 +4002,7 @@ while True:
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(state.vms.lock().unwrap().is_empty());
         assert!(state.store.load_all().unwrap().is_empty());
+        assert!(state.reconciliation.lock().unwrap().is_empty());
         assert!(!paths.dir.exists());
 
         let error = get_vm(
@@ -3883,6 +4053,41 @@ while True:
             policy < tap && tap < dhcp,
             "unexpected network calls: {calls:?}"
         );
+    }
+
+    /// The other half of the lease lifecycle: a lease outlives every stop,
+    /// crash and disappearance, and a delete is what frees it.
+    #[tokio::test]
+    async fn deleting_a_vm_frees_its_address_for_the_next_one() {
+        let directory = tempdir().unwrap();
+        let state = test_state(directory.path()).await;
+        let vm = record("leaving", Uuid::new_v4());
+        seed_vm(&state, &vm);
+        let leased = state
+            .store
+            .active_lease(vm.id)
+            .unwrap()
+            .expect("seeded VMs are leased");
+
+        let status = delete_vm(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            axum::extract::Path(vm.id.to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(state.store.active_lease(vm.id).unwrap(), None);
+        // Addresses go out lowest-free first, so the freed one is next.
+        let next = state
+            .store
+            .allocate_lease(
+                Uuid::new_v4(),
+                SubnetSpec::legacy_default_subnet(Uuid::from_u128(1)),
+            )
+            .unwrap();
+        assert_eq!(next.ipv4, leased.ipv4);
     }
 
     /// A delete that can't clear the artifact tree must not half-remove the
@@ -3989,7 +4194,9 @@ while True:
         firecracker::sigkill(pid);
 
         wait_for_state(&state, vm.id, VmState::Error).await;
-        assert_eq!(db_state(&state, vm.id), Some(VmState::Error));
+        // The exit monitor tears the network down before it persists, so a
+        // persisted row also means the helper calls below are all recorded.
+        wait_for_db_state(&state, vm.id, VmState::Error).await;
         assert!(state.processes.lock().unwrap().is_empty());
 
         let calls = log.lock().unwrap().clone();

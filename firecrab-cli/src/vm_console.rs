@@ -2,10 +2,12 @@
 
 use std::io::IsTerminal;
 
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use firecrab_api_types::CONSOLE_SESSION_ENDED_CLOSE_CODE;
 use futures_util::{SinkExt, StreamExt};
-use nix::sys::termios::{self, SetArg, Termios};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::{Error as WebSocketError, Message};
 use uuid::Uuid;
 
@@ -37,8 +39,17 @@ pub enum Error {
     Terminal(String),
 }
 
+/// Why an attached console ended without an error.
+#[derive(Debug, PartialEq, Eq)]
+enum Detach {
+    /// Ctrl+], stdin closed, or the API closed the console (the VM stopped).
+    Detached,
+    /// The guest's login session ended (`exit`).
+    SessionEnded,
+}
+
 /// Attaches the process terminal to the VM's ttyS0 stream until the VM stops,
-/// stdin closes, or the operator types Ctrl+].
+/// the guest session ends, stdin closes, or the operator types Ctrl+].
 pub fn attach(api_base: &str, id: Uuid) -> Result<(), Error> {
     let url = console_url(api_base, id)?;
     eprintln!("attaching to VM {id} serial console (Ctrl+] to detach)");
@@ -57,10 +68,20 @@ pub fn attach(api_base: &str, id: Uuid) -> Result<(), Error> {
     // Restore canonical input before printing a local status line. This also
     // runs on every error path; Drop remains a second safety net for panics.
     drop(raw_terminal);
-    if result.is_ok() {
-        eprintln!("\r\nconsole detached");
+    let detach = match result {
+        Ok(detach) => detach,
+        Err(error) => {
+            // A cancelled stdin read can stay blocked until the next byte.
+            runtime.shutdown_background();
+            return Err(error);
+        }
+    };
+    match detach {
+        Detach::Detached => eprintln!("\r\nconsole detached"),
+        Detach::SessionEnded => eprintln!("\r\nguest session ended"),
     }
-    result
+    runtime.shutdown_background();
+    Ok(())
 }
 
 /// Converts an HTTP API base to the console WebSocket endpoint while
@@ -87,7 +108,7 @@ fn console_url(api_base: &str, id: Uuid) -> Result<reqwest::Url, Error> {
     Ok(url)
 }
 
-async fn stream<R, W>(url: &str, mut input: R, mut output: W) -> Result<(), Error>
+async fn stream<R, W>(url: &str, mut input: R, mut output: W) -> Result<Detach, Error>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -104,7 +125,7 @@ where
                 let read = read?;
                 if read == 0 {
                     let _ = sink.send(Message::Close(None)).await;
-                    return Ok(());
+                    return Ok(Detach::Detached);
                 }
 
                 let (guest_input, detach) = split_at_detach(&buffer[..read]);
@@ -115,12 +136,12 @@ where
                 }
                 if detach {
                     let _ = sink.send(Message::Close(None)).await;
-                    return Ok(());
+                    return Ok(Detach::Detached);
                 }
             }
             frame = source.next() => {
                 let Some(frame) = frame else {
-                    return Ok(());
+                    return Ok(Detach::Detached);
                 };
                 match frame.map_err(map_websocket_error)? {
                     Message::Binary(bytes) => {
@@ -131,11 +152,21 @@ where
                         output.write_all(text.as_bytes()).await?;
                         output.flush().await?;
                     }
-                    Message::Close(_) => return Ok(()),
+                    Message::Close(close) => return Ok(close_reason(close.as_ref())),
                     Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
                 }
             }
         }
+    }
+}
+
+/// Tells a guest session that ended apart from any other close by the API.
+fn close_reason(close: Option<&CloseFrame>) -> Detach {
+    match close {
+        Some(frame) if u16::from(frame.code) == CONSOLE_SESSION_ENDED_CLOSE_CODE => {
+            Detach::SessionEnded
+        }
+        _ => Detach::Detached,
     }
 }
 
@@ -162,31 +193,25 @@ fn map_websocket_error(error: WebSocketError) -> Error {
     Error::Connection(error.to_string())
 }
 
-/// Restores the exact input terminal attributes when the console exits.
-struct RawTerminal {
-    original: Termios,
-}
+/// Restores the process terminal mode when the console exits.
+struct RawTerminal;
 
 impl RawTerminal {
+    /// Enables raw input only when stdin is attached to a terminal.
     fn enter() -> Result<Option<Self>, Error> {
         let input = std::io::stdin();
         if !input.is_terminal() {
             return Ok(None);
         }
 
-        let original =
-            termios::tcgetattr(&input).map_err(|error| Error::Terminal(error.to_string()))?;
-        let mut raw = original.clone();
-        termios::cfmakeraw(&mut raw);
-        termios::tcsetattr(&input, SetArg::TCSANOW, &raw)
-            .map_err(|error| Error::Terminal(error.to_string()))?;
-        Ok(Some(Self { original }))
+        enable_raw_mode().map_err(|error| Error::Terminal(error.to_string()))?;
+        Ok(Some(Self))
     }
 }
 
 impl Drop for RawTerminal {
     fn drop(&mut self) {
-        let _ = termios::tcsetattr(std::io::stdin(), SetArg::TCSANOW, &self.original);
+        let _ = disable_raw_mode();
     }
 }
 
@@ -268,7 +293,7 @@ mod tests {
             input_writer.write_all(b"echo ok\r").await.unwrap();
         });
         let mut output = Vec::new();
-        stream(
+        let detach = stream(
             &format!("ws://{address}/ws/vms/{ID}/console"),
             input_reader,
             &mut output,
@@ -279,6 +304,41 @@ mod tests {
         input_task.await.unwrap();
         server.await.unwrap();
         assert_eq!(output, b"booted\r\n$ ");
+        assert_eq!(
+            detach,
+            Detach::Detached,
+            "a plain close is not a session end"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_ended_close_reports_that_the_guest_session_ended() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(tcp).await.unwrap();
+            socket
+                .close(Some(tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                    code: firecrab_api_types::CONSOLE_SESSION_ENDED_CLOSE_CODE.into(),
+                    reason: firecrab_api_types::CONSOLE_SESSION_ENDED_CLOSE_REASON.into(),
+                }))
+                .await
+                .unwrap();
+        });
+
+        // Stdin stays open: only the close frame can end the session.
+        let (_input_writer, input_reader) = tokio::io::duplex(64);
+        let detach = stream(
+            &format!("ws://{address}/ws/vms/{ID}/console"),
+            input_reader,
+            Vec::<u8>::new(),
+        )
+        .await
+        .unwrap();
+
+        server.await.unwrap();
+        assert_eq!(detach, Detach::SessionEnded);
     }
 
     #[tokio::test]
@@ -287,11 +347,19 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let read = tcp.read(&mut buffer).await.unwrap();
+                assert!(read > 0, "client closed before sending request headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
             tcp.write_all(
                 b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{\"code\":\"vm_not_running\"}",
             )
             .await
             .unwrap();
+            tcp.shutdown().await.unwrap();
         });
 
         let error = stream(

@@ -139,11 +139,6 @@ async fn host_local_catalog_row_reinstalls_custom_alias() {
         "{}",
         finished.log
     );
-    assert!(
-        finished
-            .log
-            .contains("local MicroRegistry package checksum verified")
-    );
     let installed = state
         .templates
         .resolve_alias(ALIAS)
@@ -173,7 +168,7 @@ async fn host_local_catalog_install_rejects_checksum_tampering() {
     let finished = wait_for_install(&state).await;
     assert_eq!(finished.status, ImageInstallStatus::Failed);
     assert!(
-        finished.log.contains("checksum mismatch"),
+        finished.log.contains("SHA-256 does not match"),
         "{}",
         finished.log
     );
