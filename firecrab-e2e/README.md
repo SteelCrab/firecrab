@@ -51,6 +51,19 @@ npm run install-browsers --prefix firecrab-e2e
 
 ## Run
 
+PIPE and database dashboard checks:
+
+```sh
+npm run typecheck:pipe --prefix firecrab-e2e
+npm run test:pipe --prefix firecrab-e2e
+```
+
+This suite runs 74 cases, including 22 DB cases. It starts only Vite on port
+8096 and mocks the API. For actual PostgreSQL/MySQL, TLS and desktop/mobile
+browser checks, use the [disposable DB QA runner](../public-docs/development/pipe-databases-qa.md).
+`test:pipe:live` requires that runner's private API and fixture environment.
+It is excluded from the default and mocked dashboard suites.
+
 Host Firecrab panel only (H3, Linux/macOS/Windows):
 
 ```sh

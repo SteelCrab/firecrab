@@ -282,6 +282,17 @@ executables are not removed.
 
 ## Validation
 
+See [PIPE database E2E and QA](../development/pipe-databases-qa.md) for browser,
+real API/DB, TLS, cleanup and cloud acceptance checks.
+
+- `cargo test -p firecrab-api --bin firecrab-api pipe_databases`: URI/provider/TLS
+  validation, credential redaction, persisted connections, API origin checks and
+  bounded operations. The ignored `reads_real_postgres_and_mysql_tables` test
+  requires disposable databases in `FIRECRAB_TEST_POSTGRES_URI` and
+  `FIRECRAB_TEST_MYSQL_URI`; it creates fixture tables in those databases.
+- `npm run test:pipe --prefix firecrab-e2e`: existing PIPE flows plus DB connection
+  tests, table previews, pagination, failure recovery, credential clearing and
+  Korean mobile layout using API fixtures.
 - `test-pipe-runtime.py`: real Nginx domain/path boundaries, request distribution,
   passive failure exclusion, multiple isolated Quick hosts, cloned route paths,
   target update/removal, public Host/HTTPS forwarding, and in-flight reloads.
