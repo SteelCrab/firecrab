@@ -1269,6 +1269,36 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn registry_deletion_is_idempotent_for_harbor_hosts_and_rejects_invalid_hosts() {
+        use axum::http::StatusCode;
+        use tower::ServiceExt;
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
+                .unwrap();
+        let app = build_router(test_state(dir.path()).await, &config);
+        for (host, status) in [
+            ("untrusted.invalid", StatusCode::OK),
+            ("untrusted.invalid", StatusCode::OK),
+            ("invalid@host", StatusCode::BAD_REQUEST),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("DELETE")
+                        .uri(format!("/api/pipe/registries/{host}"))
+                        .header("origin", "http://localhost:8080")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{host}");
+        }
+    }
+
+    #[tokio::test]
     async fn registry_routes_keep_origin_protection_and_never_return_login_secrets() {
         use axum::http::StatusCode;
         use tower::ServiceExt;

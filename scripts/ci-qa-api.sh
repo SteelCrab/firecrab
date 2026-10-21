@@ -404,6 +404,8 @@ REG_SAVED=
 http DELETE "/api/pipe/registries/${REG_HOST}"
 expect P4 200
 http DELETE /api/pipe/registries/untrusted.invalid
+expect P4 200
+http DELETE /api/pipe/registries/invalid@host
 expect P4 400
 pass P4
 
