@@ -1084,6 +1084,9 @@ a.options-menu-item {
 .reconciliation-detail .reconciliation-diagnostic { padding-left: 0.65rem; border-left: 2px solid var(--line); }
 
 /* M2Image table status cell: badge and "⋯" options menu trigger on one line. */
+.pulled-image-row td:first-child { overflow-wrap: anywhere; white-space: normal; }
+.pulled-image-source { display: block; color: var(--shell); margin-top: .25rem; font-size: .75rem; }
+.pulled-image-log .subpanel { margin-block: .5rem; }
 table.image-table .state-cell {
   display: flex;
   align-items: center;
@@ -2202,37 +2205,43 @@ table.image-table .image-package-url a:hover {
 
 .pipe-domain-note { margin: 0 0 1rem; color: var(--ink); font-size: .8rem; line-height: 1.6; }
 
-/* Registry connections share Pipe's fields and table controls. */
-.registry-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; margin: 16px 0; }
-.registry-wide { grid-column: 1 / -1; }
-.registry-form .field { min-width: 0; }
-.registry-form .field > span { color: var(--shell); font-family: var(--font-mono); font-size: .75rem; }
-.registry-form .pipe-row-actions { flex-wrap: wrap; }
-.registry-table { min-width: 44rem; }
-.registry-reference { overflow-wrap: anywhere; min-width: 16rem; max-width: 420px; }
-.registry-reference small { display: block; font-size: 11px; opacity: .65; margin-top: 4px; }
-.registry-log { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 12px; }
-
-.pipe-registries h3 { margin: 1.25rem 0 .65rem; font-size: .9rem; font-weight: 600; }
-.registry-help { color: var(--shell); font-size: .8rem; line-height: 1.6; overflow-wrap: anywhere; }
-.registry-browser-actions { margin-block: .75rem; flex-wrap: wrap; }
-.registry-image-tags h4 { margin: 1.25rem 0 .5rem; font-size: .85rem; }
-.registry-catalog { width: 100%; }
-.registry-catalog-scroll { max-height: 22rem; margin-block: .75rem; }
-.registry-catalog .registry-reference { min-width: 0; white-space: normal; }
-.registry-catalog tr[aria-selected="true"] { background: color-mix(in srgb, var(--ready) 8%, var(--bg-panel)); }
-.registry-tag-list { display: flex; flex-wrap: wrap; gap: .45rem; max-height: 12rem; overflow: auto; padding-block: .25rem; }
-.registry-tag-list .btn { overflow-wrap: anywhere; white-space: normal; max-width: 100%; }
-.registry-tag-list .btn[aria-pressed="true"] { color: var(--ink); border-color: var(--ready); background: color-mix(in srgb, var(--ready) 8%, var(--bg-panel)); }
-.registry-selected code { overflow-wrap: anywhere; }
+/* Pipe Registry: saved logins, then the selected login's repositories and tags. */
 .pipe-registries > .panel-title { flex-wrap: wrap; gap: .75rem; }
+.registry-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .9rem .85rem; align-items: start; margin-bottom: 1.25rem; }
+.registry-wide, .registry-form-title { grid-column: 1 / -1; }
+.registry-form-title { margin: 0; font-size: .85rem; font-weight: 600; }
+.registry-form .pipe-controls { margin-top: 0; }
+.registry-source { margin-left: .3rem; color: var(--shell); font: .75rem var(--font-mono); letter-spacing: normal; text-transform: none; overflow-wrap: anywhere; }
+.registry-browser > .panel-title .btn { flex: none; white-space: nowrap; }
+.registry-connections tbody tr, .registry-catalog tbody tr { cursor: pointer; }
+@media (hover: hover) {
+  .registry-connections tbody tr:not(.selected):hover > td, .registry-catalog tbody tr:not(.selected):hover > td { background: var(--bg); }
+}
+.registry-select { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.registry-select:focus-visible { outline: 2px solid var(--ember); outline-offset: 2px; }
+.registry-name { min-width: 0; max-width: 26rem; overflow-wrap: anywhere; }
+.registry-connections .registry-name { font-weight: 600; }
+.registry-catalog-scroll { max-height: 22rem; }
+.registry-catalog { width: 100%; }
+.registry-catalog thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-panel); }
+.registry-catalog .registry-name { font: .85rem var(--font-mono); }
+.registry-status { width: 1%; white-space: nowrap; }
+.registry-pull-form { margin-top: 0; }
+.registry-pull-form .field { flex: 1 1 14rem; }
+.registry-pull-form select { background: var(--bg-panel); }
+.registry-pull .poll-note, .registry-pull .banner { margin-top: 0; }
+.registry-selection { margin: 1rem 0 0; }
+.registry-job .detail-fields { margin-bottom: 1rem; }
+.registry-log { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 560px) {
-  .registry-connections { min-width: 0; }
   .registry-connections thead { display: none; }
-  .registry-connections tbody { display: block; }
-  .registry-connections tr { display: grid; gap: .65rem; padding-block: 1rem; border-bottom: 1px solid var(--line); }
-  .registry-connections td { padding: 0; border: 0; white-space: normal; }
-  .registry-connections .registry-reference { min-width: 0; max-width: none; font-weight: 600; }
-  .registry-connections .registry-account::before { content: attr(data-label) ": "; color: var(--shell); }
-  .registry-connections .pipe-row-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .registry-connections tbody { display: grid; }
+  .registry-connections tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .25rem .75rem; padding: .75rem; border-bottom: 1px solid var(--line); }
+  .registry-connections tr:last-child { border-bottom: 0; }
+  .registry-connections tr.selected { background: rgba(255, 122, 41, 0.12); }
+  .registry-connections td { grid-column: 1; min-width: 0; padding: 0; border: 0; white-space: normal; }
+  .registry-connections tbody tr.selected > td { background: none; }
+  .registry-connections td[data-label] { color: var(--shell); font-size: .8rem; }
+  .registry-connections td[data-label]::before { content: attr(data-label) ": "; }
+  .registry-connections td.actions { grid-column: 2; grid-row: 1 / span 3; align-self: start; }
 }

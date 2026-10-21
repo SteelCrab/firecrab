@@ -73,7 +73,9 @@ test.describe("Pipe registries against the API", () => {
     await page.goto("/#/pipe");
     await expect(pipe.getByRole("link", { name: "Pipe Registry", exact: true })).toContainText(cardStatus(before + 1));
     await pipe.getByRole("link", { name: "Pipe Registry", exact: true }).click();
-    await row.getByRole("button", { name: "Remove" }).click();
+    page.once("dialog", dialog => void dialog.accept());
+    await row.getByRole("button", { name: `${HOST} actions`, exact: true }).click();
+    await page.getByRole("menuitem", { name: "Delete", exact: true }).click();
     await expect(row).toHaveCount(0);
     expect((await connections()).rows.some(value => value.registry === HOST)).toBe(false);
   });

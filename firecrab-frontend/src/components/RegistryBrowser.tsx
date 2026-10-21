@@ -1,11 +1,23 @@
-import { useEffect, useState } from "react";
-import { getRegistryRepositories, getRegistryTags, type RegistryRepositories, type RegistryTags } from "../api/registries";
+import { useEffect, useState, type FormEvent } from "react";
+import { getRegistryImages, getRegistryRepositories, getRegistryTags, type RegistryImage, type RegistryRepositories, type RegistryTags } from "../api/registries";
 import { useI18n } from "../i18n";
 
-function ImageTags({ registry, repository, disabled, onPull }: {
+/** Local pull record: it does not tell whether the remote tag moved since. */
+function LocalImageStatus({ pulled, unavailable }: { pulled: boolean | undefined; unavailable: boolean }) {
+  const { t } = useI18n();
+  const label = unavailable ? t("Status unavailable", "상태 확인 불가")
+    : pulled === undefined ? t("Checking…", "확인 중…")
+    : pulled ? t("Pulled", "가져옴") : t("Not pulled", "가져오지 않음");
+  return <span className={`state-badge${pulled && !unavailable ? " running" : ""}`}>{label}</span>;
+}
+
+function ImageTags({ registry, repository, images, imagesUnavailable, disabled, pulling, onPull }: {
   registry: string;
   repository: string;
+  images: RegistryImage[] | null;
+  imagesUnavailable: boolean;
   disabled: boolean;
+  pulling: boolean;
   onPull: (reference: string) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -47,27 +59,39 @@ function ImageTags({ registry, repository, disabled, onPull }: {
   }
 
   const reference = `${registry}/${repository}:${selectedTag}`;
-  const canPull = !disabled && !loading && !!selectedTag && !!page?.tags.includes(selectedTag);
-  return <div className="registry-image-tags" aria-label={t("Repository tags", "저장소 태그")}>
-    <h4>{t("Image tags", "이미지 태그")}</h4>
-    {loading && <p className="registry-help" role="status">{t("Loading image tags…", "이미지 태그 조회 중…")}</p>}
+  const pulled = (tag: string) => !imagesUnavailable && !!images?.some(image => image.reference === `${registry}/${repository}:${tag}`);
+  const canPull = !disabled && !pulling && !loading && !error && !!selectedTag && !!page?.tags.includes(selectedTag);
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (canPull) void onPull(reference);
+  }
+  return <div className="subpanel registry-pull" role="group" aria-label={t("Selected repository", "선택한 저장소")}>
     {error && <div className="banner error" role="alert">{error}</div>}
-    {page && page.tags.length === 0 && <p className="registry-help" role="status">{t("This repository has no tags.", "이 저장소에 태그가 없다.")}</p>}
-    {!!page?.tags.length && <div className="registry-tag-list" role="group" aria-label={t("Image tags", "이미지 태그")}>
-      {page.tags.map(tag => <button className="btn" key={tag} disabled={disabled || loading} aria-pressed={selectedTag === tag} onClick={() => setSelectedTag(tag)}>{tag}</button>)}
-    </div>}
-    <div className="pipe-row-actions registry-browser-actions">
-      {page?.nextLast && <button className="btn" disabled={disabled || loading} onClick={() => void moreTags()}>{t("More tags", "태그 더 보기")}</button>}
-      {error && <button className="btn" disabled={disabled || loading} onClick={reload}>{t("Retry tags", "태그 다시 조회")}</button>}
-      <button className="btn primary" disabled={!canPull} onClick={() => { if (canPull) void onPull(reference); }}>{t("Pull image", "이미지 가져오기")}</button>
-    </div>
-    {selectedTag && <p className="registry-help registry-selected" role="status">{t("Selected image", "선택한 이미지")}: <code>{reference}</code></p>}
+    {loading && <p className="poll-note" role="status">{t("Loading tags…", "태그 조회 중…")}</p>}
+    {page && !page.tags.length && <div className="empty">{t("No tags.", "태그가 없다.")}</div>}
+    {(!!page?.tags.length || !!error) && <form className="pipe-controls registry-pull-form" onSubmit={submit}>
+      {!!page?.tags.length && <div className="field"><label htmlFor="registry-image-tag">{t("Tag", "태그")}</label>
+        <select id="registry-image-tag" value={selectedTag} disabled={loading || !!error} onChange={event => setSelectedTag(event.target.value)}>
+          {page.tags.map(tag => <option key={tag} value={tag}>{tag}{pulled(tag) ? t(" · Pulled", " · 가져옴") : ""}</option>)}
+        </select>
+      </div>}
+      {page?.nextLast && <button className="btn" type="button" disabled={loading} onClick={() => void moreTags()}>{t("More tags", "태그 더 보기")}</button>}
+      {error && <button className="btn" type="button" disabled={loading} onClick={reload}>{t("Retry tags", "태그 다시 조회")}</button>}
+      <button className="btn primary" type="submit" disabled={!canPull}>{t("Pull image", "이미지 가져오기")}</button>
+    </form>}
+    {selectedTag && <dl className="detail-fields mono registry-selection">
+      <dt>{t("Image", "이미지")}</dt><dd>{reference}</dd>
+      <dt>{t("Status", "상태")}</dt><dd><LocalImageStatus pulled={images ? pulled(selectedTag) : undefined} unavailable={imagesUnavailable} /></dd>
+    </dl>}
   </div>;
 }
 
-export default function RegistryBrowser({ registry, disabled, onPull }: {
+/** Repositories of one saved registry; the selected row's tags open below the table. */
+export default function RegistryBrowser({ registry, imageVersion, disabled, pulling, onPull }: {
   registry: string;
+  imageVersion: number;
   disabled: boolean;
+  pulling: boolean;
   onPull: (reference: string) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -76,6 +100,16 @@ export default function RegistryBrowser({ registry, disabled, onPull }: {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [images, setImages] = useState<RegistryImage[] | null>(null);
+  const [imagesUnavailable, setImagesUnavailable] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getRegistryImages().then(images => {
+      if (!cancelled) { setImages(images); setImagesUnavailable(false); }
+    }).catch(() => { if (!cancelled) setImagesUnavailable(true); });
+    return () => { cancelled = true; };
+  }, [imageVersion, refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,24 +142,26 @@ export default function RegistryBrowser({ registry, disabled, onPull }: {
     }
   }
 
-  return <div className="registry-browser">
+  const pulled = (value: string) => images?.some(image => image.reference.startsWith(`${registry}/${value}:`) || image.reference.startsWith(`${registry}/${value}@`));
+  return <section className="pipe-subsection registry-browser" aria-labelledby="registry-repositories-title">
+    <h3 className="panel-title"><span id="registry-repositories-title">{t("Repositories", "저장소")} <span className="registry-source">{registry}</span></span>
+      {catalog?.listingSupported !== false && <button className="btn" type="button" disabled={disabled || loading} onClick={reload}>{t("Refresh", "새로고침")}</button>}
+    </h3>
     {error && <div className="banner error" role="alert">{error}</div>}
-    {loading && <p className="registry-help" role="status">{t("Loading registry images…", "레지스트리 이미지 조회 중…")}</p>}
-    {catalog && !catalog.listingSupported && <p className="registry-help" role="status">{t("Repository lookup requires AWS IAM.", "저장소 조회에는 AWS IAM 연동이 필요하다.")}</p>}
-    {catalog?.listingSupported && catalog.repositories.length === 0 && <p className="registry-help" role="status">{t("No repositories.", "저장소가 없다.")}</p>}
+    {imagesUnavailable && <p className="field-error" role="alert">{t("Local image status unavailable. Refresh to retry.", "로컬 이미지 상태를 확인하지 못했다. 새로고침으로 다시 확인한다.")}</p>}
+    {loading && <p className="poll-note" role="status">{t("Loading repositories…", "저장소 조회 중…")}</p>}
+    {catalog && !catalog.listingSupported && <div className="empty">{t("Repository browsing is not available for ECR.", "ECR 저장소 목록 조회를 지원하지 않는다.")}</div>}
+    {catalog?.listingSupported && !catalog.repositories.length && <div className="empty">{t("No repositories.", "저장소가 없다.")}</div>}
     {!!catalog?.repositories.length && <div className="table-scroll registry-catalog-scroll">
-      <table className="vm-table registry-catalog" aria-label={t("Registry images", "레지스트리 이미지")}>
-        <thead><tr><th>{t("Image repository", "이미지 저장소")}</th><th className="actions">{t("Actions", "작업")}</th></tr></thead>
-        <tbody>{catalog.repositories.map(value => <tr key={value} aria-selected={repository === value}>
-          <td className="registry-reference">{registry}/{value}</td>
-          <td className="actions"><button className="btn" disabled={disabled} aria-pressed={repository === value} onClick={() => setRepository(value)}>{repository === value ? t("Selected", "선택됨") : t("Select", "선택")}</button></td>
+      <table className="vm-table registry-catalog" aria-label={t("Repositories", "저장소")}>
+        <thead><tr><th scope="col">{t("Repository", "저장소")}</th><th scope="col">{t("Status", "상태")}</th></tr></thead>
+        <tbody>{catalog.repositories.map(value => <tr key={value} className={repository === value ? "selected" : undefined} onClick={() => setRepository(value)}>
+          <td className="registry-name"><button className="registry-select" type="button" aria-pressed={repository === value}>{value}</button></td>
+          <td className="registry-status"><LocalImageStatus pulled={pulled(value)} unavailable={imagesUnavailable} /></td>
         </tr>)}</tbody>
       </table>
     </div>}
-    <div className="pipe-row-actions registry-browser-actions">
-      {catalog?.nextPage && <button className="btn" disabled={disabled || loading} onClick={() => void moreRepositories()}>{t("More images", "이미지 더 보기")}</button>}
-      {catalog?.listingSupported !== false && <button className="btn" disabled={disabled || loading} onClick={reload}>{t("Refresh repositories", "저장소 새로 고침")}</button>}
-    </div>
-    {repository && <ImageTags key={repository} registry={registry} repository={repository} disabled={disabled} onPull={onPull} />}
-  </div>;
+    {catalog?.nextPage && <div className="pipe-controls"><button className="btn" type="button" disabled={disabled || loading} onClick={() => void moreRepositories()}>{t("More repositories", "저장소 더 보기")}</button></div>}
+    {repository && <ImageTags key={repository} registry={registry} repository={repository} images={images} imagesUnavailable={imagesUnavailable} disabled={disabled} pulling={pulling} onPull={onPull} />}
+  </section>;
 }

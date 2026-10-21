@@ -3,16 +3,30 @@ import { useI18n } from "../i18n";
 import { deleteRegistry, getRegistries, getRegistryTransfer, saveRegistry, startRegistryTransfer, type RegistryConnection } from "../api/registries";
 import type { ImageInstallResponse } from "../bindings";
 import RegistryBrowser from "./RegistryBrowser";
+import PipeServiceMenu from "./PipeServiceMenu";
 
-type ActiveJob = { kind: "transfer"; id: string };
+type Provider = RegistryConnection["provider"];
+type ActiveJob = { kind: "transfer"; id: string; reference: string };
+interface Editor { original: string | null; provider: Provider; host: string; username: string; secret: string }
+
 const JOB_KEY = "firecrab.registry-job";
+const PROVIDERS: { id: Provider; name: string; short: string }[] = [
+  { id: "dockerHub", name: "Docker Hub", short: "Docker Hub" },
+  { id: "ghcr", name: "GitHub Container Registry", short: "GHCR" },
+  { id: "ecr", name: "Amazon ECR", short: "Amazon ECR" },
+  { id: "harbor", name: "Harbor", short: "Harbor" },
+];
+
 function restoredJob(): ActiveJob | null {
   try {
     const value = JSON.parse(localStorage.getItem(JOB_KEY) ?? "null");
-    return value && value.kind === "transfer" && typeof value.id === "string" ? value : null;
+    if (!value || value.kind !== "transfer" || typeof value.id !== "string") return null;
+    // Jobs saved before the reference was stored still resume; they just show no image line.
+    return { kind: "transfer", id: value.id, reference: typeof value.reference === "string" ? value.reference : "" };
   } catch { return null; }
 }
 
+/** Saved registry logins; the selected row's repositories open below the table. */
 export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (dirty: boolean) => void }) {
   const { t } = useI18n();
   const [connections, setConnections] = useState<RegistryConnection[]>([]);
@@ -20,19 +34,15 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [editor, setEditor] = useState(false);
-  const [provider, setProvider] = useState("ghcr");
-  const [host, setHost] = useState("");
-  const [username, setUsername] = useState("");
-  const [secret, setSecret] = useState("");
+  const [editor, setEditor] = useState<Editor | null>(null);
   const [selectedRegistry, setRegistry] = useState("");
   const [browserVersion, setBrowserVersion] = useState(0);
+  const [imageVersion, setImageVersion] = useState(0);
   const [activeJob, setActiveJob] = useState<ActiveJob | null>(restoredJob);
-  const [job, setJob] = useState<ImageInstallResponse | null>(null);
+  const [job, setJob] = useState<{ reference: string; snapshot: ImageInstallResponse } | null>(null);
   const inFlight = useRef(false);
-  const disabled = loading || busy || activeJob !== null;
-  const [initial, setInitial] = useState({ host: "", username: "" });
-  const dirty = editor && (!!secret || host !== initial.host || username !== initial.username);
+  const original = connections.find(value => value.registry === editor?.original);
+  const dirty = !!editor && (!!editor.secret || (original ? editor.username !== original.username : !!editor.host || !!editor.username));
 
   useEffect(() => { onUnsavedChange(dirty); return () => onUnsavedChange(false); }, [dirty, onUnsavedChange]);
   useEffect(() => {
@@ -56,14 +66,11 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
       try {
         const next = await getRegistryTransfer(activeJob!.id);
         if (cancelled) return;
-        setJob(next);
+        setJob({ reference: activeJob!.reference, snapshot: next });
         if (next.status === "running") { timer = setTimeout(poll, 1_000); return; }
-        if (next.status === "succeeded") {
-          setNotice(t("Image pulled.", "가져오기 완료"));
-        } else {
-          setError(next.status === "idle" ? t("Job expired. Retry.", "작업 만료. 다시 시도한다.") : next.log.split("\n").filter(Boolean).at(-1) ?? t("Image pull failed.", "이미지 가져오기에 실패했다."));
-        }
-        if (!cancelled) setActiveJob(null);
+        if (next.status === "succeeded") setImageVersion(value => value + 1);
+        else setError(next.status === "idle" ? t("Job expired. Retry.", "작업이 만료됐다. 다시 시도한다.") : next.log.split("\n").filter(Boolean).at(-1) ?? t("Image pull failed.", "이미지 가져오기에 실패했다."));
+        setActiveJob(null);
       } catch (failure) {
         if (!cancelled) { setError((failure as Error).message); timer = setTimeout(poll, 5_000); }
       }
@@ -78,53 +85,117 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
     try { await action(); } catch (failure) { setError((failure as Error).message); }
     finally { inFlight.current = false; setBusy(false); }
   }
-  function resetEditor() { setEditor(false); setHost(""); setUsername(""); setSecret(""); }
-  function edit(connection?: RegistryConnection) {
-    const host = connection?.registry ?? "";
-    const username = connection?.username ?? "";
-    setProvider(connection?.provider ?? "ghcr"); setHost(host); setUsername(username); setInitial({ host, username }); setSecret(""); setEditor(true);
+  function open(connection?: RegistryConnection) {
+    setEditor(connection
+      ? { original: connection.registry, provider: connection.provider, host: connection.registry, username: connection.username, secret: "" }
+      : { original: null, provider: "ghcr", host: "", username: "", secret: "" });
+    setError(null); setNotice(null);
+  }
+  function select(registry: string) {
+    if (registry === selectedRegistry) return;
+    setRegistry(registry); setBrowserVersion(value => value + 1);
   }
   async function login(event: FormEvent) {
     event.preventDefault();
+    if (!editor) return;
+    const { provider, host, username, secret } = editor;
     await perform(async () => {
-      const loginRegistry = ["ecr", "harbor"].includes(provider) ? host.trim() : provider === "dockerHub" ? "docker.io" : "ghcr.io";
-      const saved = await saveRegistry(loginRegistry, provider === "ecr" ? "AWS" : username.trim(), secret, provider === "harbor" ? "harbor" : undefined);
-      setConnections(current => [...current.filter(value => value.registry !== saved.registry), saved].sort((a,b) => a.registry.localeCompare(b.registry)));
-      setRegistry(saved.registry); setBrowserVersion(value => value + 1); resetEditor(); setNotice(t("Login saved.", "인증 저장 완료"));
+      const registry = ["ecr", "harbor"].includes(provider) ? host.trim() : provider === "dockerHub" ? "docker.io" : "ghcr.io";
+      const saved = await saveRegistry(registry, provider === "ecr" ? "AWS" : username.trim(), secret, provider === "harbor" ? "harbor" : undefined);
+      setConnections(current => [...current.filter(value => value.registry !== saved.registry), saved].sort((a, b) => a.registry.localeCompare(b.registry)));
+      setRegistry(saved.registry); setBrowserVersion(value => value + 1); setEditor(null);
+      setNotice(t("Login saved.", "인증을 저장했다."));
+    });
+  }
+  function remove(registry: string) {
+    if (busy || !window.confirm(t(`Delete the ${registry} login? Pulled images are kept.`, `${registry} 인증을 삭제할까요? 가져온 이미지는 유지된다.`))) return;
+    void perform(async () => {
+      await deleteRegistry(registry);
+      setConnections(current => current.filter(value => value.registry !== registry));
+      setEditor(current => current?.original === registry ? null : current);
+      setNotice(t("Login deleted.", "인증을 삭제했다."));
     });
   }
   async function pull(reference: string) {
     await perform(async () => {
       const next = await startRegistryTransfer({ action: "pull", reference });
-      setJob(next); setActiveJob({ kind: "transfer", id: next.alias });
+      setJob({ reference, snapshot: next }); setActiveJob({ kind: "transfer", id: next.alias, reference });
     });
   }
+
   const selectedConnection = connections.find(value => value.registry === selectedRegistry) ?? connections[0];
   const registry = selectedConnection?.registry ?? "";
+  const providerName = (id: Provider) => PROVIDERS.find(value => value.id === id)?.short ?? id;
+  const jobLabel = { idle: t("Expired", "만료"), running: t("Pulling…", "가져오는 중…"), succeeded: t("Pulled", "가져옴"), failed: t("Failed", "실패") };
+  const jobTone = { idle: "", running: " starting", succeeded: " running", failed: " error" };
   return <section className="panel pipe-registries" aria-label="Pipe Registry">
-    <h2 className="panel-title"><span>Pipe Registry</span><button className="btn" disabled={disabled || editor} onClick={() => edit()}>{t("Add registry", "레지스트리 추가")}</button></h2>
+    <h2 className="panel-title"><span>Pipe Registry</span><button className="btn" type="button" disabled={loading || busy || !!editor} aria-expanded={!!editor && !editor.original} aria-controls="registry-login-editor" onClick={() => open()}>{t("Add registry", "레지스트리 추가")}</button></h2>
     {error && <div className="banner error" role="alert">{error}</div>}
     {notice && <div className="banner info" role="status">{notice}</div>}
-    {loading && <p role="status">{t("Loading registries…", "레지스트리 조회 중…")}</p>}
-    {editor && <form className="registry-form" onSubmit={login} aria-label={t("Registry login", "레지스트리 인증")}>
-      <label className="field"><span>{t("Provider", "서비스")}</span><select value={provider} disabled={disabled} onChange={event => { setProvider(event.target.value); setHost(""); setUsername(""); setSecret(""); }}><option value="dockerHub">Docker Hub</option><option value="ghcr">GitHub Container Registry</option><option value="ecr">Amazon ECR</option><option value="harbor">Harbor</option></select></label>
-      {["ecr", "harbor"].includes(provider) && <label className="field"><span>{t("Registry hostname", "레지스트리 호스트")}</span><input value={host} onChange={event => setHost(event.target.value)} placeholder={provider === "harbor" ? "harbor.example.com or 127.0.0.1:18080" : "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com"} disabled={disabled} required /></label>}
-      {provider !== "ecr" && <label className="field"><span>{provider === "harbor" ? t("Harbor username", "Harbor 사용자명") : provider === "dockerHub" ? t("Docker Hub username", "Docker Hub 사용자명") : t("GitHub username", "GitHub 사용자명")}</span><input autoComplete="username" value={username} onChange={event => setUsername(event.target.value)} disabled={disabled} required /></label>}
-      <label className="field"><span>{provider === "harbor" ? t("Harbor password or robot token", "Harbor 비밀번호 또는 로봇 토큰") : provider === "ghcr" ? t("Personal access token (classic)", "개인 액세스 토큰 (classic)") : provider === "dockerHub" ? t("Personal access token (PAT)", "개인 액세스 토큰 (PAT)") : t("ECR login password", "ECR 로그인 비밀번호")}</span><input type="password" autoComplete="new-password" value={secret} onChange={event => setSecret(event.target.value)} disabled={disabled} required /></label>
-      {provider === "dockerHub" && <p className="registry-help registry-wide">{t("Token permission: Read", "토큰 권한: Read")}</p>}
-      {provider === "ghcr" && <p className="registry-help registry-wide">{t("Token permission: read:packages", "토큰 권한: read:packages")}</p>}
-      {provider === "ecr" && <p className="registry-help registry-wide"><code>aws ecr get-login-password --region REGION</code></p>}
-      <div className="pipe-row-actions registry-wide"><button className="btn primary" disabled={disabled} type="submit">{t("Save login", "인증 저장")}</button><button className="btn" type="button" disabled={busy} onClick={resetEditor}>{t("Cancel", "취소")}</button></div>
-    </form>}
-    {!loading && connections.length > 0 && <div className="table-scroll"><table className="vm-table registry-table registry-connections"><thead><tr><th>{t("Registry", "레지스트리")}</th><th>{t("Account", "계정")}</th><th className="actions">{t("Actions", "작업")}</th></tr></thead><tbody>{connections.map(connection => <tr key={connection.registry} aria-selected={connection.registry === registry}><td className="registry-reference">{connection.registry}</td><td className="registry-account" data-label={t("Account", "계정")}>{connection.username}</td><td className="actions"><div className="pipe-row-actions"><button className="btn" disabled={disabled} onClick={() => { setRegistry(connection.registry); setBrowserVersion(value => value + 1); }}>{t("View images", "이미지 보기")}</button><button className="btn" disabled={disabled || editor} onClick={() => edit(connection)}>{t("Update token", "토큰 갱신")}</button><button className="btn danger" disabled={disabled} onClick={() => void perform(async () => { await deleteRegistry(connection.registry); setConnections(current => current.filter(value => value.registry !== connection.registry)); if (registry === connection.registry) setRegistry(""); setNotice(t("Login removed.", "인증 삭제 완료")); })}>{t("Remove", "삭제")}</button></div></td></tr>)}</tbody></table></div>}
-    {!loading && connections.length === 0 && <p className="registry-help">{t("No registries.", "등록한 레지스트리가 없다.")}</p>}
-    {selectedConnection && <>
-      <h3>{t("Registry images", "레지스트리 이미지")}</h3>
-      <div className="registry-form">
-        <label className="field"><span>{t("Source registry", "원본 레지스트리")}</span><select value={registry} disabled={disabled} onChange={event => setRegistry(event.target.value)}>{connections.map(connection => <option key={connection.registry} value={connection.registry}>{connection.registry === "docker.io" ? "Docker Hub (docker.io)" : connection.registry} · {connection.username}</option>)}</select></label>
-      </div>
-      <RegistryBrowser key={`${registry}/${selectedConnection.username}/${browserVersion}`} registry={registry} disabled={disabled} onPull={pull} />
-    </>}
-    {job && <div aria-live="polite"><p className="registry-help">{job.status === "running" ? t("Pulling…", "가져오는 중…") : t("Last pull", "최근 가져오기")}</p><pre className="registry-log">{job.log}</pre></div>}
+    {editor && <RegistryForm editor={editor} busy={busy} onChange={setEditor} onSubmit={login} onCancel={() => setEditor(null)} />}
+    {loading ? <p className="poll-note" role="status">{t("Loading registries…", "레지스트리 조회 중…")}</p>
+      : !connections.length ? <div className="empty">{t("No registries.", "등록한 레지스트리가 없다.")}</div>
+      : <div className="table-scroll"><table className="vm-table registry-connections" aria-label={t("Saved registries", "등록한 레지스트리")}>
+        <thead><tr><th scope="col">{t("Registry", "레지스트리")}</th><th scope="col">{t("Provider", "서비스")}</th><th scope="col">{t("Account", "계정")}</th><th scope="col" className="actions">{t("Actions", "작업")}</th></tr></thead>
+        <tbody>{connections.map(connection => {
+          const selected = connection.registry === registry;
+          // The row takes the click; its button gives keyboard users the same selection.
+          return <tr key={connection.registry} className={selected ? "selected" : undefined} onClick={() => select(connection.registry)}>
+            <td className="registry-name"><button className="registry-select" type="button" aria-pressed={selected}>{connection.registry}</button></td>
+            <td data-label={t("Provider", "서비스")}>{providerName(connection.provider)}</td>
+            <td data-label={t("Account", "계정")}>{connection.username}</td>
+            <td className="actions" onClick={event => event.stopPropagation()}><PipeServiceMenu label={t(`${connection.registry} actions`, `${connection.registry} 작업`)} disabled={busy} items={[
+              { label: t("Update token", "토큰 갱신"), disabled: !!editor, onSelect: () => open(connection) },
+              { label: t("Delete", "삭제"), danger: true, onSelect: () => remove(connection.registry) },
+            ]} /></td>
+          </tr>;
+        })}</tbody>
+      </table></div>}
+    {selectedConnection && <RegistryBrowser key={`${registry}/${selectedConnection.username}/${browserVersion}`} registry={registry} imageVersion={imageVersion} disabled={busy} pulling={activeJob !== null} onPull={pull} />}
+    {job && <div className="subpanel registry-job" role="group" aria-label={t("Last pull", "최근 가져오기")} aria-live="polite">
+      <dl className="detail-fields mono">
+        <dt>{t("Pull status", "가져오기 상태")}</dt><dd><span className={`state-badge${jobTone[job.snapshot.status]}`}>{jobLabel[job.snapshot.status]}</span></dd>
+        {job.reference && <><dt>{t("Image", "이미지")}</dt><dd>{job.reference}</dd></>}
+      </dl>
+      <pre className="detail-log registry-log">{job.snapshot.log}</pre>
+    </div>}
   </section>;
+}
+
+function RegistryForm({ editor, busy, onChange, onSubmit, onCancel }: {
+  editor: Editor;
+  busy: boolean;
+  onChange: (editor: Editor) => void;
+  onSubmit: (event: FormEvent) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  const { original, provider } = editor;
+  const update = (patch: Partial<Editor>) => onChange({ ...editor, ...patch });
+  const usernameLabel = provider === "harbor" ? t("Harbor username", "Harbor 사용자명") : provider === "dockerHub" ? t("Docker Hub username", "Docker Hub 사용자명") : t("GitHub username", "GitHub 사용자명");
+  const secretLabel = provider === "harbor" ? t("Harbor password or robot token", "Harbor 비밀번호 또는 로봇 토큰")
+    : provider === "ghcr" ? t("Personal access token (classic)", "개인 액세스 토큰 (classic)")
+    : provider === "dockerHub" ? t("Personal access token (PAT)", "개인 액세스 토큰 (PAT)") : t("ECR login password", "ECR 로그인 비밀번호");
+  const secretHelp = provider === "harbor" ? t("Needs list and pull access.", "목록 조회와 가져오기 권한이 필요하다.")
+    : provider === "ghcr" ? t("Permission: read:packages", "권한: read:packages")
+    : provider === "dockerHub" ? t("Permission: Read", "권한: Read") : "aws ecr get-login-password --region REGION";
+  return <form id="registry-login-editor" className="registry-form" onSubmit={onSubmit} aria-labelledby="registry-login-title">
+    <h3 id="registry-login-title" className="registry-form-title">{original ? <>{t("Update token", "토큰 갱신")} <span className="registry-source">{original}</span></> : t("Add registry", "레지스트리 추가")}</h3>
+    {!original && <div className="field"><label htmlFor="registry-provider">{t("Provider", "서비스")}</label>
+      <select id="registry-provider" value={provider} disabled={busy} autoFocus onChange={event => onChange({ ...editor, provider: event.target.value as Provider, host: "", username: "", secret: "" })}>
+        {PROVIDERS.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}
+      </select>
+    </div>}
+    {!original && ["ecr", "harbor"].includes(provider) && <div className="field"><label htmlFor="registry-host">{t("Registry hostname", "레지스트리 호스트")}</label>
+      <input id="registry-host" value={editor.host} onChange={event => update({ host: event.target.value })} placeholder={provider === "harbor" ? "harbor.example.com" : "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com"} autoComplete="off" spellCheck={false} disabled={busy} required />
+    </div>}
+    {provider !== "ecr" && <div className="field"><label htmlFor="registry-username">{usernameLabel}</label>
+      <input id="registry-username" autoComplete="username" spellCheck={false} value={editor.username} onChange={event => update({ username: event.target.value })} disabled={busy} required />
+    </div>}
+    <div className="field"><label htmlFor="registry-secret">{secretLabel}</label>
+      <input id="registry-secret" type="password" autoComplete="new-password" aria-describedby="registry-secret-help" value={editor.secret} onChange={event => update({ secret: event.target.value })} disabled={busy} required autoFocus={!!original} />
+      <span className="poll-note" id="registry-secret-help">{secretHelp}</span>
+    </div>
+    <div className="pipe-controls registry-wide"><button className="btn primary" type="submit" disabled={busy}>{busy ? t("Saving…", "저장 중…") : t("Save login", "인증 저장")}</button><button className="btn" type="button" disabled={busy} onClick={onCancel}>{t("Cancel", "취소")}</button></div>
+  </form>;
 }
