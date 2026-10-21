@@ -34,7 +34,7 @@ body {
   outline-offset: 2px;
 }
 
-/* 앱 셸 — 헤더 + 좌측 내비 + 콘텐츠 */
+/* App shell: header, left navigation, and content. */
 
 .shell-header {
   position: relative;
@@ -83,7 +83,7 @@ body {
   border: 0;
 }
 
-/* 내비 폭은 여기서만 바꾼다 — 축소 단계마다 이 값 하나로 전환된다. */
+/* Set navigation width only here. Each responsive breakpoint switches this one value. */
 .shell-body {
   display: grid;
   grid-template-columns: 13.5rem minmax(0, 1fr);
@@ -346,14 +346,14 @@ form.shell-create-grid .field-span-2 {
   max-width: 1080px;
 }
 
-/* 좁아지면 라벨을 접어 좌측 아이콘 레일로 유지한다.
-   모바일에서도 상단 가로 줄로 펼치지 않는다 — 아이콘이 화면 가운데로
-   흩어지지 않고 좌측에 고정된다. */
+/* Hide labels on narrow screens to keep a left icon rail.
+   Keep it on the left on mobile too, rather than switching to a top row,
+   so icons stay anchored instead of spreading across the screen. */
 @media (max-width: 1000px) {
   .shell-body { grid-template-columns: 3.25rem minmax(0, 1fr); }
   .shell-nav {
     padding: 1.25rem 0.35rem;
-    /* sticky 레일이 뷰포트 높이를 채우도록 */
+    /* Let the sticky rail fill the viewport height. */
     align-self: stretch;
     min-height: calc(100dvh - 6rem);
   }
@@ -375,7 +375,7 @@ form.shell-create-grid .field-span-2 {
 
 @media (max-width: 700px) {
   .shell-header { padding: 1.25rem 0.85rem 0.85rem; }
-  /* 가로 줄로 바꾸지 않고 좌측 아이콘 레일 유지 */
+  /* Keep the left icon rail instead of switching to a horizontal row. */
   .shell-body { grid-template-columns: 3rem minmax(0, 1fr); }
   .shell-nav {
     position: sticky;
@@ -463,61 +463,12 @@ form.shell-create-grid .field-span-2 {
 .panel-title a.btn.primary { color: var(--on-ember); }
 .panel-title #vm-list-add { margin-right: 0.75rem; }
 
-.microregistry-title-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-  min-width: 0;
-}
-.microregistry-source {
-  overflow: hidden;
-  max-width: 32rem;
-  color: var(--dim);
-  font-size: 0.68rem;
-  font-weight: 400;
-  letter-spacing: 0.02em;
-  text-overflow: ellipsis;
-  text-transform: none;
-  white-space: nowrap;
-}
-.microregistry-source:hover { color: var(--shell); }
-.registry-health {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--dim);
-  font-size: 0.68rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  white-space: nowrap;
-}
-.registry-health::before {
-  content: "";
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: var(--dim);
-}
-.registry-health.online { color: var(--ready); }
-.registry-health.online::before { background: var(--ready); }
-.registry-health.offline { color: var(--error); }
-.registry-health.offline::before { background: var(--error); }
-.microregistry-refresh {
-  padding: 0.3rem 0.55rem;
-  font-size: 0.68rem;
-}
-.microregistry-intro,
 .panel-intro {
   margin: -0.45rem 0 1.1rem;
   color: var(--dim);
   font-size: 0.82rem;
   line-height: 1.5;
 }
-.microregistry-empty { margin: 0; }
-.microregistry-table .actions { text-align: right; }
-.microregistry-image { font-weight: 600; }
-.microregistry-status { min-width: 12rem; }
 .package-progress { display: block; }
 .package-progress-track {
   display: block;
@@ -594,12 +545,12 @@ form.create-grid {
   gap: 0.9rem 0.85rem;
   align-items: start;
 }
-/* 내비가 레일로 줄어드는 폭 — 5열을 유지하면 페이지가 가로 스크롤된다. */
+/* Navigation collapses to a rail at this width. Keeping five columns would make the page scroll horizontally. */
 @media (max-width: 1000px) {
   form.create-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   form.create-grid .field-submit { grid-column: 1 / -1; }
 }
-/* 폰 폭에서는 1열 */
+/* Use one column at phone widths. */
 @media (max-width: 560px) {
   form.create-grid { grid-template-columns: minmax(0, 1fr); }
 }
@@ -751,7 +702,7 @@ a.btn {
 .btn.danger { color: var(--error); }
 .btn.danger:hover:not(:disabled) { border-color: var(--error); }
 
-/* 좁은 셸에서 표만 가로로 스크롤되고 페이지는 그대로 */
+/* In a narrow shell, only the table scrolls horizontally; the page stays in place. */
 .table-scroll { overflow-x: auto; }
 
 .service-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.8rem 0; }
@@ -781,7 +732,7 @@ table.service-table { min-width: 48rem; }
   .service-variable-row .btn { justify-self: start; }
 }
 
-/* 페이지 안에 한 단계 들여 놓는 상세 블록 (모달의 .detail-body 대체) */
+/* Inset detail block within the page (replaces the modal's .detail-body). */
 .subpanel {
   margin-top: 1.25rem;
   padding: 1.25rem;
@@ -1083,15 +1034,29 @@ a.options-menu-item {
 .reconciliation-detail .reconciliation-note { color: var(--shell); font-size: 0.72rem; }
 .reconciliation-detail .reconciliation-diagnostic { padding-left: 0.65rem; border-left: 2px solid var(--line); }
 
-/* M2Image 표의 상태 셀 — 뱃지와 "⋯" 옵션 메뉴 트리거를 한 줄에 나란히. */
+/* M2Image table status cell: badge and "⋯" options menu trigger on one line. */
+table.image-table td:first-child, table.image-table .image-registry { overflow-wrap: anywhere; white-space: normal; }
+.pulled-image-log .subpanel { margin-block: .5rem; }
 table.image-table .state-cell {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
 }
+@media (max-width: 560px) {
+  table.image-table, table.image-table tbody { display: block; width: 100%; }
+  table.image-table thead { display: none; }
+  table.image-table tbody tr { position: relative; display: grid; gap: .4rem; padding: .75rem 0; border-bottom: 1px solid var(--line); }
+  table.image-table td { display: block; min-width: 0; padding: 0; border: 0; }
+  table.image-table td:first-child { padding-right: 2.5rem; overflow-wrap: anywhere; white-space: normal; }
+  table.image-table td[data-label]::before { content: attr(data-label) ": "; color: var(--shell); font-size: .75rem; }
+  table.image-table .state-cell { display: flex; flex-wrap: wrap; gap: .25rem; }
+  table.image-table .state-cell .options-menu { position: absolute; top: .75rem; right: 0; }
+  table.image-table tbody tr.pulled-image-log { display: block; padding: 0; border-bottom: 0; }
+  table.image-table .pulled-image-log td { padding-right: 0; }
+}
 
-/* 시작 파이프라인 — CI 빌드 로그처럼 단계별 소요 시간을 가로로 (task-vm-startup-timeline) */
+/* Startup pipeline: show step durations horizontally, like a CI build log (task-vm-startup-timeline). */
 .pipeline {
   list-style: none;
   display: flex;
@@ -1115,7 +1080,7 @@ table.image-table .state-cell {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 소요 시간이 들어가는 칸 자체가 진행 막대 역할을 한다 */
+/* The duration cell itself acts as the progress bar. */
 .step-bar {
   display: flex;
   align-items: center;
@@ -1263,14 +1228,6 @@ table.image-table .image-package-url a:hover {
   .kernel-update-row select { width: 100%; }
 }
 
-/* The image table's per-row OS logo (Images.tsx). */
-.image-template-logo {
-  flex: 0 0 auto;
-  width: 4.4rem;
-  height: 2rem;
-  object-fit: contain;
-  object-position: left center;
-}
 @media (max-width: 700px) {
   .store-import-dock { align-items: stretch; flex-direction: column; }
   .store-import-dock .btn { width: 100%; }
@@ -2021,7 +1978,7 @@ table.image-table .image-package-url a:hover {
   gap: 0.6rem;
   margin: 0 0 1.5rem;
 }
-/* MicroNetwork 목록에서 상세를 열어둔 행 */
+/* MicroNetwork list row with its details expanded. */
 .vm-table tbody tr.selected > td {
   background: rgba(255, 122, 41, 0.12);
 }
@@ -2110,6 +2067,17 @@ table.image-table .image-package-url a:hover {
 }
 
 /* Pipe uses the existing panels, tables and field tokens. */
+.pipe-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 16rem), 1fr)); gap: 1rem; margin: 0; padding: 0; list-style: none; }
+.pipe-card { display: flex; flex-direction: column; gap: .5rem; height: 100%; box-sizing: border-box; padding: 1.1rem 1.25rem; border: 1px solid var(--line); border-radius: 3px; background: var(--bg-panel); color: var(--ink); text-decoration: none; transition: border-color .15s ease, background-color .15s ease; }
+.pipe-card:hover { border-color: var(--shell); background: var(--bg); }
+.pipe-card-head { display: flex; align-items: center; gap: .6rem; }
+.pipe-card-icon { width: 1.75rem; height: 1.75rem; flex: none; object-fit: contain; border-radius: 4px; color: var(--ember); }
+.pipe-card-title { font-size: .95rem; font-weight: 600; }
+.pipe-card-description { flex: 1; color: var(--shell); font-size: .82rem; line-height: 1.5; }
+.pipe-back a { color: var(--ember); font: .8rem var(--font-mono); letter-spacing: .08em; text-decoration: none; }
+.pipe-back a:hover { text-decoration: underline; }
+.pipe-subsection { margin-top: 2rem; }
+@media (prefers-reduced-motion: reduce) { .pipe-card { transition: none; } }
 .quick-tunnel-form { margin-top: 1rem; }
 .quick-tunnel-url { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
 .quick-tunnel-url > a { flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; font: .85rem var(--font-mono); }
@@ -2190,3 +2158,44 @@ table.image-table .image-package-url a:hover {
 .named-tunnel-addresses .pipe-url > a { font: .85rem var(--font-mono); }
 
 .pipe-domain-note { margin: 0 0 1rem; color: var(--ink); font-size: .8rem; line-height: 1.6; }
+
+/* Pipe Registry: saved logins, then the selected login's repositories and tags. */
+.pipe-registries > .panel-title { flex-wrap: wrap; gap: .75rem; }
+.registry-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .9rem .85rem; align-items: start; margin-bottom: 1.25rem; }
+.registry-wide, .registry-form-title { grid-column: 1 / -1; }
+.registry-form-title { margin: 0; font-size: .85rem; font-weight: 600; }
+.registry-form .pipe-controls { margin-top: 0; }
+.registry-source { margin-left: .3rem; color: var(--shell); font: .75rem var(--font-mono); letter-spacing: normal; text-transform: none; overflow-wrap: anywhere; }
+.registry-browser > .panel-title .btn { flex: none; white-space: nowrap; }
+.registry-connections tbody tr, .registry-catalog tbody tr { cursor: pointer; }
+@media (hover: hover) {
+  .registry-connections tbody tr:not(.selected):hover > td, .registry-catalog tbody tr:not(.selected):hover > td { background: var(--bg); }
+}
+.registry-select { display: block; width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.registry-select:focus-visible { outline: 2px solid var(--ember); outline-offset: 2px; }
+.registry-name { min-width: 0; max-width: 26rem; overflow-wrap: anywhere; }
+.registry-connections .registry-name { font-weight: 600; }
+.registry-catalog-scroll { max-height: 22rem; }
+.registry-catalog { width: 100%; }
+.registry-catalog thead th { position: sticky; top: 0; z-index: 1; background: var(--bg-panel); }
+.registry-catalog .registry-name { font: .85rem var(--font-mono); }
+.registry-status { width: 1%; white-space: nowrap; }
+.registry-pull-form { margin-top: 0; }
+.registry-pull-form .field { flex: 1 1 14rem; }
+.registry-pull-form select { background: var(--bg-panel); }
+.registry-pull .poll-note, .registry-pull .banner { margin-top: 0; }
+.registry-selection { margin: 1rem 0 0; }
+.registry-job .detail-fields { margin-bottom: 1rem; }
+.registry-log { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .registry-connections thead { display: none; }
+  .registry-connections tbody { display: grid; }
+  .registry-connections tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .25rem .75rem; padding: .75rem; border-bottom: 1px solid var(--line); }
+  .registry-connections tr:last-child { border-bottom: 0; }
+  .registry-connections tr.selected { background: rgba(255, 122, 41, 0.12); }
+  .registry-connections td { grid-column: 1; min-width: 0; padding: 0; border: 0; white-space: normal; }
+  .registry-connections tbody tr.selected > td { background: none; }
+  .registry-connections td[data-label] { color: var(--shell); font-size: .8rem; }
+  .registry-connections td[data-label]::before { content: attr(data-label) ": "; }
+  .registry-connections td.actions { grid-column: 2; grid-row: 1 / span 3; align-self: start; }
+}

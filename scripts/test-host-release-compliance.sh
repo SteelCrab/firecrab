@@ -32,6 +32,11 @@ mkdir -p "$bins" "$dashboard" "$compliance" "$unpacked"
 write_elf64 "$bins/firecrab-api" 62
 write_elf64 "$bins/firecrab-helper" 62
 write_elf64 "$bins/firecrab" 62
+write_elf64 "$bins/firecrab-ingress" 62
+mkdir -p "$bins/ingress"
+for name in LICENSE.nginx LICENSE.pcre2 LICENSE.musl sources.json; do
+    printf 'fixture\n' >"$bins/ingress/$name"
+done
 printf '<html></html>\n' >"$dashboard/index.html"
 printf 'third-party notices\n' >"$compliance/THIRD_PARTY_NOTICES.txt"
 printf '{"schemaVersion":1,"runtime":[],"buildTestOnly":[]}\n' \
@@ -47,7 +52,8 @@ for need in \
     THIRD_PARTY_NOTICES.txt \
     release-license-inventory.json \
     licenses/GPL-2.0-only.txt \
-    extract-vmlinux; do
+    extract-vmlinux firecrab-ingress ingress/LICENSE.nginx ingress/LICENSE.pcre2 \
+    ingress/LICENSE.musl ingress/sources.json; do
     printf '%s\n' "$members" | grep -qx -- "$need" || {
         printf 'missing compliance member: %s\n' "$need" >&2
         exit 1
@@ -65,6 +71,8 @@ cmp "$ROOT/LICENSE" "$unpacked/LICENSE"
 cmp "$ROOT/licenses/GPL-2.0-only.txt" "$unpacked/licenses/GPL-2.0-only.txt"
 cmp "$compliance/THIRD_PARTY_NOTICES.txt" "$unpacked/THIRD_PARTY_NOTICES.txt"
 cmp "$compliance/release-license-inventory.json" "$unpacked/release-license-inventory.json"
+cmp "$bins/firecrab-ingress" "$unpacked/firecrab-ingress"
+cmp "$bins/ingress/LICENSE.nginx" "$unpacked/ingress/LICENSE.nginx"
 
 rm "$compliance/THIRD_PARTY_NOTICES.txt"
 if "$ROOT/scripts/package-host-release.sh" \

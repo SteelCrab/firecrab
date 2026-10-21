@@ -1,19 +1,19 @@
-//! install.sh `ensure` / `ensure_runtime_deps`: 두 데몬이 런타임에 shell out 하는
-//! 명령들과 설치 스크립트 자체가 필요로 하는 몇 가지를 채운다.
+//! install.sh `ensure` / `ensure_runtime_deps`: provide the external commands
+//! both daemons call at runtime, plus a few tools needed by the installer itself.
 
 use super::output;
 use super::pkg::{Packages, PkgManager, have};
 
-/// 무엇이 빠졌고 무엇을 경고했는지. `missing`이 비면 성공이다.
+/// Missing dependencies and warnings. An empty `missing` list means success.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct DepsOutcome {
-    /// 설치하지 못한, 반드시 필요한 명령들.
+    /// Required commands that could not be installed.
     pub missing: Vec<String>,
-    /// 없어도 진행 가능한 항목에 대한 경고.
+    /// Warnings about optional dependencies.
     pub warnings: Vec<String>,
 }
 
-/// install.sh `ensure`: 실제로 없는 것만 설치한다.
+/// install.sh `ensure`: install only missing dependencies.
 fn ensure(
     packages: &mut Packages<'_>,
     outcome: &mut DepsOutcome,
@@ -74,7 +74,7 @@ fn ensure(
     }
 }
 
-/// install.sh `ensure_runtime_deps` 전체.
+/// Full equivalent of install.sh `ensure_runtime_deps`.
 pub fn ensure_runtime_deps(
     packages: &mut Packages<'_>,
     install_deps: bool,

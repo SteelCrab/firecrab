@@ -166,6 +166,10 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use uuid::Uuid;
 
+    // A free-port probe releases its socket before the relay binds it. Keep
+    // these tests from claiming each other's ports or post-drop bind probes.
+    static PORT_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn policy(host_port: u16, guest_port: u16) -> VmPolicy {
         VmPolicy {
             vm_id: Uuid::new_v4(),
@@ -231,6 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn forwards_half_closed_streams_and_releases_stopped_ports() {
+        let _ports = PORT_TESTS.lock().await;
         let (guest, echo) = echo_server().await;
         let port = free_port();
         let mut relays = PortRelays::new(true);
@@ -251,6 +256,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_bind_preserves_the_existing_relay() {
+        let _ports = PORT_TESTS.lock().await;
         let (guest, echo) = echo_server().await;
         let busy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let busy_port = busy.local_addr().unwrap().port();
@@ -274,6 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn unchanged_snapshot_keeps_connections_and_retargeting_closes_them() {
+        let _ports = PORT_TESTS.lock().await;
         let (guest, echo) = echo_server().await;
         let (next_guest, next_echo) = echo_server().await;
         let port = free_port();
@@ -315,6 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn non_wsl_and_udp_do_not_bind_ports() {
+        let _ports = PORT_TESTS.lock().await;
         let busy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let port = busy.local_addr().unwrap().port();
         let mut relays = PortRelays::new(false);
@@ -330,6 +338,7 @@ mod tests {
 
     #[tokio::test]
     async fn abandoned_transaction_releases_reserved_ports() {
+        let _ports = PORT_TESTS.lock().await;
         let port = free_port();
         let relays = PortRelays::new(true);
         let prepared = relays.prepare(&[policy(port, 80)]).await.unwrap();
@@ -340,6 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_closes_accepted_connections_before_returning() {
+        let _ports = PORT_TESTS.lock().await;
         let (guest, echo) = echo_server().await;
         let port = free_port();
         let mut relays = PortRelays::new(true);
@@ -360,6 +370,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_ports_do_not_retarget_an_existing_relay() {
+        let _ports = PORT_TESTS.lock().await;
         let (guest, echo) = echo_server().await;
         let port = free_port();
         let original = policy(port, guest);

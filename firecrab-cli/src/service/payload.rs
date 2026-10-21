@@ -1,5 +1,5 @@
-//! install.sh `resolve_payload` / `download_host_bundle`: 설치할 파일 묶음을
-//! `--bin-dir` 체크아웃 또는 다운로드한 릴리스 번들 중 하나로 확정한다.
+//! install.sh `resolve_payload` / `download_host_bundle`: select the installation
+//! files from a `--bin-dir` checkout or a downloaded release bundle.
 
 use std::path::{Path, PathBuf};
 
@@ -10,13 +10,13 @@ use super::Error;
 
 const STEP: &str = "payload";
 
-/// 번들과 `--bin-dir` 양쪽에서 반드시 있어야 하는 바이너리.
+/// Binaries required in both release bundles and `--bin-dir` installations.
 pub const BUNDLE_BINARIES: [&str; 3] = ["firecrab-api", "firecrab-helper", "firecrab"];
 
-/// API가 런타임에 커널을 변환할 때 쓰는 셸 스크립트.
+/// Shell scripts the API uses to convert kernels at runtime.
 pub const EXTRACT_HELPERS: [&str; 2] = ["extract-vmlinux", "extract-arm64-image"];
 
-/// `firecrab_elf_arch`: 64비트 리틀엔디언 ELF의 `e_machine`을 릴리스 arch 이름으로.
+/// `firecrab_elf_arch`: map a 64-bit little-endian ELF `e_machine` to a release architecture name.
 pub fn elf_arch(path: &Path) -> Option<&'static str> {
     let bytes = std::fs::read(path).ok()?;
     if bytes.len() < 20 || &bytes[0..4] != b"\x7fELF" {
@@ -32,12 +32,12 @@ pub fn elf_arch(path: &Path) -> Option<&'static str> {
     }
 }
 
-/// `firecrab_resolve_binary`: `--bin-dir`에 있으면 그것, 없으면 이미 설치된 것.
+/// `firecrab_resolve_binary`: prefer `--bin-dir`, then fall back to the installed binary.
 ///
-/// `scripts/firecrab-release.sh`는 `-x`(실행 비트)로 검사하지만, 여기서는
-/// `is_file()`로 충분하다: 설치는 `install -o root -g root -m 0755`로 복사돼
-/// 실행 비트를 무조건 다시 세팅하므로, 원본의 실행 비트 유무는 이후 설치
-/// 성공 여부에 영향을 주지 않는다.
+/// `scripts/firecrab-release.sh` checks `-x` (the executable bit), but
+/// `is_file()` is enough here: installation copies files with
+/// `install -o root -g root -m 0755`, which always sets the executable bits.
+/// The source file's executable bits therefore do not affect installation.
 pub fn resolve_binary(name: &str, src_dir: Option<&Path>, dest_dir: &Path) -> Option<PathBuf> {
     for dir in src_dir.into_iter().chain(std::iter::once(dest_dir)) {
         let names = if name == "firecrab-helper" {
@@ -55,8 +55,8 @@ pub fn resolve_binary(name: &str, src_dir: Option<&Path>, dest_dir: &Path) -> Op
     None
 }
 
-/// `start`에서 위로 올라가며 firecrab 체크아웃 루트를 찾는다
-/// (install.sh `is_checkout`과 같은 판정).
+/// Walk upward from `start` to find the firecrab checkout root
+/// using the same checks as install.sh `is_checkout`.
 pub fn find_checkout(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start);
     while let Some(current) = dir {
@@ -72,11 +72,11 @@ pub fn find_checkout(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// 추출된 릴리스 번들이 install.sh가 요구하는 멤버를 모두 갖췄는지 확인한다.
+/// Check that an extracted release bundle contains every member required by install.sh.
 ///
-/// `install.sh`는 `[ -x "$PAYLOAD_ROOT/$name" ]`로 검사하지만, 여기서도
-/// [`resolve_binary`]와 같은 이유로 `is_file()`이면 충분하다 — 이후 설치
-/// 단계가 `install -m 0755`로 실행 비트를 다시 세팅한다.
+/// `install.sh` checks `[ -x "$PAYLOAD_ROOT/$name" ]`, but `is_file()` is enough
+/// for the same reason as in [`resolve_binary`]: the later installation step
+/// sets the executable bits with `install -m 0755`.
 pub fn verify_bundle_members(root: &Path, arch: &str) -> Result<(), Error> {
     for name in BUNDLE_BINARIES {
         let path = resolve_binary(name, None, root)
@@ -107,15 +107,15 @@ pub fn verify_bundle_members(root: &Path, arch: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// 명시적으로 주어진 버전을 정규화한다. `None`은 "아직 확정된 태그가 없다 —
-/// GitHub의 `releases/latest`를 조회해서 알아내야 한다"는 뜻으로, 미지정
-/// (`None`), 빈 문자열, `"latest"` 모두 이 경우로 합쳐진다. 그 외에는
-/// `scripts/firecrab-release.sh`의 `firecrab_normalize_tag`와 같은 규칙으로
-/// `v` 접두를 보정한 `Some(tag)`를 돌려준다.
+/// Normalize an explicitly supplied version. `None` means the tag is not yet
+/// known and must be fetched from GitHub's `releases/latest`. An omitted value
+/// (`None`), an empty string, and `"latest"` all resolve to this case. Otherwise,
+/// return `Some(tag)` with the `v` prefix normalized using the same rules as
+/// `scripts/firecrab-release.sh`'s `firecrab_normalize_tag`.
 ///
-/// 순수 함수로 분리해 둔 이유는 네트워크 없이 태그 정규화 규칙만 테스트하기
-/// 위해서다 — 실제 "latest" 조회는 [`Payload::from_release`]에서
-/// `check::fetch_latest_tag`로 한다.
+/// Keep this as a pure function so tag normalization can be tested without
+/// network access. [`Payload::from_release`] performs the actual "latest"
+/// lookup through `check::fetch_latest_tag`.
 fn normalize_tag(version: Option<&str>) -> Option<String> {
     match version {
         None => None,
@@ -125,33 +125,33 @@ fn normalize_tag(version: Option<&str>) -> Option<String> {
     }
 }
 
-/// 설치할 파일들의 출처.
+/// Sources of the files to install.
 #[derive(Debug)]
 pub struct Payload {
-    /// 바이너리가 있는 디렉터리.
+    /// Directory containing the binaries.
     pub bin: PathBuf,
-    /// `*.service` 템플릿 디렉터리.
+    /// Directory containing `*.service` templates.
     pub units: PathBuf,
-    /// `extract-vmlinux` / `extract-arm64-image`가 있는 디렉터리.
+    /// Directory containing `extract-vmlinux` / `extract-arm64-image`.
     pub extract: PathBuf,
-    /// 대시보드 빌드 (없으면 `--no-frontend`이거나 기존 설치 유지).
+    /// Dashboard build (absent with `--no-frontend` or when keeping the existing installation).
     pub dashboard: Option<PathBuf>,
     /// FireCrab LICENSE.
     pub license: PathBuf,
-    /// GPL-2.0 전문.
+    /// Full GPL-2.0 license text.
     pub gpl: PathBuf,
-    /// 서드파티 고지 (체크아웃에서는 없을 수 있음).
+    /// Third-party notices (may be absent in a checkout).
     pub third_party: Option<PathBuf>,
-    /// 라이선스 인벤토리 (체크아웃에서는 없을 수 있음).
+    /// License inventory (may be absent in a checkout).
     pub inventory: Option<PathBuf>,
-    /// 체크아웃 루트 (firecracker 스크립트 탐색에 쓰임).
+    /// Checkout root (used to find the Firecracker script).
     pub checkout: Option<PathBuf>,
-    /// 다운로드 번들의 수명을 payload에 묶는다.
+    /// Keep the downloaded bundle alive for the lifetime of the payload.
     pub(crate) _temp: Option<tempfile::TempDir>,
 }
 
 impl Payload {
-    /// install.sh `resolve_payload`의 `dir` 분기.
+    /// The `dir` branch of install.sh `resolve_payload`.
     pub fn from_bin_dir(
         bin_dir: &Path,
         dashboard_dir: Option<&Path>,
@@ -213,7 +213,7 @@ impl Payload {
         })
     }
 
-    /// install.sh `download_host_bundle`: 번들과 `SHA256SUMS`를 받아 검증하고 푼다.
+    /// install.sh `download_host_bundle`: download the bundle and `SHA256SUMS`, verify, then extract.
     pub fn from_release(
         runner: &dyn CommandRunner,
         version: Option<&str>,

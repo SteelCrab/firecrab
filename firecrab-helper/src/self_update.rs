@@ -33,9 +33,9 @@ use tokio::process::Command;
 use uuid::Uuid;
 
 /// Binaries a release bundle must contain; a bundle missing any of them is
-/// rejected before a single target is touched (the same three names
-/// `install.sh`'s `download_host_bundle` insists on).
-const REQUIRED_BINARIES: [&str; 2] = ["firecrab-api", "firecrab"];
+/// rejected before a single target is touched. The helper has a separate
+/// canonical/legacy-name check below.
+const REQUIRED_BINARIES: [&str; 3] = ["firecrab-api", "firecrab", "firecrab-ingress"];
 
 /// New bundles also carry the legacy member for pre-rename helpers. Always
 /// select one source for both installed paths so they cannot diverge.
@@ -127,7 +127,12 @@ fn hash_reader<R: Read>(reader: &mut R) -> std::io::Result<String> {
 /// which walks it backwards.
 fn swap_plan(layout: &InstallLayout, staging: &Path) -> Vec<(PathBuf, PathBuf)> {
     let mut plan = Vec::new();
-    for name in ["firecrab-api", "extract-vmlinux", "extract-arm64-image"] {
+    for name in [
+        "firecrab-api",
+        "extract-vmlinux",
+        "extract-arm64-image",
+        "firecrab-ingress",
+    ] {
         plan.push((staging.join(name), layout.libdir.join(name)));
     }
     let helper = helper_source(staging);
@@ -136,6 +141,7 @@ fn swap_plan(layout: &InstallLayout, staging: &Path) -> Vec<(PathBuf, PathBuf)> 
     }
     plan.push((staging.join("firecrab"), layout.bindir.join("firecrab")));
     plan.push((staging.join("dashboard"), layout.sharedir.join("dashboard")));
+    plan.push((staging.join("ingress"), layout.libdir.join("ingress")));
     plan
 }
 
@@ -356,6 +362,19 @@ fn extract_and_check(file: &mut File, staging: &Path) -> std::io::Result<()> {
             std::io::ErrorKind::InvalidData,
             "release bundle is missing firecrab-helper (or legacy firecrab-net-helper)",
         ));
+    }
+    for name in [
+        "LICENSE.nginx",
+        "LICENSE.pcre2",
+        "LICENSE.musl",
+        "sources.json",
+    ] {
+        if !staging.join("ingress").join(name).is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("release bundle is missing ingress/{name}"),
+            ));
+        }
     }
     Ok(())
 }
@@ -808,11 +827,38 @@ mod tests {
             Member::File("firecrab-api", b"new-api"),
             Member::File("firecrab-helper", b"new-helper"),
             Member::File("firecrab", b"new-cli"),
+            Member::File("firecrab-ingress", b"new-ingress"),
+            Member::File("ingress/LICENSE.nginx", b"nginx license"),
+            Member::File("ingress/LICENSE.pcre2", b"pcre2 license"),
+            Member::File("ingress/LICENSE.musl", b"musl license"),
+            Member::File("ingress/sources.json", b"{}"),
             Member::File("extract-vmlinux", b"new-extract"),
             Member::File("extract-arm64-image", b"new-extract-arm"),
             Member::File("dashboard/index.html", b"new-index"),
             Member::File("systemd/firecrab-api.service", b"[Unit]\n"),
         ]
+    }
+
+    #[tokio::test]
+    async fn incomplete_ingress_bundle_keeps_installed_binaries() {
+        for missing in ["firecrab-ingress", "ingress/LICENSE.nginx"] {
+            let dir = tempfile::tempdir().unwrap();
+            let layout = seed_layout(dir.path());
+            fs::write(layout.libdir.join("firecrab-ingress"), b"old-ingress").unwrap();
+            let mut members = release_members();
+            members.retain(|member| !matches!(member, Member::File(name, _) if *name == missing));
+            let (path, sha) = write_bundle(dir.path(), &members);
+            let result = apply_bundle_against(&layout, &layout, &path, &sha).await;
+            assert!(result.is_err(), "accepted a bundle missing {missing}");
+            assert_eq!(
+                fs::read(layout.libdir.join("firecrab-api")).unwrap(),
+                b"old"
+            );
+            assert_eq!(
+                fs::read(layout.libdir.join("firecrab-ingress")).unwrap(),
+                b"old-ingress"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1037,6 +1083,14 @@ mod tests {
             b"new-cli"
         );
         assert_eq!(
+            fs::read(layout.libdir.join("firecrab-ingress")).unwrap(),
+            b"new-ingress"
+        );
+        assert_eq!(
+            fs::read(layout.libdir.join("ingress/LICENSE.nginx")).unwrap(),
+            b"nginx license"
+        );
+        assert_eq!(
             fs::read(layout.sharedir.join("dashboard/index.html")).unwrap(),
             b"new-index"
         );
@@ -1086,10 +1140,13 @@ mod tests {
             "extract-vmlinux",
             "extract-arm64-image",
             "firecrab",
+            "firecrab-ingress",
         ] {
             fs::write(staging.join(name), b"new").expect("stage file");
         }
         fs::write(staging.join("dashboard/index.html"), b"new").expect("stage asset");
+        fs::create_dir_all(staging.join("ingress")).unwrap();
+        fs::write(staging.join("ingress/LICENSE.nginx"), b"license").unwrap();
 
         for (staged, target) in swap_plan(&layout, &staging) {
             let meta = fs::symlink_metadata(&staged).expect("staged source");

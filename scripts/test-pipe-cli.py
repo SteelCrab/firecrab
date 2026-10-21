@@ -69,11 +69,13 @@ def main(args):
     with tempfile.TemporaryDirectory(prefix="fc-pipe-cli-", dir="/var/lib") as temporary:
         root = Path(temporary)
         root.chmod(0o755)
-        engines = root / "engines"
-        engines.mkdir()
-        for name, source in [("nginx", args.nginx), ("cloudflared-real", args.cloudflared)]:
-            shutil.copyfile(source, engines / name)
-            (engines / name).chmod(0o755)
+        library = root / "lib"
+        engines = library / "pipe"
+        engines.mkdir(parents=True)
+        for name, source in [("firecrab-ingress", args.nginx), ("pipe/cloudflared-real", args.cloudflared)]:
+            binary = library / name
+            shutil.copyfile(source, binary)
+            binary.chmod(0o755)
         connector = engines / "cloudflared"
         connector.write_text('''#!/usr/bin/python3
 import json, os, socket, sys, time
@@ -89,7 +91,7 @@ notify.send(b"READY=1")
 while True: time.sleep(10)
 ''')
         connector.chmod(0o755)
-        environment = dict(os.environ, CONFDIR=str(root / "config"), UNITDIR=str(unit_root))
+        environment = dict(os.environ, FIRECRAB_LIBDIR=str(library), CONFDIR=str(root / "config"), UNITDIR=str(unit_root))
         cli = str(Path(args.firecrab).resolve())
         manifest = root / "pipe.json"
         credentials = root / "credentials.json"
@@ -98,7 +100,7 @@ while True: time.sleep(10)
         credentials.write_text(json.dumps(secret))
         credentials.chmod(0o600)
         config = {"listen": f"127.0.0.1:{port}", "routes": [{"host": "app.example.com", "upstreams": [f"127.0.0.1:{servers[0].server_port}"]}], "tunnel": {"id": tunnel_id, "credentialsFile": str(credentials)}}
-        overrides = ["--nginx", str(engines / "nginx"), "--cloudflared", str(connector)]
+        overrides = ["--nginx", str(library / "firecrab-ingress"), "--cloudflared", str(connector)]
 
         def pipe(*arguments, input=None, success=True):
             output = subprocess.run([cli, "pipe", *arguments], env=environment, input=input, capture_output=True, text=True, timeout=90)
@@ -111,7 +113,7 @@ while True: time.sleep(10)
 
         def apply(success=True):
             manifest.write_text(json.dumps(config))
-            return pipe("apply", "--config", str(manifest), *overrides, success=success)
+            return pipe("apply", "--config", str(manifest), success=success)
 
         control = "fc-pipe-control-" + uuid.uuid4().hex[:10] + ".service"
         try:
@@ -122,9 +124,28 @@ while True: time.sleep(10)
             stored = root / "config/pipe"
             assert (stored / "secrets/tunnel-credentials.json").stat().st_mode & 0o777 == 0o600
             status = pipe("status").stdout
-            assert "Nginx" in status and "Cloudflare Tunnel" in status
-            assert "running" in status and "available" in status
+            for name in ["Nginx", "Cloudflare Tunnel"]:
+                row = next(line for line in status.splitlines() if line.startswith(name))
+                assert "running" in row and "available" in row, status
             pipe("status", "--json", success=False)
+            print("PASS CLI discovers both engines in the private host bundle", flush=True)
+
+            ingress = library / "firecrab-ingress"
+            unavailable = library / "firecrab-ingress.unavailable"
+            saved_manifest = (stored / "manifest.json").read_bytes()
+            ingress.rename(unavailable)
+            try:
+                status = pipe("status").stdout
+                rows = status.splitlines()
+                assert "missing" in next(row for row in rows if row.startswith("Nginx")), status
+                assert "available" in next(row for row in rows if row.startswith("Cloudflare Tunnel")), status
+                assert identities() == original
+                assert (stored / "manifest.json").read_bytes() == saved_manifest
+                request(b"first")
+            finally:
+                unavailable.rename(ingress)
+            assert "available" in next(row for row in pipe("status").stdout.splitlines() if row.startswith("Nginx"))
+            print("PASS missing bundled ingress is reported without stopping traffic or changing saved routes", flush=True)
             (unit_root / control).write_text("[Service]\nExecStart=/bin/sleep infinity\n")
             systemctl("daemon-reload")
             systemctl("start", control)

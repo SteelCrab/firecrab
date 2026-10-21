@@ -29,6 +29,13 @@ esac
 [ -x "$bin_dir/firecrab-api" ] || { printf 'missing %s\n' "$bin_dir/firecrab-api" >&2; exit 1; }
 [ -x "$bin_dir/firecrab-helper" ] || { printf 'missing %s\n' "$bin_dir/firecrab-helper" >&2; exit 1; }
 [ -x "$bin_dir/firecrab" ] || { printf 'missing %s\n' "$bin_dir/firecrab" >&2; exit 1; }
+[ -x "$bin_dir/firecrab-ingress" ] || { printf 'missing %s\n' "$bin_dir/firecrab-ingress" >&2; exit 1; }
+firecrab_assert_binary_arch "$bin_dir/firecrab-ingress" "$arch" || {
+    printf 'firecrab-ingress is not a %s ELF\n' "$arch" >&2; exit 1;
+}
+for name in LICENSE.nginx LICENSE.pcre2 LICENSE.musl sources.json; do
+    [ -f "$bin_dir/ingress/$name" ] || { printf 'missing ingress/%s\n' "$name" >&2; exit 1; }
+done
 if ! firecrab_assert_binary_arch "$bin_dir/firecrab-api" "$arch"; then
     printf '%s is not a %s ELF (wrong architecture)\n' "$bin_dir/firecrab-api" "$arch" >&2
     exit 1
@@ -69,6 +76,8 @@ install -m 0755 "$bin_dir/firecrab-helper" "$stage/firecrab-helper"
 # Their self-update extractor deliberately rejects symlinks and hardlinks.
 install -m 0755 "$bin_dir/firecrab-helper" "$stage/firecrab-net-helper"
 install -m 0755 "$bin_dir/firecrab" "$stage/firecrab"
+install -m 0755 "$bin_dir/firecrab-ingress" "$stage/firecrab-ingress"
+cp -R "$bin_dir/ingress" "$stage/ingress"
 install -m 0755 "$root/scripts/firecracker-menual/extract-vmlinux" "$stage/extract-vmlinux"
 install -m 0755 "$root/scripts/firecracker-menual/extract-arm64-image" "$stage/extract-arm64-image"
 install -m 0644 "$root/LICENSE" "$stage/LICENSE"
@@ -89,7 +98,7 @@ cp -a "$dashboard_dir/." "$stage/dashboard/"
 mkdir -p "$(dirname -- "$output")"
 members=(
     firecrab-api firecrab-helper firecrab-net-helper extract-vmlinux extract-arm64-image
-    firecrab systemd dashboard LICENSE licenses
+    firecrab firecrab-ingress ingress systemd dashboard LICENSE licenses
 )
 if [ -n "$compliance_dir" ]; then
     members+=(THIRD_PARTY_NOTICES.txt release-license-inventory.json)
