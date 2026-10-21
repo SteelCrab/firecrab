@@ -142,26 +142,33 @@ export default function RegistryBrowser({ registry, imageVersion, disabled, pull
     }
   }
 
+  // ECR passwords can query tags, but only retained images identify known repositories.
+  const repositories = catalog?.listingSupported === false
+    ? [...new Set((images ?? []).filter(image => image.reference.startsWith(`${registry}/`))
+      .map(image => image.reference.slice(registry.length + 1).split(/[:@]/)[0]))].sort()
+    : catalog?.repositories ?? [];
+  const selectedRepository = repositories.includes(repository) ? repository : repositories[0] ?? "";
   const pulled = (value: string) => images?.some(image => image.reference.startsWith(`${registry}/${value}:`) || image.reference.startsWith(`${registry}/${value}@`));
   return <section className="pipe-subsection registry-browser" aria-labelledby="registry-repositories-title">
     <h3 className="panel-title"><span id="registry-repositories-title">{t("Repositories", "저장소")} <span className="registry-source">{registry}</span></span>
-      {catalog?.listingSupported !== false && <button className="btn" type="button" disabled={disabled || loading} onClick={reload}>{t("Refresh", "새로고침")}</button>}
+      <button className="btn" type="button" disabled={disabled || loading} onClick={reload}>{t("Refresh", "새로고침")}</button>
     </h3>
     {error && <div className="banner error" role="alert">{error}</div>}
     {imagesUnavailable && <p className="field-error" role="alert">{t("Local image status unavailable. Refresh to retry.", "로컬 이미지 상태를 확인하지 못했다. 새로고침으로 다시 확인한다.")}</p>}
     {loading && <p className="poll-note" role="status">{t("Loading repositories…", "저장소 조회 중…")}</p>}
-    {catalog && !catalog.listingSupported && <div className="empty">{t("Repository browsing is not available for ECR.", "ECR 저장소 목록 조회를 지원하지 않는다.")}</div>}
-    {catalog?.listingSupported && !catalog.repositories.length && <div className="empty">{t("No repositories.", "저장소가 없다.")}</div>}
-    {!!catalog?.repositories.length && <div className="table-scroll registry-catalog-scroll">
+    {catalog && !catalog.listingSupported && <p className="poll-note">{t("ECR login passwords cannot list all repositories. Showing previously pulled repositories; tags are fetched from ECR.", "ECR 로그인 비밀번호로는 전체 저장소를 조회할 수 없다. 가져온 저장소만 표시하고, 태그는 ECR에서 조회한다.")}</p>}
+    {catalog?.listingSupported && !repositories.length && <div className="empty">{t("No repositories.", "저장소가 없다.")}</div>}
+    {catalog && !catalog.listingSupported && images !== null && !imagesUnavailable && !repositories.length && <div className="empty">{t("No previously pulled repositories.", "아직 가져온 저장소가 없다.")}</div>}
+    {!!repositories.length && <div className="table-scroll registry-catalog-scroll">
       <table className="vm-table registry-catalog" aria-label={t("Repositories", "저장소")}>
         <thead><tr><th scope="col">{t("Repository", "저장소")}</th><th scope="col">{t("Status", "상태")}</th></tr></thead>
-        <tbody>{catalog.repositories.map(value => <tr key={value} className={repository === value ? "selected" : undefined} onClick={() => setRepository(value)}>
-          <td className="registry-name"><button className="registry-select" type="button" aria-pressed={repository === value}>{value}</button></td>
+        <tbody>{repositories.map(value => <tr key={value} className={selectedRepository === value ? "selected" : undefined} onClick={() => setRepository(value)}>
+          <td className="registry-name"><button className="registry-select" type="button" aria-pressed={selectedRepository === value}>{value}</button></td>
           <td className="registry-status"><LocalImageStatus pulled={pulled(value)} unavailable={imagesUnavailable} /></td>
         </tr>)}</tbody>
       </table>
     </div>}
     {catalog?.nextPage && <div className="pipe-controls"><button className="btn" type="button" disabled={disabled || loading} onClick={() => void moreRepositories()}>{t("More repositories", "저장소 더 보기")}</button></div>}
-    {repository && <ImageTags key={repository} registry={registry} repository={repository} images={images} imagesUnavailable={imagesUnavailable} disabled={disabled} pulling={pulling} onPull={onPull} />}
+    {selectedRepository && <ImageTags key={selectedRepository} registry={registry} repository={selectedRepository} images={images} imagesUnavailable={imagesUnavailable} disabled={disabled} pulling={pulling} onPull={onPull} />}
   </section>;
 }

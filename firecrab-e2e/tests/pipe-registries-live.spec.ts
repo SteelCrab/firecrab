@@ -57,7 +57,7 @@ test.describe("Pipe registries against the API", () => {
     const panel = page.getByRole("region", { name: "Pipe Registry", exact: true });
     await panel.getByRole("button", { name: "Add registry" }).click();
     await panel.getByLabel("Provider").selectOption("ecr");
-    await panel.getByLabel("Registry hostname").fill(HOST);
+    await panel.getByLabel("Registry URI").fill(HOST);
     await panel.getByLabel("ECR login password").fill(SECRET);
     await panel.getByRole("button", { name: "Save login" }).click();
     const row = panel.getByRole("row").filter({ has: page.getByRole("cell", { name: HOST, exact: true }) });
