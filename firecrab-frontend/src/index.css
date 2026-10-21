@@ -1036,7 +1036,6 @@ a.options-menu-item {
 
 /* M2Image table status cell: badge and "⋯" options menu trigger on one line. */
 table.image-table td:first-child, table.image-table .image-registry { overflow-wrap: anywhere; white-space: normal; }
-.pulled-image-source { display: block; color: var(--shell); margin-top: .25rem; font-size: .75rem; }
 .pulled-image-log .subpanel { margin-block: .5rem; }
 table.image-table .state-cell {
   display: flex;
