@@ -91,6 +91,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- `firecrab doctor` no longer fails its images check on a host that runs only
+  imported or some of the built-in images, or that has none yet. An install
+  fetches no guest image, so the check passes when any guest rootfs is
+  installed and skips, with a hint to use the Images page, when there is none.
+  CI used to require that failure after every install.
 - macOS and Windows `service dev` starts the source dashboard on
   `http://localhost:8080`, checks its API proxy, and keeps it running after the
   command exits. Development start/stop/restart commands control the dashboard

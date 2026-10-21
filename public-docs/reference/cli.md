@@ -152,7 +152,7 @@ Any failed check returns nonzero.
 | `helper_socket` | API account can reach the helper |
 | `ufw` | DHCP, DNS, and forwarding permitted |
 | `data_root` | One reachable database |
-| `images` | Default template artifacts |
+| `images` | A built-in or imported guest rootfs is installed; no image yet is a SKIP because installation fetches none |
 | `image_install_tools` | `tar` and `zstd` |
 | `selinux_domain` | Services are outside systemd's `init_t` domain |
 | `registry_egress` | Registry access as the API account |
