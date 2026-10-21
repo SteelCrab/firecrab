@@ -306,4 +306,3 @@ function MicroStorageDetail({ pool, detail, error }: { pool: MicroStorageRespons
     </>
   );
 }
-
