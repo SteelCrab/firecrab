@@ -36,6 +36,11 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `scripts/ci-qa-macos-e2e.sh repair` | G7/G7a runtime recovery and preservation; [detailed checks](macos-repair.md) |
 | `firecrab-e2e` | B1–B17; full or explicit import/form mode |
 | `firecrab-e2e` `test:dashboard` | Mocked dashboard/API/console checks |
+| `scripts/ci-qa-pipe-databases.sh --browser` | PDB1–PDB12; real API, PostgreSQL/MySQL, TLS and desktop/mobile browser checks |
+| `scripts/test-pipe-databases-qa.py` | Database QA remote-host guard and cleanup after failures |
+
+See [PIPE database E2E and QA](pipe-databases-qa.md) for the case matrix,
+fixture-only browser commands, live database prerequisites and cloud acceptance limits.
 
 Guest references are `alpine:3.21`, `ubuntu:24.04`, and `fedora:42`.
 Expanded shared checks run on the first reference.
