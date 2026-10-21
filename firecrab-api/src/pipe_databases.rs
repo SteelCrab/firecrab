@@ -476,3 +476,7 @@ pub fn validation(message: &'static str, request_id: Uuid) -> crate::error::AppE
         request_id,
     )
 }
+
+#[cfg(test)]
+#[path = "pipe_databases_tests.rs"]
+mod tests;
