@@ -84,6 +84,25 @@ async function open(page: Page, options: Options = {}) {
 }
 
 test.describe("PIPE databases @dashboard", () => {
+  test("keeps long mobile cells compact and scrollable", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const value = "x".repeat(2048);
+    await open(page, { saved: true, preview: { columns: [{ name: "long_text", dataType: "text" }], rows: [[value]], hasMore: false, offset: 0 } });
+    const panel = page.getByRole("region", { name: "Databases", exact: true });
+    await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
+    await panel.getByLabel("Table", { exact: true }).selectOption("0");
+    const cell = panel.locator(".pipe-database-cell");
+    await expect(cell).toHaveText(value);
+    await expect(cell).toHaveAttribute("tabindex", "0");
+    const dimensions = await cell.evaluate(element => ({ height: element.clientHeight, contentHeight: element.scrollHeight }));
+    expect(dimensions.height).toBeLessThanOrEqual(160);
+    expect(dimensions.contentHeight).toBeGreaterThan(dimensions.height);
+    await cell.focus();
+    await cell.press("End");
+    expect(await cell.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+
   test("requires a nonblank name and URI before testing or saving", async ({ page }) => {
     const mock = await open(page);
     const panel = page.getByRole("region", { name: "Databases", exact: true });

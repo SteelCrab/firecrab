@@ -2125,6 +2125,7 @@ table.image-table .image-package-url a:hover {
 .pipe-database-form textarea { width: 100%; min-height: 5rem; resize: vertical; padding: .6rem; color: var(--shell); background: var(--bg); border: 1px solid var(--dim); border-radius: 4px; font-family: var(--font-mono); font-size: .8rem; }
 .pipe-database-browser { margin-top: 1.25rem; border-top: 1px solid var(--dim); padding-top: 1rem; }
 .pipe-database-preview td { max-width: 24rem; overflow-wrap: anywhere; white-space: pre-wrap; vertical-align: top; }
+.pipe-database-cell { min-width: 8rem; max-width: 24rem; max-height: 8rem; overflow: auto; }
 .pipe-database-preview th small { display: block; font-size: .65rem; font-weight: normal; color: var(--dim); }
 .pipe-database-null { color: var(--dim); font-style: italic; }
 .pipe-unsaved { padding: .75rem 1rem; margin-bottom: 1rem; border: 1px solid var(--error); border-radius: 8px; background: color-mix(in srgb, var(--error) 5%, var(--bg-panel)); color: var(--error); font-size: .85rem; line-height: 1.5; }
