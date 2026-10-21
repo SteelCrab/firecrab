@@ -12,3 +12,6 @@ export function useMediaQuery(query: string): boolean {
 
 /** Wide enough for the three-column layout (spec §6.4). */
 export const WIDE_LAYOUT = "(min-width: 1280px)";
+
+/** Phone width: the sidebar is a drawer and the panel fills the screen. */
+export const PHONE_LAYOUT = "(max-width: 767px)";

@@ -27,6 +27,9 @@ const rows = (page: Page) => page.locator("table.vm-list tbody tr");
 const row = (page: Page, name: string) => rows(page).filter({ has: page.getByRole("button", { name, exact: true }) });
 const panel = (page: Page) => page.getByRole("complementary", { name: "MicroVM detail" });
 const summary = (page: Page, label: string) => page.locator(".vm-summary-item").filter({ hasText: label });
+const resizer = (page: Page) => page.getByRole("separator", { name: "Resize detail panel" });
+const panelWidth = (page: Page) => panel(page).evaluate((el) => el.getBoundingClientRect().width);
+const mainWidth = (page: Page) => page.locator(".screen-main").evaluate((el) => el.getBoundingClientRect().width);
 
 async function open(page: Page, options: Parameters<typeof openDashboard>[1] = {}) {
   await openDashboard(page, { vms: VMS, routes: { "/api/host": HOST }, ...options });
@@ -197,6 +200,79 @@ test.describe("MicroVM list", () => {
       }).length;
     });
     expect(full).toBeGreaterThanOrEqual(13);
+  });
+
+  test("drags the panel edge to resize it and remembers the width", async ({ page }) => {
+    await open(page);
+    expect(await panelWidth(page)).toBe(384);
+    const mainBefore = await mainWidth(page);
+    const box = (await resizer(page).boundingBox())!;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 120, y, { steps: 6 });
+    await page.mouse.up();
+    expect(await panelWidth(page)).toBe(504);
+    expect(await mainWidth(page)).toBe(mainBefore - 120);
+    await expect(resizer(page)).toHaveAttribute("aria-valuenow", "504");
+
+    await page.reload();
+    await expect(rows(page)).toHaveCount(4);
+    expect(await panelWidth(page)).toBe(504);
+  });
+
+  test("resizes the panel with the keyboard within limits", async ({ page }) => {
+    await open(page);
+    await row(page, "api-gateway").click();
+    const handle = resizer(page);
+    await expect(handle).toHaveAttribute("aria-valuenow", "384");
+    await handle.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(handle).toHaveAttribute("aria-valuenow", "400");
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowRight");
+    await expect(handle).toHaveAttribute("aria-valuenow", "368");
+    await page.keyboard.press("Home");
+    await expect(handle).toHaveAttribute("aria-valuenow", "320");
+    await page.keyboard.press("End");
+    // 1440 − 236 sidebar − 480 kept for the list = 724, capped at 720.
+    await expect(handle).toHaveAttribute("aria-valuenow", "720");
+    expect(await panelWidth(page)).toBe(720);
+    // Arrow keys on the handle never move the list selection.
+    await expect(row(page, "api-gateway")).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("double-click on the panel edge restores the default width", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("firecrab.detailPanelWidth", "560"));
+    await open(page);
+    expect(await panelWidth(page)).toBe(560);
+    await resizer(page).dblclick();
+    expect(await panelWidth(page)).toBe(384);
+  });
+
+  test("keeps room for the list when a remembered width no longer fits", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("firecrab.detailPanelWidth", "700"));
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await open(page);
+    // 1280 − 236 sidebar − 480 for the list.
+    expect(await panelWidth(page)).toBe(564);
+  });
+
+  test("the overlay panel uses the same width", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("firecrab.detailPanelWidth", "480"));
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await open(page);
+    await row(page, "api-gateway").click();
+    await expect(panel(page)).toHaveCSS("position", "fixed");
+    expect(await panelWidth(page)).toBe(480);
+  });
+
+  test("the phone panel has no resize handle", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page);
+    await page.getByRole("button", { name: "api-gateway", exact: true }).click();
+    await expect(panel(page).getByRole("heading", { name: "api-gateway" })).toBeVisible();
+    await expect(resizer(page)).toBeHidden();
   });
 
   test("keeps the row actions menu", async ({ page }) => {

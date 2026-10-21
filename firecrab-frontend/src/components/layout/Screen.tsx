@@ -1,7 +1,10 @@
+import { useRef } from "react";
 import type { ReactNode } from "react";
 import { ChevronRight, MousePointerClick, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useI18n } from "../../i18n";
-import { WIDE_LAYOUT, useMediaQuery } from "../../lib/useMediaQuery";
+import { MAIN_MIN_WIDTH, PANEL_WIDTH, clampPanelWidth } from "../../lib/detailPanel";
+import { useElementWidth } from "../../lib/useElementWidth";
+import { PHONE_LAYOUT, WIDE_LAYOUT, useMediaQuery } from "../../lib/useMediaQuery";
 import { VIEWS, viewGroupLabel, viewLabel } from "../../navigation";
 import type { ViewId } from "../../navigation";
 import DetailPanel from "./DetailPanel";
@@ -33,8 +36,11 @@ interface ScreenProps {
 /** One screen inside the frame: header, banner, body, and the optional detail panel. */
 export default function Screen({ view, actions, toolbar, detail, detailLabel, detailKind, onCloseDetail, live, flush, children }: ScreenProps) {
   const { locale, t } = useI18n();
-  const { banner, pollNote, detailOpen, setDetailOpen } = useScreenStatus();
+  const { banner, pollNote, detailOpen, setDetailOpen, detailWidth, setDetailWidth } = useScreenStatus();
   const wide = useMediaQuery(WIDE_LAYOUT);
+  const phone = useMediaQuery(PHONE_LAYOUT);
+  const screenRef = useRef<HTMLDivElement>(null);
+  const screenWidth = useElementWidth(screenRef);
   const item = VIEWS.find((entry) => entry.id === view)!;
 
   const hasPanel = detail !== undefined;
@@ -47,10 +53,15 @@ export default function Screen({ view, actions, toolbar, detail, detailLabel, de
     if (wide) setDetailOpen(false);
     onCloseDetail?.();
   };
+  // A wide screen keeps room for the list beside the column; the overlay
+  // only keeps a strip of the workspace visible. Unmeasured: no limit yet.
+  const room = screenWidth === 0 ? PANEL_WIDTH.max : screenWidth - (wide ? MAIN_MIN_WIDTH : 48);
+  const panelMax = clampPanelWidth(room);
+  const panelWidth = clampPanelWidth(detailWidth, panelMax);
   const toggleLabel = detailOpen ? t("Close detail panel", "상세 패널 닫기") : t("Open detail panel", "상세 패널 열기");
 
   return (
-    <div className={panelVisible ? "screen has-panel" : "screen"}>
+    <div ref={screenRef} className={panelVisible ? "screen has-panel" : "screen"}>
       <div className="screen-main">
         <header className="screen-header">
           <div className="screen-crumbs">
@@ -85,7 +96,14 @@ export default function Screen({ view, actions, toolbar, detail, detailLabel, de
         <div className={flush ? "screen-body flush" : "screen-body"}>{children}</div>
       </div>
       {panelVisible && (
-        <DetailPanel label={detailLabel ?? ""} kind={detail ? detailKind : undefined} onClose={closePanel}>
+        <DetailPanel
+          label={detailLabel ?? ""}
+          kind={detail ? detailKind : undefined}
+          onClose={closePanel}
+          width={panelWidth}
+          maxWidth={panelMax}
+          onResize={phone ? undefined : setDetailWidth}
+        >
           {detail ?? (
             <div className="empty-state detail-panel-empty">
               <div className="empty-state-icon"><MousePointerClick aria-hidden="true" /></div>

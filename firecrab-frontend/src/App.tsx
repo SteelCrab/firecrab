@@ -20,7 +20,7 @@ import CommandPalette from "./components/CommandPalette";
 import Screen from "./components/layout/Screen";
 import { ScreenStatus } from "./components/layout/screenStatus";
 import { HostStatusProvider } from "./hostStatus";
-import { useDetailPanelOpen } from "./lib/detailPanel";
+import { useDetailPanelOpen, useDetailPanelWidth } from "./lib/detailPanel";
 import { useAppRoute, viewHash } from "./navigation";
 import { useI18n } from "./i18n";
 
@@ -139,6 +139,7 @@ export default function App() {
   const [pipeHasUnsavedChanges, setPipeHasUnsavedChanges] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useDetailPanelOpen();
+  const [detailWidth, setDetailWidth] = useDetailPanelWidth();
   const confirmLeave = useCallback(() => !pipeHasUnsavedChanges || window.confirm(t(
     "Pipe changes have not been saved. Leave without saving?",
     "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
@@ -228,8 +229,8 @@ export default function App() {
     [state.banner, dismiss],
   );
   const screenStatus = useMemo(
-    () => ({ banner, pollNote, detailOpen, setDetailOpen }),
-    [banner, pollNote, detailOpen, setDetailOpen],
+    () => ({ banner, pollNote, detailOpen, setDetailOpen, detailWidth, setDetailWidth }),
+    [banner, pollNote, detailOpen, setDetailOpen, detailWidth, setDetailWidth],
   );
 
   // Terminal owns the whole viewport — no shell chrome, no modal clip box.
