@@ -3,12 +3,13 @@ import type { ITerminalInitOnlyOptions, ITerminalOptions, Terminal } from "@xter
 type TerminalCtorOptions = ITerminalOptions & ITerminalInitOnlyOptions;
 
 /**
- * Mono first, then system CJK so Hangul/Kana/Han measure and render.
- * IBM Plex Mono has no CJK glyphs; without these fallbacks composed
- * syllables are tofu and xterm's cell width is wrong.
+ * The dashboard's mono token first (index.html loads it), then system CJK so
+ * Hangul/Kana/Han measure and render. JetBrains Mono has no CJK glyphs;
+ * without these fallbacks composed syllables are tofu and xterm's cell width
+ * is wrong.
  */
 export const TERMINAL_FONT_FAMILY =
-  '"IBM Plex Mono", "Noto Sans KR", "Noto Sans JP", "Noto Sans SC", "D2Coding", "NanumGothicCoding", "Malgun Gothic", "Apple SD Gothic Neo", "Yu Gothic", "Microsoft YaHei", ui-monospace, monospace';
+  '"JetBrains Mono", "Noto Sans KR", "Noto Sans JP", "Noto Sans SC", "D2Coding", "NanumGothicCoding", "Malgun Gothic", "Apple SD Gothic Neo", "Yu Gothic", "Microsoft YaHei", ui-monospace, monospace';
 
 export function defaultInteractiveTerminalOptions(
   overrides: Partial<TerminalCtorOptions> = {},

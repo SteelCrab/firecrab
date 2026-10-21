@@ -329,6 +329,9 @@ jobs:
       - name: Playwright @dashboard specs
         run: npm --prefix firecrab-e2e run test:dashboard
 
+      - name: Playwright mocked dashboard specs
+        run: npm --prefix firecrab-e2e run test:mocked
+
       - name: PIPE database E2E types
         run: npm run typecheck:pipe --prefix firecrab-e2e
 

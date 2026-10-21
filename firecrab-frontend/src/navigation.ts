@@ -2,12 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Locale } from "./i18n";
 
 /**
- * Dashboard destinations. Rendered as a `NavIcon` (see `NavIcons.tsx`) in the
- * rail, except `shells`, whose `icon` is a small image (the Shell repository
- * bash cube) shown instead.
+ * Dashboard destinations, in rail order. Icons live in `viewIcons.ts`.
  *
- * Kept out of `components/Shell.tsx` so that file exports only its component
- * — mixing constants and hooks in there breaks Vite's fast refresh.
+ * Kept out of the layout components so those files export only components —
+ * mixing constants and hooks in there breaks Vite's fast refresh.
  */
 export const VIEWS = [
   { id: "vms", group: "compute", labels: { en: "MicroVM", ko: "MicroVM" } },
@@ -17,7 +15,7 @@ export const VIEWS = [
   { id: "storages", group: "data", labels: { en: "Storage", ko: "스토리지" } },
   { id: "images", group: "data", labels: { en: "Images", ko: "이미지" } },
   { id: "kernels", group: "data", labels: { en: "Kernels", ko: "커널" } },
-  { id: "shells", group: "system", labels: { en: "Shells", ko: "Shell" }, icon: "/bash.png" },
+  { id: "shells", group: "system", labels: { en: "Shells", ko: "Shell" } },
   { id: "host", group: "system", labels: { en: "Host", ko: "호스트" } },
 ] as const;
 

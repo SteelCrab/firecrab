@@ -116,7 +116,7 @@ export default function UsageCharts({
         values={cpuValues}
         width={width}
         height={height}
-        stroke="var(--ember, #c43e12)"
+        stroke="var(--accent)"
         fill="rgba(196, 62, 18, 0.12)"
         yMaxHint={100}
         strokeWidth={strokeWidth}
@@ -128,7 +128,7 @@ export default function UsageCharts({
         values={memPctValues}
         width={width}
         height={height}
-        stroke="var(--ready, #2f9e6b)"
+        stroke="var(--green)"
         fill="rgba(47, 158, 107, 0.12)"
         yMaxHint={100}
         strokeWidth={strokeWidth}

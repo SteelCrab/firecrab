@@ -116,7 +116,7 @@ function checkCommandRows(
   return rows;
 }
 
-/** Eye / eye-off, drawn like `NavIcons.tsx` (24x24, tracks `currentColor`). */
+/** Eye / eye-off (24x24, tracks `currentColor`). */
 function EyeIcon({ off }: { off: boolean }) {
   return (
     <svg

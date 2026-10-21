@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import type {
   Ipv6AddressMode,
   MicroNetworkDetailResponse,
@@ -14,7 +14,12 @@ import {
   listMicroNetworks,
   updateMicroNetwork,
 } from "../api/client";
+import { Network } from "lucide-react";
 import { useI18n } from "../i18n";
+import Screen from "./layout/Screen";
+import { useScreenStatus } from "./layout/screenStatus";
+import { DetailHead, DetailProp, DetailSection } from "./ui/DetailSection";
+import StatusBadge from "./ui/StatusBadge";
 
 /**
  * MicroNetwork management (`public-docs/guides/networking.md`) — firecrab's own
@@ -24,6 +29,7 @@ import { useI18n } from "../i18n";
  */
 export default function MicroNetworks() {
   const { t } = useI18n();
+  const { setDetailOpen } = useScreenStatus();
   const [networks, setNetworks] = useState<MicroNetworkResponse[] | null>(null);
   const [name, setName] = useState("");
   const [subnetCidr, setSubnetCidr] = useState("");
@@ -157,7 +163,50 @@ export default function MicroNetworks() {
     <span className="field-error">{fieldErrors?.fieldError(field) ?? ""}</span>
   );
 
+  const selectedNetwork = networks?.find((network) => network.id === selectedId) ?? null;
+  const select = (id: string) => {
+    setSelectedId(id);
+    setDetailOpen(true);
+  };
+
   return (
+    <Screen
+      view="networks"
+      detail={selectedNetwork ? (
+        <MicroNetworkDetail
+          name={selectedNetwork.name}
+          detail={detail}
+          error={detailError}
+          storedUplink={selectedNetwork.uplink}
+          interfaces={interfaces}
+          defaultUplink={defaultUplink}
+          busy={busyId === selectedNetwork.id}
+          onSaveUplink={async (next) => {
+            if (!selectedId || !detail || busyId) return;
+            const id = selectedId;
+            const internetEnabled = detail.nat.enabled;
+            setBusyId(id);
+            try {
+              await updateMicroNetwork(id, {
+                internetEnabled,
+                uplink: next,
+              });
+              await refresh();
+              if (selectedIdRef.current !== id) return;
+              const nextDetail = await getMicroNetwork(id);
+              if (selectedIdRef.current === id) setDetail(nextDetail);
+            } catch (error) {
+              setListError((error as Error).message);
+            } finally {
+              setBusyId(null);
+            }
+          }}
+        />
+      ) : null}
+      detailLabel={t("MicroNetwork detail", "MicroNetwork 상세")}
+      detailKind={<><Network aria-hidden="true" />MicroNetwork</>}
+      onCloseDetail={() => setSelectedId(null)}
+    >
     <section className="panel">
       <h2 className="panel-title">MicroNetwork</h2>
       <form className="create-grid" onSubmit={handleSubmit}>
@@ -277,12 +326,12 @@ export default function MicroNetworks() {
               <tr>
                 <th>name</th>
                 <th>subnet CIDR</th>
-                <th>gateway</th>
-                <th>IPv6</th>
+                <th className="col-detail">gateway</th>
+                <th className="col-detail">IPv6</th>
                 <th>{t("Internet", "인터넷")}</th>
-                <th>{t("Uplink", "업링크")}</th>
-                <th>NAT</th>
-                <th>id</th>
+                <th className="col-detail">{t("Uplink", "업링크")}</th>
+                <th className="col-detail">NAT</th>
+                <th className="col-detail">id</th>
                 <th className="actions">{t("Actions", "작업")}</th>
               </tr>
             </thead>
@@ -291,12 +340,13 @@ export default function MicroNetworks() {
                 <tr
                   key={network.id}
                   className={selectedId === network.id ? "selected" : undefined}
-                  onClick={() => setSelectedId(selectedId === network.id ? null : network.id)}
+                  aria-selected={selectedId === network.id}
+                  onClick={() => select(network.id)}
                 >
                   <td className="name">{network.name}</td>
                   <td className="mono">{network.subnetCidr}</td>
-                  <td className="mono">{network.gateway}</td>
-                  <td className="mono">
+                  <td className="mono col-detail">{network.gateway}</td>
+                  <td className="mono col-detail">
                     {network.ipv6Cidr ?? t("Off", "꺼짐")}
                     {network.ipv6Egress && (
                       <>
@@ -306,13 +356,13 @@ export default function MicroNetworks() {
                     )}
                   </td>
                   <td>{network.internetEnabled ? t("Enabled", "연결") : t("Blocked", "차단")}</td>
-                  <td className="mono">{network.uplink ?? t("Auto", "자동")}</td>
-                  <td className="mono">
+                  <td className="mono col-detail">{network.uplink ?? t("Auto", "자동")}</td>
+                  <td className="mono col-detail">
                     {network.internetEnabled
                       ? `${network.subnetCidr} → ${network.uplink ?? (defaultUplink || t("Auto", "자동"))}`
                       : t("Off", "꺼짐")}
                   </td>
-                  <td className="mono" title={network.id}>
+                  <td className="mono col-detail" title={network.id}>
                     {network.id.split("-")[0]}
                   </td>
                   <td className="actions">
@@ -349,43 +399,14 @@ export default function MicroNetworks() {
         </div>
       )}
 
-      {selectedId && (
-        <MicroNetworkDetail
-          detail={detail}
-          error={detailError}
-          storedUplink={networks?.find((network) => network.id === selectedId)?.uplink ?? null}
-          interfaces={interfaces}
-          defaultUplink={defaultUplink}
-          busy={busyId === selectedId}
-          onSaveUplink={async (next) => {
-            if (!selectedId || !detail || busyId) return;
-            const id = selectedId;
-            const internetEnabled = detail.nat.enabled;
-            setBusyId(id);
-            try {
-              await updateMicroNetwork(id, {
-                internetEnabled,
-                uplink: next,
-              });
-              await refresh();
-              if (selectedIdRef.current !== id) return;
-              const nextDetail = await getMicroNetwork(id);
-              if (selectedIdRef.current === id) setDetail(nextDetail);
-            } catch (error) {
-              setListError((error as Error).message);
-            } finally {
-              setBusyId(null);
-            }
-          }}
-        />
-      )}
     </section>
+    </Screen>
   );
 }
 
-/** Renders one network's services. Kept in this file because it is only ever
- *  shown from the row it belongs to. */
+/** One network's services, shown in the detail panel. */
 function MicroNetworkDetail({
+  name,
   detail,
   error,
   storedUplink,
@@ -394,6 +415,7 @@ function MicroNetworkDetail({
   busy,
   onSaveUplink,
 }: {
+  name: string;
   detail: MicroNetworkDetailResponse | null;
   error: string | null;
   storedUplink: string | null;
@@ -403,8 +425,9 @@ function MicroNetworkDetail({
   onSaveUplink: (uplink: string) => Promise<void>;
 }) {
   const { t } = useI18n();
-  if (error) return <div className="field-error">{error}</div>;
-  if (!detail) return <div className="empty">{t("Loading details…", "상세 불러오는 중…")}</div>;
+  const head = (meta?: ReactNode) => <DetailHead title={name} meta={meta} />;
+  if (error) return <>{head()}<div className="detail-body"><p className="field-error">{error}</p></div></>;
+  if (!detail) return <>{head()}<div className="detail-body"><p className="detail-note">{t("Loading details…", "상세 불러오는 중…")}</p></div></>;
 
   const { subnet, bridge, nat, firewall } = detail;
   const pickerInterfaces =
@@ -412,57 +435,58 @@ function MicroNetworkDetail({
       ? [storedUplink, ...interfaces]
       : interfaces;
   return (
-    <div className="subpanel">
-      <dl className="detail-fields mono">
-        <dt>{t("Network ID", "네트워크 ID")}</dt>
-        <dd>{detail.id}</dd>
+    <>
+      {head(
+        <>
+          <span className="mono">{subnet.cidr}</span>
+          <span className={nat.enabled ? "badge running" : "badge"}>{nat.enabled ? t("Internet on", "인터넷 연결") : t("Internet blocked", "인터넷 차단")}</span>
+        </>,
+      )}
+      <div className="detail-body">
+        <DetailSection title={t("Subnet", "서브넷")}>
+          <dl className="props">
+            <DetailProp label={t("Network ID", "네트워크 ID")} copy={detail.id}><span className="mono">{detail.id}</span></DetailProp>
+            <DetailProp label="CIDR"><span className="mono">{subnet.cidr}</span></DetailProp>
+            <DetailProp label={t("Gateway", "게이트웨이")}><span className="mono">{subnet.gateway}</span></DetailProp>
+            <DetailProp label={t("Addresses", "주소")}>{subnet.allocatedAddresses}/{subnet.usableAddresses} {t("used", "사용 중")}</DetailProp>
+            <DetailProp label="DHCP">{subnet.dhcp}</DetailProp>
+            <DetailProp label="IPv6" wrap>
+              {subnet.ipv6Cidr ? (
+                <>
+                  <span className="mono">{subnet.ipv6Cidr}</span> · gateway <span className="mono">{subnet.ipv6Gateway}</span>
+                  <br />
+                  {subnet.ipv6AddressMode === "dhcpv6" ? "DHCPv6" : "SLAAC (RA)"} ·{" "}
+                  {subnet.ipv6Egress === "nat66"
+                    ? t("NAT66 (unique-local prefix)", "NAT66 (unique-local 프리픽스)")
+                    : t("direct (globally routable)", "직접 라우팅 (공인 프리픽스)")}
+                </>
+              ) : (
+                t("Off", "꺼짐")
+              )}
+            </DetailProp>
+            <DetailProp label={t("Bridge", "브릿지")}>
+              <span className="mono">{bridge.name}</span> · TAP {bridge.attachedTaps} {t("attached", "개 연결")}
+            </DetailProp>
+          </dl>
+        </DetailSection>
 
-        <dt>{t("Subnet", "서브넷")}</dt>
-        <dd>
-          {subnet.cidr} · gateway {subnet.gateway}
-          <br />
-          {t("Addresses", "주소")} {subnet.allocatedAddresses}/{subnet.usableAddresses} {t("used", "사용 중")} · {subnet.dhcp}
-        </dd>
-
-        <dt>IPv6</dt>
-        <dd>
-          {subnet.ipv6Cidr ? (
-            <>
-              {subnet.ipv6Cidr} · gateway {subnet.ipv6Gateway}
-              <br />
-              {subnet.ipv6AddressMode === "dhcpv6" ? "DHCPv6" : "SLAAC (RA)"} ·{" "}
-              {subnet.ipv6Egress === "nat66"
-                ? t("NAT66 (unique-local prefix)", "NAT66 (unique-local 프리픽스)")
-                : t("direct (globally routable)", "직접 라우팅 (공인 프리픽스)")}
-            </>
-          ) : (
-            t("Off", "꺼짐")
-          )}
-        </dd>
-
-        <dt>{t("Bridge", "브릿지")}</dt>
-        <dd>
-          {bridge.name} · TAP {bridge.attachedTaps} {t("attached", "개 연결")}
-        </dd>
-
-        <dt>NAT</dt>
-        <dd>
-          {nat.enabled
-            ? t("Enabled", "연결")
-            : t("Internet blocked — no masquerading; outbound traffic is dropped", "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop")}
-          <br />
-          {t("source", "출발")} {nat.sourceCidr}
-          {subnet.ipv6Cidr && (
-            <>
-              <br />
-              {t("source (IPv6)", "출발 (IPv6)")}{" "}
-              {nat.ipv6SourceCidr ?? t("none — not translated", "없음 — 변환하지 않음")}
-            </>
-          )}
-          <br />
-          {t("uplink", "업링크")} {nat.uplink || t("(no uplink)", "(uplink 없음)")}
-          <div className="field">
-            <label htmlFor="mn-detail-uplink">{t("Uplink", "업링크")}</label>
+        <DetailSection title="NAT">
+          <dl className="props">
+            <DetailProp label={t("State", "상태")} wrap>
+              {nat.enabled
+                ? t("Enabled", "연결")
+                : t("Internet blocked — no masquerading; outbound traffic is dropped", "인터넷 차단 — 마스커레이드 없음, 외부로 나가는 트래픽 drop")}
+            </DetailProp>
+            <DetailProp label={t("Source", "출발")}><span className="mono">{nat.sourceCidr}</span></DetailProp>
+            {subnet.ipv6Cidr && (
+              <DetailProp label={t("Source (IPv6)", "출발 (IPv6)")}>
+                {nat.ipv6SourceCidr ? <span className="mono">{nat.ipv6SourceCidr}</span> : t("none — not translated", "없음 — 변환하지 않음")}
+              </DetailProp>
+            )}
+            <DetailProp label={t("Uplink", "업링크")}><span className="mono">{nat.uplink || t("(no uplink)", "(uplink 없음)")}</span></DetailProp>
+          </dl>
+          <div className="field detail-field">
+            <label htmlFor="mn-detail-uplink">{t("Change uplink", "업링크 변경")}</label>
             <select
               id="mn-detail-uplink"
               value={storedUplink ?? ""}
@@ -483,35 +507,36 @@ function MicroNetworkDetail({
               ))}
             </select>
           </div>
-        </dd>
+        </DetailSection>
 
-        <dt>{t("Firewall", "방화벽")}</dt>
-        <dd>
-          {[
-            firewall.eastWestBlocked
-              ? t("VM-to-VM blocked", "VM 간 차단")
-              : t("VM-to-VM allowed", "VM 간 통신 허용"),
-            firewall.crossNetworkBlocked && t("Cross-network blocked", "다른 네트워크 차단"),
-            firewall.antiSpoofing && t("IP/MAC spoofing blocked", "IP/MAC 위조 차단"),
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          <br />
-          {t("Default egress", "기본 외부 통신")}: {firewall.defaultEgress}
-        </dd>
+        <DetailSection title={t("Firewall", "방화벽")}>
+          <ul className="detail-list">
+            <li>{firewall.eastWestBlocked ? t("VM-to-VM blocked", "VM 간 차단") : t("VM-to-VM allowed", "VM 간 통신 허용")}</li>
+            {firewall.crossNetworkBlocked && <li>{t("Cross-network blocked", "다른 네트워크 차단")}</li>}
+            {firewall.antiSpoofing && <li>{t("IP/MAC spoofing blocked", "IP/MAC 위조 차단")}</li>}
+            <li>
+              <span className="detail-list-main">{t("Default egress", "기본 외부 통신")}</span>
+              <span className="detail-list-sub">{firewall.defaultEgress}</span>
+            </li>
+          </ul>
+        </DetailSection>
 
-        <dt>{t("Member VMs", "소속 VM")}</dt>
-        <dd>
-          {detail.vms.length === 0
-            ? t("None", "없음")
-            : detail.vms
-                .map(
-                  (vm) =>
-                    `${vm.name} (${[vm.ipv4, vm.ipv6].filter(Boolean).join(", ") || t("no address", "주소 없음")}, ${vm.state})`,
-                )
-                .join(", ")}
-        </dd>
-      </dl>
-    </div>
+        <DetailSection title={t("Member VMs", "소속 VM")}>
+          {detail.vms.length === 0 ? (
+            <p className="detail-note">{t("None", "없음")}</p>
+          ) : (
+            <ul className="detail-list">
+              {detail.vms.map((vm) => (
+                <li key={vm.id}>
+                  <span className="detail-list-main">{vm.name}</span>
+                  <span className="detail-list-sub mono">{[vm.ipv4, vm.ipv6].filter(Boolean).join(", ") || t("no address", "주소 없음")}</span>
+                  <StatusBadge state={vm.state} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </DetailSection>
+      </div>
+    </>
   );
 }

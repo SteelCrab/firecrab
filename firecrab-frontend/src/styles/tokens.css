@@ -1,11 +1,8 @@
 /*
  * Design tokens for the dashboard redesign
  * (docs/superpowers/specs/2026-10-21-dashboard-redesign-design.ko.md §5).
- *
- * Scoped to `.ds` while the old screens still use the variables in
- * index.css. The app-frame step moves this block to `:root`.
  */
-.ds {
+:root {
   --bg: #ffffff;
   --bg-sidebar: #f7f7f8;
   --bg-subtle: #fafafb;
@@ -42,7 +39,9 @@
   --shadow-xs: 0 1px 2px rgba(17, 17, 26, 0.05);
   --shadow-pop: 0 12px 32px rgba(17, 17, 26, 0.12), 0 1px 3px rgba(17, 17, 26, 0.06);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --control-height: 30px;
+  --control-height-sm: 26px;
 
   --font: "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Noto Sans JP", "Noto Sans SC", system-ui, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, "Pretendard Variable", monospace;
 }

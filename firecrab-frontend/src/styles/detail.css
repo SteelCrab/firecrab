@@ -1,0 +1,118 @@
+/* Detail panel content shared by every list screen (spec §6.3, §8.2). */
+
+.detail-head { flex-shrink: 0; padding: 0 16px 14px; border-bottom: 1px solid var(--border); }
+.detail-title { margin: 0 0 6px; overflow: hidden; font-size: 18px; font-weight: 600; letter-spacing: -0.02em; text-overflow: ellipsis; white-space: nowrap; }
+.detail-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-3); font-size: 12.5px; }
+.detail-meta .mono { font-size: 12px; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.detail-tabs { flex-shrink: 0; padding: 0 16px; }
+.detail-body { flex: 1; min-height: 0; padding: 0 16px 28px; overflow-y: auto; }
+
+.detail-sec { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.detail-sec:last-child { border-bottom: 0; }
+.detail-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 10px; }
+.detail-sec-head h3 { margin: 0; color: var(--text-2); font-size: 12px; font-weight: 600; }
+.detail-sec-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.detail-note { margin: 8px 0 0; color: var(--text-3); font-size: 12px; }
+.detail-sec-head + .detail-note { margin-top: 0; }
+.detail-value-line { margin: 0; }
+.muted { color: var(--text-3); }
+
+.props { display: grid; grid-template-columns: 96px minmax(0, 1fr); margin: 0; }
+.props dt { padding: 6px 0; color: var(--text-3); font-size: 12.5px; }
+.props dd { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 30px; margin: 0; padding: 3px 0; }
+.props dd.editing { display: block; }
+.prop-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prop-value .mono { font-size: 12px; }
+.prop-action { width: 24px; height: 24px; margin-left: auto; opacity: 0; }
+.prop-action svg { width: 13px; height: 13px; }
+.props dd:hover .prop-action, .prop-action:focus-visible { opacity: 1; }
+@media (hover: none) { .prop-action { opacity: 1; } }
+.prop-lock { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; margin-left: auto; color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
+.prop-lock svg { width: 12px; height: 12px; }
+.prop-editor { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 6px; }
+.prop-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.detail-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.prop-editor .detail-edit-actions { margin-top: 0; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.kv { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.kv-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 3px 6px 3px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.kv-row:last-child { border-bottom: 0; }
+.kv-head { min-height: 28px; background: var(--bg-subtle); color: var(--text-3); font-size: 11.5px; }
+.kv-arrow { width: 13px; height: 13px; color: var(--text-4); }
+.kv-proto { color: var(--text-3); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; }
+.vm-port-editor .kv-row { grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) 64px 28px; padding-left: 6px; }
+.vm-env-row { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); }
+.vm-env-editor .kv-row { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr) 28px; padding-left: 6px; }
+.kv-key, .kv-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.kv + .btn { margin-top: 8px; }
+.kv-row .input { height: 28px; padding: 0 8px; font-size: 12px; }
+.prop-value.wrap { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+.detail-list { margin: 0; padding: 0; list-style: none; }
+.detail-list li { display: flex; align-items: center; gap: 8px; min-height: 32px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.detail-list li:last-child { border-bottom: 0; }
+.detail-list .detail-list-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-list .detail-list-sub { color: var(--text-3); font-size: 12px; white-space: nowrap; }
+
+.detail-body .detail-log {
+  max-height: none;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  color: var(--text-2);
+  font: 11.5px/1.7 var(--mono);
+}
+.detail-body .detail-ssh-panel { margin-top: 12px; }
+
+/* Existing page sections (forms, runtime) shown inside the panel lose their card frame. */
+.detail-embed { padding-top: 4px; }
+.detail-embed > .panel { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+.detail-embed .panel-title { padding: 0 0 12px; margin: 0 0 12px; border-bottom: 1px solid var(--border); font-family: var(--font); font-size: 13px; letter-spacing: 0; text-transform: none; }
+.detail-embed .create-grid { grid-template-columns: minmax(0, 1fr); }
+.detail-embed .service-wide, .detail-embed .service-full { grid-column: auto; }
+.detail-field { margin-top: 10px; }
+
+/* Shell revisions */
+.shell-revisions li { padding: 0; }
+.shell-revision {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.shell-revision.active { background: var(--bg-active); }
+@media (hover: hover) { .shell-revision:not(.active):hover { background: var(--bg-hover); } }
+.shell-revision-version { font-size: 12.5px; font-weight: 500; }
+.shell-revision-meta { overflow: hidden; color: var(--text-3); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.shell-detail-desc { margin-top: 12px; }
+.detail-body .shell-file-editor { min-height: 240px; font-size: 12px; }
+
+/* With the detail column open, list tables drop the columns the panel shows. */
+.screen.has-panel .col-detail { display: none; }
+.vm-table .actions { white-space: nowrap; }
+.vm-table .actions .btn { height: var(--control-height-sm); padding: 0 8px; font-size: 12px; }
+.screen.has-panel table.service-table { width: 100%; min-width: 0; table-layout: fixed; }
+.screen.has-panel .service-table th:first-child { width: 120px; }
+.screen.has-panel .service-table th:nth-child(3) { width: 72px; }
+.screen.has-panel .service-table th:last-child { width: 232px; }
+.screen.has-panel .service-table .service-image { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

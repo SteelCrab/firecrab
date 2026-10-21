@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Cpu, Plus, Search } from "lucide-react";
+import { Cpu, PanelRight, Plus, Search } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { VmResponse } from "../bindings";
 import { useI18n } from "../i18n";
@@ -26,14 +26,16 @@ interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void;
   vms: VmResponse[];
   onSelectView: (view: ViewId) => void;
-  onOpenVm: (id: string) => void;
+  /** Selects a VM on the MicroVM screen and opens its detail. */
+  onSelectVm: (id: string) => void;
+  onToggleDetail: () => void;
 }
 
 /**
  * ⌘K palette: jump to a screen, open a MicroVM, or start an action. It opens
  * and closes without animation because it is driven from the keyboard.
  */
-export default function CommandPalette({ open, onOpenChange, vms, onSelectView, onOpenVm }: CommandPaletteProps) {
+export default function CommandPalette({ open, onOpenChange, vms, onSelectView, onSelectVm, onToggleDetail }: CommandPaletteProps) {
   const { locale, t } = useI18n();
 
   useEffect(() => {
@@ -58,6 +60,14 @@ export default function CommandPalette({ open, onOpenChange, vms, onSelectView, 
       hint: "",
       run: () => { window.location.hash = newVmHash(); },
     },
+    {
+      key: "toggle-detail",
+      group: "actions",
+      icon: PanelRight,
+      label: t("Toggle detail panel", "상세 패널 열기/닫기"),
+      hint: "",
+      run: onToggleDetail,
+    },
     ...VIEWS.map((view): PaletteItem => ({
       key: `view-${view.id}`,
       group: "views",
@@ -74,10 +84,10 @@ export default function CommandPalette({ open, onOpenChange, vms, onSelectView, 
       hint: t(...VM_STATE_LABELS[vm.state]),
       run: () => {
         onSelectView("vms");
-        onOpenVm(vm.id);
+        onSelectVm(vm.id);
       },
     })),
-  ], [locale, t, vms, onSelectView, onOpenVm]);
+  ], [locale, t, vms, onSelectView, onSelectVm, onToggleDetail]);
 
   if (!open) return null;
   // Mounted only while open, so every opening starts from an empty query.
@@ -163,7 +173,7 @@ function PaletteDialog({ items, onClose }: { items: PaletteItem[]; onClose: () =
 
   return (
     <div
-      className="ds command-palette-backdrop"
+      className="command-palette-backdrop"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) dismiss();
       }}

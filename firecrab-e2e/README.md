@@ -8,6 +8,7 @@ Isolated Playwright suite.
 - OCI DHCP boot (busybox `udhcpc`, same path as nginx-stable)
 - [#303](https://github.com/SteelCrab/firecrab/issues/303) console session end: `exit` stops the web terminal at "Session ended"
 - `npm run test:dashboard` runs only `@dashboard` specs, which fake the API or console and need no KVM (CI job `e2e-dashboard`)
+- `npm run test:mocked` runs every dashboard spec that answers `/api` in the browser (layout, MicroVM list and detail panel, list-screen panels, command palette, and the Host/MicroService/update/reconciliation suites) against Vite alone
 - Local OCI registry fixture only — no Docker Hub
 - Playwright is a test-only dependency of this package, not of `firecrab-frontend`
 
@@ -63,6 +64,18 @@ This suite runs 74 cases, including 22 DB cases. It starts only Vite on port
 browser checks, use the [disposable DB QA runner](../public-docs/development/pipe-databases-qa.md).
 `test:pipe:live` requires that runner's private API and fixture environment.
 It is excluded from the default and mocked dashboard suites.
+
+Dashboard layout and mocked screens:
+
+```sh
+npm run test:mocked --prefix firecrab-e2e
+```
+
+This starts only Vite on port 8097 (`FIRECRAB_MOCKED_E2E_BASE_URL` overrides it)
+and answers every API request in the browser with fixtures from
+`tests/support/mockApi.ts`. It covers the three-column frame, the MicroVM list
+and detail panel, the list-screen detail panels, the command palette, and the
+Host, microManager, MicroService, update dialog and reconciliation suites.
 
 Host Firecrab panel only (H3, Linux/macOS/Windows):
 

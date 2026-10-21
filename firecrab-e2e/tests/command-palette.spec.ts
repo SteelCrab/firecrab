@@ -1,55 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { VmResponse } from "../../firecrab-frontend/src/bindings";
-
-function vm(name: string, id: string, state: VmResponse["state"]): VmResponse {
-  return {
-    id,
-    name,
-    state,
-    reconciliation: null,
-    template: "ubuntu-24.04",
-    templateVersion: "2026.09.1",
-    cpu: 2,
-    ram: 1024,
-    diskGb: 8,
-    startupStep: null,
-    startupTimeline: [],
-    egressPolicy: "internet",
-    ipv4: state === "running" ? "10.42.0.11" : null,
-    ipv6: null,
-    mac: null,
-    hostname: name,
-    microNetworkId: "default",
-    storageRoot: "default",
-    cpuUsagePercent: null,
-    memoryUsedMib: null,
-    memoryTotalMib: null,
-    memoryUsedPercent: null,
-    usageHistory: [],
-    shellRefs: [],
-    portForwards: [],
-    env: {},
-    sshHostFingerprint: null,
-  };
-}
+import { openDashboard, vm } from "./support/mockApi";
 
 const VMS = [
   vm("api-gateway", "7f3a9c2e-1b4d-4e8a-9c3f-2d1e0a5b6c7d", "running"),
   vm("postgres-main", "8d1f4a6c-2e3b-4c5d-9e8f-7a6b5c4d3e2f", "stopped"),
 ];
 
-async function open(page: Page, locale = "en") {
-  await page.addInitScript((language) => localStorage.setItem("firecrab.locale", language), locale);
-  // Only the VM list matters here; every other API call gets an empty answer
-  // so pages reached through the palette render without a backend.
-  await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
-    const path = new URL(route.request().url()).pathname;
-    if (path === "/api/vms") return route.fulfill({ json: VMS });
-    if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
-    return route.fulfill({ status: 404, json: { error: { message: "not mocked" } } });
-  });
-  await page.goto("/#/vms");
-  await expect(page.getByRole("button", { name: "api-gateway", exact: true })).toBeVisible();
+async function open(page: Page, locale: "en" | "ko" = "en") {
+  await openDashboard(page, { vms: VMS, locale });
+  await expect(page.getByText("api-gateway", { exact: true })).toBeVisible();
 }
 
 const palette = (page: Page) => page.getByRole("dialog", { name: "Command palette", exact: true });
@@ -127,7 +86,24 @@ test.describe("command palette", () => {
 
     await expect(palette(page)).toHaveCount(0);
     await expect(page).toHaveURL(/#\/vms$/);
-    await expect(page.getByRole("dialog", { name: /VM — postgres-main/ })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "MicroVM detail" }).getByRole("heading", { name: "postgres-main" })).toBeVisible();
+  });
+
+  test("toggles the detail panel", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await open(page);
+    const detail = page.getByRole("complementary", { name: "MicroVM detail" });
+    await expect(detail).toBeVisible();
+
+    await page.keyboard.press("ControlOrMeta+k");
+    await search(page).fill("toggle detail");
+    await page.keyboard.press("Enter");
+    await expect(detail).toHaveCount(0);
+
+    await page.keyboard.press("ControlOrMeta+k");
+    await search(page).fill("toggle detail");
+    await page.keyboard.press("Enter");
+    await expect(detail).toBeVisible();
   });
 
   test("New MicroVM goes to the create page", async ({ page }) => {
