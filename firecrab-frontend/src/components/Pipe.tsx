@@ -8,6 +8,7 @@ import type { VmResponse } from "../bindings";
 import { canUsePipeApps, pipeApps } from "../pipeApps";
 import PipeAppPicker from "./PipeAppPicker";
 import PipeServiceMenu from "./PipeServiceMenu";
+import PipeDatabases from "./PipeDatabases";
 
 const EMPTY: PipeConfig = { listen: "127.0.0.1:8080", routes: [], tunnel: null };
 
@@ -30,6 +31,7 @@ export default function Pipe({ vms, vmsLoading, vmsUnavailable, onUnsavedChange 
   const [quickDirty, setQuickDirty] = useState(false);
   const [namedDirty, setNamedDirty] = useState(false);
   const [firecrabDirty, setFirecrabDirty] = useState(false);
+  const [databaseDirty, setDatabaseDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -42,7 +44,7 @@ export default function Pipe({ vms, vmsLoading, vmsUnavailable, onUnsavedChange 
   const preserved = typeof editing === "number" ? draft.routes[editing]?.upstreams ?? [] : [];
   const appsReady = !vmsLoading && !vmsUnavailable && canUsePipeApps(apps, upstreams, preserved);
   const editorPending = typeof editing === "number" || !!host.trim() || path !== "/" || upstreams.length > 0;
-  const hasUnsavedChanges = dirty || editorPending || quickDirty || namedDirty || firecrabDirty || (listenInput !== null && listenInput !== draft.listen);
+  const hasUnsavedChanges = dirty || editorPending || quickDirty || namedDirty || firecrabDirty || databaseDirty || (listenInput !== null && listenInput !== draft.listen);
   const saveDisabled = busy || !snapshot?.nginxAvailable || (listenInput !== null && !listenInput.trim()) || (editorOpen && (!host.trim() || !path.startsWith("/") || !appsReady)) || ((draft.tunnel !== null || !!draft.quickTunnel || !!snapshot?.config?.quickTunnels?.length) && !snapshot.cloudflaredAvailable);
 
   useEffect(() => {
@@ -172,6 +174,8 @@ export default function Pipe({ vms, vmsLoading, vmsUnavailable, onUnsavedChange 
       </tbody></table></div>
       {snapshot && !snapshot.nginxAvailable && <p className="field-error">{t("Install Nginx on this host before applying routes.", "라우트를 적용하기 전에 이 호스트에 Nginx를 설치한다.")}</p>}
     </section>
+
+    <PipeDatabases onUnsavedChange={setDatabaseDirty} />
 
     <FirecrabTunnel snapshot={snapshot} busy={busy} apps={apps} vmsLoading={vmsLoading} vmsUnavailable={vmsUnavailable}
       onBusy={value => { mutating.current = value; setBusy(value); revision.current++; }} onUnsavedChange={setFirecrabDirty}
