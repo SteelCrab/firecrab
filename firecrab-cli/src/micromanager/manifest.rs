@@ -364,10 +364,7 @@ mod tests {
     fn invalid_manifest_inputs_and_corrupt_installed_files_are_errors() {
         for text in [
             BUNDLED.replace("schema_version = 1", "schema_version = 2"),
-            BUNDLED.replace(
-                &Manifest::bundled().unwrap().firecrab.installer.filename,
-                "../escape.sh",
-            ),
+            BUNDLED.replace("install-firecrab-v0.2.2.sh", "../escape.sh"),
             BUNDLED.replace("algorithm = \"sha256\"", "algorithm = \"md5\""),
             BUNDLED.replace("6.12.111+deb13-arm64", "6.12.111;touch-pwned"),
             BUNDLED.replace("https://", "http://"),

@@ -8,7 +8,6 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 | Version | Date | Work |
 | --- | --- | --- |
 | [Unreleased](#unreleased) | — | — |
-| [0.3.2](#032---2026-10-21) | 2026-10-21 | Native CLI heartbeat and package update |
 | [0.3.1](#031---2026-10-06) | 2026-10-06 | [#123], [#314], [#315], [#318], [#324], [#330], [#331], [#332], [#333], [#343], [#351], [#358], [#359], [#360], [#368], [#378] |
 | [0.3.0](#030---2026-09-29) | 2026-09-29 | [#210], [#266], [#287], [#290], [#294], [#295], [#297], [#312] |
 | [0.2.2](#022---2026-09-15) | 2026-09-15 | [#269], [#270], [#272], [88ba35d], [729bb47] |
@@ -21,8 +20,6 @@ Sections are **Added**, **Changed**, **Deprecated**, **Fixed**, and **Improved**
 ## [Unreleased]
 
 Entries land here as work merges, and move under the next version heading when that release is cut.
-
-## [0.3.2] - 2026-10-21
 
 ### Added
 
@@ -74,10 +71,6 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Changed
 
-- Stable-address clients send unchanged remote targets every three hours. Local
-  connector checks continue every 30 seconds and publish changed URLs immediately.
-  Saved heartbeat state survives updater restarts.
-
 - The dashboard's VM list shows only a VM's own state: the API label next to it
   is gone, and the API's reconciliation result for a VM stays in its detail view.
 
@@ -86,10 +79,6 @@ Entries land here as work merges, and move under the next version heading when t
 - None.
 
 ### Fixed
-
-- Native CLI release packages pin the installer and Linux guest bundles built by
-  the same release run, with their exact SHA-256 hashes. macOS and Windows no
-  longer provision the previous pinned guest CLI after installing a new package.
 
 - macOS and Windows `service dev` starts the source dashboard on
   `http://localhost:8080`, checks its API proxy, and keeps it running after the
@@ -664,8 +653,7 @@ network helper.
 - Changelog validation is part of the documentation CI job so a release
   cannot drop a required section.
 
-[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.3.2...main
-[0.3.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.2
+[Unreleased]: https://github.com/SteelCrab/firecrab/compare/v0.3.1...main
 [0.3.1]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.1
 [0.3.0]: https://github.com/SteelCrab/firecrab/releases/tag/v0.3.0
 [0.2.2]: https://github.com/SteelCrab/firecrab/releases/tag/v0.2.2

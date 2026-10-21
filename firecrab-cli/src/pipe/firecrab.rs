@@ -38,8 +38,6 @@ struct Binding {
     registered: bool,
     connected: bool,
     last_success: u64,
-    #[serde(default)]
-    last_tunnel_url: Option<String>,
     error: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
@@ -186,18 +184,12 @@ fn unit(enable: bool) -> Result<()> {
 
 /// Safe status projection; tokens and service configuration are never returned to the API.
 pub(super) fn addresses() -> Result<Vec<Address>> {
-    let store = read()?;
-    let grace = if store.protocol == RegistryProtocol::RegisterV1 {
-        11100
-    } else {
-        150
-    };
-    Ok(store
+    Ok(read()?
         .bindings
         .into_iter()
         .map(|binding| {
             let connected =
-                binding.connected && seconds().saturating_sub(binding.last_success) < grace;
+                binding.connected && seconds().saturating_sub(binding.last_success) < 150;
             Address {
                 public_url: format!("https://{}.{}", binding.subdomain, DOMAIN),
                 subdomain: binding.subdomain,
@@ -424,7 +416,6 @@ fn save(store: &mut Store, subdomain: String, target: Target, token: Option<Stri
         registered: false,
         connected: false,
         last_success: 0,
-        last_tunnel_url: None,
         error: None,
     });
     binding.token = token;
@@ -432,7 +423,6 @@ fn save(store: &mut Store, subdomain: String, target: Target, token: Option<Stri
     binding.connector_id = connector_id;
     binding.owned_connector = owned;
     binding.connected = false;
-    binding.last_tunnel_url = None;
     store.bindings.retain(|b| b.subdomain != subdomain);
     store.bindings.push(binding);
     // Persist ownership before the network request, including a lost response.
@@ -564,15 +554,6 @@ fn refresh_bindings(
             .iter()
             .find(|q| q.id == binding.connector_id);
         let url = connector.and_then(|q| q.public_url.as_ref());
-        if store.protocol == RegistryProtocol::RegisterV1
-            && binding.connected
-            && binding.error.is_none()
-            && url.is_some()
-            && binding.last_tunnel_url.as_ref() == url
-            && seconds().saturating_sub(binding.last_success) < 10800
-        {
-            continue;
-        }
         let kind = if matches!(binding.target, Target::Nginx { .. }) {
             "nginx"
         } else {
@@ -635,7 +616,6 @@ fn refresh_bindings(
                 binding.registered = true;
                 binding.connected = url.is_some();
                 binding.last_success = seconds();
-                binding.last_tunnel_url = url.cloned();
                 binding.error = if url.is_none() {
                     Some(connector_error(connector))
                 } else {
@@ -799,7 +779,6 @@ mod tests {
             registered: true,
             connected: true,
             last_success: seconds(),
-            last_tunnel_url: None,
             error: None,
         }
     }
@@ -817,14 +796,12 @@ mod tests {
                 }]
             }),
         ).unwrap();
-        let reply = serde_json::json!({
-            "ok":true, "url":"https://first.firecrab.dev", "suspended":false
-        });
-        let (endpoint, server) = registry(vec![
-            (200, reply.clone()),
-            (200, reply.clone()),
-            (200, reply),
-        ]);
+        let (endpoint, server) = registry(vec![(
+            200,
+            serde_json::json!({
+                "ok":true, "url":"https://first.firecrab.dev", "suspended":false
+            }),
+        )]);
         let mut store = Store {
             endpoint,
             protocol: RegistryProtocol::RegisterV1,
@@ -841,26 +818,11 @@ mod tests {
         refresh_bindings(&mut store, &snapshot).unwrap();
         assert!(store.bindings[0].connected);
         assert!(store.bindings[0].error.is_none());
-        // The local updater still polls connectors, but must not send another remote heartbeat.
-        store = serde_json::from_slice(&serde_json::to_vec(&store).unwrap()).unwrap();
-        refresh_bindings(&mut store, &snapshot).unwrap();
-        assert!(store.bindings[0].connected);
-        assert!(store.bindings[0].error.is_none());
-        store.bindings[0].last_success = seconds().saturating_sub(10800);
-        refresh_bindings(&mut store, &snapshot).unwrap();
-        assert!(store.bindings[0].error.is_none());
-        snapshot.quick_tunnels[0].public_url =
-            Some("https://changed-crab.trycloudflare.com".into());
-        refresh_bindings(&mut store, &snapshot).unwrap();
-        assert!(store.bindings[0].error.is_none());
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 1);
         assert!(requests[0].starts_with("POST /__firecrab/heartbeat HTTP/1.1"));
         assert!(
             requests[0].ends_with(r#"{"tunnel_url":"https://recovered-crab.trycloudflare.com"}"#)
-        );
-        assert!(
-            requests[2].ends_with(r#"{"tunnel_url":"https://changed-crab.trycloudflare.com"}"#)
         );
     }
 

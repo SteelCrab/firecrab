@@ -33,7 +33,7 @@ baked = (
 )
 baked = baked.replace("@FIRECRAB_RELEASE_TAG@", tag)
 out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(baked, encoding="utf-8", newline="\n")
+out.write_text(baked, encoding="utf-8")
 out.chmod(0o755)
 print(out)
 PY
