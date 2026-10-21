@@ -99,7 +99,7 @@ test.describe("PIPE databases @dashboard", () => {
     expect(dimensions.contentHeight).toBeGreaterThan(dimensions.height);
     await cell.focus();
     await cell.press("End");
-    expect(await cell.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    await expect.poll(() => cell.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
