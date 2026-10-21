@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { Search } from "lucide-react";
+import { PALETTE_SHORTCUT } from "../lib/shortcuts";
 import { VIEWS, viewLabel } from "../navigation";
 import type { ViewId } from "../navigation";
 import NavIcon, { type NavIconId } from "./NavIcons";
@@ -8,6 +10,7 @@ import { useI18n } from "../i18n";
 interface ShellProps {
   view: ViewId;
   onSelectView: (view: ViewId) => void;
+  onOpenPalette: () => void;
   children: ReactNode;
 }
 
@@ -16,7 +19,7 @@ interface ShellProps {
  * collapses to an icon rail and then to a horizontal strip via CSS alone —
  * no breakpoint state to keep in sync with the stylesheet.
  */
-export default function Shell({ view, onSelectView, children }: ShellProps) {
+export default function Shell({ view, onSelectView, onOpenPalette, children }: ShellProps) {
   const { locale, setLocale, t } = useI18n();
   return (
     <div className="shell">
@@ -42,6 +45,17 @@ export default function Shell({ view, onSelectView, children }: ShellProps) {
       </header>
       <div className="shell-body">
         <nav className="shell-nav" aria-label={t("Main navigation", "주요 메뉴")}>
+          <button
+            type="button"
+            className="shell-nav-item shell-search"
+            aria-label={t("Search and go", "검색 및 이동")}
+            title={`${t("Search and go", "검색 및 이동")} (${PALETTE_SHORTCUT})`}
+            onClick={onOpenPalette}
+          >
+            <Search className="shell-nav-icon" aria-hidden="true" />
+            <span className="shell-nav-label">{t("Search and go", "검색 및 이동")}</span>
+            <kbd className="shell-search-kbd">{PALETTE_SHORTCUT}</kbd>
+          </button>
           <ul>
             {VIEWS.map((item) => {
               const label = viewLabel(item, locale);

@@ -2197,3 +2197,108 @@ table.image-table .image-package-url a:hover {
 .named-tunnel-addresses .pipe-url > a { font: .85rem var(--font-mono); }
 
 .pipe-domain-note { margin: 0 0 1rem; color: var(--ink); font-size: .8rem; line-height: 1.6; }
+
+/* Command palette (⌘K). Uses the redesign tokens from styles/tokens.css and
+   has no open/close animation because it is a keyboard surface. */
+.command-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 14vh 16px 16px;
+  background: rgba(24, 24, 27, 0.16);
+  color: var(--text);
+  font: 13px/1.45 var(--font);
+  letter-spacing: -0.003em;
+}
+.command-palette {
+  width: 560px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--shadow-pop);
+}
+.command-palette-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 50px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+.command-palette-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--text);
+  font: 15px var(--font);
+}
+.command-palette-search input::placeholder { color: var(--text-3); }
+.command-palette-icon { width: 16px; height: 16px; flex-shrink: 0; stroke-width: 1.75; }
+.command-palette-list { max-height: min(360px, 50vh); overflow-y: auto; padding: 6px; }
+.command-palette-list:empty { display: none; }
+.command-palette-group { padding: 8px 10px 4px; color: var(--text-3); font-size: 11.5px; font-weight: 500; }
+.command-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.command-palette-item .command-palette-icon { color: var(--text-3); }
+.command-palette-item.active { background: var(--bg-hover); color: var(--text); }
+.command-palette-item.active .command-palette-icon { color: var(--text-2); }
+.command-palette-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-palette-hint { margin-left: auto; padding-left: 12px; color: var(--text-3); font-size: 12px; white-space: nowrap; }
+.command-palette-empty { padding: 22px 16px 26px; color: var(--text-3); text-align: center; }
+.command-palette-foot {
+  display: flex;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.command-palette-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.command-palette kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-3);
+  font: 500 11px var(--font);
+}
+@media (max-width: 560px) {
+  .command-palette-backdrop { padding-top: 8vh; }
+  .command-palette-foot { display: none; }
+}
+
+/* Palette entry point at the top of the old navigation rail. */
+.shell-search { margin-bottom: 0.6rem; border: 1px solid var(--line); }
+.shell-search .shell-nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shell-search-kbd {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 0.3rem;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--shell);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+@media (max-width: 1000px) {
+  .shell-search-kbd { display: none; }
+}
+

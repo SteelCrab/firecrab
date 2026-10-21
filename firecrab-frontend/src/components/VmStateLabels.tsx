@@ -1,15 +1,7 @@
 import type { VmResponse, VmState } from "../bindings";
 import { useI18n } from "../i18n";
+import { VM_STATE_LABELS } from "../model";
 import StatusLabel from "./StatusLabel";
-
-const LABELS: Record<VmState, [string, string]> = {
-  created: ["Created", "생성됨"],
-  starting: ["Starting", "시작 중"],
-  running: ["Running", "실행 중"],
-  stopping: ["Stopping", "중지 중"],
-  stopped: ["Stopped", "중지됨"],
-  error: ["Error", "오류"],
-};
 
 const DESCRIPTIONS: Record<VmState, [string, string]> = {
   created: ["The VM is created and has not been started yet.", "VM이 생성되었으며 아직 시작되지 않았습니다."],
@@ -22,7 +14,7 @@ const DESCRIPTIONS: Record<VmState, [string, string]> = {
 
 export default function VmStateLabels({ vm }: { vm: VmResponse }) {
   const { t } = useI18n();
-  const label = `VM-STATUS: ${t(...LABELS[vm.state])}`;
+  const label = `VM-STATUS: ${t(...VM_STATE_LABELS[vm.state])}`;
   return (
     <div className="vm-state-labels">
       <StatusLabel
@@ -36,7 +28,7 @@ export default function VmStateLabels({ vm }: { vm: VmResponse }) {
               <dt>NAME</dt><dd>{vm.name}</dd>
               <dt>ID</dt><dd className="mono">{vm.id}</dd>
               <dt>{t("Status", "상태")}</dt>
-              <dd className={`vm-status-label ${vm.state}`}>{t(...LABELS[vm.state])}</dd>
+              <dd className={`vm-status-label ${vm.state}`}>{t(...VM_STATE_LABELS[vm.state])}</dd>
               <dt>{t("Info", "정보")}</dt><dd>{t(...DESCRIPTIONS[vm.state])}</dd>
             </dl>
           </>

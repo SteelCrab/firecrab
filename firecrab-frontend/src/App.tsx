@@ -17,6 +17,7 @@ import MicroServices from "./components/MicroServices";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
 import Shells from "./components/Shells";
+import CommandPalette from "./components/CommandPalette";
 import { newVmHash, useAppRoute, viewHash } from "./navigation";
 import { useI18n } from "./i18n";
 
@@ -117,6 +118,7 @@ export default function App() {
   // server-synced. The serial console is a full-page hash route instead.
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [pipeHasUnsavedChanges, setPipeHasUnsavedChanges] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const confirmLeave = useCallback(() => !pipeHasUnsavedChanges || window.confirm(t(
     "Pipe changes have not been saved. Leave without saving?",
     "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
@@ -189,6 +191,7 @@ export default function App() {
 
   const onOpenDetail = useCallback((id: string) => setOpenDetailId(id), []);
   const onCloseDetail = useCallback(() => setOpenDetailId(null), []);
+  const onOpenPalette = useCallback(() => setPaletteOpen(true), []);
 
   const pollNote = slowMode
     ? t("API unavailable — retrying every 15s", "API 연결 안 됨 — 15s 간격 재시도")
@@ -202,7 +205,7 @@ export default function App() {
   const view = route.kind === "vm-new" ? "vms" : route.view;
 
   return (
-    <Shell view={view} onSelectView={selectView}>
+    <Shell view={view} onSelectView={selectView} onOpenPalette={onOpenPalette}>
       <div className="stack">
         {state.banner && <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} />}
         {route.kind === "vm-new" && (
@@ -254,6 +257,13 @@ export default function App() {
         )}
       </div>
       {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        vms={state.vms}
+        onSelectView={selectView}
+        onOpenVm={onOpenDetail}
+      />
     </Shell>
   );
 }
