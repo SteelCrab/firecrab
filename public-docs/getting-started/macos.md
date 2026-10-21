@@ -153,3 +153,7 @@ against that release's `SHA256SUMS`, and saves the selected inputs in `micromana
 Debian, Firecracker, kernel selection, and runtime policy retain the manifest's values.
 If GitHub cannot be reached, verified cached downloads can use the release recorded by a previous download.
 A malformed release response or digest mismatch fails installation. Ordinary service commands use the installed manifest.
+
+`firecrab service update` compares the managed guest's Firecrab with the latest release.
+Use `firecrab service update --apply` to verify and run that release's installer in the guest;
+`--yes` accepts the download. Update downloads are separate from the installed manifest's cache.

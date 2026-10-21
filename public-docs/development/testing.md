@@ -318,3 +318,5 @@ Keep logs and summaries; see [QA script coverage](qa.md#script-coverage).
 - [CI](ci.md)
 - [Validation history](validation-history.md)
 - [Contributing](../../CONTRIBUTING.md)
+
+- [ ] **U2 — macOS/Windows:** compare the installed guest with `service update`, apply with `service update --apply`, and verify API/helper readiness and the host API response.

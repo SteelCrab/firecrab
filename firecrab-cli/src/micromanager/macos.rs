@@ -14,11 +14,13 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command as ProcessCommand, ExitStatus};
+use std::process::{Child, Command as ProcessCommand, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::dev::dashboard;
+use super::guest_update;
+use super::release::{self, Release};
 use super::{Command, DevCommand, debug, managed_home, manifest, report};
 
 const HELPER_NAME: &str = "firecrab-micromanager-macos";
@@ -46,6 +48,8 @@ pub enum Error {
     Daemon(#[from] daemon::Error),
     #[error(transparent)]
     Provision(#[from] provision::Error),
+    #[error(transparent)]
+    Release(#[from] release::Error),
     #[error(transparent)]
     Repair(#[from] repair::Error),
     #[error(transparent)]
@@ -141,6 +145,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             None => run_dev(source.as_deref(), release, restore, yes),
         },
         Command::Shell { command } => run_shell(&command),
+        Command::Update { apply, yes, .. } => run_update(apply, yes),
         Command::ForwardPorts {
             manager,
             key,
@@ -515,10 +520,18 @@ fn host_capability(layout: &lifecycle::Layout) -> debug::Capability {
 /// A root shell in the management VM over its key-only SSH, or one command
 /// run there as root.
 fn run_shell(command: &[String]) -> Result<i32, Error> {
-    use std::io::IsTerminal;
-
     let layout = lifecycle::Layout::from_process_env()?;
     let ip = running_guest_ip(&layout)?;
+    shell_at(&layout, ip, command)
+}
+
+fn shell_at(
+    layout: &lifecycle::Layout,
+    ip: std::net::IpAddr,
+    command: &[String],
+) -> Result<i32, Error> {
+    use std::io::IsTerminal;
+
     let runtime = layout.managed_home.join("runtime");
     if !runtime.join("manager_ed25519").is_file() {
         return Err(Error::ShellCredentials(runtime));
@@ -594,6 +607,67 @@ fn known_hosts_option(path: &Path) -> OsString {
     }
     option.push(b'"');
     OsString::from_vec(option)
+}
+
+/// What one command prints as root in the management VM, if it succeeds. It
+/// connects as `service shell` does, which `guest_command` cannot while the
+/// managed home's path has a space in it: ssh splits `UserKnownHostsFile` there.
+fn shell_stdout(
+    layout: &lifecycle::Layout,
+    ip: std::net::IpAddr,
+    command: &[String],
+) -> Option<String> {
+    let runtime = layout.managed_home.join("runtime");
+    let settings = ssh::load(&layout.managed_home).ok()?;
+    let output = ProcessCommand::new("/usr/bin/ssh")
+        .args(ssh::arguments(&runtime, &settings, ssh::Session::Command))
+        .args(shell_arguments(&runtime, ip, command, false))
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Updates the Firecrab in the management VM, which is where it runs on macOS.
+fn run_update(apply: bool, yes: bool) -> Result<i32, Error> {
+    let layout = lifecycle::Layout::from_process_env()?;
+    let ip = running_guest_ip(&layout)?;
+    let release = Release::latest()?;
+    guest_update::run(&ManagedGuest { layout, ip }, &release, apply, yes)
+}
+
+struct ManagedGuest {
+    layout: lifecycle::Layout,
+    ip: std::net::IpAddr,
+}
+
+impl guest_update::Guest for ManagedGuest {
+    type Error = Error;
+
+    fn installed_version(&self) -> Option<String> {
+        shell_stdout(
+            &self.layout,
+            self.ip,
+            &["firecrab".to_owned(), "--version".to_owned()],
+        )
+        .and_then(|output| guest_update::version_of(&output))
+    }
+
+    fn download(&self, release: &Release, assume_yes: bool) -> Result<(), Error> {
+        Ok(provision::download_firecrab(
+            release,
+            &self.layout.managed_home,
+            assume_yes,
+        )?)
+    }
+
+    fn run_installer(&self) -> Result<i32, Error> {
+        let script = provision::write_update_script(&self.layout.managed_home)?;
+        shell_at(&self.layout, self.ip, &["bash".to_owned(), script])
+    }
 }
 
 /// `ssh` arguments for [`run_shell`]. ssh joins everything after the host
@@ -960,6 +1034,7 @@ fn command_arguments(command: &Command) -> Vec<OsString> {
         | Command::ResourceServer { .. }
         | Command::ResourceApply { .. }
         | Command::Dev { .. }
+        | Command::Update { .. }
         | Command::Shell { .. }
         | Command::ForwardPorts { .. } => {
             unreachable!("lifecycle and relay commands do not invoke the native helper")

@@ -193,3 +193,7 @@ Systemd unit files require an installer rerun; see [Operations](../guides/operat
 - [API](api.md)
 - [Operations](../guides/operations.md)
 - [Build from source](../../CONTRIBUTING.md#run-from-source)
+
+`firecrab service update` compares the managed guest's Firecrab with the latest release.
+Use `firecrab service update --apply` to verify and run that release's installer in the guest;
+`--yes` accepts the download. Update downloads are separate from the installed manifest's cache.

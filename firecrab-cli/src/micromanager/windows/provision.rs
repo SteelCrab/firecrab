@@ -573,6 +573,67 @@ echo passed >"$work/result"
     )
 }
 
+/// Download the update separately from the installed manifest's verified cache.
+pub fn download_firecrab(
+    host: &Host<'_>,
+    release: &super::super::release::Release,
+    directory: &Path,
+    assume_yes: bool,
+) -> Result<(), Error> {
+    let directory = directory
+        .parent()
+        .unwrap_or(directory)
+        .join("updates/downloads");
+    let filename = if host.architecture == "aarch64" {
+        "firecrab-host-aarch64-gnu.tar.gz"
+    } else {
+        "firecrab-host-x86_64-gnu.tar.gz"
+    };
+    let bundle = release.artifact("Firecrab host bundle", filename, filename)?;
+    let installer = release.installer()?;
+    artifact::fetch_all(
+        &[
+            bundle.spec("Firecrab host bundle"),
+            installer.spec("Firecrab guest installer"),
+        ],
+        &directory,
+        assume_yes,
+    )?;
+    release.record(&directory)?;
+    Ok(())
+}
+
+pub fn write_update_script(layout: &Layout, share: &str) -> Result<String, Error> {
+    let directory = layout.managed_home.join("updates/provision");
+    fs::create_dir_all(&directory).map_err(|source| Error::Io {
+        action: "create update directory",
+        path: directory.clone(),
+        source,
+    })?;
+
+    write_script(
+        &layout
+            .managed_home
+            .join("updates/provision")
+            .join(super::super::guest_update::GUEST_SCRIPT_FILE),
+        &super::super::guest_update::guest_script(),
+    )?;
+    Ok(format!(
+        "{share}/updates/provision/{}",
+        super::super::guest_update::GUEST_SCRIPT_FILE
+    ))
+}
+
+impl Host<'_> {
+    pub(super) fn firecrab_bundle(&self) -> &'static str {
+        if self.architecture == "aarch64" {
+            "firecrab-host-aarch64-gnu.tar.gz"
+        } else {
+            "firecrab-host-x86_64-gnu.tar.gz"
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::wsl::fake;

@@ -335,3 +335,5 @@ getfacl -p /dev/kvm; sysctl net.ipv4.ip_forward net.ipv6.conf.all.forwarding # U
 - [CI](ci.md)
 - [과거 검증 기록](validation-history.md)
 - [기여 가이드](../../CONTRIBUTING.md)
+
+- [ ] **U2 — macOS/Windows:** `service update`로 최신 릴리스와 비교하고 `service update --apply`로 게스트를 갱신한 뒤 API/helper와 API 응답을 확인한다.

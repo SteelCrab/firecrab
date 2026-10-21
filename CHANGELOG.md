@@ -23,6 +23,11 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- `firecrab service update` on macOS and Windows compares the Firecrab in the
+  managed guest with the latest release, and `--apply` runs that release's
+  installer there after verifying it against the release's `SHA256SUMS`. It is
+  the counterpart of the Linux-only `firecrab update`, which now points to it on
+  these hosts, and unlike `update --apply` it also migrates unit files ([#373]).
 - Updating from the dashboard opens a dialog that shows what the new release
   changes, then a gauge with the overall percent and the stage (check,
   download, verify, apply, restart) until the API is back on the new version.
@@ -736,6 +741,7 @@ network helper.
 [#372]: https://github.com/SteelCrab/firecrab/pull/372
 [#378]: https://github.com/SteelCrab/firecrab/pull/378
 [#123]: https://github.com/SteelCrab/firecrab/issues/123
+[#373]: https://github.com/SteelCrab/firecrab/pull/373
 [88ba35d]: https://github.com/SteelCrab/firecrab/commit/88ba35d
 [34193f5]: https://github.com/SteelCrab/firecrab/commit/34193f5
 [729bb47]: https://github.com/SteelCrab/firecrab/commit/729bb47

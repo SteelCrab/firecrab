@@ -869,6 +869,49 @@ fn io_error(action: &'static str, path: &Path, source: io::Error) -> Error {
     }
 }
 
+/// Download the update separately from the installed manifest's verified cache.
+pub fn download_firecrab(
+    release: &super::super::release::Release,
+    managed_home: &Path,
+    assume_yes: bool,
+) -> Result<(), Error> {
+    let directory = managed_home.join("updates/downloads");
+    let bundle = release.artifact(
+        "Firecrab ARM64 host bundle",
+        "firecrab-host-aarch64-gnu.tar.gz",
+        "firecrab-host-aarch64-gnu.tar.gz",
+    )?;
+    let installer = release.installer()?;
+    artifact::fetch_all(
+        &[
+            bundle.spec("Firecrab ARM64 host bundle"),
+            installer.spec("Firecrab guest installer"),
+        ],
+        &directory,
+        assume_yes,
+    )?;
+    release.record(&directory)?;
+    Ok(())
+}
+
+pub fn write_update_script(managed_home: &Path) -> Result<String, Error> {
+    let directory = managed_home.join("updates/provision");
+    fs::create_dir_all(&directory)
+        .map_err(|source| io_error("create update directory", &directory, source))?;
+
+    write_private(
+        &managed_home
+            .join("updates/provision")
+            .join(super::super::guest_update::GUEST_SCRIPT_FILE),
+        super::super::guest_update::guest_script().as_bytes(),
+        0o700,
+    )?;
+    Ok(format!(
+        "/mnt/firecrab/updates/provision/{}",
+        super::super::guest_update::GUEST_SCRIPT_FILE
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
