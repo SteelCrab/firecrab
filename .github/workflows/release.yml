@@ -38,6 +38,9 @@ jobs:
       - name: CLI installer contract
         run: bash scripts/test-install-cli-release.sh
 
+      - name: Native CLI package pins
+        run: python3 -m unittest scripts/test_prepare_cli_release.py
+
   build-release:
     name: Build (${{ matrix.target }})
     needs: release-test
@@ -110,7 +113,7 @@ jobs:
 
   build-cli:
     name: CLI (${{ matrix.target }})
-    needs: [release-test, license-compliance]
+    needs: [release-test, license-compliance, package-host]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -154,6 +157,23 @@ jobs:
         with:
           name: firecrab-license-compliance
           path: compliance
+
+      - name: Download matching guest host bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: firecrab-host-*-gnu
+          merge-multiple: true
+          path: host-bundles
+
+      - name: Pin packaged CLI to matching guest binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$(python -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')"
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then test "$GITHUB_REF_NAME" = "$tag"; fi
+          bash scripts/bake-install-sh.sh "$tag" cli-install.sh
+          python scripts/prepare-cli-release.py --tag "$tag" \
+            --host-dir host-bundles --installer cli-install.sh
 
       - name: Install pinned toolchain
         run: rustup show
