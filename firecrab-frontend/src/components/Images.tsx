@@ -451,7 +451,7 @@ function PulledImageRow({ image, onBuilt }: {
 
   return <>
     <tr className="pulled-image-row">
-      <td className="mono" title={image.reference}><div>{registryImageName(image)}</div><small className="pulled-image-source">{image.architecture} · {formatRootfsSize(image.sizeBytes)}</small></td>
+      <td className="mono" title={image.reference}>{registryImageName(image)}</td>
       <td className="image-registry" data-label={t("Registry", "레지스트리")} title={image.reference.split("/")[0]}>{registryProviderName(image)}</td>
       <td className="mono" data-label={t("Minimum disk", "최소 디스크")}>—</td>
       <td className="state-cell">

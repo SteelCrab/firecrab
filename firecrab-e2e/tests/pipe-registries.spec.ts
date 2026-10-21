@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { RegistryImage } from "../../firecrab-frontend/src/api/registries";
 
 const HARBOR = "127.0.0.1:18080";
+const ECR = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com";
 const selection = (panel: Locator, name = "Selected repository") => panel.getByRole("group", { name, exact: true });
 const lastPull = (panel: Locator) => panel.getByRole("group", { name: "Last pull", exact: true });
 function localImage(reference: string, digestCharacter = "c"): RegistryImage {
@@ -9,6 +10,7 @@ function localImage(reference: string, digestCharacter = "c"): RegistryImage {
 }
 async function open(page: Page, options: {
   saved?: "ghcr" | "harbor" | "dockerHub" | "both" | "ecr";
+  ecrRegistry?: string;
   failPull?: boolean;
   running?: boolean;
   catalogError?: boolean;
@@ -29,7 +31,7 @@ async function open(page: Page, options: {
   let connections = options.saved === "ghcr" ? [github]
     : options.saved === "dockerHub" ? [docker]
     : options.saved === "both" ? [github, docker]
-    : options.saved === "ecr" ? [{ registry: "public.ecr.aws", username: "AWS", provider: "ecr" }]
+    : options.saved === "ecr" ? [{ registry: options.ecrRegistry ?? "public.ecr.aws", username: "AWS", provider: "ecr" }]
     : options.saved === "harbor" ? [{ registry: HARBOR, username: "pipe-reader", provider: "harbor" }] : [];
   let polls = 0;
   let failTags = options.tagError;
@@ -51,7 +53,7 @@ async function open(page: Page, options: {
       if (failCatalog) {
         return route.fulfill({ status: 403, json: { error: { message: "Catalog access denied. Check token permissions." } } });
       }
-      if (registry === "public.ecr.aws") return route.fulfill({ json: { repositories: [], nextPage: null, listingSupported: false } });
+      if (registry === "public.ecr.aws" || registry.includes(".dkr.ecr.")) return route.fulfill({ json: { repositories: [], nextPage: null, listingSupported: false } });
       const repositories = options.empty ? [] : registry === HARBOR ? [`firecrab/${page === 1 ? "harbor-nginx" : "worker"}`]
         : [`${namespace}/${page === 1 ? "app" : "worker"}`];
       return route.fulfill({ json: { repositories, nextPage: page === 1 ? 2 : null, listingSupported: true } });
@@ -60,7 +62,7 @@ async function open(page: Page, options: {
       const registry = path.slice("/api/pipe/registries/".length);
       if (method === "DELETE") { connections = connections.filter(value => value.registry !== registry); return route.fulfill({ json: { deleted: true } }); }
       const body = route.request().postDataJSON(); logins.push({ registry, ...body });
-      const saved = { registry, username: body.username, provider: body.provider ?? (registry === "docker.io" ? "dockerHub" : registry === "ghcr.io" ? "ghcr" : "ecr") };
+      const saved = { registry, username: body.username, provider: body.provider ?? (registry === "docker.io" ? "dockerHub" : registry === "ghcr.io" ? "ghcr" : "ecr"), ...(body.accountName ? { accountName: body.accountName } : {}) };
       connections = [...connections.filter(value => value.registry !== registry), saved];
       return route.fulfill({ json: saved });
     }
@@ -73,6 +75,7 @@ async function open(page: Page, options: {
       }
       if (reference.startsWith("docker.io/docker-user/")) return route.fulfill({ json: { tags: ["alpine"], nextLast: null } });
       if (reference.startsWith(HARBOR)) return route.fulfill({ json: { tags: ["1.0.0", "latest"], nextLast: null } });
+      if (reference.startsWith(`${ECR}/ecr-nginx:`)) return route.fulfill({ json: { tags: ["latest", "1.30.6"], nextLast: null } });
       return route.fulfill({ json: url.searchParams.has("last") ? { tags: ["v2"], nextLast: null } : { tags: ["v1"], nextLast: "v1" } });
     }
     if (path === "/api/pipe/registry-transfers") {
@@ -279,9 +282,68 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
 
   test("shows the ECR automatic discovery limitation without restoring manual inputs", async ({ page }) => {
     const mock = await open(page, { saved: "ecr" });
-    await expect(mock.panel.getByText("Repository browsing is not available for ECR.", { exact: true })).toBeVisible();
+    await expect(mock.panel.getByText(/ECR login passwords cannot list all repositories/)).toBeVisible();
+    await expect(mock.panel.getByText("No previously pulled repositories.", { exact: true })).toBeVisible();
+    await expect(mock.panel.getByText("No repositories.", { exact: true })).toHaveCount(0);
     await expect(mock.panel.locator("input")).toHaveCount(0);
     await expect(mock.panel.getByRole("button", { name: "Pull image", exact: true })).toHaveCount(0);
+  });
+
+  test("shows the AWS account name while retaining AWS as the ECR authentication username", async ({ page }) => {
+    const mock = await open(page, { saved: "ecr", ecrRegistry: ECR });
+    const row = mock.panel.getByRole("row").filter({ has: page.getByRole("cell", { name: ECR, exact: true }) });
+    await expect(row.getByRole("cell", { name: "123456789012", exact: true })).toBeVisible();
+    await expect(row.getByRole("cell", { name: "AWS", exact: true })).toHaveCount(0);
+    await row.getByRole("button", { name: `${ECR} actions`, exact: true }).click();
+    await page.getByRole("menuitem", { name: "Update token", exact: true }).click();
+    await mock.panel.getByLabel("AWS account name (optional)", { exact: true }).fill("production");
+    await mock.panel.getByLabel("ECR login password", { exact: true }).fill("renewed-ecr-token");
+    await mock.panel.getByRole("button", { name: "Save login", exact: true }).click();
+    await expect(row.getByRole("cell", { name: "production", exact: true })).toHaveAttribute("title", "123456789012");
+    expect(mock.logins).toEqual([{ registry: ECR, username: "AWS", secret: "renewed-ecr-token", accountName: "production" }]);
+    await page.reload();
+    await expect(row.getByRole("cell", { name: "production", exact: true })).toBeVisible();
+    await row.getByRole("button", { name: `${ECR} actions`, exact: true }).click();
+    await page.getByRole("menuitem", { name: "Update token", exact: true }).click();
+    await expect(mock.panel.getByLabel("AWS account name (optional)", { exact: true })).toHaveValue("production");
+    await expect(mock.panel.getByLabel("ECR login password", { exact: true })).toHaveValue("");
+  });
+
+  test("shows retained ECR repositories and fetches their remote tags for pulling", async ({ page }) => {
+    const mock = await open(page, { saved: "ecr", ecrRegistry: ECR, images: [
+      localImage(`${ECR}/ecr-nginx:1.30.6`),
+      localImage(`${ECR}/ecr-nginx@sha256:${"a".repeat(64)}`, "a"),
+      localImage(`${ECR}/team/worker:v1`, "b"),
+      localImage("999999999999.dkr.ecr.ap-northeast-2.amazonaws.com/other:v1", "d"),
+      localImage("ghcr.io/team/app:v1", "e"),
+    ] });
+    const catalog = mock.panel.getByRole("table", { name: "Repositories", exact: true });
+    await expect(catalog.getByRole("button")).toHaveText(["ecr-nginx", "team/worker"]);
+    await expect(catalog.getByRole("button", { name: "ecr-nginx", exact: true })).toHaveAttribute("aria-pressed", "true");
+    const tag = mock.panel.getByLabel("Tag", { exact: true });
+    await expect(tag.locator("option")).toHaveText(["latest", "1.30.6"]);
+    await expect(selection(mock.panel).getByText("Not pulled", { exact: true })).toBeVisible();
+    await tag.selectOption("1.30.6");
+    await expect(selection(mock.panel).getByText("Pulled", { exact: true })).toBeVisible();
+    await mock.panel.getByRole("button", { name: "Pull image", exact: true }).click();
+    await expect(lastPull(mock.panel).getByText("Pulled", { exact: true })).toBeVisible();
+    expect(mock.transfers).toEqual([{ action: "pull", reference: `${ECR}/ecr-nginx:1.30.6` }]);
+    expect(mock.tagQueries).toContain(`${ECR}/ecr-nginx:latest`);
+    await page.reload();
+    await expect(catalog.getByRole("button", { name: "ecr-nginx", exact: true })).toBeVisible();
+    await expect(tag.locator("option")).toHaveText(["latest", "1.30.6"]);
+  });
+
+  test("recovers ECR repositories after a local inventory lookup failure", async ({ page }) => {
+    const mock = await open(page, { saved: "ecr", ecrRegistry: ECR, imagesError: true, images: [localImage(`${ECR}/ecr-nginx:1.30.6`)] });
+    await expect(mock.panel.getByRole("alert")).toContainText("Local image status unavailable");
+    await expect(mock.panel.getByText("No repositories.", { exact: true })).toHaveCount(0);
+    await expect(mock.panel.getByText("No previously pulled repositories.", { exact: true })).toHaveCount(0);
+    mock.allowImages();
+    await mock.panel.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(mock.panel.getByRole("button", { name: "ecr-nginx", exact: true })).toBeVisible();
+    await expect(mock.panel.getByLabel("Tag", { exact: true })).toHaveValue("latest");
+    await expect(mock.panel.getByRole("alert")).toHaveCount(0);
   });
 
   test("retains the selection after a failed pull for retry", async ({ page }) => {

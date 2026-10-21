@@ -20,6 +20,7 @@ use crate::model::{Lease, VmRecord, VmState};
 mod micro_services;
 mod pipe_auth;
 mod registries;
+pub use registries::RegistryLogin;
 
 /// Default SQLite database path, relative to the process's working directory.
 const DB_FILE: &str = "data/firecrab.db";
@@ -703,6 +704,7 @@ impl Store {
             ) STRICT",
             [],
         )?;
+        registries::migrate_account_name(&conn)?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;

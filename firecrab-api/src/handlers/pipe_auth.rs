@@ -80,6 +80,59 @@ mod tests {
     use crate::{oci::RegistryCredential, templates::TemplateRegistry};
 
     #[tokio::test]
+    async fn shared_aws_auth_preserves_the_saved_registry_account_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let templates = TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap();
+        let state = AppState::with_db_file(templates, dir.path().join("state.db"))
+            .await
+            .unwrap();
+        let id = RequestId(uuid::Uuid::nil());
+        let registry = "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com";
+        state
+            .store
+            .put_registry_login(
+                &RegistryCredential {
+                    registry: registry.into(),
+                    username: "AWS".into(),
+                    secret: "direct-password".into(),
+                },
+                Some("production"),
+            )
+            .unwrap();
+        state
+            .store
+            .put_pipe_auth(&SavedAuth::Aws {
+                account_id: "123456789012".into(),
+                credentials: pipe_auth::AwsCredentials {
+                    access_key_id: "example-key".into(),
+                    secret_access_key: "shared-secret".into(),
+                    session_token: String::new(),
+                    region: "ap-northeast-2".into(),
+                },
+            })
+            .unwrap();
+
+        for shared in [true, false] {
+            let Json(rows) = super::super::registries::list(State(state.clone()), Extension(id))
+                .await
+                .unwrap();
+            let rows = serde_json::to_value(rows).unwrap();
+            assert_eq!(rows.as_array().unwrap().len(), 1);
+            assert_eq!(rows[0]["registry"], registry);
+            assert_eq!(rows[0]["accountName"], "production");
+            assert_eq!(rows[0]["username"], "AWS");
+            assert_eq!(rows[0].get("authProvider").is_some(), shared);
+            assert!(!rows.to_string().contains("direct-password"));
+            assert!(!rows.to_string().contains("shared-secret"));
+            if shared {
+                let _ = delete(State(state.clone()), Extension(id), Path(Provider::Aws))
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn shared_auth_lists_a_single_registry_scopes_secrets_and_disconnects() {
         let dir = tempfile::tempdir().unwrap();
         let templates = TemplateRegistry::from_specs(dir.path(), std::iter::empty()).unwrap();
@@ -89,11 +142,14 @@ mod tests {
         let id = RequestId(uuid::Uuid::nil());
         state
             .store
-            .put_registry_credential(&RegistryCredential {
-                registry: "ghcr.io".into(),
-                username: "legacy".into(),
-                secret: "legacy-token".into(),
-            })
+            .put_registry_login(
+                &RegistryCredential {
+                    registry: "ghcr.io".into(),
+                    username: "legacy".into(),
+                    secret: "legacy-token".into(),
+                },
+                None,
+            )
             .unwrap();
         state
             .store

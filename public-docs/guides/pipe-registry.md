@@ -18,9 +18,16 @@ rotate or disconnect it. The direct registry login flow below remains available.
      listing and pull access. Use the hostname only, without a URL scheme or path.
      Remote Harbor connections require HTTPS. Loopback development registries,
      such as `127.0.0.1:18080`, use HTTP.
-   - ECR: enter the registry hostname and the output of
+   - ECR: enter the login registry URI, such as
+     `123456789012.dkr.ecr.ap-northeast-2.amazonaws.com`, and the output of
      `aws ecr get-login-password --region REGION`. Pipe uses username `AWS`.
+     Omit `https://`, repository paths, and tags from the login registry URI.
      Tokens expire after 12 hours. Select **Update token** to renew them.
+     Optionally enter the AWS account name for the **Account** column. Without
+     a name, private ECR connections show the account ID. Authentication always
+     uses `AWS`. Get the name with
+     `aws account get-account-information --query AccountName --output text`;
+     ECR login passwords cannot retrieve account names.
 2. Saving a login selects it and loads its repositories. Select another row in
    the registry table to switch registries. The row's **⋯** menu contains
    **Update token** and **Delete**. **Delete** asks for confirmation and keeps
@@ -54,8 +61,13 @@ rotate or disconnect it. The direct registry login flow below remains available.
 ECR login passwords cannot call the signed AWS `DescribeRepositories` API.
 Connect AWS in [Pipe Auth](pipe-auth.md) with `ecr:DescribeRepositories` access
 to browse private ECR repositories. Shared AWS authentication issues registry
-passwords on demand and supports repository pagination. Direct ECR password
-logins still show the discovery limitation without a manual repository input.
+passwords on demand and supports repository pagination.
+
+With a direct ECR password login, Pipe shows previously pulled repositories for
+the selected registry and fetches their tags from ECR. This is not the full AWS
+repository list. **Refresh** reloads these records and their pull status.
+Without any retained image records, the page says no repositories have been
+pulled yet; it does not claim that the remote registry is empty.
 
 Pulls run as background jobs. Pipe polls the status and retains the transfer ID
 across browser reloads. Jobs stop if the API process stops; downloaded images
@@ -74,8 +86,8 @@ SHA-256 content digests.
 
 | Endpoint | Action |
 | --- | --- |
-| `GET /api/pipe/registries` | Saved registry hosts, providers, and usernames; no secrets |
-| `PUT /api/pipe/registries/{registry}` | Save `{username, secret}`; include `provider: "harbor"` for a custom Harbor host |
+| `GET /api/pipe/registries` | Saved registry hosts, providers, usernames, and optional ECR `accountName`; no secrets |
+| `PUT /api/pipe/registries/{registry}` | Save `{username, secret}`; optional ECR `accountName` or `provider: "harbor"` for a custom Harbor host |
 | `DELETE /api/pipe/registries/{registry}` | Remove one saved login |
 | `GET /api/pipe/registries/{registry}/repositories?page=…` | Repository names, `nextPage`, and `listingSupported`; AWS Pipe Auth also returns `nextCursor`, passed as `cursor` on the next request |
 | `GET /api/pipe/registry-tags?reference=…&last=…` | One tag page and optional `nextLast` cursor |

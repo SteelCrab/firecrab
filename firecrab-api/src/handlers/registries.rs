@@ -3,6 +3,7 @@ use crate::{
     error::AppError,
     extract::ValidatedJson,
     oci::{self, ImageReference, RegistryCredential, registries, registry_catalog},
+    persistence::RegistryLogin,
     server::RequestId,
     state::AppState,
 };
@@ -91,15 +92,23 @@ async fn registered_reference(
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Connection {
     registry: String,
     username: String,
     provider: &'static str,
     /// Shared Pipe Auth provider, or `None` when this registry uses a direct login.
-    #[serde(rename = "authProvider", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     auth_provider: Option<crate::pipe_auth::Provider>,
+    /// Optional display name retained from a direct ECR login.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_name: Option<String>,
 }
-fn connection(credential: RegistryCredential) -> Connection {
+fn connection(login: RegistryLogin) -> Connection {
+    let RegistryLogin {
+        credential,
+        account_name,
+    } = login;
     Connection {
         provider: provider(&credential.registry).unwrap_or("harbor"),
         registry: if credential.registry == "registry-1.docker.io" {
@@ -109,6 +118,7 @@ fn connection(credential: RegistryCredential) -> Connection {
         },
         username: credential.username,
         auth_provider: None,
+        account_name,
     }
 }
 
@@ -117,13 +127,17 @@ pub async fn list(
     Extension(id): Extension<RequestId>,
 ) -> Result<Json<Vec<Connection>>, AppError> {
     let auths = super::pipe_auth::saved(&state, id).await?;
-    let rows = tokio::task::spawn_blocking(move || state.store.registry_credentials())
+    let rows = tokio::task::spawn_blocking(move || state.store.registry_logins())
         .await
         .map_err(|_| AppError::internal(id.0))?
         .map_err(|_| AppError::internal(id.0))?;
     let mut connections: Vec<_> = rows.into_iter().map(connection).collect();
     for auth in auths {
         let auth = auth.connection();
+        let account_name = connections
+            .iter()
+            .find(|connection| connection.registry == auth.registry)
+            .and_then(|connection| connection.account_name.clone());
         connections.retain(|connection| connection.registry != auth.registry);
         connections.push(Connection {
             username: if auth.provider == crate::pipe_auth::Provider::Aws {
@@ -134,6 +148,7 @@ pub async fn list(
             provider: provider(&auth.registry).unwrap_or("harbor"),
             registry: auth.registry,
             auth_provider: Some(auth.provider),
+            account_name,
         });
     }
     connections.sort_by(|a, b| a.registry.cmp(&b.registry));
@@ -141,11 +156,12 @@ pub async fn list(
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Login {
     username: String,
     secret: String,
     provider: Option<String>,
+    account_name: Option<String>,
 }
 pub async fn save(
     State(state): State<AppState>,
@@ -173,6 +189,13 @@ pub async fn save(
         body.username.trim()
     };
     let secret = body.secret.trim();
+    let account_name = body.account_name.map(|name| name.trim().to_owned());
+    if account_name
+        .as_ref()
+        .is_some_and(|name| kind != "ecr" || name.len() > 255 || name.chars().any(char::is_control))
+    {
+        return Err(invalid("Provide a valid AWS account name", id));
+    }
     if username.is_empty()
         || username.len() > 255
         || username.contains(':')
@@ -188,12 +211,15 @@ pub async fn save(
         username: username.into(),
         secret: secret.into(),
     };
-    let response = connection(credential.clone());
-    tokio::task::spawn_blocking(move || state.store.put_registry_credential(&credential))
-        .await
-        .map_err(|_| AppError::internal(id.0))?
-        .map_err(|_| AppError::internal(id.0))?;
-    Ok(Json(response))
+    let saved = tokio::task::spawn_blocking(move || {
+        state
+            .store
+            .put_registry_login(&credential, account_name.as_deref())
+    })
+    .await
+    .map_err(|_| AppError::internal(id.0))?
+    .map_err(|_| AppError::internal(id.0))?;
+    Ok(Json(connection(saved)))
 }
 
 pub async fn delete(
@@ -551,6 +577,7 @@ mod credential_tests {
             Path("harbor.example.com".into()),
             ValidatedJson(Login {
                 provider: Some("harbor".into()),
+                account_name: None,
                 username: "reader".into(),
                 secret: "harbor-secret".into(),
             }),
@@ -610,6 +637,7 @@ mod credential_tests {
                 Path(registry.into()),
                 ValidatedJson(Login {
                     provider: None,
+                    account_name: (registry == ecr).then(|| " production ".into()),
                     username: username.into(),
                     secret: secret.into(),
                 }),
@@ -617,11 +645,23 @@ mod credential_tests {
             .await
             .unwrap();
             let json = serde_json::to_value(saved).unwrap();
+            if registry == ecr {
+                assert_eq!(json["accountName"], "production");
+                assert_eq!(json["username"], "AWS");
+            }
             assert!(json.get("secret").is_none());
             assert!(!json.to_string().contains(secret.trim()));
         }
         let Json(rows) = list(State(state.clone()), Extension(id)).await.unwrap();
         assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.registry == ecr)
+                .unwrap()
+                .account_name
+                .as_deref(),
+            Some("production")
+        );
         let login = super::super::oci::stored_credential_for(&state, ecr, id)
             .await
             .unwrap()
@@ -674,6 +714,7 @@ mod credential_tests {
                 ValidatedJson(Login {
                     provider: None,
                     username: "octocat".into(),
+                    account_name: None,
                     secret: "  \n ".into()
                 })
             )
@@ -713,6 +754,7 @@ mod credential_tests {
                 ValidatedJson(Login {
                     provider: None,
                     username: " octocat ".into(),
+                    account_name: None,
                     secret: " dckr_pat_secret ".into(),
                 }),
             )

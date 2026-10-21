@@ -8,7 +8,7 @@ import { pipeCardHash } from "../navigation";
 
 type Provider = RegistryConnection["provider"];
 type ActiveJob = { kind: "transfer"; id: string; reference: string };
-interface Editor { original: string | null; provider: Provider; host: string; username: string; secret: string }
+interface Editor { original: string | null; provider: Provider; host: string; username: string; secret: string; accountName: string }
 
 const JOB_KEY = "firecrab.registry-job";
 const PROVIDERS: { id: Provider; name: string; short: string }[] = [
@@ -43,7 +43,7 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
   const [job, setJob] = useState<{ reference: string; snapshot: ImageInstallResponse } | null>(null);
   const inFlight = useRef(false);
   const original = connections.find(value => value.registry === editor?.original);
-  const dirty = !!editor && (!!editor.secret || (original ? editor.username !== original.username : !!editor.host || !!editor.username));
+  const dirty = !!editor && (!!editor.secret || editor.accountName !== (original?.accountName ?? "") || (original ? editor.username !== original.username : !!editor.host || !!editor.username));
 
   useEffect(() => { onUnsavedChange(dirty); return () => onUnsavedChange(false); }, [dirty, onUnsavedChange]);
   useEffect(() => {
@@ -88,8 +88,8 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
   }
   function open(connection?: RegistryConnection) {
     setEditor(connection
-      ? { original: connection.registry, provider: connection.provider, host: connection.registry, username: connection.username, secret: "" }
-      : { original: null, provider: "ghcr", host: "", username: "", secret: "" });
+      ? { original: connection.registry, provider: connection.provider, host: connection.registry, username: connection.username, secret: "", accountName: connection.accountName ?? "" }
+      : { original: null, provider: "ghcr", host: "", username: "", secret: "", accountName: "" });
     setError(null); setNotice(null);
   }
   function select(registry: string) {
@@ -102,7 +102,7 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
     const { provider, host, username, secret } = editor;
     await perform(async () => {
       const registry = ["ecr", "harbor"].includes(provider) ? host.trim() : provider === "dockerHub" ? "docker.io" : "ghcr.io";
-      const saved = await saveRegistry(registry, provider === "ecr" ? "AWS" : username.trim(), secret, provider === "harbor" ? "harbor" : undefined);
+      const saved = await saveRegistry(registry, provider === "ecr" ? "AWS" : username.trim(), secret, provider === "harbor" ? "harbor" : undefined, provider === "ecr" ? editor.accountName.trim() : undefined);
       setConnections(current => [...current.filter(value => value.registry !== saved.registry), saved].sort((a, b) => a.registry.localeCompare(b.registry)));
       setRegistry(saved.registry); setBrowserVersion(value => value + 1); setEditor(null);
       setNotice(t("Login saved.", "인증을 저장했다."));
@@ -141,11 +141,12 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
         <thead><tr><th scope="col">{t("Registry", "레지스트리")}</th><th scope="col">{t("Provider", "서비스")}</th><th scope="col">{t("Account", "계정")}</th><th scope="col" className="actions">{t("Actions", "작업")}</th></tr></thead>
         <tbody>{connections.map(connection => {
           const selected = connection.registry === registry;
+          const accountId = connection.registry.match(/^\d{12}(?=\.dkr\.ecr\.)/)?.[0];
           // The row takes the click; its button gives keyboard users the same selection.
           return <tr key={connection.registry} className={selected ? "selected" : undefined} onClick={() => select(connection.registry)}>
             <td className="registry-name"><button className="registry-select" type="button" aria-pressed={selected}>{connection.registry}</button></td>
             <td data-label={t("Provider", "서비스")}>{providerName(connection.provider)}</td>
-            <td data-label={t("Account", "계정")}>{connection.username}</td>
+            <td data-label={t("Account", "계정")} title={connection.provider === "ecr" ? accountId : undefined}>{connection.provider === "ecr" ? connection.accountName || accountId || "—" : connection.username}</td>
             <td className="actions" onClick={event => event.stopPropagation()}>{connection.authProvider ? <a href={pipeCardHash("auth")}>{t("Manage in Pipe Auth", "Pipe Auth에서 관리")}</a> : <PipeServiceMenu label={t(`${connection.registry} actions`, `${connection.registry} 작업`)} disabled={busy} items={[
               { label: t("Update token", "토큰 갱신"), disabled: !!editor, onSelect: () => open(connection) },
               { label: t("Delete", "삭제"), danger: true, onSelect: () => remove(connection.registry) },
@@ -184,12 +185,16 @@ function RegistryForm({ editor, busy, onChange, onSubmit, onCancel }: {
   return <form id="registry-login-editor" className="registry-form" onSubmit={onSubmit} aria-labelledby="registry-login-title">
     <h3 id="registry-login-title" className="registry-form-title">{original ? <>{t("Update token", "토큰 갱신")} <span className="registry-source">{original}</span></> : t("Add registry", "레지스트리 추가")}</h3>
     {!original && <div className="field"><label htmlFor="registry-provider">{t("Provider", "서비스")}</label>
-      <select id="registry-provider" value={provider} disabled={busy} autoFocus onChange={event => onChange({ ...editor, provider: event.target.value as Provider, host: "", username: "", secret: "" })}>
+      <select id="registry-provider" value={provider} disabled={busy} autoFocus onChange={event => onChange({ ...editor, provider: event.target.value as Provider, host: "", username: "", secret: "", accountName: "" })}>
         {PROVIDERS.map(value => <option key={value.id} value={value.id}>{value.name}</option>)}
       </select>
     </div>}
-    {!original && ["ecr", "harbor"].includes(provider) && <div className="field"><label htmlFor="registry-host">{t("Registry hostname", "레지스트리 호스트")}</label>
-      <input id="registry-host" value={editor.host} onChange={event => update({ host: event.target.value })} placeholder={provider === "harbor" ? "harbor.example.com" : "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com"} autoComplete="off" spellCheck={false} disabled={busy} required />
+    {!original && ["ecr", "harbor"].includes(provider) && <div className="field"><label htmlFor="registry-host">{provider === "ecr" ? t("Registry URI", "레지스트리 URI") : t("Registry hostname", "레지스트리 호스트")}</label>
+      <input id="registry-host" value={editor.host} onChange={event => update({ host: event.target.value })} placeholder={provider === "harbor" ? "harbor.example.com" : "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com"} autoComplete="off" spellCheck={false} disabled={busy} required aria-describedby={provider === "ecr" ? "ecr-registry-uri-help" : undefined} />
+      {provider === "ecr" && <span className="poll-note" id="ecr-registry-uri-help">{t("Enter the login registry URI without https://, a repository path, or a tag.", "로그인용 레지스트리 URI를 입력한다. https://, 저장소 경로와 태그는 제외한다.")}</span>}
+    </div>}
+    {provider === "ecr" && <div className="field"><label htmlFor="registry-account-name">{t("AWS account name (optional)", "AWS 계정 이름 (선택)")}</label>
+      <input id="registry-account-name" value={editor.accountName} onChange={event => update({ accountName: event.target.value })} maxLength={255} autoComplete="off" disabled={busy} />
     </div>}
     {provider !== "ecr" && <div className="field"><label htmlFor="registry-username">{usernameLabel}</label>
       <input id="registry-username" autoComplete="username" spellCheck={false} value={editor.username} onChange={event => update({ username: event.target.value })} disabled={busy} required />

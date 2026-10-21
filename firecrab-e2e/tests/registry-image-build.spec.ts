@@ -77,7 +77,7 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
       await expect(mock.panel.getByRole("columnheader", { name: "Registry", exact: true })).toBeVisible();
       await expect(mock.row.getByRole("cell", { name: registry, exact: true })).toBeVisible();
       await expect(mock.row.getByRole("cell", { name: registry, exact: true })).toHaveAttribute("title", host);
-      await expect(mock.row.locator("td:first-child > div")).toHaveText(name);
+      await expect(mock.row.locator("td:first-child")).toHaveText(name);
       await expect(mock.row.getByText("Build required", { exact: true })).toBeVisible();
       await mock.row.getByRole("button", { name: "⋯", exact: true }).click();
       await mock.row.getByRole("button", { name: "Build M2Image", exact: true }).click();
