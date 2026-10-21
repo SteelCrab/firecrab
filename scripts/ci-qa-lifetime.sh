@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# QA VM lifetime (public-docs/qa.md R1–R7, X7): each VM's shim in its own
+# QA VM lifetime (public-docs/development/qa.md R1–R7, X7): each VM's shim in its own
 # systemd unit, a stop from outside the API, a quick restart, an API restart, a
 # crash while the API is down, an interrupted start, and unit cleanup.
 #

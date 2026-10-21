@@ -13,8 +13,12 @@ PUBLIC_DOCS = REPO / "public-docs"
 MAX_LINES = 300
 # API is the contract page; the complete test checklists also need room for
 # every case and the commands needed to run them.
-LINE_LIMIT_EXEMPT = frozenset({"api.md", "TEST.md", "TEST.ko.md"})
-KOREAN_ALLOWED = frozenset({"TEST.ko.md"})
+LINE_LIMIT_EXEMPT = frozenset({
+    "reference/api.md",
+    "development/testing.md",
+    "development/testing.ko.md",
+})
+KOREAN_ALLOWED = frozenset({"development/testing.ko.md"})
 
 LINK_RE = re.compile(r"\]\(\s*<?([^)>\s]+)>?(?:\s+\"[^\"]*\")?\s*\)")
 PUBLIC_PATH_RE = re.compile(r"public-docs/[\w./-]+\.(?:md|py|sh)")
@@ -67,7 +71,10 @@ def check_public_docs() -> list[str]:
 
         for line_number, line in enumerate(lines, start=1):
             if public_path not in KOREAN_ALLOWED and KOREAN_RE.search(line):
-                problems.append(f"{relative}:{line_number}: Korean text is only allowed in TEST.ko.md")
+                problems.append(
+                    f"{relative}:{line_number}: Korean text is only allowed in "
+                    "development/testing.ko.md"
+                )
 
         in_fenced_code = False
         for line_number, line in enumerate(lines, start=1):

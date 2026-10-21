@@ -39,6 +39,7 @@ fn host_platform(
     let kernel = kernel.map(str::trim).unwrap_or_default().to_owned();
     match descriptor.and_then(|text| serde_json::from_str::<HostPlatformDescriptor>(text).ok()) {
         Some(descriptor) => HostPlatformResponse {
+            controller_id: descriptor.controller_id,
             os: descriptor.os,
             name: descriptor.name,
             version: Some(descriptor.version).filter(|version| !version.is_empty()),
@@ -49,6 +50,7 @@ fn host_platform(
             kernel,
         },
         None => HostPlatformResponse {
+            controller_id: None,
             os: HostOs::Linux,
             name: system.clone(),
             version: None,
@@ -150,6 +152,15 @@ mod tests {
             Some("Arch Linux")
         );
         assert_eq!(pretty_name("NAME=\"x\"\nPRETTY_NAME=\"\""), None);
+    }
+
+    #[test]
+    fn native_controller_identity_survives_the_guest_host_response() {
+        let descriptor = r#"{"controllerId":"native-manager","os":"macos","name":"macOS","version":"26","architecture":"arm64","virtualization":"Virtualization.framework"}"#;
+        let platform = host_platform(Some(descriptor), Some(DEBIAN), Some("6.12"), "aarch64");
+        assert_eq!(platform.controller_id.as_deref(), Some("native-manager"));
+        let old = host_platform(Some(WINDOWS), Some(DEBIAN), Some("6.12"), "x86_64");
+        assert_eq!(old.controller_id, None);
     }
 
     #[test]

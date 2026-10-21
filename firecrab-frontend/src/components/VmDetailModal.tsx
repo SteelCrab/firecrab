@@ -52,7 +52,7 @@ const STARTUP_STEP_LABEL: Record<StartupStep, string> = {
 };
 
 // Derived client-side from the polled `startupStep` value — no dedicated
-// backend log field. See public-docs/dashboard.md for why.
+// backend log field. See public-docs/guides/dashboard.md for why.
 const STARTUP_STEP_LOG_LINE: Record<StartupStep, string> = {
   preparingDisk: "Preparing disk (copying rootfs template)…",
   generatingConfig: "Disk ready → generating Firecracker configuration…",
@@ -363,7 +363,7 @@ export default function VmDetailModal({ vmId, vms, onClose }: VmDetailModalProps
             {vm.reconciliation && (
               <section className="vm-api-status" aria-label="API-STATUS">
                 <h3>API-STATUS</h3>
-                <ReconciliationStatus result={vm.reconciliation} details />
+                <ReconciliationStatus result={vm.reconciliation} />
               </section>
             )}
             <dl className="detail-fields mono">
@@ -782,7 +782,7 @@ function clockTime(epochMillis: number): string {
 
 /**
  * The start pipeline as a row of timed steps, like a CI build log
- * (`public-docs/api.md`). Durations come from the
+ * (`public-docs/reference/api.md`). Durations come from the
  * server's own timestamps — polling is far too coarse to time a 2-second
  * disk copy — and only the still-running step ticks locally.
  */

@@ -26,6 +26,8 @@ Environment=FIRECRAB_NET_HELPER_ALLOWED_UID=@FIRECRAB_UID@
 # installed with a custom PREFIX must re-run install.sh before self-updating.
 Environment=PREFIX=@PREFIX@
 Environment=FIRECRAB_LIBDIR=@LIBDIR@
+Environment=CONFDIR=@CONFDIR@
+Environment=UNITDIR=@UNITDIR@
 ExecStart=@LIBDIR@/firecrab-helper
 Restart=on-failure
 RestartSec=2
@@ -61,7 +63,7 @@ NoNewPrivileges=yes
 # owner permissions already suffice and CAP_DAC_OVERRIDE stays dropped.
 ProtectHome=yes
 ProtectSystem=full
-ReadWritePaths=/run/firecrab @LIBDIR@ @SHAREDIR@ @PREFIX@/bin @DATADIR@
+ReadWritePaths=/run/firecrab @LIBDIR@ @SHAREDIR@ @PREFIX@/bin @DATADIR@ @CONFDIR@ @UNITDIR@
 
 [Install]
 WantedBy=multi-user.target

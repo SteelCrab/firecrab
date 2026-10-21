@@ -1,0 +1,12 @@
+# Operator service: replace UUID and credentials path after creating a named tunnel.
+tunnel: REPLACE-WITH-OPERATOR-TUNNEL-UUID
+credentials-file: /etc/cloudflared/firecrab-connection.json
+ingress:
+  - hostname: firecrab.dev
+    path: ^/dashboard(/.*)?$
+    service: http://127.0.0.1:8790
+  - hostname: tunnel.firecrab.dev
+    service: http://127.0.0.1:8790
+  - hostname: "*.firecrab.dev"
+    service: http://127.0.0.1:8790
+  - service: http_status:404

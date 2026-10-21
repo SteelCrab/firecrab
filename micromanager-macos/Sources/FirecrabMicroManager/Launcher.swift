@@ -24,7 +24,7 @@ final class VirtualMachineStopObserver: NSObject, @preconcurrency VZVirtualMachi
         }
     }
 
-    private func finish(_ result: Result<Void, Error>) {
+    func finish(_ result: Result<Void, Error>) {
         guard self.result == nil else { return }
         self.result = result
         guard let continuation else { return }
@@ -94,11 +94,16 @@ func runManagementVM(configuration: VZVirtualMachineConfiguration) async throws 
     let shutdown = VirtualMachineShutdown(
         requestStop: { try virtualMachine.requestStop() },
         stop: {
+            if virtualMachine.state == .stopped {
+                observer.finish(.success(()))
+                return
+            }
             guard virtualMachine.canStop else { return }
             FileHandle.standardError.write(
                 Data("microManager: guest shutdown timed out; stopping VM\n".utf8)
             )
             try await virtualMachine.stop()
+            observer.finish(.success(()))
         }
     )
     signal(SIGINT, SIG_IGN)

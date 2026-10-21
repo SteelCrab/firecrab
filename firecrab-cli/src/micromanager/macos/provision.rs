@@ -1,47 +1,21 @@
-use std::borrow::Cow;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-use super::super::artifact::{self, ArtifactSpec, HashAlgorithm};
-use super::super::guest_update;
-use super::super::release::{self, Release};
+use super::super::artifact::{self, HashAlgorithm};
+use super::super::manifest::{self, Manifest};
 use super::super::report;
 
-pub const DEBIAN_BUILD: &str = "20260914-2601";
+// Frozen pins are used only to repair installations without a TOML manifest.
 pub const DEBIAN_ARCHIVE: &str = "debian-13-generic-arm64-20260914-2601.tar.xz";
-pub const FIRECRACKER_VERSION: &str = "v1.17.0";
-
-const DEBIAN_URL: &str = "https://cloud.debian.org/images/cloud/trixie/20260914-2601/debian-13-generic-arm64-20260914-2601.tar.xz";
 const DEBIAN_SHA512: &str = "7bacdeb825f81b7eb5fcd35330ce7160ed60413adfa61f37cff3c4028fdc61dbd444e046c58934cd0494192f53fa2cbcfcca1e8e1d337755b34c6c90dc72f62b";
-const FIRECRACKER_URL: &str = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.17.0/firecracker-v1.17.0-aarch64.tgz";
-const FIRECRACKER_SHA256: &str = "e351ebe4f7a16b5873bbd51005d2e6767103cff4d5ebc829df2d3f95a93e2256";
-const FIRECRAB_HOST_ASSET: &str = "firecrab-host-aarch64-gnu.tar.gz";
 const DEBIAN_RAW_BYTES: u64 = 3 * 1024 * 1024 * 1024;
 const DATA_DISK_BYTES: u64 = 16 * 1024 * 1024 * 1024;
-const PROVISION_SCHEMA: u32 = 5;
+pub(super) const PROVISION_SCHEMA: u32 = 5;
 const EXTRACT_ARM64_IMAGE: &str =
     include_str!("../../../../scripts/firecracker-menual/extract-arm64-image");
-
-/// The artifacts that stay pinned. Firecrab itself comes from the latest release.
-const PINNED: [ArtifactSpec; 2] = [
-    ArtifactSpec {
-        label: "Debian 13 ARM64 management image",
-        filename: Cow::Borrowed(DEBIAN_ARCHIVE),
-        url: Cow::Borrowed(DEBIAN_URL),
-        algorithm: HashAlgorithm::Sha512,
-        digest: Cow::Borrowed(DEBIAN_SHA512),
-    },
-    ArtifactSpec {
-        label: "Firecracker ARM64 release",
-        filename: Cow::Borrowed("firecracker-v1.17.0-aarch64.tgz"),
-        url: Cow::Borrowed(FIRECRACKER_URL),
-        algorithm: HashAlgorithm::Sha256,
-        digest: Cow::Borrowed(FIRECRACKER_SHA256),
-    },
-];
 
 #[derive(Clone, Debug)]
 pub struct DownloadedArtifacts {
@@ -49,8 +23,6 @@ pub struct DownloadedArtifacts {
     pub firecracker_archive: PathBuf,
     pub firecrab_host_archive: PathBuf,
     pub firecrab_installer: PathBuf,
-    /// The Firecrab release the host bundle and installer belong to.
-    pub firecrab_version: String,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +37,8 @@ pub struct PreparedLayout {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Release(#[from] super::super::release::Error),
     #[error("could not create artifact directory {path}: {source}")]
     CreateDirectory {
         path: PathBuf,
@@ -74,7 +48,7 @@ pub enum Error {
     #[error(transparent)]
     Artifact(#[from] artifact::Error),
     #[error(transparent)]
-    Release(#[from] release::Error),
+    Manifest(#[from] manifest::Error),
     #[error("could not {action} {path}: {source}")]
     Io {
         action: &'static str,
@@ -93,67 +67,27 @@ pub enum Error {
     GuestProvision(String),
 }
 
-/// The latest Firecrab release's host bundle and guest installer.
-fn firecrab_artifacts(release: &Release) -> Result<[ArtifactSpec; 2], release::Error> {
-    Ok([
-        release.artifact(
-            "Firecrab ARM64 GNU host bundle",
-            FIRECRAB_HOST_ASSET,
-            FIRECRAB_HOST_ASSET,
-        )?,
-        release.installer()?,
-    ])
-}
-
-pub fn download_all(managed_home: &Path, assume_yes: bool) -> Result<DownloadedArtifacts, Error> {
-    let directory = managed_home.join("downloads");
-    let release = Release::latest_or_recorded(&directory)?;
-    let [debian, firecracker] = PINNED;
-    let [host, installer] = firecrab_artifacts(&release)?;
-    let artifacts = [debian, firecracker, host, installer];
-    artifact::fetch_all(&artifacts, &directory, assume_yes)?;
-    release.record(&directory)?;
-    let [debian, firecracker, host, installer] = &artifacts;
-    Ok(DownloadedArtifacts {
-        debian_archive: directory.join(&*debian.filename),
-        firecracker_archive: directory.join(&*firecracker.filename),
-        firecrab_host_archive: directory.join(&*host.filename),
-        firecrab_installer: directory.join(&*installer.filename),
-        firecrab_version: release.tag().to_owned(),
-    })
-}
-
-/// Downloads `release` alone, for a guest that is already provisioned.
-pub fn download_firecrab(
-    release: &Release,
+pub fn download_all(
     managed_home: &Path,
+    manifest: &Manifest,
     assume_yes: bool,
-) -> Result<(), Error> {
+) -> Result<DownloadedArtifacts, Error> {
     let directory = managed_home.join("downloads");
-    artifact::fetch_all(&firecrab_artifacts(release)?, &directory, assume_yes)?;
-    release.record(&directory)?;
-    Ok(())
-}
-
-/// Writes the script `service update` runs in the guest, where the managed home
-/// is mounted at `/mnt/firecrab`. Returns its path as the guest sees it.
-pub fn write_update_script(managed_home: &Path) -> Result<String, Error> {
-    write_private(
-        &managed_home
-            .join("provision")
-            .join(guest_update::GUEST_SCRIPT_FILE),
-        guest_update::guest_script().as_bytes(),
-        0o700,
-    )?;
-    Ok(format!(
-        "/mnt/firecrab/provision/{}",
-        guest_update::GUEST_SCRIPT_FILE
-    ))
+    let artifacts = manifest.macos_artifacts();
+    artifact::fetch_all(&artifacts, &directory, assume_yes)?;
+    Ok(DownloadedArtifacts {
+        debian_archive: directory.join(artifacts[0].filename),
+        firecracker_archive: directory.join(artifacts[1].filename),
+        firecrab_host_archive: directory.join(artifacts[2].filename),
+        firecrab_installer: directory.join(artifacts[3].filename),
+    })
 }
 
 pub fn prepare(
     managed_home: &Path,
     artifacts: &DownloadedArtifacts,
+    manifest: &Manifest,
+    reinstall: bool,
 ) -> Result<PreparedLayout, Error> {
     let system = managed_home.join("system");
     let data = managed_home.join("data");
@@ -167,7 +101,7 @@ pub fn prepare(
         fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
             .map_err(|source| io_error("protect directory", directory, source))?;
     }
-    reset_failed_system(&system, &runtime)?;
+    reset_system(&system, &runtime, manifest, reinstall)?;
 
     let os_disk = system.join("debian-system.raw");
     prepare_os_disk(&artifacts.debian_archive, &os_disk, &system)?;
@@ -180,7 +114,7 @@ pub fn prepare(
     let data_disk = data.join("firecrab-data.raw");
     prepare_sparse_disk(&data_disk, DATA_DISK_BYTES)?;
     let ssh_private_key = prepare_ssh_key(&runtime, &provision)?;
-    prepare_guest_payload(&provision)?;
+    prepare_guest_payload(&provision, manifest)?;
     let seed_iso = runtime.join("cloud-init-seed.iso");
     prepare_seed_iso(&runtime, &seed_iso)?;
 
@@ -292,21 +226,30 @@ fn validate_arm64_image(path: &Path) -> Result<(), Error> {
     }
 }
 
-fn reset_failed_system(system: &Path, runtime: &Path) -> Result<(), Error> {
+fn reset_system(
+    system: &Path,
+    runtime: &Path,
+    manifest: &Manifest,
+    reinstall: bool,
+) -> Result<(), Error> {
     let failed = runtime.join("provision.failed");
     let provisioned = runtime.join("provisioned");
     let incomplete = runtime.join("provision.phase").is_file() && !provisioned.is_file();
+    let marker = fs::read_to_string(&provisioned).unwrap_or_default();
     let outdated = provisioned.is_file()
-        && !fs::read_to_string(&provisioned)
-            .unwrap_or_default()
+        && (!marker
             .lines()
-            .any(|line| line == format!("schema={PROVISION_SCHEMA}"));
-    if !failed.is_file() && !outdated && !incomplete {
+            .any(|line| line == format!("schema={PROVISION_SCHEMA}"))
+            || !manifest.matches_marker(&marker)?
+            || !manifest::marker_value_matches(&marker, "kernel", &manifest.macos.kernel_version));
+    if !reinstall && !failed.is_file() && !outdated && !incomplete {
         return Ok(());
     }
     report!(
         "[RESET] {} Debian system disk; persistent data is preserved",
-        if outdated {
+        if reinstall {
+            "reinstalled"
+        } else if outdated {
             "outdated"
         } else if failed.is_file() {
             "failed"
@@ -319,6 +262,7 @@ fn reset_failed_system(system: &Path, runtime: &Path) -> Result<(), Error> {
         system.join("Image"),
         system.join("Image.partial"),
         system.join("initrd.img"),
+        system.join("initrd.img.partial"),
         runtime.join("efi-variable-store"),
         runtime.join("cloud-init-seed.iso"),
         runtime.join("root-partuuid"),
@@ -327,6 +271,9 @@ fn reset_failed_system(system: &Path, runtime: &Path) -> Result<(), Error> {
         runtime.join("provision.phase"),
         runtime.join("guest-provision.log"),
         runtime.join("manager-ready"),
+        // Replacing the OS regenerates the SSH server's keys. Keep the client
+        // key, but discard its cached host fingerprint before the next tunnel.
+        runtime.join("known_hosts"),
     ] {
         match fs::remove_file(&path) {
             Ok(()) => {}
@@ -335,6 +282,41 @@ fn reset_failed_system(system: &Path, runtime: &Path) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// Use only the pinned local cache for offline recovery. Never download here.
+pub(super) fn cached_os_reference(home: &Path, destination: &Path) -> Result<bool, Error> {
+    let installed = Manifest::installed(home)?;
+    let (filename, algorithm, digest) = match &installed {
+        Some(manifest) => {
+            let image = &manifest.macos.image;
+            (
+                image.filename.as_str(),
+                image.algorithm,
+                image.digest.as_str(),
+            )
+        }
+        None => (DEBIAN_ARCHIVE, HashAlgorithm::Sha512, DEBIAN_SHA512),
+    };
+    let archive = home.join("downloads").join(filename);
+    super::super::managed_home::reject_symlink_components(&archive)
+        .map_err(manifest::Error::from)?;
+    if !archive.exists() {
+        return Ok(false);
+    }
+    let directory = destination
+        .parent()
+        .expect("private reference has a parent");
+    let cached_copy = directory.join(filename);
+    fs::copy(&archive, &cached_copy)
+        .map_err(|source| io_error("stage Debian cache", &archive, source))?;
+    fs::set_permissions(&cached_copy, fs::Permissions::from_mode(0o600))
+        .map_err(|source| io_error("protect Debian cache", &cached_copy, source))?;
+    artifact::verify(&cached_copy, algorithm, digest)?;
+    prepare_os_disk(&cached_copy, destination, directory)?;
+    fs::remove_file(&cached_copy)
+        .map_err(|source| io_error("remove staged Debian cache", &cached_copy, source))?;
+    Ok(true)
 }
 
 fn prepare_os_disk(archive: &Path, destination: &Path, system: &Path) -> Result<(), Error> {
@@ -542,7 +524,7 @@ fn prepare_ssh_key(runtime: &Path, provision: &Path) -> Result<PathBuf, Error> {
     Ok(private_key)
 }
 
-fn prepare_guest_payload(provision: &Path) -> Result<(), Error> {
+fn prepare_guest_payload(provision: &Path, manifest: &Manifest) -> Result<(), Error> {
     write_private(
         &provision.join("extract-arm64-image"),
         EXTRACT_ARM64_IMAGE.as_bytes(),
@@ -550,26 +532,32 @@ fn prepare_guest_payload(provision: &Path) -> Result<(), Error> {
     )?;
     write_private(
         &provision.join("guest-provision.sh"),
-        guest_provision_script().as_bytes(),
+        guest_provision_script(manifest)?.as_bytes(),
         0o700,
     )?;
     write_private(
         &provision.join("nested-firecracker-e2e.sh"),
-        nested_firecracker_e2e_script().as_bytes(),
+        nested_firecracker_e2e_script(&manifest.macos.kernel_version).as_bytes(),
         0o700,
     )?;
     Ok(())
 }
 
-fn guest_provision_script() -> String {
-    format!(
+fn guest_provision_script(manifest: &Manifest) -> Result<String, Error> {
+    Ok(format!(
         r#"#!/bin/bash
-set -Eeuxo pipefail
+set -Eeuo pipefail
 share=/mnt/firecrab
 log=/var/log/firecrab-provision.log
-exec >>"$log" 2>&1
 mkdir -p "$share"
 mountpoint -q "$share" || mount -t virtiofs firecrab "$share"
+saved_umask=$(umask)
+umask 077
+exec 3>&1 4>&2
+exec > >(tee -a "$log" "$share/runtime/guest-provision.log") 2>&1
+log_pid=$!
+umask "$saved_umask"
+set -x
 failed="$share/runtime/provision.failed"
 ready="$share/runtime/provisioned"
 phase_file="$share/runtime/provision.phase"
@@ -579,18 +567,27 @@ finish() {{
   rc=$?
   set +e
   if [ "$rc" -ne 0 ]; then echo "$rc" >"$failed"; fi
-  cp -f "$log" "$share/runtime/guest-provision.log"
+  # Drain the live log before shutdown so its final error is preserved.
+  exec 1>&3 2>&4
+  wait "$log_pid"
   sync
   systemctl poweroff --no-block || poweroff -f
 }}
 trap finish EXIT
+
+phase distribution
+. /etc/os-release
+test "$ID" = debian
+test "$VERSION_ID" = '{debian_version}'
+test "$VERSION_CODENAME" = '{debian_suite}'
 
 phase apt-update
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 phase apt-install
 apt-get install -y ca-certificates curl sudo tar findutils xz-utils gzip zstd lz4 lzop \
-  nftables dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat openssh-server
+  nftables dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat openssh-server \
+  linux-image-{kernel_version}
 # firecrab-helper runs its own dnsmasq per bridge; the packaged unit only
 # fails at boot fighting systemd-resolved for port 53 and leaves the guest degraded.
 systemctl mask --now dnsmasq.service
@@ -626,16 +623,20 @@ systemctl mask getty.target
 systemctl stop getty.target || true
 
 phase kernel
-kernel=/boot/vmlinuz-$(uname -r)
-initrd=/boot/initrd.img-$(uname -r)
+kernel_version='{kernel_version}'
+kernel=/boot/vmlinuz-$kernel_version
+initrd=/boot/initrd.img-$kernel_version
+test -s "$kernel"
+test -s "$initrd"
 "$share/provision/extract-arm64-image" "$kernel" >"$share/system/Image.partial"
 mv -f "$share/system/Image.partial" "$share/system/Image"
-cp -f "$initrd" "$share/system/initrd.img"
+cp -f "$initrd" "$share/system/initrd.img.partial"
+mv -f "$share/system/initrd.img.partial" "$share/system/initrd.img"
 chmod 600 "$share/system/Image" "$share/system/initrd.img"
 
 phase firecracker
 tmp=$(mktemp -d)
-tar -xzf "$share/downloads/firecracker-{firecracker}-aarch64.tgz" -C "$tmp"
+tar -xzf "$share/downloads/{firecracker_archive}" -C "$tmp"
 fc=$(find "$tmp" -type f -name 'firecracker-{firecracker}-aarch64' -print -quit)
 jailer=$(find "$tmp" -type f -name 'jailer-{firecracker}-aarch64' -print -quit)
 test -n "$fc"
@@ -669,6 +670,7 @@ systemctl is-active --quiet ssh
 {{
   echo 'schema={schema}'
   echo "ip=$ip"
+  echo "kernel=$(uname -r)"
   echo 'firecrab_api=active'
   echo 'firecrab_net_helper=active'
   echo 'ssh=active'
@@ -699,7 +701,9 @@ systemctl enable --now firecrab-manager-ready.service
 phase verify
 {{
   echo 'schema={schema}'
-  echo "kernel=$(uname -r)"
+  echo 'manifest={manifest_id}'
+  echo "kernel=$kernel_version"
+  echo "provisioning_kernel=$(uname -r)"
   echo "debian=$(. /etc/os-release; echo "$PRETTY_NAME")"
   if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
     echo 'kvm=usable'
@@ -713,14 +717,19 @@ phase verify
 phase complete
 exit 0
 "#,
-        firecracker = FIRECRACKER_VERSION,
-        installer = release::INSTALLER_FILE,
+        kernel_version = manifest.macos.kernel_version,
+        debian_version = manifest.debian.version,
+        debian_suite = manifest.debian.suite,
+        firecracker = manifest.firecracker.version,
+        firecracker_archive = manifest.firecracker.aarch64.filename,
+        installer = manifest.firecrab.installer.filename,
+        manifest_id = manifest.fingerprint()?,
         schema = PROVISION_SCHEMA,
-    )
+    ))
 }
 
-fn nested_firecracker_e2e_script() -> &'static str {
-    r#"#!/bin/bash
+fn nested_firecracker_e2e_script(kernel_version: &str) -> String {
+    let script = r#"#!/bin/bash
 set -Eeuxo pipefail
 work=/var/lib/firecrab/e2e-nested
 rm -rf "$work"
@@ -738,7 +747,7 @@ INIT
 chmod 0755 "$work/rootfs/sbin/init"
 truncate -s 128M "$work/rootfs.ext4"
 mkfs.ext4 -q -F -d "$work/rootfs" "$work/rootfs.ext4"
-kver=$(uname -r)
+kver='@KERNEL_VERSION@'
 /mnt/firecrab/provision/extract-arm64-image "/boot/vmlinuz-$kver" >"$work/Image"
 cat >"$work/config.json" <<JSON
 {
@@ -770,7 +779,8 @@ cat "$work/console.log"
 test "$rc" -eq 0
 grep -a -q FIRECRAB_NESTED_WORKLOAD_OK "$work/console.log"
 echo passed >"$work/result"
-"#
+"#;
+    script.replace("@KERNEL_VERSION@", kernel_version)
 }
 
 /// cloud-init's `bootcmd` runs in a stage whose unit is ordered
@@ -859,9 +869,81 @@ fn io_error(action: &'static str, path: &Path, source: io::Error) -> Error {
     }
 }
 
+/// Download the update separately from the installed manifest's verified cache.
+pub fn download_firecrab(
+    release: &super::super::release::Release,
+    managed_home: &Path,
+    assume_yes: bool,
+) -> Result<(), Error> {
+    let directory = managed_home.join("updates/downloads");
+    let bundle = release.artifact(
+        "Firecrab ARM64 host bundle",
+        "firecrab-host-aarch64-gnu.tar.gz",
+        "firecrab-host-aarch64-gnu.tar.gz",
+    )?;
+    let installer = release.installer()?;
+    artifact::fetch_all(
+        &[
+            bundle.spec("Firecrab ARM64 host bundle"),
+            installer.spec("Firecrab guest installer"),
+        ],
+        &directory,
+        assume_yes,
+    )?;
+    release.record(&directory)?;
+    Ok(())
+}
+
+pub fn write_update_script(managed_home: &Path) -> Result<String, Error> {
+    let directory = managed_home.join("updates/provision");
+    fs::create_dir_all(&directory)
+        .map_err(|source| io_error("create update directory", &directory, source))?;
+
+    write_private(
+        &managed_home
+            .join("updates/provision")
+            .join(super::super::guest_update::GUEST_SCRIPT_FILE),
+        super::super::guest_update::guest_script().as_bytes(),
+        0o700,
+    )?;
+    Ok(format!(
+        "/mnt/firecrab/updates/provision/{}",
+        super::super::guest_update::GUEST_SCRIPT_FILE
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires FIRECRAB_REPAIR_QA_DEBIAN_ARCHIVE pointing to the pinned cached image"]
+    fn verified_cached_reference_is_private_and_leaves_the_cache_unchanged() {
+        let source = PathBuf::from(
+            std::env::var_os("FIRECRAB_REPAIR_QA_DEBIAN_ARCHIVE").expect("cached Debian archive"),
+        );
+        let original = fs::metadata(&source).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let downloads = home.join("downloads");
+        fs::create_dir_all(&downloads).unwrap();
+        let cache = downloads.join(DEBIAN_ARCHIVE);
+        fs::copy(&source, &cache).unwrap();
+        let directory = root.path().join("recovery");
+        fs::create_dir(&directory).unwrap();
+        let reference = directory.join("debian-system.reference.raw");
+        assert!(cached_os_reference(&home, &reference).unwrap());
+        assert_eq!(fs::metadata(&reference).unwrap().len(), DEBIAN_RAW_BYTES);
+        assert_eq!(
+            fs::metadata(&reference).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!directory.join(DEBIAN_ARCHIVE).exists());
+        artifact::verify(&cache, HashAlgorithm::Sha512, DEBIAN_SHA512).unwrap();
+        let after = fs::metadata(&source).unwrap();
+        assert_eq!(after.len(), original.len());
+        assert_eq!(after.modified().unwrap(), original.modified().unwrap());
+    }
 
     #[test]
     fn gpt_linux_partition_partuuid_is_derived_from_disk() {
@@ -916,7 +998,8 @@ mod tests {
 
     #[test]
     fn guest_scripts_require_ssh_ready_and_nested_firecracker() {
-        let provision = guest_provision_script();
+        let manifest = Manifest::bundled().unwrap();
+        let provision = guest_provision_script(&manifest).unwrap();
         assert!(provision.contains("openssh-server"));
         // The mask lives on the OS disk so an EFI-booted console never shows a login prompt.
         let console = provision.find("\nphase console\n").expect("console phase");
@@ -939,77 +1022,85 @@ mod tests {
         assert!(provision.contains("nested-firecracker-e2e.sh"));
         assert!(provision.contains("nested_firecracker=passed"));
         assert!(provision.contains(&format!("schema={PROVISION_SCHEMA}")));
-        assert!(provision.contains("bash \"$share/downloads/install-firecrab.sh\" --no-deps"));
 
-        let nested = nested_firecracker_e2e_script();
+        let nested = nested_firecracker_e2e_script(&manifest.macos.kernel_version);
         assert!(nested.contains("FIRECRAB_NESTED_WORKLOAD_OK"));
         assert!(nested.contains("</dev/null"));
         assert!(nested.contains("test \"$rc\" -eq 0"));
-    }
-
-    const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-
-    /// A release whose two files are listed with the digest of `abc`, so a
-    /// cached `abc` counts as already downloaded.
-    fn release_of_abc() -> Release {
-        Release::fixture(
-            "v0.3.1",
-            "https://example.invalid/releases",
-            &format!(
-                "{ABC_SHA256}  ./{FIRECRAB_HOST_ASSET}\n{ABC_SHA256}  ./{}\n",
-                release::INSTALLER_ASSET
-            ),
-        )
-    }
-
-    #[test]
-    fn the_latest_release_supplies_the_host_bundle_and_installer() {
-        let [host, installer] = firecrab_artifacts(&release_of_abc()).expect("both are listed");
-        assert_eq!(host.filename, FIRECRAB_HOST_ASSET);
-        assert_eq!(
-            host.url,
-            format!("https://example.invalid/releases/download/v0.3.1/{FIRECRAB_HOST_ASSET}")
-        );
-        assert_eq!(installer.filename, release::INSTALLER_FILE);
-        assert_eq!(
-            installer.url,
-            "https://example.invalid/releases/download/v0.3.1/install.sh"
-        );
-        assert_eq!(host.digest, ABC_SHA256);
-        assert_eq!(installer.digest, ABC_SHA256);
-    }
-
-    #[test]
-    fn updating_downloads_only_the_release_and_records_its_digests() {
-        let home = tempfile::tempdir().unwrap();
-        let downloads = home.path().join("downloads");
-        fs::create_dir_all(&downloads).unwrap();
-        for name in [FIRECRAB_HOST_ASSET, release::INSTALLER_FILE] {
-            fs::write(downloads.join(name), b"abc").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        for (name, script) in [("provision.sh", provision), ("nested.sh", nested)] {
+            let path = directory.path().join(name);
+            fs::write(&path, script).unwrap();
+            assert!(
+                ProcessCommand::new("bash")
+                    .arg("-n")
+                    .arg(path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
         }
-        download_firecrab(&release_of_abc(), home.path(), true)
-            .expect("cached files that match the release need no network");
-        let recorded = fs::read_to_string(downloads.join("SHA256SUMS")).unwrap();
-        assert!(recorded.contains(ABC_SHA256), "{recorded}");
-        // Debian and Firecracker are not part of an update.
-        assert!(!downloads.join(DEBIAN_ARCHIVE).exists());
     }
 
     #[test]
-    fn the_update_script_is_private_and_found_through_the_guest_mount() {
-        let home = tempfile::tempdir().unwrap();
-        fs::create_dir_all(home.path().join("provision")).unwrap();
-        let guest_path = write_update_script(home.path()).unwrap();
-        assert_eq!(guest_path, "/mnt/firecrab/provision/guest-update.sh");
-        let written = home.path().join("provision/guest-update.sh");
-        assert_eq!(
-            fs::read_to_string(&written).unwrap(),
-            guest_update::guest_script()
-        );
-        assert_eq!(
-            fs::metadata(&written).unwrap().permissions().mode() & 0o777,
-            0o700
-        );
+    fn guest_logs_are_visible_before_exit_and_drained_on_success_or_failure() {
+        let script = guest_provision_script(&Manifest::bundled().unwrap()).unwrap();
+        let setup = script
+            .split("\nphase distribution\n")
+            .next()
+            .unwrap()
+            .replace("share=/mnt/firecrab", "share=\"$FIRECRAB_TEST_SHARE\"")
+            .replace(
+                "log=/var/log/firecrab-provision.log",
+                "log=\"$FIRECRAB_TEST_LOG\"",
+            );
+        for status in [0, 7] {
+            let root = tempfile::tempdir().unwrap();
+            let share = root.path().join("shared");
+            fs::create_dir_all(share.join("runtime")).unwrap();
+            let test = format!(
+                r#"mountpoint() {{ return 0; }}
+sync() {{ :; }}
+systemctl() {{ :; }}
+initial_umask=$(umask)
+{setup}
+test "$(umask)" = "$initial_umask"
+phase firecrab
+printf 'LIVE_PROVISION_OUTPUT\n'
+for _ in {{1..100}}; do
+  grep -qx 'LIVE_PROVISION_OUTPUT' "$share/runtime/guest-provision.log" 2>/dev/null && break
+  sleep 0.01
+done
+grep -qx 'LIVE_PROVISION_OUTPUT' "$share/runtime/guest-provision.log"
+printf 'LAST_PROVISION_ERROR\n' >&2
+exit {status}
+"#
+            );
+            let output = ProcessCommand::new("bash")
+                .args(["-c", &test])
+                .env("FIRECRAB_TEST_SHARE", &share)
+                .env("FIRECRAB_TEST_LOG", root.path().join("guest.log"))
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let log = fs::read_to_string(share.join("runtime/guest-provision.log")).unwrap();
+            assert_eq!(
+                fs::metadata(share.join("runtime/guest-provision.log"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert!(log.lines().any(|line| line == "LIVE_PROVISION_OUTPUT"));
+            assert!(log.lines().any(|line| line == "LAST_PROVISION_ERROR"));
+            assert_eq!(share.join("runtime/provision.failed").exists(), status != 0);
+        }
     }
 
     #[test]
@@ -1103,7 +1194,7 @@ mod tests {
         assert!(error.to_string().contains("stopped during firecrab"));
         assert!(error.to_string().contains("service reinstall"));
 
-        reset_failed_system(&system, &runtime).unwrap();
+        reset_system(&system, &runtime, &Manifest::bundled().unwrap(), false).unwrap();
         assert!(!system.join("debian-system.raw").exists());
         assert!(!runtime.join("provision.phase").exists());
         assert_eq!(
@@ -1113,10 +1204,164 @@ mod tests {
     }
 
     #[test]
+    fn offline_repair_verifies_the_installed_toml_image_and_keeps_legacy_fallback() {
+        let home = tempfile::tempdir().unwrap();
+        let downloads = home.path().join("downloads");
+        let repair = home.path().join("repair");
+        fs::create_dir(&downloads).unwrap();
+        fs::create_dir(&repair).unwrap();
+        let reference = repair.join("reference.raw");
+        assert!(!cached_os_reference(home.path(), &reference).unwrap());
+        assert!(!home.path().join(manifest::FILE_NAME).exists());
+
+        let mut installed = Manifest::bundled().unwrap();
+        installed.macos.image.filename = "installed-image.tar.xz".into();
+        installed.macos.image.digest = "0".repeat(128);
+        installed.save(home.path()).unwrap();
+        let cache = downloads.join(&installed.macos.image.filename);
+        fs::write(&cache, b"corrupt installed cache").unwrap();
+        let error = cached_os_reference(home.path(), &reference).unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Artifact(artifact::Error::Checksum { .. })
+        ));
+        assert!(!reference.exists());
+        assert_eq!(fs::read(cache).unwrap(), b"corrupt installed cache");
+    }
+
+    #[test]
+    fn explicit_install_migrates_legacy_os_once_and_preserves_data_and_keys() {
+        let home = tempfile::tempdir().unwrap();
+        let system = home.path().join("system");
+        let runtime = home.path().join("runtime");
+        let data = home.path().join("data");
+        for directory in [&system, &runtime, &data] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        let gates = format!(
+            "schema={PROVISION_SCHEMA}\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n"
+        );
+        fs::write(runtime.join("provisioned"), &gates).unwrap();
+        fs::write(runtime.join("manager_ed25519"), b"keep key").unwrap();
+        fs::write(runtime.join("known_hosts"), b"old host fingerprint").unwrap();
+        fs::write(system.join("debian-system.raw"), b"legacy OS").unwrap();
+        let mut kernel = [0_u8; 64];
+        kernel[56..60].copy_from_slice(b"ARMd");
+        fs::write(system.join("Image"), kernel).unwrap();
+        fs::write(system.join("initrd.img"), b"legacy initrd").unwrap();
+        fs::write(data.join("firecrab-data.raw"), b"keep data").unwrap();
+
+        require_guest_provisioned(home.path()).unwrap();
+        assert!(system.join("debian-system.raw").exists());
+        assert!(!home.path().join(manifest::FILE_NAME).exists());
+
+        let manifest = Manifest::bundled().unwrap();
+        reset_system(&system, &runtime, &manifest, false).unwrap();
+        assert!(!system.join("debian-system.raw").exists());
+        assert!(!system.join("Image").exists());
+        assert!(!runtime.join("provisioned").exists());
+        assert!(!runtime.join("known_hosts").exists());
+        assert_eq!(
+            fs::read(data.join("firecrab-data.raw")).unwrap(),
+            b"keep data"
+        );
+        assert_eq!(
+            fs::read(runtime.join("manager_ed25519")).unwrap(),
+            b"keep key"
+        );
+        assert!(!home.path().join(manifest::FILE_NAME).exists());
+
+        fs::write(system.join("debian-system.raw"), b"TOML OS").unwrap();
+        fs::write(system.join("Image"), kernel).unwrap();
+        fs::write(system.join("initrd.img"), b"TOML initrd").unwrap();
+        let marker = format!(
+            "{gates}manifest={}\nkernel={}\n",
+            manifest.fingerprint().unwrap(),
+            manifest.macos.kernel_version
+        );
+        fs::write(runtime.join("provisioned"), &marker).unwrap();
+        manifest
+            .verify_provisioned(&marker, "kernel", &manifest.macos.kernel_version)
+            .unwrap();
+        manifest.save(home.path()).unwrap();
+        reset_system(&system, &runtime, &manifest, false).unwrap();
+        require_guest_provisioned(home.path()).unwrap();
+        assert_eq!(
+            fs::read(system.join("debian-system.raw")).unwrap(),
+            b"TOML OS"
+        );
+        assert!(system.join("Image").exists());
+        assert_eq!(
+            fs::read(data.join("firecrab-data.raw")).unwrap(),
+            b"keep data"
+        );
+        super::super::super::managed_home::clear_installation_state(home.path()).unwrap();
+        reset_system(&system, &runtime, &manifest, true).unwrap();
+        assert!(!system.join("debian-system.raw").exists());
+        assert!(!system.join("Image").exists());
+        assert!(!system.join("initrd.img").exists());
+        assert!(!home.path().join(manifest::FILE_NAME).exists());
+        assert_eq!(
+            fs::read(data.join("firecrab-data.raw")).unwrap(),
+            b"keep data"
+        );
+        assert_eq!(
+            fs::read(runtime.join("manager_ed25519")).unwrap(),
+            b"keep key"
+        );
+    }
+
+    #[test]
+    fn boot_files_use_the_toml_kernel_even_when_the_provisioning_kernel_is_older() {
+        let manifest = Manifest::bundled().unwrap();
+        let script = guest_provision_script(&manifest).unwrap();
+        let kernel_step = script
+            .split_once("\nphase kernel\n")
+            .unwrap()
+            .1
+            .split_once("\nphase firecracker\n")
+            .unwrap()
+            .0;
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join("provision")).unwrap();
+        fs::create_dir(home.path().join("system")).unwrap();
+        write_private(
+            &home.path().join("provision/extract-arm64-image"),
+            b"#!/bin/bash\nprintf '%s' \"$1\"\n",
+            0o700,
+        )
+        .unwrap();
+        let output = ProcessCommand::new("bash").args(["-c", &format!(
+            "set -eu\nshare=$1\nuname() {{ echo 6.12.107+deb13-arm64; }}\ntest() {{ :; }}\ncp() {{ printf '%s' \"$2\" >\"$3\"; }}\n{kernel_step}"
+        ), "kernel-test"]).arg(home.path()).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(home.path().join("system/Image")).unwrap(),
+            format!("/boot/vmlinuz-{}", manifest.macos.kernel_version)
+        );
+        assert_eq!(
+            fs::read_to_string(home.path().join("system/initrd.img")).unwrap(),
+            format!("/boot/initrd.img-{}", manifest.macos.kernel_version)
+        );
+    }
+
+    #[test]
     fn pinned_artifacts_use_immutable_versions_and_valid_digest_lengths() {
-        assert!(DEBIAN_URL.contains(DEBIAN_BUILD));
-        assert!(FIRECRACKER_URL.contains(FIRECRACKER_VERSION));
-        for artifact in PINNED {
+        let manifest = Manifest::bundled().unwrap();
+        assert!(
+            manifest
+                .macos
+                .image
+                .url
+                .contains(&manifest.macos.image_build)
+        );
+        assert_eq!(manifest.macos.image.filename, DEBIAN_ARCHIVE);
+        assert_eq!(manifest.macos.image.digest, DEBIAN_SHA512);
+        for artifact in manifest.macos_artifacts() {
             assert!(artifact.url.starts_with("https://"));
             let expected_length = match artifact.algorithm {
                 HashAlgorithm::Sha256 => 64,

@@ -6,17 +6,24 @@
 mod daemon;
 mod dev;
 mod doctor;
-mod lifecycle;
+mod filesystem;
+pub(super) mod lifecycle;
 mod provision;
+mod repair;
+pub(super) mod resource;
 mod wsl;
 
+use super::dev::dashboard;
+use super::guest_update;
 use super::release::{self, Release};
-use super::{Command, debug, guest_update};
+use super::{Command, DevCommand, debug, managed_home, manifest};
 use doctor::Status;
-use wsl::DISTRO_NAME;
+pub(super) use wsl::DISTRO_NAME;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Resource(#[from] super::resource::Error),
     #[error("the host is not ready; run `firecrab service doctor` and fix the FAILED checks")]
     NotReady,
     #[error("could not render the capability report: {0}")]
@@ -28,15 +35,23 @@ pub enum Error {
     #[error(transparent)]
     Release(#[from] release::Error),
     #[error(transparent)]
+    Manifest(#[from] manifest::Error),
+    #[error(transparent)]
+    ManagedHome(#[from] managed_home::Error),
+    #[error(transparent)]
     Daemon(#[from] daemon::Error),
     #[error(transparent)]
     Dev(#[from] super::dev::Error),
+    #[error(transparent)]
+    Repair(#[from] repair::Error),
     #[error(transparent)]
     Wsl(#[from] wsl::Error),
     #[error("the management VM did not become healthy: {0}")]
     Unhealthy(String),
     #[error("{DISTRO_NAME} is not imported; run `firecrab service install`")]
     NotInstalled,
+    #[error("the management VM is not running; run `firecrab service start` first")]
+    GuestNotRunning,
     #[error("could not run wsl.exe: {0}")]
     Console(#[source] std::io::Error),
     #[error("`firecrab service {0}` is only used by the macOS microManager daemon")]
@@ -45,8 +60,17 @@ pub enum Error {
 
 pub fn run(command: Command) -> Result<i32, Error> {
     match command {
+        Command::Resource { options } => Ok(super::resource::run(options)?),
+        Command::ResourceServer { home } => Ok(super::resource_server::run(home)?),
+        Command::ResourceApply { id } => Ok(super::resource::run_apply(&id)?),
         Command::Install { yes } => run_install(false, yes),
         Command::Reinstall { yes } => run_install(true, yes),
+        #[cfg(any(target_os = "macos", target_os = "windows", test))]
+        Command::Repair => {
+            let status = repair::run(&lifecycle::Layout::from_process_env()?)?;
+            print_daemon_status(&status);
+            Ok(0)
+        }
         Command::Uninstall { purge } => {
             run_uninstall(&lifecycle::Layout::from_process_env()?, purge)
         }
@@ -56,18 +80,28 @@ pub fn run(command: Command) -> Result<i32, Error> {
         Command::Debug { json, logs, tail } => run_debug(debug::Options::new(json, logs, tail)),
         Command::Doctor { json } => run_doctor(json),
         Command::Validate => {
-            run_validate(provision::host()?, &lifecycle::Layout::from_process_env()?)
+            let layout = lifecycle::Layout::from_process_env()?;
+            let installed = manifest::Manifest::installed(&layout.managed_home)?;
+            let host = match &installed {
+                Some(manifest) => provision::host_from_manifest(manifest, std::env::consts::ARCH)?,
+                None => provision::host()?.clone(),
+            };
+            run_validate(&host, &layout)
         }
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         Command::Shell { command } => run_shell(&command),
         Command::Update { apply, yes, .. } => run_update(apply, yes),
         Command::ForwardPorts { .. } => Err(Error::MacosOnly("forward-ports")),
         Command::Dev {
+            command,
             source,
             release,
             restore,
             yes,
-        } => run_dev(source.as_deref(), release, restore, yes),
+        } => match command {
+            Some(command) => run_dev_control(command),
+            None => run_dev(source.as_deref(), release, restore, yes),
+        },
     }
 }
 
@@ -87,16 +121,36 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         println!("{}", doctor::render_human(&report));
         return Err(Error::NotReady);
     }
-    let host = provision::host()?;
     let layout = lifecycle::Layout::from_process_env()?;
+    let mut manifest = manifest::Manifest::for_install(&layout.managed_home)?;
+    let release = super::release::Release::latest_or_recorded(&layout.downloads())
+        .map_err(provision::Error::from)?;
+    release
+        .apply_manifest(&mut manifest)
+        .map_err(provision::Error::from)?;
+    let host = provision::host_from_manifest(&manifest, std::env::consts::ARCH)?;
     lifecycle::prepare(&layout)?;
     // Before the service stops, so declining the download leaves it running.
-    let artifacts = provision::download_all(host, &layout.downloads(), assume_yes)?;
-    daemon::stop()?;
+    let artifacts = provision::download_all(&host, &layout.downloads(), assume_yes)?;
+    release
+        .record(&layout.downloads())
+        .map_err(provision::Error::from)?;
+    if reinstall {
+        daemon::uninstall(&layout)?;
+        managed_home::clear_installation_state(&layout.managed_home)?;
+    } else {
+        daemon::stop()?;
+    }
 
     let imported = provision::ensure_distro(&layout, &artifacts.debian_rootfs)?;
-    let guest = provision::ensure_provisioned(&layout, host, reinstall || imported)?;
-    let task = daemon::install(&layout)?;
+    let guest = provision::ensure_provisioned(&layout, &host, reinstall || imported)?;
+    manifest.verify_provisioned(
+        &guest,
+        "workload_kernel",
+        host.kernel_version.expect("TOML host has a kernel"),
+    )?;
+    let task =
+        daemon::install_with_runtime(&layout, &manifest.runtime.clone().unwrap_or_default())?;
     let status = daemon::start()?;
     if !status.success() {
         print_daemon_status(&status);
@@ -105,6 +159,7 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
             status.task, status.ready, status.api_reachable
         )));
     }
+    manifest.save(&layout.managed_home)?;
     println!(
         "microManager {}\n  managed data: {}\n  distribution: {DISTRO_NAME} (WSL 2, {})\n  Debian WSL rootfs {}: {}\n  Firecracker {}: {}\n  Firecrab {} host: {}\n  guest installer: {}\n  provision marker: {}\n  scheduled task: \\{} ({})\n  API: http://127.0.0.1:5523/\n  guest: {}",
         if reinstall {
@@ -114,11 +169,11 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         },
         layout.managed_home.display(),
         host.architecture,
-        provision::DEBIAN_ROOTFS_VERSION,
+        host.rootfs_version,
         artifacts.debian_rootfs.display(),
-        provision::FIRECRACKER_VERSION,
+        host.firecracker_version,
         artifacts.firecracker.display(),
-        artifacts.firecrab_version,
+        host.firecrab_version,
         artifacts.firecrab_host.display(),
         artifacts.installer.display(),
         layout.provision_marker().display(),
@@ -126,10 +181,19 @@ fn run_install(reinstall: bool, assume_yes: bool) -> Result<i32, Error> {
         task.display(),
         guest.lines().collect::<Vec<_>>().join(", ")
     );
+    println!(
+        "  manifest: {}",
+        layout.managed_home.join(manifest::FILE_NAME).display()
+    );
     Ok(0)
 }
 
 fn run_start() -> Result<i32, Error> {
+    if daemon::task_state() == daemon::TaskState::Missing {
+        return Err(daemon::Error::NotInstalled.into());
+    }
+    let layout = lifecycle::Layout::from_process_env()?;
+    daemon::install(&layout)?;
     let status = daemon::start()?;
     print_daemon_status(&status);
     Ok(i32::from(!status.success()))
@@ -150,6 +214,11 @@ fn run_dev(
         )?)
     };
     let layout = lifecycle::Layout::from_process_env()?;
+    let frontend = checkout
+        .as_ref()
+        .map(|checkout| dashboard::prepare(&checkout.root))
+        .transpose()
+        .map_err(super::dev::Error::from)?;
     if !layout.runtime().join("microManager-task.xml").is_file()
         || daemon::task_state() == daemon::TaskState::Missing
         || !wsl::contains(&wsl::distributions(), DISTRO_NAME)
@@ -173,11 +242,37 @@ fn run_dev(
         return Err(super::dev::Error::LocalApiUnavailable.into());
     }
     super::report!("[PASS] API: http://127.0.0.1:5523/");
+    if let Some(source) = frontend {
+        dashboard::start(&source, &layout.managed_home).map_err(super::dev::Error::from)?;
+    } else {
+        dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?;
+    }
     super::report!("  logs: firecrab service debug --logs --tail 100");
     Ok(0)
 }
 
+fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
+    if !wsl::is_running(DISTRO_NAME) {
+        return Err(Error::GuestNotRunning);
+    }
+    dev::control(command)?;
+    let layout = lifecycle::Layout::from_process_env()?;
+    if command != DevCommand::Start {
+        dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?;
+    }
+    if command != DevCommand::Stop {
+        let source = dashboard::source(&layout.managed_home).map_err(super::dev::Error::from)?;
+        dashboard::start(&source, &layout.managed_home).map_err(super::dev::Error::from)?;
+    }
+    Ok(0)
+}
+
 fn run_stop() -> Result<i32, Error> {
+    match lifecycle::Layout::from_process_env() {
+        Ok(layout) => dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?,
+        Err(lifecycle::Error::MissingManagedHome) => {}
+        Err(error) => return Err(error.into()),
+    }
     daemon::stop()?;
     println!("[PASS] task_scheduler: stopped");
     Ok(0)
@@ -205,7 +300,10 @@ fn collect_debug(layout: &lifecycle::Layout, options: debug::Options) -> debug::
         "windows",
         &layout.managed_home,
         options,
-        &[("provision", "guest-provision.log")],
+        &[
+            ("dashboard", "dev-dashboard.log"),
+            ("provision", "guest-provision.log"),
+        ],
     );
     let capabilities = doctor::report(doctor::Inputs::debug());
     report.capability = debug::Capability::from_checks(
@@ -399,7 +497,7 @@ fn run_update(apply: bool, yes: bool) -> Result<i32, Error> {
 
 struct ManagedGuest<'a> {
     layout: &'a lifecycle::Layout,
-    host: &'a provision::Host,
+    host: &'a provision::Host<'a>,
     /// The managed home as the distribution sees it under `/mnt`.
     share: String,
 }
@@ -443,12 +541,32 @@ fn shell_arguments(command: &[String]) -> Vec<String> {
     arguments
 }
 
+/// Non-interactive stdin transport; PowerShell never converts credential bytes.
+pub(crate) fn run_guest_command(
+    command: &[String],
+    input: Option<std::fs::File>,
+) -> Result<i32, Error> {
+    if !wsl::contains(&wsl::distributions(), DISTRO_NAME) {
+        return Err(Error::NotInstalled);
+    }
+    let stdin = input
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(std::process::Stdio::null);
+    let status = std::process::Command::new("wsl.exe")
+        .args(shell_arguments(command))
+        .stdin(stdin)
+        .status()
+        .map_err(Error::Console)?;
+    Ok(status.code().unwrap_or(1))
+}
+
 /// Without `--purge` the distribution stays registered, so its Firecrab data
 /// and the managed home survive for the next install, as on macOS.
 fn run_uninstall(layout: &lifecycle::Layout, purge: bool) -> Result<i32, Error> {
     if purge {
         lifecycle::validate_purge(layout)?;
     }
+    dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?;
     daemon::uninstall(layout)?;
     if purge {
         if wsl::contains(&wsl::distributions(), DISTRO_NAME) {
@@ -561,6 +679,53 @@ mod tests {
     }
 
     #[test]
+    fn dev_controls_use_the_running_guest_without_changing_micro_manager() {
+        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+            let action = command.as_str();
+            let wsl = fake::answer(move |line| match line {
+                "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+                l if l
+                    == format!("wsl.exe -d firecrab-debian -u root --exec bash -s -- {action}") =>
+                {
+                    Ok(String::new())
+                }
+                other => panic!("dev control changed the host: {other}"),
+            });
+            dev::control(command).unwrap();
+            assert_eq!(wsl.calls().len(), 1);
+        }
+    }
+
+    #[test]
+    fn dev_controls_do_not_boot_a_stopped_guest() {
+        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+            let wsl = fake::answer(|line| match line {
+                "wsl.exe --list --running --quiet" => Ok("Debian\n".into()),
+                other => panic!("dev control booted a guest: {other}"),
+            });
+            assert!(matches!(
+                run_dev_control(command),
+                Err(Error::GuestNotRunning)
+            ));
+            assert_eq!(wsl.calls().len(), 1);
+        }
+    }
+
+    #[test]
+    fn dev_control_failure_is_reported_without_starting_micro_manager() {
+        let wsl = fake::answer(|line| match line {
+            "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+            l if l.contains("--exec bash -s -- restart") => Err("restart failed".into()),
+            other => panic!("dev control changed the host: {other}"),
+        });
+        assert!(matches!(
+            run_dev_control(DevCommand::Restart),
+            Err(Error::Wsl(_))
+        ));
+        assert_eq!(wsl.calls().len(), 2);
+    }
+
+    #[test]
     fn status_and_stop_report_an_uninstalled_host() {
         let _wsl = fake::answer(empty_host);
         assert_eq!(run(Command::Status).expect("reported"), 1);
@@ -655,19 +820,21 @@ mod tests {
     const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
     const VERSION_QUERY: &str =
         "wsl.exe -d firecrab-debian -u root --exec sh -c firecrab --version";
-    const INSTALL: &str = "wsl.exe -d firecrab-debian -u root --exec bash /mnt/c/Users/dev/AppData/Local/Firecrab/micromanager/provision/guest-update.sh";
+    const INSTALL: &str = "wsl.exe -d firecrab-debian -u root --exec bash /mnt/c/Users/dev/AppData/Local/Firecrab/micromanager/updates/provision/guest-update.sh";
 
     /// A release whose files are already cached, so nothing is downloaded.
-    fn cached_release(layout: &lifecycle::Layout, host: &provision::Host) -> Release {
-        for name in [host.firecrab_bundle, release::INSTALLER_FILE] {
-            std::fs::write(layout.downloads().join(name), b"abc").expect("cached download");
+    fn cached_release(layout: &lifecycle::Layout, host: &provision::Host<'_>) -> Release {
+        let directory = layout.managed_home.join("updates/downloads");
+        std::fs::create_dir_all(&directory).unwrap();
+        for name in [host.firecrab_bundle(), release::INSTALLER_FILE] {
+            std::fs::write(directory.join(name), b"abc").expect("cached download");
         }
         Release::fixture(
             "v0.3.1",
             "https://example.invalid/releases",
             &format!(
                 "{ABC_SHA256}  ./{}\n{ABC_SHA256}  ./{}\n",
-                host.firecrab_bundle,
+                host.firecrab_bundle(),
                 release::INSTALLER_ASSET
             ),
         )
@@ -692,7 +859,12 @@ mod tests {
             0
         );
         assert_eq!(wsl.calls(), [VERSION_QUERY]);
-        assert!(!layout.provision().join("guest-update.sh").exists());
+        assert!(
+            !layout
+                .managed_home
+                .join("updates/provision/guest-update.sh")
+                .exists()
+        );
     }
 
     #[test]
@@ -716,11 +888,22 @@ mod tests {
         );
         assert_eq!(wsl.calls(), [VERSION_QUERY, INSTALL]);
         assert_eq!(
-            std::fs::read_to_string(layout.provision().join("guest-update.sh")).unwrap(),
+            std::fs::read_to_string(
+                layout
+                    .managed_home
+                    .join("updates/provision/guest-update.sh")
+            )
+            .unwrap(),
             guest_update::guest_script()
         );
         // What the downloads were verified against stays for `service validate`.
-        assert!(layout.downloads().join("SHA256SUMS").is_file());
+        assert!(
+            layout
+                .managed_home
+                .join("updates/downloads/SHA256SUMS")
+                .is_file()
+        );
+        assert!(!layout.downloads().join("SHA256SUMS").exists());
     }
 
     #[test]
@@ -781,6 +964,17 @@ mod tests {
     #[test]
     fn purge_unregisters_the_distribution_and_deletes_the_managed_home() {
         let (_directory, layout) = layout();
+        manifest::Manifest::bundled()
+            .unwrap()
+            .save(&layout.managed_home)
+            .unwrap();
+        std::fs::write(
+            layout.provision().join("legacy-install.sh"),
+            b"legacy installer",
+        )
+        .unwrap();
+        std::fs::write(layout.provision_marker(), b"legacy marker").unwrap();
+        std::fs::write(layout.distro().join("ext4.vhdx"), b"distribution data").unwrap();
         let wsl = fake::answer(|line| match line {
             "wsl.exe --list --quiet" => Ok("Debian\nfirecrab-debian\n".into()),
             "wsl.exe --list --running --quiet" => Ok(String::new()),
@@ -792,6 +986,11 @@ mod tests {
         assert!(
             wsl.calls()
                 .contains(&"wsl.exe --unregister firecrab-debian".to_string())
+        );
+        assert!(
+            !wsl.calls()
+                .iter()
+                .any(|line| line == "wsl.exe --unregister Debian")
         );
     }
 

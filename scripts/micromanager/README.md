@@ -101,7 +101,7 @@ Same lab, same caveat about the extra nesting layer.
   built in.
 
 The same lab now runs `firecrab service install` end to end; see
-[microManager on Windows](../../public-docs/micromanager-windows.md).
+[microManager on Windows](../../public-docs/getting-started/windows.md).
 
 ## Next feasibility gate
 

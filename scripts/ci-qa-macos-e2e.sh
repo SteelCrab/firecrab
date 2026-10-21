@@ -5,7 +5,7 @@
 #
 # CI must set isolated FIRECRAB_INSTALL_DIR and FIRECRAB_MICROMANAGER_HOME
 # paths. The gate installs the current checkout; the caller purges afterward.
-# Usage: scripts/ci-qa-macos-e2e.sh [gate|shell|browser|api|nginx|guest|lifetime|all]
+# Usage: scripts/ci-qa-macos-e2e.sh [gate|shell|repair|browser|api|nginx|guest|lifetime|all]
 set -euo pipefail
 
 if [ "$(uname -s)" != Darwin ]; then
@@ -23,9 +23,9 @@ PHASE=${1:-all}
 export FIRECRAB_QA_WAIT_FACTOR=${FIRECRAB_QA_WAIT_FACTOR:-3}
 
 case "$PHASE" in
-    gate | shell | browser | api | nginx | guest | lifetime | all) ;;
+    gate | shell | repair | browser | api | nginx | guest | lifetime | all) ;;
     *)
-        printf 'usage: %s [gate|shell|browser|api|nginx|guest|lifetime|all]\n' "$0" >&2
+        printf 'usage: %s [gate|shell|repair|browser|api|nginx|guest|lifetime|all]\n' "$0" >&2
         exit 2
         ;;
 esac
@@ -146,6 +146,10 @@ run_lifetime() {
     "$root/scripts/ci-qa-lifetime.sh" "${FIRECRAB_QA_LIFETIME_REFERENCE:-alpine:3.21}"
 }
 
+run_repair() {
+    python3 "$root/scripts/ci-qa-macos-repair.py" --cli "$(command -v firecrab)"
+}
+
 case "$PHASE" in
     gate)
         run_gate
@@ -153,6 +157,9 @@ case "$PHASE" in
     shell)
         require_api
         run_shell
+        ;;
+    repair)
+        run_repair
         ;;
     browser)
         require_api
@@ -181,6 +188,8 @@ case "$PHASE" in
     all)
         run_gate
         run_shell
+        run_repair
+        configure_manager_ssh
         npm --prefix "$root/firecrab-e2e" test
         "$root/scripts/ci-qa-api.sh"
         "$root/scripts/ci-qa-nginx.sh" nginx:1.27-alpine

@@ -501,7 +501,9 @@ pub fn check_ufw(runner: &dyn CommandRunner) -> Vec<CheckResult> {
     if bridges.is_empty() {
         return vec![CheckResult::skip(
             "ufw: active, but no firecrab bridges (fcbr0/mnb*) yet",
-            Some("new bridges need DHCP/DNS and route allows (public-docs/troubleshooting.md)"),
+            Some(
+                "new bridges need DHCP/DNS and route allows (public-docs/guides/troubleshooting.md)",
+            ),
             Some("after net-helper starts: sudo ufw allow in on fcbr0 to any port 67 proto udp; …"),
         )];
     }
@@ -926,7 +928,7 @@ pub fn check_image_install_tools(env: &DoctorEnv, runner: &dyn CommandRunner) ->
         return vec![CheckResult::skip(
             format!("image-install: remote disabled (FIRECRAB_IMAGE_BASE_URL={base_url})"),
             Some("dashboard will not download packages; seed images/ on the host"),
-            Some("see public-docs/installation.md (M2Image)"),
+            Some("see public-docs/getting-started/installation.md (M2Image)"),
         )];
     }
     vec![CheckResult::pass("image_install_tools")]
