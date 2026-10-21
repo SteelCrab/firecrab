@@ -36,8 +36,10 @@ VM apps and saved Nginx routes. The operator must deploy that service.
 
 - Linux with systemd 247 or later. On macOS/Windows, a running managed Linux guest.
 - Matching Firecrab API, helper, and CLI builds for dashboard controls.
-- Nginx installed by the host's package manager. The CLI searches `/usr/sbin/nginx`,
-  `/usr/bin/nginx`, then PATH. `apply --nginx` accepts an external executable.
+- The bundled `firecrab-ingress` engine, built from pinned Nginx and PCRE2 sources
+  and installed in `$FIRECRAB_LIBDIR` (default `/usr/local/lib/firecrab`).
+  No OS Nginx package or compiler is required. `apply --nginx` remains an explicit
+  override for operators who manage their own engine.
 - Reachable app ports. Existing VM port forwards can provide loopback upstreams
   such as `127.0.0.1:18081`.
 - For temporary public access, a reachable Cloudflare Quick Tunnel connection.
@@ -51,23 +53,50 @@ Cloudflare. Direct public HTTPS and MicroNetwork listeners are subsequent work.
 ## Install and configure
 
 ```sh
-# Linux example. Other distributions use their own Nginx package.
-sudo apt-get install nginx
+# Linux: the normal host install already includes firecrab-ingress.
+# Install the optional Cloudflare connector when using tunnels:
 sudo firecrab pipe install
 
-# macOS/Windows: install Nginx in the managed guest first, then run:
+# macOS/Windows: the host bundle in the managed guest includes the engine.
 firecrab pipe install
 ```
 
-`pipe install` requires an installed Nginx and downloads the pinned cloudflared
+`pipe install` checks the bundled ingress engine and downloads the pinned cloudflared
 release. It verifies SHA-256 before replacing the executable and skips unchanged
 verified downloads. Installing does not start Firecrab traffic units or apply
-routes. `install.sh --with-pipe` also installs the OS Nginx package.
+routes. `install.sh --with-pipe` also installs the connector during host setup.
 
 Cloudflared versions and release digests are in
 [pipe-engines.json](../../packaging/pipe-engines.json). Run `pipe install` explicitly
-to update the connector. Manage Nginx updates through the OS package manager.
+to update the connector. Firecrab host releases update the bundled ingress engine.
 Firecrab uses its own Nginx config and unit. It does not edit the host's nginx.conf.
+
+### Building the bundled engine
+
+Release builds run `scripts/build-ingress.sh OUTPUT_DIR` on each Linux architecture
+with `musl-tools`, a C toolchain, Python 3 and curl. The source versions and SHA-256
+digests are pinned in `packaging/ingress-sources.json`. Nginx and PCRE2 are linked
+statically with musl; the build rejects a dynamic executable. HTTPS terminates at
+the tunnel, so OpenSSL is not included. Compression is left to the application.
+The engine retains the rewrite, map, proxy and upstream modules used by Pipe.
+
+The host bundle includes `firecrab-ingress` and an `ingress/` attribution directory
+with upstream licenses and source identities. Source installs must build these
+beside the API, helper and CLI before running `install.sh --bin-dir`.
+`firecrab service install` on Linux invokes the same host installer.
+Routes remain in `$CONFDIR/pipe` across engine replacement. An engine update
+replaces the on-disk executable; an already-running master keeps its old version
+until an explicit ingress restart. Plan that restart when updating the engine.
+
+For an existing installation whose old self-update helper does not know about the
+ingress bundle, rerun the new host installer once to install the engine and notices.
+Applying routes then switches the unit to the private engine; switching an active
+unit from an external nginx requires the existing disable/apply procedure.
+
+Source development builds and stages the same private engine. Restoring the
+release API/helper preserves a source engine still referenced by the ingress unit,
+so Pipe can continue running independently. Disable and apply with the release CLI
+to move that unit back to the release engine.
 
 Copy [the manifest example](../../packaging/pipe.example.json). Set the hostnames,
 app addresses, and optional tunnel UUID and credentials file. Relative credential

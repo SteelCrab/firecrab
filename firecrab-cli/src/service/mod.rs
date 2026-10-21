@@ -1,12 +1,7 @@
 //! `firecrab service` — install.sh의 설치/삭제와 systemd 제어를 Rust로.
 //!
-//! install.sh 함수 하나가 이 모듈 트리의 함수 하나에 대응한다. 모든 호스트
-//! 변경은 [`privileged::Privileged`]를 거쳐 `sudo <cmd>`로 실행되고, 읽기
-//! 전용 검사는 sudo 없이 실행된다.
-//!
-//! Task 1은 명령 표면과 에러 타입만 세운다. `Error::Sudo`/`NotInstalled`와
-//! `Error::step_fix`는 이후 태스크의 실제 설치/삭제/systemd 제어 구현이
-//! 붙으면 쓰인다.
+//! 설치·재설치는 번들에 포함한 install.sh를 재사용한다. 서비스 제어와
+//! 삭제는 [`privileged::Privileged`]를 거쳐 실행한다.
 #![allow(dead_code)]
 
 use std::path::PathBuf;
@@ -19,6 +14,7 @@ pub mod deps;
 pub mod env;
 pub mod firecracker;
 pub mod host_state;
+mod installer;
 pub mod layout;
 pub mod output;
 pub mod payload;
@@ -163,8 +159,7 @@ pub fn run(runner: &dyn CommandRunner, command: Command) -> Result<(), Error> {
             privileged.ensure_ticket()?;
             uninstall::uninstall(&privileged, &env, purge)
         }
-        Command::Install(_) | Command::Reinstall { .. } => {
-            Err(Error::step("service", "not implemented yet"))
-        }
+        Command::Install(opts) => installer::run(opts, false, false),
+        Command::Reinstall { opts, purge } => installer::run(opts, true, purge),
     }
 }

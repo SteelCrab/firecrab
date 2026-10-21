@@ -91,6 +91,16 @@ pub fn uninstall(privileged: &Privileged<'_>, env: &ServiceEnv, purge: bool) -> 
         "rm",
         &["-rf", &env.libdir.join("pipe").to_string_lossy()],
     )?;
+    privileged.run_ok(
+        STEP,
+        "rm",
+        &["-f", &env.libdir.join("firecrab-ingress").to_string_lossy()],
+    )?;
+    privileged.run_ok(
+        STEP,
+        "rm",
+        &["-rf", &env.libdir.join("ingress").to_string_lossy()],
+    )?;
 
     // SIGTERM은 helper의 소켓 루프만 멈춘다 — helper가 만든 브리지, TAP,
     // nftables 테이블은 재부팅 전까지 남는다. 바이너리가 아직 디스크에 있는

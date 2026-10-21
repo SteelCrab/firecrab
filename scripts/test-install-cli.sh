@@ -280,12 +280,17 @@ fake=$(mktemp -d)
 write_elf64 "$fake/firecrab-api" 62
 write_elf64 "$fake/firecrab-helper" 62
 write_elf64 "$fake/firecrab" 62
+write_elf64 "$fake/firecrab-ingress" 62
+mkdir -p "$fake/ingress"
+for name in LICENSE.nginx LICENSE.pcre2 LICENSE.musl sources.json; do
+    printf 'fixture\n' >"$fake/ingress/$name"
+done
 mkdir -p "$fake/dist"
 printf '<html></html>\n' >"$fake/dist/index.html"
 "$ROOT/scripts/package-host-release.sh" x86_64 "$fake" "$fake/dist" "$fake/firecrab-host-x86_64.tar.gz" >/dev/null
 members=$(tar -tzf "$fake/firecrab-host-x86_64.tar.gz")
 for need in firecrab-api firecrab-helper extract-vmlinux extract-arm64-image \
-            firecrab dashboard/index.html systemd/firecrab-api.service \
+            firecrab firecrab-ingress ingress/LICENSE.nginx dashboard/index.html systemd/firecrab-api.service \
             systemd/firecrab-helper.service; do
     if printf '%s\n' "$members" | grep -qx -- "$need"; then
         pass "host tarball contains $need"

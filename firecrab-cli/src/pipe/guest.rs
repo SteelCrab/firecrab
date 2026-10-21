@@ -39,7 +39,7 @@ pub(super) fn input(path: &Path) -> Result<File> {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(super) fn run(args: Vec<String>, input: Option<File>) -> Result<()> {
-    let script = r#"if test -f /etc/systemd/system/firecrab-api.service.d/90-firecrab-dev.conf && test -x /usr/local/lib/firecrab-dev/bin/firecrab; then cli=/usr/local/lib/firecrab-dev/bin/firecrab; else cli=$(command -v firecrab) || { echo 'Firecrab CLI is missing in the managed guest' >&2; exit 1; }; fi; exec "$cli" pipe "$@""#;
+    let script = r#"if test -f /etc/systemd/system/firecrab-api.service.d/90-firecrab-dev.conf && test -x /usr/local/lib/firecrab-dev/bin/firecrab; then cli=/usr/local/lib/firecrab-dev/bin/firecrab; export FIRECRAB_INGRESS_BINARY=/usr/local/lib/firecrab-dev/bin/firecrab-ingress; else cli=$(command -v firecrab) || { echo 'Firecrab CLI is missing in the managed guest' >&2; exit 1; }; fi; exec "$cli" pipe "$@""#;
     let mut command = vec![
         "sh".into(),
         "-c".into(),

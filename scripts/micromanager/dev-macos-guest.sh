@@ -161,10 +161,11 @@ if [ "$profile" != restore ]; then
   esac
   echo '[BUILD] preparing Debian compiler and pinned Rust toolchain'
   if ! command -v cc >/dev/null || ! command -v pkg-config >/dev/null || ! command -v cmake >/dev/null \
-    || ! command -v objcopy >/dev/null; then
+    || ! command -v objcopy >/dev/null || ! command -v musl-gcc >/dev/null \
+    || ! command -v python3 >/dev/null; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y build-essential pkg-config cmake ca-certificates curl
+    apt-get install -y build-essential pkg-config cmake ca-certificates curl musl-tools python3
   fi
   export CARGO_HOME="$root/cargo"
   export RUSTUP_HOME="$root/rustup"
@@ -205,6 +206,9 @@ if [ "$profile" != restore ]; then
   if [ "$profile" = release ]; then flags+=(--release); fi
   # Compilers must not retain the deployment lock after their owning shell exits.
   rustup run "$channel" cargo build "${flags[@]}" 9>&-
+  if [ -f scripts/build-ingress.sh ]; then
+    bash scripts/build-ingress.sh "$CARGO_TARGET_DIR/ingress" 9>&-
+  fi
 
   # Compilation writes to the data disk. Check the OS disk again before staging
   # executables or stopping the running services.
@@ -224,6 +228,10 @@ if [ "$profile" != restore ]; then
     objcopy --compress-debug-sections=zlib \
       "$CARGO_TARGET_DIR/$target/$profile/$binary" "$compressed/$binary"
   done
+  if [ -f scripts/build-ingress.sh ]; then
+    install -m 0755 "$CARGO_TARGET_DIR/ingress/firecrab-ingress" "$compressed/firecrab-ingress"
+    cp -R "$CARGO_TARGET_DIR/ingress/ingress" "$compressed/ingress"
+  fi
   # Fail before touching the OS disk instead of with a partial install.
   need_kib=$(du -sk "$compressed" | cut -f1)
   free_kib=$(df -Pk "$bin_root" | awk 'NR == 2 { print $4 }')
@@ -238,6 +246,10 @@ if [ "$profile" != restore ]; then
   for binary in firecrab-api firecrab-helper firecrab; do
     install -m 0755 "$compressed/$binary" "$binaries/$binary"
   done
+  if [ -f "$compressed/firecrab-ingress" ]; then
+    install -m 0755 "$compressed/firecrab-ingress" "$binaries/firecrab-ingress"
+    cp -R "$compressed/ingress" "$binaries/ingress"
+  fi
   # The API resolves these runtime tools next to its executable. The source
   # snapshot is root-only, so its compile-time fallback path is not accessible.
   for tool in extract-vmlinux extract-arm64-image; do
@@ -267,6 +279,10 @@ else
     printf '[Service]\nExecStart=\nExecStart=%s/bin/%s\n' "$bin_root" "$binary" \
       >"$unit_root/$unit.service.d/90-firecrab-dev.conf"
     if [ "$unit" = "$helper_unit" ]; then
+      if [ -x "$binaries/firecrab-ingress" ]; then
+        printf 'Environment=FIRECRAB_INGRESS_BINARY=%s/bin/firecrab-ingress\n' "$bin_root" \
+          >>"$unit_root/$unit.service.d/90-firecrab-dev.conf"
+      fi
       printf 'ReadWritePaths=-/etc/firecrab -%s\n' "$unit_root" \
         >>"$unit_root/$unit.service.d/90-firecrab-dev.conf"
     fi
@@ -286,10 +302,21 @@ for _ in $(seq 1 60); do
     && curl -fs --max-time 2 http://127.0.0.1:5523/api/host >/dev/null; then
     check_filesystems || exit 74
     deploying=0
-    if [ "$profile" = restore ]; then rm -f "$bin_root/bin"; fi
-    case "$previous_bin" in
-      "$bin_root"/build.*) rm -rf "$previous_bin" ;;
-    esac
+    keep_ingress_build=0
+    if [ "$profile" = restore ]; then
+      # Pipe outlives the API. Keep an engine still referenced by its unit,
+      # including an inactive unit that an operator can start again later.
+      if grep -Fq "$bin_root/bin/firecrab-ingress" "$unit_root/firecrab-ingress.service" 2>/dev/null; then
+        keep_ingress_build=1
+      else
+        rm -f "$bin_root/bin"
+      fi
+    fi
+    if [ "$keep_ingress_build" = 0 ]; then
+      case "$previous_bin" in
+        "$bin_root"/build.*) rm -rf "$previous_bin" ;;
+      esac
+    fi
     echo "[PASS] guest: $profile API + helper are ready"
     exit 0
   fi
