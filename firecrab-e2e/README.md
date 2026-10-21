@@ -30,7 +30,7 @@ Isolated Playwright suite.
 5. Assert `FIRECRAB_NETWORK_READY` and `FIRECRAB_OCI_E2E_READY` on the console
 6. Networks: IPv6 select defaults to Off; create IPv4-only and auto-ULA dual-stack networks
 7. OCI DHCP: import fixture → create network → VM with `80:18888/tcp` → start → `FIRECRAB_NETWORK_READY` and an IPv4 on the detail panel
-8. MicroRegistry: register a custom image → delete its installed template → reinstall the local package → boot that image
+8. MicroRegistry API: register a custom image → delete its installed template → reinstall the local package through the API → boot that image
 9. Pipe Registry: the card shows the API login count; save and remove a fake ECR login without exposing its secret
 
 - `FIRECRAB_E2E_SKIP_GUEST_BOOT=1`: skip guest-boot half
