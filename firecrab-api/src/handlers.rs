@@ -18,3 +18,4 @@ pub mod vms;
 
 pub mod cloudflare;
 pub mod pipe;
+pub mod pipe_databases;
