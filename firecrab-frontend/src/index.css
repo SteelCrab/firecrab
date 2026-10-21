@@ -1084,7 +1084,7 @@ a.options-menu-item {
 .reconciliation-detail .reconciliation-diagnostic { padding-left: 0.65rem; border-left: 2px solid var(--line); }
 
 /* M2Image table status cell: badge and "⋯" options menu trigger on one line. */
-.pulled-image-row td:first-child { overflow-wrap: anywhere; white-space: normal; }
+table.image-table td:first-child, table.image-table .image-registry { overflow-wrap: anywhere; white-space: normal; }
 .pulled-image-source { display: block; color: var(--shell); margin-top: .25rem; font-size: .75rem; }
 .pulled-image-log .subpanel { margin-block: .5rem; }
 table.image-table .state-cell {
@@ -1092,6 +1092,18 @@ table.image-table .state-cell {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+}
+@media (max-width: 560px) {
+  table.image-table, table.image-table tbody { display: block; width: 100%; }
+  table.image-table thead { display: none; }
+  table.image-table tbody tr { position: relative; display: grid; gap: .4rem; padding: .75rem 0; border-bottom: 1px solid var(--line); }
+  table.image-table td { display: block; min-width: 0; padding: 0; border: 0; }
+  table.image-table td:first-child { padding-right: 2.5rem; overflow-wrap: anywhere; white-space: normal; }
+  table.image-table td[data-label]::before { content: attr(data-label) ": "; color: var(--shell); font-size: .75rem; }
+  table.image-table .state-cell { display: flex; flex-wrap: wrap; gap: .25rem; }
+  table.image-table .state-cell .options-menu { position: absolute; top: .75rem; right: 0; }
+  table.image-table tbody tr.pulled-image-log { display: block; padding: 0; border-bottom: 0; }
+  table.image-table .pulled-image-log td { padding-right: 0; }
 }
 
 /* Startup pipeline: show step durations horizontally, like a CI build log (task-vm-startup-timeline). */

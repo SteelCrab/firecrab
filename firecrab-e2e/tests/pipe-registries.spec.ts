@@ -132,7 +132,8 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
     const selected = selection(mock.panel);
     await expect(selected.getByText("Pulled", { exact: true })).toBeVisible();
     await expect(catalog.getByText("Pulled", { exact: true })).toBeVisible();
-    await expect(mock.panel.getByLabel("Tag", { exact: true }).locator('option[value="alpine"]')).toHaveText("alpine · Pulled");
+    await expect(mock.panel.getByLabel("Tag", { exact: true }).locator('option[value="alpine"]')).toHaveText("alpine");
+    await expect(selected.getByText(/Pulled/)).toHaveCount(1);
     expect(mock.transfers).toEqual([{ action: "pull", reference: "docker.io/docker-user/app:alpine" }]);
     expect(mock.catalogs).toContainEqual({ registry: "docker.io", namespace: "", page: 2 });
     expect(mock.catalogs.every(query => query.registry === "docker.io" && query.namespace === "")).toBe(true);
@@ -295,7 +296,7 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
     await expect(mock.panel.getByRole("table", { name: "Repositories", exact: true }).getByText("Pulled", { exact: true })).toHaveCount(0);
   });
 
-  test("keeps a newly pulled tag selected and restores its marker after reload", async ({ page }) => {
+  test("keeps a newly pulled tag selected and restores its status after reload", async ({ page }) => {
     const mock = await open(page, { saved: "ghcr" });
     await mock.panel.getByRole("button", { name: "More tags", exact: true }).click();
     const tag = mock.panel.getByLabel("Tag", { exact: true });
@@ -308,9 +309,10 @@ test.describe("Pipe registry automatic discovery @dashboard", () => {
     await expect(tag).toHaveValue("v1");
     await expect(selected.getByText("Not pulled", { exact: true })).toBeVisible();
     await mock.panel.getByRole("button", { name: "More tags", exact: true }).click();
-    await expect(tag.locator('option[value="v2"]')).toHaveText("v2 · Pulled");
+    await expect(tag.locator('option[value="v2"]')).toHaveText("v2");
     await tag.selectOption("v2");
     await expect(selected.getByText("Pulled", { exact: true })).toBeVisible();
+    await expect(selected.getByText(/Pulled/)).toHaveCount(1);
     expect(mock.transfers).toEqual([{ action: "pull", reference: "ghcr.io/team/app:v2" }]);
   });
 

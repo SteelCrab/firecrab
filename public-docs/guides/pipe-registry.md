@@ -34,11 +34,18 @@ daemon. Image uploads are managed by the source registry.
    shown. Changing the source registry clears the previous selection. The pull
    panel shows the image, its status, and the job log.
 5. The repository **Status** column shows whether a repository has a retained
-   image. Pulled tags are marked in **Tag** and in the selected image's status.
+   image. **Tag** shows tag names only. The selected image's **Status** shows
+   whether that tag has been pulled.
    Status is loaded from the host and refreshed after a successful pull, so it
    survives a page reload. This records a previous pull; it does not check
    whether a remote tag has changed since then. **Pull image** remains available
    to update it.
+6. Open **Images → M2Image**. Pulled sources appear as **Build required**.
+   Use the source row's **⋯ → Build M2Image** to create a bootable template.
+   Building uses the retained digest, so a moved source tag cannot change the
+   selected image. After success, the installed template replaces the source row
+   and becomes selectable when creating a VM. Failed builds retain their log and
+   can be retried; page reloads resume a running build's status.
 
 ECR login passwords cannot call the signed AWS `DescribeRepositories` API.
 Automatic ECR repository discovery requires an AWS IAM integration, which is
@@ -69,7 +76,7 @@ SHA-256 content digests.
 | `GET /api/pipe/registry-tags?reference=…&last=…` | One tag page and optional `nextLast` cursor |
 | `POST /api/pipe/registry-transfers` | Start `{action: "pull", reference}`; returns 202 |
 | `GET /api/pipe/registry-transfers/{id}` | Transfer status; ID is the POST response's `alias` |
-| `GET /api/pipe/registry-images` | Retained OCI image metadata for API clients |
+| `GET /api/pipe/registry-images` | Retained OCI metadata and digest-pinned `templateAlias` for M2Image builds |
 
 Harbor discovery uses its `/api/v2.0/repositories` API. Tag lookups and pulls use
 its OCI Distribution API and registry token service. Catalog pagination does not

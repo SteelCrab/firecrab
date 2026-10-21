@@ -72,7 +72,7 @@ function ImageTags({ registry, repository, images, imagesUnavailable, disabled, 
     {(!!page?.tags.length || !!error) && <form className="pipe-controls registry-pull-form" onSubmit={submit}>
       {!!page?.tags.length && <div className="field"><label htmlFor="registry-image-tag">{t("Tag", "태그")}</label>
         <select id="registry-image-tag" value={selectedTag} disabled={loading || !!error} onChange={event => setSelectedTag(event.target.value)}>
-          {page.tags.map(tag => <option key={tag} value={tag}>{tag}{pulled(tag) ? t(" · Pulled", " · 가져옴") : ""}</option>)}
+          {page.tags.map(tag => <option key={tag} value={tag}>{tag}</option>)}
         </select>
       </div>}
       {page?.nextLast && <button className="btn" type="button" disabled={loading} onClick={() => void moreTags()}>{t("More tags", "태그 더 보기")}</button>}

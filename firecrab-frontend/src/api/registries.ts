@@ -2,7 +2,7 @@ import { fetchJson } from "./client";
 import type { ImageInstallResponse } from "../bindings";
 
 export interface RegistryConnection { registry: string; username: string; provider: "dockerHub" | "ghcr" | "ecr" | "harbor" }
-export interface RegistryImage { id: string; reference: string; digest: string; architecture: string; sizeBytes: number }
+export interface RegistryImage { id: string; reference: string; digest: string; architecture: string; sizeBytes: number; templateAlias: string }
 export interface RegistryTags { tags: string[]; nextLast: string | null }
 export interface RegistryRepositories { repositories: string[]; nextPage: number | null; listingSupported: boolean }
 export type RegistryTransfer = { action: "pull"; reference: string };
@@ -15,3 +15,9 @@ export const getRegistryImages = () => fetchJson<RegistryImage[]>(`${base}/regis
 export const getRegistryTags = (reference: string, last?: string) => fetchJson<RegistryTags>(`${base}/registry-tags?${new URLSearchParams({ reference, ...(last ? { last } : {}) })}`);
 export const startRegistryTransfer = (body: RegistryTransfer) => fetchJson<ImageInstallResponse>(`${base}/registry-transfers`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 export const getRegistryTransfer = (id: string) => fetchJson<ImageInstallResponse>(`${base}/registry-transfers/${encodeURIComponent(id)}`);
+
+export function pinnedRegistryReference(image: RegistryImage): string {
+  const name = image.reference.split("@")[0];
+  const colon = name.lastIndexOf(":");
+  return `${colon > name.lastIndexOf("/") ? name.slice(0, colon) : name}@${image.digest}`;
+}

@@ -267,14 +267,41 @@ pub async fn tags(
         .map_err(|error| invalid(error.to_string(), id))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryImage {
+    #[serde(flatten)]
+    image: registries::LocalRegistryImage,
+    template_alias: String,
+}
+
+fn registry_image(
+    image: registries::LocalRegistryImage,
+    id: RequestId,
+) -> Result<RegistryImage, AppError> {
+    let mut pinned = reference(&image.reference, id)?;
+    pinned.version = oci::ImageVersion::Digest(
+        oci::Sha256Digest::parse(&image.digest).map_err(|error| invalid(error.to_string(), id))?,
+    );
+    let named = oci::template_name_from_reference(&pinned)
+        .map_err(|error| invalid(error.to_string(), id))?;
+    Ok(RegistryImage {
+        image,
+        template_alias: named.alias,
+    })
+}
+
 pub async fn images(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
-) -> Result<Json<Vec<registries::LocalRegistryImage>>, AppError> {
+) -> Result<Json<Vec<RegistryImage>>, AppError> {
     registries::images(state.templates.image_root_path())
         .await
+        .map_err(|error| invalid(error.to_string(), id))?
+        .into_iter()
+        .map(|image| registry_image(image, id))
+        .collect::<Result<Vec<_>, _>>()
         .map(Json)
-        .map_err(|error| invalid(error.to_string(), id))
 }
 
 /// The `action` tag keeps the request explicit; pulling is the only transfer.
@@ -351,6 +378,36 @@ pub async fn job(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retained_image_alias_is_pinned_to_the_downloaded_digest() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        for (reference, expected) in [
+            ("docker.io/team/app:latest", "team-app-sha256-aaaaaaaaaaaa"),
+            (
+                "127.0.0.1:18080/project/app:latest",
+                "127.0.0.1-18080-project-app-sha256-aaaaaaaaaaaa",
+            ),
+        ] {
+            let image = registry_image(
+                registries::LocalRegistryImage {
+                    id: "a".repeat(64),
+                    reference: reference.into(),
+                    digest: digest.clone(),
+                    architecture: "aarch64".into(),
+                    size_bytes: 1024,
+                },
+                RequestId(uuid::Uuid::nil()),
+            )
+            .unwrap();
+            assert_eq!(image.template_alias, expected);
+            let json = serde_json::to_value(image).unwrap();
+            assert_eq!(json["templateAlias"], expected);
+            assert_eq!(json["reference"], reference);
+            assert_eq!(json["digest"], digest);
+        }
+    }
+
     #[test]
     fn docker_hub_references_normalize_the_registry_and_official_image_namespace() {
         let id = RequestId(uuid::Uuid::nil());
