@@ -20,7 +20,9 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # Unique /24 per template hash so parallel matrix jobs on one host would not
 # collide if ever co-located (each CI job is its own runner today).
 SUBNET_THIRD=$(printf '%s' "$TEMPLATE" | cksum | awk '{print ($1 % 200) + 20}')
-SUBNET="172.${SUBNET_THIRD}.0.0/24"
+# Keep every generated subnet in RFC1918 space. 172.<hash>.0.0 sampled
+# public prefixes too, outside 172.16/12, and is unsuitable for NAT-only labs.
+SUBNET="10.231.${SUBNET_THIRD}.0/24"
 NAME_NET="boot-$(echo "$TEMPLATE" | tr -c 'a-zA-Z0-9' '-')"
 NAME_VM="m2-$(echo "$TEMPLATE" | tr -c 'a-zA-Z0-9' '-')"
 FIRST_REFERENCE=${FIRECRAB_QA_FIRST_REFERENCE:-0}
@@ -49,6 +51,18 @@ STORAGE=
 STORAGE_PATH=
 CONSOLE_ERROR=
 cleanup_boot() {
+  local result=$?
+  if [ "$result" -ne 0 ] && [ -n "${VM:-}" ]; then
+    # Preserve the guest failure before stop/delete removes its serial log.
+    curl -sS --max-time 15 "$API/api/vms/$VM/log" | python3 -c '
+import json, sys
+try:
+    log = json.load(sys.stdin).get("consoleLog") or ""
+    sys.stderr.write("Guest console tail:\n" + log[-8000:] + "\n")
+except (ValueError, AttributeError):
+    pass
+' || true
+  fi
   # This trap runs for both the happy path and a failed lifecycle assertion.
   # Keep every cleanup operation best-effort: the original failure is more
   # useful than a second error from a partially torn-down VM/network.
@@ -241,6 +255,35 @@ if [ "$FIRST_REFERENCE" = 1 ]; then
   CONSOLE_ERROR=
   echo "PASS V9/$TEMPLATE (console WebSocket)"
   echo "PASS C2/$TEMPLATE (CLI console attach/detach)"
+
+  # V15/C2b (#303): `exit` ends the session. stdin stays open for the whole
+  # wait, so only the API's session_ended close can end the CLI; an EOF or
+  # Ctrl+] detach would print "console detached" instead.
+  CONSOLE_ERROR=$(mktemp)
+  if ! timeout 90 "$CLI_BIN" --api "$API" vm console "$VM" >/dev/null 2>"$CONSOLE_ERROR" \
+      < <(printf '\r'; sleep 2; printf 'exit\r'; sleep 120); then
+    cat "$CONSOLE_ERROR" >&2
+    rm -f "$CONSOLE_ERROR"
+    CONSOLE_ERROR=
+    echo "V15/C2b CLI console did not end on guest exit" >&2
+    exit 1
+  fi
+  if ! grep -q 'guest session ended' "$CONSOLE_ERROR"; then
+    cat "$CONSOLE_ERROR" >&2
+    rm -f "$CONSOLE_ERROR"
+    CONSOLE_ERROR=
+    echo "V15/C2b CLI console ended without the session_ended close" >&2
+    exit 1
+  fi
+  rm -f "$CONSOLE_ERROR"
+  CONSOLE_ERROR=
+  state=$(curl -fsS "$API/api/vms/$VM" | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')
+  [ "$state" = running ] || {
+    echo "V15 VM left running state after guest exit (state=$state)" >&2
+    exit 1
+  }
+  echo "PASS V15/$TEMPLATE (guest exit closes the console with session_ended)"
+  echo "PASS C2b/$TEMPLATE (CLI console ends on guest exit)"
 
   running_delete_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
     -X DELETE "$API/api/vms/$VM")

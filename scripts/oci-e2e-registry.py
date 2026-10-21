@@ -328,6 +328,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=int(os.environ.get("FIRECRAB_OCI_E2E_PORT", "0")),
         help="loopback port (0 = ephemeral, also FIRECRAB_OCI_E2E_PORT)",
     )
+    parser.add_argument(
+        "--exit-on-stdin-close",
+        action="store_true",
+        help="stop the fixture when its SSH controller disconnects",
+    )
     args = parser.parse_args(argv)
     registry = LocalOciRegistry(port=args.port)
     registry.start()
@@ -338,6 +343,12 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
+    if args.exit_on_stdin_close:
+        def watch_controller() -> None:
+            while sys.stdin.read(1):
+                pass
+            stop.set()
+        threading.Thread(target=watch_controller, daemon=True).start()
     try:
         print(json.dumps(registry.announcement()), flush=True)
         print(

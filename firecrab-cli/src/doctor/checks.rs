@@ -4,6 +4,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use super::{CheckResult, DoctorEnv};
+use crate::service::units::helper_unit;
 use crate::shell::CommandRunner;
 
 /// Username for diagnostic detail text. `std::env::var("USER")` stands in
@@ -58,7 +59,7 @@ pub fn check_kvm() -> Vec<CheckResult> {
 }
 
 /// `net.ipv4.ip_forward` must be `1`, or guest outbound NAT never works —
-/// `firecrab-net-helper` also sets this at startup, so a `Fail` here usually
+/// `firecrab-helper` also sets this at startup, so a `Fail` here usually
 /// means the helper hasn't run yet, not a broken host.
 pub fn check_ip_forward() -> Vec<CheckResult> {
     let raw = match fs::read_to_string("/proc/sys/net/ipv4/ip_forward") {
@@ -278,13 +279,19 @@ pub fn check_nft(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckResult
         return vec![CheckResult::fail(
             "nft: missing the inet firecrab table",
             Some("net-helper socket is up but the table is absent"),
-            Some("systemctl restart firecrab-net-helper  (or start a VM so rules are applied)"),
+            Some(&format!(
+                "systemctl restart {}  (or start a VM so rules are applied)",
+                helper_unit(runner)
+            )),
         )];
     }
     vec![CheckResult::skip(
         "nft: inet firecrab table not present yet",
-        Some("expected after firecrab-net-helper is running"),
-        Some("start firecrab-net-helper, then re-run doctor"),
+        Some("expected after firecrab-helper is running"),
+        Some(&format!(
+            "start {}, then re-run doctor",
+            helper_unit(runner)
+        )),
     )]
 }
 
@@ -332,13 +339,16 @@ pub fn check_dnsmasq(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckRe
                     env.dnsmasq_conf,
                     interfaces.join(" ")
                 )),
-                Some("systemctl restart firecrab-net-helper  (or create a MicroNetwork)"),
+                Some(&format!(
+                    "systemctl restart {}  (or create a MicroNetwork)",
+                    helper_unit(runner)
+                )),
             )];
         }
         return vec![CheckResult::skip(
             "dnsmasq: not running (helper also down)",
             None,
-            Some("start firecrab-net-helper"),
+            Some(&format!("start {}", helper_unit(runner))),
         )];
     }
 
@@ -361,7 +371,8 @@ pub fn check_dnsmasq(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<CheckRe
                     interfaces.join(" ")
                 )),
                 Some(&format!(
-                    "systemctl restart firecrab-net-helper  (rewrites {})",
+                    "systemctl restart {}  (rewrites {})",
+                    helper_unit(runner),
                     env.dnsmasq_conf
                 )),
             )];
@@ -490,7 +501,9 @@ pub fn check_ufw(runner: &dyn CommandRunner) -> Vec<CheckResult> {
     if bridges.is_empty() {
         return vec![CheckResult::skip(
             "ufw: active, but no firecrab bridges (fcbr0/mnb*) yet",
-            Some("new bridges need DHCP/DNS and route allows (public-docs/troubleshooting.md)"),
+            Some(
+                "new bridges need DHCP/DNS and route allows (public-docs/guides/troubleshooting.md)",
+            ),
             Some("after net-helper starts: sudo ufw allow in on fcbr0 to any port 67 proto udp; …"),
         )];
     }
@@ -579,8 +592,9 @@ pub fn check_selinux_domain(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<
         "selinux: a firecrab service runs in systemd's own domain (init_t)",
         Some(&detail),
         Some(&format!(
-            "sudo semanage fcontext -a -t bin_t '{libdir}(/.*)?' && sudo restorecon -R {libdir} && sudo systemctl restart firecrab-net-helper firecrab-api",
-            libdir = env.libdir
+            "sudo semanage fcontext -a -t bin_t '{libdir}(/.*)?' && sudo restorecon -R {libdir} && sudo systemctl restart {helper} firecrab-api",
+            libdir = env.libdir,
+            helper = helper_unit(runner)
         )),
     )]
 }
@@ -613,7 +627,10 @@ pub fn check_helper_socket(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<C
             return vec![CheckResult::fail(
                 format!("helper socket: {sock} does not exist"),
                 Some("API cannot reach the network helper"),
-                Some("systemctl start firecrab-net-helper  (dev: ./scripts/dev-net-helper.sh)"),
+                Some(&format!(
+                    "systemctl start {}  (dev: ./scripts/dev-net-helper.sh)",
+                    helper_unit(runner)
+                )),
             )];
         }
     };
@@ -679,7 +696,7 @@ pub fn check_helper_socket(env: &DoctorEnv, runner: &dyn CommandRunner) -> Vec<C
         return vec![CheckResult::fail(
             format!("helper socket: mode {mode:o} is too tight for a group-shared socket"),
             Some(&format!("path={sock} owner={owner_uid}:{group_gid}")),
-            Some("ensure firecrab-net-helper runs with Group= shared with the API (chmod 0660)"),
+            Some("ensure firecrab-helper runs with Group= shared with the API (chmod 0660)"),
         )];
     }
     vec![CheckResult::pass("helper_socket")]
@@ -911,7 +928,7 @@ pub fn check_image_install_tools(env: &DoctorEnv, runner: &dyn CommandRunner) ->
         return vec![CheckResult::skip(
             format!("image-install: remote disabled (FIRECRAB_IMAGE_BASE_URL={base_url})"),
             Some("dashboard will not download packages; seed images/ on the host"),
-            Some("see public-docs/installation.md (M2Image)"),
+            Some("see public-docs/getting-started/installation.md (M2Image)"),
         )];
     }
     vec![CheckResult::pass("image_install_tools")]

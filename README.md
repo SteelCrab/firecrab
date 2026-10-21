@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.2.2-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.1-informational"></a>
 </p>
 
 ```text
@@ -17,60 +17,89 @@
 <p align="center">A lightweight microVM platform for your own server.</p>
 
 <p align="center">
+  <a href="./README.md">English</a> ·
   <a href="./README.ko.md">한국어</a> ·
-  <a href="./README.zh.md">中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
+  <a href="./README.zh.md">中文</a> ·
   <a href="./README.id.md">Bahasa Indonesia</a>
 </p>
 
-**firecrab runs [Firecracker](https://firecracker-microvm.github.io/) microVMs on one
-Linux host you control.** Creating a VM also means choosing its image, network, disk
-location, and outbound-access policy — from a browser dashboard, a CLI, or REST.
+![Firecrab demo](assets/dashboard/firecrab-demo.gif)
 
-It is built for a private, single-host microVM environment: stronger isolation than
-containers, without a full cloud control plane. It is not a hosted service and not a
-multi-host scheduler.
+[DeepWiki](https://deepwiki.com/SteelCrab/firecrab)
 
-![firecrab M2 dashboard demo](assets/dashboard/firecrab-m2.gif)
+## Overview
 
-## Install
+<details>
+<summary>Purpose</summary>
 
-You need a Linux host with `/dev/kvm`, network access, and a user allowed to run
-`sudo`. Run the installer as that regular user — do **not** prefix it with `sudo`. It
-downloads release binaries and calls `sudo` only for the package, systemd, and
-host-setup steps that require it.
+Run Firecracker microVMs on one Linux host you control, managed through a browser dashboard, CLI, or REST API. Built for personal servers, homelabs, and development environments.
+
+</details>
+
+<details>
+<summary>Key features</summary>
+
+- **VMs** — create, start, stop, and delete microVMs; access a browser serial console.
+- **Images and disks** — M2Image templates, OCI image imports, and MicroStorage disk locations.
+- **Networks** — MicroNetwork subnets and per-VM internet or isolated egress.
+- **Host platforms** — Linux directly; macOS and Windows through microManager (Windows Preview).
+
+</details>
+
+<details>
+<summary>Platform comparison</summary>
+
+| Key point | **Firecrab** | [KVM + libvirt](https://libvirt.org/) | [OpenStack](https://docs.openstack.org/nova/latest/) |
+| --- | --- | --- | --- |
+| Focus | Single-host microVMs | General-purpose VMs | Private cloud |
+| Virtualization | Firecracker + KVM | QEMU/KVM | Usually QEMU/KVM |
+| Management | Dashboard, CLI, REST | libvirt API, CLI; separate GUI | Horizon, CLI, REST |
+| Deployment | One host | Per-host management | Controller and compute services |
+
+</details>
+
+## Architecture
+
+[Detailed architecture](public-docs/reference/architecture.md): OS-specific microManager layers, VM startup, image/kernel supply, guest features, and CLI updates.
+
+### Firecrab at a glance
+
+![Firecrab at a glance](assets/architecture/firecrab-at-a-glance.en.svg)
+
+1. Ask from the browser or the CLI. Pick an M2Image, a MicroNetwork, and a MicroStorage to create a MicroVM.
+2. Firecrab verifies the M2Image, prepares the MicroNetwork, and creates the VM’s own disk in the MicroStorage.
+3. It starts one Firecracker process per MicroVM, so each one boots its own kernel.
+4. When the guest reports that its network is ready, the MicroVM is running.
+
+### Runs anywhere
+
+![Runs anywhere](assets/architecture/firecrab-runs-anywhere.en.svg)
+
+On Linux, one `install.sh` is enough. On macOS and Windows, `firecrab service install` creates a managed Debian VM that runs the same Firecrab, and you open the same dashboard at `localhost:5523`.
+
+macOS needs Apple silicon M3 or later and is validated on an Apple M5. Windows is marked Preview because microVMs cannot start on WSL2 yet.
+
+Logos: Linux, Apple, and Debian from simple-icons (CC0); the gear icon from Lucide (ISC). All logos and trademarks belong to their respective owners.
+
+## Installation
+
+<details>
+<summary>Install on Linux, macOS, or Windows</summary>
+
+### Linux
+
+Requires Linux x86_64 or ARM64, usable `/dev/kvm`, network access, and a regular user with `sudo`. Run the installer as that user, without a `sudo` prefix. Enable hardware or nested virtualization first if KVM is unavailable.
 
 ```sh
 curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
-```sh
-./install.sh --check              # report prerequisites and planned changes
-./install.sh --doctor             # diagnose KVM, firewall, socket, and host setup
-./install.sh --libc musl          # pick a libc instead of autodetecting gnu/musl
-./install.sh --uninstall          # retain data by default
-./install.sh --uninstall --purge  # also remove /var/lib/firecrab
-```
+Installer diagnostics and uninstall options are in the [installation guide](public-docs/getting-started/installation.md). To install only the remote CLI on Linux, use the verified `install-cli.sh` procedure below; it selects GNU or musl and installs to `~/.local/bin`.
 
-The installer cannot enable KVM. If `/dev/kvm` is missing, turn on hardware (or
-nested) virtualization first. Every option, install path, and troubleshooting step is
-in the [installation guide](public-docs/installation.md).
+### macOS
 
-### Install the remote CLI binary
-
-The standalone `firecrab` client manages a remote Linux host from Linux, Apple
-silicon macOS, or x86_64/ARM64 Windows. The macOS archive installation only installs
-the CLI and its helper. On a runtime-supported Apple silicon Mac, run
-`firecrab service install` to provision a pinned Debian management VM, run Firecrab
-and Firecracker through nested KVM, and register the resident launchd service that
-exposes the managed dashboard on localhost. The full path has been validated on Apple M5 with macOS
-26.6.2; other M3-or-later configurations remain gated by `firecrab service doctor` and
-end-to-end installation evidence. See [microManager on macOS](public-docs/micromanager-macos.md).
-On Windows, the same `firecrab service install` imports a pinned Debian WSL2
-distribution, runs Firecrab and Firecracker inside it through nested KVM, and keeps it
-resident with a per-user scheduled task. See [microManager on Windows](public-docs/micromanager-windows.md).
-
-On Linux or macOS, download and verify the release installer before executing it:
+Requires Apple silicon, macOS 15+, and runtime support for nested virtualization (M3 or later; full validation on M5/macOS 26.6.2). First install the CLI and helper, verifying the installer checksum:
 
 ```sh
 curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.sh
@@ -80,16 +109,21 @@ if command -v sha256sum >/dev/null; then
   sha256sum -c install-cli.sh.sha256
 else
   shasum -a 256 -c install-cli.sh.sha256
-fi
-sh install-cli.sh
+fi && sh install-cli.sh
 ```
 
-Remove the standalone client with `sh install-cli.sh --uninstall`. Add `--purge` to also remove saved host profiles from `~/.firecrab/config.toml`.
+Then check host capability and provision the managed Debian environment:
 
-Linux automatically selects the matching GNU or musl archive. The default destination
-is `~/.local/bin/firecrab`.
+```sh
+firecrab service doctor
+firecrab service install
+```
 
-On Windows PowerShell:
+The CLI installer alone does not install the VM. microManager uses `Virtualization.framework`, a separate persistent data disk, and a resident launchd service. See [microManager on macOS](public-docs/getting-started/macos.md).
+
+### Windows
+
+Requires x86_64 or ARM64 Windows, Microsoft Store WSL2, and nested KVM. In a regular PowerShell session, download and verify the CLI installer:
 
 ```powershell
 Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.ps1 -OutFile install-cli.ps1
@@ -99,100 +133,220 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 & ./install-cli.ps1
 ```
 
-The Windows installer selects x86_64 or ARM64 and adds its user-level installation
-directory to `PATH`. See [CLI host profiles](public-docs/firecrab-cli.md#host-profiles)
-for connecting the installed client to a firecrab host.
+Open a new PowerShell session if `firecrab` is not yet on `PATH`, then run the capability check and install. ARM64 installation has not been validated end to end. See [microManager on Windows](public-docs/getting-started/windows.md).
 
-## Quick start
+```powershell
+firecrab service doctor
+firecrab service install
+```
 
-Open `http://127.0.0.1:5523/` after installation, then:
-
-1. Create a **MicroNetwork**.
-2. Choose an installed image and create a VM in that network.
-3. Start the VM, wait for `running`, then open **Terminal**.
-
-Creating the network first is intentional: firecrab has no hidden default subnet, so
-every VM sits in a network the operator chose.
-
-## What you get
-
-- **microVM lifecycle** — create, inspect, edit inactive VMs, start, stop, delete, and
-  reach each VM through a browser serial console.
-- **Isolated networks** — explicit **MicroNetworks**, each VM holding a persistent
-  IPv4, MAC, and hostname. Networks are isolated from one another, with per-VM
-  internet or isolated egress.
-- **Images and disks** — install M2Image templates, import an OCI image from a
-  registry, bootstrap supported distributions in a temporary builder VM, and place VM
-  disks on configured storage roots or **MicroStorage** pools.
-- **Visibility** — startup progress, console logs, and host status in the dashboard,
-  in English and Korean.
-- **A small privilege surface** — the API runs unprivileged; only the separate
-  `firecrab-net-helper` holds the capabilities host networking needs.
-
-## Architecture
-
-One Linux host. One unprivileged API. One capability-bounded helper. One Firecracker
-process per running guest. No multi-host scheduler.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture/firecrab-architecture-dark.svg">
-  <img alt="firecrab architecture in five layers: external clients and image registry, the unprivileged firecrab-api control layer, the capability-bounded firecrab-net-helper network layer, the Firecracker runtime layer, and the MicroStorage layer" src="assets/architecture/firecrab-architecture-light.svg">
-</picture>
-
-| Layer | Piece | Job |
-| --- | --- | --- |
-| External | `firecrab-frontend` | VM, network, image, storage, and console UI |
-| External | `firecrab-cli` | The same operations from a terminal |
-| Control | `firecrab-api` | REST, WebSocket, lifecycle, SQLite, artifact checks |
-| Network | `firecrab-net-helper` | Bridge, TAP, DHCP, DNS, NAT, firewall, port forwards |
-| Runtime | Firecracker | One process per running guest |
-| Storage | MicroStorage | Kernels, rootfs images, VM disks, SQLite state |
-
-A MicroNetwork is one IPv4 subnet on its own bridge. Guests on the same network talk
-over that bridge; different networks are blocked. Internet NAT needs both the network
-`internetEnabled` switch and the VM `egressPolicy`.
-
-An imported OCI image is not a bootable OS on its own. firecrab turns the registry
-tree into a Firecracker rootfs, boots busybox as PID 1, and runs the image entrypoint
-as a service — so `/proc/1/exe` is `/etc/firecrab/busybox`, never the image's `init`.
-
-Full detail: [architecture](public-docs/architecture.md) ·
-[MicroNetwork](public-docs/micro-network.md) · [OCI images](public-docs/oci.md) ·
-[API](public-docs/api.md).
-
-## How it compares
-
-firecrab targets the gap between running `firecracker` by hand and standing up
-OpenStack: one server, a web dashboard, and named primitives for images
-(**M2Image**), networks (**MicroNetwork**), and disks (**MicroStorage**). It trades
-clustering and HA for a control plane you can read in an afternoon.
-
-<details>
-<summary>Full comparison table</summary>
-
-| Category | **Firecrab** | VMware / ESXi | KVM + libvirt | OpenStack | Firecracker alone |
-| --- | --- | --- | --- | --- | --- |
-| Basic unit | **microVM** | VM | VM | VM | microVM |
-| Virtualization | Firecracker + KVM | VMware hypervisor | KVM/QEMU | Mainly KVM/QEMU | KVM |
-| Main goal | **Simple microVM operation on one server** | Enterprise virtualization | General-purpose Linux virtualization | Large private cloud | Run microVMs |
-| Management complexity | **Designed to be low** | Medium | Medium–high | **Very high** | High |
-| Web dashboard | ✅ | ✅ | Separate setup | ✅ | ❌ |
-| VM images | **M2Image** | Template/Image | qcow2, etc. | Glance | Manual |
-| Virtual network | **MicroNetwork** | vSwitch | bridge/libvirt network | Neutron | Manual implementation |
-| Disk management | **MicroStorage** | Datastore/VMDK | qcow2/LVM, etc. | Cinder | Manual implementation |
-| Browser console | ✅ | ✅ | Setup required | ✅ | ❌ |
-| VM isolation | **Strong** | Strong | Strong | Strong | **Strong** |
-| Boot speed | **Very fast** | Relatively slow | Relatively slow | Relatively slow | **Very fast** |
-| Resource overhead | **Low** | High | Medium | High | **Very low** |
-| Control plane | **Minimal** | Included | Almost none | **Large-scale** | None |
-| Single-server operation | **Primary goal** | Supported | Supported | Inefficient | Supported |
-| Cluster / HA | Limited / future extension | ✅ | Separate setup | ✅ | ❌ |
-| Kubernetes integration | Possible future runtime | Supported | Supported | Supported | containerd integration available |
-| Best fit | **Personal server, homelab, edge, development server** | Enterprise datacenter | Linux server | Large cloud | Serverless/container infrastructure |
+**Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
 
 </details>
 
-## Dashboard
+## Run
+
+<details>
+<summary>Start and stop on Linux, macOS, or Windows</summary>
+
+### Linux
+
+The installer starts both systemd services. To start, inspect, or stop them later:
+
+```sh
+sudo systemctl start firecrab-helper firecrab-api
+systemctl status firecrab-helper firecrab-api
+sudo systemctl stop firecrab-api firecrab-helper
+```
+
+### macOS
+
+microManager starts the resident management VM and localhost API tunnel:
+
+```sh
+firecrab service start
+firecrab service status
+firecrab service debug --logs --tail 100
+firecrab service stop
+```
+
+### Windows
+
+microManager keeps the managed WSL2 distribution running through a per-user scheduled task:
+
+```powershell
+firecrab service start
+firecrab service status
+firecrab service debug --logs --tail 100
+firecrab service stop
+```
+
+**Windows limitation:** the currently pinned v0.2.2 guest supports the API, images, and networks, but cannot start MicroVMs on stock WSL2. The net-helper fix needs a newer pinned guest release; local nginx VM execution is affected too. The Windows CLI can still manage a supported remote Linux host.
+
+When healthy, open `http://127.0.0.1:5523/`. Create a MicroNetwork, choose an installed image, create and start a VM, then open Terminal after `running`. For a remote host, configure a [CLI host profile](public-docs/reference/cli.md#host-profiles).
+
+</details>
+
+## Run from source
+
+<details>
+<summary>Linux API and dashboard / macOS and Windows CLI</summary>
+
+From the repository root, use the pinned [Rust toolchain](rust-toolchain.toml), Node.js 22+, and npm. Full VM execution also needs Linux KVM and the [host prerequisites](public-docs/getting-started/installation.md).
+
+### Linux
+
+Use three terminals. The helper runs privileged; the API runs as your regular user. Local data paths are relative to the repository root.
+
+```sh
+# 1
+cargo build -p firecrab-helper --locked
+sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
+  ./target/debug/firecrab-helper
+
+# 2
+cargo run -p firecrab-api --locked
+
+# 3
+npm ci --prefix firecrab-frontend
+npm run dev --prefix firecrab-frontend
+# http://localhost:8080/
+```
+
+For a build served by the API, stop the development API and run:
+
+```sh
+npm run build --prefix firecrab-frontend
+FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api --locked
+# http://127.0.0.1:5523/
+```
+
+### macOS
+
+Build the checkout CLI and signed native helper, then install the managed service (use `service start` if already installed):
+
+```sh
+cargo build -p firecrab-cli --locked
+scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
+./target/debug/firecrab service install
+./target/debug/firecrab service status
+```
+
+### Windows
+
+Build the checkout CLI in PowerShell, then install the managed service (use `service start` if already installed):
+
+```powershell
+cargo build -p firecrab-cli --locked
+.\target\debug\firecrab.exe service install
+.\target\debug\firecrab.exe service status
+```
+
+On macOS and Windows, these commands run the checkout CLI/helper with the installed guest API. They do **not** rebuild edited `firecrab-api` source inside Debian. Develop the full API/net-helper runtime on Linux; see the platform guides above for managed-service development.
+
+</details>
+
+## Tests
+
+<details>
+<summary>Checks, coverage, and browser E2E</summary>
+
+Workspace checks from the repository root on Linux:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+npm ci --prefix firecrab-frontend
+npm run lint --prefix firecrab-frontend
+npm run build --prefix firecrab-frontend
+python3 scripts/check-doc-links.py
+python3 scripts/check-changelog.py
+```
+
+Optional local coverage (requires `cargo-llvm-cov`):
+
+```sh
+cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+```
+
+Browser E2E without guest boot:
+
+```sh
+npm ci --prefix firecrab-e2e
+npm run install-browsers --prefix firecrab-e2e
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
+```
+
+In PowerShell, set `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"` before `npm test --prefix firecrab-e2e`. This skips guest boot, so it does not validate KVM or nginx HTTP. Guest execution and all installer checks are covered in [TEST.md](public-docs/development/testing.md), [한국어 체크리스트](public-docs/development/testing.ko.md), and the [E2E guide](firecrab-e2e/README.md).
+
+Windows source runtime E2E (requires WSL2 nested KVM):
+
+```powershell
+cargo build -p firecrab-cli --locked
+.\scripts\ci-qa-windows-e2e.ps1 -Phase browser -Cli .\target\debug\firecrab.exe -Source .
+```
+
+This runs Chromium inside managed WSL with real guest boot enabled.
+See the [CI guide](public-docs/development/ci.md) for all phases and the [Windows source QA continuation](public-docs/development/validation-history.md#windows-source-qa-continuation-2026-10-04) for guest/browser passes and validation limits.
+
+</details>
+
+## Usage: nginx
+
+<details>
+<summary>Import nginx, create a microVM, and access HTTP</summary>
+
+Use a supported Linux host or macOS microManager with a running API and CLI. The commands below use a POSIX shell on Linux/macOS. The dashboard offers the same flow under Images → OCI Import, Networks, and MicroVM.
+
+1. Inspect and import the image, then repeat the status command until the job succeeds and `nginx-1.27` is installed:
+
+```sh
+firecrab image inspect nginx:1.27
+firecrab image import nginx:1.27
+firecrab image import-status nginx-1.27
+```
+
+2. Create a network. Replace `NETWORK_ID` below with the UUID returned by the first command (choose a non-overlapping subnet):
+
+```sh
+firecrab network create --name nginx-net --subnet-cidr 172.31.20.0/24
+firecrab vm create --name nginx-demo --template nginx-1.27 --network NETWORK_ID
+```
+
+3. Replace `VM_ID` with the UUID returned by VM creation, start it, and wait for `running` in the VM list:
+
+```sh
+firecrab vm start VM_ID
+firecrab vm list
+```
+
+4. Add TCP host port `8081` → guest port `80` with the REST API, then check nginx. This PUT replaces the VM’s complete port-forward list; keep any other rules you need in the request.
+
+```sh
+curl -fsS -X PUT http://127.0.0.1:5523/api/vms/VM_ID/port-forwards \
+  -H 'Content-Type: application/json' \
+  -d '{"portForwards":[{"hostPort":8081,"guestPort":80,"protocol":"tcp"}]}'
+```
+
+On Linux, run the HTTP check from another machine using `http://FIRECRAB_HOST_IP:8081/`; DNAT does not provide a host-loopback shortcut. On macOS, the TCP relay provides `http://127.0.0.1:8081/`. Allow host port 8081 through the host/router firewall when accessing it remotely.
+
+```sh
+curl -I http://FIRECRAB_HOST_IP:8081/
+# macOS
+curl -I http://127.0.0.1:8081/
+```
+
+OCI import builds a bootable rootfs with `/etc/firecrab/busybox` as PID 1 and runs nginx’s entrypoint as a service. `EXPOSE 80` does not create a host port forward. See [OCI images](public-docs/guides/oci.md) and [networking](public-docs/guides/networking.md).
+
+To stop the example VM:
+
+```sh
+firecrab vm stop VM_ID
+```
+
+<details>
+<summary>Dashboard screens</summary>
 
 The left navigation splits daily work into **MicroVM**, a per-VM **Terminal**,
 **Networks**, and **Images**.
@@ -235,90 +389,18 @@ progress, errors, and the resulting alias.
 
 ![M2Image list](assets/dashboard/images.png)
 
-See the [image guide](public-docs/images.md), the [OCI image guide](public-docs/oci.md),
-and the [API guide](public-docs/api.md).
+See the [image guide](public-docs/guides/images.md), the [OCI image guide](public-docs/guides/oci.md),
+and the [API guide](public-docs/reference/api.md).
 
-## Develop from source
+</details>
 
-Use three terminals: the network helper, the API, and the Vite dashboard. Run the API
-from the repository root, because its local data paths are relative to the working
-directory.
+</details>
 
-```sh
-# Terminal 1 — privileged network operations
-cargo build -p firecrab-net-helper
-sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
-  ./target/debug/firecrab-net-helper
+## Documentation and contributing
 
-# Terminal 2 — API and Firecracker manager
-pkill -x firecrab-api 2>/dev/null || true
-cargo run -p firecrab-api
+English is the default documentation language; the README links above offer Korean, Japanese, Chinese, and Indonesian. The dashboard supports English and Korean.
 
-# Terminal 3 — dashboard at http://localhost:8080/
-pkill -f '[f]irecrab-frontend/node_modules/.bin/vite' 2>/dev/null || true
-npm install --prefix firecrab-frontend
-npm run dev --prefix firecrab-frontend
-```
+- [public-docs/](public-docs/README.md): Installation, API, operations, and troubleshooting
+- [CONTRIBUTING.md](CONTRIBUTING.md): Maintainer’s note, development, and pull request checks
 
-For a production-like local run, build the dashboard and let the API serve it:
-
-```sh
-npm run build --prefix firecrab-frontend
-FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
-# http://127.0.0.1:5523/
-```
-
-## Tests
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --locked
-
-# coverage, optional locally — same command CI uses
-cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
-
-# frontend lint, typecheck, build
-npm install --prefix firecrab-frontend
-npm run lint --prefix firecrab-frontend
-npm run build --prefix firecrab-frontend
-
-# browser E2E for OCI inspect → import, against a local registry fixture
-npm install --prefix firecrab-e2e
-npm run install-browsers --prefix firecrab-e2e
-FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
-
-# docs links + CHANGELOG shape
-python3 scripts/check-doc-links.py
-python3 scripts/check-changelog.py
-```
-
-`cargo clippy` runs with `-D warnings` — one warning fails CI, no baseline to drift.
-`npm test --prefix firecrab-e2e` runs all 5 spec files (OCI import, MicroRegistry
-register, MicroNetwork IPv6, OCI DHCP boot, pools) together; per-suite pass/skip counts,
-environment needs, and the register spec's known leftover-catalog-row gotcha (L3
-`microregistry_local` has no DELETE yet, so a stale row fails its `beforeAll`) are in
-[firecrab-e2e/README.md](firecrab-e2e/README.md). Full pre-PR gate list — shellcheck,
-installer smoke tests, rustdoc — is in
-[CONTRIBUTING.md](./CONTRIBUTING.md#checks-before-you-open-a-pr). See also the
-[web dashboard guide](public-docs/dashboard.md).
-
-## Documentation
-
-The English technical documentation in [`public-docs/`](public-docs/README.md) covers
-architecture, installation, operations, API contracts, and troubleshooting.
-
-## Contributing
-
-<p align="center">
-  <a href="./CONTRIBUTING.md">
-    <img src="assets/icons/contributors.png" alt="Contributors" width="96" />
-  </a>
-</p>
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for the [maintainer’s note](./CONTRIBUTING.md#a-note-from-the-maintainer),
-development setup, checks, pull request expectations, and documentation rules.
-
-## License
-
-Licensed under the [Apache License, Version 2.0](./LICENSE).
+Licensed under [Apache License, Version 2.0](LICENSE).

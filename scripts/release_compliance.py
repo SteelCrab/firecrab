@@ -10,7 +10,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
-HOST_ROOTS = {"firecrab-api", "firecrab-net-helper", "firecrab-cli"}
+HOST_ROOTS = {"firecrab-api", "firecrab-helper", "firecrab-cli"}
 NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "AUTHORS")
 
 # Keep the mechanical release gate deliberately small and fail closed. These are

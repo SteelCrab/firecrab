@@ -311,17 +311,20 @@ struct RpmIndex {
 
 fn parse_rpm_header(blob: &[u8]) -> Result<PackageRecord, String> {
     let magic = [0x8e, 0xad, 0xe8];
-    let start = blob
+    let magic_start = blob
         .windows(magic.len())
         .take(32)
-        .position(|candidate| candidate == magic)
-        .ok_or_else(|| "RPM database row is missing a package header magic".to_owned())?;
-    if blob.len() < start + 16 {
+        .position(|candidate| candidate == magic);
+    // RPM SQLite stores headerExport() blobs: counts, indexes, then data.
+    // The eight-byte magic prefix belongs to the RPM file representation.
+    // Retain that older representation too, including its existing prefix.
+    let counts_start = magic_start.map_or(0, |start| start + 8);
+    if blob.len() < counts_start + 8 {
         return Err("RPM package header is truncated".to_owned());
     }
-    let index_count = be_u32(blob, start + 8)? as usize;
-    let store_size = be_u32(blob, start + 12)? as usize;
-    let indexes_start = start + 16;
+    let index_count = be_u32(blob, counts_start)? as usize;
+    let store_size = be_u32(blob, counts_start + 4)? as usize;
+    let indexes_start = counts_start + 8;
     let store_start = indexes_start
         .checked_add(
             index_count
@@ -334,6 +337,9 @@ fn parse_rpm_header(blob: &[u8]) -> Result<PackageRecord, String> {
         .ok_or("RPM header store overflow")?;
     if store_end > blob.len() {
         return Err("RPM package header data store is truncated".to_owned());
+    }
+    if magic_start.is_none() && store_end != blob.len() {
+        return Err("RPM package header length does not match its data store".to_owned());
     }
     let store = &blob[store_start..store_end];
 

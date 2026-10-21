@@ -8,6 +8,8 @@ use serde::de::DeserializeOwned;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// Short timeout used only by the host status probe.
 const HOST_STATUS_TIMEOUT: Duration = Duration::from_secs(3);
+/// Registry authentication and manifest retries have a 60s API deadline.
+const OCI_INSPECT_TIMEOUT: Duration = Duration::from_secs(65);
 
 /// Matches firecrab-api's own default (`bind_addr_or_default` in
 /// firecrab-api/src/server.rs) — the API listens on 127.0.0.1:5523 unless
@@ -116,6 +118,11 @@ impl ApiClient {
             .client
             .get(self.url(path))
             .query(query)
+            .timeout(if path == "/api/oci/inspect" {
+                OCI_INSPECT_TIMEOUT
+            } else {
+                DEFAULT_REQUEST_TIMEOUT
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -194,7 +201,6 @@ impl ApiClient {
 
     /// Sends `body` as JSON with `PUT` and deserializes any successful 2xx
     /// response body.
-    #[cfg(test)]
     pub fn put<B, T>(&self, path: &str, body: &B) -> Result<T, ApiError>
     where
         B: Serialize + ?Sized,
@@ -307,6 +313,15 @@ mod tests {
         content_type: Option<&str>,
         body: &str,
     ) -> (String, Receiver<CapturedRequest>, JoinHandle<()>) {
+        serve_once_after(status, content_type, body, Duration::ZERO)
+    }
+
+    fn serve_once_after(
+        status: &str,
+        content_type: Option<&str>,
+        body: &str,
+        delay: Duration,
+    ) -> (String, Receiver<CapturedRequest>, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let response_body = body.as_bytes().to_vec();
@@ -317,6 +332,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request(&mut stream);
             tx.send(request).unwrap();
+            thread::sleep(delay);
 
             let mut headers = format!(
                 "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -491,6 +507,21 @@ url = "https://prod.example:5523/"
             "/api/oci/inspect?reference=ghcr.io%2Forg%2Fapp%3Av1%40sha256%3Aabc"
         );
         assert!(request.body.is_empty());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn registry_inspection_can_outlast_the_normal_cli_deadline() {
+        let (base, _requests, server) = serve_once_after(
+            "200 OK",
+            Some("application/json"),
+            r#"{"value":"inspected"}"#,
+            DEFAULT_REQUEST_TIMEOUT + Duration::from_secs(1),
+        );
+        let response: FixtureResponse = ApiClient::new(base)
+            .get_query("/api/oci/inspect", &[("reference", "alpine:3.21")])
+            .unwrap();
+        assert_eq!(response.value, "inspected");
         server.join().unwrap();
     }
 

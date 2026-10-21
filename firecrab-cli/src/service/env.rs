@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 
 /// 시작 순서. 정지는 역순.
-pub const UNITS: [&str; 2] = ["firecrab-net-helper.service", "firecrab-api.service"];
+pub const UNITS: [&str; 2] = ["firecrab-helper.service", "firecrab-api.service"];
+/// Previous installations keep working until the installer migrates their unit.
+pub const LEGACY_HELPER_UNIT: &str = "firecrab-net-helper.service";
 
 /// 설치 계정과 경로 집합. `firecrab update`의 `resolve_layout`과 같은 규칙으로
 /// `PREFIX`/`FIRECRAB_LIBDIR`를 해석해 helper의 `host_layout`과 어긋나지 않는다.

@@ -326,6 +326,7 @@ mod tests {
             name: "web-1".to_owned(),
             purpose: firecrab_api_types::VmPurpose::Instance,
             state: VmState::Running,
+            reconciliation: None,
             template: "alpine-3.24.1".to_owned(),
             template_version: "3.24.1".to_owned(),
             cpu: 2,

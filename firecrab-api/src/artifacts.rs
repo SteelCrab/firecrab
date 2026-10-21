@@ -3,7 +3,7 @@
 //!
 //! Host paths are always derived from the configured vms root +
 //! server-generated UUIDs — never from user-supplied absolute paths
-//! (`public-docs/storage.md`).
+//! (`public-docs/guides/storage.md`).
 
 use std::fs;
 use std::io;
@@ -51,6 +51,40 @@ pub struct HostRuntimePaths {
     pub api_socket: PathBuf,
     /// Tee'd guest console log.
     pub console_log: PathBuf,
+    /// The per-VM shim's control socket (`crate::vm_shim`).
+    pub shim_socket: PathBuf,
+    /// Firecracker's exit status, written by the shim when the VM exits so
+    /// the outcome survives an API that was not connected at the time.
+    pub exit_status: PathBuf,
+    /// Why the shim could not start Firecracker, when it could not: the
+    /// shim's stderr only reaches the journal, and this is what the start
+    /// error shows the user.
+    pub shim_error: PathBuf,
+    /// Lock the shim holds for its whole life, one per VM (not per start):
+    /// it keeps a second shim from running Firecracker on the same disk.
+    pub vm_lock: PathBuf,
+}
+
+impl HostRuntimePaths {
+    /// Every runtime file of one start, derived from its directory alone, so
+    /// the API and the shim it launches can never disagree on a path.
+    pub fn in_dir(dir: PathBuf) -> Self {
+        // Short names: the socket paths must fit AF_UNIX's ~108-byte cap.
+        Self {
+            config: dir.join("fc.json"),
+            api_socket: dir.join("fc.sock"),
+            console_log: dir.join("console.log"),
+            shim_socket: dir.join("shim.sock"),
+            exit_status: dir.join("exit.json"),
+            shim_error: dir.join("shim.err"),
+            // `<vm>/r/<runtime>/` → `<vm>/vm.lock`, shared by every start.
+            vm_lock: dir
+                .parent()
+                .and_then(Path::parent)
+                .map_or_else(|| dir.join("vm.lock"), |vm| vm.join("vm.lock")),
+            dir,
+        }
+    }
 }
 
 impl VmArtifactPaths {
@@ -80,14 +114,7 @@ impl VmArtifactPaths {
 
     /// Paths for one start's runtime identity.
     pub fn runtime(&self, runtime_id: Uuid) -> HostRuntimePaths {
-        let dir = self.runtimes.join(uuid_dir(runtime_id));
-        HostRuntimePaths {
-            // Short names: the socket path must fit AF_UNIX's ~108-byte cap.
-            config: dir.join("fc.json"),
-            api_socket: dir.join("fc.sock"),
-            console_log: dir.join("console.log"),
-            dir,
-        }
+        HostRuntimePaths::in_dir(self.runtimes.join(uuid_dir(runtime_id)))
     }
 
     /// Ensures `dir`, `disks`, and `runtimes` exist as real directories (mode 0700).
@@ -157,6 +184,22 @@ mod tests {
     use super::*;
     use core::assert_matches;
     use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn runtime_paths_include_shim_socket_and_exit_status() {
+        let root = Path::new("/var/lib/firecrab/vms");
+        let paths = VmArtifactPaths::for_vm(root, Uuid::new_v4());
+        let runtime_id = Uuid::new_v4();
+        let dir = paths.runtimes.join(uuid_dir(runtime_id));
+
+        let runtime = paths.runtime(runtime_id);
+
+        assert_eq!(runtime, HostRuntimePaths::in_dir(dir.clone()));
+        assert_eq!(runtime.shim_socket, dir.join("shim.sock"));
+        assert_eq!(runtime.exit_status, dir.join("exit.json"));
+        assert_eq!(runtime.shim_error, dir.join("shim.err"));
+        assert_eq!(runtime.vm_lock, paths.dir.join("vm.lock"));
+    }
 
     #[test]
     fn paths_are_uuid_scoped_and_unique_per_vm() {

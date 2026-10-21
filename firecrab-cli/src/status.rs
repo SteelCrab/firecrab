@@ -10,8 +10,10 @@ pub struct StatusReport {
     /// `systemctl is-active` output for `firecrab-api.service` — "active",
     /// "inactive", "failed", or "unknown" if `systemctl` itself is missing.
     pub api_service: String,
-    /// Same as `api_service`, for `firecrab-net-helper.service`.
+    /// Same as `api_service`, for `firecrab-helper.service`.
     pub net_helper_service: String,
+    /// Actual unit queried, including the legacy name before migration.
+    pub helper_unit: String,
     /// `Some` only when the API answered; `host_error` explains a `None`.
     pub host: Option<HostStatusResponse>,
     pub host_error: Option<String>,
@@ -34,7 +36,8 @@ pub(crate) fn systemd_is_active(runner: &dyn CommandRunner, unit: &str) -> Strin
 /// otherwise-useful status).
 pub fn collect(runner: &dyn CommandRunner, client: &ApiClient) -> StatusReport {
     let api_service = systemd_is_active(runner, "firecrab-api.service");
-    let net_helper_service = systemd_is_active(runner, "firecrab-net-helper.service");
+    let helper_unit = crate::service::units::helper_unit(runner);
+    let net_helper_service = systemd_is_active(runner, helper_unit);
     let (host, host_error) = match client.get_host_status() {
         Ok(h) => (Some(h), None),
         Err(ApiError::Unreachable(msg)) => (None, Some(format!("unreachable: {msg}"))),
@@ -43,6 +46,7 @@ pub fn collect(runner: &dyn CommandRunner, client: &ApiClient) -> StatusReport {
     StatusReport {
         api_service,
         net_helper_service,
+        helper_unit: helper_unit.to_owned(),
         host,
         host_error,
     }
@@ -55,12 +59,7 @@ fn format_human(report: &StatusReport) -> String {
     use std::fmt::Write;
     let mut out = String::new();
     writeln!(out, "firecrab-api.service:        {}", report.api_service).unwrap();
-    writeln!(
-        out,
-        "firecrab-net-helper.service: {}",
-        report.net_helper_service
-    )
-    .unwrap();
+    writeln!(out, "{}: {}", report.helper_unit, report.net_helper_service).unwrap();
     match &report.host {
         Some(h) => {
             writeln!(out, "host:").unwrap();
@@ -120,7 +119,7 @@ mod tests {
         );
         fake.set(
             "systemctl",
-            &["is-active", "firecrab-net-helper.service"],
+            &["is-active", "firecrab-helper.service"],
             3,
             "inactive\n",
             "",
@@ -148,12 +147,13 @@ mod tests {
         let report = StatusReport {
             api_service: "active".to_owned(),
             net_helper_service: "inactive".to_owned(),
+            helper_unit: "firecrab-helper.service".to_owned(),
             host: None,
             host_error: Some("unreachable: connection refused".to_owned()),
         };
         let text = format_human(&report);
         assert!(text.contains("firecrab-api.service:        active"));
-        assert!(text.contains("firecrab-net-helper.service: inactive"));
+        assert!(text.contains("firecrab-helper.service: inactive"));
         assert!(text.contains("host: unreachable: connection refused"));
     }
 
@@ -162,6 +162,7 @@ mod tests {
         let report = StatusReport {
             api_service: "unknown".to_owned(),
             net_helper_service: "unknown".to_owned(),
+            helper_unit: "firecrab-helper.service".to_owned(),
             host: None,
             host_error: None,
         };
@@ -174,6 +175,7 @@ mod tests {
         let report = StatusReport {
             api_service: "active".to_owned(),
             net_helper_service: "active".to_owned(),
+            helper_unit: "firecrab-helper.service".to_owned(),
             host: Some(HostStatusResponse {
                 load_average_1m: 0.42,
                 memory_available_mib: 512,
@@ -198,10 +200,51 @@ mod tests {
         let report = StatusReport {
             api_service: "active".to_owned(),
             net_helper_service: "active".to_owned(),
+            helper_unit: "firecrab-helper.service".to_owned(),
             host: None,
             host_error: Some("unreachable: test".to_owned()),
         };
         print_human(&report);
         print_json(&report);
+    }
+    #[test]
+    fn legacy_status_keeps_the_json_field_and_reports_the_actual_unit() {
+        let mut fake = FakeCommandRunner::new();
+        fake.set(
+            "systemctl",
+            &[
+                "show",
+                "--property=LoadState",
+                "--value",
+                "firecrab-helper.service",
+            ],
+            0,
+            "not-found\n",
+            "",
+        );
+        fake.set(
+            "systemctl",
+            &[
+                "show",
+                "--property=LoadState",
+                "--value",
+                "firecrab-net-helper.service",
+            ],
+            0,
+            "loaded\n",
+            "",
+        );
+        fake.set(
+            "systemctl",
+            &["is-active", "firecrab-net-helper.service"],
+            0,
+            "active\n",
+            "",
+        );
+        let report = collect(&fake, &ApiClient::new("http://127.0.0.1:1".to_owned()));
+        assert!(format_human(&report).contains("firecrab-net-helper.service: active"));
+        let json = serde_json::to_value(report).unwrap();
+        assert_eq!(json["netHelperService"], "active");
+        assert_eq!(json["helperUnit"], "firecrab-net-helper.service");
     }
 }

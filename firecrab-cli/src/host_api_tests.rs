@@ -10,6 +10,149 @@ use super::{Cli, run};
 const VM_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NETWORK_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
+fn service_deployment_response(phase: &str) -> Value {
+    json!({
+        "id": NETWORK_ID, "serviceId": VM_ID, "phase": phase,
+        "spec": { "name": "web", "image": "busybox:latest", "port": 8080, "ram": 128, "cpu": 1 },
+        "request": { "hostPort": 30100, "microNetworkId": null },
+        "digest": null, "instances": [], "log": [], "error": null,
+    })
+}
+
+#[test]
+fn micro_services_deploy_status_and_stop_use_the_runtime_api() {
+    let response = service_deployment_response("queued").to_string();
+    let (code, request) = run_once(
+        &[
+            "microservice",
+            "deploy",
+            VM_ID,
+            "--host-port",
+            "30100",
+            "--no-wait",
+        ],
+        "202 Accepted",
+        &response,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(request.method, "POST");
+    assert_eq!(
+        request.path,
+        format!("/api/micro-services/{VM_ID}/deployment")
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&request.body).unwrap(),
+        json!({"hostPort": 30100, "microNetworkId": null})
+    );
+    let (code, request) = run_once(&["microservice", "status", VM_ID], "200 OK", &response);
+    assert_eq!(code, 0);
+    assert_eq!(request.method, "GET");
+    assert_eq!(
+        request.path,
+        format!("/api/micro-services/{VM_ID}/deployment")
+    );
+    let (code, request) = run_once(
+        &["microservice", "stop", VM_ID, "--no-wait"],
+        "202 Accepted",
+        &service_deployment_response("stopping").to_string(),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(request.path, format!("/api/micro-services/{VM_ID}/stop"));
+    assert!(request.body.is_empty());
+}
+
+#[test]
+fn micro_services_waiting_deploy_returns_failure_to_the_caller() {
+    let mut failed = service_deployment_response("failed");
+    failed["error"] = json!("App health check failed");
+    let (code, _) = run_once(
+        &["microservice", "deploy", VM_ID, "--host-port", "30100"],
+        "202 Accepted",
+        &failed.to_string(),
+    );
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn micro_services_commands_send_configuration_and_secret_references() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("orders.json");
+    let spec = json!({
+        "name": "orders", "image": "ghcr.io/team/orders:1.0", "runtime": "vm",
+        "port": 8080, "healthPath": "/health", "domain": null, "ram": 512, "cpu": 1,
+        "replicas": 2, "startupTimeout": 300, "drainTimeout": 30,
+        "env": {"PROFILE": "prod"}, "secrets": {"DB_PASSWORD": NETWORK_ID}
+    });
+    std::fs::write(&file, spec.to_string()).unwrap();
+    let file = file.to_str().unwrap();
+    let mut response = spec.clone();
+    response["id"] = json!(VM_ID);
+    for (args, method, path, body) in [
+        (
+            vec!["microservice", "list", "--json"],
+            "GET",
+            "/api/micro-services".to_owned(),
+            json!([response.clone()]),
+        ),
+        (
+            vec!["microservice", "get", VM_ID],
+            "GET",
+            format!("/api/micro-services/{VM_ID}"),
+            response.clone(),
+        ),
+        (
+            vec!["microservice", "create", "--file", file],
+            "POST",
+            "/api/micro-services".to_owned(),
+            response.clone(),
+        ),
+        (
+            vec!["microservice", "update", VM_ID, "--file", file],
+            "PUT",
+            format!("/api/micro-services/{VM_ID}"),
+            response,
+        ),
+    ] {
+        let (code, request) = run_once(&args, "200 OK", &body.to_string());
+        assert_eq!(code, 0);
+        assert_eq!(request.method, method);
+        assert_eq!(request.path, path);
+        if matches!(method, "POST" | "PUT") {
+            assert_eq!(request.content_type.as_deref(), Some("application/json"));
+            assert_eq!(
+                serde_json::from_slice::<Value>(&request.body).unwrap(),
+                spec
+            );
+        }
+    }
+    let (code, request) = run_once(&["microservice", "delete", VM_ID], "204 No Content", "");
+    assert_eq!(code, 0);
+    assert_eq!(request.method, "DELETE");
+    assert_eq!(request.path, format!("/api/micro-services/{VM_ID}"));
+}
+
+#[test]
+fn micro_services_fail_on_invalid_files_and_api_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("invalid.json");
+    std::fs::write(&file, "{bad json}").unwrap();
+    let cli = Cli::try_parse_from([
+        "firecrab",
+        "microservice",
+        "create",
+        "--file",
+        file.to_str().unwrap(),
+    ])
+    .unwrap();
+    assert_eq!(run(cli), 1);
+    let (code, _) = run_once(
+        &["microservice", "get", VM_ID],
+        "404 Not Found",
+        r#"{"error":{"code":"not_found","message":"resource not found"}}"#,
+    );
+    assert_eq!(code, 1);
+}
+
 struct CapturedRequest {
     method: String,
     path: String,

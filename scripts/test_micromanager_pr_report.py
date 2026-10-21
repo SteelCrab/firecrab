@@ -113,6 +113,11 @@ class ChangedFilesTests(unittest.TestCase):
         for shared in (
             "firecrab-cli/src/micromanager.rs",
             "firecrab-cli/src/micromanager/artifact.rs",
+            "firecrab-cli/src/micromanager/dev.rs",
+            "scripts/micromanager/dev-macos-guest.sh",
+            "scripts/test-micromanager-dev.py",
+            "scripts/ci-qa-guest.sh",
+            "firecrab-e2e/playwright.config.ts",
         ):
             for platform in report.PLATFORMS:
                 self.assertEqual(report.changed_files(platform, [shared]), [shared])

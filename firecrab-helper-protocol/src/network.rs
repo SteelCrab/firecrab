@@ -1,5 +1,6 @@
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -17,7 +18,7 @@ use crate::PROTOCOL_VERSION;
 pub const TAP_PREFIX: &str = "fct";
 
 /// The deterministic TAP interface name for a VM. Both `firecrab-api` (to
-/// reference it in the Firecracker config) and `firecrab-net-helper` (to
+/// reference it in the Firecracker config) and `firecrab-helper` (to
 /// create/attach/delete the real device, and to name nftables objects)
 /// derive the same name from the same `vm_id` — the API never gets to pass
 /// the helper an arbitrary interface name.
@@ -111,16 +112,26 @@ impl<'de> Deserialize<'de> for MacAddr {
     }
 }
 
+/// What `StartVmUnit::memory_max_mib` may ask for. Sanity bounds, not policy:
+/// no guest runs in less than its smallest RAM, and the top is far beyond any
+/// host this runs on.
+pub const UNIT_MEMORY_MAX_MIB: RangeInclusive<u32> = 128..=1_048_576;
+
+/// What `StartVmUnit::cpu_quota_percent` may ask for: one core to 64 cores.
+pub const UNIT_CPU_QUOTA_PERCENT: RangeInclusive<u32> = 100..=6_400;
+
 /// The complete privileged surface. Interface names, CIDRs, or nftables text
 /// are deliberately absent: the helper derives all of those from its own
 /// root-owned configuration and the VM UUID.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum NetworkRequest {
+    /// Fixed pipe controls; no arbitrary command or host paths.
+    Pipe { request: crate::pipe::Operation },
     /// Idempotently ensure the shared bridge/subnet/gateway exist.
     EnsureBridge,
     /// Idempotently ensure a MicroNetwork's own bridge/subnet/gateway exist
-    /// (`public-docs/networking.md`). The interface name is derived from
+    /// (`public-docs/guides/networking.md`). The interface name is derived from
     /// `micro_network_id` (see [`micro_network_bridge_name`]), never taken
     /// as a string from the API — only the numeric gateway/prefix, which
     /// carry no shell/nftables injection surface, cross the boundary
@@ -208,6 +219,40 @@ pub enum NetworkRequest {
         /// Every MicroNetwork that currently exists, so dnsmasq can serve
         /// each one's bridge. Empty means no Firecrab DHCP interfaces.
         micro_networks: Vec<MicroNetworkSpec>,
+    },
+    /// Run a VM's shim in its own transient systemd unit
+    /// (`firecrab-vm-<uuid>.service`) so the VM outlives the API process.
+    ///
+    /// The helper takes the program from the connecting API's own executable
+    /// and the unit's uid/gid from its peer credentials; it never runs a path
+    /// from this request with more privilege than the API already has. The
+    /// runtime directory must be the API's own private directory.
+    StartVmUnit {
+        /// The VM; also names the unit.
+        vm_id: Uuid,
+        /// The start's runtime directory, absolute.
+        runtime_dir: PathBuf,
+        /// Firecracker binary, absolute; run as the API's own user.
+        firecracker: PathBuf,
+        /// Whether Firecracker gets `--enable-pci`.
+        #[serde(default)]
+        enable_pci: bool,
+        /// The shim's SIGTERM-to-SIGKILL grace.
+        stop_grace_ms: u64,
+        /// Ceiling on the unit's memory in MiB (`MemoryMax`). `None` leaves
+        /// it unlimited, as an API from before limits existed sends.
+        #[serde(default)]
+        memory_max_mib: Option<u32>,
+        /// Ceiling on the unit's CPU time as a percentage of one core
+        /// (`CPUQuota`; 200 is two cores' worth). `None` leaves it unlimited.
+        #[serde(default)]
+        cpu_quota_percent: Option<u32>,
+    },
+    /// Stop a VM's unit (and so its shim and Firecracker); a no-op when the
+    /// unit does not exist.
+    StopVmUnit {
+        /// The VM whose unit to stop.
+        vm_id: Uuid,
     },
     /// Install an already-downloaded host bundle over this host's binaries and
     /// restart both services (`firecrab update --apply`).
@@ -465,7 +510,7 @@ pub struct DhcpLeaseEntry {
 /// The (unprivileged) CLI resolves these exactly the way `firecrab info` does
 /// and sends them here, but the helper does **not** write where they point: it
 /// re-derives the same three paths from its own `PREFIX`/`FIRECRAB_LIBDIR`
-/// (exported by `packaging/systemd/firecrab-net-helper.service`) and rejects
+/// (exported by `packaging/systemd/firecrab-helper.service`) and rejects
 /// the request unless the two agree byte-for-byte. So this field is a
 /// "do we both mean the same host?" cross-check, not a destination — a caller
 /// that made it past the socket's uid allowlist still cannot point a
@@ -474,7 +519,7 @@ pub struct DhcpLeaseEntry {
 pub struct InstallLayout {
     /// Receives the `firecrab` CLI (`$PREFIX/bin`).
     pub bindir: PathBuf,
-    /// Receives `firecrab-api` and `firecrab-net-helper` (`$LIBDIR`).
+    /// Receives `firecrab-api` and `firecrab-helper` (`$LIBDIR`).
     pub libdir: PathBuf,
     /// Receives the dashboard assets under `dashboard/` (`$SHAREDIR`).
     pub sharedir: PathBuf,
@@ -556,6 +601,9 @@ pub struct NetworkResponseEnvelope {
     pub request_id: Uuid,
     /// Outcome of processing the request.
     pub result: Result<(), HelperFailure>,
+    /// Optional data for pipe inspection; absent in older responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe: Option<crate::pipe::Snapshot>,
 }
 
 #[cfg(test)]
@@ -762,6 +810,7 @@ mod tests {
     #[test]
     fn response_result_round_trips() {
         let failure = NetworkResponseEnvelope {
+            pipe: None,
             version: PROTOCOL_VERSION,
             request_id: Uuid::nil(),
             result: Err(HelperFailure::UnsupportedVersion { supported: 1 }),
@@ -823,6 +872,7 @@ mod tests {
             },
         ] {
             let envelope = NetworkResponseEnvelope {
+                pipe: None,
                 version: PROTOCOL_VERSION,
                 request_id: Uuid::nil(),
                 result: Err(failure.clone()),
@@ -996,5 +1046,47 @@ mod tests {
         // not-yet-restarted helper and get UnsupportedVersion for the few
         // seconds between the swap and the restart. Do not bump.
         assert_eq!(PROTOCOL_VERSION, 2);
+    }
+
+    #[test]
+    fn a_start_vm_unit_request_without_limits_decodes_as_unlimited() {
+        // What an API from before the limits existed sends.
+        let json = serde_json::json!({
+            "operation": "start_vm_unit",
+            "vm_id": "00000000-0000-0000-0000-000000001234",
+            "runtime_dir": "/run/firecrab/vms/1234",
+            "firecracker": "/usr/local/bin/firecracker",
+            "stop_grace_ms": 5000,
+        });
+        let NetworkRequest::StartVmUnit {
+            memory_max_mib,
+            cpu_quota_percent,
+            ..
+        } = serde_json::from_value(json).unwrap()
+        else {
+            panic!("expected a StartVmUnit request");
+        };
+        assert_eq!(memory_max_mib, None);
+        assert_eq!(cpu_quota_percent, None);
+    }
+
+    #[test]
+    fn start_vm_unit_limits_round_trip_through_json() {
+        let request = NetworkRequest::StartVmUnit {
+            vm_id: Uuid::from_u128(0x1234),
+            runtime_dir: PathBuf::from("/run/firecrab/vms/1234"),
+            firecracker: PathBuf::from("/usr/local/bin/firecracker"),
+            enable_pci: false,
+            stop_grace_ms: 5000,
+            memory_max_mib: Some(768),
+            cpu_quota_percent: Some(200),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["memory_max_mib"], 768);
+        assert_eq!(json["cpu_quota_percent"], 200);
+        assert_eq!(
+            serde_json::from_value::<NetworkRequest>(json).unwrap(),
+            request
+        );
     }
 }

@@ -309,6 +309,22 @@ if [ "$(uname -s)" = Darwin ]; then
     [ "$http_ok" = 1 ] || fail V4 "macOS loopback port-forward :${HOST_PORT} did not return 200"
     pass "V4 macOS loopback curl :${HOST_PORT}"
 fi
+if [ -n "${FIRECRAB_QA_WINDOWS_POWERSHELL:-}" ]; then
+    # Run on the Windows host: a curl inside WSL cannot validate its relay.
+    http_ok=0
+    for _ in $(seq 1 $((15 * WAIT_FACTOR))); do
+        pf=$("$FIRECRAB_QA_WINDOWS_POWERSHELL" -NoProfile -NonInteractive -Command \
+            "try { (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:${HOST_PORT}/ -TimeoutSec 5).StatusCode } catch { exit 1 }" \
+            2>/dev/null | tr -d '\r' || true)
+        if [ "$pf" = 200 ]; then
+            http_ok=1
+            break
+        fi
+        sleep 2
+    done
+    [ "$http_ok" = 1 ] || fail V4 "Windows loopback port-forward :${HOST_PORT} did not return 200"
+    pass "V4 Windows loopback curl :${HOST_PORT}"
+fi
 
 KEY=$(mktemp)
 chmod 600 "$KEY"

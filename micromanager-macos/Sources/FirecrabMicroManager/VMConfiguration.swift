@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 @preconcurrency import Virtualization
 
@@ -73,6 +74,15 @@ private func fileURL(_ path: String) -> URL {
 }
 
 enum ManagementVMConfiguration {
+    // Linux virtio disks need explicit host caching to avoid the filesystem
+    // corruption reported with automatic mode. Keep guest flushes durable.
+    // https://github.com/lima-vm/lima/pull/2026
+    static func writableDisk(_ url: URL) throws -> VZDiskImageStorageDeviceAttachment {
+        try VZDiskImageStorageDeviceAttachment(
+            url: url, readOnly: false, cachingMode: .cached, synchronizationMode: .full
+        )
+    }
+
     static func makeProvisioning(
         options: VMOptions,
         consoleInput: FileHandle = .standardInput,
@@ -111,21 +121,14 @@ enum ManagementVMConfiguration {
             )
         }
 
-        let osAttachment = try VZDiskImageStorageDeviceAttachment(
-            url: options.osDiskURL,
-            readOnly: false
-        )
-        let dataAttachment = try VZDiskImageStorageDeviceAttachment(
-            url: options.dataDiskURL,
-            readOnly: false
-        )
+        let osAttachment = try writableDisk(options.osDiskURL)
+        let dataAttachment = try writableDisk(options.dataDiskURL)
         let seedAttachment = try VZDiskImageStorageDeviceAttachment(
             url: seedURL,
             readOnly: true
         )
 
-        let network = VZVirtioNetworkDeviceConfiguration()
-        network.attachment = VZNATNetworkDeviceAttachment()
+        let network = try makeNetwork(managedHomeURL: options.managedHomeURL)
 
         let console = VZVirtioConsoleDeviceSerialPortConfiguration()
         console.attachment = VZFileHandleSerialPortAttachment(
@@ -234,14 +237,16 @@ enum ManagementVMConfiguration {
     static func make(
         options: VMOptions,
         consoleInput: FileHandle = .standardInput,
-        consoleOutput: FileHandle = .standardOutput
+        consoleOutput: FileHandle = .standardOutput,
+        repairingOS: Bool = false,
+        referenceOS: URL? = nil
     ) throws -> VZVirtualMachineConfiguration {
         guard VZVirtualMachine.isSupported else {
             throw MicroManagerError.unsupported(
                 "Virtualization.framework is unavailable; run `firecrab service doctor`."
             )
         }
-        guard VZGenericPlatformConfiguration.isNestedVirtualizationSupported else {
+        guard repairingOS || VZGenericPlatformConfiguration.isNestedVirtualizationSupported else {
             throw MicroManagerError.unsupported(
                 "nested virtualization is unavailable; an M3-or-later supported host is required"
             )
@@ -253,29 +258,41 @@ enum ManagementVMConfiguration {
             try validateRegularFile(initialRamdiskURL, label: "initrd", writable: false)
         }
         try validateRegularFile(options.osDiskURL, label: "OS disk", writable: true)
-        try validateRegularFile(options.dataDiskURL, label: "data disk", writable: true)
-        try validateSeparateDisks(options.osDiskURL, options.dataDiskURL)
+        if !repairingOS {
+            try validateRegularFile(options.dataDiskURL, label: "data disk", writable: true)
+            try validateSeparateDisks(options.osDiskURL, options.dataDiskURL)
+        }
 
+        if let referenceOS {
+            guard repairingOS else {
+                throw MicroManagerError.argument("reference disks are allowed only during OS repair")
+            }
+            try validateRegularFile(referenceOS, label: "cached OS reference", writable: false)
+            try validateSeparateDisks(referenceOS, options.osDiskURL)
+            try validateSeparateDisks(referenceOS, options.dataDiskURL)
+        }
         let memorySize = try validatedMemorySize(options)
 
         let platform = VZGenericPlatformConfiguration()
-        platform.isNestedVirtualizationEnabled = true
+        platform.isNestedVirtualizationEnabled = !repairingOS
 
         let bootLoader = VZLinuxBootLoader(kernelURL: options.kernelURL)
         bootLoader.initialRamdiskURL = options.initialRamdiskURL
         bootLoader.commandLine = options.commandLine
 
-        let osAttachment = try VZDiskImageStorageDeviceAttachment(
-            url: options.osDiskURL,
-            readOnly: false
-        )
-        let dataAttachment = try VZDiskImageStorageDeviceAttachment(
-            url: options.dataDiskURL,
-            readOnly: false
-        )
+        let osAttachment = try writableDisk(options.osDiskURL)
+        var storage: [VZStorageDeviceConfiguration] = [
+            VZVirtioBlockDeviceConfiguration(attachment: osAttachment),
+        ]
+        if !repairingOS {
+            let dataAttachment = try writableDisk(options.dataDiskURL)
+            storage.append(VZVirtioBlockDeviceConfiguration(attachment: dataAttachment))
+        }
 
-        let network = VZVirtioNetworkDeviceConfiguration()
-        network.attachment = VZNATNetworkDeviceAttachment()
+        if let referenceOS {
+            let referenceAttachment = try VZDiskImageStorageDeviceAttachment(url: referenceOS, readOnly: true)
+            storage.append(VZVirtioBlockDeviceConfiguration(attachment: referenceAttachment))
+        }
 
         let console = VZVirtioConsoleDeviceSerialPortConfiguration()
         console.attachment = VZFileHandleSerialPortAttachment(
@@ -283,25 +300,20 @@ enum ManagementVMConfiguration {
             fileHandleForWriting: consoleOutput
         )
 
-        let sharedDirectory = VZSharedDirectory(
-            url: options.managedHomeURL,
-            readOnly: false
-        )
-        let fileSystem = VZVirtioFileSystemDeviceConfiguration(tag: "firecrab")
-        fileSystem.share = VZSingleDirectoryShare(directory: sharedDirectory)
-
         let configuration = VZVirtualMachineConfiguration()
         configuration.platform = platform
         configuration.bootLoader = bootLoader
         configuration.cpuCount = options.cpuCount
         configuration.memorySize = memorySize
-        configuration.storageDevices = [
-            VZVirtioBlockDeviceConfiguration(attachment: osAttachment),
-            VZVirtioBlockDeviceConfiguration(attachment: dataAttachment),
-        ]
-        configuration.networkDevices = [network]
+        configuration.storageDevices = storage
         configuration.serialPorts = [console]
-        configuration.directorySharingDevices = [fileSystem]
+        if !repairingOS {
+            configuration.networkDevices = [try makeNetwork(managedHomeURL: options.managedHomeURL)]
+            let sharedDirectory = VZSharedDirectory(url: options.managedHomeURL, readOnly: false)
+            let fileSystem = VZVirtioFileSystemDeviceConfiguration(tag: "firecrab")
+            fileSystem.share = VZSingleDirectoryShare(directory: sharedDirectory)
+            configuration.directorySharingDevices = [fileSystem]
+        }
         configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
         configuration.memoryBalloonDevices = [
             VZVirtioTraditionalMemoryBalloonDeviceConfiguration(),
@@ -309,6 +321,41 @@ enum ManagementVMConfiguration {
         configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
         try configuration.validate()
         return configuration
+    }
+
+    static func makeNetwork(managedHomeURL: URL) throws -> VZVirtioNetworkDeviceConfiguration {
+        let home = managedHomeURL.standardizedFileURL.resolvingSymlinksInPath()
+        let savedAddressURL = home.appendingPathComponent("runtime/network-mac-address")
+        let addressString: String
+        if FileManager.default.fileExists(atPath: savedAddressURL.path) {
+            addressString = try String(contentsOf: savedAddressURL, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            let digest = SHA256.hash(data: Data(home.path.utf8))
+            addressString = ([UInt8(0x02)] + Array(digest.prefix(5)))
+                .map { String(format: "%02x", $0) }.joined(separator: ":")
+        }
+        guard let address = VZMACAddress(string: addressString),
+            address.isLocallyAdministeredAddress, address.isUnicastAddress
+        else {
+            throw MicroManagerError.invalidArtifact(
+                "invalid management network MAC address: \(savedAddressURL.path)"
+            )
+        }
+        // Debian retains its DHCP client identity across boots. Changing the MAC
+        // on every start can leave the Mac routing that IP to the previous VM NIC.
+        let network = VZVirtioNetworkDeviceConfiguration()
+        network.macAddress = address
+        if let allocation = try ManagerAllocation.read(home: managedHomeURL), allocation.networkMode == "bridged" {
+            try allocation.validate()
+            guard let interface = VZBridgedNetworkInterface.networkInterfaces.first(where: {
+                $0.identifier == allocation.networkInterface
+            }) else { throw MicroManagerError.argument("bridged interface is unavailable") }
+            network.attachment = VZBridgedNetworkDeviceAttachment(interface: interface)
+        } else {
+            network.attachment = VZNATNetworkDeviceAttachment()
+        }
+        return network
     }
 }
 
@@ -410,7 +457,7 @@ private func validateRegularFile(_ url: URL, label: String, writable: Bool) thro
     }
 }
 
-private func validateSeparateDisks(_ osDiskURL: URL, _ dataDiskURL: URL) throws {
+func validateSeparateDisks(_ osDiskURL: URL, _ dataDiskURL: URL) throws {
     if osDiskURL == dataDiskURL {
         throw MicroManagerError.invalidArtifact(
             "OS disk and persistent data disk must be different files"

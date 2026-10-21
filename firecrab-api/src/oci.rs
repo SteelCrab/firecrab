@@ -1,4 +1,4 @@
-//! OCI registry access for image import (`public-docs/images.md`).
+//! OCI registry access for image import (`public-docs/guides/images.md`).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -1221,7 +1221,7 @@ impl RegistrySession {
         })
     }
 
-    async fn send_once(
+    async fn send_request(
         &self,
         url: &str,
         accept: Option<&str>,
@@ -1238,9 +1238,7 @@ impl RegistrySession {
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
         }
-        request.send().await.map_err(|error| {
-            ResolveError::Transport(format!("GET {url}: {}", format_error_chain(&error)))
-        })
+        transport::get(request, url).await
     }
 
     async fn get(
@@ -1251,7 +1249,7 @@ impl RegistrySession {
     ) -> Result<reqwest::Response, ResolveError> {
         let attempted = self.token.lock().await.clone();
         let response = self
-            .send_once(url, accept, attempted.as_deref(), timeout)
+            .send_request(url, accept, attempted.as_deref(), timeout)
             .await?;
         if response.status() != reqwest::StatusCode::UNAUTHORIZED {
             return Ok(response);
@@ -1276,9 +1274,7 @@ impl RegistrySession {
             if let Some(basic) = &self.basic {
                 token_request = token_request.basic_auth(&basic.username, Some(&basic.secret));
             }
-            let response = token_request.send().await.map_err(|error| {
-                ResolveError::Transport(format!("GET {token_url}: {}", format_error_chain(&error)))
-            })?;
+            let response = transport::get(token_request, &token_url).await?;
             if !response.status().is_success() {
                 return Err(ResolveError::Authentication(format!(
                     "token endpoint answered {}",
@@ -1298,7 +1294,9 @@ impl RegistrySession {
         };
         drop(stored);
 
-        let response = self.send_once(url, accept, Some(&token), timeout).await?;
+        let response = self
+            .send_request(url, accept, Some(&token), timeout)
+            .await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(ResolveError::Authentication(
                 "registry rejected the issued bearer token".to_owned(),
@@ -2113,6 +2111,7 @@ mod service_tests;
 
 #[cfg(test)]
 pub(crate) mod registry_fixture;
+mod transport;
 
 /// One verified cache entry together with the descriptor that named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4550,7 +4549,7 @@ mod tests {
         let session = RegistrySession::new(&reference, false, None).unwrap();
 
         let error = session
-            .send_once("http://127.0.0.1:1/v2/", None, None, None)
+            .send_request("http://127.0.0.1:1/v2/", None, None, None)
             .await
             .expect_err("a secure registry session must reject HTTP before connecting");
 

@@ -7,7 +7,7 @@
  * busybox when present so the import does not pull from Docker Hub.
  *
  * Playwright's webServer `reuseExistingServer` skips this script when
- * http://127.0.0.1:3000/api/host already answers.
+ * http://127.0.0.1:5523/api/host already answers.
  */
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -17,6 +17,11 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
+
+if (["1", "true", "yes"].includes(process.env.FIRECRAB_E2E_REQUIRE_RUNNING_API ?? "")) {
+  console.error("The managed API must already be running; refusing to start a second API for E2E");
+  process.exit(1);
+}
 
 function hostKernelRelPath() {
   const machine = os.machine();

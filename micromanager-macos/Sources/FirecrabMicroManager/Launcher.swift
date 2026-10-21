@@ -24,7 +24,7 @@ final class VirtualMachineStopObserver: NSObject, @preconcurrency VZVirtualMachi
         }
     }
 
-    private func finish(_ result: Result<Void, Error>) {
+    func finish(_ result: Result<Void, Error>) {
         guard self.result == nil else { return }
         self.result = result
         guard let continuation else { return }
@@ -33,11 +33,55 @@ final class VirtualMachineStopObserver: NSObject, @preconcurrency VZVirtualMachi
     }
 }
 
-private final class SendableVirtualMachine: @unchecked Sendable {
-    let value: VZVirtualMachine
+@MainActor
+final class VirtualMachineShutdown {
+    private let gracePeriod: Duration
+    private let requestStop: () throws -> Void
+    private let stop: () async throws -> Void
+    private var task: Task<Void, Never>?
 
-    init(_ value: VZVirtualMachine) {
-        self.value = value
+    init(
+        gracePeriod: Duration = .seconds(20),
+        requestStop: @escaping () throws -> Void,
+        stop: @escaping () async throws -> Void
+    ) {
+        self.gracePeriod = gracePeriod
+        self.requestStop = requestStop
+        self.stop = stop
+    }
+
+    func request() {
+        guard task == nil else { return }
+        task = Task {
+            do {
+                try requestStop()
+                FileHandle.standardError.write(
+                    Data("microManager: orderly guest shutdown requested\n".utf8)
+                )
+            } catch {
+                FileHandle.standardError.write(
+                    Data("microManager: could not request guest shutdown: \(error)\n".utf8)
+                )
+            }
+            do {
+                try await Task.sleep(for: gracePeriod)
+            } catch {
+                return
+            }
+            // A panicked guest cannot acknowledge ACPI shutdown. Release its
+            // VZ instance before launchd kills the supervising shell.
+            do {
+                try await stop()
+            } catch {
+                FileHandle.standardError.write(
+                    Data("microManager: could not stop unresponsive VM: \(error)\n".utf8)
+                )
+            }
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
     }
 }
 
@@ -47,21 +91,28 @@ func runManagementVM(configuration: VZVirtualMachineConfiguration) async throws 
     let observer = VirtualMachineStopObserver()
     virtualMachine.delegate = observer
 
-    let sendableVirtualMachine = SendableVirtualMachine(virtualMachine)
+    let shutdown = VirtualMachineShutdown(
+        requestStop: { try virtualMachine.requestStop() },
+        stop: {
+            if virtualMachine.state == .stopped {
+                observer.finish(.success(()))
+                return
+            }
+            guard virtualMachine.canStop else { return }
+            FileHandle.standardError.write(
+                Data("microManager: guest shutdown timed out; stopping VM\n".utf8)
+            )
+            try await virtualMachine.stop()
+            observer.finish(.success(()))
+        }
+    )
     signal(SIGINT, SIG_IGN)
     signal(SIGTERM, SIG_IGN)
     let interruptSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
     let terminateSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
     let requestStop: @Sendable () -> Void = {
-        do {
-            try sendableVirtualMachine.value.requestStop()
-            FileHandle.standardError.write(
-                Data("microManager: orderly guest shutdown requested\n".utf8)
-            )
-        } catch {
-            FileHandle.standardError.write(
-                Data("microManager: could not request guest shutdown: \(error)\n".utf8)
-            )
+        Task { @MainActor in
+            shutdown.request()
         }
     }
     interruptSource.setEventHandler(handler: requestStop)
@@ -69,6 +120,7 @@ func runManagementVM(configuration: VZVirtualMachineConfiguration) async throws 
     interruptSource.resume()
     terminateSource.resume()
     defer {
+        shutdown.cancel()
         interruptSource.cancel()
         terminateSource.cancel()
     }

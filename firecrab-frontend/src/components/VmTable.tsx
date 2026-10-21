@@ -5,6 +5,7 @@ import { availableActions } from "../model";
 import { consolePageUrl } from "../navigation";
 import { useI18n } from "../i18n";
 import ConsoleSshTab from "./ConsoleSshTab";
+import VmStateLabels from "./VmStateLabels";
 
 interface VmTableProps {
   vms: VmResponse[];
@@ -164,8 +165,8 @@ function Row({
         </button>
         {vm.purpose === "pool" && <span className="state-badge">{t("pool", "풀")}</span>}
       </td>
-      <td>
-        <span className={`state-badge ${vm.state}`}>{vm.state}</span>
+      <td className="vm-state-cell">
+        <VmStateLabels vm={vm} />
       </td>
       <td className="mono">{vm.template}</td>
       <td className="mono">{vm.cpu}</td>

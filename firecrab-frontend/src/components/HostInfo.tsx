@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { HostOs, HostPlatformResponse, HostStatusResponse, NetworkInfoResponse } from "../bindings";
 import { getHostStatus, getNetworkInfo } from "../api/client";
 import { useI18n } from "../i18n";
+import ManagerResources from "./ManagerResources";
 
 const POLL_MILLIS = 2000;
 
@@ -11,7 +12,7 @@ const OS_ICONS: Record<HostOs, string> = {
   windows: "/windows.svg",
 };
 
-/** Read-only view of the host machine, its network config, and live resource status. */
+/** Host status and native microManager resource controls. */
 export default function HostInfo() {
   const { locale, t } = useI18n();
   const [network, setNetwork] = useState<NetworkInfoResponse | null>(null);
@@ -75,6 +76,7 @@ export default function HostInfo() {
       ) : (
         <div className="empty">{t("Loading…", "불러오는 중…")}</div>
       )}
+      {status?.platform?.virtualization && status.platform.os !== "linux" && <ManagerResources controllerId={status.platform.controllerId} />}
     </section>
   );
 }

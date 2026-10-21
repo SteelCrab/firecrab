@@ -47,3 +47,9 @@ id_ed25519*
 # Local design notes and project records are never published.
 /docs/
 .zed/
+
+# Log
+logs
+
+# MacOS
+.DS_Store

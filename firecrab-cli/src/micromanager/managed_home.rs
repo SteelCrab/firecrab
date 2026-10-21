@@ -5,6 +5,16 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+const INSTALLATION_FILES: &[&str] = &[
+    "micromanager.toml",
+    "runtime/provisioned",
+    "runtime/provision.failed",
+    "runtime/provision.phase",
+    "runtime/guest-provision.log",
+    "runtime/manager-ready",
+    "runtime/daemon-ready",
+];
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("refusing to use managed path containing a symlink: {0}")]
@@ -30,6 +40,30 @@ pub fn purge(path: &Path) -> Result<(), Error> {
     }
 }
 
+/// Reinstallation discards only replaceable installation state. Disks, keys,
+/// and verified downloads remain available to the new TOML installation.
+pub fn clear_installation_state(home: &Path) -> Result<(), Error> {
+    let provision = home.join("provision");
+    reject_symlink_components(&provision)?;
+    for relative in INSTALLATION_FILES {
+        reject_symlink_components(&home.join(relative))?;
+    }
+    match fs::remove_dir_all(&provision) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(io_error("remove installation scripts", &provision, source)),
+    }
+    for relative in INSTALLATION_FILES {
+        let path = home.join(relative);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(io_error("remove installation state", &path, source)),
+        }
+    }
+    Ok(())
+}
+
 /// Only an absolute, symlink-free directory named `micromanager` may be purged.
 pub fn validate_purge(path: &Path) -> Result<(), Error> {
     validate_purge_path(path)?;
@@ -52,6 +86,10 @@ pub fn reject_symlink_components(path: &Path) -> Result<(), Error> {
     let mut normal_component_count = 0;
     for component in path.components() {
         current.push(component.as_os_str());
+        // A Windows prefix such as `\\?\C:` needs its root separator first.
+        if matches!(component, Component::Prefix(_)) {
+            continue;
+        }
         if matches!(component, Component::Normal(_)) {
             normal_component_count += 1;
         }
@@ -96,6 +134,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reinstall_removes_installation_state_but_preserves_disks_keys_and_downloads() {
+        let home = tempfile::tempdir().unwrap();
+        let scripts = home.path().join("provision/legacy-install.sh");
+        fs::create_dir_all(scripts.parent().unwrap()).unwrap();
+        fs::write(&scripts, b"legacy script").unwrap();
+        for relative in INSTALLATION_FILES {
+            let path = home.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"old installation").unwrap();
+        }
+        for relative in [
+            "data/firecrab-data.raw",
+            "distro/ext4.vhdx",
+            "runtime/manager_ed25519",
+            "downloads/verified.tar.xz",
+        ] {
+            let path = home.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"keep").unwrap();
+        }
+        clear_installation_state(home.path()).unwrap();
+        assert!(!home.path().join("provision").exists());
+        for relative in INSTALLATION_FILES {
+            assert!(!home.path().join(relative).exists());
+        }
+        for relative in [
+            "data/firecrab-data.raw",
+            "distro/ext4.vhdx",
+            "runtime/manager_ed25519",
+            "downloads/verified.tar.xz",
+        ] {
+            assert_eq!(fs::read(home.path().join(relative)).unwrap(), b"keep");
+        }
+        clear_installation_state(home.path()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_installation_scripts_are_rejected_before_clearing_any_state() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep.sh"), b"keep").unwrap();
+        std::os::unix::fs::symlink(outside.path(), home.path().join("provision")).unwrap();
+        fs::write(home.path().join("micromanager.toml"), b"keep manifest").unwrap();
+        assert!(matches!(
+            clear_installation_state(home.path()),
+            Err(Error::UnsafeManagedPath(_))
+        ));
+        assert_eq!(fs::read(outside.path().join("keep.sh")).unwrap(), b"keep");
+        assert_eq!(
+            fs::read(home.path().join("micromanager.toml")).unwrap(),
+            b"keep manifest"
+        );
+    }
+
+    #[test]
     fn a_managed_home_is_purged_and_a_missing_one_is_fine() {
         let directory = tempfile::tempdir().expect("temp dir");
         let managed_home = directory.path().join("state/micromanager");
@@ -105,6 +199,23 @@ mod tests {
         purge(&managed_home).expect("purge succeeds");
         assert!(!managed_home.exists());
         purge(&managed_home).expect("purging twice is a no-op");
+    }
+
+    #[test]
+    fn a_canonical_managed_home_is_checked_and_purged() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("state/micromanager");
+        fs::create_dir_all(home.join("data")).unwrap();
+        fs::write(home.join("data/disk.raw"), b"data").unwrap();
+        // On Windows, canonicalize returns a verbatim path such as `\\?\C:\...`.
+        let home = fs::canonicalize(home).unwrap();
+
+        reject_symlink_components(&home.join("data/disk.raw")).unwrap();
+        reject_symlink_components(&home.join("runtime/not-created-yet")).unwrap();
+        validate_purge(&home).unwrap();
+        purge(&home).unwrap();
+        assert!(!home.exists());
+        purge(&home).unwrap();
     }
 
     #[test]
@@ -140,10 +251,11 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let directory = tempfile::tempdir().expect("temp dir");
-        let real_parent = directory.path().join("real");
+        let canonical_parent = fs::canonicalize(directory.path()).unwrap();
+        let real_parent = canonical_parent.join("real");
         let real_managed_home = real_parent.join("micromanager");
         fs::create_dir_all(&real_managed_home).expect("managed home");
-        let linked_parent = directory.path().join("linked");
+        let linked_parent = canonical_parent.join("linked");
         symlink(&real_parent, &linked_parent).expect("symlink");
 
         assert!(matches!(

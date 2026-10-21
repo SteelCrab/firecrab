@@ -130,6 +130,23 @@ for _ in $(seq 1 $((40 * WAIT_FACTOR))); do
             break
         fi
     fi
+    # The boot worker is finished when both markers are present. Waiting for
+    # another SSH probe cannot recover a missing daemon until the next boot.
+    check_body=$BODY
+    check_code=$CODE
+    http GET "/api/vms/${VM_ID}/log"
+    if [ "$CODE" = 200 ] && printf '%s' "$BODY" | python3 -c '
+import json, sys
+log = json.load(sys.stdin).get("consoleLog") or ""
+sys.exit(0 if "FIRECRAB_PACKAGES_FAILED" in log and
+         "FIRECRAB_SSHD skipped: no /usr/sbin/sshd" in log else 1)
+'; then
+        # Do not print the API's ssh-key response on this failure path.
+        BODY=
+        fail V8c "guest package installation failed and sshd is missing; inspect the guest console"
+    fi
+    BODY=$check_body
+    CODE=$check_code
     sleep 3
 done
 [ "$check_ok" = 1 ] || fail V8c "GET /ssh-host-key/check expected match got ${status:-HTTP ${CODE}}"

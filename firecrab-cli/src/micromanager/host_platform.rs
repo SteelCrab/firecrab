@@ -6,8 +6,20 @@ use firecrab_api_types::{HostOs, HostPlatformDescriptor};
 pub use firecrab_api_types::HOST_PLATFORM_DESCRIPTOR_PATH;
 
 /// One JSON line in the shape `GET /api/host` parses back.
+#[cfg(test)]
 pub fn descriptor_json(os: HostOs, name: &str, version: &str, virtualization: &str) -> String {
+    descriptor_with_controller(os, name, version, virtualization, None)
+}
+
+pub fn descriptor_with_controller(
+    os: HostOs,
+    name: &str,
+    version: &str,
+    virtualization: &str,
+    controller_id: Option<String>,
+) -> String {
     let descriptor = HostPlatformDescriptor {
+        controller_id,
         os,
         name: name.to_owned(),
         version: version.trim().to_owned(),

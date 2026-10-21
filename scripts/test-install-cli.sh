@@ -37,6 +37,21 @@ rm -rf "$cli_home"
 
 help=$("./install.sh" --help)
 
+if printf '%s\n' "$help" | grep -q -- '--with-pipe'; then
+    pass "--help documents optional pipe engines"
+else
+    fail "--help documents optional pipe engines"
+fi
+
+if ./install.sh --deps-only --with-pipe >"$cli_home-pipe-error" 2>&1; then
+    fail "--with-pipe rejects dependency-only mode"
+elif grep -q -- '--with-pipe is supported with installation or --check' "$cli_home-pipe-error"; then
+    pass "--with-pipe rejects dependency-only mode before host changes"
+else
+    fail "--with-pipe mode rejection has no clear error"
+fi
+rm -f "$cli_home-pipe-error"
+
 cli_help=$(sh ./install-cli.sh --help)
 if printf '%s\n' "$cli_help" | grep -q -- '--uninstall' \
     && printf '%s\n' "$cli_help" | grep -q -- '--purge'; then
@@ -263,15 +278,15 @@ PY
 
 fake=$(mktemp -d)
 write_elf64 "$fake/firecrab-api" 62
-write_elf64 "$fake/firecrab-net-helper" 62
+write_elf64 "$fake/firecrab-helper" 62
 write_elf64 "$fake/firecrab" 62
 mkdir -p "$fake/dist"
 printf '<html></html>\n' >"$fake/dist/index.html"
 "$ROOT/scripts/package-host-release.sh" x86_64 "$fake" "$fake/dist" "$fake/firecrab-host-x86_64.tar.gz" >/dev/null
 members=$(tar -tzf "$fake/firecrab-host-x86_64.tar.gz")
-for need in firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image \
+for need in firecrab-api firecrab-helper extract-vmlinux extract-arm64-image \
             firecrab dashboard/index.html systemd/firecrab-api.service \
-            systemd/firecrab-net-helper.service; do
+            systemd/firecrab-helper.service; do
     if printf '%s\n' "$members" | grep -qx -- "$need"; then
         pass "host tarball contains $need"
     else
@@ -280,7 +295,7 @@ for need in firecrab-api firecrab-net-helper extract-vmlinux extract-arm64-image
 done
 wrong=$(mktemp -d)
 write_elf64 "$wrong/firecrab-api" 183
-write_elf64 "$wrong/firecrab-net-helper" 183
+write_elf64 "$wrong/firecrab-helper" 183
 write_elf64 "$wrong/firecrab" 183
 mkdir -p "$wrong/dist"
 printf '<html></html>\n' >"$wrong/dist/index.html"

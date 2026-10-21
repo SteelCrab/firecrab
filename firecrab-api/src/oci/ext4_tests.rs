@@ -325,6 +325,50 @@ mod compliance_coverage {
     const RPM_STRING_TYPE: u32 = 6;
 
     #[test]
+    fn fedora_sqlite_exported_header_generates_spdx_without_file_magic() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("usr/lib/sysimage/rpm/rpmdb.sqlite");
+        let header = include_bytes!("fixtures/fedora-42-basesystem.rpmhdr");
+        create_rpm_database(&database, vec![header.to_vec()]);
+
+        let generated = generate_spdx(directory.path(), "fedora", "42", Architecture::X86_64)
+            .unwrap()
+            .unwrap();
+        assert_eq!(generated.package_count, 1);
+        let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
+        assert_eq!(json["packages"][1]["name"], "basesystem");
+        assert_eq!(json["packages"][1]["versionInfo"], "11-22.fc42");
+        assert_eq!(json["packages"][1]["licenseDeclared"], "NOASSERTION");
+        assert!(
+            json["packages"][1]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("LicenseRef-Fedora-Public-Domain")
+        );
+        assert!(
+            json["packages"][1]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("source-package=basesystem-11-22.fc42.src.rpm")
+        );
+    }
+
+    #[test]
+    fn sqlite_exported_headers_reject_truncated_and_trailing_data() {
+        let header = include_bytes!("fixtures/fedora-42-basesystem.rpmhdr");
+        let mut trailing = header.to_vec();
+        trailing.push(0);
+        for blob in [header[..header.len() - 1].to_vec(), trailing] {
+            let directory = tempfile::tempdir().unwrap();
+            let database = directory.path().join("var/lib/rpm/rpmdb.sqlite");
+            create_rpm_database(&database, vec![blob]);
+            let error =
+                generate_spdx(directory.path(), "invalid", "42", Architecture::X86_64).unwrap_err();
+            assert!(error.contains("RPM package header"), "{error}");
+        }
+    }
+
+    #[test]
     fn rpm_sqlite_database_generates_spdx_and_deduplicates() {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("usr/lib/sysimage/rpm/rpmdb.sqlite");
@@ -449,7 +493,7 @@ mod compliance_coverage {
             Architecture::X86_64,
         )
         .unwrap_err();
-        assert!(error.contains("missing a package header magic"));
+        assert!(error.contains("RPM package header"), "{error}");
     }
 
     #[test]

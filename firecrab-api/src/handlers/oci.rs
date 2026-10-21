@@ -1,4 +1,4 @@
-//! OCI inspect and import (`public-docs/oci.md`).
+//! OCI inspect and import (`public-docs/guides/oci.md`).
 //!
 //! `GET /api/oci/inspect` is metadata-only: it resolves a reference to the
 //! manifest this host would pull so a wrong-architecture image is caught
@@ -113,7 +113,10 @@ pub async fn start_oci_import(
 /// A read failure is logged and answered as "no login": an anonymous pull is
 /// still worth attempting, so a broken credential row never makes every
 /// public image unreachable.
-async fn stored_credential(state: &AppState, request_id: RequestId) -> Option<RegistryCredential> {
+pub(crate) async fn stored_credential(
+    state: &AppState,
+    request_id: RequestId,
+) -> Option<RegistryCredential> {
     let store = state.store.clone();
     match tokio::task::spawn_blocking(move || store.docker_hub_credential()).await {
         Ok(Ok(stored)) => stored.map(RegistryCredential::from),
@@ -436,7 +439,9 @@ mod tests {
         .expect("job accepted");
 
         let mut snapshot = state.oci_imports.snapshot(&started.alias);
-        for _ in 0..80 {
+        // Connection retries include 3s + 6s backoff. The accepted job must
+        // still reach Failed and remove its scratch within a bounded wait.
+        for _ in 0..300 {
             if snapshot.status == ImageInstallStatus::Failed {
                 break;
             }

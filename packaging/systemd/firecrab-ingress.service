@@ -1,0 +1,31 @@
+[Unit]
+Description=Firecrab PipeIngress (Nginx)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+RuntimeDirectory=firecrab-ingress
+RuntimeDirectoryMode=0711
+ExecStart=@NGINX@ -p /run/firecrab-ingress/ -c /etc/firecrab-pipe/ingress.conf -g "daemon off;"
+ExecReload=@NGINX@ -t -p /run/firecrab-ingress/ -c /etc/firecrab-pipe/ingress.conf
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGQUIT
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=330
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+# Bind the directory so atomic config replacements stay visible after reload.
+BindReadOnlyPaths=@CONFDIR@/pipe:/etc/firecrab-pipe
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0000
+# The Unix endpoint only returns a generation hash. Other users can connect,
+# but cannot replace its socket or read Nginx private temporary directories.
+
+[Install]
+WantedBy=multi-user.target

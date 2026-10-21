@@ -61,7 +61,8 @@ MACOS = Platform(
         "micromanager-macos/",
         "scripts/build-micromanager-macos.sh",
         "scripts/ci-qa-macos-e2e.sh",
-        "public-docs/micromanager-macos.md",
+        "public-docs/getting-started/macos.md",
+        "public-docs/development/macos-repair.md",
     ),
     local=(
         "swift test --package-path micromanager-macos"
@@ -70,6 +71,7 @@ MACOS = Platform(
         "cargo build -p firecrab-cli --locked",
         "cargo clippy -p firecrab-cli --all-targets -- -D warnings",
         "cargo test -p firecrab-cli --locked",
+        "python3 scripts/test-micromanager-dev.py",
         "target/debug/firecrab-micromanager-macos doctor --json",
     ),
     e2e_note=(
@@ -92,13 +94,17 @@ WINDOWS = Platform(
         "firecrab-cli/src/micromanager/windows.rs",
         "firecrab-cli/src/micromanager/windows/",
         "scripts/ci-qa-windows-e2e.ps1",
+        "scripts/test-ci-qa-windows.ps1",
         "scripts/micromanager/create-windows-lab.py",
-        "public-docs/micromanager-windows.md",
+        "public-docs/getting-started/windows.md",
     ),
     local=(
         "cargo clippy -p firecrab-cli --all-targets -- -D warnings",
         "cargo test -p firecrab-cli --locked",
         "cargo build -p firecrab-cli --locked",
+        "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-ci-qa-windows.ps1",
+        "npm ci --prefix firecrab-e2e",
+        "npm run test:runner --prefix firecrab-e2e",
         r".\target\debug\firecrab.exe service doctor --json",
     ),
     e2e_note=(
@@ -106,8 +112,7 @@ WINDOWS = Platform(
         "Run the E2E on a Windows host:"
     ),
     e2e=(
-        r"scripts\ci-qa-windows-e2e.ps1 -Phase all -Cli target\debug\firecrab.exe",
-        r".\target\debug\firecrab.exe service uninstall --purge",
+        r"scripts\ci-qa-windows-e2e.ps1 -Phase all -Cli target\debug\firecrab.exe -Source .",
     ),
 )
 
@@ -116,6 +121,18 @@ PLATFORMS = (MACOS, WINDOWS)
 
 def is_shared(path: str) -> bool:
     """`micromanager.rs` and the modules beside the platform directories."""
+    if path in (
+        "public-docs/development/micromanager.md",
+        "scripts/micromanager/dev-macos-guest.sh",
+        "scripts/test-micromanager-dev.py",
+        "scripts/ci-qa-api.sh",
+        "scripts/ci-qa-nginx.sh",
+        "scripts/ci-qa-guest.sh",
+        "scripts/test-ci-qa-guest.py",
+        "scripts/ci-qa-ssh.sh",
+        "scripts/ci-m2-guest-boot.sh",
+    ) or path.startswith("firecrab-e2e/"):
+        return True
     if path == "firecrab-cli/src/micromanager.rs":
         return True
     if not path.startswith(MICROMANAGER):

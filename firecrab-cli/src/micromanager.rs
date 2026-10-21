@@ -3,10 +3,20 @@
 //! Each host has its own backend module; everything they share lives beside them.
 
 mod artifact;
+mod debug;
+mod dev;
 mod host_platform;
 #[cfg(target_os = "macos")]
 mod macos;
 mod managed_home;
+mod manifest;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod os_repair;
+mod resource;
+mod resource_server;
+mod runtime;
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+mod snapshot;
 // Everything but the `wsl.exe` and `schtasks.exe` calls is plain Rust, so the
 // Windows backend also builds and runs its tests on the Linux CI runner.
 #[cfg(any(target_os = "windows", test))]
@@ -20,8 +30,12 @@ use clap::Subcommand;
 
 #[cfg(target_os = "macos")]
 pub use macos::run;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::run_guest_command;
 #[cfg(target_os = "windows")]
 pub use windows::run;
+#[cfg(target_os = "windows")]
+pub(crate) use windows::run_guest_command;
 
 /// `println!` panics if the write returns an error, and on some terminal
 /// multiplexers a burst of output (a progress bar redraw, then this line)
@@ -65,9 +79,24 @@ fn write_retrying_transient_errors(writer: &mut impl Write, mut bytes: &[u8]) {
 }
 
 /// `firecrab service` on every host that runs Firecrab inside a managed Debian
-/// VM. One definition keeps the verbs identical; each backend decides how.
+/// VM. Common lifecycle verbs share one definition; platform tools are gated.
 #[derive(Subcommand)]
 pub enum Command {
+    /// Show or change management VM CPU, RAM, disk, and networking.
+    #[command(name = "resorce", visible_alias = "resource")]
+    Resource {
+        #[command(flatten)]
+        options: resource::Options,
+    },
+    /// Native, loopback-only resource control used by the Host screen.
+    #[command(hide = true)]
+    ResourceServer {
+        #[arg(long)]
+        home: Option<std::path::PathBuf>,
+    },
+    /// Detached apply worker; survives the managed service restart.
+    #[command(hide = true)]
+    ResourceApply { id: String },
     /// Install microManager and provision the managed Debian VM.
     Install {
         /// Skip the download confirmation prompt (implied when not attached to a TTY).
@@ -80,6 +109,11 @@ pub enum Command {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Repair the resident service using the existing managed VM and installed binaries.
+    ///
+    /// Windows requires PowerShell running as Administrator for offline disk repair.
+    #[cfg(any(target_os = "macos", target_os = "windows", test))]
+    Repair,
     /// Remove microManager and optionally all managed VM data.
     Uninstall {
         /// Also delete the managed Debian VM and its persistent data.
@@ -100,8 +134,44 @@ pub enum Command {
     },
     /// Show and validate the managed Debian VM configuration.
     Validate,
-    /// Run the managed Debian VM in the foreground with its console attached.
-    Run,
+    /// Diagnose the managed VM without changing its state.
+    Debug {
+        /// Emit a machine-readable diagnostic report.
+        #[arg(long)]
+        json: bool,
+        /// Include bounded excerpts from available logs.
+        #[arg(long)]
+        logs: bool,
+        /// Number of lines from each log (requires --logs; maximum 1000).
+        #[arg(long, requires = "logs", value_parser = clap::value_parser!(u16).range(1..=1000))]
+        tail: Option<u16>,
+    },
+    /// Build/deploy guest services and start the source dashboard on localhost:8080.
+    #[command(args_conflicts_with_subcommands = true)]
+    Dev {
+        #[command(subcommand)]
+        command: Option<DevCommand>,
+        /// Checkout root (defaults to the current directory).
+        #[arg(long, conflicts_with = "restore")]
+        source: Option<std::path::PathBuf>,
+        /// Build optimized guest binaries instead of debug binaries.
+        #[arg(long, conflicts_with = "restore")]
+        release: bool,
+        /// Remove development overrides and restart the installed release binaries.
+        #[arg(long)]
+        restore: bool,
+        /// Skip the artifact download prompt if the management VM needs installation.
+        #[arg(short, long, conflicts_with = "restore")]
+        yes: bool,
+    },
+    /// Open a root shell in the managed Debian guest, or run one command there.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg_attr(target_os = "windows", command(alias = "run"))]
+    Shell {
+        /// Command to run instead of an interactive shell, e.g. `systemctl status firecrab-api`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     /// Serve running VMs' TCP port forwards on 127.0.0.1; run by the macOS daemon.
     #[command(hide = true)]
     ForwardPorts {
@@ -114,6 +184,26 @@ pub enum Command {
         #[arg(long)]
         known_hosts: std::path::PathBuf,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Subcommand)]
+pub enum DevCommand {
+    /// Start the deployed API/helper and dashboard without rebuilding or booting the VM.
+    Start,
+    /// Stop the API/helper and development dashboard while keeping microManager running.
+    Stop,
+    /// Restart the deployed API/helper and dashboard without rebuilding or rebooting the VM.
+    Restart,
+}
+
+impl DevCommand {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -188,5 +278,124 @@ mod tests {
 
         let install = TestCli::try_parse_from(["test", "install"]).unwrap();
         assert!(matches!(install.command, Command::Install { yes: false }));
+    }
+
+    #[test]
+    fn debug_log_tail_is_explicit_and_bounded() {
+        let parsed =
+            TestCli::try_parse_from(["test", "debug", "--json", "--logs", "--tail", "50"]).unwrap();
+        assert!(matches!(
+            parsed.command,
+            Command::Debug {
+                json: true,
+                logs: true,
+                tail: Some(50)
+            }
+        ));
+        assert!(TestCli::try_parse_from(["test", "debug", "--tail", "50"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "debug", "--logs", "--tail", "0"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "debug", "--logs", "--tail", "1001"]).is_err());
+    }
+
+    #[test]
+    fn repair_requires_no_install_or_download_options() {
+        let repair = TestCli::try_parse_from(["test", "repair"]).unwrap();
+        assert!(matches!(repair.command, Command::Repair));
+        assert!(TestCli::try_parse_from(["test", "repair", "--yes"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "repair", "--purge"]).is_err());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[test]
+    fn shell_opens_a_console_or_runs_one_command() {
+        let cli = TestCli::try_parse_from(["test", "shell"]).unwrap();
+        assert!(matches!(cli.command, Command::Shell { ref command } if command.is_empty()));
+
+        for line in [
+            &["test", "shell", "systemctl", "status", "firecrab-api"][..],
+            &["test", "shell", "--", "systemctl", "status", "firecrab-api"][..],
+        ] {
+            let cli = TestCli::try_parse_from(line).unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Shell { ref command } if command == &["systemctl", "status", "firecrab-api"]
+            ));
+        }
+
+        // Options after the command belong to the command, not to `shell`.
+        let cli =
+            TestCli::try_parse_from(["test", "shell", "journalctl", "-u", "firecrab-api"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Shell { ref command } if command == &["journalctl", "-u", "firecrab-api"]
+        ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn run_still_opens_the_shell_on_windows() {
+        let cli = TestCli::try_parse_from(["test", "run"]).unwrap();
+        assert!(matches!(cli.command, Command::Shell { ref command } if command.is_empty()));
+    }
+
+    #[test]
+    fn dev_restore_is_independent_of_source_and_build_options() {
+        let cli = TestCli::try_parse_from(["test", "dev", "--restore"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Dev {
+                restore: true,
+                source: None,
+                ..
+            }
+        ));
+        assert!(TestCli::try_parse_from(["test", "dev", "--restore", "--source", "."]).is_err());
+        assert!(TestCli::try_parse_from(["test", "dev", "--restore", "--release"]).is_err());
+        let cli = TestCli::try_parse_from([
+            "test",
+            "dev",
+            "--source",
+            "/tmp/firecrab",
+            "--release",
+            "--yes",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Dev {
+                release: true,
+                yes: true,
+                restore: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn dev_controls_are_separate_from_build_and_restore_options() {
+        let cli = TestCli::try_parse_from(["test", "dev"]).unwrap();
+        assert!(matches!(cli.command, Command::Dev { command: None, .. }));
+
+        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+            let cli = TestCli::try_parse_from(["test", "dev", command.as_str()]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Dev { command: Some(parsed), .. } if parsed == command
+            ));
+            for options in [
+                &["--source", "."][..],
+                &["--release"][..],
+                &["--restore"][..],
+                &["--yes"][..],
+            ] {
+                let mut args = vec!["test", "dev"];
+                args.extend_from_slice(options);
+                args.push(command.as_str());
+                assert!(TestCli::try_parse_from(args).is_err());
+                let mut args = vec!["test", "dev", command.as_str()];
+                args.extend_from_slice(options);
+                assert!(TestCli::try_parse_from(args).is_err());
+            }
+        }
     }
 }

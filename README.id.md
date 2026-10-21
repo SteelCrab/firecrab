@@ -3,7 +3,7 @@
   <a href="https://codecov.io/gh/SteelCrab/firecrab"><img alt="Codecov" src="https://codecov.io/gh/SteelCrab/firecrab/branch/main/graph/badge.svg"></a>
   <a href="https://www.linux.org"><img alt="Linux" src="https://img.shields.io/badge/platform-linux-blue?logo=linux&logoColor=white"></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.2.2-informational"></a>
+  <a href="./CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/changelog-0.3.1-informational"></a>
 </p>
 
 ```text
@@ -19,50 +19,85 @@
 <p align="center">
   <a href="./README.md">English</a> ·
   <a href="./README.ko.md">한국어</a> ·
+  <a href="./README.ja.md">日本語</a> ·
   <a href="./README.zh.md">中文</a> ·
-  <a href="./README.ja.md">日本語</a>
+  <a href="./README.id.md">Bahasa Indonesia</a>
 </p>
 
-**firecrab menjalankan microVM [Firecracker](https://firecracker-microvm.github.io/) di satu
-host Linux yang Anda kendalikan.** Membuat VM juga berarti memilih image, jaringan, lokasi
-disk, serta kebijakan akses keluar (outbound) — langsung dari dashboard browser, CLI, atau REST API.
+![Demo Firecrab](assets/dashboard/firecrab-demo.gif)
 
-Dirancang untuk lingkungan microVM privat pada host tunggal: isolasi yang lebih kuat daripada
-kontainer, tanpa memerlukan control plane cloud berskala penuh. firecrab bukan layanan hosting
-dan bukan penjadwal multi-host (multi-host scheduler).
+## Ringkasan
 
-![Demo dashboard firecrab M2](assets/dashboard/firecrab-m2.gif)
+<details>
+<summary>Tujuan</summary>
+
+Jalankan microVM Firecracker pada satu host Linux yang Anda kelola melalui dashboard browser, CLI, atau REST API. Cocok untuk server pribadi, homelab, dan lingkungan pengembangan.
+
+</details>
+
+<details>
+<summary>Fitur utama</summary>
+
+- **VM** — buat, mulai, hentikan, dan hapus microVM; akses konsol serial di browser.
+- **Image dan disk** — template M2Image, impor image OCI, dan lokasi disk MicroStorage.
+- **Jaringan** — subnet MicroNetwork dan kebijakan internet atau isolasi per VM.
+- **Platform host** — langsung di Linux; melalui microManager di macOS dan Windows (Windows Preview).
+
+</details>
+
+<details>
+<summary>Perbandingan platform</summary>
+
+| Poin utama | **Firecrab** | [KVM + libvirt](https://libvirt.org/) | [OpenStack](https://docs.openstack.org/nova/latest/) |
+| --- | --- | --- | --- |
+| Tujuan | microVM pada satu host | VM serbaguna | Cloud privat |
+| Virtualisasi | Firecracker + KVM | QEMU/KVM | Umumnya QEMU/KVM |
+| Pengelolaan | Dashboard, CLI, REST | API libvirt, CLI; GUI terpisah | Horizon, CLI, REST |
+| Deployment | Satu host | Pengelolaan per host | Layanan controller dan compute |
+
+</details>
+
+## Arsitektur
+
+[Arsitektur terperinci](public-docs/reference/architecture.md): lapisan microManager per OS, startup VM, pasokan image/kernel, fitur guest, dan pembaruan CLI.
+
+### Sekilas Firecrab
+
+![Sekilas Firecrab](assets/architecture/firecrab-at-a-glance.en.svg)
+
+1. Gunakan browser atau CLI. Pilih M2Image, MicroNetwork, dan MicroStorage untuk membuat MicroVM.
+2. Firecrab memverifikasi M2Image, menyiapkan MicroNetwork, dan membuat disk khusus VM di MicroStorage.
+3. Satu proses Firecracker dijalankan per MicroVM, sehingga setiap VM melakukan boot dengan kernelnya sendiri.
+4. Saat guest melaporkan jaringan siap, MicroVM berstatus running.
+
+### Berjalan di berbagai platform
+
+![Berjalan di berbagai platform](assets/architecture/firecrab-runs-anywhere.en.svg)
+
+Di Linux, satu `install.sh` sudah cukup. Di macOS dan Windows, `firecrab service install` membuat VM Debian terkelola yang menjalankan Firecrab yang sama, dan dashboard yang sama dibuka di `localhost:5523`.
+
+macOS memerlukan Apple silicon M3 atau lebih baru dan telah divalidasi pada Apple M5. Windows ditandai Preview karena microVM belum dapat dimulai di WSL2.
+
+Logo Linux, Apple, dan Debian berasal dari simple-icons (CC0); ikon roda gigi dari Lucide (ISC). Semua logo dan merek dagang milik pemiliknya masing-masing.
 
 ## Instalasi
 
-Anda memerlukan host Linux dengan `/dev/kvm`, akses jaringan, dan pengguna dengan izin `sudo`.
-Jalankan penginstal sebagai pengguna biasa tersebut — **jangan** beri awalan `sudo`. Penginstal
-akan mengunduh biner rilis dan hanya memanggil `sudo` untuk langkah paket, systemd, dan
-konfigurasi host yang memang membutuhkannya.
+<details>
+<summary>Instalasi di Linux, macOS, atau Windows</summary>
+
+### Linux
+
+Memerlukan Linux x86_64 atau ARM64, `/dev/kvm` yang dapat digunakan, jaringan, dan pengguna biasa dengan izin `sudo`. Jalankan penginstal sebagai pengguna tersebut, **tanpa awalan `sudo`**. Aktifkan virtualisasi perangkat keras atau nested virtualization terlebih dahulu jika KVM tidak tersedia.
 
 ```sh
 curl -fsSL https://github.com/SteelCrab/firecrab/releases/latest/download/install.sh | bash
 ```
 
-```sh
-./install.sh --check              # laporkan prasyarat dan perubahan yang direncanakan
-./install.sh --doctor             # diagnosis KVM, firewall, soket, dan konfigurasi host
-./install.sh --libc musl          # pilih libc secara manual alih-alih deteksi otomatis gnu/musl
-./install.sh --uninstall          # pertahankan data secara default
-./install.sh --uninstall --purge  # hapus juga /var/lib/firecrab
-```
+Opsi diagnosis dan penghapusan ada di [panduan instalasi](public-docs/getting-started/installation.md). Untuk memasang CLI jarak jauh saja di Linux, gunakan prosedur `install-cli.sh` dengan verifikasi checksum di bawah; GNU/musl dipilih otomatis dan lokasi default adalah `~/.local/bin`.
 
-Penginstal tidak dapat mengaktifkan KVM secara otomatis. Jika `/dev/kvm` tidak tersedia,
-aktifkan virtualisasi perangkat keras (atau nested virtualization) terlebih dahulu. Seluruh
-opsi, jalur instalasi, dan langkah pemecahan masalah tercantum dalam
-[panduan instalasi](public-docs/installation.md).
+### macOS
 
-### Memasang biner CLI jarak jauh
-
-Klien mandiri `firecrab` mengelola host Linux jarak jauh dari Linux, macOS Apple Silicon,
-atau Windows x86_64/ARM64. Klien ini tidak memasang Firecracker maupun layanan host lokal.
-
-Pada Linux atau macOS, unduh dan verifikasi skrip penginstal rilis sebelum menjalankannya:
+Memerlukan Apple silicon, macOS 15+, dan dukungan runtime untuk nested virtualization (M3 atau lebih baru; validasi lengkap pada M5/macOS 26.6.2). Verifikasi checksum penginstal, lalu pasang CLI dan helper:
 
 ```sh
 curl -fLO https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.sh
@@ -72,17 +107,21 @@ if command -v sha256sum >/dev/null; then
   sha256sum -c install-cli.sh.sha256
 else
   shasum -a 256 -c install-cli.sh.sha256
-fi
-sh install-cli.sh
+fi && sh install-cli.sh
 ```
 
-Hapus klien mandiri dengan perintah `sh install-cli.sh --uninstall`. Tambahkan `--purge` untuk
-turut menghapus profil host yang tersimpan di `~/.firecrab/config.toml`.
+Selanjutnya periksa kemampuan host dan siapkan lingkungan Debian terkelola:
 
-Linux secara otomatis memilih arsip GNU atau musl yang sesuai. Lokasi tujuan default adalah
-`~/.local/bin/firecrab`.
+```sh
+firecrab service doctor
+firecrab service install
+```
 
-Pada Windows PowerShell:
+Penginstal CLI saja tidak memasang VM terkelola. microManager menggunakan `Virtualization.framework`, disk data persisten terpisah, dan layanan launchd yang menetap. Lihat [panduan macOS](public-docs/getting-started/macos.md).
+
+### Windows
+
+Memerlukan Windows x86_64 atau ARM64, WSL2 dari Microsoft Store, dan nested KVM. Unduh dan verifikasi penginstal CLI dalam sesi PowerShell biasa:
 
 ```powershell
 Invoke-WebRequest https://github.com/SteelCrab/firecrab/releases/latest/download/install-cli.ps1 -OutFile install-cli.ps1
@@ -92,103 +131,210 @@ if ((Get-FileHash install-cli.ps1 -Algorithm SHA256).Hash -ne $expected) { throw
 & ./install-cli.ps1
 ```
 
-Penginstal Windows akan memilih versi x86_64 atau ARM64 dan menambahkan direktori instalasi
-tingkat pengguna ke `PATH`. Lihat [profil host CLI](public-docs/firecrab-cli.md#host-profiles)
-untuk menghubungkan klien yang terpasang ke host firecrab.
+Buka sesi PowerShell baru jika `firecrab` belum ada di `PATH`, lalu periksa kemampuan dan jalankan instalasi. Instalasi ARM64 belum divalidasi dari awal hingga akhir. Lihat [panduan Windows](public-docs/getting-started/windows.md).
 
-## Memulai Cepat
+```powershell
+firecrab service doctor
+firecrab service install
+```
 
-Buka `http://127.0.0.1:5523/` setelah instalasi selesai, kemudian:
-
-1. Buat **MicroNetwork**.
-2. Pilih image yang telah terpasang dan buat VM di jaringan tersebut.
-3. Jalankan VM, tunggu hingga statusnya `running`, lalu buka **Terminal**.
-
-Membuat jaringan terlebih dahulu merupakan langkah yang disengaja: firecrab tidak memiliki
-subnet default tersembunyi, sehingga setiap VM berada pada jaringan yang secara eksplisit
-dipilih oleh operator.
-
-## Fitur yang Anda Dapatkan
-
-- **Siklus hidup microVM** — buat, periksa, ubah VM yang tidak aktif, jalankan, hentikan,
-  hapus, serta akses setiap VM melalui konsol serial browser.
-- **Jaringan terisolasi** — **MicroNetwork** eksplisit, dengan setiap VM memegang IPv4, MAC,
-  dan hostname persisten. Antarjaringan terisolasi satu sama lain, dengan akses internet
-  atau isolasi egress per VM.
-- **Image dan disk** — pasang template M2Image, impor image OCI dari container registry,
-  bootstrap distribusi Linux yang didukung dalam builder VM sementara, dan tempatkan disk VM
-  pada storage root yang dikonfigurasi atau pool **MicroStorage**.
-- **Visibilitas** — pantau progres booting awal, log konsol, dan status host di dashboard,
-  tersedia dalam bahasa Inggris dan Korea.
-- **Permukaan hak akses minimal** — API berjalan tanpa hak istimewa (unprivileged); hanya
-  layanan terpisah `firecrab-net-helper` yang memegang kapabilitas jaringan host yang diperlukan.
-
-## Arsitektur
-
-Satu host Linux. Satu API tanpa hak istimewa. Satu helper dengan kapabilitas terbatas.
-Satu proses Firecracker per guest yang berjalan. Tanpa penjadwal multi-host.
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture/firecrab-architecture-dark.svg">
-  <img alt="arsitektur firecrab dalam lima lapisan: klien eksternal dan registry image, lapisan kontrol unprivileged firecrab-api, lapisan jaringan firecrab-net-helper dengan batas kapabilitas, lapisan runtime Firecracker, dan lapisan MicroStorage" src="assets/architecture/firecrab-architecture-light.svg">
-</picture>
-
-| Lapisan | Komponen | Peran |
-| --- | --- | --- |
-| Eksternal | `firecrab-frontend` | Antarmuka web untuk VM, jaringan, image, penyimpanan, dan konsol |
-| Eksternal | `firecrab-cli` | Operasi yang sama langsung dari terminal |
-| Kontrol | `firecrab-api` | REST, WebSocket, siklus hidup, SQLite, verifikasi artefak |
-| Jaringan | `firecrab-net-helper` | Bridge, TAP, DHCP, DNS, NAT, firewall, penerusan port (port forward) |
-| Runtime | Firecracker | Satu proses per guest yang sedang aktif |
-| Penyimpanan | MicroStorage | Kernel, rootfs image, disk VM, status SQLite |
-
-Sebuah MicroNetwork adalah satu subnet IPv4 pada bridge-nya sendiri. Guest dalam jaringan yang
-sama dapat berkomunikasi melalui bridge tersebut; komunikasi antarjaringan berbeda diblokir.
-NAT internet memerlukan pengaktifan switch `internetEnabled` pada jaringan dan aturan
-`egressPolicy` pada VM.
-
-Image OCI yang diimpor bukanlah sistem operasi yang dapat di-boot secara langsung. firecrab
-mengubah hierarki registry menjadi rootfs Firecracker, menjalankan busybox sebagai PID 1,
-dan mengeksekusi entrypoint image sebagai layanan — sehingga `/proc/1/exe` mengarah ke
-`/etc/firecrab/busybox`, bukan `init` bawaan image.
-
-Rincian lengkap: [arsitektur](public-docs/architecture.md) ·
-[MicroNetwork](public-docs/micro-network.md) · [image OCI](public-docs/oci.md) ·
-[API](public-docs/api.md).
-
-## Perbandingan
-
-firecrab mengisi celah antara menjalankan `firecracker` secara manual dan mengelola OpenStack:
-satu server, dashboard web, serta primitif terstruktur untuk image (**M2Image**), jaringan
-(**MicroNetwork**), dan disk (**MicroStorage**). firecrab menukar fitur clustering dan HA demi
-control plane sederhana yang dapat dipelajari dalam satu sore.
-
-<details>
-<summary>Tabel perbandingan lengkap</summary>
-
-| Kategori | **Firecrab** | VMware / ESXi | KVM + libvirt | OpenStack | Firecracker mandiri |
-| --- | --- | --- | --- | --- | --- |
-| Unit dasar | **microVM** | VM | VM | VM | microVM |
-| Virtualisasi | Firecracker + KVM | VMware hypervisor | KVM/QEMU | Sebagian besar KVM/QEMU | KVM |
-| Tujuan utama | **Operasi microVM sederhana pada satu server** | Virtualisasi enterprise | Virtualisasi Linux serbaguna | Cloud privat skala besar | Menjalankan microVM |
-| Kompleksitas pengelolaan | **Dirancang rendah** | Sedang | Sedang–tinggi | **Sangat tinggi** | Tinggi |
-| Dashboard web | ✅ | ✅ | Konfigurasi terpisah | ✅ | ❌ |
-| Image VM | **M2Image** | Template/Image | qcow2, dll. | Glance | Manual |
-| Jaringan virtual | **MicroNetwork** | vSwitch | bridge/jaringan libvirt | Neutron | Implementasi manual |
-| Manajemen disk | **MicroStorage** | Datastore/VMDK | qcow2/LVM, dll. | Cinder | Implementasi manual |
-| Konsol browser | ✅ | ✅ | Perlu konfigurasi | ✅ | ❌ |
-| Isolasi VM | **Kuat** | Kuat | Kuat | Kuat | **Kuat** |
-| Kecepatan boot | **Sangat cepat** | Relatif lambat | Relatif lambat | Relatif lambat | **Sangat cepat** |
-| Beban sumber daya | **Rendah** | Tinggi | Sedang | Tinggi | **Sangat rendah** |
-| Control plane | **Minimal** | Sudah termasuk | Hampir tidak ada | **Skala besar** | Tidak ada |
-| Operasi satu server | **Tujuan utama** | Didukung | Didukung | Tidak efisien | Didukung |
-| Klaster / HA | Terbatas / rencana masa depan | ✅ | Konfigurasi terpisah | ✅ | ❌ |
-| Integrasi Kubernetes | Kemungkinan runtime masa depan | Didukung | Didukung | Didukung | Tersedia integrasi containerd |
-| Paling sesuai untuk | **Server pribadi, homelab, edge, server pengembangan** | Datacenter enterprise | Server Linux | Cloud skala besar | Infrastruktur serverless/kontainer |
+**Batasan Windows:** guest v0.2.2 yang saat ini dipatok mendukung API, image, dan jaringan, tetapi tidak dapat memulai MicroVM pada WSL2 standar. Perbaikan net-helper memerlukan rilis guest baru yang dipatok; VM nginx lokal juga terdampak. CLI Windows tetap dapat mengelola host Linux jarak jauh yang didukung.
 
 </details>
 
-## Dashboard
+## Menjalankan
+
+<details>
+<summary>Mulai dan hentikan di Linux, macOS, atau Windows</summary>
+
+### Linux
+
+Penginstal memulai kedua layanan systemd. Untuk memulai, memeriksa, atau menghentikannya kemudian:
+
+```sh
+sudo systemctl start firecrab-helper firecrab-api
+systemctl status firecrab-helper firecrab-api
+sudo systemctl stop firecrab-api firecrab-helper
+```
+
+### macOS
+
+microManager memulai VM terkelola yang menetap dan tunnel API localhost:
+
+```sh
+firecrab service start
+firecrab service status
+firecrab service debug --logs --tail 100
+firecrab service stop
+```
+
+### Windows
+
+microManager menjaga distribusi WSL2 terkelola tetap berjalan melalui tugas terjadwal per pengguna:
+
+```powershell
+firecrab service start
+firecrab service status
+firecrab service debug --logs --tail 100
+firecrab service stop
+```
+
+**Batasan Windows:** guest v0.2.2 yang saat ini dipatok mendukung API, image, dan jaringan, tetapi tidak dapat memulai MicroVM pada WSL2 standar. Perbaikan net-helper memerlukan rilis guest baru yang dipatok; VM nginx lokal juga terdampak. CLI Windows tetap dapat mengelola host Linux jarak jauh yang didukung.
+
+Saat sehat, buka `http://127.0.0.1:5523/`. Buat MicroNetwork, pilih image terpasang, buat dan mulai VM, lalu buka Terminal setelah `running`. Untuk host jarak jauh, atur [profil host CLI](public-docs/reference/cli.md#host-profiles).
+
+</details>
+
+## Menjalankan dari sumber
+
+<details>
+<summary>API dan dashboard Linux / CLI macOS dan Windows</summary>
+
+Dari root repositori, gunakan [toolchain Rust](rust-toolchain.toml) yang dipatok, Node.js 22+, dan npm. Eksekusi VM juga memerlukan Linux KVM dan [prasyarat host](public-docs/getting-started/installation.md).
+
+### Linux
+
+Gunakan tiga terminal. Helper berjalan dengan hak istimewa; API berjalan sebagai pengguna biasa. Path data lokal relatif terhadap root repositori.
+
+```sh
+# 1
+cargo build -p firecrab-helper --locked
+sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
+  ./target/debug/firecrab-helper
+
+# 2
+cargo run -p firecrab-api --locked
+
+# 3
+npm ci --prefix firecrab-frontend
+npm run dev --prefix firecrab-frontend
+# http://localhost:8080/
+```
+
+Untuk menyajikan dashboard hasil build melalui API, hentikan API pengembangan lalu jalankan:
+
+```sh
+npm run build --prefix firecrab-frontend
+FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api --locked
+# http://127.0.0.1:5523/
+```
+
+### macOS
+
+Build CLI dari checkout dan helper native bertanda tangan, lalu pasang layanan terkelola. Gunakan `service start` jika sudah terpasang:
+
+```sh
+cargo build -p firecrab-cli --locked
+scripts/build-micromanager-macos.sh target/debug/firecrab-micromanager-macos
+./target/debug/firecrab service install
+./target/debug/firecrab service status
+```
+
+### Windows
+
+Build CLI dari checkout di PowerShell, lalu pasang layanan terkelola. Gunakan `service start` jika sudah terpasang:
+
+```powershell
+cargo build -p firecrab-cli --locked
+.\target\debug\firecrab.exe service install
+.\target\debug\firecrab.exe service status
+```
+
+Di macOS dan Windows, perintah ini menjalankan CLI/helper dari checkout dengan API guest yang terpasang. Perintah ini **tidak** membangun ulang sumber `firecrab-api` yang diedit di dalam Debian. Kembangkan runtime API/net-helper lengkap di Linux; pengembangan layanan terkelola dijelaskan di panduan platform di atas.
+
+</details>
+
+## Pengujian
+
+<details>
+<summary>Pemeriksaan, cakupan, dan E2E browser</summary>
+
+Pemeriksaan umum dari root repositori:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+npm ci --prefix firecrab-frontend
+npm run lint --prefix firecrab-frontend
+npm run build --prefix firecrab-frontend
+python3 scripts/check-doc-links.py
+python3 scripts/check-changelog.py
+```
+
+Cakupan lokal opsional (memerlukan `cargo-llvm-cov`):
+
+```sh
+cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+```
+
+E2E browser tanpa boot guest:
+
+```sh
+npm ci --prefix firecrab-e2e
+npm run install-browsers --prefix firecrab-e2e
+FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
+```
+
+Di PowerShell, atur `$env:FIRECRAB_E2E_SKIP_GUEST_BOOT="1"` sebelum `npm test --prefix firecrab-e2e`. Boot guest dilewati, sehingga KVM maupun HTTP nginx tidak divalidasi. Eksekusi guest dan seluruh pemeriksaan penginstal ada di [TEST.md](public-docs/development/testing.md), [daftar periksa Korea](public-docs/development/testing.ko.md), dan [panduan E2E](firecrab-e2e/README.md).
+
+</details>
+
+## Penggunaan: nginx
+
+<details>
+<summary>Impor nginx → buat microVM → akses HTTP</summary>
+
+Gunakan host Linux yang didukung atau microManager macOS dengan API dan CLI yang berjalan. Perintah berikut menggunakan shell POSIX di Linux/macOS. Dashboard menyediakan alur yang sama di Images → OCI Import, Networks, dan MicroVM.
+
+1. Periksa dan impor image, lalu ulangi pemeriksaan status sampai pekerjaan berhasil dan `nginx-1.27` terpasang:
+
+```sh
+firecrab image inspect nginx:1.27
+firecrab image import nginx:1.27
+firecrab image import-status nginx-1.27
+```
+
+2. Buat jaringan dengan subnet yang tidak tumpang tindih. Ganti `NETWORK_ID` dengan UUID dari perintah pertama:
+
+```sh
+firecrab network create --name nginx-net --subnet-cidr 172.31.20.0/24
+firecrab vm create --name nginx-demo --template nginx-1.27 --network NETWORK_ID
+```
+
+3. Ganti `VM_ID` dengan UUID hasil pembuatan VM, mulai VM, lalu tunggu hingga daftar menunjukkan `running`:
+
+```sh
+firecrab vm start VM_ID
+firecrab vm list
+```
+
+4. Tambahkan port host TCP `8081` → port guest `80` melalui REST API, lalu periksa respons nginx. PUT ini mengganti seluruh daftar port forward VM; sertakan aturan lain yang ingin dipertahankan.
+
+```sh
+curl -fsS -X PUT http://127.0.0.1:5523/api/vms/VM_ID/port-forwards \
+  -H 'Content-Type: application/json' \
+  -d '{"portForwards":[{"hostPort":8081,"guestPort":80,"protocol":"tcp"}]}'
+```
+
+Di Linux, periksa dari komputer lain menggunakan `http://FIRECRAB_HOST_IP:8081/`; DNAT tidak menyediakan akses loopback dari host itu sendiri. Di macOS, relay TCP menyediakan `http://127.0.0.1:8081/`. Izinkan port 8081 melalui firewall host/router untuk akses jarak jauh.
+
+```sh
+curl -I http://FIRECRAB_HOST_IP:8081/
+# macOS
+curl -I http://127.0.0.1:8081/
+```
+
+OCI import membangun rootfs yang dapat di-boot dengan `/etc/firecrab/busybox` sebagai PID 1, lalu menjalankan entrypoint nginx sebagai layanan. `EXPOSE 80` tidak membuat port forward host. Lihat [image OCI](public-docs/guides/oci.md) dan [jaringan](public-docs/guides/networking.md).
+
+Untuk menghentikan VM contoh:
+
+```sh
+firecrab vm stop VM_ID
+```
+
+<details>
+<summary>Panduan layar dashboard</summary>
 
 Navigasi bilah kiri membagi alur kerja harian ke dalam **MicroVM**, **Terminal** per VM,
 **Networks**, dan **Images**.
@@ -231,84 +377,18 @@ dengan indikator progres, laporan error, dan alias yang dihasilkan.
 
 ![Daftar M2Image](assets/dashboard/images.png)
 
-Lihat [panduan image](public-docs/images.md), [panduan image OCI](public-docs/oci.md),
-dan [panduan API](public-docs/api.md).
+Lihat [panduan image](public-docs/guides/images.md), [panduan image OCI](public-docs/guides/oci.md),
+dan [panduan API](public-docs/reference/api.md).
 
-## Pengembangan dari Sumber
+</details>
 
-Gunakan tiga terminal: network helper, API, dan dashboard Vite. Jalankan API dari root repository
-karena jalur data lokal bersifat relatif terhadap direktori kerja.
+</details>
 
-```sh
-# Terminal 1 — operasi jaringan dengan hak akses khusus
-cargo build -p firecrab-net-helper
-sudo -u root -g "$(id -gn)" FIRECRAB_NET_HELPER_ALLOWED_UID="$(id -u)" \
-  ./target/debug/firecrab-net-helper
+## Dokumentasi dan kontribusi
 
-# Terminal 2 — API dan manajer Firecracker
-pkill -x firecrab-api 2>/dev/null || true
-cargo run -p firecrab-api
+Bahasa dokumentasi default adalah Inggris; tautan di atas menyediakan README Korea, Jepang, Tionghoa, dan Indonesia. Dashboard mendukung Inggris dan Korea.
 
-# Terminal 3 — dashboard di http://localhost:8080/
-pkill -f '[f]irecrab-frontend/node_modules/.bin/vite' 2>/dev/null || true
-npm install --prefix firecrab-frontend
-npm run dev --prefix firecrab-frontend
-```
+- [public-docs/](public-docs/README.md): Instalasi, API, operasi, dan pemecahan masalah
+- [CONTRIBUTING.md](CONTRIBUTING.md): Catatan pengelola, pengembangan, dan pemeriksaan PR
 
-Untuk pengujian lokal yang menyerupai lingkungan produksi, bangun dashboard dan biarkan API menyediakannya:
-
-```sh
-npm run build --prefix firecrab-frontend
-FIRECRAB_STATIC_ROOT="$PWD/firecrab-frontend/dist" cargo run -p firecrab-api
-# Akses melalui: http://127.0.0.1:5523/
-```
-
-## Pengujian
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --locked
-
-# cakupan kode (coverage), opsional secara lokal — perintah yang sama dengan CI
-cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
-
-# lint frontend, pemeriksaan tipe, dan build
-npm install --prefix firecrab-frontend
-npm run lint --prefix firecrab-frontend
-npm run build --prefix firecrab-frontend
-
-# E2E browser untuk inspeksi OCI → impor, terhadap fixture registry lokal
-npm install --prefix firecrab-e2e
-npm run install-browsers --prefix firecrab-e2e
-FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm test --prefix firecrab-e2e
-
-# validasi link dokumentasi + format CHANGELOG
-python3 scripts/check-doc-links.py
-python3 scripts/check-changelog.py
-```
-
-`cargo clippy` berjalan dengan `-D warnings` — satu peringatan saja akan menggagalkan CI.
-Daftar lengkap pemeriksaan sebelum membuka PR tercantum di
-[CONTRIBUTING.md](./CONTRIBUTING.md#checks-before-you-open-a-pr). Lihat juga
-[panduan dashboard web](public-docs/dashboard.md).
-
-## Dokumentasi
-
-Dokumentasi teknis lengkap berbahasa Inggris di folder [`public-docs/`](public-docs/README.md)
-mencakup arsitektur, instalasi, operasional, kontrak API, dan pemecahan masalah.
-
-## Kontribusi
-
-<p align="center">
-  <a href="./CONTRIBUTING.md">
-    <img src="assets/icons/contributors.png" alt="Contributors" width="96" />
-  </a>
-</p>
-
-Lihat [CONTRIBUTING.md](./CONTRIBUTING.md) untuk [catatan maintainer](./CONTRIBUTING.md#a-note-from-the-maintainer),
-panduan setup pengembangan, daftar pemeriksaan, standar pull request, dan aturan dokumentasi.
-
-## Lisensi
-
-Dilisensikan di bawah [Apache License, Version 2.0](./LICENSE).
+Dilisensikan dengan [Apache License, Version 2.0](LICENSE).

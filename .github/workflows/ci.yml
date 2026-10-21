@@ -31,15 +31,15 @@ jobs:
             cargo-${{ runner.os }}-
 
       - name: Install pinned toolchain
-        # rust-toolchain.toml pins channel 1.96.0 + clippy/rustfmt/llvm-tools
+        # rust-toolchain.toml pins the channel and clippy/rustfmt/llvm-tools.
         run: rustup show
 
-      - name: Install dnsmasq, fakeroot
-        # firecrab-net-helper's dhcp.rs tests shell out to the real
+      - name: Install dnsmasq, fakeroot and Nginx
+        # firecrab-helper's dhcp.rs tests shell out to the real
         # `dnsmasq --test` to validate generated configs, and oci::ext4's
         # tests pack a root-owned image via real `fakeroot` (issue #250) —
         # neither preinstalled on the runner image.
-        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot
+        run: sudo apt-get update && sudo apt-get install -y dnsmasq fakeroot nginx
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
@@ -53,11 +53,41 @@ jobs:
       - name: cargo test -p firecrab-cli
         run: cargo test -p firecrab-cli --locked
 
+      - name: Shared source development deployment contract
+        run: python3 scripts/test-micromanager-dev.py
+
+      - name: Guest QA failure and cleanup contract
+        run: python3 scripts/test-ci-qa-guest.py
+
+      - name: macOS repair QA guard and restoration contract
+        run: python3 -m unittest scripts/test_macos_repair_qa.py scripts/test_macos_os_repair_qa.py scripts/test_macos_os_files.py
+
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: cargo test + coverage
-        run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Unit and Pipe systemd tests + coverage
+        run: |
+          source <(cargo llvm-cov show-env --sh)
+          cargo llvm-cov clean --workspace
+          cargo test --workspace --locked
+          cargo build -p firecrab-cli -p firecrab-api -p firecrab-helper --locked
+          bin="$CARGO_LLVM_COV_TARGET_DIR/debug"
+          # The API runs as nobody; its helper runs in a systemd sandbox that
+          # hides /home. Collect their profiles outside the runner's checkout.
+          profiles=$(mktemp -d /var/tmp/firecrab-coverage.XXXXXX)
+          chmod 1777 "$profiles"
+          trap 'sudo rm -rf "$profiles"' EXIT
+          export LLVM_PROFILE_FILE="$profiles/firecrab-%p-%m.profraw"
+          sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
+          # A second install verifies the cached executable and digest record.
+          sudo --preserve-env=LLVM_PROFILE_FILE env FIRECRAB_LIBDIR=/var/lib/firecrab-pipe-qa "$bin/firecrab" pipe install
+          cloudflared=/var/lib/firecrab-pipe-qa/pipe/cloudflared
+          python3 scripts/test-pipe-runtime.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-cli.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx --cloudflared "$cloudflared"
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-firecrab-address.py --firecrab "$bin/firecrab" --nginx /usr/sbin/nginx
+          sudo --preserve-env=LLVM_PROFILE_FILE python3 scripts/test-pipe-api.py --api "$bin/firecrab-api" --helper "$bin/firecrab-helper"
+          cp "$profiles"/*.profraw "$CARGO_LLVM_COV_TARGET_DIR/"
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7
@@ -98,6 +128,9 @@ jobs:
           target/debug/firecrab --help
           target/debug/firecrab host list
 
+      - name: Source development deployment contract
+        run: python3 scripts/test-micromanager-dev.py
+
       - name: Verify hosted-runner diagnostic contract
         run: |
           rc=0
@@ -117,11 +150,28 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show
 
-      - name: Windows CLI clippy and tests
+      - name: Windows CLI clippy
+        run: cargo clippy -p firecrab-cli --all-targets -- -D warnings
+
+      - name: Windows CLI tests
+        run: cargo test -p firecrab-cli --locked
+
+      - name: Windows CLI build
+        run: cargo build -p firecrab-cli --locked
+
+      - name: Windows QA runner contract (PowerShell 5.1)
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-ci-qa-windows.ps1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: firecrab-e2e/package-lock.json
+
+      - name: Cross-platform browser runner contracts
         run: |
-          cargo clippy -p firecrab-cli --all-targets -- -D warnings
-          cargo test -p firecrab-cli --locked
-          cargo build -p firecrab-cli --locked
+          npm ci --prefix firecrab-e2e
+          npm run test:runner --prefix firecrab-e2e
 
       - name: Verify hosted-runner diagnostic contract
         shell: pwsh
@@ -130,6 +180,7 @@ jobs:
           $rc = $LASTEXITCODE
           if ($rc -ne 0 -and $rc -ne 1) { throw "doctor exited with $rc" }
           $report = $json | Out-String | ConvertFrom-Json
+          $json | Out-String | Set-Content -Path doctor.json -Encoding UTF8
           if ($report.platform -ne 'Windows') { throw "unexpected platform $($report.platform)" }
           $report.checks | Format-Table id, status, detail -AutoSize
           exit 0
@@ -233,6 +284,56 @@ jobs:
               sys.exit(1)
           PY
 
+  e2e-dashboard:
+    name: Browser E2E (dashboard, no guest boot)
+    # Playwright specs tagged @dashboard fake the API or console they need, so
+    # they run without KVM or the net helper. Guest-boot halves stay manual.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install pinned toolchain
+        run: rustup show
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            firecrab-frontend/package-lock.json
+            firecrab-e2e/package-lock.json
+
+      - name: Install dashboard and E2E dependencies
+        run: |
+          npm ci --prefix firecrab-frontend
+          npm ci --prefix firecrab-e2e
+          npx --prefix firecrab-e2e playwright install --with-deps chromium
+
+      - name: Build the API Playwright starts
+        run: cargo build -p firecrab-api
+
+      - name: Playwright @dashboard specs
+        run: npm --prefix firecrab-e2e run test:dashboard
+
+      - name: Playwright traces (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-dashboard-results
+          path: firecrab-e2e/test-results
+          retention-days: 7
+
   install:
     name: Installer (shellcheck, --check, doctor, install/uninstall)
     # GitHub Ubuntu exposes /dev/kvm on typical x86_64 hosted runners. Nested
@@ -240,6 +341,9 @@ jobs:
     # the guest-boot step instead of skipping it. Full E2E still belongs on a
     # self-hosted runner when flake rate matters.
     runs-on: ubuntu-24.04
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
 
@@ -259,14 +363,16 @@ jobs:
 
       - name: shellcheck
         run: |
-          shellcheck install.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
+          shellcheck install.sh scripts/ci-qa-helper-upgrade.sh scripts/firecrab-release.sh scripts/package-host-release.sh \
             scripts/build-micromanager-macos.sh \
             scripts/bake-install-sh.sh scripts/ci-prepare-install-payload.sh \
             scripts/ci-qa-api.sh \
             scripts/ci-qa-guest.sh \
+            scripts/ci-qa-lifetime.sh \
             scripts/ci-qa-nginx.sh \
             scripts/ci-qa-ssh.sh \
             scripts/ci-qa-macos-e2e.sh \
+            scripts/micromanager/dev-macos-guest.sh \
             scripts/ci-m2-guest-boot.sh \
             scripts/verify-release-binary.sh \
             scripts/smoke-release-exec.sh scripts/test-smoke-release-exec.sh \
@@ -314,13 +420,16 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: firecrab-frontend/package-lock.json
+          cache-dependency-path: |
+            firecrab-frontend/package-lock.json
+            firecrab-e2e/package-lock.json
 
       - name: Build install payload
         # CI installs from local binaries, not GitHub Releases (PRs have none).
         run: ./scripts/ci-prepare-install-payload.sh
 
       - name: Install
+        id: install-service
         # install.sh never installs a guest image itself now — deps, account,
         # directories, units, dashboard are all still real.
         run: |
@@ -330,7 +439,7 @@ jobs:
 
       - name: Both daemons are up
         run: |
-          systemctl is-active --quiet firecrab-net-helper
+          systemctl is-active --quiet firecrab-helper
           systemctl is-active --quiet firecrab-api
           # The socket's group is what lets the unprivileged API reach the
           # helper at all; getting it wrong is a silent, confusing failure.
@@ -368,11 +477,14 @@ jobs:
           test "$code" -eq 1
 
       - name: QA work list (API, no guest boot)
-        # Shared QA IDs from public-docs/qa.md: see scripts/ci-qa-api.sh.
+        # Shared QA IDs from public-docs/development/qa.md: see scripts/ci-qa-api.sh.
         # Leaves the later "ci" / 172.31.0.0/24 smoke network contract unchanged.
-        run: scripts/ci-qa-api.sh
+        run: |
+          mkdir -p target/qa
+          scripts/ci-qa-api.sh 2>&1 | tee target/qa/api.log
 
       - name: Enable KVM
+        id: enable-kvm
         run: |
           sudo chmod 666 /dev/kvm
           ls -l /dev/kvm
@@ -380,11 +492,42 @@ jobs:
           sudo -u firecrab test -r /dev/kvm
           sudo -u firecrab test -w /dev/kvm
 
+      - name: Prepare Chromium and local OCI fixture
+        id: browser-deps
+        run: |
+          sudo apt-get install -y --no-install-recommends openssh-server busybox-static
+          npm ci --prefix firecrab-e2e
+          npm run test:runner --prefix firecrab-e2e
+          ./firecrab-e2e/node_modules/.bin/playwright install --with-deps chromium
+          # Reuse the installed API; its OCI toolbox comes from the local
+          # static binary so the fixture does not pull a Docker Hub image.
+          sudo mkdir -p /run/systemd/system/firecrab-api.service.d
+          printf '[Service]\nEnvironment=FIRECRAB_OCI_TOOLBOX_PATH=/usr/bin/busybox\n' \
+            | sudo tee /run/systemd/system/firecrab-api.service.d/90-ci-e2e.conf
+          sudo systemctl daemon-reload
+          sudo systemctl restart firecrab-api
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:5523/api/host >/dev/null && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5523/api/host >/dev/null
+
+      - name: Chromium E2E with real guest boot and dual-stack SSH
+        if: ${{ !cancelled() && steps.browser-deps.outcome == 'success' }}
+        timeout-minutes: 30
+        env:
+          FIRECRAB_E2E_REUSE_SERVER: "1"
+          FIRECRAB_E2E_REQUIRE_GUEST_BOOT: "1"
+          FIRECRAB_E2E_REQUIRE_RUNNING_API: "1"
+        run: npm test --prefix firecrab-e2e 2>&1 | tee target/qa/browser.log
+
       - name: QA nginx env, port-forward, shells
+        if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' }}
         timeout-minutes: 25
-        run: scripts/ci-qa-nginx.sh nginx:1.27-alpine
+        run: scripts/ci-qa-nginx.sh nginx:1.27-alpine 2>&1 | tee target/qa/nginx.log
 
       - name: QA guest boot (OCI alpine, ubuntu, fedora)
+        if: ${{ !cancelled() && steps.install-service.outcome == 'success' && steps.enable-kvm.outcome == 'success' }}
         timeout-minutes: 90
         # Every reference runs I5 + V1/V7/V8/V11/V13/X5; fresh later aliases
         # use the API for I6, while the first fresh alias uses the CLI.
@@ -392,7 +535,14 @@ jobs:
         # a pre-existing first alias is preserved and its unperformed import is
         # reported as WARNING rather than a false PASS.
         # The first reference also runs P1-P6, C6, and X7.
-        run: scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42
+        run: scripts/ci-qa-guest.sh alpine:3.21 ubuntu:24.04 fedora:42 2>&1 | tee target/qa/guest.log
+
+      - name: QA VM lifetime
+        timeout-minutes: 30
+        # R1–R7 and X7 from public-docs/development/qa.md; restarts the installed API.
+        env:
+          FIRECRAB_QA_HELPER_UPGRADE: "1"
+        run: scripts/ci-qa-lifetime.sh alpine:3.21
 
       - name: Dashboard, MicroNetwork, and create-VM API smoke
         # No guest image here, so no guest boot. Still exercise the
@@ -445,7 +595,7 @@ jobs:
           ip -br addr | grep -Eq 'mnb.*172\.31\.0\.1/24'
           sudo pgrep -af dnsmasq | grep -q firecrab
           sudo ss -lun | grep -q ':67'
-          ! sudo journalctl -u firecrab-net-helper --no-pager | grep -i 'operation not permitted'
+          ! sudo journalctl -u firecrab-helper --no-pager | grep -i 'operation not permitted'
 
       - name: Re-running is safe
         run: |
@@ -458,10 +608,38 @@ jobs:
 
       - name: Uninstall keeps data, purge removes it
         run: |
+          # A MicroVM unit still running at uninstall time has to go with it. The
+          # uninstaller goes by the unit name alone, so a sleep stands in for a VM.
+          vm_unit=firecrab-vm-00000000000000000000000000000001.service
+          sudo systemd-run --unit="$vm_unit" --collect --quiet sleep 600
+          systemctl is-active --quiet "$vm_unit"
           sudo ./install.sh --uninstall
-          ! systemctl is-active --quiet firecrab-api
+          if systemctl is-active --quiet firecrab-api; then
+            echo 'FAILED: firecrab-api is still active after uninstall'
+            exit 1
+          fi
+          if systemctl is-active --quiet "$vm_unit"; then
+            echo 'FAILED: a MicroVM unit is still running after uninstall'
+            exit 1
+          fi
           test ! -e /etc/systemd/system/firecrab-api.service
           test ! -e /usr/local/bin/firecrab
+          # The whole library directory goes, kernel extract scripts included.
+          test ! -e /usr/local/lib/firecrab
+          # The MicroNetwork created above leaves no device or NAT rule behind.
+          # Captured first: under `pipefail`, `grep -q` ending the pipe early can
+          # turn a match into a failed condition.
+          links=$(ip -br link)
+          if grep -Eq '^(mnb|fct|fcbr)' <<<"$links"; then
+            echo 'FAILED: a firecrab network device survived the uninstall'
+            exit 1
+          fi
+          nat=$(sudo iptables -t nat -S POSTROUTING)
+          if grep -Eq -- '-s 172\.31\.0\.0/24 .*MASQUERADE' <<<"$nat"; then
+            echo 'FAILED: the MicroNetwork NAT rule survived the uninstall'
+            exit 1
+          fi
+          test ! -e /etc/firecrab/host-baseline.env
           test -d /var/lib/firecrab
           sudo ./install.sh --uninstall --purge
           test ! -e /var/lib/firecrab
@@ -469,10 +647,21 @@ jobs:
       - name: Daemon logs (on failure)
         if: failure()
         run: |
-          sudo journalctl -u firecrab-net-helper --no-pager -n 60 || true
+          sudo journalctl -u firecrab-helper --no-pager -n 60 || true
           sudo journalctl -u firecrab-api --no-pager -n 60 || true
-          systemctl status firecrab-net-helper firecrab-api --no-pager || true
+          systemctl status firecrab-helper firecrab-api --no-pager || true
           sudo firecrab doctor 2>&1 || true
+
+      - name: Retain QA logs and Playwright results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-runtime-qa-${{ github.run_attempt }}
+          path: |
+            target/qa/
+            firecrab-e2e/test-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   install-distro:
     name: Installer deps (${{ matrix.image }})
@@ -518,12 +707,13 @@ jobs:
           elif command -v pacman >/dev/null; then
             retry pacman -Sy --noconfirm --needed bash ca-certificates curl git
           elif command -v zypper >/dev/null; then
-            # Tumbleweed's oss snapshot is replaced while the container
-            # still has the previous repomd. A stale appdata-icons.tar.gz
-            # hash then makes `zypper install git` fail even after retries
-            # unless metadata is discarded first. Its CDN also rejects some
-            # plain HTTP object requests, so switch every repo to HTTPS first.
-            sed -i 's#^baseurl=http://#baseurl=https://#' /etc/zypp/repos.d/*.repo
+            # Read metadata and packages from the same origin: redirected
+            # mirrors can lag behind repomd.xml and return 404 even after a
+            # forced refresh. Keep HTTPS for every repository.
+            sed -i \
+              -e 's#^baseurl=http://#baseurl=https://#' \
+              -e 's#//download\.opensuse\.org/#//downloadcontent.opensuse.org/#g' \
+              /etc/zypp/repos.d/*.repo
             retry sh -c 'zypper --non-interactive clean --all && zypper --non-interactive --gpg-auto-import-keys refresh --force && zypper --non-interactive install --no-recommends bash ca-certificates curl git'
           fi
         shell: sh -e {0}
@@ -560,5 +750,7 @@ jobs:
           cache-dependency-path: firecrab-frontend/package-lock.json
 
       - run: npm ci
+      - name: Development dashboard lifecycle with real Vite
+        run: node ../scripts/test-dev-dashboard.mjs
       - run: npm run lint
       - run: npm run build

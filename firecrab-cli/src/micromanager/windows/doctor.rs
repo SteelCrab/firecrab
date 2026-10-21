@@ -86,17 +86,38 @@ pub struct Inputs {
     wsl_version: Option<String>,
     wsl_kernel: Option<String>,
     distributions: Vec<String>,
-    /// `None` when no distribution exists yet, so nothing could be probed.
+    /// `None` when no distribution was probed, including stopped debug snapshots.
     probe: Option<BTreeMap<String, String>>,
 }
 
 impl Inputs {
     pub fn live() -> Self {
+        Self::collect(true)
+    }
+
+    /// `debug` may inspect a running managed guest, but never boots one.
+    pub fn debug() -> Self {
+        Self::collect(false)
+    }
+
+    fn collect(allow_start: bool) -> Self {
         let wsl = wsl::run(&["--version"]).unwrap_or_default();
         let distributions = wsl::distributions();
+        let running = if allow_start {
+            Vec::new()
+        } else {
+            wsl::running()
+        };
+        let target = if allow_start {
+            probe_target(&distributions)
+        } else if wsl::contains(&running, DISTRO_NAME) {
+            Some(DISTRO_NAME)
+        } else {
+            None
+        };
         // Root, because the managed guest runs everything as root; the user's
         // group membership in some other distribution says nothing about it.
-        let probe = probe_target(&distributions).map(|target| {
+        let probe = target.map(|target| {
             wsl::run(&[
                 "-d",
                 target,
@@ -248,10 +269,10 @@ fn not_probed(id: &'static str) -> Diagnostic {
     Diagnostic {
         id,
         status: Status::Warning,
-        detail: "Not checked: no WSL distribution is available to probe.".to_string(),
-        fix: Some(format!(
-            "`firecrab service install` checks this after importing {DISTRO_NAME}."
-        )),
+        detail: "Not checked: no WSL distribution was probed.".to_string(),
+        fix: Some(
+            "Run `firecrab service doctor` to probe WSL (may start a distribution).".to_string(),
+        ),
     }
 }
 

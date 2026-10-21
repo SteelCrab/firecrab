@@ -47,7 +47,7 @@ Native release CI runs `cargo test` and `cargo build` for these targets:
 ### Terminal session 1 — Linux host, root required
 
 ```sh
-sudo systemctl status firecrab-api firecrab-net-helper
+sudo systemctl status firecrab-api firecrab-helper
 curl -fsS http://127.0.0.1:5523/api/host
 ```
 

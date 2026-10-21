@@ -1091,11 +1091,11 @@ fn publish_tree(partial: &Path, destination: &Path) -> Result<(), ResolveError> 
                 path: destination.to_owned(),
             });
         }
-        return Err(merge_io(
+        Err(merge_io(
             "publish partial tree",
             destination.to_owned(),
             error,
-        ));
+        ))
     }
     #[cfg(not(target_os = "linux"))]
     {

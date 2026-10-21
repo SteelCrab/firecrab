@@ -19,6 +19,7 @@ use crate::model::{Lease, VmRecord, VmState};
 
 mod pools;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
+mod micro_services;
 
 /// Default SQLite database path, relative to the process's working directory.
 const DB_FILE: &str = "data/firecrab.db";
@@ -72,7 +73,7 @@ const UPDATE_SQL: &str = "UPDATE vms SET name = ?2, state = ?3, template = ?4, \
     micro_network_id = ?13, storage_root = ?14, disk_generation = ?15, last_runtime_id = ?16, \
     purpose = ?17, env = ?18 WHERE id = ?1";
 
-/// Schema for the `micro_networks` table (`public-docs/networking.md`).
+/// Schema for the `micro_networks` table (`public-docs/guides/networking.md`).
 /// The gateway isn't stored — it's derived from `subnet_cidr` — and neither
 /// is the bridge name, which the helper derives from `id`.
 const CREATE_MICRO_NETWORKS_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_networks (
@@ -94,7 +95,7 @@ const INSERT_MICRO_NETWORK_SQL: &str = "INSERT INTO micro_networks \
     (id, name, subnet_cidr, internet_enabled, uplink, ipv6_cidr, ipv6_address_mode) \
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
 
-/// MicroStorage pools (`public-docs/storage.md`).
+/// MicroStorage pools (`public-docs/guides/storage.md`).
 const CREATE_MICRO_STORAGES_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS micro_storages (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -276,7 +277,7 @@ fn migrate_storage_root_column(conn: &Connection) -> Result<(), PersistenceError
 }
 
 /// Disk generation + last runtime ids for the artifact layout
-/// (`public-docs/storage.md`).
+/// (`public-docs/guides/storage.md`).
 fn migrate_disk_generation_columns(conn: &Connection) -> Result<(), PersistenceError> {
     for (name, sql) in [
         (
@@ -463,6 +464,8 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    #[error("MicroService name {name} is already registered")]
+    DuplicateMicroServiceName { name: String },
     /// Couldn't create the database's parent directory.
     #[error("failed to create VM data directory {path}: {source}")]
     CreateDirectory {
@@ -682,6 +685,8 @@ impl Store {
         migrate_uplink_column(&conn)?;
         migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
+        conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
+        conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;
@@ -1058,6 +1063,18 @@ impl Store {
             }
             Err(error) => Err(PersistenceError::Database(error)),
         }
+    }
+
+    /// Removes only the local row for this alias and architecture.
+    pub fn delete_microregistry_local(
+        &self,
+        alias: &str,
+        architecture: &str,
+    ) -> Result<bool, PersistenceError> {
+        Ok(self.lock().execute(
+            "DELETE FROM microregistry_local WHERE alias = ?1 AND architecture = ?2",
+            params![alias, architecture],
+        )? > 0)
     }
 
     /// How many VMs still point at `storage_root` (id string).
@@ -1658,21 +1675,6 @@ impl Store {
         ipam::current_revision(&self.lock())
     }
 
-    /// Startup cleanup: a VM left in a live state by a previous run has no
-    /// process behind it anymore, so demote it to stopped.
-    pub fn reset_active_states(&self) -> Result<usize, PersistenceError> {
-        let changed = self.lock().execute(
-            "UPDATE vms SET state = ?1 WHERE state IN (?2, ?3, ?4)",
-            params![
-                encode_state(VmState::Stopped),
-                encode_state(VmState::Starting),
-                encode_state(VmState::Running),
-                encode_state(VmState::Stopping),
-            ],
-        )?;
-        Ok(changed)
-    }
-
     /// Imports `legacy` (the old JSON store) if it exists, then renames it
     /// with a `.imported` suffix so re-opening never imports it again.
     fn import_legacy(&self, legacy: &Path) -> Result<(), PersistenceError> {
@@ -1955,38 +1957,6 @@ mod tests {
         store.clear_vm_shells(vm.id).unwrap();
         store.delete_shell(shell_id).unwrap();
         assert!(store.shell_detail(shell_id).unwrap().is_none());
-    }
-
-    #[test]
-    fn reset_demotes_live_states_to_stopped() {
-        let directory = tempdir().unwrap();
-        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
-        let states = [
-            VmState::Created,
-            VmState::Starting,
-            VmState::Running,
-            VmState::Stopping,
-            VmState::Stopped,
-            VmState::Error,
-        ];
-        let mut ids = Vec::new();
-        for state in states {
-            let mut vm = record(Uuid::new_v4(), "vm");
-            vm.state = state;
-            store.insert(&vm).unwrap();
-            ids.push((vm.id, state));
-        }
-
-        assert_eq!(store.reset_active_states().unwrap(), 3);
-
-        let all = store.load_all().unwrap();
-        for (id, before) in ids {
-            let expected = match before {
-                VmState::Starting | VmState::Running | VmState::Stopping => VmState::Stopped,
-                other => other,
-            };
-            assert_eq!(all.get(&id).unwrap().state, expected, "{before:?}");
-        }
     }
 
     #[test]
@@ -2762,6 +2732,43 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(store.list_microregistry_local(None).unwrap(), [entry]);
+    }
+
+    #[test]
+    fn removing_a_local_registration_preserves_other_aliases_and_architectures() {
+        let directory = tempdir().unwrap();
+        let store = Store::open(&directory.path().join("firecrab.db")).unwrap();
+        for (alias, arch) in [
+            ("custom", "x86_64"),
+            ("custom", "aarch64"),
+            ("other", "x86_64"),
+        ] {
+            store
+                .insert_microregistry_local(&local_catalog_entry(alias, arch))
+                .unwrap();
+        }
+        assert!(
+            store
+                .delete_microregistry_local("custom", "x86_64")
+                .unwrap()
+        );
+        assert!(
+            !store
+                .delete_microregistry_local("custom", "x86_64")
+                .unwrap()
+        );
+        assert!(
+            store
+                .microregistry_local("custom", "aarch64")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .microregistry_local("other", "x86_64")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

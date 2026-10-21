@@ -5,7 +5,7 @@
 //! pass [`crate::image_install::is_safe_archive_member`].
 
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -14,6 +14,7 @@ use crate::image_install::{
     ImageInstallTracker, clear_staged_package_origin, is_safe_archive_member, package_name,
     staged_package_path, write_staged_package_origin,
 };
+use crate::persistence::LocalCatalogEntry;
 use crate::templates::{TemplateRegistry, TemplateSpec, TemplateVersion};
 use firecrab_api_types::PackageOrigin;
 
@@ -99,20 +100,67 @@ pub async fn pack_registered_template(
 pub fn read_packed_template_spec(archive: &Path) -> Result<TemplateSpec, String> {
     let file =
         File::open(archive).map_err(|error| format!("open {}: {error}", archive.display()))?;
-    let decoder = zstd::stream::read::Decoder::new(file)
-        .map_err(|error| format!("zstd decoder {}: {error}", archive.display()))?;
+    read_template_spec(file)
+}
+
+/// A local catalog row pins both the compressed bytes and the template identity.
+/// Read from the same open file after hashing, before extracting any artifacts.
+pub(crate) fn read_local_template_spec(
+    image_root: &Path,
+    entry: &LocalCatalogEntry,
+) -> Result<TemplateSpec, String> {
+    if entry.package != package_name(&entry.alias) {
+        return Err("local package filename does not match its alias".to_owned());
+    }
+    let archive = staged_package_path(image_root, &entry.alias);
+    let mut file =
+        File::open(&archive).map_err(|error| format!("open {}: {error}", archive.display()))?;
+    let mut hasher = HashingWriter::new(io::sink());
+    io::copy(&mut file, &mut hasher).map_err(|error| format!("hash local package: {error}"))?;
+    if hasher.finalize().1 != entry.sha256 {
+        return Err("local package SHA-256 does not match its catalog registration".to_owned());
+    }
+    file.rewind()
+        .map_err(|error| format!("rewind local package: {error}"))?;
+    let spec = read_template_spec(file)?;
+    if spec.alias != entry.alias || spec.version != entry.version {
+        return Err(
+            "local template alias or version does not match its catalog registration".to_owned(),
+        );
+    }
+    for path in [&spec.kernel, &spec.rootfs]
+        .into_iter()
+        .chain(spec.initrd.iter())
+    {
+        if !is_safe_archive_member(&path.to_string_lossy()) {
+            return Err(format!(
+                "unsafe local template artifact path: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(spec)
+}
+
+fn read_template_spec(file: File) -> Result<TemplateSpec, String> {
+    let decoder =
+        zstd::stream::read::Decoder::new(file).map_err(|error| format!("zstd decoder: {error}"))?;
     let mut tar = tar::Archive::new(decoder);
     for entry in tar
         .entries()
         .map_err(|error| format!("tar entries: {error}"))?
     {
-        let mut entry = entry.map_err(|error| format!("tar entry: {error}"))?;
+        let entry = entry.map_err(|error| format!("tar entry: {error}"))?;
         let name = entry
             .path()
             .map_err(|error| format!("tar member path: {error}"))?;
         let name = name.to_string_lossy().replace('\\', "/");
         if name == TEMPLATE_SPEC_MEMBER {
-            return serde_json::from_reader(&mut entry)
+            const MAX_SPEC_BYTES: u64 = 64 * 1024;
+            if !entry.header().entry_type().is_file() || entry.size() > MAX_SPEC_BYTES {
+                return Err("template metadata must be a regular file of at most 64 KiB".to_owned());
+            }
+            return serde_json::from_reader(entry.take(MAX_SPEC_BYTES))
                 .map_err(|error| format!("parse {TEMPLATE_SPEC_MEMBER}: {error}"));
         }
     }

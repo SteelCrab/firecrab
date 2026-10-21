@@ -12,8 +12,10 @@ use firecrab_api_types::{
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
 use crate::image_install;
+use crate::image_install::Architecture;
 use crate::kernel_manager;
 use crate::oci::kernel as kernel_cache;
+use crate::persistence::LocalCatalogEntry;
 use crate::server::RequestId;
 use crate::state::AppState;
 use crate::templates::{TemplateRegistry, TemplateSpec, TemplateVersion};
@@ -354,6 +356,9 @@ pub async fn get_image_package(
 ) -> Result<Json<ImageInstallResponse>, AppError> {
     if TemplateRegistry::known_spec(&alias).is_none()
         && state.templates.resolve_alias(&alias).is_none()
+        && local_catalog_entry(&state, &alias, request_id.0)
+            .await?
+            .is_none()
     {
         return Err(AppError::not_found(request_id.0));
     }
@@ -437,10 +442,33 @@ pub async fn get_image_install(
 ) -> Result<Json<ImageInstallResponse>, AppError> {
     if TemplateRegistry::known_spec(&alias).is_none()
         && state.templates.resolve_alias(&alias).is_none()
+        && local_catalog_entry(&state, &alias, request_id.0)
+            .await?
+            .is_none()
     {
         return Err(AppError::not_found(request_id.0));
     }
     Ok(Json(state.image_installs.snapshot(&alias)))
+}
+
+async fn local_catalog_entry(
+    state: &AppState,
+    alias: &str,
+    request_id: uuid::Uuid,
+) -> Result<Option<LocalCatalogEntry>, AppError> {
+    let store = state.store.clone();
+    let alias = alias.to_owned();
+    tokio::task::spawn_blocking(move || {
+        store.microregistry_local(&alias, Architecture::HOST.as_str())
+    })
+    .await
+    .map_err(|_| AppError::internal(request_id))?
+    .map_err(|_| AppError::internal(request_id))
+}
+
+enum ImageInstallSource {
+    Known(TemplateSpec),
+    Local(LocalCatalogEntry),
 }
 
 /// `POST /api/images/{alias}/install` — extract/register an image from its
@@ -450,8 +478,14 @@ pub async fn start_image_install(
     Path(alias): Path<String>,
     Extension(request_id): Extension<RequestId>,
 ) -> Result<impl IntoResponse, AppError> {
-    let Some(spec) = TemplateRegistry::known_spec(&alias) else {
-        return Err(AppError::not_found(request_id.0));
+    let source = match TemplateRegistry::known_spec(&alias) {
+        Some(spec) => ImageInstallSource::Known(spec),
+        None => {
+            let entry = local_catalog_entry(&state, &alias, request_id.0)
+                .await?
+                .ok_or_else(|| AppError::not_found(request_id.0))?;
+            ImageInstallSource::Local(entry)
+        }
     };
 
     if state.templates.resolve_alias(&alias).is_some() {
@@ -493,6 +527,28 @@ pub async fn start_image_install(
     let tracker = state.image_installs.clone();
     let templates = (*state.templates).clone();
     tokio::spawn(async move {
+        let spec = match source {
+            ImageInstallSource::Known(spec) => spec,
+            ImageInstallSource::Local(entry) => {
+                let image_root = templates.image_root_path().to_path_buf();
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::package::read_local_template_spec(&image_root, &entry)
+                })
+                .await;
+                match result {
+                    Ok(Ok(spec)) => spec,
+                    Ok(Err(error)) => {
+                        tracker.finish_err(&alias, error);
+                        return;
+                    }
+                    Err(error) => {
+                        tracker
+                            .finish_err(&alias, format!("local package validation task: {error}"));
+                        return;
+                    }
+                }
+            }
+        };
         image_install::run_image_install(tracker, templates, spec).await;
     });
 
@@ -682,6 +738,219 @@ mod tests {
         AppState::with_db_file(templates, root.join("state.db"))
             .await
             .unwrap()
+    }
+
+    async fn deleted_local_image(root: &Path) -> (AppState, LocalCatalogEntry) {
+        write_file(&root.join("kernel/custom"), b"custom-kernel");
+        write_file(&root.join("kernel/custom.initrd"), b"custom-initrd");
+        write_file(&root.join("rootfs/custom.ext4"), b"custom-rootfs");
+        let templates = TemplateRegistry::from_specs(
+            root,
+            [TemplateSpec {
+                alias: "custom".to_owned(),
+                version: "imported".to_owned(),
+                kernel: "kernel/custom".into(),
+                initrd: Some("kernel/custom.initrd".into()),
+                rootfs: "rootfs/custom.ext4".into(),
+                boot_args: "console=ttyS0 root=/dev/vda rw custom=1".to_owned(),
+            }],
+        )
+        .unwrap();
+        let state = AppState::with_db_file(templates, root.join("state.db"))
+            .await
+            .unwrap();
+        let packed = crate::package::pack_registered_template(
+            &state.microregistry_registers,
+            &state.templates,
+            "custom",
+            "7",
+        )
+        .await
+        .unwrap();
+        let entry = LocalCatalogEntry {
+            alias: "custom".to_owned(),
+            architecture: Architecture::HOST.as_str().to_owned(),
+            version: "7".to_owned(),
+            package: packed.package,
+            sha256: packed.sha256,
+            min_disk_gb: 1,
+            published_at: "2026-10-02T00:00:00Z".to_owned(),
+        };
+        state.store.insert_microregistry_local(&entry).unwrap();
+        delete_image(
+            State(state.clone()),
+            Path("custom".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap();
+        assert!(!root.join("rootfs/custom.ext4").exists());
+        (state, entry)
+    }
+
+    async fn install_local_image(state: &AppState) -> ImageInstallResponse {
+        let response = start_image_install(
+            State(state.clone()),
+            Path("custom".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.into_response().status(), StatusCode::ACCEPTED);
+        for _ in 0..100 {
+            let Json(snapshot) = get_image_install(
+                State(state.clone()),
+                Path("custom".to_owned()),
+                Extension(RequestId(uuid::Uuid::nil())),
+            )
+            .await
+            .unwrap();
+            if snapshot.status != ImageInstallStatus::Running {
+                return snapshot;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("local image installation did not finish");
+    }
+
+    #[tokio::test]
+    async fn deleted_custom_image_reinstalls_from_registered_package() {
+        let directory = tempdir().unwrap();
+        let root = directory.path();
+        let (state, _) = deleted_local_image(root).await;
+        let Json(package) = get_image_package(
+            State(state.clone()),
+            Path("custom".to_owned()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(package.status, ImageInstallStatus::Succeeded);
+        let snapshot = install_local_image(&state).await;
+        assert_eq!(
+            snapshot.status,
+            ImageInstallStatus::Succeeded,
+            "{}",
+            snapshot.log
+        );
+        let restarted = TemplateRegistry::load_from(root).unwrap();
+        let image = restarted.resolve_alias("custom").unwrap();
+        assert_eq!(image.version, "7");
+        assert_eq!(image.boot_args, "console=ttyS0 root=/dev/vda rw custom=1");
+        assert!(image.initrd.is_some());
+        assert_eq!(
+            fs::read(root.join("rootfs/custom.ext4")).unwrap(),
+            b"custom-rootfs"
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_image_reinstall_rejects_changed_package_before_extraction() {
+        let directory = tempdir().unwrap();
+        let (state, entry) = deleted_local_image(directory.path()).await;
+        write_file(
+            &image_install::staged_package_path(directory.path(), &entry.alias),
+            b"changed",
+        );
+        let snapshot = install_local_image(&state).await;
+        assert_eq!(snapshot.status, ImageInstallStatus::Failed);
+        assert!(snapshot.log.contains("SHA-256"), "{}", snapshot.log);
+        assert!(state.templates.resolve_alias("custom").is_none());
+        assert!(!directory.path().join("rootfs/custom.ext4").exists());
+        assert!(
+            state
+                .store
+                .microregistry_local("custom", Architecture::HOST.as_str())
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_image_reinstall_requires_matching_registered_identity() {
+        let directory = tempdir().unwrap();
+        let (state, mut entry) = deleted_local_image(directory.path()).await;
+        state
+            .store
+            .delete_microregistry_local(&entry.alias, &entry.architecture)
+            .unwrap();
+        entry.version = "wrong-version".to_owned();
+        state.store.insert_microregistry_local(&entry).unwrap();
+        let snapshot = install_local_image(&state).await;
+        assert_eq!(snapshot.status, ImageInstallStatus::Failed);
+        assert!(
+            snapshot.log.contains("alias or version"),
+            "{}",
+            snapshot.log
+        );
+        assert!(!directory.path().join("rootfs/custom.ext4").exists());
+    }
+
+    #[tokio::test]
+    async fn custom_image_reinstall_requires_a_staged_package() {
+        let directory = tempdir().unwrap();
+        let (state, entry) = deleted_local_image(directory.path()).await;
+        fs::remove_file(image_install::staged_package_path(
+            directory.path(),
+            &entry.alias,
+        ))
+        .unwrap();
+        let response = start_image_install(
+            State(state.clone()),
+            Path(entry.alias),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .err()
+        .unwrap()
+        .into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "package_required");
+        assert!(!state.image_installs.is_running("custom"));
+    }
+
+    #[tokio::test]
+    async fn custom_image_reinstall_ignores_other_architecture_registration() {
+        let directory = tempdir().unwrap();
+        let (state, mut entry) = deleted_local_image(directory.path()).await;
+        state
+            .store
+            .delete_microregistry_local(&entry.alias, &entry.architecture)
+            .unwrap();
+        entry.architecture = Architecture::HOST.other().as_str().to_owned();
+        state.store.insert_microregistry_local(&entry).unwrap();
+        let response = start_image_install(
+            State(state.clone()),
+            Path(entry.alias.clone()),
+            Extension(RequestId(uuid::Uuid::nil())),
+        )
+        .await
+        .err()
+        .unwrap()
+        .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(
+            get_image_package(
+                State(state.clone()),
+                Path(entry.alias.clone()),
+                Extension(RequestId(uuid::Uuid::nil()))
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            get_image_install(
+                State(state),
+                Path(entry.alias),
+                Extension(RequestId(uuid::Uuid::nil()))
+            )
+            .await
+            .is_err()
+        );
     }
 
     #[tokio::test]
