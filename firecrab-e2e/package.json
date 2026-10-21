@@ -20,7 +20,7 @@
     "test:pipe": "playwright test --config playwright.pipe.config.ts"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.64.1",
     "@types/node": "^24.13.2"
   }
 }
