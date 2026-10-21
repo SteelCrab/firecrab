@@ -17,7 +17,7 @@ import {
 import { useI18n } from "../i18n";
 
 /**
- * MicroNetwork management (`public-docs/networking.md`) — firecrab's own
+ * MicroNetwork management (`public-docs/guides/networking.md`) — firecrab's own
  * virtual networks. Creating one reserves the CIDR, provisions its host
  * bridge, and gives it its own DHCP range and NAT rule; VMs then pick one on
  * the create form. Deleting is refused while VMs are still in it.

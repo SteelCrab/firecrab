@@ -45,7 +45,7 @@ const AARCH64_BOOT_ARGS: &str =
 /// Borrowed rather than owned so the compiled pins are `'static` constants
 /// while tests can pin a fixture built at runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PinnedKernel<'a> {
+pub(crate) struct PinnedKernel<'a> {
     /// Registry alias, which is also the package filename stem.
     pub alias: &'a str,
     /// Upstream kernel version, which is a registry path segment.
@@ -65,25 +65,99 @@ pub(super) struct PinnedKernel<'a> {
 /// Every supported architecture carries the latest stable kernel that was
 /// published when this release was built. `None` remains the signal for a
 /// future architecture that has no dedicated artifact yet.
-pub(super) fn pinned_kernel(architecture: Architecture) -> Option<PinnedKernel<'static>> {
+pub(crate) fn pinned_kernel(architecture: Architecture) -> Option<PinnedKernel<'static>> {
+    supported_kernels(architecture).into_iter().next()
+}
+
+/// Kernels this release can install for one host architecture, newest first.
+///
+/// The first entry is the default used by OCI import. Older entries stay in
+/// the catalog so an operator can keep an image on a known-good kernel while
+/// testing a newer one, or roll an image back without downloading a custom
+/// artifact. Retention policy: keep at most 3 versions per `major.minor`
+/// branch (e.g. `7.1.x`, `7.2.x`); when the MicroRegistry publishes a 4th
+/// patch release on a branch, drop that branch's oldest entry here.
+pub(crate) fn supported_kernels(architecture: Architecture) -> Vec<PinnedKernel<'static>> {
     match architecture {
-        Architecture::X86_64 => Some(PinnedKernel {
-            alias: "vmlinux-7.1.9",
-            version: "7.1.9",
-            image: "vmlinux-7.1.9-x86_64",
-            package_digest: "sha256:fd058e64d2173b3911ad09a15aa6bcf15531941254ce44ba6e935b876662ba65",
-            image_digest: "sha256:079d2149a9378f5705da46232e99886187fecdd5517428d2c294b6bd1e0dca6b",
-            boot_args: X86_64_BOOT_ARGS,
-        }),
-        Architecture::Aarch64 => Some(PinnedKernel {
-            alias: "vmlinux-7.1.9",
-            version: "7.1.9",
-            image: "Image-7.1.9-aarch64",
-            package_digest: "sha256:3a8576656d45eb051874a4b1cf4b8838d54d96aa268bc53706118e0bbeb727f7",
-            image_digest: "sha256:6d60d06429aa5e244cc5a0eb60383a97fde61f4aa40453d5cc6fecb59a64b58f",
-            boot_args: AARCH64_BOOT_ARGS,
-        }),
+        Architecture::X86_64 => vec![
+            PinnedKernel {
+                alias: "vmlinux-7.2.2",
+                version: "7.2.2",
+                image: "vmlinux-7.2.2-x86_64",
+                package_digest: "sha256:716d7bcfcf9118a76d0c9f0b7ab06ba167f78b77cb16f928612809c75ebeffae",
+                image_digest: "sha256:351b23784e5e53de5af970ff6af7a074a916a55327ff802645f3583b39f3a4f1",
+                boot_args: X86_64_BOOT_ARGS,
+            },
+            PinnedKernel {
+                alias: "vmlinux-7.1.12",
+                version: "7.1.12",
+                image: "vmlinux-7.1.12-x86_64",
+                package_digest: "sha256:b4666cdc2ded25c6e929c9b4a4d4bcad0bff58c6fcae831d9514d17819fac31e",
+                image_digest: "sha256:004c3031dfcc2deec974b55714a2ed1052903662531e8df2a3cb3380bda5674b",
+                boot_args: X86_64_BOOT_ARGS,
+            },
+            PinnedKernel {
+                alias: "vmlinux-7.1.9",
+                version: "7.1.9",
+                image: "vmlinux-7.1.9-x86_64",
+                package_digest: "sha256:fd058e64d2173b3911ad09a15aa6bcf15531941254ce44ba6e935b876662ba65",
+                image_digest: "sha256:079d2149a9378f5705da46232e99886187fecdd5517428d2c294b6bd1e0dca6b",
+                boot_args: X86_64_BOOT_ARGS,
+            },
+            PinnedKernel {
+                alias: "vmlinux-7.1.8",
+                version: "7.1.8",
+                image: "vmlinux-7.1.8-x86_64",
+                package_digest: "sha256:eb2efc87a8b64b9bcf5c4b7365193c578e6cf203c4773060ec157d6f34c11f53",
+                image_digest: "sha256:1d693ebb340ee418127aacf679080671679e455302a8f89ff8d4a45b6d293cdb",
+                boot_args: X86_64_BOOT_ARGS,
+            },
+        ],
+        Architecture::Aarch64 => vec![
+            PinnedKernel {
+                alias: "vmlinux-7.2.2",
+                version: "7.2.2",
+                image: "Image-7.2.2-aarch64",
+                package_digest: "sha256:885550806de246892df6f08b6d37a3062ac987228729ee50b9421d5caa98621f",
+                image_digest: "sha256:f3acb729ded8213e4b157fd80746f6034cc4994888f73b82b1e34cea5813dbc0",
+                boot_args: AARCH64_BOOT_ARGS,
+            },
+            PinnedKernel {
+                alias: "vmlinux-7.1.12",
+                version: "7.1.12",
+                image: "Image-7.1.12-aarch64",
+                package_digest: "sha256:3cdf98523c4688ba6061cb025394931c696e67988d8367280639941f8a833c48",
+                image_digest: "sha256:6d6205c7dccbadcd74fa0bf84082af2f13bd8492d7a489ee0e2a6891c00c10bd",
+                boot_args: AARCH64_BOOT_ARGS,
+            },
+            PinnedKernel {
+                alias: "vmlinux-7.1.9",
+                version: "7.1.9",
+                image: "Image-7.1.9-aarch64",
+                package_digest: "sha256:3a8576656d45eb051874a4b1cf4b8838d54d96aa268bc53706118e0bbeb727f7",
+                image_digest: "sha256:6d60d06429aa5e244cc5a0eb60383a97fde61f4aa40453d5cc6fecb59a64b58f",
+                boot_args: AARCH64_BOOT_ARGS,
+            },
+            PinnedKernel {
+                alias: "vmlinux-7.1.8",
+                version: "7.1.8",
+                image: "Image-7.1.8-aarch64",
+                package_digest: "sha256:bddbe93f83fc3180a23c1c55a0a40946e5906592ec6331969bd64d68a302a507",
+                image_digest: "sha256:f1ded792a87f2b2d798566d22485fe73367dc8f348670827638f1a6b43375a44",
+                boot_args: AARCH64_BOOT_ARGS,
+            },
+        ],
     }
+}
+
+/// Finds a digest-pinned kernel by catalog version for this architecture.
+pub(crate) fn kernel_for_version(
+    architecture: Architecture,
+    version: &str,
+) -> Option<PinnedKernel<'static>> {
+    supported_kernels(architecture)
+        .into_iter()
+        .find(|kernel| kernel.version == version)
 }
 
 /// Reads the operator's kernel override, if one is set.
@@ -104,7 +178,7 @@ pub(super) fn configured_base_url() -> Option<String> {
 }
 
 /// Registry object key of a pinned package.
-pub(super) fn package_key(architecture: Architecture, pinned: &PinnedKernel<'_>) -> String {
+pub(crate) fn package_key(architecture: Architecture, pinned: &PinnedKernel<'_>) -> String {
     format!(
         "{PACKAGE_KERNEL_DIRECTORY}/{}/{}/{}.tar.zst",
         pinned.version,
@@ -114,10 +188,58 @@ pub(super) fn package_key(architecture: Architecture, pinned: &PinnedKernel<'_>)
 }
 
 /// Image-root-relative cache path a registered `TemplateSpec` records.
-pub(super) fn cache_relative(architecture: Architecture, pinned: &PinnedKernel<'_>) -> PathBuf {
+pub(crate) fn cache_relative(architecture: Architecture, pinned: &PinnedKernel<'_>) -> PathBuf {
     Path::new(".oci/kernel")
         .join(architecture.as_str())
         .join(pinned.image)
+}
+
+/// Ensures a catalog kernel is present in the shared OCI kernel cache.
+///
+/// Kernel management intentionally uses the same cache and verification path
+/// as OCI import. That keeps one copy per architecture/version and means a
+/// kernel installed from the dashboard is immediately usable by a later OCI
+/// import without a second download.
+pub(crate) async fn ensure_managed_kernel(
+    image_root: &Path,
+    architecture: Architecture,
+    version: &str,
+    base_url: Option<&str>,
+) -> Result<PathBuf, ResolveError> {
+    let pinned = kernel_for_version(architecture, version).ok_or_else(|| {
+        ResolveError::KernelUnavailable {
+            architecture,
+            reason: format!("kernel version {version} is not in the release catalog"),
+        }
+    })?;
+    let pair = ensure_pinned_kernel(image_root, architecture, &pinned, None, base_url).await?;
+    Ok(pair.kernel)
+}
+
+/// Returns whether the cached bytes still match the catalog digest and host
+/// architecture. A corrupt cache is reported as not installed so the next
+/// install can replace it instead of exposing a false-ready state.
+pub(crate) async fn cached_kernel_is_valid(
+    image_root: &Path,
+    architecture: Architecture,
+    version: &str,
+) -> bool {
+    let Some(pinned) = kernel_for_version(architecture, version) else {
+        return false;
+    };
+    let relative = cache_relative(architecture, &pinned);
+    let path = image_root.join(&relative);
+    if !path.is_file() {
+        return false;
+    }
+    let pair = KernelBootPair {
+        architecture,
+        source_alias: pinned.alias.to_owned(),
+        kernel: relative,
+        initrd: None,
+        boot_args: pinned.boot_args.to_owned(),
+    };
+    verify_kernel(&path, &pair, &pinned).await.is_ok()
 }
 
 /// Archive member the kernel is lifted from.

@@ -1,6 +1,6 @@
 //! IP address and MAC allocation management (IPAM): hands out unique
 //! IPv4/MAC leases from a MicroNetwork's subnet
-//! (`public-docs/networking.md`) — backed by SQLite so allocation
+//! (`public-docs/guides/networking.md`) — backed by SQLite so allocation
 //! is atomic under concurrent VM creation.
 
 use std::collections::HashSet;
@@ -54,6 +54,7 @@ pub const CREATE_LEASES_INDEXES_SQL: [&str; 3] = [
 /// `micro_network_id` rows to an explicit MicroNetwork on upgrade.
 pub(crate) const LEGACY_DEFAULT_NETWORK: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 0);
 /// Legacy gateway for the same promotion path.
+#[cfg(test)]
 pub(crate) const LEGACY_DEFAULT_GATEWAY: Ipv4Addr = Ipv4Addr::new(172, 30, 0, 1);
 /// Legacy prefix for the same promotion path.
 pub(crate) const LEGACY_DEFAULT_PREFIX: u8 = 24;
@@ -62,7 +63,7 @@ const MAX_MAC_ATTEMPTS: u32 = 8;
 
 /// The subnet a lease is allocated from — always a real MicroNetwork.
 /// Addresses are derived from `network`/`prefix` rather than stored, the
-/// same way `firecrab-net-helper`'s bridge derives them.
+/// same way `firecrab-helper`'s bridge derives them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubnetSpec {
     /// The MicroNetwork this subnet belongs to.
@@ -73,7 +74,7 @@ pub struct SubnetSpec {
     pub prefix: u8,
     /// The network's IPv6 plan, when it is dual-stack. IPv4 stays mandatory
     /// — this is a second family, never a replacement
-    /// (`public-docs/networking.md`).
+    /// (`public-docs/guides/networking.md`).
     pub ipv6: Option<MicroNetworkIpv6Spec>,
 }
 
@@ -209,6 +210,7 @@ impl SubnetSpec {
 
     /// The historical `172.30.0.0/24` layout under an explicit MicroNetwork
     /// id — used by upgrade promotion and unit tests that need a full /24.
+    #[cfg(test)]
     pub fn legacy_default_subnet(micro_network_id: Uuid) -> Self {
         Self {
             micro_network_id,
@@ -281,7 +283,7 @@ pub fn rotate(
     subnet: SubnetSpec,
     unavailable_ipv4s: &HashSet<Ipv4Addr>,
 ) -> Result<Lease, IpamError> {
-    let current = active_lease(&*tx, vm_id)?.ok_or(IpamError::NotLeased { vm_id })?;
+    let current = active_lease(tx, vm_id)?.ok_or(IpamError::NotLeased { vm_id })?;
     let mut excluded = unavailable_ipv4s.clone();
     // A caller may only know about the most recent conflict, but never hand
     // the just-released address straight back to the VM.
@@ -496,7 +498,7 @@ pub fn ipv6_egress_mode(ipv6: &MicroNetworkIpv6Spec) -> firecrab_api_types::Ipv6
 /// then a 16-bit subnet id). Deterministic in both inputs, so a network keeps
 /// the same prefix across restarts and two networks on one host — or the same
 /// network on two hosts — never share one. ULA scope is what makes this
-/// egress through NAT66 (`public-docs/networking.md`).
+/// egress through NAT66 (`public-docs/guides/networking.md`).
 pub fn auto_ula_prefix(host_id: &str, micro_network_id: Uuid) -> MicroNetworkIpv6Spec {
     let global_id = Sha256::digest(host_id.as_bytes());
     let subnet_id = Sha256::digest(micro_network_id.as_bytes());

@@ -1,18 +1,15 @@
-//! Gives a merged container tree the guest runtime a MicroVM needs to boot.
-//!
-//! A container rootfs fails three ways at once: the kernel finds no `/sbin/init`
-//! and panics, nothing asks for a DHCP lease so the guest never gets an address,
-//! and nothing prints the readiness sentinel the host waits 180 seconds for.
-//! Firecrab's existing guest features cannot fill the gap — they install only
-//! when systemd or OpenRC is already present and no-op otherwise, which is
-//! exactly the container case.
-//!
-//! So this stage injects an init, a DHCP client, the readiness sentinel, and the
-//! metrics agent, all from one static program. The image's own userland is left
-//! alone: its entrypoint becomes an ordinary service under the injected init in
-//! a later stage, never PID 1.
+//! Activates an OCI tree using its native init, or a static BusyBox fallback.
+//! Native services own metrics and OCI bootstrap; only the fallback installs
+//! a BusyBox `/sbin/init` and replaces `/etc/inittab`.
 
 use super::*;
+
+#[path = "init_system.rs"]
+mod init_system;
+use init_system::InitSystem;
+
+/// Persists the import decision across VM specialization.
+pub(crate) const INIT_SYSTEM_PATH: &str = "/etc/firecrab/init-system";
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
@@ -39,6 +36,8 @@ const GUEST_INITTAB: &str = "/etc/inittab";
 const GUEST_BOOT_SCRIPT: &str = "/etc/firecrab/rc.boot";
 /// Console wrapper used when the image has no agetty (MOTD + ash).
 const GUEST_CONSOLE_SCRIPT: &str = "/etc/firecrab/rc.console";
+/// Serial console a native init respawns; BusyBox init uses the inittab instead.
+pub(crate) const GUEST_SERIAL_SCRIPT: &str = "/etc/firecrab/rc.serial";
 /// util-linux getty, in the usual usr-merge locations.
 pub(crate) const GUEST_AGETTY_CANDIDATES: &[&str] = &["/sbin/agetty", "/usr/sbin/agetty"];
 /// Login shell for the serial console.
@@ -46,7 +45,7 @@ pub(crate) const GUEST_BASH_CANDIDATES: &[&str] = &["/bin/bash", "/usr/bin/bash"
 /// Welcome banner shown on the injected console (same text as catalog VMs).
 const GUEST_MOTD: &str = "/etc/motd";
 /// Lease hook busybox `udhcpc` calls to apply an address.
-const GUEST_DHCP_SCRIPT: &str = "/etc/firecrab/dhcp.script";
+pub(crate) const GUEST_DHCP_SCRIPT: &str = "/etc/firecrab/dhcp.script";
 /// Directory a later stage drops the image's translated entrypoint into.
 const GUEST_SERVICES: &str = "/etc/firecrab/services.d";
 /// Mount points a container tree may not carry.
@@ -132,6 +131,7 @@ pub(super) async fn provision_merged_rootfs(
 ///
 /// Split from acquisition so the injection rules can be tested without a
 /// registry, and so a caller that already holds a program never re-verifies it.
+#[cfg(test)]
 pub(super) async fn inject_with_toolbox(
     rootfs: MergedRootfs,
     toolbox: &ToolboxProgram,
@@ -189,6 +189,7 @@ fn inject_blocking(
     let mut unwind = InjectedPaths::default();
     let result = (|| {
         control.check()?;
+        let init = init_system::detect(tree)?;
         for (mount_point, mode) in GUEST_MOUNT_POINTS {
             ensure_guest_directory(tree, mount_point, *mode, &mut unwind)?;
         }
@@ -197,7 +198,14 @@ fn inject_blocking(
 
         control.check()?;
         install_program(tree, GUEST_TOOLBOX, toolbox.path(), &mut unwind)?;
-        install_symlink(tree, GUEST_INIT, GUEST_TOOLBOX, &mut unwind)?;
+        init_system::install(tree, init, &mut unwind)?;
+        install_file(
+            tree,
+            INIT_SYSTEM_PATH,
+            init.name().as_bytes(),
+            0o644,
+            &mut unwind,
+        )?;
         install_toolbox_commands(tree, &mut unwind)?;
         if let Some(path) = fastfetch
             && first_existing(tree, fastfetch::GLIBC_LOADERS).is_some()
@@ -207,20 +215,23 @@ fn inject_blocking(
 
         control.check()?;
         if let Some(shell) = first_existing(tree, GUEST_BASH_CANDIDATES) {
-            set_root_shell(tree, &shell)?;
+            set_root_shell(tree, &shell, &mut unwind)?;
         }
         ensure_securetty(tree, &mut unwind)?;
-        install_file(
-            tree,
-            GUEST_INITTAB,
-            inittab(first_existing(tree, GUEST_AGETTY_CANDIDATES).as_deref()).as_bytes(),
-            0o644,
-            &mut unwind,
-        )?;
+        let agetty = first_existing(tree, GUEST_AGETTY_CANDIDATES);
+        if init == InitSystem::BusyBox {
+            install_file(
+                tree,
+                GUEST_INITTAB,
+                inittab(agetty.as_deref()).as_bytes(),
+                0o644,
+                &mut unwind,
+            )?;
+        }
         install_file(
             tree,
             GUEST_BOOT_SCRIPT,
-            boot_script().as_bytes(),
+            boot_script_for(init == InitSystem::BusyBox).as_bytes(),
             0o755,
             &mut unwind,
         )?;
@@ -231,6 +242,15 @@ fn inject_blocking(
             0o755,
             &mut unwind,
         )?;
+        if let Some(agetty) = agetty.as_deref() {
+            install_file(
+                tree,
+                GUEST_AGETTY_WRAPPER,
+                agetty_wrapper_script(agetty).as_bytes(),
+                0o755,
+                &mut unwind,
+            )?;
+        }
         install_file(
             tree,
             GUEST_MOTD,
@@ -242,6 +262,13 @@ fn inject_blocking(
             tree,
             GUEST_DHCP_SCRIPT,
             dhcp_script().as_bytes(),
+            0o755,
+            &mut unwind,
+        )?;
+        install_file(
+            tree,
+            crate::guest_ssh::GUEST_SSHD_SERVICE,
+            crate::guest_ssh::sshd_service_script().as_bytes(),
             0o755,
             &mut unwind,
         )?;
@@ -258,9 +285,12 @@ fn inject_blocking(
 
     match result {
         Ok(()) => {
+            // Displaced image entries live beside their replacements until
+            // the injection commits. Remove them while their parent
+            // directories are still writable, then restore the image modes.
+            unwind.keep();
             unwind.restore_modes();
             control.finish();
-            unwind.keep();
             Ok(())
         }
         Err(error) => {
@@ -316,8 +346,24 @@ impl InjectedPaths {
         }
     }
 
-    /// Keeps everything: injection succeeded.
+    /// Keeps the injected paths and removes temporary displaced entries.
+    ///
+    /// `displace_existing` moves an image entry aside so a failed injection
+    /// can put it back. On success those backups must not remain in the guest
+    /// image. This runs before [`Self::restore_modes`] because a parent may
+    /// have been temporarily made writable solely for the replacement.
     fn keep(&mut self) {
+        for (backup, _) in self.displaced.drain(..) {
+            if let Err(error) = fs::remove_file(&backup)
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                tracing::warn!(
+                    error = %error,
+                    path = %backup.display(),
+                    "failed to remove a committed guest backup"
+                );
+            }
+        }
         self.kept = true;
     }
 
@@ -701,13 +747,14 @@ fn guest_path_unusable(guest_path: &str, reason: GuestPathViolation) -> ResolveE
 /// wrapper still prints MOTD and drops into ash.
 pub(crate) fn inittab(agetty: Option<&str>) -> String {
     let console = match agetty {
-        Some(path) => format!(
-            "ttyS0::respawn:{path} --autologin root --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux"
-        ),
+        // Wrapped so `exit` prints a session-boundary banner (issue #223)
+        // before agetty re-enters — a bare `respawn:{path} --autologin`
+        // gives no sign the shell ever restarted.
+        Some(_) => format!("ttyS0::respawn:{GUEST_TOOLBOX} sh {GUEST_AGETTY_WRAPPER}"),
         None => format!("::respawn:-{GUEST_TOOLBOX} sh {GUEST_CONSOLE_SCRIPT}"),
     };
     format!(
-        "# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).\n\
+        "# Firecrab guest runtime for an imported OCI image (public-docs/guides/oci.md).\n\
          ::sysinit:{GUEST_TOOLBOX} sh {GUEST_BOOT_SCRIPT}\n\
          {console}\n\
          ::ctrlaltdel:{GUEST_TOOLBOX} poweroff -f\n\
@@ -736,7 +783,11 @@ pub(crate) fn first_existing(tree: &Path, candidates: &[&str]) -> Option<String>
 }
 
 /// Points root's login shell at `shell` so agetty/login start bash.
-fn set_root_shell(tree: &Path, shell: &str) -> Result<(), ResolveError> {
+fn set_root_shell(
+    tree: &Path,
+    shell: &str,
+    unwind: &mut InjectedPaths,
+) -> Result<(), ResolveError> {
     let path = tree.join("etc/passwd");
     let current = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -746,11 +797,13 @@ fn set_root_shell(tree: &Path, shell: &str) -> Result<(), ResolveError> {
         Err(source) => return Err(injection_io("read guest passwd", path, source)),
     };
     let rewritten = rewrite_root_shell(&current, shell);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|source| injection_io("create guest etc", parent.to_owned(), source))?;
-    }
-    fs::write(&path, rewritten).map_err(|source| injection_io("write guest passwd", path, source))
+    let mode = fs::symlink_metadata(&path)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_file())
+        .map(|metadata| metadata.permissions().mode() & 0o7777)
+        .filter(|mode| *mode != 0)
+        .unwrap_or(0o644);
+    install_file(tree, "/etc/passwd", rewritten.as_bytes(), mode, unwind)
 }
 
 /// Ensures `/etc/securetty` lists ttyS0 so root may log in on the serial console.
@@ -764,7 +817,13 @@ fn ensure_securetty(tree: &Path, unwind: &mut InjectedPaths) -> Result<(), Resol
                 next.push('\n');
             }
             next.push_str("ttyS0\n");
-            fs::write(&path, next).map_err(|source| injection_io("update securetty", path, source))
+            let mode = fs::symlink_metadata(&path)
+                .ok()
+                .filter(|metadata| metadata.file_type().is_file())
+                .map(|metadata| metadata.permissions().mode() & 0o7777)
+                .filter(|mode| *mode != 0)
+                .unwrap_or(0o644);
+            install_file(tree, "/etc/securetty", next.as_bytes(), mode, unwind)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             install_file(tree, "/etc/securetty", b"ttyS0\n", 0o644, unwind)
@@ -800,19 +859,26 @@ pub(crate) fn rewrite_root_shell(passwd: &str, shell: &str) -> String {
 
 /// Everything between the kernel handing off and the host seeing a sentinel.
 pub(crate) fn boot_script() -> String {
+    boot_script_for(true)
+}
+
+/// Native init has already mounted the virtual filesystems and owns metrics.
+fn boot_script_for(fallback: bool) -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
-# Firecrab guest runtime for an imported OCI image (public-docs/oci.md).
+# Firecrab guest runtime for an imported OCI image (public-docs/guides/oci.md).
 # Avoid `set -e`: one failed mount must not leave the host waiting out the full
 # readiness timeout for a sentinel that will now never be printed.
 BB={GUEST_TOOLBOX}
 
+if [ "{fallback}" = true ]; then
 $BB mount -t proc -o nosuid,nodev,noexec proc /proc 2>/dev/null
 $BB mount -t sysfs -o nosuid,nodev,noexec sysfs /sys 2>/dev/null
 $BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
 $BB mkdir -p /dev/pts
 $BB mount -t devpts -o nosuid,noexec devpts /dev/pts 2>/dev/null
 $BB mount -t tmpfs -o nosuid,nodev,mode=755 tmpfs /run 2>/dev/null
+fi
 # Official images expect the Linux fd nodes Docker always provides.
 # Bash process substitution (initdb, entrypoints) opens /dev/fd/N.
 [ -e /dev/fd ] || $BB ln -sf /proc/self/fd /dev/fd
@@ -832,7 +898,9 @@ export LC_ALL="$LANG" LC_CTYPE="$LANG"
 $BB stty iutf8 2>/dev/null
 
 # Metrics first, so the dashboard has samples even when the network fails.
-$BB setsid $BB sh {agent} >/dev/null 2>&1 &
+if [ "{fallback}" = true ]; then
+  $BB setsid $BB sh {agent} >/dev/null 2>&1 &
+fi
 
 $BB ip link set lo up 2>/dev/null
 # A bare udhcpc on an administratively down link never sends a single packet and
@@ -842,7 +910,10 @@ if ! $BB ip link set eth0 up 2>/dev/null; then
   exit 0
 fi
 
-$BB udhcpc -i eth0 -n -q -t 8 -T 2 -s {dhcp} >/dev/console 2>&1
+# Reuse a lease already supplied by the native network service.
+if ! $BB ip -4 -o addr show eth0 | $BB grep -q 'inet '; then
+  $BB udhcpc -i eth0 -n -q -t 8 -T 2 -s {dhcp} >/dev/console 2>&1
+fi
 
 ipv4=""
 tries=0
@@ -876,6 +947,9 @@ fi
 
 echo "FIRECRAB_NETWORK_READY $ipv4" >/dev/console
 
+# Package configuration can take minutes on a small guest. Let init start
+# the console while this worker installs packages, then starts services.
+(
 {base_packages}
 
 # Fallback only: glibc guests already received a pinned /usr/bin/fastfetch at
@@ -900,6 +974,7 @@ for service in {services}/*; do
   echo $! > /run/firecrab/$name.pid
   [ "$name" = app ] && echo $! > /run/firecrab-app.pid
 done
+) </dev/null >/dev/console 2>&1 &
 exit 0
 "#,
         agent = crate::guest_agent::BIN_PATH,
@@ -909,53 +984,39 @@ exit 0
     )
 }
 
-/// First-boot install of a small operator set. Slim OCI images ship a
-/// package manager and empty lists, so `apt-get install ping` fails until
-/// `update` has run. A failed attempt leaves no stamp and retries next boot.
-/// Distroless trees have no manager; the busybox applets are enough.
-pub(crate) const BASE_PACKAGE_INSTALL: &str = r#"
-# First boot only. Container images rarely ship ping/curl.
-if [ ! -f /etc/firecrab/base-packages.ok ]; then
-  ok=0
-  if [ -x /usr/bin/apt-get ]; then
-    if DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -qq \
-      && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -qq \
-        iputils-ping iproute2 ca-certificates curl procps; then
-      ok=1
-    fi
-  elif [ -x /usr/bin/dnf ]; then
-    /usr/bin/dnf install -y -q iputils iproute ca-certificates curl procps-ng && ok=1
-  elif [ -x /usr/bin/microdnf ]; then
-    /usr/bin/microdnf -y install iputils iproute ca-certificates curl procps-ng && ok=1
-  elif [ -x /usr/bin/yum ]; then
-    /usr/bin/yum install -y -q iputils iproute ca-certificates curl procps-ng && ok=1
-  elif [ -x /sbin/apk ]; then
-    /sbin/apk add --no-cache iputils iproute2 ca-certificates curl procps && ok=1
-  elif [ -x /usr/bin/apk ]; then
-    /usr/bin/apk add --no-cache iputils iproute2 ca-certificates curl procps && ok=1
-  elif [ -x /usr/bin/zypper ]; then
-    /usr/bin/zypper --non-interactive install -y iputils iproute2 ca-certificates curl procps && ok=1
-  elif [ -x /usr/bin/pacman ]; then
-    /usr/bin/pacman -Sy --noconfirm --needed iputils iproute2 ca-certificates curl procps-ng && ok=1
-  else
-    ok=1
-  fi
-  [ "$ok" -eq 1 ] && $BB touch /etc/firecrab/base-packages.ok
+pub(in crate::oci) const BASE_PACKAGE_INSTALL: &str = include_str!("guest/install-packages.sh");
+
+/// Guest path of the agetty respawn wrapper (issue #223).
+pub(crate) const GUEST_AGETTY_WRAPPER: &str = "/etc/firecrab/rc.agetty";
+
+/// Printed on every console respawn after the first (issue #223): busybox
+/// `respawn` and agetty's `--autologin` both re-enter silently, so `exit`
+/// otherwise looks like it did nothing. `/run` is tmpfs — a genuine reboot
+/// always starts clean, so this only fires when the guest shell actually exited.
+/// The session-ended marker goes first so the host closes attached viewers
+/// before the banner meant for the next session (issue #303).
+const SESSION_BANNER_PRELUDE: &str = concat!(
+    r#"if [ -f /run/firecrab-console-active ]; then
+  printf '"#,
+    crate::console_session::session_ended_marker_printf!(),
+    r#"\n=== session ended — starting a new one ===\n\n'
 fi
-"#;
+$BB touch /run/firecrab-console-active
+"#
+);
 
 /// Interactive console: MOTD, fastfetch when present, then ash.
 pub(crate) fn console_script() -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
-# Firecrab injected console (public-docs/oci.md).
+# Firecrab injected console (public-docs/guides/oci.md).
 BB={GUEST_TOOLBOX}
 PATH="/usr/local/bin:/usr/local/sbin:$PATH"
 export PATH
 export LANG="${{LANG:-C.UTF-8}}"
 export LC_ALL="$LANG" LC_CTYPE="$LANG"
 $BB stty iutf8 2>/dev/null
-if [ -s /etc/hostname ]; then
+{SESSION_BANNER_PRELUDE}if [ -s /etc/hostname ]; then
   $BB hostname -F /etc/hostname 2>/dev/null
   $BB cat /etc/hostname > /proc/sys/kernel/hostname 2>/dev/null
 fi
@@ -970,23 +1031,75 @@ exec $BB sh
     )
 }
 
+/// Serial console for a native init (systemd or OpenRC), which has no inittab
+/// entry for it. The same console as the fallback: agetty autologin when the
+/// guest has agetty and login (looked up at boot, since packages may add them),
+/// otherwise MOTD and ash. The init service runs it with no terminal, so it
+/// binds `ttyS0` itself. systemd and supervise-daemon start it as a session
+/// leader, so opening `ttyS0` also makes it the controlling terminal. `setsid`
+/// must not be used here: it would fork, the parent would exit, and the init
+/// would respawn another shell on the same terminal every second.
+pub(crate) fn serial_console_script() -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
+# Firecrab serial console under a native init (public-docs/guides/oci.md).
+BB={GUEST_TOOLBOX}
+exec </dev/ttyS0 >/dev/ttyS0 2>&1
+{LOGIN_PROGRAM_LOOKUP}
+for agetty in {agetty}; do
+  [ -x "$agetty" ] && [ -x "$login_program" ] || continue
+{SESSION_BANNER_PRELUDE}  exec "$agetty" {AGETTY_ARGS}
+done
+exec $BB sh {GUEST_CONSOLE_SCRIPT}
+"#,
+        agetty = GUEST_AGETTY_CANDIDATES.join(" "),
+    )
+}
+
+// Slim images can ship agetty without login (for example Fedora's container
+// image). Such agetty exits immediately and init respawns it forever.
+const LOGIN_PROGRAM_LOOKUP: &str = r#"login_program=/bin/login
+[ -x "$login_program" ] || login_program=/usr/bin/login"#;
+
+/// agetty's arguments for the root autologin console on `ttyS0`.
+const AGETTY_ARGS: &str = "--autologin root --login-program \"$login_program\" --noclear --keep-baud 115200,57600,38400,9600 ttyS0 linux";
+
+/// Wraps `agetty --autologin` so `exit` has a visible effect (issue #223).
+/// A bare respawn is invisible — `--autologin` re-enters with no prompt and
+/// no output change. Prints the same session-boundary banner as
+/// [`console_script`] before handing off; `exec` still makes agetty the
+/// tty's session leader exactly as a direct inittab invocation would.
+pub(crate) fn agetty_wrapper_script(agetty: &str) -> String {
+    format!(
+        r#"#!{GUEST_TOOLBOX} sh
+# Firecrab injected agetty wrapper (public-docs/guides/oci.md).
+BB={GUEST_TOOLBOX}
+{LOGIN_PROGRAM_LOOKUP}
+[ -x "$login_program" ] || exec "$BB" sh {GUEST_CONSOLE_SCRIPT}
+{SESSION_BANNER_PRELUDE}exec {agetty} {AGETTY_ARGS}
+"#
+    )
+}
+
 /// busybox `udhcpc` lease hook.
 ///
 /// The lease arrives in the environment, not in arguments. `mask` is a prefix
 /// length in busybox, unlike the dotted `subnet` beside it.
-fn dhcp_script() -> String {
+pub(crate) fn dhcp_script() -> String {
     format!(
         r#"#!{GUEST_TOOLBOX} sh
-# Firecrab guest DHCP hook for an imported OCI image (public-docs/oci.md).
+# Firecrab guest DHCP hook for an imported OCI image (public-docs/guides/oci.md).
 BB={GUEST_TOOLBOX}
 
 case "$1" in
   deconfig)
-    $BB ip addr flush dev "$interface" 2>/dev/null
+    $BB ip -4 addr flush dev "$interface" 2>/dev/null
     $BB ip link set "$interface" up 2>/dev/null
     ;;
   bound|renew)
-    $BB ip addr flush dev "$interface" 2>/dev/null
+    # udhcpc owns IPv4 only. Flushing IPv6 also removes the link-local
+    # address required for SLAAC and neighbor discovery on dual-stack VMs.
+    $BB ip -4 addr flush dev "$interface" 2>/dev/null
     $BB ip addr add "$ip/${{mask:-24}}" dev "$interface" 2>/dev/null
     $BB ip link set "$interface" up 2>/dev/null
     for gateway in $router; do

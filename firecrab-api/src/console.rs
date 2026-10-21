@@ -1,8 +1,8 @@
 //! Per-VM serial console bridge. Output: one Firecracker process's stdout
 //! (the guest's ttyS0) is read once and broadcast to any number of
-//! WebSocket viewers, while the raw bytes are still teed to `console.log`
-//! on disk. Input: keystrokes from an attached WebSocket are written
-//! straight to the guest's stdin.
+//! WebSocket viewers (the VM's shim tees the same bytes to `console.log`).
+//! Input: keystrokes from an attached WebSocket go to the guest through the
+//! shim (`crate::vm_shim`).
 //!
 //! A late-joining viewer (the common case — a user opens the terminal panel
 //! after the VM already booted) needs to see what already happened, not just
@@ -13,9 +13,9 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use tokio::io::AsyncWriteExt;
-use tokio::process::ChildStdin;
 use tokio::sync::broadcast;
+
+use crate::vm_shim::client::ShimControl;
 
 /// Bytes of scrollback kept for viewers that connect after boot output has
 /// already scrolled by. Generous enough for a full systemd boot log without
@@ -29,12 +29,11 @@ const BROADCAST_CAPACITY: usize = 256;
 #[derive(Debug)]
 pub struct ConsoleBroker {
     state: Mutex<ConsoleState>,
-    /// The guest's stdin. A `tokio::sync::Mutex` (not `std`) because holding
-    /// it spans the `.await` in `write_input`. Every attached WS session may
-    /// write; nothing arbitrates between concurrent typists beyond mutual
-    /// exclusion of the write itself, matching the single-operator scenario
-    /// this is built for.
-    stdin: tokio::sync::Mutex<Option<ChildStdin>>,
+    /// Where keystrokes go: the VM's shim, which forwards them to the
+    /// guest's ttyS0. Every attached WS session may write; the shim's request
+    /// queue serializes them, matching the single-operator scenario this is
+    /// built for.
+    input: Mutex<Option<ShimControl>>,
 }
 
 #[derive(Debug)]
@@ -55,26 +54,30 @@ impl ConsoleBroker {
                 output,
                 line_filter: Vec::new(),
             }),
-            stdin: tokio::sync::Mutex::new(None),
+            input: Mutex::new(None),
         }
     }
 
-    /// Hands the broker the write half of the guest's console, once, right
-    /// after the process is spawned.
-    pub async fn attach_stdin(&self, stdin: ChildStdin) {
-        *self.stdin.lock().await = Some(stdin);
+    /// Routes console input to the VM's shim, once, right after the shim
+    /// accepted the connection.
+    pub fn attach_control(&self, control: ShimControl) {
+        *self
+            .input
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(control);
     }
 
-    /// Writes keystrokes to the guest's console. A closed or never-attached
-    /// stdin is not an error — bytes typed before the pipe exists, or after
-    /// the VM has already exited, are silently dropped rather than killing
-    /// the WS session over it.
+    /// Writes keystrokes to the guest's console. Nothing attached yet, or a
+    /// VM that already exited, is not an error — those bytes are silently
+    /// dropped rather than killing the WS session over it.
     pub async fn write_input(&self, bytes: &[u8]) {
-        let mut guard = self.stdin.lock().await;
-        if let Some(stdin) = guard.as_mut()
-            && stdin.write_all(bytes).await.is_err()
-        {
-            *guard = None; // pipe closed (e.g. the guest exited mid-keystroke)
+        let control = self
+            .input
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(control) = control {
+            control.input(bytes).await;
         }
     }
 
@@ -246,38 +249,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_input_before_stdin_is_attached_is_silently_dropped() {
+    async fn write_input_before_a_shim_is_attached_is_silently_dropped() {
         let broker = ConsoleBroker::new();
-        // Must not panic or block forever with no stdin ever attached.
+        // Must not panic or block forever with no shim ever attached.
         broker.write_input(b"echo hi\n").await;
     }
 
     #[tokio::test]
-    async fn write_input_forwards_bytes_to_the_attached_pipe() {
-        // A real ChildStdin can only come from a real Child, so exercise the
-        // write path through a tiny `cat`-like process instead of mocking.
-        let mut child = tokio::process::Command::new("cat")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawn cat");
-        let stdin = child.stdin.take().unwrap();
-        let mut stdout = child.stdout.take().unwrap();
-
+    async fn write_input_forwards_bytes_to_the_attached_shim() {
+        let (control, mut requests) = ShimControl::for_test();
         let broker = ConsoleBroker::new();
-        broker.attach_stdin(stdin).await;
+        broker.attach_control(control);
+
         broker.write_input(b"hello broker\n").await;
 
-        let mut buffer = [0_u8; 32];
-        let read = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            tokio::io::AsyncReadExt::read(&mut stdout, &mut buffer)
-                .await
-                .unwrap()
-        })
-        .await
-        .expect("cat echoed input back before the timeout");
-        assert_eq!(&buffer[..read], b"hello broker\n");
-
-        let _ = child.kill().await;
+        assert_eq!(
+            requests.recv().await,
+            Some(crate::vm_shim::protocol::ShimRequest::Input(
+                b"hello broker\n".to_vec()
+            ))
+        );
     }
 }

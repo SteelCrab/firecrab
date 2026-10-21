@@ -5,6 +5,8 @@ import type { PackageOrigin } from "./PackageOrigin";
 export type ImageResponse = {
   alias: string;
   version: string;
+  kernelVersion?: string;
+  kernelImage: string;
   kernelSha256: string;
   rootfsSha256: string;
   initrdSha256?: string;

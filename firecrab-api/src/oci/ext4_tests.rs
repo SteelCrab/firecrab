@@ -171,6 +171,104 @@ async fn a_planned_image_over_the_operator_ceiling_fails_before_mkfs() {
     assert!(!destination.exists());
 }
 
+/// merge.rs's OCI layer extraction is unprivileged (`preserve_ownerships(false)`),
+/// so a fixture tree here — like a real merged layer tree — is owned by
+/// whichever uid runs the test, never root. `mkfs.ext4 -d` copies that
+/// ownership verbatim unless `run_mkfs` corrects it, and a guest that boots
+/// with non-root-owned directories fails any package postinst that checks
+/// for that (systemd 261's "unsafe path transition", issue #250).
+#[tokio::test]
+async fn packed_inodes_are_root_owned_even_though_the_source_tree_is_not() {
+    let directory = tempdir().expect("create fixture directory");
+    let tree = tree_with_payload(directory.path(), 4096);
+    let destination = directory.path().join("rootfs.ext4");
+
+    let source_uid = std::fs::metadata(tree.join("app/payload"))
+        .expect("stat fixture file")
+        .uid();
+    assert_ne!(
+        source_uid, 0,
+        "fixture must start non-root-owned to exercise the fix; test is running as root"
+    );
+
+    ext4::write_provisioned_ext4(&provisioned(tree), &destination)
+        .await
+        .expect("pack tree");
+
+    let output = std::process::Command::new("debugfs")
+        .args(["-R", "stat /app/payload"])
+        .arg(&destination)
+        .output()
+        .expect("run debugfs stat");
+    let stat = String::from_utf8_lossy(&output.stdout);
+    let tokens: Vec<&str> = stat.split_whitespace().collect();
+    let field = |name: &str| {
+        tokens
+            .iter()
+            .position(|t| *t == name)
+            .map(|i| tokens[i + 1])
+            .unwrap_or_else(|| panic!("debugfs stat missing {name} field: {stat}"))
+    };
+    assert_eq!(
+        field("User:"),
+        "0",
+        "packed file must be root-owned: {stat}"
+    );
+    assert_eq!(
+        field("Group:"),
+        "0",
+        "packed file must be root-owned: {stat}"
+    );
+}
+
+#[test]
+fn missing_fakeroot_binary_is_named_instead_of_the_tree() {
+    let tree =
+        std::path::PathBuf::from("/var/lib/firecrab/images/.oci/import/busybox-1.36.1/rootfs");
+    let destination = std::path::PathBuf::from("/var/lib/firecrab/images/busybox-1.36.1.ext4");
+    let error = ext4::fakeroot_spawn_error(
+        "run fakeroot chown",
+        destination,
+        std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory"),
+    );
+    let rendered = error.to_string();
+    assert_matches!(
+        error,
+        ResolveError::Ext4Build { ref detail, .. } if detail.contains("missing fakeroot binary"),
+        "{error}"
+    );
+    assert!(
+        !rendered.contains(tree.to_str().unwrap()),
+        "must not blame the tree path for a missing binary: {rendered}"
+    );
+}
+
+#[test]
+fn run_mkfs_reports_a_readable_error_when_fakeroot_chown_cannot_reach_the_tree() {
+    let directory = tempdir().expect("create fixture directory");
+    let missing_tree = directory.path().join("no-such-tree");
+    let image = directory.path().join("image.ext4");
+    let destination = directory.path().join("rootfs.ext4");
+    std::fs::write(&image, []).expect("create empty image placeholder");
+
+    let error = ext4::run_mkfs(&missing_tree, &image, &destination)
+        .expect_err("chown -R over a nonexistent tree must fail");
+    assert_matches!(error, ResolveError::Ext4Build { ref detail, .. } if detail.contains("fakeroot chown"), "{error}");
+}
+
+#[test]
+fn run_mkfs_reports_a_readable_error_when_mkfs_ext4_itself_fails() {
+    let directory = tempdir().expect("create fixture directory");
+    let tree = tree_with_payload(directory.path(), 1024);
+    // mkfs.ext4 cannot create its output under a parent that does not exist.
+    let image = directory.path().join("no-such-dir/image.ext4");
+    let destination = directory.path().join("rootfs.ext4");
+
+    let error =
+        ext4::run_mkfs(&tree, &image, &destination).expect_err("mkfs.ext4 must fail to run");
+    assert_matches!(error, ResolveError::Ext4Build { .. }, "{error}");
+}
+
 #[tokio::test]
 async fn ext4_refusals_render_operator_readable_messages() {
     let rendered = [
@@ -200,4 +298,389 @@ async fn ext4_refusals_render_operator_readable_messages() {
     assert!(rendered[1].contains("exceeding the"));
     assert!(rendered[2].contains("No space left on device"));
     assert!(rendered[3].contains("cancelled"));
+}
+
+// Keep the compliance edge-case suite inside the binary crate so llvm-cov
+// attributes execution to the production `oci/compliance.rs` module.
+mod compliance_coverage {
+    use super::super::compliance::{
+        GeneratedSbom, generate_spdx, remove_bundle, write_spdx_bundle,
+    };
+    use crate::image_install::Architecture;
+    use rusqlite::{Connection, params};
+    use serde_json::Value;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+
+    const RPMTAG_NAME: u32 = 1000;
+    const RPMTAG_VERSION: u32 = 1001;
+    const RPMTAG_RELEASE: u32 = 1002;
+    const RPMTAG_EPOCH: u32 = 1003;
+    const RPMTAG_LICENSE: u32 = 1014;
+    const RPMTAG_ARCH: u32 = 1022;
+    const RPMTAG_SOURCERPM: u32 = 1044;
+    const RPM_INT32_TYPE: u32 = 4;
+    const RPM_STRING_TYPE: u32 = 6;
+
+    #[test]
+    fn fedora_sqlite_exported_header_generates_spdx_without_file_magic() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("usr/lib/sysimage/rpm/rpmdb.sqlite");
+        let header = include_bytes!("fixtures/fedora-42-basesystem.rpmhdr");
+        create_rpm_database(&database, vec![header.to_vec()]);
+
+        let generated = generate_spdx(directory.path(), "fedora", "42", Architecture::X86_64)
+            .unwrap()
+            .unwrap();
+        assert_eq!(generated.package_count, 1);
+        let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
+        assert_eq!(json["packages"][1]["name"], "basesystem");
+        assert_eq!(json["packages"][1]["versionInfo"], "11-22.fc42");
+        assert_eq!(json["packages"][1]["licenseDeclared"], "NOASSERTION");
+        assert!(
+            json["packages"][1]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("LicenseRef-Fedora-Public-Domain")
+        );
+        assert!(
+            json["packages"][1]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("source-package=basesystem-11-22.fc42.src.rpm")
+        );
+    }
+
+    #[test]
+    fn sqlite_exported_headers_reject_truncated_and_trailing_data() {
+        let header = include_bytes!("fixtures/fedora-42-basesystem.rpmhdr");
+        let mut trailing = header.to_vec();
+        trailing.push(0);
+        for blob in [header[..header.len() - 1].to_vec(), trailing] {
+            let directory = tempfile::tempdir().unwrap();
+            let database = directory.path().join("var/lib/rpm/rpmdb.sqlite");
+            create_rpm_database(&database, vec![blob]);
+            let error =
+                generate_spdx(directory.path(), "invalid", "42", Architecture::X86_64).unwrap_err();
+            assert!(error.contains("RPM package header"), "{error}");
+        }
+    }
+
+    #[test]
+    fn rpm_sqlite_database_generates_spdx_and_deduplicates() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("usr/lib/sysimage/rpm/rpmdb.sqlite");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE Packages (hnum INTEGER PRIMARY KEY, blob BLOB NOT NULL)",
+                [],
+            )
+            .unwrap();
+
+        let blob = rpm_fixture(&[
+            (RPMTAG_NAME, RPM_STRING_TYPE, b"bash\0".to_vec(), 1),
+            (RPMTAG_VERSION, RPM_STRING_TYPE, b"5.2\0".to_vec(), 1),
+            (RPMTAG_RELEASE, RPM_STRING_TYPE, b"1.fc42\0".to_vec(), 1),
+            (RPMTAG_ARCH, RPM_STRING_TYPE, b"aarch64\0".to_vec(), 1),
+            (
+                RPMTAG_LICENSE,
+                RPM_STRING_TYPE,
+                b"GPL-3.0-or-later\0".to_vec(),
+                1,
+            ),
+            (
+                RPMTAG_SOURCERPM,
+                RPM_STRING_TYPE,
+                b"bash-5.2-1.fc42.src.rpm\0".to_vec(),
+                1,
+            ),
+            (
+                RPMTAG_EPOCH,
+                RPM_INT32_TYPE,
+                2_u32.to_be_bytes().to_vec(),
+                1,
+            ),
+        ]);
+        connection
+            .execute(
+                "INSERT INTO Packages (hnum, blob) VALUES (?1, ?2)",
+                params![1_i64, blob.clone()],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO Packages (hnum, blob) VALUES (?1, ?2)",
+                params![2_i64, blob],
+            )
+            .unwrap();
+        drop(connection);
+
+        fs::create_dir_all(directory.path().join("etc")).unwrap();
+        fs::write(directory.path().join("etc/os-release"), "ID='fedora'\n").unwrap();
+
+        let generated = generate_spdx(directory.path(), "fedora-test", "42", Architecture::Aarch64)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(generated.package_manager, "rpm");
+        assert_eq!(generated.package_count, 1);
+        let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
+        assert_eq!(json["packages"][1]["name"], "bash");
+        assert_eq!(json["packages"][1]["versionInfo"], "2:5.2-1.fc42");
+        assert!(
+            json["packages"][1]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("source-package=bash-5.2-1.fc42.src.rpm")
+        );
+        assert!(
+            json["packages"][0]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("distribution=fedora; architecture=aarch64; package-manager=rpm")
+        );
+    }
+
+    #[test]
+    fn rpm_header_defaults_cover_optional_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("var/lib/rpm/rpmdb.sqlite");
+        create_rpm_database(
+            &database,
+            vec![rpm_fixture(&[
+                (RPMTAG_NAME, RPM_STRING_TYPE, b"minimal\0".to_vec(), 1),
+                (RPMTAG_VERSION, RPM_STRING_TYPE, b"1.0\0".to_vec(), 1),
+            ])],
+        );
+
+        let generated = generate_spdx(directory.path(), "minimal", "latest", Architecture::X86_64)
+            .unwrap()
+            .unwrap();
+
+        let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
+        assert_eq!(json["packages"][1]["versionInfo"], "1.0");
+        assert!(json["packages"][1].get("comment").is_none());
+        assert!(
+            json["packages"][0]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("distribution=rpm")
+        );
+    }
+
+    #[test]
+    fn rpm_database_reports_invalid_sqlite_and_header_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("var/lib/rpm/rpmdb.sqlite");
+        fs::create_dir_all(database.parent().unwrap()).unwrap();
+        fs::write(&database, b"not a sqlite database").unwrap();
+
+        let error =
+            generate_spdx(directory.path(), "broken", "latest", Architecture::X86_64).unwrap_err();
+        assert!(error.contains("RPM database"));
+
+        fs::remove_file(&database).unwrap();
+        create_rpm_database(&database, vec![vec![0_u8; 64]]);
+        let error = generate_spdx(
+            directory.path(),
+            "broken-header",
+            "latest",
+            Architecture::X86_64,
+        )
+        .unwrap_err();
+        assert!(error.contains("RPM package header"), "{error}");
+    }
+
+    #[test]
+    fn rpm_header_reports_truncated_store_and_invalid_utf8() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("var/lib/rpm/rpmdb.sqlite");
+
+        let mut truncated = vec![0x8e, 0xad, 0xe8, 1, 0, 0, 0, 0];
+        truncated.extend_from_slice(&0_u32.to_be_bytes());
+        truncated.extend_from_slice(&64_u32.to_be_bytes());
+        create_rpm_database(&database, vec![truncated]);
+        let error = generate_spdx(
+            directory.path(),
+            "truncated",
+            "latest",
+            Architecture::X86_64,
+        )
+        .unwrap_err();
+        assert!(error.contains("data store is truncated"));
+
+        fs::remove_file(&database).unwrap();
+        create_rpm_database(
+            &database,
+            vec![rpm_fixture(&[
+                (RPMTAG_NAME, RPM_STRING_TYPE, vec![0xff, 0], 1),
+                (RPMTAG_VERSION, RPM_STRING_TYPE, b"1\0".to_vec(), 1),
+            ])],
+        );
+        let error = generate_spdx(
+            directory.path(),
+            "invalid-utf8",
+            "latest",
+            Architecture::X86_64,
+        )
+        .unwrap_err();
+        assert!(error.contains("RPM string is not UTF-8"));
+    }
+
+    #[test]
+    fn apk_defaults_and_empty_database_error_are_exercised() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = directory.path().join("lib/apk/db");
+        fs::create_dir_all(&db).unwrap();
+        fs::write(
+            db.join("installed"),
+            "not-a-field\nP:tiny\nV:1\nZ:ignored\n\nP:missing-version\nA:x86_64\n",
+        )
+        .unwrap();
+
+        let generated = generate_spdx(directory.path(), "tiny", "latest", Architecture::X86_64)
+            .unwrap()
+            .unwrap();
+        assert_eq!(generated.package_count, 1);
+        let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
+        assert!(
+            json["packages"][1]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("source-package=tiny")
+        );
+
+        fs::write(db.join("installed"), "P:no-version\n").unwrap();
+        let error =
+            generate_spdx(directory.path(), "empty", "latest", Architecture::X86_64).unwrap_err();
+        assert!(error.contains("contained no installed packages"));
+    }
+
+    #[test]
+    fn dpkg_parser_handles_continuations_and_incomplete_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = directory.path().join("var/lib/dpkg");
+        fs::create_dir_all(&db).unwrap();
+        fs::write(
+            db.join("status"),
+            concat!(
+                "Package: curl\n",
+                "Status: install ok installed\n",
+                "Version: 8.0\n",
+                "Description: first line\n",
+                " continuation line\n\n",
+                "Status: install ok installed\n",
+                "Version: 1\n\n",
+                "Package: missing-version\n",
+                "Status: install ok installed\n\n",
+                "Package: removed\n",
+                "Status: deinstall ok config-files\n",
+                "Version: 2\n\n",
+                "this line has no colon\n"
+            ),
+        )
+        .unwrap();
+
+        let generated = generate_spdx(directory.path(), "debian-test", "sid", Architecture::X86_64)
+            .unwrap()
+            .unwrap();
+        assert_eq!(generated.package_manager, "dpkg");
+        assert_eq!(generated.package_count, 1);
+        let json: Value = serde_json::from_slice(&generated.bytes).unwrap();
+        assert!(
+            json["packages"][1]["comment"]
+                .as_str()
+                .unwrap()
+                .contains("source-package=curl")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_package_database_is_not_followed() {
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir_all(outside.path().join("apk/db")).unwrap();
+        fs::write(outside.path().join("apk/db/installed"), "P:escape\nV:1\n").unwrap();
+        fs::create_dir_all(directory.path()).unwrap();
+        symlink(outside.path(), directory.path().join("lib")).unwrap();
+
+        assert!(
+            generate_spdx(directory.path(), "escape", "latest", Architecture::X86_64,)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn bundle_can_be_replaced_and_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = GeneratedSbom {
+            bytes: b"{\"generation\":1}\n".to_vec(),
+            package_manager: "apk",
+            package_count: 1,
+        };
+        let second = GeneratedSbom {
+            bytes: b"{\"generation\":2}\n".to_vec(),
+            package_manager: "apk",
+            package_count: 1,
+        };
+
+        let path = write_spdx_bundle(directory.path(), "replace-me", Architecture::X86_64, &first)
+            .unwrap();
+        write_spdx_bundle(
+            directory.path(),
+            "replace-me",
+            Architecture::X86_64,
+            &second,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), second.bytes);
+
+        remove_bundle(directory.path(), "replace-me", Architecture::X86_64);
+        assert!(!path.parent().unwrap().exists());
+        remove_bundle(directory.path(), "replace-me", Architecture::X86_64);
+    }
+
+    fn create_rpm_database(path: &Path, blobs: Vec<Vec<u8>>) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let connection = Connection::open(path).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE Packages (hnum INTEGER PRIMARY KEY, blob BLOB NOT NULL)",
+                [],
+            )
+            .unwrap();
+        for (index, blob) in blobs.into_iter().enumerate() {
+            connection
+                .execute(
+                    "INSERT INTO Packages (hnum, blob) VALUES (?1, ?2)",
+                    params![index as i64 + 1, blob],
+                )
+                .unwrap();
+        }
+    }
+
+    fn rpm_fixture(entries: &[(u32, u32, Vec<u8>, u32)]) -> Vec<u8> {
+        let mut indexes = Vec::new();
+        let mut store = Vec::new();
+        for (tag, kind, value, count) in entries {
+            indexes.extend_from_slice(&tag.to_be_bytes());
+            indexes.extend_from_slice(&kind.to_be_bytes());
+            indexes.extend_from_slice(&(store.len() as u32).to_be_bytes());
+            indexes.extend_from_slice(&count.to_be_bytes());
+            store.extend_from_slice(value);
+        }
+        let mut header = vec![0x8e, 0xad, 0xe8, 1, 0, 0, 0, 0];
+        header.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+        header.extend_from_slice(&(store.len() as u32).to_be_bytes());
+        header.extend_from_slice(&indexes);
+        header.extend_from_slice(&store);
+        header
+    }
 }

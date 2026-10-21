@@ -7,11 +7,14 @@ import type { StartupStep } from "./StartupStep";
 import type { StartupStepRun } from "./StartupStepRun";
 import type { VmState } from "./VmState";
 import type { VmUsageSample } from "./VmUsageSample";
+import type { VmReconciliation } from "./VmReconciliation";
 
 export type VmResponse = {
   id: string;
   name: string;
   state: VmState;
+  /** Latest API startup/network retry check, absent with an older API. */
+  reconciliation?: VmReconciliation | null;
   template: string;
   templateVersion: string;
   cpu: number;
@@ -47,4 +50,6 @@ export type VmResponse = {
   env?: { [key: string]: string };
   /** Git source deployment attached at VM creation. */
   sourceDeployment?: SourceDeployment;
+  /** SHA256 fingerprint of the guest SSH host key; null until first start. */
+  sshHostFingerprint?: string | null;
 };

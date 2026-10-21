@@ -6,6 +6,7 @@ interface VmRow {
   state: string;
   template: string;
   ipv4?: string | null;
+  ipv6?: string | null;
   portForwards?: Array<{ hostPort: number; guestPort: number; protocol: string }>;
 }
 
@@ -160,20 +161,11 @@ export class ApiCleanup {
     await this.request("DELETE", `/api/images/${encodeURIComponent(alias)}/package`);
   }
 
-  /**
-   * Best-effort local catalog delete. L3 is insert-only today, so this
-   * 404s until that layer grows a DELETE.
-   */
+  /** Remove this run's local registration after deleting its disk and package. */
   async deleteLocalCatalogRow(alias: string): Promise<boolean> {
     const encoded = encodeURIComponent(alias);
-    for (const pathname of [
-      `/api/microregistry/${encoded}`,
-      `/api/microregistry/local/${encoded}`,
-    ]) {
-      const { status } = await this.request("DELETE", pathname);
-      if (status === 200 || status === 204) return true;
-    }
-    return false;
+    const { status } = await this.request("DELETE", `/api/microregistry/local/${encoded}`);
+    return status === 204;
   }
 
   async stopVm(id: string): Promise<void> {

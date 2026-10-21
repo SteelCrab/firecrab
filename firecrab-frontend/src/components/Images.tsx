@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import type {
-  BootstrapResponse,
-  BootstrapStep,
-  BootstrapStepRun,
   ImageInstallResponse,
   ImageResponse,
+  KernelResponse,
   MicroRegistryRegisterResponse,
   MicroRegistryResponse,
   OciInspectResponse,
@@ -12,12 +10,9 @@ import type {
 } from "../bindings";
 import {
   ApiClientError,
-  cancelBootstrap,
   deleteImage,
   deleteStagedPackage,
   deleteVm,
-  getActiveBootstrap,
-  getBootstrap,
   getImageInstall,
   getImagePackage,
   getMicroRegistry,
@@ -25,18 +20,18 @@ import {
   getOciImport,
   inspectOciImage,
   listImages,
+  listKernels,
   listVms,
-  startBootstrap,
   startImageInstall,
   startImagePackage,
   startMicroRegistryRegister,
   startOciImport,
   stopVm,
+  updateImageKernel,
 } from "../api/client";
 import { logDownloadFilename } from "../lib/textExport";
 import Banner from "./Banner";
 import LogExportActions from "./LogExportActions";
-import InlineConsole from "./InlineConsole";
 import { useI18n } from "../i18n";
 
 const KNOWN_TEMPLATES = [
@@ -150,104 +145,6 @@ function keepNewestJobSnapshot<T extends ImageInstallResponse>(
   return incoming;
 }
 
-const BOOTSTRAP_STEPS: BootstrapStep[] = [
-  "startingBuilderVm",
-  "installingSystem",
-  "packaging",
-  "finalizing",
-];
-
-function bootstrapStepLabel(
-  step: BootstrapStep,
-  t: (english: string, korean: string) => string,
-): string {
-  switch (step) {
-    case "startingBuilderVm": return t("Preparing builder VM", "빌더 VM 준비");
-    case "installingSystem": return t("Installing system", "시스템 설치");
-    case "packaging": return t("Packaging", "패키징");
-    case "finalizing": return t("Finalizing", "마무리");
-  }
-}
-
-
-/** Guards against a single unbroken line (no `\n` to split on at all) still
- *  blowing up the step box the same way the unsplit case would. */
-const STEP_DETAIL_PREVIEW_MAX = 160;
-
-/**
- * Short label for a failed step's box. On the primary failure path
- * (`bootstrap.rs::run_bootstrap_script`), `run.detail` is `"bootstrap
- * script exited with code {n}"` followed by a newline and then up to
- * `OUTPUT_TAIL_CAP` (8 KiB) of echoed guest script plus console output —
- * that full text is already shown, correctly, in the `.detail-log` `<pre>`
- * below the stepper, so this box only ever needs the first line. Capped in
- * length too, in case a future producer of `detail` hands back one very
- * long line with no newline at all.
- */
-function stepDetailPreview(detail: string): string {
-  const firstLine = detail.split("\n", 1)[0];
-  return firstLine.length > STEP_DETAIL_PREVIEW_MAX
-    ? `${firstLine.slice(0, STEP_DETAIL_PREVIEW_MAX)}…`
-    : firstLine;
-}
-
-/**
- * Four-box progress view over one bootstrap session, mirroring
- * `VmDetailModal`'s `PipelineStepper` so a VM start and a bootstrap read the
- * same way. Durations come from the server's own timestamps — the 1s poll is
- * far too coarse to time the short steps — and only the open step ticks
- * locally between polls.
- */
-function BootstrapStepper({ timeline }: { timeline: BootstrapStepRun[] }) {
-  const { t } = useI18n();
-  const [now, setNow] = useState(() => Date.now());
-  const hasOpenStep = timeline.some((run) => run.outcome === "running");
-  useEffect(() => {
-    if (!hasOpenStep) return;
-    const tick = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(tick);
-  }, [hasOpenStep]);
-
-  const runFor = (step: BootstrapStep) => timeline.find((run) => run.step === step);
-
-  return (
-    <ol className="pipeline">
-      {BOOTSTRAP_STEPS.map((step) => {
-        const run = runFor(step);
-        const status = run ? run.outcome : "pending";
-        const elapsed = run ? (run.endedAtMs ?? now) - run.startedAtMs : null;
-
-        return (
-          <li key={step} className={`pipeline-step ${status}`}>
-          <span className="step-label">{bootstrapStepLabel(step, t)}</span>
-            <span className="step-bar">
-              <span className="step-time">
-                {elapsed === null ? "—" : formatElapsed(elapsed)}
-              </span>
-              <span className="step-mark">
-                {status === "succeeded" ? "✓" : status === "failed" ? "✕" : ""}
-              </span>
-            </span>
-            {run?.detail && (
-              <span className="step-detail step-detail-clamped">
-                {stepDetailPreview(run.detail)}
-              </span>
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
-/** Same shape as `VmDetailModal`'s `duration()`. */
-function formatElapsed(millis: number): string {
-  if (millis < 1000) return `${millis}ms`;
-  const seconds = Math.round(millis / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
 /**
  * 클릭하면 열리는 최소 드롭다운 메뉴. 바깥 클릭 또는 Esc로 닫힌다.
  * 이 프로젝트에 다른 드롭다운 패턴이 없어 이 자리 전용으로 최소 구현했다 —
@@ -331,16 +228,32 @@ function computeMenuItems(
 function ImageDetail({
   image,
   registryMinDiskGb,
+  kernels,
+  kernelUpdateBusy,
+  onUpdateKernel,
   usedByVms,
   usedByError,
 }: {
   image: ImageResponse;
   registryMinDiskGb?: number;
+  kernels: KernelResponse[];
+  kernelUpdateBusy: boolean;
+  onUpdateKernel: (version: string) => Promise<void>;
   usedByVms: VmResponse[] | null;
   usedByError: string | null;
 }) {
   const { t } = useI18n();
   const minDiskGb = Math.max(image.minDiskGb, registryMinDiskGb ?? 0);
+  const [targetKernel, setTargetKernel] = useState(image.kernelVersion ?? "");
+  useEffect(() => {
+    setTargetKernel(image.kernelVersion ?? "");
+  }, [image.alias, image.kernelVersion]);
+  const installedKernels = kernels.filter((kernel) => kernel.installed);
+  const canUpdateKernel =
+    image.installed &&
+    targetKernel !== "" &&
+    targetKernel !== image.kernelVersion &&
+    !kernelUpdateBusy;
 
   return (
     <div className="subpanel">
@@ -350,6 +263,25 @@ function ImageDetail({
 
         <dt>{t("Version", "버전")}</dt>
         <dd>{image.version}</dd>
+
+        <dt>{t("Kernel version", "커널 버전")}</dt>
+        <dd>{image.kernelVersion ?? t("Distro-provided kernel", "배포판 제공 커널")}</dd>
+
+        <dt>{t("Kernel image", "커널 이미지")}</dt>
+        <dd>{image.kernelImage || "—"}</dd>
+
+        <dt>{t("Kernel SHA256", "커널 SHA256")}</dt>
+        <dd>{image.kernelSha256 || "—"}</dd>
+
+        <dt>{t("Rootfs SHA256", "rootfs SHA256")}</dt>
+        <dd>{image.rootfsSha256 || "—"}</dd>
+
+        {image.initrdSha256 && (
+          <>
+            <dt>initrd SHA256</dt>
+            <dd>{image.initrdSha256}</dd>
+          </>
+        )}
 
         <dt>{t("Minimum disk", "최소 디스크")}</dt>
         <dd>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</dd>
@@ -375,6 +307,46 @@ function ImageDetail({
                 : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
         </dd>
       </dl>
+      {image.installed && (
+        <div className="kernel-update-control">
+          <label htmlFor={`image-kernel-${image.alias}`}>
+            {t("Update image kernel", "이미지 커널 업데이트")}
+          </label>
+          <div className="kernel-update-row">
+            <select
+              id={`image-kernel-${image.alias}`}
+              value={targetKernel}
+              onChange={(event) => setTargetKernel(event.target.value)}
+              disabled={kernelUpdateBusy || installedKernels.length === 0}
+            >
+              <option value="">
+                {installedKernels.length === 0
+                  ? t("Install a kernel first", "먼저 커널을 설치하세요")
+                  : t("Select installed kernel", "설치된 커널을 선택하세요")}
+              </option>
+              {installedKernels.map((kernel) => (
+                <option key={kernel.version} value={kernel.version}>
+                  {kernel.version}{kernel.version === image.kernelVersion ? t(" · current", " · 현재") : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn primary"
+              disabled={!canUpdateKernel}
+              onClick={() => void onUpdateKernel(targetKernel)}
+            >
+              {kernelUpdateBusy ? t("Updating…", "업데이트 중…") : t("Update kernel", "커널 업데이트")}
+            </button>
+          </div>
+          <small>
+            {t(
+              "Only images with no VM references can change their kernel.",
+              "VM이 연결되지 않은 이미지만 커널을 변경할 수 있습니다.",
+            )}
+          </small>
+        </div>
+      )}
     </div>
   );
 }
@@ -414,196 +386,6 @@ function ImageJobLog({
       </div>
       <pre className="detail-log image-install-log" ref={logRef}>{job.log}</pre>
     </div>
-  );
-}
-
-function MicroBootPanel({
-  images,
-  session,
-  install,
-  startingAlias,
-  error,
-  onStart,
-  onCancel,
-  onInstall,
-  onDeletePackage,
-}: {
-  images: ImageResponse[];
-  session: BootstrapResponse | null;
-  install: ImageInstallResponse | null;
-  startingAlias: string | null;
-  error: string | null;
-  onStart: (alias: string) => Promise<void>;
-  onCancel: (bootstrapId: string) => Promise<void>;
-  onInstall: (alias: string) => Promise<void>;
-  onDeletePackage: (alias: string) => Promise<void>;
-}) {
-  const { t } = useI18n();
-  const sessionActive =
-    session !== null && session.status !== "succeeded" && session.status !== "failed";
-  const bootstrapBusy = startingAlias !== null || sessionActive;
-  const sessionLogRef = useRef<HTMLPreElement>(null);
-  useEffect(() => {
-    const el = sessionLogRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [session?.log]);
-
-  return (
-    <section className="panel microboot-panel">
-      <h2 className="panel-title">MicroBoot</h2>
-      <p className="panel-intro">
-        {t(
-          "Build an M2Image from an official distribution inside an isolated builder microVM. The finished package stays on this host until you install or delete it.",
-          "격리된 빌더 microVM에서 공식 배포판으로 M2Image를 만듭니다. 완성된 패키지는 설치하거나 삭제할 때까지 이 호스트에 보관됩니다.",
-        )}
-      </p>
-      {error && <div className="field-error">{error}</div>}
-      <div className="table-scroll">
-        <table className="vm-table microboot-table">
-          <thead>
-            <tr>
-              <th>{t("Target image", "대상 이미지")}</th>
-              <th>{t("Build status", "빌드 상태")}</th>
-              <th className="actions">{t("Action", "동작")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {images.map((image) => {
-              const isMine = startingAlias === image.alias || session?.alias === image.alias;
-              const canCancel =
-                isMine &&
-                session !== null &&
-                (session.status === "booting" || session.status === "running");
-              const building = isMine && bootstrapBusy;
-              const microBootPackageReady =
-                image.packageStaged && image.packageOrigin === "microBoot";
-              const packageOwnedElsewhere = image.packageStaged && !microBootPackageReady;
-              const installing = install?.alias === image.alias && install.status === "running";
-              const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
-              const statusLabel = building
-                ? session?.status ?? t("Starting", "시작 중")
-                : microBootPackageReady
-                  ? t("Package ready", "패키지 준비됨")
-                  : packageOwnedElsewhere
-                    ? t("Package managed by MicroRegistry", "MicroRegistry에서 관리 중")
-                  : image.installed
-                    ? t("Installed", "설치됨")
-                    : t("Ready to build", "빌드 가능");
-              const statusClass = building
-                ? " starting"
-                : image.packageStaged || image.installed
-                  ? " running"
-                  : "";
-              const actionLabel = canCancel
-                ? t("Cancel build", "빌드 취소")
-                : packageOwnedElsewhere
-                  ? t("Managed by MicroRegistry", "MicroRegistry에서 관리")
-                  : building
-                    ? t("Building…", "빌드 중…")
-                    : image.installed
-                      ? t("No build needed", "빌드 필요 없음")
-                      : bootstrapBusy
-                        ? t("Another build is running", "다른 빌드 진행 중")
-                        : t("Build", "빌드");
-              const actionDisabled = canCancel
-                ? false
-                : packageOwnedElsewhere
-                  ? true
-                  : image.installed || bootstrapBusy;
-              const handleAction = () => {
-                if (canCancel && session) {
-                  if (!window.confirm(t(
-                    "Cancel the build in progress?\nThe builder VM will be deleted and its progress will be lost.",
-                    "진행 중인 빌드를 취소할까요?\n빌더 VM을 삭제하며, 지금까지 진행된 내용은 저장되지 않습니다.",
-                  ))) return;
-                  void onCancel(session.bootstrapId);
-                  return;
-                }
-                void onStart(image.alias);
-              };
-
-              return (
-                <tr key={image.alias}>
-                  <td className="mono">
-                    {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
-                    {image.alias}
-                  </td>
-                  <td><span className={`state-badge${statusClass}`}>{statusLabel}</span></td>
-                  <td className="actions">
-                    {microBootPackageReady && !canCancel ? (
-                      <>
-                        <button
-                          type="button"
-                          className="btn"
-                          disabled={installing || bootstrapBusy}
-                          onClick={() => void onInstall(image.alias)}
-                        >
-                          {installing ? t("Installing…", "설치 중…") : t("Install", "설치")}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn danger"
-                          disabled={installing || bootstrapBusy}
-                          onClick={() => {
-                            if (!window.confirm(t(
-                              `Delete the built package '${image.alias}'?`,
-                              `'${image.alias}' 구운 패키지를 삭제할까요?`,
-                            ))) return;
-                            void onDeletePackage(image.alias);
-                          }}
-                        >
-                          {t("Delete package", "패키지 삭제")}
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className={`btn${canCancel ? " danger" : ""}`}
-                        disabled={actionDisabled}
-                        onClick={handleAction}
-                      >
-                        {actionLabel}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {session && (
-        <div className="subpanel microboot-session">
-          <div className="log-export-bar">
-            <span className="log-export-bar-label">
-              {t("MicroBoot session", "MicroBoot 세션")} — {session.alias}
-            </span>
-            <LogExportActions
-              text={session.log}
-              filename={logDownloadFilename("microboot", session.alias)}
-              buttonClassName="btn console-bar-btn"
-              disabled={!session.log}
-            />
-          </div>
-          <BootstrapStepper timeline={session.stepTimeline} />
-          {session.status === "booting" || session.status === "running" ? (
-            <InlineConsole vmId={session.vmId} />
-          ) : (
-            <p className="inline-console-ended">
-              {t(
-                "The builder VM was cleaned up, so its console connection ended.",
-                "빌더 VM이 정리되어 콘솔 연결이 종료되었습니다.",
-              )}
-            </p>
-          )}
-          <pre className="detail-log" ref={sessionLogRef}>{session.log}</pre>
-        </div>
-      )}
-      {install && install.status !== "idle" && (
-        <ImageJobLog job={install} kind="import" />
-      )}
-    </section>
   );
 }
 
@@ -941,9 +723,9 @@ function OciImportPanel({
 }
 
 /**
- * M2Image inventory, MicroBoot builder, MicroRegistry, and OCI import are
- * intentionally separate panels so local images, local builds, remote
- * packages, and container imports do not read as one mixed catalog.
+ * M2Image inventory, MicroRegistry, and OCI import are intentionally separate
+ * panels so local images, remote packages, and container imports do not read
+ * as one mixed catalog.
  */
 export default function Images() {
   const { t } = useI18n();
@@ -951,6 +733,7 @@ export default function Images() {
   const [listError, setListError] = useState<string | null>(null);
   const [registry, setRegistry] = useState<MicroRegistryResponse | null>(null);
   const [registryError, setRegistryError] = useState<string | null>(null);
+  const [kernels, setKernels] = useState<KernelResponse[]>([]);
   const [registerAlias, setRegisterAlias] = useState("");
   const [registerVersion, setRegisterVersion] = useState("");
   const [registerJob, setRegisterJob] = useState<MicroRegistryRegisterResponse | null>(null);
@@ -961,24 +744,8 @@ export default function Images() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
   const packagePollingRef = useRef(new Set<string>());
-  /** Session id currently being polled, so only ever one loop runs. */
-  const bootstrapPollingRef = useRef<string | null>(null);
   const [install, setInstall] = useState<ImageInstallResponse | null>(null);
-  const [installOrigin, setInstallOrigin] = useState<"microRegistry" | "microBoot" | null>(null);
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
-  const [bootstrapSession, setBootstrapSession] = useState<BootstrapResponse | null>(null);
-  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
-  /**
-   * Set from the click itself, not from the response — mirrors
-   * `handleInstallStaged` 등의 `busyAlias` 가드와 같은 이유: 응답이
-   * 오기 전 더블클릭이 두 번째 POST를 쏴서 빌더 VM이 두 개 뜨는 것을
-   * 막는다. 백엔드도 세션 하나만 허용하므로(409) 이중 방어다. alias를
-   * 함께 들고 있는 이유: `startBootstrap` 자체가 실패하면
-   * `bootstrapSession`이 이 alias로 채워지지 않으므로, "지금 이 alias의
-   * 요청이 진행 중"이라는 사실을 세션과 무관하게 알아야 굽기 버튼이
-   * 자기 자신의 요청을 "다른 배포판 굽는 중"으로 잘못 표시하지 않는다.
-   */
-  const [bootstrapStartingAlias, setBootstrapStartingAlias] = useState<string | null>(null);
 
   const refreshList = useCallback(async () => {
     try {
@@ -1022,10 +789,19 @@ export default function Images() {
     }
   }, []);
 
+  const refreshKernels = useCallback(async () => {
+    try {
+      setKernels(await listKernels());
+    } catch (error) {
+      setActionError((error as Error).message);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshList();
     void refreshRegistry();
-  }, [refreshList, refreshRegistry]);
+    void refreshKernels();
+  }, [refreshList, refreshRegistry, refreshKernels]);
 
   const selectedImage = (images ?? []).find((image) => image.alias === selectedAlias) ?? null;
 
@@ -1053,13 +829,8 @@ export default function Images() {
 
   // `Images` is conditionally mounted by the App shell (only while the
   // "images" tab is active), so a poll started here can easily outlive the
-  // component if the user navigates away mid-install or mid-bootstrap.
-  // Every tick must check this before touching state. Deliberately does NOT
-  // cancel an in-flight bootstrap session on unmount: cancelling mid-Packaging
-  // deletes the builder VM's disk out from under the concurrently-running
-  // packaging step, which can publish a truncated archive. A bootstrap simply
-  // keeps running on the backend and this panel resumes polling it next time
-  // Images mounts.
+  // component if the user navigates away mid-install. Every tick must check
+  // this before touching state.
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -1161,102 +932,16 @@ export default function Images() {
     void tick();
   };
 
-  // 404는 취소로 삭제된 세션이라는 확정 신호(그만 폴링), 그 외 에러는
-  // 일시적일 수 있으니 계속 폴링한다.
-  const pollBootstrap = (bootstrapId: string) => {
-    // One loop per session: the resume effect below and an explicit start
-    // can both ask for the same id, and StrictMode runs that effect twice in
-    // development, so without this guard the timers stack up.
-    if (bootstrapPollingRef.current === bootstrapId) return;
-    bootstrapPollingRef.current = bootstrapId;
-    const stop = () => {
-      if (bootstrapPollingRef.current === bootstrapId) bootstrapPollingRef.current = null;
-    };
-    const tick = async () => {
-      if (!mountedRef.current) return stop();
-      try {
-        const snapshot = await getBootstrap(bootstrapId);
-        if (!mountedRef.current) return stop();
-        setBootstrapSession(snapshot);
-        if (snapshot.status === "succeeded") {
-          stop();
-          await Promise.all([refreshList(), refreshRegistry()]);
-        } else if (snapshot.status !== "failed") {
-          setTimeout(() => void tick(), 1000);
-        } else {
-          // "failed" is a confirmed terminal state too — stop without retrying.
-          stop();
-        }
-      } catch (err) {
-        if (err instanceof ApiClientError && err.status === 404) {
-          stop();
-          if (mountedRef.current) setBootstrapSession(null);
-          return;
-        }
-        if (mountedRef.current) setTimeout(() => void tick(), 1000);
-        else stop();
-      }
-    };
-    void tick();
-  };
-
-  // Makes good on what the `mountedRef` comment above already promises —
-  // that a bootstrap "keeps running on the backend and this panel resumes
-  // polling it next time Images mounts". It could not, until now: the
-  // session id arrives only in the `startBootstrap` response and lives only
-  // in this component's state, so a reload or a walk to another tab left the
-  // build running with no panel and no console until it finished. Ask the
-  // server which bootstrap is live and pick that id back up.
-  useEffect(() => {
-    let cancelled = false;
-    getActiveBootstrap()
-      .then((session) => {
-        if (cancelled || !mountedRef.current || !session) return;
-        setBootstrapSession(session);
-        pollBootstrap(session.bootstrapId);
-      })
-      // Having nothing to resume is the ordinary case, and a failure here
-      // must not stop the image list itself from rendering.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-    // Once, on mount. `pollBootstrap` is rebuilt every render, but the ref
-    // guard inside it is what keeps duplicate loops out.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const handleStartBootstrap = async (alias: string) => {
-    if (bootstrapStartingAlias !== null) return;
-    setBootstrapStartingAlias(alias);
-    setBootstrapError(null);
-    try {
-      const started = await startBootstrap(alias);
-      if (!mountedRef.current) return;
-      setBootstrapSession(started);
-      pollBootstrap(started.bootstrapId);
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setBootstrapError((err as Error).message);
-    } finally {
-      if (mountedRef.current) setBootstrapStartingAlias(null);
-    }
-  };
-
   /**
    * Install straight from an archive already staged on this host — what a
-   * finished 배포판 부트스트랩 leaves behind. Deliberately skips
+   * MicroRegistry download leaves behind. Deliberately skips
    * `startImagePackage`: there is nothing to download (and on a host with no
    * `FIRECRAB_IMAGE_BASE_URL` there is nowhere to download from), so this
    * goes directly to the same install + poll the remote path ends with.
    */
-  const handleInstallStaged = async (
-    alias: string,
-    origin: "microRegistry" | "microBoot",
-  ) => {
+  const handleInstallStaged = async (alias: string) => {
     setBusyAlias(alias);
     setActionError(null);
-    setInstallOrigin(origin);
     try {
       const started = await startImageInstall(alias);
       setInstall(started);
@@ -1265,11 +950,9 @@ export default function Images() {
       if (error instanceof ApiClientError && error.apiError?.code === "already_installed") {
         await Promise.all([refreshList(), refreshRegistry()]);
         setInstall(null);
-        setInstallOrigin(null);
         return;
       }
       if (
-        origin === "microRegistry" &&
         error instanceof ApiClientError &&
         error.apiError?.code === "package_required"
       ) {
@@ -1292,6 +975,30 @@ export default function Images() {
       pollPackage(alias);
     } catch (error) {
       setActionError((error as Error).message);
+    } finally {
+      setBusyAlias(null);
+    }
+  };
+
+  const handleUpdateKernel = async (alias: string, version: string) => {
+    setBusyAlias(alias);
+    setActionError(null);
+    try {
+      await updateImageKernel(alias, { kernelVersion: version });
+      await Promise.all([refreshList(), refreshKernels()]);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.apiError?.code === "in_use") {
+        const count = error.apiError.fields?.count ?? "";
+        const vms = error.apiError.fields?.vms ?? "";
+        setActionError(
+          t(
+            `'${alias}' has ${count} VM(s) still using it, so its kernel cannot change: ${vms}. Delete those VMs first.`,
+            `'${alias}' 이미지를 쓰는 VM ${count}개가 있어 커널을 바꿀 수 없습니다: ${vms}. 먼저 해당 VM을 삭제하세요.`,
+          ),
+        );
+      } else {
+        setActionError((error as Error).message);
+      }
     } finally {
       setBusyAlias(null);
     }
@@ -1367,12 +1074,6 @@ export default function Images() {
       }
       await Promise.all([refreshList(), refreshRegistry()]);
       if (install?.alias === alias) setInstall(null);
-      if (
-        bootstrapSession?.alias === alias &&
-        (bootstrapSession.status === "succeeded" || bootstrapSession.status === "failed")
-      ) {
-        setBootstrapSession(null);
-      }
       if (selectedAlias === alias) refreshUsedByVms(alias);
     } catch (error) {
       setActionError((error as Error).message);
@@ -1392,32 +1093,10 @@ export default function Images() {
         delete next[alias];
         return next;
       });
-      if (
-        bootstrapSession?.alias === alias &&
-        (bootstrapSession.status === "succeeded" || bootstrapSession.status === "failed")
-      ) {
-        setBootstrapSession(null);
-      }
     } catch (error) {
       setActionError((error as Error).message);
     } finally {
       setBusyAlias(null);
-    }
-  };
-
-  // 취소 실패는 부트스트랩 자체의 진행 실패가 아니라 사용자가 시작한 별도
-  // 액션이므로, 세션 전용 `bootstrapError`가 아니라 일반 `actionError`
-  // 배너에 표시한다. 성공 시 세션을 즉시 지운다 — 다음 폴링 틱을 기다리면
-  // (`pollBootstrap`의 404 처리가 결국 같은 일을 하긴 하지만) 최대 1초
-  // 동안 이미 취소된 세션이 화면에 남는다.
-  const handleCancelBootstrap = async (bootstrapId: string) => {
-    setActionError(null);
-    try {
-      await cancelBootstrap(bootstrapId);
-      setBootstrapSession(null);
-      setBootstrapError(null);
-    } catch (error) {
-      setActionError((error as Error).message);
     }
   };
 
@@ -1598,7 +1277,7 @@ export default function Images() {
                     entry.installed || actionBusy || microBootPackageReady || !entry.downloadable;
                   const doAction = () => {
                     if (registryPackageReady) {
-                      void handleInstallStaged(entry.alias, "microRegistry");
+                      void handleInstallStaged(entry.alias);
                     } else {
                       void handleDownloadPackage(entry.alias);
                     }
@@ -1651,7 +1330,7 @@ export default function Images() {
         {Object.values(packageJobs)
           .filter((job) => job.status !== "idle")
           .map((job) => <ImageJobLog key={`download-${job.alias}`} job={job} kind="download" />)}
-        {installOrigin === "microRegistry" && install && install.status !== "idle" && (
+        {install && install.status !== "idle" && (
           <ImageJobLog job={install} kind="import" />
         )}
     </section>
@@ -1723,6 +1402,9 @@ export default function Images() {
           <ImageDetail
             image={selectedImage}
             registryMinDiskGb={registry?.images.find((entry) => entry.alias === selectedImage.alias)?.minDiskGb}
+            kernels={kernels}
+            kernelUpdateBusy={busyAlias === selectedImage.alias}
+            onUpdateKernel={(version) => handleUpdateKernel(selectedImage.alias, version)}
             usedByVms={usedByVms}
             usedByError={usedByError}
           />
@@ -1733,17 +1415,6 @@ export default function Images() {
         onImported={handleOciImported}
       />
       {registryPanel}
-      <MicroBootPanel
-        images={images ?? []}
-        session={bootstrapSession}
-        install={installOrigin === "microBoot" ? install : null}
-        startingAlias={bootstrapStartingAlias}
-        error={bootstrapError}
-        onStart={handleStartBootstrap}
-        onCancel={handleCancelBootstrap}
-        onInstall={(alias) => handleInstallStaged(alias, "microBoot")}
-        onDeletePackage={handleDeleteStagedPackage}
-      />
     </div>
   );
 }

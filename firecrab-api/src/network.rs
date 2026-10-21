@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::model::Lease;
 
 use crate::network_policy::EgressPolicy;
+use crate::resource_limits::ResourceLimits;
 
 pub const DEFAULT_HELPER_SOCKET: &str = "/run/firecrab/net-helper.sock";
 const HELPER_TIMEOUT: Duration = Duration::from_secs(5);
@@ -38,7 +39,7 @@ pub enum NetworkError {
     Helper(#[source] HelperFailure),
 }
 
-/// Client for the privileged firecrab-net-helper; one connection per call.
+/// Client for the privileged firecrab-helper; one connection per call.
 #[derive(Debug, Clone)]
 pub struct NetworkClient {
     socket_path: PathBuf,
@@ -55,19 +56,88 @@ impl NetworkClient {
         }
     }
 
+    pub async fn pipe(
+        &self,
+        request: firecrab_helper_protocol::pipe::Operation,
+    ) -> Result<firecrab_helper_protocol::pipe::Snapshot, NetworkError> {
+        let timeout = if matches!(
+            &request,
+            firecrab_helper_protocol::pipe::Operation::ConnectCloudflare { .. }
+                | firecrab_helper_protocol::pipe::Operation::ManageFirecrabTunnel { .. }
+                | firecrab_helper_protocol::pipe::Operation::ConnectQuickTunnel { .. }
+                | firecrab_helper_protocol::pipe::Operation::ManageQuickTunnel {
+                    request: firecrab_helper_protocol::pipe::QuickTunnelRequest::Save { .. }
+                }
+        ) {
+            450
+        } else {
+            240
+        };
+        tokio::time::timeout(
+            Duration::from_secs(timeout),
+            self.exchange(NetworkRequest::Pipe { request }),
+        )
+        .await
+        .map_err(|_| NetworkError::Timeout)??
+        .ok_or(NetworkError::MismatchedResponse)
+    }
+
     pub async fn call(&self, request: NetworkRequest) -> Result<(), NetworkError> {
-        tokio::time::timeout(self.timeout, self.exchange(request))
+        self.call_within(self.timeout, request).await
+    }
+
+    async fn call_within(
+        &self,
+        timeout: Duration,
+        request: NetworkRequest,
+    ) -> Result<(), NetworkError> {
+        tokio::time::timeout(timeout, self.exchange(request))
             .await
+            .map(|result| result.map(|_| ()))
             .map_err(|_| NetworkError::Timeout)?
     }
 
-    /// Idempotently ensures the shared bridge exists.
-    pub async fn ensure_bridge(&self) -> Result<(), NetworkError> {
-        self.call(NetworkRequest::EnsureBridge).await
+    /// Asks the helper to run `vm_id`'s shim in its own systemd unit, so the
+    /// VM outlives this process. Returns once the unit has started; the
+    /// caller then connects to the shim's socket. The unit runs under
+    /// `limits`.
+    pub async fn start_vm_unit(
+        &self,
+        vm_id: Uuid,
+        runtime_dir: PathBuf,
+        firecracker: PathBuf,
+        enable_pci: bool,
+        stop_grace: Duration,
+        limits: ResourceLimits,
+    ) -> Result<(), NetworkError> {
+        self.call(NetworkRequest::StartVmUnit {
+            vm_id,
+            runtime_dir,
+            firecracker,
+            enable_pci,
+            stop_grace_ms: u64::try_from(stop_grace.as_millis()).unwrap_or(u64::MAX),
+            memory_max_mib: Some(limits.memory_max_mib),
+            cpu_quota_percent: Some(limits.cpu_quota_percent),
+        })
+        .await
+    }
+
+    /// Stops `vm_id`'s unit — the shim's own graceful stop, then systemd's
+    /// SIGKILL — and waits for it, up to `stop_grace` plus systemd's slack.
+    pub async fn stop_vm_unit(
+        &self,
+        vm_id: Uuid,
+        stop_grace: Duration,
+    ) -> Result<(), NetworkError> {
+        self.call_within(
+            self.timeout + stop_grace + Duration::from_secs(15),
+            NetworkRequest::StopVmUnit { vm_id },
+        )
+        .await
     }
 
     /// Idempotently ensures a MicroNetwork's own bridge exists, gated at
-    /// `gateway`/`prefix` (`public-docs/networking.md`).
+    /// `gateway`/`prefix` (`public-docs/guides/networking.md`).
     pub async fn ensure_micro_network_bridge(
         &self,
         micro_network_id: Uuid,
@@ -185,7 +255,10 @@ impl NetworkClient {
         }
     }
 
-    async fn exchange(&self, request: NetworkRequest) -> Result<(), NetworkError> {
+    async fn exchange(
+        &self,
+        request: NetworkRequest,
+    ) -> Result<Option<firecrab_helper_protocol::pipe::Snapshot>, NetworkError> {
         let mut stream = UnixStream::connect(&self.socket_path)
             .await
             .map_err(|source| NetworkError::Unavailable {
@@ -200,7 +273,8 @@ impl NetworkClient {
         if response.request_id != envelope.request_id {
             return Err(NetworkError::MismatchedResponse);
         }
-        response.result.map_err(NetworkError::Helper)
+        response.result.map_err(NetworkError::Helper)?;
+        Ok(response.pipe)
     }
 }
 
@@ -240,6 +314,7 @@ pub(crate) mod test_support {
                 Err(_) => return,
             };
             let response = NetworkResponseEnvelope {
+                pipe: None,
                 version: PROTOCOL_VERSION,
                 request_id: envelope.request_id,
                 result: Ok(()),
@@ -254,6 +329,7 @@ pub(crate) mod test_support {
     /// sequence rather than each request's full payload.
     fn operation_name(request: &NetworkRequest) -> &'static str {
         match request {
+            NetworkRequest::Pipe { .. } => "pipe",
             NetworkRequest::EnsureBridge => "ensure_bridge",
             NetworkRequest::EnsureMicroNetworkBridge { .. } => "ensure_micro_network_bridge",
             NetworkRequest::RemoveMicroNetworkBridge { .. } => "remove_micro_network_bridge",
@@ -263,6 +339,8 @@ pub(crate) mod test_support {
             NetworkRequest::ApplyVmPolicy { .. } => "apply_vm_policy",
             NetworkRequest::RemoveVmPolicy { .. } => "remove_vm_policy",
             NetworkRequest::SyncDhcpLeases { .. } => "sync_dhcp_leases",
+            NetworkRequest::StartVmUnit { .. } => "start_vm_unit",
+            NetworkRequest::StopVmUnit { .. } => "stop_vm_unit",
             NetworkRequest::ApplySelfUpdate { .. } => "apply_self_update",
         }
     }
@@ -347,6 +425,7 @@ pub(crate) mod test_support {
                 Ok(())
             };
             let response = NetworkResponseEnvelope {
+                pipe: None,
                 version: PROTOCOL_VERSION,
                 request_id: envelope.request_id,
                 result,
@@ -379,6 +458,7 @@ pub(crate) mod test_support {
                 _ => Ok(()),
             };
             let response = NetworkResponseEnvelope {
+                pipe: None,
                 version: PROTOCOL_VERSION,
                 request_id: envelope.request_id,
                 result,
@@ -435,6 +515,7 @@ mod tests {
         let path = dir.path().join("helper.sock");
         let listener = UnixListener::bind(&path).expect("bind");
         fake_helper(listener, |envelope| NetworkResponseEnvelope {
+            pipe: None,
             version: PROTOCOL_VERSION,
             request_id: envelope.request_id,
             result: Ok(()),
@@ -452,6 +533,7 @@ mod tests {
         let path = dir.path().join("helper.sock");
         let listener = UnixListener::bind(&path).expect("bind");
         fake_helper(listener, |envelope| NetworkResponseEnvelope {
+            pipe: None,
             version: PROTOCOL_VERSION,
             request_id: envelope.request_id,
             result: Err(HelperFailure::UnsupportedOperation),
@@ -477,6 +559,7 @@ mod tests {
         let path = dir.path().join("helper.sock");
         let listener = UnixListener::bind(&path).expect("bind");
         fake_helper(listener, |_| NetworkResponseEnvelope {
+            pipe: None,
             version: PROTOCOL_VERSION,
             request_id: Uuid::new_v4(),
             result: Ok(()),

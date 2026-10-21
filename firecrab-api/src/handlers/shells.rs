@@ -73,15 +73,15 @@ pub async fn create_shell(
     let content = req.content.clone();
     let sha_for_db = sha.clone();
     tokio::task::spawn_blocking(move || {
-        store.create_shell(
+        store.create_shell(&crate::persistence::NewShell {
             id,
-            &name,
-            description.as_deref(),
+            name: &name,
+            description: description.as_deref(),
             revision_id,
-            &content,
-            &sha_for_db,
-            now,
-        )
+            content: &content,
+            content_sha256: &sha_for_db,
+            now_ms: now,
+        })
     })
     .await
     .map_err(|_| AppError::internal(request_id.0))?
@@ -225,13 +225,13 @@ fn validate_shell_write(
             "must be 1-64 ASCII letters, numbers, '.', '_' or '-'".to_owned(),
         );
     }
-    if let Some(description) = description {
-        if description.len() > 512 {
-            fields.insert(
-                "description".to_owned(),
-                "must be at most 512 characters".to_owned(),
-            );
-        }
+    if let Some(description) = description
+        && description.len() > 512
+    {
+        fields.insert(
+            "description".to_owned(),
+            "must be at most 512 characters".to_owned(),
+        );
     }
     validate_content(content, &mut fields);
     fields
