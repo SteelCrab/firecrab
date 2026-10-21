@@ -246,7 +246,7 @@ test.describe("Pipe dashboard @dashboard", () => {
     await expect(page.getByRole("region", { name: "Quick Tunnel", exact: true })).toBeVisible();
     await expect(panel.getByLabel("Quick Tunnel", { exact: true })).toHaveCount(0);
     await expect(panel.getByLabel("Subdomain", { exact: true })).toHaveCount(0);
-    await expect(panel.getByRole("link", { name: "Get a token from the dashboard", exact: true })).toHaveAttribute("href", "https://firecrab.dev/dashboard/");
+    await expect(panel.getByRole("link", { name: "Get a token from the dashboard", exact: true })).toHaveAttribute("href", "https://console.firecrab.dev/");
     await expect(panel.getByLabel("Connection token", { exact: true })).toHaveAttribute("type", "password");
     await panel.getByLabel("Connection token", { exact: true }).fill(CONNECTION_TOKEN);
     await expect(panel.getByLabel("Connection target").locator("option")).toHaveText(["VM apps", "Nginx routes"]);

@@ -132,7 +132,7 @@ Select **Edit** on an existing row to open its editor, or **Cancel** to discard
 the editor's inputs. Removed routes stay in the local draft until **Save**.
 Polling preserves local edits. API connection failure clears stale service badges.
 
-Open [the connection dashboard](https://firecrab.dev/dashboard/) to issue a token.
+Open [the connection dashboard](https://console.firecrab.dev/) to issue a token.
 Under **Firecrab Tunnel → Add fixed address**, paste it and select
 **VM apps** or saved **Nginx routes** in **Connection target**. There is no
 subdomain input or separate Quick Tunnel input in Firecrab Tunnel. Use the

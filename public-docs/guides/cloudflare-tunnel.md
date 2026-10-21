@@ -22,7 +22,7 @@ On macOS and Windows, the connector runs inside the managed Linux guest.
 
 Use **Pipe → Cloudflare Quick Tunnel** to create, edit and control temporary
 connectors. In **Pipe → Firecrab Tunnel**, paste a token
-from [the Firecrab dashboard](https://firecrab.dev/dashboard/) and select an
+from [the Firecrab dashboard](https://console.firecrab.dev/) and select an
 **VM apps** or saved **Nginx routes**. See the
 [Firecrab Tunnel guide](firecrab-tunnel.md) for token issuance and revocation.
 
