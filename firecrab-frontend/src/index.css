@@ -838,7 +838,8 @@ table.image-table tbody tr.is-selected td {
 .pipe-nginx-editor h3 { margin: 0; font-size: .85rem; font-weight: 600; }
 .pipe-nginx-editor .pipe-description { margin: .35rem 0 0; }
 .pipe-controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: end; margin-top: 1rem; }
-.pipe-database-form { display: grid; gap: .75rem; margin-block: 1rem; }
+.pipe-database-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; margin-block: 1rem; }
+.pipe-database-form .pipe-row-actions { flex-wrap: wrap; }
 .pipe-database-form textarea { width: 100%; min-height: 5rem; resize: vertical; padding: .6rem; color: var(--text-2); background: var(--bg); border: 1px solid var(--text-4); border-radius: 4px; font-family: var(--mono); font-size: .8rem; }
 .pipe-database-browser { margin-top: 1.25rem; border-top: 1px solid var(--text-4); padding-top: 1rem; }
 .pipe-database-preview td { max-width: 24rem; overflow-wrap: anywhere; white-space: pre-wrap; vertical-align: top; }

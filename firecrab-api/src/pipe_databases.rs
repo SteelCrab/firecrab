@@ -11,44 +11,65 @@ use sqlx::postgres::{PgConnectOptions, PgConnection, PgSslMode};
 use sqlx::{ConnectOptions, Connection, Row};
 use uuid::Uuid;
 
+/// Maximum number of base tables returned by one metadata request.
 const MAX_TABLES: usize = 500;
+/// Maximum number of columns accepted for a row preview.
 const MAX_COLUMNS: usize = 128;
+/// Maximum text length returned for each preview cell.
 const MAX_CELL_CHARS: usize = 2048;
+/// Maximum serialized row data collected for one preview response.
 const MAX_PREVIEW_BYTES: usize = 2 * 1024 * 1024;
+/// Deadline for connecting and completing one database operation.
 pub const OPERATION_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Connection source and its engine and TLS requirements.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
+    /// An operator-supplied MySQL or PostgreSQL TCP URI.
     Local,
+    /// A Supabase PostgreSQL endpoint or session pooler.
     Supabase,
+    /// An Amazon RDS MySQL or PostgreSQL endpoint.
     Rds,
 }
 
+/// SQL dialect and connection driver selected from the URI scheme.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Engine {
+    /// PostgreSQL with native text conversion for preview values.
     Postgres,
+    /// MySQL, including compatible servers that support read-only sessions.
     Mysql,
 }
 
+/// Encryption and server identity policy for a database connection.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TlsMode {
+    /// Plain TCP, accepted only for the local URI source.
     Disable,
+    /// Require encryption without checking the server certificate identity.
     Require,
+    /// Verify the certificate chain and the requested hostname.
     VerifyFull,
 }
 
-/// Never derive Debug: the URI contains a password.
+/// Connection form input containing credentials; Debug output is redacted.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DatabaseInput {
+    /// Display name, trimmed before it appears in a summary.
     pub name: String,
+    /// Source used to validate the engine and default TLS policy.
     pub provider: Provider,
+    /// TCP database URI, including percent-encoded credentials.
     pub uri: String,
+    /// Explicit TLS choice, overriding the URI and provider default.
     #[serde(default)]
     pub tls_mode: Option<TlsMode>,
+    /// Optional PEM certificate bundle supplied directly, never a file path.
     #[serde(default)]
     pub ca_certificate: Option<String>,
 }
@@ -59,31 +80,48 @@ impl std::fmt::Debug for DatabaseInput {
     }
 }
 
+/// Persisted connection input and the identifier used by REST routes.
 #[derive(Debug, Clone)]
 pub struct DatabaseRecord {
+    /// Stable identifier assigned when the connection is saved.
     pub id: Uuid,
+    /// Saved configuration with credentials, retained only on the API host.
     pub input: DatabaseInput,
 }
 
+/// Credential-free connection metadata returned to dashboard clients.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatabaseSummary {
+    /// Identifier used to browse or remove this saved connection.
     pub id: Uuid,
+    /// Human-readable connection name.
     pub name: String,
+    /// Selected connection source.
     pub provider: Provider,
+    /// Driver selected from the validated URI scheme.
     pub engine: Engine,
+    /// TCP hostname or IP address without IPv6 brackets.
     pub host: String,
+    /// Explicit port, or the engine's default TCP port.
     pub port: u16,
+    /// Decoded database name from the URI path.
     pub database: String,
+    /// Effective encryption and server verification policy.
     pub tls_mode: TlsMode,
 }
 
+/// Validated connection fields kept separate from serializable metadata.
 pub struct ConnectionSettings {
+    /// Safe metadata that can be returned after authentication succeeds.
     pub summary: DatabaseSummary,
+    /// Decoded account name, excluded from dashboard summaries.
     username: String,
+    /// Decoded password, excluded from Debug output and API responses.
     password: String,
 }
 
+/// Decode one URI component and reject invalid UTF-8.
 fn decode(value: &str) -> Result<String, &'static str> {
     percent_decode_str(value)
         .decode_utf8()
@@ -92,6 +130,7 @@ fn decode(value: &str) -> Result<String, &'static str> {
 }
 
 impl DatabaseInput {
+    /// Validate input and resolve engine, credentials, port and TLS policy.
     pub fn settings(&self, id: Uuid) -> Result<ConnectionSettings, &'static str> {
         if self.name.trim().is_empty()
             || self.name.chars().count() > 100
@@ -158,13 +197,12 @@ impl DatabaseInput {
         if self.provider != Provider::Local && tls_mode == TlsMode::Disable {
             return Err("Supabase and Amazon RDS connections require TLS");
         }
-        if let Some(ca) = &self.ca_certificate {
-            if ca.len() > 32 * 1024
+        if let Some(ca) = &self.ca_certificate
+            && (ca.len() > 32 * 1024
                 || !ca.trim().starts_with("-----BEGIN CERTIFICATE-----")
-                || !ca.trim().ends_with("-----END CERTIFICATE-----")
-            {
-                return Err("CA certificate must be PEM text of at most 32 KiB");
-            }
+                || !ca.trim().ends_with("-----END CERTIFICATE-----"))
+        {
+            return Err("CA certificate must be PEM text of at most 32 KiB");
         }
         Ok(ConnectionSettings {
             summary: DatabaseSummary {
@@ -187,42 +225,58 @@ impl DatabaseInput {
     }
 }
 
+/// Accessible base table identified by its schema and exact name.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Table {
+    /// Schema name, or database name for MySQL.
     pub schema: String,
+    /// Table name preserved for dialect-specific identifier quoting.
     pub name: String,
 }
 
+/// Bounded table listing with an explicit truncation indicator.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tables {
+    /// Accessible base tables in metadata sort order.
     pub tables: Vec<Table>,
+    /// Whether additional tables were omitted by the listing limit.
     pub truncated: bool,
 }
 
+/// Column metadata used to render and convert preview values.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Column {
+    /// Exact column identifier returned by the server.
     pub name: String,
+    /// Server-reported SQL type used for text or binary conversion.
     pub data_type: String,
 }
 
+/// Table selection and bounded pagination input; arbitrary SQL is rejected.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreviewRequest {
+    /// Exact schema identifier to look up before generating a query.
     pub schema: String,
+    /// Exact table identifier to look up before generating a query.
     pub table: String,
+    /// Requested row count, validated in the range 1 through 100.
     #[serde(default = "default_limit")]
     pub limit: u32,
+    /// Number of rows to skip, capped at 100000.
     #[serde(default)]
     pub offset: u32,
 }
+/// Default page size used when a REST request omits its limit.
 fn default_limit() -> u32 {
     50
 }
 
 impl PreviewRequest {
+    /// Reject invalid identifiers and pagination before opening a connection.
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.schema.is_empty()
             || self.table.is_empty()
@@ -240,21 +294,30 @@ impl PreviewRequest {
     }
 }
 
+/// Bounded row values and metadata returned by one read-only query.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preview {
+    /// Columns in the same ordinal order as each row's values.
     pub columns: Vec<Column>,
+    /// Text or hex values, with SQL NULL preserved as None.
     pub rows: Vec<Vec<Option<String>>>,
+    /// Whether another row exists beyond the row or response-size limit.
     pub has_more: bool,
+    /// Starting offset echoed from the validated request.
     pub offset: u32,
 }
 
+/// Single database session configured for read-only inspection.
 pub enum DatabaseConnection {
+    /// PostgreSQL session with read-only startup options and a statement timeout.
     Postgres(PgConnection),
+    /// MySQL session switched to read-only transaction mode after connecting.
     Mysql(MySqlConnection),
 }
 
 impl DatabaseConnection {
+    /// Open a TCP session from validated fields without reading URI file paths.
     pub async fn connect(
         input: &DatabaseInput,
         settings: &ConnectionSettings,
@@ -313,6 +376,7 @@ impl DatabaseConnection {
         }
     }
 
+    /// Verify that the authenticated session is responsive.
     pub async fn ping(&mut self) -> Result<(), sqlx::Error> {
         match self {
             Self::Postgres(c) => c.ping().await,
@@ -320,11 +384,13 @@ impl DatabaseConnection {
         }
     }
 
+    /// List accessible base tables and report truncation after 500 entries.
     pub async fn tables(&mut self) -> Result<Tables, sqlx::Error> {
         let pairs: Vec<(String, String)> = match self {
             Self::Postgres(c) => sqlx::query_as("SELECT table_schema::text, table_name::text FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema') ORDER BY table_schema, table_name LIMIT 501")
                 .persistent(false).fetch_all(c).await?,
-            Self::Mysql(c) => sqlx::query_as("SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME LIMIT 501")
+            // Normalize metadata to nonbinary text before decoding it as String.
+            Self::Mysql(c) => sqlx::query_as("SELECT CAST(TABLE_SCHEMA AS CHAR CHARACTER SET utf8mb4), CAST(TABLE_NAME AS CHAR CHARACTER SET utf8mb4) FROM information_schema.tables WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME LIMIT 501")
                 .persistent(false).fetch_all(c).await?,
         };
         let truncated = pairs.len() > MAX_TABLES;
@@ -338,11 +404,12 @@ impl DatabaseConnection {
         })
     }
 
+    /// Inspect columns and stream a bounded page of converted row values.
     pub async fn preview(&mut self, request: &PreviewRequest) -> Result<Preview, sqlx::Error> {
         let fields: Vec<(String, String)> = match self {
             Self::Postgres(c) => sqlx::query_as("SELECT column_name::text, data_type::text FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position LIMIT 129")
                 .bind(&request.schema).bind(&request.table).persistent(false).fetch_all(c).await?,
-            Self::Mysql(c) => sqlx::query_as("SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.columns WHERE TABLE_SCHEMA = DATABASE() AND TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION LIMIT 129")
+            Self::Mysql(c) => sqlx::query_as("SELECT CAST(COLUMN_NAME AS CHAR CHARACTER SET utf8mb4), CAST(DATA_TYPE AS CHAR CHARACTER SET utf8mb4) FROM information_schema.columns WHERE TABLE_SCHEMA = DATABASE() AND TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION LIMIT 129")
                 .bind(&request.schema).bind(&request.table).persistent(false).fetch_all(c).await?,
         };
         if fields.is_empty() {
@@ -403,6 +470,7 @@ impl DatabaseConnection {
     }
 }
 
+/// Append a row while enforcing the requested count and serialized byte budget.
 fn append_row(
     preview: &mut Preview,
     row: Vec<Option<String>>,
@@ -420,6 +488,7 @@ fn append_row(
     true
 }
 
+/// Quote an exact SQL identifier using the selected engine's delimiter.
 fn quote(engine: Engine, name: &str) -> String {
     let delimiter = if engine == Engine::Postgres { '"' } else { '`' };
     format!(
@@ -428,6 +497,7 @@ fn quote(engine: Engine, name: &str) -> String {
     )
 }
 
+/// Generate a SELECT with bounded cell conversion and bound pagination values.
 fn preview_sql(engine: Engine, request: &PreviewRequest, columns: &[Column]) -> String {
     let fields = columns
         .iter()
@@ -470,6 +540,7 @@ fn preview_sql(engine: Engine, request: &PreviewRequest, columns: &[Column]) -> 
     }
 }
 
+/// Convert a safe validation message into the database form's API error field.
 pub fn validation(message: &'static str, request_id: Uuid) -> crate::error::AppError {
     crate::error::AppError::validation(
         BTreeMap::from([("database".into(), message.into())]),

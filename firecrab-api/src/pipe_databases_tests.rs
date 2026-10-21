@@ -194,12 +194,12 @@ async fn reads_real_postgres_and_mysql_tables() {
         match engine {
             Engine::Postgres => {
                 let mut connection = PgConnection::connect(&uri).await.unwrap();
-                sqlx::raw_sql(&format!("CREATE TABLE {table} (id integer, {column} text, payload bytea); INSERT INTO {table} VALUES (1, '한글', decode('0102', 'hex')), (2, NULL, NULL)"))
+                sqlx::raw_sql(&format!("CREATE TABLE {table} (id integer, {column} text, payload bytea); INSERT INTO {table} VALUES (1, 'café', decode('0102', 'hex')), (2, NULL, NULL)"))
                     .execute(&mut connection).await.unwrap();
             }
             Engine::Mysql => {
                 let mut connection = MySqlConnection::connect(&uri).await.unwrap();
-                sqlx::raw_sql(&format!("CREATE TABLE {table} (id integer, {column} text, payload blob); INSERT INTO {table} VALUES (1, '한글', X'0102'), (2, NULL, NULL)"))
+                sqlx::raw_sql(&format!("CREATE TABLE {table} (id integer, {column} text, payload blob); INSERT INTO {table} VALUES (1, 'café', X'0102'), (2, NULL, NULL)"))
                     .execute(&mut connection).await.unwrap();
             }
         }
@@ -226,7 +226,7 @@ async fn reads_real_postgres_and_mysql_tables() {
             preview
                 .rows
                 .iter()
-                .any(|row| row[1].as_deref() == Some("한글"))
+                .any(|row| row[1].as_deref() == Some("café"))
         );
         assert!(
             preview
