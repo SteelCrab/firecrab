@@ -36,11 +36,17 @@ for _attempt in 1 2; do
         bash "$root/install.sh" --bin-dir "$scratch/bin" --no-deps --no-frontend \
         >"$scratch/install.log" 2>&1 || { cat "$scratch/install.log" >&2; exit 1; }
     cmp "$engine/firecrab-ingress" "$scratch/installed/lib/firecrab/firecrab-ingress"
-    cmp "$engine/ingress/LICENSE.nginx" "$scratch/installed/lib/firecrab/ingress/LICENSE.nginx"
+    [ -x "$scratch/installed/lib/firecrab/firecrab-ingress" ]
+    [ "$(stat -c %a "$scratch/installed/lib/firecrab/firecrab-ingress")" = 755 ]
+    for name in LICENSE.nginx LICENSE.pcre2 LICENSE.musl sources.json; do
+        cmp "$engine/ingress/$name" "$scratch/installed/lib/firecrab/ingress/$name"
+        [ "$(stat -c %a "$scratch/installed/lib/firecrab/ingress/$name")" = 644 ]
+    done
+    "$scratch/installed/lib/firecrab/firecrab-ingress" -v
     cmp "$scratch/original.json" "$scratch/config/pipe/manifest.json"
 done
 if grep -q firecrab-ingress "$scratch/calls"; then
     printf 'install must not start an unconfigured ingress\n' >&2
     exit 1
 fi
-printf 'PASS initial install and reinstall bundle ingress and preserve saved routes\n'
+printf 'PASS initial install and reinstall preserve executable ingress, all attributions and saved routes\n'

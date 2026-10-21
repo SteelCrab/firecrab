@@ -36,6 +36,11 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `scripts/ci-qa-macos-e2e.sh repair` | G7/G7a runtime recovery and preservation; [detailed checks](macos-repair.md) |
 | `firecrab-e2e` | B1–B19; full or explicit import/form mode |
 | `firecrab-e2e` `test:dashboard` | Mocked dashboard/API/console checks |
+| `firecrab-e2e` `test:pipe` | Pipe and registry browser checks; English/Korean host-bundle recovery guidance |
+| `scripts/test-pipe-cli.py` | Real systemd CLI routing, default private-engine discovery, explicit overrides, missing-engine status without traffic loss, rollback, and cleanup |
+| `scripts/test-pipe-api.py` | Unprivileged API through the systemd helper; route preservation and ingress lifecycle |
+| `scripts/test-pipe-runtime.py` | Real ingress routing, health, reload, independent Quick Tunnel targets, and rejected-config rollback |
+| `scripts/test-ingress-install.sh` | Isolated initial install/reinstall; executable mode, all attributions, and saved routes, with fake service controls |
 
 Guest references are `alpine:3.21`, `ubuntu:24.04`, and `fedora:42`.
 Expanded shared checks run on the first reference.
