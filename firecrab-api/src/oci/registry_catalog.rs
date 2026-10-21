@@ -6,14 +6,19 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
 
+/// A page of qualified repository names from the registry's metadata API.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegistryRepositories {
+    /// Repository paths without the registry hostname or an image tag.
     pub repositories: Vec<String>,
+    /// The next one-based page, constructed locally instead of following remote URLs.
     pub next_page: Option<u32>,
+    /// False when registry credentials cannot access the provider's catalog API.
     pub listing_supported: bool,
 }
 
+/// Accept account and organization names that fit a single URL path segment.
 pub fn valid_namespace(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 255
@@ -26,6 +31,10 @@ pub fn valid_namespace(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
 }
 
+/// List provider repositories with credentials scoped to this exact registry.
+///
+/// Docker Hub uses the saved username. Harbor returns accessible project paths.
+/// ECR passwords cannot list repositories, so ECR returns an unsupported page.
 pub async fn repositories(
     registry: &str,
     namespace: &str,
@@ -78,10 +87,12 @@ pub async fn repositories(
     docker_repositories(&client, "https://hub.docker.com", page, credential).await
 }
 
+/// Remove request URLs before returning transport errors to API callers.
 fn transport(error: reqwest::Error) -> ResolveError {
     ResolveError::Transport(error.without_url().to_string())
 }
 
+/// Decode a bounded successful response without exposing provider error bodies.
 async fn json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, ResolveError> {
     if response.status() != StatusCode::OK {
         return Err(ResolveError::Status {
@@ -93,6 +104,7 @@ async fn json<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, Res
         .map_err(|_| ResolveError::Malformed("invalid registry catalog response".into()))
 }
 
+/// Validate, qualify and deduplicate repository paths while retaining nested names.
 fn catalog(
     namespace: &str,
     names: Vec<String>,
@@ -124,6 +136,7 @@ fn catalog(
     })
 }
 
+/// List Harbor project repositories using the saved account's Basic authentication.
 async fn harbor_repositories(
     client: &Client,
     base: &str,
@@ -162,6 +175,7 @@ async fn harbor_repositories(
     )
 }
 
+/// Exchange a Docker Hub PAT and list the saved user's repositories, including private ones.
 async fn docker_repositories(
     client: &Client,
     base: &str,
@@ -212,6 +226,7 @@ async fn docker_repositories(
     )
 }
 
+/// List personal or organization container packages using fixed GitHub API paths.
 async fn github_repositories(
     client: &Client,
     base: &str,

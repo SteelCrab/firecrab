@@ -55,6 +55,7 @@ fn reference(value: &str, id: RequestId) -> Result<ImageReference, AppError> {
     Ok(reference)
 }
 
+/// Accept a hostname and optional port, excluding URL credentials, paths and queries.
 fn valid_harbor_host(registry: &str) -> bool {
     if registry.is_empty()
         || registry.len() > 255
@@ -72,6 +73,7 @@ fn valid_harbor_host(registry: &str) -> bool {
         && (registry.contains('.') || registry.contains(':') || registry == "localhost")
 }
 
+/// Resolve an image and its login, requiring registration for custom Harbor hosts.
 async fn registered_reference(
     state: &AppState,
     value: &str,
@@ -188,13 +190,17 @@ pub async fn delete(
     Ok(Json(serde_json::json!({"deleted": true})))
 }
 
+/// Pagination and the optional GitHub account or organization override.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepositoriesQuery {
+    /// GitHub catalog owner; Docker Hub always uses the saved account instead.
     namespace: Option<String>,
+    /// One-based catalog page, defaulting to the first page.
     page: Option<u32>,
 }
 
+/// Return a provider catalog page after validating the host, account and page number.
 pub async fn repositories(
     State(state): State<AppState>,
     Extension(id): Extension<RequestId>,
