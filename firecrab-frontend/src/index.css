@@ -34,7 +34,7 @@ body {
   outline-offset: 2px;
 }
 
-/* 앱 셸 — 헤더 + 좌측 내비 + 콘텐츠 */
+/* App shell: header, left navigation, and content. */
 
 .shell-header {
   position: relative;
@@ -83,7 +83,7 @@ body {
   border: 0;
 }
 
-/* 내비 폭은 여기서만 바꾼다 — 축소 단계마다 이 값 하나로 전환된다. */
+/* Set navigation width only here. Each responsive breakpoint switches this one value. */
 .shell-body {
   display: grid;
   grid-template-columns: 13.5rem minmax(0, 1fr);
@@ -346,14 +346,14 @@ form.shell-create-grid .field-span-2 {
   max-width: 1080px;
 }
 
-/* 좁아지면 라벨을 접어 좌측 아이콘 레일로 유지한다.
-   모바일에서도 상단 가로 줄로 펼치지 않는다 — 아이콘이 화면 가운데로
-   흩어지지 않고 좌측에 고정된다. */
+/* Hide labels on narrow screens to keep a left icon rail.
+   Keep it on the left on mobile too, rather than switching to a top row,
+   so icons stay anchored instead of spreading across the screen. */
 @media (max-width: 1000px) {
   .shell-body { grid-template-columns: 3.25rem minmax(0, 1fr); }
   .shell-nav {
     padding: 1.25rem 0.35rem;
-    /* sticky 레일이 뷰포트 높이를 채우도록 */
+    /* Let the sticky rail fill the viewport height. */
     align-self: stretch;
     min-height: calc(100dvh - 6rem);
   }
@@ -375,7 +375,7 @@ form.shell-create-grid .field-span-2 {
 
 @media (max-width: 700px) {
   .shell-header { padding: 1.25rem 0.85rem 0.85rem; }
-  /* 가로 줄로 바꾸지 않고 좌측 아이콘 레일 유지 */
+  /* Keep the left icon rail instead of switching to a horizontal row. */
   .shell-body { grid-template-columns: 3rem minmax(0, 1fr); }
   .shell-nav {
     position: sticky;
@@ -594,12 +594,12 @@ form.create-grid {
   gap: 0.9rem 0.85rem;
   align-items: start;
 }
-/* 내비가 레일로 줄어드는 폭 — 5열을 유지하면 페이지가 가로 스크롤된다. */
+/* Navigation collapses to a rail at this width. Keeping five columns would make the page scroll horizontally. */
 @media (max-width: 1000px) {
   form.create-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   form.create-grid .field-submit { grid-column: 1 / -1; }
 }
-/* 폰 폭에서는 1열 */
+/* Use one column at phone widths. */
 @media (max-width: 560px) {
   form.create-grid { grid-template-columns: minmax(0, 1fr); }
 }
@@ -751,7 +751,7 @@ a.btn {
 .btn.danger { color: var(--error); }
 .btn.danger:hover:not(:disabled) { border-color: var(--error); }
 
-/* 좁은 셸에서 표만 가로로 스크롤되고 페이지는 그대로 */
+/* In a narrow shell, only the table scrolls horizontally; the page stays in place. */
 .table-scroll { overflow-x: auto; }
 
 .service-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.8rem 0; }
@@ -781,7 +781,7 @@ table.service-table { min-width: 48rem; }
   .service-variable-row .btn { justify-self: start; }
 }
 
-/* 페이지 안에 한 단계 들여 놓는 상세 블록 (모달의 .detail-body 대체) */
+/* Inset detail block within the page (replaces the modal's .detail-body). */
 .subpanel {
   margin-top: 1.25rem;
   padding: 1.25rem;
@@ -1083,7 +1083,7 @@ a.options-menu-item {
 .reconciliation-detail .reconciliation-note { color: var(--shell); font-size: 0.72rem; }
 .reconciliation-detail .reconciliation-diagnostic { padding-left: 0.65rem; border-left: 2px solid var(--line); }
 
-/* M2Image 표의 상태 셀 — 뱃지와 "⋯" 옵션 메뉴 트리거를 한 줄에 나란히. */
+/* M2Image table status cell: badge and "⋯" options menu trigger on one line. */
 table.image-table .state-cell {
   display: flex;
   align-items: center;
@@ -1091,7 +1091,7 @@ table.image-table .state-cell {
   gap: 0.5rem;
 }
 
-/* 시작 파이프라인 — CI 빌드 로그처럼 단계별 소요 시간을 가로로 (task-vm-startup-timeline) */
+/* Startup pipeline: show step durations horizontally, like a CI build log (task-vm-startup-timeline). */
 .pipeline {
   list-style: none;
   display: flex;
@@ -1115,7 +1115,7 @@ table.image-table .state-cell {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 소요 시간이 들어가는 칸 자체가 진행 막대 역할을 한다 */
+/* The duration cell itself acts as the progress bar. */
 .step-bar {
   display: flex;
   align-items: center;
@@ -2021,7 +2021,7 @@ table.image-table .image-package-url a:hover {
   gap: 0.6rem;
   margin: 0 0 1.5rem;
 }
-/* MicroNetwork 목록에서 상세를 열어둔 행 */
+/* MicroNetwork list row with its details expanded. */
 .vm-table tbody tr.selected > td {
   background: rgba(255, 122, 41, 0.12);
 }

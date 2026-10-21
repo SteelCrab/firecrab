@@ -27,7 +27,7 @@ async function resolveText(source: TextSource): Promise<string> {
 }
 
 /**
- * Compact "복사" / "다운로드" pair for log panels.
+ * Compact "Copy" / "Download" pair for log panels.
  * Brief status text appears next to the buttons after an action.
  */
 export default function LogExportActions({

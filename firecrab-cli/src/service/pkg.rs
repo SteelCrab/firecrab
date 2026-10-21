@@ -1,4 +1,4 @@
-//! install.sh의 `detect_pkg` / `pkg_name` / `pkg_refresh` / `pkg_install`.
+//! Equivalents of install.sh `detect_pkg` / `pkg_name` / `pkg_refresh` / `pkg_install`.
 
 use crate::shell::CommandRunner;
 
@@ -7,8 +7,8 @@ use super::privileged::Privileged;
 
 /// install.sh `have`: `command -v <cmd>`.
 ///
-/// `sh -c` 경유인 이유는 `command`가 셸 빌트인이라 `std::process::Command`로
-/// 직접 부를 수 없기 때문이다.
+/// Use `sh -c` because `command` is a shell builtin and cannot be invoked
+/// directly with `std::process::Command`.
 pub fn have(runner: &dyn CommandRunner, cmd: &str) -> bool {
     let probe = format!("command -v {cmd}");
     runner
