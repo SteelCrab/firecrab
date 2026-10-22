@@ -14,6 +14,8 @@ Open `http://127.0.0.1:5523/` after installation.
 Row actions are in the `⋯` menu.
 CPU, RAM, disk, and egress edits require an inactive VM.
 Disks can grow only.
+An optional Git source deployment on create clones, builds, and runs the repository inside the guest.
+
 Environment edits can run while the VM is running; saving restarts its app service.
 Values are stored in plaintext and require an image with a guest app service.
 

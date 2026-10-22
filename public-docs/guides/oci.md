@@ -71,6 +71,16 @@ and its [login API](../reference/api.md#docker-hub-login).
 Secrets are write-only in API responses.
 For socket permission errors, inspect the [host diagnostics](troubleshooting.md#oci-pull-fails).
 
+## Git source deployment
+
+
+- A VM created from an OCI-imported template accepts the same `sourceDeployment` object as a catalog-image VM.
+- The injected `source-deployment` service replaces `/etc/firecrab/services.d/app`, so the OCI Entrypoint/Cmd and the repository workload never start together.
+- Git installation, clone, checkout, build, and native or Wasmer launch stay inside the Firecracker guest.
+- The OCI image supplies language build tools and, for MicroWASM, Wasmer.
+- See [API](../reference/api.md#git-source-deployments) for native and WASM request examples.
+
+
 ## Related
 
 - [Import pipeline and safety rules](../reference/oci-import.md)

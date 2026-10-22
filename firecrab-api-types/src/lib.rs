@@ -153,6 +153,49 @@ pub struct CreateVmRequest {
     /// Values are stored and written into the guest in plaintext.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Optional Git source deployment. The repository is cloned, built, and
+    /// run inside the guest; the Firecrab host never executes user commands.
+    #[serde(default)]
+    pub source_deployment: Option<SourceDeployment>,
+}
+
+/// A Git repository deployed as the VM's primary application workload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceDeployment {
+    /// Public HTTPS Git repository URL.
+    pub repository: String,
+    /// Branch, tag, or commit to check out. Empty selects the remote default.
+    #[serde(default)]
+    pub revision: String,
+    /// Guest shell command that produces the runnable workload.
+    pub build_command: String,
+    /// Runtime-specific launch configuration.
+    #[serde(flatten)]
+    pub runtime: SourceRuntime,
+}
+
+/// How a built Git source deployment is launched inside the MicroVM.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "runtime",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SourceRuntime {
+    /// Execute an ordinary Linux command from the checked-out repository.
+    Native {
+        /// Long-running guest shell command.
+        run_command: String,
+    },
+    /// Execute one built WebAssembly artifact with Wasmer.
+    Wasm {
+        /// Repository-relative path to the `.wasm` artifact.
+        artifact_path: String,
+        /// Arguments passed to the WebAssembly module.
+        #[serde(default)]
+        args: Vec<String>,
+    },
 }
 
 /// Network protocol for a port forward rule.
@@ -469,6 +512,9 @@ pub struct VmResponse {
     /// Per-VM environment. Empty is valid. Stored and applied in plaintext.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Git source deployment attached at VM creation, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_deployment: Option<SourceDeployment>,
     /// SHA256 fingerprint of the guest SSH host key. `null` until first start
     /// has generated the per-VM host key (`public-docs/guides/oci.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1709,6 +1755,7 @@ mod tests {
         assert_eq!(request.egress_policy, EgressPolicy::Internet);
         assert!(request.shell_ids.is_empty());
         assert!(request.env.is_empty());
+        assert!(request.source_deployment.is_none());
 
         let serialized = serde_json::to_value(&request).unwrap();
         assert_eq!(serialized["diskGb"], 2);
@@ -1717,6 +1764,21 @@ mod tests {
             serialized["microNetworkId"],
             "00000000-0000-0000-0000-000000000001"
         );
+    }
+
+    #[test]
+    fn source_deployment_round_trips_native_and_wasm_runtime_shapes() {
+        for json in [
+            r#"{"repository":"https://github.com/acme/api.git","revision":"main","buildCommand":"cargo build --release","runtime":"native","runCommand":"./target/release/api"}"#,
+            r#"{"repository":"https://github.com/acme/api.git","revision":"v1","buildCommand":"cargo build --target wasm32-wasip1","runtime":"wasm","artifactPath":"target/api.wasm","args":["--port","8080"]}"#,
+        ] {
+            let deployment: SourceDeployment = serde_json::from_str(json).unwrap();
+            let encoded = serde_json::to_string(&deployment).unwrap();
+            assert_eq!(
+                serde_json::from_str::<SourceDeployment>(&encoded).unwrap(),
+                deployment
+            );
+        }
     }
 
     #[test]
@@ -1884,6 +1946,7 @@ mod tests {
             shell_refs: Vec::new(),
             port_forwards: Vec::new(),
             env: BTreeMap::from([("FOO".to_owned(), "bar".to_owned())]),
+            source_deployment: None,
             ssh_host_fingerprint: Some("SHA256:test".to_owned()),
         };
 
@@ -2010,6 +2073,7 @@ mod tests {
             shell_refs: Vec::new(),
             port_forwards: Vec::new(),
             env: BTreeMap::new(),
+            source_deployment: None,
             ssh_host_fingerprint: None,
         };
         let json = serde_json::to_string(&response).unwrap();

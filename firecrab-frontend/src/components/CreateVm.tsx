@@ -16,6 +16,7 @@ import type {
   PortForward,
   PortProtocol,
   ShellResponse,
+  SourceDeployment,
   StorageRootResponse,
   VmResponse,
 } from "../bindings";
@@ -35,6 +36,7 @@ const FIELDS_WITH_OWN_ERROR = [
   "shellIds",
   "portForwards",
   "env",
+  "sourceDeployment",
 ] as const;
 
 type EnvRow = { key: string; value: string };
@@ -88,6 +90,14 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
   const [shellIds, setShellIds] = useState<string[]>([]);
   const [portForwards, setPortForwards] = useState<PortForward[]>([]);
   const [envRows, setEnvRows] = useState<EnvRow[]>([]);
+  const [sourceEnabled, setSourceEnabled] = useState(false);
+  const [sourceRepository, setSourceRepository] = useState("");
+  const [sourceRevision, setSourceRevision] = useState("");
+  const [sourceBuildCommand, setSourceBuildCommand] = useState("");
+  const [sourceRuntime, setSourceRuntime] = useState<"native" | "wasm">("native");
+  const [sourceRunCommand, setSourceRunCommand] = useState("");
+  const [sourceArtifactPath, setSourceArtifactPath] = useState("app.wasm");
+  const [sourceWasmArgs, setSourceWasmArgs] = useState("");
   /** Bumped after a successful create so Shell checkboxes remount cleared. */
   const [formEpoch, setFormEpoch] = useState(0);
   const [submitting, setSubmitting] = useState(false);
@@ -255,6 +265,27 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
     }
     setEnvError(null);
 
+    let sourceDeployment: SourceDeployment | undefined;
+    if (sourceEnabled) {
+      const common = {
+        repository: sourceRepository.trim(),
+        revision: sourceRevision.trim(),
+        buildCommand: sourceBuildCommand,
+      };
+      sourceDeployment =
+        sourceRuntime === "native"
+          ? { ...common, runtime: "native", runCommand: sourceRunCommand }
+          : {
+              ...common,
+              runtime: "wasm",
+              artifactPath: sourceArtifactPath.trim(),
+              args: sourceWasmArgs
+                .split("\n")
+                .map((value) => value.trim())
+                .filter(Boolean),
+            };
+    }
+
     const request: CreateVmRequest = {
       name: name.trim(),
       template,
@@ -267,6 +298,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       shellIds: shellIds.length > 0 ? shellIds : undefined,
       portForwards: portForwards.length > 0 ? portForwards : undefined,
       env,
+      sourceDeployment,
     };
 
     setSubmitting(true);
@@ -280,6 +312,14 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
       setPortForwardsError(null);
       setEnvRows([]);
       setEnvError(null);
+      setSourceEnabled(false);
+      setSourceRepository("");
+      setSourceRevision("");
+      setSourceBuildCommand("");
+      setSourceRuntime("native");
+      setSourceRunCommand("");
+      setSourceArtifactPath("app.wasm");
+      setSourceWasmArgs("");
       setFieldErrors(null);
       setFormEpoch((epoch) => epoch + 1);
       listShells()
@@ -542,6 +582,112 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
         </div>
         {portForwardsError && <span className="field-error">{portForwardsError}</span>}
         {fieldError("portForwards")}
+      </div>
+      <div className="field" style={{ gridColumn: "1 / -1" }}>
+        <label htmlFor="vm-source-enabled">{t("Git source deployment", "Git 소스 배포")}</label>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <input
+            id="vm-source-enabled"
+            type="checkbox"
+            checked={sourceEnabled}
+            onChange={(event) => setSourceEnabled(event.target.checked)}
+          />
+          {t(
+            "Clone, build, and run a repository inside this MicroVM",
+            "이 MicroVM 내부에서 저장소 clone, build, run",
+          )}
+        </label>
+        {sourceEnabled && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: "0.75rem",
+              marginTop: "0.6rem",
+              padding: "0.8rem",
+              border: "1px solid var(--border-color, rgba(255, 255, 255, 0.1))",
+              borderRadius: "6px",
+            }}
+          >
+            <div className="field" style={{ gridColumn: "1 / -1" }}>
+              <label htmlFor="vm-source-repository">{t("Repository URL", "저장소 URL")}</label>
+              <input
+                id="vm-source-repository"
+                type="url"
+                placeholder="https://github.com/acme/app.git"
+                value={sourceRepository}
+                onChange={(event) => setSourceRepository(event.target.value)}
+                required
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="vm-source-revision">{t("Git revision", "Git 리비전")}</label>
+              <input
+                id="vm-source-revision"
+                placeholder="main (default: remote HEAD)"
+                value={sourceRevision}
+                onChange={(event) => setSourceRevision(event.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="vm-source-runtime">{t("Runtime", "런타임")}</label>
+              <select
+                id="vm-source-runtime"
+                value={sourceRuntime}
+                onChange={(event) => setSourceRuntime(event.target.value as "native" | "wasm")}
+              >
+                <option value="native">Native Linux</option>
+                <option value="wasm">MicroWASM (Wasmer)</option>
+              </select>
+            </div>
+            <div className="field" style={{ gridColumn: "1 / -1" }}>
+              <label htmlFor="vm-source-build">{t("Build command", "빌드 명령")}</label>
+              <input
+                id="vm-source-build"
+                placeholder="cargo build --release"
+                value={sourceBuildCommand}
+                onChange={(event) => setSourceBuildCommand(event.target.value)}
+                required
+              />
+            </div>
+            {sourceRuntime === "native" ? (
+              <div className="field" style={{ gridColumn: "1 / -1" }}>
+                <label htmlFor="vm-source-run">{t("Run command", "실행 명령")}</label>
+                <input
+                  id="vm-source-run"
+                  placeholder="./target/release/app"
+                  value={sourceRunCommand}
+                  onChange={(event) => setSourceRunCommand(event.target.value)}
+                  required
+                />
+              </div>
+            ) : (
+              <>
+                <div className="field">
+                  <label htmlFor="vm-source-artifact">{t("WASM artifact", "WASM artifact")}</label>
+                  <input
+                    id="vm-source-artifact"
+                    placeholder="target/app.wasm"
+                    value={sourceArtifactPath}
+                    onChange={(event) => setSourceArtifactPath(event.target.value)}
+                    required
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="vm-source-args">{t("WASM arguments", "WASM 인자")}</label>
+                  <textarea
+                    id="vm-source-args"
+                    placeholder={t("One argument per line", "한 줄에 인자 하나")}
+                    value={sourceWasmArgs}
+                    onChange={(event) => setSourceWasmArgs(event.target.value)}
+                    rows={3}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {fieldError("sourceDeployment")}
       </div>
       <div className="field" style={{ gridColumn: "1 / -1" }}>
         <label>{t("Environment", "환경 변수")}</label>

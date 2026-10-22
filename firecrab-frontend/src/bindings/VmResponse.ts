@@ -2,6 +2,7 @@
 import type { EgressPolicy } from "./EgressPolicy";
 import type { PortForward } from "./PortForward";
 import type { ShellRef } from "./ShellRef";
+import type { SourceDeployment } from "./SourceDeployment";
 import type { StartupStep } from "./StartupStep";
 import type { StartupStepRun } from "./StartupStepRun";
 import type { VmState } from "./VmState";
@@ -47,6 +48,8 @@ export type VmResponse = {
   portForwards?: Array<PortForward>;
   /** Per-VM environment. Empty is valid. Stored and applied in plaintext. */
   env?: { [key: string]: string };
+  /** Git source deployment attached at VM creation. */
+  sourceDeployment?: SourceDeployment;
   /** SHA256 fingerprint of the guest SSH host key; null until first start. */
   sshHostFingerprint?: string | null;
 };

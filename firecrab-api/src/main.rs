@@ -30,6 +30,7 @@ mod rootfs;
 mod server;
 mod service_runtime;
 mod shells;
+mod source_deployment;
 mod state;
 mod storage;
 mod templates;

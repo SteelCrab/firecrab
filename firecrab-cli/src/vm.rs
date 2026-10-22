@@ -141,6 +141,7 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             json,
         } => {
             let request = CreateVmRequest {
+                source_deployment: None,
                 name,
                 template,
                 ram,
@@ -322,6 +323,7 @@ mod tests {
 
     fn sample_vm() -> VmResponse {
         VmResponse {
+            source_deployment: None,
             id: id("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
             name: "web-1".to_owned(),
             state: VmState::Running,

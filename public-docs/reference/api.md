@@ -67,6 +67,7 @@ Success returns `201` and the VM UUID.
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional registered storage ID |
 | `shellIds` | Optional shell IDs; latest revisions are pinned |
+| `sourceDeployment` | Optional public HTTPS Git repository cloned, built, and run inside the guest; see [Git source deployments](#git-source-deployments) |
 | `env` | Optional string map; create omission means `{}`, PUT omission preserves values, `{}` clears |
 
 Environment keys use POSIX names; limits are 64 entries, 256 bytes per key, and 4096 bytes per value.
@@ -75,6 +76,49 @@ Values are stored in plaintext in the guest.
 Updating `env` while running restarts the app service; images without one ignore runtime environment changes.
 See [Guest runtime](guest-runtime.md#environment).
 CPU, RAM, disk, and egress edits require `created`, `stopped`, or `error`.
+
+### Git source deployments
+
+
+- `sourceDeployment` works with catalog images and OCI-imported images.
+- Clone, checkout, build, and run commands execute inside the MicroVM, never on the Firecrab host.
+- The selected image must contain the requested build toolchain.
+- `native` launches `runCommand` as the primary service.
+- `wasm` launches `artifactPath` with `wasmer run`; the selected image must contain Wasmer.
+- On an OCI-imported image, the source deployment replaces the image's original Entrypoint/Cmd service.
+- MVP accepts public HTTPS repositories only. Embedded credentials and private repository secrets are rejected.
+
+Native example:
+
+```json
+{
+  "sourceDeployment": {
+    "repository": "https://github.com/acme/api.git",
+    "revision": "main",
+    "buildCommand": "cargo build --release",
+    "runtime": "native",
+    "runCommand": "./target/release/api"
+  }
+}
+```
+
+MicroWASM example:
+
+```json
+{
+  "sourceDeployment": {
+    "repository": "https://github.com/acme/api.git",
+    "revision": "v1.0.0",
+    "buildCommand": "cargo build --release --target wasm32-wasip1",
+    "runtime": "wasm",
+    "artifactPath": "target/wasm32-wasip1/release/api.wasm",
+    "args": ["--port", "8080"]
+  }
+}
+```
+
+Guest console markers expose `CLONING`, `CHECKOUT`, `BUILDING`, `BUILT`, `RUNNING`, and `FAILED` phases under the `FIRECRAB_SOURCE_` prefix.
+
 
 ### VM states and console
 

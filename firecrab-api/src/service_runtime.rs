@@ -361,6 +361,7 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         .await?;
         let host_port = deployment.request.host_port + index;
         let request = CreateVmRequest {
+            source_deployment: None,
             name: format!(
                 "ms-{}-{}-{index}",
                 deployment.service_id.simple(),
