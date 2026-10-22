@@ -10,7 +10,9 @@ checks on native Linux/KVM. Two real Firecracker VMs served through a temporary
 public HTTPS hostname. API stop/start, failed-health cleanup, single-replica
 failure, an independent macOS client, and complete QA runtime cleanup passed.
 See [MicroService domain live QA](microservice-domain-qa.md) for the measured
-environment, evidence and repeatable command.
+environment, evidence and repeatable command. A second run passed nine checks
+with real Chrome screenshots, a runtime-table layout correction, and retained
+machine-readable cleanup evidence.
 
 ## Windows source validation, 2026-10-03
 

@@ -23,6 +23,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--restart-unit", default="firecrab-qa335-api.service")
     parser.add_argument("--external-ack", type=Path)
+    parser.add_argument("--capture-ack", type=Path, help="pause with both replicas healthy until browser screenshots are saved")
     args = parser.parse_args()
     api = urlsplit(args.api)
     if api.hostname not in {"127.0.0.1", "localhost"} or api.scheme != "http":
@@ -164,6 +165,35 @@ printf 'Content-Type: application/json\\r\\nCache-Control: no-store\\r\\n\\r\\n'
 printf '{"marker":"%s","instance":"%s","host":"%s","proto":"%s"}\\n' "$GREETING" "$(/etc/firecrab/busybox cat /sys/class/net/eth0/address)" "$HTTP_HOST" "$HTTP_X_FORWARDED_PROTO"
 CGI
 /etc/firecrab/busybox chmod 755 /tmp/www/cgi-bin/identity
+cat > /tmp/www/index.html <<'HTML'
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Firecrab #335 live MicroVM</title>
+<style>
+body{font:18px system-ui,sans-serif;background:#f6f8fa;color:#182225;margin:0;padding:6vw}
+main{max-width:960px;margin:auto;background:white;padding:40px;border:1px solid #d8e1de;border-radius:12px}
+small{color:#547469}h1{font-size:36px}pre{font:17px monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:#edf5f1;padding:24px;border-radius:8px}
+button{font:inherit;background:#185d44;color:white;border:0;border-radius:6px;padding:12px 20px;cursor:pointer}
+</style>
+<main><small>Firecrab #335 / live MicroVM fixture</small>
+<h1>MicroService domain connection</h1>
+<p>This response comes from a real Firecracker MicroVM through public HTTPS.</p>
+<p id="address"></p><pre id="identity">Loading the serving VM identity...</pre>
+<button id="refresh">Request another response</button></main>
+<script>
+document.getElementById('address').textContent=location.origin;
+async function refresh(){
+  const output=document.getElementById('identity');
+  try{
+    const response=await fetch('/cgi-bin/identity',{cache:'no-store'});
+    if(!response.ok)throw Error('HTTP '+response.status);
+    output.textContent=JSON.stringify(await response.json(),null,2);
+  }catch(error){output.textContent='Request failed: '+error.message;}
+}
+document.getElementById('refresh').addEventListener('click',refresh);
+refresh();
+</script></html>
+HTML
 exec /etc/firecrab/busybox httpd -f -p 8080 -h /tmp/www
 """
         with fixture.LocalOciRegistry() as registry:
@@ -206,6 +236,20 @@ exec /etc/firecrab/busybox httpd -f -p 8080 -h /tmp/www
                 seen.add(identity["instance"].lower())
             assert seen == set(expected), seen
             passed("public requests reach both VMs with the original Host and HTTPS scheme", replicas=sorted(seen))
+
+            if args.capture_ack:
+                report["status"] = "awaiting_browser_capture"
+                save()
+                deadline = time.monotonic() + 600
+                while not args.capture_ack.is_file():
+                    assert time.monotonic() < deadline, "browser capture did not acknowledge"
+                    time.sleep(1)
+                capture = json.loads(args.capture_ack.read_text())
+                assert capture["marker"] == marker and capture["publicUrl"] == public_url, capture
+                assert capture.get("screenshots"), capture
+                passed("real dashboard and public HTTPS browser screenshots saved", evidence=capture)
+                report["status"] = "running"
+                save()
 
             units = ["firecrab-ingress.service", entry["unit"]["unit"]] + ["firecrab-vm-" + item["vmId"].replace("-", "") + ".service" for item in deployed["instances"]]
             before = {unit: pid(unit) for unit in units}

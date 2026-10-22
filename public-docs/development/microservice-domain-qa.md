@@ -32,6 +32,13 @@ the report's marker and hostname. Write a JSON acknowledgment to `PATH` with the
 matching `marker` and `publicUrl`, plus the observed HTTP status and TLS evidence.
 The runner waits up to 180 seconds for that acknowledgment.
 
+Add `--capture-ack PATH` to pause after public requests reach both healthy VMs.
+Capture the real dashboard and open its **Open domain** link in a browser. The
+fixture page shows the serving VM identity from a live HTTP request. Save the
+images, then write a JSON acknowledgment with the matching `marker`, `publicUrl`
+and a nonempty `screenshots` list. The runner waits up to 600 seconds before
+continuing the API-restart and VM-failure checks.
+
 ## Measured result: 2026-10-23 KST
 
 Source: `SteelCrab/firecrab`, branch `feat/335-microservice-domain`, uncommitted
@@ -58,3 +65,33 @@ The temporary public URL was retired after the checks. No long-lived public
 endpoint or named-tunnel DNS record was created. Local evidence files are
 `live-report.json`, `live.log`, `runtime.log`, `source-manifest.json`,
 `environment.txt` and `cleanup.log` in the retained validation output directory.
+
+
+## Real browser capture: 2026-10-23 KST
+
+Repeated on native KVM after synchronizing main. API, CLI and helper sources were
+at `1f2816f26ea67f3173991acda2822a62df7645a4`. The QA runner added a browser-capture
+pause and a small HTTP fixture page. The dashboard included a narrow runtime-table
+CSS correction: list column widths no longer apply to the replica table.
+All replica header and value bounds were checked in the real browser.
+
+Nine live checks passed. Chrome used the real MSI API and public HTTPS; no API
+responses were intercepted. The two public screenshots show different VM MAC
+addresses under the same hostname and marker. They were captured before the
+failure checks and resource cleanup.
+
+![Real MicroService dashboard with two healthy VMs](../../assets/dashboard/microservice-domain/dashboard-running.jpg)
+
+![Public HTTPS response from a real VM](../../assets/dashboard/microservice-domain/public-vm-b.jpg)
+
+Additional screenshots:
+
+- [Public response from the other VM](../../assets/dashboard/microservice-domain/public-vm-a.jpg)
+- [Automatically managed route and both guest app addresses](../../assets/dashboard/microservice-domain/pipe-route.jpg)
+- [Empty service list after cleanup](../../assets/dashboard/microservice-domain/dashboard-cleaned.jpg)
+
+[Machine-readable results and screenshot hashes](../../assets/qa/microservice-domain-20261023.json)
+record all nine checks and the final cleanup state. VMs, services, MicroNetworks,
+routes and Quick Tunnels were empty. The dedicated API/helper/ingress units were
+stopped and removed. Ports 15335/18335 were closed, the QA installation was removed,
+and the local SSH forward was closed. Unrelated QA processes were left running.
