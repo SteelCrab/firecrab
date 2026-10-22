@@ -1,0 +1,40 @@
+.pools-screen { width: 100%; max-width: 880px; margin: 0 auto; display: grid; gap: 20px; }
+.pool-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 6px 0; }
+.pool-heading h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -.025em; }
+.pool-heading p, .pool-note { margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.pool-heading > .btn { flex: none; }
+.pool-create .panel-title, .pool-detail .panel-title { margin-bottom: 12px; }
+.pool-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.pool-advanced-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 16px 0; }
+.pool-create > form > .pool-note { margin: 12px 0; }
+.pool-form-actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.pool-disclosure { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.pool-disclosure > summary { width: fit-content; color: var(--text-2); font-size: 12.5px; font-weight: 500; cursor: pointer; }
+.pool-disclosure > .pool-note { margin-top: 12px; overflow-wrap: anywhere; }
+.pool-list { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.pool-row { display: flex; align-items: center; gap: 24px; padding: 18px 20px; }
+.pool-row + .pool-row { border-top: 1px solid var(--border); }
+.pool-row.selected { background: var(--bg-subtle); }
+.pool-row-name { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.pool-row-name > span { color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+.pool-select { padding: 0; width: fit-content; max-width: 100%; border: 0; background: none; font: 600 13px var(--font); color: var(--text); cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.pool-select:hover { text-decoration: underline; text-underline-offset: 3px; }
+.pool-row-status { display: flex; align-items: center; gap: 16px; color: var(--text-2); font-size: 12px; }
+.pool-section-title { margin: 22px 0 8px; font-size: 12px; font-weight: 600; }
+.pool-session { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; }
+.pool-session + .pool-session { border-top: 1px solid var(--border); }
+.pool-session-info { min-width: 0; display: grid; gap: 4px; overflow-wrap: anywhere; }
+.pool-session-info strong { font-size: 12.5px; font-weight: 500; }
+.pool-session-info > span { color: var(--text-2); font-size: 12px; }
+.pool-session-actions { display: flex; gap: 8px; flex: none; }
+.pool-history { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 680px) {
+  .pool-heading { align-items: flex-start; }
+  .pool-heading h2 { font-size: 16px; }
+  .pool-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 16px; }
+  .pool-row-status { grid-row: 2; grid-column: 1 / -1; gap: 12px; }
+  .pool-row > .btn { grid-column: 2; grid-row: 1; }
+  .pool-form-grid, .pool-advanced-grid { grid-template-columns: minmax(0, 1fr); }
+  .pool-session { align-items: flex-start; flex-direction: column; }
+  .pool-session-actions { flex-wrap: wrap; }
+}

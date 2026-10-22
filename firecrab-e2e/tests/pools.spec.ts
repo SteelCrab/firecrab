@@ -21,15 +21,14 @@ import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js
  * The form test does not need the net helper. Creating the network does
  * (same gate as the other specs' mutation half). minReady 0 so reconcile
  * never starts a member. Acquire's response is 409 pool_exhausted.
- * The dashboard poll clears the on-screen error, so the test does not
- * wait for that text.
+ * An exhausted pool shows a persistent error without creating a VM.
  */
 test.describe.configure({ mode: "serial" });
 
 const api = new ApiCleanup();
 const MIN_READY = "0";
 const MAX_SIZE = "1";
-const LEASE_TTL_SECONDS = "600";
+const SESSION_MINUTES = "10";
 const POOL_DELETE_TIMEOUT_MS = 60_000;
 
 let registry: LocalOciRegistry | undefined;
@@ -44,9 +43,7 @@ async function openEnglish(page: Page, hash: string): Promise<void> {
 }
 
 function poolsPanel(page: Page): Locator {
-  return page.locator("section.panel", {
-    has: page.getByRole("heading", { name: "Pools", level: 2 }),
-  });
+  return page.locator(".pools-screen");
 }
 
 async function deleteOwnedPool(): Promise<void> {
@@ -120,9 +117,10 @@ async function submitCreate(page: Page, panel: Locator): Promise<void> {
   if (!response.ok()) {
     throw new Error(`POST /api/pools ${response.status()}: ${body}`);
   }
-  const created = JSON.parse(body) as { name?: string; minReady?: number; members?: unknown };
+  const created = JSON.parse(body) as { name?: string; minReady?: number; leaseTtlSeconds?: number; members?: unknown };
   expect(created.name).toBe(POOL_E2E_NAME);
   expect(created.minReady).toBe(0);
+  expect(created.leaseTtlSeconds).toBe(600);
   if (!Array.isArray(created.members)) {
     throw new Error(`POST /api/pools members was not a list: ${body}`);
   }
@@ -147,28 +145,24 @@ test.afterAll(async () => {
   }
 });
 
-test("shows the Pools heading, empty copy, and create form without submitting", async ({
-  page,
-}) => {
+test("shows a simple create form with optional advanced settings", async ({ page }) => {
   await openEnglish(page, "/#/pools");
   await expect(page).toHaveURL(/#\/pools$/);
+  await expect(page.locator(".screen-header")).toContainText("Pools");
   const panel = poolsPanel(page);
-  await expect(panel.getByRole("heading", { name: "Pools", level: 2 })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Fresh VMs, ready to use" })).toBeVisible();
+  await expect(panel.getByText("Loading pools…", { exact: true })).toHaveCount(0);
+  if ((await api.listPools()).length > 0) await panel.getByRole("button", { name: "New pool", exact: true }).click();
   await expect(panel.locator("#pool-name")).toBeVisible();
   await expect(panel.locator("#pool-image")).toBeVisible();
+  await expect(panel.locator("#pool-network")).toBeHidden();
+  await expect(panel.locator("#pool-min")).toBeHidden();
+  await panel.getByText("Advanced settings", { exact: true }).click();
   await expect(panel.locator("#pool-network")).toBeVisible();
   await expect(panel.locator("#pool-min")).toBeVisible();
   await expect(panel.locator("#pool-max")).toBeVisible();
-  await expect(panel.locator("#pool-ttl")).toBeVisible();
-  await expect(panel.getByRole("button", { name: "Create pool" })).toBeVisible();
-  await expect(panel.getByText(/^Loading/)).toHaveCount(0);
-
-  const pools = await api.listPools();
-  if (pools.length === 0) {
-    await expect(panel.getByText("No pools yet.", { exact: true })).toBeVisible();
-  } else {
-    await expect(panel.locator("table.vm-table")).toBeVisible();
-  }
+  await expect(panel.locator("#pool-ttl")).toHaveValue(SESSION_MINUTES);
+  await expect(panel.getByRole("button", { name: "Create pool", exact: true })).toBeVisible();
 });
 
 test("creates pool-e2e, reports no ready member on acquire, and deletes the row", async ({
@@ -186,6 +180,8 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
 
   await openEnglish(page, "/#/pools");
   const panel = poolsPanel(page);
+  if ((await api.listPools()).length > 0) await panel.getByRole("button", { name: "New pool", exact: true }).click();
+  await panel.getByText("Advanced settings", { exact: true }).click();
   await expect(panel.locator(`#pool-image option[value="${alias}"]`)).toHaveCount(1, {
     timeout: 15_000,
   });
@@ -195,18 +191,17 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
   await panel.locator("#pool-network").selectOption(network.id);
   await panel.locator("#pool-min").fill(MIN_READY);
   await panel.locator("#pool-max").fill(MAX_SIZE);
-  await panel.locator("#pool-ttl").fill(LEASE_TTL_SECONDS);
+  await panel.locator("#pool-ttl").fill(SESSION_MINUTES);
   await expect(panel.locator("#pool-min")).toHaveValue(MIN_READY);
   await expect(panel.locator("#pool-max")).toHaveValue(MAX_SIZE);
-  await expect(panel.locator("#pool-ttl")).toHaveValue(LEASE_TTL_SECONDS);
+  await expect(panel.locator("#pool-ttl")).toHaveValue(SESSION_MINUTES);
   await expect(panel.locator("#pool-image")).toHaveValue(alias);
   await expect(panel.locator("#pool-network")).toHaveValue(network.id);
 
   await submitCreate(page, panel);
-  const row = panel.locator("table.vm-table tbody tr").filter({ hasText: POOL_E2E_NAME });
+  const row = panel.locator(".pool-row").filter({ hasText: POOL_E2E_NAME });
   await expect(row).toBeVisible();
-  await expect(row).toContainText("0 / 0");
-  await expect(row).toContainText("600s");
+  await expect(row).toContainText("0 in use");
   const created = (await api.listPools()).find((pool) => pool.name === POOL_E2E_NAME);
   expect(created, `API missing ${POOL_E2E_NAME}`).toBeTruthy();
   expect(created?.minReady).toBe(0);
@@ -218,7 +213,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
       response.url().includes("/api/pools/") &&
       response.url().includes("/acquire"),
   );
-  await row.getByRole("button", { name: "Acquire" }).click();
+  await row.getByRole("button", { name: "Use VM" }).click();
   const acquired = await acquireResponse;
   const acquireBody = await acquired.text();
   expect(acquired.status(), acquireBody).toBe(409);
@@ -229,6 +224,7 @@ test("creates pool-e2e, reports no ready member on acquire, and deletes the row"
     expect(dialog.message()).toContain(POOL_E2E_NAME);
     await dialog.accept();
   });
-  await row.getByRole("button", { name: "Delete" }).click();
+  await panel.getByText("Pool settings", { exact: true }).click();
+  await panel.getByRole("button", { name: "Delete pool", exact: true }).click();
   await expect(row).toHaveCount(0, { timeout: 30_000 });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type {
   ImageResponse,
@@ -18,6 +18,8 @@ import {
   releasePoolLease,
   updatePool,
 } from "../api/client";
+import { ArrowRight, Plus, SquareTerminal } from "lucide-react";
+import "../styles/pools.css";
 import { consolePageUrl } from "../navigation";
 import { useI18n } from "../i18n";
 import { acquireWithRetryKey } from "../lib/poolAcquire";
@@ -28,16 +30,17 @@ function count(pool: PoolResponse, state: PoolMemberState): number {
   return pool.members.filter((member) => member.state === state).length;
 }
 
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleString();
-}
-
 /**
  * Warm MicroVM pools (#291): booted, never-used VMs kept ready to lease. A
  * released or expired member is deleted and replaced, never handed out again.
  */
 export default function Pools() {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
+  const [createOpen, setCreateOpen] = useState(false);
+  const [configLoading, setConfigLoading] = useState(true);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const advanced = useRef<HTMLDetailsElement>(null);
+  const selection = useRef<string | null>(null);
   const [pools, setPools] = useState<PoolResponse[] | null>(null);
   const [images, setImages] = useState<ImageResponse[]>([]);
   const [networks, setNetworks] = useState<MicroNetworkResponse[]>([]);
@@ -58,7 +61,7 @@ export default function Pools() {
   const [diskGb, setDiskGb] = useState("2");
   const [minReady, setMinReady] = useState("2");
   const [maxSize, setMaxSize] = useState("4");
-  const [leaseTtl, setLeaseTtl] = useState("600");
+  const [leaseTtl, setLeaseTtl] = useState("10");
 
   const [editMin, setEditMin] = useState("");
   const [editMax, setEditMax] = useState("");
@@ -73,15 +76,16 @@ export default function Pools() {
     } catch (error) {
       setListError((error as Error).message);
     }
-    if (selectedId) {
+    const poolId = selection.current;
+    if (poolId) {
       try {
-        setLeases(await listPoolLeases(selectedId));
-        setDetailError(null);
+        const next = await listPoolLeases(poolId);
+        if (selection.current === poolId) { setLeases(next); setDetailError(null); }
       } catch (error) {
-        setDetailError((error as Error).message);
+        if (selection.current === poolId) setDetailError((error as Error).message);
       }
     }
-  }, [selectedId]);
+  }, []);
 
   useEffect(() => {
     const first = setTimeout(() => void refresh(), 0);
@@ -90,30 +94,31 @@ export default function Pools() {
       clearTimeout(first);
       clearInterval(interval);
     };
-  }, [refresh]);
+  }, [refresh, selectedId]);
 
   useEffect(() => {
-    listImages()
-      .then((next) => {
-        const installed = next.filter((image) => image.installed);
-        setImages(installed);
-        setTemplate((current) => current || installed[0]?.alias || "");
-      })
-      .catch(() => setImages([]));
-    listMicroNetworks()
-      .then((next) => {
-        setNetworks(next);
-        setNetworkId((current) => current || next[0]?.id || "");
-      })
-      .catch(() => setNetworks([]));
+    let current = true;
+    void Promise.all([listImages(), listMicroNetworks()]).then(([nextImages, nextNetworks]) => {
+      if (!current) return;
+      const installed = nextImages.filter((image) => image.installed && image.alias !== "__microboot");
+      setImages(installed);
+      setTemplate(installed[0]?.alias ?? "");
+      setDiskGb(String(Math.max(2, installed[0]?.minDiskGb ?? 1)));
+      setNetworks(nextNetworks);
+      setNetworkId(nextNetworks.find((network) => network.id === "default")?.id ?? nextNetworks[0]?.id ?? "");
+    }).catch((error: Error) => {
+      if (current) setConfigError(error.message);
+    }).finally(() => { if (current) setConfigLoading(false); });
+    return () => { current = false; };
   }, []);
 
   const select = (pool: PoolResponse) => {
+    selection.current = pool.id;
     setSelectedId(pool.id);
-    setLeases([]);
+    if (selectedId !== pool.id) { setLeases([]); setDetailError(null); }
     setEditMin(String(pool.minReady));
     setEditMax(String(pool.maxSize));
-    setEditTtl(String(pool.leaseTtlSeconds));
+    setEditTtl(String(pool.leaseTtlSeconds / 60));
   };
 
   const handleCreate = async (event: FormEvent) => {
@@ -133,13 +138,15 @@ export default function Pools() {
         storageRoot: null,
         minReady: Number(minReady),
         maxSize: Number(maxSize),
-        leaseTtlSeconds: Number(leaseTtl),
+        leaseTtlSeconds: Math.round(Number(leaseTtl) * 60),
       });
       setName("");
+      setCreateOpen(false);
       await refresh();
       select(created);
     } catch (error) {
       setFormError(error as ApiClientError);
+      if (advanced.current) advanced.current.open = true;
     } finally {
       setSubmitting(false);
     }
@@ -169,276 +176,171 @@ export default function Pools() {
       updatePool(pool.id, {
         minReady: Number(editMin),
         maxSize: Number(editMax),
-        leaseTtlSeconds: Number(editTtl),
+        leaseTtlSeconds: Math.round(Number(editTtl) * 60),
       }),
     );
 
-  const fieldError = (field: string) => (
-    <span className="field-error">{formError?.fieldError(field) ?? ""}</span>
+  const fieldError = (field: string) => {
+    const message = formError?.fieldError(field);
+    return message ? <span className="field-error">{message}</span> : null;
+  };
+  const numericField = (id: string, label: string, value: string, change: (value: string) => void, min: number, max: number, field?: string, step: number | "any" = 1) => (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <input id={id} type="number" min={min} max={max} step={step} value={value} onChange={(event) => change(event.target.value)} required />
+      {field && fieldError(field)}
+    </div>
   );
+  const active = leases.filter((lease) => lease.state === "active");
+  const history = leases.filter((lease) => lease.state !== "active");
+  const showCreate = createOpen || pools?.length === 0;
+  const minimumDisk = Math.max(1, images.find((image) => image.alias === template)?.minDiskGb ?? 1);
+  const formatTime = (ms: number) => new Date(ms).toLocaleString(locale === "ko" ? "ko-KR" : "en-US");
 
   return (
-    <section className="panel">
-      <h2 className="panel-title">{t("Pools", "풀")}</h2>
-      <p className="poll-note" style={{ marginBottom: "0.75rem" }}>
-        {t(
-          "Keep booted MicroVMs ready to lease. A released or expired VM is deleted and replaced, never handed out again.",
-          "부팅된 MicroVM을 lease할 수 있게 준비해 둡니다. 반납되거나 만료된 VM은 삭제 후 새 VM으로 교체되며 다시 쓰이지 않습니다.",
-        )}
-      </p>
+    <div className="pools-screen">
+      <div className="pool-heading">
+        <div>
+          <h2>{t("Fresh VMs, ready to use", "필요할 때 바로 쓰는 VM")}</h2>
+          <p>{t("Choose an image once. Startup, cleanup, and replacement happen automatically.", "이미지를 한 번 선택하면 준비, 정리, 교체는 자동으로 처리합니다.")}</p>
+        </div>
+        {!showCreate && <button className="btn" onClick={() => setCreateOpen(true)}><Plus aria-hidden="true" />{t("New pool", "새 풀")}</button>}
+      </div>
 
-      <form className="create-grid" onSubmit={handleCreate}>
-        <div className="field">
-          <label htmlFor="pool-name">name</label>
-          <input id="pool-name" placeholder="ci" value={name} onChange={(e) => setName(e.target.value)} required maxLength={40} />
-          {fieldError("name")}
-        </div>
-        <div className="field">
-          <label htmlFor="pool-image">{t("image", "이미지")}</label>
-          <select id="pool-image" value={template} onChange={(e) => setTemplate(e.target.value)} required>
-            {images.map((image) => (
-              <option key={image.alias} value={image.alias}>
-                {image.alias}
-              </option>
-            ))}
-          </select>
-          {fieldError("template")}
-        </div>
-        <div className="field">
-          <label htmlFor="pool-network">{t("network", "네트워크")}</label>
-          <select id="pool-network" value={networkId} onChange={(e) => setNetworkId(e.target.value)} required>
-            {networks.map((network) => (
-              <option key={network.id} value={network.id}>
-                {network.name} ({network.subnetCidr})
-              </option>
-            ))}
-          </select>
-          {fieldError("microNetworkId")}
-        </div>
-        <div className="field">
-          <label htmlFor="pool-cpu">vCPU</label>
-          <input id="pool-cpu" type="number" min={1} max={32} value={cpu} onChange={(e) => setCpu(e.target.value)} />
-          {fieldError("cpu")}
-        </div>
-        <div className="field">
-          <label htmlFor="pool-ram">RAM (MiB)</label>
-          <input id="pool-ram" type="number" min={128} step={128} value={ram} onChange={(e) => setRam(e.target.value)} />
-          {fieldError("ram")}
-        </div>
-        <div className="field">
-          <label htmlFor="pool-disk">{t("disk (GiB)", "디스크 (GiB)")}</label>
-          <input id="pool-disk" type="number" min={1} value={diskGb} onChange={(e) => setDiskGb(e.target.value)} />
-          {fieldError("diskGb")}
-        </div>
-        <div className="field">
-          <label htmlFor="pool-min">minReady</label>
-          <input id="pool-min" type="number" min={0} value={minReady} onChange={(e) => setMinReady(e.target.value)} />
-          {fieldError("minReady")}
-        </div>
-        <div className="field">
-          <label htmlFor="pool-max">maxSize</label>
-          <input id="pool-max" type="number" min={1} max={32} value={maxSize} onChange={(e) => setMaxSize(e.target.value)} />
-          {fieldError("maxSize")}
-        </div>
-        <div className="field">
-          <label htmlFor="pool-ttl">{t("lease TTL (s)", "lease TTL (초)")}</label>
-          <input id="pool-ttl" type="number" min={60} value={leaseTtl} onChange={(e) => setLeaseTtl(e.target.value)} />
-          {fieldError("leaseTtlSeconds")}
-        </div>
-        <div className="field">
-          <label>&nbsp;</label>
-          <button className="btn primary" type="submit" disabled={submitting}>
-            {submitting ? t("Creating…", "생성 중…") : t("Create pool", "풀 생성")}
-          </button>
-          {fieldError("storageRoot")}
-        </div>
-      </form>
+      {showCreate && (
+        <section className="panel pool-create" aria-labelledby="pool-create-title">
+          <h3 id="pool-create-title" className="panel-title">{t("Create a pool", "풀 만들기")}</h3>
+          <form onSubmit={handleCreate}>
+            <div className="pool-form-grid">
+              <div className="field">
+                <label htmlFor="pool-name">{t("Name", "이름")}</label>
+                <input id="pool-name" placeholder="build-runners" value={name} onChange={(e) => setName(e.target.value)} required maxLength={40} />
+                {fieldError("name")}
+              </div>
+              <div className="field">
+                <label htmlFor="pool-image">{t("Image", "이미지")}</label>
+                <select id="pool-image" value={template} onChange={(e) => {
+                  setTemplate(e.target.value);
+                  setDiskGb(String(Math.max(Number(diskGb), images.find((image) => image.alias === e.target.value)?.minDiskGb ?? 1)));
+                }} required disabled={configLoading || images.length === 0}>
+                  {images.map((image) => <option key={image.alias} value={image.alias}>{image.alias}</option>)}
+                </select>
+                {fieldError("template")}
+              </div>
+            </div>
+            {configLoading ? <p className="pool-note">{t("Loading available images…", "사용할 이미지를 불러오는 중…")}</p>
+              : configError ? <p className="field-error" role="alert">{configError} <button className="btn sm" type="button" onClick={() => window.location.reload()}>{t("Reload", "다시 불러오기")}</button></p>
+              : images.length === 0 ? <p className="pool-note">{t("Install an image to get started.", "시작하려면 이미지를 설치하세요.")} <a href="#/images">{t("Open Images", "이미지 열기")}</a></p>
+              : networks.length === 0 ? <p className="pool-note">{t("Create a network to get started.", "시작하려면 네트워크를 만드세요.")} <a href="#/networks">{t("Open Networks", "네트워크 열기")}</a></p>
+              : null}
+            <details ref={advanced} className="pool-disclosure" onInvalidCapture={() => { if (advanced.current) advanced.current.open = true; }}>
+              <summary>{t("Advanced settings", "고급 설정")}</summary>
+              <div className="pool-form-grid pool-advanced-grid">
+                {numericField("pool-min", t("Keep ready", "미리 준비할 VM 수"), minReady, setMinReady, 0, Number(maxSize), "minReady")}
+                {numericField("pool-max", t("Maximum VMs", "최대 VM 수"), maxSize, setMaxSize, Math.max(1, Number(minReady)), 32, "maxSize")}
+                {numericField("pool-ttl", t("Session duration (minutes)", "사용 시간 (분)"), leaseTtl, setLeaseTtl, 1, 10080, "leaseTtlSeconds", "any")}
+                {numericField("pool-cpu", "vCPU", cpu, setCpu, 1, 32, "cpu")}
+                <div className="field">
+                  <label htmlFor="pool-ram">{t("Memory", "메모리")}</label>
+                  <select id="pool-ram" value={ram} onChange={(event) => setRam(event.target.value)}>
+                    {[128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768].map((size) => <option key={size} value={size}>{size < 1024 ? `${size} MiB` : `${size / 1024} GiB`}</option>)}
+                  </select>
+                  {fieldError("ram")}
+                </div>
+                {numericField("pool-disk", t("Disk (GiB)", "디스크 (GiB)"), diskGb, setDiskGb, minimumDisk, 500, "diskGb")}
+                <div className="field">
+                  <label htmlFor="pool-network">{t("Network", "네트워크")}</label>
+                  <select id="pool-network" value={networkId} onChange={(e) => setNetworkId(e.target.value)} required disabled={configLoading || networks.length === 0}>
+                    {networks.map((network) => <option key={network.id} value={network.id}>{network.name}</option>)}
+                  </select>
+                  {fieldError("microNetworkId")}
+                </div>
+              </div>
+            </details>
+            <p className="pool-note">{t(`${minReady} kept ready · Up to ${maxSize} VMs · ${leaseTtl} minutes per use`, `${minReady}대 미리 준비 · 최대 ${maxSize}대 · 한 번에 ${leaseTtl}분 사용`)}</p>
+            {formError && <p className="field-error" role="alert">{formError.message}</p>}
+            <div className="pool-form-actions">
+              <button className="btn primary" type="submit" disabled={submitting || configLoading || !!configError || !template || !networkId}>
+                {submitting ? t("Creating…", "만드는 중…") : t("Create pool", "풀 만들기")}
+              </button>
+              {!!pools?.length && <button className="btn ghost" type="button" disabled={submitting} onClick={() => setCreateOpen(false)}>{t("Cancel", "취소")}</button>}
+            </div>
+          </form>
+        </section>
+      )}
 
-      <h3 className="panel-title" style={{ marginTop: "1rem" }}>
-        {t("Pools", "풀 목록")}
-      </h3>
-      {listError && <div className="field-error">{listError}</div>}
-      {pools === null ? (
-        <div className="empty">{t("Loading…", "불러오는 중…")}</div>
-      ) : pools.length === 0 ? (
-        <div className="empty">{t("No pools yet.", "아직 풀이 없습니다.")}</div>
-      ) : (
-        <div className="table-scroll">
-          <table className="vm-table">
-            <thead>
-              <tr>
-                <th>name</th>
-                <th>{t("image", "이미지")}</th>
-                <th>ready / min</th>
-                <th>{t("leased", "lease 중")}</th>
-                <th>{t("members / max", "멤버 / 최대")}</th>
-                <th>TTL</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {pools.map((pool) => (
-                <tr
-                  key={pool.id}
-                  className={selectedId === pool.id ? "selected" : undefined}
-                  onClick={() => select(pool)}
-                  style={{ cursor: "pointer" }}
-                >
-                  <td>
-                    {pool.name}
-                    {pool.deleting && <span className="state-badge stopping"> {t("deleting", "삭제 중")}</span>}
-                  </td>
-                  <td className="mono">{pool.templateVersion}</td>
-                  <td>
-                    {count(pool, "ready")} / {pool.minReady}
-                  </td>
-                  <td>{count(pool, "leased")}</td>
-                  <td>
-                    {pool.members.length} / {pool.maxSize}
-                  </td>
-                  <td>{pool.leaseTtlSeconds}s</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={busyId === pool.id || pool.deleting}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        select(pool);
-                        void run(pool.id, () => acquireWithRetryKey(pool.id));
-                      }}
-                    >
-                      {t("Acquire", "Lease 받기")}
-                    </button>{" "}
-                    <button
-                      type="button"
-                      className="btn"
-                      disabled={busyId === pool.id || pool.deleting}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleDelete(pool);
-                      }}
-                    >
-                      {t("Delete", "삭제")}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {listError && <div className="field-error" role="alert">{listError}</div>}
+      {actionError && <div className="field-error" role="alert">{actionError}</div>}
+      {pools === null ? <p className="pool-note">{t("Loading pools…", "풀을 불러오는 중…")}</p> : pools.length > 0 && (
+        <section className="pool-list" aria-label={t("Pools", "풀 목록")}>
+          {pools.map((pool) => (
+            <article key={pool.id} className={`pool-row${selectedId === pool.id ? " selected" : ""}`}>
+              <div className="pool-row-name">
+                <button className="pool-select" disabled={!!busyId} aria-expanded={selectedId === pool.id} onClick={() => select(pool)}>{pool.name}</button>
+                <span>{pool.template}</span>
+              </div>
+              <div className="pool-row-status">
+                <span className={`badge ${pool.deleting ? "stopping" : count(pool, "ready") > 0 ? "running" : pool.lastError ? "error" : count(pool, "provisioning") > 0 ? "starting" : ""}`}>
+                  {pool.deleting ? t("Deleting", "삭제 중") : count(pool, "ready") > 0 ? t(`${count(pool, "ready")} ready`, `${count(pool, "ready")}대 준비됨`) : pool.lastError ? t("Needs attention", "확인 필요") : count(pool, "provisioning") > 0 ? t("Preparing", "준비 중") : t("No VMs ready", "준비된 VM 없음")}
+                </span>
+                <span>{t(`${count(pool, "leased")} in use`, `${count(pool, "leased")}대 사용 중`)}</span>
+              </div>
+              <button className="btn primary" disabled={!!busyId || pool.deleting} onClick={() => {
+                select(pool);
+                void run(pool.id, async () => {
+                  const lease = await acquireWithRetryKey(pool.id);
+                  setLeases((current) => [lease, ...current.filter((item) => item.id !== lease.id)]);
+                });
+              }}>
+                {busyId === pool.id ? t("Working…", "처리 중…") : t("Use VM", "VM 사용")}<ArrowRight aria-hidden="true" />
+              </button>
+            </article>
+          ))}
+        </section>
       )}
 
       {selected && (
-        <div style={{ marginTop: "1rem" }}>
-          <h3 className="panel-title">{selected.name}</h3>
-          {detailError && <div className="field-error">{detailError}</div>}
-          {actionError && <div className="field-error" role="alert">{actionError}</div>}
-          {selected.lastError && (
-            <div className="field-error">
-              {t("Last member failure: ", "최근 멤버 실패: ")}
-              {selected.lastError}
+        <section className="panel pool-detail" aria-label={t(`${selected.name} details`, `${selected.name} 상세`)}>
+          <h3 className="panel-title">{selected.name}<span className="pool-note">{t("Automatically managed", "자동 관리")}</span></h3>
+          <p className="pool-note">{t("End a session when you are done. Its VM is deleted and a fresh one is prepared automatically.", "사용을 종료하면 VM을 삭제하고 새 VM을 자동으로 준비합니다.")}</p>
+          {selected.lastError && <p className="field-error" role="alert">{selected.lastError}</p>}
+          {detailError && <p className="field-error" role="alert">{detailError}</p>}
+          <h4 className="pool-section-title">{t("In use", "사용 중")}</h4>
+          {active.length === 0 ? <p className="pool-note">{t("Nothing in use. Choose Use VM to get started.", "사용 중인 VM이 없습니다. ‘VM 사용’을 누르면 시작합니다.")}</p> : active.map((lease) => (
+            <div className="pool-session" key={lease.id}>
+              <div className="pool-session-info">
+                <strong className="mono">{lease.vm?.ipv4 ?? lease.vm?.name ?? lease.vmId}</strong>
+                <span>{t("Ends ", "자동 종료: ")}{formatTime(lease.expiresAtMs)}</span>
+              </div>
+              <div className="pool-session-actions">
+                <a className="btn" href={consolePageUrl(lease.vmId)} target="_blank" rel="noreferrer"><SquareTerminal aria-hidden="true" />{t("Open terminal", "터미널 열기")}</a>
+                <button className="btn ghost" disabled={!!busyId || selected.deleting} onClick={() => void run(lease.id, () => releasePoolLease(selected.id, lease.id))}>{t("End session", "사용 종료")}</button>
+              </div>
             </div>
-          )}
-          <dl className="detail-fields mono">
-            <dt>id</dt>
-            <dd>{selected.id}</dd>
-            <dt>{t("image", "이미지")}</dt>
-            <dd>
-              {selected.template} ({selected.templateVersion})
-            </dd>
-            <dt>spec</dt>
-            <dd>
-              {selected.cpu} vCPU · {selected.ram} MiB · {selected.diskGb} GiB
-            </dd>
-            <dt>{t("members", "멤버")}</dt>
-            <dd>
-              {(["provisioning", "ready", "leased", "draining"] as const)
-                .map((state) => `${state} ${count(selected, state)}`)
-                .join(" · ")}
-            </dd>
-          </dl>
-
-          {!selected.deleting && (
-            <form
-              className="create-grid"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handleSave(selected);
-              }}
-            >
-              <div className="field">
-                <label htmlFor="pool-edit-min">minReady</label>
-                <input id="pool-edit-min" type="number" min={0} value={editMin} onChange={(e) => setEditMin(e.target.value)} />
+          ))}
+          <details className="pool-disclosure" key={selected.id}>
+            <summary>{t("Pool settings", "풀 설정")}</summary>
+            <p className="pool-note">{selected.template} · {selected.cpu} vCPU · {selected.ram} MiB · {selected.diskGb} GiB</p>
+            <p className="pool-note">{t("Pinned image", "고정 이미지")}: <span className="mono">{selected.templateVersion}</span></p>
+            {!selected.deleting && <form onSubmit={(event) => { event.preventDefault(); void handleSave(selected); }}>
+              <div className="pool-form-grid pool-advanced-grid">
+                {numericField("pool-edit-min", t("Keep ready", "미리 준비할 VM 수"), editMin, setEditMin, 0, Number(editMax))}
+                {numericField("pool-edit-max", t("Maximum VMs", "최대 VM 수"), editMax, setEditMax, Math.max(1, Number(editMin)), 32)}
+                {numericField("pool-edit-ttl", t("Session duration (minutes)", "사용 시간 (분)"), editTtl, setEditTtl, 1, 10080, undefined, "any")}
               </div>
-              <div className="field">
-                <label htmlFor="pool-edit-max">maxSize</label>
-                <input id="pool-edit-max" type="number" min={1} max={32} value={editMax} onChange={(e) => setEditMax(e.target.value)} />
-              </div>
-              <div className="field">
-                <label htmlFor="pool-edit-ttl">{t("lease TTL (s)", "lease TTL (초)")}</label>
-                <input id="pool-edit-ttl" type="number" min={60} value={editTtl} onChange={(e) => setEditTtl(e.target.value)} />
-              </div>
-              <div className="field">
-                <label>&nbsp;</label>
-                <button className="btn" type="submit" disabled={busyId === selected.id}>
-                  {t("Save", "저장")}
-                </button>
-              </div>
-            </form>
-          )}
-
-          <h3 className="panel-title" style={{ marginTop: "1rem" }}>
-            {t("Leases", "Lease")}
-          </h3>
-          {leases.length === 0 ? (
-            <div className="empty">{t("No leases.", "Lease가 없습니다.")}</div>
-          ) : (
-            <div className="table-scroll">
-              <table className="vm-table">
-                <thead>
-                  <tr>
-                    <th>{t("state", "상태")}</th>
-                    <th>VM</th>
-                    <th>ipv4</th>
-                    <th>{t("expires", "만료")}</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {leases.map((lease) => (
-                    <tr key={lease.id}>
-                      <td>
-                        <span className={`state-badge ${lease.state === "active" ? "running" : "stopped"}`}>{lease.state}</span>
-                      </td>
-                      <td className="mono">{lease.vm?.name ?? lease.vmId}</td>
-                      <td className="mono">{lease.vm?.ipv4 ?? "—"}</td>
-                      <td>{formatTime(lease.expiresAtMs)}</td>
-                      <td>
-                        {lease.state === "active" && (
-                          <>
-                            <a className="btn" href={consolePageUrl(lease.vmId)} target="_blank" rel="noreferrer">
-                              {t("Terminal", "터미널")}
-                            </a>{" "}
-                            <button
-                              type="button"
-                              className="btn"
-                              disabled={busyId === lease.id}
-                              onClick={() => void run(lease.id, () => releasePoolLease(selected.id, lease.id))}
-                            >
-                              {t("Release", "반납")}
-                            </button>
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+              <div className="pool-form-actions"><button className="btn" type="submit" disabled={!!busyId}>{t("Save settings", "설정 저장")}</button></div>
+            </form>}
+            <p className="pool-note">{t(`${selected.members.length} of ${selected.maxSize} VMs · ${count(selected, "provisioning")} preparing · ${count(selected, "draining")} cleaning up`, `${selected.maxSize}대 중 ${selected.members.length}대 · ${count(selected, "provisioning")}대 준비 중 · ${count(selected, "draining")}대 정리 중`)}</p>
+            <p className="pool-note mono">ID: {selected.id}</p>
+            <button className="btn danger" disabled={!!busyId || selected.deleting || active.length > 0} onClick={() => handleDelete(selected)}>{t("Delete pool", "풀 삭제")}</button>
+            {active.length > 0 && <p className="pool-note">{t("End all sessions before deleting the pool.", "풀을 삭제하려면 사용 중인 VM을 모두 종료하세요.")}</p>}
+          </details>
+          {history.length > 0 && <details className="pool-disclosure">
+            <summary>{t("Past sessions", "지난 사용 내역")} ({history.length})</summary>
+            {history.map((lease) => <p className="pool-history" key={lease.id}><span>{lease.vm?.name ?? lease.vmId}</span><span>{lease.state === "released" ? t("Ended", "종료됨") : t("Expired", "시간 만료")}</span><span>{formatTime(lease.expiresAtMs)}</span></p>)}
+          </details>}
+        </section>
       )}
-    </section>
+    </div>
   );
 }

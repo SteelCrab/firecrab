@@ -39,6 +39,8 @@ Entries land here as work merges, and move under the next version heading when t
   empty. CLI failures print the acquire retry key, and the dashboard keeps
   pending keys across reloads. Surviving members and leases reconnect after an
   API restart; guest QA verifies unchanged VM processes and lease replay.
+  The dashboard starts with name and image inputs, keeps advanced settings
+  optional, and exposes Use VM and End session as its main actions.
 
 - Updating from the dashboard opens a dialog that shows what the new release
   changes, then a gauge with the overall percent and the stage (check,
