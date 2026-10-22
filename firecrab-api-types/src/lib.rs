@@ -96,10 +96,16 @@ impl VmState {
             (self, to),
             (Created, Starting)
                 | (Starting, Running | Error)
-                | (Running, Pausing | Stopping | Stopped | Error)
-                | (Pausing, Paused | Running | Stopping | Stopped | Error)
-                | (Paused, Resuming | Stopping | Stopped | Error)
-                | (Resuming, Running | Paused | Stopping | Stopped | Error)
+                | (Running, Pausing | Resuming | Stopping | Stopped | Error)
+                | (
+                    Pausing,
+                    Paused | Resuming | Running | Stopping | Stopped | Error
+                )
+                | (Paused, Pausing | Resuming | Stopping | Stopped | Error)
+                | (
+                    Resuming,
+                    Running | Pausing | Paused | Stopping | Stopped | Error
+                )
                 | (Stopping, Stopped | Error)
                 | (Stopped, Starting)
                 | (Error, Starting)
@@ -1754,16 +1760,20 @@ mod tests {
             (Starting, Running),
             (Starting, Error),
             (Running, Pausing),
+            (Running, Resuming),
             (Pausing, Paused),
+            (Pausing, Resuming),
             (Pausing, Running),
             (Pausing, Stopping),
             (Pausing, Stopped),
             (Pausing, Error),
             (Paused, Resuming),
+            (Paused, Pausing),
             (Paused, Stopping),
             (Paused, Stopped),
             (Paused, Error),
             (Resuming, Running),
+            (Resuming, Pausing),
             (Resuming, Paused),
             (Resuming, Stopping),
             (Resuming, Stopped),

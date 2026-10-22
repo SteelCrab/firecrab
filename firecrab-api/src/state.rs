@@ -109,9 +109,9 @@ pub struct AppState {
     pub(crate) store: Store,
     /// Encrypted, host-local PipeSecrets vault; opened lazily on first use.
     pub(crate) secrets: Arc<crate::secrets::Vault>,
-    /// Short configuration/operation claims; never held while booting a guest.
     /// Active per-VM lifecycle locks; weak entries do not retain deleted VM IDs.
     pub(crate) vm_mutations: Arc<Mutex<HashMap<Uuid, Weak<AsyncMutex<()>>>>>,
+    /// Short service configuration/operation claims; never held while booting a guest.
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
     /// One image/VM deployment at a time bounds replica surge on one host.
     pub(crate) service_deploy_permits: Arc<Semaphore>,
