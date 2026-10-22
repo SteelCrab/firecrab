@@ -534,10 +534,12 @@ mod tests {
     }
 
     #[test]
-    fn an_executable_owned_by_an_untrusted_user_is_not_trusted() {
+    fn an_executable_owner_must_be_root_or_the_trusted_user() {
         let directory = private_dir();
         let path = executable(directory.path(), 0o755);
-        assert!(trusted_executable(&path, own_uid().wrapping_add(1)).is_err());
+        let result = trusted_executable(&path, own_uid().wrapping_add(1));
+        // Root-owned files remain trusted even for a different requested owner.
+        assert_eq!(result.is_ok(), own_uid() == ROOT_UID);
     }
 
     #[test]
