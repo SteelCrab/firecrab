@@ -677,6 +677,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "reqwest",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",

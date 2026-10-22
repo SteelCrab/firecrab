@@ -203,7 +203,7 @@ fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), AppError> {
     if spec.secrets.values().any(Uuid::is_nil) {
         fields.insert(
             "secrets".to_owned(),
-            "must reference non-nil CrabSecrets UUIDs".to_owned(),
+            "must reference non-nil PipeSecrets UUIDs".to_owned(),
         );
     }
     if spec.secrets.keys().any(|key| spec.env.contains_key(key)) {

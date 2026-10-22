@@ -23,6 +23,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Configure and manage an app | [MicroService](guides/microservices.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Register stack ownership and preview configuration changes | [Stack planning](guides/stack-planning.md) |
+| Store secrets and transfer them to external stores | [Secrets and PipeSecrets](guides/secrets.md) |
 | Configure subnets, internet access, and IPv6 | [Networking](guides/networking.md) |
 | Choose a disk location and back up VM data | [Storage](guides/storage.md) |
 | Set management VM CPU, RAM, disk, and networking | [microManager resources](guides/micromanager-resources.md) |

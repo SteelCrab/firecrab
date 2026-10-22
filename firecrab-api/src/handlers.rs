@@ -15,6 +15,7 @@ pub mod microregistry;
 pub mod network;
 pub mod oci;
 pub mod registries;
+pub mod secrets;
 pub mod shells;
 pub mod stacks;
 pub mod storage;
