@@ -93,7 +93,7 @@ def main():
     parser.add_argument("--api-binary", type=Path, required=True)
     parser.add_argument("--helper-binary", type=Path, required=True)
     parser.add_argument("--image-root", type=Path, required=True)
-    parser.add_argument("--template", required=True, help="Installed HTTP image with a serial root shell")
+    parser.add_argument("--template", required=True, help="Installed image with a serial root shell and sshd")
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--inside", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -169,17 +169,20 @@ def exercise(args):
     env = {**os.environ, "FIRECRAB_STORAGE_ROOTS": f"qa={storage}", "FIRECRAB_NET_HELPER_SOCK": str(root / "helper.sock"), "FIRECRAB_IMAGE_ROOT": str(args.image_root), "FIRECRAB_BIND_ADDR": "127.0.0.1:19442"}
     helper_log = (root / "helper.log").open("w")
     api_log = (root / "api.log").open("w")
-    # Keep DHCP runtime files private as well as network state.
-    helper = subprocess.Popen(["unshare", "--mount", "--propagation", "private", "sh", "-c", 'set -eu; mount --bind "$1/run" /run/firecrab; exec "$1/firecrab-helper"', "qa", str(root)], env=env, stdout=helper_log, stderr=subprocess.STDOUT)
+    # The guest readiness probe resolves example.com. Answer it locally so
+    # the isolated test needs neither an upstream DNS server nor Internet.
+    (root / "hosts").write_text(Path("/etc/hosts").read_text() + "\n192.0.2.42 example.com\n")
+    # Keep DHCP runtime files and the DNS fixture private as well as network state.
+    helper = subprocess.Popen(["unshare", "--mount", "--propagation", "private", "sh", "-c", 'set -eu; mount --bind "$1/run" /run/firecrab; mount --bind "$1/hosts" /etc/hosts; exec "$1/firecrab-helper"', "qa", str(root)], env=env, stdout=helper_log, stderr=subprocess.STDOUT)
     until(lambda: (root / "helper.sock").exists())
     api = None
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     port = 19442
-    def request(path, method="GET", body=None, timeout=10):
+    def request(path, method="GET", body=None, timeout=10, raw=False):
         data = json.dumps(body).encode() if body is not None else (b"" if method == "POST" else None)
         with opener.open(urllib.request.Request(f"http://127.0.0.1:{port}" + path, data=data, method=method, headers={"Content-Type": "application/json"}), timeout=timeout) as response:
             payload = response.read()
-            return json.loads(payload) if payload else None
+            return payload if raw else (json.loads(payload) if payload else None)
     def start_api():
         process = subprocess.Popen([str(args.api_binary)], env=env, stdout=api_log, stderr=subprocess.STDOUT)
         def ready():
@@ -207,6 +210,7 @@ def exercise(args):
         (dropin / "qa.conf").write_text(f"[Service]\nNetworkNamespacePath=/run/netns/{ns}\n")
         run("systemctl", "daemon-reload")
         request(f"/api/vms/{vm_id}/start", "POST")
+        print("WAIT guest boot and local DNS readiness", flush=True)
         def running():
             result = request(f"/api/vms/{vm_id}")
             assert result["state"] != "error", request(f"/api/vms/{vm_id}/log")
@@ -232,6 +236,17 @@ def exercise(args):
         console.send("B=/etc/firecrab/busybox; $B mkdir -p /tmp/fc442-www; printf ok >/tmp/fc442-www/index.html; $B httpd -p 80 -h /tmp/fc442-www >/dev/null 2>&1 || true\n")
         until(http)
         passed("guest HTTP before pause")
+        key = root / "operator.key"
+        key.write_bytes(request(f"/api/vms/{vm_id}/ssh-key", raw=True))
+        key.chmod(0o600)
+        hosts = root / "known_hosts"
+        hosts.write_text(vm["ipv4"] + " " + request(f"/api/vms/{vm_id}/ssh-host-key")["publicKey"].strip() + "\n")
+        console.send("/etc/firecrab/services.d/sshd >/tmp/fc442-sshd.log 2>&1 &\n")
+        def ssh():
+            result = subprocess.run(["ssh", "-F", "/dev/null", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={hosts}", "-o", "ConnectTimeout=3", "root@" + vm["ipv4"], "/etc/firecrab/busybox cat /proc/sys/kernel/random/boot_id"], text=True, capture_output=True, timeout=10)
+            return result.stdout.strip() if result.returncode == 0 else None
+        ssh_boot = until(ssh)
+        passed("new authenticated SSH connection before pause")
         console.send("B=/etc/firecrab/busybox; token=$($B cat /proc/sys/kernel/random/uuid); boot=$($B cat /proc/sys/kernel/random/boot_id); n=0; while :; do printf 'FC442:%s:%s:%s:%s\\n' \"$token\" \"$$\" \"$boot\" \"$n\"; n=$((n+1)); $B sleep 1; done\n")
         sample = until(console.sample)
         for cycle in range(3):
@@ -256,7 +271,8 @@ def exercise(args):
             later = until(lambda: (value if (value := console.sample()) and int(value[3]) > int(frozen[3]) else None))
             assert later[:3] == sample[:3], (sample, later)
             assert http()
-            passed(f"cycle {cycle + 1}: RAM token, guest PID, boot ID, VMM PID, IP/MAC, and HTTP preserved")
+            assert ssh() == ssh_boot == later[2]
+            passed(f"cycle {cycle + 1}: RAM token, guest PID, boot ID, VMM PID, IP/MAC, HTTP, and new SSH preserved")
         assert request(f"/api/vms/{vm_id}/pause", "POST")["state"] == "paused"
         assert request(f"/api/vms/{vm_id}/stop", "POST")["state"] == "stopped"
         passed("Stop from Paused")

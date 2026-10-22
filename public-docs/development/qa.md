@@ -116,8 +116,10 @@ Past source runs and their remaining limits are in [Validation history](validati
 
 `scripts/ci-qa-vm-pause.py` prepares a temporary API, helper, image copy, and
 private network/mount namespaces on a Linux/KVM test host. It requires root,
-systemd, iproute2, unshare, dnsmasq, nftables, and a Firecracker binary on PATH.
-Choose an installed image that provides a serial root shell.
+systemd, iproute2, unshare, dnsmasq, nftables, an SSH client, and a Firecracker
+binary on PATH. Choose an installed image that provides a serial root shell and
+sshd. The guest readiness DNS probe uses a local fixture inside the private
+helper mount namespace, so the test needs no external network access.
 
 ```sh
 sudo python3 scripts/ci-qa-vm-pause.py \
@@ -128,7 +130,8 @@ sudo python3 scripts/ci-qa-vm-pause.py \
 ```
 
 The test checks three pause/resume cycles, an in-memory random token and counter,
-guest process and boot identity, VMM PID, IP/MAC, HTTP recovery, Sleepy inhibition,
+guest process and boot identity, VMM PID, IP/MAC, HTTP and new authenticated SSH
+connections, Sleepy inhibition,
 API restart while paused, Stop from Paused, and cleanup. Existing workload units
 and installed services are preserved. A successful JSON report is native KVM
 evidence; API fixture and browser results alone do not establish memory continuity.
