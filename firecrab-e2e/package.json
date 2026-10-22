@@ -21,7 +21,7 @@
     "test:pipe:databases": "playwright test --config playwright.pipe.config.ts tests/pipe-databases.spec.ts",
     "test:pipe:live": "playwright test --config playwright.pipe-live.config.ts",
     "test:mocked": "playwright test --config playwright.mocked.config.ts",
-    "typecheck:pipe": "node ../firecrab-frontend/node_modules/typescript/bin/tsc -p tsconfig.pipe.json"
+    "typecheck:pipe": "node ../firecrab-frontend/node_modules/tsrs/bin/tsrs -p tsconfig.pipe.json"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
