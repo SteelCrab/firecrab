@@ -15,12 +15,14 @@ firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
 filetime = "0.2.29"
 futures-util = "0.3"
+percent-encoding = "2.3"
 libc = "0.2.186"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "mysql"] }
 tar = { version = "0.4.46", default-features = false }
 thiserror = { workspace = true }
 tokio = { version = "1", features = ["full"] }

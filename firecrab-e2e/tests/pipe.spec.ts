@@ -111,6 +111,7 @@ async function open(page: Page, options: { card?: PipeCardId | null; unavailable
   const connectionGate = new Promise<void>(resolve => { finishConnection = resolve; });
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/pipe/databases") return route.fulfill({ json: [] });
     if (path === "/api/pipe/cloudflare/zones") {
       zoneRequests.push(route.request().postDataJSON().apiToken);
       if (options.zonesFailure) return route.fulfill({ status: 400, json: { error: { message: "Cloudflare rejected the API token" } } });
@@ -213,12 +214,13 @@ test.describe("Pipe cards @dashboard", () => {
     { title: "Pipe Auth", id: "auth", region: "Pipe Auth", status: "Not configured" },
     { title: "Route", id: "route", region: "Route", status: "Nginx active · 1 route" },
     { title: "Pipe Registry", id: "registry", region: "Pipe Registry", status: "Not configured" },
+    { title: "Database", id: "database", region: "Databases", status: "Not configured" },
     { title: "Firecrab Tunnel", id: "firecrab-tunnel", region: "Firecrab Tunnel", status: "Not configured" },
     { title: "Cloudflare Quick Tunnel", id: "quick-tunnel", region: "Quick Tunnel", status: "1/1 running" },
     { title: "Cloudflare Named Tunnel", id: "named-tunnel", region: "Cloudflare Named Tunnel", status: "Connector active" },
   ];
 
-  test("lists six services and opens each one only from its card", async ({ page }, info) => {
+  test("lists seven services and opens each one only from its card", async ({ page }, info) => {
     await open(page, { card: null, quickTunnels: [webTunnel], configuredTunnel: true });
     const pipe = page.getByRole("region", { name: "Pipe", exact: true });
     await expect(pipe.getByRole("listitem")).toHaveCount(cards.length);
@@ -229,6 +231,8 @@ test.describe("Pipe cards @dashboard", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath("pipe-cards-mobile.png"), fullPage: true });
+    // Phones keep the sidebar in a drawer; the rest checks the sidebar too.
+    await page.setViewportSize({ width: 1280, height: 800 });
 
     const back = page.getByRole("navigation", { name: "Pipe navigation", exact: true }).getByRole("link", { name: "Pipe", exact: true });
     for (const card of cards) {
@@ -323,7 +327,7 @@ test.describe("Pipe dashboard @dashboard", () => {
     await panel.getByRole("button", { name: "Add fixed address" }).click();
     await expect(panel.getByLabel("Quick Tunnel", { exact: true })).toHaveCount(0);
     await expect(panel.getByLabel("Subdomain", { exact: true })).toHaveCount(0);
-    await expect(panel.getByRole("link", { name: "Get token", exact: true })).toHaveAttribute("href", "https://firecrab.dev/dashboard/");
+    await expect(panel.getByRole("link", { name: "Get token", exact: true })).toHaveAttribute("href", "https://console.firecrab.dev/");
     await expect(panel.getByLabel("Connection token", { exact: true })).toHaveAttribute("type", "password");
     await panel.getByLabel("Connection token", { exact: true }).fill(CONNECTION_TOKEN);
     await expect(panel.getByLabel("Connection target").locator("option")).toHaveText(["VM apps", "Nginx routes"]);
@@ -1119,7 +1123,7 @@ test.describe("Public address → Nginx → VM apps @dashboard", () => {
 test.describe("API connection recovery @dashboard", () => {
   test("clears the connection error after polling succeeds without reloading the page", async ({ page }) => {
     const mock = await open(page, { card: null, vmsUnavailable: true });
-    const banner = page.locator(".banner.error").filter({ has: page.getByRole("button", { name: "✕", exact: true }) });
+    const banner = page.locator(".banner.error").filter({ has: page.getByRole("button", { name: "Dismiss", exact: true }) });
     await expect(banner).toContainText("VM list unavailable");
     mock.recoverVms();
     await expect(banner).toHaveCount(0);
@@ -1137,7 +1141,7 @@ test.describe("API connection recovery @dashboard", () => {
     const row = page.getByRole("row").filter({ has: page.getByText("web-a", { exact: true }) });
     await row.getByRole("button", { name: "Actions", exact: true }).click();
     await page.getByRole("menuitem", { name: "stop", exact: true }).click();
-    const banner = page.locator(".banner.error").filter({ has: page.getByRole("button", { name: "✕", exact: true }) });
+    const banner = page.locator(".banner.error").filter({ has: page.getByRole("button", { name: "Dismiss", exact: true }) });
     await expect(banner).toContainText("This VM cannot be stopped right now");
     refresh = true;
     await expect(page.getByRole("row").filter({ has: page.getByText("web-a-refreshed", { exact: true }) })).toBeVisible();

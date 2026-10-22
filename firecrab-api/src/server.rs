@@ -247,6 +247,26 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             "/api/pipe/auth/{provider}",
             axum::routing::put(handlers::pipe_auth::save).delete(handlers::pipe_auth::delete),
         )
+        .route(
+            "/api/pipe/databases",
+            get(handlers::pipe_databases::list).post(handlers::pipe_databases::create),
+        )
+        .route(
+            "/api/pipe/databases/test",
+            post(handlers::pipe_databases::test),
+        )
+        .route(
+            "/api/pipe/databases/{id}",
+            delete(handlers::pipe_databases::delete),
+        )
+        .route(
+            "/api/pipe/databases/{id}/tables",
+            get(handlers::pipe_databases::tables),
+        )
+        .route(
+            "/api/pipe/databases/{id}/preview",
+            post(handlers::pipe_databases::preview),
+        )
         .route("/api/pipe/registries", get(handlers::registries::list))
         .route(
             "/api/pipe/registries/{registry}",

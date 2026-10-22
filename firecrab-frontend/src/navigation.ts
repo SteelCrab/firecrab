@@ -2,29 +2,40 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Locale } from "./i18n";
 
 /**
- * Dashboard destinations. Rendered as a `NavIcon` (see `NavIcons.tsx`) in the
- * rail, except `shells`, whose `icon` is a small image (the Shell repository
- * bash cube) shown instead.
+ * Dashboard destinations, in rail order. Icons live in `viewIcons.ts`.
  *
- * Kept out of `components/Shell.tsx` so that file exports only its component
- * — mixing constants and hooks in there breaks Vite's fast refresh.
+ * Kept out of the layout components so those files export only components —
+ * mixing constants and hooks in there breaks Vite's fast refresh.
  */
 export const VIEWS = [
-  { id: "vms", labels: { en: "MicroVM", ko: "MicroVM" } },
-  { id: "services", labels: { en: "MicroService", ko: "MicroService" } },
-  { id: "networks", labels: { en: "Networks", ko: "네트워크" } },
-  { id: "pipe", labels: { en: "Pipe", ko: "Pipe" } },
-  { id: "storages", labels: { en: "Storage", ko: "스토리지" } },
-  { id: "images", labels: { en: "Images", ko: "이미지" } },
-  { id: "kernels", labels: { en: "Kernels", ko: "커널" } },
-  { id: "shells", labels: { en: "Shells", ko: "Shell" }, icon: "/bash.png" },
-  { id: "host", labels: { en: "Host", ko: "호스트" } },
+  { id: "vms", group: "compute", labels: { en: "MicroVM", ko: "MicroVM" } },
+  { id: "services", group: "compute", labels: { en: "MicroService", ko: "MicroService" } },
+  { id: "networks", group: "network", labels: { en: "Networks", ko: "네트워크" } },
+  { id: "pipe", group: "network", labels: { en: "Pipe", ko: "Pipe" } },
+  { id: "storages", group: "data", labels: { en: "Storage", ko: "스토리지" } },
+  { id: "images", group: "data", labels: { en: "Images", ko: "이미지" } },
+  { id: "kernels", group: "data", labels: { en: "Kernels", ko: "커널" } },
+  { id: "shells", group: "system", labels: { en: "Shells", ko: "Shell" } },
+  { id: "host", group: "system", labels: { en: "Host", ko: "호스트" } },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];
+export type ViewGroup = (typeof VIEWS)[number]["group"];
 
 export function viewLabel(view: (typeof VIEWS)[number], locale: Locale): string {
   return view.labels[locale];
+}
+
+/** Section a destination belongs to; the command palette shows it as a hint. */
+const VIEW_GROUP_LABELS: Record<ViewGroup, Record<Locale, string>> = {
+  compute: { en: "Compute", ko: "컴퓨팅" },
+  network: { en: "Network", ko: "네트워크" },
+  data: { en: "Data", ko: "데이터" },
+  system: { en: "System", ko: "시스템" },
+};
+
+export function viewGroupLabel(group: ViewGroup, locale: Locale): string {
+  return VIEW_GROUP_LABELS[group][locale];
 }
 
 const DEFAULT_VIEW: ViewId = "vms";
@@ -99,7 +110,7 @@ export function newVmHash(): string {
 }
 
 /** Pipe service cards. `#/pipe` lists them; `#/pipe/<id>` opens one. */
-export const PIPE_CARDS = ["auth", "route", "registry", "firecrab-tunnel", "quick-tunnel", "named-tunnel"] as const;
+export const PIPE_CARDS = ["auth", "route", "registry", "database", "firecrab-tunnel", "quick-tunnel", "named-tunnel"] as const;
 export type PipeCardId = (typeof PIPE_CARDS)[number];
 const PIPE_CARD_RE = /^pipe\/([^/?#]+)$/;
 

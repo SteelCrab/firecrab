@@ -22,6 +22,7 @@ mod oci;
 mod package;
 mod persistence;
 mod pipe_auth;
+mod pipe_databases;
 mod process_metrics;
 mod reconcile;
 mod resource_limits;

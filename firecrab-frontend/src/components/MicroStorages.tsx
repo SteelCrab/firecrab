@@ -13,7 +13,12 @@ import {
   listMicroStorages,
   listStorageDevices,
 } from "../api/client";
+import { HardDrive } from "lucide-react";
 import { useI18n } from "../i18n";
+import Screen from "./layout/Screen";
+import { useScreenStatus } from "./layout/screenStatus";
+import { DetailHead, DetailProp, DetailSection } from "./ui/DetailSection";
+import StatusBadge from "./ui/StatusBadge";
 
 /**
  * MicroStorage management — register host mount paths as named storage pools
@@ -22,6 +27,7 @@ import { useI18n } from "../i18n";
  */
 export default function MicroStorages() {
   const { t } = useI18n();
+  const { setDetailOpen } = useScreenStatus();
   const [pools, setPools] = useState<MicroStorageResponse[] | null>(null);
   const [devices, setDevices] = useState<StorageDeviceResponse[]>([]);
   const [name, setName] = useState("");
@@ -108,7 +114,20 @@ export default function MicroStorages() {
     <span className="field-error">{fieldErrors?.fieldError(field) ?? ""}</span>
   );
 
+  const selectedPool = pools?.find((pool) => pool.id === selectedId) ?? null;
+  const select = (id: string) => {
+    setSelectedId(id);
+    setDetailOpen(true);
+  };
+
   return (
+    <Screen
+      view="storages"
+      detail={selectedPool ? <MicroStorageDetail pool={selectedPool} detail={detail} error={detailError} /> : null}
+      detailLabel={t("MicroStorage detail", "MicroStorage 상세")}
+      detailKind={<><HardDrive aria-hidden="true" />MicroStorage</>}
+      onCloseDetail={() => setSelectedId(null)}
+    >
     <section className="panel">
       <h2 className="panel-title">MicroStorage</h2>
       <p className="poll-note" style={{ marginBottom: "0.75rem" }}>
@@ -218,7 +237,8 @@ export default function MicroStorages() {
                 <tr
                   key={pool.id}
                   className={selectedId === pool.id ? "selected" : undefined}
-                  onClick={() => setSelectedId(pool.id)}
+                  aria-selected={selectedId === pool.id}
+                  onClick={() => select(pool.id)}
                   style={{ cursor: "pointer" }}
                 >
                   <td>{pool.name}</td>
@@ -246,30 +266,43 @@ export default function MicroStorages() {
         </div>
       )}
 
-      {selectedId && (
-        <div style={{ marginTop: "1rem" }}>
-          <h3 className="panel-title">{t("Details", "상세")}</h3>
-          {detailError && <div className="field-error">{detailError}</div>}
-          {detail && (
-            <dl className="detail-fields mono">
-              <dt>id</dt>
-              <dd>{detail.id}</dd>
-              <dt>path</dt>
-              <dd>{detail.path}</dd>
-              <dt>free</dt>
-              <dd>
-                {detail.availableGib} / {detail.totalGib} GiB
-              </dd>
-              <dt>VMs</dt>
-              <dd>
-                {detail.vms.length === 0
-                  ? t("None", "없음")
-                  : detail.vms.map((vm) => `${vm.name} (${vm.state}, ${vm.diskGb} GiB)`).join(", ")}
-              </dd>
-            </dl>
-          )}
-        </div>
-      )}
     </section>
+    </Screen>
+  );
+}
+
+function MicroStorageDetail({ pool, detail, error }: { pool: MicroStorageResponse; detail: MicroStorageDetailResponse | null; error: string | null }) {
+  const { t } = useI18n();
+  return (
+    <>
+      <DetailHead title={pool.name} meta={<span className="mono">{pool.path}</span>} />
+      <div className="detail-body">
+        {error && <p className="field-error">{error}</p>}
+        <DetailSection title={t("Properties", "속성")}>
+          <dl className="props">
+            <DetailProp label="ID" copy={pool.id}><span className="mono">{pool.id}</span></DetailProp>
+            <DetailProp label={t("Path", "경로")}><span className="mono">{pool.path}</span></DetailProp>
+            <DetailProp label={t("Free", "여유 공간")}>{(detail ?? pool).availableGib} / {(detail ?? pool).totalGib} GiB</DetailProp>
+          </dl>
+        </DetailSection>
+        <DetailSection title="VMs">
+          {!detail ? (
+            !error && <p className="detail-note">{t("Loading…", "불러오는 중…")}</p>
+          ) : detail.vms.length === 0 ? (
+            <p className="detail-note">{t("None", "없음")}</p>
+          ) : (
+            <ul className="detail-list">
+              {detail.vms.map((vm) => (
+                <li key={vm.id}>
+                  <span className="detail-list-main">{vm.name}</span>
+                  <span className="detail-list-sub">{vm.diskGb} GiB</span>
+                  <StatusBadge state={vm.state} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </DetailSection>
+      </div>
+    </>
   );
 }

@@ -22,11 +22,6 @@ app deployment automation, secret store, and automatic VM replacement are separa
 #335 work. Firecrab Tunnel uses a dashboard token to connect VM apps
 or saved Nginx domain/path groups to a fixed public address.
 
-## Pipe Auth
-
-[Pipe Auth](pipe-auth.md) connects AWS and GitHub accounts for use by Pipe services.
-It covers credential setup, rotation, disconnects, and the authentication API.
-
 ## Public address connections
 
 An existing public domain or a generated Quick Tunnel URL connects to the local
@@ -130,14 +125,15 @@ the protected manifest. View saved routes in the Pipe dashboard.
 
 ## Dashboard
 
-Select **Pipe** in the existing dashboard menu. The page lists six service
+Select **Pipe** in the existing dashboard menu. The page lists seven service
 cards. Each card shows a short summary and the service's current state:
 
 | Card | Use |
 | --- | --- |
-| **Pipe Auth** | Shared AWS and GitHub account authentication |
+| **[Pipe Auth](pipe-auth.md)** | Shared AWS and GitHub account authentication |
 | **Route** | Nginx service state and domain/path routes to VM apps |
 | **Pipe Registry** | Container registry logins and image pulls |
+| **Database** | Saved database connections and read-only table browsing |
 | **Firecrab Tunnel** | Fixed addresses issued with a dashboard token |
 | **Cloudflare Quick Tunnel** | Temporary public URLs |
 | **Cloudflare Named Tunnel** | Stable public addresses on an owned Cloudflare domain |
@@ -181,7 +177,7 @@ Select **Edit** on an existing row to open its editor, or **Cancel** to discard
 the editor's inputs. Removed routes stay in the local draft until **Save**.
 Polling preserves local edits. API connection failure clears stale service badges.
 
-Open [the connection dashboard](https://firecrab.dev/dashboard/) to issue a token.
+Open [the connection dashboard](https://console.firecrab.dev/) to issue a token.
 Under **Firecrab Tunnel → Add fixed address**, paste it and select
 **VM apps** or saved **Nginx routes** in **Connection target**. There is no
 subdomain input or separate Quick Tunnel input in Firecrab Tunnel. Use the
@@ -212,6 +208,12 @@ on the same validation, persistence, reload, and rollback path.
 | `POST /api/pipe/disable` | Stop traffic units and retain saved config |
 
 Manifests and dashboard requests are limited to 48 KiB for the helper's bounded protocol frames.
+
+## Database connections
+
+Connect a local MySQL/PostgreSQL URI, Supabase or Amazon RDS database from the
+**Database** card. See [Database connections](pipe-databases.md) for URI,
+TLS, table browsing, preview limits and API endpoints.
 
 ## Routing and reload
 

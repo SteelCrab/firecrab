@@ -80,7 +80,7 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
       await expect(mock.row.locator("td:first-child")).toHaveText(name);
       await expect(mock.row.getByText("Build required", { exact: true })).toBeVisible();
       await mock.row.getByRole("button", { name: "⋯", exact: true }).click();
-      await mock.row.getByRole("button", { name: "Build M2Image", exact: true }).click();
+      await mock.row.getByRole("menuitem", { name: "Build M2Image", exact: true }).click();
       await expect(mock.row.getByText("Building…", { exact: true })).toBeVisible();
       const installed = mock.panel.getByRole("row").filter({ has: page.getByText("Installed", { exact: true }) });
       await expect(installed.getByText("Installed", { exact: true })).toBeVisible();
@@ -103,12 +103,12 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
   test("keeps failed builds visible with their log and allows retry", async ({ page }) => {
     const mock = await open(page, { failBuild: true });
     await mock.row.getByRole("button", { name: "⋯", exact: true }).click();
-    await mock.row.getByRole("button", { name: "Build M2Image", exact: true }).click();
+    await mock.row.getByRole("menuitem", { name: "Build M2Image", exact: true }).click();
     await expect(mock.row.getByText("Build failed", { exact: true })).toBeVisible();
     await expect(mock.panel.getByRole("alert")).toContainText("ext4 build failed");
     mock.allowBuild();
     await mock.row.getByRole("button", { name: "⋯", exact: true }).click();
-    await mock.row.getByRole("button", { name: "Build M2Image", exact: true }).click();
+    await mock.row.getByRole("menuitem", { name: "Build M2Image", exact: true }).click();
     await expect(mock.panel.locator("table.image-table").getByText("Installed", { exact: true })).toBeVisible();
     expect(mock.requests).toHaveLength(2);
   });
@@ -116,7 +116,7 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
   test("resumes a running build after reload without starting another import", async ({ page }) => {
     const mock = await open(page, { running: true });
     await mock.row.getByRole("button", { name: "⋯", exact: true }).click();
-    await mock.row.getByRole("button", { name: "Build M2Image", exact: true }).click();
+    await mock.row.getByRole("menuitem", { name: "Build M2Image", exact: true }).click();
     await expect(mock.row.getByText("Building…", { exact: true })).toBeVisible();
     await page.reload();
     await expect(mock.row.getByText("Building…", { exact: true })).toBeVisible();
@@ -141,7 +141,7 @@ test.describe("Pulled registry images in M2Image @dashboard", () => {
     await expect(mock.row.locator('[data-label="Registry"]')).toHaveText("GHCR");
     expect(await mock.panel.evaluate(panel => panel.scrollWidth > panel.clientWidth)).toBe(false);
     await mock.row.getByRole("button", { name: "⋯", exact: true }).click();
-    await mock.row.getByRole("button", { name: "Build M2Image", exact: true }).click();
+    await mock.row.getByRole("menuitem", { name: "Build M2Image", exact: true }).click();
     await expect(mock.panel.locator("table.image-table").getByText("Installed", { exact: true })).toBeVisible();
     await expect(mock.panel.locator('table.image-table [data-label="Registry"]')).toHaveText("GHCR");
     expect(await mock.panel.evaluate(panel => panel.scrollWidth > panel.clientWidth)).toBe(false);

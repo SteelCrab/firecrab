@@ -21,3 +21,4 @@ pub mod cloudflare;
 pub mod pipe;
 /// Provider authentication endpoints shared by supported Pipe services.
 pub mod pipe_auth;
+pub mod pipe_databases;

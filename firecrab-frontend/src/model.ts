@@ -2,6 +2,16 @@ import type { VmState } from "./bindings";
 
 export type VmAction = "start" | "stop" | "delete";
 
+/** Display name for each VM state, as `t(english, korean)` arguments. */
+export const VM_STATE_LABELS: Record<VmState, [string, string]> = {
+  created: ["Created", "생성됨"],
+  starting: ["Starting", "시작 중"],
+  running: ["Running", "실행 중"],
+  stopping: ["Stopping", "중지 중"],
+  stopped: ["Stopped", "중지됨"],
+  error: ["Error", "오류"],
+};
+
 /** RAM is restricted to powers of two, matching how cloud instance sizes
  * are usually picked (and the server's own validation). */
 export const RAM_OPTIONS_MIB = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768] as const;
