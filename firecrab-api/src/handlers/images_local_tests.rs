@@ -230,3 +230,26 @@ async fn host_local_staged_package_can_be_deleted_after_source_removal() {
         "deleting the staged archive must not remove its local catalog row"
     );
 }
+
+#[tokio::test]
+async fn staged_package_delete_rejects_alias_without_local_catalog_row() {
+    let directory = tempdir().unwrap();
+    let state = custom_state(directory.path()).await;
+    stage_local_catalog_package(&state).await;
+    remove_installed_source(&state).await;
+
+    let error = delete_staged_package(
+        State(state.clone()),
+        AxumPath("unregistered-alias".to_owned()),
+        Extension(RequestId(uuid::Uuid::nil())),
+    )
+    .await
+    .err()
+    .expect("an alias with no template or local catalog row must not be deletable");
+
+    assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    assert!(
+        image_install::staged_package_exists(state.templates.image_root_path(), ALIAS),
+        "rejecting an unknown alias must not touch another alias's staged package"
+    );
+}
