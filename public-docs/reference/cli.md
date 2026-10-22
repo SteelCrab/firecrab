@@ -108,6 +108,20 @@ See [OCI images](../guides/oci.md) for registry access and import limits.
 Use the [macOS](../getting-started/macos.md#service-commands) or [Windows](../getting-started/windows.md#service-commands) command table for managed services.
 Use [service dev](../development/micromanager.md) to deploy source-built API/helper binaries.
 
+On macOS and Windows, lifecycle controls have separate scopes:
+
+| Commands | Scope |
+| --- | --- |
+| `firecrab service start` / `stop` / `restart` | The management VM and its resident host service |
+| `firecrab service dev start` / `stop` / `restart` | Guest API/helper and the host development dashboard |
+| `firecrab service dev clean` | Restore installed release services, remove guest development files, and clear host dashboard state |
+
+Management VM controls leave the development dashboard running.
+While the VM is stopped, the dashboard cannot reach its API.
+Development controls do not boot or reboot the management VM and do not rebuild sources.
+`dev start`, `dev restart`, and `dev clean` require a running VM; `dev stop` can stop the dashboard after the VM is stopped.
+`dev clean` keeps VM disks, application data, and the host checkout.
+
 ## Pipe ingress and tunnel
 
 `pipe` manages Nginx routing and the optional Cloudflare Tunnel connector.

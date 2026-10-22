@@ -152,7 +152,7 @@ class GuestDevelopmentTest(unittest.TestCase):
         environment.update(TEST_ROOT=str(self.root), PATH=str(self.commands) + ":" + environment["PATH"])
         environment.update({key: str(value) for key, value in flags.items()})
         args = [shell, str(self.script), profile]
-        if profile not in ["start", "stop", "restart", "check"]:
+        if profile not in ["start", "stop", "restart", "clean", "check"]:
             args.extend(["1.97.1", self.archive.name])
         return subprocess.run(args,
                               env=environment, text=True, capture_output=True, timeout=10)
@@ -274,7 +274,7 @@ class GuestDevelopmentTest(unittest.TestCase):
 
     def test_read_only_os_rejects_start_restart_and_build_even_with_healthy_api(self):
         self.mounts.write_text("/dev/os / ext4 ro,relatime 0 0\n")
-        for action in ["check", "start", "restart", "debug", "restore"]:
+        for action in ["check", "start", "restart", "clean", "debug", "restore"]:
             with self.subTest(action=action):
                 result = self.run_guest(action)
                 self.assertEqual(result.returncode, 74, result.stderr)
@@ -468,6 +468,56 @@ class GuestDevelopmentTest(unittest.TestCase):
         self.assertIn("in progress", result.stderr)
         self.assertFalse((self.root / "events").exists())
 
+    def test_clean_restores_release_and_removes_only_development_files(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (self.root / "rustup-events").unlink()
+        custom = self.override().parent / "custom.conf"
+        custom.write_text("custom settings\n")
+        data = self.root / "persistent-data"
+        data.mkdir()
+        (data / "disk.raw").write_text("VM data\n")
+        (self.cache / ".hidden-cache").write_text("cached file")
+        (self.cache / "external").symlink_to(data, target_is_directory=True)
+        (self.binaries / "external").symlink_to(data, target_is_directory=True)
+        lock_inode = (self.cache / "deploy.lock").stat().st_ino
+
+        result = self.run_guest("clean", BUILD_FAIL=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("development files cleaned", result.stdout)
+        self.assertFalse(self.override().exists())
+        self.assertFalse(self.binaries.exists())
+        self.assertEqual(sorted(path.name for path in self.cache.iterdir()), ["deploy.lock"])
+        self.assertEqual((self.cache / "deploy.lock").stat().st_ino, lock_inode)
+        self.assertFalse((self.root / "rustup-events").exists())
+        self.assertEqual(custom.read_text(), "custom settings\n")
+        self.assertEqual((data / "disk.raw").read_text(), "VM data\n")
+        self.assertEqual((self.root / "local/firecrab-api/src/main.rs").read_text(), "edited local source")
+
+    def test_clean_without_a_deployment_is_repeatable_and_needs_no_checkout(self):
+        for _ in range(2):
+            result = self.run_guest("clean", BUILD_FAIL=1)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("[PASS]", result.stdout)
+            self.assertFalse(self.binaries.exists())
+            self.assertEqual(sorted(path.name for path in self.cache.iterdir()), ["deploy.lock"])
+            self.assertFalse((self.root / "rustup-events").exists())
+
+    def test_failed_clean_restoration_preserves_development_binaries_and_cache(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        previous = (self.binaries / "bin").resolve()
+        override = self.override().read_text()
+        result = self.run_guest("clean", HEALTH_FAIL=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[ROLLBACK]", result.stderr)
+        self.assertNotIn("development files cleaned", result.stdout)
+        self.assertEqual((self.binaries / "bin").resolve(), previous)
+        self.assertEqual(self.override().read_text(), override)
+        self.assertTrue((self.cache / "source/firecrab-api/src/main.rs").exists())
+        self.assertTrue((self.cache / "target").is_dir())
+        self.assertTrue((self.cache / "cargo/bin/rustup").exists())
+
     def test_controls_preserve_deployment_and_do_not_build(self):
         for legacy in [0, 1]:
             helper = "firecrab-net-helper" if legacy else "firecrab-helper"
@@ -502,7 +552,7 @@ class GuestDevelopmentTest(unittest.TestCase):
                     self.assertTrue(self.archive.exists())
 
     def test_controls_share_the_deployment_lock(self):
-        for action in ["start", "stop", "restart"]:
+        for action in ["start", "stop", "restart", "clean"]:
             with self.subTest(action=action):
                 result = self.run_guest(action, LOCK_FAIL=1)
                 self.assertNotEqual(result.returncode, 0)

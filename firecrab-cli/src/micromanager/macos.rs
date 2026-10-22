@@ -128,6 +128,10 @@ pub fn run(command: Command) -> Result<i32, Error> {
         Command::Uninstall { purge } => run_uninstall(purge),
         Command::Start => run_start(),
         Command::Stop => run_stop(),
+        Command::Restart => {
+            run_stop()?;
+            run_start()
+        }
         Command::Status => run_status(),
         Command::Debug { json, logs, tail } => run_debug(debug::Options::new(json, logs, tail)),
         Command::Dev {
@@ -341,8 +345,18 @@ fn wait_for_dev_api(layout: &lifecycle::Layout) -> Result<(), Error> {
 
 fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
-    let ip = running_guest_ip(&layout)?;
-    dev::control(&layout, ip, command)?;
+    match running_guest_ip(&layout) {
+        Ok(ip) => dev::control(&layout, ip, command)?,
+        // The dashboard can outlive a management VM stopped by `service stop`.
+        Err(Error::ShellNotRunning) if command == DevCommand::Stop => {}
+        Err(error) => return Err(error),
+    }
+    if command == DevCommand::Clean {
+        dashboard::clean(&layout.managed_home).map_err(dev::Error::from)?;
+        wait_for_dev_api(&layout)?;
+        report!("[PASS] installed release API: http://127.0.0.1:5523/");
+        return Ok(0);
+    }
     if command != DevCommand::Start {
         dashboard::stop(&layout.managed_home).map_err(dev::Error::from)?;
     }
@@ -357,7 +371,6 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
 
 fn run_stop() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
-    dashboard::stop(&layout.managed_home).map_err(dev::Error::from)?;
     daemon::stop(&layout)?;
     report!("[PASS] launchd: stopped");
     Ok(0)
@@ -945,6 +958,7 @@ fn command_arguments(command: &Command) -> Vec<OsString> {
         | Command::Uninstall { .. }
         | Command::Start
         | Command::Stop
+        | Command::Restart
         | Command::Status
         | Command::Debug { .. }
         | Command::Resource { .. }

@@ -45,7 +45,7 @@ case "$profile" in
     [[ "$archive_name" != */* ]]
     [[ "$channel" =~ ^[a-zA-Z0-9.-]+$ ]]
     ;;
-  start|stop|restart|check) ;;
+  start|stop|restart|clean|check) ;;
   *) echo 'invalid build profile or service action' >&2; exit 1 ;;
 esac
 
@@ -118,7 +118,7 @@ finish() {
   set +e
   if [ "$rc" -ne 0 ] && ! check_filesystems; then
     echo '[FAIL] guest OS filesystem is unhealthy; stop retrying the build and run firecrab service repair' >&2
-    echo "[PRESERVE] deployment backup: $backup; source archive: $root/$archive_name" >&2
+    echo "[PRESERVE] deployment backup: $backup; development cache: $root" >&2
     exit 74
   fi
   if [ "$rc" -ne 0 ] && [ "$deploying" -eq 1 ]; then
@@ -142,7 +142,9 @@ finish() {
     systemctl start "$helper_unit"
     systemctl start firecrab-api
   fi
-  if ! rm -f "$root/$archive_name" "$bin_root/bin.next" || ! rm -rf "$backup"; then
+  cleanup=("$bin_root/bin.next")
+  if [ -n "${archive_name:-}" ]; then cleanup+=("$root/$archive_name"); fi
+  if ! rm -f "${cleanup[@]}" || ! rm -rf "$backup"; then
     echo '[WARN] guest deployment cleanup failed; inspect filesystem errors with firecrab service debug --logs' >&2
   fi
   if [ "$rc" -ne 0 ] && [ -n "$binaries" ]; then rm -rf "$binaries"; fi
@@ -152,7 +154,7 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ "$profile" != restore ]; then
+if [ "$profile" != restore ] && [ "$profile" != clean ]; then
   phase=build
   case "$(uname -m)" in
     aarch64) target=aarch64-unknown-linux-gnu ;;
@@ -227,7 +229,7 @@ fi
 deploying=1
 phase=activate
 systemctl stop firecrab-api "$helper_unit"
-if [ "$profile" = restore ]; then
+if [ "$profile" = restore ] || [ "$profile" = clean ]; then
   for unit in firecrab-api firecrab-helper firecrab-net-helper; do
     rm -f "$unit_root/$unit.service.d/90-firecrab-dev.conf"
   done
@@ -263,6 +265,17 @@ for _ in $(seq 1 60); do
     && curl -fs --max-time 2 http://127.0.0.1:5523/api/host >/dev/null; then
     check_filesystems || exit 74
     deploying=0
+    if [ "$profile" = clean ]; then
+      phase=clean
+      # Release services are healthy. Keep the lock inode while removing caches.
+      rm -rf -- "$bin_root"
+      shopt -s dotglob nullglob
+      for entry in "$root"/*; do
+        if [ "$entry" != "$root/deploy.lock" ]; then rm -rf -- "$entry"; fi
+      done
+      echo '[PASS] guest: development files cleaned; installed release API + helper are ready'
+      exit 0
+    fi
     if [ "$profile" = restore ]; then rm -f "$bin_root/bin"; fi
     case "$previous_bin" in
       "$bin_root"/build.*) rm -rf "$previous_bin" ;;
