@@ -1080,8 +1080,9 @@ table.image-table tbody tr.is-selected td {
 .secrets-form { max-width: 48rem; }
 .secrets-form fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .secrets-field { display: grid; gap: .4rem; margin: 1rem 0; }
-.secrets-field input, .secrets-field textarea, .secrets-field select, .secrets-search, .secrets-upload select { width: 100%; min-width: 0; border: 1px solid var(--border); border-radius: 3px; padding: .6rem .7rem; background: var(--bg); color: var(--text); font: .82rem var(--mono); }
-.secrets-field textarea { resize: vertical; }
+.secrets-field input, .secrets-field textarea, .secrets-field select, .secrets-search, .secrets-upload select { width: 100%; min-width: 0; height: var(--control-height); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 10px; background: var(--bg); color: var(--text); font: 13px var(--font); }
+.secrets-field select, .secrets-upload select { padding-right: 28px; }
+.secrets-field textarea { height: auto; min-height: 80px; padding: 8px 10px; line-height: 1.5; resize: vertical; }
 .secrets-masked-input { -webkit-text-security: disc; }
 .secrets-checkbox { display: flex; align-items: center; gap: .5rem; font-size: .85rem; margin: .75rem 0; }
 .secrets-changes { margin: 1rem 0; max-height: 24rem; overflow-y: auto; border: 1px solid var(--border); }
