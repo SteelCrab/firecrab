@@ -127,7 +127,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Resource | Paths |
 | --- | --- |
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
-| MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/stop` |
+| MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/deployment/check`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |

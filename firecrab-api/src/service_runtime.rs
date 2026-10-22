@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::extract::ValidatedJson;
-use crate::handlers::micro_services::database;
-use crate::handlers::{micro_networks, oci as oci_handler, vms};
+use crate::handlers::micro_services::{database, require_image_auth};
+use crate::handlers::{micro_networks, vms};
 use crate::image_install::Architecture;
 use crate::oci::{self, ImageReference, ImageVersion, Sha256Digest};
 use crate::server::RequestId;
@@ -38,22 +38,8 @@ pub async fn deploy(
     let service = database(request_id.0, move || store.micro_service(id))
         .await?
         .ok_or_else(|| AppError::not_found(request_id.0))?;
-    let fields = deployment_fields(&service.spec, &request, state.api_port);
-    if !fields.is_empty() {
-        return Err(AppError::validation(fields, request_id.0));
-    }
-    if let Some(network_id) = request.micro_network_id {
-        let store = state.store.clone();
-        if database(request_id.0, move || store.micro_network(network_id))
-            .await?
-            .is_none()
-        {
-            return Err(AppError::validation(
-                BTreeMap::from([("microNetworkId".into(), "network does not exist".into())]),
-                request_id.0,
-            ));
-        }
-    }
+    require_image_auth(&state, &service.spec.image, request_id.0).await?;
+    validate_placement(&state, &service.spec, &request, request_id.0).await?;
     let deployment = MicroServiceDeployment {
         id: Uuid::new_v4(),
         service_id: id,
@@ -74,6 +60,85 @@ pub async fn deploy(
         run_deploy(task_state, task_deployment).await;
     });
     Ok((StatusCode::ACCEPTED, Json(deployment)))
+}
+
+/// Check current placement without queuing a deployment or creating resources.
+pub async fn check(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(id): Path<String>,
+    ValidatedJson(request): ValidatedJson<DeployMicroServiceRequest>,
+) -> Result<Json<()>, AppError> {
+    let id = vms::parse_id(&id, request_id.0)?;
+    let store = state.store.clone();
+    let service = database(request_id.0, move || store.micro_service(id))
+        .await?
+        .ok_or_else(|| AppError::not_found(request_id.0))?;
+    validate_placement(&state, &service.spec, &request, request_id.0).await?;
+    Ok(Json(()))
+}
+
+/// Report placement errors together so the form can correct both fields at once.
+async fn validate_placement(
+    state: &AppState,
+    spec: &MicroServiceSpec,
+    request: &DeployMicroServiceRequest,
+    request_id: Uuid,
+) -> Result<(), AppError> {
+    let mut fields = deployment_fields(spec, request, state.api_port);
+    if let Some(network_id) = request.micro_network_id {
+        let store = state.store.clone();
+        if database(request_id, move || store.micro_network(network_id))
+            .await?
+            .is_none()
+        {
+            fields.insert("microNetworkId".into(), "network does not exist".into());
+        }
+    }
+    if !fields.contains_key("hostPort")
+        && let Some(conflict) =
+            host_port_conflict(state, request, spec.replicas, request_id).await?
+    {
+        fields.insert("hostPort".into(), conflict);
+    }
+    if !fields.is_empty() {
+        return Err(AppError::validation(fields, request_id));
+    }
+    Ok(())
+}
+
+/// NAT assignments and host listeners both prevent using a TCP port.
+async fn host_port_conflict(
+    state: &AppState,
+    request: &DeployMicroServiceRequest,
+    replicas: u16,
+    request_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    let store = state.store.clone();
+    let ports = database(request_id, move || store.list_all_port_forwards()).await?;
+    let first = u32::from(request.host_port);
+    let end = first + u32::from(replicas);
+    if let Some((_, port)) = ports.iter().find(|(_, port)| {
+        port.protocol == PortProtocol::Tcp && (first..end).contains(&u32::from(port.host_port))
+    }) {
+        return Ok(Some(format!(
+            "Host port {} is already assigned to a MicroVM",
+            port.host_port
+        )));
+    }
+    for port in first..end {
+        if let Err(error) =
+            std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port as u16))
+        {
+            let detail = if error.kind() == std::io::ErrorKind::AddrInUse {
+                "is already used by another process"
+            } else {
+                "cannot be used on this host"
+            };
+            return Ok(Some(format!("Host port {port} {detail}")));
+        }
+    }
+    Ok(None)
 }
 
 /// Read the latest deployment with live VM states and application health checks.
@@ -225,36 +290,55 @@ async fn run_deploy(state: AppState, mut deployment: MicroServiceDeployment) {
     let Ok(_permit) = state.service_deploy_permits.acquire().await else {
         return;
     };
-    if let Err(mut error) = execute(&state, &mut deployment).await {
-        if let Err(cleanup_error) = cleanup(&state, &mut deployment).await {
-            error.push_str(&format!("; cleanup requires retry: {cleanup_error}"));
-        }
-        deployment.phase = ServicePhase::Failed;
-        deployment.error = Some(error.clone());
-        deployment.log.push(error);
-        if let Err(error) = save(&state, &deployment).await {
-            tracing::error!(service_id = %deployment.service_id, %error, "could not record failed deployment");
-        }
+    let result = async {
+        // Queued requests may outlive their AUTH connection. Never fall back to
+        // anonymous pulls or independently saved registry credentials here.
+        let auth = require_image_auth(&state, &deployment.spec.image, deployment.id)
+            .await
+            .map_err(|_| "Image account is no longer connected in Pipe Auth".to_owned())?;
+        let credential = auth.registry_credential().await.map_err(str::to_owned)?;
+        execute(&state, &mut deployment, credential).await
+    }
+    .await;
+    if let Err(error) = result {
+        fail_deployment(&state, &mut deployment, error).await;
+    }
+}
+
+/// Retain cleanup failures and VM ownership so Stop can safely retry.
+async fn fail_deployment(
+    state: &AppState,
+    deployment: &mut MicroServiceDeployment,
+    mut error: String,
+) {
+    if let Err(cleanup_error) = cleanup(state, deployment).await {
+        error.push_str(&format!("; cleanup requires retry: {cleanup_error}"));
+    }
+    deployment.phase = ServicePhase::Failed;
+    deployment.error = Some(error.clone());
+    deployment.log.push(error);
+    if let Err(error) = save(state, deployment).await {
+        tracing::error!(service_id = %deployment.service_id, %error, "could not record failed deployment");
     }
 }
 
 /// Check capacity, import a pinned image and boot each replica until HTTP health passes.
-async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> Result<(), String> {
+async fn execute(
+    state: &AppState,
+    deployment: &mut MicroServiceDeployment,
+    credential: oci::RegistryCredential,
+) -> Result<(), String> {
     check_capacity(state, &deployment.spec).await?;
-    let store = state.store.clone();
-    let ports = database(deployment.id, move || store.list_all_port_forwards())
-        .await
-        .map_err(|_| "Could not check host ports".to_owned())?;
-    let first = u32::from(deployment.request.host_port);
-    let end = first + u32::from(deployment.spec.replicas);
-    if ports.iter().any(|(_, port)| {
-        port.protocol == PortProtocol::Tcp && (first..end).contains(&u32::from(port.host_port))
-    }) {
-        return Err("A requested host port is already assigned to a VM".into());
-    }
-    for port in first..end {
-        std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, port as u16))
-            .map_err(|_| format!("Host port {port} is already used by another process"))?;
+    if let Some(conflict) = host_port_conflict(
+        state,
+        &deployment.request,
+        deployment.spec.replicas,
+        deployment.id,
+    )
+    .await
+    .map_err(|_| "Could not check host ports".to_owned())?
+    {
+        return Err(conflict);
     }
     phase(
         state,
@@ -265,17 +349,11 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
     .await?;
     let original =
         ImageReference::parse(&deployment.spec.image).map_err(|error| error.to_string())?;
-    let credential =
-        oci_handler::stored_credential_for(state, &original.registry, RequestId(deployment.id))
-            .await
-            .map_err(|_| {
-                "Could not authenticate the image registry. Check Pipe Auth.".to_owned()
-            })?;
     let resolved = oci::resolve(
         &original,
         Architecture::HOST,
         oci::is_loopback_registry(&original.registry),
-        credential.clone(),
+        Some(credential.clone()),
     )
     .await
     .map_err(|error| format!("Image resolution failed: {error}"))?;
@@ -305,7 +383,7 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
                     (*state.templates).clone(),
                     pinned,
                     alias.clone(),
-                    credential,
+                    Some(credential),
                 )
                 .await
             }

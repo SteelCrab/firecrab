@@ -54,6 +54,7 @@ pub async fn save(
         .await
         .map_err(|message| auth_error(message, id))?;
     let connection = auth.connection();
+    let _claim = state.service_mutations.lock().await;
     tokio::task::spawn_blocking(move || state.store.put_pipe_auth(&auth))
         .await
         .map_err(|_| AppError::internal(id.0))?
@@ -67,6 +68,7 @@ pub async fn delete(
     Extension(id): Extension<RequestId>,
     Path(provider): Path<Provider>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let _claim = state.service_mutations.lock().await;
     tokio::task::spawn_blocking(move || state.store.delete_pipe_auth(provider))
         .await
         .map_err(|_| AppError::internal(id.0))?

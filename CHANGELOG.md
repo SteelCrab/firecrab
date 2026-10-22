@@ -135,6 +135,24 @@ Entries land here as work merges, and move under the next version heading when t
   status, and stderr. Warnings also identify failed nftables and firewall-state
   queries that keep their existing empty or disabled fallback ([#305]).
 
+- MicroService setup guides users through app, connection, resources, and review
+  steps, with field explanations and a configuration summary. App selection
+  uses only Pipe Auth-connected GitHub or AWS accounts and their repository/tag
+  lists, rechecks the connection before saving, and directs unconnected users
+  to Auth. The API also checks image ownership when saving, updating, and
+  deploying; queued work rechecks Auth and pulls only with its credentials.
+  Deployment controls recheck Auth in the background and before submitting,
+  disable deployment after disconnection or a failed check, and link to Auth
+  reconnection while keeping service stop available. Reconnecting the matching
+  account returns to the same deployment panel with the selected network and
+  host port, ready for an explicit deploy action. Placement checks verify that
+  the restored network still exists and all replica TCP ports are available;
+  invalid choices block deployment with field errors and direct editing. The
+  deploy API rechecks placement before queueing, including VM forwards and host
+  listeners.
+  Saving opens deployment management with image/start/health progress, an app
+  link after a successful health check, and guidance for failed deployments.
+
 ## [0.3.1] - 2026-10-06
 
 firecrab runs every MicroVM in its own systemd unit with host resource ceilings and startup

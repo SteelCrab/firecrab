@@ -33,10 +33,12 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   const mutating = useRef(false);
   const apps = pipeApps(vms);
 
-  useEffect(() => {
-    onUnsavedChange(dirty);
-    return () => onUnsavedChange(false);
-  }, [dirty, onUnsavedChange]);
+  const reportUnsavedChange = useCallback((value: boolean) => {
+    setDirty(value);
+    onUnsavedChange(value);
+  }, [onUnsavedChange]);
+
+  useEffect(() => () => onUnsavedChange(false), [onUnsavedChange]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -78,17 +80,17 @@ export default function Pipe({ card, vms, vmsLoading, vmsUnavailable, onUnsavedC
   // A started request blocks polling so an older snapshot cannot overwrite its result.
   const onBusy = useCallback((value: boolean) => { mutating.current = value; setBusy(value); revision.current++; }, []);
   const onSnapshot = useCallback((next: PipeSnapshot) => { setSnapshot(next); setError(null); }, []);
-  const shared = { snapshot, busy, onBusy, onUnsavedChange: setDirty };
+  const shared = { snapshot, busy, onBusy, onUnsavedChange: reportUnsavedChange };
   const appProps = { apps, vmsLoading, vmsUnavailable };
 
-  if (card === "auth") return <PipeAuth onUnsavedChange={setDirty} />;
+  if (card === "auth") return <PipeAuth onUnsavedChange={reportUnsavedChange} />;
   if (!card) return <Screen view="pipe"><PipeCards snapshot={snapshot} error={error} /></Screen>;
   return <Screen view="pipe"><div className="stack">
     <nav className="pipe-back" aria-label={t("Pipe navigation", "Pipe 이동")}><a href={viewHash("pipe")}><span aria-hidden="true">← </span>Pipe</a></nav>
     {error && <div className="banner error" role="alert">{error}</div>}
     {card === "route" && <PipeRouting {...shared} {...appProps} onSnapshot={onSnapshot} />}
-    {card === "registry" && <PipeRegistries onUnsavedChange={setDirty} />}
-    {card === "database" && <PipeDatabases onUnsavedChange={setDirty} />}
+    {card === "registry" && <PipeRegistries onUnsavedChange={reportUnsavedChange} />}
+    {card === "database" && <PipeDatabases onUnsavedChange={reportUnsavedChange} />}
     {card === "firecrab-tunnel" && <FirecrabTunnel {...shared} {...appProps} onConnected={onSnapshot} />}
     {card === "quick-tunnel" && <CloudflareConnect {...shared} {...appProps} config={snapshot?.config ?? EMPTY_PIPE} onConnected={onSnapshot} />}
     {card === "named-tunnel" && <NamedCloudflareTunnel {...shared} config={snapshot?.config ?? EMPTY_PIPE} onConnected={onSnapshot} />}

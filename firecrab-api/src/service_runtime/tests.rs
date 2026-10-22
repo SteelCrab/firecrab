@@ -5,19 +5,27 @@ use firecrab_api_types::{MicroServiceResponse, MicroServiceSpec};
 
 fn spec() -> MicroServiceSpec {
     serde_json::from_value(serde_json::json!({
-        "name": "web", "image": "127.0.0.1:1/app:v1", "port": 8080,
+        "name": "web", "image": "ghcr.io/team/app:v1", "port": 8080,
         "ram": 128, "cpu": 1,
     }))
     .unwrap()
 }
 
 async fn state(root: &std::path::Path) -> AppState {
-    AppState::with_db_file(
+    let state = AppState::with_db_file(
         TemplateRegistry::from_specs(root, std::iter::empty()).unwrap(),
         root.join("state.db"),
     )
     .await
-    .unwrap()
+    .unwrap();
+    state
+        .store
+        .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+            username: "team".into(),
+            token: "test-only-secret".into(),
+        })
+        .unwrap();
+    state
 }
 
 fn deployment(id: Uuid) -> MicroServiceDeployment {
@@ -345,20 +353,24 @@ fn free_port() -> u16 {
 #[tokio::test]
 async fn failed_app_health_deletes_the_booted_replica_and_records_the_reason() {
     let directory = crate::firecracker::test_support::short_tempdir();
-    let (state, id, _, _) = bootable_service(directory.path()).await;
-    let (status, Json(queued)) = deploy(
-        State(state.clone()),
-        Extension(RequestId(Uuid::new_v4())),
-        Path(id.to_string()),
-        ValidatedJson(DeployMicroServiceRequest {
-            micro_network_id: None,
-            host_port: free_port(),
-        }),
-    )
-    .await
-    .unwrap();
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(queued.phase, ServicePhase::Queued);
+    let (state, id, spec, _) = bootable_service(directory.path()).await;
+    // Exercise VM lifecycle with the loopback manifest fixture after the AUTH
+    // boundary. Separate API tests reject loopback images and revoked accounts.
+    let mut queued = deployment(id);
+    queued.spec = spec;
+    queued.request.host_port = free_port();
+    save(&state, &queued).await.unwrap();
+    let task_state = state.clone();
+    tokio::spawn(async move {
+        let credential = oci::RegistryCredential {
+            registry: ImageReference::parse(&queued.spec.image).unwrap().registry,
+            username: "fixture".into(),
+            secret: "fixture".into(),
+        };
+        if let Err(error) = execute(&task_state, &mut queued, credential).await {
+            fail_deployment(&task_state, &mut queued, error).await;
+        }
+    });
     let record = wait_for_phase(&state, id, ServicePhase::Failed).await;
     let error = record.error.unwrap();
     assert!(error.contains("App health check /health failed"), "{error}");
@@ -547,4 +559,146 @@ async fn get_reports_live_instance_state_and_rejects_unknown_services() {
     };
     assert_eq!(live.phase, ServicePhase::Degraded);
     assert_eq!(live.instances[0].state, VmState::Stopped);
+}
+
+#[tokio::test]
+async fn service_runtime_auth_rejects_unowned_saved_images_before_queuing() {
+    let root = tempfile::tempdir().unwrap();
+    let state = state(root.path()).await;
+    let _queue = state.service_deploy_permits.acquire().await.unwrap();
+    for image in [
+        "nginx:1.27",
+        "127.0.0.1:5000/app:v1",
+        "ghcr.io/other/app:v1",
+    ] {
+        let id = Uuid::new_v4();
+        let mut spec = spec();
+        spec.name = format!("service-{}", id.simple());
+        spec.image = image.into();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse { id, spec })
+            .unwrap();
+        let error = deploy(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                micro_network_id: None,
+                host_port: 30100,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        assert!(state.store.service_deployment(id).unwrap().is_none());
+    }
+    assert!(state.vms.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn service_runtime_auth_rechecks_revoked_and_replaced_accounts_after_queueing() {
+    for replacement in [None, Some("other")] {
+        let root = tempfile::tempdir().unwrap();
+        let state = state(root.path()).await;
+        let id = Uuid::new_v4();
+        state
+            .store
+            .insert_micro_service(&MicroServiceResponse { id, spec: spec() })
+            .unwrap();
+        state
+            .store
+            .put_registry_login(
+                &oci::RegistryCredential {
+                    registry: "ghcr.io".into(),
+                    username: "team".into(),
+                    secret: "fallback-must-not-be-used".into(),
+                },
+                None,
+            )
+            .unwrap();
+        let queue = state.service_deploy_permits.acquire().await.unwrap();
+        let (_, Json(queued)) = deploy(
+            State(state.clone()),
+            Extension(RequestId(Uuid::new_v4())),
+            Path(id.to_string()),
+            ValidatedJson(DeployMicroServiceRequest {
+                micro_network_id: None,
+                host_port: 30100,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(queued.phase, ServicePhase::Queued);
+        state
+            .store
+            .delete_pipe_auth(crate::pipe_auth::Provider::Github)
+            .unwrap();
+        if let Some(username) = replacement {
+            state
+                .store
+                .put_pipe_auth(&crate::pipe_auth::SavedAuth::Github {
+                    username: username.into(),
+                    token: "other-private-token".into(),
+                })
+                .unwrap();
+        }
+        drop(queue);
+        let failed = wait_for_phase(&state, id, ServicePhase::Failed).await;
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("Image account is no longer connected in Pipe Auth")
+        );
+        assert!(failed.digest.is_none());
+        assert!(failed.instances.is_empty());
+        assert!(
+            !failed
+                .log
+                .iter()
+                .any(|line| line.contains("Resolving image"))
+        );
+        assert!(
+            !serde_json::to_string(&failed)
+                .unwrap()
+                .contains("fallback-must-not-be-used")
+        );
+        assert!(state.vms.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn placement_checks_reserved_vm_tcp_ports_across_all_replicas_but_allows_udp() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = state(directory.path()).await;
+    let owner = Uuid::new_v4();
+    let port = free_port().min(65534);
+    let request = DeployMicroServiceRequest {
+        micro_network_id: None,
+        host_port: port,
+    };
+    let forward = |protocol| PortForward {
+        host_port: port + 1,
+        guest_port: 8080,
+        protocol,
+    };
+    state
+        .store
+        .set_vm_port_forwards(owner, &[forward(PortProtocol::Udp)])
+        .unwrap();
+    assert!(
+        host_port_conflict(&state, &request, 2, Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    state
+        .store
+        .set_vm_port_forwards(owner, &[forward(PortProtocol::Tcp)])
+        .unwrap();
+    let conflict = host_port_conflict(&state, &request, 2, Uuid::new_v4())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(conflict.contains(&(port + 1).to_string()));
+    assert!(conflict.contains("MicroVM"));
 }

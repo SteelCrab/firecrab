@@ -13,6 +13,7 @@ use crate::extract::ValidatedJson;
 use crate::handlers::vms::{parse_id, validate_vm_env};
 use crate::oci::{ImageReference, ImageVersion};
 use crate::persistence::PersistenceError;
+use crate::pipe_auth::SavedAuth;
 use crate::server::RequestId;
 use crate::state::AppState;
 
@@ -46,6 +47,8 @@ pub async fn create(
     ValidatedJson(spec): ValidatedJson<MicroServiceSpec>,
 ) -> Result<(StatusCode, Json<MicroServiceResponse>), AppError> {
     validate(&spec, request_id.0)?;
+    let _claim = state.service_mutations.lock().await;
+    require_image_auth(&state, &spec.image, request_id.0).await?;
     let service = MicroServiceResponse {
         id: Uuid::new_v4(),
         spec,
@@ -69,6 +72,7 @@ pub async fn update(
     validate(&spec, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
+    require_image_auth(&state, &spec.image, request_id.0).await?;
     let service = MicroServiceResponse { id, spec };
     let record = service.clone();
     let changed = database(request_id.0, move || {
@@ -94,6 +98,37 @@ pub async fn delete(
         return Err(AppError::not_found(request_id.0));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Scope service images to the verified account, never to independent registry logins.
+/// Saving validates ownership locally; deployment resolves the image with this account's credentials.
+pub(crate) async fn require_image_auth(
+    state: &AppState,
+    image: &str,
+    request_id: Uuid,
+) -> Result<SavedAuth, AppError> {
+    let invalid = || {
+        let message = "must belong to an account connected in Pipe Auth; use that GitHub account's GHCR namespace or that AWS account's ECR registry and region";
+        AppError::validation(
+            BTreeMap::from([("image".into(), message.into())]),
+            request_id,
+        )
+    };
+    let reference = ImageReference::parse(image).map_err(|_| invalid())?;
+    let auths = super::pipe_auth::saved(state, RequestId(request_id)).await?;
+    auths
+        .into_iter()
+        .find(|auth| match auth {
+            SavedAuth::Github { username, .. } => {
+                reference.registry == "ghcr.io"
+                    && reference
+                        .repository
+                        .split_once('/')
+                        .is_some_and(|(owner, _)| owner.eq_ignore_ascii_case(username))
+            }
+            SavedAuth::Aws { .. } => reference.registry == auth.connection().registry,
+        })
+        .ok_or_else(invalid)
 }
 
 /// Keep SQLite work off the async executor and never expose DB details or env values.

@@ -137,16 +137,17 @@ export default function App() {
   // Generation token so React StrictMode's mount→unmount→remount does not
   // leave a stuck "in flight" flag that skips the real first list fetch.
   const refreshGen = useRef(0);
-  const [pipeHasUnsavedChanges, setPipeHasUnsavedChanges] = useState(false);
+  const pipeHasUnsavedChanges = useRef(false);
+  const onPipeUnsavedChange = useCallback((dirty: boolean) => { pipeHasUnsavedChanges.current = dirty; }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useDetailPanelOpen();
   const [detailWidth, setDetailWidth] = useDetailPanelWidth();
   const [secretsHasUnsavedChanges, setSecretsHasUnsavedChanges] = useState(false);
-  const confirmLeave = useCallback(() => !(pipeHasUnsavedChanges || secretsHasUnsavedChanges) || window.confirm(
+  const confirmLeave = useCallback(() => !(pipeHasUnsavedChanges.current || secretsHasUnsavedChanges) || window.confirm(
     secretsHasUnsavedChanges
       ? t("Secrets changes have not been saved or are still processing. Leave this page?", "Secrets 변경을 저장하지 않았거나 처리 중이다. 이동할까요?")
       : t("Pipe changes have not been saved. Leave without saving?", "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?"),
-  ), [pipeHasUnsavedChanges, secretsHasUnsavedChanges, t]);
+  ), [secretsHasUnsavedChanges, t]);
   const { route, selectView, closeConsole } = useAppRoute(confirmLeave);
 
   const runRefresh = useCallback(() => {
@@ -274,7 +275,7 @@ export default function App() {
       {view === "services" && <MicroServices />}
       {view === "secrets" && <Screen view="secrets"><Secrets onUnsavedChange={setSecretsHasUnsavedChanges} /></Screen>}
       {view === "pipe" && (
-        <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
+        <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={onPipeUnsavedChange} />
       )}
       {view === "storages" && <MicroStorages />}
       {view === "images" && <Images />}

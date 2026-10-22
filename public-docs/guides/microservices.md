@@ -12,7 +12,7 @@ Domain routing, PipeSecrets injection, rolling updates, rollback, and automatic 
 | Field | Rule or default |
 | --- | --- |
 | `name` | Required unique DNS label; 1–63 lowercase letters, digits, or hyphens; start and end with a letter or digit |
-| `image` | Required OCI image reference; tag or SHA256 digest; no registry request when saving |
+| `image` | Required OCI image in a Pipe Auth-connected account; tag or SHA256 digest; ownership checked locally when saving |
 | `runtime` | `vm` only; default `vm` |
 | `port` | Required app port; 1–65535 |
 | `healthPath` | Absolute HTTP path without query or fragment; default `/health` |
@@ -55,12 +55,26 @@ The existing origin rules, request deadline, JSON errors, and 64 KiB body limit 
 Stop the service before editing, deleting, or deploying it again.
 Those requests return `409` while a deployment is active or its instances still exist.
 
-Example `web.json` using a public image:
+Create, update, and deploy require a matching **Pipe Auth** connection:
+
+- GitHub: `ghcr.io/ACCOUNT/REPOSITORY`, where `ACCOUNT` matches the connected
+  GitHub login. Another user's or organization's namespace is rejected.
+- AWS: the exact private ECR registry for the connected account and region.
+  Other account IDs, regions, public ECR, and lookalike hosts are rejected.
+
+A standalone registry login does not satisfy this policy. Invalid ownership
+returns `400` with an `image` field error before saving or queuing a deployment.
+Saving checks account scope without contacting the registry; the worker resolves
+the requested tag or digest with that account's credentials when deploying.
+Reading, stopping, and deleting existing services do not require the connection.
+
+Example `web.json` using an image published to the connected GitHub account
+(replace `your-account` with its lowercase login):
 
 ```json
 {
   "name": "web",
-  "image": "nginx:stable-alpine",
+  "image": "ghcr.io/your-account/web:1.0",
   "runtime": "vm",
   "port": 80,
   "healthPath": "/",
@@ -96,10 +110,52 @@ Create, get, and update print JSON.
 Delete prints a JSON receipt.
 In the dashboard, open **MicroService** to create, inspect, edit, or delete configurations.
 The form supports environment variables and [PipeSecrets](secrets.md) references.
-Saving a configuration does not deploy it.
-Select **Run**, then **Deploy and run** to pull the image and start its replicas.
-The panel reports startup progress, app health, host-port links, and failures.
-**Stop service** removes the owned MicroVMs.
+Select **New MicroService** to follow four setup steps:
+
+1. **App** — enter a name, choose an account connected in **Pipe Auth**, then
+   select one of its app repositories and image versions. Connect GitHub or AWS
+   in Auth first if no accounts are available. Manual image addresses and public
+   examples are not offered in this picker.
+2. **Connection** — set the app's internal port and a path that returns HTTP 2xx.
+3. **Resources** — choose memory, CPU, and replica count. Advanced settings
+   contain timeouts, environment variables, and PipeSecrets references.
+4. **Review** — check the summary, return to any section to change it, then save.
+
+Going back keeps the values entered in the form.
+Switching accounts clears the selected app. The wizard checks the connected
+account again before leaving App and before saving. If the account is disconnected
+or replaced during setup, select an app from a connected account again.
+The API enforces the same ownership rule for dashboard, CLI, and REST requests.
+Saving opens deployment management but does not start any MicroVMs.
+Keep the automatic services network or choose an existing one, set the first
+host port, and select **Deploy and run**.
+For an existing configuration, select **Run** to open the same panel.
+The panel shows image preparation, app startup, health checks, and an **Open app**
+link once the app responds successfully. Failed deployments show a log and next
+steps. Domain routing and secret injection are marked as unsupported; remove
+those settings before deploying.
+The panel checks Pipe Auth when opened, every three seconds, when returning to
+this browser tab, and immediately before deployment. Deploy stays disabled during
+the initial and pre-deployment checks, when the image's account is disconnected
+or replaced, or when the Auth API cannot be reached. **Reconnect AUTH** opens
+Pipe Auth to reconnect the account. It keeps the selected service, network, and
+host port in this browser's history entry, including when the Auth page reloads.
+A successful connection for the image's account returns to the same deployment
+panel automatically. Select **Deploy and run** to continue; reconnection does not
+start deployment. A different account or AWS region keeps you in Auth with
+instructions. Browser Back also restores the choices if you cancel reconnection.
+The panel loads the current service configuration on return and reports if the
+service was deleted. Before enabling deployment, it verifies the selected network
+and every consecutive host TCP port needed by the replicas. Deleted networks
+remain visible with a field error; choose another network or **Use automatic
+services network**. Occupied ports show a field error and the conflicting port.
+Edit the first host port to choose a new range. Changes trigger a fresh check,
+and late replies for older choices are ignored. Failed checks keep deployment
+disabled and offer **Retry deployment check**. The choices remain editable.
+**Check again** verifies the new connection without leaving the panel. An Auth
+request failure offers **Retry AUTH check**. Reconnecting the matching account
+allows deployment again. For AWS, the account and region must both match.
+**Stop service** removes the owned MicroVMs, even when Auth is disconnected.
 
 ## Deploy behavior
 
@@ -108,7 +164,19 @@ Two replicas use host ports 30100 and 30101, both forwarding to the configured a
 Omit the network UUID to create or reuse the `services` MicroNetwork.
 Supply `microNetworkId` or CLI `--network UUID` to use an existing network.
 The automatic network selects a free `/24` from `172.30.0.0/16`.
+`POST /api/micro-services/{id}/deployment/check` accepts the same request body.
+It returns HTTP 200 with JSON `null` when placement is valid, or HTTP 400 with
+`fields.microNetworkId` and/or `fields.hostPort` errors. It reads the current
+service configuration and checks saved MicroVM TCP forwards and host listeners.
+It does not save a deployment, create a network, or start MicroVMs. The check
+briefly tests each TCP port; it does not reserve ports. The UI checks again
+immediately before submitting. The deploy API repeats validation before queuing,
+and the worker checks ports again before preparing the image.
 Concurrent deployments share one host queue.
+The worker rechecks Pipe Auth after leaving the queue. A disconnected or replaced
+account fails the deployment before image resolution or VM creation. It never
+falls back to anonymous pulls or an independently saved registry login.
+Disconnecting Auth does not stop an already running service.
 The worker checks memory, disk space, and port conflicts before starting replicas.
 
 The image's existing ENTRYPOINT and CMD run inside each VM.
@@ -140,7 +208,9 @@ cargo test -p firecrab-cli micro_services
 FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm --prefix firecrab-e2e run test:services
 ```
 
-API tests cover persistence, full replacement, concurrent name conflicts, and rejected inputs.
+API tests cover persistence, full replacement, concurrent name conflicts, rejected
+inputs, account/region ownership, standalone-login rejection, and Auth revocation
+while a deployment is queued.
 CLI tests cover request paths, JSON bodies, secret references, and failures.
 Browser tests cover CRUD, validation, Korean labels, and the mobile layout.
 They also cover deploy progress, healthy endpoints, and Stop.
@@ -149,10 +219,15 @@ Run the real HTTP app test on a Linux host with KVM and the API/helper running:
 Install the normal OCI tools and `dnsmasq-utils` (`dhcp_release`) so stopped VM leases can be reused.
 
 ```sh
-python3 scripts/test-microservice-runtime.py --api http://127.0.0.1:5523
+python3 scripts/test-microservice-runtime.py --api http://127.0.0.1:5523 \
+  --image ghcr.io/your-account/firecrab-service-test:qa
 ```
 
-It imports a local OCI fixture, boots two real MicroVMs, checks HTTP and env injection, and tests failed-health cleanup.
+First publish a fixture image to the connected account. It must serve HTTP on
+port 8080, return the `GREETING` environment value at `/health`, and return a
+non-2xx response at `/missing`. Loopback registry images are rejected by the
+service API. The script boots two MicroVMs, checks HTTP and env injection, and
+tests failed-health cleanup using the supplied image.
 Use `--restart-unit UNIT` only for an isolated QA API unit to test re-adoption after restart.
 Use `--keep-running` to retain the healthy service for manual inspection.
 
