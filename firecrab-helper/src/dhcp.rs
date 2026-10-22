@@ -23,14 +23,6 @@ use tokio::sync::Mutex;
 /// Where the live host-reservation file lives; `sync_dhcp_leases` only ever
 /// replaces it via an atomic rename, never edits it in place.
 const HOSTS_FILE: &str = "/run/firecrab/dnsmasq-hosts.conf";
-/// PID file dnsmasq itself maintains, used to signal it for a reload.
-const PID_FILE: &str = "/run/firecrab/dnsmasq.pid";
-/// dnsmasq's own DHCP lease database — set explicitly (rather than letting
-/// it default to the OS-wide `/var/lib/misc/dnsmasq.leases`) so
-/// `release_stale_leases` can read it back to find stale leases, and so it
-/// lives in our own runtime dir regardless of what user dnsmasq ends up
-/// running as.
-const LEASE_FILE: &str = "/run/firecrab/dnsmasq.leases";
 /// dnsmasq starts as root but normally drops to an unprivileged account
 /// before it handles SIGHUP.  The reservation snapshot has to remain
 /// readable by that account when a later sync atomically replaces it.
@@ -80,9 +72,12 @@ pub enum DhcpError {
 /// mutex, and the last-applied revision it caches is what lets a
 /// duplicate/out-of-order snapshot be recognized as stale and ignored (see
 /// `NetworkRequest::SyncDhcpLeases`'s doc comment).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DhcpActor {
     state: Mutex<DhcpState>,
+    /// All runtime files, including the PID used to signal orphaned dnsmasq,
+    /// belong to this instance. Tests use a private temporary directory.
+    hosts_path: PathBuf,
 }
 
 #[derive(Debug, Default)]
@@ -104,7 +99,16 @@ struct DhcpState {
 impl DhcpActor {
     /// Creates an actor with no dnsmasq process running yet.
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            state: Mutex::default(),
+            hosts_path: PathBuf::from(HOSTS_FILE),
+        }
+    }
+}
+
+impl Default for DhcpActor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -177,8 +181,12 @@ fn render_hosts_file(leases: &[DhcpLeaseEntry]) -> String {
 /// unaffected by our own process restarting. Without this, a stale lease
 /// blocks the new MAC ("no address available") until the old one's full
 /// `dhcp-range` lease time (an hour) naturally expires.
-async fn release_stale_leases(current: &[DhcpLeaseEntry], micro_networks: &[MicroNetworkSpec]) {
-    for (ip, mac) in stale_leases(active_leases().await, current) {
+async fn release_stale_leases(
+    hosts_path: &Path,
+    current: &[DhcpLeaseEntry],
+    micro_networks: &[MicroNetworkSpec],
+) {
+    for (ip, mac) in stale_leases(active_leases(hosts_path).await, current) {
         release_lease(ip, mac, serving_interface(ip, micro_networks)).await;
     }
 }
@@ -202,8 +210,9 @@ fn serving_interface(ip: Ipv4Addr, micro_networks: &[MicroNetworkSpec]) -> Strin
 /// currently considers actively leased. A missing or unreadable file is
 /// treated as "no active leases" — the normal case right after a fresh
 /// dnsmasq spawn that hasn't leased anything yet.
-async fn active_leases() -> Vec<(Ipv4Addr, MacAddr)> {
-    let Ok(text) = tokio::fs::read_to_string(LEASE_FILE).await else {
+async fn active_leases(hosts_path: &Path) -> Vec<(Ipv4Addr, MacAddr)> {
+    let Ok(text) = tokio::fs::read_to_string(hosts_path.with_file_name("dnsmasq.leases")).await
+    else {
         return Vec::new();
     };
     parse_lease_file(&text)
@@ -326,10 +335,12 @@ fn render_base_config(hosts_file: &Path, micro_networks: &[MicroNetworkSpec]) ->
          bind-dynamic\n\
          except-interface=lo\n\
          dhcp-hostsfile={}\n\
-         dhcp-leasefile={LEASE_FILE}\n\
-         pid-file={PID_FILE}\n\
+         dhcp-leasefile={}\n\
+         pid-file={}\n\
          log-dhcp\n",
-        hosts_file.display()
+        hosts_file.display(),
+        hosts_file.with_file_name("dnsmasq.leases").display(),
+        hosts_file.with_file_name("dnsmasq.pid").display(),
     )
 }
 
@@ -345,9 +356,10 @@ pub async fn sync_dhcp_leases(
     micro_networks: &[MicroNetworkSpec],
 ) -> Result<(), DhcpError> {
     let mut state = actor.state.lock().await;
+    let hosts_path = actor.hosts_path.as_path();
     let networks_changed = state.served_networks.as_deref() != Some(micro_networks);
     let dnsmasq_running = owned_child_running(&mut state)?
-        || (state.child.is_none() && running_orphan_pid().await.is_some());
+        || (state.child.is_none() && running_orphan_pid(hosts_path).await.is_some());
     let (revision, leases) = if !networks_changed
         && state
             .applied_revision
@@ -360,7 +372,6 @@ pub async fn sync_dhcp_leases(
     } else {
         (revision, dhcpv6_reservations_only(leases, micro_networks))
     };
-    let hosts_path = Path::new(HOSTS_FILE);
     let hosts_content = render_hosts_file(&leases);
     let base_content = render_base_config(hosts_path, micro_networks);
     let base_matches = file_matches(&base_config_path(hosts_path), &base_content).await;
@@ -376,7 +387,7 @@ pub async fn sync_dhcp_leases(
         // loaded a tampered hosts file. Liveness alone cannot prove that.
         if let Some(child) = state.child.as_mut() {
             reload(child)?;
-        } else if let Some(pid) = running_orphan_pid().await {
+        } else if let Some(pid) = running_orphan_pid(hosts_path).await {
             reload_pid(pid)?;
         }
         return Ok(());
@@ -385,7 +396,7 @@ pub async fn sync_dhcp_leases(
     // and dnsmasq then answers DNS on every host interface, uplink included.
     // Nothing to serve means nothing runs.
     if micro_networks.is_empty() {
-        stop_running_dnsmasq(&mut state).await;
+        stop_running_dnsmasq(&mut state, hosts_path).await;
         state.served_networks = Some(Vec::new());
         state.applied_revision = Some(revision);
         state.applied_leases = leases;
@@ -407,7 +418,7 @@ pub async fn sync_dhcp_leases(
         // net-helper lifetime too: whatever is running was configured for a
         // different set of interfaces, so reusing it would leave the new
         // network's bridge unserved (or keep answering on a deleted one).
-        stop_running_dnsmasq(&mut state).await;
+        stop_running_dnsmasq(&mut state, hosts_path).await;
         state.child = Some(spawn_dnsmasq(hosts_path, micro_networks).await?);
         state.served_networks = Some(micro_networks.to_vec());
     } else {
@@ -419,14 +430,14 @@ pub async fn sync_dhcp_leases(
             // otherwise healthy, tracked only by its own pid file. Reusing it
             // is what makes a restart not silently strand every VM started
             // afterwards without a working DHCP reload target.
-            None => match running_orphan_pid().await {
+            None => match running_orphan_pid(hosts_path).await {
                 Some(pid) => reload_pid(pid)?,
                 None => state.child = Some(spawn_dnsmasq(hosts_path, micro_networks).await?),
             },
         }
     }
 
-    release_stale_leases(&leases, micro_networks).await;
+    release_stale_leases(hosts_path, &leases, micro_networks).await;
     state.applied_revision = Some(revision);
     state.applied_leases = leases;
     Ok(())
@@ -478,12 +489,12 @@ fn owned_child_running(state: &mut DhcpState) -> Result<bool, DhcpError> {
 /// lifetime (found via its pid file). Best-effort: if nothing is running, or
 /// the signal fails because it already exited, there is nothing to clean up
 /// and the caller can go straight to spawning a replacement.
-async fn stop_running_dnsmasq(state: &mut DhcpState) {
+async fn stop_running_dnsmasq(state: &mut DhcpState, hosts_path: &Path) {
     if let Some(mut child) = state.child.take() {
         let _ = child.kill().await;
         return;
     }
-    if let Some(pid) = running_orphan_pid().await {
+    if let Some(pid) = running_orphan_pid(hosts_path).await {
         // SAFETY: sending a signal is memory-safe; a stale/reused pid only
         // risks misdelivering the signal, not memory unsafety.
         unsafe { libc::kill(pid as i32, libc::SIGTERM) };
@@ -494,8 +505,10 @@ async fn stop_running_dnsmasq(state: &mut DhcpState) {
 /// still alive and is not a zombie. `kill(pid, 0)` alone is insufficient:
 /// Linux reports success for an unreaped zombie, which cannot serve DHCP or
 /// react to SIGHUP.
-async fn running_orphan_pid() -> Option<u32> {
-    let text = tokio::fs::read_to_string(PID_FILE).await.ok()?;
+async fn running_orphan_pid(hosts_path: &Path) -> Option<u32> {
+    let text = tokio::fs::read_to_string(hosts_path.with_file_name("dnsmasq.pid"))
+        .await
+        .ok()?;
     let pid: u32 = text.trim().parse().ok()?;
     // SAFETY: signal 0 sends nothing; it only probes whether `pid` exists
     // and is signalable, per kill(2).
@@ -509,12 +522,12 @@ async fn running_orphan_pid() -> Option<u32> {
         return None;
     }
     let command = tokio::fs::read(format!("/proc/{pid}/cmdline")).await.ok()?;
-    is_firecrab_dnsmasq(&command).then_some(pid)
+    is_firecrab_dnsmasq(&command, &base_config_path(hosts_path)).then_some(pid)
 }
 
 /// A stale/reused PID file must never turn an unrelated process into our
 /// reload/stop target. Orphans must serve this helper's own config file.
-fn is_firecrab_dnsmasq(command: &[u8]) -> bool {
+fn is_firecrab_dnsmasq(command: &[u8], config_path: &Path) -> bool {
     let mut arguments = command.split(|byte| *byte == 0);
     let Some(program) = arguments
         .next()
@@ -522,10 +535,11 @@ fn is_firecrab_dnsmasq(command: &[u8]) -> bool {
     else {
         return false;
     };
+    let expected_config = format!("--conf-file={}", config_path.display());
     Path::new(program)
         .file_name()
         .is_some_and(|name| name == "dnsmasq")
-        && arguments.any(|argument| argument == b"--conf-file=/run/firecrab/dnsmasq.conf")
+        && arguments.any(|argument| argument == expected_config.as_bytes())
 }
 
 /// Extracts the one-character process state after `/proc/<pid>/stat`'s
@@ -703,10 +717,19 @@ fn reload(child: &mut Child) -> Result<(), DhcpError> {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::CommandExt;
+
     use firecrab_helper_protocol::network::MicroNetworkIpv6Spec;
     use uuid::Uuid;
 
     use super::*;
+
+    fn isolated_actor(dir: &tempfile::TempDir) -> DhcpActor {
+        DhcpActor {
+            state: Mutex::default(),
+            hosts_path: dir.path().join("dnsmasq-hosts.conf"),
+        }
+    }
 
     fn lease(vm_id: u128, ipv4: &str, mac: &str) -> DhcpLeaseEntry {
         DhcpLeaseEntry {
@@ -1075,7 +1098,8 @@ mod tests {
 
     #[tokio::test]
     async fn empty_network_snapshot_stops_dnsmasq_even_at_an_unchanged_revision() {
-        let actor = DhcpActor::new();
+        let dir = tempfile::tempdir().unwrap();
+        let actor = isolated_actor(&dir);
         {
             let mut state = actor.state.lock().await;
             state.applied_revision = Some(5);
@@ -1123,7 +1147,8 @@ mod tests {
 
     #[tokio::test]
     async fn with_no_micro_network_dnsmasq_is_stopped_instead_of_serving_every_interface() {
-        let actor = DhcpActor::new();
+        let dir = tempfile::tempdir().unwrap();
+        let actor = isolated_actor(&dir);
         {
             let mut state = actor.state.lock().await;
             state.applied_revision = Some(5);
@@ -1167,14 +1192,77 @@ mod tests {
 
     #[test]
     fn orphan_pid_must_belong_to_dnsmasq_serving_our_config() {
+        let config = Path::new("/run/firecrab/dnsmasq.conf");
         assert!(is_firecrab_dnsmasq(
-            b"dnsmasq\0--keep-in-foreground\0--conf-file=/run/firecrab/dnsmasq.conf\0"
+            b"dnsmasq\0--keep-in-foreground\0--conf-file=/run/firecrab/dnsmasq.conf\0",
+            config,
         ));
-        assert!(!is_firecrab_dnsmasq(b"sleep\x0060\0"));
+        assert!(!is_firecrab_dnsmasq(b"sleep\x0060\0", config));
         assert!(!is_firecrab_dnsmasq(
-            b"/usr/sbin/dnsmasq\0--conf-file=/etc/dnsmasq.conf\0"
+            b"/usr/sbin/dnsmasq\0--conf-file=/etc/dnsmasq.conf\0",
+            config,
         ));
-        assert!(!is_firecrab_dnsmasq(b""));
+        assert!(!is_firecrab_dnsmasq(b"", config));
+    }
+
+    #[tokio::test]
+    async fn empty_snapshot_cannot_stop_dnsmasq_from_another_runtime_directory() {
+        let own_dir = tempfile::tempdir().unwrap();
+        let other_dir = tempfile::tempdir().unwrap();
+        let actor = isolated_actor(&own_dir);
+        let other = isolated_actor(&other_dir);
+        let other_config = base_config_path(&other.hosts_path);
+        // A shell blocked on stdin mimics dnsmasq's argv without opening sockets.
+        tokio::fs::write(&other_config, "# isolated signal target\n")
+            .await
+            .unwrap();
+        let mut command = Command::new("sh");
+        command.as_std_mut().arg0("dnsmasq");
+        let mut child = command
+            .arg("-c")
+            .arg("read -r _")
+            .arg(format!("--conf-file={}", other_config.display()))
+            .stdin(Stdio::piped())
+            .kill_on_drop(true)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "signal target must be running"
+        );
+        let pid = child.id().unwrap().to_string();
+        for hosts_path in [&actor.hosts_path, &other.hosts_path] {
+            tokio::fs::write(hosts_path.with_file_name("dnsmasq.pid"), &pid)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(running_orphan_pid(&actor.hosts_path).await, None);
+        assert!(sync_dhcp_leases(&actor, 1, &[], &[]).await.is_ok());
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "another instance must survive"
+        );
+        assert_eq!(running_orphan_pid(&other.hosts_path).await, child.id());
+
+        stop_running_dnsmasq(&mut DhcpState::default(), &other.hosts_path).await;
+        tokio::time::timeout(std::time::Duration::from_secs(3), child.wait())
+            .await
+            .expect("the matching instance must stop")
+            .unwrap();
+    }
+
+    #[test]
+    fn runtime_files_stay_in_the_hosts_directory() {
+        let hosts = Path::new("/tmp/private-firecrab/dnsmasq-hosts.conf");
+        let config = render_base_config(hosts, &[]);
+        assert!(config.contains("dhcp-hostsfile=/tmp/private-firecrab/dnsmasq-hosts.conf\n"));
+        assert!(config.contains("dhcp-leasefile=/tmp/private-firecrab/dnsmasq.leases\n"));
+        assert!(config.contains("pid-file=/tmp/private-firecrab/dnsmasq.pid\n"));
+        assert!(!config.contains("/run/firecrab/"));
     }
 
     #[test]
