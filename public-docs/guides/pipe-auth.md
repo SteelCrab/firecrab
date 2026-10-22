@@ -13,19 +13,26 @@ unfinished credentials asks before discarding them.
 | --- | --- | --- |
 | GitHub | Personal access token (classic) with `read:packages` | GHCR in Pipe Registry |
 | AWS | Access key ID, secret access key, region, optional session token | The account's private Amazon ECR registry in Pipe Registry |
-| Firecrab | Connection token issued by [console.firecrab.dev](https://console.firecrab.dev/) | Its fixed address in Firecrab Tunnel |
+| Firecrab | Account integration token issued by [console.firecrab.dev](https://console.firecrab.dev/#account) | Firecrab account identity |
 
-For Firecrab, select **Connect Firecrab** and paste the console's 64-character
-connection token. Verification resolves its assigned address without publishing
-a target. **Firecrab Tunnel → Add fixed address** selects **Use Pipe Auth** when
-a shared token is connected. Select the VM apps or saved Nginx routes to publish.
-**Enter a connection token** remains available for another address.
+For Firecrab, open **Account integration** in the console and issue a token.
+Copy the `fca_` token shown once, then select **Connect Firecrab** in Pipe Auth.
+Firecrab verifies it at `https://console.firecrab.dev/api/account` and displays
+the verified account ID, email, and token expiry. The token has only
+`account:read` permission. It does not create a console browser session.
 
-Each host keeps one shared Firecrab token. Updating it changes the token available
-for new connections. Existing tunnels keep their own saved tokens. Disconnecting
-Pipe Auth does not revoke console tokens or remove tunnels. Revoke or suspend a
-token in the console to stop its remote access. Firecrab credentials are never
-used for container registries.
+Account integration tokens expire after 90 days by default. Choose 1–365 days
+when issuing one. A console token rotation or revocation invalidates the old
+token immediately. To update this host, use **Update credentials** and paste
+the replacement token. Disconnect removes this host's saved account credential;
+revoke it in the console to disable the token itself.
+
+Tunnel connection tokens authorize individual addresses. They cannot link an
+account in Pipe Auth. Firecrab Tunnel keeps its own connection-token flow.
+Existing prototype shared Tunnel credentials are removed when the host starts;
+reconnect with an account integration token. Saved Tunnel bindings and other
+providers are preserved. Firecrab account credentials are never used for image
+registries.
 
 GitHub authentication checks the token owner's identity and package scope. If an
 organization requires SSO, authorize the token for that organization. GitHub
@@ -59,9 +66,6 @@ routes:
 - `PUT /api/pipe/auth/firecrab`: verify and save `{ "provider": "firecrab", "token": "…" }`.
 - `DELETE /api/pipe/auth/{provider}`: disconnect a provider.
 
-Firecrab metadata returns its address label as `account`, `registry: null`, and
-`services: ["firecrab-tunnel"]`. To connect its saved token, send
-`{ "usePipeAuth": true, "target": { "type": "nginx", "host": "app.example.com" } }`
-to `POST /api/pipe/firecrab-tunnels`. Choose exactly one of `usePipeAuth`, an
-explicit `token`, or an existing `subdomain`; secrets stay on the host.
-
+Firecrab metadata returns the verified email as `account`, the stable UUID as
+`accountId`, the token's Unix-millisecond expiry as `expiresAt`, `registry: null`,
+and `services: []`. Account connection responses contain no token.

@@ -30,7 +30,7 @@ export interface FirecrabAddress {
   connected: boolean;
   error: string | null;
 }
-export function saveFirecrabAddress(ownership: { token: string } | { subdomain: string } | { usePipeAuth: true }, target: FirecrabTarget): Promise<PipeSnapshot> {
+export function saveFirecrabAddress(ownership: { token: string } | { subdomain: string }, target: FirecrabTarget): Promise<PipeSnapshot> {
   return fetchJson("/api/pipe/firecrab-tunnels", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...ownership, target }) });
 }
 export function deleteFirecrabAddress(subdomain: string): Promise<PipeSnapshot> {

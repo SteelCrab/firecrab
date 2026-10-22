@@ -14,7 +14,7 @@ use std::{collections::BTreeMap, time::Duration};
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
-    /// Console-issued connection token for a fixed Firecrab address.
+    /// Console-issued account integration token.
     Firecrab,
     /// AWS signing credentials for a private ECR registry.
     Aws,
@@ -38,14 +38,20 @@ impl Provider {
 pub struct Connection {
     /// Provider that verified the account credentials.
     pub provider: Provider,
-    /// Verified Firecrab address label, GitHub login, or AWS account ID.
+    /// Verified Firecrab email, GitHub login, or AWS account ID.
     pub account: String,
+    /// Stable console account ID, when this is a Firecrab connection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// Account token expiry in Unix milliseconds, when provided by the console.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
     /// Exact registry hostname, or `None` for providers without registry access.
     pub registry: Option<String>,
     /// Selected AWS region, or `None` for GitHub.
     pub region: Option<String>,
     /// Pipe service identifiers that can reuse this connection.
-    pub services: [&'static str; 1],
+    pub services: &'static [&'static str],
 }
 
 /// AWS signing material and the region used for ECR requests.
@@ -74,9 +80,9 @@ pub struct AwsCredentials {
     deny_unknown_fields
 )]
 pub enum Login {
-    /// Verify a connection token issued by console.firecrab.dev.
+    /// Verify an account integration token issued by console.firecrab.dev.
     Firecrab {
-        /// Opaque token for one fixed address.
+        /// Opaque account credential; a Tunnel token is not accepted.
         token: String,
     },
     /// Verify a classic PAT and its package access against the GitHub account API.
@@ -118,10 +124,14 @@ impl Login {
     rename_all_fields = "camelCase"
 )]
 pub enum SavedAuth {
-    /// Verified fixed address and its console-issued connection token.
+    /// Verified account identity and its console-issued integration token.
     Firecrab {
-        /// DNS label returned by the connection service.
-        subdomain: String,
+        /// Stable UUID assigned by the console.
+        account_id: String,
+        /// Verified email of the connected account.
+        email: String,
+        /// Account credential expiry in Unix milliseconds.
+        expires_at: u64,
         /// Secret retained only on the managed host.
         token: String,
     },
@@ -144,19 +154,28 @@ impl SavedAuth {
     /// Project a stored credential into the secret-free dashboard connection view.
     pub fn connection(&self) -> Connection {
         match self {
-            Self::Firecrab { subdomain, .. } => Connection {
+            Self::Firecrab {
+                account_id,
+                email,
+                expires_at,
+                ..
+            } => Connection {
                 provider: Provider::Firecrab,
-                account: subdomain.clone(),
+                account: email.clone(),
+                account_id: Some(account_id.clone()),
+                expires_at: Some(*expires_at),
                 registry: None,
                 region: None,
-                services: ["firecrab-tunnel"],
+                services: &[],
             },
             Self::Github { username, .. } => Connection {
                 provider: Provider::Github,
                 account: username.clone(),
+                account_id: None,
+                expires_at: None,
                 registry: Some("ghcr.io".into()),
                 region: None,
-                services: ["registry"],
+                services: &["registry"],
             },
             Self::Aws {
                 account_id,
@@ -164,9 +183,11 @@ impl SavedAuth {
             } => Connection {
                 provider: Provider::Aws,
                 account: account_id.clone(),
+                account_id: None,
+                expires_at: None,
                 registry: Some(ecr_registry(account_id, &credentials.region)),
                 region: Some(credentials.region.clone()),
-                services: ["registry"],
+                services: &["registry"],
             },
         }
     }
@@ -215,16 +236,20 @@ fn client() -> Result<Client, &'static str> {
 pub async fn connect(login: Login) -> Result<SavedAuth, &'static str> {
     match login {
         Login::Firecrab { token } => {
-            if !firecrab_helper_protocol::firecrab_tunnel::valid_token(&token) {
-                return Err("Enter a valid connection token from console.firecrab.dev");
+            if !token.strip_prefix("fca_").is_some_and(|secret| {
+                secret.len() == 64
+                    && secret
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            }) {
+                return Err(
+                    "Enter an account integration token from console.firecrab.dev; Tunnel tokens cannot link an account",
+                );
             }
             firecrab_auth(
                 &client()?,
                 &token,
-                &format!(
-                    "{}/v1/register",
-                    firecrab_helper_protocol::firecrab_tunnel::ENDPOINT
-                ),
+                "https://console.firecrab.dev/api/account",
             )
             .await
         }
@@ -262,55 +287,67 @@ pub async fn connect(login: Login) -> Result<SavedAuth, &'static str> {
     }
 }
 
-/// Verify ownership without publishing a target or following a response-provided URL.
+/// Verify the console account through a fixed identity endpoint without touching Tunnel ownership.
 async fn firecrab_auth(
     client: &Client,
     token: &str,
     endpoint: &str,
 ) -> Result<SavedAuth, &'static str> {
-    use firecrab_helper_protocol::firecrab_tunnel::{DOMAIN, subdomain};
-
     let response = client
-        .post(endpoint)
+        .get(endpoint)
         .bearer_auth(token)
-        .header("x-firecrab-protocol", "2")
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body("{}")
+        .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await
-        .map_err(|_| "Cannot reach the Firecrab connection service. Retry the connection.")?;
+        .map_err(|_| "Cannot reach console.firecrab.dev. Retry the account connection.")?;
     if !response.status().is_success() {
         return Err(match response.status().as_u16() {
-            401 | 410 => "The Firecrab connection token is invalid, expired, or revoked",
-            403 => "The Firecrab address is suspended; check console.firecrab.dev",
-            429 => "Firecrab token verification is rate limited; retry later",
-            _ => "The Firecrab connection service could not verify the token",
+            401 | 410 => "The Firecrab account integration token is invalid, expired, or revoked",
+            403 => "The Firecrab account is unavailable; check console.firecrab.dev",
+            429 => "Firecrab account verification is rate limited; retry later",
+            _ => "The Firecrab console could not verify the account token",
         });
     }
     #[derive(Deserialize)]
-    /// Ownership metadata returned by the console's registration API.
-    struct Registration {
-        /// Reserved DNS label.
-        name: String,
-        /// HTTPS address that must match the reserved label.
-        url: String,
-        /// Expected heartbeat path; never followed during authentication.
-        heartbeat_url: String,
-        /// Whether the console has disabled this address.
-        suspended: bool,
+    /// Identity returned only after account-token authentication.
+    struct Account {
+        /// Stable console identity.
+        id: String,
+        /// Verified account email.
+        email: String,
     }
-    let registration: Registration = response_json(response).await?;
-    if !subdomain(&registration.name)
-        || registration.url != format!("https://{}.{DOMAIN}", registration.name)
-        || registration.heartbeat_url != format!("{}/__firecrab/heartbeat", registration.url)
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    /// Account identity and the credential's limited permission.
+    struct Identity {
+        /// Verified account metadata.
+        account: Account,
+        /// Only account identity may be read with this credential.
+        scope: String,
+        /// Unix milliseconds at which the credential expires.
+        expires_at: u64,
+    }
+    let identity: Identity = response_json(response).await?;
+    let email = &identity.account.email;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    if uuid::Uuid::parse_str(&identity.account.id).is_err()
+        || email.len() > 254
+        || !email.bytes().all(|byte| byte.is_ascii_graphic())
+        || !email.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty() && domain.contains('.') && !domain.contains('@')
+        })
+        || identity.scope != "account:read"
+        || u128::from(identity.expires_at) <= now
     {
-        return Err("Firecrab returned an invalid connection address");
-    }
-    if registration.suspended {
-        return Err("The Firecrab address is suspended; check console.firecrab.dev");
+        return Err("Firecrab returned an invalid account identity");
     }
     Ok(SavedAuth::Firecrab {
-        subdomain: registration.name,
+        account_id: identity.account.id,
+        email: identity.account.email,
+        expires_at: identity.expires_at,
         token: token.into(),
     })
 }
@@ -778,76 +815,70 @@ mod tests {
         assert!(!headers.contains_key("x-amz-security-token"));
     }
 
+    fn account_identity() -> serde_json::Value {
+        serde_json::json!({
+            "account": {"id":"11111111-1111-4111-8111-111111111111", "email":"owner@example.com"},
+            "scope":"account:read", "expiresAt":4102444800000u64
+        })
+    }
+
     #[tokio::test]
-    async fn firecrab_verifies_address_without_publishing_or_exposing_the_token() {
-        let token = "a".repeat(64);
-        let (url, task, received) = fixture(
-            StatusCode::OK,
-            "",
-            serde_json::json!({
-                "name":"my-app", "url":"https://my-app.firecrab.dev",
-                "heartbeat_url":"https://my-app.firecrab.dev/__firecrab/heartbeat",
-                "suspended":false
-            })
-            .to_string(),
-        )
-        .await;
+    async fn firecrab_verifies_account_identity_without_exposing_the_token() {
+        let token = format!("fca_{}", "a".repeat(64));
+        let (url, task, received) =
+            fixture(StatusCode::OK, "", account_identity().to_string()).await;
         let auth = firecrab_auth(&Client::new(), &token, &url).await.unwrap();
         let (headers, body) = received.await.unwrap();
         assert_eq!(headers["authorization"], format!("Bearer {token}"));
-        assert_eq!(headers["x-firecrab-protocol"], "2");
-        assert_eq!(body, "{}");
+        assert_eq!(headers["accept"], "application/json");
+        assert!(!headers.contains_key("x-firecrab-protocol"));
+        assert!(body.is_empty());
         let connection = serde_json::to_value(auth.connection()).unwrap();
         assert_eq!(connection["provider"], "firecrab");
-        assert_eq!(connection["account"], "my-app");
-        assert_eq!(connection["registry"], serde_json::Value::Null);
+        assert_eq!(connection["account"], "owner@example.com");
         assert_eq!(
-            connection["services"],
-            serde_json::json!(["firecrab-tunnel"])
+            connection["accountId"],
+            "11111111-1111-4111-8111-111111111111"
         );
+        assert_eq!(connection["expiresAt"], 4102444800000u64);
+        assert_eq!(connection["registry"], serde_json::Value::Null);
+        assert_eq!(connection["services"], serde_json::json!([]));
         assert!(!connection.to_string().contains(&token));
         assert!(auth.registry_credential().await.is_err());
         task.abort();
     }
 
     #[tokio::test]
-    async fn firecrab_rejects_invalid_tokens_and_untrusted_registration_metadata() {
+    async fn firecrab_rejects_tunnel_tokens_and_untrusted_account_metadata() {
         for token in [
-            "",
-            "short",
-            &"g".repeat(64),
-            &format!("{}\n", "a".repeat(64)),
+            "".into(),
+            "short".into(),
+            "a".repeat(64),
+            format!("fca_{}", "g".repeat(64)),
+            format!("fca_{}\n", "a".repeat(64)),
         ] {
-            assert!(
-                connect(Login::Firecrab {
-                    token: token.into()
-                })
-                .await
-                .is_err()
-            );
+            assert!(connect(Login::Firecrab { token }).await.is_err());
         }
-        let registration = serde_json::json!({
-            "name":"my-app", "url":"https://my-app.firecrab.dev",
-            "heartbeat_url":"https://my-app.firecrab.dev/__firecrab/heartbeat",
-            "suspended":false
-        });
-        for (key, value) in [
-            ("name", serde_json::json!("../attacker")),
-            ("url", serde_json::json!("https://attacker.invalid/")),
-            (
-                "heartbeat_url",
-                serde_json::json!("https://attacker.invalid/heartbeat"),
-            ),
-            ("suspended", serde_json::json!(true)),
+        for body in [
+            serde_json::json!({"name":"my-app", "url":"https://my-app.firecrab.dev"}),
+            serde_json::json!({"account":{"id":"not-an-id", "email":"owner@example.com"}, "scope":"account:read", "expiresAt":4102444800000u64}),
+            serde_json::json!({"account":{"id":"11111111-1111-4111-8111-111111111111", "email":"not-an-email"}, "scope":"account:read", "expiresAt":4102444800000u64}),
+            {
+                let mut identity = account_identity();
+                identity["scope"] = "tunnel:write".into();
+                identity
+            },
+            {
+                let mut identity = account_identity();
+                identity["expiresAt"] = 1.into();
+                identity
+            },
         ] {
-            let mut body = registration.clone();
-            body[key] = value;
             let (url, task, _) = fixture(StatusCode::OK, "", body.to_string()).await;
             assert!(
-                firecrab_auth(&Client::new(), &"a".repeat(64), &url)
+                firecrab_auth(&Client::new(), "fca_test", &url)
                     .await
-                    .is_err(),
-                "{key}"
+                    .is_err()
             );
             task.abort();
         }
@@ -856,8 +887,9 @@ mod tests {
             StatusCode::GONE,
             StatusCode::TOO_MANY_REQUESTS,
             StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::FOUND,
         ] {
-            let secret = "a".repeat(64);
+            let secret = format!("fca_{}", "a".repeat(64));
             let (url, task, _) = fixture(status, "", secret.clone()).await;
             let error = firecrab_auth(&Client::new(), &secret, &url)
                 .await

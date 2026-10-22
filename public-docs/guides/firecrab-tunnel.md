@@ -2,9 +2,8 @@
 
 Firecrab Tunnel connects a fixed `*.firecrab.dev` address to selected VM apps
 or saved Nginx routes. Get a connection token from
-[the connection dashboard](https://console.firecrab.dev/), then save it in
-[Pipe Auth](pipe-auth.md) or enter it directly in Firecrab Tunnel.
-There is no subdomain input in the Firecrab app.
+[the connection dashboard](https://console.firecrab.dev/), then paste it into
+the Firecrab app. There is no subdomain input in the Firecrab app.
 
 ```text
 Connection dashboard → generated address + connection token
@@ -31,9 +30,7 @@ the connection. The address remains owned by the dashboard account.
 ## Connect an address
 
 1. Open **Pipe → Firecrab Tunnel → Add fixed address**.
-2. Select **Use Pipe Auth** to reuse a token verified in **Pipe → Pipe Auth →
-   Connect Firecrab**. Alternatively, select **Enter a connection token** and
-   paste the dashboard token into **Connection token**.
+2. Paste the dashboard token into **Connection token**.
 3. Select one of the two connection targets:
    - **VM apps**: select one or more running VM apps and registered TCP ports.
    - **Nginx routes**: select a saved route domain.
@@ -52,9 +49,6 @@ connector and distributes requests across the selected app pool. Switching
 targets keeps the same fixed address and preserves
 unrelated routes and connectors. **Edit** uses the secret already saved on the
 host; it never reloads the token into the browser.
-
-Disconnecting Firecrab in Pipe Auth only removes the shared token available for
-new connections. Existing address bindings keep their saved ownership secrets.
 
 Deleting a local Firecrab connection removes its exclusively owned connector.
 A reused user connector remains. Production dashboard reservations and remote

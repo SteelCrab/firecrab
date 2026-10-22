@@ -23,11 +23,10 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
-- Pipe Auth verifies connection tokens from `console.firecrab.dev` and shares
-  them with Firecrab Tunnel. Existing token entry remains available; disconnecting
-  the shared credential keeps existing tunnels and other providers intact. Token
-  verification and heartbeats declare the connection service's required client
-  protocol (#440).
+- Pipe Auth links a Firecrab account with an account integration token issued
+  by `console.firecrab.dev`. It displays the verified account ID, email, and
+  token expiry. Address-scoped Tunnel tokens remain separate. Existing Tunnel
+  connection requests also declare the service's required client protocol (#440).
 
 - `firecrab stack validate --file YAML [--json]` validates an experimental
   declarative stack offline. The shared schema checks local network references,

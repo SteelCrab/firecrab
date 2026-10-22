@@ -233,14 +233,12 @@ pub async fn control_quick_tunnel(
 
 /// Connect with a dashboard token, or edit an address whose secret is already saved.
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct FirecrabSaveRequest {
     #[serde(default)]
     subdomain: Option<String>,
     #[serde(default)]
     token: Option<firecrab_helper_protocol::firecrab_tunnel::ConnectionToken>,
-    #[serde(default)]
-    use_pipe_auth: bool,
     target: firecrab_helper_protocol::firecrab_tunnel::Target,
 }
 
@@ -251,37 +249,20 @@ pub async fn save_firecrab_tunnel(
     Json(request): Json<FirecrabSaveRequest>,
 ) -> Result<Json<Snapshot>, AppError> {
     use firecrab_helper_protocol::firecrab_tunnel::Request;
-    let intent = match (request.token, request.subdomain, request.use_pipe_auth) {
-        (Some(token), None, false) => Request::Connect {
+    let intent = match (request.token, request.subdomain) {
+        (Some(token), None) => Request::Connect {
             token,
             target: request.target,
         },
-        (None, Some(subdomain), false) => Request::Save {
+        (None, Some(subdomain)) => Request::Save {
             subdomain,
             target: request.target,
         },
-        (None, None, true) => {
-            let token = super::pipe_auth::saved(&state, request_id)
-                .await?
-                .into_iter()
-                .find_map(|auth| match auth {
-                    crate::pipe_auth::SavedAuth::Firecrab { token, .. } => Some(token),
-                    _ => None,
-                })
-                .ok_or_else(|| {
-                    super::pipe_auth::auth_error("Connect Firecrab in Pipe Auth first", request_id)
-                })?;
-            Request::Connect {
-                token: firecrab_helper_protocol::firecrab_tunnel::ConnectionToken(token),
-                target: request.target,
-            }
-        }
         _ => {
             return Err(AppError::validation(
                 std::collections::BTreeMap::from([(
                     "token".into(),
-                    "Use Pipe Auth, provide a connection token, or select a saved address to edit"
-                        .into(),
+                    "Provide a connection token or select a saved address to edit".into(),
                 )]),
                 request_id.0,
             ));
