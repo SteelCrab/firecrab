@@ -196,6 +196,31 @@ fn stop_at(home: &Path, url: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// Stop the owned server and forget its checkout, generated script, and log.
+pub fn clean(home: &Path) -> Result<(), Error> {
+    clean_at(home, URL)
+}
+
+fn clean_at(home: &Path, url: &str) -> Result<(), Error> {
+    let _lock = lock(home)?;
+    if let Some(state) = read_session(home)? {
+        stop_session(&client()?, &state, url)?;
+    }
+    for name in [
+        "dev-dashboard.json",
+        "dev-dashboard.mjs",
+        "dev-dashboard.log",
+    ] {
+        match fs::remove_file(home.join("runtime").join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    // Keep the lock inode so concurrent dashboard operations use the same lock.
+    Ok(())
+}
+
 /// Launch one detached Node process, or reuse the matching healthy dashboard.
 pub fn start(source: &Path, home: &Path) -> Result<(), Error> {
     start_at(source, home, 8080)
