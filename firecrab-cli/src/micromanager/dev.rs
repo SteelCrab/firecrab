@@ -38,6 +38,8 @@ const OPTIONAL_SOURCE_INPUTS: &[&str] = &[
     "scripts/verify-release-binary.sh",
     "packaging/ingress-sources.json",
     "firecrab-tunnel",
+    "firecrab-stack",
+    "examples/stacks/basic.yaml",
     "packaging/micromanager.toml",
     "packaging/systemd/firecrab-quick-tunnel.service",
     "packaging/systemd/firecrab-address-updater.service",
@@ -171,7 +173,9 @@ fn validate_checkout(root: &Path) -> Result<String, Error> {
     if members.iter().any(|member| {
         member.as_str().is_none_or(|name| {
             !SOURCE_INPUTS.contains(&name)
-                && !(name == "firecrab-tunnel" && root.join(name).is_dir())
+                && !(OPTIONAL_SOURCE_INPUTS.contains(&name)
+                    && name.starts_with("firecrab-")
+                    && root.join(name).is_dir())
         })
     }) {
         return Err(checkout_error(
@@ -347,6 +351,9 @@ members = ["firecrab-api", "firecrab-api-types", "firecrab-cli", "firecrab-helpe
             "packaging/systemd/firecrab-quick-tunnel.service",
             "packaging/systemd/firecrab-address-updater.service",
             "firecrab-tunnel/Cargo.toml",
+            "firecrab-stack/Cargo.toml",
+            "firecrab-stack/src/lib.rs",
+            "examples/stacks/basic.yaml",
         ] {
             assert_eq!(
                 fs::read(unpacked.path().join(input)).expect(input),

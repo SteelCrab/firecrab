@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- `firecrab stack validate --file YAML [--json]` validates an experimental
+  declarative stack offline. The shared schema checks local network references,
+  resource limits, overlapping subnets and service ports, and pinned service
+  image syntax. Validation reports omit configuration values. Applying resources
+  and continuous Git synchronization remain follow-up work for #437.
+
 - Updating from the dashboard opens a dialog that shows what the new release
   changes, then a gauge with the overall percent and the stage (check,
   download, verify, apply, restart) until the API is back on the new version.
