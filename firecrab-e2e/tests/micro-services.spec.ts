@@ -92,7 +92,7 @@ test.describe("MicroService configuration @dashboard", () => {
   });
 
   test("closes stale runtime settings after saving and preserves mobile headers", async ({ page }) => {
-    await openServices(page, [INITIAL]);
+    const writes = await openServices(page, [{ ...INITIAL, securityGroupId: SECRET }]);
     await page.route(`**/api/micro-services/${ID}/deployment`, (route) => route.fulfill({ json: null }));
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Not deployed");
@@ -102,6 +102,7 @@ test.describe("MicroService configuration @dashboard", () => {
     await page.getByRole("button", { name: "Save configuration" }).click();
     await expect(page.getByRole("heading", { name: "Run: orders", exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Edit: orders", exact: true })).toHaveCount(0);
+    expect(writes[0].body.securityGroupId).toBe(SECRET);
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByText("Each replica uses one host port, starting at 30100. App port: 9090.", { exact: true })).toBeVisible();
     await expect(page.getByLabel("First host port")).toHaveAttribute("max", "65533");

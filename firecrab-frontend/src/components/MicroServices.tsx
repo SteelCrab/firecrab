@@ -171,6 +171,7 @@ function ServiceForm({ service, onCancel, onSaved }: {
       ram: spec.ram, cpu: spec.cpu, replicas: spec.replicas,
       startupTimeout: spec.startupTimeout, drainTimeout: spec.drainTimeout,
       env: maps.env!, secrets: maps.secrets!,
+      securityGroupId: spec.securityGroupId,
     };
     setSaving(true);
     try {

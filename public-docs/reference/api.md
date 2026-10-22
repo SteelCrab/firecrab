@@ -12,6 +12,7 @@ Keep the unauthenticated listener on a trusted loopback path.
 - [Host responses](#host)
 - [Update](#update)
 - [Images and kernels](#images-and-kernels)
+- [Security group](#security-group)
 - [MicroNetwork](#micronetwork)
 - [MicroRegistry](#microregistry)
 - [Docker Hub login](#docker-hub-login)
@@ -64,6 +65,7 @@ Success returns `201` and the VM UUID.
 | `ram` | Power of two, 128–32768 MiB |
 | `diskGb` | Image minimum through 500 GiB; grow only |
 | `microNetworkId` | Existing network UUID, required |
+| `securityGroupId` | Optional group UUID from the same IPv4-only network; PUT omission preserves it, null detaches it |
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional registered storage ID |
 | `shellIds` | Optional shell IDs; latest revisions are pinned |
@@ -129,6 +131,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
+| Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |
 | Images | `/api/images`, `/{alias}`, `/{alias}/package`, `/{alias}/install`, `/{alias}/kernel`, `/{alias}/bootstrap` |
@@ -240,6 +243,28 @@ Missing/invalid cache returns `409 kernel_required`; referenced images return `4
 Kernel deletion also returns `409 in_use` while an image references it.
 Image deletion retains the independent kernel cache.
 See [Images](../guides/images.md) and [Kernels](../guides/kernels.md) for task examples.
+
+## Security group
+
+POST accepts `{"name":"database","microNetworkId":"NETWORK_ID"}` and returns `201`.
+PUT on the group replaces its name using `{"name":"new-name"}`.
+Names must contain 1–64 bytes without control characters.
+Responses contain `id`, `name`, `microNetworkId`, and `rules`.
+
+PUT on `/rules` replaces the complete rule list using `{"rules":[...]}`.
+Each rule requires `direction` (`ingress` or `egress`), `protocol` (`tcp` or `udp`), `portFrom`, `portTo`, and `peerCidr`.
+Ports are inclusive destination ports; `1 <= portFrom <= portTo <= 65535`.
+Peers must be IPv4 CIDRs; host bits are normalized.
+At most 256 rules are allowed.
+Unknown fields, invalid networks, and invalid rules return `400`.
+An unknown group returns `404`.
+Active VM runtimes or deployments block rule replacement with `409`.
+DELETE returns `204`, or `409` while any VM or MicroService references the group.
+
+VM create/update and MicroService configuration accept nullable `securityGroupId`.
+MicroService PUT resets omission to null; VM PUT preserves omission.
+The deployment snapshot and every new replica retain the selection.
+See [security groups](../guides/security-groups.md) for traffic behavior and examples.
 
 ## MicroNetwork
 
