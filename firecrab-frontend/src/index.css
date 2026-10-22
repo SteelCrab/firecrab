@@ -342,6 +342,23 @@ form.create-grid {
 /* In a narrow shell, only the table scrolls horizontally; the page stays in place. */
 .table-scroll { overflow-x: auto; }
 
+.security-group-list { list-style: none; margin: 0; padding: 0; }
+.security-group-list > li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--border); }
+.security-group-list > li:last-child { border-bottom: 0; }
+.security-group-list > li.is-selected { box-shadow: inset 2px 0 var(--accent); padding-left: 0.8rem; }
+.security-group-summary { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; overflow-wrap: anywhere; }
+.security-group-summary > span { color: var(--text-2); font-size: 0.8rem; }
+.security-group-list .service-actions { flex-shrink: 0; margin: 0; }
+.security-group-form { display: grid; gap: 1rem; min-width: 0; }
+.security-group-form .poll-note, .security-group-form .service-actions { margin: 0; }
+.security-group-rule { margin: 0; padding: 0.8rem; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); }
+.security-group-rule legend { color: var(--text-2); font-size: 0.8rem; padding: 0 0.3rem; }
+.security-group-rule-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; margin-bottom: 0.8rem; }
+.security-group-peer { grid-column: 1 / -1; }
+@media (max-width: 700px) {
+  .security-group-list > li { align-items: start; flex-direction: column; }
+}
+
 .service-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.8rem 0; }
 .service-full { grid-column: 1 / -1; }
 .service-wide { grid-column: span 2; }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import type { MicroNetworkResponse, MicroServiceDeployment, MicroServiceResponse, ServicePhase } from "../bindings";
-import { deployMicroService, getServiceDeployment, listMicroNetworks, stopMicroService } from "../api/client";
+import type { MicroNetworkResponse, MicroServiceDeployment, MicroServiceResponse, SecurityGroupResponse, ServicePhase } from "../bindings";
+import { deployMicroService, getSecurityGroup, getServiceDeployment, listMicroNetworks, stopMicroService } from "../api/client";
 import { consoleHash } from "../navigation";
 import { useI18n } from "../i18n";
 
@@ -17,11 +17,24 @@ export default function ServiceDeployment({ service, onClose }: { service: Micro
   const [error, setError] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [group, setGroup] = useState<SecurityGroupResponse | null>(null);
+  const [groupError, setGroupError] = useState<string | null>(null);
   const generation = useRef(0);
   const polling = useRef(false);
   const acting = useRef(false);
   const busy = !!deployment && BUSY.includes(deployment.phase);
   const hasInstances = !!deployment?.instances.length;
+  const groupPending = !!service.securityGroupId && group === null;
+  const deployNetwork = busy || hasInstances ? network : group?.microNetworkId ?? network;
+
+  useEffect(() => {
+    if (!service.securityGroupId) return;
+    let active = true;
+    getSecurityGroup(service.securityGroupId)
+      .then((result) => { if (active) setGroup(result); })
+      .catch((failure) => { if (active) setGroupError((failure as Error).message); });
+    return () => { active = false; };
+  }, [service.securityGroupId]);
 
   const refresh = useCallback(async () => {
     if (polling.current || acting.current) return;
@@ -50,11 +63,11 @@ export default function ServiceDeployment({ service, onClose }: { service: Micro
   }, [refresh]);
 
   const act = async (stop: boolean) => {
-    if (acting.current) return;
+    if (acting.current || (!stop && groupPending)) return;
     acting.current = true;
     setSubmitting(true); setError(null); generation.current += 1;
     try {
-      const result = stop ? await stopMicroService(service.id) : await deployMicroService(service.id, { hostPort: port, microNetworkId: network || null });
+      const result = stop ? await stopMicroService(service.id) : await deployMicroService(service.id, { hostPort: port, microNetworkId: deployNetwork || null });
       generation.current += 1;
       setDeployment(result);
     } catch (failure) {
@@ -78,14 +91,16 @@ export default function ServiceDeployment({ service, onClose }: { service: Micro
       {!loaded && <p className="empty">{t("Loading…", "불러오는 중…")}</p>}
       {error && <p className="field-error" role="alert">{error}</p>}
       {statusError && <p className="field-error" role="alert">{statusError}</p>}
+      {groupError && <p className="field-error" role="alert">{groupError}</p>}
       {deployment?.error && <p className="field-error" role="alert">{deployment.error}</p>}
       <p role="status">{statusError ? t("Status unavailable", "상태를 확인할 수 없다") : deployment ? labels[deployment.phase] : loaded ? t("Not deployed", "아직 배포하지 않았다") : t("Checking deployment…", "배포 상태 확인 중…")}</p>
       {deployment?.digest && <p className="service-digest">{deployment.digest}</p>}
       <form className="create-grid" onSubmit={submit}>
-        <div className="field service-wide"><label htmlFor="service-deploy-network">{t("Network", "네트워크")}</label><select id="service-deploy-network" value={network} disabled={submitting || busy || hasInstances} onChange={(event) => setNetwork(event.target.value)}><option value="">{t("Automatic services network", "서비스 네트워크 자동 생성")}</option>{network && !networks.some((row) => row.id === network) && <option value={network}>{t("Deployment network", "배포 네트워크")} · {network.slice(0, 8)}</option>}{networks.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.subnetCidr}</option>)}</select></div>
+        <div className="field service-wide"><label htmlFor="service-deploy-network">{t("Network", "네트워크")}</label><select id="service-deploy-network" value={deployNetwork} disabled={submitting || busy || hasInstances || !!service.securityGroupId} onChange={(event) => setNetwork(event.target.value)}><option value="">{t("Automatic services network", "서비스 네트워크 자동 생성")}</option>{deployNetwork && !networks.some((row) => row.id === deployNetwork) && <option value={deployNetwork}>{t("Deployment network", "배포 네트워크")} · {deployNetwork.slice(0, 8)}</option>}{networks.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.subnetCidr}</option>)}</select></div>
         <div className="field"><label htmlFor="service-deploy-port">{t("First host port", "첫 번째 호스트 포트")}</label><input id="service-deploy-port" type="number" min={1024} max={65536 - service.replicas} value={port} disabled={submitting || busy || hasInstances} required onChange={(event) => setPort(event.target.valueAsNumber)} /></div>
-        <div className="field field-submit"><label>&nbsp;</label><button className="btn primary" type="submit" disabled={!loaded || submitting || busy || hasInstances}>{t("Deploy and run", "배포 및 실행")}</button></div>
+        <div className="field field-submit"><label>&nbsp;</label><button className="btn primary" type="submit" disabled={!loaded || submitting || busy || hasInstances || groupPending}>{t("Deploy and run", "배포 및 실행")}</button></div>
       </form>
+      {group && <p className="poll-note">{t(`New replicas inherit security group "${group.name}". Its MicroNetwork is selected automatically.`, `새 복제 VM은 보안그룹 "${group.name}"을(를) 상속한다. 해당 MicroNetwork를 자동으로 선택한다.`)}</p>}
       <p className="poll-note">{t(`Each replica uses one host port, starting at ${port}. App port: ${service.port}.`, `복제본마다 ${port}번부터 호스트 포트를 하나씩 사용한다. 앱 포트는 ${service.port}번이다.`)}</p>
       {(service.domain || Object.keys(service.secrets).length > 0) && <p className="field-error">{t("This deployment supports host ports and plain environment variables. Domain routing and CrabSecrets injection require later work.", "현재 배포는 호스트 포트와 일반 환경 변수를 지원한다. 도메인 연결과 CrabSecrets 주입은 아직 지원하지 않는다.")}</p>}
       {hasInstances && <>

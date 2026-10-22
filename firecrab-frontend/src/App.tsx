@@ -13,6 +13,7 @@ import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
 import MicroServices from "./components/MicroServices";
+import SecurityGroups from "./components/SecurityGroups";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
 import Shells from "./components/Shells";
@@ -268,6 +269,7 @@ export default function App() {
       {/* Each page mounts only while selected, so its own polling stops
           the moment you navigate away. */}
       {view === "networks" && <MicroNetworks />}
+      {view === "security-groups" && <SecurityGroups />}
       {view === "services" && <MicroServices />}
       {view === "pipe" && (
         <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />

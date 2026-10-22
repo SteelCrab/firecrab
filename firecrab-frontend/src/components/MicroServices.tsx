@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import type { MicroServiceResponse, MicroServiceSpec } from "../bindings";
+import type { MicroNetworkResponse, MicroServiceResponse, MicroServiceSpec, SecurityGroupResponse } from "../bindings";
 import {
   ApiClientError, createMicroService, deleteMicroService, getMicroService,
-  listMicroServices, updateMicroService,
+  listMicroNetworks, listMicroServices, listSecurityGroups, updateMicroService,
 } from "../api/client";
 import { Boxes } from "lucide-react";
 import { useI18n } from "../i18n";
@@ -144,13 +144,32 @@ function ServiceForm({ service, onCancel, onSaved }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
+  const [groups, setGroups] = useState<SecurityGroupResponse[] | null>(null);
+  const [networks, setNetworks] = useState<MicroNetworkResponse[]>([]);
+  const [groupError, setGroupError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([listSecurityGroups(), listMicroNetworks()])
+      .then(([rows, nets]) => { if (active) { setGroups(rows); setNetworks(nets); } })
+      .catch((failure) => { if (active) setGroupError((failure as Error).message); });
+    return () => { active = false; };
+  }, []);
+
+  const reloadGroups = async () => {
+    setGroupError(null);
+    try {
+      const [rows, nets] = await Promise.all([listSecurityGroups(), listMicroNetworks()]);
+      setGroups(rows); setNetworks(nets);
+    } catch (failure) { setGroupError((failure as Error).message); }
+  };
 
   const change = <K extends keyof MicroServiceSpec>(key: K, value: MicroServiceSpec[K]) => setSpec((previous) => ({ ...previous, [key]: value }));
   const fieldError = (key: string) => fields[key] && <span className="field-error" role="alert">{fields[key]}</span>;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (saving) return;
+    if (saving || groups === null || groupError) return;
     setError(null); setFields({});
     const maps: Record<string, Record<string, string>> = {};
     for (const [field, rows] of [["env", env], ["secrets", secrets]] as const) {
@@ -194,6 +213,18 @@ function ServiceForm({ service, onCancel, onSaved }: {
         <div className="field"><label htmlFor="service-name">{t("Name", "이름")}</label><input id="service-name" value={spec.name} onChange={(event) => change("name", event.target.value)} placeholder="orders" required maxLength={63} pattern={"[a-z0-9]([a-z0-9\\-]*[a-z0-9])?"} disabled={saving} />{fieldError("name")}</div>
         <div className="field service-wide"><label htmlFor="service-image">{t("OCI image", "OCI 이미지")}</label><input id="service-image" value={spec.image} onChange={(event) => change("image", event.target.value)} placeholder="ghcr.io/team/orders:1.0" required maxLength={2048} disabled={saving} />{fieldError("image")}</div>
         <div className="field"><label htmlFor="service-runtime">{t("Runtime", "실행 환경")}</label><select id="service-runtime" defaultValue="vm" disabled><option value="vm">MicroVM</option></select>{fieldError("runtime")}</div>
+        <div className="field service-full">
+          <label htmlFor="service-security-group">{t("Security group", "보안그룹")}</label>
+          <select id="service-security-group" value={spec.securityGroupId ?? ""} disabled={saving || groups === null || !!groupError} onChange={(event) => change("securityGroupId", event.target.value || null)} aria-describedby="service-security-group-note">
+            <option value="">{groups === null ? t("Loading…", "불러오는 중…") : t("None — use network defaults", "없음 — 네트워크 기본 설정 사용")}</option>
+            {spec.securityGroupId && !groups?.some((group) => group.id === spec.securityGroupId) && <option value={spec.securityGroupId}>{t("Unavailable group", "그룹을 확인할 수 없다")} · {spec.securityGroupId}</option>}
+            {groups?.map((group) => <option key={group.id} value={group.id}>{group.name} · {networks.find((network) => network.id === group.microNetworkId)?.name ?? group.microNetworkId}</option>)}
+          </select>
+          {fieldError("securityGroupId")}
+          {groupError && <div><p className="field-error" role="alert">{groupError}</p><button type="button" className="btn" onClick={reloadGroups}>{t("Retry loading security groups", "보안그룹 다시 불러오기")}</button></div>}
+          <p className="poll-note" id="service-security-group-note">{t("New replica VMs inherit the selected group and use its MicroNetwork. Changes apply on the next deployment.", "새 복제 VM은 선택한 그룹을 상속하고 해당 MicroNetwork를 사용한다. 변경은 다음 배포에 적용한다.")}</p>
+          {groups?.length === 0 && <p className="poll-note">{t("Create a group from Security groups in the network menu.", "네트워크 메뉴의 보안그룹 화면에서 그룹을 생성한다.")}</p>}
+        </div>
         <div className="field"><label htmlFor="service-port">{t("App port", "앱 포트")}</label><input id="service-port" type="number" min={1} max={65535} value={spec.port} onChange={(event) => change("port", event.target.valueAsNumber)} required disabled={saving} />{fieldError("port")}</div>
         <div className="field"><label htmlFor="service-health">{t("Health path", "상태 검사 경로")}</label><input id="service-health" value={spec.healthPath} onChange={(event) => change("healthPath", event.target.value)} placeholder="/actuator/health" required disabled={saving} />{fieldError("healthPath")}</div>
         <div className="field service-wide"><label htmlFor="service-domain">{t("Domain (optional)", "도메인 (선택)")}</label><input id="service-domain" value={spec.domain ?? ""} onChange={(event) => change("domain", event.target.value)} placeholder="orders.example.com" maxLength={253} disabled={saving} />{fieldError("domain")}</div>
@@ -207,7 +238,7 @@ function ServiceForm({ service, onCancel, onSaved }: {
         <VariableRows kind="secrets" rows={secrets} setRows={setSecrets} disabled={saving} />
         <div className="service-full">{fieldError("secrets")}</div>
         <div className="service-actions service-full">
-          <button type="submit" className="btn primary" disabled={saving}>{saving ? t("Saving…", "저장 중…") : t("Save configuration", "설정 저장")}</button>
+          <button type="submit" className="btn primary" disabled={saving || groups === null || !!groupError}>{saving ? t("Saving…", "저장 중…") : t("Save configuration", "설정 저장")}</button>
           <button type="button" className="btn" disabled={saving} onClick={onCancel}>{t("Cancel", "취소")}</button>
         </div>
       </form>

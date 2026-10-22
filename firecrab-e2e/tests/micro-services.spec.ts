@@ -17,6 +17,8 @@ async function openServices(page: Page, rows: object[] = [], failSave = false) {
     const method = route.request().method();
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/micro-networks") return route.fulfill({ json: [] });
+    if (path === "/api/security-groups") return route.fulfill({ json: [{ id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] }] });
+    if (path === `/api/security-groups/${SECRET}`) return route.fulfill({ json: { id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] } });
     if (path === "/api/host") return route.fulfill({ json: { loadAverage1m: 0.1, memoryTotalMib: 8192, memoryAvailableMib: 4096, diskTotalGib: 100, diskAvailableGib: 50, uptimeSeconds: 3600 } });
     if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
     if (path === "/api/update/progress") return route.fulfill({ json: { phase: "idle", percent: 0, updatedAtMs: 0 } });

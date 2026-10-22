@@ -7,6 +7,26 @@ Replies to established connections remain allowed.
 An empty group denies all new peer connections.
 Omitted or null `securityGroupId` keeps the existing network behavior.
 
+## Dashboard
+
+Open **Security groups** in the network menu.
+Choose **New security group**, enter a name, and select an IPv4-only MicroNetwork.
+The new group starts with no allow rules.
+Add inbound or outbound rules with TCP or UDP, an inclusive destination port range, and a peer IPv4 CIDR, then choose **Save rules**.
+For inbound rules the peer is the source; for outbound rules it is the destination.
+Removing all rules restores default deny for new peer connections.
+
+In **MicroService**, create or edit a configuration and select its **Security group**.
+Choose **Save configuration** to store the selection.
+The deployment screen selects that group's MicroNetwork automatically.
+New replica VMs inherit the group before startup.
+Configuration changes apply on the next deployment; stop and redeploy an existing service to use them.
+Select **None — use network defaults** to remove the group from the saved service configuration.
+
+Stop affected VMs and service deployments before saving rule changes.
+Failed saves keep the draft rules in the editor.
+The dashboard also supports deleting unreferenced groups.
+
 ## Create and attach
 
 ```sh
@@ -31,7 +51,7 @@ When both peers have groups, the source egress and destination ingress must allo
 
 ## MicroService replicas
 
-Set `securityGroupId` in the MicroService JSON configuration.
+Select a group in the dashboard or set `securityGroupId` in the MicroService JSON configuration.
 Deploy with the same network UUID, or reuse an existing matching `services` network.
 The deployment snapshot captures the selection.
 Each new replica receives it before guest startup.
@@ -68,8 +88,8 @@ sudo nft list table inet firecrab_sg
 sudo nft list table bridge firecrab_sg
 ```
 
-This version provides REST configuration on one host.
-Dashboard editing, live policy changes, IPv6, ICMP allow rules, group-to-group references, and multiple groups per VM are outside this scope.
+This version provides dashboard and REST configuration on one host.
+Live policy changes, IPv6, ICMP allow rules, group-to-group references, and multiple groups per VM are outside this scope.
 See the [API contract](../reference/api.md#security-group) and [networking guide](networking.md).
 
 ## Verify in isolation

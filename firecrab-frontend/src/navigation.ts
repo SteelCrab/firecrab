@@ -11,6 +11,7 @@ export const VIEWS = [
   { id: "vms", group: "compute", labels: { en: "MicroVM", ko: "MicroVM" } },
   { id: "services", group: "compute", labels: { en: "MicroService", ko: "MicroService" } },
   { id: "networks", group: "network", labels: { en: "Networks", ko: "네트워크" } },
+  { id: "security-groups", group: "network", labels: { en: "Security groups", ko: "보안그룹" } },
   { id: "pipe", group: "network", labels: { en: "Pipe", ko: "Pipe" } },
   { id: "storages", group: "data", labels: { en: "Storage", ko: "스토리지" } },
   { id: "images", group: "data", labels: { en: "Images", ko: "이미지" } },
