@@ -27,6 +27,7 @@ mod process_metrics;
 mod reconcile;
 mod resource_limits;
 mod rootfs;
+mod secrets;
 mod server;
 mod service_runtime;
 mod shells;
