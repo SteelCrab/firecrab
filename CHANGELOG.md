@@ -125,7 +125,9 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Improved
 
-- None.
+- The helper logs failed host firewall commands with their arguments, exit
+  status, and stderr. Warnings also identify failed nftables and firewall-state
+  queries that keep their existing empty or disabled fallback ([#305]).
 
 ## [0.3.1] - 2026-10-06
 
