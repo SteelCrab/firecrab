@@ -464,7 +464,7 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
   return { mutations, bindings, triggers, jobs, kafka, serviceId };
 }
 
-test("writes JSON text without rounding and keeps unknown-result retries identical", async ({ page }) => {
+test("writes JSON text without rounding and keeps unknown-result retries identical @dashboard", async ({ page }) => {
   const mock = await openWritable(page, "unknown");
   await page.getByRole("button", { name: "Add row", exact: true }).click();
   const editor = page.getByRole("form", { name: "Row editor" });
@@ -483,7 +483,7 @@ test("writes JSON text without rounding and keeps unknown-result retries identic
   expect(mock.mutations[0].values).toEqual({ name: "New user", metadata: '{"amount":9007199254740993.123456789}' });
 });
 
-test("keeps original primary keys and releases edits after a definitive conflict", async ({ page }) => {
+test("keeps original primary keys and releases edits after a definitive conflict @dashboard", async ({ page }) => {
   const mock = await openWritable(page, "conflict");
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   const editor = page.getByRole("form", { name: "Row editor" });
@@ -496,7 +496,7 @@ test("keeps original primary keys and releases edits after a definitive conflict
   await expect(editor).toHaveCount(0);
 });
 
-test("uses minimal service and Kafka defaults and confirms snapshot restore", async ({ page }) => {
+test("uses minimal service and Kafka defaults and confirms snapshot restore @dashboard", async ({ page }) => {
   const mock = await openWritable(page);
   await page.getByText("Services & reliable events", { exact: true }).click();
   await page.getByLabel("Service", { exact: true }).selectOption(mock.serviceId);
