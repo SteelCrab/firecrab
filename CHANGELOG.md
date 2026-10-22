@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroService domains connect healthy replicas to PipeIngress automatically,
+  without host ports or manual routes. The dashboard shows the domain and DNS
+  setup guidance, and the CLI accepts domain deployments without `--host-port`.
+  Deployment ownership protects routes from stale Pipe saves and retains cleanup
+  state across API restarts. Stop withdraws the domain before deleting instances.
+
 - Updating from the dashboard opens a dialog that shows what the new release
   changes, then a gauge with the overall percent and the stage (check,
   download, verify, apply, restart) until the API is back on the new version.

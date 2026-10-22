@@ -1058,3 +1058,12 @@ table.image-table tbody tr.is-selected td {
   .pipe-auth-heading { padding: 16px 12px; }
   .pipe-auth-connections .pipe-auth-account, .pipe-auth-connections .pipe-auth-services { display: none; }
 }
+
+.service-domain-panel {
+  margin-block: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+.service-domain-panel p { margin-block: .5rem; }

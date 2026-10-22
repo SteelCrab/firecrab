@@ -148,7 +148,7 @@ fn validate(spec: &MicroServiceSpec, request_id: Uuid) -> Result<(), AppError> {
         );
     }
     if let Some(domain) = &spec.domain
-        && (domain.len() > 253 || !domain.split('.').all(dns_label))
+        && !firecrab_helper_protocol::pipe::valid_route_hostname(domain)
     {
         fields.insert(
             "domain".to_owned(),
