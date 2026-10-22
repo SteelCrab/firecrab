@@ -213,7 +213,14 @@ See [#216](https://github.com/SteelCrab/firecrab/pull/216) for an example.
 
 ## Issues
 
-Report bugs and installation failures in an [issue](https://github.com/SteelCrab/firecrab/issues) with reproduction steps, environment details, and logs.
+Write issue bodies in English. Follow the [issue template](.github/ISSUE_TEMPLATE/task.md) and use only these three sections, in this order:
+
+- `## Summary`: describe the change or problem in 1–3 short sentences.
+- `## Scope`: list the work and essential constraints as a short checklist. For bugs and installation failures, include reproduction steps, environment details, and relevant logs here.
+- `## Architecture`: include a compact Mermaid diagram of the affected components and data flow. Keep supporting text short.
+
+Do not add `Motivation`, `Acceptance`, or `Notes` sections, or other top-level sections.
+Keep issues concise. Put detailed implementation designs in separate documents when needed.
 Prefer one problem per issue. Report sensitive security problems privately to the maintainers.
 
 ## CI
