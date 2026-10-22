@@ -34,11 +34,20 @@ pub(crate) const AGENT_SCRIPT: &str = r#"#!/bin/sh
 # Avoid `set -e`: a single awk/test failure must not kill the reporter loop.
 INTERVAL="${FIRECRAB_GUEST_AGENT_INTERVAL:-3}"
 STATE=/run/firecrab-guest-agent.cpu
-mkdir -p /run
+# Minimal OCI images have the injected toolbox without PATH applet symlinks.
+tool() {
+  if [ -x /etc/firecrab/busybox ]; then
+    /etc/firecrab/busybox "$@"
+  else
+    "$@"
+  fi
+}
+
+tool mkdir -p /run
 echo $$ >/run/firecrab-guest-agent.pid 2>/dev/null || true
 
 read_cpu() {
-  awk '/^cpu / {
+  tool awk '/^cpu / {
     idle=$5; total=0
     for (i=2; i<=NF; i++) total+=$i
     print total, idle
@@ -47,7 +56,7 @@ read_cpu() {
 }
 
 read_mem() {
-  awk '
+  tool awk '
     /^MemTotal:/ { t=$2+0 }
     /^MemAvailable:/ { a=$2+0 }
     END {
@@ -60,13 +69,13 @@ read_mem() {
 }
 
 read_cpu >"$STATE" 2>/dev/null || echo "0 0" >"$STATE"
-sleep 1
+tool sleep 1 || exit 1
 
 while true; do
   set -- $(read_cpu)
   total=${1:-0}
   idle=${2:-0}
-  set -- $(cat "$STATE" 2>/dev/null)
+  set -- $(tool cat "$STATE" 2>/dev/null)
   prev_total=${1:-0}
   prev_idle=${2:-0}
   printf '%s %s\n' "$total" "$idle" >"$STATE" 2>/dev/null || true
@@ -78,7 +87,7 @@ while true; do
     if [ "$dt" -gt 0 ] 2>/dev/null; then
       busy=$((dt - di))
       if [ "$busy" -lt 0 ] 2>/dev/null; then busy=0; fi
-      cpu_pct=$(awk -v b="$busy" -v d="$dt" 'BEGIN { printf "%.1f", (b*100)/d }' 2>/dev/null) || cpu_pct="0.0"
+      cpu_pct=$(tool awk -v b="$busy" -v d="$dt" 'BEGIN { printf "%.1f", (b*100)/d }' 2>/dev/null) || cpu_pct="0.0"
     fi
   fi
 
@@ -91,7 +100,7 @@ while true; do
   printf 'FIRECRAB_USAGE cpu_pct=%s mem_used_mib=%s mem_total_mib=%s mem_used_pct=%s\n' \
     "$cpu_pct" "$mem_used_mib" "$mem_total_mib" "$mem_used_pct" >/dev/console 2>/dev/null || true
 
-  sleep "$INTERVAL"
+  tool sleep "$INTERVAL" || exit 1
 done
 "#;
 
@@ -247,7 +256,9 @@ pub(crate) fn network_ready_kick_openrc() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::{PermissionsExt, symlink};
     use std::process::Command;
+    use std::time::{Duration, Instant};
 
     use tempfile::tempdir;
     use uuid::Uuid;
@@ -265,6 +276,94 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[test]
+    fn reports_usage_with_only_the_toolbox_and_with_native_tools() {
+        for toolbox_available in [true, false] {
+            let directory = tempdir().unwrap();
+            let root = directory.path();
+            let tools = root.join("tools");
+            std::fs::create_dir(&tools).unwrap();
+            std::fs::write(root.join("stat"), "cpu 100 0 50 850 0 0 0 0\n").unwrap();
+            std::fs::write(
+                root.join("meminfo"),
+                "MemTotal: 262144 kB\nMemAvailable: 196608 kB\n",
+            )
+            .unwrap();
+            // Run real awk/cat/mkdir with no utilities in PATH. The sleep
+            // fixture advances CPU counters, then stops after one report.
+            let dispatch = tools.join("dispatch");
+            std::fs::write(
+                &dispatch,
+                format!(
+                    r#"#!/bin/sh
+tool=${{0##*/}}
+if [ "$tool" = busybox ]; then tool=$1; shift; fi
+case "$tool" in
+  awk) exec /usr/bin/awk "$@" ;;
+  cat) exec /bin/cat "$@" ;;
+  mkdir) exec /bin/mkdir "$@" ;;
+  sleep)
+    printf '%s\n' "$1" >>"{root}/sleeps"
+    [ "$1" = 1 ] || exit 1
+    printf 'cpu 150 0 50 900 0 0 0 0\n' >"{root}/stat"
+    ;;
+  *) exit 127 ;;
+esac
+"#,
+                    root = root.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&dispatch, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let toolbox = root.join("busybox");
+            if toolbox_available {
+                symlink(&dispatch, &toolbox).unwrap();
+            } else {
+                for name in ["awk", "cat", "mkdir", "sleep"] {
+                    symlink(&dispatch, tools.join(name)).unwrap();
+                }
+            }
+            let mut script = AGENT_SCRIPT.to_string();
+            for (guest, fixture) in [
+                (crate::oci::provision::GUEST_TOOLBOX, toolbox),
+                ("/proc/stat", root.join("stat")),
+                ("/proc/meminfo", root.join("meminfo")),
+                ("/dev/console", root.join("console")),
+                ("/run", root.join("run")),
+            ] {
+                script = script.replace(guest, fixture.to_str().unwrap());
+            }
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", &script])
+                .env("PATH", &tools)
+                .env("FIRECRAB_GUEST_AGENT_INTERVAL", "3")
+                .spawn()
+                .unwrap();
+            let started = Instant::now();
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if started.elapsed() > Duration::from_secs(2) {
+                    child.kill().unwrap();
+                    child.wait().unwrap();
+                    panic!("agent did not stop after sleep failed");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            assert_eq!(status.code(), Some(1));
+            assert_eq!(
+                std::fs::read_to_string(root.join("sleeps")).unwrap(),
+                "1\n3\n"
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("console")).unwrap(),
+                "FIRECRAB_USAGE cpu_pct=50.0 mem_used_mib=64 mem_total_mib=256 mem_used_pct=25.0\n",
+                "toolbox_available={toolbox_available}"
+            );
+        }
     }
 
     /// Alpine-like layout: `/usr/local` without `sbin`, OpenRC only.
