@@ -37,8 +37,11 @@ desktop and mobile for each engine. DB requests are not mocked in these cases.
 Container cleanup runs on success, failure, and interrupt. It removes only the
 containers created by this run. Docker image layers may remain cached.
 
-The `pipe-databases` CI job runs this command. It retains the JSON report,
-redacted API log, browser screenshots, and failure traces for seven days.
+The `pipe-databases` CI job runs an instrumented API and uploads its real
+database coverage to Codecov alongside the unit-test coverage. Continuous
+profiles preserve counts when the QA runner restarts or stops the API.
+The job retains the JSON report, redacted API log, LCOV report, browser
+screenshots, and failure traces for seven days.
 
 ## Existing disposable fixtures
 
