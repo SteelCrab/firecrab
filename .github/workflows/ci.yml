@@ -241,8 +241,8 @@ jobs:
       - name: microManager PR report
         run: python3 -m unittest scripts/test_micromanager_pr_report.py
 
-      - name: README contributor credits
-        run: python3 -m unittest scripts/test_update_contributors.py
+      - name: PR and issue contributor assignees
+        run: node --test scripts/test-assign-contributor.mjs
 
       - name: Cache cargo
         uses: actions/cache@v6
