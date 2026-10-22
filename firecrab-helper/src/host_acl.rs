@@ -19,8 +19,9 @@
 //! Idempotent. Missing binaries and already-present rules are ignored.
 
 use std::fs;
+use std::io;
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{Output, Stdio};
 
 use firecrab_helper_protocol::network::{MICRO_NETWORK_BRIDGE_PREFIX, MicroNetworkSpec};
 use tokio::process::Command;
@@ -521,6 +522,30 @@ fn tool_search_order(bin: &str) -> Vec<String> {
     ]
 }
 
+fn remember_spawn_error(last_error: &mut Option<io::Error>, error: io::Error) {
+    if error.kind() != io::ErrorKind::NotFound || last_error.is_none() {
+        *last_error = Some(error);
+    }
+}
+
+fn expected_rule_miss(bin: &str, args: &[&str], output: &Output) -> bool {
+    if !matches!(
+        Path::new(bin).file_name().and_then(|name| name.to_str()),
+        Some("iptables" | "ip6tables")
+    ) || output.status.code() != Some(1)
+    {
+        return false;
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let missing_rule = stderr.contains("Bad rule (does a matching rule exist in that chain?)");
+    match args.first().copied() {
+        // iptables-nft can report a missing rule without stderr on a fresh ruleset.
+        Some("-C" | "--check") => missing_rule || stderr.trim().is_empty(),
+        Some("-D" | "--delete") => missing_rule,
+        _ => false,
+    }
+}
+
 async fn run_tool(bin: &str, args: &[&str]) -> bool {
     let mut last_error = None;
     for path in tool_search_order(bin) {
@@ -533,7 +558,9 @@ async fn run_tool(bin: &str, args: &[&str]) -> bool {
             .await;
         match output {
             Ok(output) => {
-                if !output.status.success() {
+                if expected_rule_miss(bin, args, &output) {
+                    tracing::debug!(tool = bin, path, ?args, "host firewall rule is absent");
+                } else if !output.status.success() {
                     tracing::warn!(
                         tool = bin,
                         path,
@@ -547,7 +574,7 @@ async fn run_tool(bin: &str, args: &[&str]) -> bool {
             }
             Err(error) => {
                 tracing::debug!(tool = bin, path, ?args, %error, "failed to start host firewall tool");
-                last_error = Some(error);
+                remember_spawn_error(&mut last_error, error);
             }
         }
     }
@@ -575,7 +602,7 @@ async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Opt
             Ok(output) => output,
             Err(error) => {
                 tracing::debug!(tool = bin, path, ?args, %error, "failed to start host firewall tool");
-                last_error = Some(error);
+                remember_spawn_error(&mut last_error, error);
                 continue;
             }
         };
@@ -620,8 +647,8 @@ mod tests {
         (file, subscriber)
     }
 
-    fn fake_tool(directory: &Path, script: &str) -> String {
-        let path = directory.join("firewall-tool");
+    fn fake_tool(directory: &Path, name: &str, script: &str) -> String {
+        let path = directory.join(name);
         fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("write tool");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable tool");
         path.to_str().expect("tool path").to_owned()
@@ -632,6 +659,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let tool = fake_tool(
             dir.path(),
+            "firewall-tool",
             "echo ignored-output; echo permission-denied >&2; exit 23",
         );
         let (capture, subscriber) = log_capture();
@@ -657,7 +685,11 @@ mod tests {
     #[tokio::test]
     async fn successful_tools_keep_stdout_and_environment_without_warning() {
         let dir = tempfile::tempdir().unwrap();
-        let tool = fake_tool(dir.path(), "echo \"$LC_ALL\"; echo harmless-diagnostic >&2");
+        let tool = fake_tool(
+            dir.path(),
+            "firewall-tool",
+            "echo \"$LC_ALL\"; echo harmless-diagnostic >&2",
+        );
         let (capture, subscriber) = log_capture();
         async {
             assert!(run_tool(&tool, &[]).await);
@@ -692,6 +724,85 @@ mod tests {
         assert!(logged.contains(tool), "{logged}");
         assert!(logged.contains("args=[\"--state\"]"), "{logged}");
         assert!(logged.contains("error="), "{logged}");
+    }
+
+    #[tokio::test]
+    async fn absent_iptables_rules_keep_false_without_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (capture, subscriber) = log_capture();
+        async {
+            for name in ["iptables", "ip6tables"] {
+                let tool = fake_tool(
+                    dir.path(),
+                    name,
+                    "echo 'Bad rule (does a matching rule exist in that chain?).' >&2; exit 1",
+                );
+                for action in ["-C", "--check", "-D", "--delete"] {
+                    assert!(!run_tool(&tool, &[action, "INPUT"]).await);
+                }
+                let tool = fake_tool(dir.path(), name, "exit 1");
+                assert!(!run_tool(&tool, &["-C", "INPUT"]).await);
+            }
+        }
+        .with_subscriber(subscriber)
+        .await;
+        assert_eq!(fs::read_to_string(capture.path()).unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn unexpected_iptables_failures_still_warn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (capture, subscriber) = log_capture();
+        async {
+            for name in ["iptables", "ip6tables"] {
+                for (action, script) in [
+                    ("-C", "echo permission-denied >&2; exit 1"),
+                    (
+                        "-I",
+                        "echo 'Bad rule (does a matching rule exist in that chain?).' >&2; exit 1",
+                    ),
+                    ("-D", "exit 1"),
+                    (
+                        "-C",
+                        "echo 'Bad rule (does a matching rule exist in that chain?).' >&2; exit 2",
+                    ),
+                ] {
+                    let tool = fake_tool(dir.path(), name, script);
+                    assert!(!run_tool(&tool, &[action, "INPUT"]).await);
+                }
+            }
+        }
+        .with_subscriber(subscriber)
+        .await;
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert_eq!(
+            logged.matches("host firewall tool failed").count(),
+            8,
+            "{logged}"
+        );
+        assert!(logged.contains("stderr=permission-denied"), "{logged}");
+    }
+
+    #[tokio::test]
+    async fn missing_fallback_paths_do_not_hide_spawn_permission_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = fake_tool(dir.path(), "firewall-tool", "exit 0");
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o644)).unwrap();
+        let (capture, subscriber) = log_capture();
+        async {
+            assert!(!run_tool(&tool, &["--state"]).await);
+            assert_eq!(output_tool(&tool, &["--state"]).await, None);
+        }
+        .with_subscriber(subscriber)
+        .await;
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert_eq!(
+            logged.matches("host firewall tool unavailable").count(),
+            2,
+            "{logged}"
+        );
+        assert_eq!(logged.matches("os error 13").count(), 2, "{logged}");
+        assert!(!logged.contains("os error 2"), "{logged}");
     }
 
     #[test]
