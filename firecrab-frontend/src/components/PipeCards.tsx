@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { KeyRound } from "lucide-react";
 import type { PipeSnapshot } from "../api/pipe";
 import { getPipeAuth } from "../api/pipeAuth";
 import { listPipeDatabases } from "../api/pipeDatabases";
@@ -18,7 +19,7 @@ interface Props {
 function PipeCardIcon({ id }: { id: PipeCardId }) {
   switch (id) {
     case "auth":
-      return <svg className="pipe-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></svg>;
+      return <KeyRound className="pipe-card-icon" aria-hidden="true" />;
     case "route":
       // One request path forking to two apps.
       return <svg className="pipe-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12h6l5-6h6M9 12l5 6h6" /><path d="M17 3l3 3-3 3M17 15l3 3-3 3" /></svg>;

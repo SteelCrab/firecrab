@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, KeyRound } from "lucide-react";
 import { connectPipeAuth, disconnectPipeAuth, getPipeAuth, type AuthConnection, type AuthProvider } from "../api/pipeAuth";
 import { useI18n } from "../i18n";
-import { pipeCardHash } from "../navigation";
+import { pipeCardHash, viewHash } from "../navigation";
+import Screen from "./layout/Screen";
+import { useScreenStatus } from "./layout/screenStatus";
+import { DetailHead, DetailProp, DetailSection } from "./ui/DetailSection";
 import PipeServiceMenu from "./PipeServiceMenu";
 
 interface Editor { provider: AuthProvider; token: string; accessKeyId: string; secretAccessKey: string; sessionToken: string; region: string }
@@ -10,19 +14,23 @@ const PROVIDERS: { id: AuthProvider; name: string; service: string }[] = [
   { id: "aws", name: "AWS", service: "Amazon ECR" },
 ];
 
-/** Provider credentials are entered once and reused by supported Pipe services. */
+/** Provider connections use the dashboard's shared list and detail-panel layout. */
 export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty: boolean) => void }) {
   const { t } = useI18n();
+  const { setDetailOpen } = useScreenStatus();
   const [connections, setConnections] = useState<AuthConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<AuthProvider | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [version, setVersion] = useState(0);
   const inFlight = useRef(false);
   const original = connections.find(connection => connection.provider === editor?.provider);
+  const selected = PROVIDERS.find(provider => provider.id === selectedProvider);
+  const selectedConnection = connections.find(connection => connection.provider === selectedProvider);
   const dirty = !!editor && (!!editor.token || !!editor.accessKeyId || !!editor.secretAccessKey || !!editor.sessionToken || editor.region !== (original?.region ?? "ap-northeast-2"));
 
   useEffect(() => { onUnsavedChange(dirty); return () => onUnsavedChange(false); }, [dirty, onUnsavedChange]);
@@ -34,8 +42,24 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
     return () => controller.abort();
   }, [version]);
 
+  function discardDraft() {
+    return !dirty || window.confirm(t("Pipe changes have not been saved. Leave without saving?", "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?"));
+  }
+  function select(provider: AuthProvider) {
+    if (busy || (provider !== selectedProvider && !discardDraft())) return;
+    if (provider !== selectedProvider) { setEditor(null); setError(null); setNotice(null); }
+    setSelectedProvider(provider);
+    setDetailOpen(true);
+  }
+  function closeDetail() {
+    if (busy || !discardDraft()) { setDetailOpen(true); return; }
+    setEditor(null);
+    setSelectedProvider(null);
+  }
   function open(provider: AuthProvider) {
     const connection = connections.find(connection => connection.provider === provider);
+    setSelectedProvider(provider);
+    setDetailOpen(true);
     setEditor({ provider, token: "", accessKeyId: "", secretAccessKey: "", sessionToken: "", region: connection?.region ?? "ap-northeast-2" });
     setError(null); setNotice(null);
   }
@@ -67,29 +91,64 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
     });
   }
 
-  return <section className="panel pipe-auth" aria-label="Pipe Auth">
-    <h2 className="panel-title"><span>Pipe Auth</span></h2>
-    <p className="pipe-description">{t("Connect an account to use its Pipe services.", "계정을 인증하여 관련 Pipe 서비스를 사용한다.")}</p>
+  const feedback = <>
     {error && <div className="banner error" role="alert">{error}</div>}
     {notice && <div className="banner info" role="status">{notice}</div>}
-    {loadError && <button className="btn" type="button" onClick={() => { setLoading(true); setLoadError(false); setError(null); setVersion(value => value + 1); }}>{t("Retry", "다시 시도")}</button>}
-    {editor && <AuthForm editor={editor} busy={busy} connected={!!original} onChange={setEditor} onSubmit={connect} onCancel={() => setEditor(null)} />}
-    {loading ? <p className="poll-note" role="status">{t("Loading connections…", "인증 조회 중…")}</p> : !loadError && <div className="table-scroll"><table className="vm-table pipe-auth-connections" aria-label={t("Provider connections", "공급자 인증")}>
-      <thead><tr><th scope="col">{t("Provider", "공급자")}</th><th scope="col">{t("Account", "계정")}</th><th scope="col">{t("Status", "상태")}</th><th scope="col">{t("Pipe services", "Pipe 서비스")}</th><th scope="col" className="actions">{t("Actions", "작업")}</th></tr></thead>
-      <tbody>{PROVIDERS.map(provider => {
-        const connection = connections.find(row => row.provider === provider.id);
-        return <tr key={provider.id}>
-          <td>{provider.name}</td>
-          <td data-label={t("Account", "계정")}>{connection ? <>{connection.account}{connection.region && <span className="pipe-auth-region">{connection.region}</span>}</> : "—"}</td>
-          <td><span className={`state-badge${connection ? " running" : ""}`}>{connection ? t("Connected", "연결됨") : t("Not connected", "미연결")}</span></td>
-          <td data-label={t("Pipe services", "Pipe 서비스")}>{connection ? <a href={pipeCardHash("registry")}>{provider.service}</a> : <span className="poll-note">{provider.service}</span>}</td>
-          <td className="actions">{connection ? <PipeServiceMenu label={t(`${provider.name} actions`, `${provider.name} 작업`)} disabled={busy || !!editor} items={[
-            { label: t("Update credentials", "인증 정보 갱신"), onSelect: () => open(provider.id) },
-            { label: t("Disconnect", "연결 해제"), danger: true, onSelect: () => disconnect(provider.id) },
-          ]} /> : <button className="btn" type="button" disabled={busy || !!editor} onClick={() => open(provider.id)}>{t(`Connect ${provider.name}`, `${provider.name} 연결`)}</button>}</td>
-        </tr>;
-      })}</tbody>
-    </table></div>}
+  </>;
+  const status = (connected: boolean) => <span className={`badge${connected ? " running" : ""}`}>{connected ? t("Connected", "연결됨") : t("Not connected", "미연결")}</span>;
+
+  return <section className="pipe-auth-screen" aria-label="Pipe Auth">
+    <Screen view="pipe" flush
+      actions={<nav aria-label={t("Pipe navigation", "Pipe 이동")}><a className="btn sm ghost" href={viewHash("pipe")}><ArrowLeft aria-hidden="true" />Pipe</a></nav>}
+      detailLabel={t("Authentication detail", "인증 상세")}
+      detailKind={<><KeyRound aria-hidden="true" />Pipe Auth</>}
+      onCloseDetail={closeDetail}
+      detail={selected ? <>
+        <DetailHead title={selected.name} meta={status(!!selectedConnection)} />
+        <div className="detail-body pipe-auth-detail">
+          {feedback}
+          {editor ? <AuthForm editor={editor} busy={busy} connected={!!original} onChange={setEditor} onSubmit={connect} onCancel={() => setEditor(null)} /> : <>
+            <DetailSection title={t("Connection", "연결 정보")}>
+              <dl className="props">
+                <DetailProp label={t("Account", "계정")} wrap>{selectedConnection?.account ?? "—"}</DetailProp>
+                {selectedConnection?.region && <DetailProp label={t("Region", "리전")}>{selectedConnection.region}</DetailProp>}
+                {selectedConnection && <DetailProp label={t("Registry", "레지스트리")} wrap><span className="mono">{selectedConnection.registry}</span></DetailProp>}
+              </dl>
+              <div className="detail-sec-buttons">
+                <button className="btn sm" type="button" disabled={busy} onClick={() => open(selected.id)}>{selectedConnection ? t("Update credentials", "인증 정보 갱신") : t("Connect account", "계정 연결")}</button>
+                {selectedConnection && <button className="btn sm danger" type="button" disabled={busy} onClick={() => disconnect(selected.id)}>{t("Disconnect", "연결 해제")}</button>}
+              </div>
+            </DetailSection>
+            <DetailSection title={t("Pipe services", "Pipe 서비스")}>
+              <p className="detail-note">{selectedConnection ? <a href={pipeCardHash("registry")}>{t(`Open ${selected.service}`, `${selected.service} 열기`)}</a> : t(`Connect ${selected.name} to use ${selected.service}.`, `${selected.name} 계정을 연결하면 ${selected.service}를 사용할 수 있다.`)}</p>
+            </DetailSection>
+          </>}
+        </div>
+      </> : null}
+    >
+      <div className="pipe-auth-heading">
+        <h2>Pipe Auth</h2>
+        <p className="detail-note">{t("Connect an account to use its Pipe services.", "계정을 인증하여 관련 Pipe 서비스를 사용한다.")}</p>
+      </div>
+      {!selected && feedback}
+      {loadError && <div className="pipe-auth-retry"><button className="btn" type="button" onClick={() => { setLoading(true); setLoadError(false); setError(null); setVersion(value => value + 1); }}>{t("Retry", "다시 시도")}</button></div>}
+      {loading ? <p className="empty" role="status">{t("Loading connections…", "인증 조회 중…")}</p> : !loadError && <div className="table-scroll"><table className="vm-table pipe-auth-connections" aria-label={t("Provider connections", "공급자 인증")}>
+        <thead><tr><th scope="col">{t("Provider", "공급자")}</th><th scope="col" className="pipe-auth-account">{t("Account", "계정")}</th><th scope="col">{t("Status", "상태")}</th><th scope="col" className="pipe-auth-services">{t("Pipe services", "Pipe 서비스")}</th><th scope="col" className="actions">{t("Actions", "작업")}</th></tr></thead>
+        <tbody>{PROVIDERS.map(provider => {
+          const connection = connections.find(row => row.provider === provider.id);
+          return <tr key={provider.id} className={selectedProvider === provider.id ? "selected" : undefined} aria-selected={selectedProvider === provider.id} onClick={() => select(provider.id)}>
+            <td className="name"><button className="link-button" type="button" onClick={event => { event.stopPropagation(); select(provider.id); }}>{provider.name}</button></td>
+            <td className="pipe-auth-account">{connection ? <>{connection.account}{connection.region && <span className="pipe-auth-region">{connection.region}</span>}</> : "—"}</td>
+            <td>{status(!!connection)}</td>
+            <td className="pipe-auth-services" onClick={event => event.stopPropagation()}>{connection ? <a href={pipeCardHash("registry")}>{provider.service}</a> : <span className="muted">{provider.service}</span>}</td>
+            <td className="actions" onClick={event => event.stopPropagation()}>{connection ? <PipeServiceMenu label={t(`${provider.name} actions`, `${provider.name} 작업`)} disabled={busy || !!editor} items={[
+              { label: t("Update credentials", "인증 정보 갱신"), onSelect: () => open(provider.id) },
+              { label: t("Disconnect", "연결 해제"), danger: true, onSelect: () => disconnect(provider.id) },
+            ]} /> : <button className="btn sm" type="button" disabled={busy || !!editor} onClick={() => open(provider.id)}>{t(`Connect ${provider.name}`, `${provider.name} 연결`)}</button>}</td>
+          </tr>;
+        })}</tbody>
+      </table></div>}
+    </Screen>
   </section>;
 }
 
@@ -98,19 +157,19 @@ function AuthForm({ editor, busy, connected, onChange, onSubmit, onCancel }: {
 }) {
   const { t } = useI18n();
   const update = (patch: Partial<Editor>) => onChange({ ...editor, ...patch });
-  const name = PROVIDERS.find(provider => provider.id === editor.provider)!.name;
-  return <form className="registry-form" onSubmit={onSubmit} aria-labelledby="pipe-auth-form-title">
-    <h3 className="registry-form-title" id="pipe-auth-form-title">{connected ? t(`Update ${name} credentials`, `${name} 인증 정보 갱신`) : t(`Connect ${name}`, `${name} 연결`)}</h3>
-    {editor.provider === "github" ? <div className="field registry-wide"><label htmlFor="pipe-auth-token">{t("Personal access token (classic)", "개인 액세스 토큰 (classic)")}</label>
+  const name = PROVIDERS.find(value => value.id === editor.provider)!.name;
+  return <form className="pipe-auth-form detail-sec" data-editing onSubmit={onSubmit} aria-labelledby="pipe-auth-form-title">
+    <div className="detail-sec-head"><h3 id="pipe-auth-form-title">{connected ? t(`Update ${name} credentials`, `${name} 인증 정보 갱신`) : t(`Connect ${name}`, `${name} 연결`)}</h3></div>
+    {editor.provider === "github" ? <div className="field"><label htmlFor="pipe-auth-token">{t("Personal access token (classic)", "개인 액세스 토큰 (classic)")}</label>
       <input id="pipe-auth-token" type="password" autoComplete="new-password" autoFocus value={editor.token} onChange={event => update({ token: event.target.value })} disabled={busy} required aria-describedby="pipe-auth-help" />
-      <span className="poll-note" id="pipe-auth-help">{t("Permission: read:packages. Authorize SSO for your organization if required.", "권한: read:packages. 조직에서 요구하면 SSO 권한을 승인한다.")}</span>
+      <p className="detail-note" id="pipe-auth-help">{t("Permission: read:packages. Authorize SSO for your organization if required.", "권한: read:packages. 조직에서 요구하면 SSO 권한을 승인한다.")}</p>
     </div> : <>
       <div className="field"><label htmlFor="pipe-auth-access-key">AWS access key ID</label><input id="pipe-auth-access-key" type="password" autoComplete="new-password" autoFocus value={editor.accessKeyId} onChange={event => update({ accessKeyId: event.target.value })} disabled={busy} required /></div>
       <div className="field"><label htmlFor="pipe-auth-secret-key">AWS secret access key</label><input id="pipe-auth-secret-key" type="password" autoComplete="new-password" value={editor.secretAccessKey} onChange={event => update({ secretAccessKey: event.target.value })} disabled={busy} required /></div>
       <div className="field"><label htmlFor="pipe-auth-session">{t("AWS session token (optional)", "AWS 세션 토큰 (선택)")}</label><input id="pipe-auth-session" type="password" autoComplete="new-password" value={editor.sessionToken} onChange={event => update({ sessionToken: event.target.value })} disabled={busy} /></div>
       <div className="field"><label htmlFor="pipe-auth-region">{t("AWS region", "AWS 리전")}</label><input id="pipe-auth-region" autoComplete="off" spellCheck={false} value={editor.region} onChange={event => update({ region: event.target.value })} disabled={busy} required /></div>
-      <p className="poll-note registry-wide">{t("Needs ecr:GetAuthorizationToken, ecr:DescribeRepositories and permission to pull images. Reconnect when temporary AWS credentials expire.", "ecr:GetAuthorizationToken, ecr:DescribeRepositories 권한과 이미지 가져오기 권한이 필요하다. 임시 AWS 인증 정보가 만료되면 다시 연결한다.")}</p>
+      <p className="detail-note">{t("Needs ecr:GetAuthorizationToken, ecr:DescribeRepositories and permission to pull images. Reconnect when temporary AWS credentials expire.", "ecr:GetAuthorizationToken, ecr:DescribeRepositories 권한과 이미지 가져오기 권한이 필요하다. 임시 AWS 인증 정보가 만료되면 다시 연결한다.")}</p>
     </>}
-    <div className="pipe-controls registry-wide"><button className="btn primary" type="submit" disabled={busy}>{busy ? t("Verifying…", "인증 확인 중…") : t("Verify and connect", "인증 확인 후 연결")}</button><button className="btn" type="button" disabled={busy} onClick={onCancel}>{t("Cancel", "취소")}</button></div>
+    <div className="detail-sec-buttons"><button className="btn primary" type="submit" disabled={busy}>{busy ? t("Verifying…", "인증 확인 중…") : t("Verify and connect", "인증 확인 후 연결")}</button><button className="btn" type="button" disabled={busy} onClick={onCancel}>{t("Cancel", "취소")}</button></div>
   </form>;
 }

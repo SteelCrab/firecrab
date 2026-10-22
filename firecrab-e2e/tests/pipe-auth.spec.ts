@@ -62,6 +62,41 @@ test.describe("Pipe Auth @dashboard", () => {
     await expect(page.getByRole("table", { name: "Provider connections" }).getByText("Connected", { exact: true })).toHaveCount(2);
   });
 
+  test("uses the shared desktop list and detail layout for provider credentials", async ({ page }, info) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const mock = await open(page, { connections: [github, aws] });
+    await mock.panel.getByRole("button", { name: "AWS", exact: true }).click();
+    const detail = mock.panel.getByRole("complementary", { name: "Authentication detail" });
+    await expect(detail.getByRole("heading", { name: "AWS", exact: true })).toBeVisible();
+    await expect(detail.getByText(aws.registry, { exact: true })).toBeVisible();
+    await expect(mock.panel.getByRole("row", { name: /AWS/ })).toHaveAttribute("aria-selected", "true");
+    const listBounds = await mock.panel.getByRole("table", { name: "Provider connections" }).boundingBox();
+    const detailBounds = await detail.boundingBox();
+    expect(detailBounds!.x).toBeGreaterThanOrEqual(listBounds!.x + listBounds!.width - 1);
+    await detail.getByRole("button", { name: "Update credentials", exact: true }).click();
+    await expect(detail.getByLabel("AWS access key ID", { exact: true })).toBeVisible();
+    await expect(mock.panel.getByRole("table", { name: "Provider connections" }).getByRole("row")).toHaveCount(3);
+    await page.screenshot({ path: info.outputPath("pipe-auth-desktop.png"), fullPage: true });
+  });
+
+  test("protects an unfinished credential when closing details or selecting another provider", async ({ page }) => {
+    const mock = await open(page);
+    await mock.panel.getByRole("button", { name: "Connect GitHub", exact: true }).click();
+    const token = mock.panel.getByLabel("Personal access token (classic)");
+    await token.fill("unfinished-secret");
+    page.once("dialog", dialog => dialog.dismiss());
+    await mock.panel.getByRole("button", { name: "Close detail", exact: true }).click();
+    await expect(token).toHaveValue("unfinished-secret");
+    page.once("dialog", dialog => dialog.dismiss());
+    await mock.panel.getByRole("button", { name: "AWS", exact: true }).click();
+    await expect(token).toHaveValue("unfinished-secret");
+    page.once("dialog", dialog => dialog.accept());
+    await mock.panel.getByRole("button", { name: "AWS", exact: true }).click();
+    await expect(mock.panel.getByRole("complementary", { name: "Authentication detail" }).getByRole("heading", { name: "AWS", exact: true })).toBeVisible();
+    await expect(mock.panel.locator('input[type="password"]')).toHaveCount(0);
+    expect(mock.writes).toHaveLength(0);
+  });
+
   test("verifies GitHub, clears the token and enables GHCR through Pipe Registry", async ({ page }) => {
     const mock = await open(page);
     await mock.panel.getByRole("button", { name: "Connect GitHub", exact: true }).click();
@@ -100,7 +135,7 @@ test.describe("Pipe Auth @dashboard", () => {
   });
 
 
-  test("browses AWS ECR repositories, preserves opaque cursors and pulls a selected image", async ({ page }) => {
+  test("browses AWS ECR repositories, preserves opaque cursors and pulls a selected image", async ({ page }, info) => {
     const mock = await open(page, { connections: [aws] });
     await mock.panel.getByRole("link", { name: "Amazon ECR", exact: true }).click();
     const registry = page.getByRole("region", { name: "Pipe Registry", exact: true });
@@ -108,6 +143,7 @@ test.describe("Pipe Auth @dashboard", () => {
     await registry.getByRole("button", { name: "More repositories", exact: true }).click();
     await registry.getByRole("button", { name: "team/worker", exact: true }).click();
     await expect(registry.getByLabel("Tag", { exact: true })).toHaveValue("v1");
+    await page.screenshot({ path: info.outputPath("pipe-auth-ecr-desktop.png"), fullPage: true });
     await registry.getByRole("button", { name: "Pull image", exact: true }).click();
     await expect(registry.getByRole("group", { name: "Last pull", exact: true })).toContainText("Pulled");
     expect(mock.transfers).toEqual([`${aws.registry}/team/worker:v1`]);
@@ -155,11 +191,20 @@ test.describe("Pipe Auth @dashboard", () => {
   test("keeps Korean AWS forms usable in a narrow viewport", async ({ page }, info) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const mock = await open(page, { connections: [github], locale: "ko" });
-    await mock.panel.getByRole("button", { name: "AWS 연결", exact: true }).click();
-    await expect(mock.panel.getByRole("button", { name: "인증 확인 후 연결", exact: true })).toBeVisible();
+    await expect(mock.panel.getByRole("button", { name: "GitHub", exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    const providerName = await mock.panel.getByRole("cell", { name: "GitHub", exact: true }).boundingBox();
-    expect(providerName!.height).toBeLessThan(40);
-    await mock.panel.screenshot({ path: info.outputPath("pipe-auth-mobile-ko.png") });
+    await page.screenshot({ path: info.outputPath("pipe-auth-mobile-list-ko.png"), fullPage: true });
+    await mock.panel.getByRole("button", { name: "AWS 연결", exact: true }).click();
+    const detail = mock.panel.getByRole("complementary", { name: "인증 상세" });
+    await expect(detail.getByRole("button", { name: "인증 확인 후 연결", exact: true })).toBeVisible();
+    const bounds = await detail.boundingBox();
+    expect(bounds!.x).toBe(0);
+    expect(bounds!.width).toBe(390);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath("pipe-auth-mobile-ko.png"), fullPage: true });
+    await detail.getByRole("button", { name: "취소", exact: true }).click();
+    await detail.getByRole("button", { name: "상세 닫기", exact: true }).click();
+    await expect(detail).toHaveCount(0);
+    await expect(mock.panel.getByRole("button", { name: "AWS 연결", exact: true })).toBeVisible();
   });
 });

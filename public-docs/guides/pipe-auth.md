@@ -4,6 +4,11 @@ Open **Pipe → Pipe Auth** to connect a provider account. Firecrab verifies the
 credentials before saving them. Each host keeps one connection per provider.
 Supported Pipe services reuse that connection without asking for a second login.
 
+Select a provider row to open its connection details. The credentials editor uses
+the dashboard's right detail panel on desktop and a full-width panel on phones.
+Use **Connect** or **Update credentials** to open the form. Closing a panel with
+unfinished credentials asks before discarding them.
+
 | Provider | Credentials | Available Pipe service |
 | --- | --- | --- |
 | GitHub | Personal access token (classic) with `read:packages` | GHCR in Pipe Registry |
