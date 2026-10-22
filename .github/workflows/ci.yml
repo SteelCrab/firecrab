@@ -59,6 +59,9 @@ jobs:
       - name: cargo test -p firecrab-cli
         run: cargo test -p firecrab-cli --locked
 
+      - name: Validate the example stack offline
+        run: cargo run -p firecrab-cli --locked -- stack validate --file examples/stacks/basic.yaml --json
+
       - name: Shared source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
 
@@ -299,7 +302,7 @@ jobs:
           PY
 
   e2e-dashboard:
-    name: Browser E2E (dashboard, no guest boot)
+    name: Browser E2E (dashboard and Secrets, no guest boot)
     # Playwright specs tagged @dashboard fake the API or console they need, so
     # they run without KVM or the net helper. Guest-boot halves stay manual.
     runs-on: ubuntu-latest
@@ -346,13 +349,23 @@ jobs:
       - name: PIPE database E2E types
         run: npm run typecheck:pipe --prefix firecrab-e2e
 
-      - name: Playwright traces (on failure)
-        if: failure()
+      - name: Secrets QA runner contracts
+        if: ${{ !cancelled() }}
+        run: python3 scripts/test-ci-qa-secrets.py
+
+      - name: PipeSecrets QA (unit, UI, real API and encrypted vault)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ci-qa-secrets.py
+
+      - name: Browser and Secrets QA reports
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: e2e-dashboard-results
-          path: firecrab-e2e/test-results
-          retention-days: 7
+          path: |
+            firecrab-e2e/test-results
+            target/qa/secrets
+          retention-days: 14
 
   pipe-databases:
     name: PIPE databases (real API, PostgreSQL, MySQL, TLS and browser)

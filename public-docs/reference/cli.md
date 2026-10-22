@@ -46,6 +46,12 @@ The config stores only endpoints; unknown TOML keys block profile changes.
 
 ## Resource commands
 
+`firecrab stack validate --file stack.yaml [--json]` checks a declarative YAML stack offline.
+It does not read host profiles or contact the API, even when `--api` or `--host` is set.
+Exit `0` means the declared schema and local constraints passed; failures exit `1`.
+With `--json`, both outcomes produce a JSON report on stdout.
+See [Stack validation](../guides/stacks.md) for the experimental schema and its limits.
+
 | Resource | Commands |
 | --- | --- |
 | VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
