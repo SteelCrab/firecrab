@@ -71,7 +71,7 @@ test.describe("Host Firecrab panel @dashboard", () => {
       INFO.apiBase,
     ]);
 
-    await expect(page.getByRole("heading", { name: "Host" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Host info", exact: true })).toBeVisible();
     await expect(page.locator(".host-info").nth(0)).toContainText("Debian GNU/Linux 13 (trixie)");
     expect(await page.locator(".host-info").count()).toBe(2);
     const host = await page.locator(".host-info").nth(0).boundingBox();

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Shared QA work list from public-docs/development/qa.md against a live API (:5523).
-# IDs match the cross-platform QA sheet (G/H/N/S/L/I/V/C/X).
+# IDs match the cross-platform QA sheet (G/H/N/S/L/I/P/V/C/X).
 #
-# RUN:  G4 G5 H1 H2 H3 N1-N5 S1-S3 L1-L3 I1 I8(GET) I9 V14
+# RUN:  G4 G5 H1 H2 H3 N1-N5 S1-S3 L1-L3 I1 I8(GET) I9 P1-P6 V14
 #       C3 C5 when `firecrab` is on PATH; X1-X4 X6
 # SKIP: G1  Linux install job (doctor / install / status)
 #       G2  GitHub macOS hosted: build only; E2E is self-hosted Mac
@@ -15,6 +15,7 @@
 #       C1 C2 C4   guest boot / image import
 #       X5         no custom OCI alias
 # N4: IPv6 SLAAC POST; HTTP 400 → SKIP with body, do not fail.
+# P1-P6 use a fake ECR host and never pull, so Docker Hub logins stay untouched.
 # Prefix qa-ci-; IPv4 172.31.201.0/24. Never name a network "ci".
 set -euo pipefail
 
@@ -25,6 +26,8 @@ SUBNET=172.31.201.0/24
 SUBNET_V6=172.31.211.0/24
 SUBNET_CLI=172.31.203.0/24
 STORAGE_PATH=${FIRECRAB_QA_STORAGE_PATH:-/tmp/qa-ci-pool}
+REG_HOST=000000000000.dkr.ecr.qa-ci-1.amazonaws.com
+REG_SECRET=qa-ci-secret-$$
 
 NET_ID=
 NET_V6_ID=
@@ -32,6 +35,7 @@ NET_CLI_ID=
 STORAGE_ID=
 SHELL_ID=
 VM_ID=
+REG_SAVED=
 CODE=
 BODY=
 FIRECRAB=
@@ -50,6 +54,10 @@ fail() {
 }
 
 cleanup() {
+    if [ -n "${REG_SAVED:-}" ]; then
+        curl -sS -o /dev/null --max-time 15 -X DELETE -H "Origin: ${API}" \
+            "${API}/api/pipe/registries/${REG_HOST}" || true
+    fi
     if [ -n "${SHELL_ID:-}" ]; then
         curl -sS -o /dev/null --max-time 15 -X DELETE "${API}/api/shells/${SHELL_ID}" || true
     fi
@@ -115,6 +123,21 @@ require_request_id() {
         return 0
     fi
     fail "$id" "JSON 404 missing error.requestId"
+}
+
+# Prints the connection row for $1 from a registry list in BODY; fails on any secret.
+registry_row() {
+    printf '%s' "$BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin)
+if not isinstance(rows, list):
+    sys.exit("not a JSON list")
+for row in rows:
+    if set(row) != {"registry", "username", "provider"}:
+        sys.exit("unexpected fields: " + ",".join(sorted(row)))
+match = [r for r in rows if r["registry"] == sys.argv[1]]
+print(json.dumps(match[0], sort_keys=True) if match else "")
+' "$1"
 }
 
 leftover_qa() {
@@ -336,6 +359,72 @@ http GET /api/images/does-not-exist
 expect I9 404
 require_request_id I9
 pass I9
+
+http GET /api/pipe/registries
+expect P1 200
+row=$(registry_row "$REG_HOST") || fail P1 "registry list shape"
+[ -z "$row" ] || fail P1 "${REG_HOST} already has a login; remove it before QA"
+pass P1
+
+http PUT "/api/pipe/registries/${REG_HOST}" "{\"username\":\"qa-ci-user\",\"secret\":\"${REG_SECRET}\"}"
+REG_SAVED=1
+expect P2 200
+case $BODY in *"$REG_SECRET"*) fail P2 "save response returned the secret" ;; esac
+[ "$(json_get 'd["username"] + "/" + d["provider"]')" = AWS/ecr ] \
+    || fail P2 "ECR login must be saved as AWS/ecr"
+http GET /api/pipe/registries
+expect P2 200
+case $BODY in *"$REG_SECRET"*) fail P2 "registry list returned the secret" ;; esac
+row=$(registry_row "$REG_HOST") || fail P2 "registry list shape"
+[ -n "$row" ] || fail P2 "saved login missing from the list"
+pass P2
+
+http PUT /api/pipe/registries/untrusted.invalid '{"username":"qa-ci-user","secret":"qa"}'
+expect P3 400
+http PUT "/api/pipe/registries/${REG_HOST}" '{"username":"qa-ci-user","secret":" "}'
+expect P3 400
+http PUT "/api/pipe/registries/${REG_HOST}" '{"username":"qa-ci-user","secret":"qa","extra":1}'
+expect P3 400
+CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X PUT \
+    -H 'Origin: https://untrusted.invalid' -H 'content-type: application/json' \
+    --data '{"username":"qa-ci-user","secret":"qa"}' \
+    "${API}/api/pipe/registries/${REG_HOST}") || CODE=000
+BODY=
+expect P3 403
+pass P3
+
+http DELETE "/api/pipe/registries/${REG_HOST}"
+expect P4 200
+[ "$(json_get 'd["deleted"]')" = True ] || fail P4 "delete response missing deleted"
+http GET /api/pipe/registries
+expect P4 200
+row=$(registry_row "$REG_HOST") || fail P4 "registry list shape"
+[ -z "$row" ] || fail P4 "login still listed after delete"
+REG_SAVED=
+http DELETE "/api/pipe/registries/${REG_HOST}"
+expect P4 200
+http DELETE /api/pipe/registries/untrusted.invalid
+expect P4 200
+http DELETE /api/pipe/registries/invalid@host
+expect P4 400
+pass P4
+
+http GET /api/pipe/registry-images
+expect P5 200
+json_get 'len(d)' >/dev/null || fail P5 "registry images not a list"
+http GET '/api/pipe/registry-tags?reference=untrusted.invalid/team/app:v1'
+expect P5 400
+http GET "/api/pipe/registry-tags?reference=${REG_HOST}/qa/app:v1&last=bad%20tag"
+expect P5 400
+pass P5
+
+http POST /api/pipe/registry-transfers '{"action":"pull","reference":"untrusted.invalid/team/app:v1"}'
+expect P6 400
+http POST /api/pipe/registry-transfers "{\"action\":\"push\",\"reference\":\"${REG_HOST}/qa/app:v1\"}"
+expect P6 400
+http GET /api/pipe/registry-transfers/not-a-digest
+expect P6 400
+pass P6
 
 http POST /api/vms '{"name":"qa-ci-nonet","template":"alpine-3.24","cpu":1,"ram":512,"diskGb":2}'
 if [ "$CODE" = 201 ]; then

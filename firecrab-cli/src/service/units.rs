@@ -1,5 +1,5 @@
-//! install.sh `install_units` / `start_units` / `wait_for_api`, 그리고
-//! `firecrab service start|stop|restart|enable|disable`의 systemd 호출.
+//! install.sh `install_units` / `start_units` / `wait_for_api`, plus systemd calls
+//! for `firecrab service start|stop|restart|enable|disable`.
 
 use std::time::Duration;
 
@@ -15,17 +15,17 @@ const STEP_UNITS: &str = "units";
 const STEP_START: &str = "start";
 const STEP_STOP: &str = "stop";
 
-/// API가 실제로 응답할 때까지 기다리는 최대 횟수/간격.
+/// Maximum attempts and interval for waiting until the API responds.
 const API_ATTEMPTS: u32 = 60;
 const API_INTERVAL: Duration = Duration::from_secs(1);
 
-/// 유닛을 재시작한 직후, 상태를 확인하기 전에 기다리는 시간
-/// (install.sh `start_units`의 `sleep 1`과 같다 — Type=simple 유닛은 fork된
-/// 즉시 `is-active`가 참이 되므로, 곧바로 죽는 유닛을 놓치지 않으려면 잠깐
-/// 기다려야 한다).
+/// Delay between restarting a unit and checking its status, matching `sleep 1`
+/// in install.sh `start_units`. For Type=simple units, `is-active` becomes true
+/// as soon as the process is forked. Wait briefly to catch units that exit
+/// immediately.
 const SETTLE: Duration = Duration::from_secs(1);
 
-/// install.sh `install_units`의 sed 치환.
+/// The sed substitutions from install.sh `install_units`.
 pub fn render_unit(template: &str, env: &ServiceEnv, uid: &str) -> String {
     let normalized = template
         .lines()
@@ -46,7 +46,7 @@ pub fn render_unit(template: &str, env: &ServiceEnv, uid: &str) -> String {
         + "\n"
 }
 
-/// 템플릿을 이 호스트의 경로·계정으로 렌더해 `$UNITDIR`에 쓰고 daemon-reload.
+/// Render templates with this host's paths and accounts, write to `$UNITDIR`, then run daemon-reload.
 pub fn install_units(
     privileged: &Privileged<'_>,
     env: &ServiceEnv,
@@ -109,7 +109,7 @@ pub fn install_units(
     Ok(())
 }
 
-/// 두 유닛 파일이 모두 `$UNITDIR`에 있어야 서비스 제어가 의미를 갖는다.
+/// Both unit files must be in `$UNITDIR` before service control is useful.
 pub fn require_installed(env: &ServiceEnv) -> Result<(), Error> {
     if env.unit_path(UNITS[1]).is_file()
         && (env.unit_path(UNITS[0]).is_file() || env.unit_path(LEGACY_HELPER_UNIT).is_file())
@@ -144,15 +144,15 @@ fn control_units(privileged: &Privileged<'_>) -> [&'static str; 2] {
     [helper_unit(privileged.runner()), UNITS[1]]
 }
 
-/// `systemctl is-active <unit>`, systemctl 자체가 없으면 `"unknown"`.
+/// Run `systemctl is-active <unit>`, or return `"unknown"` if systemctl is unavailable.
 ///
-/// `status` 서브커맨드의 `systemd_is_active`와 같은 규칙이다 — 여기서 그
-/// 구현에 위임한다.
+/// Use the same rules as the `status` subcommand's `systemd_is_active`
+/// by delegating to that implementation.
 pub fn is_active(runner: &dyn CommandRunner, unit: &str) -> String {
     crate::status::systemd_is_active(runner, unit)
 }
 
-/// 부팅 시 활성화.
+/// Enable at boot.
 pub fn enable(privileged: &Privileged<'_>) -> Result<(), Error> {
     let mut args = vec!["enable"];
     args.extend(control_units(privileged));
@@ -161,7 +161,7 @@ pub fn enable(privileged: &Privileged<'_>) -> Result<(), Error> {
         .map(|_| ())
 }
 
-/// 부팅 시 비활성화.
+/// Disable at boot.
 pub fn disable(privileged: &Privileged<'_>) -> Result<(), Error> {
     let mut args = vec!["disable"];
     args.extend(control_units(privileged));
@@ -170,7 +170,7 @@ pub fn disable(privileged: &Privileged<'_>) -> Result<(), Error> {
         .map(|_| ())
 }
 
-/// `probe`가 참을 돌려줄 때까지 `attempts`번 재시도한다.
+/// Retry up to `attempts` times until `probe` returns true.
 pub fn wait_for(probe: &dyn Fn() -> bool, attempts: u32, interval: Duration) -> bool {
     for attempt in 0..attempts {
         if probe() {
@@ -183,11 +183,11 @@ pub fn wait_for(probe: &dyn Fn() -> bool, attempts: u32, interval: Duration) -> 
     false
 }
 
-/// install.sh `wait_for_api`의 HTTP probe.
+/// HTTP probe from install.sh `wait_for_api`.
 ///
-/// `is-active`는 Type=simple 유닛에서 프로세스가 fork 되는 순간 참이 된다 —
-/// 실제로 서빙하는 시점이 아니다. API는 리스너를 열기 전에 설치된 모든 템플릿
-/// 아티팩트를 해시하므로, 큰 rootfs가 있으면 fork 이후로도 한참 걸린다.
+/// For Type=simple units, `is-active` becomes true when the process is forked,
+/// before it can serve requests. The API hashes all installed template artifacts
+/// before opening its listener, so large rootfs files can delay readiness well after the fork.
 pub fn http_probe(bind: &str) -> bool {
     let url = format!("http://{bind}/");
     reqwest::blocking::Client::builder()
@@ -199,8 +199,8 @@ pub fn http_probe(bind: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// [`confirm_active`]의 본체 — `settle`과 `(attempts, interval)`을 주입해
-/// 실서비스 경로의 대기 시간을 테스트에서는 0에 가깝게 줄일 수 있게 한다.
+/// Core of [`confirm_active`]. Inject `settle` and `(attempts, interval)` so tests
+/// can reduce the delays used by the real service path to nearly zero.
 fn confirm_active_with(
     privileged: &Privileged<'_>,
     probe: &dyn Fn() -> bool,
@@ -243,7 +243,7 @@ fn confirm_active(privileged: &Privileged<'_>, probe: &dyn Fn() -> bool) -> Resu
     confirm_active_with(privileged, probe, SETTLE, API_ATTEMPTS, API_INTERVAL)
 }
 
-/// 부팅 순서대로 시작한 뒤 실제로 떴는지 확인한다.
+/// Start in boot order, then verify the services are actually running.
 pub fn start(privileged: &Privileged<'_>, probe: &dyn Fn() -> bool) -> Result<(), Error> {
     let mut args = vec!["start"];
     args.extend(control_units(privileged));
@@ -251,7 +251,7 @@ pub fn start(privileged: &Privileged<'_>, probe: &dyn Fn() -> bool) -> Result<()
     confirm_active(privileged, probe)
 }
 
-/// install.sh `start_units`: enable + restart + 확인.
+/// install.sh `start_units`: enable, restart, and verify.
 pub fn enable_and_start(
     privileged: &Privileged<'_>,
     probe: &dyn Fn() -> bool,
@@ -263,7 +263,7 @@ pub fn enable_and_start(
     confirm_active(privileged, probe)
 }
 
-/// 역순으로 정지한다 — API가 helper보다 먼저 내려가야 한다.
+/// Stop in reverse order so the API shuts down before the helper.
 pub fn stop(privileged: &Privileged<'_>) -> Result<(), Error> {
     let mut args = vec!["stop"];
     args.extend(control_units(privileged).into_iter().rev());

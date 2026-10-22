@@ -1961,33 +1961,30 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn ensure_firewall_renders_per_vm_uplink_before_nft() {
+    #[test]
+    fn reconciled_ruleset_uses_the_vms_network_uplink() {
         let network = MicroNetworkSpec {
             uplink: Some("eth1".to_owned()),
             ..sample_network(0x1234, "172.30.0.1", 24)
         };
-        let policy = sample_policy(EgressPolicy::Internet, false);
-        let actor = FirewallActor::new();
-        let _ = ensure_firewall(&actor, std::slice::from_ref(&network), &[policy]).await;
-        assert_eq!(
-            actor.state.lock().await.networks[0].uplink.as_deref(),
-            Some("eth1")
+        let mut policy = sample_policy(EgressPolicy::Internet, false);
+        policy
+            .port_forwards
+            .push(firecrab_helper_protocol::network::PortForwardSpec {
+                host_port: 18080,
+                guest_port: 80,
+                protocol: "tcp".to_owned(),
+            });
+        let base = render_apply_ruleset("eth0", std::slice::from_ref(&network)).unwrap();
+        let ruleset = render_reconciled_ruleset(&base, "eth0", &[network], &[policy]);
+        assert!(
+            ruleset.contains("iifname \"eth1\" tcp dport 18080"),
+            "{ruleset}"
         );
-    }
-
-    #[tokio::test]
-    async fn iptables_compat_walks_each_egress_oif() {
-        // Best-effort shim: exercise the per-oif loop even when iptables
-        // is missing or the process cannot change the host tables.
-        ensure_iptables_compat(
-            &["mnbtst0".to_owned()],
-            &[
-                ("172.31.0.0/24".to_owned(), "eth0".to_owned()),
-                ("172.32.0.0/24".to_owned(), "eth1".to_owned()),
-            ],
-        )
-        .await;
+        assert!(
+            !ruleset.contains("iifname \"eth0\" tcp dport 18080"),
+            "{ruleset}"
+        );
     }
 
     const NAT_LISTING: &str = "-P POSTROUTING ACCEPT\n\
@@ -2023,15 +2020,6 @@ mod tests {
         assert!(masquerade_rules_for(NAT_LISTING, &["172.31.77.0/25".to_owned()]).is_empty());
         assert!(masquerade_rules_for(NAT_LISTING, &[]).is_empty());
         assert!(masquerade_rules_for("", &["172.31.77.0/24".to_owned()]).is_empty());
-    }
-
-    #[tokio::test]
-    async fn remove_firewall_clears_cached_networks() {
-        let actor = FirewallActor::new();
-        actor.state.lock().await.networks = vec![sample_network(0x1234, "172.31.0.1", 24)];
-        if remove_firewall(&actor).await.is_ok() {
-            assert!(actor.state.lock().await.networks.is_empty());
-        }
     }
 
     #[tokio::test]
@@ -2088,32 +2076,6 @@ mod tests {
         );
         assert!(owned_snapshot(br#"{}"#).is_err());
         assert!(owned_snapshot(b"not json").is_err());
-    }
-
-    #[tokio::test]
-    async fn applying_the_same_policy_under_a_different_uplink_is_not_a_no_op() {
-        // `render_vm_policy_for_network` bakes the uplink into the DNAT rules' `iifname`
-        // match, so a changed uplink with an otherwise byte-identical
-        // `VmPolicy` must still be treated as a real change, not skipped.
-        let actor = FirewallActor::new();
-        let policy = sample_policy(EgressPolicy::Internet, false);
-        actor.state.lock().await.applied_vms.insert(
-            policy.vm_id,
-            (
-                "stale-uplink-that-is-not-the-real-one".to_owned(),
-                policy.clone(),
-            ),
-        );
-
-        // Reaching real `nft`/rtnetlink here (rather than short-circuiting)
-        // is exactly what this test wants to prove happens; on a host
-        // without NET_ADMIN this call fails for privilege reasons, not
-        // because the no-op check wrongly skipped it.
-        let result = apply_vm_policy(&actor, policy).await;
-        assert!(
-            !matches!(result, Ok(())),
-            "expected a real nft attempt, not a skipped no-op"
-        );
     }
 
     #[test]

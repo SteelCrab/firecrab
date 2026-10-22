@@ -41,7 +41,7 @@ pub async fn inspect_oci_image(
         .alias;
 
     let insecure = is_loopback_registry(&reference.registry);
-    let credential = stored_credential(&state, request_id).await;
+    let credential = stored_credential_for(&state, &reference.registry, request_id).await?;
     let resolved = resolve(&reference, Architecture::HOST, insecure, credential)
         .await
         .map_err(|error| {
@@ -85,6 +85,7 @@ pub async fn start_oci_import(
         Err(error) => return Err(validation_reference(error.to_string(), request_id.0)),
     };
 
+    let credential = stored_credential_for(&state, &reference.registry, request_id).await?;
     let response = match state.oci_imports.begin_with(&named.alias, "import started") {
         Ok(snapshot) => snapshot,
         Err("running") => {
@@ -97,7 +98,6 @@ pub async fn start_oci_import(
         Err(_) => return Err(AppError::internal(request_id.0)),
     };
 
-    let credential = stored_credential(&state, request_id).await;
     let tracker = state.oci_imports.clone();
     let templates = (*state.templates).clone();
     let alias = named.alias.clone();
@@ -130,6 +130,32 @@ pub(crate) async fn stored_credential(
         }
         Err(_) => None,
     }
+}
+
+/// Resolve the credential for this exact registry; preserve Docker Hub compatibility.
+pub(crate) async fn stored_credential_for(
+    state: &AppState,
+    registry: &str,
+    request_id: RequestId,
+) -> Result<Option<RegistryCredential>, AppError> {
+    if crate::oci::is_docker_hub_registry(registry) {
+        return Ok(stored_credential(state, request_id).await);
+    }
+    let registry = registry.to_ascii_lowercase();
+    for auth in super::pipe_auth::saved(state, request_id).await? {
+        if auth.connection().registry == registry {
+            return auth
+                .registry_credential()
+                .await
+                .map(Some)
+                .map_err(|message| super::pipe_auth::auth_error(message, request_id));
+        }
+    }
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.registry_credential(&registry))
+        .await
+        .map_err(|_| AppError::internal(request_id.0))?
+        .map_err(|_| AppError::internal(request_id.0))
 }
 
 /// `GET /api/oci/import/{alias}` — latest import snapshot, including idle.

@@ -9,7 +9,7 @@ test("connects, reads and removes a real database through the dashboard", async 
   // Update checks are unrelated to DB access and would contact GitHub.
   await page.route("**/api/update", route => route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } }));
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
-  await page.goto("/#/pipe");
+  await page.goto("/#/pipe/database");
   const panel = page.getByRole("region", { name: "Databases", exact: true });
   await panel.getByRole("button", { name: "Add database", exact: true }).click();
   await panel.getByLabel("Connection name", { exact: true }).fill(name);
@@ -26,7 +26,7 @@ test("connects, reads and removes a real database through the dashboard", async 
     await page.reload();
     await panel.getByRole("button", { name: `Browse ${name}`, exact: true }).click();
     await panel.getByLabel("Table", { exact: true }).selectOption({ label: `${database.schema}.${database.table}` });
-    await expect(panel.getByRole("cell", { name: "한글", exact: true })).toBeVisible();
+    await expect(panel.getByRole("cell", { name: "café", exact: true })).toBeVisible();
     await expect(panel.getByRole("cell", { name: "<script>text</script>", exact: true })).toBeVisible();
     await expect(panel.locator(".pipe-database-preview tbody tr")).toHaveCount(3);
     const longValue = panel.locator(".pipe-database-cell").filter({ hasText: /^x{2048}$/ });

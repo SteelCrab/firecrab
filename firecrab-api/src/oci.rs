@@ -999,7 +999,13 @@ fn token_request(challenge: &str, base: &str) -> Option<String> {
     }
     let mut realm = None;
     let mut query = Vec::new();
-    for parameter in parameters.split(',') {
+    let mut quoted = false;
+    for parameter in parameters.split(|character| {
+        if character == '"' {
+            quoted = !quoted;
+        }
+        character == ',' && !quoted
+    }) {
         let (key, value) = parameter.trim().split_once('=')?;
         let value = value.trim_matches('"');
         match key {
@@ -1128,7 +1134,7 @@ fn format_error_chain(error: &(dyn std::error::Error + 'static)) -> String {
 /// The registry belongs to the credential rather than to the call site: a
 /// session attaches a login only while talking to the registry it was saved
 /// for, so a Docker Hub token cannot follow a reference to another host.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RegistryCredential {
     /// Registry host this login belongs to.
     pub registry: String,
@@ -1136,6 +1142,17 @@ pub struct RegistryCredential {
     pub username: String,
     /// Password or personal access token.
     pub secret: String,
+}
+
+impl fmt::Debug for RegistryCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryCredential")
+            .field("registry", &self.registry)
+            .field("username", &self.username)
+            .field("secret", &"[redacted]")
+            .finish()
+    }
 }
 
 impl RegistryCredential {
@@ -1234,6 +1251,8 @@ impl RegistrySession {
         }
         if let Some(token) = token {
             request = request.bearer_auth(token);
+        } else if let Some(basic) = &self.basic {
+            request = request.basic_auth(&basic.username, Some(&basic.secret));
         }
         if let Some(timeout) = timeout {
             request = request.timeout(timeout);
@@ -1255,54 +1274,74 @@ impl RegistrySession {
             return Ok(response);
         }
 
-        let challenge = response
-            .headers()
-            .get("www-authenticate")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_owned();
-        let mut stored = self.token.lock().await;
-        let token = if stored.is_some() && *stored != attempted {
-            stored.clone().expect("token checked as present")
-        } else {
-            let token_url = token_request(&challenge, &self.base).ok_or_else(|| {
-                ResolveError::Authentication(
-                    "registry sent an unusable bearer challenge".to_owned(),
-                )
-            })?;
-            let mut token_request = self.client.get(&token_url).timeout(Duration::from_secs(20));
-            if let Some(basic) = &self.basic {
-                token_request = token_request.basic_auth(&basic.username, Some(&basic.secret));
-            }
-            let response = transport::get(token_request, &token_url).await?;
-            if !response.status().is_success() {
-                return Err(ResolveError::Authentication(format!(
-                    "token endpoint answered {}",
-                    response.status().as_u16()
-                )));
-            }
-            let issued = read_token_body(response).await?;
-            let issued: TokenResponse = serde_json::from_slice(&issued)
-                .map_err(|error| ResolveError::Authentication(error.to_string()))?;
-            let Some(token) = issued.issued().map(str::to_owned) else {
-                return Err(ResolveError::Authentication(
-                    "token endpoint returned an empty token".to_owned(),
-                ));
-            };
-            *stored = Some(token.clone());
-            token
-        };
-        drop(stored);
-
+        let token = self.authorize(&response, attempted).await?;
         let response = self
             .send_request(url, accept, Some(&token), timeout)
             .await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(ResolveError::Authentication(
-                "registry rejected the issued bearer token".to_owned(),
+                "registry rejected the credentials".into(),
             ));
         }
         Ok(response)
+    }
+
+    async fn authorize(
+        &self,
+        response: &reqwest::Response,
+        attempted: Option<String>,
+    ) -> Result<String, ResolveError> {
+        let challenge = response
+            .headers()
+            .get("www-authenticate")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let mut stored = self.token.lock().await;
+        if stored.is_some() && *stored != attempted {
+            return Ok(stored.clone().expect("token is present"));
+        }
+        let token_url = token_request(challenge, &self.base).ok_or_else(|| {
+            ResolveError::Authentication(if self.basic.is_some() {
+                "registry rejected credentials; renew the login token (ECR tokens expire after 12 hours)".into()
+            } else {
+                "registry requires a login; save credentials for this registry".into()
+            })
+        })?;
+        let token_url = reqwest::Url::parse(&token_url)
+            .map_err(|_| ResolveError::Authentication("invalid token URL".into()))?;
+        // A saved secret may go only to its registry's known token service.
+        let base = reqwest::Url::parse(&self.base).expect("validated registry URL");
+        let trusted = token_url.host_str() == base.host_str()
+            && token_url.port_or_known_default() == base.port_or_known_default()
+            || (base.host_str() == Some(DOCKER_HUB_REGISTRY)
+                && token_url.host_str() == Some("auth.docker.io"));
+        if self.basic.is_some() && !trusted {
+            return Err(ResolveError::Authentication(
+                "untrusted registry token service".into(),
+            ));
+        }
+        let mut request = self
+            .client
+            .get(token_url.clone())
+            .timeout(Duration::from_secs(20));
+        if let Some(basic) = &self.basic {
+            request = request.basic_auth(&basic.username, Some(&basic.secret));
+        }
+        let response = transport::get(request, token_url.as_str()).await?;
+        if !response.status().is_success() {
+            return Err(ResolveError::Authentication(format!(
+                "token endpoint answered {}",
+                response.status().as_u16()
+            )));
+        }
+        let issued: TokenResponse = serde_json::from_slice(&read_token_body(response).await?)
+            .map_err(|_| ResolveError::Authentication("invalid token response".into()))?;
+        let token = issued
+            .issued()
+            .ok_or_else(|| ResolveError::Authentication("empty registry token".into()))?
+            .to_owned();
+        *stored = Some(token.clone());
+        Ok(token)
     }
 
     async fn fetch_manifest(
@@ -2109,6 +2148,8 @@ pub(crate) mod service;
 #[cfg(test)]
 mod service_tests;
 
+pub mod registries;
+pub mod registry_catalog;
 #[cfg(test)]
 pub(crate) mod registry_fixture;
 mod transport;

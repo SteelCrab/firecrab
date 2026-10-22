@@ -69,8 +69,19 @@ Entries land here as work merges, and move under the next version heading when t
   An idle-runtime macOS E2E phase checks recovery, injected SSH/API failures,
   preserved assets, and restoration, retaining logs and JSON QA evidence.
 
+- The dashboard's Pipe Registry card saves Docker Hub, GHCR and Amazon ECR
+  logins, lists repository tags, pulls OCI images to this host, and imports a pulled image as
+  an M2Image. Logins are write-only in API responses. See
+  [Pipe Registry](public-docs/guides/pipe-registry.md).
+
 ### Changed
 
+- The dashboard's Pipe page lists its services as five cards: Route, Pipe
+  Registry, Firecrab Tunnel, Cloudflare Quick Tunnel, and Cloudflare Named
+  Tunnel. Each card shows the service state and opens that service's page
+  (`#/pipe/<card>`); **← Pipe** returns to the cards. Route combines the Nginx
+  service row and the route table, and the Cloudflare Tunnel service menu moves
+  to the Named Tunnel card.
 - The dashboard's VM list shows only a VM's own state: the API label next to it
   is gone, and the API's reconciliation result for a VM stays in its detail view.
 
@@ -217,6 +228,11 @@ the files, processes, and firewall rules an uninstall used to leave behind.
 
 ### Improved
 
+- The `firecrab-helper` service logs through `tracing`. A connection from an
+  unauthorized UID, an unreadable peer credential, a request read timeout, and a
+  failed response write now appear in `journalctl -u firecrab-helper`.
+  `RUST_LOG=firecrab_helper=debug` raises the level; the default is
+  `firecrab_helper=info` ([#305]).
 - Contributor guide, READMEs, architecture diagrams, and PR-body guidance are
   simplified and updated for the per-VM shim and VM lifetime ([#314], [#315]).
 
@@ -709,6 +725,7 @@ network helper.
 [#295]: https://github.com/SteelCrab/firecrab/pull/295
 [#297]: https://github.com/SteelCrab/firecrab/pull/297
 [#303]: https://github.com/SteelCrab/firecrab/issues/303
+[#305]: https://github.com/SteelCrab/firecrab/issues/305
 [#306]: https://github.com/SteelCrab/firecrab/issues/306
 [#312]: https://github.com/SteelCrab/firecrab/pull/312
 [#314]: https://github.com/SteelCrab/firecrab/pull/314

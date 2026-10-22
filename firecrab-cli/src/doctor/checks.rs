@@ -1427,7 +1427,7 @@ mod tests {
             datadir: dir.path().join("nonexistent-datadir").display().to_string(),
             ..DoctorEnv::default()
         };
-        // cwd (crate 소스 트리) has no ./images either.
+        // cwd (crate source tree) has no ./images either.
         let results = check_images(&env, false);
         assert_eq!(results[0].status, Status::Fail);
     }

@@ -1,0 +1,114 @@
+/* SSH access: the three steps (SshAccess) and the dialog around them (SshDialog). */
+
+.console-ssh { display: grid; gap: 18px; min-width: 0; }
+.ssh-step { display: grid; gap: 10px; min-width: 0; }
+.ssh-step + .ssh-step { padding-top: 18px; border-top: 1px solid var(--border); }
+.ssh-step-head { display: flex; align-items: flex-start; gap: 10px; }
+.ssh-step-num {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--text);
+  color: #ffffff;
+  font: 600 11px/1 var(--font);
+}
+.ssh-step-title { margin: 0; font-size: 13px; font-weight: 600; }
+.ssh-step-hint { margin: 2px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+.ssh-step-body { display: grid; gap: 12px; min-width: 0; padding-left: 30px; }
+
+.console-ssh-block { display: grid; gap: 4px; min-width: 0; }
+.console-ssh-block-head { display: flex; align-items: center; gap: 4px; min-width: 0; min-height: 26px; }
+.console-ssh-block-label { margin-right: auto; overflow: hidden; color: var(--text-2); font: 500 11.5px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.console-ssh-copy { color: var(--text-3); }
+.console-ssh-code {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font: 12px/1.6 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.console-ssh-code code { font: inherit; }
+.console-ssh-code.is-masked { color: var(--text-4); user-select: none; }
+
+/* The key gets a card of its own: it is the one thing every command needs. */
+.ssh-key { gap: 8px; padding: 8px 8px 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.ssh-key .console-ssh-block-label { color: var(--text); font-size: 12px; }
+.ssh-key .console-ssh-code { border: 0; }
+.ssh-key-icon { flex-shrink: 0; width: 15px; height: 15px; margin-right: 2px; color: var(--text-3); stroke-width: 1.75; }
+
+.console-ssh-forward { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.console-ssh-forward label { color: var(--text-2); font-size: 12px; font-weight: 500; }
+.console-ssh-forward .input { width: 96px; height: var(--control-height-sm); }
+.console-ssh-forward-target { color: var(--text-3); font: 12px var(--mono); }
+.console-ssh-empty { margin: 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
+
+.ssh-more summary { width: fit-content; color: var(--text-2); font-size: 12px; font-weight: 500; cursor: pointer; }
+.ssh-more summary:hover { color: var(--text); }
+.ssh-more[open] { display: grid; gap: 12px; }
+
+/* Dialog over the dashboard */
+
+.ssh-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 16px 16px;
+  background: rgba(24, 24, 27, 0.24);
+  transition: opacity 160ms ease;
+}
+.ssh-dialog {
+  display: flex;
+  flex-direction: column;
+  width: 640px;
+  max-width: 100%;
+  max-height: 84vh;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--shadow-pop);
+  outline: none;
+  transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
+}
+@starting-style {
+  .ssh-overlay { opacity: 0; }
+  .ssh-dialog { opacity: 0; transform: translateY(4px) scale(0.98); }
+}
+.ssh-dialog-head { display: flex; flex-shrink: 0; align-items: center; gap: 10px; padding: 12px 12px 12px 18px; border-bottom: 1px solid var(--border); }
+.ssh-dialog-icon {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-2);
+}
+.ssh-dialog-icon svg { width: 15px; height: 15px; stroke-width: 1.75; }
+.ssh-dialog-titles { min-width: 0; margin-right: auto; }
+.ssh-dialog-title { margin: 0; font-size: 14px; font-weight: 600; }
+.ssh-dialog-sub { display: flex; gap: 8px; margin: 1px 0 0; overflow: hidden; color: var(--text-3); font-size: 12px; white-space: nowrap; }
+.ssh-dialog-sub .mono { font-size: 11.5px; }
+.ssh-dialog-body { min-height: 0; padding: 18px 20px 22px; overflow-y: auto; }
+
+@media (max-width: 640px) {
+  .ssh-overlay { align-items: stretch; padding: 0; }
+  .ssh-dialog { max-height: none; border-radius: 0; }
+  .ssh-step-body { padding-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ssh-overlay, .ssh-dialog { transition: none; }
+}

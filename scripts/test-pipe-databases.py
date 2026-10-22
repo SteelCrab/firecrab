@@ -104,7 +104,7 @@ class Fixture:
         self.sql(f"""
             CREATE TABLE {self.table('rows')} (id integer, label text, note text, payload {binary_type}, long_value text);
             INSERT INTO {self.table('rows')} VALUES
-              (1, '한글', NULL, {binary}, REPEAT('x', 3000)),
+              (1, 'café', NULL, {binary}, REPEAT('x', 3000)),
               (2, '', 'NULL', NULL, ''), (3, '<script>text</script>', 'plain', NULL, 'tail');
             CREATE TABLE {self.table('empty')} (id integer);
             CREATE TABLE {self.table('wide')} ({columns});
@@ -200,7 +200,7 @@ def exercise(api, fixture, record, browser=False):
     preview_request = {"schema": fixture.schema, "table": fixture.names["rows"], "limit": 50, "offset": 0}
     preview = api.request("POST", connection + "/preview", preview_request)
     rows = {row[0]: row for row in preview["rows"]}
-    assert rows["1"][1] == "한글" and rows["1"][2] is None
+    assert rows["1"][1] == "café" and rows["1"][2] is None
     assert rows["2"][1] == "" and rows["2"][2] == "NULL"
     assert rows["1"][3] == ("\\x0102" if fixture.engine == "postgres" else "0102")
     assert len(rows["1"][4]) == 2048 and len(rows) == 3 and not preview["hasMore"]

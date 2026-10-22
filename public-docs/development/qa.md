@@ -26,7 +26,7 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 
 | Script or suite | Cases / purpose |
 | --- | --- |
-| `scripts/ci-qa-api.sh` | G4–G5, H1–H3, N1–N5, S1–S3, L1–L3, I1/I8/I9, V14, C3/C5, X1–X4/X6 |
+| `scripts/ci-qa-api.sh` | G4–G5, H1–H3, N1–N5, S1–S3, L1–L3, I1/I8/I9, P1–P6, V14, C3/C5, X1–X4/X6 |
 | `scripts/ci-qa-nginx.sh` | NGX1–NGX9, including real SSH, env, shell, and forwarded HTTP |
 | `scripts/ci-qa-ssh.sh` | V8a–V8d; called by nginx and guest boot |
 | `scripts/ci-qa-guest.sh` | I5/I6, V1/V2/V6–V9/V11–V13/V15, N6, C1/C2/C2b/C4, X5 |
@@ -34,8 +34,13 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `scripts/ci-qa-macos-e2e.sh` | Native Mac gate, shell, repair, browser, API, nginx, guest, and lifetime |
 | `scripts/ci-qa-windows-e2e.ps1` | Native Windows gate/shell, WSL API/nginx/guest/lifetime/browser, plus Windows HTTP |
 | `scripts/ci-qa-macos-e2e.sh repair` | G7/G7a runtime recovery and preservation; [detailed checks](macos-repair.md) |
-| `firecrab-e2e` | B1–B17; full or explicit import/form mode |
+| `firecrab-e2e` | B1–B19; full or explicit import/form mode |
 | `firecrab-e2e` `test:dashboard` | Mocked dashboard/API/console checks |
+| `firecrab-e2e` `test:pipe` | Pipe and registry browser checks; English/Korean host-bundle recovery guidance |
+| `scripts/test-pipe-cli.py` | Real systemd CLI routing, default private-engine discovery, explicit overrides, missing-engine status without traffic loss, rollback, and cleanup |
+| `scripts/test-pipe-api.py` | Unprivileged API through the systemd helper; route preservation and ingress lifecycle |
+| `scripts/test-pipe-runtime.py` | Real ingress routing, health, reload, independent Quick Tunnel targets, and rejected-config rollback |
+| `scripts/test-ingress-install.sh` | Isolated initial install/reinstall; executable mode, all attributions, and saved routes, with fake service controls |
 | `scripts/ci-qa-pipe-databases.sh --browser` | PDB1–PDB12; real API, PostgreSQL/MySQL, TLS and desktop/mobile browser checks |
 | `scripts/test-pipe-databases-qa.py` | Database QA remote-host guard and cleanup after failures |
 
