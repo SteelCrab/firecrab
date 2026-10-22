@@ -16,6 +16,7 @@ clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
 firecrab-api-types = { path = "../firecrab-api-types" }
 firecrab-helper-protocol = { path = "../firecrab-helper-protocol" }
+firecrab-stack = { path = "../firecrab-stack" }
 fs2 = "0.4"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"] }

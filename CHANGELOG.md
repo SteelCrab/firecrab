@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- `firecrab stack validate --file YAML [--json]` validates an experimental
+  declarative stack offline. The shared schema checks local network references,
+  resource limits, overlapping subnets and service ports, and pinned service
+  image syntax. Validation reports omit configuration values. Applying resources
+  and continuous Git synchronization remain follow-up work for #437.
+
 - Warm MicroVM pools keep booted, never-used VMs ready to lease. A pool pins an
   image version and VM spec, keeps `minReady` members booted within `maxSize`,
   and deletes and replaces every released or expired member instead of reusing
@@ -33,6 +39,7 @@ Entries land here as work merges, and move under the next version heading when t
   empty. CLI failures print the acquire retry key, and the dashboard keeps
   pending keys across reloads. Surviving members and leases reconnect after an
   API restart; guest QA verifies unchanged VM processes and lease replay.
+
 - Updating from the dashboard opens a dialog that shows what the new release
   changes, then a gauge with the overall percent and the stage (check,
   download, verify, apply, restart) until the API is back on the new version.

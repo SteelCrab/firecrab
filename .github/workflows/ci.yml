@@ -59,6 +59,9 @@ jobs:
       - name: cargo test -p firecrab-cli
         run: cargo test -p firecrab-cli --locked
 
+      - name: Validate the example stack offline
+        run: cargo run -p firecrab-cli --locked -- stack validate --file examples/stacks/basic.yaml --json
+
       - name: Shared source development deployment contract
         run: python3 scripts/test-micromanager-dev.py
 
