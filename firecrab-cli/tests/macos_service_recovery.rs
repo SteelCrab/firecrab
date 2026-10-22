@@ -80,7 +80,7 @@ fn start_on_a_new_host_suggests_install() {
 fn dev_controls_require_a_running_guest_without_installing_or_building() {
     let root = tempfile::tempdir().unwrap();
     completed_install(root.path());
-    for action in ["start", "stop", "restart"] {
+    for action in ["start", "restart", "clean"] {
         let output = service(root.path(), &["dev", action]);
         assert!(!output.status.success());
         let error = String::from_utf8(output.stderr).unwrap();
@@ -94,6 +94,32 @@ fn dev_controls_require_a_running_guest_without_installing_or_building() {
         assert!(!root.path().join("micromanager/runtime/daemon.sh").exists());
         assert!(!root.path().join("Library/LaunchAgents").exists());
     }
+}
+
+#[test]
+fn dev_stop_succeeds_after_the_management_vm_is_stopped() {
+    let root = tempfile::tempdir().unwrap();
+    completed_install(root.path());
+    let output = service(root.path(), &["dev", "stop"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(!root.path().join("micromanager/runtime/daemon.sh").exists());
+    assert!(!root.path().join("Library/LaunchAgents").exists());
+
+    // Dashboard cleanup still runs when the VM is already stopped.
+    fs::write(
+        root.path().join("micromanager/runtime/dev-dashboard.json"),
+        "invalid session",
+    )
+    .unwrap();
+    let output = service(root.path(), &["dev", "stop"]);
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.starts_with("dashboard:"), "{error}");
 }
 
 #[test]

@@ -31,7 +31,7 @@ jobs:
             cargo-${{ runner.os }}-
 
       - name: Install pinned toolchain
-        # rust-toolchain.toml pins the channel and clippy/rustfmt/llvm-tools.
+        # rust-toolchain.toml pins Rust 1.97.1 and clippy/rustfmt/llvm-tools.
         run: rustup show
 
       - name: Install test and ingress build tools
@@ -242,6 +242,9 @@ jobs:
 
       - name: microManager PR report
         run: python3 -m unittest scripts/test_micromanager_pr_report.py
+
+      - name: PR and issue contributor assignees
+        run: node --test scripts/test-assign-contributor.mjs
 
       - name: Cache cargo
         uses: actions/cache@v6

@@ -54,6 +54,7 @@ Source lab passes do not establish stock-release or physical-Windows compatibili
 | Command | Effect |
 | --- | --- |
 | `firecrab service start` / `stop` | Enable and start / disable and stop the managed distribution |
+| `firecrab service restart` | Stop and start the managed distribution; wait for the local API |
 | `firecrab service status` | Check the task, guest units, and Windows API |
 | `firecrab service validate` | Recheck downloads, distribution, provisioning, and task state |
 | `firecrab service shell` | Open a root guest shell; `run` is an alias |

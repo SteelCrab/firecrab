@@ -270,9 +270,7 @@ export default function App() {
       {view === "networks" && <MicroNetworks />}
       {view === "services" && <MicroServices />}
       {view === "pipe" && (
-        <Screen view="pipe">
-          <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
-        </Screen>
+        <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
       )}
       {view === "storages" && <MicroStorages />}
       {view === "images" && <Images />}

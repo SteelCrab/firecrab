@@ -14,6 +14,9 @@ pub struct RegistryRepositories {
     pub repositories: Vec<String>,
     /// The next one-based page, constructed locally instead of following remote URLs.
     pub next_page: Option<u32>,
+    /// Opaque continuation token used by AWS ECR.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
     /// False when registry credentials cannot access the provider's catalog API.
     pub listing_supported: bool,
 }
@@ -46,6 +49,7 @@ pub async fn repositories(
         return Ok(RegistryRepositories {
             repositories: Vec::new(),
             next_page: None,
+            next_cursor: None,
             listing_supported: false,
         });
     }
@@ -130,6 +134,7 @@ fn catalog(
     repositories.sort();
     repositories.dedup();
     Ok(RegistryRepositories {
+        next_cursor: None,
         repositories,
         next_page: more.then_some(page + 1),
         listing_supported: true,
