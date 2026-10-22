@@ -36,7 +36,7 @@ The API keeps host privileges minimal; the helper handles network operations tha
 
 ## Prerequisites
 
-- **Common:** The repository's Rust toolchain, Node.js 22 or later, and npm
+- **Common:** Rust 1.97.1 (pinned in `rust-toolchain.toml`), Node.js 22 or later, and npm
 - **Linux:** Guest runtime tests require /dev/kvm and network tools.
 - **macOS:** Uses microManager; runtime validation requires nested virtualization.
 - **Windows:** Uses microManager in WSL2; runtime validation requires nested virtualization.

@@ -31,7 +31,7 @@ jobs:
             cargo-${{ runner.os }}-
 
       - name: Install pinned toolchain
-        # rust-toolchain.toml pins the channel and clippy/rustfmt/llvm-tools.
+        # rust-toolchain.toml pins Rust 1.97.1 and clippy/rustfmt/llvm-tools.
         run: rustup show
 
       - name: Install test and ingress build tools
