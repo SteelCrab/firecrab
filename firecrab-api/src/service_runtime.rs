@@ -267,7 +267,10 @@ async fn execute(state: &AppState, deployment: &mut MicroServiceDeployment) -> R
         ImageReference::parse(&deployment.spec.image).map_err(|error| error.to_string())?;
     let credential =
         oci_handler::stored_credential_for(state, &original.registry, RequestId(deployment.id))
-            .await;
+            .await
+            .map_err(|_| {
+                "Could not authenticate the image registry. Check Pipe Auth.".to_owned()
+            })?;
     let resolved = oci::resolve(
         &original,
         Architecture::HOST,

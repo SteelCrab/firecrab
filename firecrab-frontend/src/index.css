@@ -1043,3 +1043,18 @@ table.image-table tbody tr.is-selected td {
   .registry-connections td[data-label]::before { content: attr(data-label) ": "; }
   .registry-connections td.actions { grid-column: 2; grid-row: 1 / span 3; align-self: start; }
 }
+
+/* Pipe Auth reuses the shared screen, list rows, and resizable detail panel. */
+.pipe-auth-screen { height: 100%; min-height: 0; }
+.pipe-auth-heading { padding: 20px; }
+.pipe-auth-heading h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.pipe-auth-retry { padding: 0 20px 16px; }
+.pipe-auth-connections td { overflow-wrap: anywhere; }
+.pipe-auth-region { display: block; margin-top: 2px; color: var(--text-3); font: 11.5px var(--mono); }
+.pipe-auth-detail .banner { margin: 12px 0 0; }
+.pipe-auth-form { display: flex; flex-direction: column; gap: 14px; }
+.pipe-auth-form .detail-sec-head, .pipe-auth-form .detail-sec-buttons, .pipe-auth-form .detail-note { margin: 0; }
+@media (max-width: 767px) {
+  .pipe-auth-heading { padding: 16px 12px; }
+  .pipe-auth-connections .pipe-auth-account, .pipe-auth-connections .pipe-auth-services { display: none; }
+}

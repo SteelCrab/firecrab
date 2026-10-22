@@ -242,6 +242,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::pipe::inspect).put(handlers::pipe::apply),
         )
         .route("/api/pipe/disable", post(handlers::pipe::disable))
+        .route("/api/pipe/auth", get(handlers::pipe_auth::list))
+        .route(
+            "/api/pipe/auth/{provider}",
+            axum::routing::put(handlers::pipe_auth::save).delete(handlers::pipe_auth::delete),
+        )
         .route(
             "/api/pipe/databases",
             get(handlers::pipe_databases::list).post(handlers::pipe_databases::create),
@@ -1390,3 +1395,7 @@ mod tests {
 #[cfg(test)]
 #[path = "server_quick_tunnels_tests.rs"]
 mod quick_tunnels_tests;
+
+#[cfg(test)]
+#[path = "server_pipe_auth_tests.rs"]
+mod pipe_auth_tests;
