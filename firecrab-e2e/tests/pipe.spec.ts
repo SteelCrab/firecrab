@@ -188,7 +188,7 @@ async function open(page: Page, options: { card?: PipeCardId | null; unavailable
       if (action.service === "tunnel" && action.action !== "stop" && snapshot.units[0].activeState !== "active") snapshot.units[0] = { ...snapshot.units[0], activeState: "active", subState: "running", mainPid: 404 };
       return route.fulfill({ json: snapshot });
     }
-    if (["/api/pipe/registries", "/api/pipe/registry-images"].includes(path)) return route.fulfill({ json: [] });
+    if (["/api/pipe/auth", "/api/pipe/registries", "/api/pipe/registry-images"].includes(path)) return route.fulfill({ json: [] });
     if (path === "/api/pipe") {
       if (unavailable) return route.fulfill({ status: 503, json: { error: { message: "Pipe helper unavailable" } } });
       if (route.request().method() === "PUT") {
@@ -210,6 +210,7 @@ async function open(page: Page, options: { card?: PipeCardId | null; unavailable
 
 test.describe("Pipe cards @dashboard", () => {
   const cards = [
+    { title: "Pipe Auth", id: "auth", region: "Pipe Auth", status: "Not configured" },
     { title: "Route", id: "route", region: "Route", status: "Nginx active · 1 route" },
     { title: "Pipe Registry", id: "registry", region: "Pipe Registry", status: "Not configured" },
     { title: "Firecrab Tunnel", id: "firecrab-tunnel", region: "Firecrab Tunnel", status: "Not configured" },
@@ -217,7 +218,7 @@ test.describe("Pipe cards @dashboard", () => {
     { title: "Cloudflare Named Tunnel", id: "named-tunnel", region: "Cloudflare Named Tunnel", status: "Connector active" },
   ];
 
-  test("lists five services and opens each one only from its card", async ({ page }, info) => {
+  test("lists six services and opens each one only from its card", async ({ page }, info) => {
     await open(page, { card: null, quickTunnels: [webTunnel], configuredTunnel: true });
     const pipe = page.getByRole("region", { name: "Pipe", exact: true });
     await expect(pipe.getByRole("listitem")).toHaveCount(cards.length);

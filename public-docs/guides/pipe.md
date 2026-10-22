@@ -22,6 +22,11 @@ app deployment automation, secret store, and automatic VM replacement are separa
 #335 work. Firecrab Tunnel uses a dashboard token to connect VM apps
 or saved Nginx domain/path groups to a fixed public address.
 
+## Pipe Auth
+
+[Pipe Auth](pipe-auth.md) connects AWS and GitHub accounts for use by Pipe services.
+It covers credential setup, rotation, disconnects, and the authentication API.
+
 ## Public address connections
 
 An existing public domain or a generated Quick Tunnel URL connects to the local
@@ -125,11 +130,12 @@ the protected manifest. View saved routes in the Pipe dashboard.
 
 ## Dashboard
 
-Select **Pipe** in the existing dashboard menu. The page lists five service
+Select **Pipe** in the existing dashboard menu. The page lists six service
 cards. Each card shows a short summary and the service's current state:
 
 | Card | Use |
 | --- | --- |
+| **Pipe Auth** | Shared AWS and GitHub account authentication |
 | **Route** | Nginx service state and domain/path routes to VM apps |
 | **Pipe Registry** | Container registry logins and image pulls |
 | **Firecrab Tunnel** | Fixed addresses issued with a dashboard token |

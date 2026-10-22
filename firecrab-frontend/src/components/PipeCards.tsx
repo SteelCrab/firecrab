@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { PipeSnapshot } from "../api/pipe";
+import { getPipeAuth } from "../api/pipeAuth";
 import { getRegistries } from "../api/registries";
 import { useI18n } from "../i18n";
 import { pipeCardHash, type PipeCardId } from "../navigation";
@@ -15,6 +16,8 @@ interface Props {
 /** Brand marks where a service has one; otherwise a line icon in the card's ink. */
 function PipeCardIcon({ id }: { id: PipeCardId }) {
   switch (id) {
+    case "auth":
+      return <svg className="pipe-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" /></svg>;
     case "route":
       // One request path forking to two apps.
       return <svg className="pipe-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 12h6l5-6h6M9 12l5 6h6" /><path d="M17 3l3 3-3 3M17 15l3 3-3 3" /></svg>;
@@ -32,10 +35,15 @@ function PipeCardIcon({ id }: { id: PipeCardId }) {
 /** Service overview: each card links to the page where that service is used. */
 export default function PipeCards({ snapshot, error }: Props) {
   const { t } = useI18n();
+  const [auths, setAuths] = useState<number | null | undefined>(undefined);
   const [registries, setRegistries] = useState<number | null | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
+    getPipeAuth().then(
+      connections => { if (!cancelled) setAuths(connections.length); },
+      () => { if (!cancelled) setAuths(null); },
+    );
     getRegistries().then(
       connections => { if (!cancelled) setRegistries(connections.length); },
       () => { if (!cancelled) setRegistries(null); },
@@ -56,6 +64,11 @@ export default function PipeCards({ snapshot, error }: Props) {
     const state = unitState("firecrab-ingress.service");
     const routes = snapshot?.config?.routes.length ?? 0;
     return show(t(`Nginx ${state} · ${routes} ${routes === 1 ? "route" : "routes"}`, `Nginx ${state} · 라우트 ${routes}개`), unitTone(state));
+  }
+  function auth() {
+    if (auths === undefined) return show(loading);
+    if (auths === null) return show(unavailable, "error");
+    return auths ? show(t(`${auths} connected`, `${auths}개 연결`), "running") : unconfigured;
   }
   function registry() {
     if (registries === undefined) return show(loading);
@@ -84,6 +97,7 @@ export default function PipeCards({ snapshot, error }: Props) {
   }
 
   const cards: Card[] = [
+    { id: "auth", title: "Pipe Auth", description: "AWS · GitHub", ...auth() },
     { id: "route", title: "Route", description: t("Domain · path", "도메인 · 경로"), ...(unknown ?? route()) },
     { id: "registry", title: "Pipe Registry", description: t("Image pull", "이미지 가져오기"), ...registry() },
     { id: "firecrab-tunnel", title: "Firecrab Tunnel", description: t("Fixed address", "고정 주소"), ...(unknown ?? firecrab()) },
