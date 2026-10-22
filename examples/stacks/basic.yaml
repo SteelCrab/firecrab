@@ -1,0 +1,35 @@
+# Validation example only. Replace the template alias and placeholder image digest.
+apiVersion: firecrab.dev/v1alpha1
+kind: Stack
+name: demo
+
+microNetworks:
+  app:
+    name: demo-app
+    subnetCidr: 172.31.20.0/24
+    internetEnabled: true
+
+microVMs:
+  worker:
+    name: demo-worker
+    template: alpine-3.24.1
+    network: app
+    cpu: 1
+    ram: 256
+    diskGb: 2
+    egressPolicy: isolated
+    env:
+      APP_MODE: demo
+
+microServices:
+  web:
+    network: app
+    hostPort: 30100
+    config:
+      name: demo-web
+      image: ghcr.io/example/web@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      port: 8080
+      healthPath: /health
+      cpu: 1
+      ram: 256
+      replicas: 2

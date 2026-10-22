@@ -18,6 +18,7 @@ mod pipe;
 mod service;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 mod shell;
+mod stack;
 #[cfg(target_os = "linux")]
 mod status;
 #[cfg(target_os = "linux")]
@@ -41,6 +42,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Validate a declarative stack file locally, without connecting to a host.
+    Stack {
+        #[command(subcommand)]
+        command: stack::Command,
+    },
     /// Manage desired MicroService configurations through the host API.
     Microservice {
         #[command(subcommand)]
@@ -133,6 +139,7 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Stack { command } => stack::run(command),
         Command::Microservice { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 microservice::run(client, command)
