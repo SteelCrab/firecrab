@@ -17,6 +17,7 @@ import Schedules from "./components/Schedules";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
 import Shells from "./components/Shells";
+import Secrets from "./components/Secrets";
 import CommandPalette from "./components/CommandPalette";
 import Screen from "./components/layout/Screen";
 import { ScreenStatus } from "./components/layout/screenStatus";
@@ -142,10 +143,12 @@ export default function App() {
   const initialRoute = parseAppRoute();
   const [detailOpen, setDetailOpen] = useDetailPanelOpen(initialRoute.kind === "shell" && !!(initialRoute.vmId || initialRoute.scheduleId || initialRoute.createSchedule));
   const [detailWidth, setDetailWidth] = useDetailPanelWidth();
-  const confirmLeave = useCallback(() => !pipeHasUnsavedChanges || window.confirm(t(
-    "Pipe changes have not been saved. Leave without saving?",
-    "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
-  )), [pipeHasUnsavedChanges, t]);
+  const [secretsHasUnsavedChanges, setSecretsHasUnsavedChanges] = useState(false);
+  const confirmLeave = useCallback(() => !(pipeHasUnsavedChanges || secretsHasUnsavedChanges) || window.confirm(
+    secretsHasUnsavedChanges
+      ? t("Secrets changes have not been saved or are still processing. Leave this page?", "Secrets 변경을 저장하지 않았거나 처리 중이다. 이동할까요?")
+      : t("Pipe changes have not been saved. Leave without saving?", "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?"),
+  ), [pipeHasUnsavedChanges, secretsHasUnsavedChanges, t]);
   const { route, selectView, closeConsole } = useAppRoute(confirmLeave);
 
   useEffect(() => {
@@ -284,6 +287,7 @@ export default function App() {
       {view === "networks" && <MicroNetworks />}
       {view === "services" && <MicroServices />}
       {view === "schedules" && <Schedules key={route.kind === "shell" ? `${route.vmId ?? "all"}-${!!route.createSchedule}-${route.scheduleId ?? ""}` : "all"} vms={state.vms} vmsLoaded={state.loaded && state.consecutiveFailures === 0} vmId={route.kind === "shell" ? route.vmId : undefined} create={route.kind === "shell" && route.createSchedule} scheduleId={route.kind === "shell" ? route.scheduleId : undefined} />}
+      {view === "secrets" && <Screen view="secrets"><Secrets onUnsavedChange={setSecretsHasUnsavedChanges} /></Screen>}
       {view === "pipe" && (
         <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
       )}

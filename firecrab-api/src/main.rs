@@ -28,6 +28,7 @@ mod reconcile;
 mod resource_limits;
 mod rootfs;
 mod scheduler;
+mod secrets;
 mod server;
 mod service_runtime;
 mod shells;

@@ -50,7 +50,7 @@ pub struct MicroServiceSpec {
     /// Plain-text environment variables passed to the image entrypoint.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// Environment variable name -> CrabSecrets UUID. Never contains secret values.
+    /// Environment variable name -> PipeSecrets UUID. Never contains secret values.
     /// Host-port deployment currently rejects nonempty secret references.
     #[serde(default)]
     pub secrets: BTreeMap<String, Uuid>,
