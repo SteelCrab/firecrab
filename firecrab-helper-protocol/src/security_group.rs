@@ -114,4 +114,30 @@ mod tests {
         rule.port_from = 6000;
         assert!(SecurityGroupRuleSpec::from_api(&rule).is_err());
     }
+
+    #[test]
+    fn policies_reject_nil_identifiers_and_excessive_rule_lists() {
+        let rule = SecurityGroupRuleSpec {
+            direction: SecurityGroupDirection::Egress,
+            protocol: PortProtocol::Udp,
+            port_from: 1,
+            port_to: u16::MAX,
+            peer_address: Ipv4Addr::UNSPECIFIED,
+            peer_prefix: 0,
+        };
+        let mut policy = SecurityGroupPolicySpec {
+            id: Uuid::from_u128(1),
+            micro_network_id: Uuid::from_u128(2),
+            rules: vec![rule; MAX_SECURITY_GROUP_RULES],
+        };
+        policy.validate().unwrap();
+        policy.rules.push(policy.rules[0].clone());
+        assert!(policy.validate().is_err());
+        policy.rules.clear();
+        policy.id = Uuid::nil();
+        assert!(policy.validate().is_err());
+        policy.id = Uuid::from_u128(1);
+        policy.micro_network_id = Uuid::nil();
+        assert!(policy.validate().is_err());
+    }
 }

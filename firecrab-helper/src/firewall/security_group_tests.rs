@@ -102,6 +102,177 @@ fn fixture() -> (Vec<MicroNetworkSpec>, Vec<VmPolicy>) {
     (networks, policies)
 }
 
+fn group_chain_rules<'a>(ruleset: &'a str, family: &str, chain: &str) -> Vec<&'a str> {
+    let prefix = format!("add rule {family} firecrab_sg {chain} ");
+    ruleset
+        .lines()
+        .filter_map(|line| line.strip_prefix(&prefix))
+        .collect()
+}
+
+#[test]
+fn group_rules_check_both_peers_on_bridge_and_routed_paths() {
+    let (networks, policies) = fixture();
+    let ruleset = crate::security_groups::render(&policies, &networks, "");
+    let source = &policies[0];
+    let destination = &policies[1];
+    let bridge = networks[0].bridge_name();
+    for family in ["inet", "bridge"] {
+        let egress = format!("vm_{}_eg", source.vm_id.simple());
+        let ingress = format!("vm_{}_in", destination.vm_id.simple());
+        let outgoing = group_chain_rules(&ruleset, family, &egress);
+        let incoming = group_chain_rules(&ruleset, family, &ingress);
+        assert!(outgoing.contains(&"ip daddr 172.30.0.3/32 tcp dport 5432-5433 return"));
+        assert!(incoming.contains(&"ip saddr 172.30.0.2/32 tcp dport 5432-5433 return"));
+        assert!(outgoing.contains(&"ip daddr 172.30.0.3/32 udp dport 5353 return"));
+        assert!(incoming.contains(&"ip saddr 172.30.0.2/32 udp dport 5353 return"));
+        for rules in [&outgoing, &incoming] {
+            assert_eq!(rules.last(), Some(&"drop"));
+            assert!(
+                rules.iter().all(|rule| !rule.ends_with(" accept")),
+                "a permitted side must still check the other peer"
+            );
+            let invalid = rules
+                .iter()
+                .position(|rule| *rule == "ct state invalid drop")
+                .unwrap();
+            let established = rules
+                .iter()
+                .position(|rule| *rule == "ct state established,related return")
+                .unwrap();
+            let first_allow = rules
+                .iter()
+                .position(|rule| rule.starts_with("ip "))
+                .unwrap();
+            assert!(invalid < established && established < first_allow);
+        }
+        let (from, to) = if family == "bridge" {
+            assert_eq!(outgoing[0], "ether type arp return");
+            assert_eq!(incoming[0], "ether type arp return");
+            (
+                format!("iifname \"{}\"", tap_name(source.vm_id)),
+                format!("oifname \"{}\"", tap_name(destination.vm_id)),
+            )
+        } else {
+            (
+                format!("iifname \"{bridge}\" ip saddr {}", source.ipv4),
+                format!("oifname \"{bridge}\" ip daddr {}", destination.ipv4),
+            )
+        };
+        assert!(ruleset.contains(&format!("forward {from} jump {egress}\n")));
+        assert!(ruleset.contains(&format!("forward {to} jump {ingress}\n")));
+    }
+    assert!(
+        !ruleset.contains("oifname \"sgwan\""),
+        "group rules cannot depend on the uplink or bypass DNAT checks"
+    );
+    assert!(
+        !ruleset.contains(&format!("iifname \"{bridge}\" oifname \"{bridge}\"")),
+        "routing through the gateway must still run the per-VM checks"
+    );
+    assert!(
+        !ruleset.contains(&policies[2].vm_id.simple().to_string()),
+        "ungrouped peers retain their legacy policy"
+    );
+    let mut reversed = policies.clone();
+    reversed.reverse();
+    assert_eq!(
+        ruleset,
+        crate::security_groups::render(&reversed, &networks, "")
+    );
+}
+
+#[test]
+fn empty_groups_deny_new_connections_but_preserve_gateway_and_admin_replies() {
+    let (networks, mut policies) = fixture();
+    policies.truncate(1);
+    let vm = &mut policies[0];
+    vm.security_group.as_mut().unwrap().rules.clear();
+    let tag = vm.vm_id.simple();
+    let ruleset = crate::security_groups::render(&policies, &networks, "");
+    for family in ["inet", "bridge"] {
+        for suffix in ["eg", "in"] {
+            let mut expected = vec![
+                "ct state invalid drop",
+                "ct state established,related return",
+                "drop",
+            ];
+            if family == "bridge" {
+                expected.insert(0, "ether type arp return");
+            }
+            assert_eq!(
+                group_chain_rules(&ruleset, family, &format!("vm_{tag}_{suffix}")),
+                expected
+            );
+        }
+    }
+    let host = format!("host_{tag}");
+    assert_eq!(
+        group_chain_rules(&ruleset, "inet", &host),
+        vec![
+            "ct state invalid drop",
+            "ct state established,related return",
+            "ip daddr { 172.30.0.1, 255.255.255.255 } udp sport 68 udp dport 67 return",
+            "ip daddr 172.30.0.1 tcp dport 53 return",
+            "ip daddr 172.30.0.1 udp dport 53 return",
+            "drop",
+        ]
+    );
+    assert!(ruleset.contains(&format!(
+        "input iifname \"{}\" ip saddr {} jump {host}\n",
+        networks[0].bridge_name(),
+        policies[0].ipv4
+    )));
+    assert!(ruleset.contains("hook input priority -10;"));
+    assert!(ruleset.contains("hook forward priority -10;"));
+    assert!(ruleset.contains("hook forward priority 0;"));
+    assert!(
+        !ruleset.contains("hook output"),
+        "host-originated administration remains permitted"
+    );
+}
+
+#[test]
+fn detaching_the_last_group_removes_only_existing_owned_tables() {
+    let (networks, mut policies) = fixture();
+    for vm in &mut policies {
+        vm.security_group = None;
+    }
+    let render = |listing| crate::security_groups::render(&policies, &networks, listing);
+    assert_eq!(
+        render(""),
+        "",
+        "legacy-only hosts must not need the bridge family"
+    );
+    assert_eq!(
+        render("table inet firecrab_sg\n"),
+        "delete table inet firecrab_sg\n"
+    );
+    assert_eq!(
+        render("table bridge firecrab_sg\n"),
+        "delete table bridge firecrab_sg\n"
+    );
+    assert_eq!(
+        render(
+            "table inet firecrab\n  table inet firecrab_sg\n table bridge firecrab_sg\ntable inet unrelated\n"
+        ),
+        "delete table inet firecrab_sg\ndelete table bridge firecrab_sg\n"
+    );
+    assert_eq!(
+        render("table inet firecrab_sg_backup\ntable bridge unrelated\n"),
+        ""
+    );
+}
+
+#[test]
+fn helper_rejects_missing_networks_and_vm_ipv6_before_rendering() {
+    let (networks, mut policies) = fixture();
+    let vm = &mut policies[0];
+    assert!(crate::security_groups::validate(vm, &networks[1..]).is_err());
+    vm.ipv6 = Some("fd00::2".parse().unwrap());
+    assert!(crate::security_groups::validate(vm, &networks).is_err());
+}
+
 #[test]
 fn policy_validation_rejects_wrong_network_ipv6_and_noncanonical_peers() {
     let (mut networks, mut policies) = fixture();
