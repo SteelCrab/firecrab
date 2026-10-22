@@ -5,8 +5,11 @@ import {
   ApiClientError, createMicroService, deleteMicroService, getMicroService,
   listMicroServices, updateMicroService,
 } from "../api/client";
+import { Boxes } from "lucide-react";
 import { useI18n } from "../i18n";
 import ServiceDeployment from "./ServiceDeployment";
+import Screen from "./layout/Screen";
+import { useScreenStatus } from "./layout/screenStatus";
 
 const DEFAULT_SPEC: MicroServiceSpec = {
   name: "", image: "", runtime: "vm", port: 8080, healthPath: "/health", domain: null,
@@ -15,6 +18,7 @@ const DEFAULT_SPEC: MicroServiceSpec = {
 
 export default function MicroServices() {
   const { t } = useI18n();
+  const { setDetailOpen } = useScreenStatus();
   const [services, setServices] = useState<MicroServiceResponse[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -43,6 +47,7 @@ export default function MicroServices() {
     setBusy(true);
     try {
       setEditor(await getMicroService(id));
+      setDetailOpen(true);
     } catch (failure) {
       setError((failure as Error).message);
     } finally {
@@ -65,13 +70,37 @@ export default function MicroServices() {
     }
   };
 
+  const openNew = () => {
+    setEditor(null);
+    setDetailOpen(true);
+  };
+  const openRuntime = (service: MicroServiceResponse) => {
+    setRuntime(service);
+    setDetailOpen(true);
+  };
+  // The form wins over the runtime view; both close together after a save.
+  const detail = editor !== undefined
+    ? <ServiceForm key={`editor-${editor?.id ?? "new"}`} service={editor} onCancel={() => setEditor(undefined)} onSaved={async () => { setEditor(undefined); setRuntime(null); await refresh(); }} />
+    : runtime
+      ? <ServiceDeployment key={`runtime-${runtime.id}`} service={runtime} onClose={() => setRuntime(null)} />
+      : null;
+
   return (
-    <>
+    <Screen
+      view="services"
+      detail={detail && <div className="detail-body detail-embed">{detail}</div>}
+      detailLabel={t("MicroService detail", "MicroService 상세")}
+      detailKind={<><Boxes aria-hidden="true" />MicroService</>}
+      onCloseDetail={() => {
+        setEditor(undefined);
+        setRuntime(null);
+      }}
+    >
       <section className="panel" aria-labelledby="microservice-heading">
         <h2 className="panel-title" id="microservice-heading">MicroService</h2>
         <p className="poll-note">{t("Save a configuration, then deploy its image to MicroVMs and check app health.", "설정을 저장한 뒤 이미지를 MicroVM에 배포한다. 앱의 상태 검사 결과를 확인한다.")}</p>
         <div className="service-actions">
-          <button className="btn primary" disabled={busy || editor !== undefined} onClick={() => setEditor(null)}>{t("New MicroService", "MicroService 추가")}</button>
+          <button className="btn primary" disabled={busy || editor !== undefined} onClick={openNew}>{t("New MicroService", "MicroService 추가")}</button>
           <button className="btn" disabled={busy} onClick={async () => { setBusy(true); await refresh(); setBusy(false); }}>{t("Refresh", "새로 고침")}</button>
         </div>
         {error && <p className="field-error" role="alert">{error}</p>}
@@ -82,14 +111,14 @@ export default function MicroServices() {
         ) : (
           <div className="table-scroll">
             <table className="vm-table service-table">
-              <thead><tr>{[t("Name", "이름"), t("Image", "이미지"), t("Port", "포트"), t("Replicas", "복제 수"), "RAM / CPU", t("Domain", "도메인"), t("Actions", "작업")].map((label, index) => <th key={label} id={`service-column-${index}`} scope="col">{label}</th>)}</tr></thead>
+              <thead><tr>{[t("Name", "이름"), t("Image", "이미지"), t("Port", "포트"), t("Replicas", "복제 수"), "RAM / CPU", t("Domain", "도메인"), t("Actions", "작업")].map((label, index) => <th key={label} id={`service-column-${index}`} scope="col" className={index >= 3 && index <= 5 ? "col-detail" : undefined}>{label}</th>)}</tr></thead>
               <tbody>{services.map((service) => (
                 <tr key={service.id}>
                   <td headers="service-column-0" className="name" data-label={t("Name", "이름")}>{service.name}</td><td headers="service-column-1" className="mono service-image" data-label={t("Image", "이미지")}>{service.image}</td>
-                  <td headers="service-column-2" data-label={t("Port", "포트")}>{service.port}</td><td headers="service-column-3" data-label={t("Replicas", "복제 수")}>{service.replicas}</td><td headers="service-column-4" data-label="RAM / CPU">{service.ram} MiB / {service.cpu}</td>
-                  <td headers="service-column-5" className="mono" data-label={t("Domain", "도메인")}>{service.domain ?? "—"}</td>
+                  <td headers="service-column-2" data-label={t("Port", "포트")}>{service.port}</td><td headers="service-column-3" className="col-detail" data-label={t("Replicas", "복제 수")}>{service.replicas}</td><td headers="service-column-4" className="col-detail" data-label="RAM / CPU">{service.ram} MiB / {service.cpu}</td>
+                  <td headers="service-column-5" className="mono col-detail" data-label={t("Domain", "도메인")}>{service.domain ?? "—"}</td>
                   <td headers="service-column-6" className="actions">
-                    <button className="btn primary" disabled={busy || editor !== undefined} onClick={() => setRuntime(service)} aria-label={t(`Run ${service.name}`, `${service.name} 실행 관리`)}>{t("Run", "실행 관리")}</button>
+                    <button className="btn primary" disabled={busy || editor !== undefined} onClick={() => openRuntime(service)} aria-label={t(`Run ${service.name}`, `${service.name} 실행 관리`)}>{t("Run", "실행 관리")}</button>
                     <button className="btn" disabled={busy || editor !== undefined} onClick={() => edit(service.id)} aria-label={t(`Edit ${service.name}`, `${service.name} 수정`)}>{t("Edit", "수정")}</button>
                     <button className="btn danger" disabled={busy || editor !== undefined} onClick={() => remove(service)} aria-label={t(`Delete ${service.name}`, `${service.name} 삭제`)}>{t("Delete", "삭제")}</button>
                   </td>
@@ -99,9 +128,7 @@ export default function MicroServices() {
           </div>
         )}
       </section>
-      {runtime && <ServiceDeployment key={`runtime-${runtime.id}`} service={runtime} onClose={() => setRuntime(null)} />}
-      {editor !== undefined && <ServiceForm key={`editor-${editor?.id ?? "new"}`} service={editor} onCancel={() => setEditor(undefined)} onSaved={async () => { setEditor(undefined); setRuntime(null); await refresh(); }} />}
-    </>
+    </Screen>
   );
 }
 
@@ -159,7 +186,7 @@ function ServiceForm({ service, onCancel, onSaved }: {
   };
 
   return (
-    <section className="panel" aria-labelledby="service-editor-heading">
+    <section className="panel" aria-labelledby="service-editor-heading" data-editing>
       <h2 className="panel-title" id="service-editor-heading">{service ? t(`Edit: ${service.name}`, `수정: ${service.name}`) : t("New MicroService", "MicroService 추가")}</h2>
       {error && <p className="field-error" role="alert">{error}</p>}
       <form className="create-grid service-form" onSubmit={submit}>

@@ -9,11 +9,12 @@ test("connects, reads and removes a real database through the dashboard", async 
   // Update checks are unrelated to DB access and would contact GitHub.
   await page.route("**/api/update", route => route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } }));
   await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
-  await page.goto("/#/pipe");
+  await page.goto("/#/pipe/database");
   const panel = page.getByRole("region", { name: "Databases", exact: true });
   await panel.getByRole("button", { name: "Add database", exact: true }).click();
   await panel.getByLabel("Connection name", { exact: true }).fill(name);
   await panel.getByLabel("Database URI", { exact: true }).fill(database.uri);
+  await panel.getByText("TLS & certificates", { exact: true }).click();
   await panel.getByLabel("TLS", { exact: true }).selectOption("disable");
   await panel.getByRole("button", { name: "Test connection", exact: true }).click();
   await expect(panel.getByRole("status")).toHaveText("Database connection succeeded.");
@@ -37,7 +38,8 @@ test("connects, reads and removes a real database through the dashboard", async 
     await expect(panel.getByRole("button", { name: "Next rows", exact: true })).toBeDisabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await panel.screenshot({ path: testInfo.outputPath("real-database-preview.png") });
-    await panel.getByRole("button", { name: `Remove connection ${name}`, exact: true }).click();
+    await panel.getByRole("button", { name: `${name} actions`, exact: true }).click();
+    await page.getByRole("menuitem", { name: `Remove connection ${name}`, exact: true }).click();
     await expect(panel.getByRole("cell", { name, exact: true })).toHaveCount(0);
     await expect(panel.getByRole("status")).toHaveText("Connection removed. The source database is unchanged.");
     const removed = await page.request.get(`/api/pipe/databases/${summary.id}/tables`);

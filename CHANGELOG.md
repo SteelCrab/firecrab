@@ -69,8 +69,19 @@ Entries land here as work merges, and move under the next version heading when t
   An idle-runtime macOS E2E phase checks recovery, injected SSH/API failures,
   preserved assets, and restoration, retaining logs and JSON QA evidence.
 
+- The dashboard's Pipe Registry card saves Docker Hub, GHCR and Amazon ECR
+  logins, lists repository tags, pulls OCI images to this host, and imports a pulled image as
+  an M2Image. Logins are write-only in API responses. See
+  [Pipe Registry](public-docs/guides/pipe-registry.md).
+
 ### Changed
 
+- The dashboard's Pipe page lists its services as five cards: Route, Pipe
+  Registry, Firecrab Tunnel, Cloudflare Quick Tunnel, and Cloudflare Named
+  Tunnel. Each card shows the service state and opens that service's page
+  (`#/pipe/<card>`); **← Pipe** returns to the cards. Route combines the Nginx
+  service row and the route table, and the Cloudflare Tunnel service menu moves
+  to the Named Tunnel card.
 - The dashboard's VM list shows only a VM's own state: the API label next to it
   is gone, and the API's reconciliation result for a VM stays in its detail view.
 

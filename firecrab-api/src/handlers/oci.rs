@@ -41,7 +41,7 @@ pub async fn inspect_oci_image(
         .alias;
 
     let insecure = is_loopback_registry(&reference.registry);
-    let credential = stored_credential(&state, request_id).await;
+    let credential = stored_credential_for(&state, &reference.registry, request_id).await;
     let resolved = resolve(&reference, Architecture::HOST, insecure, credential)
         .await
         .map_err(|error| {
@@ -97,7 +97,7 @@ pub async fn start_oci_import(
         Err(_) => return Err(AppError::internal(request_id.0)),
     };
 
-    let credential = stored_credential(&state, request_id).await;
+    let credential = stored_credential_for(&state, &reference.registry, request_id).await;
     let tracker = state.oci_imports.clone();
     let templates = (*state.templates).clone();
     let alias = named.alias.clone();
@@ -129,6 +129,38 @@ pub(crate) async fn stored_credential(
             None
         }
         Err(_) => None,
+    }
+}
+
+/// Resolve the credential for this exact registry; preserve Docker Hub compatibility.
+pub(crate) async fn stored_credential_for(
+    state: &AppState,
+    registry: &str,
+    request_id: RequestId,
+) -> Option<RegistryCredential> {
+    if crate::oci::is_docker_hub_registry(registry) {
+        return stored_credential(state, request_id).await;
+    }
+    let store = state.store.clone();
+    let registry = registry.to_ascii_lowercase();
+    match tokio::task::spawn_blocking(move || store.registry_credential(&registry)).await {
+        Ok(Ok(stored)) => stored,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                request_id = %request_id.0,
+                %error,
+                "failed to read the stored registry credential; continuing anonymously"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                request_id = %request_id.0,
+                %error,
+                "registry credential lookup did not finish; continuing anonymously"
+            );
+            None
+        }
     }
 }
 

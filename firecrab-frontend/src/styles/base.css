@@ -1,0 +1,266 @@
+/* Base elements and shared controls for the redesign (spec §5.5, §5.6). */
+
+* { box-sizing: border-box; }
+html { color-scheme: light; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 var(--font);
+  letter-spacing: -0.003em;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mono { font-family: var(--mono); letter-spacing: 0; }
+
+/* Plain text links; buttons styled as links opt out through their own class. */
+:where(a) {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+:where(a):hover { text-decoration-color: currentColor; }
+
+/* Buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control-height);
+  padding: 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: 500 13px/1 var(--font);
+  letter-spacing: -0.003em;
+  white-space: nowrap;
+  text-decoration: none;
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  transition: transform 140ms var(--ease-out), background-color 120ms ease, border-color 120ms ease;
+}
+.btn svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--text-2); stroke-width: 1.75; }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn:disabled { color: var(--text-4); box-shadow: none; cursor: default; }
+.btn:disabled svg { color: var(--text-4); }
+.btn.primary { background: var(--text); border-color: var(--text); color: #ffffff; }
+.btn.primary svg { color: #ffffff; }
+.btn.primary:disabled { background: var(--text-4); border-color: var(--text-4); }
+.btn.ghost { border-color: transparent; background: none; box-shadow: none; color: var(--text-2); }
+.btn.danger, .btn.danger svg { color: var(--red-ink); }
+.btn.sm { height: var(--control-height-sm); padding: 0 8px; font-size: 12px; }
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-3);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.icon-btn svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.icon-btn:disabled { color: var(--text-4); cursor: default; }
+
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover:not(:disabled) { background: var(--bg-subtle); border-color: #cfcfd6; }
+  .btn.primary:hover:not(:disabled) { background: #2c2c32; border-color: #2c2c32; }
+  .btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
+  .btn.danger:hover:not(:disabled) { border-color: #f0b4b4; background: var(--red-soft); }
+  .icon-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+}
+
+/* Form fields. `.field` wraps a label and its control; `.input` styles a
+   control that has no wrapper. `:where` keeps these rules at class weight so
+   composite controls (RAM stepper, inline editors) keep their own styles. */
+
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field label {
+  min-height: 16px;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.input,
+.field :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: 13px var(--font);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+textarea.input, .field :where(textarea) { height: auto; min-height: 80px; padding: 8px 10px; line-height: 1.5; }
+select.input, .field :where(select) { padding-right: 28px; text-overflow: ellipsis; }
+.input:focus-visible,
+.field :where(input, select, textarea):focus-visible {
+  outline: none;
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.input:disabled,
+.field :where(input, select, textarea):disabled { background: var(--bg-subtle); color: var(--text-3); }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--text); }
+.field-error { color: var(--red-ink); font-size: 12px; }
+
+/* Status badge, chip, keyboard key */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 7px;
+  border-radius: 999px;
+  background: var(--gray-soft);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge.running { background: var(--green-soft); color: var(--green-ink); }
+.badge.starting, .badge.stopping { background: var(--amber-soft); color: var(--amber-ink); }
+.badge.starting::before, .badge.stopping::before { animation: badge-pulse 1.4s ease-in-out infinite; }
+.badge.error { background: var(--red-soft); color: var(--red-ink); }
+.badge.created { background: var(--indigo-soft); color: var(--indigo-ink); }
+@keyframes badge-pulse { 50% { opacity: 0.3; } }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.chip svg { width: 13px; height: 13px; color: var(--text-3); }
+
+kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-3);
+  font: 500 11px var(--font);
+}
+
+/* Underline tabs (detail panel) and two-option switch */
+
+.tabs { display: flex; gap: 18px; height: 40px; border-bottom: 1px solid var(--border); }
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  font: 500 13px var(--font);
+  cursor: pointer;
+}
+.tab[aria-selected="true"] { color: var(--text); }
+.tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text);
+}
+.tab-count { padding: 0 6px; border-radius: 99px; background: var(--gray-soft); color: var(--text-3); font-size: 11px; line-height: 17px; }
+@media (hover: hover) { .tab:hover { color: var(--text-2); } }
+
+.segmented { display: grid; grid-auto-columns: 1fr; grid-auto-flow: column; padding: 2px; border-radius: var(--radius); background: var(--gray-soft); }
+.segmented button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-2);
+  font: 500 12.5px var(--font);
+  cursor: pointer;
+}
+.segmented button svg { width: 14px; height: 14px; }
+.segmented button[aria-pressed="true"] {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(17, 17, 26, 0.08), 0 0 0 1px var(--border);
+}
+
+/* Alert box and empty state */
+
+.alert {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.alert svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+.alert.error { border-color: #f6caca; background: var(--red-soft); color: var(--red-ink); }
+.alert.warn { border-color: #f4d9a8; background: var(--amber-soft); color: var(--amber-ink); }
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 24px;
+  color: var(--text-3);
+  text-align: center;
+}
+.empty-state-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-subtle);
+  color: var(--text-2);
+}
+.empty-state-icon svg { width: 20px; height: 20px; }
+.empty-state-title { color: var(--text); font-size: 14px; font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn { transition: none; }
+  .badge::before { animation: none; }
+}

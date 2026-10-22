@@ -1,7 +1,7 @@
 # PIPE database connections
 
-In **Pipe → Databases**, select **Add database**. Enter a connection name and
-choose **Local DB URI**, **Supabase**, or **Amazon RDS**. Paste a database URI:
+Open the **Database** card (`#/pipe/database`) and select **Add database**.
+Enter a connection name and choose **Local DB URI**, **Supabase**, or **Amazon RDS**. Paste a database URI:
 
 ```text
 mysql://user:password@host:3306/database
@@ -23,8 +23,10 @@ Connections originate from the API host. `localhost` on macOS and Windows means
 the managed Linux guest, not the desktop host. Use a desktop address reachable
 from that guest to connect to a database on the desktop.
 
-TLS defaults to disabled for local URI connections and certificate/hostname
-verification for Supabase and RDS. The URI may set `sslmode` or `ssl-mode` to
+Open **TLS & certificates** to change TLS or add a CA certificate. These optional
+settings are collapsed by default. TLS defaults to disabled for local URI
+connections and certificate/hostname verification for Supabase and RDS.
+The URI may set `sslmode` or `ssl-mode` to
 `disable`, `require`, or `verify-full` (MySQL also accepts `DISABLED`, `REQUIRED`,
 and `VERIFY_IDENTITY`). An explicit TLS selector overrides the URI. Cloud
 connections cannot disable TLS. Paste a PEM CA bundle into **CA certificate**
@@ -42,7 +44,8 @@ after eight seconds. **Refresh rows** retries the selected table.
 
 The API stores connection credentials in its existing owner-only SQLite file.
 URI passwords and CA certificates never appear in list or save responses.
-**Remove** deletes only the saved connection. It does not change the source DB.
+Open the connection's **⋯** menu and select **Remove connection** to delete only
+the saved connection. It does not change the source DB.
 Existing connections survive API restarts.
 
 | Endpoint | Action |
@@ -62,3 +65,12 @@ The DB routes use the standard API origin, body-size, concurrency and deadline l
 
 See [PIPE database E2E and QA](../development/pipe-databases-qa.md) for browser,
 real API/DB, TLS, cleanup and cloud acceptance checks.
+
+- `cargo test -p firecrab-api --bin firecrab-api pipe_databases`: URI/provider/TLS
+  validation, credential redaction, persisted connections, API origin checks and
+  bounded operations. The ignored `reads_real_postgres_and_mysql_tables` test
+  requires disposable databases in `FIRECRAB_TEST_POSTGRES_URI` and
+  `FIRECRAB_TEST_MYSQL_URI`; it creates fixture tables in those databases.
+- `npm run test:pipe --prefix firecrab-e2e`: existing PIPE flows plus DB connection
+  tests, table previews, pagination, failure recovery, credential clearing and
+  English mobile layout using API fixtures.

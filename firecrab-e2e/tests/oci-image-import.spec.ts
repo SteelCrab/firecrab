@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { ApiCleanup } from "../src/api.js";
+import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
   FIXED_ALIAS,
   FIXED_REFERENCE,
@@ -144,15 +145,16 @@ test("creates a VM from the imported image and asserts the guest service started
   await expect(page).toHaveURL(/#\/vms$/);
   await expect(page.getByText(`Created: ${VM_NAME}`)).toBeVisible({ timeout: 30_000 });
 
-  const row = page.locator("table.vm-table tbody tr", { hasText: VM_NAME });
+  const row = page.locator("table.vm-list tbody tr", { hasText: VM_NAME });
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await row.getByRole("menuitem", { name: "start", exact: true }).click();
   await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
   if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
-    await row.locator("button.link-button").click();
-    await expect(page.locator(".vm-detail-heading")).toBeVisible();
+    await openVmTab(page, row, "Overview");
+    const steps = (await vmPanel(page).locator(".vm-timeline-step").allTextContents()).join("\n");
+    await vmPanel(page).getByRole("tab", { name: /^Log/ }).click();
     await expect
       .poll(async () => (await page.locator("pre.detail-log").textContent())?.trim() ?? "", {
         timeout: 10_000,
@@ -160,13 +162,12 @@ test("creates a VM from the imported image and asserts the guest service started
       .not.toBe("");
     const logText = (await page.locator("pre.detail-log").textContent()) ?? "";
     const banner = (await page.locator(".banner").textContent().catch(() => "")) ?? "";
-    const steps = (await page.locator(".pipeline-step").allTextContents()).join("\n");
     throw new Error(
       `VM ${VM_NAME} entered error instead of running.\nbanner: ${banner}\nsteps:\n${steps}\nlog:\n${logText}`,
     );
   }
 
-  await row.locator("button.link-button").click();
+  await openVmTab(page, row, "Log");
   const log = page.locator("pre.detail-log");
   await expect(log).toContainText(NETWORK_READY, { timeout: 30_000 });
   await expect(log).toContainText(sentinel(), { timeout: 60_000 });

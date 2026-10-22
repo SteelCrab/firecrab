@@ -79,7 +79,7 @@ async function open(page: Page, options: Options = {}) {
     return route.fulfill({ status: 404 });
   });
   await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en");
-  await page.goto("/#/pipe");
+  await page.goto("/#/pipe/database");
   return { creates, checks, previews, removes, release, get tableReads() { return tableReads; }, recover: () => { unavailable = false; }, recoverPreview: () => { previewFailure = false; }, failPreview: () => { previewFailure = true; }, recoverTables: () => { tableFailure = false; }, failTables: () => { tableFailure = true; }, recoverDelete: () => { deleteFailure = false; } };
 }
 
@@ -128,6 +128,7 @@ test.describe("PIPE databases @dashboard", () => {
     await panel.getByRole("button", { name: "Add database", exact: true }).click();
     await panel.getByLabel("Connection name", { exact: true }).fill("RDS TLS");
     await panel.getByLabel("Database URI", { exact: true }).fill("mysql://user:secret@db.rds.amazonaws.com/app");
+    await panel.getByText("TLS & certificates", { exact: true }).click();
     await panel.getByLabel("TLS", { exact: true }).selectOption("disable");
     await panel.getByLabel("Database source", { exact: true }).selectOption("rds");
     await expect(panel.getByLabel("TLS", { exact: true })).toHaveValue("");
@@ -213,7 +214,7 @@ test.describe("PIPE databases @dashboard", () => {
     let dialogs = 0;
     page.on("dialog", async dialog => { dialogs++; await dialog.dismiss(); });
     await page.getByRole("button", { name: "MicroVM", exact: true }).click();
-    await expect(page).toHaveURL(/#\/pipe$/);
+    await expect(page).toHaveURL(/#\/pipe\/database$/);
     await expect(panel.getByLabel("Connection name", { exact: true })).toHaveValue("Unfinished DB");
     expect(dialogs).toBe(1);
     await panel.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -244,12 +245,14 @@ test.describe("PIPE databases @dashboard", () => {
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Browse Application DB", exact: true }).click();
     await panel.getByLabel("Table", { exact: true }).selectOption("0");
-    await panel.getByRole("button", { name: "Remove connection Application DB", exact: true }).click();
+    await panel.getByRole("button", { name: "Application DB actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Remove connection Application DB", exact: true }).click();
     await expect(panel.getByRole("alert")).toContainText("Cannot remove database connection");
     await expect(panel.getByRole("cell", { name: "Application DB", exact: true })).toBeVisible();
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
     mock.recoverDelete();
-    await panel.getByRole("button", { name: "Remove connection Application DB", exact: true }).click();
+    await panel.getByRole("button", { name: "Application DB actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Remove connection Application DB", exact: true }).click();
     await expect(panel.getByRole("cell", { name: "Application DB", exact: true })).toHaveCount(0);
     expect(mock.removes).toHaveLength(2);
   });
@@ -336,7 +339,10 @@ test.describe("PIPE databases @dashboard", () => {
     await panel.getByLabel("Table", { exact: true }).selectOption("0");
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
     await expect(panel.getByRole("cell", { name: "NULL", exact: true })).toBeVisible();
-    await panel.screenshot({ path: testInfo.outputPath("database-preview-desktop.png") });
+    await page.screenshot({ path: testInfo.outputPath("database-preview-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("database-preview-mobile.png"), fullPage: true });
     expect(mock.previews[0]).toEqual({ schema: "public", table: "users", limit: 50, offset: 0 });
     await panel.getByRole("button", { name: "Next rows", exact: true }).click();
     await expect(panel.getByRole("cell", { name: "Next page", exact: true })).toBeVisible();
@@ -345,7 +351,8 @@ test.describe("PIPE databases @dashboard", () => {
     await expect(panel.getByRole("cell", { name: "Ada", exact: true })).toBeVisible();
     await panel.getByLabel("Table", { exact: true }).selectOption("1");
     await expect(panel.getByText("This table has no rows on this page.")).toBeVisible();
-    await panel.getByRole("button", { name: "Remove connection Application DB", exact: true }).click();
+    await panel.getByRole("button", { name: "Application DB actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Remove connection Application DB", exact: true }).click();
     await expect(panel.getByText("Connection removed. The source database is unchanged.")).toBeVisible();
     expect(mock.removes).toEqual([id]);
     await expect(panel.getByLabel("Database browser", { exact: true })).toHaveCount(0);
@@ -386,6 +393,12 @@ test.describe("PIPE databases @dashboard", () => {
     const panel = page.getByRole("region", { name: "Databases", exact: true });
     await panel.getByRole("button", { name: "Add database", exact: true }).click();
     await panel.getByLabel("Database source", { exact: true }).selectOption("rds");
+    await expect(panel.getByLabel("TLS", { exact: true })).not.toBeVisible();
+    await expect(panel.getByLabel("CA certificate (PEM, optional)", { exact: true })).not.toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("database-form-mobile-default.png"), fullPage: true });
+    const security = panel.getByText("TLS & certificates", { exact: true });
+    await security.focus();
+    await security.press("Enter");
     await expect(panel.getByLabel("TLS", { exact: true }).getByRole("option", { name: "Disabled", exact: true })).toHaveCount(0);
     await expect(panel.getByLabel("CA certificate (PEM, optional)", { exact: true })).toBeVisible();
     const clippedControls = await panel.locator(".pipe-database-form").evaluate(form => {
@@ -397,6 +410,6 @@ test.describe("PIPE databases @dashboard", () => {
     });
     expect(clippedControls).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await panel.screenshot({ path: testInfo.outputPath("database-form-mobile.png") });
+    await page.screenshot({ path: testInfo.outputPath("database-form-mobile.png"), fullPage: true });
   });
 });
