@@ -912,19 +912,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_cli_teardown_mode_exercises_the_whole_dispatch_without_hanging() {
-        // Safe to call directly, unlike the default (no-args) path: teardown()
-        // never blocks waiting on a signal, while `run()` would hang this test
-        // forever if it ever got far enough to call `serve()`. Whichever way
-        // this resolves is fine — remove_firewall's nft call needs
-        // CAP_NET_ADMIN (same reasoning as
-        // firewall::tests::remove_firewall_clears_cached_networks), so an
-        // unprivileged test process usually takes the error branch, but
-        // either outcome exercises the real dispatch.
-        let _ = run_cli(vec!["firecrab-helper".to_owned(), "--teardown".to_owned()]).await;
-    }
-
-    #[tokio::test]
     async fn deleting_a_tap_that_was_never_created_is_a_no_op() {
         // Read-only rtnetlink lookups need no special privilege, so this is
         // safe to run unprivileged: the delete never reaches the point of

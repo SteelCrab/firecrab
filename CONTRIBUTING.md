@@ -90,6 +90,12 @@ for build, restore, and frontend options.
 
 ## Tests
 
+Helper unit tests must not change the host network, firewall, or production
+DHCP process, even when run as root. Test rendered rules or use fake host
+operations. DHCP tests must use a private runtime directory for all files and
+PID lookups. Run tests that need real network changes only in a disposable VM
+or isolated network namespace with private runtime files.
+
 Run workspace checks on Linux; use the [native CLI checks](public-docs/development/ci.md#local-checks) on Windows and macOS:
 
 ```sh
