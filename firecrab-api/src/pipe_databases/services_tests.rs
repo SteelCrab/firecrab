@@ -47,6 +47,38 @@ async fn database_services_real_engines() {
             .unwrap();
         initialize(&mut c, record.id).await.unwrap();
         initialize(&mut c, record.id).await.unwrap();
+        if engine == Engine::Mysql {
+            let table = TableRequest {
+                schema: settings.summary.database.clone(),
+                table: format!("geom_{}", Uuid::new_v4().simple()),
+            };
+            let qualified = table.qualified(engine);
+            execute(&mut c, &format!("CREATE TABLE {qualified}(id bigint PRIMARY KEY, shape GEOMETRYCOLLECTION); INSERT INTO {qualified} VALUES (1,ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 2))'))")).await;
+            let page = c
+                .editable_page(&PageRequest {
+                    table: table.clone(),
+                    offset: 0,
+                    limit: 50,
+                })
+                .await
+                .unwrap();
+            assert!(page.definition.columns[1].binary);
+            let value = page.rows[0].values["shape"].as_ref().unwrap();
+            assert!(value.bytes().all(|b| b.is_ascii_hexdigit()));
+            let edit = Mutation {
+                request_id: Uuid::new_v4(),
+                table,
+                operation: Operation::Update,
+                values: BTreeMap::from([("shape".into(), json!(value))]),
+                key: page.rows[0].key.clone(),
+                version: Some(page.rows[0].version.clone()),
+            };
+            assert!(matches!(
+                mutate(&mut c, record.id, &edit).await,
+                Err(Error::Invalid(_))
+            ));
+            execute(&mut c, &format!("DROP TABLE {qualified}")).await;
+        }
         let schema = if engine == Engine::Postgres {
             "public".to_owned()
         } else {
@@ -321,14 +353,63 @@ async fn database_services_real_engines() {
             count(&mut c, &format!("SELECT COUNT(*) FROM {outbox}")).await,
             2
         );
-        bindings::revoke(&record, &write_binding).await.unwrap();
         execute(&mut c, &format!("DROP TABLE {qualified}")).await;
+        let mut stale_binding = write_binding.clone();
+        stale_binding.tables.push(TableRequest {
+            schema: "qa_dropped_schema".into(),
+            table: "missing".into(),
+        });
+        bindings::revoke(&record, &stale_binding).await.unwrap();
         let namespace = quote(engine, &internal_schema(record.id));
         if engine == Engine::Postgres {
             execute(&mut c, &format!("DROP SCHEMA {namespace} CASCADE")).await;
         } else {
             execute(&mut c, &format!("DROP DATABASE {namespace}")).await;
         }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MySQL fixture"]
+async fn cancelled_mysql_setup_repairs_only_a_host_claimed_namespace() {
+    let inputs: Vec<DatabaseInput> = serde_json::from_slice(
+        &std::fs::read(std::env::var("FIRECRAB_DB_SERVICES_QA_JSON").unwrap()).unwrap(),
+    )
+    .unwrap();
+    let input = inputs
+        .into_iter()
+        .find(|input| input.settings(Uuid::nil()).unwrap().summary.engine == Engine::Mysql)
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let store = crate::persistence::Store::open(&directory.path().join("state.db")).unwrap();
+    for owner_table in [false, true] {
+        let record = DatabaseRecord {
+            id: Uuid::new_v4(),
+            input: input.clone(),
+        };
+        let settings = record.input.settings(record.id).unwrap();
+        let mut c = DatabaseConnection::connect_write(&record.input, &settings)
+            .await
+            .unwrap();
+        let schema = quote(Engine::Mysql, &internal_schema(record.id));
+        execute(&mut c, &format!("CREATE DATABASE {schema}")).await;
+        if owner_table {
+            execute(
+                &mut c,
+                &format!("CREATE TABLE {schema}.owner(id char(36) PRIMARY KEY) ENGINE=InnoDB"),
+            )
+            .await;
+        }
+        assert!(
+            initialize_saved(&mut c, &record, &store).await.is_err(),
+            "unclaimed namespaces must not be adopted"
+        );
+        let target = super::maintenance::target_hash(&record).unwrap();
+        store.set_database_setup_claim(record.id, &target).unwrap();
+        initialize_saved(&mut c, &record, &store).await.unwrap();
+        verify_owner(&mut c, record.id).await.unwrap();
+        assert!(!store.database_setup_claim(record.id, &target).unwrap());
+        execute(&mut c, &format!("DROP DATABASE {schema}")).await;
     }
 }
 

@@ -180,6 +180,36 @@ fn saved_connections_survive_reopening_and_can_be_removed() {
 
 /// Run against fresh disposable databases, never an operator's existing DB.
 #[tokio::test]
+#[ignore = "requires disposable FIRECRAB_TEST_MARIADB_URI"]
+async fn mariadb_sessions_apply_native_timeout_and_access_mode() {
+    let mut spec = input(
+        &std::env::var("FIRECRAB_TEST_MARIADB_URI").unwrap(),
+        Provider::Local,
+    );
+    for write in [false, true] {
+        spec.write_enabled = write;
+        let settings = spec.settings(Uuid::new_v4()).unwrap();
+        let connection = DatabaseConnection::connect_mode(&spec, &settings, write)
+            .await
+            .unwrap();
+        let DatabaseConnection::Mysql(mut c) = connection else {
+            panic!("MariaDB fixture must use MySQL")
+        };
+        let timeout: f64 = sqlx::query_scalar("SELECT @@max_statement_time")
+            .fetch_one(&mut c)
+            .await
+            .unwrap();
+        let readonly: i64 = sqlx::query_scalar("SELECT CAST(@@tx_read_only AS SIGNED)")
+            .fetch_one(&mut c)
+            .await
+            .unwrap();
+        assert_eq!(timeout, 5.0);
+        assert_eq!(readonly, i64::from(!write));
+    }
+}
+
+/// Run against fresh disposable databases, never an operator's existing DB.
+#[tokio::test]
 #[ignore = "requires disposable FIRECRAB_TEST_POSTGRES_URI and FIRECRAB_TEST_MYSQL_URI databases"]
 async fn reads_real_postgres_and_mysql_tables() {
     for (variable, engine, schema) in [

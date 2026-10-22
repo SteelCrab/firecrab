@@ -58,6 +58,8 @@ External Kafka supports verified TLS, optional mutual TLS, and SASL/PLAIN over T
 
 HTTP failures retry with durable backoff from 2 to 300 seconds. After 12 attempts the event stays failed in the source DB. Later events wait until it is replayed with the original ID. Broker failures keep retrying without dropping the source event. Event envelopes above 512 KiB enter failed storage. Inspect pending, failed, delivered and worker error state in the dashboard.
 
+An operator can explicitly skip a failed delivery, including an oversized event. Confirmation records `skipped` and `operator_acknowledged` in the retained source row. Its payload stays intact; later events can proceed. Skipped events are separate from successful delivery and cannot be replayed through the normal retry action.
+
 Pause stops delivery after any in-flight request. Detach removes capture but continues draining retained events. Removing a trigger requires a detached, drained outbox. Source audit, inbox and delivery receipts are retained; monitor their storage and archive them under an operator retention policy.
 
 ## Backups and schema changes

@@ -86,25 +86,36 @@ fn matches_input(a: &Job, b: &Job) -> bool {
         && a.backup_id == b.backup_id
         && a.target_hash == b.target_hash
 }
-/// Persist an immutable job intent while excluding competing target maintenance.
-fn save(
+/// Return an existing receipt before checking the mutable database state.
+fn existing(
     state: &AppState,
     rid: Uuid,
-    job: Job,
-) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    job: &Job,
+) -> Result<Option<(StatusCode, Json<serde_json::Value>)>, AppError> {
     if let Some(previous) = state
         .store
         .database_job(job.id)
         .map_err(|_| AppError::internal(rid))?
     {
-        if !matches_input(&previous, &job) {
+        if !matches_input(&previous, job) {
             return Err(AppError::conflict(
                 "request_conflict",
                 "The request ID belongs to another database operation",
                 rid,
             ));
         }
-        return Ok((StatusCode::OK, Json(previous.summary())));
+        return Ok(Some((StatusCode::OK, Json(previous.summary()))));
+    }
+    Ok(None)
+}
+/// Persist an immutable job intent while excluding competing target maintenance.
+fn save(
+    state: &AppState,
+    rid: Uuid,
+    job: Job,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    if let Some(receipt) = existing(state, rid, &job)? {
+        return Ok(receipt);
     }
     let jobs = state
         .store
@@ -158,6 +169,13 @@ pub async fn migrate(
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let _claim = state.service_mutations.lock().await;
     let record = load(state.clone(), rid.0, id).await?;
+    let mut job =
+        Job::new(&record, input.request_id, Kind::Migration).map_err(|e| validation(e, rid.0))?;
+    job.version = Some(input.version.clone());
+    job.sql = Some(input.sql.clone());
+    if let Some(receipt) = existing(&state, rid.0, &job)? {
+        return Ok(receipt);
+    }
     let settings = record
         .input
         .settings(record.id)
@@ -176,10 +194,6 @@ pub async fn migrate(
     )
     .map_err(|e| validation(e, rid.0))?;
     bounded_write(rid.0, maintenance::require_maintenance(&state, &record)).await?;
-    let mut job =
-        Job::new(&record, input.request_id, Kind::Migration).map_err(|e| validation(e, rid.0))?;
-    job.version = Some(input.version);
-    job.sql = Some(input.sql);
     save(&state, rid.0, job)
 }
 /// Queue replacement only from a verified snapshot of the same connection.
@@ -191,6 +205,12 @@ pub async fn restore(
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let _claim = state.service_mutations.lock().await;
     let record = load(state.clone(), rid.0, id).await?;
+    let mut job =
+        Job::new(&record, input.request_id, Kind::Restore).map_err(|e| validation(e, rid.0))?;
+    job.backup_id = Some(input.backup_id);
+    if let Some(receipt) = existing(&state, rid.0, &job)? {
+        return Ok(receipt);
+    }
     let settings = record
         .input
         .settings(record.id)
@@ -218,9 +238,6 @@ pub async fn restore(
             rid.0,
         ));
     }
-    let mut job =
-        Job::new(&record, input.request_id, Kind::Restore).map_err(|e| validation(e, rid.0))?;
-    job.backup_id = Some(input.backup_id);
     save(&state, rid.0, job)
 }
 /// Stream a completed private archive to the trusted operator.
@@ -312,4 +329,82 @@ pub async fn delete_backup(
         .save_database_job(&job)
         .map_err(|_| AppError::internal(rid.0))?;
     Ok(Json(serde_json::json!({"deleted":true})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipe_databases::{DatabaseInput, DatabaseRecord};
+
+    #[tokio::test]
+    async fn completed_retries_return_receipts_before_live_preconditions() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::with_db_file(
+            crate::templates::TemplateRegistry::load_default().unwrap(),
+            dir.path().join("state.db"),
+        )
+        .await
+        .unwrap();
+        let record = DatabaseRecord {
+            id: Uuid::new_v4(),
+            input: serde_json::from_value::<DatabaseInput>(serde_json::json!({
+                "name":"Offline", "provider":"local", "uri":"postgres://operator@127.0.0.1:1/app", "writeEnabled":true,
+            })).unwrap(),
+        };
+        state
+            .store
+            .save_pipe_database(record.id, &record.input)
+            .unwrap();
+        for kind in [Kind::Migration, Kind::Restore] {
+            let mut job = Job::new(&record, Uuid::new_v4(), kind).unwrap();
+            job.status = "succeeded".into();
+            if kind == Kind::Migration {
+                job.version = Some("v1".into());
+                job.sql = Some("CREATE TABLE example(id int)".into());
+            } else {
+                job.backup_id = Some(Uuid::new_v4());
+            }
+            state.store.save_database_job(&job).unwrap();
+            let response = if kind == Kind::Migration {
+                migrate(
+                    State(state.clone()),
+                    Extension(RequestId(Uuid::new_v4())),
+                    Path(record.id.to_string()),
+                    ValidatedJson(MigrationInput {
+                        request_id: job.id,
+                        version: job.version.clone().unwrap(),
+                        sql: job.sql.clone().unwrap(),
+                        confirm_database: String::new(),
+                        external_writers_stopped: false,
+                    }),
+                )
+                .await
+            } else {
+                restore(
+                    State(state.clone()),
+                    Extension(RequestId(Uuid::new_v4())),
+                    Path(record.id.to_string()),
+                    ValidatedJson(RestoreInput {
+                        request_id: job.id,
+                        backup_id: job.backup_id.unwrap(),
+                        confirm_database: String::new(),
+                        external_writers_stopped: false,
+                    }),
+                )
+                .await
+            }
+            .unwrap();
+            assert_eq!(response.0, StatusCode::OK);
+            assert_eq!(response.1.0["status"], "succeeded");
+            let mut changed = job.clone();
+            changed.kind = Kind::Backup;
+            assert_eq!(
+                existing(&state, Uuid::new_v4(), &changed)
+                    .unwrap_err()
+                    .into_response()
+                    .status(),
+                StatusCode::CONFLICT
+            );
+        }
+    }
 }

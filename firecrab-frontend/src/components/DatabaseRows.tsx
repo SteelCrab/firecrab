@@ -136,6 +136,7 @@ export default function DatabaseRows({ connection, onClose, onDirty }: Props) {
         "multipoint",
         "multilinestring",
         "multipolygon",
+        "geomcollection",
         "geometrycollection",
       ].includes(column.dataType)
     );

@@ -19,7 +19,7 @@ pub const FIRECRACKER_VERSION: &str = "v1.17.0";
 pub const FIRECRAB_VERSION: &str = "v0.2.2";
 
 /// Bumped whenever the guest steps change, so an older marker forces a re-run.
-const PROVISION_SCHEMA: u32 = 1;
+const PROVISION_SCHEMA: u32 = 2;
 
 const INSTALLER: ArtifactSpec<'static> = ArtifactSpec {
     label: "Firecrab guest installer",

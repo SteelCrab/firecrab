@@ -46,8 +46,11 @@ def main():
     def ready(name, command):
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
-            if subprocess.run(["docker", "exec", name, *command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-                return
+            try:
+                if subprocess.run(["docker", "exec", name, *command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0:
+                    return
+            except subprocess.TimeoutExpired:
+                pass
             time.sleep(1)
         raise RuntimeError("QA database readiness timed out")
 
@@ -80,6 +83,12 @@ def main():
             probes = {pg: ["env","PGPASSWORD="+password,"psql","-h127.0.0.1","-U","qa","-d","firecrab_dev","-c","SELECT 1"], mysql: ["env", "MYSQL_PWD=" + password, "mysql","--protocol=TCP","-h127.0.0.1", "-uroot","-Dfirecrab_dev","-e","SELECT 1","--silent"]}
             for name, command in probes.items():
                 ready(name, command)
+            maria = prefix + "-mariadb"
+            start(maria, "mariadb:11.8", {"MARIADB_ROOT_PASSWORD": password, "MARIADB_ROOT_HOST": "%", "MARIADB_DATABASE": "firecrab_dev"})
+            ready(maria, ["env", "MYSQL_PWD=" + password, "mariadb", "--protocol=TCP", "-h127.0.0.1", "-uroot", "-Dfirecrab_dev", "-e", "SELECT 1", "--silent"])
+            run([*base, "-e", f"FIRECRAB_TEST_MARIADB_URI=mysql://root:{quote(password)}@{maria}/firecrab_dev", "firecrab-database-services-qa", f"/tests/{binary.name}", "mariadb_sessions_apply_native_timeout_and_access_mode", "--ignored", "--nocapture"])
+            run(["docker", "rm", "-fv", maria], quiet=True)
+            containers.remove(maria)
             log = temporary / "certificates.log"
             commands = [
                 ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", str(temporary / "ca.key"), "-out", str(temporary / "ca.pem"), "-subj", "/CN=Firecrab disposable service QA", "-addext", "basicConstraints=critical,CA:TRUE"],
@@ -111,7 +120,7 @@ def main():
                     raise RuntimeError("QA Kafka startup timed out")
                 time.sleep(1)
             tests = [*base, "-e", "FIRECRAB_DB_SERVICES_QA_JSON=/qa/input.json", "-e", "FIRECRAB_KAFKA_FIXTURE=/qa/kafka.json", "firecrab-database-services-qa", f"/tests/{binary.name}"]
-            for name in ["database_services_real_engines", "native_backups_migrations_and_restore", "database_services_api_real_engines"]:
+            for name in ["database_services_real_engines", "cancelled_mysql_setup_repairs_only_a_host_claimed_namespace", "native_backups_migrations_and_restore", "database_services_api_real_engines"]:
                 run([*tests, name, "--ignored", "--nocapture"])
             gate = temporary / "restart-gate"
             gate.mkdir()

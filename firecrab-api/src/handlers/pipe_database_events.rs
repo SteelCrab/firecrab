@@ -93,6 +93,7 @@ pub async fn list(
                 pending: 0,
                 failed: 0,
                 delivered: 0,
+                skipped: 0,
                 last_error: Some("setup_incomplete".into()),
             }
         };
@@ -464,4 +465,45 @@ pub async fn replay(
     })
     .await?;
     Ok(Json(serde_json::json!({"queued":true})))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+/// Exact event confirmation before skipping a retained failed delivery.
+pub struct AcknowledgeInput {
+    /// Full trigger UUID and outbox ID selected by the operator.
+    confirm_event_id: String,
+}
+
+/// Skip a failed delivery after confirmation, preserving its source payload.
+pub async fn acknowledge(
+    State(state): State<AppState>,
+    Extension(rid): Extension<RequestId>,
+    Path((id, event)): Path<(String, i64)>,
+    ValidatedJson(input): ValidatedJson<AcknowledgeInput>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let id = super::vms::parse_id(&id, rid.0)?;
+    if input.confirm_event_id != format!("{id}:{event}") {
+        return Err(crate::pipe_databases::validation(
+            "Confirm the exact failed event ID",
+            rid.0,
+        ));
+    }
+    let trigger = state
+        .store
+        .database_trigger(id)
+        .map_err(|_| AppError::internal(rid.0))?
+        .ok_or_else(|| AppError::not_found(rid.0))?;
+    super::pipe_databases::available(&state, trigger.database_id, rid.0)?;
+    let record = load(state, rid.0, trigger.database_id.to_string()).await?;
+    let settings = record
+        .input
+        .settings(record.id)
+        .map_err(|_| AppError::internal(rid.0))?;
+    bounded_write(rid.0, async {
+        let mut c = DatabaseConnection::connect_write(&record.input, &settings).await?;
+        events::acknowledge(&mut c, &trigger, event).await
+    })
+    .await?;
+    Ok(Json(serde_json::json!({"acknowledged":true})))
 }

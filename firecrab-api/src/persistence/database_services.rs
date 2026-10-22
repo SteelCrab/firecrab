@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS database_vm_services (id TEXT PRIMARY KEY, service_id
 CREATE TABLE IF NOT EXISTS database_trigger_health (id TEXT PRIMARY KEY, error TEXT) STRICT;
 CREATE TABLE IF NOT EXISTS database_managed_kafka (id INTEGER PRIMARY KEY CHECK(id=1), spec TEXT NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS database_jobs (id TEXT PRIMARY KEY, database_id TEXT NOT NULL, spec TEXT NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS database_setup_claims (id TEXT NOT NULL, target_hash TEXT NOT NULL, PRIMARY KEY(id,target_hash)) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS database_binding_environment ON database_bindings(service_id,json_extract(spec,'$.input.envName'));
 ";
 
@@ -34,6 +35,34 @@ fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, PersistenceE
 }
 
 impl Store {
+    /// Check the durable intent recorded before creating a MySQL namespace.
+    pub fn database_setup_claim(&self, id: Uuid, target: &str) -> Result<bool, PersistenceError> {
+        Ok(self.lock().query_row(
+            "SELECT EXISTS(SELECT 1 FROM database_setup_claims WHERE id=?1 AND target_hash=?2)",
+            params![id.to_string(), target],
+            |row| row.get(0),
+        )?)
+    }
+    /// Keep namespace creation ownership across cancellation or host restart.
+    pub fn set_database_setup_claim(&self, id: Uuid, target: &str) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            "INSERT OR IGNORE INTO database_setup_claims VALUES (?1,?2)",
+            params![id.to_string(), target],
+        )?;
+        Ok(())
+    }
+    /// Clear temporary ownership after the source owner marker is verified.
+    pub fn clear_database_setup_claim(
+        &self,
+        id: Uuid,
+        target: &str,
+    ) -> Result<(), PersistenceError> {
+        self.lock().execute(
+            "DELETE FROM database_setup_claims WHERE id=?1 AND target_hash=?2",
+            params![id.to_string(), target],
+        )?;
+        Ok(())
+    }
     /// Read one private job by its stable UUID.
     pub fn database_job(
         &self,

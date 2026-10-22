@@ -244,6 +244,8 @@ pub struct TriggerStatus {
     pub failed: i64,
     /// Retained receipts for successful HTTP delivery.
     pub delivered: i64,
+    /// Failed payloads retained after an explicit operator acknowledgement.
+    pub skipped: i64,
     /// Redacted worker error suitable for the dashboard.
     pub last_error: Option<String>,
 }
@@ -455,7 +457,12 @@ pub async fn status(
 ) -> Result<TriggerStatus, Error> {
     let outbox = trigger.outbox(connection.engine());
     let sql = format!(
-        "SELECT CAST(COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) AS {}), CAST(COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0) AS {}),CAST(COALESCE(SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END),0) AS {}) FROM {outbox}",
+        "SELECT CAST(COALESCE(SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END),0) AS {}), CAST(COALESCE(SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END),0) AS {}),CAST(COALESCE(SUM(CASE WHEN status='delivered' THEN 1 ELSE 0 END),0) AS {}),CAST(COALESCE(SUM(CASE WHEN status='skipped' THEN 1 ELSE 0 END),0) AS {}) FROM {outbox}",
+        if connection.engine() == Engine::Postgres {
+            "bigint"
+        } else {
+            "SIGNED"
+        },
         if connection.engine() == Engine::Postgres {
             "bigint"
         } else {
@@ -472,7 +479,7 @@ pub async fn status(
             "SIGNED"
         }
     );
-    let (pending, failed, delivered): (i64, i64, i64) = match connection {
+    let (pending, failed, delivered, skipped): (i64, i64, i64, i64) = match connection {
         DatabaseConnection::Postgres(c) => sqlx::query_as(&sql).fetch_one(c).await?,
         DatabaseConnection::Mysql(c) => sqlx::query_as(&sql).fetch_one(c).await?,
     };
@@ -481,6 +488,7 @@ pub async fn status(
         pending,
         failed,
         delivered,
+        skipped,
         last_error: None,
     })
 }
@@ -581,6 +589,46 @@ pub async fn replay(
     Ok(())
 }
 
+/// Retain a failed payload and record the operator's decision to skip delivery.
+pub async fn acknowledge(
+    connection: &mut DatabaseConnection,
+    trigger: &Trigger,
+    id: i64,
+) -> Result<(), Error> {
+    if id <= 0 {
+        return Err(Error::Invalid("Invalid event ID"));
+    }
+    let engine = connection.engine();
+    let outbox = trigger.outbox(engine);
+    let placeholder = if engine == Engine::Postgres {
+        "$1"
+    } else {
+        "?"
+    };
+    let sql = format!(
+        "UPDATE {outbox} SET status='skipped',last_error='operator_acknowledged' WHERE id={placeholder} AND status='failed'"
+    );
+    match &mut *connection {
+        DatabaseConnection::Postgres(c) => {
+            sqlx::query(&sql).bind(id).execute(c).await?;
+        }
+        DatabaseConnection::Mysql(c) => {
+            sqlx::query(&sql).bind(id).execute(c).await?;
+        }
+    }
+    let sql = format!("SELECT status FROM {outbox} WHERE id={placeholder}");
+    let status: Option<String> = match connection {
+        DatabaseConnection::Postgres(c) => {
+            sqlx::query_scalar(&sql).bind(id).fetch_optional(c).await?
+        }
+        DatabaseConnection::Mysql(c) => sqlx::query_scalar(&sql).bind(id).fetch_optional(c).await?,
+    };
+    if status.as_deref() != Some("skipped") {
+        return Err(Error::Invalid("Only a failed event can be acknowledged"));
+    }
+    Ok(())
+}
+
 /// Backoff and terminal failure are durable in the source DB, not a memory queue.
 fn retry_delay(attempt: i32) -> i64 {
     (1_i64 << attempt.clamp(1, 9)).min(300)
@@ -649,7 +697,7 @@ async fn relay(
         }
 
         let sql = format!(
-            "SELECT id,LEFT(payload,1048577),attempts,kafka_offset,status,next_attempt,CAST(OCTET_LENGTH(payload) AS {length_type}) FROM {outbox} WHERE status<>'delivered' ORDER BY id LIMIT 1"
+            "SELECT id,LEFT(payload,1048577),attempts,kafka_offset,status,next_attempt,CAST(OCTET_LENGTH(payload) AS {length_type}) FROM {outbox} WHERE status IN ('pending','failed') ORDER BY id LIMIT 1"
         );
         let row: Option<DeliveryRow> = match &mut connection {
             DatabaseConnection::Postgres(c) => sqlx::query_as(&sql).fetch_optional(c).await?,

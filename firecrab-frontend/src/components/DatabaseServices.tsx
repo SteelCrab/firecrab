@@ -54,7 +54,7 @@ export default function DatabaseServices({
   }, [dirty, onDirty]);
   const [failures, setFailures] = useState<{
     trigger: string;
-    rows: { eventId: string; attempts: number }[];
+    rows: { eventId: string; attempts: number; error?: string | null }[];
   } | null>(null);
   const load = useCallback(async () => {
     const [s, b, tr, k, m] = await Promise.all([
@@ -458,7 +458,10 @@ export default function DatabaseServices({
                 type="checkbox"
                 checked={development}
                 disabled={busy}
-                onChange={(e) => setDevelopment(e.target.checked)}
+                onChange={(e) => {
+                  setDevelopment(e.target.checked);
+                  if (!e.target.checked) setTls(true);
+                }}
               />
               {t("Single-broker development", "단일 브로커 개발용")}
             </label>
@@ -486,6 +489,7 @@ export default function DatabaseServices({
                   `Pending ${trigger.pending} · Failed ${trigger.failed} · Delivered ${trigger.delivered}`,
                   `대기 ${trigger.pending} · 실패 ${trigger.failed} · 전달 ${trigger.delivered}`,
                 )}
+                {!!trigger.skipped && ` · ${t(`Skipped ${trigger.skipped}`, `제외 ${trigger.skipped}`)}`}
                 {trigger.detached
                   ? ` · ${t("Capture detached", "변경 감지 해제")}`
                   : trigger.paused
@@ -598,6 +602,7 @@ export default function DatabaseServices({
             {failures.rows.map((event) => (
               <div className="pipe-database-binding" key={event.eventId}>
                 <code>{event.eventId}</code>
+                {event.error && <small>{event.error}</small>}
                 <button
                   className="btn sm"
                   type="button"
@@ -628,6 +633,26 @@ export default function DatabaseServices({
                   }
                 >
                   {t("Replay", "재처리")}
+                </button>
+                <button
+                  className="btn sm danger"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!window.confirm(t(
+                      `Skip delivery of ${event.eventId}? Its payload stays in the source database. Later events can continue.`,
+                      `${event.eventId} 전달을 제외하는가? 원본은 DB에 보존한다. 이후 이벤트는 계속 처리한다.`,
+                    ))) return;
+                    void run(async () => {
+                      await db.acknowledgeDatabaseEvent(failures.trigger, event.eventId);
+                      setFailures((current) => current ? {
+                        ...current,
+                        rows: current.rows.filter((row) => row.eventId !== event.eventId),
+                      } : null);
+                    }, t("Failed delivery skipped. The source payload is retained.", "실패 전달을 제외했다. 원본은 보존한다."));
+                  }}
+                >
+                  {t("Skip delivery", "전달 제외")}
                 </button>
               </div>
             ))}

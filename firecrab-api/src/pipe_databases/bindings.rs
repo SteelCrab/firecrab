@@ -367,12 +367,30 @@ pub async fn revoke(admin: &DatabaseRecord, binding: &BindingRecord) -> Result<(
             // These generated roles cannot own application objects. RESTRICT prevents data loss.
             let mut tx = write::pg_transaction(c).await?;
             for table in &binding.tables {
-                sqlx::query(&format!(
-                    "REVOKE ALL ON {} FROM {role}",
-                    table.qualified(Engine::Postgres)
-                ))
-                .execute(&mut *tx)
+                let present: bool = sqlx::query_scalar(
+                    "SELECT to_regclass(format('%I.%I',$1::text,$2::text)) IS NOT NULL",
+                )
+                .bind(&table.schema)
+                .bind(&table.table)
+                .fetch_one(&mut *tx)
                 .await?;
+                if present {
+                    sqlx::query(&format!(
+                        "REVOKE ALL ON {} FROM {role}",
+                        table.qualified(Engine::Postgres)
+                    ))
+                    .execute(&mut *tx)
+                    .await?;
+                }
+                let schema_present: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname=$1)",
+                )
+                .bind(&table.schema)
+                .fetch_one(&mut *tx)
+                .await?;
+                if !schema_present {
+                    continue;
+                }
                 sqlx::query(&format!(
                     "REVOKE USAGE ON SCHEMA {} FROM {role}",
                     quote(Engine::Postgres, &table.schema)

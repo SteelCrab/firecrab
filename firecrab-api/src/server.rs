@@ -311,6 +311,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             post(handlers::pipe_database_events::replay),
         )
         .route(
+            "/api/pipe/database-triggers/{id}/acknowledge/{event}",
+            post(handlers::pipe_database_events::acknowledge),
+        )
+        .route(
             "/api/pipe/databases/{id}/bindings",
             get(handlers::pipe_database_bindings::list)
                 .post(handlers::pipe_database_bindings::create),

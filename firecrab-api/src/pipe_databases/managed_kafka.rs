@@ -219,6 +219,14 @@ async fn image(state: &AppState, cluster: &mut Cluster) -> Result<String, Error>
     let id = cluster.id;
     let original =
         ImageReference::parse(&cluster.image).map_err(|_| Error::Invalid("Invalid Kafka image"))?;
+    if matches!(original.version, ImageVersion::Digest(_)) {
+        let alias = oci::template_name_from_reference(&original)
+            .map_err(|_| Error::Invalid("Cannot name the Kafka image"))?
+            .alias;
+        if state.templates.resolve_alias(&alias).is_some() {
+            return Ok(alias);
+        }
+    }
     let credential = oci_handler::stored_credential_for(state, &original.registry, RequestId(id))
         .await
         .map_err(|_| Error::Invalid("Cannot authenticate Kafka image registry"))?;
@@ -508,6 +516,48 @@ pub fn recover(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn pinned_local_image_recovers_without_registry_access() {
+        use crate::templates::{TemplateRegistry, TemplateSpec};
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("kernel"), b"qa kernel").unwrap();
+        std::fs::write(directory.path().join("rootfs"), b"qa rootfs").unwrap();
+        let reference = format!("registry.invalid/apache/kafka@sha256:{}", "a".repeat(64));
+        let parsed = ImageReference::parse(&reference).unwrap();
+        let alias = oci::template_name_from_reference(&parsed).unwrap().alias;
+        let templates = TemplateRegistry::from_specs(
+            directory.path(),
+            vec![TemplateSpec {
+                alias: alias.clone(),
+                version: "qa".into(),
+                kernel: "kernel".into(),
+                initrd: None,
+                rootfs: "rootfs".into(),
+                boot_args: String::new(),
+            }],
+        )
+        .unwrap();
+        let state = AppState::with_db_file(templates, directory.path().join("state.db"))
+            .await
+            .unwrap();
+        let mut cluster = Cluster {
+            id: Uuid::new_v4(),
+            enabled: true,
+            image: reference,
+            development: false,
+            phase: "ready".into(),
+            error: None,
+            brokers: vec![],
+            config: None,
+        };
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), image(&state, &mut cluster))
+                .await
+                .unwrap()
+                .unwrap(),
+            alias
+        );
+    }
     #[test]
     #[ignore = "exports disposable TLS Kafka fixture to FIRECRAB_KAFKA_EXPORT"]
     fn export_managed_kafka_fixture() {

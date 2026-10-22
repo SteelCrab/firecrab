@@ -79,6 +79,7 @@ export interface DatabaseTrigger {
   pending: number;
   failed: number;
   delivered: number;
+  skipped: number;
   lastError: string | null;
 }
 export interface KafkaStatus {
@@ -237,7 +238,7 @@ export const removeDatabaseTrigger = (id: string): Promise<unknown> =>
   });
 export const failedDatabaseEvents = (
   id: string,
-): Promise<{ eventId: string; attempts: number }[]> =>
+): Promise<{ eventId: string; attempts: number; error?: string | null }[]> =>
   fetchJson(`/api/pipe/database-triggers/${encodeURIComponent(id)}/failures`);
 export const replayDatabaseEvent = (
   id: string,
@@ -249,6 +250,8 @@ export const replayDatabaseEvent = (
   );
 export const kafkaStatus = (): Promise<KafkaStatus> =>
   fetchJson("/api/pipe/database-kafka");
+export const acknowledgeDatabaseEvent = (id: string, eventId: string): Promise<unknown> =>
+  post(`/api/pipe/database-triggers/${encodeURIComponent(id)}/acknowledge/${encodeURIComponent(eventId.split(":").at(-1)!)}`, { confirmEventId: eventId });
 export const saveKafka = (input: KafkaInput): Promise<unknown> =>
   post("/api/pipe/database-kafka", input, "PUT");
 export const managedKafkaStatus = (): Promise<ManagedKafka | null> =>

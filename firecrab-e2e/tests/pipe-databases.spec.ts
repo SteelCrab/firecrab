@@ -411,7 +411,7 @@ test.describe("PIPE databases @dashboard", () => {
 });
 
 async function openWritable(page: Page, failure?: "unknown" | "conflict") {
-  const mutations: Record<string, unknown>[] = [], bindings: Record<string, unknown>[] = [], triggers: Record<string, unknown>[] = [], jobs: Record<string, unknown>[] = [], kafka: unknown[] = [];
+  const mutations: Record<string, unknown>[] = [], bindings: Record<string, unknown>[] = [], triggers: Record<string, unknown>[] = [], jobs: Record<string, unknown>[] = [], kafka: unknown[] = [], acknowledgements: unknown[] = [];
   const serviceId = "22222222-2222-4222-8222-222222222222";
   let configured = false;
   const columns = [
@@ -442,7 +442,12 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
       if (method === "POST") triggers.push({ id: input().requestId, databaseId: id, paused: false, installed: true, detached: false, pending: 0, failed: 0, delivered: 0, ...input() });
       return route.fulfill({ json: method === "GET" ? triggers : triggers.at(-1) });
     }
-    if (path === "/api/pipe/database-kafka") return route.fulfill({ json: { configured, brokers: configured ? ["broker:9092"] : undefined, tls: true, development: false } });
+    if (path.endsWith("/failures")) return route.fulfill({ json: [{ eventId: `${triggers[0].id}:1`, attempts: 12, error: "payload_too_large" }] });
+    if (path.includes("/acknowledge/")) { acknowledgements.push(input()); triggers[0].failed = 0; triggers[0].skipped = 1; return route.fulfill({ json: { acknowledged: true } }); }
+    if (path === "/api/pipe/database-kafka") {
+      if (method === "PUT") { kafka.push(input()); configured = true; }
+      return route.fulfill({ json: { configured, brokers: configured ? ["broker:9092"] : undefined, tls: true, development: false } });
+    }
     if (path === "/api/pipe/database-kafka/managed") {
       if (method === "POST") { kafka.push(input()); configured = true; }
       return route.fulfill({ json: configured ? { phase: "ready", development: false } : null });
@@ -461,7 +466,7 @@ async function openWritable(page: Page, failure?: "unknown" | "conflict") {
   await page.getByRole("button", { name: "Browse Application DB", exact: true }).click();
   await page.getByLabel("Table", { exact: true }).selectOption("0");
   await expect(page.getByRole("button", { name: "Add row", exact: true })).toBeVisible();
-  return { mutations, bindings, triggers, jobs, kafka, serviceId };
+  return { mutations, bindings, triggers, jobs, kafka, acknowledgements, serviceId };
 }
 
 test("writes JSON text without rounding and keeps unknown-result retries identical @dashboard", async ({ page }) => {
@@ -521,4 +526,34 @@ test("uses minimal service and Kafka defaults and confirms snapshot restore @das
   await restore.click();
   await expect.poll(() => mock.jobs.length).toBe(2);
   expect(mock.jobs[1]).toMatchObject({ backupId: mock.jobs[0].id, confirmDatabase: "app", externalWritersStopped: true });
+});
+
+test("restores production TLS and requires confirmation to skip a failed delivery @dashboard", async ({ page }) => {
+  const mock = await openWritable(page);
+  await page.getByText("Services & reliable events", { exact: true }).click();
+  await page.getByText("Use existing Kafka", { exact: true }).click();
+  await page.getByLabel("Single-broker development", { exact: true }).check();
+  await page.getByLabel("TLS", { exact: true }).uncheck();
+  await page.getByLabel("Single-broker development", { exact: true }).uncheck();
+  await expect(page.getByLabel("TLS", { exact: true })).toBeChecked();
+  await expect(page.getByLabel("TLS", { exact: true })).toBeDisabled();
+  await page.getByLabel("Broker addresses", { exact: true }).fill("broker-1:9093, broker-2:9093, broker-3:9093");
+  await page.getByRole("button", { name: "Save Kafka connection", exact: true }).click();
+  await expect.poll(() => mock.kafka.length).toBe(1);
+  expect(mock.kafka[0]).toMatchObject({ development: false, tls: true });
+  await page.getByLabel("Source table", { exact: true }).selectOption("0");
+  await page.getByLabel("Handler service", { exact: true }).selectOption(mock.serviceId);
+  await page.getByRole("button", { name: "Enable events", exact: true }).click();
+  await expect.poll(() => mock.triggers.length).toBe(1);
+  mock.triggers[0].failed = 1;
+  await page.getByRole("button", { name: "Failed events", exact: true }).click();
+  await expect(page.getByText("payload_too_large", { exact: true })).toBeVisible();
+  page.once("dialog", dialog => dialog.dismiss());
+  await page.getByRole("button", { name: "Skip delivery", exact: true }).click();
+  expect(mock.acknowledgements).toHaveLength(0);
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Skip delivery", exact: true }).click();
+  await expect.poll(() => mock.acknowledgements.length).toBe(1);
+  expect(mock.acknowledgements[0]).toEqual({ confirmEventId: `${mock.triggers[0].id}:1` });
+  await expect(page.getByText(/Skipped 1/)).toBeVisible();
 });

@@ -454,6 +454,7 @@ fn mysql_binary(kind: &str) -> bool {
             | "multipoint"
             | "multilinestring"
             | "multipolygon"
+            | "geomcollection"
             | "geometrycollection"
     )
 }
@@ -469,6 +470,7 @@ fn spatial(kind: &str) -> bool {
             | "multipoint"
             | "multilinestring"
             | "multipolygon"
+            | "geomcollection"
             | "geometrycollection"
     )
 }
@@ -524,6 +526,47 @@ pub(super) fn internal_schema(id: Uuid) -> String {
 
 /// Create an owned audit namespace or verify and repair its completed setup.
 pub async fn initialize(connection: &mut DatabaseConnection, id: Uuid) -> Result<(), Error> {
+    initialize_claimed(connection, id, false).await
+}
+
+/// Repair cancelled MySQL creation only when this host recorded prior absence.
+pub async fn initialize_saved(
+    connection: &mut DatabaseConnection,
+    record: &super::DatabaseRecord,
+    store: &crate::persistence::Store,
+) -> Result<(), Error> {
+    if let DatabaseConnection::Mysql(c) = connection {
+        let target = super::maintenance::target_hash(record)?;
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME=?",
+        )
+        .bind(internal_schema(record.id))
+        .fetch_one(c)
+        .await?;
+        if exists == 0 {
+            store
+                .set_database_setup_claim(record.id, &target)
+                .map_err(|_| Error::Invalid("Cannot save database setup ownership"))?;
+        }
+        let claimed = store
+            .database_setup_claim(record.id, &target)
+            .map_err(|_| Error::Invalid("Cannot load database setup ownership"))?;
+        initialize_claimed(connection, record.id, claimed).await?;
+        store
+            .clear_database_setup_claim(record.id, &target)
+            .map_err(|_| Error::Invalid("Cannot finish database setup ownership"))?;
+        Ok(())
+    } else {
+        initialize(connection, record.id).await
+    }
+}
+
+/// Never repair an unmarked namespace without a durable creation claim.
+async fn initialize_claimed(
+    connection: &mut DatabaseConnection,
+    id: Uuid,
+    claimed: bool,
+) -> Result<(), Error> {
     let engine = connection.engine();
     let schema = quote(engine, &internal_schema(id));
     match connection {
@@ -548,6 +591,16 @@ pub async fn initialize(connection: &mut DatabaseConnection, id: Uuid) -> Result
             .fetch_one(&mut *c)
             .await?;
             if exists != 0 {
+                if claimed {
+                    let other_tables: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.tables WHERE TABLE_SCHEMA=? AND TABLE_NAME<>'owner'")
+                        .bind(internal_schema(id)).fetch_one(&mut *c).await?;
+                    if other_tables == 0 {
+                        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {schema}.owner (id char(36) PRIMARY KEY) ENGINE=InnoDB"))
+                            .execute(&mut *c).await?;
+                        sqlx::query(&format!("INSERT INTO {schema}.owner (id) SELECT ? FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM {schema}.owner)"))
+                            .bind(id.to_string()).execute(&mut *c).await?;
+                    }
+                }
                 verify_owner(connection, id).await?;
                 let DatabaseConnection::Mysql(c) = connection else {
                     unreachable!()

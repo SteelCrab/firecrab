@@ -413,7 +413,15 @@ impl DatabaseConnection {
                     options = options.ssl_ca_from_pem(ca.as_bytes().to_vec());
                 }
                 let mut connection = MySqlConnection::connect_with(&options).await?;
-                sqlx::query("SET SESSION max_execution_time=5000, innodb_lock_wait_timeout=5, lock_wait_timeout=5, time_zone='+00:00', sql_mode=CONCAT_WS(',',@@sql_mode,'STRICT_ALL_TABLES')").execute(&mut connection).await?;
+                let version: String = sqlx::query_scalar("SELECT @@version")
+                    .fetch_one(&mut connection)
+                    .await?;
+                let timeout = if version.to_ascii_lowercase().contains("mariadb") {
+                    "max_statement_time=5"
+                } else {
+                    "max_execution_time=5000"
+                };
+                sqlx::query(&format!("SET SESSION {timeout}, innodb_lock_wait_timeout=5, lock_wait_timeout=5, time_zone='+00:00', sql_mode=CONCAT_WS(',',@@sql_mode,'STRICT_ALL_TABLES')")).execute(&mut connection).await?;
                 sqlx::query(if write {
                     "SET SESSION TRANSACTION READ WRITE"
                 } else {

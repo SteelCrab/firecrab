@@ -323,6 +323,43 @@ async fn durable_events_real_kafka() {
         assert_eq!(receiver.effects.lock().unwrap().len(), 4);
         let status = status(&mut c, trigger.clone()).await.unwrap();
         assert_eq!((status.pending, status.failed, status.delivered), (0, 0, 4));
+        execute(
+            &mut c,
+            &format!("INSERT INTO {outbox}(payload) VALUES (REPEAT('x',524289))"),
+        )
+        .await;
+        execute(
+            &mut c,
+            &format!("INSERT INTO {qualified}(name) VALUES ('after oversized')"),
+        )
+        .await;
+        relay(&state, &record, &trigger, &client).await.unwrap();
+        assert_eq!(
+            failed(&mut c, &trigger).await.unwrap()[0].error.as_deref(),
+            Some("payload_too_large")
+        );
+        replay(&mut c, &trigger, 5).await.unwrap();
+        relay(&state, &record, &trigger, &client).await.unwrap();
+        assert!(
+            acknowledge(&mut c, &trigger, 6).await.is_err(),
+            "pending delivery cannot be skipped"
+        );
+        acknowledge(&mut c, &trigger, 5).await.unwrap();
+        acknowledge(&mut c, &trigger, 5).await.unwrap();
+        assert!(replay(&mut c, &trigger, 5).await.is_err());
+        relay(&state, &record, &trigger, &client).await.unwrap();
+        assert_eq!(receiver.effects.lock().unwrap().len(), 5);
+        let status = super::status(&mut c, trigger.clone()).await.unwrap();
+        assert_eq!(
+            (
+                status.pending,
+                status.failed,
+                status.delivered,
+                status.skipped
+            ),
+            (0, 0, 5, 1)
+        );
+        assert_eq!(number(&mut c, &format!("SELECT COUNT(*) FROM {outbox} WHERE id=5 AND OCTET_LENGTH(payload)=524289 AND last_error='operator_acknowledged' AND delivered_at IS NULL")).await, 1);
         detach(&mut c, &trigger).await.unwrap();
         execute(
             &mut c,
@@ -331,7 +368,7 @@ async fn durable_events_real_kafka() {
         .await;
         assert_eq!(
             number(&mut c, &format!("SELECT COUNT(*) FROM {outbox}")).await,
-            4
+            6
         );
         server.abort();
         client

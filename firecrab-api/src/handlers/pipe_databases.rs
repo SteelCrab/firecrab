@@ -79,7 +79,15 @@ pub async fn create(
     if input.write_enabled {
         bounded_write(request_id.0, async {
             let mut connection = DatabaseConnection::connect_write(&input, &settings).await?;
-            write::initialize(&mut connection, id).await
+            write::initialize_saved(
+                &mut connection,
+                &DatabaseRecord {
+                    id,
+                    input: input.clone(),
+                },
+                &state.store,
+            )
+            .await
         })
         .await?;
     } else {
@@ -173,7 +181,15 @@ pub async fn update(
     if input.write_enabled {
         bounded_write(rid.0, async {
             let mut c = DatabaseConnection::connect_write(&input, &settings).await?;
-            write::initialize(&mut c, record.id).await
+            write::initialize_saved(
+                &mut c,
+                &DatabaseRecord {
+                    id: record.id,
+                    input: input.clone(),
+                },
+                &state.store,
+            )
+            .await
         })
         .await?;
     } else {
@@ -350,7 +366,7 @@ pub async fn access(
         bounded_write(request_id.0, async {
             let mut connection =
                 DatabaseConnection::connect_write(&record.input, &settings).await?;
-            write::initialize(&mut connection, record.id).await
+            write::initialize_saved(&mut connection, &record, &state.store).await
         })
         .await?;
     }
