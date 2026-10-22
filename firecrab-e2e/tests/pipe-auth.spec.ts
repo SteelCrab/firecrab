@@ -1,8 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { AuthConnection, AuthLogin } from "../../firecrab-frontend/src/api/pipeAuth";
+import type { PipeSnapshot } from "../../firecrab-frontend/src/api/pipe";
 
-const github: AuthConnection = { provider: "github", account: "octocat", registry: "ghcr.io", region: null, services: ["registry"] };
-const aws: AuthConnection = { provider: "aws", account: "123456789012", registry: "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com", region: "ap-northeast-2", services: ["registry"] };
+const github = { provider: "github", account: "octocat", registry: "ghcr.io", region: null, services: ["registry"] } satisfies AuthConnection;
+const aws = { provider: "aws", account: "123456789012", registry: "123456789012.dkr.ecr.ap-northeast-2.amazonaws.com", region: "ap-northeast-2", services: ["registry"] } satisfies AuthConnection;
+const firecrab = { provider: "firecrab", account: "console-app", registry: null, region: null, services: ["firecrab-tunnel"] } satisfies AuthConnection;
 async function open(page: Page, options: { connections?: AuthConnection[]; reject?: boolean; loadFailure?: boolean; locale?: "ko"; overview?: boolean } = {}) {
   let connections = options.connections ?? [];
   let failLoad = options.loadFailure;
@@ -10,6 +12,11 @@ async function open(page: Page, options: { connections?: AuthConnection[]; rejec
   const deletes: string[] = [];
   const catalogs: string[] = [];
   const transfers: string[] = [];
+  const tunnelSaves: unknown[] = [];
+  const snapshot: PipeSnapshot = {
+    config: { listen: "127.0.0.1:8080", routes: [{ host: "app.example.com", pathPrefix: "/", upstreams: ["127.0.0.1:9000"] }], tunnel: null },
+    units: [], nginxAvailable: true, cloudflaredAvailable: true, firecrabTunnels: [],
+  };
   await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en");
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const url = new URL(route.request().url());
@@ -27,12 +34,17 @@ async function open(page: Page, options: { connections?: AuthConnection[]; rejec
       }
       const login = route.request().postDataJSON() as AuthLogin;
       writes.push(login);
-      if (options.reject) return route.fulfill({ status: 400, json: { error: { message: "GitHub rejected the token. Check its validity and permissions." } } });
-      const connection = provider === "github" ? github : aws;
+      if (options.reject) return route.fulfill({ status: 400, json: { error: { message: provider === "firecrab" ? "The Firecrab connection token is invalid, expired, or revoked" : "GitHub rejected the token. Check its validity and permissions." } } });
+      const connection = provider === "github" ? github : provider === "firecrab" ? firecrab : aws;
       connections = [...connections.filter(row => row.provider !== provider), connection];
       return route.fulfill({ json: connection });
     }
-    if (path === "/api/pipe/registries") return route.fulfill({ json: connections.map(connection => ({ registry: connection.registry, username: connection.provider === "aws" ? "AWS" : connection.account, provider: connection.provider === "aws" ? "ecr" : "ghcr", authProvider: connection.provider })) });
+    if (path === "/api/pipe/registries") return route.fulfill({ json: connections.filter(connection => connection.registry !== null).map(connection => ({ registry: connection.registry, username: connection.provider === "aws" ? "AWS" : connection.account, provider: connection.provider === "aws" ? "ecr" : "ghcr", authProvider: connection.provider })) });
+    if (path === "/api/pipe/firecrab-tunnels") {
+      tunnelSaves.push(route.request().postDataJSON());
+      snapshot.firecrabTunnels = [{ subdomain: firecrab.account, publicUrl: `https://${firecrab.account}.firecrab.dev`, target: { type: "nginx", host: "app.example.com" }, connectorId: "11111111-1111-4111-8111-111111111111", connected: true, error: null }];
+      return route.fulfill({ json: snapshot });
+    }
     if (path.endsWith("/repositories")) {
       catalogs.push(url.search);
       const isAws = path.includes(aws.registry);
@@ -45,14 +57,108 @@ async function open(page: Page, options: { connections?: AuthConnection[]; rejec
     }
     if (path.startsWith("/api/pipe/registry-transfers/")) return route.fulfill({ json: { alias: "a".repeat(64), status: "succeeded", log: "registry transfer succeeded" } });
     if (path === "/api/pipe/registry-images" || path === "/api/vms") return route.fulfill({ json: [] });
-    if (path === "/api/pipe") return route.fulfill({ json: { config: null, units: [], nginxAvailable: true, cloudflaredAvailable: true } });
+    if (path === "/api/pipe") return route.fulfill({ json: snapshot });
     return route.fulfill({ status: 404, json: { error: { message: "Fixture route unavailable" } } });
   });
   await page.goto(options.overview ? "/#/pipe" : "/#/pipe/auth");
-  return { writes, deletes, catalogs, transfers, recover: () => { failLoad = false; }, get connections() { return connections; }, panel: page.getByRole("region", { name: "Pipe Auth", exact: true }) };
+  return { writes, deletes, catalogs, transfers, tunnelSaves, failAuthentication: () => { failLoad = true; }, recover: () => { failLoad = false; }, get connections() { return connections; }, panel: page.getByRole("region", { name: "Pipe Auth", exact: true }) };
 }
 
 test.describe("Pipe Auth @dashboard", () => {
+  test("connects a console token, reuses it without browser secrets, and retains tunnels after disconnect", async ({ page }, info) => {
+    const mock = await open(page, { connections: [github] });
+    await mock.panel.getByRole("button", { name: "Connect Firecrab", exact: true }).click();
+    const input = mock.panel.getByLabel("Connection token", { exact: true });
+    await expect(input).toHaveAttribute("type", "password");
+    await expect(mock.panel.getByRole("link", { name: "console.firecrab.dev", exact: true })).toHaveAttribute("href", "https://console.firecrab.dev/");
+    const token = "c".repeat(64);
+    await input.fill(token);
+    await mock.panel.getByRole("button", { name: "Verify and connect", exact: true }).click();
+    await expect(mock.panel.getByRole("status")).toContainText("The address is available in Firecrab Tunnel");
+    expect(mock.writes).toEqual([{ provider: "firecrab", token }]);
+    await expect(mock.panel.locator('input[type="password"]')).toHaveCount(0);
+    expect(await page.evaluate(() => JSON.stringify(localStorage) + JSON.stringify(sessionStorage))).not.toContain(token);
+    await page.screenshot({ path: info.outputPath("pipe-auth-firecrab.png"), fullPage: true });
+    await mock.panel.getByRole("link", { name: "Firecrab Tunnel", exact: true }).click();
+    const tunnel = page.getByRole("region", { name: "Firecrab Tunnel", exact: true });
+    await tunnel.getByRole("button", { name: "Add fixed address", exact: true }).click();
+    await expect(tunnel.getByLabel("Authentication", { exact: true })).toHaveValue("pipe-auth");
+    await expect(tunnel.getByText("console-app.firecrab.dev", { exact: true })).toBeVisible();
+    await expect(tunnel.getByLabel("Connection token", { exact: true })).toHaveCount(0);
+    await tunnel.getByLabel("Connection target", { exact: true }).selectOption("nginx");
+    await tunnel.getByLabel("Nginx route domain", { exact: true }).selectOption("app.example.com");
+    await tunnel.getByRole("button", { name: "Connect address", exact: true }).click();
+    await expect(tunnel.getByRole("link", { name: "https://console-app.firecrab.dev", exact: true })).toBeVisible();
+    expect(mock.tunnelSaves).toEqual([{ usePipeAuth: true, target: { type: "nginx", host: "app.example.com" } }]);
+    await page.goto("/#/pipe/auth");
+    page.once("dialog", dialog => { expect(dialog.message()).toContain("Existing tunnels keep their saved tokens"); return dialog.accept(); });
+    await mock.panel.getByRole("button", { name: "Firecrab actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Disconnect", exact: true }).click();
+    await expect(mock.panel.getByRole("button", { name: "Connect Firecrab", exact: true })).toBeVisible();
+    expect(mock.deletes).toEqual(["firecrab"]);
+    await expect(mock.panel.getByText("octocat", { exact: true })).toBeVisible();
+    await page.goto("/#/pipe/firecrab-tunnel");
+    await expect(tunnel.getByRole("link", { name: "https://console-app.firecrab.dev", exact: true })).toBeVisible();
+    await tunnel.getByRole("button", { name: "Add fixed address", exact: true }).click();
+    await expect(tunnel.getByLabel("Authentication", { exact: true })).toHaveValue("token");
+    await expect(tunnel.getByRole("option", { name: "Use Pipe Auth", exact: true })).toHaveAttribute("disabled", "");
+  });
+
+  test("keeps direct token entry available when Firecrab is connected in Pipe Auth", async ({ page }) => {
+    const mock = await open(page, { connections: [firecrab] });
+    await mock.panel.getByRole("link", { name: "Firecrab Tunnel", exact: true }).click();
+    const tunnel = page.getByRole("region", { name: "Firecrab Tunnel", exact: true });
+    await tunnel.getByRole("button", { name: "Add fixed address", exact: true }).click();
+    await tunnel.getByLabel("Authentication", { exact: true }).selectOption("token");
+    const token = "b".repeat(64);
+    await tunnel.getByLabel("Connection token", { exact: true }).fill(token);
+    await tunnel.getByLabel("Connection target", { exact: true }).selectOption("nginx");
+    await tunnel.getByLabel("Nginx route domain", { exact: true }).selectOption("app.example.com");
+    await tunnel.getByRole("button", { name: "Connect address", exact: true }).click();
+    await expect(tunnel.getByRole("link", { name: "https://console-app.firecrab.dev", exact: true })).toBeVisible();
+    expect(mock.tunnelSaves).toEqual([{ token, target: { type: "nginx", host: "app.example.com" } }]);
+  });
+
+  test("preserves an existing Firecrab connection when its replacement token is rejected", async ({ page }) => {
+    const mock = await open(page, { connections: [firecrab], reject: true });
+    await mock.panel.getByRole("button", { name: "Firecrab actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Update credentials", exact: true }).click();
+    await mock.panel.getByLabel("Connection token", { exact: true }).fill("a".repeat(64));
+    await mock.panel.getByRole("button", { name: "Verify and connect", exact: true }).click();
+    await expect(mock.panel.getByRole("alert")).toContainText("invalid, expired, or revoked");
+    await expect(mock.panel.getByText("console-app", { exact: true })).toBeVisible();
+    expect(mock.connections).toEqual([firecrab]);
+    await mock.panel.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(mock.panel.locator('input[type="password"]')).toHaveCount(0);
+  });
+
+  test("shows the console token form on a narrow Korean screen", async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mock = await open(page, { locale: "ko" });
+    await mock.panel.getByRole("button", { name: "Firecrab 연결", exact: true }).click();
+    await expect(mock.panel.getByLabel("연결 토큰", { exact: true })).toBeVisible();
+    await expect(mock.panel.getByRole("link", { name: "console.firecrab.dev", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath("pipe-auth-firecrab-mobile-ko.png"), fullPage: true });
+  });
+
+  test("keeps manual token entry usable and retries saved authentication after a lookup failure", async ({ page }) => {
+    const mock = await open(page, { connections: [firecrab] });
+    await expect(mock.panel.getByRole("link", { name: "Firecrab Tunnel", exact: true })).toBeVisible();
+    mock.failAuthentication();
+    await mock.panel.getByRole("link", { name: "Firecrab Tunnel", exact: true }).click();
+    const tunnel = page.getByRole("region", { name: "Firecrab Tunnel", exact: true });
+    await tunnel.getByRole("button", { name: "Add fixed address", exact: true }).click();
+    await expect(tunnel.getByLabel("Connection token", { exact: true })).toBeVisible();
+    await expect(tunnel.getByRole("option", { name: "Use Pipe Auth", exact: true })).toHaveAttribute("disabled", "");
+    mock.recover();
+    await tunnel.getByRole("button", { name: "Retry authentication", exact: true }).click();
+    await expect(tunnel.getByRole("option", { name: "Use Pipe Auth", exact: true })).not.toHaveAttribute("disabled", "");
+    await tunnel.getByLabel("Authentication", { exact: true }).selectOption("pipe-auth");
+    await expect(tunnel.getByLabel("Connection token", { exact: true })).toHaveCount(0);
+    await expect(tunnel.getByText("console-app.firecrab.dev", { exact: true })).toBeVisible();
+  });
+
   test("shows the provider connection count and opens the authentication card", async ({ page }) => {
     await open(page, { connections: [github, aws], overview: true });
     const card = page.getByRole("link", { name: "Pipe Auth", exact: true });
@@ -75,7 +181,7 @@ test.describe("Pipe Auth @dashboard", () => {
     expect(detailBounds!.x).toBeGreaterThanOrEqual(listBounds!.x + listBounds!.width - 1);
     await detail.getByRole("button", { name: "Update credentials", exact: true }).click();
     await expect(detail.getByLabel("AWS access key ID", { exact: true })).toBeVisible();
-    await expect(mock.panel.getByRole("table", { name: "Provider connections" }).getByRole("row")).toHaveCount(3);
+    await expect(mock.panel.getByRole("table", { name: "Provider connections" }).getByRole("row")).toHaveCount(4);
     await page.screenshot({ path: info.outputPath("pipe-auth-desktop.png"), fullPage: true });
   });
 

@@ -13,6 +13,19 @@ unfinished credentials asks before discarding them.
 | --- | --- | --- |
 | GitHub | Personal access token (classic) with `read:packages` | GHCR in Pipe Registry |
 | AWS | Access key ID, secret access key, region, optional session token | The account's private Amazon ECR registry in Pipe Registry |
+| Firecrab | Connection token issued by [console.firecrab.dev](https://console.firecrab.dev/) | Its fixed address in Firecrab Tunnel |
+
+For Firecrab, select **Connect Firecrab** and paste the console's 64-character
+connection token. Verification resolves its assigned address without publishing
+a target. **Firecrab Tunnel → Add fixed address** selects **Use Pipe Auth** when
+a shared token is connected. Select the VM apps or saved Nginx routes to publish.
+**Enter a connection token** remains available for another address.
+
+Each host keeps one shared Firecrab token. Updating it changes the token available
+for new connections. Existing tunnels keep their own saved tokens. Disconnecting
+Pipe Auth does not revoke console tokens or remove tunnels. Revoke or suspend a
+token in the console to stop its remote access. Firecrab credentials are never
+used for container registries.
 
 GitHub authentication checks the token owner's identity and package scope. If an
 organization requires SSO, authorize the token for that organization. GitHub
@@ -43,5 +56,12 @@ routes:
 - `GET /api/pipe/auth`: list connected providers and available services.
 - `PUT /api/pipe/auth/github`: verify and save `{ "provider": "github", "token": "…" }`.
 - `PUT /api/pipe/auth/aws`: verify and save `{ "provider": "aws", "accessKeyId": "…", "secretAccessKey": "…", "region": "ap-northeast-2", "sessionToken": "…" }`.
+- `PUT /api/pipe/auth/firecrab`: verify and save `{ "provider": "firecrab", "token": "…" }`.
 - `DELETE /api/pipe/auth/{provider}`: disconnect a provider.
+
+Firecrab metadata returns its address label as `account`, `registry: null`, and
+`services: ["firecrab-tunnel"]`. To connect its saved token, send
+`{ "usePipeAuth": true, "target": { "type": "nginx", "host": "app.example.com" } }`
+to `POST /api/pipe/firecrab-tunnels`. Choose exactly one of `usePipeAuth`, an
+explicit `token`, or an existing `subdomain`; secrets stay on the host.
 

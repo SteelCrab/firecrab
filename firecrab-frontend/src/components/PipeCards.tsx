@@ -112,7 +112,7 @@ export default function PipeCards({ snapshot, error }: Props) {
   }
 
   const cards: Card[] = [
-    { id: "auth", title: "Pipe Auth", description: "AWS · GitHub", ...auth() },
+    { id: "auth", title: "Pipe Auth", description: "AWS · GitHub · Firecrab", ...auth() },
     { id: "route", title: "Route", description: t("Domain · path", "도메인 · 경로"), ...(unknown ?? route()) },
     { id: "registry", title: "Pipe Registry", description: t("Image pull", "이미지 가져오기"), ...registry() },
     { id: "database", title: "Database", description: t("Connections · browse", "연결 · 조회"), ...database() },
