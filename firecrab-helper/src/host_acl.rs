@@ -19,6 +19,7 @@
 //! Idempotent. Missing binaries and already-present rules are ignored.
 
 use std::fs;
+use std::path::Path;
 use std::process::Stdio;
 
 use firecrab_helper_protocol::network::{MICRO_NETWORK_BRIDGE_PREFIX, MicroNetworkSpec};
@@ -76,7 +77,12 @@ pub async fn ensure_all(default_uplink: &str, micro_networks: &[MicroNetworkSpec
     let frontend = select_frontend(ufw_is_enabled(), firewalld_is_running().await);
     let nft_listed = output_tool("nft", &["list", "tables"])
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "failed to list nftables tables; assuming no tables during firewall setup"
+            );
+            String::new()
+        });
     for network in micro_networks {
         let bridge = network.bridge_name();
         if !is_safe_ifname(&bridge) {
@@ -101,7 +107,13 @@ pub async fn remove_bridge(bridge: &str) {
     remove_iptables_input(bridge).await;
     let nft_listed = output_tool("nft", &["list", "tables"])
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                bridge,
+                "failed to list nftables tables; assuming no tables during bridge removal"
+            );
+            String::new()
+        });
     delete_nft_filter(&nft_listed, bridge).await;
     if ufw_is_enabled() {
         let _ = run_tool(
@@ -193,7 +205,17 @@ fn ufw_rules_on(listing: &str, wanted: impl Fn(&str) -> bool) -> Vec<u32> {
 }
 
 fn ufw_is_enabled() -> bool {
-    ufw_conf_is_enabled(&fs::read_to_string("/etc/ufw/ufw.conf").unwrap_or_default())
+    ufw_is_enabled_at(Path::new("/etc/ufw/ufw.conf"))
+}
+
+fn ufw_is_enabled_at(path: &Path) -> bool {
+    match fs::read_to_string(path) {
+        Ok(config) => ufw_conf_is_enabled(&config),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "failed to read UFW config; treating UFW as disabled");
+            false
+        }
+    }
 }
 
 fn ufw_conf_is_enabled(text: &str) -> bool {
@@ -206,6 +228,7 @@ fn firewalld_state_is_running(stdout: &str) -> bool {
 
 async fn firewalld_is_running() -> bool {
     let Some(output) = output_tool("firewall-cmd", &["--state"]).await else {
+        tracing::warn!("failed to query firewalld state; treating firewalld as not running");
         return false;
     };
     firewalld_state_is_running(&output)
@@ -499,16 +522,37 @@ fn tool_search_order(bin: &str) -> Vec<String> {
 }
 
 async fn run_tool(bin: &str, args: &[&str]) -> bool {
+    let mut last_error = None;
     for path in tool_search_order(bin) {
-        let status = Command::new(&path)
+        let output = Command::new(&path)
             .args(args)
+            .stdin(Stdio::inherit())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
+            .stderr(Stdio::piped())
+            .output()
             .await;
-        if let Ok(status) = status {
-            return status.success();
+        match output {
+            Ok(output) => {
+                if !output.status.success() {
+                    tracing::warn!(
+                        tool = bin,
+                        path,
+                        ?args,
+                        status = %output.status,
+                        stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                        "host firewall tool failed"
+                    );
+                }
+                return output.status.success();
+            }
+            Err(error) => {
+                tracing::debug!(tool = bin, path, ?args, %error, "failed to start host firewall tool");
+                last_error = Some(error);
+            }
         }
+    }
+    if let Some(error) = last_error {
+        tracing::warn!(tool = bin, ?args, %error, "host firewall tool unavailable in all search paths");
     }
     false
 }
@@ -518,23 +562,40 @@ async fn output_tool(bin: &str, args: &[&str]) -> Option<String> {
 }
 
 async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Option<String> {
+    let mut last_error = None;
     for path in tool_search_order(bin) {
-        let Ok(output) = Command::new(&path)
+        let output = match Command::new(&path)
             .args(args)
             .envs(envs.iter().copied())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .output()
             .await
-        else {
-            continue;
+        {
+            Ok(output) => output,
+            Err(error) => {
+                tracing::debug!(tool = bin, path, ?args, %error, "failed to start host firewall tool");
+                last_error = Some(error);
+                continue;
+            }
         };
         if output.status.success() {
             return Some(String::from_utf8_lossy(&output.stdout).into_owned());
         }
         // Binary existed; a non-zero exit is a real failure, not a
         // missing-path miss. Do not try /usr/sbin after /usr/bin already ran.
+        tracing::warn!(
+            tool = bin,
+            path,
+            ?args,
+            status = %output.status,
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "host firewall tool failed"
+        );
         return None;
+    }
+    if let Some(error) = last_error {
+        tracing::warn!(tool = bin, ?args, %error, "host firewall tool unavailable in all search paths");
     }
     None
 }
@@ -542,6 +603,126 @@ async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use tracing::instrument::WithSubscriber;
+
+    fn log_capture() -> (
+        tempfile::NamedTempFile,
+        impl tracing::Subscriber + Send + Sync,
+    ) {
+        let file = tempfile::NamedTempFile::new().expect("capture log");
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter("firecrab_helper::host_acl=warn")
+            .with_ansi(false)
+            .without_time()
+            .with_writer(file.reopen().expect("log writer"))
+            .finish();
+        (file, subscriber)
+    }
+
+    fn fake_tool(directory: &Path, script: &str) -> String {
+        let path = directory.join("firewall-tool");
+        fs::write(&path, format!("#!/bin/sh\n{script}\n")).expect("write tool");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable tool");
+        path.to_str().expect("tool path").to_owned()
+    }
+
+    #[tokio::test]
+    async fn failed_tools_keep_return_values_and_log_arguments_status_and_stderr() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = fake_tool(
+            dir.path(),
+            "echo ignored-output; echo permission-denied >&2; exit 23",
+        );
+        let (capture, subscriber) = log_capture();
+        async {
+            assert!(!run_tool(&tool, &["list", "tables"]).await);
+            assert_eq!(output_tool(&tool, &["list", "tables"]).await, None);
+        }
+        .with_subscriber(subscriber)
+        .await;
+
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert_eq!(
+            logged.matches("host firewall tool failed").count(),
+            2,
+            "{logged}"
+        );
+        assert!(logged.contains(&tool), "{logged}");
+        assert!(logged.contains("args=[\"list\", \"tables\"]"), "{logged}");
+        assert!(logged.contains("status=exit status: 23"), "{logged}");
+        assert!(logged.contains("stderr=permission-denied"), "{logged}");
+    }
+
+    #[tokio::test]
+    async fn successful_tools_keep_stdout_and_environment_without_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = fake_tool(dir.path(), "echo \"$LC_ALL\"; echo harmless-diagnostic >&2");
+        let (capture, subscriber) = log_capture();
+        async {
+            assert!(run_tool(&tool, &[]).await);
+            assert_eq!(
+                output_tool_env(&tool, &[], &[("LC_ALL", "C")]).await,
+                Some("C\n".to_owned())
+            );
+        }
+        .with_subscriber(subscriber)
+        .await;
+        assert_eq!(fs::read_to_string(capture.path()).unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn missing_tools_keep_false_and_none_and_log_spawn_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("missing");
+        let tool = tool.to_str().unwrap();
+        let (capture, subscriber) = log_capture();
+        async {
+            assert!(!run_tool(tool, &["--state"]).await);
+            assert_eq!(output_tool(tool, &["--state"]).await, None);
+        }
+        .with_subscriber(subscriber)
+        .await;
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert_eq!(
+            logged.matches("host firewall tool unavailable").count(),
+            2,
+            "{logged}"
+        );
+        assert!(logged.contains(tool), "{logged}");
+        assert!(logged.contains("args=[\"--state\"]"), "{logged}");
+        assert!(logged.contains("error="), "{logged}");
+    }
+
+    #[test]
+    fn unreadable_ufw_config_warns_and_still_means_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ufw.conf");
+        fs::write(&path, [0xff]).unwrap();
+        let (capture, subscriber) = log_capture();
+        tracing::subscriber::with_default(subscriber, || assert!(!ufw_is_enabled_at(&path)));
+        let logged = fs::read_to_string(capture.path()).unwrap();
+        assert!(
+            logged.contains("failed to read UFW config; treating UFW as disabled"),
+            "{logged}"
+        );
+        assert!(logged.contains(path.to_str().unwrap()), "{logged}");
+        assert!(logged.contains("error="), "{logged}");
+    }
+
+    #[test]
+    fn readable_ufw_config_keeps_enabled_and_disabled_states_without_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ufw.conf");
+        let (capture, subscriber) = log_capture();
+        tracing::subscriber::with_default(subscriber, || {
+            fs::write(&path, "ENABLED=yes\n").unwrap();
+            assert!(ufw_is_enabled_at(&path));
+            fs::write(&path, "ENABLED=no\n").unwrap();
+            assert!(!ufw_is_enabled_at(&path));
+        });
+        assert_eq!(fs::read_to_string(capture.path()).unwrap(), "");
+    }
 
     const UFW_LISTING: &str = "Status: active\n\n\
          \x20    To                         Action      From\n\
