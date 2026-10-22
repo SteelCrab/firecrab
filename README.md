@@ -403,4 +403,23 @@ English is the default documentation language; the README links above offer Kore
 - [public-docs/](public-docs/README.md): Installation, API, operations, and troubleshooting
 - [CONTRIBUTING.md](CONTRIBUTING.md): Maintainer’s note, development, and pull request checks
 
+## Contributors
+
+Thanks to everyone who has opened a pull request or issue.
+Credits update automatically. Each count links to the contribution history; the latest link opens the original PR or issue.
+See [credit rules and corrections](CONTRIBUTING.md#automatic-contributor-credits).
+
+<!-- contributors:start -->
+
+| Contributor | Pull requests | Issues |
+| :--- | :--- | :--- |
+| <a href="https://github.com/been-there-done-that"><img src="https://avatars.githubusercontent.com/u/57761677?s=64" width="32" height="32" alt="been-there-done-that" /></a> [@been-there-done-that](https://github.com/been-there-done-that) | [3](https://github.com/SteelCrab/firecrab/pulls?q=is%3Apr+author%3Abeen-there-done-that+-label%3Aspam+-label%3Askip-contributors) · [latest #196](https://github.com/SteelCrab/firecrab/pull/196) | — |
+| <a href="https://github.com/kudala-bharani"><img src="https://avatars.githubusercontent.com/u/121555407?s=64" width="32" height="32" alt="kudala-bharani" /></a> [@kudala-bharani](https://github.com/kudala-bharani) | [1](https://github.com/SteelCrab/firecrab/pulls?q=is%3Apr+author%3Akudala-bharani+-label%3Aspam+-label%3Askip-contributors) · [latest #71](https://github.com/SteelCrab/firecrab/pull/71) | — |
+| <a href="https://github.com/MAliffadlan"><img src="https://avatars.githubusercontent.com/u/89256932?s=64" width="32" height="32" alt="MAliffadlan" /></a> [@MAliffadlan](https://github.com/MAliffadlan) | [4](https://github.com/SteelCrab/firecrab/pulls?q=is%3Apr+author%3AMAliffadlan+-label%3Aspam+-label%3Askip-contributors) · [latest #366](https://github.com/SteelCrab/firecrab/pull/366) | [1](https://github.com/SteelCrab/firecrab/issues?q=is%3Aissue+author%3AMAliffadlan+-label%3Aspam+-label%3Askip-contributors) · [latest #305](https://github.com/SteelCrab/firecrab/issues/305) |
+| <a href="https://github.com/mcc0nnell"><img src="https://avatars.githubusercontent.com/u/9466271?s=64" width="32" height="32" alt="mcc0nnell" /></a> [@mcc0nnell](https://github.com/mcc0nnell) | [6](https://github.com/SteelCrab/firecrab/pulls?q=is%3Apr+author%3Amcc0nnell+-label%3Aspam+-label%3Askip-contributors) · [latest #211](https://github.com/SteelCrab/firecrab/pull/211) | — |
+| <a href="https://github.com/SteelCrab"><img src="https://avatars.githubusercontent.com/u/43775386?s=64" width="32" height="32" alt="SteelCrab" /></a> [@SteelCrab](https://github.com/SteelCrab) | [228](https://github.com/SteelCrab/firecrab/pulls?q=is%3Apr+author%3ASteelCrab+-label%3Aspam+-label%3Askip-contributors) · [latest #425](https://github.com/SteelCrab/firecrab/pull/425) | [108](https://github.com/SteelCrab/firecrab/issues?q=is%3Aissue+author%3ASteelCrab+-label%3Aspam+-label%3Askip-contributors) · [latest #426](https://github.com/SteelCrab/firecrab/issues/426) |
+| <a href="https://github.com/VedantMadane"><img src="https://avatars.githubusercontent.com/u/6527493?s=64" width="32" height="32" alt="VedantMadane" /></a> [@VedantMadane](https://github.com/VedantMadane) | [1](https://github.com/SteelCrab/firecrab/pulls?q=is%3Apr+author%3AVedantMadane+-label%3Aspam+-label%3Askip-contributors) · [latest #188](https://github.com/SteelCrab/firecrab/pull/188) | — |
+
+<!-- contributors:end -->
+
 Licensed under [Apache License, Version 2.0](LICENSE).
