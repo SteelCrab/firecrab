@@ -1,0 +1,19 @@
+FIRECRAB | ISOLATED DEVELOPMENT CONTROL TEST
+2026-10-22 12:04:21 KST
+Scope: embedded guest script; stubbed systemctl and curl
+No live management VM, installed service, or user data access.
+
+Command contract: firecrab service dev stop
+$ /bin/bash scripts/micromanager/dev-macos-guest.sh stop
+[PASS] guest: API + helper stopped
+
+Recorded service operations:
+  systemctl stop firecrab-api
+  systemctl stop firecrab-helper
+
+[PASS] API/helper operation order
+[PASS] No compiler or build invoked
+[PASS] User data, custom overrides, and host checkout preserved
+[PASS] Development executables, overrides, and caches preserved
+
+RESULT: PASS | stop | exit code 0
