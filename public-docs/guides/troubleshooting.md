@@ -17,6 +17,19 @@ ls -l /dev/kvm /run/firecrab/net-helper.sock
 df -h
 ```
 
+The helper logs at `firecrab_helper=info`. Raise it while diagnosing a network
+problem — the unit declares its `Environment=` lines inline, so use a drop-in:
+
+```sh
+sudo systemctl edit firecrab-helper.service
+# add under [Service]:
+#   Environment=RUST_LOG=firecrab_helper=debug
+sudo systemctl restart firecrab-helper
+```
+
+A connection from an unknown UID, an unreadable peer credential, a request read
+timeout, and a failed response write are all recorded there.
+
 ## Dashboard cannot reach the API
 
 Check the API directly.

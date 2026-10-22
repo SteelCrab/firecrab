@@ -228,6 +228,11 @@ the files, processes, and firewall rules an uninstall used to leave behind.
 
 ### Improved
 
+- The `firecrab-helper` service logs through `tracing`. A connection from an
+  unauthorized UID, an unreadable peer credential, a request read timeout, and a
+  failed response write now appear in `journalctl -u firecrab-helper`.
+  `RUST_LOG=firecrab_helper=debug` raises the level; the default is
+  `firecrab_helper=info` ([#305]).
 - Contributor guide, READMEs, architecture diagrams, and PR-body guidance are
   simplified and updated for the per-VM shim and VM lifetime ([#314], [#315]).
 
@@ -720,6 +725,7 @@ network helper.
 [#295]: https://github.com/SteelCrab/firecrab/pull/295
 [#297]: https://github.com/SteelCrab/firecrab/pull/297
 [#303]: https://github.com/SteelCrab/firecrab/issues/303
+[#305]: https://github.com/SteelCrab/firecrab/issues/305
 [#306]: https://github.com/SteelCrab/firecrab/issues/306
 [#312]: https://github.com/SteelCrab/firecrab/pull/312
 [#314]: https://github.com/SteelCrab/firecrab/pull/314
