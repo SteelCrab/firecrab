@@ -159,7 +159,7 @@ pub enum Command {
         /// Build optimized guest binaries instead of debug binaries.
         #[arg(long, conflicts_with = "restore")]
         release: bool,
-        /// Remove development overrides and restart the installed release binaries.
+        /// Stop workload MicroVMs and restore the installed release binaries.
         #[arg(long)]
         restore: bool,
         /// Skip the artifact download prompt if the management VM needs installation.
@@ -196,7 +196,7 @@ pub enum DevCommand {
     Stop,
     /// Restart the deployed API/helper and dashboard without rebuilding or rebooting the VM.
     Restart,
-    /// Restore installed release services and remove guest development files and dashboard state.
+    /// Stop workload MicroVMs, restore installed services, and remove development state.
     Clean,
 }
 

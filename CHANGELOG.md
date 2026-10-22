@@ -91,6 +91,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Fixed
 
+- macOS and Windows `service dev clean` and `service dev --restore` stop
+  workload MicroVM units before switching back to installed services. Older
+  installed APIs no longer start a second Firecracker against a TAP or disk
+  held by a development VM. Failed unit listing or stopping preserves the
+  development deployment and cache. VM disks and application data are kept.
+
 - macOS and Windows `service dev` starts the source dashboard on
   `http://localhost:8080`, checks its API proxy, and keeps it running after the
   command exits. Development start/stop/restart commands control the dashboard

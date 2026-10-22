@@ -95,6 +95,25 @@ case "$name" in
       exit 0
     fi
     echo "$*" >>"$TEST_ROOT/events"
+    if [ "$1" = list-units ]; then
+      [ "${VM_LIST_FAIL:-0}" = 0 ] || exit 46
+      if [ -f "$TEST_ROOT/vm-units" ]; then cat "$TEST_ROOT/vm-units"; fi
+      exit 0
+    fi
+    if [ "$1" = stop ] && [[ "$2" = firecrab-vm-* ]]; then
+      [ "${VM_STOP_FAIL:-0}" = 0 ] || exit 47
+      if [ -f "$TEST_ROOT/vm-runtime-pid" ]; then
+        kill "$(cat "$TEST_ROOT/vm-runtime-pid")"
+        # Wait for the exclusive runtime resource to be released before starting
+        # the installed API, just as synchronous systemctl stop waits for the unit.
+        python3 - <<'PYWAIT'
+import fcntl, os
+with open(os.path.join(os.environ["TEST_ROOT"], "tap-lock"), "w") as resource:
+    fcntl.flock(resource, fcntl.LOCK_EX)
+PYWAIT
+      fi
+      : >"$TEST_ROOT/vm-units"
+    fi
     if [ "$1" = stop ] && [ "$2" = firecrab-api ] \
       && [ "${BLOCK_ACTIVATE:-0}" = 1 ] && [ ! -f "$TEST_ROOT/blocked" ]; then block_command; fi
     if [ "$*" = 'stop firecrab-api' ] && [ "${STOP_FAIL:-0}" = 1 ]; then exit 44; fi
@@ -594,6 +613,96 @@ class GuestDevelopmentTest(unittest.TestCase):
         self.assertTrue((self.cache / "source/firecrab-api/src/main.rs").exists())
         self.assertTrue((self.cache / "target").is_dir())
         self.assertTrue((self.cache / "cargo/bin/rustup").exists())
+
+    def test_release_transitions_stop_vm_units_before_helper_and_binary_changes(self):
+        for action in ["clean", "restore"]:
+            for legacy in [0, 1]:
+                with self.subTest(action=action, legacy=legacy):
+                    helper = "firecrab-net-helper" if legacy else "firecrab-helper"
+                    vm = "firecrab-vm-9ef8f079dfb345918d349954213dc41e.service"
+                    failed = "firecrab-vm-0794b2e090b4417eb4b02ca2261189d9.service"
+                    (self.root / "vm-units").write_text(
+                        f"{vm} loaded active running MicroVM\n"
+                        f"{failed} loaded failed failed MicroVM\n"
+                        "unrelated.service loaded active running unrelated\n")
+                    events = self.root / "events"
+                    events.unlink(missing_ok=True)
+                    result = self.run_guest(action, LEGACY_HELPER=legacy)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    changes = events.read_text().splitlines()
+                    self.assertLess(changes.index("stop firecrab-api"), changes.index(f"stop {vm} {failed}"))
+                    self.assertLess(changes.index(f"stop {vm} {failed}"), changes.index(f"stop {helper}"))
+                    self.assertLess(changes.index(f"stop {helper}"), changes.index("daemon-reload"))
+                    self.assertLess(changes.index("daemon-reload"), changes.index("start firecrab-api"))
+                    self.assertFalse((self.root / "vm-units").read_text())
+                    self.assertFalse(any(line.startswith("stop unrelated") for line in changes))
+
+    def test_source_deployments_and_controls_preserve_running_vm_units(self):
+        vm = "firecrab-vm-9ef8f079dfb345918d349954213dc41e.service"
+        listing = f"{vm} loaded active running MicroVM\n"
+        archive = self.archive.read_bytes()
+        for action in ["debug", "release", "start", "stop", "restart"]:
+            with self.subTest(action=action):
+                self.archive.write_bytes(archive)
+                (self.root / "vm-units").write_text(listing)
+                (self.root / "events").unlink(missing_ok=True)
+                result = self.run_guest(action)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.root / "vm-units").read_text(), listing)
+                self.assertNotIn(vm, (self.root / "events").read_text())
+
+    def test_failed_vm_listing_or_stop_preserves_development_deployment(self):
+        self.assertEqual(self.run_guest().returncode, 0)
+        previous = (self.binaries / "bin").resolve()
+        override = self.override().read_text()
+        vm = "firecrab-vm-9ef8f079dfb345918d349954213dc41e.service"
+        for action in ["clean", "restore"]:
+            for failure in ["VM_LIST_FAIL", "VM_STOP_FAIL"]:
+                with self.subTest(action=action, failure=failure):
+                    (self.root / "vm-units").write_text(f"{vm} loaded active running MicroVM\n")
+                    events = self.root / "events"
+                    events.unlink(missing_ok=True)
+                    result = self.run_guest(action, **{failure: 1})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("[ROLLBACK]", result.stderr)
+                    self.assertNotIn("development files cleaned", result.stdout)
+                    self.assertEqual((self.binaries / "bin").resolve(), previous)
+                    self.assertEqual(self.override().read_text(), override)
+                    self.assertTrue((self.cache / "source/firecrab-api/src/main.rs").exists())
+                    self.assertTrue((self.cache / "target").is_dir())
+                    self.assertTrue((self.root / "vm-units").read_text())
+                    self.assertNotIn("stop firecrab-helper", events.read_text().splitlines())
+
+    def test_clean_releases_the_previous_vm_resource_before_start_and_is_repeatable(self):
+        resource = self.root / "tap-lock"
+        holder = subprocess.Popen(["python3", "-c", """
+import fcntl, pathlib, sys, time
+resource = pathlib.Path(sys.argv[1])
+with resource.open('w') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    resource.with_name('vm-ready').touch()
+    time.sleep(60)
+""", str(resource)])
+        def stop_holder():
+            if holder.poll() is None:
+                holder.kill()
+            holder.wait(timeout=5)
+        self.addCleanup(stop_holder)
+        deadline = time.monotonic() + 5
+        while not (self.root / "vm-ready").exists():
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        (self.root / "vm-runtime-pid").write_text(str(holder.pid))
+        vm = "firecrab-vm-9ef8f079dfb345918d349954213dc41e.service"
+        (self.root / "vm-units").write_text(f"{vm} loaded active running MicroVM\n")
+        for _ in range(2):
+            result = self.run_guest("clean")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIsNotNone(holder.poll(), "clean left the previous VM running")
+            result = self.run_guest("start")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with resource.open('w') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_controls_preserve_deployment_and_do_not_build(self):
         for legacy in [0, 1]:
