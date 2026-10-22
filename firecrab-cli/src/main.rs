@@ -11,11 +11,14 @@ mod image;
 mod info;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod micromanager;
+mod microservice;
 mod network;
+mod pipe;
 #[cfg(target_os = "linux")]
 mod service;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 mod shell;
+mod stack;
 #[cfg(target_os = "linux")]
 mod status;
 #[cfg(target_os = "linux")]
@@ -39,6 +42,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Validate a declarative stack file locally, without connecting to a host.
+    Stack {
+        #[command(subcommand)]
+        command: stack::Command,
+    },
+    /// Manage desired MicroService configurations through the host API.
+    Microservice {
+        #[command(subcommand)]
+        command: microservice::Command,
+    },
+    /// Configure the independent ingress and Cloudflare Tunnel services.
+    Pipe {
+        #[command(subcommand)]
+        command: pipe::Command,
+    },
     /// Diagnose host readiness for firecrab (KVM, nft, dnsmasq, UFW, ...).
     #[cfg(target_os = "linux")]
     Doctor {
@@ -121,6 +139,19 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Stack { command } => stack::run(command),
+        Command::Microservice { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                microservice::run(client, command)
+            })
+        }
+        Command::Pipe { command } => match pipe::run(command) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("[ERROR] {error}");
+                1
+            }
+        },
         #[cfg(target_os = "linux")]
         Command::Doctor { digest, json } => run_doctor(digest, json),
         #[cfg(target_os = "linux")]
@@ -634,11 +665,15 @@ mod tests {
             "repair",
             "start",
             "stop",
+            "restart",
             "status",
             "validate",
             "dev",
         ] {
             assert!(Cli::try_parse_from(["firecrab", "service", action]).is_ok());
+        }
+        for action in ["start", "stop", "restart", "clean"] {
+            assert!(Cli::try_parse_from(["firecrab", "service", "dev", action]).is_ok());
         }
         #[cfg(target_os = "macos")]
         {

@@ -77,6 +77,10 @@ pub fn run(command: Command) -> Result<i32, Error> {
         }
         Command::Start => run_start(),
         Command::Stop => run_stop(),
+        Command::Restart => {
+            run_stop()?;
+            run_start()
+        }
         Command::Status => run_status(),
         Command::Debug { json, logs, tail } => run_debug(debug::Options::new(json, logs, tail)),
         Command::Doctor { json } => run_doctor(json),
@@ -108,7 +112,7 @@ pub fn run(command: Command) -> Result<i32, Error> {
             restore,
             yes,
         } => match command {
-            Some(command) => run_dev_control(command),
+            Some(command) => run_dev_control(&lifecycle::Layout::from_process_env()?, command),
             None => run_dev(source.as_deref(), release, restore, yes),
         },
     }
@@ -265,12 +269,16 @@ fn run_dev(
     Ok(0)
 }
 
-fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
-    if !wsl::is_running(DISTRO_NAME) {
+fn run_dev_control(layout: &lifecycle::Layout, command: DevCommand) -> Result<i32, Error> {
+    if wsl::is_running(DISTRO_NAME) {
+        dev::control(command)?;
+    } else if command != DevCommand::Stop {
         return Err(Error::GuestNotRunning);
     }
-    dev::control(command)?;
-    let layout = lifecycle::Layout::from_process_env()?;
+    if command == DevCommand::Clean {
+        dashboard::clean(&layout.managed_home).map_err(super::dev::Error::from)?;
+        return Ok(0);
+    }
     if command != DevCommand::Start {
         dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?;
     }
@@ -284,7 +292,6 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
 fn run_stop() -> Result<i32, Error> {
     match lifecycle::Layout::from_process_env() {
         Ok(layout) => {
-            dashboard::stop(&layout.managed_home).map_err(super::dev::Error::from)?;
             #[cfg(target_os = "windows")]
             if super::controller::active(&layout.managed_home) {
                 super::controller::stop(&layout.managed_home)?;
@@ -532,6 +539,25 @@ fn shell_arguments(command: &[String]) -> Vec<String> {
     arguments
 }
 
+/// Non-interactive stdin transport; PowerShell never converts credential bytes.
+pub(crate) fn run_guest_command(
+    command: &[String],
+    input: Option<std::fs::File>,
+) -> Result<i32, Error> {
+    if !wsl::contains(&wsl::distributions(), DISTRO_NAME) {
+        return Err(Error::NotInstalled);
+    }
+    let stdin = input
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(std::process::Stdio::null);
+    let status = std::process::Command::new("wsl.exe")
+        .args(shell_arguments(command))
+        .stdin(stdin)
+        .status()
+        .map_err(Error::Console)?;
+    Ok(status.code().unwrap_or(1))
+}
+
 /// Without `--purge` the distribution stays registered, so its Firecrab data
 /// and the managed home survive for the next install, as on macOS.
 fn run_uninstall(layout: &lifecycle::Layout, purge: bool) -> Result<i32, Error> {
@@ -654,7 +680,12 @@ mod tests {
 
     #[test]
     fn dev_controls_use_the_running_guest_without_changing_micro_manager() {
-        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+        for command in [
+            DevCommand::Start,
+            DevCommand::Stop,
+            DevCommand::Restart,
+            DevCommand::Clean,
+        ] {
             let action = command.as_str();
             let wsl = fake::answer(move |line| match line {
                 "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
@@ -672,13 +703,14 @@ mod tests {
 
     #[test]
     fn dev_controls_do_not_boot_a_stopped_guest() {
-        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+        let (_directory, layout) = layout();
+        for command in [DevCommand::Start, DevCommand::Restart, DevCommand::Clean] {
             let wsl = fake::answer(|line| match line {
                 "wsl.exe --list --running --quiet" => Ok("Debian\n".into()),
                 other => panic!("dev control booted a guest: {other}"),
             });
             assert!(matches!(
-                run_dev_control(command),
+                run_dev_control(&layout, command),
                 Err(Error::GuestNotRunning)
             ));
             assert_eq!(wsl.calls().len(), 1);
@@ -687,16 +719,76 @@ mod tests {
 
     #[test]
     fn dev_control_failure_is_reported_without_starting_micro_manager() {
+        let (_directory, layout) = layout();
         let wsl = fake::answer(|line| match line {
             "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
             l if l.contains("--exec bash -s -- restart") => Err("restart failed".into()),
             other => panic!("dev control changed the host: {other}"),
         });
         assert!(matches!(
-            run_dev_control(DevCommand::Restart),
+            run_dev_control(&layout, DevCommand::Restart),
             Err(Error::Wsl(_))
         ));
         assert_eq!(wsl.calls().len(), 2);
+    }
+
+    #[test]
+    fn dev_stop_succeeds_after_the_management_vm_is_stopped() {
+        let (_directory, layout) = layout();
+        let wsl = fake::answer(|line| match line {
+            "wsl.exe --list --running --quiet" => Ok(String::new()),
+            other => panic!("dev stop booted the management VM: {other}"),
+        });
+        assert_eq!(run_dev_control(&layout, DevCommand::Stop).unwrap(), 0);
+        assert_eq!(wsl.calls().len(), 1);
+
+        // A stopped VM must not skip dashboard cleanup.
+        std::fs::write(
+            layout.runtime().join("dev-dashboard.json"),
+            "invalid session",
+        )
+        .unwrap();
+        assert!(matches!(
+            run_dev_control(&layout, DevCommand::Stop),
+            Err(Error::Dev(_))
+        ));
+    }
+
+    #[test]
+    fn dev_clean_removes_dashboard_state_without_source_or_vm_lifecycle_commands() {
+        let (_directory, layout) = layout();
+        for name in ["dev-dashboard.mjs", "dev-dashboard.log"] {
+            std::fs::write(layout.runtime().join(name), "development state").unwrap();
+        }
+        let wsl = fake::answer(|line| match line {
+            "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+            "wsl.exe -d firecrab-debian -u root --exec bash -s -- clean" => Ok(String::new()),
+            other => panic!("dev clean changed the management VM or built sources: {other}"),
+        });
+        assert_eq!(run_dev_control(&layout, DevCommand::Clean).unwrap(), 0);
+        assert_eq!(wsl.calls().len(), 2);
+        assert!(!layout.runtime().join("dev-dashboard.mjs").exists());
+        assert!(!layout.runtime().join("dev-dashboard.log").exists());
+    }
+
+    #[test]
+    fn failed_guest_clean_preserves_host_dashboard_state() {
+        let (_directory, layout) = layout();
+        let state = layout.runtime().join("dev-dashboard.json");
+        std::fs::write(&state, "preserved").unwrap();
+        let wsl = fake::answer(|line| match line {
+            "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+            "wsl.exe -d firecrab-debian -u root --exec bash -s -- clean" => {
+                Err("restore failed".into())
+            }
+            other => panic!("dev clean continued after failure: {other}"),
+        });
+        assert!(matches!(
+            run_dev_control(&layout, DevCommand::Clean),
+            Err(Error::Wsl(_))
+        ));
+        assert_eq!(wsl.calls().len(), 2);
+        assert_eq!(std::fs::read_to_string(state).unwrap(), "preserved");
     }
 
     #[test]
@@ -708,6 +800,53 @@ mod tests {
             run(Command::Start),
             Err(Error::Daemon(daemon::Error::NotInstalled))
         ));
+    }
+
+    #[test]
+    fn restart_stops_the_management_vm_before_starting_it() {
+        let mut queries = 0;
+        let wsl = fake::answer(move |line| match line {
+            l if l.starts_with("schtasks.exe /Query") => {
+                queries += 1;
+                if queries == 1 {
+                    Ok(ENABLED.into())
+                } else {
+                    // Registration disappears after shutdown; start must report it.
+                    Err("not found".into())
+                }
+            }
+            "wsl.exe --list --running --quiet" => Ok("firecrab-debian\n".into()),
+            l if l.starts_with("schtasks.exe /Change") || l.starts_with("schtasks.exe /End") => {
+                Ok(String::new())
+            }
+            l if l.contains("systemctl stop firecrab-api") => Ok(String::new()),
+            "wsl.exe --terminate firecrab-debian" => Ok(String::new()),
+            other => panic!("management restart invoked a development command: {other}"),
+        });
+        assert!(matches!(
+            run(Command::Restart),
+            Err(Error::Daemon(daemon::Error::NotInstalled))
+        ));
+        let calls = wsl.calls();
+        let terminate = calls
+            .iter()
+            .position(|call| call == "wsl.exe --terminate firecrab-debian")
+            .unwrap();
+        assert_eq!(terminate, calls.len() - 2);
+        assert!(calls.last().unwrap().starts_with("schtasks.exe /Query"));
+    }
+
+    #[test]
+    fn restart_does_not_start_the_management_vm_after_stop_fails() {
+        let wsl = fake::answer(|line| match line {
+            l if l.starts_with("schtasks.exe /Query") => Ok(ENABLED.into()),
+            "schtasks.exe /Change /TN Firecrab\\microManager /DISABLE" => {
+                Err("disable failed".into())
+            }
+            other => panic!("restart continued after stop failed: {other}"),
+        });
+        assert!(matches!(run(Command::Restart), Err(Error::Daemon(_))));
+        assert_eq!(wsl.calls().len(), 2);
     }
 
     #[test]

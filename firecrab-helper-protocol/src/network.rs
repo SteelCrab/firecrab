@@ -126,6 +126,8 @@ pub const UNIT_CPU_QUOTA_PERCENT: RangeInclusive<u32> = 100..=6_400;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum NetworkRequest {
+    /// Fixed pipe controls; no arbitrary command or host paths.
+    Pipe { request: crate::pipe::Operation },
     /// Idempotently ensure the shared bridge/subnet/gateway exist.
     EnsureBridge,
     /// Idempotently ensure a MicroNetwork's own bridge/subnet/gateway exist
@@ -599,6 +601,9 @@ pub struct NetworkResponseEnvelope {
     pub request_id: Uuid,
     /// Outcome of processing the request.
     pub result: Result<(), HelperFailure>,
+    /// Optional data for pipe inspection; absent in older responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipe: Option<crate::pipe::Snapshot>,
 }
 
 #[cfg(test)]
@@ -805,6 +810,7 @@ mod tests {
     #[test]
     fn response_result_round_trips() {
         let failure = NetworkResponseEnvelope {
+            pipe: None,
             version: PROTOCOL_VERSION,
             request_id: Uuid::nil(),
             result: Err(HelperFailure::UnsupportedVersion { supported: 1 }),
@@ -866,6 +872,7 @@ mod tests {
             },
         ] {
             let envelope = NetworkResponseEnvelope {
+                pipe: None,
                 version: PROTOCOL_VERSION,
                 request_id: Uuid::nil(),
                 result: Err(failure.clone()),

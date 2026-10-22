@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { expect, test, type Page } from "@playwright/test";
 
 import { ApiCleanup } from "../src/api.js";
+import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
   apiUrl,
   DHCP_FIXED_ALIAS,
@@ -251,15 +252,14 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
   await expect(page).toHaveURL(/#\/vms$/);
   await expect(page.getByText(`Created: ${DHCP_VM_NAME}`)).toBeVisible({ timeout: 30_000 });
 
-  const row = page.locator("table.vm-table tbody tr", { hasText: DHCP_VM_NAME });
+  const row = page.locator("table.vm-list tbody tr", { hasText: DHCP_VM_NAME });
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await row.getByRole("menuitem", { name: "start" }).click();
   await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
   if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
-    await row.locator("button.link-button").click();
-    await expect(page.locator(".vm-detail-heading")).toBeVisible();
+    await openVmTab(page, row, "Log");
     const logText = (await page.locator("pre.detail-log").textContent()) ?? "";
     const banner = (await page.locator(".banner").textContent().catch(() => "")) ?? "";
     throw new Error(
@@ -267,16 +267,18 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
     );
   }
 
-  await row.locator("button.link-button").click();
+  await openVmTab(page, row, "Log");
   const log = page.locator("pre.detail-log");
   await expect(log).toContainText(NETWORK_READY, { timeout: 30_000 });
   await expect(log).not.toContainText(NETWORK_FAILED);
   await expect(log).toContainText(sentinel(), { timeout: 60_000 });
-  await expect(page.locator("dt").filter({ hasText: /^ip$/ }).locator("+ dd")).toContainText(
-    /^172\.30\.94\./,
+  await vmPanel(page).getByRole("tab", { name: /^Network/ }).click();
+  await expect(vmPanel(page).locator(".props dt").filter({ hasText: /^IPv4$/ }).locator("+ dd")).toContainText(
+    /172\.30\.94\./,
   );
-  await expect(page.locator("dt", { hasText: /^ports$/ })).toBeVisible();
-  await expect(page.getByText(`80:${DHCP_HOST_PORT}/tcp`)).toBeVisible();
+  const ports = vmPanel(page).getByRole("region", { name: "Port forwarding" });
+  await expect(ports.locator(".kv-row").filter({ hasText: String(DHCP_HOST_PORT) })).toContainText("80");
+  await expect(ports.locator(".kv-row").filter({ hasText: String(DHCP_HOST_PORT) })).toContainText("tcp");
 
   const vms = await api.listVms();
   const vm = vms.find((row) => row.name === DHCP_VM_NAME);
@@ -295,19 +297,24 @@ test("boots the imported dual-stack guest and authenticates SSH over IPv4 and IP
     ]),
   );
 
-  await expect(page.getByRole("button", { name: /Download key|키 다운로드/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
-  await page.locator(".console-panel > .console-bar .console-close").click();
-  await expect(page.locator(".console-overlay")).toHaveCount(0);
+  // The detail is a side panel, not a modal: nothing covers the list.
+  await expect(page.locator(".ssh-overlay")).toHaveCount(0);
+  // Its SSH button opens the same dialog as the row menu below.
+  await vmPanel(page).getByRole("button", { name: "SSH", exact: true }).click();
+  const panelSsh = page.getByRole("dialog", { name: new RegExp(`SSH — ${DHCP_VM_NAME}`) });
+  await expect(panelSsh.getByRole("button", { name: /Download |다운로드/ })).toBeVisible();
+  await expect(panelSsh.getByRole("button", { name: /Copy key|키 복사/ })).toBeVisible();
+  await panelSsh.getByRole("button", { name: /^(Close|닫기)$/ }).click();
+  await expect(panelSsh).toHaveCount(0);
 
   // SSH from the VM list: Actions → SSH connect opens a dialog with the panel.
   await openEnglish(page, "/#/vms");
-  const sshRow = page.locator("table.vm-table tbody tr", { hasText: DHCP_VM_NAME });
+  const sshRow = page.locator("table.vm-list tbody tr", { hasText: DHCP_VM_NAME });
   await sshRow.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await sshRow.getByRole("menuitem", { name: /SSH connect|SSH 연결/ }).click();
   const sshDialog = page.getByRole("dialog", { name: new RegExp(`SSH — ${DHCP_VM_NAME}`) });
   await expect(sshDialog.locator(".console-ssh-block-label", { hasText: /^fingerprint$/i })).toBeVisible();
-  await sshDialog.getByRole("button", { name: "✕" }).click();
+  await sshDialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(sshDialog).toHaveCount(0);
 
   await openEnglish(page, `/#/console/${detail!.id}`);

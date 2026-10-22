@@ -97,6 +97,8 @@ const DISK_PREP_CONCURRENCY: usize = 2;
 /// table, template registry, and runtime config.
 #[derive(Debug, Clone)]
 pub struct AppState {
+    /// Port of the bound HTTP listener, set before serving requests.
+    pub(crate) api_port: u16,
     /// In-memory cache of every VM record, mirrored to [`AppState::store`].
     pub vms: Arc<Mutex<HashMap<Uuid, VmRecord>>>,
     /// Results from startup or explicit network retry; never persisted as live health.
@@ -105,6 +107,10 @@ pub struct AppState {
     pub templates: Arc<TemplateRegistry>,
     /// SQLite-backed durable storage.
     pub(crate) store: Store,
+    /// Short configuration/operation claims; never held while booting a guest.
+    pub(crate) service_mutations: Arc<AsyncMutex<()>>,
+    /// One image/VM deployment at a time bounds replica surge on one host.
+    pub(crate) service_deploy_permits: Arc<Semaphore>,
     /// Live VM id -> its running Firecracker process handle.
     pub(crate) processes: Arc<Mutex<HashMap<Uuid, VmProcess>>>,
     /// Environment-derived runtime settings.
@@ -129,6 +135,9 @@ pub struct AppState {
     pub(crate) bootstraps: crate::bootstrap::BootstrapTracker,
     /// Async OCI import jobs (`POST /api/oci/import`).
     pub(crate) oci_imports: ImageInstallTracker,
+    /// Original OCI transfers run separately from M2Image conversion.
+    pub(crate) registry_transfers: ImageInstallTracker,
+    pub(crate) registry_transfer_permits: Arc<Semaphore>,
     /// Async MicroRegistry register jobs (`POST /api/microregistry/register`).
     pub(crate) microregistry_registers: ImageInstallTracker,
     /// Previous `/proc` jiffy samples used to derive host-process CPU %.
@@ -166,9 +175,12 @@ impl AppState {
         let network = NetworkClient::from_env();
         let runtime = RuntimeConfig::from_defaults(&storage, &network);
         Ok(AppState {
+            api_port: 5523,
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            service_mutations: Arc::new(AsyncMutex::new(())),
+            service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),
             reconciliation: Arc::new(Mutex::new(HashMap::new())),
             runtime: Arc::new(runtime),
@@ -181,6 +193,8 @@ impl AppState {
             kernel_installs: ImageInstallTracker::from_env(),
             bootstraps: crate::bootstrap::BootstrapTracker::default(),
             oci_imports: ImageInstallTracker::default(),
+            registry_transfers: ImageInstallTracker::default(),
+            registry_transfer_permits: Arc::new(Semaphore::new(2)),
             microregistry_registers: ImageInstallTracker::default(),
             process_metrics: Arc::new(Mutex::new(ProcessMetricsTracker::default())),
             update_check: Arc::new(AsyncMutex::new(None)),

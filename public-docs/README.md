@@ -20,6 +20,8 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Task | Guide |
 | --- | --- |
 | Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
+| Configure and manage an app | [MicroService](guides/microservices.md) |
+| Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
 | Configure subnets, internet access, and IPv6 | [Networking](guides/networking.md) |
 | Choose a disk location and back up VM data | [Storage](guides/storage.md) |
 | Set management VM CPU, RAM, disk, and networking | [microManager resources](guides/micromanager-resources.md) |
@@ -28,6 +30,10 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Import a container image | [OCI images](guides/oci.md) |
 | Install or change a guest kernel | [Kernels](guides/kernels.md) |
 | Configure services, upgrade, or uninstall | [Operations](guides/operations.md) |
+| Route domains and paths across apps | [Pipe ingress and tunnel](guides/pipe.md) |
+| Connect AWS and GitHub accounts to Pipe services | [Pipe Auth](guides/pipe-auth.md) |
+| Connect and browse an existing database | [Pipe databases](guides/pipe-databases.md) |
+| Pull images from Docker Hub, GHCR or Amazon ECR | [Pipe Registry](guides/pipe-registry.md) |
 | Diagnose a failure | [Troubleshooting](guides/troubleshooting.md) |
 
 ## Reference

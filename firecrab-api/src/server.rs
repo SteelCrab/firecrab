@@ -181,7 +181,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // stay open far longer than `enforce_limits`' request timeout allows,
     // and a request body limit means nothing for an upgraded connection.
     // Everything else keeps the full REST stack (CORS, body limit,
-    // timeout/concurrency), except recovery and inspection below; every sub-router
+    // timeout/concurrency), except setup, recovery and inspection below; every sub-router
     // still gets origin enforcement and request-id tagging, applied after
     // the merge below.
     //
@@ -191,6 +191,24 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // inspecting each request's Upgrade header, so an HTTP-proxied `/api`
     // prefix and a WS-proxied path can't overlap.
     let rest = Router::new()
+        .route(
+            "/api/micro-services",
+            get(handlers::micro_services::list).post(handlers::micro_services::create),
+        )
+        .route(
+            "/api/micro-services/{id}",
+            get(handlers::micro_services::get)
+                .put(handlers::micro_services::update)
+                .delete(handlers::micro_services::delete),
+        )
+        .route(
+            "/api/micro-services/{id}/deployment",
+            get(crate::service_runtime::get).post(crate::service_runtime::deploy),
+        )
+        .route(
+            "/api/micro-services/{id}/stop",
+            post(crate::service_runtime::stop),
+        )
         .route(
             "/api/vms",
             get(handlers::vms::list_vms).post(handlers::vms::create_vm_route),
@@ -223,6 +241,53 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::micromanager::activity),
         )
         .route("/api/info", get(handlers::info::get_info))
+        .route(
+            "/api/pipe",
+            get(handlers::pipe::inspect).put(handlers::pipe::apply),
+        )
+        .route("/api/pipe/disable", post(handlers::pipe::disable))
+        .route("/api/pipe/auth", get(handlers::pipe_auth::list))
+        .route(
+            "/api/pipe/auth/{provider}",
+            axum::routing::put(handlers::pipe_auth::save).delete(handlers::pipe_auth::delete),
+        )
+        .route(
+            "/api/pipe/databases",
+            get(handlers::pipe_databases::list).post(handlers::pipe_databases::create),
+        )
+        .route(
+            "/api/pipe/databases/test",
+            post(handlers::pipe_databases::test),
+        )
+        .route(
+            "/api/pipe/databases/{id}",
+            delete(handlers::pipe_databases::delete),
+        )
+        .route(
+            "/api/pipe/databases/{id}/tables",
+            get(handlers::pipe_databases::tables),
+        )
+        .route(
+            "/api/pipe/databases/{id}/preview",
+            post(handlers::pipe_databases::preview),
+        )
+        .route("/api/pipe/registries", get(handlers::registries::list))
+        .route(
+            "/api/pipe/registries/{registry}",
+            axum::routing::put(handlers::registries::save).delete(handlers::registries::delete),
+        )
+        .route(
+            "/api/pipe/registry-images",
+            get(handlers::registries::images),
+        )
+        .route(
+            "/api/pipe/registry-transfers",
+            post(handlers::registries::transfer),
+        )
+        .route(
+            "/api/pipe/registry-transfers/{id}",
+            get(handlers::registries::job),
+        )
         // GET and POST share one path, matching this router's existing shape
         // for "read this resource / start work on it" pairs such as
         // `/api/images/{alias}/install`.
@@ -368,12 +433,47 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
-    // Network recovery keeps that stack minus the deadline. A retry makes up
-    // to three attempts at several helper calls (5 s each) behind the lock VM
-    // starts and stops take, so it can outlast the deadline; a 504 would drop
-    // it partway and skip recording its results instead of answering the
-    // documented `204`/`503`.
+    // Recovery, tunnel setup and service controls retain the REST protections except
+    // the short deadline. Their helper clients have their own bounded waits;
+    // dropping setup during engine installation would return an early 504.
     let recovery = Router::new()
+        .route("/api/pipe/service", post(handlers::pipe::control))
+        .route(
+            "/api/pipe/firecrab-tunnels",
+            post(handlers::pipe::save_firecrab_tunnel),
+        )
+        .route(
+            "/api/pipe/firecrab-tunnels/{subdomain}",
+            delete(handlers::pipe::delete_firecrab_tunnel),
+        )
+        .route(
+            "/api/pipe/cloudflare/zones",
+            post(handlers::cloudflare::zones),
+        )
+        .route(
+            "/api/pipe/cloudflare/connect",
+            post(handlers::cloudflare::connect),
+        )
+        .route(
+            "/api/pipe/cloudflare/disconnect",
+            post(handlers::cloudflare::disconnect),
+        )
+        .route(
+            "/api/pipe/quick-tunnel",
+            post(handlers::pipe::connect_quick_tunnel),
+        )
+        .route(
+            "/api/pipe/quick-tunnels",
+            post(handlers::pipe::save_quick_tunnel),
+        )
+        .route(
+            "/api/pipe/quick-tunnels/{id}",
+            delete(handlers::pipe::delete_quick_tunnel),
+        )
+        .route(
+            "/api/pipe/quick-tunnels/{id}/service",
+            post(handlers::pipe::control_quick_tunnel),
+        )
         .route(
             "/api/network/reconcile",
             post(handlers::network::reconcile_network),
@@ -390,6 +490,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // same concurrency pool, body limit, CORS and origin checks as other REST.
     let inspection = Router::new()
         .route("/api/oci/inspect", get(handlers::oci::inspect_oci_image))
+        .route(
+            "/api/pipe/registries/{registry}/repositories",
+            get(handlers::registries::repositories),
+        )
+        .route("/api/pipe/registry-tags", get(handlers::registries::tags))
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -739,6 +844,296 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn quick_tunnel_rejects_invalid_or_credential_bearing_requests_before_helper_calls() {
+        use serde_json::json;
+        use tower::ServiceExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = test_state(directory.path()).await;
+        state.network = crate::network::NetworkClient::with_socket_path(
+            directory.path().join("unused-helper.sock"),
+        );
+        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let app = build_router(state, &config);
+        let valid = json!({"config":{"routes":[],"quickTunnel":{"upstreams":["172.30.1.2:80"]}}});
+        let mut both = valid.clone();
+        both["config"]["tunnel"] = json!({"id":"11111111-1111-4111-8111-111111111111","credentialsFile":"credentials.json"});
+        let mut oversized = valid.clone();
+        oversized["config"]["routes"] =
+            json!([{"host":"x".repeat(48 * 1024),"upstreams":["172.30.1.2:80"]}]);
+        let mut credentials = valid.clone();
+        credentials["apiToken"] = json!("not-required");
+        for (body, status) in [
+            (
+                json!({"config":{"routes":[]}}),
+                axum::http::StatusCode::BAD_REQUEST,
+            ),
+            (
+                json!({"config":{"routes":[],"quickTunnel":{"upstreams":[]}}}),
+                axum::http::StatusCode::BAD_REQUEST,
+            ),
+            (both, axum::http::StatusCode::BAD_REQUEST),
+            (oversized, axum::http::StatusCode::BAD_REQUEST),
+            (credentials, axum::http::StatusCode::UNPROCESSABLE_ENTITY),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/api/pipe/quick-tunnel")
+                        .header(header::HOST, "localhost:3000")
+                        .header(header::ORIGIN, "http://localhost:3000")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+        }
+    }
+
+    #[tokio::test]
+    async fn quick_tunnel_keeps_origin_protection_and_waits_past_the_short_rest_deadline() {
+        use firecrab_helper_protocol::framing::{read_frame, write_frame};
+        use firecrab_helper_protocol::network::{
+            NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope,
+        };
+        use firecrab_helper_protocol::pipe::{
+            Operation, QuickConnectRequest, QuickTunnelStatus, Snapshot,
+        };
+        use tower::ServiceExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("quick-helper.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let request: QuickConnectRequest = serde_json::from_value(serde_json::json!({
+            "config": { "routes": [], "quickTunnel": { "upstreams": ["172.30.1.2:80"] } }
+        }))
+        .unwrap();
+        let expected_request = request.clone();
+        let snapshot = Snapshot {
+            firecrab_tunnels: Vec::new(),
+            config: Some(request.config.clone()),
+            units: Vec::new(),
+            nginx_available: true,
+            cloudflared_available: true,
+            quick_tunnel: Some(QuickTunnelStatus {
+                public_url: Some("https://example.trycloudflare.com".into()),
+            }),
+            quick_tunnels: Vec::new(),
+        };
+        let helper_snapshot = snapshot.clone();
+        let helper = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+            assert_eq!(
+                envelope.request,
+                NetworkRequest::Pipe {
+                    request: Operation::ConnectQuickTunnel {
+                        request: expected_request
+                    }
+                }
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            write_frame(
+                &mut stream,
+                &NetworkResponseEnvelope {
+                    version: firecrab_helper_protocol::PROTOCOL_VERSION,
+                    request_id: envelope.request_id,
+                    result: Ok(()),
+                    pipe: Some(helper_snapshot),
+                },
+            )
+            .await
+            .unwrap();
+        });
+        let mut state = test_state(directory.path()).await;
+        state.network = crate::network::NetworkClient::with_socket_path(socket);
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        config.request_timeout = Duration::from_millis(10);
+        let app = build_router(state, &config);
+        for (origin, expected_status) in [
+            (
+                "http://untrusted.invalid",
+                axum::http::StatusCode::FORBIDDEN,
+            ),
+            ("http://localhost:3000", axum::http::StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/api/pipe/quick-tunnel")
+                        .header(header::HOST, "localhost:3000")
+                        .header(header::ORIGIN, origin)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(
+                            serde_json::to_vec(&request).unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status);
+            if expected_status == axum::http::StatusCode::OK {
+                let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Snapshot>(&bytes).unwrap(),
+                    snapshot
+                );
+            }
+        }
+        helper.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pipe_service_rejects_unknown_services_actions_and_fields() {
+        use tower::ServiceExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = test_state(directory.path()).await;
+        state.network = crate::network::NetworkClient::with_socket_path(
+            directory.path().join("unused-helper.sock"),
+        );
+        let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        let app = build_router(state, &config);
+        for body in [
+            r#"{"service":"firecrab-api.service","action":"stop"}"#,
+            r#"{"service":"ingress","action":"reload"}"#,
+            r#"{"service":"tunnel","action":"stop","unit":"sshd.service"}"#,
+            r#"{"service":"ingress"}"#,
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri("/api/pipe/service")
+                        .header(header::HOST, "localhost:3000")
+                        .header(header::ORIGIN, "http://localhost:3000")
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                "{body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pipe_service_preserves_origin_checks_and_outlasts_the_rest_deadline() {
+        use firecrab_helper_protocol::framing::{read_frame, write_frame};
+        use firecrab_helper_protocol::network::{
+            NetworkRequest, NetworkRequestEnvelope, NetworkResponseEnvelope,
+        };
+        use firecrab_helper_protocol::pipe::{
+            Operation, Service, ServiceAction, ServiceRequest, Snapshot,
+        };
+        use tower::ServiceExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("pipe-helper.sock");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let requests = [Service::Ingress, Service::Tunnel]
+            .into_iter()
+            .flat_map(|service| {
+                [
+                    ServiceAction::Start,
+                    ServiceAction::Stop,
+                    ServiceAction::Restart,
+                ]
+                .into_iter()
+                .map(move |action| ServiceRequest { service, action })
+            })
+            .collect::<Vec<_>>();
+        let expected_requests = requests.clone();
+        let snapshot = Snapshot {
+            firecrab_tunnels: Vec::new(),
+            config: None,
+            units: Vec::new(),
+            nginx_available: true,
+            cloudflared_available: false,
+            quick_tunnel: None,
+            quick_tunnels: Vec::new(),
+        };
+        let helper_snapshot = snapshot.clone();
+        let helper = tokio::spawn(async move {
+            for request in expected_requests {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let envelope: NetworkRequestEnvelope = read_frame(&mut stream).await.unwrap();
+                assert_eq!(
+                    envelope.request,
+                    NetworkRequest::Pipe {
+                        request: Operation::Control { request }
+                    }
+                );
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                write_frame(
+                    &mut stream,
+                    &NetworkResponseEnvelope {
+                        version: firecrab_helper_protocol::PROTOCOL_VERSION,
+                        request_id: envelope.request_id,
+                        result: Ok(()),
+                        pipe: Some(helper_snapshot.clone()),
+                    },
+                )
+                .await
+                .unwrap();
+            }
+        });
+        let mut state = test_state(directory.path()).await;
+        state.network = crate::network::NetworkClient::with_socket_path(socket);
+        let mut config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
+        config.request_timeout = Duration::from_millis(10);
+        let app = build_router(state, &config);
+        for (origin, expected_status) in [
+            (
+                "http://untrusted.invalid",
+                axum::http::StatusCode::FORBIDDEN,
+            ),
+            ("http://localhost:3000", axum::http::StatusCode::OK),
+        ] {
+            for request in &requests {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri("/api/pipe/service")
+                            .header(header::HOST, "localhost:3000")
+                            .header(header::ORIGIN, origin)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(axum::body::Body::from(serde_json::to_vec(request).unwrap()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), expected_status);
+                if expected_status == axum::http::StatusCode::OK {
+                    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                        .await
+                        .unwrap();
+                    assert_eq!(serde_json::from_slice::<Snapshot>(&body).unwrap(), snapshot);
+                }
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(1), helper)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn without_a_static_root_every_unknown_path_is_a_json_404() {
         let directory = tempfile::tempdir().unwrap();
         let config = HttpConfig::from_values("127.0.0.1:3000", "", false, false).unwrap();
@@ -902,4 +1297,109 @@ mod tests {
             Some(&HeaderValue::from_static("http://localhost:8080"))
         );
     }
+    #[tokio::test]
+    async fn registry_deletion_is_idempotent_for_harbor_hosts_and_rejects_invalid_hosts() {
+        use axum::http::StatusCode;
+        use tower::ServiceExt;
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
+                .unwrap();
+        let app = build_router(test_state(dir.path()).await, &config);
+        for (host, status) in [
+            ("untrusted.invalid", StatusCode::OK),
+            ("untrusted.invalid", StatusCode::OK),
+            ("invalid@host", StatusCode::BAD_REQUEST),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("DELETE")
+                        .uri(format!("/api/pipe/registries/{host}"))
+                        .header("origin", "http://localhost:8080")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{host}");
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_routes_keep_origin_protection_and_never_return_login_secrets() {
+        use axum::http::StatusCode;
+        use tower::ServiceExt;
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
+                .unwrap();
+        let app = build_router(test_state(dir.path()).await, &config);
+        for (origin, status) in [
+            ("https://untrusted.invalid", StatusCode::FORBIDDEN),
+            ("http://localhost:8080", StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/api/pipe/registries/ghcr.io")
+                        .header("origin", origin)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"username":"octocat","secret":"test-token"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let body = axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains("test-token"));
+        }
+        let (status, body) = get(&app, "/api/pipe/registries").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("octocat"));
+        assert!(!body.contains("test-token"));
+        let (status, body) = get(&app, "/api/pipe/registry-images").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "[]");
+        let (status, _) = get(
+            &app,
+            "/api/pipe/registry-tags?reference=untrusted.invalid/team/app:v1",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        for uri in [
+            "/api/pipe/registries/untrusted.invalid/repositories?namespace=team",
+            "/api/pipe/registries/docker.io/repositories?namespace=library",
+            "/api/pipe/registries/registry-1.docker.io/repositories?namespace=library",
+            "/api/pipe/registries/ghcr.io/repositories?namespace=..%2Fteam",
+            "/api/pipe/registries/docker.io/repositories?namespace=team&page=0",
+            "/api/pipe/registries/docker.io/repositories?namespace=team&page=10001",
+        ] {
+            let (status, _) = get(&app, uri).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        }
+        let (status, body) = get(&app, "/api/pipe/registries/public.ecr.aws/repositories").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({
+                "repositories": [], "nextPage": null, "listingSupported": false,
+            })
+        );
+    }
 }
+
+#[cfg(test)]
+#[path = "server_quick_tunnels_tests.rs"]
+mod quick_tunnels_tests;
+
+#[cfg(test)]
+#[path = "server_pipe_auth_tests.rs"]
+mod pipe_auth_tests;

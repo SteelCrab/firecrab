@@ -58,11 +58,13 @@ Stop and start a VM after an API upgrade to refresh its guest agent.
 
 | Screen | Main actions |
 | --- | --- |
+| [MicroService](microservices.md) | Configure apps, deploy MicroVM replicas, check HTTP health, and stop services |
 | Networks | Create IPv4-only or dual-stack networks; choose SLAAC or DHCPv6 for IPv6 |
 | Storage | Register mounted host directories for VM disks |
 | Images | Install M2Images, inspect/import OCI, and register custom images locally |
 | Kernels | Install verified kernels, pair them with unused images, and delete unused kernels |
 | Host | Inspect OS, capacity, build information, and API/helper service states |
+| Pipe | Open a service card: [Pipe Auth](pipe-auth.md) connects AWS and GitHub accounts; Route edits [Nginx](pipe.md) domain/path routes; [Pipe Registry](pipe-registry.md) pulls images; three tunnel cards publish apps |
 | Update | Read release notes, then follow the gauge, percent, and stage until the new API answers |
 
 MicroBoot image bootstrap is [API-only](images.md#bootstrap).

@@ -51,6 +51,11 @@ After a successful build, deployment switches the two systemd executable overrid
 It starts the source dashboard in the background at `http://localhost:8080`.
 The command returns only after the dashboard and its API proxy answer successfully.
 A build failure leaves services running; an ordinary deployment failure restores previous executables.
+Ctrl+C or a lost development-command connection cancels that command's guest build
+and compiler descendants. Cleanup releases its deployment lock before another build
+can proceed. Cancelling compilation preserves the running API/helper. Cancelling
+activation restores the previous executables. Compiler caches remain available for
+the next build. Do not delete `deploy.lock` to bypass a running deployment.
 Before uploading, starting, or deploying, macOS checks the guest's writable OS/data mounts and critical OS executables.
 The shared macOS/WSL deployment script repeats these checks after compilation and before reporting success.
 An HTTP response from `/api/host` alone does not establish that the guest filesystem is healthy.
@@ -66,11 +71,24 @@ Guest service restarts interrupt API/helper requests, so stop workloads before c
 | `service dev --release` | Optimize the source build |
 | `service dev --yes` | Skip pending-download confirmation |
 | `service dev start` / `stop` / `restart` | Control guest API/helper and the development dashboard without rebuilding |
+| `service dev clean` | Restore installed release services and remove guest development files and host dashboard state |
 | `service dev --restore` | Remove development overrides and restart installed release binaries |
 | `service shell` | Open a root shell in managed Debian |
 
-`dev start`, `stop`, and `restart` require a running management VM.
-They preserve deployed binaries and overrides and cannot be combined with build/restore options.
+`dev start`, `dev restart`, and `dev clean` require a running management VM.
+`dev stop` also stops the development dashboard when the management VM is already stopped.
+`start`, `stop`, and `restart` preserve deployed binaries and overrides.
+`dev clean` and `--restore` stop workload MicroVM units before restoring installed services.
+They wait for the old Firecracker processes to release their TAP devices and disks.
+The installed API may be older than the development runtime and unable to adopt those VMs.
+A failure to list or stop the units cancels restoration and preserves development files.
+VM disks and application data remain available for the next start.
+After `dev clean`, `dev start` uses the installed release; `service dev` builds and deploys sources again.
+Development subcommands cannot be combined with build/restore options.
+`service start`, `stop`, and `restart` control the management VM and its resident host service.
+`service restart` stops the VM, starts it again, and waits for the local API.
+These commands leave the host development dashboard running; use `service dev stop` to stop it.
+Stopping or restarting the management VM also stops its guest services and workload MicroVMs.
 `--restore` needs no checkout and cannot be combined with `--source`, `--release`, or `--yes`.
 Overrides persist across `service stop` and `start` until restored.
 `service start` resumes selected binaries; it does not build edited sources.
@@ -85,13 +103,12 @@ An unrelated server on port 8080 causes an error; Firecrab does not stop it or s
 Stop a manually started Vite server before using `service dev`.
 
 `dev start` and `dev restart` use the last selected checkout, even from another directory.
-`dev stop`, `service stop`, and `service dev --restore` stop the development dashboard.
+`service dev stop`, `service dev clean`, and `service dev --restore` stop the development dashboard.
+The dashboard stays running across management VM stops and restarts; its API proxy recovers when the VM is ready again.
 Dashboard logs are stored at `runtime/dev-dashboard.log` in the managed home.
 The installed release dashboard remains available through the API's port 5523.
 Vite proxies `/api` and `/ws` to `127.0.0.1:5523` through the macOS SSH tunnel or WSL localhost forwarding.
 Use `localhost` for the configured browser origin.
-`service dev` and `service dev start` print the API URL and the separate frontend command.
-They do not start Vite; port 8080 is available only while the frontend command runs.
 
 ## macOS disk I/O
 

@@ -132,6 +132,10 @@ pub fn run(command: Command) -> Result<i32, Error> {
         Command::Uninstall { purge } => run_uninstall(purge),
         Command::Start => run_start(),
         Command::Stop => run_stop(),
+        Command::Restart => {
+            run_stop()?;
+            run_start()
+        }
         Command::Status => run_status(),
         Command::Settings { json, set } => Ok(super::settings::run(
             &lifecycle::Layout::from_process_env()?.managed_home,
@@ -357,8 +361,18 @@ fn wait_for_dev_api(layout: &lifecycle::Layout) -> Result<(), Error> {
 
 fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
-    let ip = running_guest_ip(&layout)?;
-    dev::control(&layout, ip, command)?;
+    match running_guest_ip(&layout) {
+        Ok(ip) => dev::control(&layout, ip, command)?,
+        // The dashboard can outlive a management VM stopped by `service stop`.
+        Err(Error::ShellNotRunning) if command == DevCommand::Stop => {}
+        Err(error) => return Err(error),
+    }
+    if command == DevCommand::Clean {
+        dashboard::clean(&layout.managed_home).map_err(dev::Error::from)?;
+        wait_for_dev_api(&layout)?;
+        report!("[PASS] installed release API: http://127.0.0.1:5523/");
+        return Ok(0);
+    }
     if command != DevCommand::Start {
         dashboard::stop(&layout.managed_home).map_err(dev::Error::from)?;
     }
@@ -373,7 +387,6 @@ fn run_dev_control(command: DevCommand) -> Result<i32, Error> {
 
 fn run_stop() -> Result<i32, Error> {
     let layout = lifecycle::Layout::from_process_env()?;
-    dashboard::stop(&layout.managed_home).map_err(dev::Error::from)?;
     if super::controller::active(&layout.managed_home) {
         super::controller::stop(&layout.managed_home)?;
         report!("[PASS] microManager: manually stopped (automatic wake blocked)");
@@ -568,6 +581,34 @@ fn running_guest_ip(layout: &lifecycle::Layout) -> Result<std::net::IpAddr, Erro
         .or_else(|| manager_ip(&guest_marker))
         .filter(|_| status.loaded)
         .ok_or(Error::ShellNotRunning)
+}
+
+/// Non-interactive private input for native commands that operate in Linux.
+pub(crate) fn run_guest_command(
+    command: &[String],
+    input: Option<std::fs::File>,
+) -> Result<i32, Error> {
+    let layout = lifecycle::Layout::from_process_env()?;
+    let ip = running_guest_ip(&layout)?;
+    let runtime = layout.managed_home.join("runtime");
+    if !runtime.join("manager_ed25519").is_file() {
+        return Err(Error::ShellCredentials(runtime));
+    }
+    let stdin = input
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(std::process::Stdio::null);
+    let settings = ssh::load(&layout.managed_home)?;
+    let status = ProcessCommand::new("/usr/bin/ssh")
+        .args(ssh::arguments(&runtime, &settings, ssh::Session::Command))
+        .args(shell_arguments(&runtime, ip, command, false))
+        .stdin(stdin)
+        .status()
+        .map_err(Error::ShellSsh)?;
+    let code = status.code().unwrap_or(1);
+    if code == 255 {
+        eprintln!("{REPAIR_HINT}");
+    }
+    Ok(code)
 }
 
 /// OpenSSH parses an `-o` value again and expands percent tokens, even
@@ -947,6 +988,7 @@ fn command_arguments(command: &Command) -> Vec<OsString> {
         | Command::Uninstall { .. }
         | Command::Start
         | Command::Stop
+        | Command::Restart
         | Command::Status
         | Command::Debug { .. }
         | Command::Resource { .. }

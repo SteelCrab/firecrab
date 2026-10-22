@@ -126,6 +126,8 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 
 | Resource | Paths |
 | --- | --- |
+| MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
+| MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |
@@ -135,6 +137,8 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | Registry | `/api/microregistry`, `/register`, `/register/{alias}`, `/local/{alias}`, `/docker-hub` |
 | Host | `/api/host`, `/api/network`, `/api/info` |
 | Update | GET / POST `/api/update`, GET `/api/update/progress` |
+
+See [MicroService](../guides/microservices.md) for configuration fields, validation, and deployment behavior.
 
 ## Host
 
@@ -295,6 +299,25 @@ The host stores one login in owner-only (`0600`) SQLite.
 It is used only for Docker Hub token exchanges, including the toolbox pull.
 Other registries are anonymous.
 Anonymous quota exhaustion returns `429`; see [OCI images](../guides/oci.md).
+
+## Pipe and Cloudflare Tunnel
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/api/pipe` | Saved routes, installed engines, and live systemd unit states; credentials are omitted |
+| PUT | `/api/pipe` | Apply `{config, credentials}` through the helper; null credentials retains the saved tunnel credential |
+| POST | `/api/pipe/disable` | Stop local ingress/tunnel units and keep saved configuration |
+| POST | `/api/pipe/cloudflare/zones` | Accept `{apiToken}` and return accessible active domains |
+| POST | `/api/pipe/cloudflare/connect` | Accept `{apiToken, zoneId, hostname, config}`; create a tunnel/DNS, install the connector if missing, apply units, and verify connection |
+
+The API token is transient. It is not saved, echoed in responses, or included in
+process arguments. Guided setup refuses existing DNS records. A failed local
+apply or connection check restores previous local settings and attempts to remove
+new Cloudflare resources. Account permissions, DNS conflicts, and setup errors
+use `400 validation_failed` with a `cloudflare` field. An unavailable helper uses
+`503 cloudflare_setup_unavailable`. Connection setup can take several minutes.
+See [token issuance and connection](../guides/cloudflare-tunnel.md) for permissions
+and manual verification. Actual public access requires a real Cloudflare domain.
 
 ## Errors
 

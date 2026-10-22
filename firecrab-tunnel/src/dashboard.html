@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Firecrab — Connection tokens</title>
+  <link rel="stylesheet" href="/dashboard/style.css">
+  <script src="/dashboard/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">PRIVATE MICROVM CLOUD</p><a class="brand" href="/dashboard/">firecrab<span>_</span></a><p>CONNECTION DASHBOARD</p></header>
+    <section aria-labelledby="title">
+      <p class="eyebrow">FIRECRAB TUNNEL</p>
+      <h1 id="title">One address. Your apps.</h1>
+      <p>Create a token here. Paste it into <strong>Pipe → Firecrab Tunnel</strong>, then choose an existing Quick Tunnel or saved Nginx routes.</p>
+      <button id="issue" type="button">Create connection token</button>
+      <p id="status" role="status" aria-live="polite"></p>
+      <p id="error" role="alert" hidden></p>
+      <div id="result" hidden>
+        <label for="address">PUBLIC ADDRESS</label><input id="address" readonly>
+        <label for="token">CONNECTION TOKEN</label><input id="token" type="password" readonly autocomplete="off" spellcheck="false">
+        <div class="actions"><button id="copy" type="button">Copy token</button><button id="reveal" type="button" aria-pressed="false">Show token</button></div>
+        <p class="note">Copy this token now. Refreshing or leaving the page clears it. The server stores only its digest. Anyone with the token can control this address.</p>
+      </div>
+    </section>
+    <section aria-labelledby="revoke-title">
+      <h2 id="revoke-title">Revoke a token</h2>
+      <p>Stop access for a lost or unwanted connection. Its address stays reserved. Issue a new token to create a new address.</p>
+      <form id="revoke-form"><label for="revoke-token">CONNECTION TOKEN</label><input id="revoke-token" type="password" required minlength="64" maxlength="64" autocomplete="off" spellcheck="false"><button id="revoke" type="submit">Revoke token</button></form>
+    </section>
+    <footer>Tokens stay out of URLs. Keep your saved copy private.</footer>
+  </main>
+</body>
+</html>

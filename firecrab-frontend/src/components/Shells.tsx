@@ -15,7 +15,11 @@ import {
   getShellRevision,
   listShells,
 } from "../api/client";
+import { SquareTerminal } from "lucide-react";
 import { useI18n } from "../i18n";
+import Screen from "./layout/Screen";
+import { useScreenStatus } from "./layout/screenStatus";
+import { DetailHead, DetailSection } from "./ui/DetailSection";
 
 /** Max body size accepted by the API (matches firecrab-api shells module). */
 const MAX_CONTENT_BYTES = 32 * 1024;
@@ -28,12 +32,10 @@ function formatRevisionTime(ms: number): string {
   }
 }
 
-/**
- * Shell repository — versioned guest scripts injected on MicroVM start.
- * Page icon: `public/bash.png` (same art as `assets/dashboard/bash.png`).
- */
+/** Shell repository — versioned guest scripts injected on MicroVM start. */
 export default function Shells() {
   const { t } = useI18n();
+  const { setDetailOpen } = useScreenStatus();
   const [shells, setShells] = useState<ShellResponse[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -155,6 +157,7 @@ export default function Shells() {
         "#!/bin/sh\n# Portable across Alpine, Ubuntu, and Rocky\necho hello from firecrab shell\n",
       );
       setSelectedId(created.shellId);
+      setDetailOpen(true);
       await refresh();
     } catch (error) {
       setFieldErrors(error as ApiClientError);
@@ -216,13 +219,96 @@ export default function Shells() {
   );
 
   const latestRevisionId = detail?.revisions[0]?.id ?? null;
+  const selectedShell = shells?.find((shell) => shell.id === selectedId) ?? null;
+
+  const detailPanel = selectedShell ? (
+    <>
+      <DetailHead
+        title={detail?.name ?? selectedShell.name}
+        meta={(
+          <>
+            <span className="mono">v{selectedShell.latestVersion}</span>
+            {viewedRevision && viewedRevision.revisionId !== latestRevisionId && (
+              <span>{t(`viewing v${viewedRevision.version}`, `v${viewedRevision.version} 보는 중`)}</span>
+            )}
+          </>
+        )}
+      />
+      <div className="detail-body">
+        {detailError && <p className="field-error">{detailError}</p>}
+        {!detail && !detailError && <p className="detail-note">{t("Loading…", "불러오는 중…")}</p>}
+        {detail && (
+          <>
+            {detail.description ? <p className="detail-note shell-detail-desc">{detail.description}</p> : null}
+            <DetailSection title={t("Revisions", "버전")}>
+              <ul className="detail-list shell-revisions">
+                {detail.revisions.map((rev) => {
+                  const isViewing = viewingRevisionId === rev.id;
+                  const isLatest = rev.id === latestRevisionId;
+                  return (
+                    <li key={rev.id}>
+                      <button
+                        type="button"
+                        className={isViewing ? "shell-revision active" : "shell-revision"}
+                        aria-pressed={isViewing}
+                        title={t("Load this version into the editor", "이 버전을 편집기에 불러오기")}
+                        onClick={() => selectRevision(rev)}
+                      >
+                        <span className="shell-revision-version mono">
+                          v{rev.version}
+                          {isLatest ? <span className="muted"> ({t("latest", "최신")})</span> : null}
+                        </span>
+                        <span className="shell-revision-meta">
+                          <span className="mono">{rev.contentSha256.slice(0, 10)}…</span> · {rev.sizeBytes} B · {formatRevisionTime(rev.createdAtMs)}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </DetailSection>
+            <DetailSection title={t("Shell file", "Shell 파일")}>
+              <form className="shell-inspect-publish" onSubmit={handleRevise}>
+                <div className="field">
+                  <label htmlFor="shell-revise">{t("Edit and publish as a new revision", "수정 후 새 버전으로 게시")}</label>
+                  {revisionLoadError && <div className="field-error">{revisionLoadError}</div>}
+                  {revisionLoading && !viewedRevision ? (
+                    <p className="detail-note">{t("Loading…", "불러오는 중…")}</p>
+                  ) : (
+                    <textarea
+                      id="shell-revise"
+                      className="shell-content-editor shell-file-editor mono"
+                      rows={14}
+                      value={reviseContent}
+                      onChange={(event) => setReviseContent(event.target.value)}
+                      spellCheck={false}
+                    />
+                  )}
+                  {fieldError("content")}
+                </div>
+                <div className="detail-sec-buttons">
+                  <button className="btn primary" type="submit" disabled={revising || revisionLoading}>
+                    {revising ? t("Publishing…", "게시 중…") : t("Publish new revision", "새 버전 게시")}
+                  </button>
+                </div>
+              </form>
+            </DetailSection>
+          </>
+        )}
+      </div>
+    </>
+  ) : null;
 
   return (
+    <Screen
+      view="shells"
+      detail={detailPanel}
+      detailLabel={t("Shell detail", "Shell 상세")}
+      detailKind={<><SquareTerminal aria-hidden="true" />Shell</>}
+      onCloseDetail={() => setSelectedId(null)}
+    >
     <section className="panel">
-      <h2 className="panel-title panel-title-with-icon">
-        <img className="panel-brand-icon" src="/bash.png" alt="" width={28} height={28} />
-        <span>{t("Shell repository", "Shell 저장소")}</span>
-      </h2>
+      <h2 className="panel-title">{t("Shell repository", "Shell 저장소")}</h2>
       <p className="poll-note" style={{ marginBottom: "0.75rem" }}>
         {t(
           "Versioned guest scripts for Alpine / Ubuntu / Rocky. Prefer #!/bin/sh for all-image compatibility (Alpine has no bash). Pin on a MicroVM; injected and run once after network-ready each start. Watch FIRECRAB_SHELL_* in the console.",
@@ -306,7 +392,11 @@ export default function Shells() {
                 <tr
                   key={shell.id}
                   className={selectedId === shell.id ? "selected" : undefined}
-                  onClick={() => setSelectedId(shell.id)}
+                  aria-selected={selectedId === shell.id}
+                  onClick={() => {
+                    setSelectedId(shell.id);
+                    setDetailOpen(true);
+                  }}
                   style={{ cursor: "pointer" }}
                 >
                   <td>
@@ -340,102 +430,7 @@ export default function Shells() {
         </div>
       )}
 
-      {selectedId && (
-        <div className="shell-inspect" style={{ marginTop: "1.25rem" }}>
-          {detailError && <div className="field-error">{detailError}</div>}
-          {!detail && !detailError && <div className="empty">{t("Loading…", "불러오는 중…")}</div>}
-          {detail && (
-            <div className="shell-inspect-unified panel">
-              <h3 className="panel-title">
-                {detail.name}
-                {viewedRevision ? (
-                  <span className="mono shell-inspect-file-ver">
-                    {" "}
-                    · v{viewedRevision.version}
-                    {viewedRevision.revisionId === latestRevisionId
-                      ? ` (${t("latest", "최신")})`
-                      : ""}
-                  </span>
-                ) : null}
-              </h3>
-              {detail.description ? (
-                <p className="poll-note shell-inspect-desc">{detail.description}</p>
-              ) : null}
-
-              <div className="table-scroll" style={{ marginBottom: "0.75rem" }}>
-                <table className="vm-table shell-rev-table">
-                  <thead>
-                    <tr>
-                      <th>ver</th>
-                      <th>sha256</th>
-                      <th>size</th>
-                      <th>{t("created", "생성")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.revisions.map((rev) => {
-                      const isViewing = viewingRevisionId === rev.id;
-                      const isLatest = rev.id === latestRevisionId;
-                      return (
-                        <tr
-                          key={rev.id}
-                          className={isViewing ? "selected" : undefined}
-                          onClick={() => selectRevision(rev)}
-                          style={{ cursor: "pointer" }}
-                          title={t("Load this version into the editor", "이 버전을 편집기에 불러오기")}
-                        >
-                          <td className="mono">
-                            v{rev.version}
-                            {isLatest ? (
-                              <span className="poll-note"> ({t("latest", "최신")})</span>
-                            ) : null}
-                          </td>
-                          <td className="mono">{rev.contentSha256.slice(0, 10)}…</td>
-                          <td>{rev.sizeBytes} B</td>
-                          <td className="mono">{formatRevisionTime(rev.createdAtMs)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <form className="shell-inspect-publish" onSubmit={handleRevise}>
-                <div className="field">
-                  <label htmlFor="shell-revise">
-                    {t("Shell file", "Shell 파일")}
-                    <span className="poll-note">
-                      {" "}
-                      — {t("edit and publish as a new revision", "수정 후 새 버전으로 게시")}
-                    </span>
-                  </label>
-                  {revisionLoadError && <div className="field-error">{revisionLoadError}</div>}
-                  {revisionLoading && !viewedRevision ? (
-                    <div className="empty">{t("Loading…", "불러오는 중…")}</div>
-                  ) : (
-                    <textarea
-                      id="shell-revise"
-                      className="shell-content-editor shell-file-editor mono"
-                      rows={14}
-                      value={reviseContent}
-                      onChange={(event) => setReviseContent(event.target.value)}
-                      spellCheck={false}
-                    />
-                  )}
-                  {fieldError("content")}
-                </div>
-                <div className="shell-inspect-actions">
-                  <button className="btn primary" type="submit" disabled={revising || revisionLoading}>
-                    {revising
-                      ? t("Publishing…", "게시 중…")
-                      : t("Publish new revision", "새 버전 게시")}
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-        </div>
-      )}
     </section>
+    </Screen>
   );
 }

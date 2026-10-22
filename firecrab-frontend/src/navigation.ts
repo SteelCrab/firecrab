@@ -1,28 +1,41 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Locale } from "./i18n";
 
 /**
- * Dashboard destinations. Rendered as a `NavIcon` (see `NavIcons.tsx`) in the
- * rail, except `shells`, whose `icon` is a small image (the Shell repository
- * bash cube) shown instead.
+ * Dashboard destinations, in rail order. Icons live in `viewIcons.ts`.
  *
- * Kept out of `components/Shell.tsx` so that file exports only its component
- * — mixing constants and hooks in there breaks Vite's fast refresh.
+ * Kept out of the layout components so those files export only components —
+ * mixing constants and hooks in there breaks Vite's fast refresh.
  */
 export const VIEWS = [
-  { id: "vms", labels: { en: "MicroVM", ko: "MicroVM" } },
-  { id: "networks", labels: { en: "Networks", ko: "네트워크" } },
-  { id: "storages", labels: { en: "Storage", ko: "스토리지" } },
-  { id: "images", labels: { en: "Images", ko: "이미지" } },
-  { id: "kernels", labels: { en: "Kernels", ko: "커널" } },
-  { id: "shells", labels: { en: "Shells", ko: "Shell" }, icon: "/bash.png" },
-  { id: "host", labels: { en: "Host", ko: "호스트" } },
+  { id: "vms", group: "compute", labels: { en: "MicroVM", ko: "MicroVM" } },
+  { id: "services", group: "compute", labels: { en: "MicroService", ko: "MicroService" } },
+  { id: "networks", group: "network", labels: { en: "Networks", ko: "네트워크" } },
+  { id: "pipe", group: "network", labels: { en: "Pipe", ko: "Pipe" } },
+  { id: "storages", group: "data", labels: { en: "Storage", ko: "스토리지" } },
+  { id: "images", group: "data", labels: { en: "Images", ko: "이미지" } },
+  { id: "kernels", group: "data", labels: { en: "Kernels", ko: "커널" } },
+  { id: "shells", group: "system", labels: { en: "Shells", ko: "Shell" } },
+  { id: "host", group: "system", labels: { en: "Host", ko: "호스트" } },
 ] as const;
 
 export type ViewId = (typeof VIEWS)[number]["id"];
+export type ViewGroup = (typeof VIEWS)[number]["group"];
 
 export function viewLabel(view: (typeof VIEWS)[number], locale: Locale): string {
   return view.labels[locale];
+}
+
+/** Section a destination belongs to; the command palette shows it as a hint. */
+const VIEW_GROUP_LABELS: Record<ViewGroup, Record<Locale, string>> = {
+  compute: { en: "Compute", ko: "컴퓨팅" },
+  network: { en: "Network", ko: "네트워크" },
+  data: { en: "Data", ko: "데이터" },
+  system: { en: "System", ko: "시스템" },
+};
+
+export function viewGroupLabel(group: ViewGroup, locale: Locale): string {
+  return VIEW_GROUP_LABELS[group][locale];
 }
 
 const DEFAULT_VIEW: ViewId = "vms";
@@ -96,6 +109,15 @@ export function newVmHash(): string {
   return `#/${NEW_VM_PATH}`;
 }
 
+/** Pipe service cards. `#/pipe` lists them; `#/pipe/<id>` opens one. */
+export const PIPE_CARDS = ["auth", "route", "registry", "database", "firecrab-tunnel", "quick-tunnel", "named-tunnel"] as const;
+export type PipeCardId = (typeof PIPE_CARDS)[number];
+const PIPE_CARD_RE = /^pipe\/([^/?#]+)$/;
+
+export function pipeCardHash(card: PipeCardId): string {
+  return `#/pipe/${card}`;
+}
+
 /**
  * Shell views live under `#/vms` etc.; the terminal is a separate full-page
  * route (`#/console/<id>`) so it never shares the modal overlay layout that
@@ -104,7 +126,8 @@ export function newVmHash(): string {
 export type AppRoute =
   | { kind: "shell"; view: ViewId }
   | { kind: "console"; vmId: string }
-  | { kind: "vm-new" };
+  | { kind: "vm-new" }
+  | { kind: "pipe-card"; card: PipeCardId };
 
 export function parseAppRoute(hash: string = window.location.hash): AppRoute {
   const path = stripHash(hash);
@@ -117,6 +140,8 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
     }
   }
   if (path === NEW_VM_PATH) return { kind: "vm-new" };
+  const card = path.match(PIPE_CARD_RE)?.[1];
+  if (PIPE_CARDS.some(id => id === card)) return { kind: "pipe-card", card: card as PipeCardId };
   return { kind: "shell", view: parseViewId(path) ?? DEFAULT_VIEW };
 }
 
@@ -125,19 +150,53 @@ export function parseAppRoute(hash: string = window.location.hash): AppRoute {
  * (not path routes) because the API serves the dashboard SPA — a deep path
  * would hit the server; `#/…` never leaves the client.
  */
-export function useAppRoute(): {
+export function useAppRoute(confirmLeave?: () => boolean): {
   route: AppRoute;
   selectView: (view: ViewId) => void;
   openConsole: (vmId: string) => void;
   closeConsole: () => void;
 } {
   const [route, setRoute] = useState<AppRoute>(() => parseAppRoute());
+  const currentUrl = useRef(window.location.href);
+  const historyIndex = useRef<number | null>(null);
+  const restoringHistory = useRef(false);
 
   useEffect(() => {
-    const onHashChange = () => setRoute(parseAppRoute());
+    if (historyIndex.current === null) {
+      historyIndex.current = typeof window.history.state?.firecrabRouteIndex === "number" ? window.history.state.firecrabRouteIndex : 0;
+      window.history.replaceState({ ...window.history.state, firecrabRouteIndex: historyIndex.current }, "");
+    }
+    const onHashChange = (event: HashChangeEvent) => {
+      // A later navigation may already have replaced this queued hash change.
+      if (event.newURL !== window.location.href) return;
+      if (restoringHistory.current) { restoringHistory.current = false; return; }
+      let nextIndex = window.history.state?.firecrabRouteIndex;
+      if (event.newURL === currentUrl.current) {
+        if (typeof nextIndex === "number") historyIndex.current = nextIndex;
+        return;
+      }
+      if (confirmLeave && !confirmLeave()) {
+        if (typeof nextIndex === "number" && nextIndex !== historyIndex.current) {
+          // Return to the existing entry so cancelling Back/Forward keeps history intact.
+          restoringHistory.current = true;
+          window.history.go(historyIndex.current! - nextIndex);
+        } else {
+          // Older dashboard entries have no index to navigate back to safely.
+          window.history.replaceState({ ...window.history.state, firecrabRouteIndex: historyIndex.current }, "", currentUrl.current);
+        }
+        return;
+      }
+      if (typeof nextIndex !== "number" || nextIndex === historyIndex.current) {
+        nextIndex = historyIndex.current! + 1;
+        window.history.replaceState({ ...window.history.state, firecrabRouteIndex: nextIndex }, "");
+      }
+      historyIndex.current = nextIndex;
+      currentUrl.current = event.newURL;
+      setRoute(parseAppRoute());
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
+  }, [confirmLeave]);
 
   // Empty / unknown shell hashes normalise to `#/vms`. Use `location.hash`
   // (not only replaceState) so the URL bar and any hash-dependent code see
@@ -150,23 +209,30 @@ export function useAppRoute(): {
     if (parseViewId(path) === null && parseConsoleVmId(window.location.hash) === null) {
       const next = viewHash(DEFAULT_VIEW);
       if (window.location.hash !== next) {
-        window.history.replaceState(null, "", next);
+        window.history.replaceState(window.history.state, "", next);
+        currentUrl.current = window.location.href;
         setRoute({ kind: "shell", view: DEFAULT_VIEW });
       }
     }
   }, [route]);
 
-  const selectView = useCallback((next: ViewId) => {
-    window.location.hash = viewHash(next);
+  const navigate = useCallback((hash: string) => {
+    if (window.location.hash === hash) return;
+    window.location.hash = hash;
+    window.history.replaceState({ ...window.history.state, firecrabRouteIndex: (historyIndex.current ?? 0) + 1 }, "");
   }, []);
+
+  const selectView = useCallback((next: ViewId) => {
+    navigate(viewHash(next));
+  }, [navigate]);
 
   const openConsole = useCallback((vmId: string) => {
-    window.location.hash = consoleHash(vmId);
-  }, []);
+    navigate(consoleHash(vmId));
+  }, [navigate]);
 
   const closeConsole = useCallback(() => {
-    window.location.hash = viewHash("vms");
-  }, []);
+    navigate(viewHash("vms"));
+  }, [navigate]);
 
   return { route, selectView, openConsole, closeConsole };
 }
@@ -175,6 +241,6 @@ export function useAppRoute(): {
 export function useHashView(): [ViewId, (view: ViewId) => void] {
   const { route, selectView } = useAppRoute();
   // Console and `#/vms/new` still highlight MicroVM; `selectView("vms")` is the list.
-  const view = route.kind === "shell" ? route.view : DEFAULT_VIEW;
+  const view = route.kind === "shell" ? route.view : route.kind === "pipe-card" ? "pipe" : DEFAULT_VIEW;
   return [view, selectView];
 }

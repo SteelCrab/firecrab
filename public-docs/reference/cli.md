@@ -46,9 +46,16 @@ The config stores only endpoints; unknown TOML keys block profile changes.
 
 ## Resource commands
 
+`firecrab stack validate --file stack.yaml [--json]` checks a declarative YAML stack offline.
+It does not read host profiles or contact the API, even when `--api` or `--host` is set.
+Exit `0` means the declared schema and local constraints passed; failures exit `1`.
+With `--json`, both outcomes produce a JSON report on stdout.
+See [Stack validation](../guides/stacks.md) for the experimental schema and its limits.
+
 | Resource | Commands |
 | --- | --- |
 | VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
+| MicroService | `microservice list`, `get ID`, `create --file JSON`, `update ID --file JSON`, `delete ID`, `deploy ID --host-port PORT`, `status ID`, `stop ID`; see [MicroService](../guides/microservices.md) |
 | Console | `vm console ID` (`terminal` alias) |
 | Network | `network list`, `create`, `delete ID` |
 | Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |
@@ -106,6 +113,32 @@ See [OCI images](../guides/oci.md) for registry access and import limits.
 `firecrab service` controls native systemd on Linux and managed Debian on macOS/Windows.
 Use the [macOS](../getting-started/macos.md#service-commands) or [Windows](../getting-started/windows.md#service-commands) command table for managed services.
 Use [service dev](../development/micromanager.md) to deploy source-built API/helper binaries.
+
+On macOS and Windows, lifecycle controls have separate scopes:
+
+| Commands | Scope |
+| --- | --- |
+| `firecrab service start` / `stop` / `restart` | The management VM and its resident host service |
+| `firecrab service dev start` / `stop` / `restart` | Guest API/helper and the host development dashboard |
+| `firecrab service dev clean` | Restore installed release services, remove guest development files, and clear host dashboard state |
+
+## Pipe ingress and tunnel
+
+`pipe` manages Nginx routing and the optional Cloudflare Tunnel connector.
+It operates on the local Linux host or the managed macOS/Windows guest.
+It does not select a remote API through `--host`.
+
+```sh
+firecrab pipe install
+firecrab pipe render --config pipe.json
+firecrab pipe apply --config pipe.json
+firecrab pipe status
+firecrab pipe disable
+```
+
+On Linux, install/apply/disable require root.
+On macOS and Windows, run them without host sudo.
+See [Pipe ingress and tunnel](../guides/pipe.md) for Nginx installation, manifest fields, dashboard controls, and reload behavior.
 
 ## Linux host diagnostics
 

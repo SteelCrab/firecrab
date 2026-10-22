@@ -198,7 +198,17 @@ pub fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn lock(home: &Path) -> Result<File, Error> {
+#[derive(Debug)]
+pub struct ResourceLock(File);
+
+impl Drop for ResourceLock {
+    fn drop(&mut self) {
+        // Closing alone can leave a lock held by descriptors inherited at fork.
+        let _ = FileExt::unlock(&self.0);
+    }
+}
+
+pub fn lock(home: &Path) -> Result<ResourceLock, Error> {
     fs::create_dir_all(home.join("runtime"))?;
     let file = OpenOptions::new()
         .create(true)
@@ -213,7 +223,7 @@ pub fn lock(home: &Path) -> Result<File, Error> {
             error.into()
         }
     })?;
-    Ok(file)
+    Ok(ResourceLock(file))
 }
 
 impl Platform {

@@ -1,18 +1,38 @@
 #!/usr/bin/env python3
 """Exercise the guest build/deploy transaction without a VM, root, or network."""
 import os
+import fcntl
 from pathlib import Path
 import shlex
+import signal
 import socket
 import subprocess
 import tarfile
 import tempfile
 import unittest
+import time
 
 GUEST_SCRIPT = Path(__file__).parent / "micromanager/dev-macos-guest.sh"
+SESSION_SCRIPT = Path(__file__).parent / "micromanager/dev-session.sh"
 STUB = r'''#!/bin/bash
 set -eu
 name=${0##*/}
+block_command() {
+  exec python3 - <<'PY'
+import fcntl, os, subprocess
+from pathlib import Path
+try:
+    fcntl.fcntl(9, fcntl.F_GETFD)
+    inherited_lock = True
+except OSError:
+    inherited_lock = False
+# The sleep stub exits at once; only the real command holds the cancellation point.
+child = subprocess.Popen(["/bin/sleep", "60"])
+Path(os.environ["TEST_ROOT"], "blocked").write_text(
+    f"{os.getpid()} {child.pid} {os.getpgrp()} {int(inherited_lock)}")
+child.wait()
+PY
+}
 case "$name" in
   chmod|rm|install)
     if [ "$1" = --version ]; then exit 0; fi
@@ -30,7 +50,17 @@ case "$name" in
     echo "$flags"
     ;;
   uname) echo "${GUEST_ARCH:-aarch64}" ;;
-  cc|pkg-config|cmake|journalctl|sleep) exit 0 ;;
+  cc|musl-gcc|pkg-config|cmake|journalctl|sleep) exit 0 ;;
+  objcopy)
+    if [ "$1" = --version ]; then exit 0; fi
+    echo "$*" >>"$TEST_ROOT/objcopy-events"
+    [ "$1" = --compress-debug-sections=zlib ] && [ "$#" = 3 ]
+    exec /bin/cp "$2" "$3"
+    ;;
+  df)
+    echo 'Filesystem 1024-blocks Used Available Capacity Mounted on'
+    echo "/dev/os 2900000 0 ${OS_FREE_KIB:-1048576} 0% /"
+    ;;
   flock) [ "${LOCK_FAIL:-0}" = 0 ] ;;
   curl) [ "${HEALTH_FAIL:-0}" = 0 ] ;;
   rustup)
@@ -39,6 +69,7 @@ case "$name" in
     [ "$1" = run ] || exit 0
     if [ "$3" = rustc ]; then [ "${TOOLCHAIN_MISSING:-0}" = 0 ]; exit; fi
     [ "${BUILD_FAIL:-0}" = 0 ] || exit 42
+    if [ "${BLOCK_BUILD:-0}" = 1 ]; then block_command; fi
     test "$(cat "$TEST_ROOT/cache/source/firecrab-api/src/main.rs")" = 'edited local source'
     fragment="$TEST_ROOT/cache/source/firecrab-api/src/oci/guest/install-packages.sh"
     if [ -f "$fragment" ]; then cp "$fragment" "$TEST_ROOT/compiled-fragment"; fi
@@ -51,7 +82,7 @@ case "$name" in
     done
     [ "$target" = "${GUEST_ARCH:-aarch64}-unknown-linux-gnu" ]
     mkdir -p "$CARGO_TARGET_DIR/$target/$profile"
-    for unit in firecrab-api firecrab-helper; do
+    for unit in firecrab-api firecrab-helper firecrab; do
       printf '#!/bin/bash\necho built-from-source\n' >"$CARGO_TARGET_DIR/$target/$profile/$unit"
     done
     if [ "${DISK_FAIL_AFTER_BUILD:-0}" = 1 ]; then
@@ -64,6 +95,27 @@ case "$name" in
       exit 0
     fi
     echo "$*" >>"$TEST_ROOT/events"
+    if [ "$1" = list-units ]; then
+      [ "${VM_LIST_FAIL:-0}" = 0 ] || exit 46
+      if [ -f "$TEST_ROOT/vm-units" ]; then cat "$TEST_ROOT/vm-units"; fi
+      exit 0
+    fi
+    if [ "$1" = stop ] && [[ "$2" = firecrab-vm-* ]]; then
+      [ "${VM_STOP_FAIL:-0}" = 0 ] || exit 47
+      if [ -f "$TEST_ROOT/vm-runtime-pid" ]; then
+        kill "$(cat "$TEST_ROOT/vm-runtime-pid")"
+        # Wait for the exclusive runtime resource to be released before starting
+        # the installed API, just as synchronous systemctl stop waits for the unit.
+        python3 - <<'PYWAIT'
+import fcntl, os
+with open(os.path.join(os.environ["TEST_ROOT"], "tap-lock"), "w") as resource:
+    fcntl.flock(resource, fcntl.LOCK_EX)
+PYWAIT
+      fi
+      : >"$TEST_ROOT/vm-units"
+    fi
+    if [ "$1" = stop ] && [ "$2" = firecrab-api ] \
+      && [ "${BLOCK_ACTIVATE:-0}" = 1 ] && [ ! -f "$TEST_ROOT/blocked" ]; then block_command; fi
     if [ "$*" = 'stop firecrab-api' ] && [ "${STOP_FAIL:-0}" = 1 ]; then exit 44; fi
     if [ "$1" = start ] && [ "$2" != firecrab-api ] && [ "${HELPER_START_FAIL:-0}" = 1 ]; then exit 45; fi
     if [ "$*" = 'start firecrab-api' ] && [ "${START_FAIL:-0}" = 1 ] \
@@ -89,7 +141,7 @@ class GuestDevelopmentTest(unittest.TestCase):
         stub = self.commands / "stub"
         stub.write_text(STUB)
         stub.chmod(0o755)
-        for name in ["findmnt", "chmod", "rm", "install", "uname", "cc", "pkg-config", "cmake", "journalctl", "sleep", "flock", "curl", "rustup", "systemctl"]:
+        for name in ["findmnt", "chmod", "rm", "install", "uname", "cc", "musl-gcc", "pkg-config", "cmake", "objcopy", "df", "journalctl", "sleep", "flock", "curl", "rustup", "systemctl"]:
             (self.commands / name).symlink_to(stub)
         # Linux mv -T replaces a symlink rather than following its directory.
         mv = self.commands / "mv"
@@ -119,17 +171,20 @@ class GuestDevelopmentTest(unittest.TestCase):
         tools.mkdir(parents=True)
         for tool in ["extract-vmlinux", "extract-arm64-image"]:
             (tools / tool).write_text("#!/bin/sh\necho runtime-tool\n")
+        ingress_builder = tools.parent / "build-ingress.sh"
+        ingress_builder.write_text('#!/bin/bash\nset -eu\nmkdir -p "$1/ingress"\nprintf "#!/bin/sh\\nexit 0\\n" >"$1/firecrab-ingress"\nchmod +x "$1/firecrab-ingress"\nprintf "fixture" >"$1/ingress/LICENSE.nginx"\n')
         self.archive = self.cache / "incoming-test.tar"
         with tarfile.open(self.archive, "w") as archive:
             archive.add(source, arcname="firecrab-api/src/main.rs")
             archive.add(tools, arcname="scripts/firecracker-menual")
+            archive.add(ingress_builder, arcname="scripts/build-ingress.sh")
 
     def run_guest(self, profile="debug", shell="bash", **flags):
         environment = os.environ.copy()
         environment.update(TEST_ROOT=str(self.root), PATH=str(self.commands) + ":" + environment["PATH"])
         environment.update({key: str(value) for key, value in flags.items()})
         args = [shell, str(self.script), profile]
-        if profile not in ["start", "stop", "restart", "check"]:
+        if profile not in ["start", "stop", "restart", "clean", "check"]:
             args.extend(["1.97.1", self.archive.name])
         return subprocess.run(args,
                               env=environment, text=True, capture_output=True, timeout=10)
@@ -137,9 +192,121 @@ class GuestDevelopmentTest(unittest.TestCase):
     def override(self, unit="firecrab-api"):
         return self.units / (unit + ".service.d/90-firecrab-dev.conf")
 
+    def start_session(self, **flags):
+        # Use a real inherited-file-description lock on Linux and macOS.
+        flock = self.commands / "flock"
+        flock.unlink()
+        flock.write_text("#!/usr/bin/env python3\nimport fcntl\nfcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)\n")
+        flock.chmod(0o755)
+        environment = os.environ.copy()
+        environment.update(TEST_ROOT=str(self.root), PATH=str(self.commands) + ":" + environment["PATH"])
+        environment.update({key: str(value) for key, value in flags.items()})
+        output = open(self.root / "session.stdout", "w+")
+        errors = open(self.root / "session.stderr", "w+")
+        self.addCleanup(output.close)
+        self.addCleanup(errors.close)
+        process = subprocess.Popen(
+            ["bash", "-c", SESSION_SCRIPT.read_text(), "--", "debug", "1.97.1", self.archive.name],
+            stdin=subprocess.PIPE, stdout=output, stderr=errors, env=environment, start_new_session=True)
+
+        def cleanup():
+            if not process.stdin.closed:
+                process.stdin.close()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                marker = self.root / "blocked"
+                if marker.exists():
+                    group = int(marker.read_text().split()[2])
+                    try:
+                        os.killpg(group, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.kill()
+                process.wait(timeout=5)
+        self.addCleanup(cleanup)
+        process.stdin.write(self.script.read_bytes() + b"\0")
+        process.stdin.flush()
+        return process
+
+    def wait_for_blocked_command(self, process):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            marker = self.root / "blocked"
+            if marker.exists() and len(marker.read_text().split()) == 4:
+                return [int(value) for value in marker.read_text().split()]
+            self.assertIsNone(process.poll(), (self.root / "session.stderr").read_text())
+            time.sleep(0.01)
+        self.fail("development command did not reach the cancellation point")
+
+    def test_caller_disconnect_stops_compilers_releases_lock_and_allows_retry(self):
+        archive = self.archive.read_bytes()
+        unrelated = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        self.addCleanup(unrelated.wait)
+        self.addCleanup(unrelated.terminate)
+        process = self.start_session(BLOCK_BUILD=1)
+        compiler, descendant, group, inherited_lock = self.wait_for_blocked_command(process)
+        self.assertEqual(inherited_lock, 0, "compiler inherited deployment lock")
+        self.assertNotEqual(group, os.getpgrp())
+        with open(self.cache / "deploy.lock", "w") as lock:
+            with self.assertRaises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=5), 130)
+        self.assertFalse((self.root / "events").exists())
+        self.assertFalse(self.override().exists())
+        self.assertIsNone(unrelated.poll())
+        for pid in [compiler, descendant]:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail(f"cancelled process {pid} is still alive")
+        self.archive.write_bytes(archive)
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_caller_disconnect_during_activation_restores_previous_services(self):
+        previous = self.binaries / "previous"
+        previous.mkdir(parents=True)
+        (self.binaries / "bin").symlink_to(previous)
+        self.override().parent.mkdir(parents=True)
+        self.override().write_text("previous override\n")
+        process = self.start_session(BLOCK_ACTIVATE=1)
+        self.wait_for_blocked_command(process)
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=5), 130)
+        self.assertEqual((self.binaries / "bin").resolve(), previous.resolve())
+        self.assertEqual(self.override().read_text(), "previous override\n")
+        self.assertTrue((self.root / "events").read_text().endswith("start firecrab-api\n"))
+
+    def test_live_caller_can_finish_without_stdin_eof(self):
+        process = self.start_session()
+        self.assertEqual(process.wait(timeout=10), 0, (self.root / "session.stderr").read_text())
+        self.assertFalse(process.stdin.closed)
+        self.assertNotIn("[CANCEL]", (self.root / "session.stderr").read_text())
+
+    def test_transport_signals_cancel_only_the_active_deployment(self):
+        archive = self.archive.read_bytes()
+        for shutdown in [signal.SIGINT, signal.SIGTERM, signal.SIGHUP]:
+            with self.subTest(signal=shutdown):
+                self.archive.write_bytes(archive)
+                (self.root / "blocked").unlink(missing_ok=True)
+                process = self.start_session(BLOCK_BUILD=1)
+                self.wait_for_blocked_command(process)
+                process.send_signal(shutdown)
+                self.assertEqual(process.wait(timeout=5), 130)
+                self.assertFalse((self.root / "events").exists())
+                with open(self.cache / "deploy.lock", "w") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_read_only_os_rejects_start_restart_and_build_even_with_healthy_api(self):
         self.mounts.write_text("/dev/os / ext4 ro,relatime 0 0\n")
-        for action in ["check", "start", "restart", "debug", "restore"]:
+        for action in ["check", "start", "restart", "clean", "debug", "restore"]:
             with self.subTest(action=action):
                 result = self.run_guest(action)
                 self.assertEqual(result.returncode, 74, result.stderr)
@@ -176,6 +343,29 @@ class GuestDevelopmentTest(unittest.TestCase):
         self.assertTrue(self.archive.exists())
         self.assertFalse((self.root / "events").exists())
         self.assertFalse(self.override().exists())
+
+    def test_low_os_disk_space_fails_before_staging_or_stopping_services(self):
+        result = self.run_guest(OS_FREE_KIB=1024)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[FAIL] guest OS disk has 1 MiB free", result.stderr)
+        self.assertIn("[HINT]", result.stderr)
+        self.assertFalse((self.root / "events").exists())
+        self.assertFalse(self.override().exists())
+        self.assertEqual(list(self.binaries.glob("build.*")), [])
+
+    def test_staging_compresses_debug_sections_and_removes_interrupted_builds(self):
+        running = self.binaries / "build.running"
+        running.mkdir(parents=True)
+        (self.binaries / "bin").symlink_to(running)
+        interrupted = self.binaries / "build.interrupted"
+        interrupted.mkdir()
+        result = self.run_guest(HEALTH_FAIL=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(interrupted.exists())
+        self.assertEqual((self.binaries / "bin").resolve(), running.resolve())
+        calls = (self.root / "objcopy-events").read_text().splitlines()
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(call.startswith("--compress-debug-sections=zlib ") for call in calls))
 
     def test_unreadable_system_executable_is_reported_as_os_failure(self):
         chmod = self.commands / "chmod"
@@ -243,7 +433,48 @@ class GuestDevelopmentTest(unittest.TestCase):
                 self.assertIn("ExecStart=" + str(self.binaries) + "/bin/firecrab-api", self.override().read_text())
                 self.assertIn("built-from-source", (self.binaries / "bin/firecrab-helper").read_text())
                 self.assertIn("runtime-tool", (self.binaries / "bin/extract-arm64-image").read_text())
+                if profile == "debug":
+                    self.assertTrue((self.binaries / "bin/firecrab-ingress").is_file())
+                    self.assertIn("Environment=FIRECRAB_INGRESS_BINARY=" + str(self.binaries) + "/bin/firecrab-ingress", self.override("firecrab-helper").read_text())
                 self.assertFalse(self.archive.exists())
+
+    def test_restore_keeps_the_engine_of_a_configured_ingress(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ingress = self.units / "firecrab-ingress.service"
+        ingress.write_text(f"[Service]\nExecStart={self.binaries}/bin/firecrab-ingress -p /run/firecrab-ingress/\n")
+        restored = self.run_guest(profile="restore")
+        self.assertEqual(restored.returncode, 0, restored.stderr)
+        self.assertFalse(self.override().exists())
+        self.assertTrue((self.binaries / "bin/firecrab-ingress").is_file())
+
+    def test_clean_preserves_configured_ingress_binaries_while_removing_build_caches(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pointer = self.binaries / "bin"
+        previous = pointer.resolve()
+        engine = (pointer / "firecrab-ingress").read_bytes()
+        resource = (pointer / "ingress/LICENSE.nginx").read_bytes()
+        ingress = self.units / "firecrab-ingress.service"
+        unit = f"[Service]\nExecStart={pointer}/firecrab-ingress -p /run/firecrab-ingress/\n"
+        ingress.write_text(unit)
+        lock_inode = (self.cache / "deploy.lock").stat().st_ino
+
+        for _ in range(2):
+            events = self.root / "events"
+            events.unlink(missing_ok=True)
+            result = self.run_guest("clean", BUILD_FAIL=1)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("independent ingress preserved", result.stdout)
+            self.assertFalse(self.override().exists())
+            self.assertFalse(self.override("firecrab-helper").exists())
+            self.assertEqual(pointer.resolve(), previous)
+            self.assertEqual((pointer / "firecrab-ingress").read_bytes(), engine)
+            self.assertEqual((pointer / "ingress/LICENSE.nginx").read_bytes(), resource)
+            self.assertEqual(ingress.read_text(), unit)
+            self.assertNotIn("firecrab-ingress", events.read_text())
+            self.assertEqual(sorted(path.name for path in self.cache.iterdir()), ["deploy.lock"])
+            self.assertEqual((self.cache / "deploy.lock").stat().st_ino, lock_inode)
 
     def test_debug_deploy_works_with_system_bash(self):
         result = self.run_guest(shell="/bin/bash")
@@ -333,6 +564,146 @@ class GuestDevelopmentTest(unittest.TestCase):
         self.assertIn("in progress", result.stderr)
         self.assertFalse((self.root / "events").exists())
 
+    def test_clean_restores_release_and_removes_only_development_files(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (self.root / "rustup-events").unlink()
+        custom = self.override().parent / "custom.conf"
+        custom.write_text("custom settings\n")
+        data = self.root / "persistent-data"
+        data.mkdir()
+        (data / "disk.raw").write_text("VM data\n")
+        (self.cache / ".hidden-cache").write_text("cached file")
+        (self.cache / "external").symlink_to(data, target_is_directory=True)
+        (self.binaries / "external").symlink_to(data, target_is_directory=True)
+        lock_inode = (self.cache / "deploy.lock").stat().st_ino
+
+        result = self.run_guest("clean", BUILD_FAIL=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("development files cleaned", result.stdout)
+        self.assertFalse(self.override().exists())
+        self.assertFalse(self.binaries.exists())
+        self.assertEqual(sorted(path.name for path in self.cache.iterdir()), ["deploy.lock"])
+        self.assertEqual((self.cache / "deploy.lock").stat().st_ino, lock_inode)
+        self.assertFalse((self.root / "rustup-events").exists())
+        self.assertEqual(custom.read_text(), "custom settings\n")
+        self.assertEqual((data / "disk.raw").read_text(), "VM data\n")
+        self.assertEqual((self.root / "local/firecrab-api/src/main.rs").read_text(), "edited local source")
+
+    def test_clean_without_a_deployment_is_repeatable_and_needs_no_checkout(self):
+        for _ in range(2):
+            result = self.run_guest("clean", BUILD_FAIL=1)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("[PASS]", result.stdout)
+            self.assertFalse(self.binaries.exists())
+            self.assertEqual(sorted(path.name for path in self.cache.iterdir()), ["deploy.lock"])
+            self.assertFalse((self.root / "rustup-events").exists())
+
+    def test_failed_clean_restoration_preserves_development_binaries_and_cache(self):
+        result = self.run_guest()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        previous = (self.binaries / "bin").resolve()
+        override = self.override().read_text()
+        result = self.run_guest("clean", HEALTH_FAIL=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[ROLLBACK]", result.stderr)
+        self.assertNotIn("development files cleaned", result.stdout)
+        self.assertEqual((self.binaries / "bin").resolve(), previous)
+        self.assertEqual(self.override().read_text(), override)
+        self.assertTrue((self.cache / "source/firecrab-api/src/main.rs").exists())
+        self.assertTrue((self.cache / "target").is_dir())
+        self.assertTrue((self.cache / "cargo/bin/rustup").exists())
+
+    def test_release_transitions_stop_vm_units_before_helper_and_binary_changes(self):
+        for action in ["clean", "restore"]:
+            for legacy in [0, 1]:
+                with self.subTest(action=action, legacy=legacy):
+                    helper = "firecrab-net-helper" if legacy else "firecrab-helper"
+                    vm = "firecrab-vm-9ef8f079dfb345918d349954213dc41e.service"
+                    failed = "firecrab-vm-0794b2e090b4417eb4b02ca2261189d9.service"
+                    (self.root / "vm-units").write_text(
+                        f"{vm} loaded active running MicroVM\n"
+                        f"{failed} loaded failed failed MicroVM\n"
+                        "unrelated.service loaded active running unrelated\n")
+                    events = self.root / "events"
+                    events.unlink(missing_ok=True)
+                    result = self.run_guest(action, LEGACY_HELPER=legacy)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    changes = events.read_text().splitlines()
+                    self.assertLess(changes.index("stop firecrab-api"), changes.index(f"stop {vm} {failed}"))
+                    self.assertLess(changes.index(f"stop {vm} {failed}"), changes.index(f"stop {helper}"))
+                    self.assertLess(changes.index(f"stop {helper}"), changes.index("daemon-reload"))
+                    self.assertLess(changes.index("daemon-reload"), changes.index("start firecrab-api"))
+                    self.assertFalse((self.root / "vm-units").read_text())
+                    self.assertFalse(any(line.startswith("stop unrelated") for line in changes))
+
+    def test_source_deployments_and_controls_preserve_running_vm_units(self):
+        vm = "firecrab-vm-9ef8f079dfb345918d349954213dc41e.service"
+        listing = f"{vm} loaded active running MicroVM\n"
+        archive = self.archive.read_bytes()
+        for action in ["debug", "release", "start", "stop", "restart"]:
+            with self.subTest(action=action):
+                self.archive.write_bytes(archive)
+                (self.root / "vm-units").write_text(listing)
+                (self.root / "events").unlink(missing_ok=True)
+                result = self.run_guest(action)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.root / "vm-units").read_text(), listing)
+                self.assertNotIn(vm, (self.root / "events").read_text())
+
+    def test_failed_vm_listing_or_stop_preserves_development_deployment(self):
+        self.assertEqual(self.run_guest().returncode, 0)
+        previous = (self.binaries / "bin").resolve()
+        override = self.override().read_text()
+        vm = "firecrab-vm-9ef8f079dfb345918d349954213dc41e.service"
+        for action in ["clean", "restore"]:
+            for failure in ["VM_LIST_FAIL", "VM_STOP_FAIL"]:
+                with self.subTest(action=action, failure=failure):
+                    (self.root / "vm-units").write_text(f"{vm} loaded active running MicroVM\n")
+                    events = self.root / "events"
+                    events.unlink(missing_ok=True)
+                    result = self.run_guest(action, **{failure: 1})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("[ROLLBACK]", result.stderr)
+                    self.assertNotIn("development files cleaned", result.stdout)
+                    self.assertEqual((self.binaries / "bin").resolve(), previous)
+                    self.assertEqual(self.override().read_text(), override)
+                    self.assertTrue((self.cache / "source/firecrab-api/src/main.rs").exists())
+                    self.assertTrue((self.cache / "target").is_dir())
+                    self.assertTrue((self.root / "vm-units").read_text())
+                    self.assertNotIn("stop firecrab-helper", events.read_text().splitlines())
+
+    def test_clean_releases_the_previous_vm_resource_before_start_and_is_repeatable(self):
+        resource = self.root / "tap-lock"
+        holder = subprocess.Popen(["python3", "-c", """
+import fcntl, pathlib, sys, time
+resource = pathlib.Path(sys.argv[1])
+with resource.open('w') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    resource.with_name('vm-ready').touch()
+    time.sleep(60)
+""", str(resource)])
+        def stop_holder():
+            if holder.poll() is None:
+                holder.kill()
+            holder.wait(timeout=5)
+        self.addCleanup(stop_holder)
+        deadline = time.monotonic() + 5
+        while not (self.root / "vm-ready").exists():
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        (self.root / "vm-runtime-pid").write_text(str(holder.pid))
+        vm = "firecrab-vm-9ef8f079dfb345918d349954213dc41e.service"
+        (self.root / "vm-units").write_text(f"{vm} loaded active running MicroVM\n")
+        for _ in range(2):
+            result = self.run_guest("clean")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIsNotNone(holder.poll(), "clean left the previous VM running")
+            result = self.run_guest("start")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with resource.open('w') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_controls_preserve_deployment_and_do_not_build(self):
         for legacy in [0, 1]:
             helper = "firecrab-net-helper" if legacy else "firecrab-helper"
@@ -367,7 +738,7 @@ class GuestDevelopmentTest(unittest.TestCase):
                     self.assertTrue(self.archive.exists())
 
     def test_controls_share_the_deployment_lock(self):
-        for action in ["start", "stop", "restart"]:
+        for action in ["start", "stop", "restart", "clean"]:
             with self.subTest(action=action):
                 result = self.run_guest(action, LOCK_FAIL=1)
                 self.assertNotEqual(result.returncode, 0)

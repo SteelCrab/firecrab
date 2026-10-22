@@ -1047,7 +1047,7 @@ mod tests {
     /// `packageUrl` is derived purely from `FIRECRAB_IMAGE_BASE_URL`, so on a
     /// host without one — the common dev case, and exactly the case web
     /// bootstrap exists for — a freshly staged archive showed up as
-    /// "패키지 URL 없음" with no way to install it. `packageStaged` reports
+    /// "No package URL" with no way to install it. `packageStaged` reports
     /// the local archive independently, which is what the dashboard's local
     /// install button keys off.
     #[tokio::test]

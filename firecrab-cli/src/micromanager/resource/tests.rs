@@ -109,6 +109,20 @@ fn lock_file_errors_are_not_reported_as_contention() {
     assert!(matches!(result, Err(Error::Io(_))), "{result:?}");
 }
 
+#[cfg(unix)]
+#[test]
+fn resource_lock_release_does_not_wait_for_inherited_descriptors() {
+    let dir = tempfile::tempdir().unwrap();
+    let held = lock(dir.path()).unwrap();
+    // A forked child shares the same open-file description, just like try_clone.
+    let inherited = held.0.try_clone().unwrap();
+    drop(held);
+    let reacquired = lock(dir.path());
+    drop(inherited);
+    assert!(reacquired.is_ok(), "{reacquired:?}");
+    assert!(matches!(lock(dir.path()), Err(Error::Busy)));
+}
+
 #[test]
 fn controller_identity_is_persistent_and_distinguishes_managed_homes() {
     let first = tempfile::tempdir().unwrap();

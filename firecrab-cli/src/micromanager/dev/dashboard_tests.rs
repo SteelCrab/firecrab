@@ -1,4 +1,5 @@
 use super::*;
+use socket2::{Domain, Socket, Type};
 use std::net::TcpListener;
 
 const VITE: &str = r#"
@@ -109,6 +110,60 @@ fn starts_reuses_stops_and_resumes_the_selected_checkout() {
 }
 
 #[test]
+fn clean_stops_the_dashboard_and_forgets_only_its_runtime_files() {
+    let fixture = Fixture::new();
+    fixture.start().unwrap();
+    let state = fixture.state();
+    let runtime = fixture.home.path().join("runtime");
+    fs::write(runtime.join("other-state.json"), "preserved").unwrap();
+    for _ in 0..2 {
+        clean_at(fixture.home.path(), &fixture.url()).unwrap();
+        assert!(!running(&client().unwrap(), &state, &fixture.url()));
+        assert!(read_session(fixture.home.path()).unwrap().is_none());
+        for name in [
+            "dev-dashboard.json",
+            "dev-dashboard.mjs",
+            "dev-dashboard.log",
+        ] {
+            assert!(!runtime.join(name).exists());
+        }
+        assert!(runtime.join("dev-dashboard.lock").is_file());
+        assert_eq!(
+            fs::read_to_string(runtime.join("other-state.json")).unwrap(),
+            "preserved"
+        );
+        assert!(
+            fixture
+                .source()
+                .join("firecrab-frontend/node_modules/vite/index.mjs")
+                .is_file()
+        );
+    }
+}
+
+#[test]
+fn clean_preserves_dashboard_files_when_ownership_state_is_invalid_or_locked() {
+    let home = tempfile::tempdir().unwrap();
+    let runtime = home.path().join("runtime");
+    fs::create_dir_all(&runtime).unwrap();
+    fs::write(runtime.join("dev-dashboard.json"), "invalid session").unwrap();
+    fs::write(runtime.join("dev-dashboard.log"), "preserved").unwrap();
+    assert!(matches!(clean(home.path()), Err(Error::State(_))));
+    assert_eq!(
+        fs::read_to_string(runtime.join("dev-dashboard.log")).unwrap(),
+        "preserved"
+    );
+    let _lock = lock(home.path()).unwrap();
+    assert!(
+        clean(home.path())
+            .unwrap_err()
+            .to_string()
+            .contains("another development dashboard")
+    );
+    assert!(runtime.join("dev-dashboard.json").exists());
+}
+
+#[test]
 fn refuses_unauthorized_shutdown_and_stale_session_ownership() {
     let fixture = Fixture::new();
     fixture.start().unwrap();
@@ -141,13 +196,20 @@ fn switches_checkouts_by_stopping_only_the_previous_owned_server() {
 }
 
 #[test]
-fn port_probe_tracks_listener_lifecycle() {
+fn port_probe_distinguishes_listening_and_closed_ports() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    assert!(listening(&url));
-    drop(listener.accept().unwrap());
-    drop(listener);
-    assert!(!listening(&url));
+    assert!(listening(&format!(
+        "http://{}",
+        listener.local_addr().unwrap()
+    )));
+    // A bound socket that never listens refuses connections and keeps its port
+    // from parallel tests; releasing and rebinding a port races with them.
+    let closed = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+    closed
+        .bind(&SocketAddr::from(([127, 0, 0, 1], 0)).into())
+        .unwrap();
+    let address = closed.local_addr().unwrap().as_socket().unwrap();
+    assert!(!listening(&format!("http://{address}")));
 }
 
 #[test]

@@ -22,6 +22,20 @@ Deleting an installed image retains its staged package.
 For container references, follow [OCI import](oci.md).
 For kernel inspection and pairing, use [Kernels](kernels.md).
 
+## Build a pulled image
+
+Images downloaded through [Pipe Registry](pipe-registry.md) appear in **M2Image**
+with **Build required** status. Select **⋯ → Build M2Image** on the source row.
+The **Registry** column shows **Docker Hub**, **GHCR**, **ECR**, or **Harbor**
+before and after a build. Hover over the registry name to see its full address.
+Images without a retained source record show **—**.
+Image names show the repository and tag. Digest references show the first 12
+digest characters. Hover over the name to see the full reference or template alias.
+The build uses the downloaded digest and reuses verified cached blobs.
+Wait for **Installed** before creating a VM from the generated alias.
+Running builds resume status polling after a page reload. Failed builds keep
+their source and log so they can be retried.
+
 ## Register
 
 Register an installed custom image to keep a reusable package in this host's catalog.

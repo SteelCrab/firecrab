@@ -9,6 +9,12 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod micro_services;
+pub use micro_services::{
+    DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
+    ServiceInstance, ServicePhase, ServiceRuntime,
+};
+
 /// The egress policies the API may request for a VM. New policies are added
 /// here and mirrored in `firecrab-helper`'s own (deliberately separate)
 /// `EgressPolicy`; the helper is the trust boundary and re-validates every
@@ -555,7 +561,7 @@ pub struct StorageRootResponse {
 }
 
 /// A MicroStorage — a named host path that VMs can put disks on
-/// (EBS analogue; 4주차 MicroStorage).
+/// (EBS analogue; week 4 MicroStorage).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroStorageResponse {

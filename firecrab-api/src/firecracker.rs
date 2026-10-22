@@ -1505,6 +1505,7 @@ mod tests {
                             return;
                         }
                         let response = NetworkResponseEnvelope {
+                            pipe: None,
                             version: PROTOCOL_VERSION,
                             request_id: envelope.request_id,
                             result: Ok(()),
