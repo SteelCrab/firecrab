@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type {
   ImageInstallResponse,
   ImageResponse,
@@ -24,6 +24,11 @@ import { getRegistryImages, pinnedRegistryReference, type RegistryImage } from "
 import Banner from "./Banner";
 import LogExportActions from "./LogExportActions";
 import { useI18n } from "../i18n";
+import { Layers } from "lucide-react";
+import Screen from "./layout/Screen";
+import { useScreenStatus } from "./layout/screenStatus";
+import { DetailHead, DetailProp, DetailSection } from "./ui/DetailSection";
+import StatusBadge from "./ui/StatusBadge";
 
 /** Human size for the real rootfs artifact (not the ceiled min-disk floor). */
 function formatRootfsSize(bytes: number | undefined | null): string {
@@ -161,15 +166,16 @@ function OptionsMenu({
 
   return (
     <div className="options-menu" ref={rootRef}>
-      <button type="button" className="options-menu-trigger" onClick={() => setOpen((current) => !current)}>
+      <button type="button" className="options-menu-trigger" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
         ⋯
       </button>
       {open && (
-        <ul className="options-menu-list">
+        <ul className="options-menu-list" role="menu">
           {items.map((item, index) => (
-            <li key={index}>
+            <li key={index} role="none">
               <button
                 type="button"
+                role="menuitem"
                 className={`options-menu-item${item.danger ? " danger" : ""}`}
                 disabled={item.disabled}
                 onClick={() => {
@@ -239,98 +245,85 @@ function ImageDetail({
     !kernelUpdateBusy;
 
   return (
-    <div className="subpanel">
-      <dl className="detail-fields mono">
-        <dt>alias</dt>
-        <dd>{image.alias}</dd>
-
-        <dt>{t("Version", "버전")}</dt>
-        <dd>{image.version}</dd>
-
-        <dt>{t("Kernel version", "커널 버전")}</dt>
-        <dd>{image.kernelVersion ?? t("Distro-provided kernel", "배포판 제공 커널")}</dd>
-
-        <dt>{t("Kernel image", "커널 이미지")}</dt>
-        <dd>{image.kernelImage || "—"}</dd>
-
-        <dt>{t("Kernel SHA256", "커널 SHA256")}</dt>
-        <dd>{image.kernelSha256 || "—"}</dd>
-
-        <dt>{t("Rootfs SHA256", "rootfs SHA256")}</dt>
-        <dd>{image.rootfsSha256 || "—"}</dd>
-
-        {image.initrdSha256 && (
+    <>
+      <DetailHead
+        title={image.alias}
+        meta={(
           <>
-            <dt>initrd SHA256</dt>
-            <dd>{image.initrdSha256}</dd>
+            <span>{image.version}</span>
+            {image.installed ? <span className="badge running">{t("Installed", "설치됨")}</span> : <span className="badge">{t("Not installed", "미설치")}</span>}
           </>
         )}
-
-        <dt>{t("Minimum disk", "최소 디스크")}</dt>
-        <dd>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</dd>
-
-        <dt>{t("Rootfs size", "rootfs 크기")}</dt>
-        <dd>{formatRootfsSize(image.rootfsSizeBytes)}</dd>
-
-        <dt>{t("Status", "상태")}</dt>
-        <dd>
-          {image.installed
-            ? t("Installed", "설치됨")
-            : t("Not installed", "미설치")}
-        </dd>
-
-        <dt>{t("VMs using it", "사용 중인 VM")}</dt>
-        <dd>
-          {usedByError
-            ? usedByError
-            : usedByVms === null
-              ? t("Loading…", "불러오는 중…")
-              : usedByVms.length === 0
-                ? t("None", "없음")
-                : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
-        </dd>
-      </dl>
-      {image.installed && (
-        <div className="kernel-update-control">
-          <label htmlFor={`image-kernel-${image.alias}`}>
-            {t("Update image kernel", "이미지 커널 업데이트")}
-          </label>
-          <div className="kernel-update-row">
-            <select
-              id={`image-kernel-${image.alias}`}
-              value={targetKernel}
-              onChange={(event) => setTargetKernel(event.target.value)}
-              disabled={kernelUpdateBusy || installedKernels.length === 0}
-            >
-              <option value="">
-                {installedKernels.length === 0
-                  ? t("Install a kernel first", "먼저 커널을 설치하세요")
-                  : t("Select installed kernel", "설치된 커널을 선택하세요")}
-              </option>
-              {installedKernels.map((kernel) => (
-                <option key={kernel.version} value={kernel.version}>
-                  {kernel.version}{kernel.version === image.kernelVersion ? t(" · current", " · 현재") : ""}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="btn primary"
-              disabled={!canUpdateKernel}
-              onClick={() => void onUpdateKernel(targetKernel)}
-            >
-              {kernelUpdateBusy ? t("Updating…", "업데이트 중…") : t("Update kernel", "커널 업데이트")}
-            </button>
-          </div>
-          <small>
-            {t(
-              "Only images with no VM references can change their kernel.",
-              "VM이 연결되지 않은 이미지만 커널을 변경할 수 있습니다.",
+      />
+      <div className="detail-body">
+        <DetailSection title={t("Properties", "속성")}>
+          <dl className="props">
+            <DetailProp label={t("Version", "버전")}>{image.version}</DetailProp>
+            <DetailProp label={t("Kernel", "커널")}>{image.kernelVersion ?? t("Distro-provided kernel", "배포판 제공 커널")}</DetailProp>
+            <DetailProp label={t("Kernel image", "커널 이미지")}><span className="mono">{image.kernelImage || "—"}</span></DetailProp>
+            <DetailProp label={t("Kernel SHA256", "커널 SHA256")} copy={image.kernelSha256 || undefined}><span className="mono">{image.kernelSha256 || "—"}</span></DetailProp>
+            <DetailProp label={t("Rootfs SHA256", "rootfs SHA256")} copy={image.rootfsSha256 || undefined}><span className="mono">{image.rootfsSha256 || "—"}</span></DetailProp>
+            {image.initrdSha256 && (
+              <DetailProp label="initrd SHA256" copy={image.initrdSha256}><span className="mono">{image.initrdSha256}</span></DetailProp>
             )}
-          </small>
-        </div>
-      )}
-    </div>
+            <DetailProp label={t("Minimum disk", "최소 디스크")}>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</DetailProp>
+            <DetailProp label={t("Rootfs size", "rootfs 크기")}>{formatRootfsSize(image.rootfsSizeBytes)}</DetailProp>
+          </dl>
+        </DetailSection>
+
+        <DetailSection title={t("VMs using it", "사용 중인 VM")}>
+          {usedByError ? (
+            <p className="field-error">{usedByError}</p>
+          ) : usedByVms === null ? (
+            <p className="detail-note">{t("Loading…", "불러오는 중…")}</p>
+          ) : usedByVms.length === 0 ? (
+            <p className="detail-note">{t("None", "없음")}</p>
+          ) : (
+            <ul className="detail-list">
+              {usedByVms.map((vm) => (
+                <li key={vm.id}>
+                  <span className="detail-list-main">{vm.name}</span>
+                  <StatusBadge state={vm.state} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </DetailSection>
+
+        {image.installed && (
+          <DetailSection title={t("Update image kernel", "이미지 커널 업데이트")}>
+            <div className="field detail-field">
+              <label htmlFor={`image-kernel-${image.alias}`} className="sr-only">{t("Update image kernel", "이미지 커널 업데이트")}</label>
+              <select
+                id={`image-kernel-${image.alias}`}
+                value={targetKernel}
+                onChange={(event) => setTargetKernel(event.target.value)}
+                disabled={kernelUpdateBusy || installedKernels.length === 0}
+              >
+                <option value="">
+                  {installedKernels.length === 0
+                    ? t("Install a kernel first", "먼저 커널을 설치하세요")
+                    : t("Select installed kernel", "설치된 커널을 선택하세요")}
+                </option>
+                {installedKernels.map((kernel) => (
+                  <option key={kernel.version} value={kernel.version}>
+                    {kernel.version}{kernel.version === image.kernelVersion ? t(" · current", " · 현재") : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="detail-sec-buttons">
+              <button type="button" className="btn primary" disabled={!canUpdateKernel} onClick={() => void onUpdateKernel(targetKernel)}>
+                {kernelUpdateBusy ? t("Updating…", "업데이트 중…") : t("Update kernel", "커널 업데이트")}
+              </button>
+            </div>
+            <p className="detail-note">
+              {t("Only images with no VM references can change their kernel.", "VM이 연결되지 않은 이미지만 커널을 변경할 수 있습니다.")}
+            </p>
+          </DetailSection>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -351,7 +344,7 @@ function ImageJobLog({ job }: { job: ImageInstallResponse }) {
         <LogExportActions
           text={job.log}
           filename={logDownloadFilename("m2image-oci", job.alias)}
-          buttonClassName="btn console-bar-btn"
+          buttonClassName="btn sm"
           disabled={!job.log}
         />
       </div>
@@ -785,6 +778,7 @@ function OciImportPanel({
 /** M2Image lists installed templates and pulled OCI sources awaiting a build. */
 export default function Images() {
   const { t } = useI18n();
+  const { setDetailOpen } = useScreenStatus();
   const [images, setImages] = useState<ImageResponse[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [pulledImages, setPulledImages] = useState<RegistryImage[]>([]);
@@ -934,12 +928,34 @@ export default function Images() {
     }
   };
 
+  const detailPanel = selectedImage ? (
+    <ImageDetail
+      image={selectedImage}
+      kernels={kernels}
+      kernelUpdateBusy={busyAlias === selectedImage.alias}
+      onUpdateKernel={(version) => handleUpdateKernel(selectedImage.alias, version)}
+      usedByVms={usedByVms}
+      usedByError={usedByError}
+    />
+  ) : null;
+  const screen = (body: ReactNode) => (
+    <Screen
+      view="images"
+      detail={detailPanel}
+      detailLabel={t("Image detail", "이미지 상세")}
+      detailKind={<><Layers aria-hidden="true" />M2Image</>}
+      onCloseDetail={() => setSelectedAlias(null)}
+    >
+      {body}
+    </Screen>
+  );
+
   if (images === null && !listError) {
-    return <div className="empty">{t("Loading image catalog…", "이미지 목록 불러오는 중…")}</div>;
+    return screen(<div className="empty">{t("Loading image catalog…", "이미지 목록 불러오는 중…")}</div>);
   }
 
-  return (
-    <div className="stack">
+  return screen(
+    <>
       {actionError && <div className="field-error">{actionError}</div>}
       <section className="panel">
         <h2 className="panel-title"><span>M2Image</span><button className="btn" type="button" onClick={() => void Promise.all([refreshList(), refreshPulledImages()])}>{t("Refresh", "새로 고침")}</button></h2>
@@ -975,7 +991,11 @@ export default function Images() {
                   <tr
                     key={image.alias}
                     className={selectedAlias === image.alias ? "is-selected" : undefined}
-                    onClick={() => setSelectedAlias(selectedAlias === image.alias ? null : image.alias)}
+                    aria-selected={selectedAlias === image.alias}
+                    onClick={() => {
+                      setSelectedAlias(image.alias);
+                      setDetailOpen(true);
+                    }}
                   >
                     <td className="mono" title={image.alias}>
                       {source ? registryImageName(source) : image.alias}
@@ -1007,21 +1027,11 @@ export default function Images() {
             </tbody>
           </table>
         )}
-        {selectedImage && (
-          <ImageDetail
-            image={selectedImage}
-            kernels={kernels}
-            kernelUpdateBusy={busyAlias === selectedImage.alias}
-            onUpdateKernel={(version) => handleUpdateKernel(selectedImage.alias, version)}
-            usedByVms={usedByVms}
-            usedByError={usedByError}
-          />
-        )}
       </section>
       <OciImportPanel
         images={images ?? []}
         onImported={handleOciImported}
       />
-    </div>
+    </>,
   );
 }

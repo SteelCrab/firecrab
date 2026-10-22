@@ -18,6 +18,7 @@ use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
 mod micro_services;
+mod pipe_databases;
 mod registries;
 pub use registries::RegistryLogin;
 
@@ -686,6 +687,7 @@ impl Store {
         migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
+        conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;

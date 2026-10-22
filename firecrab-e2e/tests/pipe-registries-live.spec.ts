@@ -40,7 +40,7 @@ test.describe("Pipe registries against the API", () => {
   test("B18 lists the Registry card with the API login count and opens the registry panel", async ({ page }) => {
     const { rows } = await connections();
     const pipe = await openCards(page);
-    await expect(pipe.getByRole("listitem")).toHaveCount(5);
+    await expect(pipe.getByRole("listitem")).toHaveCount(6);
     const card = pipe.getByRole("link", { name: "Pipe Registry", exact: true });
     await expect(card).toContainText(cardStatus(rows.length));
     await card.click();

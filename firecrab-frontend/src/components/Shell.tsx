@@ -1,84 +1,54 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
-import { VIEWS, viewLabel } from "../navigation";
+import { Menu } from "lucide-react";
 import type { ViewId } from "../navigation";
-import NavIcon, { type NavIconId } from "./NavIcons";
-import UpdateIndicator from "./UpdateIndicator";
 import { useI18n } from "../i18n";
+import SidebarNav from "./layout/SidebarNav";
 
 interface ShellProps {
   view: ViewId;
   onSelectView: (view: ViewId) => void;
+  onOpenPalette: () => void;
+  vmCount: number;
+  vmErrorCount: number;
   children: ReactNode;
 }
 
 /**
- * Header + left nav + content frame every screen renders inside. The nav
- * collapses to an icon rail and then to a horizontal strip via CSS alone —
- * no breakpoint state to keep in sync with the stylesheet.
+ * Sidebar + workspace frame every screen renders inside. Below 768px the
+ * sidebar becomes a drawer opened from the menu button; the icon rail between
+ * 768px and 1024px is CSS alone.
  */
-export default function Shell({ view, onSelectView, children }: ShellProps) {
-  const { locale, setLocale, t } = useI18n();
+export default function Shell({ view, onSelectView, onOpenPalette, vmCount, vmErrorCount, children }: ShellProps) {
+  const { t } = useI18n();
+  const [navOpen, setNavOpen] = useState(false);
+
   return (
-    <div className="shell">
-      <header className="shell-header">
-        <div className="shell-brand">
-          <p className="eyebrow">private microvm cloud</p>
-          <h1 className="wordmark">
-            firecrab
-            <span className="cursor">_</span>
-          </h1>
-        </div>
-        <label className="language-select">
-          <span className="sr-only">{t("Language", "언어")}</span>
-          <select
-            value={locale}
-            onChange={(event) => setLocale(event.target.value as "en" | "ko")}
-            aria-label={t("Language", "언어")}
-          >
-            <option value="en">English</option>
-            <option value="ko">한국어</option>
-          </select>
-        </label>
-      </header>
-      <div className="shell-body">
-        <nav className="shell-nav" aria-label={t("Main navigation", "주요 메뉴")}>
-          <ul>
-            {VIEWS.map((item) => {
-              const label = viewLabel(item, locale);
-              return (
-              <li key={item.id}>
-                <button
-                  type="button"
-                  className={item.id === view ? "shell-nav-item active" : "shell-nav-item"}
-                  aria-current={item.id === view ? "page" : undefined}
-                  // The rail hides the label, so the accessible name has to
-                  // come from here; `title` gives the same text on hover.
-                  aria-label={label}
-                  title={label}
-                  onClick={() => onSelectView(item.id)}
-                >
-                  {"icon" in item && item.icon ? (
-                    <img
-                      className="shell-nav-icon"
-                      src={item.icon}
-                      alt=""
-                      width={18}
-                      height={18}
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <NavIcon id={item.id as NavIconId} className="shell-nav-icon" />
-                  )}
-                  <span className="shell-nav-label">{label}</span>
-                </button>
-              </li>
-              );
-            })}
-          </ul>
-          <UpdateIndicator />
-        </nav>
-        <main className="shell-content">{children}</main>
-      </div>
+    <div className="app-frame" data-nav-open={navOpen ? "" : undefined}>
+      <button
+        type="button"
+        className="icon-btn nav-toggle"
+        aria-label={t("Open menu", "메뉴 열기")}
+        aria-expanded={navOpen}
+        onClick={() => setNavOpen(true)}
+      >
+        <Menu aria-hidden="true" />
+      </button>
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} />}
+      <SidebarNav
+        view={view}
+        onSelectView={(next) => {
+          setNavOpen(false);
+          onSelectView(next);
+        }}
+        onOpenPalette={() => {
+          setNavOpen(false);
+          onOpenPalette();
+        }}
+        vmCount={vmCount}
+        vmErrorCount={vmErrorCount}
+      />
+      <div className="app-workspace">{children}</div>
     </div>
   );
 }

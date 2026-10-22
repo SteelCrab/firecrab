@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { PipeSnapshot } from "../api/pipe";
+import { listPipeDatabases } from "../api/pipeDatabases";
 import { getRegistries } from "../api/registries";
 import { useI18n } from "../i18n";
 import { pipeCardHash, type PipeCardId } from "../navigation";
@@ -21,6 +22,9 @@ function PipeCardIcon({ id }: { id: PipeCardId }) {
     case "registry":
       // Shipping container: images held in a container registry.
       return <svg className="pipe-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="1.5" /><path d="M6.5 9.5v5M10.5 9.5v5M14.5 9.5v5M18.5 9.5v5" strokeWidth="1.6" /></svg>;
+    case "database":
+      // Stacked disks: a database cylinder.
+      return <svg className="pipe-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><ellipse cx="12" cy="5.5" rx="8" ry="3" /><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13" /><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" /></svg>;
     case "firecrab-tunnel":
       return <img className="pipe-card-icon" src="/firecrab.png" alt="" width={28} height={28} />;
     case "quick-tunnel":
@@ -33,12 +37,17 @@ function PipeCardIcon({ id }: { id: PipeCardId }) {
 export default function PipeCards({ snapshot, error }: Props) {
   const { t } = useI18n();
   const [registries, setRegistries] = useState<number | null | undefined>(undefined);
+  const [databases, setDatabases] = useState<number | null | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
     getRegistries().then(
       connections => { if (!cancelled) setRegistries(connections.length); },
       () => { if (!cancelled) setRegistries(null); },
+    );
+    listPipeDatabases().then(
+      connections => { if (!cancelled) setDatabases(connections.length); },
+      () => { if (!cancelled) setDatabases(null); },
     );
     return () => { cancelled = true; };
   }, []);
@@ -61,6 +70,11 @@ export default function PipeCards({ snapshot, error }: Props) {
     if (registries === undefined) return show(loading);
     if (registries === null) return show(unavailable, "error");
     return registries ? show(t(`${registries} connected`, `${registries}개 연결`), "running") : unconfigured;
+  }
+  function database() {
+    if (databases === undefined) return show(loading);
+    if (databases === null) return show(unavailable, "error");
+    return databases ? show(t(`${databases} saved`, `${databases}개 저장됨`), "running") : unconfigured;
   }
   function firecrab() {
     const addresses = snapshot?.firecrabTunnels ?? [];
@@ -86,6 +100,7 @@ export default function PipeCards({ snapshot, error }: Props) {
   const cards: Card[] = [
     { id: "route", title: "Route", description: t("Domain · path", "도메인 · 경로"), ...(unknown ?? route()) },
     { id: "registry", title: "Pipe Registry", description: t("Image pull", "이미지 가져오기"), ...registry() },
+    { id: "database", title: "Database", description: t("Connections · browse", "연결 · 조회"), ...database() },
     { id: "firecrab-tunnel", title: "Firecrab Tunnel", description: t("Fixed address", "고정 주소"), ...(unknown ?? firecrab()) },
     { id: "quick-tunnel", title: "Cloudflare Quick Tunnel", description: t("Temporary URL", "임시 주소"), ...(unknown ?? quick()) },
     { id: "named-tunnel", title: "Cloudflare Named Tunnel", description: t("Custom domain", "사용자 도메인"), ...(unknown ?? named()) },
