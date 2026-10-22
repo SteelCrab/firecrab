@@ -1,3 +1,5 @@
+//! CLI configuration and history commands for host-local VM schedules.
+
 use clap::{Args, Subcommand};
 use firecrab_api_types::{
     ScheduleAction, ScheduleResponse, ScheduleRun, ScheduleSpec, ScheduleTiming,
@@ -7,43 +9,66 @@ use uuid::Uuid;
 
 use crate::api_client::{ApiClient, ApiError};
 
+/// Schedule operations sent to the API selected by the global host options.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// List saved schedules and their next execution times.
     List {
+        /// Emit the complete schedule responses as JSON.
         #[arg(long)]
         json: bool,
     },
     /// Read a schedule, including its latest execution result.
-    Get { id: Uuid },
+    Get {
+        /// Schedule identifier.
+        id: Uuid,
+    },
     /// Create a one-time or recurring schedule.
     Create {
+        /// Complete target, operation, and timing configuration.
         #[command(flatten)]
         spec: SpecArgs,
     },
     /// Replace a schedule's complete configuration.
     Update {
+        /// Schedule identifier.
         id: Uuid,
+        /// Complete replacement; omitted fields are not retained from the old configuration.
         #[command(flatten)]
         spec: SpecArgs,
     },
     /// Enable a schedule, starting with its next future occurrence.
-    Enable { id: Uuid },
+    Enable {
+        /// Schedule identifier.
+        id: Uuid,
+    },
     /// Disable future runs; an active operation continues to completion.
-    Disable { id: Uuid },
+    Disable {
+        /// Schedule identifier.
+        id: Uuid,
+    },
     /// Show the latest 100 executions, newest first.
-    Runs { id: Uuid },
+    Runs {
+        /// Schedule identifier.
+        id: Uuid,
+    },
     /// Delete an idle schedule and its execution history.
-    Delete { id: Uuid },
+    Delete {
+        /// Schedule identifier.
+        id: Uuid,
+    },
 }
 
+/// Shared create/update arguments; clap requires exactly one timing mode.
 #[derive(Debug, Args)]
 pub struct SpecArgs {
+    /// Display name containing 1–64 UTF-8 bytes and no control characters.
     #[arg(long)]
     name: String,
     /// Target MicroVM UUID.
     #[arg(long)]
     vm: Uuid,
+    /// VM lifecycle operation: start or stop.
     #[arg(long, value_parser = ["start", "stop"])]
     action: String,
     /// One RFC 3339 instant, including Z or an explicit offset.
@@ -61,6 +86,7 @@ pub struct SpecArgs {
 }
 
 impl SpecArgs {
+    /// Convert clap-validated arguments into the shared full-replacement API body.
     fn into_spec(self) -> ScheduleSpec {
         let timing = match self.at {
             Some(at) => ScheduleTiming::Once { at },
@@ -85,6 +111,8 @@ impl SpecArgs {
     }
 }
 
+/// Execute one schedule command using the selected API client.
+/// Only list defaults to tabular output; other responses use pretty JSON.
 pub fn run(client: &ApiClient, command: Command) -> Result<(), ApiError> {
     match command {
         Command::List { json } => {
@@ -145,6 +173,7 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Update only the enabled flag and print the saved schedule response.
 fn set_enabled(client: &ApiClient, id: Uuid, enabled: bool) -> Result<(), ApiError> {
     print_json(&client.put::<_, ScheduleResponse>(
         &format!("/api/schedules/{id}/enabled"),
@@ -153,6 +182,7 @@ fn set_enabled(client: &ApiClient, id: Uuid, enabled: bool) -> Result<(), ApiErr
     Ok(())
 }
 
+/// Print a typed API result as human-readable JSON.
 fn print_json(value: &impl serde::Serialize) {
     println!(
         "{}",

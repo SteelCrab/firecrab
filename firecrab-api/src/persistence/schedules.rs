@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::{PersistenceError, Store};
 
+/// Tables and indexes enforcing one claim per instant and one active run per schedule.
 pub(super) const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS schedules (
     id TEXT PRIMARY KEY,
@@ -32,14 +33,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS schedule_one_running ON schedule_runs(schedule
 CREATE INDEX IF NOT EXISTS schedule_run_history ON schedule_runs(schedule_id);
 ";
 
+/// Expected mutation outcomes, distinct from database or record-decoding failures.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ScheduleMutation {
+    /// Applied successfully, including an idempotent enable/disable request.
     Done,
+    /// No schedule has the requested identifier.
     Missing,
+    /// Active execution prevents replacement, deletion, or re-enabling.
     Busy,
+    /// The requested enabled configuration has no unconsumed future occurrence.
     Expired,
 }
 
+/// Wrap invalid persisted data or scheduler ownership failures with schedule context.
 fn corrupt(error: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::CorruptRecord {
         id: "schedule".to_owned(),
@@ -47,6 +54,7 @@ fn corrupt(error: impl std::fmt::Display) -> PersistenceError {
     }
 }
 
+/// Decode configuration columns; callers attach the latest execution separately.
 fn decode_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScheduleResponse> {
     let id: String = row.get(0)?;
     let spec: String = row.get(1)?;
@@ -63,6 +71,7 @@ fn decode_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScheduleResponse
     })
 }
 
+/// Read at most `limit` executions in reverse claim-insertion order.
 fn runs(conn: &Connection, id: Uuid, limit: usize) -> Result<Vec<ScheduleRun>, PersistenceError> {
     let mut statement = conn.prepare(
         "SELECT id, scheduled_at_ms, started_at_ms, finished_at_ms, status, error
@@ -100,6 +109,7 @@ fn runs(conn: &Connection, id: Uuid, limit: usize) -> Result<Vec<ScheduleRun>, P
     .collect()
 }
 
+/// Read one configuration and its latest run using the caller's connection or transaction.
 fn get(conn: &Connection, id: Uuid) -> Result<Option<ScheduleResponse>, PersistenceError> {
     let mut result = conn.query_row("SELECT id, spec, next_run_at_ms, created_at_ms, updated_at_ms FROM schedules WHERE id = ?1",
         [id.to_string()], decode_schedule).optional()?;
@@ -109,6 +119,8 @@ fn get(conn: &Connection, id: Uuid) -> Result<Option<ScheduleResponse>, Persiste
     Ok(result)
 }
 
+/// Insert or update scheduling state while preserving the original creation time.
+/// Execution history is stored separately and is not changed here.
 fn write(conn: &Connection, schedule: &ScheduleResponse) -> Result<(), PersistenceError> {
     let spec = serde_json::to_string(&schedule.spec).map_err(corrupt)?;
     conn.execute("INSERT INTO schedules (id, spec, enabled, next_run_at_ms, created_at_ms, updated_at_ms)
@@ -118,6 +130,7 @@ fn write(conn: &Connection, schedule: &ScheduleResponse) -> Result<(), Persisten
     Ok(())
 }
 
+/// Whether a durable claim exists whose completion or interruption is not recorded.
 fn busy(conn: &Connection, id: Uuid) -> Result<bool, PersistenceError> {
     Ok(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM schedule_runs WHERE schedule_id = ?1 AND status = 'running')",
@@ -126,7 +139,9 @@ fn busy(conn: &Connection, id: Uuid) -> Result<bool, PersistenceError> {
     )?)
 }
 
-/// A backwards wall-clock adjustment must not reuse an already claimed instant.
+/// Find the next occurrence after both `now` and the latest retained claim instant.
+/// Disabled schedules have no next occurrence. A backwards clock adjustment must
+/// not reuse an already claimed instant.
 fn next(
     conn: &Connection,
     schedule: &ScheduleResponse,
@@ -167,6 +182,7 @@ impl Store {
         })?;
         Ok(file)
     }
+    /// List schedules by display name and identifier, each with its latest run.
     pub(crate) fn list_schedules(&self) -> Result<Vec<ScheduleResponse>, PersistenceError> {
         let conn = self.lock();
         let mut stmt = conn.prepare("SELECT id, spec, next_run_at_ms, created_at_ms, updated_at_ms FROM schedules ORDER BY json_extract(spec, '$.name'), id")?;
@@ -179,10 +195,12 @@ impl Store {
         Ok(schedules)
     }
 
+    /// Read one schedule and its latest run; return `None` if it does not exist.
     pub(crate) fn schedule(&self, id: Uuid) -> Result<Option<ScheduleResponse>, PersistenceError> {
         get(&self.lock(), id)
     }
 
+    /// Persist a newly validated schedule configuration without creating a run.
     pub(crate) fn insert_schedule(
         &self,
         schedule: &ScheduleResponse,
@@ -191,6 +209,11 @@ impl Store {
     }
 
     /// Active operations reject edits and deletion. Disabling is always allowed.
+    ///
+    /// `replacement` supplies a complete configuration; otherwise `enabled`
+    /// selects a pause/resume request. With neither, delete configuration and
+    /// history. Idempotent enable/disable requests return without changing state.
+    /// Future timing is recalculated under the same immediate transaction.
     pub(crate) fn mutate_schedule(
         &self,
         id: Uuid,
@@ -233,11 +256,17 @@ impl Store {
         Ok(ScheduleMutation::Done)
     }
 
+    /// Read up to 100 executions, newest claim first; unknown IDs return no rows.
     pub(crate) fn schedule_runs(&self, id: Uuid) -> Result<Vec<ScheduleRun>, PersistenceError> {
         runs(&self.lock(), id, 100)
     }
 
     /// Claim and consume due instants atomically, before calling a VM handler.
+    ///
+    /// Select up to `limit` idle schedules due at or before Unix millisecond `now`.
+    /// Clear their next times and disable one-time schedules before committing.
+    /// Each schedule yields one claim even if several recurring times were missed.
+    /// Prune completed or interrupted history to keep at most 100 total runs.
     pub(crate) fn claim_schedules(
         &self,
         now: i64,
@@ -280,6 +309,12 @@ impl Store {
         Ok(claimed)
     }
 
+    /// Complete a still-running claim and calculate its schedule's next occurrence.
+    ///
+    /// `finished` is the operation's completion time; `now` is the persistence
+    /// attempt time, both in Unix milliseconds. An error records failure. `disable`
+    /// prevents future work for a missing VM. Repeated completion writes are inert.
+    /// A user pause is preserved, and occurrences before `now` are not replayed.
     pub(crate) fn finish_schedule_run(
         &self,
         run: &ScheduleRun,
@@ -309,6 +344,8 @@ impl Store {
     }
 
     /// Unknown side effects from a previous process are recorded, never replayed.
+    /// Mark active claims interrupted at Unix millisecond `now` and advance their
+    /// schedules to a future occurrence. Unclaimed overdue schedules remain due.
     pub(crate) fn recover_schedules(&self, now: i64) -> Result<(), PersistenceError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

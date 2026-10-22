@@ -16,6 +16,8 @@ use crate::persistence::{PersistenceError, ScheduleMutation};
 use crate::server::RequestId;
 use crate::state::AppState;
 
+/// Run synchronous SQLite work off the async executor and log failures by request.
+/// Database and worker failures become an internal API error without SQL details.
 async fn database<T: Send + 'static>(
     request_id: Uuid,
     operation: impl FnOnce() -> Result<T, PersistenceError> + Send + 'static,
@@ -29,6 +31,7 @@ async fn database<T: Send + 'static>(
         })
 }
 
+/// `GET /api/schedules`: list saved schedules by name, including their latest run.
 pub async fn list(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -38,6 +41,7 @@ pub async fn list(
         .map(Json)
 }
 
+/// `GET /api/schedules/{id}`: read one schedule or return `404` when absent.
 pub async fn get(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -50,6 +54,8 @@ pub async fn get(
         .ok_or_else(|| AppError::not_found(request.0))
 }
 
+/// Validate the name, existing target VM, and timing against Unix milliseconds.
+/// Return the next due instant for enabled schedules; collect field errors as `400`.
 fn validate(
     state: &AppState,
     spec: &ScheduleSpec,
@@ -96,6 +102,7 @@ fn validate(
     Ok(if spec.enabled { next } else { None })
 }
 
+/// `POST /api/schedules`: validate and persist a new schedule, returning `201`.
 pub async fn create(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -116,6 +123,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(schedule)))
 }
 
+/// Map transaction outcomes to `404`, expired-timing `400`, or active-run `409`.
 fn changed(result: ScheduleMutation, request: Uuid) -> Result<(), AppError> {
     match result {
         ScheduleMutation::Done => Ok(()),
@@ -136,6 +144,8 @@ fn changed(result: ScheduleMutation, request: Uuid) -> Result<(), AppError> {
     }
 }
 
+/// `PUT /api/schedules/{id}`: replace configuration unless an execution is active.
+/// Recompute the next unconsumed future occurrence within the mutation transaction.
 pub async fn update(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -156,6 +166,8 @@ pub async fn update(
     get(State(state), Extension(request), Path(id)).await
 }
 
+/// `PUT /api/schedules/{id}/enabled`: idempotently pause or resume future claims.
+/// Disabling permits active work to finish; resuming a paused schedule requires it to be idle.
 pub async fn set_enabled(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -184,6 +196,8 @@ pub async fn set_enabled(
     get(State(state), Extension(request), Path(id)).await
 }
 
+/// `DELETE /api/schedules/{id}`: remove an idle schedule and its history, returning `204`.
+/// The target VM is retained; an active execution prevents deletion with `409`.
 pub async fn delete(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,
@@ -202,6 +216,8 @@ pub async fn delete(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `GET /api/schedules/{id}/runs`: return the latest 100 claims, newest first.
+/// An existing schedule with no runs returns an empty list; a missing one returns `404`.
 pub async fn history(
     State(state): State<AppState>,
     Extension(request): Extension<RequestId>,

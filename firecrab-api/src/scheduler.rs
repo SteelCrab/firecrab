@@ -14,9 +14,17 @@ use crate::persistence::PersistenceError;
 use crate::server::RequestId;
 use crate::state::AppState;
 
+/// Maximum concurrent scheduler workers, including those retrying result persistence.
 const MAX_CONCURRENT: usize = 4;
 
 /// RFC 3339 offsets are mandatory; cron has minute precision and named weekdays.
+/// Return the first occurrence strictly after Unix millisecond `after_ms`, or
+/// `None` if none remains. Daylight-saving gaps are skipped and repeated local
+/// minutes use their earlier UTC instant only.
+///
+/// # Errors
+/// Reject malformed timestamps, non-five-field cron, unknown IANA zones, and
+/// recurring schedule search timestamps outside the supported date range.
 pub(crate) fn next_run(timing: &ScheduleTiming, after_ms: i64) -> Result<Option<i64>, String> {
     match timing {
         ScheduleTiming::Once { at } => {
@@ -56,6 +64,9 @@ pub(crate) fn next_run(timing: &ScheduleTiming, after_ms: i64) -> Result<Option<
 }
 
 /// Start only after VM reconciliation and listener binding have succeeded.
+/// Recover interrupted claims, then poll once per second with bounded concurrency.
+/// The task retains the database ownership lock for its lifetime; acquiring that
+/// lock before host recovery is the caller's responsibility.
 pub(crate) async fn spawn(
     state: AppState,
     ownership: std::fs::File,
@@ -99,6 +110,9 @@ pub(crate) async fn spawn(
     Ok(())
 }
 
+/// Execute an already committed claim through the existing VM lifecycle handler.
+/// Missing targets disable future runs. Retry only result persistence on database
+/// failures, retaining the claim and worker slot without repeating VM side effects.
 async fn execute(state: AppState, schedule: ScheduleResponse, run: ScheduleRun) {
     let exists = state
         .vms
