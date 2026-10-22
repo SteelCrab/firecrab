@@ -1,6 +1,6 @@
 ---
 name: Task
-about: Short structured issue (Summary, Scope, Architecture)
+about: Short structured issue (Summary, Scope, Architecture, Notes)
 title: "feat: "
 labels: []
 ---
@@ -26,3 +26,7 @@ flowchart LR
     Entry["Entry point"] --> Component["Main component"]
     Component --> State[("State")]
 ```
+
+## Notes
+
+<!-- Add brief caveats, dependencies, or related issue links. -->
