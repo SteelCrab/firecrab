@@ -546,16 +546,37 @@ fn expected_rule_miss(bin: &str, args: &[&str], output: &Output) -> bool {
     }
 }
 
+/// Retry only test-fixture spawn failures, before any tool process exists.
+/// Installed tools retain their existing fail-fast behavior.
+async fn tool_output(command: &mut Command) -> io::Result<Output> {
+    let mut attempt = 0;
+    let child = loop {
+        match command.spawn() {
+            Err(error)
+                if cfg!(test)
+                    && error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && attempt < 8 =>
+            {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(10 * attempt)).await;
+            }
+            result => break result?,
+        }
+    };
+    child.wait_with_output().await
+}
+
 async fn run_tool(bin: &str, args: &[&str]) -> bool {
     let mut last_error = None;
     for path in tool_search_order(bin) {
-        let output = Command::new(&path)
-            .args(args)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
+        let output = tool_output(
+            Command::new(&path)
+                .args(args)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped()),
+        )
+        .await;
         match output {
             Ok(output) => {
                 if expected_rule_miss(bin, args, &output) {
@@ -591,13 +612,15 @@ async fn output_tool(bin: &str, args: &[&str]) -> Option<String> {
 async fn output_tool_env(bin: &str, args: &[&str], envs: &[(&str, &str)]) -> Option<String> {
     let mut last_error = None;
     for path in tool_search_order(bin) {
-        let output = match Command::new(&path)
-            .args(args)
-            .envs(envs.iter().copied())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
+        let output = match tool_output(
+            Command::new(&path)
+                .args(args)
+                .envs(envs.iter().copied())
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .await
         {
             Ok(output) => output,
             Err(error) => {
@@ -724,6 +747,47 @@ mod tests {
         assert!(logged.contains(tool), "{logged}");
         assert!(logged.contains("args=[\"--state\"]"), "{logged}");
         assert!(logged.contains("error="), "{logged}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn busy_fixture_retries_before_execution_without_repeating_the_tool() {
+        let directory = tempfile::tempdir().unwrap();
+        let tool = fake_tool(
+            directory.path(),
+            "iptables",
+            r#"printf 'run\n' >> "${0%/*}/runs"; printf 'observed\n'"#,
+        );
+        let (capture, subscriber) = log_capture();
+        async {
+            for capture_output in [true, false] {
+                let writer = std::fs::OpenOptions::new().write(true).open(&tool).unwrap();
+                assert_eq!(
+                    std::process::Command::new(&tool)
+                        .status()
+                        .unwrap_err()
+                        .kind(),
+                    io::ErrorKind::ExecutableFileBusy
+                );
+                let release = std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(60));
+                    drop(writer);
+                });
+                if capture_output {
+                    assert_eq!(output_tool(&tool, &[]).await.as_deref(), Some("observed\n"));
+                } else {
+                    assert!(run_tool(&tool, &[]).await);
+                }
+                release.join().unwrap();
+            }
+        }
+        .with_subscriber(subscriber)
+        .await;
+        assert_eq!(
+            fs::read_to_string(directory.path().join("runs")).unwrap(),
+            "run\nrun\n"
+        );
+        assert_eq!(fs::read_to_string(capture.path()).unwrap(), "");
     }
 
     #[tokio::test]
