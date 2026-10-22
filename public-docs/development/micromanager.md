@@ -87,22 +87,6 @@ Stopping or restarting the management VM also stops its guest services and workl
 Overrides persist across `service stop` and `start` until restored.
 `service start` resumes selected binaries; it does not build edited sources.
 
-## Clean development files
-
-```sh
-firecrab service dev clean
-```
-
-`clean` needs no source checkout, Node.js, or build options.
-It restores the installed release API/helper and verifies guest readiness before deleting development files.
-It removes guest source snapshots, Cargo/Rust toolchain caches, build outputs, and staged development binaries.
-It then stops the owned development dashboard and removes its remembered checkout, generated server script, and log.
-Deployment and dashboard lock files remain so concurrent commands keep using the same locks.
-VM disks, application data, installed release binaries, custom service overrides, and the host checkout remain.
-If release restoration fails, development executables and overrides are rolled back and the build cache remains.
-`clean` does not start or reboot the management VM.
-Use `service dev --restore` to keep build caches for the next development session.
-
 ## Frontend
 
 `service dev` installs locked frontend dependencies with `npm ci` when needed.
