@@ -45,7 +45,7 @@ CLI commands use the activated controller port by default. `--api`,
 `FIRECRAB_API`, and a selected remote host retain their usual precedence.
 
 Sleepy defaults to off with a 10-minute idle timeout. Enabled Sleepy shuts down
-the management VM only when no MicroVM is starting/running/stopping, no detached
+the management VM only when no MicroVM has a live runtime (including paused and pause/resume transitions), no detached
 image/kernel/OCI/registry/bootstrap/update work is active, and no API request,
 console or host-shell lease remains. Unknown activity keeps the VM awake.
 
@@ -72,3 +72,7 @@ open-shell and running-MicroVM sleep inhibition, monitoring and manual stop.
 It creates and cleans only its own test VM/network and restores the previous
 Sleepy/autostart/idle settings even after a failure. It requires a real Windows
 host; portable unit tests do not substitute for native VM validation.
+
+Paused MicroVMs keep their RAM and prevent management-VM idle shutdown.
+Use [MicroVM pause/resume](operations.md#pause-and-resume-a-microvm) to preserve guest execution state.
+Sleepy still shuts down an empty management VM and cold-boots it for new work.

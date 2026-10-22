@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { VmResponse } from "./bindings";
-import { deleteVm, listVms, startVm, stopVm } from "./api/client";
+import { deleteVm, listVms, startVm, stopVm, pauseVm, resumeVm } from "./api/client";
 import type { VmAction } from "./model";
 import BannerView from "./components/Banner";
 import CreateVm from "./components/CreateVm";
@@ -183,6 +183,8 @@ export default function App() {
         try {
           let vm: VmResponse | null;
           if (action === "start") vm = await startVm(id);
+          else if (action === "pause") vm = await pauseVm(id);
+          else if (action === "resume") vm = await resumeVm(id);
           else if (action === "stop") vm = await stopVm(id);
           else {
             await deleteVm(id);

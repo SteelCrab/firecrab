@@ -33,6 +33,7 @@ mod shells;
 mod state;
 mod storage;
 mod templates;
+mod vm_execution;
 mod vm_shim;
 
 use std::error::Error;

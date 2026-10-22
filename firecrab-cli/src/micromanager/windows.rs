@@ -290,9 +290,9 @@ fn run_dev_control(layout: &lifecycle::Layout, command: DevCommand) -> Result<i3
 }
 
 fn run_stop() -> Result<i32, Error> {
+    #[cfg(target_os = "windows")]
     match lifecycle::Layout::from_process_env() {
         Ok(layout) => {
-            #[cfg(target_os = "windows")]
             if super::controller::active(&layout.managed_home) {
                 super::controller::stop(&layout.managed_home)?;
                 println!("[PASS] microManager: manually stopped (automatic wake blocked)");

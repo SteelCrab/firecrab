@@ -19,6 +19,7 @@ pub mod registries;
 pub mod shells;
 pub mod storage;
 pub mod update;
+pub mod vm_execution;
 pub mod vms;
 
 pub mod cloudflare;

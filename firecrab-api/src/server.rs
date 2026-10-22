@@ -221,6 +221,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
+        .route(
+            "/api/vms/{id}/pause",
+            post(handlers::vm_execution::pause_vm),
+        )
+        .route(
+            "/api/vms/{id}/resume",
+            post(handlers::vm_execution::resume_vm),
+        )
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route(
             "/api/vms/{id}/ssh-key",

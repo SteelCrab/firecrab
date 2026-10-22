@@ -222,6 +222,14 @@ export function startVm(id: string): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}/start`, { method: "POST" });
 }
 
+export function pauseVm(id: string): Promise<VmResponse> {
+  return fetchJson<VmResponse>(`/api/vms/${id}/pause`, { method: "POST" });
+}
+
+export function resumeVm(id: string): Promise<VmResponse> {
+  return fetchJson<VmResponse>(`/api/vms/${id}/resume`, { method: "POST" });
+}
+
 export function stopVm(id: string): Promise<VmResponse> {
   return fetchJson(`/api/vms/${id}/stop`, { method: "POST" });
 }

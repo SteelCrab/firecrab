@@ -1,7 +1,6 @@
 //! The host controller fails closed if this endpoint is absent or unreachable.
 use crate::state::AppState;
 use axum::{Json, extract::State};
-use firecrab_api_types::VmState;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -21,12 +20,7 @@ pub async fn activity(State(state): State<AppState>) -> Json<Activity> {
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .values()
-        .any(|vm| {
-            matches!(
-                vm.state,
-                VmState::Starting | VmState::Running | VmState::Stopping
-            )
-        });
+        .any(|vm| vm.state.has_live_runtime());
     let jobs = [
         &state.image_installs,
         &state.image_packages,
