@@ -27,6 +27,13 @@ Stop affected VMs and service deployments before saving rule changes.
 Failed saves keep the draft rules in the editor.
 The dashboard also supports deleting unreferenced groups.
 
+Each group's connection diagram shows its MicroServices and their actual replica VMs.
+Service boxes show the configured replica count; circles represent VMs from a deployment.
+Services without VMs are labeled explicitly.
+An **Inherited** label confirms that the VM record selects this group.
+Unverified and mismatched selections have separate labels.
+The diagram refreshes automatically without replacing unsaved rule edits.
+
 ## Create and attach
 
 ```sh

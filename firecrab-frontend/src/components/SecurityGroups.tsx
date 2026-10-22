@@ -1,23 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Shield } from "lucide-react";
-import type { MicroNetworkResponse, SecurityGroupResponse, SecurityGroupRule } from "../bindings";
+import type { MicroNetworkResponse, SecurityGroupResponse, SecurityGroupRule, VmResponse } from "../bindings";
 import {
   ApiClientError, createSecurityGroup, deleteSecurityGroup, listMicroNetworks,
   listSecurityGroups, replaceSecurityGroupRules,
 } from "../api/client";
 import { useI18n } from "../i18n";
 import { viewHash } from "../navigation";
+import { useSecurityGroupConnections } from "../lib/useSecurityGroupConnections";
+import SecurityGroupConnections from "./SecurityGroupConnections";
 import Screen from "./layout/Screen";
 import { useScreenStatus } from "./layout/screenStatus";
 
-export default function SecurityGroups() {
+export default function SecurityGroups({ vms, vmsAvailable }: { vms: VmResponse[]; vmsAvailable: boolean }) {
   const { t } = useI18n();
   const { setDetailOpen } = useScreenStatus();
   const [groups, setGroups] = useState<SecurityGroupResponse[] | null>(null);
   const [networks, setNetworks] = useState<MicroNetworkResponse[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [connectionsVersion, setConnectionsVersion] = useState(0);
+  const connections = useSecurityGroupConnections(connectionsVersion);
   // undefined closes the editor; null creates an empty policy first.
   const [editor, setEditor] = useState<SecurityGroupResponse | null | undefined>(undefined);
 
@@ -35,6 +39,7 @@ export default function SecurityGroups() {
     try {
       const [rows, nets] = await Promise.all([listSecurityGroups(), listMicroNetworks()]);
       setGroups(rows); setNetworks(nets);
+      setConnectionsVersion((version) => version + 1);
     } catch (failure) {
       setError((failure as Error).message);
     } finally { setBusy(false); }
@@ -66,7 +71,7 @@ export default function SecurityGroups() {
   return (
     <Screen
       view="security-groups"
-      detail={editor === undefined ? null : <div className="detail-body detail-embed">
+      detail={editor === undefined ? undefined : <div className="detail-body detail-embed">
         {editor === null
           ? <CreateGroupForm networks={networks} onSaved={saved} onCancel={close} />
           : <RulesForm key={editor.id} group={editor} networkName={networkName(editor.microNetworkId)} onSaved={saved} onCancel={close} />}
@@ -90,6 +95,7 @@ export default function SecurityGroups() {
               const inbound = group.rules.filter((rule) => rule.direction === "ingress").length;
               const outbound = group.rules.length - inbound;
               return <li key={group.id} className={editor?.id === group.id ? "is-selected" : undefined}>
+              <div className="security-group-row">
               <div className="security-group-summary">
                 <strong>{group.name}</strong>
                 <span>{networkName(group.microNetworkId)}</span>
@@ -102,6 +108,9 @@ export default function SecurityGroups() {
                 <button className="btn" disabled={busy || editor !== undefined} onClick={() => open(group)} aria-label={t(`Edit rules for ${group.name}`, `${group.name} 규칙 편집`)}>{t("Edit rules", "규칙 편집")}</button>
                 <button className="btn danger" disabled={busy || editor !== undefined} onClick={() => remove(group)} aria-label={t(`Delete ${group.name}`, `${group.name} 삭제`)}>{t("Delete", "삭제")}</button>
               </div>
+              </div>
+              <SecurityGroupConnections group={group} services={connections.services} loaded={connections.loaded} error={connections.error}
+                vms={vms} vmsAvailable={vmsAvailable} onRetry={() => setConnectionsVersion((version) => version + 1)} />
             </li>; })}
           </ul>}
       </section>
