@@ -9,7 +9,7 @@ use axum::{Extension, Json};
 use firecrab_api_types::{ImageInstallResponse, ImageInstallStatus};
 use tempfile::tempdir;
 
-use super::images::{delete_image, get_image_install, start_image_install};
+use super::images::{delete_image, delete_staged_package, get_image_install, start_image_install};
 use crate::image_install::{self, ImageInstallTracker};
 use crate::persistence::LocalCatalogEntry;
 use crate::server::RequestId;
@@ -200,4 +200,33 @@ async fn host_local_catalog_install_reports_missing_staged_package() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"]["code"], "package_required");
+}
+
+#[tokio::test]
+async fn host_local_staged_package_can_be_deleted_after_source_removal() {
+    let directory = tempdir().unwrap();
+    let state = custom_state(directory.path()).await;
+    stage_local_catalog_package(&state).await;
+    remove_installed_source(&state).await;
+
+    let staged = image_install::staged_package_path(state.templates.image_root_path(), ALIAS);
+    let status = delete_staged_package(
+        State(state.clone()),
+        AxumPath(ALIAS.to_owned()),
+        Extension(RequestId(uuid::Uuid::nil())),
+    )
+    .await
+    .expect("a locally registered alias should permit deletion of its staged package");
+
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!staged.exists());
+    assert!(state.templates.resolve_alias(ALIAS).is_none());
+    assert!(
+        state
+            .store
+            .microregistry_local(ALIAS, image_install::host_architecture())
+            .unwrap()
+            .is_some(),
+        "deleting the staged archive must not remove its local catalog row"
+    );
 }
