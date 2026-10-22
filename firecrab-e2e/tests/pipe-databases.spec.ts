@@ -409,3 +409,116 @@ test.describe("PIPE databases @dashboard", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });
+
+async function openWritable(page: Page, failure?: "unknown" | "conflict") {
+  const mutations: Record<string, unknown>[] = [], bindings: Record<string, unknown>[] = [], triggers: Record<string, unknown>[] = [], jobs: Record<string, unknown>[] = [], kafka: unknown[] = [];
+  const serviceId = "22222222-2222-4222-8222-222222222222";
+  let configured = false;
+  const columns = [
+    { name: "id", dataType: "bigint", nullable: false, generated: true, primaryKey: true, binary: false, defaultValue: null },
+    { name: "name", dataType: "text", nullable: false, generated: false, primaryKey: false, binary: false, defaultValue: null },
+    { name: "metadata", dataType: "jsonb", nullable: true, generated: false, primaryKey: false, binary: false, defaultValue: null },
+  ];
+  await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
+    const path = new URL(route.request().url()).pathname, method = route.request().method();
+    const input = () => route.request().postDataJSON();
+    if (path === "/api/vms") return route.fulfill({ json: [] });
+    if (path === "/api/update") return route.fulfill({ json: { current: "0.3.1", latest: "0.3.1", updateAvailable: false } });
+    if (path === "/api/pipe") return route.fulfill({ json: { config: null, units: [], nginxAvailable: false, cloudflaredAvailable: false } });
+    if (path === "/api/pipe/databases") return route.fulfill({ json: [{ ...saved, writeEnabled: true }] });
+    if (path.endsWith("/tables")) return route.fulfill({ json: { tables: [{ schema: "public", name: "users" }], truncated: false } });
+    if (path.endsWith("/rows")) return route.fulfill({ json: { definition: { columns, primaryKey: ["id"], transactional: true }, rows: [{ values: { id: "9007199254740993", name: "Ada", metadata: null }, key: { id: "9007199254740993" }, version: "abc123", truncatedColumns: [] }], offset: 0, hasMore: false } });
+    if (path.endsWith("/mutations")) {
+      const body = input(); mutations.push(body);
+      if (failure && mutations.length === 1) return route.fulfill({ status: failure === "conflict" ? 409 : 503, json: { error: { message: failure === "conflict" ? "The row changed; refresh it before saving" : "Request result is unknown" } } });
+      return route.fulfill({ json: { requestId: body.requestId, affectedRows: 1 } });
+    }
+    if (path === "/api/micro-services") return route.fulfill({ json: [{ id: serviceId, name: "Worker" }] });
+    if (path.endsWith("/bindings")) {
+      if (method === "POST") bindings.push({ id: input().requestId, databaseId: id, envName: "DATABASE_URL", ready: true, tableCount: 1, ...input() });
+      return route.fulfill({ json: method === "GET" ? bindings : bindings.at(-1) });
+    }
+    if (path.endsWith("/triggers")) {
+      if (method === "POST") triggers.push({ id: input().requestId, databaseId: id, paused: false, installed: true, detached: false, pending: 0, failed: 0, delivered: 0, ...input() });
+      return route.fulfill({ json: method === "GET" ? triggers : triggers.at(-1) });
+    }
+    if (path === "/api/pipe/database-kafka") return route.fulfill({ json: { configured, brokers: configured ? ["broker:9092"] : undefined, tls: true, development: false } });
+    if (path === "/api/pipe/database-kafka/managed") {
+      if (method === "POST") { kafka.push(input()); configured = true; }
+      return route.fulfill({ json: configured ? { phase: "ready", development: false } : null });
+    }
+    if (path === "/api/pipe/database-maintenance/tools") return route.fulfill({ json: { postgres: true, mysql: true } });
+    if (path.endsWith("/jobs")) return route.fulfill({ json: jobs });
+    if (path.endsWith("/backups")) {
+      jobs.push({ id: input().requestId, databaseId: id, kind: "backup", status: "succeeded", createdAt: 1, checksum: "abc", bytes: 100, backupId: null, safetyBackupId: null, version: null, error: null });
+      return route.fulfill({ status: 202, json: jobs.at(-1) });
+    }
+    if (path.endsWith("/restore")) { jobs.push({ ...input(), id: input().requestId, kind: "restore", status: "queued", createdAt: 2, bytes: null }); return route.fulfill({ status: 202, json: jobs.at(-1) }); }
+    return route.fulfill({ status: 404 });
+  });
+  await page.addInitScript(() => localStorage.setItem("firecrab.locale", "en"));
+  await page.goto("/#/pipe/database");
+  await page.getByRole("button", { name: "Browse Application DB", exact: true }).click();
+  await page.getByLabel("Table", { exact: true }).selectOption("0");
+  await expect(page.getByRole("button", { name: "Add row", exact: true })).toBeVisible();
+  return { mutations, bindings, triggers, jobs, kafka, serviceId };
+}
+
+test("writes JSON text without rounding and keeps unknown-result retries identical", async ({ page }) => {
+  const mock = await openWritable(page, "unknown");
+  await page.getByRole("button", { name: "Add row", exact: true }).click();
+  const editor = page.getByRole("form", { name: "Row editor" });
+  await editor.getByLabel("name value mode", { exact: true }).selectOption("value");
+  await editor.getByLabel("name text", { exact: true }).fill("New user");
+  await editor.getByLabel("metadata value mode", { exact: true }).selectOption("value");
+  await editor.getByLabel("metadata jsonb", { exact: true }).fill('{"amount":9007199254740993.123456789}');
+  await editor.getByRole("button", { name: "Save change", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("unknown");
+  await expect(editor.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+  await expect(editor.getByLabel("name text", { exact: true })).toBeDisabled();
+  await editor.getByRole("button", { name: "Retry same request", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  expect(mock.mutations).toHaveLength(2);
+  expect(mock.mutations[0]).toEqual(mock.mutations[1]);
+  expect(mock.mutations[0].values).toEqual({ name: "New user", metadata: '{"amount":9007199254740993.123456789}' });
+});
+
+test("keeps original primary keys and releases edits after a definitive conflict", async ({ page }) => {
+  const mock = await openWritable(page, "conflict");
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  const editor = page.getByRole("form", { name: "Row editor" });
+  await editor.getByLabel("name text", { exact: true }).fill("Changed");
+  await editor.getByRole("button", { name: "Save change", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("row changed");
+  await expect(editor.getByLabel("name text", { exact: true })).toBeEnabled();
+  expect(mock.mutations[0]).toMatchObject({ key: { id: "9007199254740993" }, version: "abc123", operation: "update" });
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+});
+
+test("uses minimal service and Kafka defaults and confirms snapshot restore", async ({ page }) => {
+  const mock = await openWritable(page);
+  await page.getByText("Services & reliable events", { exact: true }).click();
+  await page.getByLabel("Service", { exact: true }).selectOption(mock.serviceId);
+  await page.getByRole("button", { name: "Connect service", exact: true }).click();
+  await expect.poll(() => mock.bindings.length).toBe(1);
+  expect(mock.bindings[0]).toMatchObject({ serviceId: mock.serviceId, access: "read", envName: "DATABASE_URL" });
+  await page.getByRole("button", { name: "Prepare Kafka automatically", exact: true }).click();
+  await expect.poll(() => mock.kafka.length).toBe(1);
+  expect(mock.kafka[0]).toEqual({ development: false });
+  await page.getByLabel("Source table", { exact: true }).selectOption("0");
+  await page.getByLabel("Handler service", { exact: true }).selectOption(mock.serviceId);
+  await page.getByRole("button", { name: "Enable events", exact: true }).click();
+  await expect.poll(() => mock.triggers.length).toBe(1);
+  expect(mock.triggers[0]).toMatchObject({ schema: "public", table: "users", serviceId: mock.serviceId, path: "/events/database" });
+  await page.getByText("Backups & schema changes", { exact: true }).click();
+  await page.getByRole("button", { name: "Back up now", exact: true }).click();
+  await page.getByRole("button", { name: "Restore…", exact: true }).click();
+  const restore = page.getByRole("button", { name: "Restore database", exact: true });
+  await expect(restore).toBeDisabled();
+  await page.getByLabel("Type database name: app", { exact: true }).fill("app");
+  await page.getByLabel("I stopped all external database writers.", { exact: true }).check();
+  await restore.click();
+  await expect.poll(() => mock.jobs.length).toBe(2);
+  expect(mock.jobs[1]).toMatchObject({ backupId: mock.jobs[0].id, confirmDatabase: "app", externalWritersStopped: true });
+});

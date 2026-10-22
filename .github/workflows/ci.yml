@@ -359,7 +359,7 @@ jobs:
   pipe-databases:
     name: PIPE databases (real API, PostgreSQL, MySQL, TLS and browser)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: "0"
       # Continuous profiles survive the isolated QA API's SIGTERM/restart.
@@ -393,6 +393,7 @@ jobs:
         run: |
           npm ci --prefix firecrab-frontend
           npm ci --prefix firecrab-e2e
+          npm ci --prefix examples/database-events
           npm run build --prefix firecrab-frontend
           npm run typecheck:pipe --prefix firecrab-e2e
           npx --prefix firecrab-e2e playwright install --with-deps chromium
@@ -403,6 +404,9 @@ jobs:
           cargo build -p firecrab-api --locked
           export LLVM_PROFILE_FILE="$CARGO_LLVM_COV_TARGET_DIR/pipe-databases-%p-%m%c.profraw"
           bash scripts/ci-qa-pipe-databases.sh --api "$CARGO_LLVM_COV_TARGET_DIR/debug/firecrab-api" --browser
+          cargo test -p firecrab-api --bin firecrab-api --no-run --locked --message-format=json > target/qa/database-service-tests.jsonl
+          test_binary=$(python3 -c 'import json; rows=[json.loads(line) for line in open("target/qa/database-service-tests.jsonl")]; print(next(row["executable"] for row in rows if row.get("reason")=="compiler-artifact" and row.get("profile",{}).get("test") and row.get("target",{}).get("name")=="firecrab-api" and row.get("executable")))')
+          python3 scripts/ci-qa-database-services.py --test-binary "$test_binary" --profiles "$CARGO_LLVM_COV_TARGET_DIR"
           cargo llvm-cov report --lcov --output-path pipe-databases.lcov.info
       - name: Upload database QA coverage to Codecov
         uses: codecov/codecov-action@v7

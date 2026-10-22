@@ -713,6 +713,24 @@ pub async fn update_vm(
     ValidatedJson(req): ValidatedJson<UpdateVmResourcesRequest>,
 ) -> Result<Json<VmResponse>, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    if req.env.is_some()
+        && (state
+            .store
+            .database_vm_service(id)
+            .map_err(|_| AppError::internal(request_id.0))?
+            .is_some()
+            || state
+                .store
+                .managed_database_kafka()
+                .map_err(|_| AppError::internal(request_id.0))?
+                .is_some_and(|c| c.brokers.iter().any(|b| b.id == id)))
+    {
+        return Err(AppError::conflict(
+            "service_environment_managed",
+            "Edit this service's configuration and redeploy to update its environment",
+            request_id.0,
+        ));
+    }
     let (updated, previous) = claim_resource_update(&state, id, &req, request_id.0)?;
     if let Err(error) = persist_update(&state, &updated, request_id.0).await {
         restore_resources(&state, id, previous);
@@ -1034,6 +1052,18 @@ pub async fn delete_vm(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    if state
+        .store
+        .managed_database_kafka()
+        .map_err(|_| AppError::internal(request_id.0))?
+        .is_some_and(|c| c.brokers.iter().any(|b| b.id == id))
+    {
+        return Err(AppError::conflict(
+            "database_broker_in_use",
+            "This VM stores managed Kafka data and cannot be deleted through the VM API",
+            request_id.0,
+        ));
+    }
     let removed = {
         let mut vms = state
             .vms
@@ -1277,6 +1307,11 @@ async fn finish_run_start(
             .map_err(|error| format!("rootfs preparation failed: {error}"))?;
         rootfs::specialize_guest(&rootfs, record.id, &record.env)
             .map_err(|error| format!("guest specialization failed: {error}"))?;
+        let (private_env, private_files) =
+            crate::pipe_databases::bindings::guest_inputs(&store_for_shells, record.id)
+                .map_err(|_| "Could not load private database bindings".to_owned())?;
+        rootfs::apply_private_service_inputs(&rootfs, &record.env, &private_env, &private_files)
+            .map_err(|_| "Could not install private database bindings".to_owned())?;
         crate::guest_ssh::install_on_guest(&rootfs, &paths)
             .map_err(|error| format!("guest SSH install failed: {error}"))?;
         if let Some(ref program) = guest_fastfetch {

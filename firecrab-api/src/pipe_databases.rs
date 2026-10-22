@@ -11,6 +11,14 @@ use sqlx::postgres::{PgConnectOptions, PgConnection, PgSslMode};
 use sqlx::{ConnectOptions, Connection, Row};
 use uuid::Uuid;
 
+pub(crate) mod bindings;
+pub(crate) mod events;
+pub(crate) mod maintenance;
+pub(crate) mod managed_kafka;
+#[cfg(test)]
+mod services_tests;
+pub(crate) mod write;
+
 /// Maximum number of base tables returned by one metadata request.
 const MAX_TABLES: usize = 500;
 /// Maximum number of columns accepted for a row preview.
@@ -72,6 +80,9 @@ pub struct DatabaseInput {
     /// Optional PEM certificate bundle supplied directly, never a file path.
     #[serde(default)]
     pub ca_certificate: Option<String>,
+    /// Operator opt-in. Existing saved connections remain read-only.
+    #[serde(default)]
+    pub write_enabled: bool,
 }
 
 impl std::fmt::Debug for DatabaseInput {
@@ -109,6 +120,8 @@ pub struct DatabaseSummary {
     pub database: String,
     /// Effective encryption and server verification policy.
     pub tls_mode: TlsMode,
+    /// Whether operator writes and service write bindings may be requested.
+    pub write_enabled: bool,
 }
 
 /// Validated connection fields kept separate from serializable metadata.
@@ -218,6 +231,7 @@ impl DatabaseInput {
                 }),
                 database,
                 tls_mode,
+                write_enabled: self.write_enabled,
             },
             username,
             password,
@@ -322,6 +336,25 @@ impl DatabaseConnection {
         input: &DatabaseInput,
         settings: &ConnectionSettings,
     ) -> Result<Self, sqlx::Error> {
+        Self::connect_mode(input, settings, false).await
+    }
+
+    /// Open a write session only for an operator-enabled connection.
+    pub async fn connect_write(
+        input: &DatabaseInput,
+        settings: &ConnectionSettings,
+    ) -> Result<Self, sqlx::Error> {
+        if !input.write_enabled {
+            return Err(sqlx::Error::Protocol("writes_disabled".into()));
+        }
+        Self::connect_mode(input, settings, true).await
+    }
+
+    async fn connect_mode(
+        input: &DatabaseInput,
+        settings: &ConnectionSettings,
+        write: bool,
+    ) -> Result<Self, sqlx::Error> {
         let summary = &settings.summary;
         match summary.engine {
             Engine::Postgres => {
@@ -340,7 +373,12 @@ impl DatabaseConnection {
                     .statement_cache_capacity(0)
                     .options([
                         ("statement_timeout", "5000"),
-                        ("default_transaction_read_only", "on"),
+                        ("lock_timeout", "5000"),
+                        ("timezone", "UTC"),
+                        (
+                            "default_transaction_read_only",
+                            if write { "off" } else { "on" },
+                        ),
                     ])
                     .disable_statement_logging();
                 if let Some(ca) = &input.ca_certificate {
@@ -368,9 +406,14 @@ impl DatabaseConnection {
                     options = options.ssl_ca_from_pem(ca.as_bytes().to_vec());
                 }
                 let mut connection = MySqlConnection::connect_with(&options).await?;
-                sqlx::query("SET SESSION TRANSACTION READ ONLY")
-                    .execute(&mut connection)
-                    .await?;
+                sqlx::query("SET SESSION max_execution_time=5000, innodb_lock_wait_timeout=5, lock_wait_timeout=5, time_zone='+00:00', sql_mode=CONCAT_WS(',',@@sql_mode,'STRICT_ALL_TABLES')").execute(&mut connection).await?;
+                sqlx::query(if write {
+                    "SET SESSION TRANSACTION READ WRITE"
+                } else {
+                    "SET SESSION TRANSACTION READ ONLY"
+                })
+                .execute(&mut connection)
+                .await?;
                 Ok(Self::Mysql(connection))
             }
         }
@@ -387,7 +430,7 @@ impl DatabaseConnection {
     /// List accessible base tables and report truncation after 500 entries.
     pub async fn tables(&mut self) -> Result<Tables, sqlx::Error> {
         let pairs: Vec<(String, String)> = match self {
-            Self::Postgres(c) => sqlx::query_as("SELECT table_schema::text, table_name::text FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema') ORDER BY table_schema, table_name LIMIT 501")
+            Self::Postgres(c) => sqlx::query_as("SELECT table_schema::text, table_name::text FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema') AND table_schema !~ '^firecrab_[0-9a-f]{32}$' ORDER BY table_schema, table_name LIMIT 501")
                 .persistent(false).fetch_all(c).await?,
             // Normalize metadata to nonbinary text before decoding it as String.
             Self::Mysql(c) => sqlx::query_as("SELECT CAST(TABLE_SCHEMA AS CHAR CHARACTER SET utf8mb4), CAST(TABLE_NAME AS CHAR CHARACTER SET utf8mb4) FROM information_schema.tables WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME LIMIT 501")

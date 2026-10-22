@@ -428,7 +428,7 @@ apt-get update
 phase apt-install
 {clean_guest_installation}
 apt-get install -y ca-certificates curl sudo tar findutils xz-utils gzip zstd lz4 lzop \
-  nftables dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat \
+  nftables dnsmasq dnsmasq-utils iproute2 jq e2fsprogs fakeroot busybox-static socat postgresql-client mariadb-client \
   binutils initramfs-tools {kernel_package}
 
 phase firecracker

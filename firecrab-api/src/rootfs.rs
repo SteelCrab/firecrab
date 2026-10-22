@@ -5,7 +5,8 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Seek, SeekFrom};
+use std::io::{self, Seek, SeekFrom, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -638,6 +639,29 @@ fn guest_file_contains(rootfs: &Path, guest_path: &str, needle: &str) -> bool {
 
 const GUEST_VM_SERVICE: &str = "/etc/firecrab/services.d/app";
 
+/// Keep generated credentials out of public VM records. Root starts the app before
+/// its image's privilege drop, so the sourced file can remain owner-readable only.
+pub(crate) fn apply_private_service_inputs(
+    rootfs: &Path,
+    public: &BTreeMap<String, String>,
+    private: &BTreeMap<String, String>,
+    files: &BTreeMap<String, String>,
+) -> Result<(), RootfsError> {
+    if private.is_empty() {
+        return Ok(());
+    }
+    let mut merged = public.clone();
+    merged.extend(private.clone());
+    apply_vm_env(rootfs, &merged)?;
+    set_guest_file_mode(rootfs, crate::oci::service::GUEST_VM_ENV_FILE, "0100600");
+    for (path, value) in files {
+        write_into_image(rootfs, path, value.as_bytes())?;
+        // CA certificates are public trust anchors. Non-root drivers must read them.
+        set_guest_file_mode(rootfs, path, "0100644");
+    }
+    Ok(())
+}
+
 /// Rewrites the delimited Firecrab env block in `services.d/app`.
 ///
 /// Missing path is a silent no-op. Image `export` lines stay; VM keys win
@@ -1049,7 +1073,17 @@ pub(crate) fn write_into_image(
     content: &[u8],
 ) -> Result<(), RootfsError> {
     let staging = rootfs.with_extension("specialize.tmp");
-    fs::write(&staging, content).map_err(|source| RootfsError::Specialize {
+    (|| -> io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&staging)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(content)
+    })()
+    .map_err(|source| RootfsError::Specialize {
         path: rootfs.to_owned(),
         detail: format!("failed to stage content for {guest_path}: {source}"),
     })?;
@@ -2275,6 +2309,47 @@ mod tests {
         let sidecar = debugfs_cat(&rootfs, "/etc/firecrab/vm.env");
         assert!(sidecar.contains("export APP_NAME='web'"), "{sidecar}");
         assert!(sidecar.contains("export FOO='bar'"), "{sidecar}");
+    }
+
+    #[test]
+    fn database_credentials_are_private_and_ca_is_readable_in_real_ext4() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        seed_services_d_app(&rootfs, &sample_app_service());
+        let private = BTreeMap::from([(
+            "DATABASE_URL".into(),
+            "postgres://app:private-test-secret@db/app".into(),
+        )]);
+        let public = BTreeMap::from([("APP_NAME".into(), "web".into())]);
+        let files = BTreeMap::from([(
+            "/etc/firecrab/database-ca.pem".into(),
+            "public-ca-test".into(),
+        )]);
+        apply_private_service_inputs(&rootfs, &public, &private, &files).unwrap();
+        let script = debugfs_cat(&rootfs, GUEST_VM_SERVICE);
+        assert!(!script.contains("private-test-secret"));
+        assert!(
+            debugfs_cat(&rootfs, crate::oci::service::GUEST_VM_ENV_FILE)
+                .contains("private-test-secret")
+        );
+        for (path, mode) in [
+            (crate::oci::service::GUEST_VM_ENV_FILE, "0600"),
+            ("/etc/firecrab/database-ca.pem", "0644"),
+        ] {
+            let result = Command::new("debugfs")
+                .arg("-R")
+                .arg(format!("stat {path}"))
+                .arg(&rootfs)
+                .output()
+                .unwrap();
+            let metadata = String::from_utf8_lossy(&result.stdout);
+            assert!(metadata.contains(&format!("Mode:  {mode}")), "{metadata}");
+        }
+        assert_eq!(
+            debugfs_cat(&rootfs, "/etc/firecrab/database-ca.pem"),
+            "public-ca-test"
+        );
     }
 
     #[test]

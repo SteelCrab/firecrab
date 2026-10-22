@@ -2,6 +2,7 @@ use super::*;
 
 fn input(uri: &str, provider: Provider) -> DatabaseInput {
     DatabaseInput {
+        write_enabled: false,
         name: "Test DB".into(),
         provider,
         uri: uri.into(),

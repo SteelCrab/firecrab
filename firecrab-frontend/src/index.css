@@ -853,6 +853,15 @@ table.image-table tbody tr.is-selected td {
 .pipe-database-security[open] > summary { margin-bottom: 14px; }
 .pipe-database-security textarea { resize: vertical; font: 12px/1.5 var(--mono); }
 .pipe-database-security > .poll-note { margin-top: 10px; }
+.pipe-database-security section { margin-block: 18px; }
+.pipe-database-security section + section { padding-top: 14px; border-top: 1px solid var(--border); }
+.pipe-database-security form { display: grid; gap: 12px; margin-block: 14px; }
+.pipe-database-security form > .btn { justify-self: start; }
+.pipe-database-binding { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding-block: 12px; border-bottom: 1px solid var(--border); font-size: 12px; overflow-wrap: anywhere; }
+.pipe-database-binding small { display: block; margin-top: 4px; color: var(--text-3); }
+.pipe-database-binding .pipe-row-actions { flex-wrap: wrap; }
+.pipe-database-write-option { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pipe-database-write-option input { width: auto; }
 .pipe-database-table td { max-width: 22rem; overflow-wrap: anywhere; }
 .pipe-database-table .actions { width: 1%; }
 .pipe-database-table .actions .pipe-row-actions { justify-content: end; flex-wrap: nowrap; }
@@ -1097,3 +1106,5 @@ table.pipe-database-preview { font-family: var(--mono); font-size: 12px; }
   .pipe-auth-heading { padding: 16px 12px; }
   .pipe-auth-connections .pipe-auth-account, .pipe-auth-connections .pipe-auth-services { display: none; }
 }
+
+.database-job-error { display: block; max-width: 28rem; white-space: normal; color: var(--text-3); line-height: 1.5; }

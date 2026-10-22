@@ -257,7 +257,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route(
             "/api/pipe/databases/{id}",
-            delete(handlers::pipe_databases::delete),
+            delete(handlers::pipe_databases::delete).put(handlers::pipe_databases::update),
         )
         .route(
             "/api/pipe/databases/{id}/tables",
@@ -266,6 +266,83 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route(
             "/api/pipe/databases/{id}/preview",
             post(handlers::pipe_databases::preview),
+        )
+        .route(
+            "/api/pipe/databases/{id}/access",
+            axum::routing::put(handlers::pipe_databases::access),
+        )
+        .route(
+            "/api/pipe/databases/{id}/rows",
+            post(handlers::pipe_databases::rows),
+        )
+        .route(
+            "/api/pipe/databases/{id}/mutations",
+            post(handlers::pipe_databases::mutate),
+        )
+        .route(
+            "/api/pipe/database-kafka",
+            get(handlers::pipe_database_events::kafka_get)
+                .put(handlers::pipe_database_events::kafka_save),
+        )
+        .route(
+            "/api/pipe/database-kafka/managed",
+            get(handlers::pipe_database_events::managed_get)
+                .post(handlers::pipe_database_events::managed_create),
+        )
+        .route(
+            "/api/pipe/databases/{id}/triggers",
+            get(handlers::pipe_database_events::list).post(handlers::pipe_database_events::create),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}",
+            axum::routing::put(handlers::pipe_database_events::pause)
+                .delete(handlers::pipe_database_events::delete),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/detach",
+            post(handlers::pipe_database_events::detach),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/failures",
+            get(handlers::pipe_database_events::failures),
+        )
+        .route(
+            "/api/pipe/database-triggers/{id}/replay/{event}",
+            post(handlers::pipe_database_events::replay),
+        )
+        .route(
+            "/api/pipe/databases/{id}/bindings",
+            get(handlers::pipe_database_bindings::list)
+                .post(handlers::pipe_database_bindings::create),
+        )
+        .route(
+            "/api/pipe/database-bindings/{id}",
+            delete(handlers::pipe_database_bindings::delete),
+        )
+        .route(
+            "/api/pipe/database-maintenance/tools",
+            get(handlers::pipe_database_maintenance::capabilities),
+        )
+        .route(
+            "/api/pipe/databases/{id}/jobs",
+            get(handlers::pipe_database_maintenance::list),
+        )
+        .route(
+            "/api/pipe/databases/{id}/backups",
+            post(handlers::pipe_database_maintenance::backup),
+        )
+        .route(
+            "/api/pipe/databases/{id}/migrations",
+            post(handlers::pipe_database_maintenance::migrate),
+        )
+        .route(
+            "/api/pipe/databases/{id}/restore",
+            post(handlers::pipe_database_maintenance::restore),
+        )
+        .route(
+            "/api/pipe/database-jobs/{id}/backup",
+            get(handlers::pipe_database_maintenance::download)
+                .delete(handlers::pipe_database_maintenance::delete_backup),
         )
         .route("/api/pipe/registries", get(handlers::registries::list))
         .route(
