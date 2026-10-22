@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Shield } from "lucide-react";
+import { Plus, RefreshCw, Shield } from "lucide-react";
 import type { MicroNetworkResponse, SecurityGroupResponse, SecurityGroupRule, VmResponse } from "../bindings";
 import {
   ApiClientError, createSecurityGroup, deleteSecurityGroup, listMicroNetworks,
@@ -71,6 +71,13 @@ export default function SecurityGroups({ vms, vmsAvailable }: { vms: VmResponse[
   return (
     <Screen
       view="security-groups"
+      actions={<>
+        <button className="icon-btn" type="button" disabled={busy || editor !== undefined} onClick={refresh}
+          aria-label={t("Refresh", "새로 고침")} title={t("Refresh", "새로 고침")}><RefreshCw aria-hidden="true" /></button>
+        <button className="btn primary" type="button" disabled={busy || groups === null || editor !== undefined} onClick={() => open(null)}>
+          <Plus aria-hidden="true" />{t("New security group", "보안그룹 추가")}
+        </button>
+      </>}
       detail={editor === undefined ? undefined : <div className="detail-body detail-embed">
         {editor === null
           ? <CreateGroupForm networks={networks} onSaved={saved} onCancel={close} />
@@ -80,13 +87,8 @@ export default function SecurityGroups({ vms, vmsAvailable }: { vms: VmResponse[
       detailKind={<><Shield aria-hidden="true" />{t("Security group", "보안그룹")}</>}
       onCloseDetail={close}
     >
-      <section className="panel" aria-labelledby="security-groups-heading">
-        <h2 className="panel-title" id="security-groups-heading">{t("Security groups", "보안그룹")}</h2>
-        <p className="poll-note">{t("Allow specific IPv4 connections on a MicroNetwork. Other new connections are denied.", "MicroNetwork에서 지정한 IPv4 연결을 허용한다. 그 외의 새 연결은 차단한다.")}</p>
-        <div className="service-actions">
-          <button className="btn primary" disabled={busy || groups === null || editor !== undefined} onClick={() => open(null)}>{t("New security group", "보안그룹 추가")}</button>
-          <button className="btn" disabled={busy || editor !== undefined} onClick={refresh}>{t("Refresh", "새로 고침")}</button>
-        </div>
+      <section className="security-groups-content" aria-label={t("Security groups", "보안그룹")}>
+        <p className="security-groups-intro">{t("Allow specific IPv4 connections on a MicroNetwork. Other new connections are denied.", "MicroNetwork에서 지정한 IPv4 연결을 허용한다. 그 외의 새 연결은 차단한다.")}</p>
         {error && <p className="field-error" role="alert">{error}</p>}
         {groups === null ? !error && <p className="empty">{t("Loading…", "불러오는 중…")}</p>
           : groups.length === 0 ? <p className="empty">{t("No security groups yet.", "저장된 보안그룹이 없다.")}</p>
@@ -95,22 +97,21 @@ export default function SecurityGroups({ vms, vmsAvailable }: { vms: VmResponse[
               const inbound = group.rules.filter((rule) => rule.direction === "ingress").length;
               const outbound = group.rules.length - inbound;
               return <li key={group.id} className={editor?.id === group.id ? "is-selected" : undefined}>
-              <div className="security-group-row">
-              <div className="security-group-summary">
-                <strong>{group.name}</strong>
-                <span>{networkName(group.microNetworkId)}</span>
-                <span className="poll-note">{t(
-                  `Inbound ${inbound} · Outbound ${outbound}`,
-                  `인바운드 ${inbound} · 아웃바운드 ${outbound}`,
-                )}</span>
-              </div>
-              <div className="service-actions">
-                <button className="btn" disabled={busy || editor !== undefined} onClick={() => open(group)} aria-label={t(`Edit rules for ${group.name}`, `${group.name} 규칙 편집`)}>{t("Edit rules", "규칙 편집")}</button>
-                <button className="btn danger" disabled={busy || editor !== undefined} onClick={() => remove(group)} aria-label={t(`Delete ${group.name}`, `${group.name} 삭제`)}>{t("Delete", "삭제")}</button>
-              </div>
-              </div>
-              <SecurityGroupConnections group={group} services={connections.services} loaded={connections.loaded} error={connections.error}
-                vms={vms} vmsAvailable={vmsAvailable} onRetry={() => setConnectionsVersion((version) => version + 1)} />
+                <div className="security-group-row">
+                  <div className="security-group-summary">
+                    <strong>{group.name}</strong>
+                    <span>{networkName(group.microNetworkId)} · {t(
+                      `Inbound ${inbound} · Outbound ${outbound}`,
+                      `인바운드 ${inbound} · 아웃바운드 ${outbound}`,
+                    )}</span>
+                  </div>
+                  <div className="service-actions">
+                    <button className="btn sm" disabled={busy || editor !== undefined} onClick={() => open(group)} aria-label={t(`Edit rules for ${group.name}`, `${group.name} 규칙 편집`)}>{t("Edit rules", "규칙 편집")}</button>
+                    <button className="btn sm danger" disabled={busy || editor !== undefined} onClick={() => remove(group)} aria-label={t(`Delete ${group.name}`, `${group.name} 삭제`)}>{t("Delete", "삭제")}</button>
+                  </div>
+                </div>
+                <SecurityGroupConnections group={group} services={connections.services} loaded={connections.loaded} error={connections.error}
+                  vms={vms} vmsAvailable={vmsAvailable} onRetry={() => setConnectionsVersion((version) => version + 1)} />
             </li>; })}
           </ul>}
       </section>

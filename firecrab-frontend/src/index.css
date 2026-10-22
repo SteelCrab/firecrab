@@ -342,13 +342,17 @@ form.create-grid {
 /* In a narrow shell, only the table scrolls horizontally; the page stays in place. */
 .table-scroll { overflow-x: auto; }
 
+.security-groups-content { min-width: 0; }
+.security-groups-intro { margin: 0 0 16px; color: var(--text-3); font-size: 12px; line-height: 1.5; }
 .security-group-list { list-style: none; margin: 0; padding: 0; }
-.security-group-list > li { padding: 1.25rem 0; border-bottom: 1px solid var(--border); }
-.security-group-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.security-group-list > li { padding: 20px 0; border-bottom: 1px solid var(--border); }
+.security-group-list > li:first-child { padding-top: 0; }
+.security-group-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 0; }
 .security-group-list > li:last-child { border-bottom: 0; }
-.security-group-list > li.is-selected { box-shadow: inset 2px 0 var(--accent); padding-left: 0.8rem; }
-.security-group-summary { display: flex; flex-direction: column; gap: 0.35rem; min-width: 0; overflow-wrap: anywhere; }
-.security-group-summary > span { color: var(--text-2); font-size: 0.8rem; }
+.security-group-list > li.is-selected .sg-connection-policy { border-color: var(--accent); }
+.security-group-summary { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.security-group-summary > strong { font-size: 13px; font-weight: 600; }
+.security-group-summary > span { color: var(--text-3); font-size: 12px; }
 .security-group-list .service-actions { flex-shrink: 0; margin: 0; }
 .security-group-form { display: grid; gap: 1rem; min-width: 0; }
 .security-group-form .poll-note, .security-group-form .service-actions { margin: 0; }
@@ -356,17 +360,15 @@ form.create-grid {
 .security-group-rule legend { color: var(--text-2); font-size: 0.8rem; padding: 0 0.3rem; }
 .security-group-rule-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; margin-bottom: 0.8rem; }
 .security-group-peer { grid-column: 1 / -1; }
-.sg-connections { container: sg-connections / inline-size; margin: 1rem 0 0; padding: 1rem; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-subtle); }
-.sg-connections figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; color: var(--text-2); font-size: 0.75rem; }
+.sg-connections { container: sg-connections / inline-size; margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--border); }
+.sg-connections figcaption { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: var(--text-3); font-size: 12px; }
 .sg-connections figcaption > span:first-child { font-weight: 600; }
-.sg-connection-tree { display: grid; grid-template-columns: 144px minmax(0, 1fr); align-items: center; gap: 40px; margin-top: 1.25rem; }
-.sg-connection-node { position: relative; display: flex; align-items: center; gap: 0.6rem; padding: 0.8rem; min-width: 0; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg); }
-.sg-connection-node > svg { flex-shrink: 0; width: 18px; height: 18px; color: var(--text-2); }
-.sg-connection-node > span, .sg-connection-vm-label { display: grid; min-width: 0; gap: 0.25rem; overflow-wrap: anywhere; }
-.sg-connections strong { font-size: 0.78rem; font-weight: 600; }
-.sg-connections small { color: var(--text-2); font-size: 0.7rem; line-height: 1.4; }
-.sg-connection-policy { border-color: var(--accent); }
-.sg-connection-policy > svg { color: var(--accent); }
+.sg-connection-tree { display: grid; grid-template-columns: 160px minmax(0, 1fr); align-items: center; gap: 40px; margin-top: 16px; }
+.sg-connection-node { position: relative; display: flex; align-items: center; gap: 8px; padding: 12px; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.sg-connection-node > svg { flex-shrink: 0; width: 16px; height: 16px; color: var(--text-2); stroke-width: 1.75; }
+.sg-connection-node > span, .sg-connection-vm-label { display: grid; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
+.sg-connections strong { font-size: 13px; font-weight: 600; }
+.sg-connections small { color: var(--text-3); font-size: 12px; line-height: 1.4; }
 .sg-connection-snapshot { border-style: dashed; }
 .sg-connection-parent::after { position: absolute; top: 50%; inset-inline-start: 100%; width: 20px; content: ""; border-top: 1px solid var(--border-strong); }
 .sg-connection-children { --branch-half-gap: 10px; display: grid; gap: 20px; padding: 0; margin: 0; min-width: 0; list-style: none; }
@@ -377,28 +379,29 @@ form.create-grid {
 .sg-connection-child::after { position: absolute; top: 50%; inset-inline-start: -20px; width: 20px; content: ""; border-top: 1px solid var(--border-strong); }
 .sg-connection-service { display: grid; grid-template-columns: minmax(120px, 220px) minmax(0, 1fr); align-items: center; gap: 40px; }
 .sg-connection-replicas { --branch-half-gap: 6px; gap: 12px; }
-.sg-connection-replica { display: flex; align-items: center; gap: 0.6rem; }
-.sg-connection-circle { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border: 1px dashed var(--border-strong); border-radius: 50%; background: var(--bg); color: var(--text-2); }
-.sg-connection-circle svg { width: 16px; height: 16px; }
-.sg-connection-replica.inherited .sg-connection-circle { border: 1px solid var(--green); color: var(--green-ink); background: var(--green-soft); }
-.sg-connection-replica.inherited .sg-connection-membership { color: var(--green-ink); }
-.sg-connection-replica.mismatch .sg-connection-circle { border: 1px solid var(--red); color: var(--red-ink); background: var(--red-soft); }
-.sg-connection-replica.mismatch .sg-connection-membership { color: var(--red-ink); }
+.sg-connection-replica { display: flex; align-items: center; gap: 8px; }
+.sg-connection-circle { display: grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border: 1px solid var(--border-strong); border-radius: 50%; background: var(--bg); color: var(--text-2); }
+.sg-connection-circle svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.sg-connection-replica.unknown .sg-connection-circle { border-style: dashed; }
+.sg-connection-vm-status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.sg-connection-membership svg { width: 12px; height: 12px; stroke-width: 1.75; }
+.sg-connection-membership.mismatch { color: var(--red-ink); background: var(--red-soft); border-color: transparent; }
 .sg-connection-replica.unknown::after { border-top-style: dashed; }
 .sg-connection-address { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.sg-connection-note { min-width: 0; margin: 0.8rem 0 0; color: var(--text-2); font-size: 0.75rem; line-height: 1.6; }
+.sg-connection-note { min-width: 0; margin: 12px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.5; }
 .sg-connection-service > .sg-connection-note { margin: 0; }
 @container sg-connections (max-width: 640px) {
   .sg-connection-tree { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .sg-connection-policy { justify-self: start; max-width: 100%; }
   .sg-connection-services { margin-inline-start: 24px; }
   .sg-connection-service { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .sg-connection-service > .sg-connection-node { min-height: 88px; }
   .sg-connection-node { justify-self: start; max-width: 100%; }
   .sg-connection-parent::after { top: 100%; inset-inline-start: 4px; width: 0; height: 20px; border-top: 0; border-inline-start: 1px solid var(--border-strong); }
   .sg-connection-child:first-child::before { top: -20px; }
-  .sg-connection-service::after { top: 34px; }
+  .sg-connection-service::after { top: 44px; }
   .sg-connection-services > .sg-connection-child:first-child::before { top: -20px; }
-  .sg-connection-services > .sg-connection-child:last-child::before { bottom: auto; height: 54px; }
+  .sg-connection-services > .sg-connection-child:last-child::before { bottom: auto; height: 64px; }
   .sg-connection-replicas { margin-inline-start: 24px; }
   .sg-connection-service > .sg-connection-note { margin-inline-start: 24px; }
 }

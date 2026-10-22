@@ -1,8 +1,8 @@
-import { Boxes, Cpu, Shield } from "lucide-react";
+import { Boxes, Check, Cpu, Shield } from "lucide-react";
 import type { SecurityGroupResponse, ServiceInstance, VmResponse } from "../bindings";
 import type { ServiceConnection } from "../lib/useSecurityGroupConnections";
 import { useI18n } from "../i18n";
-import { VM_STATE_LABELS } from "../model";
+import StatusBadge from "./ui/StatusBadge";
 
 interface ConnectionsProps {
   group: SecurityGroupResponse;
@@ -76,8 +76,14 @@ function ReplicaNode({ instance, groupId, vm }: { instance: ServiceInstance; gro
     <span className="sg-connection-vm-label">
       <strong>{vm?.name ?? instance.vmId.slice(0, 8)}</strong>
       <small className="sg-connection-address">{vm?.ipv4 ?? instance.ipv4}</small>
-      <small>{t(...VM_STATE_LABELS[state])} · <span className="sg-connection-membership">{membership === "inherited"
-        ? t("Inherited", "상속됨") : membership === "mismatch" ? t("Group mismatch", "그룹 불일치") : t("Group unverified", "그룹 미확인")}</span></small>
+      <span className="sg-connection-vm-status">
+        <StatusBadge state={state} />
+        <span className={`chip sg-connection-membership ${membership}`}>
+          {membership === "inherited" && <Check aria-hidden="true" />}
+          {membership === "inherited" ? t("Inherited", "상속됨")
+            : membership === "mismatch" ? t("Group mismatch", "그룹 불일치") : t("Group unverified", "그룹 미확인")}
+        </span>
+      </span>
     </span>
   </li>;
 }
