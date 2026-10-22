@@ -609,11 +609,15 @@ fn pool_commands_match_the_pool_api() {
 
 #[test]
 fn an_exhausted_pool_fails_the_acquire_with_the_api_error() {
-    let (code, _) = run_once(
+    let (code, request) = run_once(
         &["pool", "acquire", POOL_ID],
         "409 Conflict",
         r#"{"error":{"code":"pool_exhausted","message":"no ready member right now","requestId":"00000000-0000-0000-0000-000000000000"}}"#,
     );
 
     assert_eq!(code, 1);
+    let key = request
+        .idempotency_key
+        .expect("an omitted key is generated even on failure");
+    assert!(uuid::Uuid::parse_str(&key).is_ok());
 }

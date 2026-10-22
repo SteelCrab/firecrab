@@ -35,7 +35,7 @@ function KernelJobLog({ job }: { job: KernelInstallResponse }) {
         <LogExportActions
           text={job.log}
           filename={logDownloadFilename("kernel-install", job.version)}
-          buttonClassName="btn console-bar-btn"
+          buttonClassName="btn sm"
           disabled={!job.log}
         />
       </div>

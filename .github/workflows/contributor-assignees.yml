@@ -1,0 +1,61 @@
+name: Contributor assignees
+
+on:
+  issues:
+    types: [opened, reopened]
+  pull_request_target:
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      number:
+        description: PR or issue number to assign to its author
+        required: true
+        type: number
+
+permissions: {}
+
+concurrency:
+  group: contributor-assignee-${{ github.event.issue.number || github.event.pull_request.number || inputs.number }}
+  cancel-in-progress: false
+
+jobs:
+  assign:
+    if: github.repository == 'SteelCrab/firecrab'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      # The inline script uses API metadata only; no PR code is checked out.
+      - name: Assign the PR or issue author
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const number = Number(
+              context.payload.issue?.number ??
+              context.payload.pull_request?.number ??
+              context.payload.inputs?.number
+            );
+            if (!Number.isSafeInteger(number) || number <= 0) {
+              throw new Error('A positive PR or issue number is required.');
+            }
+            const target = { ...context.repo, issue_number: number };
+            const { data: item } = await github.rest.issues.get(target);
+            const author = item.user;
+            if (!author || author.type !== 'User' || author.login.toLowerCase() === 'ghost') {
+              core.info(`Skipping #${number}: no human author.`);
+              return;
+            }
+            if (item.assignees.some(person => person.id === author.id)) {
+              core.info(`@${author.login} is already assigned to #${number}.`);
+              return;
+            }
+            const { data: updated } = await github.rest.issues.addAssignees({
+              ...target,
+              assignees: [author.login],
+            });
+            if (!updated.assignees.some(person => person.id === author.id)) {
+              throw new Error(`GitHub did not assign @${author.login} to #${number}.`);
+            }
+            core.info(`Assigned @${author.login} to #${number}.`);

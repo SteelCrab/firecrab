@@ -47,6 +47,7 @@ first install whose binaries already exist, rerun `~/.local/bin/firecrab service
 | Command | Effect |
 | --- | --- |
 | `firecrab service start` / `stop` | Start / stop the management VM and API tunnel |
+| `firecrab service restart` | Stop and start the management VM and API tunnel; wait for the local API |
 | `firecrab service status` | Check launchd, guest services, and localhost API |
 | `firecrab service validate` | Check prepared assets and VM configuration |
 | `firecrab service shell` | Open a root shell inside Debian |

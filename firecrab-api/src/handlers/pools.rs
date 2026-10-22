@@ -27,6 +27,38 @@ const LEASE_TTL_RANGE_SECONDS: std::ops::RangeInclusive<u32> = 60..=7 * 24 * 60 
 /// Longest accepted idempotency key.
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 255;
 
+/// Keeps a pool's image installed even while it has no members. Image deletion
+/// and kernel replacement must consult durable pool references, not only VMs.
+pub(crate) async fn ensure_image_unused(
+    state: &AppState,
+    alias: &str,
+    request_id: RequestId,
+) -> Result<(), AppError> {
+    let store = state.store.clone();
+    let alias = alias.to_owned();
+    let users: Vec<String> = blocking(request_id, move || {
+        Ok(store
+            .list_pools()?
+            .into_iter()
+            .filter(|pool| pool.template == alias)
+            .map(|pool| pool.name)
+            .collect())
+    })
+    .await?;
+    if users.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::in_use_with_fields(
+        "image is pinned by a pool; delete the pool before changing or deleting its image",
+        BTreeMap::from([
+            ("count".to_owned(), users.len().to_string()),
+            ("pools".to_owned(), users.join(", ")),
+        ]),
+        request_id.0,
+    ))
+}
+
+/// Lists pool configurations and their current members.
 pub async fn list_pools(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -51,6 +83,7 @@ pub async fn list_pools(
     ))
 }
 
+/// Returns one pool and its member state.
 pub async fn get_pool(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -60,6 +93,7 @@ pub async fn get_pool(
     Ok(Json(load_pool(&state, request_id, id).await?))
 }
 
+/// Validates and persists a pool, then wakes member provisioning.
 pub async fn create_pool(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -154,6 +188,7 @@ pub async fn create_pool(
     Ok((StatusCode::CREATED, Json(pool_response(&state, &row, &[]))))
 }
 
+/// Changes sizing and the TTL used for future leases.
 pub async fn update_pool(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -283,6 +318,7 @@ pub async fn acquire_pool_lease(
     ))
 }
 
+/// Lists active and retained ended leases, newest first.
 pub async fn list_pool_leases(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -304,6 +340,7 @@ pub async fn list_pool_leases(
     Ok(Json(responses))
 }
 
+/// Returns a lease only when it belongs to the requested pool.
 pub async fn get_pool_lease(
     State(state): State<AppState>,
     Extension(request_id): Extension<RequestId>,
@@ -617,6 +654,86 @@ while True:
     }
 
     #[tokio::test]
+    async fn an_empty_pool_protects_its_image_from_delete_and_kernel_replacement() {
+        let directory = short_tempdir();
+        let (state, network) = pool_state(directory.path(), &format!("{BOOTS}{SERVE_LOOP}")).await;
+        let created = create(&state, request(network, 0, 1)).await;
+        assert!(created.members.is_empty());
+
+        let deleted = crate::handlers::images::delete_image(
+            State(state.clone()),
+            Path(created.template.clone()),
+            rid(),
+        )
+        .await
+        .unwrap_err();
+        let updated = crate::handlers::images::update_image_kernel(
+            State(state.clone()),
+            Path(created.template.clone()),
+            rid(),
+            ValidatedJson(firecrab_api_types::UpdateImageKernelRequest {
+                kernel_version: "7.2.2".to_owned(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        for error in [deleted, updated] {
+            let response = error.into_response();
+            assert_eq!(response.status(), StatusCode::CONFLICT);
+            let body = axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"]["code"], "in_use");
+            assert_eq!(body["error"]["fields"]["pools"], "ci");
+        }
+        assert!(
+            state
+                .templates
+                .resolve_version(&created.template, &created.template_version)
+                .is_some()
+        );
+
+        state.store.mark_pool_deleting(created.id).unwrap();
+        reconcile(&state, now_ms()).await;
+        assert_eq!(
+            crate::handlers::images::delete_image(State(state), Path(created.template), rid())
+                .await
+                .unwrap(),
+            StatusCode::NO_CONTENT
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_members_validate_the_pinned_image_after_the_alias_moves() {
+        let directory = short_tempdir();
+        let (state, network) = pool_state(directory.path(), &format!("{BOOTS}{SERVE_LOOP}")).await;
+        let created = create(&state, request(network, 1, 1)).await;
+        // The new alias needs two GiB; the pool's pinned v1 still fits in one.
+        std::fs::File::create(directory.path().join("larger-rootfs"))
+            .unwrap()
+            .set_len(1024 * 1024 * 1024 + 1)
+            .unwrap();
+        state
+            .templates
+            .register_spec(crate::templates::TemplateSpec {
+                alias: created.template.clone(),
+                version: "v2".to_owned(),
+                kernel: "kernel".into(),
+                initrd: None,
+                rootfs: "larger-rootfs".into(),
+                boot_args: "console=ttyS0".to_owned(),
+            })
+            .unwrap();
+
+        let current = ready(&state, created.id, 1).await;
+        let vm = state.vms.lock().unwrap()[&current.members[0].vm_id].clone();
+        assert_eq!(vm.template_version, "v1");
+        assert_eq!(vm.disk_gb, 1);
+        assert!(current.last_error.is_none());
+    }
+
+    #[tokio::test]
     async fn min_ready_two_converges_to_two_ready_members() {
         let directory = short_tempdir();
         let (state, network) = pool_state(directory.path(), &format!("{BOOTS}{SERVE_LOOP}")).await;
@@ -795,7 +912,8 @@ while True:
         let converged = ready(&state, created.id, 2).await;
         let (_, lease) = acquire(&state, created.id, None).await.unwrap();
 
-        // What an API restart does to every guest (see `reset_active_states`).
+        // Simulate guest exits. API restarts preserve live shims; that path is
+        // covered separately by pool restart reconciliation and guest QA P7.
         for member in &converged.members {
             let _stopped = crate::handlers::vms::stop_vm(
                 State(state.clone()),

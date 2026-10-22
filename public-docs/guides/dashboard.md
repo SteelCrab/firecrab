@@ -64,7 +64,7 @@ Stop and start a VM after an API upgrade to refresh its guest agent.
 | Images | Install M2Images, inspect/import OCI, and register custom images locally |
 | Kernels | Install verified kernels, pair them with unused images, and delete unused kernels |
 | Host | Inspect OS, capacity, build information, and API/helper service states |
-| Pipe | Edit domain/path routes and app addresses; apply or stop [Nginx ingress and an optional tunnel](pipe.md) |
+| Pipe | Open a service card: [Pipe Auth](pipe-auth.md) connects AWS and GitHub accounts; Route edits [Nginx](pipe.md) domain/path routes; [Pipe Registry](pipe-registry.md) pulls images; three tunnel cards publish apps |
 | Update | Read release notes, then follow the gauge, percent, and stage until the new API answers |
 
 MicroBoot image bootstrap is [API-only](images.md#bootstrap).
@@ -85,3 +85,6 @@ The Host panel refreshes service states every ten seconds and clears stale state
 - `Acquire` leases one ready VM; `Delete` is refused while a lease is active
 - Select a pool for its members by state, the last member failure, sizing edits, and leases
 - An active lease links to the VM's terminal; `Release` gives the VM back to be deleted and replaced
+
+If an acquire response is lost, repeat `Acquire` to recover the same lease. The pending request
+key survives navigation and page reloads in the same browser tab. A successful response clears it.

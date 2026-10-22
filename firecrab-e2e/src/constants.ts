@@ -45,7 +45,7 @@ export const REGISTER_FIXED_REFERENCE = `127.0.0.1:${REGISTER_REGISTRY_PORT}/fir
 /** Alias `POST /api/oci/import` claims for {@link REGISTER_FIXED_REFERENCE}. */
 export const REGISTER_FIXED_ALIAS = `127.0.0.1-${REGISTER_REGISTRY_PORT}-firecrab-e2e-ready`;
 
-/** Catalog version typed into the MicroRegistry register form. */
+/** Catalog version published through the MicroRegistry API. */
 export const REGISTER_VERSION = "1";
 
 /** VM created by the guest-boot half of the register suite. */

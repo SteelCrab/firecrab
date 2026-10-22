@@ -1,44 +1,34 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type {
   ImageInstallResponse,
   ImageResponse,
   KernelResponse,
-  MicroRegistryRegisterResponse,
-  MicroRegistryResponse,
   OciInspectResponse,
   VmResponse,
 } from "../bindings";
 import {
   ApiClientError,
   deleteImage,
-  deleteStagedPackage,
   deleteVm,
-  getImageInstall,
-  getImagePackage,
-  getMicroRegistry,
-  getMicroRegistryRegisterJob,
   getOciImport,
   inspectOciImage,
   listImages,
   listKernels,
   listVms,
-  startImageInstall,
-  startImagePackage,
-  startMicroRegistryRegister,
   startOciImport,
   stopVm,
   updateImageKernel,
 } from "../api/client";
 import { logDownloadFilename } from "../lib/textExport";
+import { getRegistryImages, pinnedRegistryReference, type RegistryImage } from "../api/registries";
 import Banner from "./Banner";
 import LogExportActions from "./LogExportActions";
 import { useI18n } from "../i18n";
-
-const KNOWN_TEMPLATES = [
-  { alias: "alpine-3.24.1", label: "Alpine Linux", logoSrc: "https://www.alpinelinux.org/alpinelinux-logo.svg" },
-  { alias: "ubuntu-26.04", label: "Ubuntu", logoSrc: "https://assets.ubuntu.com/v1/ff6a9a38-ubuntu-logo-2022.svg" },
-  { alias: "rocky-9.8", label: "Rocky Linux 9.8", logoSrc: "https://raw.githubusercontent.com/rocky-linux/branding/main/logo/src/icon-primary.svg" },
-] as const;
+import { Layers } from "lucide-react";
+import Screen from "./layout/Screen";
+import { useScreenStatus } from "./layout/screenStatus";
+import { DetailHead, DetailProp, DetailSection } from "./ui/DetailSection";
+import StatusBadge from "./ui/StatusBadge";
 
 /** Human size for the real rootfs artifact (not the ceiled min-disk floor). */
 function formatRootfsSize(bytes: number | undefined | null): string {
@@ -146,9 +136,9 @@ function keepNewestJobSnapshot<T extends ImageInstallResponse>(
 }
 
 /**
- * 클릭하면 열리는 최소 드롭다운 메뉴. 바깥 클릭 또는 Esc로 닫힌다.
- * 이 프로젝트에 다른 드롭다운 패턴이 없어 이 자리 전용으로 최소 구현했다 —
- * 범용화해서 다른 화면에 재사용할 계획은 없다.
+ * Minimal dropdown menu that opens on click and closes on outside click or Esc.
+ * The project has no other dropdown pattern, so this implementation is specific
+ * to this location. There are no plans to generalize it for other screens.
  */
 function OptionsMenu({
   items,
@@ -176,15 +166,16 @@ function OptionsMenu({
 
   return (
     <div className="options-menu" ref={rootRef}>
-      <button type="button" className="options-menu-trigger" onClick={() => setOpen((current) => !current)}>
+      <button type="button" className="options-menu-trigger" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((current) => !current)}>
         ⋯
       </button>
       {open && (
-        <ul className="options-menu-list">
+        <ul className="options-menu-list" role="menu">
           {items.map((item, index) => (
-            <li key={index}>
+            <li key={index} role="none">
               <button
                 type="button"
+                role="menuitem"
                 className={`options-menu-item${item.danger ? " danger" : ""}`}
                 disabled={item.disabled}
                 onClick={() => {
@@ -202,7 +193,7 @@ function OptionsMenu({
   );
 }
 
-/** 선택한 로컬 이미지의 상세 정보를 표 아래에 표시한다. */
+/** Show details of the selected local image below the table. */
 function computeMenuItems(
   image: ImageResponse,
   ctx: {
@@ -227,7 +218,6 @@ function computeMenuItems(
 
 function ImageDetail({
   image,
-  registryMinDiskGb,
   kernels,
   kernelUpdateBusy,
   onUpdateKernel,
@@ -235,7 +225,6 @@ function ImageDetail({
   usedByError,
 }: {
   image: ImageResponse;
-  registryMinDiskGb?: number;
   kernels: KernelResponse[];
   kernelUpdateBusy: boolean;
   onUpdateKernel: (version: string) => Promise<void>;
@@ -243,7 +232,7 @@ function ImageDetail({
   usedByError: string | null;
 }) {
   const { t } = useI18n();
-  const minDiskGb = Math.max(image.minDiskGb, registryMinDiskGb ?? 0);
+  const minDiskGb = image.minDiskGb;
   const [targetKernel, setTargetKernel] = useState(image.kernelVersion ?? "");
   useEffect(() => {
     setTargetKernel(image.kernelVersion ?? "");
@@ -256,116 +245,91 @@ function ImageDetail({
     !kernelUpdateBusy;
 
   return (
-    <div className="subpanel">
-      <dl className="detail-fields mono">
-        <dt>alias</dt>
-        <dd>{image.alias}</dd>
-
-        <dt>{t("Version", "버전")}</dt>
-        <dd>{image.version}</dd>
-
-        <dt>{t("Kernel version", "커널 버전")}</dt>
-        <dd>{image.kernelVersion ?? t("Distro-provided kernel", "배포판 제공 커널")}</dd>
-
-        <dt>{t("Kernel image", "커널 이미지")}</dt>
-        <dd>{image.kernelImage || "—"}</dd>
-
-        <dt>{t("Kernel SHA256", "커널 SHA256")}</dt>
-        <dd>{image.kernelSha256 || "—"}</dd>
-
-        <dt>{t("Rootfs SHA256", "rootfs SHA256")}</dt>
-        <dd>{image.rootfsSha256 || "—"}</dd>
-
-        {image.initrdSha256 && (
+    <>
+      <DetailHead
+        title={image.alias}
+        meta={(
           <>
-            <dt>initrd SHA256</dt>
-            <dd>{image.initrdSha256}</dd>
+            <span>{image.version}</span>
+            {image.installed ? <span className="badge running">{t("Installed", "설치됨")}</span> : <span className="badge">{t("Not installed", "미설치")}</span>}
           </>
         )}
-
-        <dt>{t("Minimum disk", "최소 디스크")}</dt>
-        <dd>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</dd>
-
-        <dt>{t("Rootfs size", "rootfs 크기")}</dt>
-        <dd>{formatRootfsSize(image.rootfsSizeBytes)}</dd>
-
-        <dt>{t("Status", "상태")}</dt>
-        <dd>
-          {image.installed
-            ? t("Installed", "설치됨")
-            : t("Not installed", "미설치")}
-        </dd>
-
-        <dt>{t("VMs using it", "사용 중인 VM")}</dt>
-        <dd>
-          {usedByError
-            ? usedByError
-            : usedByVms === null
-              ? t("Loading…", "불러오는 중…")
-              : usedByVms.length === 0
-                ? t("None", "없음")
-                : usedByVms.map((vm) => `${vm.name} [${vm.state}]`).join(", ")}
-        </dd>
-      </dl>
-      {image.installed && (
-        <div className="kernel-update-control">
-          <label htmlFor={`image-kernel-${image.alias}`}>
-            {t("Update image kernel", "이미지 커널 업데이트")}
-          </label>
-          <div className="kernel-update-row">
-            <select
-              id={`image-kernel-${image.alias}`}
-              value={targetKernel}
-              onChange={(event) => setTargetKernel(event.target.value)}
-              disabled={kernelUpdateBusy || installedKernels.length === 0}
-            >
-              <option value="">
-                {installedKernels.length === 0
-                  ? t("Install a kernel first", "먼저 커널을 설치하세요")
-                  : t("Select installed kernel", "설치된 커널을 선택하세요")}
-              </option>
-              {installedKernels.map((kernel) => (
-                <option key={kernel.version} value={kernel.version}>
-                  {kernel.version}{kernel.version === image.kernelVersion ? t(" · current", " · 현재") : ""}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="btn primary"
-              disabled={!canUpdateKernel}
-              onClick={() => void onUpdateKernel(targetKernel)}
-            >
-              {kernelUpdateBusy ? t("Updating…", "업데이트 중…") : t("Update kernel", "커널 업데이트")}
-            </button>
-          </div>
-          <small>
-            {t(
-              "Only images with no VM references can change their kernel.",
-              "VM이 연결되지 않은 이미지만 커널을 변경할 수 있습니다.",
+      />
+      <div className="detail-body">
+        <DetailSection title={t("Properties", "속성")}>
+          <dl className="props">
+            <DetailProp label={t("Version", "버전")}>{image.version}</DetailProp>
+            <DetailProp label={t("Kernel", "커널")}>{image.kernelVersion ?? t("Distro-provided kernel", "배포판 제공 커널")}</DetailProp>
+            <DetailProp label={t("Kernel image", "커널 이미지")}><span className="mono">{image.kernelImage || "—"}</span></DetailProp>
+            <DetailProp label={t("Kernel SHA256", "커널 SHA256")} copy={image.kernelSha256 || undefined}><span className="mono">{image.kernelSha256 || "—"}</span></DetailProp>
+            <DetailProp label={t("Rootfs SHA256", "rootfs SHA256")} copy={image.rootfsSha256 || undefined}><span className="mono">{image.rootfsSha256 || "—"}</span></DetailProp>
+            {image.initrdSha256 && (
+              <DetailProp label="initrd SHA256" copy={image.initrdSha256}><span className="mono">{image.initrdSha256}</span></DetailProp>
             )}
-          </small>
-        </div>
-      )}
-    </div>
+            <DetailProp label={t("Minimum disk", "최소 디스크")}>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</DetailProp>
+            <DetailProp label={t("Rootfs size", "rootfs 크기")}>{formatRootfsSize(image.rootfsSizeBytes)}</DetailProp>
+          </dl>
+        </DetailSection>
+
+        <DetailSection title={t("VMs using it", "사용 중인 VM")}>
+          {usedByError ? (
+            <p className="field-error">{usedByError}</p>
+          ) : usedByVms === null ? (
+            <p className="detail-note">{t("Loading…", "불러오는 중…")}</p>
+          ) : usedByVms.length === 0 ? (
+            <p className="detail-note">{t("None", "없음")}</p>
+          ) : (
+            <ul className="detail-list">
+              {usedByVms.map((vm) => (
+                <li key={vm.id}>
+                  <span className="detail-list-main">{vm.name}</span>
+                  <StatusBadge state={vm.state} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </DetailSection>
+
+        {image.installed && (
+          <DetailSection title={t("Update image kernel", "이미지 커널 업데이트")}>
+            <div className="field detail-field">
+              <label htmlFor={`image-kernel-${image.alias}`} className="sr-only">{t("Update image kernel", "이미지 커널 업데이트")}</label>
+              <select
+                id={`image-kernel-${image.alias}`}
+                value={targetKernel}
+                onChange={(event) => setTargetKernel(event.target.value)}
+                disabled={kernelUpdateBusy || installedKernels.length === 0}
+              >
+                <option value="">
+                  {installedKernels.length === 0
+                    ? t("Install a kernel first", "먼저 커널을 설치하세요")
+                    : t("Select installed kernel", "설치된 커널을 선택하세요")}
+                </option>
+                {installedKernels.map((kernel) => (
+                  <option key={kernel.version} value={kernel.version}>
+                    {kernel.version}{kernel.version === image.kernelVersion ? t(" · current", " · 현재") : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="detail-sec-buttons">
+              <button type="button" className="btn primary" disabled={!canUpdateKernel} onClick={() => void onUpdateKernel(targetKernel)}>
+                {kernelUpdateBusy ? t("Updating…", "업데이트 중…") : t("Update kernel", "커널 업데이트")}
+              </button>
+            </div>
+            <p className="detail-note">
+              {t("Only images with no VM references can change their kernel.", "VM이 연결되지 않은 이미지만 커널을 변경할 수 있습니다.")}
+            </p>
+          </DetailSection>
+        )}
+      </div>
+    </>
   );
 }
 
-function ImageJobLog({
-  job,
-  kind,
-}: {
-  job: ImageInstallResponse;
-  kind: "download" | "import" | "oci" | "register";
-}) {
+function ImageJobLog({ job }: { job: ImageInstallResponse }) {
   const { t } = useI18n();
-  const label = kind === "download"
-    ? t("Package download log", "패키지 다운로드 로그")
-    : kind === "oci"
-      ? t("OCI import log", "OCI 가져오기 로그")
-      : kind === "register"
-        ? t("Register log", "등록 로그")
-        : t("Image import log", "이미지 가져오기 로그");
+  const label = t("OCI import log", "OCI 가져오기 로그");
 
   const logRef = useRef<HTMLPreElement>(null);
   useEffect(() => {
@@ -379,8 +343,8 @@ function ImageJobLog({
         <span className="log-export-bar-label">{label} — {job.alias}</span>
         <LogExportActions
           text={job.log}
-          filename={logDownloadFilename(`m2image-${kind}`, job.alias)}
-          buttonClassName="btn console-bar-btn"
+          filename={logDownloadFilename("m2image-oci", job.alias)}
+          buttonClassName="btn sm"
           disabled={!job.log}
         />
       </div>
@@ -406,6 +370,95 @@ function jobStatusClass(status: ImageInstallResponse["status"]): string {
   if (status === "succeeded") return " running";
   if (status === "failed") return " error";
   return "";
+}
+
+function registryImageName(image: RegistryImage): string {
+  const [name, digest] = image.reference.slice(image.reference.indexOf("/") + 1).split("@");
+  return digest ? `${name}@${digest.slice(0, "sha256:".length + 12)}` : name;
+}
+
+function registryProviderName(image: RegistryImage): string {
+  const host = image.reference.split("/")[0];
+  if (host === "docker.io" || host === "registry-1.docker.io") return "Docker Hub";
+  if (host === "ghcr.io") return "GHCR";
+  if (host === "public.ecr.aws" || /^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/.test(host)) return "ECR";
+  return "Harbor";
+}
+
+function PulledImageRow({ image, onBuilt }: {
+  image: RegistryImage;
+  onBuilt: (alias: string) => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [job, setJob] = useState<ImageInstallResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [generation, setGeneration] = useState(0);
+  const running = starting || job?.status === "running";
+
+  useEffect(() => {
+    if (!image.templateAlias) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const next = await getOciImport(image.templateAlias);
+        if (cancelled) return;
+        setJob(current => keepNewestJobSnapshot(current, next));
+        if (next.status === "running") {
+          timer = setTimeout(poll, 500);
+        } else if (next.status === "succeeded") {
+          await onBuilt(next.alias);
+        } else if (next.status === "failed") {
+          setError(lastLogLine(next.log, t("Image build failed.", "이미지 빌드에 실패했다.")));
+        }
+      } catch (failure) {
+        if (!cancelled) {
+          setError(apiErrorText(failure));
+          timer = setTimeout(poll, 2_000);
+        }
+      }
+    }
+    void poll();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [image.templateAlias, generation, onBuilt, t]);
+
+  async function build() {
+    if (running || !image.templateAlias) return;
+    setStarting(true);
+    setError(null);
+    try {
+      const started = await startOciImport({ reference: pinnedRegistryReference(image) });
+      setJob(started);
+      setGeneration(value => value + 1);
+    } catch (failure) {
+      if (failure instanceof ApiClientError && failure.apiError?.code === "import_in_progress") {
+        setGeneration(value => value + 1);
+      } else {
+        setError(apiErrorText(failure));
+      }
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  return <>
+    <tr className="pulled-image-row">
+      <td className="mono" title={image.reference}>{registryImageName(image)}</td>
+      <td className="image-registry" data-label={t("Registry", "레지스트리")} title={image.reference.split("/")[0]}>{registryProviderName(image)}</td>
+      <td className="mono" data-label={t("Minimum disk", "최소 디스크")}>—</td>
+      <td className="state-cell">
+        <span className={`state-badge${running ? " starting" : job?.status === "failed" ? " error" : ""}`}>
+          {running ? t("Building…", "빌드 중…") : job?.status === "failed" ? t("Build failed", "빌드 실패") : t("Build required", "빌드 필요")}
+        </span>
+        <OptionsMenu items={[{ label: t("Build M2Image", "M2Image 빌드"), disabled: running || !image.templateAlias, onClick: () => void build() }]} />
+      </td>
+    </tr>
+    {(error || (job && job.status !== "idle")) && <tr className="pulled-image-log"><td colSpan={4}>
+      {error && <p className="field-error" role="alert">{error}</p>}
+      {job && job.status !== "idle" && <ImageJobLog job={job} />}
+    </td></tr>}
+  </>;
 }
 
 /**
@@ -715,42 +768,30 @@ function OciImportPanel({
               )}
             </dl>
           </div>
-          <ImageJobLog job={job} kind="oci" />
+          <ImageJobLog job={job} />
         </>
       )}
     </section>
   );
 }
 
-/**
- * M2Image inventory, MicroRegistry, and OCI import are intentionally separate
- * panels so local images, remote packages, and container imports do not read
- * as one mixed catalog.
- */
+/** M2Image lists installed templates and pulled OCI sources awaiting a build. */
 export default function Images() {
   const { t } = useI18n();
+  const { setDetailOpen } = useScreenStatus();
   const [images, setImages] = useState<ImageResponse[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [registry, setRegistry] = useState<MicroRegistryResponse | null>(null);
-  const [registryError, setRegistryError] = useState<string | null>(null);
+  const [pulledImages, setPulledImages] = useState<RegistryImage[]>([]);
+  const [pulledImagesError, setPulledImagesError] = useState<string | null>(null);
   const [kernels, setKernels] = useState<KernelResponse[]>([]);
-  const [registerAlias, setRegisterAlias] = useState("");
-  const [registerVersion, setRegisterVersion] = useState("");
-  const [registerJob, setRegisterJob] = useState<MicroRegistryRegisterResponse | null>(null);
-  const [registerError, setRegisterError] = useState<string | null>(null);
-  const [registerStarting, setRegisterStarting] = useState(false);
-  const registerPollingRef = useRef<string | null>(null);
   const [busyAlias, setBusyAlias] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [packageJobs, setPackageJobs] = useState<Record<string, ImageInstallResponse>>({});
-  const packagePollingRef = useRef(new Set<string>());
-  const [install, setInstall] = useState<ImageInstallResponse | null>(null);
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
 
   const refreshList = useCallback(async () => {
     try {
       const next = await listImages();
-      setImages(next);
+      setImages(next.filter((image) => image.installed));
       setListError(null);
     } catch (error) {
       setListError((error as Error).message);
@@ -762,30 +803,12 @@ export default function Images() {
     setSelectedAlias(alias);
   }, [refreshList]);
 
-  const refreshRegistry = useCallback(async () => {
+  const refreshPulledImages = useCallback(async () => {
     try {
-      const next = await getMicroRegistry();
-      setRegistry(next);
-      setRegistryError(null);
-      // `GET /api/images/{alias}/package` is backed by the server-side job
-      // tracker. Rehydrate it after a browser refresh so a running package
-      // transfer immediately regains both its bar and its poll loop.
-      const snapshots = await Promise.allSettled(
-        next.images
-          .filter((image) => image.downloadable)
-          .map((image) => getImagePackage(image.alias)),
-      );
-      setPackageJobs((current) => {
-        const merged = { ...current };
-        for (const result of snapshots) {
-          if (result.status === "fulfilled") {
-            merged[result.value.alias] = keepNewestJobSnapshot(merged[result.value.alias], result.value);
-          }
-        }
-        return merged;
-      });
+      setPulledImages(await getRegistryImages());
+      setPulledImagesError(null);
     } catch (error) {
-      setRegistryError((error as Error).message);
+      setPulledImagesError((error as Error).message);
     }
   }, []);
 
@@ -799,9 +822,9 @@ export default function Images() {
 
   useEffect(() => {
     void refreshList();
-    void refreshRegistry();
+    void refreshPulledImages();
     void refreshKernels();
-  }, [refreshList, refreshRegistry, refreshKernels]);
+  }, [refreshList, refreshPulledImages, refreshKernels]);
 
   const selectedImage = (images ?? []).find((image) => image.alias === selectedAlias) ?? null;
 
@@ -816,8 +839,8 @@ export default function Images() {
       .catch((error) => setUsedByError((error as Error).message));
   }, []);
 
-  // MicroNetworks의 `getMicroNetwork(selectedId)`와 같은 패턴 —
-  // 목록 자체엔 없는, 선택 시점의 최신 사용처만 별도로 가져온다.
+  // Follow the same pattern as MicroNetworks' `getMicroNetwork(selectedId)`:
+  // fetch current usage separately on selection because the list does not include it.
   useEffect(() => {
     if (!selectedAlias) {
       setUsedByVms(null);
@@ -826,159 +849,6 @@ export default function Images() {
     }
     refreshUsedByVms(selectedAlias);
   }, [selectedAlias, refreshUsedByVms]);
-
-  // `Images` is conditionally mounted by the App shell (only while the
-  // "images" tab is active), so a poll started here can easily outlive the
-  // component if the user navigates away mid-install. Every tick must check
-  // this before touching state.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const pollPackage = useCallback((alias: string) => {
-    if (packagePollingRef.current.has(alias)) return;
-    packagePollingRef.current.add(alias);
-    const tick = async () => {
-      if (!mountedRef.current) {
-        packagePollingRef.current.delete(alias);
-        return;
-      }
-      try {
-        const latest = await getImagePackage(alias);
-        if (!mountedRef.current) {
-          packagePollingRef.current.delete(alias);
-          return;
-        }
-        setPackageJobs((current) => ({ ...current, [alias]: keepNewestJobSnapshot(current[alias], latest) }));
-        if (latest.status === "running") {
-          setTimeout(() => void tick(), 500);
-          return;
-        }
-        packagePollingRef.current.delete(alias);
-        if (latest.status === "succeeded") await Promise.all([refreshList(), refreshRegistry()]);
-      } catch (error) {
-        packagePollingRef.current.delete(alias);
-        if (mountedRef.current) setActionError((error as Error).message);
-      }
-    };
-    void tick();
-  }, [refreshList, refreshRegistry]);
-
-  useEffect(() => {
-    for (const job of Object.values(packageJobs)) {
-      if (job.status === "running") pollPackage(job.alias);
-    }
-  }, [packageJobs, pollPackage]);
-
-  // `startImageInstall` only kicks the install off — the backend always
-  // answers with a single "install started" snapshot and does the real
-  // extract/register work in the background, so the result must be polled
-  // to a terminal status before the table can show "설치됨".
-  const pollInstall = (alias: string) => {
-    const tick = async () => {
-      if (!mountedRef.current) return;
-      try {
-        const latest = await getImageInstall(alias);
-        if (!mountedRef.current) return;
-        setInstall((current) => keepNewestJobSnapshot(current, latest));
-        if (latest.status === "running") {
-          setTimeout(() => void tick(), 300);
-        } else if (latest.status === "succeeded") {
-          await Promise.all([refreshList(), refreshRegistry()]);
-        }
-        // "failed" is a confirmed terminal state too — stop without retrying.
-      } catch {
-        // A fetch failure is not positive confirmation the job reached a
-        // terminal state, so keep polling rather than freezing the log on a
-        // one-off network blip (unless the component is already gone).
-        if (mountedRef.current) setTimeout(() => void tick(), 300);
-      }
-    };
-    void tick();
-  };
-
-  const pollRegister = (jobId: string) => {
-    if (registerPollingRef.current === jobId) return;
-    registerPollingRef.current = jobId;
-    const stop = () => {
-      if (registerPollingRef.current === jobId) registerPollingRef.current = null;
-    };
-    const tick = async () => {
-      if (!mountedRef.current) return stop();
-      try {
-        const latest = await getMicroRegistryRegisterJob(jobId);
-        if (!mountedRef.current) return stop();
-        setRegisterJob((current) => keepNewestJobSnapshot(current, latest));
-        if (latest.status === "running") {
-          setTimeout(() => void tick(), 400);
-          return;
-        }
-        stop();
-        if (latest.status === "succeeded") {
-          setRegisterError(null);
-          await refreshRegistry();
-        } else if (latest.status === "failed") {
-          setRegisterError(lastLogLine(latest.log, t("Register failed.", "등록에 실패했습니다.")));
-        }
-      } catch {
-        if (mountedRef.current) setTimeout(() => void tick(), 400);
-        else stop();
-      }
-    };
-    void tick();
-  };
-
-  /**
-   * Install straight from an archive already staged on this host — what a
-   * MicroRegistry download leaves behind. Deliberately skips
-   * `startImagePackage`: there is nothing to download (and on a host with no
-   * `FIRECRAB_IMAGE_BASE_URL` there is nowhere to download from), so this
-   * goes directly to the same install + poll the remote path ends with.
-   */
-  const handleInstallStaged = async (alias: string) => {
-    setBusyAlias(alias);
-    setActionError(null);
-    try {
-      const started = await startImageInstall(alias);
-      setInstall(started);
-      pollInstall(alias);
-    } catch (error) {
-      if (error instanceof ApiClientError && error.apiError?.code === "already_installed") {
-        await Promise.all([refreshList(), refreshRegistry()]);
-        setInstall(null);
-        return;
-      }
-      if (
-        error instanceof ApiClientError &&
-        error.apiError?.code === "package_required"
-      ) {
-        await refreshRegistry();
-        await handleDownloadPackage(alias);
-        return;
-      }
-      setActionError((error as Error).message);
-    } finally {
-      setBusyAlias(null);
-    }
-  };
-
-  const handleDownloadPackage = async (alias: string) => {
-    setBusyAlias(alias);
-    setActionError(null);
-    try {
-      const snap = await startImagePackage(alias);
-      setPackageJobs((current) => ({ ...current, [alias]: snap }));
-      pollPackage(alias);
-    } catch (error) {
-      setActionError((error as Error).message);
-    } finally {
-      setBusyAlias(null);
-    }
-  };
 
   const handleUpdateKernel = async (alias: string, version: string) => {
     setBusyAlias(alias);
@@ -1001,29 +871,6 @@ export default function Images() {
       }
     } finally {
       setBusyAlias(null);
-    }
-  };
-
-  const handleRegister = async (event: FormEvent) => {
-    event.preventDefault();
-    const alias = registerAlias;
-    const version = registerVersion.trim();
-    if (!alias || !version || registerStarting || registerJob?.status === "running") return;
-    setRegisterStarting(true);
-    setRegisterError(null);
-    try {
-      const started = await startMicroRegistryRegister({ alias, version });
-      if (!mountedRef.current) return;
-      setRegisterJob((current) => keepNewestJobSnapshot(current, started));
-      if (started.status === "failed") {
-        setRegisterError(lastLogLine(started.log, t("Register failed.", "등록에 실패했습니다.")));
-      }
-      pollRegister(started.jobId);
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setRegisterError(error instanceof ApiClientError ? error.message : (error as Error).message);
-    } finally {
-      if (mountedRef.current) setRegisterStarting(false);
     }
   };
 
@@ -1062,6 +909,7 @@ export default function Images() {
       } catch (error) {
         const apiError = error instanceof ApiClientError ? error : null;
         if (apiError?.apiError?.code !== "in_use") throw error;
+        if (apiError.apiError.fields?.pools) throw error;
         const users = (await listVms()).filter(
           (vm) => vm.template === alias && vm.purpose !== "pool",
         );
@@ -1074,8 +922,7 @@ export default function Images() {
         await removeVmsUsingImage(users);
         await deleteImage(alias);
       }
-      await Promise.all([refreshList(), refreshRegistry()]);
-      if (install?.alias === alias) setInstall(null);
+      await refreshList();
       if (selectedAlias === alias) refreshUsedByVms(alias);
     } catch (error) {
       setActionError((error as Error).message);
@@ -1084,339 +931,110 @@ export default function Images() {
     }
   };
 
-  const handleDeleteStagedPackage = async (alias: string) => {
-    setBusyAlias(alias);
-    setActionError(null);
-    try {
-      await deleteStagedPackage(alias);
-      await Promise.all([refreshList(), refreshRegistry()]);
-      setPackageJobs((current) => {
-        const next = { ...current };
-        delete next[alias];
-        return next;
-      });
-    } catch (error) {
-      setActionError((error as Error).message);
-    } finally {
-      setBusyAlias(null);
-    }
-  };
-
-  if (images === null && !listError) {
-    return <div className="empty">{t("Loading image catalog…", "이미지 목록 불러오는 중…")}</div>;
-  }
-
-  const registrySource = registry?.source ?? "https://registry.firecrab.dev/catalog.json";
-  const registryPanel = (
-    <section className="panel microregistry-panel">
-        <h2 className="panel-title">
-          <span>MicroRegistry</span>
-          <span className="microregistry-title-actions">
-            <span className={`registry-health${registry ? " online" : registryError ? " offline" : " checking"}`}>
-              {registry
-                ? t("Online", "정상")
-                : registryError
-                  ? t("Offline", "연결 실패")
-                  : t("Checking", "확인 중")}
-            </span>
-            <a
-              className="microregistry-source"
-              href={registrySource}
-              target="_blank"
-              rel="noreferrer"
-              title={registrySource}
-            >
-              {registrySource}
-            </a>
-            <button type="button" className="btn microregistry-refresh" onClick={() => void refreshRegistry()}>
-              {t("Refresh", "새로고침")}
-            </button>
-          </span>
-        </h2>
-        <p className="microregistry-intro">
-          {t(
-            "Published M2Image packages. Download verifies the package on this host; install registers a prepared local package.",
-            "공개된 M2Image 패키지입니다. 다운로드는 이 호스트에서 검증하고, 설치는 준비된 로컬 패키지를 등록합니다.",
-          )}
-        </p>
-        <form className="create-grid" onSubmit={(event) => void handleRegister(event)}>
-          <div className="field">
-            <label htmlFor="microregistry-register-alias">{t("Image", "이미지")}</label>
-            <select
-              id="microregistry-register-alias"
-              value={registerAlias}
-              onChange={(event) => setRegisterAlias(event.target.value)}
-              disabled={registerStarting || registerJob?.status === "running"}
-            >
-              <option value="">
-                {(images ?? []).some((image) => image.installed)
-                  ? t("Select an installed image", "설치된 이미지를 선택하세요")
-                  : t("No installed images", "설치된 이미지가 없습니다")}
-              </option>
-              {(images ?? []).filter((image) => image.installed).map((image) => (
-                <option key={image.alias} value={image.alias}>
-                  {image.alias}{image.version ? ` · ${image.version}` : ""}
-                </option>
-              ))}
-            </select>
-            <span className="field-error" aria-hidden />
-          </div>
-          <div className="field">
-            <label htmlFor="microregistry-register-version">{t("Version", "버전")}</label>
-            <input
-              id="microregistry-register-version"
-              name="version"
-              value={registerVersion}
-              onChange={(event) => setRegisterVersion(event.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-              disabled={registerStarting || registerJob?.status === "running"}
-            />
-            <span className="field-error" aria-hidden />
-          </div>
-          <div className="field">
-            <label htmlFor="microregistry-register-submit">&nbsp;</label>
-            <button
-              id="microregistry-register-submit"
-              className="btn"
-              type="submit"
-              disabled={!registerAlias || !registerVersion.trim() || registerStarting || registerJob?.status === "running"}
-            >
-              {registerStarting || registerJob?.status === "running"
-                ? t("Registering…", "등록 중…")
-                : t("Register", "등록")}
-            </button>
-            <span className="field-error" aria-hidden />
-          </div>
-        </form>
-        {registerError && (
-          <div style={{ margin: "1rem 0" }}>
-            <Banner kind="error" text={registerError} onDismiss={() => setRegisterError(null)} />
-          </div>
-        )}
-        {registerJob && registerJob.status !== "idle" && (
-          <>
-            <div className="subpanel">
-              <dl className="detail-fields mono">
-                <dt>{t("Register status", "등록 상태")}</dt>
-                <dd>
-                  <span className={`state-badge${jobStatusClass(registerJob.status)}`}>
-                    {registerJob.status === "running"
-                      ? t("Registering…", "등록 중…")
-                      : registerJob.status === "succeeded"
-                        ? t("Registered", "등록됨")
-                        : registerJob.status === "failed"
-                          ? t("Register failed", "등록 실패")
-                          : t("Idle", "대기")}
-                  </span>
-                </dd>
-              </dl>
-            </div>
-            <ImageJobLog job={registerJob} kind="register" />
-          </>
-        )}
-        {registryError && <div className="field-error">{registryError}</div>}
-        {registry === null && !registryError && (
-          <div className="empty microregistry-empty">{t("Loading MicroRegistry…", "MicroRegistry 불러오는 중…")}</div>
-        )}
-        {registry && registry.images.length === 0 && (
-          <div className="empty microregistry-empty">{t("No published packages yet.", "아직 게시된 패키지가 없습니다.")}</div>
-        )}
-        {registry && registry.images.length > 0 && (
-          <div className="table-scroll">
-            <table className="vm-table microregistry-table">
-              <thead>
-                <tr>
-                  <th>{t("Image", "이미지")}</th>
-                  <th>{t("Version", "버전")}</th>
-                  <th>{t("Minimum disk", "최소 디스크")}</th>
-                  <th>{t("Status", "상태")}</th>
-                  <th className="actions">{t("Action", "동작")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {registry.images.map((entry) => {
-                  const packageJob = packageJobs[entry.alias];
-                  // Legacy staged archives predate origin sidecars. Treat
-                  // them as registry downloads; all new MicroBoot builds are
-                  // explicitly marked and therefore never land here.
-                  const registryPackageReady =
-                    entry.packageStaged && entry.packageOrigin !== "microBoot";
-                  const microBootPackageReady =
-                    entry.packageStaged && entry.packageOrigin === "microBoot";
-                  const installing = install?.alias === entry.alias && install.status === "running";
-                  const downloading = packageJob?.status === "running";
-                  const downloadFailed = packageJob?.status === "failed";
-                  const actionBusy = busyAlias === entry.alias || installing || downloading;
-                  const downloadPercent = packageJob ? packageDownloadPercent(packageJob) : null;
-                  const statusLabel = entry.installed
-                    ? t("Installed", "설치됨")
-                    : downloading
-                      ? downloadPercent === null
-                        ? t("Downloading…", "다운로드 중…")
-                        : `${t("Downloading", "다운로드 중")} ${downloadPercent}%`
-                    : downloadFailed
-                      ? t("Download failed", "다운로드 실패")
-                    : registryPackageReady
-                      ? t("Package ready", "패키지 준비됨")
-                      : microBootPackageReady
-                        ? t("Built locally", "로컬 빌드 완료")
-                      : entry.downloadable
-                        ? t("Available", "사용 가능")
-                        : t("Unsupported", "지원 안 됨");
-                  const actionLabel = entry.installed
-                    ? t("Installed", "설치됨")
-                    : registryPackageReady
-                      ? actionBusy
-                        ? t("Installing…", "설치 중…")
-                        : t("Install", "설치")
-                      : microBootPackageReady
-                        ? t("Managed by MicroBoot", "MicroBoot에서 관리")
-                      : downloading
-                        ? t("Downloading…", "다운로드 중…")
-                        : t("Download", "다운로드");
-                  const actionDisabled =
-                    entry.installed || actionBusy || microBootPackageReady || !entry.downloadable;
-                  const doAction = () => {
-                    if (registryPackageReady) {
-                      void handleInstallStaged(entry.alias);
-                    } else {
-                      void handleDownloadPackage(entry.alias);
-                    }
-                  };
-                  return (
-                    <tr key={entry.alias}>
-                      <td className="mono microregistry-image" title={entry.package}>{entry.alias}</td>
-                      <td className="mono">{entry.version}</td>
-                      <td className="mono">{entry.minDiskGb} GiB</td>
-                      <td className="microregistry-status">
-                        <span className={`state-badge${entry.installed ? " running" : downloading ? " starting" : downloadFailed ? " error" : ""}`}>
-                          {statusLabel}
-                        </span>
-                        {downloading && packageJob && <PackageDownloadProgress job={packageJob} />}
-                      </td>
-                      <td className="actions">
-                        <button
-                          type="button"
-                          className="btn"
-                          disabled={actionDisabled}
-                          onClick={doAction}
-                          title={entry.downloadable ? entry.package : t("This Firecrab version cannot install this alias.", "이 Firecrab 버전은 이 별칭을 설치할 수 없습니다.")}
-                        >
-                          {actionLabel}
-                        </button>
-                        {registryPackageReady && (
-                          <button
-                            type="button"
-                            className="btn danger"
-                            disabled={actionBusy}
-                            onClick={() => {
-                              if (!window.confirm(t(
-                                `Delete the downloaded package '${entry.alias}'?`,
-                                `'${entry.alias}' 다운로드 패키지를 삭제할까요?`,
-                              ))) return;
-                              void handleDeleteStagedPackage(entry.alias);
-                            }}
-                          >
-                            {t("Delete package", "패키지 삭제")}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {Object.values(packageJobs)
-          .filter((job) => job.status !== "idle")
-          .map((job) => <ImageJobLog key={`download-${job.alias}`} job={job} kind="download" />)}
-        {install && install.status !== "idle" && (
-          <ImageJobLog job={install} kind="import" />
-        )}
-    </section>
+  const detailPanel = selectedImage ? (
+    <ImageDetail
+      image={selectedImage}
+      kernels={kernels}
+      kernelUpdateBusy={busyAlias === selectedImage.alias}
+      onUpdateKernel={(version) => handleUpdateKernel(selectedImage.alias, version)}
+      usedByVms={usedByVms}
+      usedByError={usedByError}
+    />
+  ) : null;
+  const screen = (body: ReactNode) => (
+    <Screen
+      view="images"
+      detail={detailPanel}
+      detailLabel={t("Image detail", "이미지 상세")}
+      detailKind={<><Layers aria-hidden="true" />M2Image</>}
+      onCloseDetail={() => setSelectedAlias(null)}
+    >
+      {body}
+    </Screen>
   );
 
-  return (
-    <div className="stack">
+  if (images === null && !listError) {
+    return screen(<div className="empty">{t("Loading image catalog…", "이미지 목록 불러오는 중…")}</div>);
+  }
+
+  return screen(
+    <>
       {actionError && <div className="field-error">{actionError}</div>}
       <section className="panel">
-        <h2 className="panel-title">M2Image</h2>
+        <h2 className="panel-title"><span>M2Image</span><button className="btn" type="button" onClick={() => void Promise.all([refreshList(), refreshPulledImages()])}>{t("Refresh", "새로 고침")}</button></h2>
         <p className="panel-intro">
           {t(
-            "Bootable microVM images available on this Firecrab host. Select an image to inspect its local installation, disk requirements, and VM usage.",
-            "이 Firecrab 호스트에서 사용할 수 있는 부팅 가능한 microVM 이미지입니다. 이미지를 선택하면 로컬 설치 상태, 디스크 요구량, 사용 중인 VM을 확인할 수 있습니다.",
+            "Manage bootable microVM images and build images pulled from Pipe Registry. Build required images become available for VM creation after building.",
+            "부팅 가능한 microVM 이미지와 Pipe Registry에서 가져온 이미지를 관리한다. 빌드가 필요한 이미지는 빌드 완료 후 VM 생성에 사용할 수 있다.",
           )}
         </p>
         {listError && <div className="field-error">{listError}</div>}
-        <table className="vm-table image-table">
-          <thead>
-            <tr>
-              <th>{t("Image", "이미지")}</th>
-              <th>{t("Minimum disk", "최소 디스크")}</th>
-              <th>{t("Status", "상태")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(images ?? []).map((image) => {
-              const registryMinDiskGb = registry?.images.find((entry) => entry.alias === image.alias)?.minDiskGb;
-              const minDiskGb = Math.max(image.minDiskGb, registryMinDiskGb ?? 0);
-              const statusLabel = image.installed
-                ? t("Installed", "설치됨")
-                : t("Not installed", "미설치");
-              // Derived/web-built templates won't have a KNOWN_TEMPLATES entry —
-              // fall back to plain alias text with no logo for those.
-              const known = KNOWN_TEMPLATES.find((template) => template.alias === image.alias);
-              return (
-                <tr
-                  key={image.alias}
-                  className={selectedAlias === image.alias ? "is-selected" : undefined}
-                  onClick={() => setSelectedAlias(selectedAlias === image.alias ? null : image.alias)}
-                >
-                  <td className="mono">
-                    {known && <img className="image-template-logo" src={known.logoSrc} alt="" />}
-                    {image.alias}
-                  </td>
-                  <td className="mono">{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</td>
-                  <td className="state-cell">
-                    <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
-                    {/* Stops the row's own onClick (select/deselect) from firing
-                        when the user is just opening or using this menu. */}
-                    {image.installed && (
-                      <span onClick={(event) => event.stopPropagation()}>
-                        <OptionsMenu
-                          items={computeMenuItems(image, {
-                            t,
-                            busyAlias,
-                            onDelete: handleDelete,
-                          })}
-                        />
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {selectedImage && (
-          <ImageDetail
-            image={selectedImage}
-            registryMinDiskGb={registry?.images.find((entry) => entry.alias === selectedImage.alias)?.minDiskGb}
-            kernels={kernels}
-            kernelUpdateBusy={busyAlias === selectedImage.alias}
-            onUpdateKernel={(version) => handleUpdateKernel(selectedImage.alias, version)}
-            usedByVms={usedByVms}
-            usedByError={usedByError}
-          />
+        {pulledImagesError && <p className="field-error" role="alert">{t("Could not load pulled images: ", "가져온 이미지 목록을 조회하지 못했다: ")}{pulledImagesError}</p>}
+        {images?.length === 0 && pulledImages.length === 0 && !listError && !pulledImagesError && (
+          <div className="empty">{t("No installed images.", "설치된 이미지가 없습니다.")}</div>
+        )}
+        {((images?.length ?? 0) > 0 || (images !== null && pulledImages.length > 0)) && (
+          <table className="vm-table image-table">
+            <thead>
+              <tr>
+                <th>{t("Image", "이미지")}</th>
+                <th>{t("Registry", "레지스트리")}</th>
+                <th>{t("Minimum disk", "최소 디스크")}</th>
+                <th>{t("Status", "상태")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(images ?? []).map((image) => {
+                const minDiskGb = image.minDiskGb;
+                const statusLabel = image.installed
+                  ? t("Installed", "설치됨")
+                  : t("Not installed", "미설치");
+                const source = pulledImages.find(source => source.templateAlias === image.alias);
+                return (
+                  <tr
+                    key={image.alias}
+                    className={selectedAlias === image.alias ? "is-selected" : undefined}
+                    aria-selected={selectedAlias === image.alias}
+                    onClick={() => {
+                      setSelectedAlias(image.alias);
+                      setDetailOpen(true);
+                    }}
+                  >
+                    <td className="mono" title={image.alias}>
+                      {source ? registryImageName(source) : image.alias}
+                    </td>
+                    <td className="image-registry" data-label={t("Registry", "레지스트리")} title={source?.reference.split("/")[0]}>{source ? registryProviderName(source) : "—"}</td>
+                    <td className="mono" data-label={t("Minimum disk", "최소 디스크")}>{minDiskGb > 0 ? `${minDiskGb} GiB` : "—"}</td>
+                    <td className="state-cell">
+                      <span className={`state-badge${image.installed ? " running" : ""}`}>{statusLabel}</span>
+                      {/* Stops the row's own onClick (select/deselect) from firing
+                          when the user is just opening or using this menu. */}
+                      {image.installed && (
+                        <span onClick={(event) => event.stopPropagation()}>
+                          <OptionsMenu
+                            items={computeMenuItems(image, {
+                              t,
+                              busyAlias,
+                              onDelete: handleDelete,
+                            })}
+                          />
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {images !== null && pulledImages.filter(image => !images.some(installed => installed.installed && installed.alias === image.templateAlias)).map(image => (
+                <PulledImageRow key={image.templateAlias} image={image} onBuilt={handleOciImported} />
+              ))}
+            </tbody>
+          </table>
         )}
       </section>
       <OciImportPanel
         images={images ?? []}
         onImported={handleOciImported}
       />
-      {registryPanel}
-    </div>
+    </>,
   );
 }

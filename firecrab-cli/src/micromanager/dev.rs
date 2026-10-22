@@ -32,6 +32,11 @@ const SOURCE_INPUTS: &[&str] = &[
 ];
 // Older checkouts predate these resources and remain valid development sources.
 const OPTIONAL_SOURCE_INPUTS: &[&str] = &[
+    "install.sh",
+    "scripts/firecrab-release.sh",
+    "scripts/build-ingress.sh",
+    "scripts/verify-release-binary.sh",
+    "packaging/ingress-sources.json",
     "firecrab-tunnel",
     "packaging/micromanager.toml",
     "packaging/systemd/firecrab-quick-tunnel.service",
@@ -331,6 +336,11 @@ members = ["firecrab-api", "firecrab-api-types", "firecrab-cli", "firecrab-helpe
             .unwrap();
         assert!(status.success());
         for input in [
+            "install.sh",
+            "scripts/firecrab-release.sh",
+            "scripts/build-ingress.sh",
+            "scripts/verify-release-binary.sh",
+            "packaging/ingress-sources.json",
             "packaging/pipe-engines.json",
             "packaging/systemd/firecrab-ingress.service",
             "packaging/systemd/firecrab-tunnel.service",

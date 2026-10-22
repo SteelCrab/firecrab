@@ -1,5 +1,5 @@
-//! install.sh `ensure_firecracker`: firecracker는 배포판 패키지가 아니라
-//! 업스트림 스크립트로 설치한다. 체크아웃이 없으면 같은 스크립트를 내려받는다.
+//! install.sh `ensure_firecracker`: install Firecracker with the upstream script
+//! rather than a distribution package. Download the same script if no checkout is available.
 
 use std::path::{Path, PathBuf};
 
@@ -12,10 +12,10 @@ use crate::update::bundle;
 
 const STEP: &str = "firecracker";
 
-/// install.sh 스크립트 상대 경로.
+/// Script path relative to install.sh.
 const SCRIPT_PATH: &str = "scripts/install-firecracker.sh";
 
-/// `firecrab_repo_raw_url`: 태그의 raw GitHub 파일. `latest`(=None)는 `main`.
+/// `firecrab_repo_raw_url`: raw GitHub file at a tag. `latest` (=None) uses `main`.
 pub fn repo_raw_url(repo: &str, version: Option<&str>, path: &str) -> String {
     let tag = match version {
         None => "main".to_owned(),
@@ -26,10 +26,10 @@ pub fn repo_raw_url(repo: &str, version: Option<&str>, path: &str) -> String {
     format!("https://raw.githubusercontent.com/{repo}/{tag}/{path}")
 }
 
-/// firecracker가 없으면 업스트림 스크립트로 설치한다.
+/// Install Firecracker with the upstream script if it is missing.
 ///
-/// `checkout`은 `--bin-dir` 설치에서 넘어오는 저장소 루트. 없으면 릴리스
-/// 태그(또는 main)의 raw 스크립트를 임시 파일로 내려받아 실행한다.
+/// `checkout` is the repository root supplied by a `--bin-dir` installation.
+/// Without it, download the raw script at the release tag (or main) to a temporary file and run it.
 pub fn ensure_firecracker(
     privileged: &Privileged<'_>,
     env: &ServiceEnv,

@@ -1,7 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import { ApiCleanup } from "../src/api.js";
+import { openVmTab, vmPanel } from "./support/vmPanel";
 import {
+  apiUrl,
   NETWORK_READY,
   REGISTER_FIXED_ALIAS,
   REGISTER_FIXED_REFERENCE,
@@ -15,7 +17,7 @@ import {
 import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js";
 
 /**
- * Issue #108 browser E2E — register an already-installed image.
+ * Issue #108 E2E — import in the browser, then register through the API.
  *
  *   FIRECRAB_E2E_SKIP_GUEST_BOOT=1 npm run test:register --prefix firecrab-e2e
  *   npm run test:register --prefix firecrab-e2e
@@ -24,7 +26,7 @@ import { startLocalOciRegistry, type LocalOciRegistry } from "../src/registry.js
  * FIRECRAB_OCI_REGISTER_E2E_PORT=15556). Cleanup always stops it and deletes
  * any VM, imported template, staged package, or catalog row this file created.
  *
- * Reinstall consumes the registered local package after deleting the import,
+ * API reinstall consumes the registered local package after deleting the import,
  * then boots the restored image. FIRECRAB_E2E_SKIP_GUEST_BOOT disables that
  * scenario. Failed register jobs require host-artifact manipulation and have
  * API unit coverage; that browser scenario is explicitly skipped.
@@ -117,34 +119,10 @@ test("inspects the local fixture and imports it as an installed image", async ({
   await expect(page.locator("table.image-table")).toContainText(alias());
 });
 
-test("registers the installed image and refuses a second register with 409", async ({ page }) => {
-  await openEnglish(page, "/#/images");
-  const select = page.locator("#microregistry-register-alias");
-  await expect(select).toBeEnabled({ timeout: 15_000 });
-  await expect(page.locator(`#microregistry-register-alias option[value="${alias()}"]`)).toHaveCount(
-    1,
-    { timeout: 15_000 },
-  );
+test("registers the installed image through the API and refuses a second register with 409", async () => {
+  const accepted = await api.startRegister(alias(), REGISTER_VERSION);
+  expect(accepted.status).toBe(202);
 
-  await select.selectOption(alias());
-  await page.locator("#microregistry-register-version").fill(REGISTER_VERSION);
-  const submit = page.locator("#microregistry-register-submit");
-  await expect(submit).toBeEnabled();
-
-  const posted = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return response.request().method() === "POST" && url.pathname === "/api/microregistry/register";
-  });
-  await submit.click();
-  const accepted = await posted;
-  if (accepted.status() === 409) {
-    throw new Error(
-      `register 409 for ${alias()} on the first submit — leftover local catalog row`,
-    );
-  }
-  expect(accepted.status()).toBe(202);
-
-  // Check the server's terminal result as well as the rendered catalog row.
   await expect
     .poll(async () => (await api.getRegister(alias()))?.status ?? "", { timeout: 180_000 })
     .toMatch(/^(succeeded|failed)$/);
@@ -154,22 +132,13 @@ test("registers the installed image and refuses a second register with 409", asy
   }
   expect(finished?.status).toBe("succeeded");
 
-  await page.locator("button.microregistry-refresh").click();
-  const table = page.locator("table.microregistry-table");
-  const rows = table.locator("tbody tr", { hasText: alias() });
-  await expect(rows).toHaveCount(1);
-  await expect(rows).toContainText(REGISTER_VERSION);
-
   const listed = (await api.listMicroregistry()).filter((row) => row.alias === alias());
   expect(listed).toEqual([{ alias: alias(), version: REGISTER_VERSION }]);
 
-  // Check the server's collision guard even if the form prevents resubmission.
   const second = await api.startRegister(alias(), REGISTER_VERSION);
   expect(second.status).toBe(409);
   expect(conflictCode(second.json)).toBe("alias_collision");
   expect((await api.listMicroregistry()).filter((row) => row.alias === alias())).toHaveLength(1);
-  await page.locator("button.microregistry-refresh").click();
-  await expect(rows).toHaveCount(1);
 });
 
 test("a failed register job leaves no current catalog row", async () => {
@@ -183,8 +152,9 @@ test("a failed register job leaves no current catalog row", async () => {
   );
 });
 
-test("deletes the template, reinstalls from the local row, and boots to FIRECRAB_NETWORK_READY", async ({
+test("deletes the template, reinstalls through the API, and boots to FIRECRAB_NETWORK_READY", async ({
   page,
+  request,
 }) => {
   test.skip(
     SKIP_GUEST_BOOT,
@@ -196,46 +166,41 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
   await expect(imageRow).toBeVisible();
   await imageRow.locator("button.options-menu-trigger").click();
   page.once("dialog", (dialog) => dialog.accept());
-  await imageRow.getByRole("button", { name: "Delete" }).click();
+  await imageRow.getByRole("menuitem", { name: "Delete" }).click();
   await expect(imageRow).toHaveCount(0, { timeout: 15_000 });
   await expect
     .poll(async () => (await api.listImages()).some((image) => image.alias === alias() && image.installed))
     .toBe(false);
 
-  await page.locator("button.microregistry-refresh").click();
-  const catalogRow = page.locator("table.microregistry-table tbody tr", { hasText: alias() });
-  await expect(catalogRow).toHaveCount(1);
-  await expect(catalogRow).toContainText(REGISTER_VERSION);
-
   const entry = await api.catalogEntry(alias());
-  const action = catalogRow.getByRole("button", { name: /^(Download|Install)$/ });
-  await expect(action).toBeVisible();
-  if (!entry?.downloadable || (await action.isDisabled())) {
-    throw new Error(
-      `cannot reinstall ${alias()} from the local catalog row after template delete (downloadable=${String(entry?.downloadable)}, packageStaged=${String(entry?.packageStaged)}).`,
-    );
+  expect(entry?.version).toBe(REGISTER_VERSION);
+  expect(entry?.downloadable).toBe(true);
+
+  const imageUrl = `${apiUrl()}/api/images/${encodeURIComponent(alias())}`;
+  if (!entry?.packageStaged) {
+    const downloaded = await request.post(`${imageUrl}/package`);
+    expect(downloaded.ok(), await downloaded.text()).toBe(true);
+    await expect.poll(async () => {
+      const response = await request.get(`${imageUrl}/package`);
+      return (await response.json()).status;
+    }, { timeout: 180_000 }).toMatch(/^(succeeded|failed)$/);
+    const response = await request.get(`${imageUrl}/package`);
+    const job = await response.json();
+    expect(job.status, job.log).toBe("succeeded");
   }
 
-  const installRequest = page.waitForResponse((response) => {
-    const url = new URL(response.url());
-    return response.request().method() === "POST" &&
-      url.pathname === `/api/images/${alias()}/install`;
-  });
-  await action.click();
-  const installed = await installRequest;
-  if (!installed.ok()) {
-    throw new Error(`local catalog reinstall HTTP ${installed.status()}: ${await installed.text()}`);
-  }
-  await expect(catalogRow.locator(".state-badge")).toHaveText(/Installed|Download failed|Unsupported/, {
-    timeout: 180_000,
-  });
-  const badge = (await catalogRow.locator(".state-badge").textContent()) ?? "";
-  if (!/Installed/.test(badge)) {
-    const banner = (await page.locator(".field-error").allTextContents()).join("; ");
-    throw new Error(
-      `reinstall from the local row did not install ${alias()}: status=${badge.trim()} ${banner}`,
-    );
-  }
+  const installed = await request.post(`${imageUrl}/install`);
+  expect(installed.ok(), await installed.text()).toBe(true);
+  await expect.poll(async () => {
+    const response = await request.get(`${imageUrl}/install`);
+    return (await response.json()).status;
+  }, { timeout: 180_000 }).toMatch(/^(succeeded|failed)$/);
+  const response = await request.get(`${imageUrl}/install`);
+  const job = await response.json();
+  expect(job.status, job.log).toBe("succeeded");
+
+  await page.reload();
+  await expect(imageRow.locator(".state-badge")).toHaveText("Installed");
   await expect
     .poll(async () => (await api.listImages()).some((image) => image.alias === alias() && image.installed), {
       timeout: 30_000,
@@ -277,15 +242,16 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
   await expect(page).toHaveURL(/#\/vms$/);
   await expect(page.getByText(`Created: ${REGISTER_VM_NAME}`)).toBeVisible({ timeout: 30_000 });
 
-  const row = page.locator("table.vm-table tbody tr", { hasText: REGISTER_VM_NAME });
+  const row = page.locator("table.vm-list tbody tr", { hasText: REGISTER_VM_NAME });
   await expect(row).toBeVisible();
   // Row actions live behind the Actions toggle now.
   await row.getByRole("button", { name: /^Actions$|^작업$/ }).click();
   await row.getByRole("menuitem", { name: "start", exact: true }).click();
   await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", /running|error/, { timeout: 240_000 });
   if ((await row.locator(".vm-status-label").getAttribute("data-state")) !== "running") {
-    await row.locator("button.link-button").click();
-    await expect(page.locator(".vm-detail-heading")).toBeVisible();
+    await openVmTab(page, row, "Overview");
+    const steps = (await vmPanel(page).locator(".vm-timeline-step").allTextContents()).join("\n");
+    await vmPanel(page).getByRole("tab", { name: /^Log/ }).click();
     await expect
       .poll(async () => (await page.locator("pre.detail-log").textContent())?.trim() ?? "", {
         timeout: 10_000,
@@ -293,13 +259,12 @@ test("deletes the template, reinstalls from the local row, and boots to FIRECRAB
       .not.toBe("");
     const logText = (await page.locator("pre.detail-log").textContent()) ?? "";
     const banner = (await page.locator(".banner").textContent().catch(() => "")) ?? "";
-    const steps = (await page.locator(".pipeline-step").allTextContents()).join("\n");
     throw new Error(
       `VM ${REGISTER_VM_NAME} entered error instead of running.\nbanner: ${banner}\nsteps:\n${steps}\nlog:\n${logText}`,
     );
   }
 
-  await row.locator("button.link-button").click();
+  await openVmTab(page, row, "Log");
   const log = page.locator("pre.detail-log");
   await expect(log).toContainText(NETWORK_READY, { timeout: 30_000 });
   await expect(log).toContainText(sentinel(), { timeout: 60_000 });

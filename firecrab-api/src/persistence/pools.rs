@@ -100,42 +100,69 @@ pub(crate) enum PoolStoreError {
 /// A pool's durable configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PoolRow {
+    /// Stable identifier of this record.
     pub id: Uuid,
+    /// Unique pool name used in member VM names.
     pub name: String,
+    /// Installed image name shared by every member.
     pub template: String,
+    /// Exact image version pinned when the pool was created.
     pub template_version: String,
+    /// Virtual CPUs assigned to each member.
     pub cpu: u8,
+    /// Memory per member in MiB.
     pub ram: u32,
+    /// Disk capacity per member in GiB.
     pub disk_gb: u16,
+    /// Outbound network policy shared by all members.
     pub egress_policy: EgressPolicy,
+    /// Network joined by all pool members.
     pub micro_network_id: Uuid,
+    /// Storage root holding member disks.
     pub storage_root: String,
+    /// Target number of booted members waiting for a lease.
     pub min_ready: u16,
+    /// Maximum member count, including leased and draining VMs.
     pub max_size: u16,
+    /// Lifetime in seconds for newly acquired leases.
     pub lease_ttl_seconds: u32,
+    /// Whether the pool is draining before deletion.
     pub deleting: bool,
+    /// Creation time in Unix milliseconds.
     pub created_at_ms: u64,
 }
 
 /// One VM owned by a pool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MemberRow {
+    /// VM owned by this member or lease.
     pub vm_id: Uuid,
+    /// Pool that owns this record.
     pub pool_id: Uuid,
+    /// Current lifecycle state of this record.
     pub state: PoolMemberState,
+    /// Creation time in Unix milliseconds.
     pub created_at_ms: u64,
 }
 
 /// One lease, active or ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LeaseRow {
+    /// Stable identifier of this record.
     pub id: Uuid,
+    /// Pool that owns this record.
     pub pool_id: Uuid,
+    /// VM owned by this member or lease.
     pub vm_id: Uuid,
+    /// Current lifecycle state of this record.
     pub state: PoolLeaseState,
+    /// Caller key used to recover the same lease on retry.
     pub idempotency_key: Option<String>,
+    /// Time the lease started, in Unix milliseconds.
     pub acquired_at_ms: u64,
+    /// Lease expiry time in Unix milliseconds.
     pub expires_at_ms: u64,
+    /// Time the lease ended, in Unix milliseconds.
     pub ended_at_ms: Option<u64>,
 }
 

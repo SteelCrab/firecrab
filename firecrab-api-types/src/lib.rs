@@ -582,7 +582,7 @@ pub struct StorageRootResponse {
 }
 
 /// A MicroStorage — a named host path that VMs can put disks on
-/// (EBS analogue; 4주차 MicroStorage).
+/// (EBS analogue; week 4 MicroStorage).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MicroStorageResponse {

@@ -96,7 +96,7 @@ pub enum Command {
         /// Pool UUID or name.
         pool: String,
         /// Retrying with the same key returns the same lease instead of a
-        /// second VM.
+        /// second VM. Omitted keys are generated and printed on failure.
         #[arg(long)]
         idempotency_key: Option<String>,
         /// Emit the lease as JSON.
@@ -207,10 +207,8 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
             json,
         } => {
             let id = resolve_pool(client, &pool)?;
-            let lease: PoolLeaseResponse = client.post_empty_idempotent(
-                &format!("/api/pools/{id}/acquire"),
-                idempotency_key.as_deref(),
-            )?;
+            let key = idempotency_key.unwrap_or_else(|| Uuid::new_v4().to_string());
+            let lease = acquire(client, id, &key)?;
             print_output(json, &lease, format_lease_human(&lease));
         }
         Command::Leases { pool, json } => {
@@ -226,6 +224,19 @@ pub fn run(client: &ApiClient, command: Command) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// Always sends the same key and preserves a concrete retry command when the
+/// response is lost. A later invocation can recover the already-created lease.
+fn acquire(client: &ApiClient, id: Uuid, key: &str) -> Result<PoolLeaseResponse, ApiError> {
+    client
+        .post_empty_idempotent(&format!("/api/pools/{id}/acquire"), Some(key))
+        .inspect_err(|_| {
+            eprintln!(
+                "retry with: firecrab --api {} pool acquire {id} --idempotency-key {key}",
+                client.base_url()
+            );
+        })
 }
 
 /// A UUID is used as-is; otherwise the pool list is searched by name, which

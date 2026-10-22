@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # QA guest boot from OCI images (public-docs/development/qa.md I5, I6, N6, V1, V2, V6,
-# V7, V8, V9, V11, V12, V13, P1-P6, C1, C2, C4, C6, X5, X7).
+# V7, V8, V9, V11, V12, V13, P1-P7, C1, C2, C4, C6, X5, X7).
 # P1-P6 and C6 run only on the first OCI reference, after guest boot and
 # before that reference's image delete. X7 runs at the end of this script.
 # Default references: alpine, ubuntu, fedora from Docker Hub.
 # GitHub Ubuntu: chmod 666 /dev/kvm first (nested virt is not guaranteed).
 # Prerequisites: firecrab-api on :5523, fakeroot, outbound registry, KVM rw.
+# FIRECRAB_QA_POOL_RESTART=1 additionally restarts the API on the disposable
+# QA host and checks that ready members, leased VMs, and retry keys survive.
 set -euo pipefail
 
 API=${FIRECRAB_API:-http://127.0.0.1:5523}
@@ -288,6 +290,68 @@ delete_pool_row() {
     done
 }
 
+# Runs privileged commands on the same QA host as ci-qa-lifetime.sh.
+pool_qa_host() {
+    if [ -n "${FIRECRAB_QA_MANAGER_HOST:-}" ]; then
+        local key=${FIRECRAB_QA_MANAGER_KEY:?management VM key is required}
+        ssh -i "$key" -o BatchMode=yes -o ConnectTimeout=10 \
+            -o StrictHostKeyChecking=accept-new \
+            -o "UserKnownHostsFile=$(dirname -- "$key")/known_hosts" \
+            "root@${FIRECRAB_QA_MANAGER_HOST}" "set -e; $1" </dev/null
+    elif [ "$(id -u)" -eq 0 ]; then
+        sh -ec "$1" </dev/null
+    else
+        sudo sh -ec "$1" </dev/null
+    fi
+}
+
+pool_restart_qa() {
+    local before after ids vm simple pids_before='' pids_after='' lease_id=$POOL_LEASE_ID
+    wait_for_ready_member "$POOL_ID" 2 "$((SECONDS + 300))"
+    http GET "/api/pools/${POOL_ID}"
+    [ "$CODE" = 200 ] || fail P7 "GET pool before restart HTTP ${CODE}"
+    before=$BODY
+    ids=$(json_get '" ".join(sorted(m["vmId"] for m in d["members"]))')
+    for vm in $ids; do
+        simple=${vm//-/}
+        pids_before+="$(pool_qa_host "pgrep -f '([v]m-shim --vm-id $vm|[f]irecracker --api-sock .*/$simple/)' | sort") "
+    done
+    [ -n "${pids_before// /}" ] || fail P7 "no live VM processes before restart"
+    pool_qa_host "systemctl restart firecrab-api" || fail P7 "API restart failed"
+    local ready=0
+    for _ in $(seq 1 60); do
+        if curl -fsS --max-time 5 "$API/api/host" >/dev/null 2>&1; then ready=1; break; fi
+        sleep 1
+    done
+    [ "$ready" = 1 ] || fail P7 "API did not return after restart"
+    http GET "/api/pools/${POOL_ID}"
+    [ "$CODE" = 200 ] || fail P7 "GET pool after restart HTTP ${CODE}"
+    after=$BODY
+    python3 - "$before" "$after" <<'PY'
+import json, sys
+before, after = map(json.loads, sys.argv[1:])
+for field in ('id', 'template', 'templateVersion', 'minReady', 'maxSize'):
+    assert before[field] == after[field], field
+members = lambda p: sorted((m['vmId'], m['state']) for m in p['members'])
+assert members(before) == members(after), 'pool members changed across restart'
+assert sum(m['state'] == 'ready' for m in after['members']) == 1
+assert sum(m['state'] == 'leased' for m in after['members']) == 1
+PY
+    for vm in $ids; do
+        simple=${vm//-/}
+        pids_after+="$(pool_qa_host "pgrep -f '([v]m-shim --vm-id $vm|[f]irecracker --api-sock .*/$simple/)' | sort") "
+        http GET "/api/vms/${vm}"
+        [ "$CODE" = 200 ] || fail P7 "GET surviving VM HTTP ${CODE}"
+        [ "$(json_get 'd["state"]')" = running ] || fail P7 "member is not running"
+    done
+    [ "$pids_before" = "$pids_after" ] || fail P7 "shim or Firecracker PID changed"
+    http POST "/api/pools/${POOL_ID}/acquire" "" "Idempotency-Key: qa-ci-pool-live"
+    [ "$CODE" = 200 ] || fail P7 "retried acquire HTTP ${CODE}"
+    [ "$(json_get 'd["id"]')" = "$lease_id" ] || fail P7 "retry created a different lease"
+    [ "$(json_get 'd["state"]')" = active ] || fail P7 "lease did not survive"
+    pass "P7 API restart preserved ready/leased members, VM PIDs, and acquire key"
+}
+
 # First OCI reference only. The network is not the boot script's subnet.
 run_pool_qa() {
     local alias=$1
@@ -385,7 +449,7 @@ if json.load(sys.stdin).get("leaseTtlSeconds") != 120:
     [ "$(json_get 'd.get("maxSize")')" = 2 ] || fail P6 "maxSize is not 2"
     wait_for_ready_member "$POOL_ID" 2 "$((SECONDS + 300))"
 
-    http POST "/api/pools/${POOL_ID}/acquire"
+    http POST "/api/pools/${POOL_ID}/acquire" "" "Idempotency-Key: qa-ci-pool-live"
     [ "$CODE" = 201 ] || fail P6 "acquire HTTP ${CODE}"
     POOL_LEASE_ID=$(json_get 'd.get("id") or ""')
     [ -n "$POOL_LEASE_ID" ] || fail P6 "acquire body missing lease id"
@@ -416,6 +480,12 @@ if found[0].get("purpose") != "pool":
     [ "$CODE" = 409 ] || fail P6 "DELETE pool VM HTTP ${CODE}"
     [ "$(json_get 'd.get("error", {}).get("code") or ""')" = "pool_owned" ] \
         || fail P6 "error.code is not pool_owned"
+
+    if [ "${FIRECRAB_QA_POOL_RESTART:-0}" = 1 ]; then
+        pool_restart_qa
+    else
+        warning P7 "set FIRECRAB_QA_POOL_RESTART=1 on a disposable host to check API restart"
+    fi
 
     http DELETE "/api/pools/${POOL_ID}/leases/${POOL_LEASE_ID}"
     [ "$CODE" = 200 ] || fail P6 "release HTTP ${CODE}"
@@ -609,7 +679,7 @@ for REFERENCE in "${REFERENCES[@]}"; do
     set +e
     (
         set -e
-        trap cleanup_imported_image EXIT
+        trap cleanup_on_exit EXIT
         boot_oci "$REFERENCE" "$first_reference"
     )
     reference_exit=$?

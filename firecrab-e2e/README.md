@@ -8,6 +8,7 @@ Isolated Playwright suite.
 - OCI DHCP boot (busybox `udhcpc`, same path as nginx-stable)
 - [#303](https://github.com/SteelCrab/firecrab/issues/303) console session end: `exit` stops the web terminal at "Session ended"
 - `npm run test:dashboard` runs only `@dashboard` specs, which fake the API or console and need no KVM (CI job `e2e-dashboard`)
+- `npm run test:mocked` runs every dashboard spec that answers `/api` in the browser (layout, MicroVM list and detail panel, list-screen panels, command palette, and the Host/MicroService/update/reconciliation suites) against Vite alone
 - Local OCI registry fixture only — no Docker Hub
 - Playwright is a test-only dependency of this package, not of `firecrab-frontend`
 
@@ -30,11 +31,15 @@ Isolated Playwright suite.
 5. Assert `FIRECRAB_NETWORK_READY` and `FIRECRAB_OCI_E2E_READY` on the console
 6. Networks: IPv6 select defaults to Off; create IPv4-only and auto-ULA dual-stack networks
 7. OCI DHCP: import fixture → create network → VM with `80:18888/tcp` → start → `FIRECRAB_NETWORK_READY` and an IPv4 on the detail panel
-8. MicroRegistry: register a custom image → delete its installed template → reinstall the local package → boot that image
+8. MicroRegistry API: register a custom image → delete its installed template → reinstall the local package through the API → boot that image
+9. Pipe Registry: the card shows the API login count; save and remove a fake ECR login without exposing its secret
 
 - `FIRECRAB_E2E_SKIP_GUEST_BOOT=1`: skip guest-boot half
 - Inspect and import still run
-- Full suite: **17 cases, including 1 existing explicit skip**; import/form-only mode also skips guest boot checks
+- The default `npm test` discovers every spec under `tests/`, including mocked
+  dashboard specs and live API cases B18/B19. The total changes as specs are added.
+- `npm run test:pipe --prefix firecrab-e2e` runs only the mocked Pipe and M2Image
+  specs. It excludes `pipe-registries-live.spec.ts` and never sends B19 to the API.
 - The failed-register-job case is always skipped because no real dashboard/API failure trigger exists
 
 ## Setup
@@ -50,6 +55,31 @@ npm run install-browsers --prefix firecrab-e2e
 - Fixture: `scripts/oci-e2e-registry.py` at the repo root
 
 ## Run
+
+PIPE and database dashboard checks:
+
+```sh
+npm run typecheck:pipe --prefix firecrab-e2e
+npm run test:pipe --prefix firecrab-e2e
+```
+
+This suite runs 74 cases, including 22 DB cases. It starts only Vite on port
+8096 and mocks the API. For actual PostgreSQL/MySQL, TLS and desktop/mobile
+browser checks, use the [disposable DB QA runner](../public-docs/development/pipe-databases-qa.md).
+`test:pipe:live` requires that runner's private API and fixture environment.
+It is excluded from the default and mocked dashboard suites.
+
+Dashboard layout and mocked screens:
+
+```sh
+npm run test:mocked --prefix firecrab-e2e
+```
+
+This starts only Vite on port 8097 (`FIRECRAB_MOCKED_E2E_BASE_URL` overrides it)
+and answers every API request in the browser with fixtures from
+`tests/support/mockApi.ts`. It covers the three-column frame, the MicroVM list
+and detail panel, the list-screen detail panels, the command palette, and the
+Host, microManager, MicroService, update dialog and reconciliation suites.
 
 Host Firecrab panel only (H3, Linux/macOS/Windows):
 

@@ -3,6 +3,15 @@ import type { VmResponse, VmState } from "./bindings";
 export type VmAction = "start" | "stop" | "delete";
 
 type VmPurpose = NonNullable<VmResponse["purpose"]>;
+/** Display name for each VM state, as `t(english, korean)` arguments. */
+export const VM_STATE_LABELS: Record<VmState, [string, string]> = {
+  created: ["Created", "생성됨"],
+  starting: ["Starting", "시작 중"],
+  running: ["Running", "실행 중"],
+  stopping: ["Stopping", "중지 중"],
+  stopped: ["Stopped", "중지됨"],
+  error: ["Error", "오류"],
+};
 
 /** RAM is restricted to powers of two, matching how cloud instance sizes
  * are usually picked (and the server's own validation). */

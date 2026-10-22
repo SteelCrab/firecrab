@@ -9,7 +9,6 @@ import type {
 } from "../bindings";
 import {
   ApiClientError,
-  acquirePoolLease,
   createPool,
   deletePool,
   listImages,
@@ -21,6 +20,7 @@ import {
 } from "../api/client";
 import { consolePageUrl } from "../navigation";
 import { useI18n } from "../i18n";
+import { acquireWithRetryKey } from "../lib/poolAcquire";
 
 const POLL_MS = 3000;
 
@@ -48,6 +48,7 @@ export default function Pools() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [leases, setLeases] = useState<PoolLeaseResponse[]>([]);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [template, setTemplate] = useState("");
@@ -147,11 +148,12 @@ export default function Pools() {
   const run = async (id: string, action: () => Promise<unknown>) => {
     if (busyId) return;
     setBusyId(id);
+    setActionError(null);
     try {
       await action();
       await refresh();
     } catch (error) {
-      setDetailError((error as Error).message);
+      setActionError((error as Error).message);
     } finally {
       setBusyId(null);
     }
@@ -303,7 +305,7 @@ export default function Pools() {
                       onClick={(event) => {
                         event.stopPropagation();
                         select(pool);
-                        void run(pool.id, () => acquirePoolLease(pool.id, crypto.randomUUID()));
+                        void run(pool.id, () => acquireWithRetryKey(pool.id));
                       }}
                     >
                       {t("Acquire", "Lease 받기")}
@@ -331,6 +333,7 @@ export default function Pools() {
         <div style={{ marginTop: "1rem" }}>
           <h3 className="panel-title">{selected.name}</h3>
           {detailError && <div className="field-error">{detailError}</div>}
+          {actionError && <div className="field-error" role="alert">{actionError}</div>}
           {selected.lastError && (
             <div className="field-error">
               {t("Last member failure: ", "최근 멤버 실패: ")}

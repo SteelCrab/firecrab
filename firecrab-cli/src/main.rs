@@ -669,11 +669,15 @@ mod tests {
             "repair",
             "start",
             "stop",
+            "restart",
             "status",
             "validate",
             "dev",
         ] {
             assert!(Cli::try_parse_from(["firecrab", "service", action]).is_ok());
+        }
+        for action in ["start", "stop", "restart", "clean"] {
+            assert!(Cli::try_parse_from(["firecrab", "service", "dev", action]).is_ok());
         }
         #[cfg(target_os = "macos")]
         {

@@ -1,24 +1,28 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { VmResponse } from "./bindings";
 import { deleteVm, listVms, startVm, stopVm } from "./api/client";
 import type { VmAction } from "./model";
 import BannerView from "./components/Banner";
 import CreateVm from "./components/CreateVm";
-import VmTable from "./components/VmTable";
 import Console from "./components/Console";
-import VmDetailModal from "./components/VmDetailModal";
+import VmScreen from "./components/vm/VmScreen";
 import FirecrabPanel from "./components/FirecrabPanel";
 import HostInfo from "./components/HostInfo";
 import Images from "./components/Images";
+import Pools from "./components/Pools";
 import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
-import Pools from "./components/Pools";
 import MicroServices from "./components/MicroServices";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
 import Shells from "./components/Shells";
-import { newVmHash, useAppRoute, viewHash } from "./navigation";
+import CommandPalette from "./components/CommandPalette";
+import Screen from "./components/layout/Screen";
+import { ScreenStatus } from "./components/layout/screenStatus";
+import { HostStatusProvider } from "./hostStatus";
+import { useDetailPanelOpen, useDetailPanelWidth } from "./lib/detailPanel";
+import { useAppRoute, viewHash } from "./navigation";
 import { useI18n } from "./i18n";
 
 const POLL_MILLIS = 3_000;
@@ -29,6 +33,7 @@ const SLOW_POLL_AFTER = 3;
 interface BannerState {
   kind: "error" | "info";
   text: string;
+  source: "poll" | "action";
 }
 
 interface Dashboard {
@@ -37,6 +42,8 @@ interface Dashboard {
   banner: BannerState | null;
   loaded: boolean;
   consecutiveFailures: number;
+  /** VM shown in the detail panel; cleared when it leaves the list. */
+  selectedVmId: string | null;
 }
 
 type Msg =
@@ -48,7 +55,8 @@ type Msg =
   | { type: "actionFailed"; id: string; message: string }
   | { type: "created"; vm: VmResponse; message: string }
   | { type: "error"; message: string }
-  | { type: "dismissBanner" };
+  | { type: "dismissBanner" }
+  | { type: "select"; id: string | null };
 
 /** Keeps the server's list order: name ascending, ties by id. */
 function upsert(vms: VmResponse[], vm: VmResponse): VmResponse[] {
@@ -59,17 +67,26 @@ function upsert(vms: VmResponse[], vm: VmResponse): VmResponse[] {
 
 function reduce(state: Dashboard, msg: Msg): Dashboard {
   switch (msg.type) {
-    case "refreshed":
-      return { ...state, vms: msg.vms, loaded: true, consecutiveFailures: 0 };
+    case "refreshed": {
+      const kept = msg.vms.some((vm) => vm.id === state.selectedVmId);
+      return {
+        ...state,
+        vms: msg.vms,
+        loaded: true,
+        consecutiveFailures: 0,
+        selectedVmId: kept ? state.selectedVmId : null,
+        banner: state.banner?.source === "poll" ? null : state.banner,
+      };
+    }
     case "refreshFailed":
-      // Always flip `loaded` so the list panel is not stuck on "불러오는 중…"
+      // Always flip `loaded` so the list panel is not stuck on "Loading…"
       // after the first failed poll (common right after `npm run dev` while
       // the API is still starting, or when the proxy flaps once).
       return {
         ...state,
         loaded: true,
         consecutiveFailures: state.consecutiveFailures + 1,
-        banner: { kind: "error", text: msg.message },
+        banner: { kind: "error", text: msg.message, source: "poll" },
       };
     case "actionStarted": {
       const busy = new Set(state.busy);
@@ -80,23 +97,28 @@ function reduce(state: Dashboard, msg: Msg): Dashboard {
       const busy = new Set(state.busy);
       busy.delete(msg.id);
       const vms = msg.vm ? upsert(state.vms, msg.vm) : state.vms.filter((vm) => vm.id !== msg.id);
-      return { ...state, busy, vms };
+      const selectedVmId = !msg.vm && state.selectedVmId === msg.id ? null : state.selectedVmId;
+      return { ...state, busy, vms, selectedVmId };
     }
     case "actionFailed": {
       const busy = new Set(state.busy);
       busy.delete(msg.id);
-      return { ...state, busy, banner: { kind: "error", text: msg.message } };
+      return { ...state, busy, banner: { kind: "error", text: msg.message, source: "action" } };
     }
     case "created":
       return {
         ...state,
-        banner: { kind: "info", text: msg.message },
+        banner: { kind: "info", text: msg.message, source: "action" },
         vms: upsert(state.vms, msg.vm),
+        // Land on the new VM so its start progress is in view.
+        selectedVmId: msg.vm.id,
       };
     case "error":
-      return { ...state, banner: { kind: "error", text: msg.message } };
+      return { ...state, banner: { kind: "error", text: msg.message, source: "action" } };
     case "dismissBanner":
       return { ...state, banner: null };
+    case "select":
+      return { ...state, selectedVmId: msg.id };
   }
 }
 
@@ -106,6 +128,7 @@ const initialState: Dashboard = {
   banner: null,
   loaded: false,
   consecutiveFailures: 0,
+  selectedVmId: null,
 };
 
 export default function App() {
@@ -114,10 +137,10 @@ export default function App() {
   // Generation token so React StrictMode's mount→unmount→remount does not
   // leave a stuck "in flight" flag that skips the real first list fetch.
   const refreshGen = useRef(0);
-  // id of the VM whose detail modal is open, if any — local UI state, not
-  // server-synced. The serial console is a full-page hash route instead.
-  const [openDetailId, setOpenDetailId] = useState<string | null>(null);
   const [pipeHasUnsavedChanges, setPipeHasUnsavedChanges] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useDetailPanelOpen();
+  const [detailWidth, setDetailWidth] = useDetailPanelWidth();
   const confirmLeave = useCallback(() => !pipeHasUnsavedChanges || window.confirm(t(
     "Pipe changes have not been saved. Leave without saving?",
     "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
@@ -188,25 +211,42 @@ export default function App() {
   const onError = useCallback((message: string) => dispatch({ type: "error", message }), []);
   const dismiss = useCallback(() => dispatch({ type: "dismissBanner" }), []);
 
-  const onOpenDetail = useCallback((id: string) => setOpenDetailId(id), []);
-  const onCloseDetail = useCallback(() => setOpenDetailId(null), []);
+  const onSelectVm = useCallback((id: string | null) => dispatch({ type: "select", id }), []);
+  // The palette opens a VM by selecting it on the MicroVM screen.
+  const onPaletteSelectVm = useCallback((id: string) => {
+    dispatch({ type: "select", id });
+    setDetailOpen(true);
+  }, [setDetailOpen]);
+  const onToggleDetail = useCallback(() => setDetailOpen(!detailOpen), [detailOpen, setDetailOpen]);
+  const onOpenPalette = useCallback(() => setPaletteOpen(true), []);
 
   const pollNote = slowMode
     ? t("API unavailable — retrying every 15s", "API 연결 안 됨 — 15s 간격 재시도")
     : t(`Polling every ${POLL_MILLIS / 1000}s`, `${POLL_MILLIS / 1000}초마다 폴링`);
+
+  const vmErrorCount = state.vms.filter((vm) => vm.state === "error").length;
+  const banner = useMemo(
+    () => (state.banner ? <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} /> : null),
+    [state.banner, dismiss],
+  );
+  const screenStatus = useMemo(
+    () => ({ banner, pollNote, detailOpen, setDetailOpen, detailWidth, setDetailWidth }),
+    [banner, pollNote, detailOpen, setDetailOpen, detailWidth, setDetailWidth],
+  );
 
   // Terminal owns the whole viewport — no shell chrome, no modal clip box.
   if (route.kind === "console") {
     return <Console vmId={route.vmId} onClose={closeConsole} />;
   }
 
-  const view = route.kind === "vm-new" ? "vms" : route.view;
+  const view = route.kind === "vm-new" ? "vms" : route.kind === "pipe-card" ? "pipe" : route.view;
 
   return (
-    <Shell view={view} onSelectView={selectView}>
-      <div className="stack">
-        {state.banner && <BannerView kind={state.banner.kind} text={state.banner.text} onDismiss={dismiss} />}
-        {route.kind === "vm-new" && (
+    <HostStatusProvider>
+    <ScreenStatus.Provider value={screenStatus}>
+    <Shell view={view} onSelectView={selectView} onOpenPalette={onOpenPalette} vmCount={state.vms.length} vmErrorCount={vmErrorCount}>
+      {route.kind === "vm-new" && (
+        <Screen view="vms">
           <section className="panel">
             <h2 className="panel-title">
               <span>{t("New MicroVM", "새 MicroVM")}</span>
@@ -214,49 +254,47 @@ export default function App() {
             </h2>
             <CreateVm onCreated={onCreated} onError={onError} />
           </section>
-        )}
-        {route.kind === "shell" && route.view === "vms" && (
-          <section className="panel">
-            <h2 className="panel-title">
-              <span>{t(`MicroVMs (${state.vms.length})`, `MicroVM 목록 (${state.vms.length})`)}</span>
-              <span>
-                <a id="vm-list-add" className="btn primary" href={newVmHash()}>
-                  {t("Create", "생성")}
-                </a>
-                <span className="poll-note">{pollNote}</span>
-              </span>
-            </h2>
-            {state.loaded ? (
-              <VmTable
-                vms={state.vms}
-                busy={state.busy}
-                onAction={onAction}
-                onOpenDetail={onOpenDetail}
-              />
-            ) : (
-              <div className="empty">{t("Loading…", "불러오는 중…")}</div>
-            )}
-          </section>
-        )}
-        {/* Each page mounts only while selected, so its own polling stops
-            the moment you navigate away. */}
-        {view === "pools" && <Pools />}
-        {view === "networks" && <MicroNetworks />}
-        {view === "services" && <MicroServices />}
-        {view === "pipe" && <Pipe vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />}
-        {view === "storages" && <MicroStorages />}
-        {view === "images" && <Images />}
-        {view === "kernels" && <Kernels />}
-        {view === "shells" && <Shells />}
-        {view === "host" && (
-          <>
-            <HostInfo />
-            <FirecrabPanel />
-          </>
-        )}
-      </div>
-      {openDetailId && <VmDetailModal vmId={openDetailId} vms={state.vms} onClose={onCloseDetail} />}
+        </Screen>
+      )}
+      {route.kind === "shell" && route.view === "vms" && (
+        <VmScreen
+          vms={state.vms}
+          loaded={state.loaded}
+          busy={state.busy}
+          selectedVmId={state.selectedVmId}
+          onSelectVm={onSelectVm}
+          onAction={onAction}
+        />
+      )}
+      {/* Each page mounts only while selected, so its own polling stops
+          the moment you navigate away. */}
+      {view === "pools" && <Screen view="pools"><Pools /></Screen>}
+      {view === "networks" && <MicroNetworks />}
+      {view === "services" && <MicroServices />}
+      {view === "pipe" && (
+        <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
+      )}
+      {view === "storages" && <MicroStorages />}
+      {view === "images" && <Images />}
+      {view === "kernels" && <Screen view="kernels"><Kernels /></Screen>}
+      {view === "shells" && <Shells />}
+      {view === "host" && (
+        <Screen view="host">
+          <HostInfo />
+          <FirecrabPanel />
+        </Screen>
+      )}
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        vms={state.vms}
+        onSelectView={selectView}
+        onSelectVm={onPaletteSelectVm}
+        onToggleDetail={onToggleDetail}
+      />
     </Shell>
+    </ScreenStatus.Provider>
+    </HostStatusProvider>
   );
 }
 

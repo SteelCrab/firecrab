@@ -347,7 +347,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
           <span className="field-error">{imagesError ?? t("Install an image before creating a VM.", "생성하려면 먼저 이미지를 설치하세요")}</span>
         )}
         {selectedImage && !selectedImage.hasGuestService && (
-          <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)" }}>
+          <span style={{ fontSize: "0.75rem", color: "var(--text-3)" }}>
             {t(
               "Runtime env is ignored: this image has no guest service.",
               "게스트 서비스가 없는 이미지라 런타임 환경 변수는 적용되지 않습니다.",
@@ -474,11 +474,11 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                 background: "var(--bg-subtle, rgba(255, 255, 255, 0.03))",
                 padding: "0.6rem 0.8rem",
                 borderRadius: "6px",
-                border: "1px solid var(--border-color, rgba(255, 255, 255, 0.1))",
+                border: "1px solid var(--border)",
               }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-3)", fontWeight: 500 }}>
                   {t("VM Guest Port", "VM 내부 포트")}
                 </span>
                 <input
@@ -488,13 +488,13 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                   onChange={(e) => updatePortForward(idx, "guestPort", Number(e.target.value))}
                   style={{
                     width: "130px",
-                    borderColor: isValidPort(pf.guestPort) ? undefined : "var(--danger, #e5484d)",
+                    borderColor: isValidPort(pf.guestPort) ? undefined : "var(--red)",
                   }}
                 />
               </div>
-              <span style={{ fontSize: "1rem", color: "var(--muted, #888)", paddingBottom: "0.4rem" }}>➔</span>
+              <span style={{ fontSize: "1rem", color: "var(--text-3)", paddingBottom: "0.4rem" }}>➔</span>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-3)", fontWeight: 500 }}>
                   {t("Host Port", "호스트 포트")}
                 </span>
                 <input
@@ -504,12 +504,12 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                   onChange={(e) => updatePortForward(idx, "hostPort", Number(e.target.value))}
                   style={{
                     width: "130px",
-                    borderColor: isValidPort(pf.hostPort) ? undefined : "var(--danger, #e5484d)",
+                    borderColor: isValidPort(pf.hostPort) ? undefined : "var(--red)",
                   }}
                 />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-3)", fontWeight: 500 }}>
                   {t("Protocol", "프로토콜")}
                 </span>
                 <select
@@ -556,11 +556,11 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                 background: "var(--bg-subtle, rgba(255, 255, 255, 0.03))",
                 padding: "0.6rem 0.8rem",
                 borderRadius: "6px",
-                border: "1px solid var(--border-color, rgba(255, 255, 255, 0.1))",
+                border: "1px solid var(--border)",
               }}
             >
               <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", flex: 1 }}>
-                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-3)", fontWeight: 500 }}>
                   {t("Key", "키")}
                 </span>
                 <input
@@ -575,7 +575,7 @@ export default function CreateVm({ onCreated, onError }: CreateVmProps) {
                 />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", flex: 2 }}>
-                <span style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontWeight: 500 }}>
+                <span style={{ fontSize: "0.75rem", color: "var(--text-3)", fontWeight: 500 }}>
                   {t("Value", "값")}
                 </span>
                 <input

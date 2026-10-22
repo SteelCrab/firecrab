@@ -26,7 +26,7 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 
 | Script or suite | Cases / purpose |
 | --- | --- |
-| `scripts/ci-qa-api.sh` | G4–G5, H1–H3, N1–N5, S1–S3, L1–L3, I1/I8/I9, V14, C3/C5, X1–X4/X6 |
+| `scripts/ci-qa-api.sh` | G4–G5, H1–H3, N1–N5, S1–S3, L1–L3, I1/I8/I9, P1–P6, V14, C3/C5, X1–X4/X6 |
 | `scripts/ci-qa-nginx.sh` | NGX1–NGX9, including real SSH, env, shell, and forwarded HTTP |
 | `scripts/ci-qa-ssh.sh` | V8a–V8d; called by nginx and guest boot |
 | `scripts/ci-qa-guest.sh` | I5/I6, V1/V2/V6–V9/V11–V13/V15, N6, C1/C2/C2b/C4, X5 |
@@ -34,8 +34,18 @@ The Firecrab API host is native Linux or managed Debian on macOS/Windows.
 | `scripts/ci-qa-macos-e2e.sh` | Native Mac gate, shell, repair, browser, API, nginx, guest, and lifetime |
 | `scripts/ci-qa-windows-e2e.ps1` | Native Windows gate/shell, WSL API/nginx/guest/lifetime/browser, plus Windows HTTP |
 | `scripts/ci-qa-macos-e2e.sh repair` | G7/G7a runtime recovery and preservation; [detailed checks](macos-repair.md) |
-| `firecrab-e2e` | B1–B17; full or explicit import/form mode |
+| `firecrab-e2e` | B1–B19; full or explicit import/form mode |
 | `firecrab-e2e` `test:dashboard` | Mocked dashboard/API/console checks |
+| `firecrab-e2e` `test:pipe` | Pipe and registry browser checks; English/Korean host-bundle recovery guidance |
+| `scripts/test-pipe-cli.py` | Real systemd CLI routing, default private-engine discovery, explicit overrides, missing-engine status without traffic loss, rollback, and cleanup |
+| `scripts/test-pipe-api.py` | Unprivileged API through the systemd helper; route preservation and ingress lifecycle |
+| `scripts/test-pipe-runtime.py` | Real ingress routing, health, reload, independent Quick Tunnel targets, and rejected-config rollback |
+| `scripts/test-ingress-install.sh` | Isolated initial install/reinstall; executable mode, all attributions, and saved routes, with fake service controls |
+| `scripts/ci-qa-pipe-databases.sh --browser` | PDB1–PDB12; real API, PostgreSQL/MySQL, TLS and desktop/mobile browser checks |
+| `scripts/test-pipe-databases-qa.py` | Database QA remote-host guard and cleanup after failures |
+
+See [PIPE database E2E and QA](pipe-databases-qa.md) for the case matrix,
+fixture-only browser commands, live database prerequisites and cloud acceptance limits.
 
 Guest references are `alpine:3.21`, `ubuntu:24.04`, and `fedora:42`.
 Expanded shared checks run on the first reference.
@@ -86,7 +96,9 @@ Needs a network (N1) and an installed template (I3 or I6).
 | P4 | acquire empty | `POST /{id}/acquire` → 409 `pool_exhausted` | no lease row |
 | P5 | delete idle | `DELETE` → 202 `deleting: true`, then GET → 404 | leftover empty |
 | P6 | warm lease | `minReady` 1 boots one member; acquire → 201; `PUT` or `DELETE /api/vms/{id}` → 409 `pool_owned`; release deletes that VM and its disk | replacement VM id differs |
+| P7 | API restart | keep one ready and one leased member; restart the API; member IDs, states and shim/Firecracker PIDs stay unchanged; retry acquire with the same key → 200 and the original active lease | release, then delete pool |
 
 P6 boots a guest.
 Run it with V7, not in the API-only pass.
-CI runs P1–P6, C6, and X7 on the first OCI reference in `scripts/ci-qa-guest.sh`, after that guest boots and before the image delete.
+CI runs P1–P7, C6, and X7 on the first OCI reference in `scripts/ci-qa-guest.sh`, after that guest boots and before the image delete.
+P7 requires `FIRECRAB_QA_POOL_RESTART=1` on a disposable host. Other runs report it as a warning.

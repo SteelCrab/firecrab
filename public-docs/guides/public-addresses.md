@@ -39,7 +39,7 @@ are required for that provider-managed setup.
 
 Create and manage temporary connectors in **Pipe → Cloudflare Quick Tunnel**.
 To give VM apps a fixed address, get a connection token from
-[the dashboard](https://firecrab.dev/dashboard/), then open **Pipe → Firecrab
+[the dashboard](https://console.firecrab.dev/), then open **Pipe → Firecrab
 Tunnel → Add fixed address**. Paste the token and choose **VM apps**
 in **Connection target**, or choose **Nginx routes** to publish a saved domain/path group through
 an automatically managed connector.

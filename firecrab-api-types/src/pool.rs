@@ -76,8 +76,11 @@ pub enum PoolMemberState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PoolMemberResponse {
+    /// VM owned by this member or lease.
     pub vm_id: Uuid,
+    /// Current lifecycle state of this record.
     pub state: PoolMemberState,
+    /// Creation time in Unix milliseconds.
     pub created_at_ms: u64,
 }
 
@@ -85,28 +88,41 @@ pub struct PoolMemberResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PoolResponse {
+    /// Stable identifier of this record.
     pub id: Uuid,
+    /// Unique pool name used in member VM names.
     pub name: String,
     /// Image alias the pool was created from.
     pub template: String,
     /// Image version every member boots.
     pub template_version: String,
+    /// Virtual CPUs assigned to each member.
     pub cpu: u8,
+    /// Memory per member in MiB.
     pub ram: u32,
+    /// Disk capacity per member in GiB.
     pub disk_gb: u16,
+    /// Outbound network policy shared by all members.
     pub egress_policy: EgressPolicy,
+    /// Network joined by all pool members.
     pub micro_network_id: Uuid,
+    /// Storage root holding member disks.
     pub storage_root: String,
+    /// Target number of booted members waiting for a lease.
     pub min_ready: u16,
+    /// Maximum member count, including leased and draining VMs.
     pub max_size: u16,
+    /// Lifetime in seconds for newly acquired leases.
     pub lease_ttl_seconds: u32,
     /// Set by `DELETE`; the pool disappears once its members are gone.
     pub deleting: bool,
+    /// All member VMs, including members being removed.
     pub members: Vec<PoolMemberResponse>,
     /// Most recent failure creating or booting a member; cleared once a
     /// member becomes ready again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Creation time in Unix milliseconds.
     pub created_at_ms: u64,
 }
 
@@ -126,11 +142,17 @@ pub enum PoolLeaseState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PoolLeaseResponse {
+    /// Stable identifier of this record.
     pub id: Uuid,
+    /// Pool that owns this record.
     pub pool_id: Uuid,
+    /// VM owned by this member or lease.
     pub vm_id: Uuid,
+    /// Current lifecycle state of this record.
     pub state: PoolLeaseState,
+    /// Time the lease started, in Unix milliseconds.
     pub acquired_at_ms: u64,
+    /// Lease expiry time in Unix milliseconds.
     pub expires_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at_ms: Option<u64>,

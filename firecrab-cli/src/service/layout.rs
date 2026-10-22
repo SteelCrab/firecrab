@@ -1,5 +1,5 @@
-//! install.sh `ensure_account` … `install_config`: 계정, 디렉터리, 컴플라이언스
-//! 자료, 바이너리·대시보드, 그리고 api.env.
+//! install.sh `ensure_account` … `install_config`: accounts, directories,
+//! compliance artifacts, binaries, the dashboard, and api.env.
 
 use std::path::Path;
 
@@ -10,7 +10,7 @@ use super::payload::{BUNDLE_BINARIES, EXTRACT_HELPERS, Payload, resolve_binary};
 use super::pkg::have;
 use super::privileged::Privileged;
 
-/// install.sh가 처음 한 번 심는 `$CONFDIR/api.env`.
+/// `$CONFDIR/api.env`, created once by install.sh.
 pub const API_ENV_TEMPLATE: &str = "\
 # firecrab API settings. The unit already sets the image root, the dashboard
 # assets and the working directory; uncomment only what you want to change.
@@ -43,7 +43,7 @@ fn succeeded(privileged: &Privileged<'_>, cmd: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-/// install.sh `ensure_account`: 시스템 계정과 kvm 그룹 소속, /dev/kvm ACL.
+/// install.sh `ensure_account`: system account, kvm group membership, and /dev/kvm ACL.
 pub fn ensure_account(privileged: &Privileged<'_>, env: &ServiceEnv) -> Result<(), Error> {
     if succeeded(privileged, "getent", &["group", &env.group]) {
         output::log(&format!("group {} exists", env.group));
@@ -323,7 +323,7 @@ pub fn install_binaries(
     }
 }
 
-/// install.sh `install_config`: 한 번만 심어 운영자의 수정이 재실행에서 살아남는다.
+/// install.sh `install_config`: create once so operator edits survive subsequent runs.
 pub fn install_config(privileged: &Privileged<'_>, env: &ServiceEnv) -> Result<(), Error> {
     let api_env = env.confdir.join("api.env");
     if api_env.is_file() {

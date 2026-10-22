@@ -242,7 +242,7 @@ async fn create_member(state: &AppState, pool: &PoolRow, now_ms: u64) -> Result<
             )
         })?;
     let request = member_request(pool);
-    let fields = crate::handlers::vms::validate_create(&request, state);
+    let fields = crate::handlers::vms::validate_create_for(&request, Some(&template), state);
     if !fields.is_empty() {
         let detail: Vec<String> = fields
             .iter()

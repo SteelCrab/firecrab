@@ -2137,6 +2137,17 @@ fn is_valid_ram_mib(ram: u32) -> bool {
 }
 
 pub(crate) fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeMap<String, String> {
+    let template = state.templates.resolve_alias(&req.template);
+    validate_create_for(req, template.as_deref(), state)
+}
+
+/// Checks a VM against the exact image it will boot. Pools pass their pinned
+/// version so changing an alias cannot change the disk requirements.
+pub(crate) fn validate_create_for(
+    req: &CreateVmRequest,
+    template: Option<&crate::templates::TemplateVersion>,
+    state: &AppState,
+) -> BTreeMap<String, String> {
     let mut fields = BTreeMap::new();
     if req.shell_ids.len() > crate::shells::MAX_SHELLS_PER_VM {
         fields.insert(
@@ -2179,7 +2190,6 @@ pub(crate) fn validate_create(req: &CreateVmRequest, state: &AppState) -> BTreeM
             );
         }
     }
-    let template = state.templates.resolve_alias(&req.template);
     if template.is_none() {
         fields.insert("template".to_owned(), "is not supported".to_owned());
     }

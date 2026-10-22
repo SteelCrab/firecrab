@@ -361,6 +361,8 @@ deleted, and replaced; its disk is never handed to another caller. Pools are hos
 - `minReady` (0 to `maxSize`), `maxSize` (1–32), `leaseTtlSeconds` (60–604800)
 - The VM spec is validated like `POST /api/vms`
 - The pool pins the image version `template` resolves to at creation; image and spec stay fixed
+- Image deletion and kernel replacement return `409 in_use` while any pool references the image,
+  including a pool with no members. Delete the pool first
 
 `PATCH /api/pools/{id}` changes `minReady`, `maxSize`, and `leaseTtlSeconds`. A new TTL applies to
 later leases. Lowering a limit drains the newest unleased members.
@@ -384,8 +386,9 @@ Members:
 - `GET /api/vms/{id}`, the console, and the SSH key still work for a member.
 - `PUT`/`DELETE /api/vms/{id}`, start, stop, storage, shells, and port forwards answer `409 pool_owned` for a member.
 - `maxSize` counts every member, draining ones included
-- A lease ends as `expired` when its TTL passes or its VM stops. Restarting the API stops every
-  guest, so leases and warm members do not survive it yet (#123)
+- A lease ends as `expired` when its TTL passes or its VM stops. API startup reconnects surviving
+  VM shims before pool reconciliation. Ready members and unexpired active leases survive a restart;
+  missing or stopped VMs are replaced and their active leases expire
 - `lastError` names the most recent member that failed to create or boot; the pool waits 30
   seconds before trying again
 

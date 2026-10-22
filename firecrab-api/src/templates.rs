@@ -927,11 +927,11 @@ fn open_beneath(root: &File, path: &Path) -> Result<File, TemplateError> {
         }
         let root_path = unsafe { CStr::from_ptr(buffer.as_ptr()) };
         let root_path = root_path.to_str().map_err(|_| TemplateError::InvalidPath)?;
-        return OpenOptions::new()
+        OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
             .open(Path::new(root_path).join(path))
-            .map_err(TemplateError::Io);
+            .map_err(TemplateError::Io)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {

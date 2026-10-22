@@ -20,6 +20,10 @@ use crate::model::{Lease, VmRecord, VmState};
 mod pools;
 pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
+mod pipe_auth;
+mod pipe_databases;
+mod registries;
+pub use registries::RegistryLogin;
 
 /// Default SQLite database path, relative to the process's working directory.
 const DB_FILE: &str = "data/firecrab.db";
@@ -686,10 +690,25 @@ impl Store {
         migrate_ipv6_columns(&conn)?;
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
+        conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS registry_credentials (
+            registry TEXT PRIMARY KEY, username TEXT NOT NULL, secret TEXT NOT NULL
+        ) STRICT",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pipe_auth_credentials (
+                provider TEXT PRIMARY KEY CHECK (provider IN ('aws', 'github')),
+                credential TEXT NOT NULL
+            ) STRICT",
+            [],
+        )?;
+        registries::migrate_account_name(&conn)?;
         conn.execute(CREATE_SHELL_REVISIONS_TABLE_SQL, [])?;
         conn.execute(CREATE_VM_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_PORT_FORWARDS_TABLE_SQL, [])?;
