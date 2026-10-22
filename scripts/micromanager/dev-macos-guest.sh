@@ -263,7 +263,27 @@ fi
 # remain installed. Helper write access also covers pipe config and unit files.
 deploying=1
 phase=activate
-systemctl stop firecrab-api "$helper_unit"
+systemctl stop firecrab-api
+if [ "$profile" = restore ] || [ "$profile" = clean ]; then
+  # The installed API may predate VM shims and cannot adopt them. Stop them
+  # synchronously before switching binaries so no old Firecracker holds a TAP
+  # or disk when that API starts a replacement. The API is already down so it
+  # cannot launch new replicas while the loaded units are being collected.
+  phase=stop-vms
+  vm_listing=$(systemctl list-units --all --plain --no-legend --no-pager 'firecrab-vm-*.service')
+  vm_units=()
+  while read -r unit _; do
+    if [[ "$unit" =~ ^firecrab-vm-[0-9a-f]{32}\.service$ ]]; then
+      vm_units+=("$unit")
+    fi
+  done <<< "$vm_listing"
+  if [ "${#vm_units[@]}" -gt 0 ]; then
+    echo "[STOP] waiting for ${#vm_units[@]} MicroVM unit(s) before restoring installed services"
+    systemctl stop "${vm_units[@]}"
+  fi
+  phase=activate
+fi
+systemctl stop "$helper_unit"
 if [ "$profile" = restore ] || [ "$profile" = clean ]; then
   for unit in firecrab-api firecrab-helper firecrab-net-helper; do
     rm -f "$unit_root/$unit.service.d/90-firecrab-dev.conf"

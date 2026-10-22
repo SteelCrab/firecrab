@@ -78,6 +78,12 @@ Guest service restarts interrupt API/helper requests, so stop workloads before c
 `dev start`, `dev restart`, and `dev clean` require a running management VM.
 `dev stop` also stops the development dashboard when the management VM is already stopped.
 `start`, `stop`, and `restart` preserve deployed binaries and overrides.
+`dev clean` and `--restore` stop workload MicroVM units before restoring installed services.
+They wait for the old Firecracker processes to release their TAP devices and disks.
+The installed API may be older than the development runtime and unable to adopt those VMs.
+A failure to list or stop the units cancels restoration and preserves development files.
+VM disks and application data remain available for the next start.
+After `dev clean`, `dev start` uses the installed release; `service dev` builds and deploys sources again.
 Development subcommands cannot be combined with build/restore options.
 `service start`, `stop`, and `restart` control the management VM and its resident host service.
 `service restart` stops the VM, starts it again, and waits for the local API.
