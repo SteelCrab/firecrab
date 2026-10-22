@@ -10,6 +10,8 @@ PIPE connects PostgreSQL and MySQL to MicroServices. Existing connections stay r
 
 Topic names, TLS certificates for managed Kafka, capture objects, signing keys, retry intervals, inbox tables, and checkpoints are generated automatically. Advanced controls remain collapsed in the dashboard.
 
+Use a direct or session-pool database endpoint for service accounts, capture and maintenance. PostgreSQL transaction-pool endpoints support browsing only. Read-only queries stay in one bounded read-only transaction, with transaction-local timeout settings.
+
 The setup account needs privileges to create the internal namespace, row triggers and service accounts. Its privileges are not granted to the service. Existing accounts are never widened. Missing privileges fail setup and leave a retryable intent.
 
 ## Architecture

@@ -345,7 +345,7 @@ pub async fn access(
     let settings = record
         .input
         .settings(record.id)
-        .map_err(|_| AppError::internal(request_id.0))?;
+        .map_err(|message| pipe_databases::validation(message, request_id.0))?;
     if input.write_enabled {
         bounded_write(request_id.0, async {
             let mut connection =

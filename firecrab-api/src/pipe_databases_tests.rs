@@ -252,3 +252,41 @@ async fn reads_real_postgres_and_mysql_tables() {
         assert!(connection.preview(&request).await.unwrap().rows.is_empty());
     }
 }
+
+#[test]
+fn supabase_transaction_pooling_is_read_only_and_spatial_previews_stay_binary() {
+    let uri = format!(
+        "postgresql://user:{}@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres",
+        "qa-fixture"
+    );
+    let mut connection = input(&uri, Provider::Supabase);
+    assert!(connection.settings(Uuid::nil()).is_ok());
+    connection.write_enabled = true;
+    assert!(connection.settings(Uuid::nil()).is_err());
+    for kind in [
+        "geometry",
+        "point",
+        "linestring",
+        "polygon",
+        "multipoint",
+        "multilinestring",
+        "multipolygon",
+        "geomcollection",
+        "geometrycollection",
+    ] {
+        let sql = preview_sql(
+            Engine::Mysql,
+            &PreviewRequest {
+                schema: "app".into(),
+                table: "places".into(),
+                limit: 50,
+                offset: 0,
+            },
+            &[Column {
+                name: "shape".into(),
+                data_type: kind.into(),
+            }],
+        );
+        assert!(sql.contains("HEX(`shape`)"), "{kind}: {sql}");
+    }
+}

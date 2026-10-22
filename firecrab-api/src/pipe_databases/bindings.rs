@@ -117,6 +117,12 @@ impl BindingRecord {
             ));
         }
         let settings = record.input.settings(record.id).map_err(Error::Invalid)?;
+        if settings.summary.host.ends_with(".pooler.supabase.com") && settings.summary.port == 6543
+        {
+            return Err(Error::Invalid(
+                "Service bindings require a direct or session-pool database endpoint",
+            ));
+        }
         let mut connection = DatabaseConnection::connect(&record.input, &settings).await?;
         let tables = connection.tables().await?;
         if tables.truncated || tables.tables.is_empty() {
@@ -208,7 +214,7 @@ pub async fn provision(admin: &DatabaseRecord, binding: &BindingRecord) -> Resul
     let marker = format!("firecrab-binding:{}", binding.id);
     match &mut connection {
         DatabaseConnection::Postgres(c) => {
-            let mut tx = sqlx::Connection::begin(c).await?;
+            let mut tx = write::pg_transaction(c).await?;
             let existing: Option<Option<String>> = sqlx::query_scalar(
                 "SELECT shobj_description(oid,'pg_authid') FROM pg_roles WHERE rolname=$1",
             )
@@ -359,7 +365,7 @@ pub async fn revoke(admin: &DatabaseRecord, binding: &BindingRecord) -> Result<(
             }
             let role = quote(Engine::Postgres, &binding.role);
             // These generated roles cannot own application objects. RESTRICT prevents data loss.
-            let mut tx = sqlx::Connection::begin(c).await?;
+            let mut tx = write::pg_transaction(c).await?;
             for table in &binding.tables {
                 sqlx::query(&format!(
                     "REVOKE ALL ON {} FROM {role}",

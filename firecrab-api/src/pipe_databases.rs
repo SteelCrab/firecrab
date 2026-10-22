@@ -173,6 +173,15 @@ impl DatabaseInput {
         if host.contains('%') || url.fragment().is_some() || url.port() == Some(0) {
             return Err("URI must contain a TCP host, a valid port and no fragment");
         }
+        if self.write_enabled
+            && engine == Engine::Postgres
+            && host.ends_with(".pooler.supabase.com")
+            && url.port() == Some(6543)
+        {
+            return Err(
+                "Database writes and capture require a direct or session-pool endpoint; use the Supabase session endpoint on port 5432",
+            );
+        }
         let username = decode(url.username())?;
         let password = decode(url.password().unwrap_or(""))?;
         let database = decode(url.path().strip_prefix('/').unwrap_or(url.path()))?;
@@ -371,22 +380,20 @@ impl DatabaseConnection {
                         TlsMode::VerifyFull => PgSslMode::VerifyFull,
                     })
                     .statement_cache_capacity(0)
-                    .options([
-                        ("statement_timeout", "5000"),
-                        ("lock_timeout", "5000"),
-                        ("timezone", "UTC"),
-                        (
-                            "default_transaction_read_only",
-                            if write { "off" } else { "on" },
-                        ),
-                    ])
                     .disable_statement_logging();
                 if let Some(ca) = &input.ca_certificate {
                     options = options.ssl_root_cert_from_pem(ca.as_bytes().to_vec());
                 }
-                PgConnection::connect_with(&options)
-                    .await
-                    .map(Self::Postgres)
+                let mut connection = PgConnection::connect_with(&options).await?;
+                if write {
+                    // Capture workers need a direct or session-pool endpoint.
+                    write::pg_batch(&mut connection,"SET SESSION statement_timeout=5000; SET SESSION lock_timeout=5000; SET SESSION timezone='UTC'; SET SESSION default_transaction_read_only=off").await?;
+                } else {
+                    // Transaction poolers pin this backend until disconnect.
+                    // LOCAL settings neither leak nor disappear between reads.
+                    write::pg_batch(&mut connection,"BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; SET LOCAL statement_timeout=5000; SET LOCAL lock_timeout=5000; SET LOCAL timezone='UTC'").await?;
+                }
+                Ok(Self::Postgres(connection))
             }
             Engine::Mysql => {
                 let mut options = MySqlConnectOptions::new()
@@ -559,6 +566,14 @@ fn preview_sql(engine: Engine, request: &PreviewRequest, columns: &[Column]) -> 
                             | "longblob"
                             | "bit"
                             | "geometry"
+                            | "point"
+                            | "linestring"
+                            | "polygon"
+                            | "multipoint"
+                            | "multilinestring"
+                            | "multipolygon"
+                            | "geomcollection"
+                            | "geometrycollection"
                     ) {
                         format!("HEX({name})")
                     } else {

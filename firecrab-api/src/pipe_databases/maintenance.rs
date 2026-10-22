@@ -436,11 +436,6 @@ pub async fn backup(state: &AppState, record: &DatabaseRecord, job: &mut Job) ->
     let mut connection = DatabaseConnection::connect(&record.input, &settings).await?;
     let mut exported_snapshot = None;
     if let DatabaseConnection::Postgres(c) = &mut connection {
-        write::pg_batch(
-            c,
-            "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
-        )
-        .await?;
         exported_snapshot = Some(
             sqlx::query_scalar::<_, String>("SELECT pg_export_snapshot()")
                 .fetch_one(&mut *c)
@@ -702,7 +697,7 @@ pub async fn apply_migration(record: &DatabaseRecord, job: &Job) -> Result<(), E
     match &mut c {
         DatabaseConnection::Postgres(c) => {
             sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {ledger}(version text PRIMARY KEY,checksum text NOT NULL,status text NOT NULL,applied_at timestamptz)" )).execute(&mut *c).await?;
-            let mut tx = sqlx::Connection::begin(c).await?;
+            let mut tx = write::pg_transaction(c).await?;
             sqlx::query("SET LOCAL search_path=public")
                 .execute(&mut *tx)
                 .await?;

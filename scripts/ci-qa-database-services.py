@@ -67,7 +67,9 @@ def main():
             if args.profiles:
                 args.profiles.mkdir(parents=True, exist_ok=True)
                 mount += ["-v", f"{args.profiles.resolve()}:/profiles", "-e", "LLVM_PROFILE_FILE=/profiles/database-services-%p-%m.profraw"]
-            base = ["docker", "run", "--rm", "--init", "--network", prefix, *mount]
+            runner=prefix+"-tests"
+            containers.append(runner)
+            base = ["docker", "run", "--rm", "--init", "--name", runner, "--network", prefix, *mount]
             run([*base, "--user", f"{os.getuid()}:{os.getgid()}", "-e", "FIRECRAB_KAFKA_EXPORT=/qa/kafka.json", "-e", f"FIRECRAB_KAFKA_QA_PREFIX={prefix}-kafka", "firecrab-database-services-qa", f"/tests/{binary.name}", "export_managed_kafka_fixture", "--ignored", "--nocapture"])
             cluster = json.loads((temporary / "kafka.json").read_text())
             # Never print the cluster object: it contains private TLS keys.

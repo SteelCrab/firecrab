@@ -277,7 +277,7 @@ pub async fn install(connection: &mut DatabaseConnection, trigger: &Trigger) -> 
     let index_name = trigger.id.simple();
     match connection {
         DatabaseConnection::Postgres(c) => {
-            let mut tx = sqlx::Connection::begin(c).await?;
+            let mut tx = write::pg_transaction(c).await?;
             write::pg_batch(&mut tx,&format!("CREATE TABLE IF NOT EXISTS {outbox} (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,payload text NOT NULL,status text NOT NULL DEFAULT 'pending',attempts integer NOT NULL DEFAULT 0,next_attempt bigint NOT NULL DEFAULT 0,kafka_offset bigint,last_error text,created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,delivered_at timestamptz); CREATE INDEX IF NOT EXISTS pending_{index_name} ON {outbox}(status,next_attempt,id); CREATE OR REPLACE FUNCTION {schema}.{function}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog SET timezone='UTC' AS $fc$ BEGIN INSERT INTO {outbox}(payload) VALUES (json_build_object('operation',lower(TG_OP),'schema',TG_TABLE_SCHEMA,'table',TG_TABLE_NAME,'before',CASE WHEN TG_OP='INSERT' THEN NULL ELSE (SELECT jsonb_object_agg(key,CASE WHEN jsonb_typeof(value)='number' THEN to_jsonb(value::text) ELSE value END) FROM jsonb_each(to_jsonb(OLD))) END,'after',CASE WHEN TG_OP='DELETE' THEN NULL ELSE (SELECT jsonb_object_agg(key,CASE WHEN jsonb_typeof(value)='number' THEN to_jsonb(value::text) ELSE value END) FROM jsonb_each(to_jsonb(NEW))) END,'occurredAt',clock_timestamp())::text); RETURN NULL; END $fc$; REVOKE ALL ON FUNCTION {schema}.{function}() FROM PUBLIC; CREATE OR REPLACE TRIGGER {function} AFTER INSERT OR UPDATE OR DELETE ON {source} FOR EACH ROW EXECUTE FUNCTION {schema}.{function}();")).await?;
             tx.commit().await?;
         }
@@ -400,7 +400,7 @@ pub async fn detach(connection: &mut DatabaseConnection, trigger: &Trigger) -> R
     match connection {
         DatabaseConnection::Postgres(c) => {
             let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema=$1 AND table_name=$2)").bind(&table.schema).bind(&table.table).fetch_one(&mut *c).await?;
-            let mut tx = sqlx::Connection::begin(c).await?;
+            let mut tx = write::pg_transaction(c).await?;
             if exists {
                 sqlx::query(&format!(
                     "DROP TRIGGER IF EXISTS {} ON {}",

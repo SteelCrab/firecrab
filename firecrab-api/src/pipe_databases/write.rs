@@ -536,7 +536,7 @@ pub async fn initialize(connection: &mut DatabaseConnection, id: Uuid) -> Result
             if exists {
                 return verify_owner(connection, id).await;
             }
-            let mut tx = c.begin().await?;
+            let mut tx = pg_transaction(c).await?;
             pg_batch(&mut tx,&format!("CREATE SCHEMA {schema}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC; CREATE TABLE {schema}.owner (id text PRIMARY KEY); INSERT INTO {schema}.owner VALUES ('{id}'); CREATE TABLE {schema}.audit (request_id text PRIMARY KEY, request_hash text NOT NULL, receipt text NOT NULL, created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP)")).await?;
             tx.commit().await?;
         }
@@ -571,6 +571,19 @@ pub async fn initialize(connection: &mut DatabaseConnection, id: Uuid) -> Result
         }
     }
     Ok(())
+}
+
+/// Pin a writable PostgreSQL transaction and enforce local execution bounds.
+pub(super) async fn pg_transaction(
+    connection: &mut sqlx::PgConnection,
+) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, sqlx::Error> {
+    let mut transaction = connection.begin_with("BEGIN READ WRITE").await?;
+    pg_batch(
+        &mut transaction,
+        "SET LOCAL statement_timeout=5000; SET LOCAL lock_timeout=5000; SET LOCAL timezone='UTC'",
+    )
+    .await?;
+    Ok(transaction)
 }
 
 /// Execute internally rendered PostgreSQL DDL on the caller transaction.
@@ -806,7 +819,7 @@ pub async fn mutate(
         .collect::<Vec<_>>();
     match connection {
         DatabaseConnection::Postgres(connection) => {
-            let mut transaction = connection.begin().await?;
+            let mut transaction = pg_transaction(connection).await?;
             sqlx::query(&format!("INSERT INTO {audit} (request_id,request_hash,receipt) VALUES ($1,$2,'{{}}') ON CONFLICT DO NOTHING")).bind(&request_id).bind(&hash).persistent(false).execute(&mut *transaction).await?;
             let (saved_hash, saved_receipt): (String, String) = sqlx::query_as(&format!(
                 "SELECT request_hash,LEFT(receipt,4097) FROM {audit} WHERE request_id=$1 FOR UPDATE"
