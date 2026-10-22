@@ -1,0 +1,220 @@
+//! Metadata-only stack ownership and read-only planning against the selected host.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use axum::Json;
+use axum::extract::{Extension, Path, State};
+use axum::http::StatusCode;
+use firecrab_stack::{
+    Binding, Inventory, Plan, RegisterStackRequest, ServiceSnapshot, Stack, StackRecord,
+    VmSnapshot, logical_name,
+};
+use uuid::Uuid;
+
+use crate::error::AppError;
+use crate::extract::ValidatedJson;
+use crate::model::VmPurpose;
+use crate::persistence::{PersistenceError, Store};
+use crate::server::RequestId;
+use crate::state::AppState;
+
+/// Idempotently register a stack name without storing or applying its manifest.
+pub async fn register(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    ValidatedJson(request): ValidatedJson<RegisterStackRequest>,
+) -> Result<Json<StackRecord>, AppError> {
+    validate_name(&request.name, request_id.0)?;
+    database(request_id.0, move || {
+        state.store.register_stack(&request.name)
+    })
+    .await
+    .map(Json)
+}
+
+/// List identities and ownership bindings without returning resource configuration.
+pub async fn list(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<Json<Vec<StackRecord>>, AppError> {
+    database(request_id.0, move || state.store.list_stacks())
+        .await
+        .map(Json)
+}
+
+/// Read one registered stack's current ownership revision.
+pub async fn get(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(name): Path<String>,
+) -> Result<Json<StackRecord>, AppError> {
+    validate_name(&name, request_id.0)?;
+    database(request_id.0, move || {
+        state
+            .store
+            .stack(&name)?
+            .ok_or(PersistenceError::MissingStack)
+    })
+    .await
+    .map(Json)
+}
+
+/// Claim an existing resource UUID explicitly. This does not edit the resource.
+pub async fn bind(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(name): Path<String>,
+    ValidatedJson(binding): ValidatedJson<Binding>,
+) -> Result<Json<StackRecord>, AppError> {
+    change_binding(state.store, request_id.0, name, binding, false)
+        .await
+        .map(Json)
+}
+
+/// Release an exact binding without stopping or deleting its resource or disks.
+pub async fn unbind(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(name): Path<String>,
+    ValidatedJson(binding): ValidatedJson<Binding>,
+) -> Result<Json<StackRecord>, AppError> {
+    change_binding(state.store, request_id.0, name, binding, true)
+        .await
+        .map(Json)
+}
+
+async fn change_binding(
+    store: Store,
+    request_id: Uuid,
+    name: String,
+    binding: Binding,
+    remove: bool,
+) -> Result<StackRecord, AppError> {
+    validate_name(&name, request_id)?;
+    if !logical_name(&binding.key) || binding.resource_id.is_nil() {
+        return Err(AppError::validation(
+            BTreeMap::from([(
+                "binding".to_owned(),
+                "requires a logical DNS key and a non-nil resource UUID".to_owned(),
+            )]),
+            request_id,
+        ));
+    }
+    database(request_id, move || {
+        if remove {
+            store.unbind_stack_resource(&name, &binding)
+        } else {
+            store.bind_stack_resource(&name, &binding)
+        }
+    })
+    .await
+}
+
+/// Compare a validated declaration to explicit UUID ownership; never mutate host resources.
+pub async fn plan(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(name): Path<String>,
+    ValidatedJson(stack): ValidatedJson<Stack>,
+) -> Result<Json<Plan>, AppError> {
+    validate_name(&name, request_id.0)?;
+    if name != stack.name {
+        return Err(AppError::validation(
+            BTreeMap::from([(
+                "name".to_owned(),
+                "must match the stack name in the URL".to_owned(),
+            )]),
+            request_id.0,
+        ));
+    }
+    firecrab_stack::validate(&stack).map_err(|errors| validation_errors(errors, request_id.0))?;
+    let (record, inventory) = database(request_id.0, move || {
+        let record = state
+            .store
+            .stack(&name)?
+            .ok_or(PersistenceError::MissingStack)?;
+        let inventory = inventory(&state.store)?;
+        Ok((record, inventory))
+    })
+    .await?;
+    firecrab_stack::plan(&stack, &record, &inventory)
+        .map(Json)
+        .map_err(|errors| validation_errors(errors, request_id.0))
+}
+
+fn inventory(store: &Store) -> Result<Inventory, PersistenceError> {
+    let mut services = Vec::new();
+    let mut service_vms = BTreeSet::new();
+    for service in store.list_micro_services()? {
+        let deployment = store.service_deployment(service.id)?;
+        if let Some(deployment) = &deployment {
+            service_vms.extend(deployment.instances.iter().map(|instance| instance.vm_id));
+        }
+        services.push(ServiceSnapshot {
+            service,
+            deployment,
+        });
+    }
+    let vms = store
+        .load_all()?
+        .into_values()
+        .filter(|vm| vm.purpose == VmPurpose::Instance && !service_vms.contains(&vm.id))
+        .map(|vm| VmSnapshot {
+            id: vm.id,
+            name: vm.name,
+            template: vm.template,
+            cpu: vm.cpu,
+            ram: vm.ram,
+            disk_gb: vm.disk_gb,
+            egress_policy: vm.egress_policy,
+            micro_network_id: vm.micro_network_id,
+            storage_root: vm.storage_root,
+            env: vm.env,
+        })
+        .collect();
+    Ok(Inventory {
+        networks: store.list_micro_networks()?,
+        vms,
+        services,
+    })
+}
+
+fn validate_name(name: &str, request_id: Uuid) -> Result<(), AppError> {
+    if logical_name(name) {
+        return Ok(());
+    }
+    Err(AppError::validation(
+        BTreeMap::from([(
+            "name".to_owned(),
+            "must be a lowercase DNS label of 1-63 bytes".to_owned(),
+        )]),
+        request_id,
+    ))
+}
+
+fn validation_errors(errors: Vec<firecrab_stack::Diagnostic>, request_id: Uuid) -> AppError {
+    AppError::validation(
+        errors
+            .into_iter()
+            .map(|e| (e.path, e.message.to_owned()))
+            .collect(),
+        request_id,
+    )
+}
+
+/// Keep SQLite off the async executor and never log submitted configuration values.
+async fn database<T: Send + 'static>(
+    request_id: Uuid,
+    operation: impl FnOnce() -> Result<T, PersistenceError> + Send + 'static,
+) -> Result<T, AppError> {
+    tokio::task::spawn_blocking(operation).await.map_err(|_| AppError::internal(request_id))?.map_err(|error| match error {
+        PersistenceError::MissingStack => AppError::not_found(request_id),
+        PersistenceError::StackConflict => AppError::new(StatusCode::CONFLICT, "stack_ownership_conflict", "binding conflicts with existing ownership; unbind the exact UUID explicitly before changing it", request_id),
+        PersistenceError::InvalidStackResource => AppError::new(StatusCode::BAD_REQUEST, "invalid_stack_resource", "resource is missing, is a protected VM, or a service operation is in progress", request_id),
+        PersistenceError::StackBindingLimit => AppError::new(StatusCode::BAD_REQUEST, "stack_binding_limit", "a stack can own at most 256 resources", request_id),
+        _ => { tracing::error!(%request_id, "stack database operation failed"); AppError::internal(request_id) }
+    })
+}
+
+#[cfg(test)]
+mod tests;

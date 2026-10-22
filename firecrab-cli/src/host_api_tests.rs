@@ -10,6 +10,104 @@ use super::{Cli, run};
 const VM_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NETWORK_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
+#[test]
+fn stacks_metadata_commands_send_only_registration_and_exact_uuid_bindings() {
+    let stack = json!({"id": VM_ID,"name":"demo","revision":0,"bindings":[]});
+    let (code, request) = run_once(
+        &["stack", "register", "--name", "demo"],
+        "200 OK",
+        &stack.to_string(),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(request.path, "/api/stacks");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&request.body).unwrap(),
+        json!({"name":"demo"})
+    );
+    for action in ["bind", "unbind"] {
+        let (code, request) = run_once(
+            &[
+                "stack", action, "--stack", "demo", "--kind", "network", "--key", "app", "--id",
+                NETWORK_ID,
+            ],
+            "200 OK",
+            &stack.to_string(),
+        );
+        assert_eq!(code, 0);
+        assert_eq!(request.method, "POST");
+        assert_eq!(
+            request.path,
+            format!(
+                "/api/stacks/demo/{}",
+                if action == "bind" {
+                    "bindings"
+                } else {
+                    "unbind"
+                }
+            )
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&request.body).unwrap(),
+            json!({"kind":"network","key":"app","resourceId":NETWORK_ID})
+        );
+    }
+    let (code, request) = run_once(&["stack", "status", "demo"], "200 OK", &stack.to_string());
+    assert_eq!(code, 0);
+    assert_eq!(request.method, "GET");
+    assert_eq!(request.path, "/api/stacks/demo");
+    let (code, request) = run_once(&["stack", "list"], "200 OK", &json!([stack]).to_string());
+    assert_eq!(code, 0);
+    assert_eq!(request.method, "GET");
+    assert_eq!(request.path, "/api/stacks");
+}
+
+#[test]
+fn stacks_plan_posts_the_validated_declaration_and_propagates_blocked_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("stack.yaml");
+    std::fs::write(&file, include_str!("../../examples/stacks/basic.yaml")).unwrap();
+    for blocked in [false, true] {
+        let response =
+            json!({"stackId":VM_ID,"name":"demo","revision":3,"blocked":blocked,"changes":[]});
+        let (code, request) = run_once(
+            &["stack", "plan", "--file", file.to_str().unwrap(), "--json"],
+            "200 OK",
+            &response.to_string(),
+        );
+        assert_eq!(code, i32::from(blocked));
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/api/stacks/demo/plan");
+        let declaration: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(declaration["apiVersion"], "firecrab.dev/v1alpha1");
+        assert!(declaration.get("microVMs").is_some());
+    }
+}
+
+#[test]
+fn stacks_invalid_manifests_fail_before_an_http_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("stack.yaml");
+    std::fs::write(&file, "name: invalid\n").unwrap();
+    let code = run(Cli::try_parse_from([
+        "firecrab",
+        "--api",
+        &base,
+        "stack",
+        "plan",
+        "--file",
+        file.to_str().unwrap(),
+    ])
+    .unwrap());
+    assert_eq!(code, 1);
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
 fn service_deployment_response(phase: &str) -> Value {
     json!({
         "id": NETWORK_ID, "serviceId": VM_ID, "phase": phase,

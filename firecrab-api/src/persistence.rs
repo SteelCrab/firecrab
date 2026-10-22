@@ -21,6 +21,7 @@ mod micro_services;
 mod pipe_auth;
 mod pipe_databases;
 mod registries;
+mod stacks;
 pub use registries::RegistryLogin;
 
 /// Default SQLite database path, relative to the process's working directory.
@@ -466,6 +467,18 @@ fn promote_implicit_default_network(conn: &Connection) -> Result<(), Persistence
 /// Failure modes for opening or operating on the VM [`Store`].
 #[derive(Debug, Error)]
 pub enum PersistenceError {
+    /// The requested stack registration does not exist.
+    #[error("stack is not registered")]
+    MissingStack,
+    /// A binding would overwrite an existing ownership assignment.
+    #[error("stack ownership conflicts with an existing binding")]
+    StackConflict,
+    /// The ownership set cannot exceed the manifest resource limit.
+    #[error("stack ownership is limited to 256 bindings")]
+    StackBindingLimit,
+    /// An explicit adoption request targets a missing or protected resource.
+    #[error("resource is missing or cannot be owned by a stack")]
+    InvalidStackResource,
     #[error("MicroService name {name} is already registered")]
     DuplicateMicroServiceName { name: String },
     /// Couldn't create the database's parent directory.
@@ -690,6 +703,7 @@ impl Store {
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
+        conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;
         conn.execute(CREATE_DOCKER_HUB_CREDENTIAL_TABLE_SQL, [])?;

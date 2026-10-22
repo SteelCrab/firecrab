@@ -23,6 +23,13 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- Host-local stack registration and UUID ownership bindings survive API restarts.
+  `firecrab stack register/list/status/bind/unbind` manages metadata without
+  changing resources. `firecrab stack plan --file YAML [--json]` reports a
+  read-only configuration diff, blocks implicit adoption and conflicting ownership,
+  and retains removed declarations. Field values stay out of plans. Actual apply
+  and Git polling remain follow-up work for #437.
+
 - `firecrab stack validate --file YAML [--json]` validates an experimental
   declarative stack offline. The shared schema checks local network references,
   resource limits, overlapping subnets and service ports, and pinned service

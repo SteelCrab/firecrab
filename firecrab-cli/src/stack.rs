@@ -1,15 +1,44 @@
-//! Local stack validation; intentionally bypasses host profiles and API clients.
+//! Offline validation plus host-local ownership and read-only plan commands.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
+use firecrab_stack::{
+    Binding, Plan, RegisterStackRequest, ResourceKind, StackRecord, logical_name,
+};
 use firecrab_stack::{Diagnostic, MAX_MANIFEST_BYTES, ResourceCounts};
 use serde::Serialize;
+use uuid::Uuid;
 
-/// Offline commands available before stack ownership and apply are implemented.
+use crate::api_client::{ApiClient, ApiError};
+
+/// Stack validation, ownership metadata and read-only planning. No apply is implemented.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Register host-local stack ownership metadata without applying resources.
+    Register {
+        /// Stable name matching the manifest's name.
+        #[arg(long)]
+        name: String,
+    },
+    /// List registered stacks and their UUID ownership mappings.
+    List,
+    /// Read a stack's ownership mappings and revision.
+    Status { name: String },
+    /// Explicitly connect an existing resource UUID to a logical manifest key.
+    Bind(BindingArgs),
+    /// Release an exact ownership mapping; keep the resource and its disks.
+    Unbind(BindingArgs),
+    /// Compare declarations to owned host configuration. Does not apply changes.
+    Plan {
+        /// YAML declaration to compare with the selected host.
+        #[arg(long)]
+        file: PathBuf,
+        /// Print the redacted plan as JSON, including blocked entries.
+        #[arg(long)]
+        json: bool,
+    },
     /// Check one YAML stack's schema, limits and local references. Does not deploy.
     Validate {
         /// UTF-8 YAML manifest, limited to 1 MiB.
@@ -19,6 +48,34 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Exact ownership identity shared by bind and unbind.
+#[derive(Debug, clap::Args)]
+pub struct BindingArgs {
+    /// Registered stack name on the selected host.
+    #[arg(long)]
+    stack: String,
+    /// Resource kind: network, vm, or service.
+    #[arg(long)]
+    kind: ResourceKind,
+    /// Logical map key in the manifest.
+    #[arg(long)]
+    key: String,
+    /// Exact existing resource UUID, also required when unbinding.
+    #[arg(long)]
+    id: Uuid,
+}
+
+/// Remote metadata and plan failures. No manifest values are included.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Api(#[from] ApiError),
+    #[error("{0}")]
+    Validation(String),
+    #[error("plan is blocked; resolve explicit ownership and network dependencies")]
+    Blocked,
 }
 
 #[derive(Serialize)]
@@ -32,8 +89,7 @@ struct Report {
 }
 
 /// Exit zero only for a valid manifest; do not echo submitted configuration values.
-pub fn run(command: Command) -> i32 {
-    let Command::Validate { file, json } = command;
+pub fn validate_file(file: PathBuf, json: bool) -> i32 {
     let report = match read_manifest(&file).and_then(|source| firecrab_stack::parse(&source)) {
         Ok(stack) => Report {
             valid: true,
@@ -71,6 +127,110 @@ pub fn run(command: Command) -> i32 {
         }
     }
     i32::from(!report.valid)
+}
+
+/// Use the selected API for ownership metadata and read-only plans.
+pub fn run_remote(client: &ApiClient, command: Command) -> Result<(), Error> {
+    match command {
+        Command::Register { name } => {
+            name_valid(&name)?;
+            let stack: StackRecord = client.post("/api/stacks", &RegisterStackRequest { name })?;
+            print_json(&stack);
+        }
+        Command::List => {
+            let stacks: Vec<StackRecord> = client.get("/api/stacks")?;
+            print_json(&stacks);
+        }
+        Command::Status { name } => {
+            name_valid(&name)?;
+            let stack: StackRecord = client.get(&format!("/api/stacks/{name}"))?;
+            print_json(&stack);
+        }
+        Command::Bind(args) => write_binding(client, args, false)?,
+        Command::Unbind(args) => write_binding(client, args, true)?,
+        Command::Plan { file, json } => {
+            let source = read_manifest(&file).map_err(diagnostics)?;
+            let stack = firecrab_stack::parse(&source).map_err(diagnostics)?;
+            let plan: Plan = client.post(&format!("/api/stacks/{}/plan", stack.name), &stack)?;
+            if json {
+                print_json(&plan);
+            } else {
+                println!(
+                    "Stack {} (ownership revision {}): read-only plan",
+                    plan.name, plan.revision
+                );
+                println!("KIND\tKEY\tACTION\tFIELDS / REASON");
+                for change in &plan.changes {
+                    println!(
+                        "{}\t{}\t{:?}\t{}",
+                        change.kind,
+                        change.key,
+                        change.action,
+                        change
+                            .reason
+                            .as_deref()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| change.fields.join(", "))
+                    );
+                }
+            }
+            if plan.blocked {
+                return Err(Error::Blocked);
+            }
+        }
+        Command::Validate { .. } => {
+            return Err(Error::Validation(
+                "validation must run through the offline command".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn write_binding(client: &ApiClient, args: BindingArgs, remove: bool) -> Result<(), Error> {
+    name_valid(&args.stack)?;
+    name_valid(&args.key)?;
+    if args.id.is_nil() {
+        return Err(Error::Validation(
+            "resource UUID must not be nil".to_owned(),
+        ));
+    }
+    let suffix = if remove { "unbind" } else { "bindings" };
+    let binding = Binding {
+        kind: args.kind,
+        key: args.key,
+        resource_id: args.id,
+    };
+    let stack: StackRecord =
+        client.post(&format!("/api/stacks/{}/{suffix}", args.stack), &binding)?;
+    print_json(&stack);
+    Ok(())
+}
+
+fn name_valid(name: &str) -> Result<(), Error> {
+    if logical_name(name) {
+        return Ok(());
+    }
+    Err(Error::Validation(
+        "stack names and logical keys must be lowercase DNS labels of 1-63 bytes".to_owned(),
+    ))
+}
+
+fn diagnostics(errors: Vec<Diagnostic>) -> Error {
+    Error::Validation(
+        errors
+            .into_iter()
+            .map(|e| format!("{}: {}", e.path, e.message))
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+fn print_json(value: &impl Serialize) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("stack metadata and plans are JSON values")
+    );
 }
 
 fn read_manifest(path: &Path) -> Result<String, Vec<Diagnostic>> {

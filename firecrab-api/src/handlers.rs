@@ -16,6 +16,7 @@ pub mod network;
 pub mod oci;
 pub mod registries;
 pub mod shells;
+pub mod stacks;
 pub mod storage;
 pub mod update;
 pub mod vms;
