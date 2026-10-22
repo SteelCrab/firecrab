@@ -493,6 +493,46 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
+    // Transfer previews may need multiple provider reads. Keep the normal
+    // REST protections and bound all Secrets operations to one minute.
+    let secrets = Router::new()
+        .route(
+            "/api/secrets",
+            get(handlers::secrets::list).post(handlers::secrets::create),
+        )
+        .route(
+            "/api/secrets/{id}",
+            axum::routing::put(handlers::secrets::update).delete(handlers::secrets::delete),
+        )
+        .route("/api/secrets/{id}/reveal", post(handlers::secrets::reveal))
+        .route(
+            "/api/secrets/connections",
+            get(handlers::secrets::connections).post(handlers::secrets::create_connection),
+        )
+        .route(
+            "/api/secrets/connections/{id}",
+            axum::routing::put(handlers::secrets::update_connection)
+                .delete(handlers::secrets::delete_connection),
+        )
+        .route(
+            "/api/secrets/connections/{id}/preview",
+            post(handlers::secrets::preview),
+        )
+        .route(
+            "/api/secrets/plans/{id}/apply",
+            post(handlers::secrets::apply),
+        )
+        .layer(cors.clone())
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
+        .layer(middleware::from_fn_with_state(
+            RequestLimits {
+                permits: Arc::clone(&limits.permits),
+                timeout: Some(Duration::from_secs(60)),
+            },
+            enforce_limits,
+        ))
+        .layer(middleware::from_fn(handlers::secrets::no_store));
+
     // Inspection performs registry authentication and multiple manifest GETs.
     // Allow their bounded connection retries to finish while retaining the
     // same concurrency pool, body limit, CORS and origin checks as other REST.
@@ -518,6 +558,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     let app = rest
         .merge(recovery)
         .merge(inspection)
+        .merge(secrets)
         .merge(console)
         // Unknown paths under the API/WebSocket prefixes answer with the JSON
         // error envelope even when the dashboard is served below, so a typo in

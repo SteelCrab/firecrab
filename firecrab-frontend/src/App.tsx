@@ -16,6 +16,7 @@ import MicroServices from "./components/MicroServices";
 import Shell from "./components/Shell";
 import Pipe from "./components/Pipe";
 import Shells from "./components/Shells";
+import Secrets from "./components/Secrets";
 import CommandPalette from "./components/CommandPalette";
 import Screen from "./components/layout/Screen";
 import { ScreenStatus } from "./components/layout/screenStatus";
@@ -140,10 +141,12 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useDetailPanelOpen();
   const [detailWidth, setDetailWidth] = useDetailPanelWidth();
-  const confirmLeave = useCallback(() => !pipeHasUnsavedChanges || window.confirm(t(
-    "Pipe changes have not been saved. Leave without saving?",
-    "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?",
-  )), [pipeHasUnsavedChanges, t]);
+  const [secretsHasUnsavedChanges, setSecretsHasUnsavedChanges] = useState(false);
+  const confirmLeave = useCallback(() => !(pipeHasUnsavedChanges || secretsHasUnsavedChanges) || window.confirm(
+    secretsHasUnsavedChanges
+      ? t("Secrets changes have not been saved or are still processing. Leave this page?", "Secrets 변경을 저장하지 않았거나 처리 중이다. 이동할까요?")
+      : t("Pipe changes have not been saved. Leave without saving?", "Pipe 변경을 저장하지 않았다. 저장하지 않고 이동할까요?"),
+  ), [pipeHasUnsavedChanges, secretsHasUnsavedChanges, t]);
   const { route, selectView, closeConsole } = useAppRoute(confirmLeave);
 
   const runRefresh = useCallback(() => {
@@ -271,6 +274,7 @@ export default function App() {
           the moment you navigate away. */}
       {view === "networks" && <MicroNetworks />}
       {view === "services" && <MicroServices />}
+      {view === "secrets" && <Screen view="secrets"><Secrets onUnsavedChange={setSecretsHasUnsavedChanges} /></Screen>}
       {view === "pipe" && (
         <Pipe card={route.kind === "pipe-card" ? route.card : null} vms={state.vms} vmsLoading={!state.loaded} vmsUnavailable={state.consecutiveFailures > 0} onUnsavedChange={setPipeHasUnsavedChanges} />
       )}
