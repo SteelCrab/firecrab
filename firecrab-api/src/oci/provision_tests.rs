@@ -1233,7 +1233,7 @@ fn base_package_install_pulls_in_udev_where_systemd_ships_without_it() {
         );
     }
     assert!(
-        !block_with("apk add").contains("udev"),
+        !block_with("add --no-cache iputils").contains("udev"),
         "Alpine is not systemd"
     );
     assert!(
@@ -1417,6 +1417,86 @@ esac
         }
         if matches!(failure, "first" | "always") {
             assert!(log.contains("--setopt=zchunk=False"), "{log}");
+        }
+    }
+}
+
+#[test]
+fn apk_retries_transient_failures_without_stamping_permanent_failures() {
+    for location in ["sbin/apk", "usr/bin/apk"] {
+        for failure in ["none", "first", "always"] {
+            let directory = tempdir().unwrap();
+            let root = directory.path();
+            for (name, body) in [
+                ("bb", "[ \"$1\" != sleep ] || exit 0; exec \"$@\""),
+                (
+                    location,
+                    r#"
+n=$(cat "$TEST_COUNT" 2>/dev/null || echo 0)
+n=$((n+1)); echo "$n" > "$TEST_COUNT"
+if [ "$FAILURE" = always ] || { [ "$FAILURE" = first ] && [ "$n" -eq 1 ]; }; then
+  exit 7
+fi
+"#,
+                ),
+            ] {
+                let path = root.join(name);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let stamp = root.join("stamp");
+            let count = root.join("count");
+            let console = root.join("console");
+            let mut script = provision::BASE_PACKAGE_INSTALL.to_owned();
+            for name in ["apt-get", "dnf", "microdnf", "yum"] {
+                script = script.replace(
+                    &format!("/usr/bin/{name}"),
+                    root.join(format!("missing-{name}")).to_str().unwrap(),
+                );
+            }
+            script = script
+                .replace("/sbin/apk", root.join("sbin/apk").to_str().unwrap())
+                .replace("/usr/bin/apk", root.join("usr/bin/apk").to_str().unwrap())
+                .replace("/etc/firecrab/base-packages.ok", stamp.to_str().unwrap())
+                .replace(">/dev/console", &format!(">>{}", console.display()));
+            let run = || {
+                std::process::Command::new("sh")
+                    .args(["-c", &script])
+                    .env("BB", root.join("bb"))
+                    .env("TEST_COUNT", &count)
+                    .env("FAILURE", failure)
+                    .output()
+                    .unwrap()
+            };
+            let output = run();
+            assert!(output.status.success(), "{output:?}");
+            let attempts = std::fs::read_to_string(&count).unwrap();
+            assert_eq!(
+                attempts.trim(),
+                match failure {
+                    "none" => "1",
+                    "first" => "2",
+                    _ => "3",
+                },
+                "{location}: {failure}"
+            );
+            assert_eq!(stamp.exists(), failure != "always", "{location}: {failure}");
+            if failure != "none" {
+                let log = std::fs::read_to_string(&console).unwrap();
+                assert!(
+                    log.contains("FIRECRAB_APK_FAILED attempt=1 exit=7"),
+                    "{log}"
+                );
+                assert_eq!(
+                    log.contains("FIRECRAB_PACKAGES_FAILED"),
+                    failure == "always"
+                );
+            }
+            if failure != "always" {
+                assert!(run().status.success());
+                assert_eq!(std::fs::read_to_string(&count).unwrap(), attempts);
+            }
         }
     }
 }

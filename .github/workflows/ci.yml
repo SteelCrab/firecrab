@@ -63,7 +63,9 @@ jobs:
         run: python3 scripts/test-micromanager-dev.py
 
       - name: Guest QA failure and cleanup contract
-        run: python3 scripts/test-ci-qa-guest.py
+        run: |
+          python3 scripts/test-ci-qa-guest.py
+          python3 scripts/test-ci-qa-ssh.py
 
       - name: Database QA guards and cleanup contract
         run: python3 scripts/test-pipe-databases-qa.py
