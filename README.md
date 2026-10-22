@@ -407,7 +407,6 @@ English is the default documentation language; the README links above offer Kore
 
 Thanks to everyone who has opened a pull request or issue.
 Credits update automatically. Each count links to the contribution history; the latest link opens the original PR or issue.
-See [credit rules and corrections](CONTRIBUTING.md#automatic-contributor-credits).
 
 <!-- contributors:start -->
 

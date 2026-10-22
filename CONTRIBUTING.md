@@ -216,56 +216,6 @@ See [#216](https://github.com/SteelCrab/firecrab/pull/216) for an example.
 Report bugs and installation failures in an [issue](https://github.com/SteelCrab/firecrab/issues) with reproduction steps, environment details, and logs.
 Prefer one problem per issue. Report sensitive security problems privately to the maintainers.
 
-## Automatic contributor credits
-
-The README credits authors of both PRs and issues, including installation failure
-reports and documentation fixes. Open, closed, and unmerged contributions count.
-Issue-only contributors receive the same visibility as PR contributors.
-
-- The [Contributors workflow](.github/workflows/contributors.yml) reads every page
-  of repository PRs and issues on each run. This includes historical contributions.
-- A GitHub account appears once, identified by its numeric account ID. Its row
-  shows its current profile, PR and issue counts, history links, and a direct link
-  to its latest contribution of each type.
-- Bot accounts, deleted authors (`null` or `ghost`), and contributions labeled
-  `spam` or `skip-contributors` are excluded. Label matching ignores case.
-  Duplicate reports still count unless explicitly excluded.
-- PR and issue creation, reopening, closure, and label changes trigger a refresh.
-  Issue deletion and transfer also trigger one. A daily run at 03:23 UTC and the
-  **Run workflow** button recover missed events and refresh account names.
-- The workflow commits only the generated README block to the default branch.
-  Unchanged credits produce no commit. Updates use a normal push and retry from
-  the latest branch up to three times if another push wins the race.
-- Fork PR events run only code from this repository's default branch. No PR
-  checkout, PR titles, issue bodies, or contributor-provided commands are used.
-
-The workflow becomes active after it is merged into `main`. It uses the built-in
-`GITHUB_TOKEN` with content-write and issue/PR-read permissions; no additional
-secret is required. Repository Actions settings must allow the workflow to run
-and write to the default branch. If branch protection later blocks this push,
-the run fails visibly; do not bypass protection. Adjust the publishing policy
-before rerunning it. The daily/manual triggers also work if repository policy
-disables `pull_request_target` events.
-
-To correct a credit, add or remove `skip-contributors` on the source PR or issue,
-then run **Contributors** from the Actions tab. Remove `spam` after correcting an
-incorrect spam classification. Deleted issues disappear on the next successful
-refresh. Deleted authors are omitted because their identity cannot be verified.
-Edit text outside the `contributors:start` / `contributors:end` markers normally;
-the automation owns the content between them.
-
-To refresh locally with an authenticated GitHub CLI:
-
-```sh
-python3 scripts/update-contributors.py --repository SteelCrab/firecrab
-python3 scripts/update-contributors.py --repository SteelCrab/firecrab --check
-python3 -m unittest scripts/test_update_contributors.py
-```
-
-API failures, invalid data, and missing or duplicate README markers fail without
-changing the README. Existing credits remain intact. Inspect the failed Actions
-run, fix the cause, and rerun it; a retry does not duplicate contributor rows.
-
 ## CI
 
 The [CI workflow](https://github.com/SteelCrab/firecrab/blob/main/.github/workflows/ci.yml) runs Rust, frontend, documentation, installer, and available automated scenario checks.
