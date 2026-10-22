@@ -273,6 +273,7 @@ async fn firecrab_auth(
     let response = client
         .post(endpoint)
         .bearer_auth(token)
+        .header("x-firecrab-protocol", "2")
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body("{}")
         .send()
@@ -794,6 +795,7 @@ mod tests {
         let auth = firecrab_auth(&Client::new(), &token, &url).await.unwrap();
         let (headers, body) = received.await.unwrap();
         assert_eq!(headers["authorization"], format!("Bearer {token}"));
+        assert_eq!(headers["x-firecrab-protocol"], "2");
         assert_eq!(body, "{}");
         let connection = serde_json::to_value(auth.connection()).unwrap();
         assert_eq!(connection["provider"], "firecrab");
