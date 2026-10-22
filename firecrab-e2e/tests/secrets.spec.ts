@@ -162,7 +162,9 @@ test.describe("Secrets web console @dashboard", () => {
     await page.getByRole("button", { name: "Add connection", exact: true }).click();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("secrets-mobile.png"), fullPage: true });
+    await page.getByRole("button", { name: "Open menu", exact: true }).click();
     await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
+    await page.getByRole("navigation", { name: "주요 메뉴", exact: true }).getByRole("button", { name: "Secrets", exact: true }).click();
     await expect(page.getByRole("heading", { name: "외부 연결 추가", exact: true })).toBeVisible();
     expect(errors).toEqual([]);
   });

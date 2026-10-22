@@ -2,7 +2,7 @@
 
 Firecrab Tunnel connects a fixed `*.firecrab.dev` address to selected VM apps
 or saved Nginx routes. Get a connection token from
-[the connection dashboard](https://firecrab.dev/dashboard/), then paste it into
+[the connection dashboard](https://console.firecrab.dev/), then paste it into
 the Firecrab app. There is no subdomain input in the Firecrab app.
 
 ```text
@@ -17,7 +17,7 @@ an alternative registry. The client supports both protocols.
 
 ## Get a token
 
-1. Open `https://firecrab.dev/dashboard/` and sign in.
+1. Open `https://console.firecrab.dev/` and sign in.
 2. Select **Issue connection token** and choose its name and expiry.
 3. Copy the token and the server-assigned public address. The token is an opaque
    64-character hexadecimal value. The server stores its SHA-256 digest.
@@ -125,9 +125,12 @@ the production dashboard's existing routing and token database.
    and enable it. Retain its SQLite database and WAL files across upgrades.
 4. Adapt [the connector example](../../packaging/firecrab-tunnel/cloudflared.yml.example)
    with the operator tunnel UUID and protected credentials file.
-5. Route `firecrab.dev/dashboard/` and its assets/mutation paths to the service.
-   Preserve the existing apex website's other paths. If that website uses another
-   ingress, configure a path proxy there rather than replacing its DNS blindly.
+5. Route the service's `/dashboard/` page, assets and mutation paths on an
+   operator-controlled host. Do not use `console.firecrab.dev` or
+   `firecrab.dev/dashboard/`: the production dashboard serves `console.firecrab.dev`
+   (UI at `/`, API at `/api/*`) and redirects `firecrab.dev/dashboard/` to it.
+   If that host uses another ingress, configure a path proxy there rather than
+   replacing its DNS blindly.
 6. Route `tunnel.firecrab.dev` and `*.firecrab.dev` to the operator connector.
    Verify wildcard DNS, edge TLS, and `https://tunnel.firecrab.dev/health` (204).
 7. Issue a canary token and verify both targets through their actual public URL.

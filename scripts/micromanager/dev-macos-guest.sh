@@ -45,7 +45,7 @@ case "$profile" in
     [[ "$archive_name" != */* ]]
     [[ "$channel" =~ ^[a-zA-Z0-9.-]+$ ]]
     ;;
-  start|stop|restart|check) ;;
+  start|stop|restart|clean|check) ;;
   *) echo 'invalid build profile or service action' >&2; exit 1 ;;
 esac
 
@@ -118,7 +118,7 @@ finish() {
   set +e
   if [ "$rc" -ne 0 ] && ! check_filesystems; then
     echo '[FAIL] guest OS filesystem is unhealthy; stop retrying the build and run firecrab service repair' >&2
-    echo "[PRESERVE] deployment backup: $backup; source archive: $root/$archive_name" >&2
+    echo "[PRESERVE] deployment backup: $backup; development cache: $root" >&2
     exit 74
   fi
   if [ "$rc" -ne 0 ] && [ "$deploying" -eq 1 ]; then
@@ -142,7 +142,9 @@ finish() {
     systemctl start "$helper_unit"
     systemctl start firecrab-api
   fi
-  if ! rm -f "$root/$archive_name" "$bin_root/bin.next" || ! rm -rf "$backup"; then
+  cleanup=("$bin_root/bin.next")
+  if [ -n "${archive_name:-}" ]; then cleanup+=("$root/$archive_name"); fi
+  if ! rm -f "${cleanup[@]}" || ! rm -rf "$backup"; then
     echo '[WARN] guest deployment cleanup failed; inspect filesystem errors with firecrab service debug --logs' >&2
   fi
   if [ "$rc" -ne 0 ] && [ -n "$binaries" ]; then rm -rf "$binaries"; fi
@@ -152,7 +154,7 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-if [ "$profile" != restore ]; then
+if [ "$profile" != restore ] && [ "$profile" != clean ]; then
   phase=build
   case "$(uname -m)" in
     aarch64) target=aarch64-unknown-linux-gnu ;;
@@ -161,10 +163,11 @@ if [ "$profile" != restore ]; then
   esac
   echo '[BUILD] preparing Debian compiler and pinned Rust toolchain'
   if ! command -v cc >/dev/null || ! command -v pkg-config >/dev/null || ! command -v cmake >/dev/null \
-    || ! command -v objcopy >/dev/null; then
+    || ! command -v objcopy >/dev/null || ! command -v musl-gcc >/dev/null \
+    || ! command -v python3 >/dev/null; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y build-essential pkg-config cmake ca-certificates curl
+    apt-get install -y build-essential pkg-config cmake ca-certificates curl musl-tools python3
   fi
   export CARGO_HOME="$root/cargo"
   export RUSTUP_HOME="$root/rustup"
@@ -205,6 +208,9 @@ if [ "$profile" != restore ]; then
   if [ "$profile" = release ]; then flags+=(--release); fi
   # Compilers must not retain the deployment lock after their owning shell exits.
   rustup run "$channel" cargo build "${flags[@]}" 9>&-
+  if [ -f scripts/build-ingress.sh ]; then
+    bash scripts/build-ingress.sh "$CARGO_TARGET_DIR/ingress" 9>&-
+  fi
 
   # Compilation writes to the data disk. Check the OS disk again before staging
   # executables or stopping the running services.
@@ -224,6 +230,10 @@ if [ "$profile" != restore ]; then
     objcopy --compress-debug-sections=zlib \
       "$CARGO_TARGET_DIR/$target/$profile/$binary" "$compressed/$binary"
   done
+  if [ -f scripts/build-ingress.sh ]; then
+    install -m 0755 "$CARGO_TARGET_DIR/ingress/firecrab-ingress" "$compressed/firecrab-ingress"
+    cp -R "$CARGO_TARGET_DIR/ingress/ingress" "$compressed/ingress"
+  fi
   # Fail before touching the OS disk instead of with a partial install.
   need_kib=$(du -sk "$compressed" | cut -f1)
   free_kib=$(df -Pk "$bin_root" | awk 'NR == 2 { print $4 }')
@@ -238,6 +248,10 @@ if [ "$profile" != restore ]; then
   for binary in firecrab-api firecrab-helper firecrab; do
     install -m 0755 "$compressed/$binary" "$binaries/$binary"
   done
+  if [ -f "$compressed/firecrab-ingress" ]; then
+    install -m 0755 "$compressed/firecrab-ingress" "$binaries/firecrab-ingress"
+    cp -R "$compressed/ingress" "$binaries/ingress"
+  fi
   # The API resolves these runtime tools next to its executable. The source
   # snapshot is root-only, so its compile-time fallback path is not accessible.
   for tool in extract-vmlinux extract-arm64-image; do
@@ -249,8 +263,28 @@ fi
 # remain installed. Helper write access also covers pipe config and unit files.
 deploying=1
 phase=activate
-systemctl stop firecrab-api "$helper_unit"
-if [ "$profile" = restore ]; then
+systemctl stop firecrab-api
+if [ "$profile" = restore ] || [ "$profile" = clean ]; then
+  # The installed API may predate VM shims and cannot adopt them. Stop them
+  # synchronously before switching binaries so no old Firecracker holds a TAP
+  # or disk when that API starts a replacement. The API is already down so it
+  # cannot launch new replicas while the loaded units are being collected.
+  phase=stop-vms
+  vm_listing=$(systemctl list-units --all --plain --no-legend --no-pager 'firecrab-vm-*.service')
+  vm_units=()
+  while read -r unit _; do
+    if [[ "$unit" =~ ^firecrab-vm-[0-9a-f]{32}\.service$ ]]; then
+      vm_units+=("$unit")
+    fi
+  done <<< "$vm_listing"
+  if [ "${#vm_units[@]}" -gt 0 ]; then
+    echo "[STOP] waiting for ${#vm_units[@]} MicroVM unit(s) before restoring installed services"
+    systemctl stop "${vm_units[@]}"
+  fi
+  phase=activate
+fi
+systemctl stop "$helper_unit"
+if [ "$profile" = restore ] || [ "$profile" = clean ]; then
   for unit in firecrab-api firecrab-helper firecrab-net-helper; do
     rm -f "$unit_root/$unit.service.d/90-firecrab-dev.conf"
   done
@@ -267,6 +301,10 @@ else
     printf '[Service]\nExecStart=\nExecStart=%s/bin/%s\n' "$bin_root" "$binary" \
       >"$unit_root/$unit.service.d/90-firecrab-dev.conf"
     if [ "$unit" = "$helper_unit" ]; then
+      if [ -x "$binaries/firecrab-ingress" ]; then
+        printf 'Environment=FIRECRAB_INGRESS_BINARY=%s/bin/firecrab-ingress\n' "$bin_root" \
+          >>"$unit_root/$unit.service.d/90-firecrab-dev.conf"
+      fi
       printf 'ReadWritePaths=-/etc/firecrab -%s\n' "$unit_root" \
         >>"$unit_root/$unit.service.d/90-firecrab-dev.conf"
     fi
@@ -286,10 +324,36 @@ for _ in $(seq 1 60); do
     && curl -fs --max-time 2 http://127.0.0.1:5523/api/host >/dev/null; then
     check_filesystems || exit 74
     deploying=0
-    if [ "$profile" = restore ]; then rm -f "$bin_root/bin"; fi
-    case "$previous_bin" in
-      "$bin_root"/build.*) rm -rf "$previous_bin" ;;
-    esac
+    keep_ingress_build=0
+    if [ "$profile" = restore ] || [ "$profile" = clean ]; then
+      # Pipe outlives the API. Keep an engine still referenced by its unit,
+      # including an inactive unit that an operator can start again later.
+      if grep -Fq "$bin_root/bin/firecrab-ingress" "$unit_root/firecrab-ingress.service" 2>/dev/null; then
+        keep_ingress_build=1
+      else
+        rm -f "$bin_root/bin"
+      fi
+    fi
+    if [ "$profile" = clean ]; then
+      phase=clean
+      # Release services are healthy. Keep the lock inode while removing caches.
+      if [ "$keep_ingress_build" = 0 ]; then
+        rm -rf -- "$bin_root"
+      else
+        echo '[PASS] guest: binaries referenced by independent ingress preserved'
+      fi
+      shopt -s dotglob nullglob
+      for entry in "$root"/*; do
+        if [ "$entry" != "$root/deploy.lock" ]; then rm -rf -- "$entry"; fi
+      done
+      echo '[PASS] guest: development files cleaned; installed release API + helper are ready'
+      exit 0
+    fi
+    if [ "$keep_ingress_build" = 0 ]; then
+      case "$previous_bin" in
+        "$bin_root"/build.*) rm -rf "$previous_bin" ;;
+      esac
+    fi
     echo "[PASS] guest: $profile API + helper are ready"
     exit 0
   fi

@@ -242,6 +242,48 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::pipe::inspect).put(handlers::pipe::apply),
         )
         .route("/api/pipe/disable", post(handlers::pipe::disable))
+        .route("/api/pipe/auth", get(handlers::pipe_auth::list))
+        .route(
+            "/api/pipe/auth/{provider}",
+            axum::routing::put(handlers::pipe_auth::save).delete(handlers::pipe_auth::delete),
+        )
+        .route(
+            "/api/pipe/databases",
+            get(handlers::pipe_databases::list).post(handlers::pipe_databases::create),
+        )
+        .route(
+            "/api/pipe/databases/test",
+            post(handlers::pipe_databases::test),
+        )
+        .route(
+            "/api/pipe/databases/{id}",
+            delete(handlers::pipe_databases::delete),
+        )
+        .route(
+            "/api/pipe/databases/{id}/tables",
+            get(handlers::pipe_databases::tables),
+        )
+        .route(
+            "/api/pipe/databases/{id}/preview",
+            post(handlers::pipe_databases::preview),
+        )
+        .route("/api/pipe/registries", get(handlers::registries::list))
+        .route(
+            "/api/pipe/registries/{registry}",
+            axum::routing::put(handlers::registries::save).delete(handlers::registries::delete),
+        )
+        .route(
+            "/api/pipe/registry-images",
+            get(handlers::registries::images),
+        )
+        .route(
+            "/api/pipe/registry-transfers",
+            post(handlers::registries::transfer),
+        )
+        .route(
+            "/api/pipe/registry-transfers/{id}",
+            get(handlers::registries::job),
+        )
         // GET and POST share one path, matching this router's existing shape
         // for "read this resource / start work on it" pairs such as
         // `/api/images/{alias}/install`.
@@ -484,6 +526,11 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // same concurrency pool, body limit, CORS and origin checks as other REST.
     let inspection = Router::new()
         .route("/api/oci/inspect", get(handlers::oci::inspect_oci_image))
+        .route(
+            "/api/pipe/registries/{registry}/repositories",
+            get(handlers::registries::repositories),
+        )
+        .route("/api/pipe/registry-tags", get(handlers::registries::tags))
         .layer(cors)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn_with_state(
@@ -1287,8 +1334,109 @@ mod tests {
             Some(&HeaderValue::from_static("http://localhost:8080"))
         );
     }
+    #[tokio::test]
+    async fn registry_deletion_is_idempotent_for_harbor_hosts_and_rejects_invalid_hosts() {
+        use axum::http::StatusCode;
+        use tower::ServiceExt;
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
+                .unwrap();
+        let app = build_router(test_state(dir.path()).await, &config);
+        for (host, status) in [
+            ("untrusted.invalid", StatusCode::OK),
+            ("untrusted.invalid", StatusCode::OK),
+            ("invalid@host", StatusCode::BAD_REQUEST),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("DELETE")
+                        .uri(format!("/api/pipe/registries/{host}"))
+                        .header("origin", "http://localhost:8080")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{host}");
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_routes_keep_origin_protection_and_never_return_login_secrets() {
+        use axum::http::StatusCode;
+        use tower::ServiceExt;
+        let dir = tempfile::tempdir().unwrap();
+        let config =
+            HttpConfig::from_values("127.0.0.1:3000", "http://localhost:8080", false, false)
+                .unwrap();
+        let app = build_router(test_state(dir.path()).await, &config);
+        for (origin, status) in [
+            ("https://untrusted.invalid", StatusCode::FORBIDDEN),
+            ("http://localhost:8080", StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PUT")
+                        .uri("/api/pipe/registries/ghcr.io")
+                        .header("origin", origin)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"username":"octocat","secret":"test-token"}"#,
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            let body = axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains("test-token"));
+        }
+        let (status, body) = get(&app, "/api/pipe/registries").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("octocat"));
+        assert!(!body.contains("test-token"));
+        let (status, body) = get(&app, "/api/pipe/registry-images").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, "[]");
+        let (status, _) = get(
+            &app,
+            "/api/pipe/registry-tags?reference=untrusted.invalid/team/app:v1",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        for uri in [
+            "/api/pipe/registries/untrusted.invalid/repositories?namespace=team",
+            "/api/pipe/registries/docker.io/repositories?namespace=library",
+            "/api/pipe/registries/registry-1.docker.io/repositories?namespace=library",
+            "/api/pipe/registries/ghcr.io/repositories?namespace=..%2Fteam",
+            "/api/pipe/registries/docker.io/repositories?namespace=team&page=0",
+            "/api/pipe/registries/docker.io/repositories?namespace=team&page=10001",
+        ] {
+            let (status, _) = get(&app, uri).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        }
+        let (status, body) = get(&app, "/api/pipe/registries/public.ecr.aws/repositories").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({
+                "repositories": [], "nextPage": null, "listingSupported": false,
+            })
+        );
+    }
 }
 
 #[cfg(test)]
 #[path = "server_quick_tunnels_tests.rs"]
 mod quick_tunnels_tests;
+
+#[cfg(test)]
+#[path = "server_pipe_auth_tests.rs"]
+mod pipe_auth_tests;

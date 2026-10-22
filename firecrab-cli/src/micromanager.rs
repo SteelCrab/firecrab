@@ -122,8 +122,10 @@ pub enum Command {
     },
     /// Start the resident management VM and wait for the local API.
     Start,
-    /// Stop the resident management VM.
+    /// Stop the resident management VM; keep the development dashboard running.
     Stop,
+    /// Restart the resident management VM and wait for the local API; keep the dev dashboard.
+    Restart,
     /// Show the resident service, VM readiness, and local API status.
     Status,
     /// Check that this host can run the managed Debian VM.
@@ -157,7 +159,7 @@ pub enum Command {
         /// Build optimized guest binaries instead of debug binaries.
         #[arg(long, conflicts_with = "restore")]
         release: bool,
-        /// Remove development overrides and restart the installed release binaries.
+        /// Stop workload MicroVMs and restore the installed release binaries.
         #[arg(long)]
         restore: bool,
         /// Skip the artifact download prompt if the management VM needs installation.
@@ -190,10 +192,12 @@ pub enum Command {
 pub enum DevCommand {
     /// Start the deployed API/helper and dashboard without rebuilding or booting the VM.
     Start,
-    /// Stop the API/helper and development dashboard while keeping microManager running.
+    /// Stop the API/helper if the VM is running, and stop the development dashboard.
     Stop,
     /// Restart the deployed API/helper and dashboard without rebuilding or rebooting the VM.
     Restart,
+    /// Stop workload MicroVMs, restore installed services, and remove development state.
+    Clean,
 }
 
 impl DevCommand {
@@ -202,6 +206,7 @@ impl DevCommand {
             Self::Start => "start",
             Self::Stop => "stop",
             Self::Restart => "restart",
+            Self::Clean => "clean",
         }
     }
 }
@@ -372,11 +377,36 @@ mod tests {
     }
 
     #[test]
+    fn management_vm_controls_are_separate_from_dev_controls() {
+        for (action, dev_command) in [
+            ("start", DevCommand::Start),
+            ("stop", DevCommand::Stop),
+            ("restart", DevCommand::Restart),
+        ] {
+            let cli = TestCli::try_parse_from(["test", action]).unwrap();
+            assert!(matches!(
+                (cli.command, action),
+                (Command::Start, "start") | (Command::Stop, "stop") | (Command::Restart, "restart")
+            ));
+            let cli = TestCli::try_parse_from(["test", "dev", action]).unwrap();
+            assert!(matches!(
+                cli.command,
+                Command::Dev { command: Some(command), .. } if command == dev_command
+            ));
+        }
+    }
+
+    #[test]
     fn dev_controls_are_separate_from_build_and_restore_options() {
         let cli = TestCli::try_parse_from(["test", "dev"]).unwrap();
         assert!(matches!(cli.command, Command::Dev { command: None, .. }));
 
-        for command in [DevCommand::Start, DevCommand::Stop, DevCommand::Restart] {
+        for command in [
+            DevCommand::Start,
+            DevCommand::Stop,
+            DevCommand::Restart,
+            DevCommand::Clean,
+        ] {
             let cli = TestCli::try_parse_from(["test", "dev", command.as_str()]).unwrap();
             assert!(matches!(
                 cli.command,

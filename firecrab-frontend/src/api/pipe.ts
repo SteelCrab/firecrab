@@ -9,6 +9,8 @@ export interface PipeConfig {
   quickTunnel?: { upstreams: string[] } | null;
   quickTunnels?: QuickTunnelEntry[];
 }
+/** Config shown before Pipe has been configured on this host. */
+export const EMPTY_PIPE: PipeConfig = { listen: "127.0.0.1:8080", routes: [], tunnel: null };
 export interface PipeSnapshot {
   firecrabTunnels?: FirecrabAddress[];
   config: PipeConfig | null;

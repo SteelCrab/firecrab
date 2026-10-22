@@ -11,7 +11,7 @@ interface LogExportActionsProps {
   filename: string;
   disabled?: boolean;
   className?: string;
-  /** Extra class on the small buttons (console bar uses `console-bar-btn`). */
+  /** Extra class on the small buttons, e.g. `btn sm`. */
   buttonClassName?: string;
   copyLabel?: string;
   downloadLabel?: string;
@@ -27,7 +27,7 @@ async function resolveText(source: TextSource): Promise<string> {
 }
 
 /**
- * Compact "복사" / "다운로드" pair for log panels.
+ * Compact "Copy" / "Download" pair for log panels.
  * Brief status text appears next to the buttons after an action.
  */
 export default function LogExportActions({

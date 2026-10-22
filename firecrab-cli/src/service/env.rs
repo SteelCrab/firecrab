@@ -1,33 +1,33 @@
-//! install.sh 상단 변수 블록의 Rust 대응: 계정과 설치 경로.
+//! Rust equivalent of install.sh's initial variable block: accounts and installation paths.
 
 use std::path::{Path, PathBuf};
 
-/// 시작 순서. 정지는 역순.
+/// Startup order. Stop in reverse order.
 pub const UNITS: [&str; 2] = ["firecrab-helper.service", "firecrab-api.service"];
 /// Previous installations keep working until the installer migrates their unit.
 pub const LEGACY_HELPER_UNIT: &str = "firecrab-net-helper.service";
 
-/// 설치 계정과 경로 집합. `firecrab update`의 `resolve_layout`과 같은 규칙으로
-/// `PREFIX`/`FIRECRAB_LIBDIR`를 해석해 helper의 `host_layout`과 어긋나지 않는다.
+/// Installation accounts and paths. Resolve `PREFIX`/`FIRECRAB_LIBDIR` using
+/// the same rules as `firecrab update`'s `resolve_layout` to match the helper's `host_layout`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceEnv {
-    /// 서비스 계정 이름 (`$FIRECRAB_USER`, 기본 `firecrab`).
+    /// Service account name (`$FIRECRAB_USER`, default `firecrab`).
     pub user: String,
-    /// 서비스 그룹 이름 (`$FIRECRAB_GROUP`, 기본 `firecrab`).
+    /// Service group name (`$FIRECRAB_GROUP`, default `firecrab`).
     pub group: String,
-    /// 설치 접두 경로 (`$PREFIX`, 기본 `/usr/local`).
+    /// Installation prefix (`$PREFIX`, default `/usr/local`).
     pub prefix: PathBuf,
-    /// 실행 파일 디렉터리 (`$PREFIX/bin`).
+    /// Executable directory (`$PREFIX/bin`).
     pub bindir: PathBuf,
-    /// 라이브러리 디렉터리 (`$FIRECRAB_LIBDIR`, 기본 `$PREFIX/lib/firecrab`).
+    /// Library directory (`$FIRECRAB_LIBDIR`, default `$PREFIX/lib/firecrab`).
     pub libdir: PathBuf,
-    /// 공유 데이터 디렉터리 (`$PREFIX/share/firecrab`).
+    /// Shared data directory (`$PREFIX/share/firecrab`).
     pub sharedir: PathBuf,
-    /// VM 디스크·DB 등 상태 디렉터리 (`$DATADIR`, 기본 `/var/lib/firecrab`).
+    /// State directory for VM disks, the database, etc. (`$DATADIR`, default `/var/lib/firecrab`).
     pub datadir: PathBuf,
-    /// 설정 디렉터리 (`$CONFDIR`, 기본 `/etc/firecrab`).
+    /// Configuration directory (`$CONFDIR`, default `/etc/firecrab`).
     pub confdir: PathBuf,
-    /// systemd 유닛 디렉터리 (`$UNITDIR`, 기본 `/etc/systemd/system`).
+    /// systemd unit directory (`$UNITDIR`, default `/etc/systemd/system`).
     pub unitdir: PathBuf,
 }
 
@@ -39,7 +39,7 @@ fn env_or(var: &str, default: &str) -> String {
 }
 
 impl ServiceEnv {
-    /// install.sh와 같은 이름·기본값으로 프로세스 환경을 읽는다.
+    /// Read the process environment using the same names and defaults as install.sh.
     pub fn from_process_env() -> Self {
         let layout = crate::update::resolve_layout();
         let prefix = PathBuf::from(env_or("PREFIX", "/usr/local"));
@@ -56,7 +56,7 @@ impl ServiceEnv {
         }
     }
 
-    /// 테스트·임시 디렉터리용: prefix 아래 표준 배치.
+    /// Standard layout under the prefix for tests and temporary directories.
     pub fn from_values(
         user: &str,
         group: &str,

@@ -27,7 +27,7 @@ Passing build or unit checks does not establish MicroVM boot, SSH, or host port 
 | `docs` | Ubuntu | Public links/language/length, changelog and release-note contracts, PR-report tests, rustdoc with warnings denied, 75% rustdoc coverage floor |
 | `install` | Ubuntu 24.04 | Shell checks, install/service permissions, API QA, Chromium with real boot and IPv4/IPv6 SSH, nginx, Alpine/Ubuntu/Fedora, reinstall/uninstall |
 | `install-distro` | Linux containers | Dependency installation on Debian 12, Fedora, Arch, and openSUSE; no systemd or guest boot |
-| `frontend` | Ubuntu, Node.js 22 | `npm ci`, lint, TypeScript check and Vite build |
+| `frontend` | Ubuntu, Node.js 22 | `npm ci`, lint, tsrs type check and Vite build |
 | `e2e-dashboard` | Ubuntu, Node.js 22 | Mocked dashboard checks; Secrets QA contracts, unit tests, lint/types/builds, and real API/vault browser E2E without guest boot |
 
 The Linux installer job requires working `/dev/kvm`; absence fails guest QA rather than skipping it.
@@ -77,6 +77,8 @@ For native Windows and macOS CLI changes, run `cargo clippy -p firecrab-cli --al
 Linux API/helper checks still run on Linux; Windows source deployment builds them inside managed Debian.
 Clippy allows zero warnings; test-only code belongs behind `#[cfg(test)]`.
 Run `npm ci --prefix firecrab-e2e` before its runner checks.
+The frontend build and `typecheck:pipe` use [tsrs](https://github.com/oxc-project/tsrs), which ships binaries for macOS arm64 and Linux x64/arm64 only.
+On Windows or Intel macOS, run them in WSL2 or on Linux.
 The docs job also enforces the rustdoc coverage floor.
 
 ## Installer and platform checks

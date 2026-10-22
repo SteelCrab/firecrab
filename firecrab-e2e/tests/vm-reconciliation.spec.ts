@@ -81,7 +81,7 @@ async function openDashboard(page: Page, locale: "en" | "ko", vms: MockVm[]) {
   });
   await page.addInitScript((language) => localStorage.setItem("firecrab.locale", language), locale);
   await page.goto("/#/vms");
-  await expect(page.locator(".vm-table tbody tr")).toHaveCount(vms.length);
+  await expect(page.locator("table.vm-list tbody tr")).toHaveCount(vms.length);
 }
 
 test.describe("VM startup reconciliation @dashboard", () => {
@@ -96,11 +96,12 @@ test.describe("VM startup reconciliation @dashboard", () => {
       // about it is in the VM's detail.
       await expect(page.locator(".api-status-label")).toHaveCount(0);
       for (const [outcome] of CASES) {
-        const row = page.locator(".vm-table tbody tr").filter({ hasText: `vm-${outcome}` });
+        const row = page.locator("table.vm-list tbody tr").filter({ hasText: `vm-${outcome}` });
         const vm = vms.find((item) => item.name === `vm-${outcome}`)!;
-        await expect(row.locator(".state-label")).toHaveText(["VM"]);
-        await expect(row.locator(".vm-state-labels svg")).toHaveCount(0);
-        await expect(row.locator(".vm-status-label")).toHaveCSS("font-weight", "700");
+        // One state badge per row, no API-status icon next to it.
+        await expect(row.locator(".state-label")).toHaveCount(1);
+        await expect(row.locator(".vm-status-label")).toHaveClass(new RegExp(`\\bbadge\\b.*\\b${vm.state}\\b`));
+        await expect(row.locator(".vm-status-label svg")).toHaveCount(0);
         await expect(row.locator(".vm-status-label")).toHaveAttribute("data-state", vm.state);
 
         await row.locator(".vm-status-label").hover();
@@ -117,13 +118,13 @@ test.describe("VM startup reconciliation @dashboard", () => {
 
       for (const [outcome, english, korean] of CASES) {
         await page.getByRole("button", { name: `vm-${outcome}`, exact: true }).click();
-        const detail = page.locator(".reconciliation-detail");
+        const panel = page.locator(".detail-panel");
+        const detail = panel.locator(".reconciliation-detail");
         const vm = vms.find((item) => item.name === `vm-${outcome}`)!;
-        await expect(page.locator(".vm-detail-heading dt")).toHaveText(["NAME", "ID", "VM-STATUS"]);
-        await expect(page.locator(".vm-detail-name dd")).toHaveText(vm.name);
-        await expect(page.locator(".vm-detail-id dd")).toHaveText(vm.id);
-        await expect(page.locator(".vm-detail-state dd")).toHaveText(vm.state);
-        await expect(page.getByRole("dialog").getByRole("heading", { name: "API-STATUS", exact: true })).toBeVisible();
+        await expect(panel.locator(".detail-title")).toHaveText(vm.name);
+        await expect(panel.locator(".detail-meta .badge")).toHaveClass(new RegExp(`\\b${vm.state}\\b`));
+        await expect(panel.locator(".props").first()).toContainText(vm.id);
+        await expect(panel.getByRole("heading", { name: "API-STATUS", exact: true })).toBeVisible();
         await expect(detail.locator(".api-status-service")).toHaveText("Firecrab API firecrab-api");
         await expect(detail.locator(".reconciliation-badge")).toHaveText(locale === "ko" ? korean : english);
         await expect(detail.locator("time")).toHaveAttribute("datetime", new Date(CHECKED_AT).toISOString());
@@ -135,10 +136,10 @@ test.describe("VM startup reconciliation @dashboard", () => {
         } else {
           await expect(detail.locator(".reconciliation-diagnostic")).toHaveCount(0);
         }
-        await page.locator(".console-close").click();
       }
 
       await page.getByRole("button", { name: "vm-unchecked-7", exact: true }).click();
+      await expect(page.locator(".detail-panel .detail-title")).toHaveText("vm-unchecked-7");
       await expect(page.locator(".detail-body")).toBeVisible();
       await expect(page.locator(".reconciliation-detail")).toHaveCount(0);
     });
@@ -152,8 +153,8 @@ test.describe("VM startup reconciliation @dashboard", () => {
     await expect(page.locator(".reconciliation-detail")).toBeVisible();
     vm.state = "starting";
     vm.reconciliation = null;
-    await expect(page.locator(".vm-table .vm-status-label")).toHaveAttribute("data-state", "starting");
-    await expect(page.locator(".vm-table .vm-status-label")).toHaveCSS("color", "rgb(154, 106, 0)");
+    await expect(page.locator("table.vm-list .vm-status-label")).toHaveAttribute("data-state", "starting");
+    await expect(page.locator("table.vm-list .vm-status-label")).toHaveCSS("color", "rgb(180, 83, 9)");
     await expect(page.locator(".reconciliation-detail")).toHaveCount(0);
   });
 
@@ -162,8 +163,8 @@ test.describe("VM startup reconciliation @dashboard", () => {
     const vm = fixture(1, "networkFailed");
     vm.reconciliation!.detail = `${DIAGNOSTIC}; ${"long-helper-diagnostic/".repeat(12)}`;
     await openDashboard(page, "ko", [vm]);
-    await expect(page.locator(".vm-state-labels svg")).toHaveCount(0);
-    await expect(page.locator(".vm-state-labels .state-label")).toHaveText(["VM"]);
+    await expect(page.locator(".vm-status-label svg")).toHaveCount(0);
+    await expect(page.locator(".vm-status-label")).toHaveText(["실행 중"]);
     await page.screenshot({ path: testInfo.outputPath("list-mobile-ko.png"), fullPage: true });
     await page.getByRole("button", { name: vm.name, exact: true }).click();
     const detail = page.locator(".reconciliation-detail");

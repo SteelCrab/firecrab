@@ -64,7 +64,7 @@ Stop and start a VM after an API upgrade to refresh its guest agent.
 | Images | Install M2Images, inspect/import OCI, and register custom images locally |
 | Kernels | Install verified kernels, pair them with unused images, and delete unused kernels |
 | Host | Inspect OS, capacity, build information, and API/helper service states |
-| Pipe | Edit domain/path routes and app addresses; apply or stop [Nginx ingress and an optional tunnel](pipe.md) |
+| Pipe | Open a service card: [Pipe Auth](pipe-auth.md) connects AWS and GitHub accounts; Route edits [Nginx](pipe.md) domain/path routes; [Pipe Registry](pipe-registry.md) pulls images; three tunnel cards publish apps |
 | Update | Read release notes, then follow the gauge, percent, and stage until the new API answers |
 
 MicroBoot image bootstrap is [API-only](images.md#bootstrap).

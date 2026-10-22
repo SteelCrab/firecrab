@@ -10,7 +10,7 @@ connector service, and its own current URL.
 
 ## Requirements
 
-- A running Firecrab Linux host or managed guest with Nginx installed.
+- A running Firecrab Linux host or managed guest with the bundled ingress engine.
 - For VM app targets, running VMs with IPv4 addresses and registered TCP ports.
 - For Nginx route targets, a saved domain/path route group.
 - Outbound access for Cloudflare Tunnel. Firecrab installs its pinned,
@@ -22,7 +22,7 @@ On macOS and Windows, the connector runs inside the managed Linux guest.
 
 Use **Pipe → Cloudflare Quick Tunnel** to create, edit and control temporary
 connectors. In **Pipe → Firecrab Tunnel**, paste a token
-from [the Firecrab dashboard](https://firecrab.dev/dashboard/) and select an
+from [the Firecrab dashboard](https://console.firecrab.dev/) and select an
 **VM apps** or saved **Nginx routes**. See the
 [Firecrab Tunnel guide](firecrab-tunnel.md) for token issuance and revocation.
 

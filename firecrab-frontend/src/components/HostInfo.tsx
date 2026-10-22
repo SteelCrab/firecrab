@@ -3,6 +3,7 @@ import type { HostOs, HostPlatformResponse, HostStatusResponse, NetworkInfoRespo
 import { getHostStatus, getNetworkInfo } from "../api/client";
 import { useI18n } from "../i18n";
 import ManagerResources from "./ManagerResources";
+import { formatUptime } from "../lib/format";
 
 const POLL_MILLIS = 2000;
 
@@ -42,7 +43,7 @@ export default function HostInfo() {
 
   return (
     <section className="panel host-info">
-      <h2 className="panel-title">{t("Host", "호스트 정보")}</h2>
+      <h2 className="panel-title">{t("Host info", "호스트 정보")}</h2>
       {status?.platform && <HostPlatform platform={status.platform} />}
       {network ? (
         <dl className="detail-fields mono">
@@ -117,15 +118,4 @@ function formatMib(mib: number): string {
 
 function formatGib(gib: number): string {
   return `${gib.toFixed(1)} GiB`;
-}
-
-function formatUptime(seconds: number, locale: "en" | "ko"): string {
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const parts = [];
-  if (days > 0) parts.push(locale === "ko" ? `${days}일` : `${days}d`);
-  if (days > 0 || hours > 0) parts.push(locale === "ko" ? `${hours}시간` : `${hours}h`);
-  parts.push(locale === "ko" ? `${minutes}분` : `${minutes}m`);
-  return parts.join(" ");
 }

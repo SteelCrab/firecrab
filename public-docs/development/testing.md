@@ -17,6 +17,7 @@ API, CLI, and browser checks are separate evidence.
 - [Shells](#shells)
 - [PipeSecrets](#pipesecrets)
 - [Images, kernels, OCI, and registry](#images-kernels-oci-and-registry)
+- [Pipe Registry](#pipe-registry)
 - [MicroVM and SSH](#microvm-and-ssh)
 - [VM lifetime](#vm-lifetime)
 - [nginx combined scenario](#nginx-combined-scenario)
@@ -161,6 +162,19 @@ I2/I3/I4/I7/I10/U1 require separate checks outside GitHub Ubuntu CI.
 - [ ] **I10 — Bootstrap (separate slow pass):** start bootstrap, then delete its job and builder VM.
 - [ ] **I11 — OCI distro boot matrix:** inspect, import, start, stop, and delete all three references below. Preserve preinstalled aliases and mark unperformed imports **WARNING**.
 
+## Pipe Registry
+
+Procedure: [Pipe Registry](../guides/pipe-registry.md).
+P1–P6 use the fake ECR host `000000000000.dkr.ecr.qa-ci-1.amazonaws.com` and never pull.
+They do not touch a Docker Hub login.
+
+- [ ] **P1 — List:** `GET /api/pipe/registries` returns only registry, username, and provider; the QA host has no login.
+- [ ] **P2 — Save:** save an ECR login; the response and list show `AWS`/`ecr` and never the secret.
+- [ ] **P3 — Reject:** an unknown registry, a blank token, an unknown field, and another origin are refused.
+- [ ] **P4 — Remove:** delete the login; the list drops it, a second delete succeeds, and an unknown registry is refused.
+- [ ] **P5 — Images and tags:** the local image list loads; an unknown registry or invalid tag cursor is refused.
+- [ ] **P6 — Transfers:** an unknown registry, a non-pull action, and an invalid transfer ID are refused.
+
 ## MicroVM and SSH
 
 Install a template and create a network first.
@@ -275,8 +289,8 @@ C12 uses an SSH tunnel to the remote loopback API; see [host profiles](../refere
 
 Commands and fixtures: [Browser E2E](../../firecrab-e2e/README.md).
 Use one worker and zero retries.
-Import/form mode: **11 passed, 6 skipped** (B2/B6/B8/B10/B13 plus product-blocked B5).
-Full runtime mode: **16 passed, 1 explicit skip** (B5).
+Import/form mode: **13 passed, 6 skipped** (B2/B6/B8/B10/B13 plus product-blocked B5).
+Full runtime mode: **18 passed, 1 explicit skip** (B5).
 Save traces and guest logs on failure; cleanup must remove suite-owned registrations and resources.
 
 - [ ] **B1 — OCI inspect/import:** enter the local reference, inspect architecture compatibility, import, and confirm the registered installed alias.
@@ -296,6 +310,8 @@ Save traces and guest logs on failure; cleanup must remove suite-owned registrat
 - [ ] **B15 — Korean reconciliation UI:** verify the same list/detail results and diagnostics in Korean.
 - [ ] **B16 — Reconciliation polling:** a new start clears the previous API result in the list and detail.
 - [ ] **B17 — Narrow reconciliation panel:** Korean diagnostics wrap without overflow and status tooltips remain accessible.
+- [ ] **B18 — Pipe Registry card:** the card shows the API login count and opens the registry panel without errors.
+- [ ] **B19 — Registry login:** save a fake ECR login in the dashboard, confirm the API never returns the secret, then remove it.
 
 ## Uninstall
 

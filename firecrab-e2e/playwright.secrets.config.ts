@@ -3,7 +3,8 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const baseURL = "http://127.0.0.1:8096";
+const baseURL = process.env.FIRECRAB_SECRETS_E2E_BASE_URL ?? "http://127.0.0.1:8096";
+const address = new URL(baseURL);
 
 export default defineConfig({
   testDir: "tests", testMatch: "secrets.spec.ts", workers: 1, retries: 0,
@@ -22,7 +23,7 @@ export default defineConfig({
       : {},
   },
   webServer: {
-    command: "npm run dev -- --host 127.0.0.1 --port 8096",
+    command: `npm run dev -- --host ${address.hostname} --port ${address.port}`,
     cwd: path.resolve(here, "../firecrab-frontend"), url: baseURL, reuseExistingServer: false,
   },
 });
