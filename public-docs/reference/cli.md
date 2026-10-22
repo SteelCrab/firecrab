@@ -4,6 +4,12 @@
 Install it with the [CLI installer](../getting-started/installation.md#cli-only-installation).
 Use `firecrab --help` or `firecrab COMMAND --help` for flags.
 
+## Schedules
+
+`firecrab schedule` creates and manages time-based MicroVM start and stop operations.
+Use `create`, `list`, `get`, `update`, `enable`, `disable`, `runs`, and `delete`.
+See [Schedules](../guides/schedules.md) for examples, time zones, and recovery behavior.
+
 ## Host profiles
 
 Save a host, then select it by name.

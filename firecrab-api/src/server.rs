@@ -192,6 +192,24 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // prefix and a WS-proxied path can't overlap.
     let rest = Router::new()
         .route(
+            "/api/schedules",
+            get(handlers::schedules::list).post(handlers::schedules::create),
+        )
+        .route(
+            "/api/schedules/{id}",
+            get(handlers::schedules::get)
+                .put(handlers::schedules::update)
+                .delete(handlers::schedules::delete),
+        )
+        .route(
+            "/api/schedules/{id}/enabled",
+            axum::routing::put(handlers::schedules::set_enabled),
+        )
+        .route(
+            "/api/schedules/{id}/runs",
+            get(handlers::schedules::history),
+        )
+        .route(
             "/api/micro-services",
             get(handlers::micro_services::list).post(handlers::micro_services::create),
         )

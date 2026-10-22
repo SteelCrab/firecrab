@@ -22,6 +22,7 @@ Linux runs the services directly; macOS and Windows use managed Debian.
 | Create VMs, use the console, and connect with SSH | [Dashboard](guides/dashboard.md) |
 | Configure and manage an app | [MicroService](guides/microservices.md) |
 | Validate a declarative YAML stack offline | [Stack validation](guides/stacks.md) |
+| Schedule MicroVM start and stop operations | [Schedules](guides/schedules.md) |
 | Configure subnets, internet access, and IPv6 | [Networking](guides/networking.md) |
 | Choose a disk location and back up VM data | [Storage](guides/storage.md) |
 | Set management VM CPU, RAM, disk, and networking | [microManager resources](guides/micromanager-resources.md) |

@@ -8,6 +8,7 @@ Keep the unauthenticated listener on a trusted loopback path.
 - [Request rules](#request-rules)
 - [VM endpoints and fields](#vm-endpoints)
 - [Startup reconciliation](#api-startup-reconciliation)
+- [Schedules](../guides/schedules.md#rest-api)
 - [Other endpoints](#other-endpoints)
 - [Host responses](#host)
 - [Update](#update)
