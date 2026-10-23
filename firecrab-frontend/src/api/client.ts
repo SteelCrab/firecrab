@@ -8,6 +8,7 @@ import type {
   CreateMicroStorageRequest,
   CreatePoolRequest,
   CreateShellRequest,
+  CreateSecurityGroupRequest,
   CreateShellRevisionRequest,
   CreateVmRequest,
   ErrorResponse,
@@ -30,6 +31,8 @@ import type {
   MicroServiceDeployment,
   DeployMicroServiceRequest,
   NetworkInfoResponse,
+  ReplaceSecurityGroupRulesRequest,
+  SecurityGroupResponse,
   PoolLeaseResponse,
   PoolResponse,
   SshHostKeyResponse,
@@ -146,6 +149,32 @@ export async function deleteSchedule(id: string): Promise<void> {
 
 export function listMicroServices(): Promise<MicroServiceResponse[]> {
   return fetchJson("/api/micro-services");
+}
+
+export function listSecurityGroups(): Promise<SecurityGroupResponse[]> {
+  return fetchJson("/api/security-groups");
+}
+
+export function getSecurityGroup(id: string): Promise<SecurityGroupResponse> {
+  return fetchJson(`/api/security-groups/${encodeURIComponent(id)}`);
+}
+
+export function createSecurityGroup(request: CreateSecurityGroupRequest): Promise<SecurityGroupResponse> {
+  return fetchJson("/api/security-groups", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export function replaceSecurityGroupRules(id: string, request: ReplaceSecurityGroupRulesRequest): Promise<SecurityGroupResponse> {
+  return fetchJson(`/api/security-groups/${encodeURIComponent(id)}/rules`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  });
+}
+
+export async function deleteSecurityGroup(id: string): Promise<void> {
+  const response = await fetch(`/api/security-groups/${encodeURIComponent(id)}`, { method: "DELETE" })
+    .catch((error) => { throw ApiClientError.transport(transportDetail(error)); });
+  if (!response.ok) throw await fail(response);
 }
 
 export function getServiceDeployment(id: string): Promise<MicroServiceDeployment | null> {

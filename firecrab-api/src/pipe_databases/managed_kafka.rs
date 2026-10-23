@@ -313,6 +313,7 @@ async fn start(state: &AppState, cluster: &mut Cluster) -> Result<(), Error> {
                 disk_gb: 10,
                 egress_policy: EgressPolicy::Isolated,
                 micro_network_id: network,
+                security_group_id: None,
                 storage_root: None,
                 shell_ids: vec![],
                 env: BTreeMap::new(),

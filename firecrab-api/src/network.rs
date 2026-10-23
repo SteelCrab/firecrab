@@ -210,6 +210,7 @@ impl NetworkClient {
         egress_policy: EgressPolicy,
         allow_host_ssh: bool,
         port_forwards: Vec<firecrab_helper_protocol::network::PortForwardSpec>,
+        security_group: Option<firecrab_helper_protocol::security_group::SecurityGroupPolicySpec>,
     ) -> Result<(), NetworkError> {
         self.call(NetworkRequest::ApplyVmPolicy {
             vm_id: lease.vm_id,
@@ -217,6 +218,7 @@ impl NetworkClient {
             ipv6: lease.ipv6,
             mac: lease.mac,
             egress_policy: egress_policy.id().to_owned(),
+            security_group,
             allow_host_ssh,
             port_forwards,
         })

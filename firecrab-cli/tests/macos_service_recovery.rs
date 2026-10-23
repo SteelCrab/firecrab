@@ -39,7 +39,7 @@ fn completed_install(root: &Path) {
     }
     fs::write(
         managed.join("runtime/provisioned"),
-        "schema=6\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n",
+        "schema=7\nkvm=usable\nfirecrab_api=active\nfirecrab_net_helper=active\nnested_firecracker=passed\n",
     ).unwrap();
     let mut image = [0_u8; 64];
     image[56..60].copy_from_slice(b"ARMd");

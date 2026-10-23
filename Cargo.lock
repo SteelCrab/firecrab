@@ -844,6 +844,7 @@ dependencies = [
 name = "firecrab-helper"
 version = "0.3.1"
 dependencies = [
+ "firecrab-api-types",
  "firecrab-helper-protocol",
  "flate2",
  "futures-util",
@@ -864,6 +865,7 @@ dependencies = [
 name = "firecrab-helper-protocol"
 version = "0.3.1"
 dependencies = [
+ "firecrab-api-types",
  "serde",
  "serde_json",
  "sha2",

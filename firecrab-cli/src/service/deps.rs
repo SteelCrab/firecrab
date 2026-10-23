@@ -97,6 +97,20 @@ pub fn ensure_runtime_deps(
         );
     }
 
+    let mut optional = DepsOutcome::default();
+    if !ensure(
+        packages,
+        &mut optional,
+        "conntrack",
+        "conntrack",
+        install_deps,
+        check_only,
+    ) {
+        outcome
+            .warnings
+            .push("conntrack is required when using security groups".into());
+    }
+
     // dhcp_release releases DHCP leases on VM stop; VMs still run without it,
     // leases just expire on their own. Fedora/RHEL ship dnsmasq without that
     // binary — do not reinstall dnsmasq for it.
