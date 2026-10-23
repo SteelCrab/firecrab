@@ -53,32 +53,16 @@ enum Detach {
 pub fn attach(api_base: &str, id: Uuid) -> Result<(), Error> {
     let url = console_url(api_base, id)?;
     eprintln!("attaching to VM {id} serial console (Ctrl+] to detach)");
-    attach_url(url, None)
-}
 
-/// Attach only to a server-issued, one-use Claude Code login terminal.
-pub fn attach_claude_login(api_base: &str, id: Uuid, ticket: Uuid) -> Result<(), Error> {
-    let mut url = console_url(api_base, id)?;
-    let path = url.path().replace(
-        &format!("/ws/vms/{id}/console"),
-        &format!("/ws/pipe/ai/connections/{id}/claude-code/login"),
-    );
-    url.set_path(&path);
-    eprintln!("Claude Code login on the API host (Ctrl+] to cancel)");
-    attach_url(url, Some(ticket))
-}
-
-fn attach_url(url: reqwest::Url, ticket: Option<Uuid>) -> Result<(), Error> {
     let raw_terminal = RawTerminal::enter()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(Error::Io)?;
-    let result = runtime.block_on(stream_with_ticket(
+    let result = runtime.block_on(stream(
         url.as_str(),
         tokio::io::stdin(),
         tokio::io::stdout(),
-        ticket,
     ));
 
     // Restore canonical input before printing a local status line. This also
@@ -124,36 +108,14 @@ fn console_url(api_base: &str, id: Uuid) -> Result<reqwest::Url, Error> {
     Ok(url)
 }
 
-#[cfg(test)]
-async fn stream<R, W>(url: &str, input: R, output: W) -> Result<Detach, Error>
+async fn stream<R, W>(url: &str, mut input: R, mut output: W) -> Result<Detach, Error>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    stream_with_ticket(url, input, output, None).await
-}
-
-async fn stream_with_ticket<R, W>(
-    url: &str,
-    mut input: R,
-    mut output: W,
-    ticket: Option<Uuid>,
-) -> Result<Detach, Error>
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let (mut socket, _) = tokio_tungstenite::connect_async(url)
+    let (socket, _) = tokio_tungstenite::connect_async(url)
         .await
         .map_err(map_websocket_error)?;
-    if let Some(ticket) = ticket {
-        socket
-            .send(Message::Text(
-                serde_json::json!({"ticket":ticket}).to_string().into(),
-            ))
-            .await
-            .map_err(map_websocket_error)?;
-    }
     let (mut sink, mut source) = socket.split();
     let mut buffer = [0_u8; 4096];
 
@@ -187,7 +149,6 @@ where
                         output.flush().await?;
                     }
                     Message::Text(text) => {
-                        if ticket.is_some() { continue; }
                         output.write_all(text.as_bytes()).await?;
                         output.flush().await?;
                     }
@@ -411,45 +372,5 @@ mod tests {
         server.await.unwrap();
         assert!(matches!(error, Error::Handshake { status: 409, .. }));
         assert!(error.to_string().contains("vm_not_running"), "{error}");
-    }
-    #[tokio::test]
-    async fn claude_login_sends_ticket_in_first_frame_and_keeps_completion_out_of_terminal() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let ticket = Uuid::new_v4();
-        let server = tokio::spawn(async move {
-            let (tcp, _) = listener.accept().await.unwrap();
-            let mut socket = accept_async(tcp).await.unwrap();
-            let first = socket.next().await.unwrap().unwrap();
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(first.to_text().unwrap()).unwrap(),
-                serde_json::json!({"ticket":ticket})
-            );
-            socket
-                .send(Message::Binary(b"CLI login prompt".to_vec().into()))
-                .await
-                .unwrap();
-            socket
-                .send(Message::Text(
-                    serde_json::json!({"type":"exit","success":true})
-                        .to_string()
-                        .into(),
-                ))
-                .await
-                .unwrap();
-            socket.close(None).await.unwrap();
-        });
-        let (_writer, input) = tokio::io::duplex(64);
-        let mut output = Vec::new();
-        stream_with_ticket(
-            &format!("ws://{address}/ws/pipe/ai/connections/{ID}/claude-code/login"),
-            input,
-            &mut output,
-            Some(ticket),
-        )
-        .await
-        .unwrap();
-        assert_eq!(output, b"CLI login prompt");
-        server.await.unwrap();
     }
 }

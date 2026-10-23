@@ -10,6 +10,7 @@ if (!binary || !sdkRoot) throw new Error("Usage: node scripts/validate-pipe-ai-m
 const { Client } = await import(pathToFileURL(join(resolve(sdkRoot), "dist/esm/client/index.js")));
 const { StdioClientTransport } = await import(pathToFileURL(join(resolve(sdkRoot), "dist/esm/client/stdio.js")));
 const borrowedId = randomUUID();
+const anthropicConnection = { id: randomUUID(), name: "Claude API", provider: "anthropic", authentication: "api_key", endpoint: "https://api.anthropic.com/v1/models", models: [], streaming: false, toolCalls: false };
 const network = (id, name, subnetCidr) => ({ id, name, subnetCidr, gateway: subnetCidr.replace(".0/24", ".1"), internetEnabled: true, uplink: null, ipv6Cidr: null, ipv6Gateway: null, ipv6AddressMode: null, ipv6Egress: null });
 let networks = [network(borrowedId, "borrowed", "172.30.0.0/24")];
 let vms = [];
@@ -23,8 +24,7 @@ const rest = createServer(async (request, response) => {
   let result;
   let status = 200;
   if (request.method === "GET" && path === "/api/images") result = [];
-  else if (request.method === "GET" && path === "/api/pipe/ai/connections") result = [];
-  else if (request.method === "GET" && path.endsWith("/claude-code/status")) result = { status: "signed_out" };
+  else if (request.method === "GET" && path === "/api/pipe/ai/connections") result = [anthropicConnection];
   else if (request.method === "GET" && path.endsWith("/model")) result = null;
   else if (request.method === "GET" && path === "/api/micro-networks") result = networks;
   else if (request.method === "POST" && path === "/api/micro-networks") {
@@ -77,8 +77,7 @@ try {
   await call("vm_delete", { id: vm.id });
   await call("network_delete", { id: createdNetwork.id });
   assert.equal((await call("owned_resources")).resources.length, 0);
-  await call("ai_connections_list");
-  assert.equal((await call("ai_claude_code_status", { id: randomUUID() })).status, "signed_out");
+  assert.deepEqual((await call("ai_connections_list")).items, [anthropicConnection]);
   await call("ai_default_get", { projectId: randomUUID() });
   assert.deepEqual(vms, []);
   assert.equal(networks.length, 1);

@@ -67,7 +67,6 @@ See [Stack validation](../guides/stacks.md) for the experimental schema and its 
 | Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |
 | Host profile | `host add`, `list`, `use`, `show`, `remove` |
 | Pipe AI | `ai login`, `login-status`, `connect`, `list`, `verify`, `get-default`, `set-default`, `respond`, `disconnect`; see [Pipe AI](../guides/pipe-ai.md) |
-| Claude Code account | `ai claude-code login ID --name NAME`, `status ID`, `disconnect ID`; official CLI runs on the selected API host; see [Claude Code](../guides/claude-code.md) |
 | Local MCP | `mcp`; serves typed tools over stdio through the selected REST host |
 
 Resource commands call the selected API and share its validation rules.

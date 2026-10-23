@@ -2,7 +2,7 @@
 //! Ownership is session-local; unknown resources can be inspected, never deleted.
 use crate::api_client::ApiClient;
 use firecrab_api_types::{
-    AiCliStatus, AiConnection, AiModelSelection, AiResponse, AiResponseRequest, AiVerifyRequest,
+    AiConnection, AiModelSelection, AiResponse, AiResponseRequest, AiVerifyRequest,
     CreateMicroNetworkRequest, CreateVmRequest, EgressPolicy, ImageResponse, MicroNetworkResponse,
     VmResponse, VmState,
 };
@@ -300,13 +300,6 @@ impl Session {
                     client.get::<Vec<AiConnection>>("/api/pipe/ai/connections")
                 )?)
             }
-            "ai_claude_code_status" => {
-                let a: Id = parse(args)?;
-                encoded(api(client.get::<AiCliStatus>(&format!(
-                    "/api/pipe/ai/connections/{}/claude-code/status",
-                    a.id
-                )))?)
-            }
             "ai_model_verify" => {
                 let a: Verify = parse(args)?;
                 encoded(api(client.post::<_, AiConnection>(
@@ -554,13 +547,6 @@ fn catalog() -> Vec<Value> {
             false,
         ),
         (
-            "ai_claude_code_status",
-            "Read the official Claude Code CLI login state. No tokens or inference are returned.",
-            schema(json!({"id":uuid}), &["id"]),
-            true,
-            false,
-        ),
-        (
             "ai_model_verify",
             "Make a billed inference probe with saved server-side credentials and add a usable model.",
             schema(json!({"id":uuid,"model":string}), &["id", "model"]),
@@ -609,7 +595,7 @@ fn output_schema(name: &str) -> Value {
         &["connectionId", "model"],
     );
     let connection = schema(
-        json!({"id":uuid,"name":string,"provider":{"enum":["openai","anthropic"]},"authentication":{"enum":["api_key","chatgpt","claude_code"]},
+        json!({"id":uuid,"name":string,"provider":{"enum":["openai","anthropic"]},"authentication":{"enum":["api_key","chatgpt"]},
         "endpoint":{"type":"string","format":"uri"},"models":{"type":"array","items":string},"streaming":{"type":"boolean"},"toolCalls":{"type":"boolean"}}),
         &[
             "id",
@@ -646,10 +632,6 @@ fn output_schema(name: &str) -> Value {
             &["resources", "retention"],
         ),
         "ai_connections_list" => array(connection),
-        "ai_claude_code_status" => schema(
-            json!({"status":{"enum":["connected","signed_out","unavailable","signing_in"]}}),
-            &["status"],
-        ),
         "ai_model_verify" => connection,
         "ai_default_get" => {
             json!({"type":"object","anyOf":[selection,schema(json!({"items":{"type":"null"}}), &["items"])]})

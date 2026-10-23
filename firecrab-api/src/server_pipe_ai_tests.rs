@@ -16,6 +16,8 @@ use tower::ServiceExt;
 struct Provider {
     requests: Arc<Mutex<Vec<(String, Value)>>>,
     credential_requests: Arc<Mutex<Vec<String>>>,
+    anthropic_requests: Arc<Mutex<Vec<axum::http::HeaderMap>>>,
+    anthropic_document: Arc<Mutex<Option<Value>>>,
     status: Arc<AtomicU16>,
     token_status: Arc<AtomicU16>,
     nonce: Arc<Mutex<String>>,
@@ -59,6 +61,14 @@ async fn fixture() -> Fixture {
         Json(json!({"object":"list","data":[{"id":"listed-but-unverified","object":"model"}]})).into_response()
     }))
     .route("/.well-known/jwks.json", get(|| async { Json(serde_json::from_str::<Value>(include_str!("pipe_ai/fixtures/oidc-test-jwks.json")).unwrap()) }))
+    .route("/anthropic/v1/models", get(|State(provider): State<Provider>, headers: axum::http::HeaderMap| async move {
+        provider.anthropic_requests.lock().unwrap().push(headers.clone());
+        let status = provider.status.load(Ordering::SeqCst);
+        if status > 0 {
+            return (StatusCode::from_u16(status).unwrap(), [("location", "/v1/models")], Json(json!({"error":{"message": headers.get("x-api-key").unwrap().to_str().unwrap()}}))).into_response();
+        }
+        Json(provider.anthropic_document.lock().unwrap().clone().unwrap_or_else(|| json!({"data":[{"type":"model","id":"catalog-only"}],"has_more":false,"first_id":"catalog-only","last_id":"catalog-only"}))).into_response()
+    }))
     .route("/api/accounts/oauth/token", post(|State(provider): State<Provider>, axum::Form(form): axum::Form<std::collections::HashMap<String,String>>| async move {
         let status = provider.token_status.load(Ordering::SeqCst);
         if status > 0 { return (StatusCode::from_u16(status).unwrap(), Json(json!({"error":"temporarily_unavailable"}))).into_response(); }
@@ -85,6 +95,9 @@ async fn fixture() -> Fixture {
     let mut state = AppState::with_db_file(templates, dir.path().join("state.db"))
         .await
         .unwrap();
+    state.pipe_ai_anthropic = crate::pipe_ai::anthropic::Anthropic::at(
+        endpoint.replace("/v1/responses", "/anthropic/v1/models"),
+    );
     state.pipe_ai = OpenAi::at(endpoint);
     let config =
         HttpConfig::from_values("127.0.0.1:5523", "http://localhost:8080", false, false).unwrap();
@@ -129,6 +142,160 @@ fn connection_path(id: Uuid) -> String {
 }
 fn selection(id: Uuid, model: &str) -> Value {
     json!({"connectionId":id,"model":model})
+}
+
+#[tokio::test]
+async fn pipe_ai_anthropic_key_connection_persists_redacts_and_disconnects_without_inference() {
+    let f = fixture().await;
+    let id = Uuid::new_v4();
+    let path = connection_path(id);
+    let account = json!({"name":"Claude API","provider":"anthropic","apiKey":"test-private-key"});
+    let (status, connected) = call(&f.app, "PUT", &path, account).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(connected["provider"], "anthropic");
+    assert_eq!(connected["authentication"], "api_key");
+    assert_eq!(
+        connected["endpoint"],
+        crate::pipe_ai::anthropic::CREDENTIAL_ENDPOINT
+    );
+    assert_eq!(connected["models"], json!([]));
+    assert_eq!(connected["streaming"], false);
+    assert_eq!(connected["toolCalls"], false);
+    {
+        let requests = f.provider.anthropic_requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["x-api-key"], "test-private-key");
+        assert_eq!(
+            requests[0]["anthropic-version"],
+            crate::pipe_ai::anthropic::API_VERSION
+        );
+        assert!(!requests[0].contains_key("authorization"));
+    }
+    let templates =
+        crate::templates::TemplateRegistry::from_specs(f._dir.path(), std::iter::empty()).unwrap();
+    let reopened = AppState::with_db_file(templates, f._dir.path().join("state.db"))
+        .await
+        .unwrap();
+    let app = build_router(reopened, &f.config);
+    assert_eq!(
+        call(&app, "GET", "/api/pipe/ai/connections", Value::Null)
+            .await
+            .1,
+        json!([connected])
+    );
+    for (uri, body) in [
+        (format!("{path}/verify"), json!({"model":"catalog-only"})),
+        (
+            "/api/pipe/ai/responses".into(),
+            json!({"projectId":Uuid::new_v4(),"selection":selection(id,"catalog-only"),"input":"Do not generate"}),
+        ),
+    ] {
+        let (status, error) = call(&app, "POST", &uri, body).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(error["error"]["code"], "ai_connection_only");
+    }
+    assert_eq!(
+        call(
+            &app,
+            "PUT",
+            &format!("/api/pipe/ai/projects/{}/model", Uuid::new_v4()),
+            selection(id, "catalog-only")
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert!(f.provider.requests.lock().unwrap().is_empty());
+    assert!(f.provider.credential_requests.lock().unwrap().is_empty());
+    assert_eq!(
+        call(&app, "DELETE", &path, Value::Null).await.1,
+        json!({"deleted":true,"remoteRevocationConfirmed":null})
+    );
+    assert_eq!(
+        call(&app, "GET", "/api/pipe/ai/connections", Value::Null)
+            .await
+            .1,
+        json!([])
+    );
+}
+
+#[tokio::test]
+async fn pipe_ai_anthropic_failed_verification_preserves_key_and_never_follows_redirects() {
+    let f = fixture().await;
+    let id = Uuid::new_v4();
+    let path = connection_path(id);
+    let account = json!({"name":"Claude API","provider":"anthropic","apiKey":"test-private-key"});
+    assert_eq!(
+        call(&f.app, "PUT", &path, account.clone()).await.0,
+        StatusCode::OK
+    );
+    let mut replacement = account;
+    replacement["name"] = json!("Replacement");
+    replacement["apiKey"] = json!("replacement-private-key");
+    for (upstream, expected) in [
+        (401, StatusCode::UNAUTHORIZED),
+        (403, StatusCode::UNAUTHORIZED),
+        (429, StatusCode::TOO_MANY_REQUESTS),
+        (503, StatusCode::BAD_GATEWAY),
+        (307, StatusCode::BAD_GATEWAY),
+    ] {
+        f.provider.status.store(upstream, Ordering::SeqCst);
+        let (status, error) = call(&f.app, "PUT", &path, replacement.clone()).await;
+        assert_eq!(status, expected);
+        assert!(!error.to_string().contains("replacement-private-key"));
+        let saved = f.state.store.ai_connection(id).unwrap().unwrap();
+        assert_eq!(saved.connection.name, "Claude API");
+        assert!(saved.api_key == "test-private-key");
+    }
+    f.provider.status.store(0, Ordering::SeqCst);
+    for malformed in [
+        json!({"data":{},"has_more":false}),
+        json!({"data":[]}),
+        json!({"data":[],"has_more":"false"}),
+    ] {
+        *f.provider.anthropic_document.lock().unwrap() = Some(malformed);
+        assert_eq!(
+            call(&f.app, "PUT", &path, replacement.clone()).await.0,
+            StatusCode::BAD_GATEWAY
+        );
+    }
+    replacement["model"] = json!("do-not-probe");
+    let count = f.provider.anthropic_requests.lock().unwrap().len();
+    assert_eq!(
+        call(&f.app, "PUT", &path, replacement.clone()).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(f.provider.anthropic_requests.lock().unwrap().len(), count);
+    assert!(f.provider.credential_requests.lock().unwrap().is_empty());
+    assert!(f.provider.requests.lock().unwrap().is_empty());
+    replacement.as_object_mut().unwrap().remove("model");
+    *f.provider.anthropic_document.lock().unwrap() =
+        Some(json!({"data":[],"has_more":false,"first_id":null,"last_id":null}));
+    assert_eq!(
+        call(&f.app, "PUT", &path, replacement).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.state
+            .store
+            .ai_connection(id)
+            .unwrap()
+            .unwrap()
+            .connection
+            .name,
+        "Replacement"
+    );
+    assert_eq!(
+        call(
+            &f.app,
+            "POST",
+            &format!("{path}/claude-code/login"),
+            json!({"name":"Removed"})
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]

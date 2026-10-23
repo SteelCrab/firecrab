@@ -710,7 +710,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tokio-tungstenite",
  "tower",
  "tower-http 0.7.1",
  "tracing",

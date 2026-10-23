@@ -2,9 +2,7 @@
 
 Pipe AI manages AI provider account connections and server-side credentials.
 The Dashboard is limited to connecting accounts, showing connection status, replacing credentials, and disconnecting.
-It supports OpenAI through ChatGPT sign-in or an API key, plus [official Claude Code CLI account login](claude-code.md).
-Claude Code owns its tokens; Pipe AI stores only connection metadata and offers login, status, and disconnect.
-Claude Code model use and execution remain AI Sandbox work.
+It supports OpenAI through ChatGPT sign-in or an API key, and Anthropic through an official API key.
 Model selection, conversation, and task UI belong to **AI Sandbox** and are not implemented on the Pipe AI page.
 Dashboard, CLI, and a local stdio MCP adapter reuse the same saved account connections.
 This is the connection and entry-point slice of [issue #414](https://github.com/SteelCrab/firecrab/issues/414).
@@ -14,12 +12,14 @@ It does not implement task scheduling, guest command execution, or automatic age
 
 | Capability | Supported behavior |
 | --- | --- |
-| API key | OpenAI project API key sent as an HTTPS bearer credential |
+| OpenAI API key | OpenAI project API key sent as an HTTPS bearer credential |
+| Anthropic API key | Workspace-scoped Claude Console API key sent as `x-api-key` over HTTPS; `anthropic-version: 2026-10-21` |
 | ChatGPT login | Official open-source public-client flow with dynamic registration, PKCE S256, state, nonce, and signed OIDC identity validation |
 | Login endpoint | `https://auth.openai.com/api/accounts/authorize` |
 | Token endpoint | `https://auth.openai.com/api/accounts/oauth/token` |
 | Signature keys | `https://auth.openai.com/.well-known/jwks.json`; RS256 only |
 | API-key connection check | `GET https://api.openai.com/v1/models`; requires permission to list models; no inference request |
+| Anthropic connection check | `GET https://api.anthropic.com/v1/models`; no inference request; redirects and custom endpoints are rejected |
 | Storage | Owner-only SQLite on the API host; no browser storage, guest environment, or model-context credentials |
 
 Account connection does not require a model or project ID.
@@ -27,9 +27,23 @@ The API-key check validates the credential but does not treat catalog entries as
 ChatGPT sign-in validates the OAuth exchange, signed identity, and granted scope without generating a response.
 Account, workspace, region, plan, and provider limits still apply.
 
+### Anthropic API key connections
+
+Select **API key → Anthropic (Claude)**, enter a workspace-scoped key from [Claude Console](https://platform.claude.com/settings/keys), then choose **Verify and save**.
+The server checks the [official Models API](https://platform.claude.com/docs/en/api/models/list) before saving. Authentication headers follow the [official API contract](https://platform.claude.com/docs/en/api/overview).
+Provider changes clear the draft key. Failed replacement keeps the previous connection.
+Only account connection, key replacement, and disconnect are implemented for Anthropic.
+Saved metadata has no verified models and advertises `streaming: false`, `toolCalls: false`.
+Supplying an Anthropic `model` during connection returns `400 ai_invalid_input`.
+Shared model verification, selection, and response routes return `409 ai_connection_only` for Anthropic connections.
+Model discovery, inference, streaming, and tool calls remain AI Sandbox work.
+Disconnect removes the server's saved key; revoke the actual key in Claude Console if needed.
+Claude Code installation, CLI login, terminal access, subscription tokens, and MicroVM execution are not part of this integration.
+
 ## Shared model adapter for AI Sandbox
 
 The existing REST, CLI, and MCP model operations are integration primitives for AI Sandbox.
+These model operations currently support OpenAI connections.
 They do not expose model selection, conversation, or task controls in Pipe AI.
 The AI Sandbox UI remains future work.
 
@@ -46,7 +60,7 @@ The AI Sandbox UI remains future work.
 Login alone does not prove permission to use a ChatGPT plan or a selected model.
 The ChatGPT token must include `chatgpt.tokens.use.direct`, and the selected model must return a complete text response before it is usable.
 Model verification consumes plan usage or API balance; account-only connection does not perform it.
-API clients can still supply an optional `model` during connection to request an inference probe.
+OpenAI API clients can still supply an optional `model` during connection to request an inference probe.
 The probe does not request tools.
 
 ChatGPT inference follows the [official request restrictions](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
@@ -63,7 +77,7 @@ The connection name starts as **ChatGPT** and can be changed.
 Choose **Continue with ChatGPT** to authorize in the browser.
 The page waits for sign-in before saving the connection.
 If a popup is blocked, use **Open ChatGPT sign-in**.
-Alternatively, select **Use API key**, enter the key, and choose **Verify and save**.
+Alternatively, select **Use API key**, select OpenAI or Anthropic, enter the key, and choose **Verify and save**.
 The connection form also lets you switch between **ChatGPT** and **API key**.
 **Sign-in help** explains the local callback requirements.
 After connecting, the account list shows the connection name, authentication method, and connection status.
@@ -112,6 +126,8 @@ To connect an API key, write a private JSON file with these fields:
 ```json
 {"name":"Personal","provider":"openai","apiKey":"YOUR_API_KEY"}
 ```
+
+For an Anthropic connection, use `{"name":"Claude API","provider":"anthropic","apiKey":"YOUR_API_KEY"}` with the same `ai connect --file` command. Omit `model`.
 
 ```sh
 chmod 600 /private/path/openai.json
@@ -219,6 +235,7 @@ Browser tests cover English/Korean desktop/mobile account management and assert 
 The [MCP SDK validation script](../../scripts/validate-pipe-ai-mcp.mjs) launches a real SDK client against the CLI and a disposable REST fixture.
 It validates schemas, VM lifecycle requests, duplicate-create prevention, secret omission, and cleanup ownership.
 These tests use local provider fixtures; they do not establish live provider access.
+Anthropic fixtures verify official request headers, credential-only verification, failed key replacement, redirect rejection, malformed catalog responses, private persistence, secret-free listing, disconnect, and blocked model use. Browser tests cover the API key lifecycle in English/Korean at desktop/mobile sizes. No real Anthropic API key was supplied, so live Anthropic verification remains unexecuted.
 Live ChatGPT account connection was verified on 2026-10-23 with the user's consent.
 The real browser flow completed account selection, login, agent registration, and plan-access consent.
 The local API exchanged the authorization code, validated the signed identity, and saved access/refresh tokens in its owner-only SQLite database (`0600`).

@@ -556,14 +556,6 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
     // same concurrency pool, body limit, CORS and origin checks as other REST.
     let inspection = Router::new()
         .route(
-            "/api/pipe/ai/connections/{id}/claude-code/login",
-            post(handlers::pipe_ai_claude::login_start),
-        )
-        .route(
-            "/api/pipe/ai/connections/{id}/claude-code/status",
-            get(handlers::pipe_ai_claude::status),
-        )
-        .route(
             "/api/pipe/ai/connections/{id}/login",
             post(handlers::pipe_ai::login_start),
         )
@@ -602,12 +594,7 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             enforce_limits,
         ));
 
-    let console = Router::new()
-        .route("/ws/vms/{id}/console", get(handlers::console::console_ws))
-        .route(
-            "/ws/pipe/ai/connections/{id}/claude-code/login",
-            get(handlers::pipe_ai_claude::terminal),
-        );
+    let console = Router::new().route("/ws/vms/{id}/console", get(handlers::console::console_ws));
 
     let app = rest
         .merge(recovery)
@@ -1510,7 +1497,3 @@ mod pipe_auth_tests;
 #[cfg(test)]
 #[path = "server_pipe_ai_tests.rs"]
 mod pipe_ai_tests;
-
-#[cfg(test)]
-#[path = "server_pipe_ai_claude_tests.rs"]
-mod pipe_ai_claude_tests;

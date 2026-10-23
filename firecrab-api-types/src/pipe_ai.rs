@@ -26,7 +26,6 @@ pub enum AiAuthentication {
     #[default]
     ApiKey,
     Chatgpt,
-    ClaudeCode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -96,35 +95,4 @@ pub struct AiLoginStart {
 pub struct AiLoginStatus {
     pub status: String,
     pub message: Option<String>,
-}
-
-/// CLI-owned authentication. This request never accepts credentials or commands.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct AiCliLoginRequest {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiCliLoginStart {
-    pub connection: AiConnection,
-    /// One-use terminal attachment capability, not a provider credential.
-    pub ticket: Uuid,
-    pub expires_in: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AiCliState {
-    Connected,
-    SignedOut,
-    Unavailable,
-    SigningIn,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiCliStatus {
-    pub status: AiCliState,
 }

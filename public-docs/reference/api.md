@@ -342,7 +342,7 @@ Pipe AI UI manages accounts only. Model verification, selection, and response ro
 | Method | Path | Contract |
 | --- | --- | --- |
 | GET | `/api/pipe/ai/connections` | Secret-free connections, verified `models`, `authentication`, `streaming`, and `toolCalls` |
-| PUT | `/api/pipe/ai/connections/{id}` | Validate credentials and atomically save `{name, provider: "openai", apiKey, model?: string}`; without `model`, check `/v1/models` without inference |
+| PUT | `/api/pipe/ai/connections/{id}` | Validate and save `{name, provider: "openai" \| "anthropic", apiKey, model?: string}`; check the provider's `/v1/models` without inference. Anthropic accepts no `model` and supports connection management only |
 | POST | `/api/pipe/ai/connections/{id}/verify` | Verify inference with saved credentials and add `{model}` |
 | DELETE | `/api/pipe/ai/connections/{id}` | Remove credentials/defaults; return `{deleted, remoteRevocationConfirmed}` |
 | POST | `/api/pipe/ai/connections/{id}/login` | Start official ChatGPT login with `{name, model?: string}`; no inference unless `model` is supplied; return `{loginId, authorizationUrl, expiresIn}` |
@@ -351,21 +351,15 @@ Pipe AI UI manages accounts only. Model verification, selection, and response ro
 | GET | `/api/pipe/ai/projects/{id}/model` | Saved `{connectionId, model}` or null |
 | PUT | `/api/pipe/ai/projects/{id}/model` | Persist a verified `{connectionId, model}` |
 | POST | `/api/pipe/ai/responses` | Accept `{projectId, input, selection?: {connectionId, model}}`; return `{selection, text}` |
-| POST | `/api/pipe/ai/connections/{id}/claude-code/login` | Start official CLI login with `{name}`; return `{connection, ticket, expiresIn}` |
-| GET | `/api/pipe/ai/connections/{id}/claude-code/status` | Secret-free CLI state: `connected`, `signed_out`, `unavailable`, or `signing_in` |
-| WS | `/ws/pipe/ai/connections/{id}/claude-code/login` | One-use ticket in first frame; ephemeral login-only PTY |
 
-Claude Code credentials remain under CLI management. DELETE runs official logout and verifies sign-out before removing metadata; failed logout keeps the record.
-Shared model endpoints reject CLI connections with `409 ai_cli_only`.
-See [Claude Code account connection](../guides/claude-code.md) for installation, runtime scope, terminal protocol, and recovery.
-
-ChatGPT login requires a local API authority and a reachable `127.0.0.1` callback.
+Login requires a local API authority and a reachable `127.0.0.1` callback.
 The server validates OAuth state, PKCE, signed identity, and granted plan scopes before replacing a connection.
 Account connection requires neither a model nor a project. Inference permission is checked separately; the optional `model` preserves API-client inference probes.
 Project UUIDs identify model settings rather than newly created Project records.
 An explicit response selection is a task/request override and leaves the project default unchanged.
 Calls never fall back to another model or connection.
 See [Pipe AI](../guides/pipe-ai.md) for capabilities, limits, CLI/MCP setup, and recovery.
+Anthropic model verification, defaults, and responses return `409 ai_connection_only`. API key disconnect removes the local saved key; it does not revoke the key at the provider.
 
 ## Errors
 

@@ -1,5 +1,4 @@
-//! The first adapter intentionally offers text inference only.
-//! A fixed HTTPS endpoint and disabled redirects bind credentials to OpenAI.
+//! Fixed provider endpoints and disabled redirects keep credentials scoped.
 use std::time::Duration;
 
 use firecrab_api_types::{AiConnection, AiConnectionInput};
@@ -7,8 +6,7 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub mod claude_code;
-mod claude_terminal;
+pub mod anthropic;
 mod oauth;
 pub use oauth::{LoginRegistry, OAuthRegistration, OAuthSession};
 
@@ -20,7 +18,6 @@ const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SavedConnection {
     pub connection: AiConnection,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
     #[serde(default)]
     pub oauth: Option<OAuthSession>,
@@ -308,11 +305,13 @@ pub fn validate_model(model: &str) -> Result<(), Failure> {
 }
 
 pub fn validate_connection(input: &AiConnectionInput) -> Result<(), Failure> {
+    if input.provider == firecrab_api_types::AiProvider::Anthropic && input.model.is_some() {
+        return Err(Failure::InvalidInput);
+    }
     if let Some(model) = &input.model {
         validate_model(model)?;
     }
-    if input.provider != firecrab_api_types::AiProvider::Openai
-        || input.name.trim().is_empty()
+    if input.name.trim().is_empty()
         || input.name.len() > 100
         || input.name.chars().any(char::is_control)
         || !(8..=4096).contains(&input.api_key.len())

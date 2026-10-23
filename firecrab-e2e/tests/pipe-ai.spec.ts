@@ -6,25 +6,9 @@ const loginId = "33333333-3333-4333-8333-333333333333";
 const otherId = "44444444-4444-4444-8444-444444444444";
 const saved: AiConnection = { id, name: "Personal AI", provider: "openai", authentication: "api_key", endpoint: "https://api.openai.com/v1/responses", models: ["server-only-model"], streaming: false, toolCalls: false };
 
-async function open(page: Page, options: { locale?: "en" | "ko"; connected?: boolean; loginFailure?: boolean; extraConnection?: boolean; connectionsUnavailable?: boolean; claudeState?: "connected" | "signed_out" | "unavailable"; claudeLoginUnavailable?: boolean; claudeLogoutFailure?: boolean } = {}) {
+async function open(page: Page, options: { locale?: "en" | "ko"; connected?: boolean; loginFailure?: boolean; extraConnection?: boolean; connectionsUnavailable?: boolean } = {}) {
   let connections: AiConnection[] = options.connected ? [{ ...saved }] : [];
   if (options.extraConnection) connections.push({ ...saved, id: otherId, name: "Other account" });
-  if (options.claudeState && connections.length) connections[0] = { ...saved, name: "Claude account", provider: "anthropic", authentication: "claude_code", endpoint: "claude-code://api-host", models: [] };
-  let cliState = options.claudeState ?? "signed_out";
-  const cliRequests: { method: string; path: string; input?: unknown }[] = [];
-  const terminalFrames: (string | Buffer)[] = [];
-  let terminalInput = "";
-  await page.routeWebSocket(/\/ws\/pipe\/ai\/connections\/[^/]+\/claude-code\/login$/, ws => {
-    ws.onMessage(message => {
-      terminalFrames.push(message);
-      if (typeof message === "string" && JSON.parse(message).ticket) ws.send(Buffer.from("Claude Code login. Enter approve: "));
-      if (typeof message !== "string") terminalInput += message.toString();
-      if (terminalInput.includes("approve\r") || terminalInput.includes("approve\n")) {
-        cliState = "connected";
-        ws.send(JSON.stringify({ type: "exit", success: true })); ws.close();
-      }
-    });
-  });
   let connectionsUnavailable = options.connectionsUnavailable ?? false;
   const writes: AiConnectionInput[] = [];
   const unexpectedAiRequests: string[] = [];
@@ -40,18 +24,6 @@ async function open(page: Page, options: { locale?: "en" | "ko"; connected?: boo
       if (connectionsUnavailable) return route.fulfill({ status: 503, json: { error: { message: "Connections unavailable" } } });
       return route.fulfill({ json: connections });
     }
-    if (path.endsWith("/claude-code/login")) {
-      const input = route.request().postDataJSON();
-      cliRequests.push({ method, path, input });
-      if (options.claudeLoginUnavailable) return route.fulfill({ status: 503, json: { error: { message: "Install the official Claude Code CLI on the API host" } } });
-      const connection: AiConnection = { ...saved, id: path.split("/")[5], name: input.name, provider: "anthropic", authentication: "claude_code", endpoint: "claude-code://api-host", models: [] };
-      connections = [...connections.filter(row => row.id !== connection.id), connection];
-      return route.fulfill({ json: { connection, ticket: loginId, expiresIn: 60 } });
-    }
-    if (path.endsWith("/claude-code/status")) {
-      cliRequests.push({ method, path });
-      return route.fulfill({ json: { status: cliState } });
-    }
     if (path.endsWith("/login")) {
       login = { ...route.request().postDataJSON(), id: path.split("/")[5] };
       return route.fulfill({ json: { loginId, authorizationUrl: "https://auth.openai.com/api/accounts/authorize?state=test", expiresIn: 600 } });
@@ -65,14 +37,13 @@ async function open(page: Page, options: { locale?: "en" | "ko"; connected?: boo
     if (/\/connections\/[^/]+$/.test(path)) {
       const connectionId = path.split("/").at(-1)!;
       if (method === "DELETE") {
-        if (options.claudeLogoutFailure && connections.some(row => row.id === connectionId && row.authentication === "claude_code")) return route.fulfill({ status: 502, json: { error: { message: "Claude Code authentication command failed" } } });
         connections = connections.filter(value => value.id !== connectionId);
         return route.fulfill({ json: { deleted: true, remoteRevocationConfirmed: null } });
       }
       const input = route.request().postDataJSON() as AiConnectionInput;
       writes.push(input);
       if (input.apiKey === "bad-key") return route.fulfill({ status: 401, json: { error: { code: "ai_authentication_expired", message: "Provider authentication was rejected" } } });
-      const connection: AiConnection = { ...saved, id: connectionId, name: input.name, models: [] };
+      const connection: AiConnection = { ...saved, id: connectionId, name: input.name, provider: input.provider, endpoint: input.provider === "anthropic" ? "https://api.anthropic.com/v1/models" : saved.endpoint, models: [] };
       connections = [...connections.filter(value => value.id !== connectionId), connection];
       return route.fulfill({ json: connection });
     }
@@ -81,10 +52,45 @@ async function open(page: Page, options: { locale?: "en" | "ko"; connected?: boo
   });
   await page.addInitScript(locale => localStorage.setItem("firecrab.locale", locale), options.locale ?? "en");
   await page.goto("/#/pipe/ai");
-  return { writes, unexpectedAiRequests, cliRequests, terminalFrames, recoverConnections() { connectionsUnavailable = false; }, get login() { return login; } };
+  return { writes, unexpectedAiRequests, recoverConnections() { connectionsUnavailable = false; }, get login() { return login; } };
 }
 
 test.describe("Pipe AI accounts @dashboard", () => {
+  for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) test(`${locale} Anthropic API key lifecycle fits ${width}px without CLI login`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const mock = await open(page, { locale });
+    const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
+    await panel.getByRole("button", { name: locale === "ko" ? "API 키로 연결" : "Use API key", exact: true }).click();
+    const provider = panel.getByLabel(locale === "ko" ? "서비스" : "Provider", { exact: true });
+    await panel.getByLabel(locale === "ko" ? "OpenAI API 키" : "OpenAI API key", { exact: true }).fill("discard-on-provider-change");
+    await provider.selectOption("anthropic");
+    const key = panel.getByLabel(locale === "ko" ? "Anthropic API 키" : "Anthropic API key", { exact: true });
+    await expect(key).toHaveValue("");
+    await expect(key).toHaveAttribute("type", "password");
+    await key.fill("test-private-key");
+    await panel.getByRole("button", { name: locale === "ko" ? "검증 후 저장" : "Verify and save", exact: true }).click();
+    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText("Anthropic");
+    expect(mock.writes[0]).toEqual({ name: "Anthropic", provider: "anthropic", apiKey: "test-private-key" });
+    await page.reload();
+    await expect(panel.getByText(locale === "ko" ? "Anthropic API 키" : "Anthropic API key", { exact: true })).toBeVisible();
+    await panel.getByRole("button", { name: locale === "ko" ? "API 키 교체" : "Replace API key", exact: true }).click();
+    await expect(provider).toHaveValue("anthropic");
+    await expect(key).toHaveValue("");
+    await key.fill("bad-key");
+    await panel.getByRole("button", { name: locale === "ko" ? "검증 후 저장" : "Verify and save", exact: true }).click();
+    await expect(panel.getByRole("alert")).toContainText("Provider authentication was rejected");
+    await panel.getByRole("button", { name: locale === "ko" ? "취소" : "Cancel", exact: true }).click();
+    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText("Anthropic");
+    await expect(panel).not.toContainText("test-private-key");
+    expect(await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }))).not.toContain("test-private-key");
+    await expect(panel.getByText(/Claude Code/)).toHaveCount(0);
+    expect(mock.unexpectedAiRequests).toEqual([]);
+    expect(mock.login).toBeNull();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await panel.getByRole("button", { name: locale === "ko" ? "연결 해제" : "Disconnect", exact: true }).click();
+    await expect(panel.locator(".pipe-ai-connections")).toHaveCount(0);
+  });
+
   test("saves a masked API key without a model or browser persistence", async ({ page }) => {
     const mock = await open(page);
     const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
@@ -207,14 +213,12 @@ test.describe("Pipe AI accounts @dashboard", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
-  test("keeps the mobile connection form usable with all authentication methods", async ({ page }) => {
+  test("keeps the mobile connection form usable with both authentication methods", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await open(page, { locale: "ko" });
     const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
     await panel.getByRole("button", { name: "ChatGPT 연결", exact: true }).click();
     await expect(panel.getByRole("button", { name: "Continue with ChatGPT", exact: true })).toBeVisible();
-    await panel.getByRole("radio", { name: "Claude Code", exact: true }).check();
-    await expect(panel.getByRole("button", { name: "로그인 터미널 열기", exact: true })).toBeVisible();
     await panel.getByRole("radio", { name: "API 키", exact: true }).focus();
     await page.keyboard.press("Space");
     await expect(panel.getByLabel("OpenAI API 키", { exact: true })).toBeVisible();
@@ -222,62 +226,4 @@ test.describe("Pipe AI accounts @dashboard", () => {
     expect(form!.x + form!.width).toBeLessThanOrEqual(390);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
-  test("logs in with the official CLI terminal without submitting credentials or models", async ({ page }) => {
-    const mock = await open(page);
-    const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
-    await panel.getByRole("button", { name: "Connect Claude Code", exact: true }).click();
-    await expect(panel.getByLabel("Connection name", { exact: true })).toHaveValue("Claude Code");
-    await expect(panel.getByLabel("OpenAI API key", { exact: true })).toHaveCount(0);
-    await panel.getByRole("button", { name: "Open login terminal", exact: true }).click();
-    const terminal = panel.getByRole("region", { name: "Claude Code sign-in terminal", exact: true });
-    await expect(terminal).toContainText("Claude Code login. Enter approve:");
-    await terminal.locator(".xterm").click();
-    await page.keyboard.type("approve");
-    await page.keyboard.press("Enter");
-    await expect(terminal).toHaveCount(0);
-    await expect(panel.locator(".pipe-ai-connections li")).toContainText("Connected");
-    expect(mock.cliRequests.find(row => row.method === "POST")?.input).toEqual({ name: "Claude Code" });
-    expect(mock.terminalFrames.some(frame => typeof frame === "string" && JSON.parse(frame).ticket === loginId)).toBe(true);
-    expect(mock.writes).toEqual([]);
-    expect(mock.unexpectedAiRequests).toEqual([]);
-    const storage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
-    expect(storage).not.toContain(loginId);
-    await page.reload();
-    await expect(panel.locator(".pipe-ai-connections li")).toContainText("Connected");
-    await panel.getByRole("button", { name: "Check status", exact: true }).click();
-    await expect(panel.getByRole("button", { name: "Check status", exact: true })).toBeEnabled();
-    await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
-    await expect(panel.locator(".pipe-ai-connections li")).toHaveCount(0);
-  });
-
-  test("keeps a Claude connection when official logout fails", async ({ page }) => {
-    await open(page, { connected: true, claudeState: "connected", claudeLogoutFailure: true });
-    const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
-    await panel.getByRole("button", { name: "Disconnect", exact: true }).click();
-    await expect(panel.getByRole("alert")).toContainText("Claude Code authentication command failed");
-    await expect(panel.locator(".pipe-ai-connections strong")).toHaveText("Claude account");
-  });
-
-  test("reports a missing CLI without saving a connection", async ({ page }) => {
-    await open(page, { claudeLoginUnavailable: true });
-    const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
-    await panel.getByRole("button", { name: "Connect Claude Code", exact: true }).click();
-    await panel.getByRole("button", { name: "Open login terminal", exact: true }).click();
-    await expect(panel.getByRole("alert")).toContainText("Install the official Claude Code CLI");
-    await expect(panel.locator(".pipe-ai-connections li")).toHaveCount(0);
-  });
-
-  for (const locale of ["en", "ko"] as const) for (const width of [1280, 390]) test(`${locale} Claude Code login terminal fits a ${width}px viewport`, async ({ page }) => {
-    await page.setViewportSize({ width, height: 844 });
-    await open(page, { locale });
-    const panel = page.getByRole("region", { name: "Pipe AI", exact: true });
-    await panel.getByRole("button", { name: locale === "ko" ? "Claude Code 연결" : "Connect Claude Code", exact: true }).click();
-    await panel.getByRole("button", { name: locale === "ko" ? "로그인 터미널 열기" : "Open login terminal", exact: true }).click();
-    const terminal = panel.getByRole("region", { name: locale === "ko" ? "Claude Code 로그인 터미널" : "Claude Code sign-in terminal", exact: true });
-    await expect(terminal.locator(".xterm")).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    await terminal.getByRole("button", { name: locale === "ko" ? "로그인 터미널 닫기" : "Close login terminal", exact: true }).click();
-    await expect(panel.locator(".pipe-ai-connections li")).toContainText(locale === "ko" ? "로그인 필요" : "Sign-in required");
-  });
-
 });
