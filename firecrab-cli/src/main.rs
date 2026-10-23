@@ -9,11 +9,13 @@ mod hosts;
 mod image;
 #[cfg(target_os = "linux")]
 mod info;
+mod mcp;
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
 mod micromanager;
 mod microservice;
 mod network;
 mod pipe;
+mod pipe_ai;
 #[cfg(target_os = "linux")]
 mod service;
 #[cfg(any(target_os = "linux", all(test, unix)))]
@@ -41,6 +43,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Connect Pipe AI providers and select models through the host REST API.
+    Ai {
+        #[command(subcommand)]
+        command: pipe_ai::Command,
+    },
+    /// Serve local MCP tools over stdin/stdout using the selected REST host.
+    Mcp,
     /// Manage desired MicroService configurations through the host API.
     Microservice {
         #[command(subcommand)]
@@ -133,6 +142,10 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
+        Command::Ai { command } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+            pipe_ai::run(client, command)
+        }),
+        Command::Mcp => run_with_api_client(api.as_deref(), host.as_deref(), mcp::run),
         Command::Microservice { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 microservice::run(client, command)

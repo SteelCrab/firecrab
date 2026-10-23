@@ -107,6 +107,11 @@ pub struct AppState {
     pub templates: Arc<TemplateRegistry>,
     /// SQLite-backed durable storage.
     pub(crate) store: Store,
+    /// Fixed-endpoint provider client; credentials remain in the private store.
+    pub(crate) pipe_ai: crate::pipe_ai::OpenAi,
+    pub(crate) pipe_ai_logins: Arc<crate::pipe_ai::LoginRegistry>,
+    /// Serializes inference with disconnect/rotation, so successful disconnect blocks new calls.
+    pub(crate) pipe_ai_mutations: Arc<AsyncMutex<()>>,
     /// Short configuration/operation claims; never held while booting a guest.
     pub(crate) service_mutations: Arc<AsyncMutex<()>>,
     /// One image/VM deployment at a time bounds replica surge on one host.
@@ -179,6 +184,9 @@ impl AppState {
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),
             store,
+            pipe_ai: crate::pipe_ai::OpenAi::new(),
+            pipe_ai_logins: Arc::new(crate::pipe_ai::LoginRegistry::default()),
+            pipe_ai_mutations: Arc::new(AsyncMutex::new(())),
             service_mutations: Arc::new(AsyncMutex::new(())),
             service_deploy_permits: Arc::new(Semaphore::new(1)),
             processes: Arc::new(Mutex::new(HashMap::new())),

@@ -139,6 +139,11 @@ impl ApiClient {
             .client
             .post(self.url(path))
             .json(body)
+            .timeout(if path.starts_with("/api/pipe/ai/") {
+                OCI_INSPECT_TIMEOUT
+            } else {
+                DEFAULT_REQUEST_TIMEOUT
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -166,6 +171,11 @@ impl ApiClient {
             .client
             .put(self.url(path))
             .json(body)
+            .timeout(if path.starts_with("/api/pipe/ai/") {
+                OCI_INSPECT_TIMEOUT
+            } else {
+                DEFAULT_REQUEST_TIMEOUT
+            })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -180,6 +190,16 @@ impl ApiClient {
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::ensure_success(resp).map(|_| ())
+    }
+
+    pub fn delete_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiError> {
+        let response = self
+            .client
+            .delete(self.url(path))
+            .timeout(OCI_INSPECT_TIMEOUT)
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::decode_json(response)
     }
 
     /// Sends `GET` and returns the raw successful body. Used for attachments

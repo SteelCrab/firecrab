@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { KeyRound } from "lucide-react";
+import { KeyRound, Sparkles } from "lucide-react";
+import { listAiConnections } from "../api/pipeAi";
 import type { PipeSnapshot } from "../api/pipe";
 import { getPipeAuth } from "../api/pipeAuth";
 import { listPipeDatabases } from "../api/pipeDatabases";
@@ -18,6 +19,8 @@ interface Props {
 /** Brand marks where a service has one; otherwise a line icon in the card's ink. */
 function PipeCardIcon({ id }: { id: PipeCardId }) {
   switch (id) {
+    case "ai":
+      return <Sparkles className="pipe-card-icon" aria-hidden="true" />;
     case "auth":
       return <KeyRound className="pipe-card-icon" aria-hidden="true" />;
     case "route":
@@ -41,11 +44,16 @@ function PipeCardIcon({ id }: { id: PipeCardId }) {
 export default function PipeCards({ snapshot, error }: Props) {
   const { t } = useI18n();
   const [auths, setAuths] = useState<number | null | undefined>(undefined);
+  const [ai, setAi] = useState<number | null | undefined>(undefined);
   const [registries, setRegistries] = useState<number | null | undefined>(undefined);
   const [databases, setDatabases] = useState<number | null | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
+    listAiConnections().then(
+      connections => { if (!cancelled) setAi(connections.length); },
+      () => { if (!cancelled) setAi(null); },
+    );
     getPipeAuth().then(
       connections => { if (!cancelled) setAuths(connections.length); },
       () => { if (!cancelled) setAuths(null); },
@@ -113,6 +121,7 @@ export default function PipeCards({ snapshot, error }: Props) {
 
   const cards: Card[] = [
     { id: "auth", title: "Pipe Auth", description: "AWS · GitHub", ...auth() },
+    { id: "ai", title: "Pipe AI", description: t("AI account connections", "AI 계정 연결 관리"), ...(ai === undefined ? show(loading) : ai === null ? show(unavailable, "error") : ai ? show(t(`${ai} connected`, `${ai}개 연결`), "running") : unconfigured) },
     { id: "route", title: "Route", description: t("Domain · path", "도메인 · 경로"), ...(unknown ?? route()) },
     { id: "registry", title: "Pipe Registry", description: t("Image pull", "이미지 가져오기"), ...registry() },
     { id: "database", title: "Database", description: t("Connections · browse", "연결 · 조회"), ...database() },

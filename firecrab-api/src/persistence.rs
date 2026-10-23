@@ -18,6 +18,7 @@ use crate::ipam::{self, IpamError, SubnetSpec};
 use crate::model::{Lease, VmRecord, VmState};
 
 mod micro_services;
+mod pipe_ai;
 mod pipe_auth;
 mod pipe_databases;
 mod registries;
@@ -689,6 +690,10 @@ impl Store {
         conn.execute(CREATE_MICRO_STORAGES_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
+        conn.execute(pipe_ai::CONNECTIONS_SQL, [])?;
+        conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
+        conn.execute(pipe_ai::SETTINGS_SQL, [])?;
+        conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
         conn.execute(CREATE_MICROREGISTRY_LOCAL_TABLE_SQL, [])?;

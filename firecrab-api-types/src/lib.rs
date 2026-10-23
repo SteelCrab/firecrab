@@ -10,10 +10,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod micro_services;
+mod pipe_ai;
 pub use micro_services::{
     DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
     ServiceInstance, ServicePhase, ServiceRuntime,
 };
+pub use pipe_ai::*;
 
 /// The egress policies the API may request for a VM. New policies are added
 /// here and mirrored in `firecrab-helper`'s own (deliberately separate)

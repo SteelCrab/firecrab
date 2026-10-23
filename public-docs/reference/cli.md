@@ -54,6 +54,8 @@ The config stores only endpoints; unknown TOML keys block profile changes.
 | Network | `network list`, `create`, `delete ID` |
 | Image | `image list`, `inspect REFERENCE`, `import REFERENCE`, `import-status ALIAS` |
 | Host profile | `host add`, `list`, `use`, `show`, `remove` |
+| Pipe AI | `ai login`, `login-status`, `connect`, `list`, `verify`, `get-default`, `set-default`, `respond`, `disconnect`; see [Pipe AI](../guides/pipe-ai.md) |
+| Local MCP | `mcp`; serves typed tools over stdio through the selected REST host |
 
 Resource commands call the selected API and share its validation rules.
 They do not manage Firecracker or host networking directly.
