@@ -228,6 +228,17 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
 
     let rest = Router::new()
         .route(
+            "/api/stacks",
+            get(handlers::stacks::list).post(handlers::stacks::register),
+        )
+        .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
+        .route(
+            "/api/stacks/{name}",
+            get(handlers::stacks::get).delete(handlers::stacks::delete),
+        )
+        .route("/api/stacks/{name}/bindings", post(handlers::stacks::bind))
+        .route("/api/stacks/{name}/unbind", post(handlers::stacks::unbind))
+        .route(
             "/api/security-groups",
             get(handlers::security_groups::list).post(handlers::security_groups::create),
         )

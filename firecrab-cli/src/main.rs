@@ -44,7 +44,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate a declarative stack file locally, without connecting to a host.
+    /// Validate stack files, manage host ownership and preview changes without applying them.
     Stack {
         #[command(subcommand)]
         command: stack::Command,
@@ -151,7 +151,14 @@ fn main() {
 fn run(cli: Cli) -> i32 {
     let Cli { api, host, command } = cli;
     match command {
-        Command::Stack { command } => stack::run(command),
+        Command::Stack {
+            command: stack::Command::Validate { file, json },
+        } => stack::validate_file(file, json),
+        Command::Stack { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                stack::run_remote(client, command)
+            })
+        }
         Command::Schedule { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 schedule::run(client, command)

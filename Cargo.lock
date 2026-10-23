@@ -694,6 +694,7 @@ dependencies = [
  "filetime",
  "firecrab-api-types",
  "firecrab-helper-protocol",
+ "firecrab-stack",
  "futures-util",
  "hmac",
  "http-body-util",
@@ -799,6 +800,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
