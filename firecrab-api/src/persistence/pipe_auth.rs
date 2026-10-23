@@ -1,4 +1,4 @@
-//! Pipe Auth shares the existing owner-only credential database.
+//! Auth shares the existing owner-only credential database.
 use super::*;
 use crate::pipe_auth::{Provider, SavedAuth};
 
@@ -16,12 +16,12 @@ impl Store {
             let auth: SavedAuth =
                 serde_json::from_str(&raw).map_err(|_| PersistenceError::CorruptRecord {
                     id: provider.clone(),
-                    reason: "invalid Pipe Auth credential".into(),
+                    reason: "invalid Auth credential".into(),
                 })?;
             if auth.connection().provider.as_str() != provider {
                 return Err(PersistenceError::CorruptRecord {
                     id: provider,
-                    reason: "Pipe Auth provider mismatch".into(),
+                    reason: "Auth provider mismatch".into(),
                 });
             }
             Ok(auth)
@@ -34,7 +34,7 @@ impl Store {
         let provider = auth.connection().provider;
         let raw = serde_json::to_string(auth).map_err(|_| PersistenceError::CorruptRecord {
             id: provider.as_str().into(),
-            reason: "could not encode Pipe Auth credential".into(),
+            reason: "could not encode Auth credential".into(),
         })?;
         self.lock().execute(
             "INSERT INTO pipe_auth_credentials (provider, credential) VALUES (?1, ?2)

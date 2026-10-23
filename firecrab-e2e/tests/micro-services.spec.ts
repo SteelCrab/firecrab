@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 const ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const SECRET = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const STORAGE = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const INITIAL = {
   id: ID, name: "orders", image: "ghcr.io/team/orders:1.0", runtime: "vm",
   port: 8080, healthPath: "/actuator/health", domain: "orders.example.com",
@@ -18,6 +19,7 @@ async function openServices(page: Page, rows: object[] = [], failSave = false) {
     if (path === "/api/pipe") return route.fulfill({ json: { config: null, units: [], nginxAvailable: true, cloudflaredAvailable: false } });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/micro-networks") return route.fulfill({ json: [] });
+    if (path === "/api/pipe/storage") return route.fulfill({ json: [{ id: STORAGE, name: "Reports", bucket: "reports-bucket", region: "ap-northeast-2", prefix: "team/", credentialRef: "connection", services: [] }] });
     if (path === "/api/security-groups") return route.fulfill({ json: [{ id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] }] });
     if (path === `/api/security-groups/${SECRET}`) return route.fulfill({ json: { id: SECRET, name: "orders-policy", microNetworkId: ID, rules: [] } });
     if (path === "/api/host") return route.fulfill({ json: { loadAverage1m: 0.1, memoryTotalMib: 8192, memoryAvailableMib: 4096, diskTotalGib: 100, diskAvailableGib: 50, uptimeSeconds: 3600 } });
@@ -42,6 +44,25 @@ async function openServices(page: Page, rows: object[] = [], failSave = false) {
 }
 
 test.describe("MicroService configuration @dashboard", () => {
+  test("binds and clears an S3 connection while preserving its security group", async ({ page }) => {
+    const writes = await openServices(page);
+    await page.getByRole("button", { name: "New MicroService", exact: true }).click();
+    await page.getByLabel("Name", { exact: true }).fill("orders");
+    await page.getByLabel("OCI image", { exact: true }).fill("ghcr.io/team/orders:1.0");
+    await page.getByLabel("Security group", { exact: true }).selectOption(SECRET);
+    await page.getByLabel("S3 connection (optional)", { exact: true }).selectOption(STORAGE);
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+    await expect(page.getByRole("cell", { name: "orders", exact: true })).toBeVisible();
+    expect(writes[0].body.storageConnectionId).toBe(STORAGE);
+    expect(writes[0].body.securityGroupId).toBe(SECRET);
+    await page.getByRole("button", { name: "Edit orders", exact: true }).click();
+    await page.getByLabel("S3 connection (optional)", { exact: true }).selectOption("");
+    await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+    await expect.poll(() => writes.length).toBe(2);
+    expect(writes[1].body).not.toHaveProperty("storageConnectionId");
+    expect(writes[1].body.securityGroupId).toBe(SECRET);
+    expect(JSON.stringify(writes)).not.toContain("secretAccessKey");
+  });
   test("deploys from the runtime panel, reports health, and stops the service", async ({ page }, testInfo) => {
     const service = { ...INITIAL, domain: null, replicas: 1 };
     await openServices(page, [service]);

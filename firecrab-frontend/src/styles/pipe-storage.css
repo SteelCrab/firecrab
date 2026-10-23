@@ -1,0 +1,104 @@
+.s3-storage { width: 100%; min-width: 0; max-width: 1120px; margin-inline: auto; }
+.s3-back { margin-bottom: 24px; }
+.s3-back a, .s3-back button { display: inline-flex; align-items: center; gap: 7px; border: 0; padding: 0; background: transparent; color: var(--text-3); font: 12px var(--font); text-decoration: none; cursor: pointer; }
+.s3-back svg { width: 14px; height: 14px; }
+.s3-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 28px; }
+.s3-heading-copy { min-width: 0; }
+.s3-heading h2 { margin: 0; color: var(--text); font-size: 22px; font-weight: 600; letter-spacing: -.035em; overflow-wrap: anywhere; }
+.s3-heading p { margin: 6px 0 0; color: var(--text-3); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.s3-toolbar { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.s3-storage .btn svg, .s3-dialog .btn svg { width: 14px; height: 14px; }
+.s3-storage button:disabled, .s3-dialog button:disabled { cursor: default; }
+.s3-notice { margin-bottom: 18px; color: var(--green-ink); font-size: 12px; line-height: 1.5; }
+.s3-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 290px; padding: 32px 20px; border: 1px dashed var(--border); border-radius: var(--radius-lg); text-align: center; }
+.s3-empty > svg { width: 32px; height: 32px; margin-bottom: 16px; color: var(--text-4); stroke-width: 1.4; }
+.s3-empty h3 { margin: 0; font-size: 15px; font-weight: 550; color: var(--text); }
+.s3-empty p { margin: 8px 0 20px; font-size: 12.5px; color: var(--text-3); }
+.s3-connections { list-style: none; padding: 0; margin: 0; border-block: 1px solid var(--border); }
+.s3-connections > li { display: flex; align-items: center; gap: 12px; padding-right: 14px; border-bottom: 1px solid var(--border); }
+.s3-connections > li:last-child { border-bottom: 0; }
+.s3-connection-open { display: flex; flex: 1; align-items: center; gap: 16px; min-width: 0; padding: 20px 12px; border: 0; background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.s3-bucket-icon { display: grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-subtle); color: var(--text-2); }
+.s3-bucket-icon svg { width: 18px; height: 18px; stroke-width: 1.6; }
+.s3-connection-copy { display: grid; flex: 1; min-width: 0; gap: 5px; }
+.s3-connection-copy strong { font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
+.s3-connection-copy > span { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+.s3-connection-copy .s3-bound { font-size: 11px; color: var(--text-2); }
+.s3-region { color: var(--text-3); font-size: 12px; flex-shrink: 0; }
+.s3-open-arrow { width: 14px; height: 14px; color: var(--text-4); flex-shrink: 0; }
+.s3-pathbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-bottom: 18px; }
+.s3-breadcrumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.s3-breadcrumbs > span { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.s3-breadcrumbs svg { width: 13px; height: 13px; flex-shrink: 0; color: var(--text-4); }
+.s3-breadcrumbs button { display: inline-flex; align-items: center; gap: 7px; padding: 4px 2px; border: 0; background: transparent; color: var(--text-3); font: 12px var(--font); cursor: pointer; overflow-wrap: anywhere; text-align: left; min-width: 0; }
+.s3-breadcrumbs button[aria-current] { color: var(--text); font-weight: 550; }
+.s3-text-button { border: 0; padding: 4px 0; background: transparent; color: var(--text-3); font: 11.5px var(--font); cursor: pointer; flex-shrink: 0; }
+.s3-path-form { display: flex; gap: 8px; margin: 0 0 18px; }
+.s3-path-form input { flex: 1; min-width: 0; }
+.s3-files { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.s3-files th { padding: 11px 12px; border-block: 1px solid var(--border); text-align: left; background: var(--bg-subtle); color: var(--text-3); font-size: 11px; font-weight: 400; }
+.s3-files td { padding: 14px 12px; border-bottom: 1px solid var(--border); color: var(--text-2); font-size: 12px; }
+.s3-files th.s3-file-size { width: 90px; }
+.s3-files th.s3-file-modified { width: 190px; }
+.s3-files th:last-child { width: 40px; }
+.s3-files .s3-file-size { text-align: right; font-variant-numeric: tabular-nums; }
+.s3-file-name { display: inline-flex; align-items: center; gap: 12px; max-width: 100%; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; font: 12.5px var(--font); cursor: pointer; }
+.s3-file-name > svg { width: 17px; height: 17px; color: var(--text-4); flex-shrink: 0; stroke-width: 1.5; }
+.s3-file-name > svg.s3-folder-icon { color: var(--text-2); }
+.s3-file-name > span { min-width: 0; overflow-wrap: anywhere; }
+.s3-file-mobile-meta { display: none; }
+.s3-folder-arrow { display: block; width: 14px; height: 14px; margin-left: 6px; color: var(--text-4); }
+.s3-files-footer { display: flex; justify-content: space-between; align-items: center; min-height: 58px; gap: 12px; color: var(--text-3); font-size: 11px; }
+.s3-empty-folder { min-height: 220px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+.s3-empty-folder p { margin-bottom: 0; }
+.s3-hint { margin: 0; color: var(--text-3); font-size: 12px; line-height: 1.6; }
+.s3-hint a { color: var(--text-2); text-underline-offset: 3px; }
+.s3-bound-note { border-top: 1px solid var(--border); padding-top: 16px; }
+.s3-connection-note { margin-top: 14px; }
+.s3-dialog { box-sizing: border-box; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); padding: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); color: var(--text); box-shadow: var(--shadow-lg, 0 16px 60px #0002); overflow-y: auto; }
+.s3-dialog::backdrop { background: rgb(15 18 23 / 30%); }
+.s3-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; }
+.s3-dialog-head h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
+.s3-form { display: grid; gap: 16px; }
+.s3-form .field { display: grid; gap: 7px; min-width: 0; }
+.s3-form .field > span { color: var(--text-2); font-size: 12px; }
+.s3-form .field input, .s3-form .field select { width: 100%; min-width: 0; box-sizing: border-box; }
+.s3-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.s3-field-pair + .s3-hint { margin-top: -8px; }
+.s3-options { border-top: 1px solid var(--border); padding-top: 14px; }
+.s3-options summary { width: fit-content; color: var(--text-3); font-size: 12px; cursor: pointer; }
+.s3-options .field { margin-top: 16px; }
+.s3-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--border); }
+.s3-check { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
+.s3-check input { width: auto; margin: 0; }
+.s3-upload-file { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg-subtle); }
+.s3-upload-file > svg { width: 21px; height: 21px; color: var(--text-3); flex-shrink: 0; }
+.s3-upload-file > div { display: grid; gap: 4px; min-width: 0; }
+.s3-upload-file strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.s3-upload-file span { color: var(--text-3); font-size: 11px; }
+.s3-destination span { overflow-wrap: anywhere; }
+.s3-storage :focus-visible, .s3-dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.s3-spinning { animation: s3-spin 1s linear infinite; }
+@keyframes s3-spin { to { transform: rotate(360deg); } }
+@media (hover: hover) and (pointer: fine) {
+  .s3-connection-open:hover:not(:disabled) { background: var(--bg-hover); }
+  .s3-file-name:hover:not(:disabled) > span, .s3-text-button:hover:not(:disabled), .s3-back a:hover { text-decoration: underline; text-underline-offset: 3px; }
+}
+@media (max-width: 650px) {
+  .s3-back { margin-bottom: 20px; }
+  .s3-heading { flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
+  .s3-heading h2 { font-size: 21px; }
+  .s3-toolbar { margin-left: auto; }
+  .s3-connections > li { padding-right: 4px; gap: 2px; }
+  .s3-connection-open { padding: 18px 4px; gap: 12px; }
+  .s3-region { display: none; }
+  .s3-bucket-icon { width: 32px; height: 32px; }
+  .s3-pathbar { align-items: flex-start; gap: 12px; }
+  .s3-files .s3-file-size, .s3-files .s3-file-modified { display: none; }
+  .s3-files th, .s3-files td { padding-inline: 4px; }
+  .s3-files th:last-child { width: 36px; }
+  .s3-files td { padding-block: 16px; }
+  .s3-file-mobile-meta { display: block; margin: 7px 0 0 29px; color: var(--text-3); font-size: 10.5px; overflow-wrap: anywhere; }
+  .s3-dialog { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); padding: 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .s3-spinning { animation: none; } }
