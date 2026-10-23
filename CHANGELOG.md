@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroService domains connect healthy replicas to PipeIngress automatically,
+  without host ports or manual routes. The dashboard shows the domain and DNS
+  setup guidance, and the CLI accepts domain deployments without `--host-port`.
+  Deployment ownership protects routes from stale Pipe saves and retains cleanup
+  state across API restarts. Stop withdraws the domain before deleting instances.
+
 - MicroVM pause/resume retains guest memory and execution state in the same
   Firecracker process through REST, `firecrab vm pause/resume`, and bilingual
   Dashboard actions. API restart recovery checks the actual VMM state. Paused

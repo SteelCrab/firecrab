@@ -14,8 +14,8 @@ pub enum Command {
     /// Pull the image, start replicas, and wait for app health.
     Deploy {
         id: Uuid,
-        /// First host TCP port; replicas use consecutive ports.
-        #[arg(long)]
+        /// First host TCP port; omit when the service has a domain.
+        #[arg(long, default_value_t = 0)]
         host_port: u16,
         /// Existing network UUID. Omit to create/use the services network.
         #[arg(long)]
