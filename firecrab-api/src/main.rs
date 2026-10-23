@@ -24,6 +24,7 @@ mod persistence;
 mod pipe_ai;
 mod pipe_auth;
 mod pipe_databases;
+mod pipe_storage;
 mod pool;
 mod process_metrics;
 mod reconcile;

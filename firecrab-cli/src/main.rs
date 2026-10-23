@@ -16,6 +16,7 @@ mod microservice;
 mod network;
 mod pipe;
 mod pipe_ai;
+mod pipe_storage;
 mod pool;
 mod schedule;
 #[cfg(target_os = "linux")]
@@ -182,6 +183,11 @@ fn run(cli: Cli) -> i32 {
                 microservice::run(client, command)
             })
         }
+        Command::Pipe {
+            command: pipe::Command::Storage { command },
+        } => run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+            pipe_storage::run(client, command)
+        }),
         Command::Pipe { command } => match pipe::run(command) {
             Ok(()) => 0,
             Err(error) => {

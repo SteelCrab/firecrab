@@ -23,6 +23,7 @@ mod micro_services;
 mod pipe_ai;
 mod pipe_auth;
 mod pipe_databases;
+mod pipe_storage;
 mod registries;
 mod schedules;
 mod security_groups;
@@ -721,6 +722,7 @@ impl Store {
         conn.execute(pipe_ai::DEFAULTS_SQL, [])?;
         conn.execute(pipe_ai::SETTINGS_SQL, [])?;
         conn.execute(pipe_ai::REGISTRATIONS_SQL, [])?;
+        conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;

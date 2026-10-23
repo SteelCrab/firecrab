@@ -111,7 +111,7 @@ async function open(page: Page, options: { card?: PipeCardId | null; unavailable
   const connectionGate = new Promise<void>(resolve => { finishConnection = resolve; });
   await page.route(/^https?:\/\/[^/]+\/api\//, async route => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/pipe/databases") return route.fulfill({ json: [] });
+    if (path === "/api/pipe/databases" || path === "/api/pipe/storage") return route.fulfill({ json: [] });
     if (path === "/api/pipe/cloudflare/zones") {
       zoneRequests.push(route.request().postDataJSON().apiToken);
       if (options.zonesFailure) return route.fulfill({ status: 400, json: { error: { message: "Cloudflare rejected the API token" } } });
@@ -211,17 +211,18 @@ async function open(page: Page, options: { card?: PipeCardId | null; unavailable
 
 test.describe("Pipe cards @dashboard", () => {
   const cards = [
-    { title: "Pipe Auth", id: "auth", region: "Pipe Auth", status: "Not configured" },
+    { title: "Auth", id: "auth", region: "Auth", status: "Not configured" },
     { title: "Pipe AI", id: "ai", region: "Pipe AI", status: "Not configured" },
     { title: "Route", id: "route", region: "Route", status: "Nginx active · 1 route" },
     { title: "Pipe Registry", id: "registry", region: "Pipe Registry", status: "Not configured" },
     { title: "Database", id: "database", region: "Databases", status: "Not configured" },
+    { title: "PipeStorage", id: "storage", region: "PipeStorage", status: "Not configured" },
     { title: "Firecrab Tunnel", id: "firecrab-tunnel", region: "Firecrab Tunnel", status: "Not configured" },
     { title: "Cloudflare Quick Tunnel", id: "quick-tunnel", region: "Quick Tunnel", status: "1/1 running" },
     { title: "Cloudflare Named Tunnel", id: "named-tunnel", region: "Cloudflare Named Tunnel", status: "Connector active" },
   ];
 
-  test("lists eight services and opens each one only from its card", async ({ page }, info) => {
+  test("lists nine services and opens each one only from its card", async ({ page }, info) => {
     await open(page, { card: null, quickTunnels: [webTunnel], configuredTunnel: true });
     const pipe = page.getByRole("region", { name: "Pipe", exact: true });
     await expect(pipe.getByRole("listitem")).toHaveCount(cards.length);

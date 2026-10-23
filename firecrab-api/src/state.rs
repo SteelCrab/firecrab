@@ -97,6 +97,9 @@ const DISK_PREP_CONCURRENCY: usize = 2;
 /// table, template registry, and runtime config.
 #[derive(Debug, Clone)]
 pub struct AppState {
+    /// Loopback fixture override, absent from production builds.
+    #[cfg(test)]
+    pub(crate) s3_test_origin: Option<String>,
     /// Port of the bound HTTP listener, set before serving requests.
     pub(crate) api_port: u16,
     /// In-memory cache of every VM record, mirrored to [`AppState::store`].
@@ -190,6 +193,8 @@ impl AppState {
         let network = NetworkClient::from_env();
         let runtime = RuntimeConfig::from_defaults(&storage, &network);
         Ok(AppState {
+            #[cfg(test)]
+            s3_test_origin: None,
             api_port: 5523,
             vms: Arc::new(Mutex::new(vms)),
             templates: Arc::new(templates),

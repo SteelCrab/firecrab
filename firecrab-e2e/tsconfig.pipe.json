@@ -1,9 +1,29 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "lib": ["ES2022", "DOM"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler"
   },
-  "include": ["tests/pipe-ai.spec.ts", "playwright.pipe.config.ts", "playwright.pipe-live.config.ts", "playwright.mocked.config.ts", "tests/pipe-auth.spec.ts", "tests/pipe-databases.spec.ts", "tests/pipe-databases-live.spec.ts", "tests/support/*.ts", "tests/command-palette.spec.ts", "tests/dashboard-frame.spec.ts", "tests/vm-list.spec.ts", "tests/vm-detail.spec.ts"]
+  "include": [
+    "tests/pipe-ai.spec.ts",
+    "playwright.pipe.config.ts",
+    "playwright.pipe-live.config.ts",
+    "playwright.mocked.config.ts",
+    "tests/pipe-auth.spec.ts",
+    "tests/pipe-databases.spec.ts",
+    "tests/pipe-databases-live.spec.ts",
+    "tests/support/*.ts",
+    "tests/command-palette.spec.ts",
+    "tests/dashboard-frame.spec.ts",
+    "tests/vm-list.spec.ts",
+    "tests/vm-detail.spec.ts",
+    "tests/pipe-storage.spec.ts",
+    "tests/pipe-storage-live.spec.ts",
+    "tests/pipe-storage-account-live.spec.ts",
+    "playwright.storage-live.config.ts"
+  ]
 }

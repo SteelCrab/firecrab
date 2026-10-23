@@ -127,7 +127,7 @@ export function newVmHash(): string {
 }
 
 /** Pipe service cards. `#/pipe` lists them; `#/pipe/<id>` opens one. */
-export const PIPE_CARDS = ["auth", "ai", "route", "registry", "database", "firecrab-tunnel", "quick-tunnel", "named-tunnel"] as const;
+export const PIPE_CARDS = ["auth", "ai", "route", "registry", "database", "storage", "firecrab-tunnel", "quick-tunnel", "named-tunnel"] as const;
 export type PipeCardId = (typeof PIPE_CARDS)[number];
 const PIPE_CARD_RE = /^pipe\/([^/?#]+)$/;
 
