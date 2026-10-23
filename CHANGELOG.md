@@ -29,6 +29,11 @@ Entries land here as work merges, and move under the next version heading when t
   read-only configuration diff, blocks implicit adoption and conflicting ownership,
   and retains removed declarations. Field values stay out of plans. Actual apply
   and Git polling remain follow-up work for #437.
+
+- An experimental Terraform REST example provisions a network, stopped VM and
+  saved service configuration through the public API. It includes a provider
+  lock file and explicit response-field exclusions that preserve drift detection.
+
 - MicroService domains connect healthy replicas to PipeIngress automatically,
   without host ports or manual routes. The dashboard shows the domain and DNS
   setup guidance, and the CLI accepts domain deployments without `--host-port`.

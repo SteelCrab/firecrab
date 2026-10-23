@@ -4,6 +4,10 @@ Register a stack on one Firecrab host and compare its YAML declaration to existi
 This extends [offline stack validation](stacks.md) for [GitOps IaC #437](https://github.com/SteelCrab/firecrab/issues/437).
 Planning does not create, update, stop, or delete resources.
 
+For a separate Terraform REST API proof, see the [experimental example](../../examples/terraform/basic/README.md).
+It manages network, stopped VM and saved service configuration through an external REST provider.
+It does not apply YAML stacks or run Git reconciliation.
+
 ## Register and inspect
 
 Use the usual [host selection](../reference/cli.md#host-profiles) flags for remote commands.
