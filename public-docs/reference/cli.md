@@ -4,6 +4,12 @@
 Install it with the [CLI installer](../getting-started/installation.md#cli-only-installation).
 Use `firecrab --help` or `firecrab COMMAND --help` for flags.
 
+## Schedules
+
+`firecrab schedule` creates and manages time-based MicroVM start and stop operations.
+Use `create`, `list`, `get`, `update`, `enable`, `disable`, `runs`, and `delete`.
+See [Schedules](../guides/schedules.md) for examples, time zones, and recovery behavior.
+
 ## Host profiles
 
 Save a host, then select it by name.
@@ -46,6 +52,12 @@ The config stores only endpoints; unknown TOML keys block profile changes.
 
 ## Resource commands
 
+`firecrab stack validate --file stack.yaml [--json]` checks a declarative YAML stack offline.
+It does not read host profiles or contact the API, even when `--api` or `--host` is set.
+Exit `0` means the declared schema and local constraints passed; failures exit `1`.
+With `--json`, both outcomes produce a JSON report on stdout.
+See [Stack validation](../guides/stacks.md) for the experimental schema and its limits.
+
 | Resource | Commands |
 | --- | --- |
 | VM | `vm list`, `create`, `start ID`, `stop ID`, `delete ID` |
@@ -72,6 +84,8 @@ firecrab image list
 firecrab network create --name app --subnet-cidr 172.31.20.0/24
 firecrab vm create --name app-1 --template alpine-3.24.1 --network NETWORK_ID
 firecrab vm start VM_ID
+firecrab vm pause VM_ID --json
+firecrab vm resume VM_ID --json
 ```
 
 Replace IDs with values returned by the previous commands.
@@ -203,3 +217,10 @@ Systemd unit files require an installer rerun; see [Operations](../guides/operat
 - [API](api.md)
 - [Operations](../guides/operations.md)
 - [Build from source](../../CONTRIBUTING.md#run-from-source)
+
+### Pause and resume
+
+`vm pause` keeps guest RAM and execution state in the same Firecracker process.
+`vm resume` continues it without a guest reboot. RAM remains allocated while paused.
+Stop discards that execution state. Host/VMM shutdown also loses it.
+Use [pause/resume operations](../guides/operations.md#pause-and-resume-a-microvm) for limits and recovery.

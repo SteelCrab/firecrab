@@ -5,7 +5,7 @@ Configurations survive API restarts in the existing SQLite database.
 Deploy imports the OCI image by digest, creates MicroVM replicas, and waits for HTTP app health.
 Each replica exposes one host TCP port.
 The deployment record and owned VM identifiers survive API restarts.
-Domain routing, CrabSecrets injection, rolling updates, rollback, and automatic instance replacement remain separate work.
+Domain routing, PipeSecrets injection, rolling updates, rollback, and automatic instance replacement remain separate work.
 
 ## Fields
 
@@ -23,7 +23,7 @@ Domain routing, CrabSecrets injection, rolling updates, rollback, and automatic 
 | `startupTimeout` | 1–3600 seconds; default 300 |
 | `drainTimeout` | 0–3600 seconds; default 30 |
 | `env` | Variable name to plain value; default `{}` |
-| `secrets` | Variable name to non-nil CrabSecrets UUID; default `{}`; values are never stored here |
+| `secrets` | Variable name to non-nil PipeSecrets UUID; default `{}`; values are never stored here |
 
 `env` and `secrets` together allow up to 64 entries.
 Variable names follow `[A-Za-z_][A-Za-z0-9_]*` and allow up to 256 bytes.
@@ -95,7 +95,7 @@ firecrab microservice delete SERVICE_UUID
 Create, get, and update print JSON.
 Delete prints a JSON receipt.
 In the dashboard, open **MicroService** to create, inspect, edit, or delete configurations.
-The form supports environment variables and CrabSecrets references.
+The form supports environment variables and [PipeSecrets](secrets.md) references.
 Saving a configuration does not deploy it.
 Select **Run**, then **Deploy and run** to pull the image and start its replicas.
 The panel reports startup progress, app health, host-port links, and failures.

@@ -16,10 +16,12 @@ mod microservice;
 mod network;
 mod pipe;
 mod pipe_ai;
+mod schedule;
 #[cfg(target_os = "linux")]
 mod service;
 #[cfg(any(target_os = "linux", all(test, unix)))]
 mod shell;
+mod stack;
 #[cfg(target_os = "linux")]
 mod status;
 #[cfg(target_os = "linux")]
@@ -50,6 +52,16 @@ enum Command {
     },
     /// Serve local MCP tools over stdin/stdout using the selected REST host.
     Mcp,
+    /// Validate a declarative stack file locally, without connecting to a host.
+    Stack {
+        #[command(subcommand)]
+        command: stack::Command,
+    },
+    /// Manage time-based MicroVM start and stop operations.
+    Schedule {
+        #[command(subcommand)]
+        command: schedule::Command,
+    },
     /// Manage desired MicroService configurations through the host API.
     Microservice {
         #[command(subcommand)]
@@ -146,6 +158,12 @@ fn run(cli: Cli) -> i32 {
             pipe_ai::run(client, command)
         }),
         Command::Mcp => run_with_api_client(api.as_deref(), host.as_deref(), mcp::run),
+        Command::Stack { command } => stack::run(command),
+        Command::Schedule { command } => {
+            run_with_api_client(api.as_deref(), host.as_deref(), |client| {
+                schedule::run(client, command)
+            })
+        }
         Command::Microservice { command } => {
             run_with_api_client(api.as_deref(), host.as_deref(), |client| {
                 microservice::run(client, command)

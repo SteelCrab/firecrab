@@ -11,11 +11,13 @@ use uuid::Uuid;
 
 mod micro_services;
 mod pipe_ai;
+mod schedules;
 pub use micro_services::{
     DeployMicroServiceRequest, MicroServiceDeployment, MicroServiceResponse, MicroServiceSpec,
     ServiceInstance, ServicePhase, ServiceRuntime,
 };
 pub use pipe_ai::*;
+pub use schedules::*;
 
 /// The egress policies the API may request for a VM. New policies are added
 /// here and mirrored in `firecrab-helper`'s own (deliberately separate)
@@ -74,6 +76,12 @@ pub enum VmState {
     Starting,
     /// Firecracker process is up and the guest has booted.
     Running,
+    /// Pause requested; runtime confirmation is pending.
+    Pausing,
+    /// Guest execution is paused; the VMM and RAM remain allocated.
+    Paused,
+    /// Resume requested; runtime confirmation is pending.
+    Resuming,
     /// Shutdown requested, process not yet confirmed gone.
     Stopping,
     /// Process exited cleanly.
@@ -85,15 +93,39 @@ pub enum VmState {
 impl VmState {
     /// Whether the lifecycle table allows moving from `self` to `to`.
     pub fn can_transition(self, to: Self) -> bool {
-        use VmState::{Created, Error, Running, Starting, Stopped, Stopping};
+        use VmState::{
+            Created, Error, Paused, Pausing, Resuming, Running, Starting, Stopped, Stopping,
+        };
         matches!(
             (self, to),
             (Created, Starting)
                 | (Starting, Running | Error)
-                | (Running, Stopping | Stopped | Error)
+                | (Running, Pausing | Resuming | Stopping | Stopped | Error)
+                | (
+                    Pausing,
+                    Paused | Resuming | Running | Stopping | Stopped | Error
+                )
+                | (Paused, Pausing | Resuming | Stopping | Stopped | Error)
+                | (
+                    Resuming,
+                    Running | Pausing | Paused | Stopping | Stopped | Error
+                )
                 | (Stopping, Stopped | Error)
                 | (Stopped, Starting)
                 | (Error, Starting)
+        )
+    }
+
+    /// Whether a live VMM may still own this VM's memory, disks, and network.
+    pub fn has_live_runtime(self) -> bool {
+        matches!(
+            self,
+            Self::Starting
+                | Self::Running
+                | Self::Pausing
+                | Self::Paused
+                | Self::Resuming
+                | Self::Stopping
         )
     }
 
@@ -1666,9 +1698,13 @@ pub struct ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use VmState::{Created, Error, Running, Starting, Stopped, Stopping};
+    use VmState::{
+        Created, Error, Paused, Pausing, Resuming, Running, Starting, Stopped, Stopping,
+    };
 
-    const ALL_STATES: [VmState; 6] = [Created, Starting, Running, Stopping, Stopped, Error];
+    const ALL_STATES: [VmState; 9] = [
+        Created, Starting, Running, Pausing, Paused, Resuming, Stopping, Stopped, Error,
+    ];
 
     #[test]
     fn egress_policy_id_round_trips_through_from_str() {
@@ -1727,6 +1763,25 @@ mod tests {
             (Created, Starting),
             (Starting, Running),
             (Starting, Error),
+            (Running, Pausing),
+            (Running, Resuming),
+            (Pausing, Paused),
+            (Pausing, Resuming),
+            (Pausing, Running),
+            (Pausing, Stopping),
+            (Pausing, Stopped),
+            (Pausing, Error),
+            (Paused, Resuming),
+            (Paused, Pausing),
+            (Paused, Stopping),
+            (Paused, Stopped),
+            (Paused, Error),
+            (Resuming, Running),
+            (Resuming, Pausing),
+            (Resuming, Paused),
+            (Resuming, Stopping),
+            (Resuming, Stopped),
+            (Resuming, Error),
             (Running, Stopping),
             (Running, Stopped),
             (Running, Error),

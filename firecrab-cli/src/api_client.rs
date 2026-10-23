@@ -51,9 +51,20 @@ pub fn resolve_api_base(
         return crate::hosts::normalize_url(&environment);
     }
     let selected = crate::hosts::selected(requested_host)?;
-    Ok(selected
-        .map(|host| host.url)
-        .unwrap_or_else(|| DEFAULT_API_BASE.to_owned()))
+    match selected {
+        Some(host) => Ok(host.url),
+        None => default_api_base(),
+    }
+}
+
+pub(crate) fn default_api_base() -> Result<String, crate::hosts::Error> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if let Some(base) =
+        crate::micromanager::local_api_base().map_err(crate::hosts::Error::LocalConfiguration)?
+    {
+        return Ok(base);
+    }
+    Ok(DEFAULT_API_BASE.to_owned())
 }
 
 /// Thin blocking HTTP client for firecrab-api, used by `status`/other
@@ -140,9 +151,9 @@ impl ApiClient {
             .post(self.url(path))
             .json(body)
             .timeout(if path.starts_with("/api/pipe/ai/") {
-                OCI_INSPECT_TIMEOUT
+                self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
             } else {
-                DEFAULT_REQUEST_TIMEOUT
+                self.mutation_timeout()
             })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
@@ -155,6 +166,7 @@ impl ApiClient {
         let resp = self
             .client
             .post(self.url(path))
+            .timeout(self.mutation_timeout())
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(resp)
@@ -172,9 +184,9 @@ impl ApiClient {
             .put(self.url(path))
             .json(body)
             .timeout(if path.starts_with("/api/pipe/ai/") {
-                OCI_INSPECT_TIMEOUT
+                self.mutation_timeout().max(OCI_INSPECT_TIMEOUT)
             } else {
-                DEFAULT_REQUEST_TIMEOUT
+                self.mutation_timeout()
             })
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
@@ -187,6 +199,7 @@ impl ApiClient {
         let resp = self
             .client
             .delete(self.url(path))
+            .timeout(self.mutation_timeout())
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::ensure_success(resp).map(|_| ())
@@ -196,10 +209,22 @@ impl ApiClient {
         let response = self
             .client
             .delete(self.url(path))
-            .timeout(OCI_INSPECT_TIMEOUT)
+            .timeout(self.mutation_timeout().max(OCI_INSPECT_TIMEOUT))
             .send()
             .map_err(|e| ApiError::Unreachable(e.to_string()))?;
         Self::decode_json(response)
+    }
+
+    fn mutation_timeout(&self) -> Duration {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if reqwest::Url::parse(self.base_url())
+            .ok()
+            .is_some_and(|url| matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")))
+        {
+            // Includes a cold microManager boot before the request is forwarded.
+            return Duration::from_secs(360);
+        }
+        DEFAULT_REQUEST_TIMEOUT
     }
 
     /// Sends `GET` and returns the raw successful body. Used for attachments

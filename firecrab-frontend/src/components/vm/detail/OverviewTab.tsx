@@ -8,6 +8,7 @@ import ShellCheckboxList from "../../ShellCheckboxList";
 import { STARTUP_STEPS, clockTime, duration, startupFailure, startupFailureDetail, startupStepLabel } from "../startup";
 import { vmSpec } from "../vmFormat";
 import VmUsage from "../VmUsage";
+import VmSchedules from "../../schedules/VmSchedules";
 import { DetailProp, DetailSection } from "../../ui/DetailSection";
 import { EditActions, EditButton, EditableProp, FieldError } from "./parts";
 import type { SectionEdit } from "./useSectionEdit";
@@ -51,6 +52,8 @@ export default function OverviewTab({ vm, detail, edit, onShowLog }: OverviewTab
           <ReconciliationStatus result={vm.reconciliation} />
         </section>
       )}
+
+      <VmSchedules vm={vm} />
 
       <DetailSection title={t("Resource usage", "리소스 사용량")}>
         <VmUsage vm={vm} />

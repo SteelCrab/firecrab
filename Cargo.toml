@@ -4,6 +4,7 @@ members = [
     "firecrab-api",
     "firecrab-api-types",
     "firecrab-cli",
+    "firecrab-stack",
     "firecrab-helper-protocol",
     "firecrab-helper",
     "firecrab-tunnel",

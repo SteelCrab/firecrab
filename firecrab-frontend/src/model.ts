@@ -1,12 +1,15 @@
 import type { VmState } from "./bindings";
 
-export type VmAction = "start" | "stop" | "delete";
+export type VmAction = "start" | "stop" | "pause" | "resume" | "delete";
 
 /** Display name for each VM state, as `t(english, korean)` arguments. */
 export const VM_STATE_LABELS: Record<VmState, [string, string]> = {
   created: ["Created", "생성됨"],
   starting: ["Starting", "시작 중"],
   running: ["Running", "실행 중"],
+  pausing: ["Pausing", "일시정지 중"],
+  paused: ["Paused", "일시정지됨"],
+  resuming: ["Resuming", "재개 중"],
   stopping: ["Stopping", "중지 중"],
   stopped: ["Stopped", "중지됨"],
   error: ["Error", "오류"],
@@ -40,7 +43,12 @@ export function availableActions(state: VmState): VmAction[] {
     case "error":
       return ["start", "delete"];
     case "running":
-      return ["stop"];
+      return ["pause", "stop"];
+    case "paused":
+      return ["resume", "stop"];
+    case "pausing":
+    case "resuming":
+      return ["pause", "resume", "stop"];
     case "starting":
     case "stopping":
       return [];

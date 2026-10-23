@@ -28,12 +28,15 @@ mod process_metrics;
 mod reconcile;
 mod resource_limits;
 mod rootfs;
+mod scheduler;
+mod secrets;
 mod server;
 mod service_runtime;
 mod shells;
 mod state;
 mod storage;
 mod templates;
+mod vm_execution;
 mod vm_shim;
 
 use std::error::Error;
@@ -119,6 +122,11 @@ async fn run() -> Result<(), StartupError> {
     let mut state = AppState::new(templates)
         .await
         .map_err(StartupError::Persistence)?;
+    // Reject a second owner before recovering any host or scheduled work.
+    let scheduler_ownership = state
+        .store
+        .scheduler_lock()
+        .map_err(StartupError::Persistence)?;
     // Bridges, nftables rules and dnsmasq's config are all host state a
     // reboot wipes, so they are re-applied here rather than assumed. Doing it
     // at startup (not only on VM start) is what brings back a MicroNetwork
@@ -143,6 +151,9 @@ async fn run() -> Result<(), StartupError> {
 
     let local_address = listener.local_addr().map_err(StartupError::LocalAddress)?;
     state.api_port = local_address.port();
+    scheduler::spawn(state.clone(), scheduler_ownership)
+        .await
+        .map_err(StartupError::Persistence)?;
     let app = build_router(state, &config);
     tracing::info!(address = %local_address, "listening on http://{local_address}");
     axum::serve(listener, app)
