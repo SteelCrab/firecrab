@@ -16,7 +16,6 @@ __pycache__/
 
 # Frontend build output / dependencies
 firecrab-frontend/dist/
-firecrab-frontend/dist-benchmark/
 node_modules/
 
 # Packaged M2Image release artifacts (scripts/package-m2images.sh)

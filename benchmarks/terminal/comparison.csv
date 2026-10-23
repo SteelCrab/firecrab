@@ -1,0 +1,13 @@
+metric,unit,before,after,change_percent
+burst_resize_median,ms,140.1,16.6,-88.15
+paced_handler_p95,ms,5.2,0.1,-98.08
+total_payload_gzip,bytes,188624,147875,-21.6
+total_payload_raw,bytes,645505,504232,-21.89
+engine_javascript_raw,bytes,636228,71910,-88.7
+paced_resize_median,ms,349.3,349.3,-0.0
+startup_median,ms,19.6,19.5,-0.51
+input_p50,ms,16.7,16.7,0.0
+input_p95,ms,18,17.9,-0.56
+tui_160x48_median,ms,21.8,22.2,1.83
+ansi_160x48_median,ms,16.7,16.7,0.0
+correct_output_checks,count,140,140,0.0
