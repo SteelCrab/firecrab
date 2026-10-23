@@ -9,6 +9,7 @@ import VmScreen from "./components/vm/VmScreen";
 import FirecrabPanel from "./components/FirecrabPanel";
 import HostInfo from "./components/HostInfo";
 import Images from "./components/Images";
+import Pools from "./components/Pools";
 import Kernels from "./components/Kernels";
 import MicroNetworks from "./components/MicroNetworks";
 import MicroStorages from "./components/MicroStorages";
@@ -286,6 +287,7 @@ export default function App() {
       )}
       {/* Each page mounts only while selected, so its own polling stops
           the moment you navigate away. */}
+      {view === "pools" && <Screen view="pools"><Pools /></Screen>}
       {view === "networks" && <MicroNetworks />}
       {view === "services" && <MicroServices />}
       {view === "schedules" && <Schedules key={route.kind === "shell" ? `${route.vmId ?? "all"}-${!!route.createSchedule}-${route.scheduleId ?? ""}` : "all"} vms={state.vms} vmsLoaded={state.loaded && state.consecutiveFailures === 0} vmId={route.kind === "shell" ? route.vmId : undefined} create={route.kind === "shell" && route.createSchedule} scheduleId={route.kind === "shell" ? route.scheduleId : undefined} />}
