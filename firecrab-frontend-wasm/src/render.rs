@@ -190,7 +190,7 @@ pub fn content(app: &App) -> String {
     }
     let mut html = match app.route.as_str() {
         "vms" => format!(
-            "{}<div class=\"vm-list-scroll\"><table class=\"vm-list\" aria-label=\"{}\"><colgroup><col><col class=\"vm-col-state\"><col class=\"vm-col-ip\"><col class=\"vm-col-cpu\"><col class=\"vm-col-mem\"><col class=\"vm-col-actions\"></colgroup><thead><tr><th>{}</th><th>{}</th><th class=\"vm-col-ip\">IPv4</th><th>CPU</th><th class=\"vm-col-mem\">{}</th><th><span class=\"sr-only\">Actions</span></th></tr></thead><tbody id=\"vm-rows\">{}</tbody></table><p id=\"vm-empty\" class=\"empty-state\" {}>{}</p></div>",
+            "<div class=\"vm-screen\">{}<div id=\"vm-scroll\" class=\"vm-list-scroll\"><table class=\"vm-list\" aria-label=\"{}\"><colgroup><col><col class=\"vm-col-state\"><col class=\"vm-col-ip\"><col class=\"vm-col-cpu\"><col class=\"vm-col-mem\"><col class=\"vm-col-actions\"></colgroup><thead><tr><th>{}</th><th>{}</th><th class=\"vm-col-ip\">IPv4</th><th>CPU</th><th class=\"vm-col-mem\">{}</th><th><span class=\"sr-only\">Actions</span></th></tr></thead><tbody id=\"vm-rows\">{}</tbody></table><p id=\"vm-empty\" class=\"empty-state\" {}>{}</p></div></div>",
             vm_summary(app),
             tr(app, "MicroVMs", "MicroVM 목록"),
             tr(app, "Name", "이름"),
@@ -364,71 +364,80 @@ fn vm_summary(app: &App) -> String {
     out
 }
 pub fn vm_rows(app: &App) -> String {
-    let mut out = String::with_capacity(app.vms.len() * 700);
-    for vm in &app.vms {
-        let visibility = if vm.matches(&app.filter, &app.query) {
-            ""
-        } else {
-            "hidden"
-        };
-        let selected = app.detail.as_ref().is_some_and(|d| text(d, "id") == vm.id);
-        let id = escape(&vm.id);
-        let state = escape(&vm.state);
-        let state_label = match vm.state.as_str() {
-            "created" => tr(app, "Created", "생성됨"),
-            "running" => tr(app, "Running", "실행 중"),
-            "stopped" => tr(app, "Stopped", "중지됨"),
-            "starting" => tr(app, "Starting", "시작 중"),
-            "stopping" => tr(app, "Stopping", "중지 중"),
-            _ => tr(app, "Error", "오류"),
-        };
-        let cpu = if vm.state == "running" {
-            vm.cpu_usage_percent
-                .map(|value| {
-                    format!(
-                        "{}<span class=\"vm-usage-value\">{value:.1}%</span>",
-                        sparkline(vm)
-                    )
-                })
-                .unwrap_or("—".into())
-        } else {
-            "—".into()
-        };
-        let memory = if vm.state == "running" {
-            vm.memory_used_percent.filter(|v|v.is_finite()).map(|value|format!("<span class=\"vm-meter\"><i style=\"width:{}%\"></i></span><span class=\"vm-usage-value\">{value:.1}%</span>",value.clamp(0.0,100.0))).unwrap_or("—".into())
-        } else {
-            "—".into()
-        };
-        let action = if vm.state == "running" {
-            vm_icon_button(tr(app, "Stop", "중지"), "vm-stop", &vm.id)
-        } else if vm.editable() {
-            vm_icon_button(tr(app, "Start", "시작"), "vm-start", &vm.id)
-        } else {
-            String::new()
-        };
-        let terminal = if vm.state == "running" {
-            format!(
-                "<a class=\"icon-btn\" href=\"#/console/{}\" target=\"_blank\" rel=\"noopener noreferrer\" aria-label=\"Terminal (new tab)\">▣</a>",
-                encode(&vm.id)
-            )
-        } else {
-            "<button class=\"icon-btn\" disabled aria-label=\"Terminal (new tab)\">▣</button>"
-                .into()
-        };
-        let _ = write!(
-            out,
-            "<tr {visibility} data-id=\"{id}\" aria-selected=\"{selected}\" class=\"{}\"><td><button type=\"button\" class=\"vm-row-name\" data-action=\"detail\" data-id=\"{id}\">{}</button><div class=\"vm-row-sub\">{} · {} vCPU · {} MiB · {} GB{}</div></td><td><span class=\"badge {state}\" tabindex=\"0\" aria-label=\"VM-STATUS: {state_label}\" data-vm-tooltip=\"{id}\" title=\"{state_label}\">{state_label}</span></td><td class=\"vm-col-ip\"><span class=\"mono\">{}</span></td><td><span class=\"vm-usage\">{cpu}</span></td><td class=\"vm-col-mem\"><span class=\"vm-usage\">{memory}</span></td><td class=\"vm-row-actions\">{action}{terminal}{}</td></tr>",
-            if selected { "selected" } else { "" },
-            escape(&vm.name),
-            escape(&vm.template),
-            vm.cpu,
-            vm.ram,
-            vm.disk_gb,
-            vm_startup_note(vm),
-            escape(vm.ipv4.as_deref().unwrap_or("—")),
-            vm_icon_button("Actions", "detail", &vm.id)
-        );
-    }
+    let matches: Vec<_> = app
+        .vms
+        .iter()
+        .filter(|vm| vm.matches(&app.filter, &app.query))
+        .collect();
+    let limit = if app.vms.len() > crate::vm_list::WINDOW_THRESHOLD {
+        64
+    } else {
+        matches.len()
+    };
+    matches
+        .into_iter()
+        .take(limit)
+        .map(|vm| vm_row(app, vm))
+        .collect()
+}
+pub fn vm_row(app: &App, vm: &Vm) -> String {
+    let mut out = String::with_capacity(1600);
+    let selected = app.detail.as_ref().is_some_and(|d| text(d, "id") == vm.id);
+    let id = escape(&vm.id);
+    let state = escape(&vm.state);
+    let state_label = match vm.state.as_str() {
+        "created" => tr(app, "Created", "생성됨"),
+        "running" => tr(app, "Running", "실행 중"),
+        "stopped" => tr(app, "Stopped", "중지됨"),
+        "starting" => tr(app, "Starting", "시작 중"),
+        "stopping" => tr(app, "Stopping", "중지 중"),
+        _ => tr(app, "Error", "오류"),
+    };
+    let cpu = if vm.state == "running" {
+        vm.cpu_usage_percent
+            .map(|value| {
+                format!(
+                    "{}<span class=\"vm-usage-value\">{value:.1}%</span>",
+                    sparkline(vm)
+                )
+            })
+            .unwrap_or("—".into())
+    } else {
+        "—".into()
+    };
+    let memory = if vm.state == "running" {
+        vm.memory_used_percent.filter(|v|v.is_finite()).map(|value|format!("<span class=\"vm-meter\"><i style=\"width:{}%\"></i></span><span class=\"vm-usage-value\">{value:.1}%</span>",value.clamp(0.0,100.0))).unwrap_or("—".into())
+    } else {
+        "—".into()
+    };
+    let action = if vm.state == "running" {
+        vm_icon_button(tr(app, "Stop", "중지"), "vm-stop", &vm.id)
+    } else if vm.editable() {
+        vm_icon_button(tr(app, "Start", "시작"), "vm-start", &vm.id)
+    } else {
+        String::new()
+    };
+    let terminal = if vm.state == "running" {
+        format!(
+            "<a class=\"icon-btn\" href=\"#/console/{}\" target=\"_blank\" rel=\"noopener noreferrer\" aria-label=\"Terminal (new tab)\">▣</a>",
+            encode(&vm.id)
+        )
+    } else {
+        "<button class=\"icon-btn\" disabled aria-label=\"Terminal (new tab)\">▣</button>".into()
+    };
+    let _ = write!(
+        out,
+        "<tr data-id=\"{id}\" aria-selected=\"{selected}\" class=\"{}\"><td><button type=\"button\" class=\"vm-row-name\" data-action=\"detail\" data-id=\"{id}\">{}</button><div class=\"vm-row-sub\">{} · {} vCPU · {} MiB · {} GB{}</div></td><td><span class=\"badge {state}\" tabindex=\"0\" aria-label=\"VM-STATUS: {state_label}\" data-vm-tooltip=\"{id}\" title=\"{state_label}\">{state_label}</span></td><td class=\"vm-col-ip\"><span class=\"mono\">{}</span></td><td><span class=\"vm-usage\">{cpu}</span></td><td class=\"vm-col-mem\"><span class=\"vm-usage\">{memory}</span></td><td class=\"vm-row-actions\">{action}{terminal}{}</td></tr>",
+        if selected { "selected" } else { "" },
+        escape(&vm.name),
+        escape(&vm.template),
+        vm.cpu,
+        vm.ram,
+        vm.disk_gb,
+        vm_startup_note(vm),
+        escape(vm.ipv4.as_deref().unwrap_or("—")),
+        vm_icon_button("Actions", "detail", &vm.id)
+    );
     out
 }
 fn vm_startup_note(vm: &Vm) -> String {

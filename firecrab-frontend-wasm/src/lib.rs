@@ -6,6 +6,7 @@ mod model;
 mod render;
 mod terminal;
 mod updates;
+mod vm_list;
 mod workflows;
 
 use forms::Form;
@@ -28,11 +29,10 @@ struct App {
     filter: String,
     query: String,
     vms: Vec<Vm>,
-    vm_rows: Vec<web_sys::HtmlElement>,
-    vm_visible: Vec<bool>,
-    vm_body: Option<Element>,
-    vm_compact: bool,
-    compact_rows: Vec<usize>,
+    vm_rows: Vec<Option<web_sys::HtmlElement>>,
+    vm_indices: Vec<usize>,
+    vm_window: Option<(usize, usize)>,
+    vm_scroll_top: i32,
     search_index: Vec<String>,
     resource: Value,
     cache: BTreeMap<String, Value>,
@@ -89,7 +89,7 @@ fn render_page(app: &Shared) {
     set_html("root", &html);
     app.borrow_mut().rendering = false;
     update_host(app);
-    cache_rows(app);
+    vm_list::cache(app);
     render_detail(app);
 }
 fn update_host(app: &Shared) {
@@ -140,7 +140,7 @@ fn render_content(app: &Shared) {
         let _ = content.set_attribute("data-loaded", if loaded { "true" } else { "false" });
     }
     set_html("messages", &messages);
-    cache_rows(app);
+    vm_list::cache(app);
     render_detail(app);
     workflows::sync_form();
 }
@@ -178,7 +178,7 @@ fn render_detail(app: &Shared) {
         if state.rendered_selected != selected {
             for id in [&state.rendered_selected, &selected] {
                 if let Some(index) = state.vms.iter().position(|vm| vm.id == *id)
-                    && let Some(row) = state.vm_rows.get(index)
+                    && let Some(row) = state.vm_rows.get(index).and_then(Option::as_ref)
                 {
                     updates.push((row.clone(), *id == selected));
                 }
@@ -214,105 +214,6 @@ fn render_detail(app: &Shared) {
 fn render_messages(app: &Shared) {
     set_html("messages", &render::messages(&app.borrow()));
 }
-fn cache_rows(app: &Shared) {
-    let mut state = app.borrow_mut();
-    state.vm_rows.clear();
-    state.vm_visible.clear();
-    state.vm_body = element("vm-rows");
-    state.vm_compact = false;
-    state.compact_rows.clear();
-    if let Ok(rows) = document().query_selector_all("#vm-rows > tr[data-id]") {
-        for i in 0..rows.length() {
-            if let Some(row) = rows
-                .item(i)
-                .and_then(|row| row.dyn_into::<web_sys::HtmlElement>().ok())
-            {
-                state.vm_visible.push(!row.hidden());
-                state.vm_rows.push(row);
-            }
-        }
-    }
-}
-fn render_rows(app: &Shared) {
-    let mut state = app.borrow_mut();
-    let query = model::lowercase(state.query.trim());
-    let matches: Vec<bool> = state
-        .vms
-        .iter()
-        .enumerate()
-        .map(|(i, vm)| {
-            (state.filter == "all" || state.filter == vm.state)
-                && (query.is_empty()
-                    || state
-                        .search_index
-                        .get(i)
-                        .is_some_and(|index| index.contains(&query)))
-        })
-        .collect();
-    let count = matches.iter().filter(|&&visible| visible).count();
-    let Some(full) = state.vm_body.clone() else {
-        return;
-    };
-    let Some(current) = element("vm-rows") else {
-        return;
-    };
-    let compact = !query.is_empty() && count <= 128;
-    let selected: Vec<usize> = if compact {
-        matches
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &visible)| visible.then_some(i))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    if !(compact && state.vm_compact && selected == state.compact_rows) {
-        // Restore moved rows in reverse order so each next sibling is already back.
-        for &index in state.compact_rows.iter().rev() {
-            let next = state.vm_rows.get(index + 1).map(|row| row.as_ref());
-            let _ = full.insert_before(&state.vm_rows[index], next);
-        }
-        state.compact_rows.clear();
-        if compact {
-            let Ok(body) = document().create_element("tbody") else {
-                return;
-            };
-            body.set_id("vm-rows");
-            if let Some(parent) = current.parent_node() {
-                let _ = parent.replace_child(&body, &current);
-            }
-            // Detach the full body once; do not invalidate styles on 10,000 rows.
-            for &index in &selected {
-                let row = &state.vm_rows[index];
-                row.set_hidden(false);
-                let _ = body.append_child(row);
-                state.vm_visible[index] = true;
-            }
-            state.compact_rows = selected;
-        } else {
-            for (i, &visible) in matches.iter().enumerate() {
-                if state.vm_visible[i] != visible {
-                    state.vm_rows[i].set_hidden(!visible);
-                    state.vm_visible[i] = visible;
-                }
-            }
-            if state.vm_compact
-                && let Some(parent) = current.parent_node()
-            {
-                let _ = parent.replace_child(&full, &current);
-            }
-        }
-        state.vm_compact = compact;
-    }
-    if let Some(rows) = element("vm-rows") {
-        let _ = rows.set_attribute("data-visible-count", &count.to_string());
-    }
-    if let Some(empty) = element("vm-empty").and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
-    {
-        empty.set_hidden(count != 0);
-    }
-}
-
 fn update_toolbar(app: &Shared) {
     let state = app.borrow();
     if let Ok(tabs) = document().query_selector_all(".vm-filter") {
@@ -387,6 +288,7 @@ pub fn start() -> Result<(), JsValue> {
     render_page(&app);
     listen(&app)?;
     details::install(&app)?;
+    vm_list::install(&app)?;
     terminal::install(&app)?;
     load_route(app.clone());
     let poll = app.clone();
@@ -765,7 +667,7 @@ fn listen(app: &Shared) -> Result<(), JsValue> {
             "vm-search" => {
                 if let Ok(input) = target.dyn_into::<HtmlInputElement>() {
                     changed.borrow_mut().query = input.value();
-                    render_rows(&changed);
+                    vm_list::filter(&changed);
                 }
             }
             "palette-query" => {
@@ -964,7 +866,7 @@ fn dispatch(app: Shared, action: &str, id: &str, button: &Element) {
         "filter" => {
             app.borrow_mut().filter = id.into();
             update_toolbar(&app);
-            render_rows(&app);
+            vm_list::filter(&app);
         }
         "detail" => show_detail(app, id.into()),
         "close-detail" => {
@@ -1392,6 +1294,7 @@ fn show_detail(app: Shared, id: String) {
     if !allow_discard(&app) {
         return;
     }
+    vm_list::reveal(&app, &id);
     let mut state = app.borrow_mut();
     state.form = None;
     state.dirty = false;

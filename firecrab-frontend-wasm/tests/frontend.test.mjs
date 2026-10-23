@@ -37,21 +37,21 @@ function mutation(path, method = 'POST') { return fixture.requests.findLast(requ
 test('WASM owns the app and filters the same names, images, addresses, and state tabs', async () => {
   await open();
   await expect(page.locator('#root')).toHaveAttribute('data-engine', 'wasm');
-  await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(12);
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(12);
   await page.getByRole('tab', { name: /^Running/ }).click();
-  await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(3);
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(3);
   await page.getByRole('tab', { name: /^All/ }).click();
   const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
-  await search.fill(' VM-00009 '); await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(1);
-  await search.fill('UBUNTU'); await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(12);
-  await search.fill('10.42.0.2'); await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(1);
+  await search.fill(' VM-00009 '); await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(1);
+  await search.fill('UBUNTU'); await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(12);
+  await search.fill('10.42.0.2'); await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(1);
 });
 
 test('narrow searches restore consecutive and separated rows in server order', async () => {
   fixture.reset(200);
   for (const index of [2, 3, 9, 99, 150]) fixture.state.vms[index].template = "shared-image";
   await open();
-  const rows = page.locator('#vm-rows tr:not([hidden])');
+  const rows = page.locator('#vm-rows tr[data-id]:visible');
   const originalIds = fixture.state.vms.map(vm => vm.id);
   await page.evaluate(() => { window.originalVmRows = [...document.querySelectorAll('#vm-rows tr')]; });
   const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
@@ -73,13 +73,115 @@ test('search preserves browser Unicode lowercasing for VM names and palette resu
   const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
   for (const name of names) {
     await search.fill(name.toLowerCase());
-    await expect(page.locator('#vm-rows tr:not([hidden])')).toHaveCount(1);
+    await expect(page.locator('#vm-rows tr[data-id]:visible')).toHaveCount(1);
     await expect(page.locator('.vm-row-name')).toHaveText(name);
   }
   await search.fill('');
   await page.keyboard.press('ControlOrMeta+k');
   await page.locator('#palette-query').fill('école');
   await expect(page.locator('#palette-items')).toContainText('ÉCOLE');
+});
+
+test('state filters expose only matching rows to the screen and accessibility tree', async () => {
+  fixture.reset(240);
+  await open();
+  const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
+  const table = page.locator('.vm-list');
+  const originalRows = await table.locator('tbody tr').elementHandles();
+  await page.locator('.vm-row-name').nth(1).click();
+  await expect(page.locator('#detail-panel')).toContainText('vm-00001');
+  for (const [filter, label, count] of [['running', 'Running', 60], ['stopped', 'Stopped', 60], ['error', 'Error', 60], ['all', 'All', 240]]) {
+    await page.getByRole('tab', { name: new RegExp(`^${label}`) }).click();
+    await expect(table.getByRole('row')).toHaveCount(count + 1);
+    await expect(table.locator('tbody tr[data-id]:visible')).toHaveCount(count);
+    assert.deepEqual(await table.locator('tbody tr[data-id]:visible').evaluateAll(rows => rows.map(row => row.dataset.id)), fixture.state.vms.filter(vm => filter === 'all' || vm.state === filter).map(vm => vm.id));
+    await search.fill('ubuntu');
+    await expect(table.getByRole('row')).toHaveCount(count + 1);
+    await search.fill('');
+  }
+  assert.equal(await page.evaluate(rows => rows.every((row, i) => row === document.querySelectorAll('#vm-rows tr')[i]), originalRows), true);
+  await page.getByRole('tab', { name: /^Running/ }).click();
+  fixture.state.vms[1].state = 'running';
+  const refreshed = page.waitForResponse(response => response.url().endsWith('/api/vms'));
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await refreshed;
+  await expect(table.getByRole('row')).toHaveCount(62);
+});
+
+test('large lists keep all VMs reachable through scrolling, palette, keyboard and filters', async () => {
+  fixture.reset(5000);
+  await open();
+  const table = page.locator('.vm-list');
+  const port = page.locator('#vm-scroll');
+  await expect(table).toHaveAttribute('aria-rowcount', '5001');
+  assert.ok(await table.locator('tr[data-id]').count() < 100, 'Large lists keep a bounded DOM window');
+  const focusedRow = page.getByRole('button', { name: 'vm-00010', exact: true });
+  await focusedRow.focus();
+  await port.evaluate(async port => { port.scrollTop = 864; await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+  assert.equal(await port.evaluate(port => port.scrollTop), 864);
+  await expect(focusedRow).toBeFocused();
+  await port.evaluate(port => { port.scrollTop = port.scrollHeight; });
+  await expect(page.locator('.vm-row-name').last()).toHaveText('vm-04999');
+  await expect(page.locator('#vm-rows tr[data-id]').last()).toHaveAttribute('aria-rowindex', '5001');
+  await page.setViewportSize({ width: 600, height: 600 });
+  await port.evaluate(port => { port.scrollTop = port.scrollHeight; });
+  await expect(page.locator('.vm-row-name').last()).toHaveText('vm-04999');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.keyboard.press('ControlOrMeta+k');
+  await page.locator('#palette-query').fill('vm-02505');
+  await page.locator('#palette-query').press('Enter');
+  await expect(page.locator('#detail-panel')).toContainText('vm-02505');
+  await expect(page.getByRole('button', { name: 'vm-02505', exact: true })).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#detail-panel')).toContainText('vm-02506');
+  const previousTop = await port.evaluate(port => port.scrollTop);
+  fixture.state.vms[2506].cpuUsagePercent = 25;
+  const updated = page.waitForResponse(response => response.url().endsWith('/api/vms'));
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await updated;
+  await expect(page.getByRole('button', { name: 'vm-02506', exact: true })).toBeVisible();
+  assert.equal(await port.evaluate(port => port.scrollTop), previousTop);
+  const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
+  await search.fill('vm-00000');
+  await expect(table).toHaveAttribute('aria-rowcount', '2');
+  await expect(page.locator('.vm-row-name')).toHaveText('vm-00000');
+  await expect(search).toBeFocused();
+  await search.fill('');
+  await expect(table).toHaveAttribute('aria-rowcount', '5001');
+  await search.fill('vm-00000');
+  await page.evaluate(() => { window.refreshedFirstRow = document.querySelector('#vm-rows tr[data-id]'); });
+  await search.fill('');
+  assert.equal(await page.evaluate(() => window.refreshedFirstRow === document.querySelector('#vm-rows tr[data-id]')), true);
+  await page.getByRole('tab', { name: /^Running/ }).click();
+  await expect(table).toHaveAttribute('aria-rowcount', '1251');
+  assert.equal(await table.locator('tr[data-id]').evaluateAll(rows => rows.every(row => Number(row.dataset.id.slice(-12)) % 4 === 0)), true);
+  await port.evaluate(port => { port.scrollTop = port.scrollHeight; });
+  await expect(page.locator('.vm-row-name').last()).toHaveText('vm-04996');
+  fixture.state.vms[1].state = 'running';
+  const refreshed = page.waitForResponse(response => response.url().endsWith('/api/vms'));
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await refreshed;
+  await expect(table).toHaveAttribute('aria-rowcount', '1252');
+});
+
+test('medium lists stay bounded when a state filter leaves a smaller result set', async () => {
+  fixture.reset(1000);
+  await open();
+  const table = page.locator('.vm-list');
+  await page.getByRole('tab', { name: /^Running/ }).click();
+  await expect(table).toHaveAttribute('aria-rowcount', '251');
+  assert.ok(await table.locator('tr[data-id]').count() < 100);
+  await page.locator('#vm-scroll').evaluate(port => { port.scrollTop = port.scrollHeight; });
+  await expect(page.locator('.vm-row-name').last()).toHaveText('vm-00996');
+  await page.getByRole('tab', { name: /^All/ }).click();
+  await expect(table).toHaveAttribute('aria-rowcount', '1001');
+  await expect(page.locator('.vm-row-name').first()).toHaveText('vm-00000');
+  const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
+  await search.fill('ubuntu');
+  assert.ok(await table.locator('tr[data-id]').count() < 100);
+  await search.fill('vm-00009');
+  await expect(table).toHaveAttribute('aria-rowcount', '2');
+  await expect(page.locator('.vm-row-name')).toHaveText('vm-00009');
 });
 
 test('VM creation sends numeric resources, optional storage, environment and port rules', async () => {
@@ -125,17 +227,17 @@ test('VM resource edits preserve isolation and environment edits use the real PU
 
 test('VM lifecycle actions refresh server state and deletion requires confirmation', async () => {
   await open();
-  await page.locator('.vm-list tbody tr:not([hidden])').nth(1).getByRole('button', { name: 'Start', exact: true }).click();
-  await expect(page.locator('.vm-list tbody tr:not([hidden])').nth(1)).toContainText('Running');
-  await page.locator('.vm-list tbody tr:not([hidden])').nth(1).getByRole('button', { name: 'Stop', exact: true }).click();
-  await expect(page.locator('.vm-list tbody tr:not([hidden])').nth(1)).toContainText('Stopped');
+  await page.locator('.vm-list tbody tr[data-id]:visible').nth(1).getByRole('button', { name: 'Start', exact: true }).click();
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible').nth(1)).toContainText('Running');
+  await page.locator('.vm-list tbody tr[data-id]:visible').nth(1).getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible').nth(1)).toContainText('Stopped');
   await page.locator('.vm-row-name').nth(1).click();
   page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
   assert.equal(fixture.state.vms.length, 12);
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
-  await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(11);
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(11);
 });
 
 test('all nine main destinations and seven Pipe destinations load without React', async () => {
@@ -287,7 +389,7 @@ test('console binds xterm, ends close-code 4000 sessions, and releases the socke
   await new Promise(resolve => setTimeout(resolve, 1200));
   assert.equal(connections, 1);
   await page.getByRole('link', { name: '← MicroVM', exact: true }).click();
-  await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(12);
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(12);
   await expect(page.locator('#terminal')).toHaveCount(0);
 });
 
@@ -310,21 +412,21 @@ test('initial API errors recover and periodic refresh preserves search focus and
   await open();
   await expect(page.getByRole('alert')).toContainText('Temporarily unavailable');
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(12);
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(12);
   const search = page.getByRole('searchbox', { name: 'Filter MicroVMs' });
   await search.fill('vm-00009');
   const nextRefresh = page.waitForResponse(response => response.url().endsWith('/api/vms'));
   await nextRefresh;
   await expect(search).toBeFocused();
   await expect(search).toHaveValue('vm-00009');
-  await expect(page.locator('.vm-list tbody tr:not([hidden])')).toHaveCount(1);
+  await expect(page.locator('.vm-list tbody tr[data-id]:visible')).toHaveCount(1);
 });
 
 test('desktop actions fit the table and the initial host response updates the sidebar', async () => {
   await open();
   await expect(page.locator('#host-memory')).toHaveText('16384');
   await expect(page.locator('#host-load')).toHaveText('0.50');
-  const row = page.locator('.vm-list tbody tr:not([hidden])').first();
+  const row = page.locator('.vm-list tbody tr[data-id]:visible').first();
   await row.hover();
   for (const label of ['Stop', 'Actions']) {
     const box = await row.getByRole('button', { name: label, exact: true }).boundingBox();

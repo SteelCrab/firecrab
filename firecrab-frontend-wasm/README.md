@@ -64,9 +64,11 @@ The previously omitted frontend workflows are implemented in Rust:
 - Release-note review, update PID tracking/retry/restart recovery, controller resource
   apply tracking; OCI inspection; database connection tests and bidirectional preview.
 
-Filtering normalizes the query once and reuses cached DOM rows. Narrow searches move matching rows into a compact table body. Clearing the query
-restores the same rows in server order. Broad results change only the visibility
-of rows whose match state changed.
+Filtering normalizes the query once and reuses cached DOM rows. Lists with more
+than 256 VMs render a scrolling window with overscan. Other rows are created
+on demand. Search and state filters still cover every VM. The table exposes its
+full row count and each rendered row's index to assistive technology. Palette and
+keyboard navigation reveal rows outside the current window.
 Unchanged polls do not replace the list. Detail updates do not rebuild it.
 
 The browser tests use deterministic HTTP fixtures. They verify frontend behavior
