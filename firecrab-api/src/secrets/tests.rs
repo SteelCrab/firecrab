@@ -1,5 +1,12 @@
 use super::*;
 
+#[test]
+fn legacy_vault_contents_default_to_no_deployment_environments() {
+    let contents: Contents =
+        serde_json::from_str(r#"{"secrets":[],"connections":[],"plans":[]}"#).unwrap();
+    assert!(contents.service_environments.is_empty());
+}
+
 fn secret(name: &str, value: &str) -> Secret {
     Secret {
         summary: SecretSummary {

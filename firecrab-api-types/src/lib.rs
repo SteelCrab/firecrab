@@ -1952,7 +1952,7 @@ mod tests {
             serde_json::to_value(cleared).unwrap()["securityGroupId"],
             serde_json::Value::Null
         );
-        let id = uuid::Uuid::new_v4();
+        let id = uuid::Uuid::from_u128(1);
         body["securityGroupId"] = serde_json::json!(id);
         let selected: UpdateVmResourcesRequest = serde_json::from_value(body).unwrap();
         assert_eq!(selected.security_group_id, Some(Some(id)));

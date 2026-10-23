@@ -51,7 +51,7 @@ pub struct MicroServiceSpec {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     /// Environment variable name -> PipeSecrets UUID. Never contains secret values.
-    /// Host-port deployment currently rejects nonempty secret references.
+    /// Resolved into an encrypted deployment snapshot and injected only into guests.
     #[serde(default)]
     pub secrets: BTreeMap<String, Uuid>,
     /// Policy copied to every replica and captured in deployment snapshots.
