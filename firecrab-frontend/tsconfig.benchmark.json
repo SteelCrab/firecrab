@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": { "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.benchmark.tsbuildinfo" },
+  "include": ["bench"]
+}

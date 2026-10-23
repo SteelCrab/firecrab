@@ -1,4 +1,5 @@
-import type { ITerminalInitOnlyOptions, ITerminalOptions, Terminal } from "@xterm/xterm";
+import type { ITerminalInitOnlyOptions, ITerminalOptions } from "@xterm/xterm";
+import type { InteractiveTerminal, TerminalEngine } from "./terminalEngine";
 
 type TerminalCtorOptions = ITerminalOptions & ITerminalInitOnlyOptions;
 
@@ -27,13 +28,13 @@ export function defaultInteractiveTerminalOptions(
 }
 
 /**
- * Point the hidden xterm textarea at the page language so the OS IME
+ * Point the hidden terminal textarea at the page language so the OS IME
  * (Hangul, Kana, Pinyin, …) attaches. Skip window shortcuts while a
  * composition is in progress so Escape does not cancel Hangul mid-syllable
  * and then also leave terminal-only mode.
  */
-export function enableTerminalIme(term: Terminal, container: HTMLElement): void {
-  const textarea = container.querySelector("textarea.xterm-helper-textarea");
+export function enableTerminalIme(term: InteractiveTerminal, container: HTMLElement, engine: TerminalEngine): void {
+  const textarea = term.textarea ?? container.querySelector("textarea");
   if (textarea instanceof HTMLTextAreaElement) {
     const lang = document.documentElement.lang || navigator.language || "ko";
     textarea.lang = lang;
@@ -43,10 +44,9 @@ export function enableTerminalIme(term: Terminal, container: HTMLElement): void 
     textarea.setAttribute("spellcheck", "false");
   }
   term.attachCustomKeyEventHandler((event) => {
-    if (event.isComposing || event.key === "Process" || event.keyCode === 229) {
-      return false;
-    }
-    return true;
+    const composing = event.isComposing || event.key === "Process" || event.keyCode === 229;
+    // Ghostty 0.4 consumes true; xterm consumes false. Both own composition.
+    return engine === "ghostty" ? composing : !composing;
   });
 }
 

@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { ghosttyOptimizations } from './build/ghosttyOptimizations.ts'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), ghosttyOptimizations()],
   server: {
     port: 8080,
     // Listen on all interfaces so SSH port-forward / LAN access works.

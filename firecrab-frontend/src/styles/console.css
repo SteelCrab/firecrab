@@ -116,6 +116,12 @@
 }
 .console-surface[hidden] { display: none; }
 .console-page.is-terminal-only .console-surface { min-height: 0; border-radius: 0; box-shadow: none; }
+.terminal-emulator { width: 100%; height: 100%; position: relative; outline: none; }
+/* Canvas output stays available as bounded plain text for assistive technology. */
+.terminal-output {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: pre;
+}
 .console-surface .xterm { width: 100% !important; height: 100% !important; padding: 0; }
 .console-surface .xterm-viewport { overflow-y: auto !important; background: transparent !important; }
 .console-surface .xterm-screen { height: 100%; }

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Maximize2, PanelRight, PanelRightClose, SlidersHorizontal, SquareTerminal, X } from "lucide-react";
-import { Terminal, type ITheme } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
+import type { ITheme } from "@xterm/xterm";
+import { createInteractiveTerminal, selectedTerminalEngine, terminalText, type InteractiveTerminal, type TerminalFit } from "../lib/terminalEngine";
 import type { VmResponse } from "../bindings";
 import { getVm, getVmLog } from "../api/client";
-import { formatVmExportBundle, serializeXtermBuffer } from "../lib/formatVmLog";
+import { formatVmExportBundle, serializeTerminalBuffer } from "../lib/formatVmLog";
 import { logDownloadFilename } from "../lib/textExport";
 import LogExportActions from "./LogExportActions";
 import SshAccess from "./ssh/SshAccess";
@@ -14,7 +13,6 @@ import StatusBadge from "./ui/StatusBadge";
 import VmUsage from "./vm/VmUsage";
 import { useI18n } from "../i18n";
 import {
-  defaultInteractiveTerminalOptions,
   enableTerminalIme,
   isImeComposing,
 } from "../lib/terminal";
@@ -135,8 +133,9 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
-  const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
+  const termRef = useRef<InteractiveTerminal | null>(null);
+  const outputRef = useRef<HTMLPreElement>(null);
+  const fitRef = useRef<TerminalFit | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const intentionalCloseRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
@@ -145,6 +144,8 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
 
   const [status, setStatus] = useState<Status>("connecting");
   const [prefs, setPrefs] = useState<ConsolePrefs>(initialPrefsRef.current);
+  const prefsRef = useRef(prefs);
+  const [terminalError, setTerminalError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [reconnectKey, setReconnectKey] = useState(0);
   const [vm, setVm] = useState<VmResponse | null>(null);
@@ -240,171 +241,221 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
     intentionalCloseRef.current = false;
     reconnectAttemptRef.current = 0;
 
-    const initial = initialPrefsRef.current;
-    const term = new Terminal(
-      defaultInteractiveTerminalOptions({
+    let disposeTerminal: (() => void) | undefined;
+    let pendingTerminal: InteractiveTerminal | undefined;
+    let mount: HTMLDivElement | undefined;
+    let outputTimer: ReturnType<typeof setTimeout> | undefined;
+    setTerminalError(null);
+    if (outputRef.current) outputRef.current.textContent = "";
+
+    const initialize = async () => {
+      const engine = selectedTerminalEngine();
+      const initial = initialPrefsRef.current;
+      const { terminal: term, fit: fitAddon } = await createInteractiveTerminal(engine, {
         fontSize: initial.fontSize,
         theme: THEMES[initial.themeId].theme,
-        // Avoid 0×0 first paint — FitAddon replaces these once the box is ready.
         cols: 80,
         rows: 24,
-      }),
-    );
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(container);
-    enableTerminalIme(term, container);
-    termRef.current = term;
-    fitRef.current = fitAddon;
-    scheduleFit();
-
-    const dataListener = term.onData((data) => {
-      // Drop xterm's synthetic CPR answer so it is not echoed by the guest
-      // tty into an `ESC[row;colR` garbage loop at the prompt.
-      // eslint-disable-next-line no-control-regex -- matching a literal ESC byte is the point
-      if (/^\x1b\[\d+;\d+R$/.test(data)) return;
-      const socket = socketRef.current;
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(new TextEncoder().encode(data));
+      });
+      pendingTerminal = term;
+      if (disposed) {
+        term.dispose();
+        return;
       }
-    });
+      const latest = prefsRef.current;
+      term.options.fontSize = latest.fontSize;
+      term.options.theme = THEMES[latest.themeId].theme;
+      mount = document.createElement("div");
+      mount.className = "terminal-emulator";
+      mount.style.fontFamily = term.options.fontFamily ?? "monospace";
+      mount.style.fontSize = `${term.options.fontSize}px`;
+      mount.dataset.terminalEngine = engine;
+      container.appendChild(mount);
+      term.open(mount);
+      enableTerminalIme(term, mount, engine);
+      termRef.current = term;
+      fitRef.current = fitAddon;
+      scheduleFit();
 
-    const ro = new ResizeObserver(() => {
-      if (!disposed) scheduleFit();
-    });
-    ro.observe(container);
-    const page = pageRef.current;
-    if (page) ro.observe(page);
+      const writeTerminal = (data: string | Uint8Array) => term.write(data, () => {
+        if (disposed || outputTimer !== undefined) return;
+        // Keep a bounded text view without updating the DOM for every chunk.
+        outputTimer = setTimeout(() => {
+          outputTimer = undefined;
+          if (!disposed && outputRef.current) {
+            outputRef.current.textContent = terminalText(term);
+          }
+        }, 75);
+      });
 
-    const onWinResize = () => {
-      if (!disposed) scheduleFit();
-    };
-    window.addEventListener("resize", onWinResize);
-
-    const onKey = (event: KeyboardEvent) => {
-      if (isImeComposing(event)) return;
-      if (event.key !== "Escape" || event.ctrlKey || event.metaKey || event.altKey) return;
-      setSettingsOpen(false);
-      if (!terminalOnlyRef.current) return;
-      event.preventDefault();
-      setTerminalOnly(false);
-    };
-    window.addEventListener("keydown", onKey);
-
-    const connect = (isRetry: boolean) => {
-      if (disposed || intentionalCloseRef.current) return;
-
-      const prev = socketRef.current;
-      if (prev) {
-        socketRef.current = null;
-        prev.onopen = null;
-        prev.onmessage = null;
-        prev.onerror = null;
-        prev.onclose = null;
-        try {
-          prev.close();
-        } catch {
-          /* ignore */
+      const dataListener = term.onData((data) => {
+        // Drop the synthetic CPR answer so it is not echoed by the guest
+        // tty into an `ESC[row;colR` garbage loop at the prompt.
+        // eslint-disable-next-line no-control-regex -- matching a literal ESC byte is the point
+        if (/^\x1b\[\d+;\d+R$/.test(data)) return;
+        const socket = socketRef.current;
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(new TextEncoder().encode(data));
         }
-      }
+      });
 
-      setStatus(isRetry ? "reconnecting" : "connecting");
+      const ro = new ResizeObserver(() => {
+        if (!disposed) scheduleFit();
+      });
+      ro.observe(container);
+      const page = pageRef.current;
+      if (page) ro.observe(page);
 
-      const socket = new WebSocket(consoleWsUrl(vmId));
-      socket.binaryType = "arraybuffer";
-      socketRef.current = socket;
-
-      socket.onopen = () => {
-        if (disposed || socketRef.current !== socket) return;
-        reconnectAttemptRef.current = 0;
-        setStatus("connected");
-        scheduleFit();
-        term.focus();
+      const onWinResize = () => {
+        if (!disposed) scheduleFit();
       };
+      window.addEventListener("resize", onWinResize);
 
-      socket.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
-        if (disposed || socketRef.current !== socket) return;
-        const live = termRef.current;
-        if (!live) return;
-        live.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
+      const onKey = (event: KeyboardEvent) => {
+        if (isImeComposing(event)) return;
+        if (event.key !== "Escape" || event.ctrlKey || event.metaKey || event.altKey) return;
+        setSettingsOpen(false);
+        if (!terminalOnlyRef.current) return;
+        event.preventDefault();
+        setTerminalOnly(false);
       };
+      window.addEventListener("keydown", onKey);
 
-      socket.onerror = () => {
-        if (disposed || socketRef.current !== socket) return;
-        if (socket.readyState !== WebSocket.OPEN && reconnectAttemptRef.current === 0) {
-          setStatus("failed");
-        }
-      };
-
-      socket.onclose = (event: CloseEvent) => {
-        if (socketRef.current === socket) {
-          socketRef.current = null;
-        }
+      const connect = (isRetry: boolean) => {
         if (disposed || intentionalCloseRef.current) return;
-        // `exit` ended the guest session. Reattaching would silently drop the
-        // operator into the shell the guest respawns, so stay detached until
-        // they ask for a new session.
-        if (event.code === SESSION_ENDED_CLOSE_CODE) {
-          setStatus("ended");
-          term.write(`\r\n\x1b[2m${sessionEndedNoticeRef.current}\x1b[0m\r\n`);
-          return;
+
+        const prev = socketRef.current;
+        if (prev) {
+          socketRef.current = null;
+          prev.onopen = null;
+          prev.onmessage = null;
+          prev.onerror = null;
+          prev.onclose = null;
+          try {
+            prev.close();
+          } catch {
+            /* ignore */
+          }
         }
-        setStatus("disconnected");
-        scheduleReconnect();
+
+        setStatus(isRetry ? "reconnecting" : "connecting");
+
+        const socket = new WebSocket(consoleWsUrl(vmId));
+        socket.binaryType = "arraybuffer";
+        socketRef.current = socket;
+
+        socket.onopen = () => {
+          if (disposed || socketRef.current !== socket) return;
+          reconnectAttemptRef.current = 0;
+          setStatus("connected");
+          scheduleFit();
+          term.focus();
+        };
+
+        socket.onmessage = (event: MessageEvent<ArrayBuffer | string>) => {
+          if (disposed || socketRef.current !== socket) return;
+          const live = termRef.current;
+          if (!live) return;
+          writeTerminal(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
+        };
+
+        socket.onerror = () => {
+          if (disposed || socketRef.current !== socket) return;
+          if (socket.readyState !== WebSocket.OPEN && reconnectAttemptRef.current === 0) {
+            setStatus("failed");
+          }
+        };
+
+        socket.onclose = (event: CloseEvent) => {
+          if (socketRef.current === socket) {
+            socketRef.current = null;
+          }
+          if (disposed || intentionalCloseRef.current) return;
+          // `exit` ended the guest session. Reattaching would silently drop the
+          // operator into the shell the guest respawns, so stay detached until
+          // they ask for a new session.
+          if (event.code === SESSION_ENDED_CLOSE_CODE) {
+            setStatus("ended");
+            writeTerminal(`\r\n\x1b[2m${sessionEndedNoticeRef.current}\x1b[0m\r\n`);
+            return;
+          }
+          setStatus("disconnected");
+          scheduleReconnect();
+        };
+      };
+
+      const scheduleReconnect = () => {
+        if (disposed || intentionalCloseRef.current) return;
+        clearReconnectTimer();
+        const attempt = reconnectAttemptRef.current;
+        const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
+        reconnectAttemptRef.current = attempt + 1;
+        setStatus("reconnecting");
+        reconnectTimerRef.current = setTimeout(() => connect(true), delay);
+      };
+
+      // Defer the first WS connect one frame so the terminal has painted and
+      // fit() can run before the backlog snapshot arrives.
+      const bootTimer = window.setTimeout(() => {
+        if (!disposed) connect(false);
+      }, 0);
+
+      disposeTerminal = () => {
+        disposed = true;
+        intentionalCloseRef.current = true;
+        window.clearTimeout(bootTimer);
+        clearReconnectTimer();
+        dataListener.dispose();
+        ro.disconnect();
+        window.removeEventListener("resize", onWinResize);
+        window.removeEventListener("keydown", onKey);
+        const socket = socketRef.current;
+        if (socket) {
+          socketRef.current = null;
+          socket.onopen = null;
+          socket.onmessage = null;
+          socket.onerror = null;
+          socket.onclose = null;
+          try {
+            socket.close();
+          } catch {
+            /* ignore */
+          }
+        }
+        term.dispose();
+        if (termRef.current === term) termRef.current = null;
+        if (fitRef.current === fitAddon) fitRef.current = null;
       };
     };
-
-    const scheduleReconnect = () => {
-      if (disposed || intentionalCloseRef.current) return;
-      clearReconnectTimer();
-      const attempt = reconnectAttemptRef.current;
-      const delay = Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
-      reconnectAttemptRef.current = attempt + 1;
-      setStatus("reconnecting");
-      reconnectTimerRef.current = setTimeout(() => connect(true), delay);
-    };
-
-    // Defer the first WS connect one frame so the terminal has painted and
-    // fit() can run before the backlog snapshot arrives.
-    const bootTimer = window.setTimeout(() => {
-      if (!disposed) connect(false);
-    }, 0);
-
+    void initialize().catch((error: unknown) => {
+      if (disposed) return;
+      disposeTerminal?.();
+      pendingTerminal?.dispose();
+      mount?.remove();
+      termRef.current = null;
+      fitRef.current = null;
+      setStatus("failed");
+      setTerminalError(error instanceof Error ? error.message : String(error));
+    });
     return () => {
       disposed = true;
       intentionalCloseRef.current = true;
-      window.clearTimeout(bootTimer);
-      clearReconnectTimer();
-      dataListener.dispose();
-      ro.disconnect();
-      window.removeEventListener("resize", onWinResize);
-      window.removeEventListener("keydown", onKey);
-      const socket = socketRef.current;
-      if (socket) {
-        socketRef.current = null;
-        socket.onopen = null;
-        socket.onmessage = null;
-        socket.onerror = null;
-        socket.onclose = null;
-        try {
-          socket.close();
-        } catch {
-          /* ignore */
-        }
-      }
-      term.dispose();
-      if (termRef.current === term) termRef.current = null;
-      if (fitRef.current === fitAddon) fitRef.current = null;
+      disposeTerminal?.();
+      pendingTerminal?.dispose();
+      mount?.remove();
+      clearTimeout(outputTimer);
     };
   }, [vmId, reconnectKey, clearReconnectTimer, scheduleFit]);
 
   // Live-apply font size and color scheme without tearing down the session.
   useEffect(() => {
+    prefsRef.current = prefs;
+    savePrefs(prefs);
     const term = termRef.current;
     if (!term) return;
     term.options.fontSize = prefs.fontSize;
     term.options.theme = THEMES[prefs.themeId].theme;
-    savePrefs(prefs);
+    if (term.element) term.element.style.fontSize = `${prefs.fontSize}px`;
     scheduleFit();
   }, [prefs, scheduleFit]);
 
@@ -446,7 +497,7 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
       consoleLog = "";
     }
     const term = termRef.current;
-    const liveTerminal = term ? serializeXtermBuffer(term) : undefined;
+    const liveTerminal = term ? serializeTerminalBuffer(term) : undefined;
     return formatVmExportBundle({
       vm,
       vmId,
@@ -579,6 +630,8 @@ export default function Console({ vmId, onClose }: ConsoleProps) {
               termRef.current?.focus();
             }}
           />
+          <pre ref={outputRef} className="terminal-output" aria-label={t("Terminal output", "터미널 출력")} />
+          {terminalError && <p role="alert" className="console-detail-note">{terminalError}</p>}
           {surfaceTab === "ssh" && (
             <div className="console-ssh-pane">
               <SshAccess vm={vm} />
