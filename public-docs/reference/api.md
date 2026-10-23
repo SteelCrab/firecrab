@@ -13,6 +13,7 @@ Keep the unauthenticated listener on a trusted loopback path.
 - [Host responses](#host)
 - [Update](#update)
 - [Images and kernels](#images-and-kernels)
+- [Security group](#security-group)
 - [MicroNetwork](#micronetwork)
 - [MicroRegistry](#microregistry)
 - [Docker Hub login](#docker-hub-login)
@@ -66,6 +67,7 @@ Success returns `201` and the VM UUID.
 | `ram` | Power of two, 128–32768 MiB |
 | `diskGb` | Image minimum through 500 GiB; grow only |
 | `microNetworkId` | Existing network UUID, required |
+| `securityGroupId` | Optional group UUID from the same IPv4-only network; PUT omission preserves it, null detaches it |
 | `egressPolicy` | `internet` or `isolated` |
 | `storageRoot` | Optional registered storage ID |
 | `shellIds` | Optional shell IDs; latest revisions are pinned |
@@ -142,6 +144,7 @@ Repeat after repairing the host/helper; this is an explicit check, not periodic 
 | MicroService | `GET, POST /api/micro-services`, `GET, PUT, DELETE /api/micro-services/{id}` |
 | MicroService deployment | `POST, GET /api/micro-services/{id}/deployment`, `POST /api/micro-services/{id}/stop` |
 | MicroNetwork | `/api/micro-networks`, `/{id}` |
+| Security group | `GET, POST /api/security-groups`, `GET, PUT, DELETE /api/security-groups/{id}`, `PUT /api/security-groups/{id}/rules` |
 | Storage | `/api/storage`, `/api/storage/devices`, `/api/micro-storages` |
 | Shells | `/api/shells`, `/{id}`, `POST /{id}/revisions`, `GET /{id}/revisions/{revisionId}` |
 | Images | `/api/images`, `/{alias}`, `/{alias}/package`, `/{alias}/install`, `/{alias}/kernel`, `/{alias}/bootstrap` |
@@ -254,6 +257,28 @@ Kernel deletion also returns `409 in_use` while an image references it.
 Image deletion retains the independent kernel cache.
 See [Images](../guides/images.md) and [Kernels](../guides/kernels.md) for task examples.
 
+## Security group
+
+POST accepts `{"name":"database","microNetworkId":"NETWORK_ID"}` and returns `201`.
+PUT on the group replaces its name using `{"name":"new-name"}`.
+Names must contain 1–64 bytes without control characters.
+Responses contain `id`, `name`, `microNetworkId`, and `rules`.
+
+PUT on `/rules` replaces the complete rule list using `{"rules":[...]}`.
+Each rule requires `direction` (`ingress` or `egress`), `protocol` (`tcp` or `udp`), `portFrom`, `portTo`, and `peerCidr`.
+Ports are inclusive destination ports; `1 <= portFrom <= portTo <= 65535`.
+Peers must be IPv4 CIDRs; host bits are normalized.
+At most 256 rules are allowed.
+Unknown fields, invalid networks, and invalid rules return `400`.
+An unknown group returns `404`.
+Active VM runtimes or deployments block rule replacement with `409`.
+DELETE returns `204`, or `409` while any VM or MicroService references the group.
+
+VM create/update and MicroService configuration accept nullable `securityGroupId`.
+MicroService PUT resets omission to null; VM PUT preserves omission.
+The deployment snapshot and every new replica retain the selection.
+See [security groups](../guides/security-groups.md) for traffic behavior and examples.
+
 ## MicroNetwork
 
 Create requires `name` and `subnetCidr`.
@@ -353,3 +378,57 @@ Use `requestId` to locate the server log.
 - [Guest runtime](guest-runtime.md)
 - [CLI](cli.md)
 - [Troubleshooting](../guides/troubleshooting.md)
+
+## Pools
+
+A pool keeps booted, never-used VMs ready to lease. A released or expired member is stopped,
+deleted, and replaced; its disk is never handed to another caller. Pools are host-local.
+
+| Method | Path | Job |
+| --- | --- | --- |
+| `GET`, `POST` | `/api/pools` | List or create pools |
+| `GET`, `PATCH`, `DELETE` | `/api/pools/{id}` | Read, resize, or delete a pool |
+| `POST` | `/api/pools/{id}/acquire` | Lease one ready VM |
+| `GET` | `/api/pools/{id}/leases` | List leases, newest first |
+| `GET`, `DELETE` | `/api/pools/{id}/leases/{leaseId}` | Read or release a lease |
+
+`POST /api/pools`:
+
+- `name` (1–40 characters), `template`, `cpu`, `ram`, `diskGb`, `microNetworkId`
+- optional `egressPolicy`, `storageRoot`
+- `minReady` (0 to `maxSize`), `maxSize` (1–32), `leaseTtlSeconds` (60–604800)
+- The VM spec is validated like `POST /api/vms`
+- The pool pins the image version `template` resolves to at creation; image and spec stay fixed
+- Image deletion and kernel replacement return `409 in_use` while any pool references the image,
+  including a pool with no members. Delete the pool first
+
+`PATCH /api/pools/{id}` changes `minReady`, `maxSize`, and `leaseTtlSeconds`. A new TTL applies to
+later leases. Lowering a limit drains the newest unleased members.
+
+Acquire:
+
+- `201` with the lease, including its `vm` (address, hostname, state)
+- `Idempotency-Key` header (1–255 visible ASCII characters): a retry returns the original lease
+  with `200`. Keys are per pool and kept until 24 hours after the lease ends
+- `409 pool_exhausted` when no member is ready. The pool keeps booting replacements up to
+  `maxSize`; retry with the same key
+- `409 pool_deleting` once the pool is being deleted
+
+Release (`DELETE /api/pools/{id}/leases/{leaseId}`) returns the ended lease; a repeat returns it
+unchanged.
+
+Members:
+
+- `provisioning` → `ready` → `leased` → `draining` → deleted
+- Members are listed on `GET /api/vms` with `purpose` `pool`.
+- `GET /api/vms/{id}`, the console, and the SSH key still work for a member.
+- `PUT`/`DELETE /api/vms/{id}`, start, stop, storage, shells, and port forwards answer `409 pool_owned` for a member.
+- `maxSize` counts every member, draining ones included
+- A lease ends as `expired` when its TTL passes or its VM stops. API startup reconnects surviving
+  VM shims before pool reconciliation. Ready members and unexpired active leases survive a restart;
+  missing or stopped VMs are replaced and their active leases expire
+- `lastError` names the most recent member that failed to create or boot; the pool waits 30
+  seconds before trying again
+
+`DELETE /api/pools/{id}` answers `409 pool_in_use` while a lease is active. Otherwise it returns
+`202` with `deleting: true`, and the pool disappears once its members are deleted.

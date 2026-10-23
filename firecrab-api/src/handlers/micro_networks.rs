@@ -441,6 +441,18 @@ pub async fn delete_micro_network(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let id = parse_id(&id, request_id.0)?;
+    let group_guard = state.network_mutations.lock().await;
+    if state
+        .store
+        .network_has_security_groups(id)
+        .map_err(|_| AppError::internal(request_id.0))?
+    {
+        return Err(AppError::conflict(
+            "security_group_in_use",
+            "delete the network's security groups first",
+            request_id.0,
+        ));
+    }
 
     // A network still holding leases has VMs whose addresses come out of its
     // subnet and whose TAPs hang off its bridge — deleting it would strand
@@ -481,6 +493,7 @@ pub async fn delete_micro_network(
         })?;
     // Same reason as create: the removed network has to disappear from the
     // firewall ruleset and dnsmasq's served interfaces too.
+    drop(group_guard);
     apply_network_services(&state, request_id.0).await;
     Ok(StatusCode::NO_CONTENT)
 }

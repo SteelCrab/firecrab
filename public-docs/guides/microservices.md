@@ -21,6 +21,7 @@ PipeSecrets injection, rolling updates, rollback, and automatic instance replace
 | `ram` | Required RAM per replica in MiB; power of two from 128 to 32768 |
 | `cpu` | Required vCPU count per replica; 1–32 |
 | `replicas` | 1–100; default 1 |
+| `securityGroupId` | Optional security group UUID; default `null`; every new replica inherits it |
 | `startupTimeout` | 1–3600 seconds; default 300 |
 | `drainTimeout` | 0–3600 seconds; default 30 |
 | `env` | Variable name to plain value; default `{}` |
@@ -151,6 +152,9 @@ Two replicas use host ports 30100 and 30101, both forwarding to the configured a
 Omit the network UUID to create or reuse the `services` MicroNetwork.
 Supply `microNetworkId` or CLI `--network UUID` to use an existing network.
 The automatic network selects a free `/24` from `172.30.0.0/16`.
+When `securityGroupId` is set, select its IPv4-only network explicitly or reuse an existing matching `services` network.
+The deployment captures the group selection and assigns it to every replica before startup.
+See [security groups](security-groups.md) for rules and inactive-only changes.
 Concurrent deployments share one host queue.
 The worker checks memory, disk space, and port conflicts before starting replicas.
 

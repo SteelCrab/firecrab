@@ -27,6 +27,7 @@ export type VmResponse = {
   mac: string | null;
   hostname: string;
   microNetworkId: string;
+  securityGroupId?: string | null;
   storageRoot: string;
   /**
    * Guest OS CPU busy percent from the Metrics Agent (`FIRECRAB_USAGE cpu_pct=`).
@@ -49,4 +50,6 @@ export type VmResponse = {
   env?: { [key: string]: string };
   /** SHA256 fingerprint of the guest SSH host key; null until first start. */
   sshHostFingerprint?: string | null;
+  /** Why this VM exists. `pool` members are listed but only their pool may start, stop, or delete them. */
+  purpose?: "instance" | "builder" | "pool";
 };
