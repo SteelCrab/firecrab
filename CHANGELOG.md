@@ -23,6 +23,12 @@ Entries land here as work merges, and move under the next version heading when t
 
 ### Added
 
+- MicroServices inject PipeSecrets into every replica using an encrypted
+  deployment snapshot that survives API and VM restarts. Missing or invalid
+  references fail before VM creation. Values stay out of public VM/deployment
+  records and SQLite; guest environment files are root-only. Stop and failed
+  deployment cleanup remove snapshots after deleting owned replicas.
+
 - MicroService domains connect healthy replicas to PipeIngress automatically,
   without host ports or manual routes. The dashboard shows the domain and DNS
   setup guidance, and the CLI accepts domain deployments without `--host-port`.

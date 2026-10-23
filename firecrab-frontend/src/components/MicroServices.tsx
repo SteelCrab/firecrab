@@ -222,7 +222,7 @@ function VariableRows({ kind, rows, setRows, disabled }: {
   return (
     <fieldset className="service-variables service-full" disabled={disabled}>
       <legend>{secret ? t("Secret references", "시크릿 참조") : t("Environment variables", "환경 변수")}</legend>
-      {secret && <p className="poll-note">{t("Enter a PipeSecrets ID for each variable. Manage sensitive values in Secrets.", "변수마다 PipeSecrets ID를 입력한다. 민감한 값은 Secrets에서 관리한다.")}</p>}
+      {secret && <p className="poll-note">{t("Enter a PipeSecrets ID for each variable. Values are injected into every replica at deployment. Secret changes apply on the next deployment.", "변수마다 PipeSecrets ID를 입력한다. 배포할 때 모든 복제본에 값을 주입한다. 시크릿 변경은 다음 배포에 반영한다.")}</p>}
       {rows.map((row, index) => (
         <div className="service-variable-row" key={index}>
           <div className="field"><label htmlFor={`service-${kind}-key-${index}`}>{t("Variable", "변수")}</label><input id={`service-${kind}-key-${index}`} value={row.key} maxLength={256} autoComplete="off" onChange={(event) => setRows(rows.map((pair, i) => i === index ? { ...pair, key: event.target.value } : pair))} required /></div>
