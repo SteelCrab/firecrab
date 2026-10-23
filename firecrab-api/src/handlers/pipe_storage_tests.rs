@@ -151,6 +151,7 @@ async fn services_block_disconnect_and_credential_values_stay_out_of_persisted_s
             healthy: true,
         }],
         log: vec![],
+        domain_route_owned: false,
         error: None,
     };
     state.store.save_service_deployment(&deployment).unwrap();
