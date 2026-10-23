@@ -1,4 +1,4 @@
-//! Verify provider credentials before replacing the saved Pipe Auth connection.
+//! Verify provider credentials before replacing the saved Auth connection.
 use crate::{
     error::AppError,
     extract::ValidatedJson,
@@ -50,12 +50,16 @@ pub async fn save(
     if provider != login.provider() {
         return Err(auth_error("Provider does not match the credential", id));
     }
+    let _claim = state.service_mutations.lock().await;
     let auth = pipe_auth::connect(login)
         .await
         .map_err(|message| auth_error(message, id))?;
     let connection = auth.connection();
-    let _claim = state.service_mutations.lock().await;
-    tokio::task::spawn_blocking(move || state.store.put_pipe_auth(&auth))
+    if let SavedAuth::Aws { credentials, .. } = &auth {
+        super::pipe_storage::validate_aws_replacement(&state, credentials, id.0).await?;
+    }
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.put_pipe_auth(&auth))
         .await
         .map_err(|_| AppError::internal(id.0))?
         .map_err(|_| AppError::internal(id.0))?;
@@ -69,7 +73,22 @@ pub async fn delete(
     Path(provider): Path<Provider>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let _claim = state.service_mutations.lock().await;
-    tokio::task::spawn_blocking(move || state.store.delete_pipe_auth(provider))
+    if provider == Provider::Aws {
+        let store = state.store.clone();
+        let records =
+            super::micro_services::database(id.0, move || store.list_pipe_storage()).await?;
+        if records.iter().any(|record| {
+            record.spec.credential_ref == firecrab_api_types::StorageCredentialRef::PipeAuthAws
+        }) {
+            return Err(AppError::conflict(
+                "storage_auth_in_use",
+                "Disconnect or change the storage connections using Auth AWS first",
+                id.0,
+            ));
+        }
+    }
+    let store = state.store.clone();
+    tokio::task::spawn_blocking(move || store.delete_pipe_auth(provider))
         .await
         .map_err(|_| AppError::internal(id.0))?
         .map_err(|_| AppError::internal(id.0))?;

@@ -9,7 +9,7 @@ const address = new URL(baseURL);
 
 export default defineConfig({
   ...baseConfig,
-  testMatch: ["pipe-auth.spec.ts", "pipe.spec.ts", "pipe-databases.spec.ts", "pipe-registries.spec.ts", "registry-image-build.spec.ts"],
+  testMatch: ["pipe-auth.spec.ts", "pipe.spec.ts", "pipe-databases.spec.ts", "pipe-storage.spec.ts", "pipe-registries.spec.ts", "registry-image-build.spec.ts"],
   timeout: 45_000,
   use: { ...baseConfig.use, baseURL },
   webServer: servers.filter(server => server.command === "npm run dev")

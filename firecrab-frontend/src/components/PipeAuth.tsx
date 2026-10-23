@@ -107,11 +107,11 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
   </>;
   const status = (connected: boolean) => <span className={`badge${connected ? " running" : ""}`}>{connected ? t("Connected", "연결됨") : t("Not connected", "미연결")}</span>;
 
-  return <section className="pipe-auth-screen" aria-label="Pipe Auth">
+  return <section className="pipe-auth-screen" aria-label="Auth">
     <Screen view="pipe" flush
       actions={<nav aria-label={t("Pipe navigation", "Pipe 이동")}><a className="btn sm ghost" href={viewHash("pipe")}><ArrowLeft aria-hidden="true" />Pipe</a></nav>}
       detailLabel={t("Authentication detail", "인증 상세")}
-      detailKind={<><KeyRound aria-hidden="true" />Pipe Auth</>}
+      detailKind={<><KeyRound aria-hidden="true" />Auth</>}
       onCloseDetail={closeDetail}
       detail={selected ? <>
         <DetailHead title={selected.name} meta={status(!!selectedConnection)} />
@@ -137,7 +137,7 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
       </> : null}
     >
       <div className="pipe-auth-heading">
-        <h2>Pipe Auth</h2>
+        <h2>Auth</h2>
         <p className="detail-note">{t("Connect an account to use its Pipe services.", "계정을 인증하여 관련 Pipe 서비스를 사용한다.")}</p>
       </div>
       {resumeDraft && <div className="banner info">
@@ -153,7 +153,7 @@ export default function PipeAuth({ onUnsavedChange }: { onUnsavedChange: (dirty:
             <td className="name"><button className="link-button" type="button" onClick={event => { event.stopPropagation(); select(provider.id); }}>{provider.name}</button></td>
             <td className="pipe-auth-account">{connection ? <>{connection.account}{connection.region && <span className="pipe-auth-region">{connection.region}</span>}</> : "—"}</td>
             <td>{status(!!connection)}</td>
-            <td className="pipe-auth-services" onClick={event => event.stopPropagation()}>{connection ? <a href={pipeCardHash("registry")}>{provider.service}</a> : <span className="muted">{provider.service}</span>}</td>
+            <td className="pipe-auth-services" onClick={event => event.stopPropagation()}>{connection ? <><a href={pipeCardHash("registry")}>{provider.service}</a>{connection.services.includes("storage") && <> · <a href={pipeCardHash("storage")}>S3</a></>}</> : <span className="muted">{provider.service}</span>}</td>
             <td className="actions" onClick={event => event.stopPropagation()}>{connection ? <PipeServiceMenu label={t(`${provider.name} actions`, `${provider.name} 작업`)} disabled={busy || !!editor} items={[
               { label: t("Update credentials", "인증 정보 갱신"), onSelect: () => open(provider.id) },
               { label: t("Disconnect", "연결 해제"), danger: true, onSelect: () => disconnect(provider.id) },

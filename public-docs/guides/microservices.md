@@ -27,6 +27,7 @@ Rolling updates, rollback, and automatic instance replacement remain separate wo
 | `drainTimeout` | 0–3600 seconds; default 30 |
 | `env` | Variable name to plain value; default `{}` |
 | `secrets` | Variable name to non-nil PipeSecrets UUID; default `{}`; values are never stored here |
+| `storageConnectionId` | Optional [S3 connection](pipe-storage.md) UUID for the app AWS SDK; default `null` |
 
 `env` and `secrets` together allow up to 64 entries.
 Variable names follow `[A-Za-z_][A-Za-z0-9_]*` and allow up to 256 bytes.
@@ -121,7 +122,7 @@ Select **New MicroService** to follow four setup steps:
    examples are not offered in this picker.
 2. **Connection** — set the app's internal port and a path that returns HTTP 2xx.
 3. **Resources** — choose memory, CPU, and replica count. Advanced settings
-   contain timeouts, environment variables, and PipeSecrets references.
+   contain timeouts, environment variables, PipeSecrets references, and S3 connections.
 4. **Review** — check the summary, return to any section to change it, then save.
 
 Going back keeps the values entered in the form.

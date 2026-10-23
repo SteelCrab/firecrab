@@ -42,7 +42,7 @@ pub struct Connection {
     /// Selected AWS region, or `None` for GitHub.
     pub region: Option<String>,
     /// Pipe service identifiers that can reuse this connection.
-    pub services: [&'static str; 1],
+    pub services: Vec<&'static str>,
 }
 
 /// AWS signing material and the region used for ECR requests.
@@ -133,7 +133,7 @@ impl SavedAuth {
                 account: username.clone(),
                 registry: "ghcr.io".into(),
                 region: None,
-                services: ["registry"],
+                services: vec!["registry"],
             },
             Self::Aws {
                 account_id,
@@ -143,7 +143,7 @@ impl SavedAuth {
                 account: account_id.clone(),
                 registry: ecr_registry(account_id, &credentials.region),
                 region: Some(credentials.region.clone()),
-                services: ["registry"],
+                services: vec!["registry", "storage"],
             },
         }
     }
@@ -167,7 +167,7 @@ impl SavedAuth {
                 let credential =
                     ecr_credential(&client()?, credentials, &format!("https://{host}/")).await?;
                 if credential.registry != ecr_registry(account_id, &credentials.region) {
-                    return Err("AWS account changed. Reconnect AWS in Pipe Auth.");
+                    return Err("AWS account changed. Reconnect AWS in Auth.");
                 }
                 Ok(credential)
             }
@@ -233,7 +233,7 @@ fn validate_secret(value: &str, max: usize) -> Result<(), &'static str> {
 }
 
 /// Validate signing keys, the optional session token, and the region hostname component.
-fn validate_aws(credentials: &AwsCredentials) -> Result<(), &'static str> {
+pub(crate) fn validate_aws(credentials: &AwsCredentials) -> Result<(), &'static str> {
     if !(16..=128).contains(&credentials.access_key_id.len())
         || !credentials
             .access_key_id
@@ -246,8 +246,13 @@ fn validate_aws(credentials: &AwsCredentials) -> Result<(), &'static str> {
     if !credentials.session_token.is_empty() {
         validate_secret(&credentials.session_token, 16384)?;
     }
-    let parts: Vec<_> = credentials.region.split('-').collect();
-    if credentials.region.len() > 63
+    validate_region(&credentials.region)
+}
+
+/// Validate the AWS region used in fixed provider hostnames and SigV4 scopes.
+pub(crate) fn validate_region(region: &str) -> Result<(), &'static str> {
+    let parts: Vec<_> = region.split('-').collect();
+    if region.len() > 63
         || parts.len() < 3
         || parts.len() > 5
         || parts.iter().any(|part| part.is_empty())
@@ -256,8 +261,7 @@ fn validate_aws(credentials: &AwsCredentials) -> Result<(), &'static str> {
             .unwrap_or(&"")
             .bytes()
             .all(|byte| byte.is_ascii_digit())
-        || !credentials
-            .region
+        || !region
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
     {

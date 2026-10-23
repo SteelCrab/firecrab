@@ -103,6 +103,7 @@ test.describe("list screens with a detail panel", () => {
       hash: "#/services",
       routes: {
         "/api/micro-services": [service],
+        "/api/pipe/storage": [],
         "/api/security-groups": [],
         "/api/micro-networks": [],
         [`/api/micro-services/${id}`]: service,

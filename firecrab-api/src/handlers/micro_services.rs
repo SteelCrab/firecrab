@@ -49,6 +49,7 @@ pub async fn create(
     validate(&spec, request_id.0)?;
     let _claim = state.service_mutations.lock().await;
     require_image_auth(&state, &spec.image, request_id.0).await?;
+    super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
     let _network = state.network_mutations.lock().await;
     crate::network_policy::validate_selection(&state, spec.security_group_id, None, request_id.0)?;
     let service = MicroServiceResponse {
@@ -75,6 +76,7 @@ pub async fn update(
     let _claim = state.service_mutations.lock().await;
     crate::service_runtime::ensure_editable(&state, id, request_id.0).await?;
     require_image_auth(&state, &spec.image, request_id.0).await?;
+    super::pipe_storage::validate_binding(&state, &spec, request_id.0).await?;
     let _network = state.network_mutations.lock().await;
     crate::network_policy::validate_selection(&state, spec.security_group_id, None, request_id.0)?;
     let service = MicroServiceResponse { id, spec };

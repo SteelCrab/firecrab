@@ -26,6 +26,7 @@ async function setup(page: Page, groups: SecurityGroupResponse[] = [], hash = "#
     "/api/pipe/auth": [{ provider: "github", account: "team", registry: "ghcr.io", region: null, services: ["registry"] }],
     "/api/pipe/registries/ghcr.io/repositories": { repositories: ["team/orders"], listingSupported: true, nextPage: null, nextCursor: null },
     "/api/pipe/registry-tags": { tags: ["1.0"], nextLast: null },
+    "/api/pipe/storage": [],
     "/api/micro-networks": [
       { id: NETWORK, name: "orders-net", subnetCidr: "172.30.0.0/24", gateway: "172.30.0.1", internetEnabled: true, ipv6Cidr: null },
       { id: IPV6_NETWORK, name: "dual-stack", subnetCidr: "172.31.0.0/24", gateway: "172.31.0.1", internetEnabled: true, ipv6Cidr: "fd42:31::/64" },

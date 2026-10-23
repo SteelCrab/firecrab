@@ -49,13 +49,13 @@ async function open(page: Page, options: { connections?: AuthConnection[]; rejec
     return route.fulfill({ status: 404, json: { error: { message: "Fixture route unavailable" } } });
   });
   await page.goto(options.overview ? "/#/pipe" : "/#/pipe/auth");
-  return { writes, deletes, catalogs, transfers, recover: () => { failLoad = false; }, get connections() { return connections; }, panel: page.getByRole("region", { name: "Pipe Auth", exact: true }) };
+  return { writes, deletes, catalogs, transfers, recover: () => { failLoad = false; }, get connections() { return connections; }, panel: page.getByRole("region", { name: "Auth", exact: true }) };
 }
 
-test.describe("Pipe Auth @dashboard", () => {
+test.describe("Auth @dashboard", () => {
   test("shows the provider connection count and opens the authentication card", async ({ page }) => {
     await open(page, { connections: [github, aws], overview: true });
-    const card = page.getByRole("link", { name: "Pipe Auth", exact: true });
+    const card = page.getByRole("link", { name: "Auth", exact: true });
     await expect(card).toContainText("2 connected");
     await card.click();
     await expect(page).toHaveURL(/#\/pipe\/auth$/);
@@ -111,9 +111,9 @@ test.describe("Pipe Auth @dashboard", () => {
     await mock.panel.getByRole("link", { name: "GHCR", exact: true }).click();
     const registry = page.getByRole("region", { name: "Pipe Registry", exact: true });
     await expect(registry.getByRole("button", { name: "ghcr.io", exact: true })).toBeVisible();
-    await expect(registry.getByRole("link", { name: "Manage in Pipe Auth", exact: true })).toBeVisible();
+    await expect(registry.getByRole("link", { name: "Manage in Auth", exact: true })).toBeVisible();
     await expect(registry.getByRole("button", { name: "ghcr.io actions", exact: true })).toHaveCount(0);
-    await registry.getByRole("link", { name: "Manage in Pipe Auth", exact: true }).click();
+    await registry.getByRole("link", { name: "Manage in Auth", exact: true }).click();
     await mock.panel.getByRole("button", { name: "GitHub actions", exact: true }).click();
     await page.getByRole("menuitem", { name: "Update credentials", exact: true }).click();
     await expect(mock.panel.getByLabel("Personal access token (classic)")).toHaveValue("");

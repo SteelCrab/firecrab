@@ -43,6 +43,7 @@ pub async fn deploy(
         .ok_or_else(|| AppError::not_found(request_id.0))?;
     require_image_auth(&state, &service.spec.image, request_id.0).await?;
     validate_placement(&state, &service.spec, &request, request_id.0).await?;
+    crate::handlers::pipe_storage::validate_binding(&state, &service.spec, request_id.0).await?;
     secrets::preflight(&state, &service.spec, request_id.0).await?;
     domain::preflight(&state, id, &service.spec, request_id.0).await?;
     let deployment = MicroServiceDeployment {

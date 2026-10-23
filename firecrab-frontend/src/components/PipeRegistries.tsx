@@ -134,7 +134,7 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
   const alert = error ?? pollError;
   return <section className="panel pipe-registries" aria-label="Pipe Registry">
     <h2 className="panel-title"><span>Pipe Registry</span><button className="btn" type="button" disabled={loading || busy || !!editor} aria-expanded={!!editor && !editor.original} aria-controls="registry-login-editor" onClick={() => open()}>{t("Add registry", "레지스트리 추가")}</button></h2>
-    <p className="pipe-description">{t("AWS and GitHub accounts can be connected in ", "AWS와 GitHub 계정은 ")}<a href={pipeCardHash("auth")}>Pipe Auth</a>{t(".", "에서 인증한다.")}</p>
+    <p className="pipe-description">{t("AWS and GitHub accounts can be connected in ", "AWS와 GitHub 계정은 ")}<a href={pipeCardHash("auth")}>Auth</a>{t(".", "에서 인증한다.")}</p>
     {alert && <div className="banner error" role="alert">{alert}</div>}
     {notice && <div className="banner info" role="status">{notice}</div>}
     {editor && <RegistryForm editor={editor} busy={busy} onChange={setEditor} onSubmit={login} onCancel={() => setEditor(null)} />}
@@ -150,7 +150,7 @@ export default function PipeRegistries({ onUnsavedChange }: { onUnsavedChange: (
             <td className="registry-name"><button className="registry-select" type="button" aria-pressed={selected}>{connection.registry}</button></td>
             <td data-label={t("Provider", "서비스")}>{providerName(connection.provider)}</td>
             <td data-label={t("Account", "계정")} title={connection.provider === "ecr" ? accountId : undefined}>{connection.provider === "ecr" ? connection.accountName || accountId || "—" : connection.username}</td>
-            <td className="actions" onClick={event => event.stopPropagation()}>{connection.authProvider ? <a href={pipeCardHash("auth")}>{t("Manage in Pipe Auth", "Pipe Auth에서 관리")}</a> : <PipeServiceMenu label={t(`${connection.registry} actions`, `${connection.registry} 작업`)} disabled={busy} items={[
+            <td className="actions" onClick={event => event.stopPropagation()}>{connection.authProvider ? <a href={pipeCardHash("auth")}>{t("Manage in Auth", "Auth에서 관리")}</a> : <PipeServiceMenu label={t(`${connection.registry} actions`, `${connection.registry} 작업`)} disabled={busy} items={[
               { label: t("Update token", "토큰 갱신"), disabled: !!editor, onSelect: () => open(connection) },
               { label: t("Delete", "삭제"), danger: true, onSelect: () => remove(connection.registry) },
             ]} />}</td>

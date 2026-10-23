@@ -3,6 +3,7 @@ import type { FormEvent, ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Box, Check, CheckCircle2, Info, SlidersHorizontal } from "lucide-react";
 import type { MicroNetworkResponse, MicroServiceResponse, MicroServiceSpec, SecurityGroupResponse } from "../bindings";
 import { ApiClientError, createMicroService, listMicroNetworks, listSecurityGroups, updateMicroService } from "../api/client";
+import { listStorage, type StorageConnection } from "../api/pipeStorage";
 import { getPipeAuth } from "../api/pipeAuth";
 import ServiceAppPicker, { type ServiceAppSelection } from "./ServiceAppPicker";
 import { useI18n } from "../i18n";
@@ -13,7 +14,7 @@ const DEFAULT_SPEC: MicroServiceSpec = {
 };
 const FIELD_STEP: Record<string, number> = {
   name: 0, image: 0, runtime: 0, port: 1, healthPath: 1, domain: 1, securityGroupId: 1,
-  ram: 2, cpu: 2, replicas: 2, startupTimeout: 2, drainTimeout: 2, env: 2, secrets: 2,
+  ram: 2, cpu: 2, replicas: 2, storageConnectionId: 2, startupTimeout: 2, drainTimeout: 2, env: 2, secrets: 2,
 };
 type Pair = { key: string; value: string };
 
@@ -32,6 +33,14 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
+  const [storageConnections, setStorageConnections] = useState<StorageConnection[]>([]);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    listStorage(controller.signal).then(rows => { if (!controller.signal.aborted) setStorageConnections(rows); })
+      .catch(failure => { if (!controller.signal.aborted) setStorageError((failure as Error).message); });
+    return () => controller.abort();
+  }, []);
   const [groups, setGroups] = useState<SecurityGroupResponse[] | null>(null);
   const [networks, setNetworks] = useState<MicroNetworkResponse[]>([]);
   const [groupError, setGroupError] = useState<string | null>(null);
@@ -66,7 +75,7 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
     setFields(errors);
     const target = FIELD_STEP[Object.keys(errors)[0] ?? ""];
     if (target !== undefined) setStep(target);
-    if (["startupTimeout", "drainTimeout", "env", "secrets"].some((field) => field in errors)) setAdvanced(true);
+    if (["startupTimeout", "drainTimeout", "env", "secrets", "storageConnectionId"].some((field) => field in errors)) setAdvanced(true);
   };
   const variables = () => {
     const maps = { env: Object.create(null) as Record<string, string>, secrets: Object.create(null) as Record<string, string> };
@@ -137,9 +146,9 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
       ...spec, name: spec.name.trim(), image: spec.image.trim(), domain: normalizedDomain(spec.domain), ...maps,
     };
     // Copy only specification fields; an edited response also contains its ID.
-    const { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, securityGroupId } = request;
+    const { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, securityGroupId, storageConnectionId } = request;
     try {
-      const body = { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, securityGroupId, ...maps };
+      const body = { name, image, runtime, port, healthPath, domain, ram, cpu, replicas, startupTimeout, drainTimeout, securityGroupId, ...(storageConnectionId ? { storageConnectionId } : {}), ...maps };
       const saved = service ? await updateMicroService(service.id, body) : await createMicroService(body);
       await onSaved(saved);
     } catch (failure) {
@@ -149,8 +158,8 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
   };
   const reviewSections: { title: string; step: number; values: [string, string | number][] }[] = [
     { title: steps[0]!, step: 0, values: [[t("Name", "이름"), spec.name], [t("Image", "이미지"), spec.image]] },
-    { title: steps[1]!, step: 1, values: [[t("App port", "앱 포트"), spec.port], [t("Health path", "상태 검사 경로"), spec.healthPath], [t("Domain", "도메인"), spec.domain || t("None", "없음")]] },
-    { title: steps[2]!, step: 2, values: [[t("Per instance", "앱 1개당"), `${spec.ram} MiB / ${spec.cpu} CPU`], [t("Replicas", "복제 수"), spec.replicas], [t("Variables / secret references", "환경 변수 / 시크릿 참조"), `${env.length} / ${secrets.length}`]] },
+    { title: steps[1]!, step: 1, values: [[t("App port", "앱 포트"), spec.port], [t("Health path", "상태 검사 경로"), spec.healthPath], [t("Domain", "도메인"), spec.domain || t("None", "없음")], [t("Security group", "보안그룹"), groups?.find(group => group.id === spec.securityGroupId)?.name ?? spec.securityGroupId ?? t("None", "없음")]] },
+    { title: steps[2]!, step: 2, values: [[t("Per instance", "앱 1개당"), `${spec.ram} MiB / ${spec.cpu} CPU`], [t("Replicas", "복제 수"), spec.replicas], [t("Variables / secret references", "환경 변수 / 시크릿 참조"), `${env.length} / ${secrets.length}`], [t("S3 connection", "S3 연결"), storageConnections.find(connection => connection.id === spec.storageConnectionId)?.name ?? spec.storageConnectionId ?? t("None", "없음")]] },
   ];
 
   return (
@@ -194,6 +203,14 @@ export default function ServiceSetup({ service, onCancel, onSaved }: {
                   <Field name="startupTimeout" label={t("Startup timeout (s)", "시작 제한 시간 (초)")} hint={t("How long to wait for the app to become healthy after boot.", "부팅 후 앱이 정상 응답할 때까지 기다리는 시간이다.")} error={fields.startupTimeout}><input {...control("startupTimeout")} type="number" min={1} max={3600} value={Number.isFinite(spec.startupTimeout) ? spec.startupTimeout : ""} onChange={(event) => change("startupTimeout", event.target.valueAsNumber)} required /></Field>
                   <Field name="drainTimeout" label={t("Drain timeout (s)", "요청 종료 대기 (초)")} hint={t("Wait for existing requests to finish before removing service instances.", "서비스 인스턴스를 삭제하기 전에 기존 요청이 끝나도록 기다리는 시간이다.")} error={fields.drainTimeout}><input {...control("drainTimeout")} type="number" min={0} max={3600} value={Number.isFinite(spec.drainTimeout) ? spec.drainTimeout : ""} onChange={(event) => change("drainTimeout", event.target.valueAsNumber)} required /></Field>
                 </div>
+                <Field name="storageConnectionId" label={t("S3 connection (optional)", "S3 연결 (선택)")} hint={t("AWS SDK credentials are provided at boot. Use FIRECRAB_S3_BUCKET and FIRECRAB_S3_PREFIX in the app. Restrict access with AWS IAM.", "부팅할 때 AWS SDK 자격 증명을 전달한다. 앱에서 FIRECRAB_S3_BUCKET과 FIRECRAB_S3_PREFIX를 사용한다. AWS IAM으로 접근 권한을 제한한다.")} error={fields.storageConnectionId}>
+                  <select {...control("storageConnectionId")} value={spec.storageConnectionId ?? ""} onChange={event => change("storageConnectionId", event.target.value || null)}>
+                    <option value="">{t("No S3 connection", "S3 연결 없음")}</option>
+                    {!!spec.storageConnectionId && !storageConnections.some(row => row.id === spec.storageConnectionId) && <option value={spec.storageConnectionId}>{spec.storageConnectionId}</option>}
+                    {storageConnections.map(connection => <option key={connection.id} value={connection.id}>{connection.name} · {connection.bucket}/{connection.prefix}</option>)}
+                  </select>
+                  {storageError && <span role="alert" className="field-error">{storageError}</span>}
+                </Field>
                 <VariableRows kind="env" rows={env} setRows={setEnv} disabled={saving} error={fields.env} />
                 <VariableRows kind="secrets" rows={secrets} setRows={setSecrets} disabled={saving} error={fields.secrets} />
               </details>

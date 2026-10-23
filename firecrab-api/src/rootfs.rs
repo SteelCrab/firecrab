@@ -640,6 +640,27 @@ fn guest_file_contains(rootfs: &Path, guest_path: &str, needle: &str) -> bool {
 
 const GUEST_VM_SERVICE: &str = "/etc/firecrab/services.d/app";
 
+/// Fail closed before booting a guest containing connection credentials.
+pub(crate) fn protect_vm_credentials(rootfs: &Path) -> Result<(), RootfsError> {
+    let path = crate::oci::service::GUEST_VM_ENV_FILE;
+    for field in ["mode 0100600", "uid 0", "gid 0"] {
+        run_debugfs(rootfs, &format!("set_inode_field {path} {field}"))?;
+    }
+    let output = run_debugfs(rootfs, &format!("stat {path}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let parts: Vec<_> = text.split_ascii_whitespace().collect();
+    if parts.windows(2).any(|w| w == ["Mode:", "0600"])
+        && parts.windows(2).any(|w| w == ["User:", "0"])
+        && parts.windows(2).any(|w| w == ["Group:", "0"])
+    {
+        return Ok(());
+    }
+    Err(RootfsError::Specialize {
+        path: rootfs.to_owned(),
+        detail: "could not verify private guest credential file permissions".into(),
+    })
+}
+
 /// Rewrites the delimited Firecrab env block in `services.d/app`.
 ///
 /// Missing path is a silent no-op. Image `export` lines stay; VM keys win
@@ -1059,6 +1080,7 @@ pub(crate) fn write_into_image(
     content: &[u8],
 ) -> Result<(), RootfsError> {
     let staging = rootfs.with_extension("specialize.tmp");
+    // The content can contain service credentials. Never stage it with the process umask.
     let _ = fs::remove_file(&staging);
     let staged = (|| {
         OpenOptions::new()
@@ -2343,6 +2365,37 @@ mod tests {
             .unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, value.as_bytes());
+        assert!(!rootfs.with_extension("specialize.tmp").exists());
+    }
+
+    #[test]
+    fn s3_guest_credentials_are_private_replaced_on_restart_and_absent_from_launcher() {
+        let directory = tempdir().unwrap();
+        let rootfs = directory.path().join("rootfs.ext4");
+        real_rootfs_with_guest_dirs(&rootfs);
+        assert!(protect_vm_credentials(&rootfs).is_err());
+        seed_services_d_app(&rootfs, &sample_app_service());
+        let id = Uuid::new_v4();
+        for secret in ["first-secret", "replacement-secret"] {
+            specialize_guest(
+                &rootfs,
+                id,
+                &BTreeMap::from([
+                    ("AWS_SECRET_ACCESS_KEY".into(), secret.into()),
+                    ("AWS_SESSION_TOKEN".into(), "session-token".into()),
+                    ("FIRECRAB_S3_BUCKET".into(), "test-bucket".into()),
+                ]),
+            )
+            .unwrap();
+            protect_vm_credentials(&rootfs).unwrap();
+            let launcher = debugfs_cat(&rootfs, GUEST_VM_SERVICE);
+            assert!(launcher.contains(". /etc/firecrab/vm.env"));
+            assert!(!launcher.contains(secret));
+            assert!(debugfs_cat(&rootfs, crate::oci::service::GUEST_VM_ENV_FILE).contains(secret));
+        }
+        assert!(
+            !debugfs_cat(&rootfs, crate::oci::service::GUEST_VM_ENV_FILE).contains("first-secret")
+        );
         assert!(!rootfs.with_extension("specialize.tmp").exists());
     }
 

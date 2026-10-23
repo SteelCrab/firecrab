@@ -22,6 +22,7 @@ pub(crate) use pools::{Acquired, LeaseRow, MemberRow, PoolRow, PoolStoreError};
 mod micro_services;
 mod pipe_auth;
 mod pipe_databases;
+mod pipe_storage;
 mod registries;
 mod schedules;
 mod security_groups;
@@ -716,6 +717,7 @@ impl Store {
         conn.execute(micro_services::CREATE_TABLE_SQL, [])?;
         conn.execute_batch(schedules::SCHEMA)?;
         conn.execute(pipe_databases::CREATE_TABLE_SQL, [])?;
+        conn.execute(pipe_storage::CREATE_TABLE_SQL, [])?;
         conn.execute(micro_services::CREATE_DEPLOYMENTS_SQL, [])?;
         conn.execute_batch(stacks::SCHEMA_SQL)?;
         conn.execute(CREATE_SHELLS_TABLE_SQL, [])?;
