@@ -15,6 +15,7 @@ async function openServices(page: Page, rows: object[] = [], failSave = false) {
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
+    if (path === "/api/pipe") return route.fulfill({ json: { config: null, units: [], nginxAvailable: true, cloudflaredAvailable: false } });
     if (path === "/api/vms") return route.fulfill({ json: [] });
     if (path === "/api/micro-networks") return route.fulfill({ json: [] });
     if (path === "/api/host") return route.fulfill({ json: { loadAverage1m: 0.1, memoryTotalMib: 8192, memoryAvailableMib: 4096, diskTotalGib: 100, diskAvailableGib: 50, uptimeSeconds: 3600 } });
@@ -92,7 +93,7 @@ test.describe("MicroService configuration @dashboard", () => {
   });
 
   test("closes stale runtime settings after saving and preserves mobile headers", async ({ page }) => {
-    await openServices(page, [INITIAL]);
+    await openServices(page, [{ ...INITIAL, domain: null }]);
     await page.route(`**/api/micro-services/${ID}/deployment`, (route) => route.fulfill({ json: null }));
     await page.getByRole("button", { name: "Run orders", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Not deployed");
@@ -194,4 +195,48 @@ test.describe("MicroService configuration @dashboard", () => {
     expect(await page.locator(".table-scroll").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("microservice-mobile.png"), fullPage: true });
   });
+});
+
+test("domain deployment needs no port input and shows DNS guidance on mobile", async ({ page }, testInfo) => {
+  const service = { ...INITIAL, replicas: 1, secrets: {} };
+  await openServices(page, [service]);
+  let deployment: Record<string, unknown> | null = null;
+  await page.route(`**/api/micro-services/${ID}/deployment`, async route => {
+    if (route.request().method() === "POST") {
+      expect(route.request().postDataJSON()).toEqual({ microNetworkId: null });
+      deployment = { id: SECRET, serviceId: ID, spec: service, phase: "running", request: { hostPort: 0 }, domainRouteOwned: true,
+        instances: [{ vmId: SECRET, ipv4: "172.30.0.2", hostPort: 0, state: "running", healthy: true }], digest: null, error: null, log: ["Domain connected"] };
+      return route.fulfill({ status: 202, json: deployment });
+    }
+    return route.fulfill({ json: deployment });
+  });
+  await page.route("**/api/pipe", route => route.fulfill({ json: { config: { listen: "127.0.0.1:8080", routes: [], tunnel: { id: SECRET, credentialsFile: "hidden" } }, units: [], nginxAvailable: true, cloudflaredAvailable: true } }));
+  await page.getByRole("button", { name: "Run orders", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("Not deployed");
+  await expect(page.getByLabel("First host port")).toHaveCount(0);
+  await expect(page.getByLabel("Network", { exact: true })).not.toBeVisible();
+  await expect(page.getByText(`${SECRET}.cfargotunnel.com`, { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open domain", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Deploy and run", exact: true }).click();
+  await expect(page.getByRole("link", { name: "Open domain", exact: true })).toHaveAttribute("href", "https://orders.example.com");
+  await expect(page.getByRole("link", { name: ":0", exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("service-domain-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.getByRole("combobox", { name: "Language", exact: true }).selectOption("ko");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("link", { name: "도메인 열기", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test("accepts a pasted domain URL", async ({ page }) => {
+  const writes = await openServices(page);
+  await page.getByRole("button", { name: "New MicroService", exact: true }).click();
+  await page.getByLabel("Name", { exact: true }).fill("web");
+  await page.getByLabel("OCI image", { exact: true }).fill("nginx:alpine");
+  await page.getByLabel("Domain (optional)", { exact: true }).fill("https://Orders.Example.COM/");
+  await page.getByRole("button", { name: "Save configuration", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].body.domain).toBe("orders.example.com");
 });

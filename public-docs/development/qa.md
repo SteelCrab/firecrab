@@ -111,3 +111,27 @@ Past source runs and their remaining limits are in [Validation history](validati
 - [Complete checklist](testing.md)
 - [Browser E2E](../../firecrab-e2e/README.md)
 - [Troubleshooting](../guides/troubleshooting.md)
+
+## MicroVM pause/resume memory continuity
+
+`scripts/ci-qa-vm-pause.py` prepares a temporary API, helper, image copy, and
+private network/mount namespaces on a Linux/KVM test host. It requires root,
+systemd, iproute2, unshare, dnsmasq, nftables, an SSH client, and a Firecracker
+binary on PATH. Choose an installed image that provides a serial root shell and
+sshd. The guest readiness DNS probe uses a local fixture inside the private
+helper mount namespace, so the test needs no external network access.
+
+```sh
+sudo python3 scripts/ci-qa-vm-pause.py \
+  --api-binary target/debug/firecrab-api \
+  --helper-binary target/debug/firecrab-helper \
+  --image-root /var/lib/firecrab/images --template IMAGE_ALIAS \
+  --report /tmp/firecrab-pause-qa.json
+```
+
+The test checks three pause/resume cycles, an in-memory random token and counter,
+guest process and boot identity, VMM PID, IP/MAC, HTTP and new authenticated SSH
+connections, Sleepy inhibition,
+API restart while paused, Stop from Paused, and cleanup. Existing workload units
+and installed services are preserved. A successful JSON report is native KVM
+evidence; API fixture and browser results alone do not establish memory continuity.

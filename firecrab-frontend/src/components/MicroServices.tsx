@@ -167,7 +167,7 @@ function ServiceForm({ service, onCancel, onSaved }: {
     }
     const request: MicroServiceSpec = {
       name: spec.name.trim(), image: spec.image.trim(), runtime: spec.runtime, port: spec.port,
-      healthPath: spec.healthPath, domain: spec.domain?.trim() || null,
+      healthPath: spec.healthPath, domain: normalizedDomain(spec.domain),
       ram: spec.ram, cpu: spec.cpu, replicas: spec.replicas,
       startupTimeout: spec.startupTimeout, drainTimeout: spec.drainTimeout,
       env: maps.env!, secrets: maps.secrets!,
@@ -195,7 +195,7 @@ function ServiceForm({ service, onCancel, onSaved }: {
         <div className="field"><label htmlFor="service-runtime">{t("Runtime", "실행 환경")}</label><select id="service-runtime" defaultValue="vm" disabled><option value="vm">MicroVM</option></select>{fieldError("runtime")}</div>
         <div className="field"><label htmlFor="service-port">{t("App port", "앱 포트")}</label><input id="service-port" type="number" min={1} max={65535} value={spec.port} onChange={(event) => change("port", event.target.valueAsNumber)} required disabled={saving} />{fieldError("port")}</div>
         <div className="field"><label htmlFor="service-health">{t("Health path", "상태 검사 경로")}</label><input id="service-health" value={spec.healthPath} onChange={(event) => change("healthPath", event.target.value)} placeholder="/actuator/health" required disabled={saving} />{fieldError("healthPath")}</div>
-        <div className="field service-wide"><label htmlFor="service-domain">{t("Domain (optional)", "도메인 (선택)")}</label><input id="service-domain" value={spec.domain ?? ""} onChange={(event) => change("domain", event.target.value)} placeholder="orders.example.com" maxLength={253} disabled={saving} />{fieldError("domain")}</div>
+        <div className="field service-wide"><label htmlFor="service-domain">{t("Domain (optional)", "도메인 (선택)")}</label><input id="service-domain" aria-describedby="service-domain-help" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={spec.domain ?? ""} onChange={(event) => change("domain", event.target.value)} placeholder="orders.example.com" maxLength={253} disabled={saving} /><p id="service-domain-help" className="poll-note">{t("Enter your domain. Healthy replicas connect automatically; no host port or manual route is needed. Public access uses Pipe Tunnel and your DNS.", "도메인을 입력하면 정상 인스턴스를 자동 연결한다. 호스트 포트나 경로를 따로 설정할 필요가 없다. 외부 접속에는 Pipe Tunnel과 DNS 연결이 필요하다.")}</p>{fieldError("domain")}</div>
         <div className="field"><label htmlFor="service-ram">RAM (MiB)</label><select id="service-ram" value={spec.ram} onChange={(event) => change("ram", Number(event.target.value))} disabled={saving}>{[128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768].map((size) => <option key={size} value={size}>{size}</option>)}</select>{fieldError("ram")}</div>
         <div className="field"><label htmlFor="service-cpu">CPU</label><input id="service-cpu" type="number" min={1} max={32} value={spec.cpu} onChange={(event) => change("cpu", event.target.valueAsNumber)} required disabled={saving} />{fieldError("cpu")}</div>
         <div className="field"><label htmlFor="service-replicas">{t("Replicas", "복제 수")}</label><input id="service-replicas" type="number" min={1} max={100} value={spec.replicas} onChange={(event) => change("replicas", event.target.valueAsNumber)} required disabled={saving} />{fieldError("replicas")}</div>
@@ -233,4 +233,17 @@ function VariableRows({ kind, rows, setRows, disabled }: {
       <button type="button" className="btn" disabled={rows.length >= 64} onClick={() => setRows([...rows, { key: "", value: "" }])}>{secret ? t("Add secret reference", "시크릿 참조 추가") : t("Add variable", "변수 추가")}</button>
     </fieldset>
   );
+}
+
+/** Accept a pasted site address without silently accepting a path or query. */
+function normalizedDomain(value: string | null): string | null {
+  const input = value?.trim().toLowerCase();
+  if (!input) return null;
+  if (/^https?:\/\//.test(input)) {
+    try {
+      const url = new URL(input);
+      if (url.pathname === "/" && !url.search && !url.hash && !url.port && !url.username && !url.password) return url.hostname.replace(/\.$/, "");
+    } catch { /* Keep invalid input for the API's domain field error. */ }
+  }
+  return input.replace(/\.$/, "");
 }

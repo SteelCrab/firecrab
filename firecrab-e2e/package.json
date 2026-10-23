@@ -17,6 +17,7 @@
     "install-browsers": "playwright install chromium",
     "test:host": "playwright test --config playwright.host-firecrab.config.ts",
     "test:services": "playwright test --config playwright.micro-services.config.ts",
+    "test:schedules": "node --experimental-strip-types --test scripts/test-schedule-timing.mjs && playwright test --config playwright.mocked.config.ts tests/schedules.spec.ts",
     "test:pipe": "playwright test --config playwright.pipe.config.ts",
     "test:pipe:databases": "playwright test --config playwright.pipe.config.ts tests/pipe-databases.spec.ts",
     "test:pipe:live": "playwright test --config playwright.pipe-live.config.ts",

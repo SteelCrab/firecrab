@@ -181,6 +181,7 @@ fn stacks_missing_and_protected_resources_cannot_be_adopted() {
         }],
         log: Vec::new(),
         error: None,
+        domain_route_owned: false,
     };
     store.save_service_deployment(&deployment).unwrap();
     owned.resource_id = replica.id;

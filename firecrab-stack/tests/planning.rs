@@ -73,6 +73,7 @@ fn fixture() -> (Stack, StackRecord, Inventory) {
             .collect(),
         log: Vec::new(),
         error: None,
+        domain_route_owned: false,
     };
     let inventory = Inventory {
         networks: vec![serde_json::from_value(json!({"id":NETWORK,"name":"demo-app","subnetCidr":"172.31.20.0/24","gateway":"172.31.20.1","internetEnabled":true})).unwrap()],

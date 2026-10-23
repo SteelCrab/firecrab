@@ -200,6 +200,24 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         .route("/api/stacks/{name}/bindings", post(handlers::stacks::bind))
         .route("/api/stacks/{name}/unbind", post(handlers::stacks::unbind))
         .route(
+            "/api/schedules",
+            get(handlers::schedules::list).post(handlers::schedules::create),
+        )
+        .route(
+            "/api/schedules/{id}",
+            get(handlers::schedules::get)
+                .put(handlers::schedules::update)
+                .delete(handlers::schedules::delete),
+        )
+        .route(
+            "/api/schedules/{id}/enabled",
+            axum::routing::put(handlers::schedules::set_enabled),
+        )
+        .route(
+            "/api/schedules/{id}/runs",
+            get(handlers::schedules::history),
+        )
+        .route(
             "/api/micro-services",
             get(handlers::micro_services::list).post(handlers::micro_services::create),
         )
@@ -229,6 +247,14 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/vms/{id}/start", post(handlers::vms::start_vm_request))
         .route("/api/vms/{id}/stop", post(handlers::vms::stop_vm))
+        .route(
+            "/api/vms/{id}/pause",
+            post(handlers::vm_execution::pause_vm),
+        )
+        .route(
+            "/api/vms/{id}/resume",
+            post(handlers::vm_execution::resume_vm),
+        )
         .route("/api/vms/{id}/log", get(handlers::vms::get_vm_log))
         .route(
             "/api/vms/{id}/ssh-key",
@@ -244,6 +270,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
         )
         .route("/api/network", get(handlers::network::get_network_info))
         .route("/api/host", get(handlers::network::get_host_status))
+        .route(
+            "/api/micromanager/activity",
+            get(handlers::micromanager::activity),
+        )
         .route("/api/info", get(handlers::info::get_info))
         .route(
             "/api/pipe",

@@ -108,6 +108,69 @@ fn stacks_invalid_manifests_fail_before_an_http_request() {
     );
 }
 
+#[test]
+fn schedules_send_timing_and_use_the_host_api_for_controls() {
+    let response =
+        json!({"id": NETWORK_ID, "name":"morning", "vmId":VM_ID, "action":"start", "enabled":true,
+        "timing":{"kind":"cron","expression":"0 9 * * Mon-Fri","timeZone":"Asia/Seoul"},
+        "nextRunAtMs":1,"createdAtMs":0,"updatedAtMs":0,"lastRun":null})
+        .to_string();
+    let flags = [
+        "--name",
+        "morning",
+        "--vm",
+        VM_ID,
+        "--action",
+        "start",
+        "--cron",
+        "0 9 * * Mon-Fri",
+        "--time-zone",
+        "Asia/Seoul",
+    ];
+    for (command, expected_method) in [("create", "POST"), ("update", "PUT")] {
+        let mut args = vec!["schedule", command];
+        if command == "update" {
+            args.push(NETWORK_ID);
+        }
+        args.extend(flags);
+        let (code, request) = run_once(&args, "200 OK", &response);
+        assert_eq!(code, 0);
+        assert_eq!(request.method, expected_method);
+        assert_eq!(
+            request.path,
+            if command == "create" {
+                "/api/schedules".to_owned()
+            } else {
+                format!("/api/schedules/{NETWORK_ID}")
+            }
+        );
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["vmId"], VM_ID);
+        assert_eq!(
+            body["timing"],
+            json!({"kind":"cron","expression":"0 9 * * Mon-Fri","timeZone":"Asia/Seoul"})
+        );
+    }
+    for (command, enabled) in [("enable", true), ("disable", false)] {
+        let (code, request) = run_once(&["schedule", command, NETWORK_ID], "200 OK", &response);
+        assert_eq!(code, 0);
+        assert_eq!(request.path, format!("/api/schedules/{NETWORK_ID}/enabled"));
+        assert_eq!(
+            serde_json::from_slice::<Value>(&request.body).unwrap(),
+            json!({"enabled":enabled})
+        );
+    }
+    let (code, request) = run_once(&["schedule", "runs", NETWORK_ID], "200 OK", "[]");
+    assert_eq!(code, 0);
+    assert_eq!(request.path, format!("/api/schedules/{NETWORK_ID}/runs"));
+    let (code, _) = run_once(
+        &["schedule", "delete", NETWORK_ID],
+        "409 Conflict",
+        r#"{"error":{"code":"schedule_running"}}"#,
+    );
+    assert_eq!(code, 1);
+}
+
 fn service_deployment_response(phase: &str) -> Value {
     json!({
         "id": NETWORK_ID, "serviceId": VM_ID, "phase": phase,
