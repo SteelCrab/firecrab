@@ -11,6 +11,25 @@ const VM_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const NETWORK_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 #[test]
+fn stacks_delete_sends_the_exact_registration_uuid() {
+    let (code, request) = run_once(
+        &["stack", "delete", "demo", "--id", VM_ID],
+        "204 No Content",
+        "",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(request.method, "DELETE");
+    assert_eq!(request.path, format!("/api/stacks/demo?id={VM_ID}"));
+    assert!(request.body.is_empty());
+    let (code, _) = run_once(
+        &["stack", "delete", "demo", "--id", VM_ID],
+        "409 Conflict",
+        r#"{"error":{"code":"stack_not_empty"}}"#,
+    );
+    assert_eq!(code, 1);
+}
+
+#[test]
 fn stacks_metadata_commands_send_only_registration_and_exact_uuid_bindings() {
     let stack = json!({"id": VM_ID,"name":"demo","revision":0,"bindings":[]});
     let (code, request) = run_once(

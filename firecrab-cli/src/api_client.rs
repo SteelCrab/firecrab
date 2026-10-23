@@ -197,6 +197,22 @@ impl ApiClient {
         Self::ensure_success(resp).map(|_| ())
     }
 
+    /// Send a DELETE with URL-encoded identity guards and accept an empty 2xx response.
+    pub fn delete_query<Q: Serialize + ?Sized>(
+        &self,
+        path: &str,
+        query: &Q,
+    ) -> Result<(), ApiError> {
+        let resp = self
+            .client
+            .delete(self.url(path))
+            .query(query)
+            .timeout(self.mutation_timeout())
+            .send()
+            .map_err(|e| ApiError::Unreachable(e.to_string()))?;
+        Self::ensure_success(resp).map(|_| ())
+    }
+
     fn mutation_timeout(&self) -> Duration {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         if reqwest::Url::parse(self.base_url())

@@ -66,6 +66,16 @@ An incorrect UUID cannot release a newer binding.
 Repeated release is harmless when the logical slot is empty.
 A stale binding can be released even after its resource has disappeared.
 
+After releasing every binding, delete empty registration metadata with its exact stack UUID:
+
+```sh
+firecrab stack delete demo --id STACK_UUID
+```
+
+This never deletes host resources or disks.
+Nonempty registrations return `409 stack_not_empty`.
+A stale UUID cannot delete a newer registration with the same name.
+
 ## Plan results
 
 Plans compare declared fields to resource UUIDs in the ownership record.
@@ -117,6 +127,7 @@ Metadata commands print JSON.
 | `POST` | `/api/stacks/{name}/bindings` | Claim an exact `{ "kind": "vm", "key": "worker", "resourceId": "UUID" }` |
 | `POST` | `/api/stacks/{name}/unbind` | Release the exact binding; preserve the resource |
 | `POST` | `/api/stacks/{name}/plan` | Compare a validated stack JSON object to its registered ownership set; the URL and manifest names must match |
+| `DELETE` | `/api/stacks/{name}?id=STACK_UUID` | Delete empty registration metadata after matching the exact UUID; return `204` |
 
 Planning requires prior registration and returns `404` for an unknown stack.
 It does not register or bind anything implicitly.

@@ -196,7 +196,10 @@ pub fn build_router(state: AppState, config: &HttpConfig) -> Router {
             get(handlers::stacks::list).post(handlers::stacks::register),
         )
         .route("/api/stacks/{name}/plan", post(handlers::stacks::plan))
-        .route("/api/stacks/{name}", get(handlers::stacks::get))
+        .route(
+            "/api/stacks/{name}",
+            get(handlers::stacks::get).delete(handlers::stacks::delete),
+        )
         .route("/api/stacks/{name}/bindings", post(handlers::stacks::bind))
         .route("/api/stacks/{name}/unbind", post(handlers::stacks::unbind))
         .route(

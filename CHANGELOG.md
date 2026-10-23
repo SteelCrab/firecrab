@@ -29,6 +29,8 @@ Entries land here as work merges, and move under the next version heading when t
   read-only configuration diff, blocks implicit adoption and conflicting ownership,
   and retains removed declarations. Field values stay out of plans. Actual apply
   and Git polling remain follow-up work for #437.
+  Empty registrations can be removed with `stack delete NAME --id STACK_UUID`;
+  bound resources and newer registrations with the same name are protected.
 
 - An experimental Terraform REST example provisions a network, stopped VM and
   saved service configuration through the public API. It includes a provider

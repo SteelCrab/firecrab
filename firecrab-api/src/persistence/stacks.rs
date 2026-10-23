@@ -26,6 +26,25 @@ CREATE TABLE IF NOT EXISTS stack_bindings (
 ) STRICT;";
 
 impl Store {
+    /// Delete empty metadata atomically. Never release bindings or delete host resources.
+    pub fn delete_empty_stack(&self, name: &str, id: Uuid) -> Result<(), PersistenceError> {
+        if !logical_name(name) || id.is_nil() {
+            return Err(PersistenceError::StackConflict);
+        }
+        let mut conn = self.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let stack = read_stack(&tx, name)?.ok_or(PersistenceError::MissingStack)?;
+        if stack.id != id {
+            return Err(PersistenceError::StackConflict);
+        }
+        if !stack.bindings.is_empty() {
+            return Err(PersistenceError::StackNotEmpty);
+        }
+        tx.execute("DELETE FROM stacks WHERE id = ?1", [id.to_string()])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Register once by name. Repeated registration returns the same UUID and revision.
     pub fn register_stack(&self, name: &str) -> Result<StackRecord, PersistenceError> {
         if !logical_name(name) {

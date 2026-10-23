@@ -41,7 +41,56 @@ async fn request(app: &Router, method: &str, path: &str, body: Value) -> (Status
     let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    (status, serde_json::from_slice(&body).unwrap())
+    let value = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body).unwrap()
+    };
+    (status, value)
+}
+
+#[tokio::test]
+async fn stacks_api_delete_requires_empty_bindings_and_the_exact_registration() {
+    let root = tempfile::tempdir().unwrap();
+    let (router, store) = app(root.path()).await;
+    let stack = store.register_stack("demo").unwrap();
+    let exact = format!("/api/stacks/demo?id={}", stack.id);
+    let wrong = format!("/api/stacks/demo?id={}", Uuid::new_v4());
+    assert_eq!(
+        request(&router, "DELETE", &wrong, Value::Null).await.0,
+        StatusCode::CONFLICT
+    );
+    let network: firecrab_api_types::MicroNetworkResponse = serde_json::from_value(json!({"id":Uuid::new_v4(),"name":"owned","subnetCidr":"172.31.20.0/24","gateway":"172.31.20.1","internetEnabled":true})).unwrap();
+    store.insert_micro_network(&network).unwrap();
+    let binding = Binding {
+        kind: firecrab_stack::ResourceKind::Network,
+        key: "app".to_owned(),
+        resource_id: network.id,
+    };
+    store.bind_stack_resource("demo", &binding).unwrap();
+    assert_eq!(
+        request(&router, "DELETE", &exact, Value::Null).await.0,
+        StatusCode::CONFLICT
+    );
+    store.unbind_stack_resource("demo", &binding).unwrap();
+    assert_eq!(
+        request(&router, "DELETE", &exact, Value::Null).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(&router, "GET", "/api/stacks/demo", Value::Null)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(store.micro_network(network.id).unwrap(), Some(network));
+    let newer = store.register_stack("demo").unwrap();
+    assert_ne!(newer.id, stack.id);
+    assert_eq!(
+        request(&router, "DELETE", &exact, Value::Null).await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(store.stack("demo").unwrap(), Some(newer));
 }
 
 fn declaration() -> Value {

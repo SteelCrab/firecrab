@@ -58,6 +58,7 @@ Exit `0` means the declared schema and local constraints passed; failures exit `
 With `--json`, both outcomes produce a JSON report on stdout.
 See [Stack validation](../guides/stacks.md) for the experimental schema and its limits.
 `stack register --name NAME`, `list`, `status NAME`, `bind`, and `unbind` manage host-local ownership metadata.
+`stack delete NAME --id STACK_UUID` removes an empty registration after matching its exact UUID; bound resources and disks are never deleted.
 `stack plan --file YAML [--json]` compares a manifest to explicitly bound resource UUIDs without applying it.
 These commands use normal host selection; see [Stack ownership and planning](../guides/stack-planning.md) for the full workflow.
 

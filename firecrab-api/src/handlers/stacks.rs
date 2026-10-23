@@ -3,11 +3,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::Json;
-use axum::extract::{Extension, Path, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use firecrab_stack::{
-    Binding, Inventory, Plan, RegisterStackRequest, ServiceSnapshot, Stack, StackRecord,
-    VmSnapshot, logical_name,
+    Binding, DeleteStackRequest, Inventory, Plan, RegisterStackRequest, ServiceSnapshot, Stack,
+    StackRecord, VmSnapshot, logical_name,
 };
 use uuid::Uuid;
 
@@ -57,6 +57,21 @@ pub async fn get(
     })
     .await
     .map(Json)
+}
+
+/// Delete only empty metadata after matching the exact registration UUID.
+pub async fn delete(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(name): Path<String>,
+    Query(request): Query<DeleteStackRequest>,
+) -> Result<StatusCode, AppError> {
+    validate_name(&name, request_id.0)?;
+    database(request_id.0, move || {
+        state.store.delete_empty_stack(&name, request.id)
+    })
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Claim an existing resource UUID explicitly. This does not edit the resource.
@@ -209,6 +224,7 @@ async fn database<T: Send + 'static>(
 ) -> Result<T, AppError> {
     tokio::task::spawn_blocking(operation).await.map_err(|_| AppError::internal(request_id))?.map_err(|error| match error {
         PersistenceError::MissingStack => AppError::not_found(request_id),
+        PersistenceError::StackNotEmpty => AppError::new(StatusCode::CONFLICT, "stack_not_empty", "unbind every exact resource UUID before deleting stack registration", request_id),
         PersistenceError::StackConflict => AppError::new(StatusCode::CONFLICT, "stack_ownership_conflict", "binding conflicts with existing ownership; unbind the exact UUID explicitly before changing it", request_id),
         PersistenceError::InvalidStackResource => AppError::new(StatusCode::BAD_REQUEST, "invalid_stack_resource", "resource is missing, is a protected VM, or a service operation is in progress", request_id),
         PersistenceError::StackBindingLimit => AppError::new(StatusCode::BAD_REQUEST, "stack_binding_limit", "a stack can own at most 256 resources", request_id),

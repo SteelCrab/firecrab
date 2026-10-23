@@ -72,6 +72,14 @@ pub struct RegisterStackRequest {
     pub name: String,
 }
 
+/// Delete only the empty registration with this exact identity.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteStackRequest {
+    /// Registration UUID; prevents deleting a later registration with the same name.
+    pub id: Uuid,
+}
+
 /// Durable host-local identity and ownership metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

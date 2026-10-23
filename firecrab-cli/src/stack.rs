@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use firecrab_stack::{
-    Binding, Plan, RegisterStackRequest, ResourceKind, StackRecord, logical_name,
+    Binding, DeleteStackRequest, Plan, RegisterStackRequest, ResourceKind, StackRecord,
+    logical_name,
 };
 use firecrab_stack::{Diagnostic, MAX_MANIFEST_BYTES, ResourceCounts};
 use serde::Serialize;
@@ -26,6 +27,14 @@ pub enum Command {
     List,
     /// Read a stack's ownership mappings and revision.
     Status { name: String },
+    /// Delete empty registration metadata; never delete bound resources.
+    Delete {
+        /// Registered stack name on the selected host.
+        name: String,
+        /// Exact registration UUID from stack status.
+        #[arg(long)]
+        id: Uuid,
+    },
     /// Explicitly connect an existing resource UUID to a logical manifest key.
     Bind(BindingArgs),
     /// Release an exact ownership mapping; keep the resource and its disks.
@@ -145,6 +154,15 @@ pub fn run_remote(client: &ApiClient, command: Command) -> Result<(), Error> {
             name_valid(&name)?;
             let stack: StackRecord = client.get(&format!("/api/stacks/{name}"))?;
             print_json(&stack);
+        }
+        Command::Delete { name, id } => {
+            name_valid(&name)?;
+            if id.is_nil() {
+                return Err(Error::Validation(
+                    "a non-nil stack UUID is required".to_owned(),
+                ));
+            }
+            client.delete_query(&format!("/api/stacks/{name}"), &DeleteStackRequest { id })?;
         }
         Command::Bind(args) => write_binding(client, args, false)?,
         Command::Unbind(args) => write_binding(client, args, true)?,

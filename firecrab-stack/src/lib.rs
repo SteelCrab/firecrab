@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 mod planning;
 pub use planning::{
-    Action, Binding, Change, Inventory, Plan, RegisterStackRequest, ResourceKind, ServiceSnapshot,
-    StackRecord, VmSnapshot, plan,
+    Action, Binding, Change, DeleteStackRequest, Inventory, Plan, RegisterStackRequest,
+    ResourceKind, ServiceSnapshot, StackRecord, VmSnapshot, plan,
 };
 
 /// Maximum UTF-8 manifest size, including comments.

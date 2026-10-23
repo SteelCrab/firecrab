@@ -472,6 +472,9 @@ pub enum PersistenceError {
     /// The requested stack registration does not exist.
     #[error("stack is not registered")]
     MissingStack,
+    /// Bindings must be explicitly released before removing registration metadata.
+    #[error("stack still has ownership bindings")]
+    StackNotEmpty,
     /// A binding would overwrite an existing ownership assignment.
     #[error("stack ownership conflicts with an existing binding")]
     StackConflict,

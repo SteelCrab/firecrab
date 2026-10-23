@@ -21,6 +21,33 @@ fn binding(id: Uuid) -> Binding {
     }
 }
 
+#[test]
+fn stacks_delete_preserves_bound_resources_and_newer_registrations() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("state.db");
+    let store = Store::open(&path).unwrap();
+    let stack = store.register_stack("demo").unwrap();
+    let resource = network(Uuid::new_v4());
+    store.insert_micro_network(&resource).unwrap();
+    let owned = binding(resource.id);
+    store.bind_stack_resource("demo", &owned).unwrap();
+    assert!(matches!(
+        store.delete_empty_stack("demo", stack.id),
+        Err(PersistenceError::StackNotEmpty)
+    ));
+    store.unbind_stack_resource("demo", &owned).unwrap();
+    store.delete_empty_stack("demo", stack.id).unwrap();
+    let store = Store::open(&path).unwrap();
+    assert!(store.stack("demo").unwrap().is_none());
+    assert_eq!(store.micro_network(resource.id).unwrap(), Some(resource));
+    let newer = store.register_stack("demo").unwrap();
+    assert!(matches!(
+        store.delete_empty_stack("demo", stack.id),
+        Err(PersistenceError::StackConflict)
+    ));
+    assert_eq!(store.stack("demo").unwrap(), Some(newer));
+}
+
 fn vm(id: Uuid, purpose: VmPurpose) -> VmRecord {
     VmRecord {
         id,
