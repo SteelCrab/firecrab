@@ -200,8 +200,17 @@ It imports a local OCI fixture, boots two real MicroVMs, checks HTTP and env inj
 Use `--restart-unit UNIT` only for an isolated QA API unit to test re-adoption after restart.
 Use `--keep-running` to retain the healthy service for manual inspection.
 
-For real domain routing, public HTTPS, API independence and replica failure, use
-[MicroService domain live QA](../development/microservice-domain-qa.md).
+For domain routing and public HTTPS, use an empty, dedicated Linux/KVM API with
+the bundled ingress and cloudflared engines installed:
+
+```sh
+sudo python3 scripts/test-microservice-domain-live.py --api http://127.0.0.1:15335
+```
+
+This test checks two real replicas, public TLS, API restart continuity and replica
+failure, then removes its VMs, services, network, routes and Quick Tunnel.
+Use `--output PATH` only when a JSON report is needed. Stop the dedicated QA
+API/helper and ingress units after the run.
 
 ## Related
 

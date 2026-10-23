@@ -3,17 +3,6 @@
 These are dated measurements of specific source snapshots.
 They do not establish current CI, stock-release, or untested-platform success.
 
-## MicroService domain source validation, 2026-10-23
-
-The `feat/335-microservice-domain` snapshot after `194a26d` passed eight live
-checks on native Linux/KVM. Two real Firecracker VMs served through a temporary
-public HTTPS hostname. API stop/start, failed-health cleanup, single-replica
-failure, an independent macOS client, and complete QA runtime cleanup passed.
-See [MicroService domain live QA](microservice-domain-qa.md) for the measured
-environment, evidence and repeatable command. A second run passed nine checks
-with real Chrome screenshots, a runtime-table layout correction, and retained
-machine-readable cleanup evidence.
-
 ## Windows source validation, 2026-10-03
 
 Measured on `feat/windows-source-dev`, including uncommitted changes after baseline `085c23f`.
