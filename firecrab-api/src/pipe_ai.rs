@@ -7,6 +7,8 @@ use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub mod claude_code;
+mod claude_terminal;
 mod oauth;
 pub use oauth::{LoginRegistry, OAuthRegistration, OAuthSession};
 
@@ -18,6 +20,7 @@ const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Deserialize, Serialize)]
 pub struct SavedConnection {
     pub connection: AiConnection,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub api_key: String,
     #[serde(default)]
     pub oauth: Option<OAuthSession>,
@@ -308,7 +311,8 @@ pub fn validate_connection(input: &AiConnectionInput) -> Result<(), Failure> {
     if let Some(model) = &input.model {
         validate_model(model)?;
     }
-    if input.name.trim().is_empty()
+    if input.provider != firecrab_api_types::AiProvider::Openai
+        || input.name.trim().is_empty()
         || input.name.len() > 100
         || input.name.chars().any(char::is_control)
         || !(8..=4096).contains(&input.api_key.len())

@@ -24,6 +24,7 @@ const rest = createServer(async (request, response) => {
   let status = 200;
   if (request.method === "GET" && path === "/api/images") result = [];
   else if (request.method === "GET" && path === "/api/pipe/ai/connections") result = [];
+  else if (request.method === "GET" && path.endsWith("/claude-code/status")) result = { status: "signed_out" };
   else if (request.method === "GET" && path.endsWith("/model")) result = null;
   else if (request.method === "GET" && path === "/api/micro-networks") result = networks;
   else if (request.method === "POST" && path === "/api/micro-networks") {
@@ -77,6 +78,7 @@ try {
   await call("network_delete", { id: createdNetwork.id });
   assert.equal((await call("owned_resources")).resources.length, 0);
   await call("ai_connections_list");
+  assert.equal((await call("ai_claude_code_status", { id: randomUUID() })).status, "signed_out");
   await call("ai_default_get", { projectId: randomUUID() });
   assert.deepEqual(vms, []);
   assert.equal(networks.length, 1);

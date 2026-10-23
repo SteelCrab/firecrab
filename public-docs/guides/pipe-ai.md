@@ -2,7 +2,9 @@
 
 Pipe AI manages AI provider account connections and server-side credentials.
 The Dashboard is limited to connecting accounts, showing connection status, replacing credentials, and disconnecting.
-It supports one provider adapter, OpenAI, through ChatGPT sign-in or an API key.
+It supports OpenAI through ChatGPT sign-in or an API key, plus [official Claude Code CLI account login](claude-code.md).
+Claude Code owns its tokens; Pipe AI stores only connection metadata and offers login, status, and disconnect.
+Claude Code model use and execution remain AI Sandbox work.
 Model selection, conversation, and task UI belong to **AI Sandbox** and are not implemented on the Pipe AI page.
 Dashboard, CLI, and a local stdio MCP adapter reuse the same saved account connections.
 This is the connection and entry-point slice of [issue #414](https://github.com/SteelCrab/firecrab/issues/414).

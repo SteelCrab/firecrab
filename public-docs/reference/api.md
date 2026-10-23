@@ -351,8 +351,15 @@ Pipe AI UI manages accounts only. Model verification, selection, and response ro
 | GET | `/api/pipe/ai/projects/{id}/model` | Saved `{connectionId, model}` or null |
 | PUT | `/api/pipe/ai/projects/{id}/model` | Persist a verified `{connectionId, model}` |
 | POST | `/api/pipe/ai/responses` | Accept `{projectId, input, selection?: {connectionId, model}}`; return `{selection, text}` |
+| POST | `/api/pipe/ai/connections/{id}/claude-code/login` | Start official CLI login with `{name}`; return `{connection, ticket, expiresIn}` |
+| GET | `/api/pipe/ai/connections/{id}/claude-code/status` | Secret-free CLI state: `connected`, `signed_out`, `unavailable`, or `signing_in` |
+| WS | `/ws/pipe/ai/connections/{id}/claude-code/login` | One-use ticket in first frame; ephemeral login-only PTY |
 
-Login requires a local API authority and a reachable `127.0.0.1` callback.
+Claude Code credentials remain under CLI management. DELETE runs official logout and verifies sign-out before removing metadata; failed logout keeps the record.
+Shared model endpoints reject CLI connections with `409 ai_cli_only`.
+See [Claude Code account connection](../guides/claude-code.md) for installation, runtime scope, terminal protocol, and recovery.
+
+ChatGPT login requires a local API authority and a reachable `127.0.0.1` callback.
 The server validates OAuth state, PKCE, signed identity, and granted plan scopes before replacing a connection.
 Account connection requires neither a model nor a project. Inference permission is checked separately; the optional `model` preserves API-client inference probes.
 Project UUIDs identify model settings rather than newly created Project records.

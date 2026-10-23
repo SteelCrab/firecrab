@@ -3,8 +3,8 @@ import { fetchJson } from "./client";
 export interface AiConnection {
   id: string;
   name: string;
-  provider: "openai";
-  authentication: "api_key" | "chatgpt";
+  provider: "openai" | "anthropic";
+  authentication: "api_key" | "chatgpt" | "claude_code";
   endpoint: string;
   models: string[];
   streaming: boolean;
@@ -19,3 +19,7 @@ export const disconnectAi = (id: string) => fetchJson<{ deleted: boolean; remote
 export interface AiLogin { loginId: string; authorizationUrl: string; expiresIn: number }
 export const startAiLogin = (id: string, name: string) => fetchJson<AiLogin>(`${base}/connections/${encodeURIComponent(id)}/login`, write("POST", { name }));
 export const getAiLogin = (id: string, signal?: AbortSignal) => fetchJson<{ status: string; message: string | null }>(`${base}/logins/${encodeURIComponent(id)}`, { signal });
+export type CliState = "connected" | "signed_out" | "unavailable" | "signing_in" | "error";
+export interface CliLogin { connection: AiConnection; ticket: string; expiresIn: number }
+export const startClaudeLogin = (id: string, name: string) => fetchJson<CliLogin>(`${base}/connections/${encodeURIComponent(id)}/claude-code/login`, write("POST", { name }));
+export const getClaudeStatus = (id: string, signal?: AbortSignal) => fetchJson<{ status: CliState }>(`${base}/connections/${encodeURIComponent(id)}/claude-code/status`, { signal });

@@ -2,8 +2,9 @@
 use crate::api_client::ApiClient;
 use clap::Subcommand;
 use firecrab_api_types::{
-    AiConnection, AiConnectionInput, AiLoginRequest, AiLoginStart, AiLoginStatus, AiModelSelection,
-    AiResponse, AiResponseRequest, AiVerifyRequest,
+    AiCliLoginRequest, AiCliLoginStart, AiCliStatus, AiConnection, AiConnectionInput,
+    AiLoginRequest, AiLoginStart, AiLoginStatus, AiModelSelection, AiResponse, AiResponseRequest,
+    AiVerifyRequest,
 };
 use std::{
     io::{self, Read},
@@ -13,6 +14,11 @@ use uuid::Uuid;
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Manage official Claude Code CLI authentication on the API host.
+    ClaudeCode {
+        #[command(subcommand)]
+        command: ClaudeCodeCommand,
+    },
     /// Sign in with ChatGPT using the local REST callback. No API key is needed.
     Login {
         id: Uuid,
@@ -58,9 +64,44 @@ pub enum Command {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub enum ClaudeCodeCommand {
+    /// Open the official CLI login terminal. Tokens stay in the CLI's private profile.
+    Login {
+        id: Uuid,
+        #[arg(long)]
+        name: String,
+    },
+    /// Check login state without making an inference request.
+    Status { id: Uuid },
+    /// Run official CLI logout, verify sign-out, and remove the connection.
+    Disconnect { id: Uuid },
+}
+
 pub fn run(client: &ApiClient, command: Command) -> Result<(), Box<dyn std::error::Error>> {
     let base = "/api/pipe/ai";
     match command {
+        Command::ClaudeCode { command } => match command {
+            ClaudeCodeCommand::Login { id, name } => {
+                let start: AiCliLoginStart = client.post(
+                    &format!("{base}/connections/{id}/claude-code/login"),
+                    &AiCliLoginRequest { name },
+                )?;
+                crate::vm_console::attach_claude_login(client.base_url(), id, start.ticket)?;
+                print(
+                    &client.get::<AiCliStatus>(&format!(
+                        "{base}/connections/{id}/claude-code/status"
+                    ))?,
+                )?;
+            }
+            ClaudeCodeCommand::Status { id } => print(
+                &client
+                    .get::<AiCliStatus>(&format!("{base}/connections/{id}/claude-code/status"))?,
+            )?,
+            ClaudeCodeCommand::Disconnect { id } => print(
+                &client.delete_json::<serde_json::Value>(&format!("{base}/connections/{id}"))?,
+            )?,
+        },
         Command::Login {
             id,
             name,

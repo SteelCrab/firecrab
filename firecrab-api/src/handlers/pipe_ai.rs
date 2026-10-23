@@ -23,7 +23,7 @@ fn failed(failure: Failure, id: RequestId) -> AppError {
     AppError::new(status, code, message, id.0)
 }
 
-fn missing(id: RequestId) -> AppError {
+pub(super) fn missing(id: RequestId) -> AppError {
     AppError::new(
         StatusCode::NOT_FOUND,
         "ai_connection_missing",
@@ -33,7 +33,7 @@ fn missing(id: RequestId) -> AppError {
 }
 
 // Keep DB work off the async runtime. Errors never include SQL or private documents.
-async fn stored<T: Send + 'static>(
+pub(super) async fn stored<T: Send + 'static>(
     id: RequestId,
     work: impl FnOnce() -> Result<T, crate::persistence::PersistenceError> + Send + 'static,
 ) -> Result<T, AppError> {
@@ -43,7 +43,7 @@ async fn stored<T: Send + 'static>(
         .map_err(|_| AppError::internal(id.0))
 }
 
-async fn connection(
+pub(super) async fn connection(
     state: &AppState,
     key: Uuid,
     id: RequestId,
@@ -60,6 +60,7 @@ async fn refreshed(
     id: RequestId,
 ) -> Result<SavedConnection, AppError> {
     let mut saved = connection(state, key, id).await?;
+    require_http_provider(&saved, id)?;
     if state
         .pipe_ai
         .refresh(&mut saved)
@@ -85,7 +86,10 @@ fn require_model(saved: &SavedConnection, model: &str, id: RequestId) -> Result<
     Ok(())
 }
 
-fn gate(state: &AppState, id: RequestId) -> Result<tokio::sync::MutexGuard<'_, ()>, AppError> {
+pub(super) fn gate(
+    state: &AppState,
+    id: RequestId,
+) -> Result<tokio::sync::MutexGuard<'_, ()>, AppError> {
     state.pipe_ai_mutations.try_lock().map_err(|_| {
         AppError::new(
             StatusCode::CONFLICT,
@@ -94,6 +98,30 @@ fn gate(state: &AppState, id: RequestId) -> Result<tokio::sync::MutexGuard<'_, (
             id.0,
         )
     })
+}
+
+fn require_http_provider(saved: &SavedConnection, id: RequestId) -> Result<(), AppError> {
+    if saved.connection.authentication == AiAuthentication::ClaudeCode {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "ai_cli_only",
+            "Use Claude Code login, status and disconnect; model use belongs in AI Sandbox",
+            id.0,
+        ));
+    }
+    Ok(())
+}
+
+async fn allow_http_replacement(
+    state: &AppState,
+    key: Uuid,
+    id: RequestId,
+) -> Result<(), AppError> {
+    let store = state.store.clone();
+    if let Some(saved) = stored(id, move || store.ai_connection(key)).await? {
+        require_http_provider(&saved, id)?;
+    }
+    Ok(())
 }
 
 pub async fn list(
@@ -118,6 +146,7 @@ pub async fn save(
 ) -> Result<Json<AiConnection>, AppError> {
     pipe_ai::validate_connection(&input).map_err(|e| failed(e, id))?;
     let _guard = gate(&state, id)?;
+    allow_http_replacement(&state, key, id).await?;
     if let Some(model) = &input.model {
         state
             .pipe_ai
@@ -190,6 +219,12 @@ pub async fn disconnect(
     let _guard = gate(&state, id)?;
     let store = state.store.clone();
     let saved = stored(id, move || store.ai_connection(key)).await?;
+    if saved
+        .as_ref()
+        .is_some_and(|s| s.connection.authentication == AiAuthentication::ClaudeCode)
+    {
+        super::pipe_ai_claude::logout(&state, key, id).await?;
+    }
     state.pipe_ai_logins.cancel_connection(key);
     let store = state.store.clone();
     stored(id, move || store.delete_ai_connection(key)).await?;
@@ -274,6 +309,7 @@ pub async fn login_start(
     ValidatedJson(input): ValidatedJson<AiLoginRequest>,
 ) -> Result<Json<AiLoginStart>, AppError> {
     let _guard = gate(&state, id)?;
+    allow_http_replacement(&state, key, id).await?;
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
